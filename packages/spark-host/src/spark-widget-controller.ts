@@ -15,7 +15,7 @@ export interface SparkWidgetControllerContext {
 
 export interface SparkWidgetControllerDeps {
   ensureLocalSparkDirectory: (cwd: string) => Promise<void>;
-  defaultTaskGraphStore: (cwd: string) => unknown;
+  defaultTaskGraphStore: (cwd: string, ctx?: any) => unknown;
   loadSparkGraph: (cwd: string, ctx?: any) => Promise<any>;
   ensureSparkGraphInvariants: (graph: any) => boolean;
   saveSparkGraphAndTodos: (cwd: string, graph: any, ctx: any, store: any) => Promise<void>;
@@ -96,7 +96,7 @@ export class SparkWidgetController {
     }
 
     await this.deps.ensureLocalSparkDirectory(cwd);
-    const store = this.deps.defaultTaskGraphStore(cwd);
+    const store = this.deps.defaultTaskGraphStore(cwd, ctx);
     const graph = await this.deps.loadSparkGraph(cwd, ctx);
     if (graph && this.deps.ensureSparkGraphInvariants(graph))
       await this.deps.saveSparkGraphAndTodos(cwd, graph, ctx, store);
@@ -117,6 +117,7 @@ export class SparkWidgetController {
     const dynamicWorkflowRun = sparkDynamicWorkflowRunWidgetEntry(dynamicWorkflowRuns);
     const todoDisplayNumbers = await this.deps.loadTodoDisplayNumberState(cwd, ctx);
     const project = graph ? await this.deps.currentSparkProject(cwd, ctx, graph) : undefined;
+    const projectOverview = graph ? sparkProjectWidgetEntries(graph, project) : undefined;
     const sessionGoal = await this.deps.loadSessionGoal(cwd, ctx);
     let sessionLoop = await this.deps.loadSessionLoop(cwd, ctx);
     if (sessionLoop?.status === "paused") {
@@ -144,6 +145,7 @@ export class SparkWidgetController {
         workflowRun: sparkWorkflowRunWidgetEntry(workflowRunStatus),
         dynamicWorkflowRun,
         ...foregroundDriver,
+        projects: projectOverview,
         activeLens,
         tasks: [],
         independentTodos: [],
@@ -225,6 +227,28 @@ export class SparkWidgetController {
   }
 }
 
+function sparkProjectWidgetEntries(graph: any, activeProject: any): SparkWidgetState["projects"] {
+  const projects = typeof graph.projects === "function" ? graph.projects() : [];
+  if (!Array.isArray(projects) || projects.length === 0) return undefined;
+  return projects
+    .map((project: any) => {
+      const tasks = typeof graph.tasks === "function" ? (graph.tasks(project.ref) as Task[]) : [];
+      const readyTasks =
+        typeof graph.readyTasks === "function" ? (graph.readyTasks(project.ref) as Task[]) : [];
+      return {
+        title: typeof project.title === "string" ? project.title : "Untitled project",
+        ref: typeof project.ref === "string" ? project.ref : undefined,
+        active: activeProject?.ref === project.ref,
+        totalTasks: tasks.length,
+        doneTasks: tasks.filter((task) => task.status === "done" || task.status === "cancelled")
+          .length,
+        readyTasks: readyTasks.length,
+      };
+    })
+    .filter((project) => project.totalTasks > 0)
+    .slice(0, 8);
+}
+
 function mapTaskStatus(status: string): TaskEntry["status"] {
   switch (status) {
     case "running":
@@ -287,6 +311,9 @@ function sparkForegroundDriverWidgetEntries(
     return {
       repro: {
         status: sessionRepro.status,
+        objective: sessionRepro.objective
+          ? compactGoalObjective(sessionRepro.objective)
+          : undefined,
         stageName: stage.name,
         stageIndex: sessionRepro.currentStageIndex,
         totalStages: sessionRepro.stages.length,

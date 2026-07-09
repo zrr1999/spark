@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { truncateToWidth } from "@zendev-lab/spark-tui/text";
+import type { ExtensionRoleRunner } from "@zendev-lab/spark-extension-api";
 import { Type } from "typebox";
 
 import {
@@ -47,6 +48,7 @@ interface PiRolesToolConfig {
     ctx: {
       cwd?: string;
       model?: PiRolesSessionModel;
+      runRole?: ExtensionRoleRunner;
       ui?: {
         notify?: (message: string, level?: string) => void;
         input?: (title: string, defaultValue?: string) => Promise<string | undefined>;
@@ -269,7 +271,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     name: "call_role",
     label: "Call Role",
     description:
-      "Call one reusable Pi role directly with an explicit instruction. This is a one-off role invocation and is not attached to managed task graphs or workflow runs. Launches a fresh child Pi run by default, or an explicitly forked child run when launch=forked.",
+      "Call one reusable Spark role directly with an explicit instruction. This is a one-off daemon-native role invocation and is not attached to managed task graphs or workflow runs. Launches a fresh headless run by default, or an explicitly forked run when launch=forked.",
     parameters: Type.Object({
       role: Type.String({
         description: "Role id or full role ref, e.g. worker or role:builtin-worker.",
@@ -347,6 +349,9 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
         timeoutMs: p.timeoutMs,
         signal,
         stdinMode: "ignore" as const,
+        roleId: role.id,
+        allowedTools: role.allowedTools,
+        nativeExecutor: ctx.runRole,
       };
 
       const result = await runRole(commandInput);
@@ -730,15 +735,7 @@ async function resolveRoleModelForCall(input: {
     projectStore: defaultProjectRoleModelSettingsStore(input.cwd),
     userStore: defaultUserRoleModelSettingsStore(),
   });
-  if (resolved) {
-    if (resolved.source === "explicit")
-      await validateRoleModel({
-        piCommand: input.piCommand,
-        model: resolved.model,
-        cwd: input.cwd,
-      });
-    return resolved.model;
-  }
+  if (resolved) return resolved.model;
   if (input.sessionModel) return input.sessionModel;
   if (!input.actualRun) return undefined;
 
@@ -755,7 +752,7 @@ function normalizeCallRoleToolParams(params: Record<string, unknown>): CallRoleT
   const launch = normalizeRoleLaunchMode(params.launch);
   if (Object.hasOwn(params, "dryRun"))
     throw new Error(
-      "call_role dryRun is no longer supported; call_role always launches a child run",
+      "call_role dryRun is no longer supported; call_role always launches a daemon-native run",
     );
   const forkFromSession = normalizeOptionalString(
     params.forkFromSession,

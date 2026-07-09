@@ -397,7 +397,7 @@ async function runPiAskFlowInteraction(
 
 function createPiAskFlowInteractionRequest(request: PiAskFlowRequest): ExtensionInteractionRequest {
   return {
-    version: "1",
+    version: 1,
     kind: "askFlow",
     requestId: `ask_flow:${Date.now().toString(36)}`,
     title: request.title?.trim() || "Ask flow",

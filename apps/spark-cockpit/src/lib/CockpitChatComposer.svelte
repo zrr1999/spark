@@ -233,15 +233,6 @@
   <div class="composer-footer">
     <div class="composer-controls" aria-label={t.contextLabel}>
       <span class="context-chip active"><Icon name={contextIcon} size={14} />{contextChipLabel}: {contextName}</span>
-      <button type="button" class="composer-pill" disabled title={t.placeholderControlsHint}>
-        {t.permissionLabel}: {t.permissionChatOnly}
-      </button>
-      <button type="button" class="composer-pill" disabled title={t.placeholderControlsHint}>
-        {t.modelLabel}: {t.modelUnavailable}
-      </button>
-      <button type="button" class="composer-pill" disabled title={t.placeholderControlsHint}>
-        {t.modeLabel}: {t.modeDefault}
-      </button>
     </div>
     <div class="submit-controls">
       {#if hasActiveRun}
@@ -262,7 +253,6 @@
       </button>
     </div>
   </div>
-  <p class="placeholder-hint">{t.placeholderControlsHint}</p>
   <p class="keyboard-hint">{t.keyboardHint}</p>
   {#if form?.message}
     <p class:form-error={!form?.queuedCommandId} class="form-message">{form.message}</p>
@@ -523,8 +513,7 @@
     margin-left: auto;
   }
 
-  .context-chip,
-  .composer-pill {
+  .context-chip {
     align-items: center;
     background: var(--color-canvas);
     border: 1px solid var(--color-border);
@@ -542,11 +531,6 @@
     background: var(--color-primary-weak);
     border-color: var(--color-primary-soft);
     color: var(--color-primary);
-  }
-
-  .composer-pill {
-    cursor: not-allowed;
-    font: inherit;
   }
 
   .chat-composer button[type="submit"],
@@ -577,14 +561,12 @@
   }
 
   .keyboard-hint,
-  .placeholder-hint,
   .form-message {
     font-size: 12px;
     line-height: 1.45;
   }
 
   .keyboard-hint,
-  .placeholder-hint,
   .unavailable-note {
     color: var(--color-ink-subtle);
   }

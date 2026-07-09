@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -234,6 +234,168 @@ void test("Spark headless role executor forwards live events through onEvent", a
   }
 });
 
+void test("daemon native reviewer noSession does not persist session file", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-headless-role-anon-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(cwd, { recursive: true });
+    const executeRole = createSparkHeadlessRoleExecutor({
+      sparkHome,
+      createServices: async (options = {}) => await makeFakeServices(options),
+    });
+    const services = await makeFakeServices({ cwd, sparkHome });
+    const before = await listSessionFileNames(services.sessionStore.sessionDir);
+
+    const result = await executeRole({
+      role: { ref: "role:builtin-reviewer", id: "reviewer", systemPrompt: "You are a reviewer." },
+      instruction: { roleRef: "role:builtin-reviewer", instruction: "review anonymously" },
+      record: {
+        ref: "run:anonymous-reviewer",
+        roleRef: "role:builtin-reviewer",
+        instruction: "review anonymously",
+        status: "queued",
+        noSession: true,
+      },
+      cwd,
+      timeoutMs: 1_000,
+      noSession: true,
+    });
+
+    const after = await listSessionFileNames(services.sessionStore.sessionDir);
+    assert.deepEqual(after, before);
+    assert.equal(result.record.status, "succeeded");
+    assert.equal(result.record.noSession, true);
+    assert.equal(result.record.sessionPersistence, "anonymous");
+    assert.equal(result.record.sessionDir, undefined);
+    assert.equal(
+      await services.sessionStore.findById("spark-daemon-run:anonymous-reviewer"),
+      undefined,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("persistent native role run writes workspace session file", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-headless-role-persistent-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(cwd, { recursive: true });
+    const executeRole = createSparkHeadlessRoleExecutor({
+      sparkHome,
+      createServices: async (options = {}) => await makeFakeServices(options),
+    });
+
+    const result = await executeRole({
+      role: { ref: "role:builtin-worker", id: "worker", systemPrompt: "You are a worker." },
+      instruction: { roleRef: "role:builtin-worker", instruction: "persist role session" },
+      record: {
+        ref: "run:persistent-worker",
+        roleRef: "role:builtin-worker",
+        instruction: "persist role session",
+        status: "queued",
+      },
+      cwd,
+      timeoutMs: 1_000,
+    });
+
+    const services = await makeFakeServices({ cwd, sparkHome });
+    const persisted = await services.sessionStore.findById("spark-daemon-run:persistent-worker");
+    assert.equal(result.record.status, "succeeded");
+    assert.equal(result.record.sessionPersistence, "persistent");
+    assert.equal(result.record.sessionDir, services.sessionStore.sessionDir);
+    assert.equal(persisted?.header.cwd, cwd);
+    assert.equal(persisted?.entries.filter((entry) => entry.type === "message").length, 2);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("anonymous role run is excluded from workspace session selector", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-headless-role-selector-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(cwd, { recursive: true });
+    const executeRole = createSparkHeadlessRoleExecutor({
+      sparkHome,
+      createServices: async (options = {}) => await makeFakeServices(options),
+    });
+
+    await executeRole({
+      role: { ref: "role:builtin-reviewer", id: "reviewer", systemPrompt: "You are a reviewer." },
+      instruction: { roleRef: "role:builtin-reviewer", instruction: "anonymous selector" },
+      record: {
+        ref: "run:selector-anonymous",
+        roleRef: "role:builtin-reviewer",
+        instruction: "anonymous selector",
+        status: "queued",
+        noSession: true,
+      },
+      cwd,
+      timeoutMs: 1_000,
+      noSession: true,
+    });
+    await executeRole({
+      role: { ref: "role:builtin-worker", id: "worker", systemPrompt: "You are a worker." },
+      instruction: { roleRef: "role:builtin-worker", instruction: "persistent selector" },
+      record: {
+        ref: "run:selector-persistent",
+        roleRef: "role:builtin-worker",
+        instruction: "persistent selector",
+        status: "queued",
+      },
+      cwd,
+      timeoutMs: 1_000,
+    });
+
+    const services = await makeFakeServices({ cwd, sparkHome });
+    const selectorIds = (await services.sessionStore.list()).map((session) => session.id);
+    assert.deepEqual(selectorIds, ["spark-daemon-run:selector-persistent"]);
+    assert.equal(selectorIds.includes("spark-daemon-run:selector-anonymous"), false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("anonymous role run artifact records sessionPersistence", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-headless-role-artifact-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(cwd, { recursive: true });
+    const executeRole = createSparkHeadlessRoleExecutor({
+      sparkHome,
+      createServices: async (options = {}) => await makeFakeServices(options),
+    });
+
+    const result = await executeRole({
+      role: { ref: "role:builtin-reviewer", id: "reviewer", systemPrompt: "You are a reviewer." },
+      instruction: { roleRef: "role:builtin-reviewer", instruction: "record persistence" },
+      record: {
+        ref: "run:artifact-anonymous",
+        roleRef: "role:builtin-reviewer",
+        instruction: "record persistence",
+        status: "queued",
+        noSession: true,
+      },
+      cwd,
+      timeoutMs: 1_000,
+      noSession: true,
+    });
+
+    assert.equal(result.record.status, "succeeded");
+    assert.equal(result.record.sessionPersistence, "anonymous");
+    assert.equal(result.record.noSession, true);
+    assert.equal("sessionPath" in result.record, false);
+    assert.equal(result.record.sessionDir, undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("daemon session.run executor drains queue item into persisted Spark session", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-daemon-session-exec-"));
   try {
@@ -285,6 +447,15 @@ void test("daemon session.run executor drains queue item into persisted Spark se
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+async function listSessionFileNames(sessionDir: string): Promise<string[]> {
+  try {
+    return (await readdir(sessionDir)).filter((name) => name.endsWith(".jsonl")).sort();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
 
 async function makeFakeServices(options: SparkCliHostServicesOptions) {
   const config: SparkConfig = {

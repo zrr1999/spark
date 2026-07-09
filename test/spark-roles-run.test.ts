@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import type { ExtensionRoleRunner } from "@zendev-lab/spark-extension-api";
+import { TaskGraph } from "@zendev-lab/spark-tasks";
 
 import {
   cancelRoleRun,
@@ -26,7 +28,13 @@ import {
   runRole,
   validateRoleModel,
 } from "@zendev-lab/spark-roles";
-import { buildRoleRunArgs, runRoleInstructionOnly } from "@zendev-lab/spark-runtime";
+import {
+  buildRoleRunArgs,
+  killActiveSparkRoleRunProcesses,
+  listActiveSparkRoleRunProcesses,
+  runRoleInstructionOnly,
+  runSparkTask,
+} from "@zendev-lab/spark-runtime";
 
 void test("spark-roles builds fresh JSON Pi role args without accidental fork session reuse", () => {
   const args = buildRoleRunArgs({
@@ -265,24 +273,124 @@ void test("spark-roles resolves role model settings with project and user preced
   }
 });
 
-void test("spark runtime role dispatch fails loudly without model settings", async () => {
+void test("spark runtime role dispatch can run native roles without model settings", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-runtime-missing-model-"));
   const previousHome = process.env.PI_ROLES_HOME;
   process.env.PI_ROLES_HOME = join(dir, "home");
   try {
     const registry = new RoleRegistry();
-    await assert.rejects(
-      () =>
-        runRoleInstructionOnly(
-          registry,
-          { roleRef: "role:builtin-worker", instruction: "Run without a model setting." },
-          { dryRun: false, cwd: dir, piCommand: "pi", timeoutMs: 5_000 },
-        ),
-      /role model unavailable for role:builtin-worker/,
+    let capturedModel: string | undefined;
+    const result = await runRoleInstructionOnly(
+      registry,
+      { roleRef: "role:builtin-worker", instruction: "Run without a model setting." },
+      {
+        dryRun: false,
+        cwd: dir,
+        piCommand: "pi",
+        timeoutMs: 5_000,
+        roleExecutor: async (input) => {
+          capturedModel = input.model;
+          return {
+            record: { ...input.record, status: "succeeded" as const },
+            stdout: "native role ok",
+            stderr: "",
+            jsonEvents: [],
+          };
+        },
+      },
     );
+
+    assert.equal(result.record.status, "succeeded");
+    assert.equal(capturedModel, undefined);
   } finally {
     if (previousHome === undefined) delete process.env.PI_ROLES_HOME;
     else process.env.PI_ROLES_HOME = previousHome;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark runtime role dispatch times out hanging native executors", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-roles-runtime-timeout-cleanup-"));
+  const runName = "timeout-cleanup-test";
+  try {
+    await assert.rejects(
+      () =>
+        runRoleInstructionOnly(
+          new RoleRegistry(),
+          { roleRef: "role:builtin-worker", instruction: "Hang until timeout." },
+          {
+            dryRun: false,
+            cwd: dir,
+            piCommand: "pi",
+            timeoutMs: 25,
+            sessionModel: "test/model",
+            runName,
+            roleExecutor: async () => await new Promise<never>(() => undefined),
+          },
+        ),
+      /timed out after 25ms/,
+    );
+
+    assert.equal(
+      listActiveSparkRoleRunProcesses().some((process) => process.runName === runName),
+      false,
+    );
+  } finally {
+    await killActiveSparkRoleRunProcesses({ runName, forceAfterMs: 0 }).catch(() => undefined);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("runSparkTask records native timeout failure and leaves no active child", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-task-runtime-timeout-cleanup-"));
+  const runName = "task-timeout-cleanup-test";
+  try {
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Timeout cleanup", description: "timeout" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: "Timeout child",
+      description: "Run a child that must be timed out.",
+      roleRef: "role:builtin-worker",
+      plan: {
+        objective: "Verify runtime timeout cleanup for a nonresponsive child role-run.",
+        contextRefs: [],
+        constraints: [],
+        nonGoals: [],
+        successCriteria: [
+          "Test assertion verifies the task run is failed with runtime_timeout.",
+          "Test assertion verifies the active role-run registry has no child for the timed-out run name.",
+        ],
+        evidenceRequired: ["Focused test assertions cover task status and active child cleanup."],
+        steps: ["Run a fake Pi child that ignores SIGTERM and assert cleanup after timeout."],
+        riskLevel: "normal",
+        openQuestions: [],
+        askRefs: [],
+      },
+    });
+
+    const run = await runSparkTask({
+      graph,
+      taskRef: task.ref,
+      registry: new RoleRegistry(),
+      cwd: dir,
+      dryRun: false,
+      piCommand: "pi",
+      timeoutMs: 25,
+      sessionModel: "test/model",
+      roleExecutor: async () => await new Promise<never>(() => undefined),
+      claim: { sessionId: "spark:test", runName },
+    });
+
+    assert.equal(run.status, "failed");
+    assert.equal(run.failureKind, "runtime_timeout");
+    assert.equal(graph.getTask(task.ref).status, "failed");
+    assert.equal(
+      listActiveSparkRoleRunProcesses().some((process) => process.runName === runName),
+      false,
+    );
+  } finally {
+    await killActiveSparkRoleRunProcesses({ runName, forceAfterMs: 0 }).catch(() => undefined);
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -292,20 +400,6 @@ void test("spark runtime role dispatch inherits session model when no role model
   const previousHome = process.env.PI_ROLES_HOME;
   process.env.PI_ROLES_HOME = join(dir, "home");
   try {
-    const fakePi = join(dir, "fake-pi.mjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "const args = process.argv.slice(2);",
-        "if (!args.includes('--print')) process.exit(10);",
-        "if (!args.includes('--model') || args[args.indexOf('--model') + 1] !== 'test/model') process.exit(11);",
-        "process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Runtime session model result.' }] }, args }) + '\\n');",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-
     const registry = new RoleRegistry();
     const result = await runRoleInstructionOnly(
       registry,
@@ -313,9 +407,22 @@ void test("spark runtime role dispatch inherits session model when no role model
       {
         dryRun: false,
         cwd: dir,
-        piCommand: fakePi,
         timeoutMs: 15_000,
         sessionModel: "test/model",
+        roleExecutor: async (input) => ({
+          record: { ...input.record, status: "succeeded", finishedAt: "2026-06-22T00:00:00.000Z" },
+          stdout: "Runtime session model result.",
+          stderr: "",
+          jsonEvents: [
+            {
+              type: "message_end",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "Runtime session model result." }],
+              },
+            },
+          ],
+        }),
       },
     );
 
@@ -328,47 +435,48 @@ void test("spark runtime role dispatch inherits session model when no role model
   }
 });
 
-void test("spark runtime role dispatch passes per-run env and tool policy to spawned Pi", async () => {
+void test("spark runtime role dispatch passes per-run env and tool policy to injected executor", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-runtime-env-tools-"));
   const previousHome = process.env.PI_ROLES_HOME;
   process.env.PI_ROLES_HOME = join(dir, "home");
   try {
-    const capturePath = join(dir, "capture.json");
-    const fakePi = join(dir, "fake-pi.mjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "const { writeFileSync } = await import('node:fs');",
-        "const args = process.argv.slice(2);",
-        `writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ args, graftBase: process.env.GRAFT_BASE_REF }));`,
-        "process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'env tools ok' }] } }) + '\\n');",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-
+    let seenEnv: NodeJS.ProcessEnv | undefined;
+    let seenAllowedTools: string[] | undefined;
     const result = await runRoleInstructionOnly(
       new RoleRegistry(),
       { roleRef: "role:builtin-worker", instruction: "Run with env/tool policy." },
       {
         dryRun: false,
         cwd: dir,
-        piCommand: fakePi,
         timeoutMs: 15_000,
         sessionModel: "test/model",
-        env: { GRAFT_BASE_REF: "tree:spawn-base" },
+        env: { GRAFT_BASE_REF: "tree:native-base" },
         allowedTools: ["graft_read", "graft_write"],
+        roleExecutor: async (input) => {
+          seenEnv = input.env;
+          seenAllowedTools = input.role.allowedTools;
+          return {
+            record: {
+              ...input.record,
+              status: "succeeded",
+              finishedAt: "2026-06-22T00:00:00.000Z",
+            },
+            stdout: "env tools ok",
+            stderr: "",
+            jsonEvents: [
+              {
+                type: "message_end",
+                message: { role: "assistant", content: [{ type: "text", text: "env tools ok" }] },
+              },
+            ],
+          };
+        },
       },
     );
 
-    const captured = JSON.parse(await readFile(capturePath, "utf8")) as {
-      args: string[];
-      graftBase?: string;
-    };
     assert.equal(result.record.status, "succeeded");
-    assert.equal(captured.graftBase, "tree:spawn-base");
-    assert.equal(captured.args[captured.args.indexOf("--tools") + 1], "graft_read,graft_write");
+    assert.equal(seenEnv?.GRAFT_BASE_REF, "tree:native-base");
+    assert.deepEqual(seenAllowedTools, ["graft_read", "graft_write"]);
   } finally {
     if (previousHome === undefined) delete process.env.PI_ROLES_HOME;
     else process.env.PI_ROLES_HOME = previousHome;
@@ -493,35 +601,24 @@ function roleDepthTestEnv(depth?: string): NodeJS.ProcessEnv {
   return env;
 }
 
-void test("spark-roles launches Pi, captures JSONL events, and records run metadata", async () => {
+void test("spark-roles runs daemon-native executor and records run metadata", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-launcher-"));
   try {
-    const fakePi = join(dir, "fake-pi.cjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "const args = process.argv.slice(2);",
-        "if (!args.includes('--print')) process.exit(10);",
-        "if (!args.includes('--mode') || args[args.indexOf('--mode') + 1] !== 'json') process.exit(11);",
-        "process.stdout.write(JSON.stringify({ type: 'start', args }) + '\\n');",
-        "process.stdout.write('not-json\\n');",
-        "process.stdout.write(JSON.stringify({ type: 'done' }) + '\\n');",
-        "process.stderr.write('diagnostic\\n');",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-
     const result = await runRole({
       runRef: "run:launcher-test",
       roleRef: "role:builtin-worker",
       systemPrompt: "You are a worker.",
       instruction: "Implement.",
-      piCommand: fakePi,
+      piCommand: "ignored-pi",
       cwd: dir,
       sessionDir: join(dir, "sessions"),
       now: () => "2026-05-21T00:00:00.000Z",
+      nativeExecutor: async (input) => ({
+        record: { ...input.record, status: "succeeded", finishedAt: "2026-05-21T00:00:00.000Z" },
+        stdout: 'not-json\n{"type":"done"}\n',
+        stderr: "diagnostic\n",
+        jsonEvents: [{ type: "start" }, { type: "done" }],
+      }),
     });
 
     assert.equal(result.record.ref, "run:launcher-test");
@@ -538,40 +635,65 @@ void test("spark-roles launches Pi, captures JSONL events, and records run metad
   }
 });
 
-void test("spark-roles can ignore child stdin for argv-prompt non-interactive runs", async () => {
+void test("runRole forwards noSession to native executor", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-roles-no-session-native-"));
+  try {
+    let seenNoSession: boolean | undefined;
+    let seenSessionPersistence: string | undefined;
+    const result = await runRole({
+      runRef: "run:no-session-native",
+      roleRef: "role:builtin-reviewer",
+      systemPrompt: "You are a reviewer.",
+      instruction: "Review anonymously.",
+      piCommand: "ignored-pi",
+      cwd: dir,
+      sessionDir: join(dir, "sessions"),
+      noSession: true,
+      nativeExecutor: async (input) => {
+        seenNoSession = input.noSession;
+        seenSessionPersistence = input.sessionPersistence;
+        return {
+          record: {
+            ...input.record,
+            status: "succeeded",
+            finishedAt: "2026-05-21T00:00:00.000Z",
+            sessionPersistence: input.sessionPersistence,
+          },
+          stdout: "approved",
+          stderr: "",
+          jsonEvents: [],
+        };
+      },
+    });
+
+    assert.equal(seenNoSession, true);
+    assert.equal(seenSessionPersistence, "anonymous");
+    assert.equal(result.record.noSession, true);
+    assert.equal(result.record.sessionPersistence, "anonymous");
+    assert.equal(result.record.sessionDir, undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark-roles daemon-native runs do not depend on child stdin", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-ignore-stdin-"));
   try {
-    const fakePi = join(dir, "fake-pi.cjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "let ended = false;",
-        "process.stdin.on('end', () => {",
-        "  ended = true;",
-        "  process.stdout.write(JSON.stringify({ type: 'stdin', ended }) + '\\n');",
-        "});",
-        "process.stdin.resume();",
-        "setTimeout(() => {",
-        "  if (!ended) {",
-        "    process.stdout.write(JSON.stringify({ type: 'stdin', ended }) + '\\n');",
-        "    process.exit(2);",
-        "  }",
-        "}, 200);",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-
     const result = await runRole({
       runRef: "run:ignore-stdin-test",
       roleRef: "role:builtin-reviewer",
       systemPrompt: "You are a reviewer.",
       instruction: "Review.",
-      piCommand: fakePi,
+      piCommand: "ignored-pi",
       cwd: dir,
       timeoutMs: 15_000,
       stdinMode: "ignore",
+      nativeExecutor: async (input) => ({
+        record: { ...input.record, status: "succeeded", finishedAt: new Date().toISOString() },
+        stdout: "",
+        stderr: "",
+        jsonEvents: [{ type: "stdin", ended: true }],
+      }),
     });
 
     assert.equal(result.record.status, "succeeded");
@@ -581,34 +703,32 @@ void test("spark-roles can ignore child stdin for argv-prompt non-interactive ru
   }
 });
 
-void test("spark-roles bounded capture keeps tail JSONL results from large output", async () => {
+void test("spark-roles preserves daemon-native stdout and JSONL results", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-tail-capture-"));
   try {
-    const fakePi = join(dir, "fake-pi.cjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "process.stdout.write('A'.repeat(2 * 1024 * 1024));",
-        "process.stdout.write('\\n' + JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'tail result delivered' }] } }) + '\\n');",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-
     const result = await runRole({
       runRef: "run:tail-capture-test",
       roleRef: "role:builtin-worker",
       systemPrompt: "You are a worker.",
       instruction: "Report after large output.",
-      piCommand: fakePi,
+      piCommand: "ignored-pi",
       cwd: dir,
+      nativeExecutor: async (input) => ({
+        record: { ...input.record, status: "succeeded", finishedAt: new Date().toISOString() },
+        stdout: `${"A".repeat(1024)}\ntail result delivered`,
+        stderr: "",
+        jsonEvents: [
+          {
+            type: "message_end",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "tail result delivered" }],
+            },
+          },
+        ],
+      }),
     });
 
-    assert.match(
-      result.stdout,
-      /^\[spark-roles stdout omitted first \d+ bytes; showing last \d+ bytes\]/,
-    );
     assert.match(result.stdout, /tail result delivered/);
     assert.deepEqual(result.jsonEvents.at(-1), {
       type: "message_end",
@@ -622,28 +742,25 @@ void test("spark-roles bounded capture keeps tail JSONL results from large outpu
   }
 });
 
-void test("spark-roles decrements role run depth for child Pi processes", async () => {
+void test("spark-roles decrements role run depth for daemon-native runs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-depth-env-"));
   try {
-    const fakePi = join(dir, "fake-pi.cjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        `process.stdout.write(JSON.stringify({ type: 'depth', depth: process.env.${ROLE_RUN_DEPTH_ENV} }) + '\\n');`,
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
+    const depthExecutor: ExtensionRoleRunner = async (input) => ({
+      record: { ...input.record, status: "succeeded", finishedAt: new Date().toISOString() },
+      stdout: "",
+      stderr: "",
+      jsonEvents: [{ type: "depth", depth: input.env?.[ROLE_RUN_DEPTH_ENV] }],
+    });
 
     const defaultDepth = await runRole({
       runRef: "run:default-depth-test",
       roleRef: "role:builtin-worker",
       systemPrompt: "You are a worker.",
       instruction: "Report depth.",
-      piCommand: fakePi,
+      piCommand: "ignored-pi",
       cwd: dir,
       env: roleDepthTestEnv(),
+      nativeExecutor: depthExecutor,
     });
     assert.deepEqual(defaultDepth.jsonEvents.at(-1), { type: "depth", depth: "3" });
 
@@ -652,9 +769,10 @@ void test("spark-roles decrements role run depth for child Pi processes", async 
       roleRef: "role:builtin-worker",
       systemPrompt: "You are a worker.",
       instruction: "Report depth.",
-      piCommand: fakePi,
+      piCommand: "ignored-pi",
       cwd: dir,
       env: roleDepthTestEnv("2"),
+      nativeExecutor: depthExecutor,
     });
     assert.deepEqual(explicitDepth.jsonEvents.at(-1), { type: "depth", depth: "1" });
   } finally {
@@ -695,28 +813,23 @@ void test("spark-roles refuses to spawn when role run depth is exhausted", async
   );
 });
 
-void test("spark-roles tracks and cancels active runs", async () => {
+void test("spark-roles tracks and cancels active daemon-native runs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-cancel-"));
   try {
-    const fakePi = join(dir, "fake-pi.cjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "setInterval(() => process.stdout.write(JSON.stringify({ type: 'tick' }) + '\\n'), 50);",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-
     const run = runRole({
       runRef: "run:cancel-test",
       roleRef: "role:builtin-worker",
       systemPrompt: "You are a worker.",
       instruction: "Wait.",
-      piCommand: fakePi,
+      piCommand: "ignored-pi",
       cwd: dir,
       timeoutMs: 15_000,
+      nativeExecutor: async (input) =>
+        await new Promise((resolve, reject) => {
+          input.signal?.addEventListener("abort", () => reject(new Error("native aborted")), {
+            once: true,
+          });
+        }),
     });
     await eventually(() => listActiveRoleRuns().some((entry) => entry.ref === "run:cancel-test"));
     assert.equal(cancelRoleRun("run:cancel-test", "test cancellation"), true);
@@ -730,22 +843,19 @@ void test("spark-roles tracks and cancels active runs", async () => {
   }
 });
 
-void test("spark-roles enforces timeout control", async () => {
+void test("spark-roles enforces timeout control for daemon-native runs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-timeout-"));
   try {
-    const fakePi = join(dir, "fake-pi.cjs");
-    await writeFile(fakePi, "#!/usr/bin/env node\nsetInterval(() => {}, 1000);\n", "utf8");
-    await chmod(fakePi, 0o755);
-
     await assert.rejects(
       runRole({
         runRef: "run:timeout-test",
         roleRef: "role:builtin-worker",
         systemPrompt: "You are a worker.",
         instruction: "Wait.",
-        piCommand: fakePi,
+        piCommand: "ignored-pi",
         cwd: dir,
         timeoutMs: 10,
+        nativeExecutor: async () => await new Promise(() => undefined),
       }),
       RoleRunTimeoutError,
     );

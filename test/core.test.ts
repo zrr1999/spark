@@ -29,8 +29,10 @@ function executionReadyPlan(objective: string): TaskPlan {
     contextRefs: [],
     constraints: [],
     nonGoals: [],
-    successCriteria: [`${objective} succeeds`],
-    evidenceRequired: [`${objective} evidence is recorded`],
+    successCriteria: [`Validation command for ${objective} passes with exit code 0.`],
+    evidenceRequired: [
+      `Validation artifact records command output, exit code, and changed-file summary for ${objective}.`,
+    ],
     steps: [objective],
     riskLevel: "normal",
     openQuestions: [],

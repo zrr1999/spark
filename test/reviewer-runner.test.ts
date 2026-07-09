@@ -182,6 +182,8 @@ void test("reviewer verdict parser maps goal remaining-work verdicts", () => {
       blockers: ["reviewer not wired"],
       confidence: "medium",
       achieved: false,
+      evidence_valid: true,
+      objective_satisfied: false,
       remainingWork: "wire task.finish reviewer gate",
     }),
   );
@@ -191,6 +193,61 @@ void test("reviewer verdict parser maps goal remaining-work verdicts", () => {
   assert.equal(verdict.achieved, false);
   assert.equal(verdict.remainingWork, "wire task.finish reviewer gate");
   assert.equal(verdict.outcome, "needs_changes");
+  assert.equal(verdict.evidenceValid, true);
+  assert.equal(verdict.objectiveSatisfied, false);
+});
+
+void test("goal reviewer approval requires explicit evidence and objective semantic gates", () => {
+  const input: GoalReviewInput = {
+    targetKind: "goal",
+    cwd: process.cwd(),
+    projectRef: "proj:demo",
+    goalId: "goal-1",
+    originalObjective: "Use the new compiler to compile Spore source code.",
+    objective: "Finish bootstrap fixed point evidence",
+    status: "active",
+    requestedStatus: "complete",
+    evidenceRefs: [],
+  };
+
+  const missing = parseReviewerVerdictForInput(
+    input,
+    JSON.stringify({
+      outcome: "approved",
+      summary: "approved but underspecified",
+      findings: [],
+      blockers: [],
+      confidence: "high",
+      achieved: true,
+      remainingWork: "",
+    }),
+  );
+
+  assert.equal(missing.targetKind, "goal");
+  assert.equal(missing.outcome, "needs_changes");
+  assert.equal(missing.achieved, false);
+  assert.match(missing.blockers.join("\n"), /evidence_valid=true and objective_satisfied=true/);
+
+  const approved = parseReviewerVerdictForInput(
+    input,
+    JSON.stringify({
+      outcome: "approved",
+      summary: "evidence and semantics both satisfy the original goal",
+      findings: [],
+      blockers: [],
+      confidence: "high",
+      achieved: true,
+      evidence_valid: true,
+      objective_satisfied: true,
+      remainingWork: "",
+    }),
+  );
+
+  assert.equal(approved.targetKind, "goal");
+  assert.equal(approved.outcome, "approved");
+  assert.equal(approved.achieved, true);
+  assert.equal(approved.evidenceValid, true);
+  assert.equal(approved.objectiveSatisfied, true);
 });
 
 void test("reviewer verdict parser normalizes common outcome aliases", () => {
@@ -286,6 +343,10 @@ void test("goal reviewer instruction still gates completion on unfinished projec
     evidenceRefs: [],
   });
 
+  assert.match(instruction, /semantic satisfaction of the immutable original user goal/);
+  assert.match(instruction, /evidence_valid=true/);
+  assert.match(instruction, /objective_satisfied=true/);
+  assert.match(instruction, /core execution path proof/);
   assert.match(instruction, /If projectStatus\.taskCounts\.unfinished > 0/);
   assert.match(instruction, /When unfinished project work remains/);
   assert.match(instruction, /"requestedStatus": "complete"/);
@@ -355,45 +416,88 @@ void test("reviewer thinking cap defaults to medium without raising lower host s
   assert.equal(capReviewerThinkingLevel("xhigh"), "medium");
 });
 
+function approvedReviewerNativeExecutor(
+  capture?: (
+    request: Parameters<
+      NonNullable<ConstructorParameters<typeof PiRolesReviewerRunner>[0]["nativeExecutor"]>
+    >[0],
+  ) => void,
+): NonNullable<ConstructorParameters<typeof PiRolesReviewerRunner>[0]["nativeExecutor"]> {
+  return async (request) => {
+    capture?.(request);
+    return {
+      record: { ...request.record, status: "succeeded", finishedAt: "2026-01-01T00:00:00.000Z" },
+      stdout: JSON.stringify({
+        outcome: "approved",
+        summary: "approved by fake reviewer",
+        findings: [],
+        blockers: [],
+        confidence: "high",
+        evidence_valid: true,
+        objective_satisfied: true,
+      }),
+      stderr: "",
+      jsonEvents: [],
+    };
+  };
+}
+
+function askAnswerNativeExecutor(
+  capture?: (
+    request: Parameters<
+      NonNullable<ConstructorParameters<typeof PiRolesReviewerRunner>[0]["nativeExecutor"]>
+    >[0],
+  ) => void,
+): NonNullable<ConstructorParameters<typeof PiRolesReviewerRunner>[0]["nativeExecutor"]> {
+  return async (request) => {
+    capture?.(request);
+    return {
+      record: { ...request.record, status: "succeeded", finishedAt: "2026-01-01T00:00:00.000Z" },
+      stdout: JSON.stringify({
+        answers: { mode: { values: ["safe_mode"] } },
+        blocked: false,
+        reason: "depth checked",
+      }),
+      stderr: "",
+      jsonEvents: [],
+    };
+  };
+}
+
+const reviewerRunnerTestEnv = { ...process.env, [ROLE_RUN_DEPTH_ENV]: "4" };
+
 void test("PiRolesReviewerRunner resolves reviewer model from role model settings", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reviewer-runner-model-settings-"));
   try {
-    const argsPath = join(dir, "args.json");
-    const fakePi = join(dir, "fake-pi.cjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "const { writeFileSync } = require('node:fs');",
-        `writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify(process.argv.slice(2)));`,
-        "process.stdout.write(JSON.stringify({ outcome: 'approved', summary: 'approved by fake reviewer', findings: [], blockers: [], confidence: 'high' }) + '\\n');",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
     await defaultProjectRoleModelSettingsStore(dir).save("role:builtin-reviewer", "test/reviewer");
+    let captured:
+      | Awaited<
+          Parameters<
+            NonNullable<ConstructorParameters<typeof PiRolesReviewerRunner>[0]["nativeExecutor"]>
+          >[0]
+        >
+      | undefined;
 
     const input = { ...reviewTaskInput(), cwd: dir };
     const runner = new PiRolesReviewerRunner({
       registry: new RoleRegistry(),
       cwd: dir,
-      piCommand: fakePi,
       timeoutMs: 15_000,
+      env: reviewerRunnerTestEnv,
+      nativeExecutor: approvedReviewerNativeExecutor((request) => {
+        captured = request;
+      }),
     });
 
     const result = await runner.review(input);
 
     assert.equal(result.verdict.outcome, "approved");
-    const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
-    assert.ok(args.includes("--no-session"));
-    assert.ok(args.includes("--no-extensions"));
-    assert.ok(args.includes("--model"));
-    assert.equal(args[args.indexOf("--model") + 1], "test/reviewer");
-    assert.ok(args.includes("--thinking"));
-    assert.equal(args[args.indexOf("--thinking") + 1], "medium");
+    assert.equal(captured?.model, "test/reviewer");
+    assert.equal(captured?.launch, "fresh");
+    assert.equal(captured?.record.launch, "fresh");
+    assert.equal(captured?.record.model, "test/reviewer");
     assert.equal(result.record.thinking, "medium");
-    assert.ok(args.includes("--tools"));
-    const tools = args[args.indexOf("--tools") + 1]?.split(",") ?? [];
+    const tools = captured?.role.allowedTools ?? [];
     assert.ok(tools.includes("read"));
     assert.ok(tools.includes("grep"));
     assert.ok(tools.includes("find"));
@@ -403,7 +507,6 @@ void test("PiRolesReviewerRunner resolves reviewer model from role model setting
     assert.equal(tools.includes("cue_exec"), false);
     assert.equal(tools.includes("script_eval"), false);
     assert.equal(tools.includes("learning"), false);
-    assert.equal(tools.includes("artifact"), false);
     assert.equal(tools.includes("task"), false);
     assert.equal(tools.includes("task_write"), false);
     assert.equal(tools.includes("goal"), false);
@@ -420,19 +523,11 @@ void test("PiRolesReviewerRunner resolves reviewer model from role model setting
 void test("PiRolesReviewerRunner strips reviewer role orchestration and interaction tools", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reviewer-runner-tool-gate-"));
   try {
-    const argsPath = join(dir, "args.json");
-    const fakePi = join(dir, "fake-pi.cjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "const { writeFileSync } = require('node:fs');",
-        `writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify(process.argv.slice(2)));`,
-        "process.stdout.write(JSON.stringify({ outcome: 'approved', summary: 'approved by gated reviewer', findings: [], blockers: [], confidence: 'high' }) + '\\n');",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
+    let captured:
+      | Parameters<
+          NonNullable<ConstructorParameters<typeof PiRolesReviewerRunner>[0]["nativeExecutor"]>
+        >[0]
+      | undefined;
 
     const projectReviewer = createRoleSpec({
       id: "project-reviewer",
@@ -470,19 +565,19 @@ void test("PiRolesReviewerRunner strips reviewer role orchestration and interact
     const runner = new PiRolesReviewerRunner({
       registry,
       cwd: dir,
-      piCommand: fakePi,
       reviewerRoleRef: projectReviewer.ref,
       timeoutMs: 15_000,
+      env: reviewerRunnerTestEnv,
+      nativeExecutor: approvedReviewerNativeExecutor((request) => {
+        captured = request;
+      }),
     });
 
     const result = await runner.review({ ...reviewTaskInput(), cwd: dir });
 
     assert.equal(result.verdict.outcome, "approved");
-    const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
-    assert.ok(args.includes("--no-session"));
-    assert.ok(args.includes("--no-extensions"));
-    const tools = args[args.indexOf("--tools") + 1]?.split(",") ?? [];
-    assert.deepEqual(tools, ["read", "task_read"]);
+    assert.equal(captured?.launch, "fresh");
+    assert.deepEqual(captured?.role.allowedTools, ["read", "task_read"]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -492,26 +587,17 @@ void test("PiRolesReviewerRunner auto-answer decrements role depth for reviewer 
   const dir = await mkdtemp(join(tmpdir(), "spark-reviewer-ask-depth-"));
   const previousDepth = process.env[ROLE_RUN_DEPTH_ENV];
   try {
-    const depthPath = join(dir, "depth.txt");
-    const fakePi = join(dir, "fake-pi.cjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "const { writeFileSync } = require('node:fs');",
-        `writeFileSync(${JSON.stringify(depthPath)}, process.env.${ROLE_RUN_DEPTH_ENV} ?? 'missing');`,
-        "process.stdout.write(JSON.stringify({ answers: { mode: { values: ['safe_mode'] } }, blocked: false, reason: 'depth checked' }) + '\\n');",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
+    let capturedDepth: string | undefined;
     process.env[ROLE_RUN_DEPTH_ENV] = "2";
 
     const runner = new PiRolesReviewerRunner({
       registry: new RoleRegistry(),
       cwd: dir,
-      piCommand: fakePi,
       timeoutMs: 15_000,
+      env: { ...process.env, [ROLE_RUN_DEPTH_ENV]: "2" },
+      nativeExecutor: askAnswerNativeExecutor((request) => {
+        capturedDepth = request.env?.[ROLE_RUN_DEPTH_ENV];
+      }),
     });
 
     const result = await runner.answerAsk({
@@ -526,7 +612,7 @@ void test("PiRolesReviewerRunner auto-answer decrements role depth for reviewer 
 
     assert.equal(result.blocked, undefined);
     assert.equal(result.answers?.mode?.values?.[0], "safe_mode");
-    assert.equal(await readFile(depthPath, "utf8"), "1");
+    assert.equal(capturedDepth, "1");
   } finally {
     if (previousDepth === undefined) delete process.env[ROLE_RUN_DEPTH_ENV];
     else process.env[ROLE_RUN_DEPTH_ENV] = previousDepth;
@@ -556,8 +642,22 @@ void test("PiRolesReviewerRunner auto-answer reports exhausted role depth before
     const runner = new PiRolesReviewerRunner({
       registry: new RoleRegistry(),
       cwd: dir,
-      piCommand: fakePi,
       timeoutMs: 15_000,
+      env: { ...process.env, [ROLE_RUN_DEPTH_ENV]: "0" },
+      nativeExecutor: async () => {
+        await writeFile(spawnedPath, "spawned", "utf8");
+        return {
+          record: {
+            ref: "run:unexpected",
+            roleRef: "role:builtin-reviewer",
+            instruction: "unexpected",
+            status: "succeeded",
+          },
+          stdout: JSON.stringify({ answers: {}, blocked: false, reason: "should not spawn" }),
+          stderr: "",
+          jsonEvents: [],
+        };
+      },
     });
 
     const result = await runner.answerAsk({
@@ -578,26 +678,21 @@ void test("PiRolesReviewerRunner auto-answer reports exhausted role depth before
 void test("PiRolesReviewerRunner runs reviewer gates in fresh mode even with parent session context", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reviewer-runner-"));
   try {
-    const argsPath = join(dir, "args.json");
-    const fakePi = join(dir, "fake-pi.cjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "const { writeFileSync } = require('node:fs');",
-        `writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify(process.argv.slice(2)));`,
-        "process.stdout.write(JSON.stringify({ outcome: 'approved', summary: 'approved by fake reviewer', findings: [], blockers: [], confidence: 'high' }) + '\\n');",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
+    let captured:
+      | Parameters<
+          NonNullable<ConstructorParameters<typeof PiRolesReviewerRunner>[0]["nativeExecutor"]>
+        >[0]
+      | undefined;
 
     const input = { ...reviewTaskInput(), cwd: dir, forkFromSession: "session:parent" };
     const runner = new PiRolesReviewerRunner({
       registry: new RoleRegistry(),
       cwd: dir,
-      piCommand: fakePi,
       timeoutMs: 15_000,
+      env: reviewerRunnerTestEnv,
+      nativeExecutor: approvedReviewerNativeExecutor((request) => {
+        captured = request;
+      }),
     });
 
     const result = await runner.review(input);
@@ -607,12 +702,10 @@ void test("PiRolesReviewerRunner runs reviewer gates in fresh mode even with par
     assert.equal(result.verdict.approved, true);
     assert.equal(result.verdict.summary, "approved by fake reviewer");
     assert.equal(result.record.roleRef, "role:builtin-reviewer");
-    const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
-    assert.equal(args.includes("--fork"), false);
-    assert.ok(args.includes("--no-session"));
-    assert.ok(args.includes("--no-extensions"));
-    assert.ok(args.includes("--tools"));
-    const tools = args[args.indexOf("--tools") + 1]?.split(",") ?? [];
+    assert.equal(captured?.forkFromSession, undefined);
+    assert.equal(captured?.record.forkFromSession, undefined);
+    assert.equal(captured?.launch, "fresh");
+    const tools = captured?.role.allowedTools ?? [];
     assert.ok(tools.includes("read"));
     assert.ok(tools.includes("grep"));
     assert.ok(tools.includes("find"));
@@ -631,7 +724,7 @@ void test("PiRolesReviewerRunner runs reviewer gates in fresh mode even with par
     assert.equal(tools.includes("workflow"), false);
     assert.equal(tools.includes("graft_patch"), false);
     assert.equal(tools.includes("ask"), false);
-    assert.ok(args.length > 0);
+    assert.ok(captured);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

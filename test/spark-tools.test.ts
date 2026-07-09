@@ -143,8 +143,10 @@ function executionReadyPlan(objective: string): TaskPlan {
     contextRefs: [],
     constraints: [],
     nonGoals: [],
-    successCriteria: [`${objective} succeeds`],
-    evidenceRequired: [`${objective} evidence is recorded`],
+    successCriteria: [`Validation command for ${objective} passes with exit code 0.`],
+    evidenceRequired: [
+      `Validation artifact records command output, exit code, and changed-file summary for ${objective}.`,
+    ],
     steps: [objective],
     riskLevel: "normal",
     openQuestions: [],
@@ -990,8 +992,12 @@ void test("/plan includes active roadmap item context and matches focus to an ex
           title: "Roadmap assisted planning",
           objective: "Use roadmap item intent while planning tasks.",
           scope: "Keep changes within task organization only.",
-          successCriteria: ["Planning prompt includes roadmap context."],
-          evidenceRequired: ["Roadmap item refs are visible to planning."],
+          successCriteria: [
+            "Planning prompt text includes the matched roadmap item ref and objective.",
+          ],
+          evidenceRequired: [
+            "Planning prompt capture records the roadmap item ref and objective text.",
+          ],
         },
       ],
     });
@@ -1063,8 +1069,10 @@ void test("impl_plan_tasks maps active roadmap item hints into task plans and at
           title: "Roadmap assisted planning",
           objective: "Organize roadmap-backed Spark planning tasks.",
           scope: "Do not add dashboard or scheduling features.",
-          successCriteria: ["Created tasks use roadmap success criteria."],
-          evidenceRequired: ["Task refs are attached to the roadmap item."],
+          successCriteria: [
+            "Created task plans include the roadmap success criterion and roadmap item ref.",
+          ],
+          evidenceRequired: ["Task graph evidence records task refs attached to the roadmap item."],
           status: "active",
         },
       ],
@@ -1092,8 +1100,12 @@ void test("impl_plan_tasks maps active roadmap item hints into task plans and at
     assert.ok(task);
     assert.match(task.plan?.contextRefs.join("\n") ?? "", /Roadmap objective:/);
     assert.match(task.plan?.constraints.join("\n") ?? "", /Do not add dashboard/);
-    assert.deepEqual(task.plan?.successCriteria, ["Created tasks use roadmap success criteria."]);
-    assert.deepEqual(task.plan?.evidenceRequired, ["Task refs are attached to the roadmap item."]);
+    assert.deepEqual(task.plan?.successCriteria, [
+      "Created task plans include the roadmap success criterion and roadmap item ref.",
+    ]);
+    assert.deepEqual(task.plan?.evidenceRequired, [
+      "Task graph evidence records task refs attached to the roadmap item.",
+    ]);
 
     const project = graph?.projects()[0];
     const item = project?.roadmap.items[0];
@@ -1282,6 +1294,58 @@ void test("impl_plan_tasks blocks mixed readiness without saving", async () => {
     assert.equal(details?.result?.created?.length, 2);
     assert.equal(details?.planDecisions?.[0]?.accepted, true);
     assert.equal(details?.planDecisions?.[1]?.blocked, true);
+    assert.equal(await taskGraphSnapshotText(dir), before);
+    assert.equal((await defaultTaskGraphStore(dir).load())?.tasks().length, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("impl_plan_tasks blocks low-bar unverifiable task plans without saving", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-plan-quality-gate-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const before = await taskGraphSnapshotText(dir);
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+    await useOnlySparkProject(tools, ctx);
+
+    const planned = await executeSparkTool(tools, "impl_plan_tasks", ctx, {
+      tasks: [
+        {
+          name: "weak-plan",
+          title: "Weak plan",
+          description: "Improve things.",
+          kind: "implement",
+          status: "pending",
+          plan: {
+            objective: "Basic improvement",
+            successCriteria: ["Things are better"],
+            evidenceRequired: ["Evidence is recorded"],
+            steps: ["Do stuff"],
+          },
+        },
+      ],
+    });
+
+    const details = planned.details as
+      | { error?: string; planDecision?: { issues?: Array<{ kind?: string }> } }
+      | undefined;
+    assert.match(toolText(planned), /Task plan not ready: @weak-plan/);
+    assert.match(toolText(planned), /unverifiable_success_criteria\(blocking\)/);
+    assert.match(toolText(planned), /weak_evidence_required\(blocking\)/);
+    assert.match(toolText(planned), /low_ambition_plan\(blocking\)/);
+    assert.equal(details?.error, "task_plan_not_ready");
+    assert.deepEqual(
+      details?.planDecision?.issues?.map((issue) => issue.kind),
+      [
+        "weak_objective",
+        "unverifiable_success_criteria",
+        "weak_evidence_required",
+        "weak_plan_items",
+        "low_ambition_plan",
+      ],
+    );
     assert.equal(await taskGraphSnapshotText(dir), before);
     assert.equal((await defaultTaskGraphStore(dir).load())?.tasks().length, 0);
   } finally {
@@ -1521,7 +1585,7 @@ void test("/goal sets a durable session goal instead of execute-mode continuatio
   }
 });
 
-void test("foreground drivers plan empty-frontier research-progress objectives", async () => {
+void test("foreground drivers do not expose selected phases for research-progress objectives", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-foreground-empty-frontier-plan-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1533,20 +1597,30 @@ void test("foreground drivers plan empty-frontier research-progress objectives",
     const goalCommand = run.commands.get("goal");
     assert.ok(goalCommand, "missing /goal command");
     await goalCommand.handler(objective, ctx);
-    assert.equal(run.customMessages.at(-1)?.customType, "spark-goal-request");
-    assert.equal(run.customMessages.at(-1)?.details?.selectedPhase, "plan");
+    const goalMessage = run.customMessages.at(-1);
+    assert.equal(goalMessage?.customType, "spark-goal-request");
+    assert.equal(goalMessage?.details?.selectedPhase, undefined);
+    assert.match(goalMessage?.content ?? "", /Goal driver requirements/);
+    assert.match(goalMessage?.content ?? "", /Goal driver guidance/);
+    assert.doesNotMatch(
+      goalMessage?.content ?? "",
+      /Selected Spark phase|selected phase|phase requirements/,
+    );
 
     const loopCommand = run.commands.get("loop");
     assert.ok(loopCommand, "missing /loop command");
     await loopCommand.handler(objective, ctx);
-    assert.equal(run.customMessages.at(-1)?.customType, "spark-loop-request");
-    assert.equal(run.customMessages.at(-1)?.details?.selectedPhase, "plan");
+    const loopMessage = run.customMessages.at(-1);
+    assert.equal(loopMessage?.customType, "spark-loop-request");
+    assert.equal(loopMessage?.details?.selectedPhase, undefined);
+    assert.match(loopMessage?.content ?? "", /Loop driver requirements/);
+    assert.doesNotMatch(loopMessage?.content ?? "", /Selected Spark phase|selected phase/);
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
 
-void test("foreground drivers preserve pure empty-frontier research objectives", async () => {
+void test("foreground drivers keep pure research objectives driver-owned", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-foreground-empty-frontier-research-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1558,14 +1632,24 @@ void test("foreground drivers preserve pure empty-frontier research objectives",
     const goalCommand = run.commands.get("goal");
     assert.ok(goalCommand, "missing /goal command");
     await goalCommand.handler(objective, ctx);
-    assert.equal(run.customMessages.at(-1)?.customType, "spark-goal-request");
-    assert.equal(run.customMessages.at(-1)?.details?.selectedPhase, "research");
+    const goalMessage = run.customMessages.at(-1);
+    assert.equal(goalMessage?.customType, "spark-goal-request");
+    assert.equal(goalMessage?.details?.selectedPhase, undefined);
+    assert.match(goalMessage?.content ?? "", /Goal driver requirements/);
+    assert.match(goalMessage?.content ?? "", /Goal driver guidance/);
+    assert.doesNotMatch(
+      goalMessage?.content ?? "",
+      /Selected Spark phase|selected phase|phase requirements/,
+    );
 
     const loopCommand = run.commands.get("loop");
     assert.ok(loopCommand, "missing /loop command");
     await loopCommand.handler(objective, ctx);
-    assert.equal(run.customMessages.at(-1)?.customType, "spark-loop-request");
-    assert.equal(run.customMessages.at(-1)?.details?.selectedPhase, "research");
+    const loopMessage = run.customMessages.at(-1);
+    assert.equal(loopMessage?.customType, "spark-loop-request");
+    assert.equal(loopMessage?.details?.selectedPhase, undefined);
+    assert.match(loopMessage?.content ?? "", /Loop driver requirements/);
+    assert.doesNotMatch(loopMessage?.content ?? "", /Selected Spark phase|selected phase/);
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -4518,9 +4602,9 @@ void test("impl_claim_task returns structured task plan details after claiming a
       plan: {
         ...executionReadyPlan("Surface the claim plan summary."),
         constraints: ["Keep output compact", "Do not remove details.task"],
-        successCriteria: ["The text includes success criteria"],
-        evidenceRequired: ["Focused test proves plan fields are rendered"],
-        steps: ["Render the plan", "Prompt for task plan items"],
+        successCriteria: ["Claim output text includes the success criteria and plan items."],
+        evidenceRequired: ["Focused test output proves plan fields are rendered."],
+        steps: ["Render the plan details", "Validate task plan item prompt text"],
       },
     });
     await store.save(graph);
@@ -4542,9 +4626,11 @@ void test("impl_claim_task returns structured task plan details after claiming a
     assert.equal(claimedTask?.name, "claim-plan-output");
     assert.equal(claimedTask?.title, "Claim plan output");
     assert.equal(claimedTask?.claim?.sessionId, ctxSessionKey(ctx));
-    assert.deepEqual(claimedTask?.plan?.successCriteria, ["The text includes success criteria"]);
+    assert.deepEqual(claimedTask?.plan?.successCriteria, [
+      "Claim output text includes the success criteria and plan items.",
+    ]);
     assert.deepEqual(claimedTask?.plan?.evidenceRequired, [
-      "Focused test proves plan fields are rendered",
+      "Focused test output proves plan fields are rendered.",
     ]);
     assert.deepEqual(claimedTask?.plan?.constraints, [
       "Keep output compact",
@@ -4552,14 +4638,14 @@ void test("impl_claim_task returns structured task plan details after claiming a
     ]);
     assert.deepEqual(
       claimedTask?.plan?.items?.map((item) => item.title),
-      ["Render the plan", "Prompt for task plan items"],
+      ["Render the plan details", "Validate task plan item prompt text"],
     );
     const reloaded = await defaultTaskGraphStore(dir).load();
     assert.deepEqual(
       reloaded?.taskTodos(planned.ref).map((todo) => [todo.content, todo.status]),
       [
-        ["Render the plan", "pending"],
-        ["Prompt for task plan items", "pending"],
+        ["Render the plan details", "pending"],
+        ["Validate task plan item prompt text", "pending"],
       ],
     );
     assert.equal(existsSync(sessionTaskTodoPath(dir, ctx)), false);
@@ -4603,6 +4689,7 @@ void test("impl_claim_task requires an existing bound task plan instead of askin
       [
         ["missing_success_criteria", "blocking"],
         ["missing_evidence_required", "blocking"],
+        ["weak_plan_items", "blocking"],
       ],
     );
     const reloaded = await defaultTaskGraphStore(dir).load();
@@ -4733,8 +4820,8 @@ void test("impl_update_task_plan_items supports upsert_done with planned task it
       status: "ready",
       plan: {
         ...executionReadyPlan("Exercise task plan item upsert and plan sync operations."),
-        successCriteria: ["Plan sync criterion is represented"],
-        steps: ["Inspect plan item sync", "Verify plan item sync"],
+        successCriteria: ["Plan sync test output includes the represented criterion."],
+        steps: ["Inspect plan item sync state", "Verify plan item sync output"],
       },
     });
     await store.save(graph);
@@ -4755,7 +4842,7 @@ void test("impl_update_task_plan_items supports upsert_done with planned task it
 
     await executeSparkTool(tools, "impl_update_task_plan_items", ctx, {
       ops: [
-        { op: "upsert_done", item: "Verify plan item sync" },
+        { op: "upsert_done", item: "Verify plan item sync output" },
         { op: "upsert_done", item: "Ad hoc validation completed" },
       ],
     });
@@ -4765,8 +4852,8 @@ void test("impl_update_task_plan_items supports upsert_done with planned task it
     assert.deepEqual(
       todos.map((todo) => [todo.content, todo.status]),
       [
-        ["Inspect plan item sync", "in_progress"],
-        ["Verify plan item sync", "done"],
+        ["Inspect plan item sync state", "in_progress"],
+        ["Verify plan item sync output", "done"],
         ["Ad hoc validation completed", "done"],
       ],
     );
@@ -4796,8 +4883,8 @@ void test("impl_plan_tasks syncs concrete plan items into task plan items", asyn
           kind: "implement",
           plan: {
             ...executionReadyPlan("Planned task should get concrete TODOs from its plan."),
-            successCriteria: ["Planned criterion is represented"],
-            steps: ["Plan step one", "Plan step two"],
+            successCriteria: ["Plan sync test output includes the represented planned criterion."],
+            steps: ["Inspect planned plan-item sync state", "Verify planned plan-item sync output"],
           },
         },
       ],
@@ -4816,8 +4903,8 @@ void test("impl_plan_tasks syncs concrete plan items into task plan items", asyn
     assert.deepEqual(
       todos.map((todo) => [todo.content, todo.status]),
       [
-        ["Plan step one", "pending"],
-        ["Plan step two", "pending"],
+        ["Inspect planned plan-item sync state", "pending"],
+        ["Verify planned plan-item sync output", "pending"],
       ],
     );
   } finally {
@@ -5960,6 +6047,8 @@ void test("split task tools dispatch read, write, and assign actions", async () 
     assert.match(taskReadParameters, /project_status/);
     assert.match(taskReadParameters, /workspace_status/);
     assert.match(taskReadParameters, /run_status/);
+    assert.match(taskReadParameters, /kill_active/);
+    assert.match(taskReadParameters, /forceAfterMs/);
     await assert.rejects(
       () => executeSparkTool(tools, "task_read", ctx, { action: "status" }),
       /task_read\.action must be one of: task_status, project_status, workspace_status, project_list, run_status/,
@@ -5972,6 +6061,15 @@ void test("split task tools dispatch read, write, and assign actions", async () 
       () => executeSparkTool(tools, "task_write", ctx, { action: "run_ready" }),
       /task_write\.action must be one of:/,
     );
+    await assert.rejects(
+      () => executeSparkTool(tools, "task_read", ctx, { action: "run_status", runAction: "stop" }),
+      /task\.runAction must be status, list, inspect, reconcile, kill, reply, steer, ack, or kill_active/,
+    );
+    const guardedKill = await executeSparkTool(tools, "task_read", ctx, {
+      action: "run_status",
+      runAction: "kill",
+    });
+    assert.match(toolText(guardedKill), /kill_requires_target/);
 
     const created = await executeSparkTool(tools, "task_write", ctx, {
       action: "project_use",
@@ -6884,7 +6982,12 @@ void test("spark_goal foreground loop asks agent to bootstrap a project when non
     await flushAsyncWork();
 
     assert.equal(isForegroundGoalTickMessage(run.customMessages.at(-1)), true);
-    assert.equal(run.customMessages.at(-1)?.details?.selectedPhase, "plan");
+    assert.equal(run.customMessages.at(-1)?.details?.selectedPhase, undefined);
+    assert.match(run.customMessages.at(-1)?.content ?? "", /Goal driver requirements/);
+    assert.doesNotMatch(
+      run.customMessages.at(-1)?.content ?? "",
+      /Selected Spark phase|selected phase|phase requirements/,
+    );
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;
@@ -7082,6 +7185,7 @@ void test("spark_goal tool sets and updates durable session goals", async () => 
     const editedGoal = await loadSessionGoal(dir, ctx);
     assert.equal(editedGoal?.goalId, pausedGoal.goalId);
     assert.equal(editedGoal?.objective, "Finish the edited durable goal slice");
+    assert.equal(editedGoal?.originalObjective, "Finish the durable goal slice");
     assert.equal(editedGoal?.lastReviewRef, undefined);
     assert.equal(editedGoal?.lastReviewArtifactRef, undefined);
     assert.equal(editedGoal?.lastReviewedAt, undefined);
@@ -7883,6 +7987,73 @@ void test("/repro command starts, reports, and stops the repro drive", async () 
   }
 });
 
+void test("/repro command treats non-action text as the repro objective", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-repro-command-objective-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const run = registerSparkToolsForTest();
+    const reproCommand = run.commands.get("repro");
+    assert.ok(reproCommand, "missing /repro command");
+
+    const objective = "你来进行正经的复现对齐工作";
+    await reproCommand.handler(objective, ctx);
+
+    const repro = await readSessionRepro(dir, ctx);
+    assert.equal(repro?.status, "active");
+    assert.equal(repro?.objective, objective);
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", drive: "repro" });
+    const message = run.customMessages.at(-1);
+    assert.equal(message?.customType, "spark-repro-request");
+    assert.equal(message?.details?.purpose, "foreground-repro-tick");
+    assert.match(message?.content ?? "", new RegExp(`Repro objective: ${objective}`));
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark repro active:/);
+    assert.match(ctx.notifications.at(-1)?.message ?? "", new RegExp(objective));
+
+    const updatedObjective = "重新对齐复现验收证据";
+    await reproCommand.handler(`start ${updatedObjective}`, ctx);
+    const updated = await readSessionRepro(dir, ctx);
+    assert.equal(updated?.reproId, repro?.reproId);
+    assert.equal(updated?.objective, updatedObjective);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("foreground driver slash commands share status, stop, and restart grammar", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-foreground-command-grammar-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const run = registerSparkToolsForTest();
+    const goalCommand = run.commands.get("goal");
+    const loopCommand = run.commands.get("loop");
+    assert.ok(goalCommand, "missing /goal command");
+    assert.ok(loopCommand, "missing /loop command");
+
+    await goalCommand.handler("Unify foreground goal grammar", ctx);
+    assert.equal((await loadSessionGoal(dir, ctx))?.objective, "Unify foreground goal grammar");
+    await goalCommand.handler("status", ctx);
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark goal active: Unify/);
+    await goalCommand.handler("restart Replace foreground goal grammar", ctx);
+    assert.equal((await loadSessionGoal(dir, ctx))?.objective, "Replace foreground goal grammar");
+    await goalCommand.handler("stop", ctx);
+    assert.equal(await loadSessionGoal(dir, ctx), undefined);
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", drive: "assist" });
+
+    await loopCommand.handler("Unify foreground loop grammar", ctx);
+    assert.equal((await loadSessionLoop(dir, ctx))?.objective, "Unify foreground loop grammar");
+    await loopCommand.handler("status", ctx);
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark loop active: Unify/);
+    await loopCommand.handler("restart Replace foreground loop grammar", ctx);
+    assert.equal((await loadSessionLoop(dir, ctx))?.objective, "Replace foreground loop grammar");
+    await loopCommand.handler("stop", ctx);
+    assert.equal(await loadSessionLoop(dir, ctx), undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
 void test("repro foreground driver ticks on session_start, reschedules on agent_end, and stops when complete", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-repro-foreground-driver-"));
   const originalSetTimeout = globalThis.setTimeout;
@@ -8278,6 +8449,8 @@ void test("spark_goal complete no longer blocks on reproduction project kind gat
               targetKind: "goal",
               goalId: "test",
               achieved: true,
+              evidenceValid: true,
+              objectiveSatisfied: true,
               outcome: "approved",
               confidence: "high",
               summary: "All done.",
@@ -9396,7 +9569,7 @@ void test("impl_workflow_runs exposes active child runs and refuses broad kill",
     await chmod(fakePi, 0o755);
     process.env.PATH = `${dir}:${process.env.PATH ?? ""}`;
 
-    const { tools } = registerSparkToolsForTest();
+    const { tools } = registerSparkToolsForTest({ piCommand: fakePi });
     await useOnlySparkProject(tools, ctx);
     await executeSparkTool(tools, "impl_run_ready_tasks", ctx, {
       dryRun: false,
@@ -10397,7 +10570,7 @@ void test("impl_run_ready_tasks reports workflow-run completion without queuing 
     await chmod(fakePi, 0o755);
     process.env.PATH = `${dir}:${process.env.PATH ?? ""}`;
 
-    const extension = registerSparkToolsForTest();
+    const extension = registerSparkToolsForTest({ piCommand: fakePi });
     const { tools, messages } = extension;
     await useOnlySparkProject(tools, ctx);
     await executeSparkTool(tools, "impl_run_ready_tasks", ctx, { dryRun: false });
@@ -12037,6 +12210,8 @@ function createApprovingReviewerRunner(): ReviewerRunner {
                 targetKind: "goal" as const,
                 goalId: input.goalId,
                 achieved: input.requestedStatus === "complete",
+                evidenceValid: true,
+                objectiveSatisfied: input.requestedStatus === "complete",
                 remainingWork: "",
               },
         record: {
@@ -12095,7 +12270,9 @@ function createRejectingReviewerRunner(
   };
 }
 
-function registerSparkToolsForTest(options: { reviewerRunner?: ReviewerRunner } = {}): {
+function registerSparkToolsForTest(
+  options: { reviewerRunner?: ReviewerRunner; piCommand?: string } = {},
+): {
   tools: Map<string, SparkToolConfig>;
   messages: string[];
   customMessages: Array<{
@@ -12136,6 +12313,7 @@ function registerSparkToolsForTest(options: { reviewerRunner?: ReviewerRunner } 
     getAllTools: () => Array<{ name: string }>;
     setActiveTools: (names: string[]) => void;
     createReviewerRunner: NonNullable<SparkExtensionApiForTest["createReviewerRunner"]>;
+    getPiCommand?: () => string | undefined;
   } = {
     registerCommand: (name, config) => {
       commands.set(name, config);
@@ -12171,6 +12349,7 @@ function registerSparkToolsForTest(options: { reviewerRunner?: ReviewerRunner } 
     },
     createReviewerRunner: () =>
       options.reviewerRunner ?? createTaskApprovingGoalUnmetReviewerRunner(),
+    getPiCommand: () => options.piCommand,
   };
   const registerExternalTool = (config: SparkToolConfig): void => {
     tools.set(config.name, config);

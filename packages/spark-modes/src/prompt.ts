@@ -2,9 +2,11 @@ import type { ModeRegistry } from "./registry.ts";
 import type { Mode, ModeRenderContext, TurnDriver } from "./types.ts";
 
 /**
- * Render the compact standing phase marker line. This is the single short signal
- * naming the active lens + drive; the trivial `research`/`assist` combination
- * renders nothing so plain turns stay noise-free.
+ * Render the compact standing marker line. Manual assist turns expose the
+ * selected phase; autonomous drivers expose the driver instead, because their
+ * concrete next-step policy is owned by driver state rather than a global phase.
+ * The trivial `research`/`assist` combination renders nothing so plain turns
+ * stay noise-free.
  */
 export function renderModeMarker(input: {
   mode: Mode;
@@ -12,9 +14,12 @@ export function renderModeMarker(input: {
   /** Toolset hint appended after the marker, if any. */
   toolsHint?: string;
 }): string | undefined {
-  const trivial = input.mode === "research" && input.driver === "assist";
-  const driverSuffix = input.driver === "assist" ? "" : ` · Mode: ${input.driver}`;
-  const marker = trivial ? "" : `Phase: ${input.mode}${driverSuffix}.`;
+  const marker =
+    input.driver === "assist"
+      ? input.mode === "research"
+        ? ""
+        : `Phase: ${input.mode}.`
+      : `Drive: ${input.driver}.`;
   const parts = [marker, input.toolsHint?.trim()].filter((part): part is string => Boolean(part));
   if (parts.length === 0) return undefined;
   return parts.join(" ");

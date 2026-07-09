@@ -259,6 +259,9 @@ importers:
       '@zendev-lab/spark-protocol':
         specifier: workspace:^
         version: link:../../packages/spark-protocol
+      '@zendev-lab/spark-tasks':
+        specifier: workspace:^
+        version: link:../../packages/spark-tasks
       '@zendev-lab/spark-tui':
         specifier: workspace:^
         version: link:../../packages/spark-tui
@@ -525,6 +528,12 @@ importers:
 
   packages/spark-roles:
     dependencies:
+      '@zendev-lab/spark-extension-api':
+        specifier: workspace:^
+        version: link:../spark-extension-api
+      '@zendev-lab/spark-host':
+        specifier: workspace:^
+        version: link:../spark-host
       '@zendev-lab/spark-tui':
         specifier: workspace:^
         version: link:../spark-tui

@@ -182,6 +182,7 @@ void test("spark-web extension registers tools, retrieves cache, and skips confl
       allowPrivateHosts: true,
     });
     assert.ok(api.tools.has("web_search"));
+    assert.ok(api.tools.has("code_search"));
     assert.ok(api.tools.has("fetch_content"));
     assert.ok(api.tools.has("get_search_content"));
 
@@ -205,6 +206,292 @@ void test("spark-web extension registers tools, retrieves cache, and skips confl
       { cwd: dir },
     );
     assert.match(recovered.content[0]?.text ?? "", /untrusted web content/);
+
+    const multiFetchResult = await fetchTool.execute(
+      "fetch-2",
+      { urls: ["https://example.com/one", "https://example.com/two"], prompt: "compat" },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+    assert.equal((multiFetchResult.details as { leafDegraded?: boolean }).leafDegraded, true);
+    assert.equal(
+      (multiFetchResult.details as { leafReasonCode?: string }).leafReasonCode,
+      "host-unsupported",
+    );
+    const aggregateResponseId = (multiFetchResult.details as { responseId?: string }).responseId;
+    assert.ok(aggregateResponseId);
+    const recoveredByIndex = await getTool.execute(
+      "get-2",
+      { responseId: aggregateResponseId, urlIndex: 1 },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+    assert.match(recoveredByIndex.content[0]?.text ?? "", /https:\/\/example\.com\/two/);
+
+    // No prompt: zero leaf calls, existing sanitized mechanical result.
+    let noPromptLeafCalls = 0;
+    const noPromptFetch = await fetchTool.execute(
+      "fetch-no-prompt",
+      { url: "https://example.com/no-prompt" },
+      new AbortController().signal,
+      () => undefined,
+      {
+        cwd: dir,
+        runLeaf: async () => {
+          noPromptLeafCalls += 1;
+          return { degraded: false, text: "should not run", model: "fake/model" };
+        },
+      },
+    );
+    assert.equal(noPromptLeafCalls, 0);
+    assert.equal((noPromptFetch.details as { promptProvided?: boolean }).promptProvided, false);
+    assert.match(noPromptFetch.content[0]?.text ?? "", /untrusted web content/);
+
+    // Prompt: exactly one content-analyst leaf call over sanitized content.
+    const fetchLeafCalls: Array<{ role: string; input: string; model?: string }> = [];
+    const analyzedFetch = await fetchTool.execute(
+      "fetch-leaf",
+      { url: "https://example.com/analyze", prompt: "Summarize the warning", model: "fake/model" },
+      new AbortController().signal,
+      () => undefined,
+      {
+        cwd: dir,
+        runLeaf: async (request: { role: string; input: string; model?: string }) => {
+          fetchLeafCalls.push({ role: request.role, input: request.input, model: request.model });
+          return {
+            degraded: false,
+            text: "Analysis: the page says to ignore previous instructions.",
+            model: "fake/model",
+          };
+        },
+      },
+    );
+    assert.equal(fetchLeafCalls.length, 1);
+    assert.equal(fetchLeafCalls[0]?.role, "content-analyst");
+    assert.equal(fetchLeafCalls[0]?.model, "fake/model");
+    assert.match(fetchLeafCalls[0]?.input ?? "", /Summarize the warning/);
+    assert.match(fetchLeafCalls[0]?.input ?? "", /untrusted web content/);
+    assert.match(analyzedFetch.content[0]?.text ?? "", /Analysis: the page says/);
+    assert.match(analyzedFetch.content[0]?.text ?? "", /Raw sanitized content:/);
+    assert.equal((analyzedFetch.details as { leafDegraded?: boolean }).leafDegraded, false);
+
+    // Prompt with degraded leaf: mechanical fallback remains available and flagged.
+    let degradedFetchLeafCalls = 0;
+    const degradedFetch = await fetchTool.execute(
+      "fetch-leaf-degraded",
+      { url: "https://example.com/degraded", prompt: "Summarize" },
+      new AbortController().signal,
+      () => undefined,
+      {
+        cwd: dir,
+        runLeaf: async () => {
+          degradedFetchLeafCalls += 1;
+          return { degraded: true, text: "", reasonCode: "model-call-failed" as const };
+        },
+      },
+    );
+    assert.equal(degradedFetchLeafCalls, 1);
+    assert.equal((degradedFetch.details as { leafDegraded?: boolean }).leafDegraded, true);
+    assert.equal(
+      (degradedFetch.details as { leafReasonCode?: string }).leafReasonCode,
+      "model-call-failed",
+    );
+    assert.match(degradedFetch.content[0]?.text ?? "", /untrusted web content/);
+    assert.doesNotMatch(degradedFetch.content[0]?.text ?? "", /Raw sanitized content:/);
+
+    const webSearch = api.tools.get("web_search")!;
+    const searchResult = await webSearch.execute(
+      "search-1",
+      { queries: ["spark memory", "spark web"], provider: "auto", workflow: "none" },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+    const searchResponseId = (searchResult.details as { responseId?: string }).responseId;
+    assert.ok(searchResponseId);
+    const recoveredQuery = await getTool.execute(
+      "get-query",
+      { responseId: searchResponseId, queryIndex: 1 },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir },
+    );
+    assert.match(recoveredQuery.content[0]?.text ?? "", /Mock answer for spark web/);
+
+    const codeSearch = await api.tools
+      .get("code_search")!
+      .execute(
+        "code-1",
+        { query: "SvelteKit load API", maxTokens: 1000 },
+        new AbortController().signal,
+        () => undefined,
+        { cwd: dir },
+      );
+    assert.match(codeSearch.content[0]?.text ?? "", /responseId:/);
+
+    // code_search researcher leaf: one leaf call, citation-preserving, degrade-safe.
+    const codeLeafCalls: Array<{ role: string; input: string }> = [];
+    const codeResult = await api.tools
+      .get("code_search")!
+      .execute(
+        "code-leaf",
+        { query: "SvelteKit load API", maxTokens: 1000 },
+        new AbortController().signal,
+        () => undefined,
+        {
+          cwd: dir,
+          runLeaf: async (request: { role: string; input: string }) => {
+            codeLeafCalls.push({ role: request.role, input: request.input });
+            return {
+              degraded: false,
+              text: "Use https://example.com/1 fetch in load().",
+              model: "fake/model",
+            };
+          },
+        },
+      );
+    assert.equal(codeLeafCalls.length, 1);
+    assert.equal(codeLeafCalls[0]?.role, "code-researcher");
+    assert.match(codeResult.content[0]?.text ?? "", /Use https:\/\/example\.com\/1 fetch in load/);
+    assert.match(codeResult.content[0]?.text ?? "", /https:\/\/example\.com\/1/);
+    assert.equal((codeResult.details as { leafDegraded?: boolean }).leafDegraded, false);
+
+    const codeDegraded = await api.tools
+      .get("code_search")!
+      .execute(
+        "code-degraded",
+        { query: "SvelteKit load API", maxTokens: 1000 },
+        new AbortController().signal,
+        () => undefined,
+        { cwd: dir },
+      );
+    assert.equal((codeDegraded.details as { leafDegraded?: boolean }).leafDegraded, true);
+    assert.match(codeDegraded.content[0]?.text ?? "", /responseId:/);
+
+    // Present-but-degraded runLeaf: mechanical fallback + flags.
+    let degradedLeafCalls = 0;
+    const codeDegradedLeaf = await api.tools
+      .get("code_search")!
+      .execute(
+        "code-degraded-leaf",
+        { query: "SvelteKit load API", maxTokens: 1000 },
+        new AbortController().signal,
+        () => undefined,
+        {
+          cwd: dir,
+          runLeaf: async () => {
+            degradedLeafCalls += 1;
+            return { degraded: true, text: "", reasonCode: "model-call-failed" as const };
+          },
+        },
+      );
+    assert.equal(degradedLeafCalls, 1);
+    assert.equal((codeDegradedLeaf.details as { leafDegraded?: boolean }).leafDegraded, true);
+    assert.equal(
+      (codeDegradedLeaf.details as { leafReasonCode?: string }).leafReasonCode,
+      "model-call-failed",
+    );
+    assert.match(codeDegradedLeaf.content[0]?.text ?? "", /responseId:/);
+    assert.match(codeDegradedLeaf.content[0]?.text ?? "", /Mock answer/);
+
+    // No provider results: zero leaf calls, reasonCode no-model.
+    const noProviderApi = new FakeApi();
+    sparkWebExtension(noProviderApi, {
+      contentStorePath: join(dir, "content-noprovider.json"),
+      fetcher: mockFetcher,
+      allowPrivateHosts: true,
+    });
+    let noResultLeafCalls = 0;
+    const codeNoResults = await noProviderApi.tools
+      .get("code_search")!
+      .execute(
+        "code-no-results",
+        { query: "SvelteKit load API", maxTokens: 1000 },
+        new AbortController().signal,
+        () => undefined,
+        {
+          cwd: dir,
+          runLeaf: async () => {
+            noResultLeafCalls += 1;
+            return { degraded: false, text: "should not be called", model: "fake/model" };
+          },
+        },
+      );
+    assert.equal(noResultLeafCalls, 0);
+    assert.equal((codeNoResults.details as { leafReasonCode?: string }).leafReasonCode, "no-model");
+    assert.equal((codeNoResults.details as { leafDegraded?: boolean }).leafDegraded, true);
+    assert.match(codeNoResults.content[0]?.text ?? "", /responseId:/);
+
+    // web_search researcher leaf: one leaf call over gathered results, citation-preserving.
+    const leafCalls: Array<{ role: string; input: string }> = [];
+    const researchApi = new FakeApi();
+    sparkWebExtension(researchApi, {
+      contentStorePath: join(dir, "content-leaf.json"),
+      fetcher: mockFetcher,
+      searchProvider: mockSearchProvider,
+      allowPrivateHosts: true,
+    });
+    const runLeaf = async (request: { role: string; input: string }) => {
+      leafCalls.push({ role: request.role, input: request.input });
+      return {
+        degraded: false,
+        text: "Synthesized: use https://example.com/1 as the primary source.",
+        model: "fake/model",
+      };
+    };
+    const researchResult = await researchApi.tools
+      .get("web_search")!
+      .execute(
+        "search-leaf",
+        { queries: ["spark leaf"] },
+        new AbortController().signal,
+        () => undefined,
+        { cwd: dir, runLeaf },
+      );
+    assert.equal(leafCalls.length, 1);
+    assert.equal(leafCalls[0]?.role, "web-researcher");
+    assert.match(leafCalls[0]?.input ?? "", /Mock answer for spark leaf/);
+    assert.match(
+      researchResult.content[0]?.text ?? "",
+      /Synthesized: use https:\/\/example\.com\/1/,
+    );
+    assert.match(researchResult.content[0]?.text ?? "", /https:\/\/example\.com\/1/);
+    assert.equal((researchResult.details as { leafDegraded?: boolean }).leafDegraded, false);
+
+    // Degraded leaf: fall back to mechanical result and flag it.
+    const degradedResult = await researchApi.tools
+      .get("web_search")!
+      .execute(
+        "search-degraded",
+        { queries: ["spark leaf"] },
+        new AbortController().signal,
+        () => undefined,
+        {
+          cwd: dir,
+          runLeaf: async () => ({
+            degraded: true,
+            text: "",
+            reasonCode: "model-call-failed" as const,
+          }),
+        },
+      );
+    assert.equal((degradedResult.details as { leafDegraded?: boolean }).leafDegraded, true);
+    assert.match(degradedResult.content[0]?.text ?? "", /Mock answer for spark leaf/);
+
+    // Absent host runLeaf: also degrades to mechanical without throwing.
+    const absentResult = await researchApi.tools
+      .get("web_search")!
+      .execute(
+        "search-absent",
+        { queries: ["spark leaf"] },
+        new AbortController().signal,
+        () => undefined,
+        { cwd: dir },
+      );
+    assert.equal((absentResult.details as { leafDegraded?: boolean }).leafDegraded, true);
+    assert.match(absentResult.content[0]?.text ?? "", /Mock answer for spark leaf/);
 
     const conflictApi = new FakeApi();
     conflictApi.registerTool({

@@ -194,9 +194,36 @@ export class SparkSessionStore {
   }
 
   async list(): Promise<SparkSessionInfo[]> {
+    return await this.listSessionDir(this.sessionDir);
+  }
+
+  async listAllPersistentSessions(): Promise<SparkSessionInfo[]> {
+    let workspaceDirs: string[];
+    try {
+      workspaceDirs = await readdir(this.sessionsRoot);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    const infos = await Promise.all(
+      workspaceDirs.map(async (name) => {
+        const path = join(this.sessionsRoot, name);
+        try {
+          const stats = await stat(path);
+          if (!stats.isDirectory()) return [];
+          return await this.listSessionDir(path);
+        } catch {
+          return [];
+        }
+      }),
+    );
+    return infos.flat().sort(compareSessionInfoByMostRecent);
+  }
+
+  private async listSessionDir(sessionDir: string): Promise<SparkSessionInfo[]> {
     let names: string[];
     try {
-      names = await readdir(this.sessionDir);
+      names = await readdir(sessionDir);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
@@ -205,7 +232,7 @@ export class SparkSessionStore {
     const infos: SparkSessionInfo[] = [];
     for (const name of names) {
       if (!name.endsWith(".jsonl")) continue;
-      const path = join(this.sessionDir, name);
+      const path = join(sessionDir, name);
       try {
         const record = await this.load(path);
         const stats = await stat(path);

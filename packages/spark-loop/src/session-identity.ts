@@ -12,7 +12,10 @@ export function sparkSessionKey(ctx?: SparkSessionContext): string {
   const sessionFile = ctx?.sessionManager?.getSessionFile?.();
   if (sessionFile) return `session:${stableId(sessionFile)}`;
   const leaf = ctx?.sessionManager?.getLeafId?.();
-  if (leaf) return `leaf:${leaf}`;
+  if (leaf) {
+    if (leaf.startsWith("session:") || leaf.startsWith("leaf:")) return leaf;
+    return `leaf:${leaf}`;
+  }
   return "session:ephemeral";
 }
 

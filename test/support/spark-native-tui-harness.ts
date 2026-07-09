@@ -9,6 +9,7 @@ import {
   type SparkNativeInteractionHandler,
   type SparkNativeResponder,
   type SparkNativeSlashCommandMap,
+  type SparkNativeWorkspaceSessionState,
 } from "../../apps/spark-tui/src/native-tui.ts";
 import type { SparkKeybindings } from "../../apps/spark-tui/src/host/keybindings.ts";
 import type { SparkTheme } from "../../apps/spark-tui/src/host/theme.ts";
@@ -45,6 +46,7 @@ export interface SparkNativeTuiHarnessOptions {
   keybindings?: SparkKeybindings;
   theme?: SparkTheme;
   withOverlay?: boolean;
+  workspaceSession?: SparkNativeWorkspaceSessionState;
 }
 
 export function createSparkNativeTuiHarness(

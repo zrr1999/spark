@@ -6,10 +6,7 @@ import {
 } from "@zendev-lab/spark-loop";
 import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/spark-tasks";
 import { nowIso, type ProjectRef } from "@zendev-lab/spark-extension-api";
-import type {
-  SparkEntryIntent,
-  SparkEntryPhase,
-} from "../../pi-extension/src/extension/spark-entry.ts";
+import type { SparkEntryIntent } from "../../pi-extension/src/extension/spark-entry.ts";
 import { applySparkEntryResolution } from "../../pi-extension/src/extension/spark-entry-application.ts";
 import {
   detectSparkProjectState,
@@ -20,7 +17,6 @@ import {
   loadSparkGraph,
   sparkSessionOwnerKey,
 } from "../../pi-extension/src/extension/session-state.ts";
-import { suggestForegroundGoalPhase } from "../../pi-extension/src/extension/spark-foreground-goal-mode.ts";
 import {
   requestGoalCompletionReview,
   type GoalCompletionReviewOutcome,
@@ -58,12 +54,10 @@ import {
   type SparkLanguage,
 } from "../../pi-extension/src/extension/spark-i18n.ts";
 import {
-  defaultSparkPhaseRegistry,
   renderSparkImplementationModePrompt,
   renderSparkModeVisibleMessage,
-  resolveActiveMode,
 } from "../../pi-extension/src/extension/mode/index.ts";
-import { renderSparkGoalDriverPhasePrompt } from "../../pi-extension/src/extension/spark-mode-prompts.ts";
+import { renderSparkGoalDriverPrompt } from "../../pi-extension/src/extension/spark-mode-prompts.ts";
 import {
   enterSparkUltracodeDriver,
   enterSparkWorkflowDriver,
@@ -88,8 +82,9 @@ import {
 import {
   compactInline,
   parseDynamicWorkflowRunRefArg,
-  parseGoalCommandArgs,
+  parseGoalCommandAction,
   parseLoopCommandAction,
+  parseReproCommandArgs,
 } from "../../pi-extension/src/extension/spark-command-parser-utils.ts";
 import {
   isGoalToolDeactivationEvent,
@@ -228,7 +223,17 @@ export function registerSparkCommands(
   });
 
   pi.registerCommand("goal", {
-    description: "Set or start the current session's durable Spark goal.",
+    description:
+      "Set, inspect, or stop the current session's durable Spark goal. Usage: /goal [start|status|stop|restart] [objective]; unrecognized text is treated as the goal objective.",
+    argumentHint: "[start|status|stop|restart] [objective]",
+    metadata: {
+      source: "extension",
+      extensionId: "spark-drive",
+      plane: "server",
+      resource: "goal",
+      verbs: ["start", "status", "stop", "restart"],
+      canonicalCliTarget: "spark server goal status",
+    },
     async handler(args, ctx) {
       await handleSparkGoalCommand(pi, ctx, args.trim());
     },
@@ -236,7 +241,16 @@ export function registerSparkCommands(
 
   pi.registerCommand("loop", {
     description:
-      "Start or continue an open-ended Spark loop driver; unlike /goal, this never requests reviewer-gated completion.",
+      "Start, inspect, or stop an open-ended Spark loop driver; unlike /goal, this never requests reviewer-gated completion. Usage: /loop [start|status|stop|restart] [objective].",
+    argumentHint: "[start|status|stop|restart] [objective]",
+    metadata: {
+      source: "extension",
+      extensionId: "spark-drive",
+      plane: "server",
+      resource: "loop",
+      verbs: ["start", "status", "stop", "restart"],
+      canonicalCliTarget: "spark server goal status",
+    },
     async handler(args, ctx) {
       await handleSparkLoopCommand(pi, ctx, args.trim());
     },
@@ -244,8 +258,16 @@ export function registerSparkCommands(
 
   pi.registerCommand("repro", {
     description:
-      "Start, inspect, or stop the milestone-driven Spark repro drive. Usage: /repro [start|status|stop|restart]",
-    argumentHint: "[start|status|stop|restart]",
+      "Start, inspect, or stop the milestone-driven Spark repro drive. Usage: /repro [start|status|stop|restart] [objective]; unrecognized text is treated as the repro objective.",
+    argumentHint: "[start|status|stop|restart] [objective]",
+    metadata: {
+      source: "extension",
+      extensionId: "spark-drive",
+      plane: "server",
+      resource: "repro",
+      verbs: ["start", "status", "stop", "restart"],
+      canonicalCliTarget: "spark server goal status",
+    },
     async handler(args, ctx) {
       await handleSparkReproCommand(pi, ctx, args.trim());
     },
@@ -358,15 +380,32 @@ export function registerSparkCommands(
       ctx.ui?.notify?.(`Spark loop stopped: ${compactInline(existingLoop.objective)}`, "info");
       return;
     }
+    if (loopAction.action === "status") {
+      ctx.ui?.notify?.(
+        existingLoop
+          ? `Spark loop ${existingLoop.status}: ${compactInline(existingLoop.objective)}`
+          : "No Spark loop is active. Use /loop <objective> or /loop start <objective> to begin.",
+        "info",
+      );
+      return;
+    }
     if (loopAction.action === "removed") {
       ctx.ui?.notify?.("/loop pause was removed; use /loop stop to clear a plain loop.", "info");
       return;
+    }
+    if (loopAction.action === "restart") {
+      clearForegroundLoop(ctx.cwd, ctx);
+      await clearSessionLoop(ctx.cwd, ctx);
+      existingLoop = undefined;
     }
 
     const graph = await loadSparkGraph(ctx.cwd, ctx);
     const project = graph ? await currentSparkProject(ctx.cwd, ctx, graph) : undefined;
     const existingGoal = await loadSessionGoal(ctx.cwd, ctx);
-    const explicitObjective = loopAction.objective;
+    const explicitObjective =
+      loopAction.action === "continue" || loopAction.action === "restart"
+        ? loopAction.objective
+        : "";
     const objective =
       explicitObjective ||
       existingLoop?.objective ||
@@ -408,8 +447,9 @@ export function registerSparkCommands(
     rawArgs: string,
   ): Promise<void> {
     clearForegroundImplement(ctx.cwd, ctx);
-    const firstArg = rawArgs.trim().split(/\s+/, 1)[0] || "start";
-    const action = firstArg === "clear" ? "stop" : firstArg;
+    const parsed = parseReproCommandArgs(rawArgs);
+    const { action } = parsed;
+    const objective = parsed.objective.trim();
 
     if (action === "stop") {
       const existing = await readSessionRepro(ctx.cwd, ctx);
@@ -431,19 +471,20 @@ export function registerSparkCommands(
     if (action === "status") {
       const existing = await readSessionRepro(ctx.cwd, ctx);
       if (!existing) {
-        ctx.ui?.notify?.("No Spark repro drive is active. Use /repro start to begin.", "info");
+        ctx.ui?.notify?.(
+          "No Spark repro drive is active. Use /repro <objective> or /repro start to begin.",
+          "info",
+        );
         return;
       }
       const stage = currentReproStage(existing);
+      const objectiveLabel = existing.objective
+        ? ` objective=${compactInline(existing.objective)},`
+        : "";
       ctx.ui?.notify?.(
-        `Spark repro ${existing.status}: ${stage.title} (${existing.currentStageIndex + 1}/${existing.stages.length}), phase=${existing.currentPhase}`,
+        `Spark repro ${existing.status}:${objectiveLabel} ${stage.title} (${existing.currentStageIndex + 1}/${existing.stages.length}), phase=${existing.currentPhase}`,
         "info",
       );
-      return;
-    }
-
-    if (action !== "start" && action !== "restart") {
-      ctx.ui?.notify?.("Usage: /repro [start|status|stop|restart]", "error");
       return;
     }
 
@@ -458,13 +499,18 @@ export function registerSparkCommands(
 
     const existing = await readSessionRepro(ctx.cwd, ctx);
     const repro =
-      existing?.status === "active" ? existing : createSparkSessionRepro(sparkSessionOwnerKey(ctx));
+      existing?.status === "active"
+        ? objective && existing.objective !== objective
+          ? { ...existing, objective, updatedAt: nowIso(), retryState: undefined }
+          : existing
+        : createSparkSessionRepro(sparkSessionOwnerKey(ctx), undefined, { objective });
     if (repro !== existing) await writeSessionRepro(ctx.cwd, repro, ctx);
 
     const stage = currentReproStage(repro);
     ctx.sparkActiveLens = sparkActiveLens(repro.currentPhase, "repro");
     await deps.refreshSparkWidget(ctx.cwd, ctx);
-    const visible = `Spark repro active: ${stage.title} (${repro.currentStageIndex + 1}/${repro.stages.length}), phase=${repro.currentPhase}`;
+    const objectivePrefix = repro.objective ? `${compactInline(repro.objective)} · ` : "";
+    const visible = `Spark repro active: ${objectivePrefix}${stage.title} (${repro.currentStageIndex + 1}/${repro.stages.length}), phase=${repro.currentPhase}`;
     ctx.ui?.notify?.(visible, "info");
     await runForegroundReproTick(piApi, ctx, { idleGateSatisfied: true, reproId: repro.reproId });
   }
@@ -475,10 +521,38 @@ export function registerSparkCommands(
     rawArgs: string,
   ): Promise<void> {
     clearForegroundImplement(ctx.cwd, ctx);
-    const objective = parseGoalCommandArgs(rawArgs);
+    const parsed = parseGoalCommandAction(rawArgs);
+    const objective = parsed.objective;
     const graph = await loadSparkGraph(ctx.cwd, ctx);
     const project = graph ? await currentSparkProject(ctx.cwd, ctx, graph) : undefined;
-    const existingGoal = await loadSessionGoal(ctx.cwd, ctx);
+    let existingGoal = await loadSessionGoal(ctx.cwd, ctx);
+    if (parsed.action === "stop") {
+      clearForegroundGoalLoop(ctx.cwd, ctx);
+      await clearSessionGoal(ctx.cwd, ctx);
+      ctx.sparkActiveLens = sparkActiveLens(ctx.sparkActiveLens?.phase ?? "research", "assist");
+      await deps.refreshSparkWidget(ctx.cwd, ctx);
+      ctx.ui?.notify?.(
+        existingGoal
+          ? `Spark goal stopped: ${compactInline(existingGoal.objective)}`
+          : "No Spark goal is active.",
+        "info",
+      );
+      return;
+    }
+    if (parsed.action === "status") {
+      ctx.ui?.notify?.(
+        existingGoal
+          ? `Spark goal ${existingGoal.status}: ${compactInline(existingGoal.objective)}`
+          : "No Spark goal is active. Use /goal <objective> or /goal start <objective> to begin.",
+        "info",
+      );
+      return;
+    }
+    if (parsed.action === "restart") {
+      clearForegroundGoalLoop(ctx.cwd, ctx);
+      await clearSessionGoal(ctx.cwd, ctx);
+      existingGoal = undefined;
+    }
     const language = sparkLanguageForProject({
       project,
       goal: existingGoal,
@@ -680,9 +754,6 @@ export function registerSparkCommands(
     const graph = await loadSparkGraph(ctx.cwd, ctx);
     const project = graph ? await currentSparkProject(ctx.cwd, ctx, graph) : undefined;
     const instructions = goalInstructions(language);
-    const selectedPhase = graph
-      ? resolveForegroundGoalPhase(graph, project?.ref, goal.objective)
-      : "plan";
     const instruction = [
       instructions.goalActiveHeader,
       projectTitle ? instructions.currentProject(projectTitle) : undefined,
@@ -697,7 +768,6 @@ export function registerSparkCommands(
     sendSparkRuntimeInstruction(piApi, "spark-goal-request", instruction, visible, {
       goalId: goal.goalId,
       purpose: "foreground-goal-start",
-      selectedPhase,
     });
     markForegroundGoalAwaitingTurn(piApi, ctx, goal.goalId);
     if (!piApi.on)
@@ -1093,10 +1163,7 @@ export function registerSparkCommands(
     const language = sparkLanguageForProject({ project, goal });
     const notifications = goalNotifications(language);
     const visible = notifications.goalTickHeader(compactInline(goal.objective), projectLabel);
-    const selectedPhase = active.graph
-      ? resolveForegroundGoalPhase(active.graph, project?.ref, goal.objective)
-      : "plan";
-    ctx.sparkActiveLens = sparkActiveLens(selectedPhase, "goal");
+    ctx.sparkActiveLens = sparkActiveLens("research", "goal");
     const instruction = renderForegroundGoalTickInstruction(
       project?.title,
       goal.objective,
@@ -1108,7 +1175,6 @@ export function registerSparkCommands(
     sendSparkRuntimeInstruction(piApi, "spark-goal-request", instruction, visible, {
       goalId: goal.goalId,
       purpose: "foreground-goal-tick",
-      selectedPhase,
     });
     markForegroundGoalAwaitingTurn(piApi, ctx, goal.goalId);
   }
@@ -1173,10 +1239,7 @@ export function registerSparkCommands(
     await clearSessionLoopSchedule(ctx.cwd, ctx, { expectedLoopId: loop.loopId });
     const projectLabel = project ? ` · project: ${project.title}` : "";
     const visible = `Spark loop tick: ${compactInline(loop.objective)}${projectLabel}`;
-    const selectedPhase = active.graph
-      ? resolveForegroundGoalPhase(active.graph, project?.ref, loop.objective, "loop")
-      : "plan";
-    ctx.sparkActiveLens = sparkActiveLens(selectedPhase, "loop");
+    ctx.sparkActiveLens = sparkActiveLens("research", "loop");
     const instruction = renderSparkLoopInstruction(
       loop.objective,
       active.graph,
@@ -1186,7 +1249,6 @@ export function registerSparkCommands(
     sendSparkRuntimeInstruction(piApi, "spark-loop-request", instruction, visible, {
       loopId: loop.loopId,
       purpose: "foreground-loop-tick",
-      selectedPhase,
     });
     markForegroundLoopAwaitingTurn(piApi, ctx, loop.loopId);
   }
@@ -1245,7 +1307,8 @@ export function registerSparkCommands(
     const { project, repro } = active;
     const stage = currentReproStage(repro);
     const projectLabel = project ? ` · project: ${project.title}` : "";
-    const visible = `Spark repro tick: ${stage.title} (${repro.currentStageIndex + 1}/${repro.stages.length}), phase=${repro.currentPhase}${projectLabel}`;
+    const objectivePrefix = repro.objective ? `${compactInline(repro.objective)} · ` : "";
+    const visible = `Spark repro tick: ${objectivePrefix}${stage.title} (${repro.currentStageIndex + 1}/${repro.stages.length}), phase=${repro.currentPhase}${projectLabel}`;
     ctx.sparkActiveLens = sparkActiveLens(repro.currentPhase, "repro");
     sendSparkRuntimeInstruction(
       piApi,
@@ -1897,17 +1960,13 @@ export function registerSparkCommands(
   }
 
   function renderSparkLoopPhasePrompt(
-    graph: TaskGraph | null | undefined,
-    selectedProjectRef: ProjectRef | undefined,
-    objective: string,
+    _graph: TaskGraph | null | undefined,
+    _selectedProjectRef: ProjectRef | undefined,
+    _objective: string,
   ): string {
-    const phase = graph
-      ? resolveForegroundGoalPhase(graph, selectedProjectRef, objective, "loop")
-      : "plan";
     return [
-      `Selected Spark phase for loop driver: ${phase}.`,
       "Loop driver requirements:",
-      "- Use the selected phase's tool policy for this turn: research, plan, or implement.",
+      "- Use the loop objective, current project/task state, and blocker/validation signals to choose the next concrete step; do not classify the whole tick as research/plan/implement.",
       "- Continue one concrete low-risk step; block on human decisions or report external blockers instead of lowering scope.",
       "- Use /goal when the user wants evidence-audited completion with reviewer gating.",
       "- End the turn by scheduling the next tick with the loop tool, unless you cleared the loop or reported a blocker that prevents scheduling.",
@@ -1969,31 +2028,7 @@ export function registerSparkCommands(
     selectedProjectRef: ProjectRef | undefined,
     objective: string,
   ): string {
-    const phase = resolveForegroundGoalPhase(graph, selectedProjectRef, objective, "goal");
-    return [
-      `Selected Spark phase for goal drive: ${phase}.`,
-      renderSparkGoalDriverPhasePrompt(graph, selectedProjectRef, objective, phase),
-    ].join("\n\n");
-  }
-
-  function resolveForegroundGoalPhase(
-    graph: TaskGraph,
-    selectedProjectRef: ProjectRef | undefined,
-    objective: string,
-    drive: "goal" | "loop" = "goal",
-  ): SparkEntryPhase {
-    const suggested = suggestForegroundGoalPhase(graph, selectedProjectRef, objective);
-    const resolved = resolveActiveMode({
-      registry: defaultSparkPhaseRegistry(),
-      driver: drive,
-      suggest: suggested,
-      fallback: "implement",
-    });
-    return isSparkEntryPhase(resolved.mode) ? resolved.mode : "implement";
-  }
-
-  function isSparkEntryPhase(phase: string): phase is SparkEntryPhase {
-    return phase === "research" || phase === "plan" || phase === "implement";
+    return renderSparkGoalDriverPrompt(graph, selectedProjectRef, objective);
   }
 
   function renderForegroundGoalTickStatus(

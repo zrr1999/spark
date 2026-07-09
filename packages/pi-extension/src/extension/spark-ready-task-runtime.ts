@@ -5,6 +5,7 @@ import {
   killActiveSparkRoleRunProcesses,
   runSparkTask,
   type RoleLaunchMode,
+  type SparkRoleInstructionExecutor,
 } from "@zendev-lab/spark-runtime";
 import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import type { ReadyTaskRun, ReadyTaskRunKiller } from "@zendev-lab/spark-workflows";
@@ -25,6 +26,7 @@ export interface SparkRuntimeReadyTaskRunnerOptions {
   launch?: RoleLaunchMode;
   forkFromSession?: string;
   sessionModel?: string;
+  roleExecutor?: SparkRoleInstructionExecutor;
   heartbeatIntervalMs?: number;
   onHeartbeat?: (graph: TaskGraph) => void | Promise<void>;
 }
@@ -49,6 +51,7 @@ export function createSparkRuntimeReadyTaskRunner(
         launch: options.launch,
         forkFromSession: options.forkFromSession,
         sessionModel: options.sessionModel,
+        roleExecutor: options.roleExecutor,
         heartbeatIntervalMs: options.heartbeatIntervalMs,
         onHeartbeat: options.onHeartbeat,
         claim: input.claim,
@@ -57,6 +60,7 @@ export function createSparkRuntimeReadyTaskRunner(
       killActiveSparkRoleRunProcesses({
         runRefs: input.runRefs,
         reason: input.reason,
+        forceAfterMs: 0,
       }),
   };
 }

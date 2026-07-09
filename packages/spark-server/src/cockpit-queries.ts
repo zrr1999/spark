@@ -155,8 +155,18 @@ export function loadWorkbenchHome(
 export function loadWorkspaceDashboard(db: DatabaseSync, workspaceRouteId: string) {
   const workspace = loadWorkspaceFullByRouteId(db, workspaceRouteId);
   if (!workspace) return null;
+  const pendingInboxCount = (
+    db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM inbox_items
+         WHERE workspace_id = ? AND status = 'pending'`,
+      )
+      .get(workspace.id) as { count: number }
+  ).count;
   return {
     workspaces: [workspace],
+    pendingInboxCount,
     workspaceControl: loadWorkspaceServerControl(db, workspace.id),
     runnerConnections: listRuntimeConnections(db),
     runnerBindings: listOwnerRuntimeWorkspaceBindings(db, workspace.id),

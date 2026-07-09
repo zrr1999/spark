@@ -53,9 +53,23 @@ export interface ExtensionAPI {
   ): void;
 }
 
+export type CommandSource = "system" | "extension" | (string & {});
+export type CommandPlane = "daemon" | "server" | "tui" | "system" | (string & {});
+
+export interface CommandMetadata {
+  source?: CommandSource;
+  extensionId?: string;
+  plane?: CommandPlane;
+  resource?: string;
+  verbs?: string[];
+  canonicalCliTarget?: string;
+  deprecatedAliasFor?: string;
+}
+
 export interface CommandConfig {
   description: string;
   argumentHint?: string;
+  metadata?: CommandMetadata;
   getArgumentCompletions?: (
     argumentPrefix: string,
   ) =>
@@ -163,12 +177,158 @@ export interface SessionModelRef {
   api?: string;
 }
 
+/**
+ * Stable, credential-free reason codes for a degraded leaf capability call.
+ * Hosts must never derive these from raw provider error text.
+ */
+export type LeafDegradeReason =
+  | "aborted"
+  | "no-model"
+  | "model-binding-unavailable"
+  | "route-unavailable"
+  | "model-call-failed"
+  | "host-unsupported";
+
+/**
+ * A bounded, single-shot model call requested by a high-level tool. A leaf owns
+ * no task, session, tools, or recursion: the calling tool stays responsible for
+ * verifying the advisory result and for any fallback.
+ */
+export interface LeafCapabilityRequest {
+  /** Stable leaf capability id, e.g. "web-researcher" or "memory-reranker". */
+  role: string;
+  /** System-level brief describing exactly the bounded transformation to run. */
+  brief: string;
+  /** Prepared, caller-gathered input payload (treated as untrusted data). */
+  input: string;
+  /** Explicit model override ("provider/model" or a model id). */
+  model?: string;
+  /** Session model to use when no explicit override is provided. */
+  sessionModel?: string;
+  /** Bounded output ceiling for the single completion. */
+  maxTokens?: number;
+  /** Request a reasoning-capable route when available. */
+  reasoning?: boolean;
+  signal?: AbortSignal;
+}
+
+export interface LeafCapabilityResult {
+  /** True when the leaf could not run a model and the caller must fall back. */
+  degraded: boolean;
+  /** Advisory model output text; empty when degraded. */
+  text: string;
+  /** Resolved model id for the completion, when one ran. */
+  model?: string;
+  /** Stable, credential-free reason code when degraded. */
+  reasonCode?: LeafDegradeReason;
+}
+
+/**
+ * Host-provided single-shot leaf runner. Optional on ExtensionContext: portable
+ * extensions and non-Spark hosts may omit it, and tools must degrade gracefully
+ * when it is absent.
+ */
+export type LeafCapabilityRunner = (
+  request: LeafCapabilityRequest,
+) => Promise<LeafCapabilityResult>;
+
+/**
+ * Shared production seam consumer for high-level tools. Calls the optional
+ * host `ctx.runLeaf` and, when the host does not provide it, returns a stable
+ * degraded result (reasonCode "host-unsupported") instead of throwing, so every
+ * leaf-backed tool degrades identically to mechanical output. Tools should call
+ * this rather than touching `ctx.runLeaf` directly.
+ */
+export async function callLeafOrDegrade(
+  ctx: Pick<ExtensionContext, "runLeaf">,
+  request: LeafCapabilityRequest,
+): Promise<LeafCapabilityResult> {
+  const result = await ctx.runLeaf?.(request);
+  if (!result) return { degraded: true, text: "", reasonCode: "host-unsupported" };
+  return result;
+}
+
+export type ExtensionRoleLaunchMode = "fresh" | "forked";
+export type ExtensionRoleRunStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "not_started";
+
+export interface ExtensionRoleRunRequest {
+  role: {
+    ref: RoleRef;
+    id: string;
+    systemPrompt: string;
+    allowedTools?: string[];
+  };
+  instruction: {
+    roleRef: RoleRef;
+    instruction: string;
+    inputs?: string[];
+  };
+  record: {
+    ref: RunRef;
+    roleRef: RoleRef;
+    runName?: string;
+    instruction: string;
+    status: ExtensionRoleRunStatus;
+    startedAt?: string;
+    finishedAt?: string;
+    launch?: ExtensionRoleLaunchMode;
+    model?: string;
+    sessionDir?: string;
+    forkFromSession?: string;
+    noSession?: boolean;
+    sessionPersistence?: "anonymous" | "persistent";
+  };
+  cwd: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+  sessionDir?: string;
+  runName?: string;
+  launch?: ExtensionRoleLaunchMode;
+  forkFromSession?: string;
+  model?: string;
+  noSession?: boolean;
+  sessionPersistence?: "anonymous" | "persistent";
+  env?: NodeJS.ProcessEnv;
+  onEvent?: (event: unknown) => void | Promise<void>;
+}
+
+export interface ExtensionRoleRunResult {
+  record: ExtensionRoleRunRequest["record"];
+  stdout: string;
+  stderr: string;
+  jsonEvents: unknown[];
+}
+
+export type ExtensionRoleRunner = (
+  request: ExtensionRoleRunRequest,
+) => Promise<ExtensionRoleRunResult>;
+
 export interface ExtensionContext {
   cwd?: string;
+  /** Optional absolute path to the Spark state root directory (`.../.spark`). */
+  sparkStateRoot?: string;
   model?: SessionModelRef;
   hasUI?: boolean;
   ui?: ExtensionUi;
   isIdle?: () => boolean;
+  /**
+   * Optional single-shot spark-ai leaf runner supplied by Spark hosts. High-level
+   * tools call `ctx.runLeaf?.(request)` to add bounded reasoning (synthesis,
+   * rerank, extraction) and fall back to mechanical output when it is absent or
+   * returns `{ degraded: true }`.
+   */
+  runLeaf?: LeafCapabilityRunner;
+  /**
+   * Optional daemon-native role runner supplied by Spark hosts. Role tools use
+   * this instead of spawning a nested `pi` process and fail loudly when absent.
+   */
+  runRole?: ExtensionRoleRunner;
 }
 
 export interface ExtensionCommandContext extends ExtensionContext {
@@ -547,6 +707,11 @@ export type TaskPlanIssueKind =
   | "missing_success_criteria"
   | "missing_evidence_required"
   | "missing_steps"
+  | "weak_objective"
+  | "unverifiable_success_criteria"
+  | "weak_evidence_required"
+  | "weak_plan_items"
+  | "low_ambition_plan"
   | "open_questions";
 
 export type TaskCompletionIssueKind = "missing_completion_evidence" | "open_plan_items";

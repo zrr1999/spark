@@ -47,6 +47,7 @@ export interface SparkSessionsCommandOptions {
   store: SparkSessionStore;
   getNavigationState: () => SparkSessionNavigationState | undefined;
   setActiveLeafId?: (leafId: string | null) => void;
+  listTextProvider?: () => string | undefined | Promise<string | undefined>;
 }
 
 export interface SparkSessionsCommandHost {
@@ -176,6 +177,11 @@ export async function runSparkSessionsCommand(
 ): Promise<void> {
   const [subcommand = "list", ...rest] = args.trim().split(/\s+/).filter(Boolean);
   if (subcommand === "list") {
+    const text = await options.listTextProvider?.();
+    if (text?.trim()) {
+      notify(ctx, text.trim());
+      return;
+    }
     const sessions = await options.store.list();
     notify(ctx, formatSessionList(sessions));
     return;
@@ -242,13 +248,19 @@ export async function runSparkSessionsCommand(
   );
 }
 
-export function formatSessionList(sessions: SparkSessionInfo[]): string {
+export function formatSessionList(
+  sessions: SparkSessionInfo[],
+  options: { showWorkspace?: boolean } = {},
+): string {
   if (sessions.length === 0) return "No Spark sessions found";
   return sessions
     .map((session) => {
       const name = session.name ? ` ${session.name}` : "";
-      const first = session.firstMessage ? ` — ${session.firstMessage}` : "";
-      return `${session.id}${name} (${session.messageCount} messages)${first}`;
+      const first = session.firstMessage
+        ? ` — ${summarizeSessionPreview(session.firstMessage)}`
+        : "";
+      const workspace = options.showWorkspace ? ` cwd=${session.cwd} path=${session.path}` : "";
+      return `${session.id}${name} (${session.messageCount} messages)${workspace}${first}`;
     })
     .join("\n");
 }
@@ -324,6 +336,11 @@ function summarizeEntry(entry: SparkSessionEntry): string {
   if (entry.type === "session_info") return `session info ${entry.name ?? ""}`.trim();
   if (entry.type === "label") return `label ${entry.targetId}`;
   return entry.type;
+}
+
+function summarizeSessionPreview(value: string): string {
+  const singleLine = value.replace(/\s+/gu, " ").trim();
+  return singleLine.length > 100 ? `${singleLine.slice(0, 97)}...` : singleLine;
 }
 
 function summarizeMessageEntry(entry: SparkSessionMessageEntry): string {

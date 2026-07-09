@@ -1,0 +1,44 @@
+[
+  {
+    "legacy": "/tasks",
+    "canonicalSlash": "/task list",
+    "canonicalCliTarget": "spark server task list",
+    "status": "deprecated alias"
+  },
+  {
+    "legacy": "/sessions",
+    "canonicalSlash": "/session list",
+    "canonicalCliTarget": "spark daemon session list",
+    "status": "deprecated alias"
+  },
+  {
+    "legacy": "/workflow-runs",
+    "canonicalSlash": "/workflow list",
+    "canonicalCliTarget": "spark server workflow list",
+    "status": "deprecated alias"
+  },
+  {
+    "legacy": "/workflow-pause",
+    "canonicalSlash": "/workflow pause <run>",
+    "canonicalCliTarget": "spark server workflow pause <run>",
+    "status": "deprecated alias"
+  },
+  {
+    "legacy": "/workflow-resume",
+    "canonicalSlash": "/workflow resume <run>",
+    "canonicalCliTarget": "spark server workflow resume <run>",
+    "status": "deprecated alias"
+  },
+  {
+    "legacy": "/workflow-stop",
+    "canonicalSlash": "/workflow stop <run>",
+    "canonicalCliTarget": "spark server workflow stop <run>",
+    "status": "deprecated alias"
+  },
+  {
+    "legacy": "/fork",
+    "canonicalSlash": "/session fork --current",
+    "canonicalCliTarget": "spark daemon session fork --current",
+    "status": "deprecated alias"
+  }
+]

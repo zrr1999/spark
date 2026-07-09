@@ -24,7 +24,7 @@ export function isGoalToolDeactivationEvent(event: unknown): boolean {
   if (toolEvent.toolName !== "goal" || toolEvent.isError === true) return false;
   if (!toolEvent.params || typeof toolEvent.params !== "object") return false;
   const action = (toolEvent.params as { action?: unknown }).action;
-  return action === "pause" || action === "clear";
+  return action === "pause" || action === "clear" || action === "complete";
 }
 
 export function isLoopToolDeactivationEvent(event: unknown): boolean {

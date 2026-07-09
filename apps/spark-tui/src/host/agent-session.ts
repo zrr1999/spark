@@ -25,6 +25,7 @@ export interface SparkAgentSessionRunResult {
   newMessageCount: number;
   assistantText: string;
   assistant?: AssistantMessage;
+  sessionPersistence?: "persistent" | "anonymous";
 }
 
 export class SparkAgentSession {
@@ -55,6 +56,24 @@ export class SparkAgentSession {
       newMessageCount: newMessages.length,
       assistantText: assistantMessageToText(assistant),
       assistant,
+      sessionPersistence: "persistent",
+    };
+  }
+
+  async runAnonymous(options: SparkAgentSessionRunOptions): Promise<SparkAgentSessionRunResult> {
+    this.services.agentLoop.setViewSessionId(options.sessionId);
+    this.services.agentLoop.replaceMessages([]);
+    const beforeCount = this.services.agentLoop.getMessages().length;
+    const assistant = await this.services.agentLoop.submit(options.prompt);
+    if (!assistant) throw new Error("Spark agent produced no assistant response");
+
+    return {
+      sessionId: options.sessionId,
+      sessionPath: "",
+      newMessageCount: this.services.agentLoop.getMessages().slice(beforeCount).length,
+      assistantText: assistantMessageToText(assistant),
+      assistant,
+      sessionPersistence: "anonymous",
     };
   }
 

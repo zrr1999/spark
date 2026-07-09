@@ -156,16 +156,17 @@ void test("runModeToolAction reports status without switching and switches other
   assert.match(switched.text, /focus=ship/u);
 });
 
-void test("renderModeMarker suppresses the trivial research/assist combination", () => {
+void test("renderModeMarker shows phase only for assist and drive for autonomous drivers", () => {
   assert.equal(renderModeMarker({ mode: "research", driver: "assist" }), undefined);
   assert.equal(
     renderModeMarker({ mode: "research", driver: "assist", toolsHint: "Tools: x" }),
     "Tools: x",
   );
   assert.equal(renderModeMarker({ mode: "plan", driver: "assist" }), "Phase: plan.");
+  assert.equal(renderModeMarker({ mode: "implement", driver: "goal" }), "Drive: goal.");
   assert.equal(
-    renderModeMarker({ mode: "implement", driver: "goal" }),
-    "Phase: implement · Mode: goal.",
+    renderModeMarker({ mode: "plan", driver: "loop", toolsHint: "Tools: x" }),
+    "Drive: loop. Tools: x",
   );
 });
 

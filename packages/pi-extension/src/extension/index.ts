@@ -69,6 +69,7 @@ interface SparkExtensionAPI extends SparkCommandApi {
     ctx: SparkToolContext,
   ): ReviewerRunner | Promise<ReviewerRunner>;
   getThinkingLevel?(): unknown;
+  getPiCommand?(): string | undefined;
   registerMessageRenderer?(
     customType: string,
     renderer: (
@@ -90,6 +91,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
 
   const workflowRunManagerController = new SparkWorkflowRunManagerController({
     refreshSparkWidget,
+    piCommand: () => pi.getPiCommand?.(),
   });
 
   registerPiAskAutoAnswerProvider("spark-goal-reviewer", async (request, rawCtx) => {
@@ -134,8 +136,10 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     return new PiRolesReviewerRunner({
       registry: await createSparkRoleRegistry(cwd),
       cwd,
+      piCommand: "pi",
       sessionModel: sessionModelName(ctx.model),
       reviewerThinkingLevel: capReviewerThinkingLevel(pi.getThinkingLevel?.()),
+      nativeExecutor: ctx.runRole,
     });
   }
 
@@ -384,12 +388,35 @@ function normalizeTaskTodoScope(value: unknown): "task" {
   throw new Error('task.scope must be "task" for todo_update');
 }
 
-function normalizeTaskRunStatusAction(value: unknown): "status" | "list" | "inspect" | "reconcile" {
+function normalizeTaskRunStatusAction(
+  value: unknown,
+):
+  | "status"
+  | "list"
+  | "inspect"
+  | "reconcile"
+  | "kill"
+  | "reply"
+  | "steer"
+  | "ack"
+  | "kill_active" {
   if (value === undefined || value === null) return "status";
-  if (value === "status" || value === "list" || value === "inspect" || value === "reconcile") {
+  if (
+    value === "status" ||
+    value === "list" ||
+    value === "inspect" ||
+    value === "reconcile" ||
+    value === "kill" ||
+    value === "reply" ||
+    value === "steer" ||
+    value === "ack" ||
+    value === "kill_active"
+  ) {
     return value;
   }
-  throw new Error("task.runAction must be status, list, inspect, or reconcile for run_status");
+  throw new Error(
+    "task.runAction must be status, list, inspect, reconcile, kill, reply, steer, ack, or kill_active for run_status",
+  );
 }
 
 function stripTaskAction(params: Record<string, unknown>): Record<string, unknown> {

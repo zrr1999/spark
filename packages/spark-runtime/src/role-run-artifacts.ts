@@ -48,6 +48,7 @@ export interface RoleRunArtifactBody {
   stdout: RoleRunTextTail;
   stderr: RoleRunTextTail;
   jsonEvents: RoleRunJsonEventsTail;
+  diagnostic?: unknown;
 }
 
 export interface RoleRunArtifactPreview {

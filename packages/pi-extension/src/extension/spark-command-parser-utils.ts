@@ -42,22 +42,72 @@ export function parseWorkflowCommandArgs(args: string): { selector?: string; foc
   return { focus: trimmed };
 }
 
+export type ForegroundDriverCommandAction = "start" | "status" | "stop" | "restart";
+
+export interface ParsedForegroundDriverCommandArgs {
+  action: ForegroundDriverCommandAction;
+  objective: string;
+  explicitAction: boolean;
+}
+
+export function parseForegroundDriverCommandArgs(args: string): ParsedForegroundDriverCommandArgs {
+  const trimmed = args.trim();
+  if (!trimmed) return { action: "start", objective: "", explicitAction: false };
+  const firstWhitespace = firstWhitespaceIndex(trimmed);
+  const first = firstWhitespace < 0 ? trimmed : trimmed.slice(0, firstWhitespace);
+  const rest = firstWhitespace < 0 ? "" : trimmed.slice(firstWhitespace + 1).trim();
+  const normalized = first.toLocaleLowerCase();
+  const action = foregroundDriverCommandAction(normalized);
+  if (action) return { action, objective: rest, explicitAction: true };
+  return { action: "start", objective: trimmed, explicitAction: false };
+}
+
+function foregroundDriverCommandAction(value: string): ForegroundDriverCommandAction | undefined {
+  if (value === "start" || value === "开始") return "start";
+  if (value === "status" || value === "状态") return "status";
+  if (
+    value === "stop" ||
+    value === "clear" ||
+    value === "halt" ||
+    value === "停止" ||
+    value === "停下"
+  )
+    return "stop";
+  if (value === "restart" || value === "重新开始" || value === "重启") return "restart";
+  return undefined;
+}
+
+export function parseGoalCommandAction(args: string): ParsedForegroundDriverCommandArgs {
+  return parseForegroundDriverCommandArgs(args);
+}
+
 export function parseGoalCommandArgs(args: string): string {
-  return args.trim();
+  return parseGoalCommandAction(args).objective;
 }
 
 export function parseLoopCommandAction(
   args: string,
-): { action: "continue"; objective: string } | { action: "clear" } | { action: "removed" } {
+):
+  | { action: "continue" | "restart"; objective: string }
+  | { action: "status" | "clear" | "removed" } {
   const trimmed = args.trim();
   const normalized = trimmed.toLocaleLowerCase();
-  if (["stop", "halt", "停止", "停下"].includes(normalized)) {
-    return { action: "clear" };
-  }
-  if (["pause", "暂停"].includes(normalized)) {
-    return { action: "removed" };
-  }
-  return { action: "continue", objective: trimmed };
+  if (["pause", "暂停"].includes(normalized)) return { action: "removed" };
+  const parsed = parseForegroundDriverCommandArgs(trimmed);
+  if (parsed.action === "status") return { action: "status" };
+  if (parsed.action === "stop") return { action: "clear" };
+  if (parsed.action === "restart") return { action: "restart", objective: parsed.objective };
+  return { action: "continue", objective: parsed.objective };
+}
+
+export type ParsedReproCommandAction = ForegroundDriverCommandAction;
+
+export interface ParsedReproCommandArgs extends ParsedForegroundDriverCommandArgs {
+  action: ParsedReproCommandAction;
+}
+
+export function parseReproCommandArgs(args: string): ParsedReproCommandArgs {
+  return parseForegroundDriverCommandArgs(args);
 }
 
 export function parseDynamicWorkflowRunRefArg(command: string, args: string): RunRef {

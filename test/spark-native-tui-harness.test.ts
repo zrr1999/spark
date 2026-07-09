@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -14,8 +14,13 @@ import {
   type ProviderConfig,
   type ProviderModelDefinition,
 } from "../apps/spark-tui/src/host/index.ts";
-import { createSparkNativeRuntimeSlashCommands } from "../apps/spark-tui/src/native-tui.ts";
+import {
+  SPARK_NATIVE_KERNEL_SLASH_COMMANDS,
+  createSparkNativeLocalControlSlashCommands,
+  createSparkNativeRuntimeSlashCommands,
+} from "../apps/spark-tui/src/native-tui.ts";
 import { createSparkPiParitySlashCommands } from "../apps/spark-tui/src/cli/pi-parity-commands.ts";
+import { SparkSessionMailStore } from "../apps/spark-tui/src/host/session-mail-store.ts";
 import { createSparkNativeTuiHarness } from "./support/spark-native-tui-harness.ts";
 
 const ESC = String.fromCharCode(27);
@@ -23,6 +28,174 @@ const ANSI_PATTERN = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]`, "gu");
 function stripAnsi(text: string): string {
   return text.replace(ANSI_PATTERN, "");
 }
+
+function markerIndexes(lines: string[], pattern: RegExp): number[] {
+  return lines.flatMap((line, index) => (pattern.test(line) ? [index] : []));
+}
+
+function firstMarkerIndex(lines: string[], pattern: RegExp): number {
+  const index = markerIndexes(lines, pattern).at(0);
+  assert.notEqual(index, undefined, `missing marker ${pattern}`);
+  return index!;
+}
+
+void test("native TUI kernel slash commands are minimal and resource slash is extension-owned", async () => {
+  assert.deepEqual(
+    [...SPARK_NATIVE_KERNEL_SLASH_COMMANDS],
+    ["help", "exit", "quit", "clear", "reload"],
+  );
+
+  const local = createSparkNativeLocalControlSlashCommands();
+  assert.equal(local.tasks?.metadata?.source, "extension");
+  assert.equal(local.tasks?.metadata?.plane, "server");
+  assert.equal(local.tasks?.metadata?.resource, "task");
+  assert.equal(local.tasks?.metadata?.canonicalCliTarget, "spark server task list");
+  assert.equal(local.task?.metadata?.canonicalCliTarget, "spark server task list");
+  assert.equal(local.artifact?.metadata?.canonicalCliTarget, "spark server artifact list");
+  assert.equal(local.review?.metadata?.canonicalCliTarget, "spark server review list");
+  assert.equal(local.run?.metadata?.canonicalCliTarget, "spark daemon run list");
+  assert.equal(local.stop?.metadata?.canonicalCliTarget, "spark daemon run cancel <run>");
+
+  const host = new SparkHostRuntime({ cwd: process.cwd() });
+  host.registerCommand("goal", {
+    description: "Goal command",
+    metadata: {
+      source: "extension",
+      extensionId: "spark-drive",
+      plane: "server",
+      resource: "goal",
+      verbs: ["status"],
+      canonicalCliTarget: "spark server goal status",
+    },
+    handler: () => undefined,
+  });
+  host.registerCommand("workflow", {
+    description: "Workflow command",
+    metadata: {
+      source: "extension",
+      extensionId: "spark-workflow",
+      plane: "server",
+      resource: "workflow",
+      verbs: ["list"],
+      canonicalCliTarget: "spark server workflow list",
+    },
+    handler: () => undefined,
+  });
+  host.registerCommand("workflow-pause", {
+    description: "Workflow pause alias",
+    argumentHint: "<runRef>",
+    metadata: {
+      source: "extension",
+      extensionId: "spark-workflow",
+      plane: "server",
+      resource: "workflow",
+      verbs: ["pause"],
+      canonicalCliTarget: "spark server workflow pause <run>",
+      deprecatedAliasFor: "spark server workflow pause <run>",
+    },
+    handler: () => undefined,
+  });
+  host.registerCommand("session", {
+    description: "Session command",
+    argumentHint: "[list]",
+    metadata: {
+      source: "extension",
+      extensionId: "spark-pi-parity",
+      plane: "daemon",
+      resource: "session",
+      verbs: ["show", "list"],
+      canonicalCliTarget: "spark daemon session list",
+    },
+    handler: () => undefined,
+  });
+  const runtime = createSparkNativeRuntimeSlashCommands(host);
+  assert.equal(runtime.goal?.metadata?.source, "extension");
+  assert.equal(runtime.goal?.metadata?.extensionId, "spark-drive");
+  assert.equal(runtime.goal?.metadata?.canonicalCliTarget, "spark server goal status");
+
+  const slashFixture = {
+    "/session list": runtime.session,
+    "/task list": local.task,
+    "/goal status": runtime.goal,
+    "/workflow list": runtime.workflow,
+    "/workflow-pause": runtime["workflow-pause"],
+    "/review list": local.review,
+    "/artifact list": local.artifact,
+    "/run list": local.run,
+  } as const;
+  const expectedTargets = {
+    "/session list": "spark daemon session list",
+    "/task list": "spark server task list",
+    "/goal status": "spark server goal status",
+    "/workflow list": "spark server workflow list",
+    "/workflow-pause": "spark server workflow pause <run>",
+    "/review list": "spark server review list",
+    "/artifact list": "spark server artifact list",
+    "/run list": "spark daemon run list",
+  } as const;
+  for (const [input, command] of Object.entries(slashFixture)) {
+    assert.equal(command?.metadata?.source, "extension", `${input} is extension-owned`);
+    assert.equal(
+      command?.metadata?.canonicalCliTarget,
+      expectedTargets[input as keyof typeof expectedTargets],
+      `${input} canonical target`,
+    );
+  }
+
+  const harness = createSparkNativeTuiHarness({ slashCommands: { ...runtime, ...local } });
+  assert.equal(await harness.submit("/help"), "command");
+  const rendered = stripAnsi(harness.render());
+  assert.match(rendered, /System\s+\/help/);
+  assert.match(rendered, /\/reload — reload extension-owned slash command state/);
+  assert.match(rendered, /Extensions\s+\d+ extension commands available/);
+  assert.match(rendered, /\/goal — Goal command \[extension\] → spark server goal status/);
+  assert.match(
+    rendered,
+    /\/session \[list\] — Session command \[extension\] → spark daemon session list/,
+  );
+  assert.match(
+    rendered,
+    /\/task — open the tasks cockpit panel \[extension\] → spark server task list/,
+  );
+  assert.match(
+    rendered,
+    /\/workflow-pause <runRef> — Workflow pause alias \[extension\] → spark server workflow pause\s+<run>/,
+  );
+  assert.doesNotMatch(rendered, /\/task — .*\[system\]/);
+});
+
+void test("Spark native TUI /mailto and /inbox use durable session mail store", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-native-mail-"));
+  const sparkHome = join(dir, "spark-home");
+  try {
+    const sessionStore = new SparkSessionStore({ cwd: join(dir, "workspace-b"), sparkHome });
+    await sessionStore.save(
+      sessionStore.createSession({ id: "session-b", timestamp: "2026-07-08T00:00:00.000Z" }),
+    );
+    const services = { cwd: join(dir, "workspace-b"), sessionStore } as never;
+    const harness = createSparkNativeTuiHarness({
+      slashCommands: createSparkPiParitySlashCommands(services),
+    });
+    const mailStore = new SparkSessionMailStore({ sparkHome });
+
+    assert.equal(await harness.submit("/mailto session-b hello"), "command");
+    let messages = await mailStore.list("session-b");
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0]?.body, "hello");
+    assert.match(stripAnsi(harness.render()), /Sent mail:/);
+
+    assert.equal(await harness.submit("/inbox"), "command");
+    assert.match(stripAnsi(harness.render()), /hello/);
+    const messageId = messages[0]!.id;
+
+    assert.equal(await harness.submit(`/inbox ack ${messageId}`), "command");
+    assert.match(stripAnsi(harness.render()), /Acknowledged mail:/);
+    messages = await mailStore.list("session-b");
+    assert.equal(messages.length, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 void test("Spark native TUI harness submits input and drives exit keys without a real terminal", async () => {
   const harness = createSparkNativeTuiHarness({
@@ -47,6 +220,137 @@ void test("Spark native TUI harness submits input and drives exit keys without a
   await harness.press("\x03");
   assert.equal(harness.state.exited, true);
   assert.equal(harness.state.renderRequests.length > 0, true);
+});
+
+void test("native TUI defaults to workspace session selector when no session target is provided", () => {
+  const harness = createSparkNativeTuiHarness({
+    cols: 180,
+    workspaceSession: {
+      mode: "select",
+      workspaceDir: "/workspaces/current",
+      workspaceHash: "hash-current",
+      controlPlaneSessionId: "client-current",
+    },
+  });
+  const rendered = stripAnsi(harness.render());
+
+  assert.match(rendered, /Select Spark session/);
+  assert.match(rendered, /workspace: \/workspaces\/current/);
+  assert.match(rendered, /workspace hash: hash-current/);
+  assert.match(rendered, /control-plane session: client-current/);
+  assert.doesNotMatch(rendered, /Spark zellij-native control and Pi replacement validation/);
+});
+
+void test("native TUI keeps Pi-like project UI placement when session selector is shown", () => {
+  const harness = createSparkNativeTuiHarness({
+    cols: 180,
+    workspaceSession: {
+      mode: "select",
+      workspaceDir: "/workspaces/current",
+      workspaceHash: "hash-current",
+      controlPlaneSessionId: "client-current",
+    },
+  });
+  harness.app.setWidget("project", [
+    "Project: Spark daemon-first session UX and Pi/Codex parity hardening",
+    "Goal: daemon-first session UX and parity hardening",
+    "Ready: @pi-like-project-ui-placement",
+  ]);
+
+  const lines = stripAnsi(harness.render()).split("\n");
+  const sessionLines = markerIndexes(lines, /Select Spark session/);
+  const projectLine = firstMarkerIndex(lines, /Project: Spark daemon-first/);
+  const goalLine = firstMarkerIndex(lines, /Goal: daemon-first/);
+  const readyLine = firstMarkerIndex(lines, /Ready: @pi-like-project-ui-placement/);
+
+  assert.deepEqual(sessionLines, [2]);
+  assert.equal(projectLine, 3);
+  assert.equal(goalLine, 4);
+  assert.equal(readyLine, 5);
+});
+
+void test("native TUI renders compact session status before Pi-like project UI", () => {
+  const harness = createSparkNativeTuiHarness({
+    cols: 180,
+    workspaceSession: {
+      mode: "attached",
+      workspaceDir: "/workspaces/current",
+      workspaceHash: "hash-current",
+      controlPlaneSessionId: "client-current",
+      attachTarget: "session:attached",
+    },
+  });
+  harness.app.setWidget("project", [
+    "Project: Spark daemon-first session UX and Pi/Codex parity hardening",
+    "Goal: daemon-first session UX and parity hardening",
+    "Ready: @zellij-driven-spark-pi-codex-parity-harness",
+  ]);
+
+  const lines = stripAnsi(harness.render()).split("\n");
+  const sessionLine = firstMarkerIndex(lines, /Spark session attached/);
+  const projectLine = firstMarkerIndex(lines, /Project: Spark daemon-first/);
+  assert.equal(sessionLine, 2);
+  assert.equal(projectLine, 3);
+  assert.equal(
+    lines.filter((line) =>
+      /Spark session attached|workspace hash: hash-current|attach target: session:attached/.test(
+        line,
+      ),
+    ).length,
+    1,
+  );
+});
+
+void test("native TUI construction does not mutate session lifecycle state", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-native-session-lifecycle-"));
+  const goalPath = join(dir, "goal.json");
+  const statePath = join(dir, "state.json");
+  await writeFile(goalPath, JSON.stringify({ status: "active", goalId: "goal-1" }), "utf8");
+  await writeFile(statePath, JSON.stringify({ currentProjectRef: "proj:1" }), "utf8");
+  const beforeGoal = await readFile(goalPath, "utf8");
+  const beforeState = await readFile(statePath, "utf8");
+  try {
+    const harness = createSparkNativeTuiHarness({
+      workspaceSession: {
+        mode: "select",
+        workspaceDir: dir,
+        workspaceHash: "hash-lifecycle",
+        controlPlaneSessionId: "client-lifecycle",
+      },
+    });
+    harness.render();
+
+    assert.equal(await readFile(goalPath, "utf8"), beforeGoal);
+    assert.equal(await readFile(statePath, "utf8"), beforeState);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark native TUI renders theme color and live widget animation frames", async () => {
+  const harness = createSparkNativeTuiHarness();
+  let frame = 0;
+  let widgetRequestRender: (() => void) | undefined;
+
+  harness.app.setWidget(
+    "animated",
+    (tui: { requestRender(): void }, theme: { fg(color: string, text: string): string }) => {
+      widgetRequestRender = () => tui.requestRender();
+      return {
+        render: () => [theme.fg("accent", `frame:${frame}`)],
+        invalidate() {},
+      };
+    },
+  );
+
+  const firstRender = harness.render();
+  assert.match(firstRender, ANSI_PATTERN);
+  assert.match(stripAnsi(firstRender), /frame:0/);
+
+  frame = 1;
+  widgetRequestRender?.();
+  assert.equal(harness.state.renderRequests.length > 0, true);
+  assert.match(stripAnsi(harness.render()), /frame:1/);
 });
 
 void test("Spark native TUI editor path submits slash commands from real keystrokes", async () => {
@@ -218,10 +522,13 @@ void test("Spark native Pi parity slash commands are discoverable and route repr
     "new",
     "compact",
     "resume",
-    "reload",
   ]) {
-    assert.match(stripAnsi(harness.render()), new RegExp(`/${command} —`, "u"));
+    assert.match(stripAnsi(harness.render()), new RegExp(`/${command}(?: \\[| <| )?.* —`, "u"));
   }
+  assert.match(
+    stripAnsi(harness.render()),
+    /\/reload — reload extension-owned slash command state/,
+  );
 
   await submitEditorText(harness, "/settings");
   assert.match(stripAnsi(harness.render()), /Spark settings:/);
@@ -295,6 +602,7 @@ void test("Spark native TUI surfaces command availability, queued work, stop, an
     slashCommands: {
       plan: { description: "Enter Spark plan mode", handler: () => "plan routed" },
       status: { description: "Show daemon status", handler: () => "daemon ok" },
+      ...createSparkNativeLocalControlSlashCommands(),
     },
     responder: (input) => {
       if (input === "first") {
@@ -307,9 +615,9 @@ void test("Spark native TUI surfaces command availability, queued work, stop, an
     },
   });
 
-  assert.match(stripAnsi(harness.render()), /native pi-tui host • idle • 2 registered commands/);
+  assert.match(stripAnsi(harness.render()), /native pi-tui host • idle • 16 registered commands/);
   assert.equal(await harness.submit("/help"), "command");
-  assert.match(stripAnsi(harness.render()), /2 registered host\/daemon commands available/);
+  assert.match(stripAnsi(harness.render()), /16 extension commands available/);
 
   assert.equal(await harness.submit("first"), "started");
   await harness.flush();
@@ -508,7 +816,7 @@ void test("Spark native TUI harness captures resize-safe golden render sections"
     "narrow render should respect the requested width",
   );
   assert.match(stripAnsi(narrowLines.join("\n")), /spark> streaming response/);
-  assert.match(stripAnsi(narrowLines.join("\n")), /tool:read \[success\] • folded/);
+  assert.match(stripAnsi(narrowLines.join("\n")), /✓ tool:read \[success\] — first l\.\.\./);
   assert.match(stripAnsi(narrowLines.join("\n")), /thinking • hidden/);
 
   harness.app.toggleTools();
@@ -520,13 +828,17 @@ void test("Spark native TUI harness captures resize-safe golden render sections"
     true,
     "wide render should respect the requested width",
   );
-  assert.match(wideText, /tool:read \[success\] \(tc-1\)> first line/);
-  assert.match(wideText, /second line with wider details/);
+  assert.match(wideText, /┌─ ✓ tool:read \[success\] · tc-1/);
+  assert.match(wideText, /│ first line/);
+  assert.match(wideText, /│ second line with wider details/);
   assert.match(wideText, /thinking> hidden chain of implementation notes/);
 });
 
 void test("Spark cockpit renders shared workflow, run, task, artifact, review, and Graft view models", async () => {
-  const harness = createSparkNativeTuiHarness({ cols: 120 });
+  const harness = createSparkNativeTuiHarness({
+    cols: 120,
+    slashCommands: createSparkNativeLocalControlSlashCommands(),
+  });
 
   harness.app.applyViewModelEvent({
     version: SPARK_PROTOCOL_VERSION,
@@ -703,7 +1015,10 @@ void test("Spark cockpit supports selectable workflow run keyboard controls", as
       },
     ]),
   );
-  const harness = createSparkNativeTuiHarness({ cols: 140, slashCommands });
+  const harness = createSparkNativeTuiHarness({
+    cols: 140,
+    slashCommands: { ...createSparkNativeLocalControlSlashCommands(), ...slashCommands },
+  });
   harness.app.applyViewModelEvent({
     version: SPARK_PROTOCOL_VERSION,
     type: "session.snapshot",
@@ -776,7 +1091,10 @@ void test("Spark cockpit supports selectable workflow run keyboard controls", as
 });
 
 void test("Spark cockpit records workflow picker requests and exposes slash command navigation", async () => {
-  const harness = createSparkNativeTuiHarness({ cols: 110 });
+  const harness = createSparkNativeTuiHarness({
+    cols: 110,
+    slashCommands: createSparkNativeLocalControlSlashCommands(),
+  });
 
   const response = await harness.app.handleInteractionRequest({
     version: SPARK_PROTOCOL_VERSION,

@@ -16,6 +16,7 @@ import {
   saveSparkGraphAndTodos,
   sparkSessionKey,
   sparkSessionOwnerKey,
+  sparkStateCwd,
 } from "./session-state.ts";
 import {
   assignTodoDisplayNumber,
@@ -36,7 +37,7 @@ export type { SparkWidgetControllerContext };
 
 const piExtensionWidgetControllerDeps: SparkWidgetControllerDeps = {
   ensureLocalSparkDirectory,
-  defaultTaskGraphStore,
+  defaultTaskGraphStore: (cwd, ctx) => defaultTaskGraphStore(sparkStateCwd(cwd, ctx)),
   loadSparkGraph: (cwd, ctx) => loadSparkGraph(cwd, ctx),
   ensureSparkGraphInvariants,
   saveSparkGraphAndTodos: (cwd, graph, ctx, store) =>

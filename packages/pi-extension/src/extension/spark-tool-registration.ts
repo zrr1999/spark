@@ -1,3 +1,4 @@
+import type { ExtensionRoleRunner } from "@zendev-lab/spark-extension-api";
 import type { ToolCallComponent, ToolCallRenderTheme } from "./tool-rendering.ts";
 import type { SparkDriveModeInput } from "./spark-drive-state.ts";
 
@@ -35,6 +36,7 @@ export interface SparkSessionModelRef {
 export interface SparkToolContext {
   cwd: string;
   model?: SparkSessionModelRef;
+  runRole?: ExtensionRoleRunner;
   sparkActiveLens?: {
     phase: "research" | "plan" | "implement";
     drive?: SparkDriveModeInput;

@@ -433,6 +433,50 @@ export const TASK_PLAN_READINESS_RULES: readonly TaskPlanReadinessRule[] = [
     description: "plan.items must include at least one concrete progress item.",
   },
   {
+    kind: "weak_objective",
+    severity: "blocking",
+    message: "Task plan objective is too vague or low-bar.",
+    remediation:
+      "Rewrite plan.objective as a concrete, high-bar outcome tied to project value and expected quality, not a generic activity.",
+    description:
+      "plan.objective must describe a substantive high-bar outcome, not a vague activity or low-threshold goal.",
+  },
+  {
+    kind: "unverifiable_success_criteria",
+    severity: "blocking",
+    message: "Task plan has success criteria that are not objectively verifiable.",
+    remediation:
+      "Rewrite every plan.successCriteria entry so it can be checked by a command, artifact, state transition, file/path diff, reviewer verdict, or explicit metric.",
+    description:
+      "every plan.successCriteria entry must be objectively verifiable by explicit evidence, state, commands, paths, reviewer verdicts, or metrics.",
+  },
+  {
+    kind: "weak_evidence_required",
+    severity: "blocking",
+    message: "Task plan has evidence requirements that are too vague.",
+    remediation:
+      "Require concrete evidence such as command output with exit codes, test names, artifact refs, changed files, screenshots, benchmark values, or reviewer decision artifacts.",
+    description:
+      "every plan.evidenceRequired entry must name concrete evidence required before completion.",
+  },
+  {
+    kind: "weak_plan_items",
+    severity: "blocking",
+    message: "Task plan items are not concrete enough to execute and verify.",
+    remediation:
+      "Rewrite plan.items as specific actions with inspect/change/validate verbs and concrete targets; avoid generic handle/improve/finish steps.",
+    description: "every active plan item must be a concrete, executable, and checkable action.",
+  },
+  {
+    kind: "low_ambition_plan",
+    severity: "blocking",
+    message: "Task plan lowers the bar with low-threshold or optional wording.",
+    remediation:
+      "Remove weak qualifiers such as basic/minimal/quick/rough/best-effort/if possible/smoke-only/初步/尽量/可选, and state the full expected quality bar plus validation.",
+    description:
+      "task objectives, criteria, evidence, and items must avoid low-threshold or optional wording that lowers the required outcome.",
+  },
+  {
     kind: "open_questions",
     severity: "warning",
     message: "Task plan records unresolved questions.",
@@ -459,6 +503,122 @@ export function renderTaskPlanReadinessRules(): string {
   ].join("\n");
 }
 
+interface WeakPlanEntry {
+  field: string;
+  value: string;
+}
+
+const VERIFIABLE_TEXT_PATTERN =
+  /\b(command|test|tests|check|checks|lint|typecheck|build|run|output|artifact|evidence|refs?|file|path|diff|snapshot|log|report|screenshot|benchmark|metric|coverage|exit code|reviewer|review|verdict|status|schema|migration|api|endpoint|assertion|assertions|passes|fails|matched|recorded|attached|validated|verified)\b|命令|测试|检查|验证|输出|证据|文件|路径|差异|日志|报告|截图|基准|指标|覆盖率|退出码|审查|审核|状态|断言|通过|失败/iu;
+const CONCRETE_EVIDENCE_PATTERN =
+  /\b(command|test|tests|assertion|assertions|output|artifact|refs?|file|path|diff|snapshot|log|report|screenshot|benchmark|metric|coverage|exit code|reviewer|review|verdict|status|schema|migration|api|endpoint|changed files?|source refs?|attached|returned|rendered)\b|命令|测试|检查|验证|输出|证据|文件|路径|差异|日志|报告|截图|基准|指标|覆盖率|退出码|审查|审核|状态|断言|通过|失败/iu;
+const COMMAND_OR_PATH_PATTERN =
+  /\b(pnpm|npm|node|uvx?|cargo|pytest|ruff|ty|go test|git diff|vp|prek|tsc|vitest|playwright|eslint|biome)\b|(?:^|\s)[\w./-]+\.(?:ts|tsx|js|jsx|mts|cts|json|md|yml|yaml|toml|rs|py|go|sh|sql)(?=$|\s|[,:;.])/iu;
+const EXPLICIT_METRIC_PATTERN =
+  /(?:[<>=]=?|\bzero\b|\bno\b|\ball\b|\bevery\b)\s*[\w -]*\d|\d+(?:\.\d+)?\s*(?:%|ms|s|sec|seconds|MiB|GiB|errors?|warnings?|tests?|files?|tasks?|items?|refs?)\b/iu;
+const GENERIC_SUCCESS_PATTERN =
+  /^(?:done|works?|completed?|finished?|better|improved|success(?:ful)?|ready|implemented|fixed|validated|verified|decision is made|output is produced|result is produced|passes?)\.?$/iu;
+const GENERIC_EVIDENCE_PATTERN =
+  /^(?:evidence|artifact|output|result|validation|summary|unit assertion)s?\s+(?:is\s+)?(?:recorded|attached|provided|returned|available)\.?$/iu;
+const GENERIC_ACTION_PATTERN =
+  /^(?:do|handle|work on|update|fix|improve|optimi[sz]e|clean up|refactor|review|research|validate|check|implement|finish|complete|address|evaluate|process|整理|处理|改进|优化|修复|检查|验证|完成|研究|实现)(?:\s+(?:it|this|that|things?|stuff|work|task|change|changes|issue|issues|问题|事项|任务|工作))?\.?$/iu;
+const ACTIONABLE_PLAN_ITEM_PATTERN =
+  /\b(inspect|read|trace|compare|design|implement|replace|remove|add|update|refactor|migrate|wire|validate|verify|test|run|record|document|render|review|audit|measure|benchmark|assert|check|fix)\b|检查|阅读|追踪|对比|实现|替换|删除|新增|更新|重构|迁移|接入|验证|测试|运行|记录|文档|渲染|审查|审核|度量|基准|断言|修复/iu;
+const LOW_AMBITION_PATTERN =
+  /\b(basic|minimal|minimum|quick|rough|first-pass|best-effort|optional|if possible|maybe|at least one|some|good enough|mostly|partial|preliminary|smoke[- ]only)\b|初步|尽量|可选|如果可以|差不多|部分|最低|最小|至少一个|一些|只需|只要|冒烟即可|粗略/iu;
+
+function isWeakTaskPlanObjective(value: string): boolean {
+  const text = value.trim();
+  if (!text) return true;
+  return LOW_AMBITION_PATTERN.test(text) || GENERIC_ACTION_PATTERN.test(text);
+}
+
+function isObjectivelyVerifiableCriterion(value: string): boolean {
+  const text = value.trim();
+  if (!text || GENERIC_SUCCESS_PATTERN.test(text)) return false;
+  return hasConcreteVerificationSignal(text);
+}
+
+function isConcreteEvidenceRequirement(value: string): boolean {
+  const text = value.trim();
+  if (!text || GENERIC_EVIDENCE_PATTERN.test(text)) return false;
+  return (
+    CONCRETE_EVIDENCE_PATTERN.test(text) ||
+    COMMAND_OR_PATH_PATTERN.test(text) ||
+    EXPLICIT_METRIC_PATTERN.test(text) ||
+    /(?:artifact|task|proj|ask|run):[\w:-]+/u.test(text)
+  );
+}
+
+function isConcretePlanItem(item: TaskPlanItem, plan: TaskPlan): boolean {
+  const text = [item.title, item.description].filter(Boolean).join(" ").trim();
+  if (!text || GENERIC_ACTION_PATTERN.test(text)) return false;
+  if (hasConcreteVerificationSignal(text)) return true;
+  if (ACTIONABLE_PLAN_ITEM_PATTERN.test(text) && text.length >= 10) return true;
+  const title = item.title.trim();
+  return (
+    title.length > 0 &&
+    plan.objective.includes(title) &&
+    plan.successCriteria.length > 0 &&
+    plan.successCriteria.every(isObjectivelyVerifiableCriterion) &&
+    plan.evidenceRequired.length > 0 &&
+    plan.evidenceRequired.every(isConcreteEvidenceRequirement)
+  );
+}
+
+function hasConcreteVerificationSignal(value: string): boolean {
+  return (
+    VERIFIABLE_TEXT_PATTERN.test(value) ||
+    COMMAND_OR_PATH_PATTERN.test(value) ||
+    EXPLICIT_METRIC_PATTERN.test(value) ||
+    /(?:artifact|task|proj|ask|run):[\w:-]+/u.test(value)
+  );
+}
+
+function weakPlanTextEntries(
+  field: string,
+  values: readonly string[],
+  accepts: (value: string) => boolean,
+): WeakPlanEntry[] {
+  return values.filter((value) => !accepts(value)).map((value) => ({ field, value: value.trim() }));
+}
+
+function weakTaskPlanItems(plan: TaskPlan, items: readonly TaskPlanItem[]): WeakPlanEntry[] {
+  return items
+    .filter((item) => !isConcretePlanItem(item, plan))
+    .map((item) => ({ field: "items", value: item.title.trim() }));
+}
+
+function lowAmbitionPlanEntries(
+  plan: TaskPlan,
+  activePlanItems: readonly TaskPlanItem[],
+): WeakPlanEntry[] {
+  const entries: WeakPlanEntry[] = [];
+  appendLowAmbitionEntry(entries, "objective", plan.objective);
+  for (const value of plan.successCriteria)
+    appendLowAmbitionEntry(entries, "successCriteria", value);
+  for (const value of plan.evidenceRequired)
+    appendLowAmbitionEntry(entries, "evidenceRequired", value);
+  for (const item of activePlanItems) {
+    appendLowAmbitionEntry(entries, "items", item.title);
+    if (item.description) appendLowAmbitionEntry(entries, "items.description", item.description);
+  }
+  return entries;
+}
+
+function appendLowAmbitionEntry(entries: WeakPlanEntry[], field: string, value: string): void {
+  const text = value.trim();
+  if (text && LOW_AMBITION_PATTERN.test(text)) entries.push({ field, value: text });
+}
+
+function formatWeakPlanEntries(entries: readonly WeakPlanEntry[]): string {
+  const visible = entries
+    .slice(0, 5)
+    .map((entry) => `${entry.field}=${JSON.stringify(entry.value)}`);
+  const hidden = entries.length - visible.length;
+  return hidden > 0 ? `${visible.join("; ")}; … ${hidden} more` : visible.join("; ");
+}
+
 export function taskPlanReadiness(task: Pick<Task, "plan" | "status">): TaskPlanReadiness {
   if (task.status === "cancelled") return { ready: true, issues: [] };
   const issues: TaskPlanIssue[] = [];
@@ -476,9 +636,61 @@ export function taskPlanReadiness(task: Pick<Task, "plan" | "status">): TaskPlan
   if (plan.evidenceRequired.length === 0) {
     issues.push(taskPlanIssue("missing_evidence_required"));
   }
-  const activePlanItemCount = (plan.items ?? []).filter((item) => item.status !== "deleted").length;
-  if (activePlanItemCount === 0) {
+  const activePlanItems = (plan.items ?? []).filter((item) => item.status !== "deleted");
+  if (activePlanItems.length === 0) {
     issues.push(taskPlanIssue("missing_steps"));
+  }
+  if (plan.objective.trim() && isWeakTaskPlanObjective(plan.objective)) {
+    issues.push(
+      taskPlanIssue(
+        "weak_objective",
+        `Task plan objective is too vague or low-bar: ${plan.objective.trim()}`,
+      ),
+    );
+  }
+  const weakSuccessCriteria = weakPlanTextEntries(
+    "successCriteria",
+    plan.successCriteria,
+    isObjectivelyVerifiableCriterion,
+  );
+  if (weakSuccessCriteria.length > 0) {
+    issues.push(
+      taskPlanIssue(
+        "unverifiable_success_criteria",
+        `Task plan success criteria must be objectively verifiable. Weak entries: ${formatWeakPlanEntries(weakSuccessCriteria)}`,
+      ),
+    );
+  }
+  const weakEvidence = weakPlanTextEntries(
+    "evidenceRequired",
+    plan.evidenceRequired,
+    isConcreteEvidenceRequirement,
+  );
+  if (weakEvidence.length > 0) {
+    issues.push(
+      taskPlanIssue(
+        "weak_evidence_required",
+        `Task plan evidence requirements must name concrete completion evidence. Weak entries: ${formatWeakPlanEntries(weakEvidence)}`,
+      ),
+    );
+  }
+  const weakPlanItems = weakTaskPlanItems(plan, activePlanItems);
+  if (weakPlanItems.length > 0) {
+    issues.push(
+      taskPlanIssue(
+        "weak_plan_items",
+        `Task plan items must be concrete, executable, and checkable. Weak entries: ${formatWeakPlanEntries(weakPlanItems)}`,
+      ),
+    );
+  }
+  const lowAmbitionEntries = lowAmbitionPlanEntries(plan, activePlanItems);
+  if (lowAmbitionEntries.length > 0) {
+    issues.push(
+      taskPlanIssue(
+        "low_ambition_plan",
+        `Task plan contains low-threshold wording. Weak entries: ${formatWeakPlanEntries(lowAmbitionEntries)}`,
+      ),
+    );
   }
   if (plan.openQuestions.length > 0) {
     issues.push(

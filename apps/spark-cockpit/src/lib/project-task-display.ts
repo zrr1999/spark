@@ -1,10 +1,3 @@
-import {
-  formatPiTaskActiveStatusLine,
-  formatPiTaskStatusCounts,
-  piTaskDisplayHandle,
-  piTaskDisplayTitle,
-} from "@zendev-lab/spark-tasks";
-
 export interface CockpitProjectDisplayInput {
   name: string;
 }
@@ -62,7 +55,7 @@ export function buildCockpitProjectTaskDisplay(input: {
   const kindSuffix = input.projectKind?.badge ? ` [${input.projectKind.badge}]` : "";
   return {
     projectLine: `Project ${input.project.name}${kindSuffix}`,
-    taskCountsLine: `Tasks: ${input.taskSummary.total} total | ${claimedCount} claimed | 0 current_session_claimed | ready_frontier=${readyFrontierCount} | ${formatPiTaskStatusCounts(
+    taskCountsLine: `Tasks: ${input.taskSummary.total} total | ${claimedCount} claimed | ready_frontier=${readyFrontierCount} | ${formatTaskStatusCounts(
       input.taskSummary.byStatus,
     )}`,
     readyFrontierCount,
@@ -72,27 +65,27 @@ export function buildCockpitProjectTaskDisplay(input: {
 }
 
 export function buildCockpitTaskDisplay(task: CockpitTaskDisplayInput): CockpitTaskDisplayModel {
-  const identity = {
-    ref: task.runtimeTaskId,
-    runtimeTaskId: task.runtimeTaskId,
-    name: task.name,
-    title: task.title,
-    status: task.status,
-  };
+  const handle = taskDisplayHandle(task);
   const owner = taskOwnerLabel(task);
+  const readyLabel = task.readyFrontier ? "ready frontier" : null;
+  const metaParts = [task.status, owner !== "unassigned" ? `@${owner}` : null, readyLabel].filter(
+    Boolean,
+  );
   return {
     runtimeTaskId: task.runtimeTaskId,
-    handle: piTaskDisplayHandle(identity),
-    title: piTaskDisplayTitle(identity),
-    statusLine: formatPiTaskActiveStatusLine({
-      task: identity,
-      owner,
-      readyFrontier: task.readyFrontier,
-    }),
+    handle,
+    title: task.title,
+    statusLine: metaParts.join(" · "),
     owner,
     kind: task.kind ?? "generic",
     readyFrontier: task.readyFrontier,
   };
+}
+
+function taskDisplayHandle(task: CockpitTaskDisplayInput): string {
+  const named = task.name?.trim();
+  if (named) return named.startsWith("@") ? named : `@${named}`;
+  return "task";
 }
 
 function taskOwnerLabel(task: CockpitTaskDisplayInput): string {
@@ -100,4 +93,13 @@ function taskOwnerLabel(task: CockpitTaskDisplayInput): string {
   if (agent) return agent;
   if (task.statusGroup === "done") return "me";
   return "unassigned";
+}
+
+function formatTaskStatusCounts(counts: Record<string, number>): string {
+  const order = ["running", "blocked", "pending", "ready", "failed", "done", "cancelled"];
+  const parts = order.flatMap((status) => {
+    const count = counts[status] ?? 0;
+    return count > 0 ? [`${status}=${count}`] : [];
+  });
+  return parts.length > 0 ? parts.join(" ") : "none";
 }

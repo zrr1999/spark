@@ -19,12 +19,27 @@ import { sparkDaemonCliStrings } from "@zendev-lab/spark-i18n/cli";
 
 import {
   exportSparkSessionRecord,
-  formatSessionList,
   formatSessionReplay,
   readSparkSessionExportFormat,
   type SparkSessionExportFormat,
 } from "../host/session-navigation.ts";
+import {
+  SparkSessionMailStore,
+  sessionMailStatus,
+  type SparkSessionMailMessage,
+} from "../host/session-mail-store.ts";
 import { SparkSessionStore, type SparkSessionInfo } from "../host/session-store.ts";
+import {
+  forkDaemonSession,
+  listDaemonSessions,
+  listLiveDaemonSessions,
+  showDaemonSession,
+  treeDaemonSession,
+  type DaemonSessionForkResult,
+  type DaemonSessionListResult,
+  type DaemonSessionShowResult,
+  type DaemonSessionTreeResult,
+} from "./daemon-session.ts";
 import type { SparkNativeSlashCommandMap } from "../native-tui.ts";
 import {
   consoleSparkCliOutput,
@@ -43,6 +58,8 @@ export type SparkDaemonCliAction =
   | "queue"
   | "start"
   | "sessions"
+  | "runs"
+  | "events"
   | "service";
 export type SparkDaemonCliQueueState = "inbox" | "processed" | "failed" | "all";
 
@@ -92,7 +109,11 @@ export interface SparkDaemonClientOptions {
     paths: SparkDaemonClientPaths,
     input: LocalWorkspaceClientReleaseInput,
   ) => Promise<LocalWorkspaceClientResult>;
-  sessionList?: (paths: SparkDaemonClientPaths) => Promise<LocalDaemonSessionListResult>;
+  workspaceList?: (paths: SparkDaemonClientPaths) => Promise<LocalDaemonWorkspaceListResult>;
+  sessionList?: (
+    paths: SparkDaemonClientPaths,
+    params?: { allWorkspaces?: boolean; history?: boolean },
+  ) => Promise<LocalDaemonSessionListResult>;
   sessionExport?: (
     paths: SparkDaemonClientPaths,
     params: { sessionId: string; format: SparkSessionExportFormat; leafId?: string | null },
@@ -101,6 +122,18 @@ export interface SparkDaemonClientOptions {
     paths: SparkDaemonClientPaths,
     params: { sessionId: string; leafId?: string | null },
   ) => Promise<LocalDaemonSessionTextResult>;
+  runList?: (
+    paths: SparkDaemonClientPaths,
+    params?: { state?: SparkDaemonCliQueueState; limit?: number },
+  ) => Promise<LocalDaemonRunListResult>;
+  runShow?: (
+    paths: SparkDaemonClientPaths,
+    params: { runId: string },
+  ) => Promise<LocalDaemonRunShowResult>;
+  eventsWatch?: (
+    paths: SparkDaemonClientPaths,
+    params?: { limit?: number },
+  ) => Promise<LocalDaemonEventsWatchResult>;
   serviceCommand?: (argv: string[]) => Promise<number>;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
@@ -142,6 +175,13 @@ export interface LocalDaemonSessionListResult {
   sessions: SparkSessionInfo[];
   text: string;
   observedAt: string;
+  allWorkspaces?: boolean;
+  history?: boolean;
+}
+
+export interface LocalDaemonWorkspaceListResult {
+  workspaces: SparkDaemonWorkspace[];
+  observedAt: string;
 }
 
 export interface LocalDaemonSessionTextResult {
@@ -170,6 +210,44 @@ export interface LocalDaemonQueueResult {
   observedAt: string;
 }
 
+export interface LocalDaemonRunSummary {
+  runKey: string;
+  id: string;
+  state: SparkDaemonCliQueueState;
+  sessionKey?: string;
+  prompt?: string;
+  enqueuedAt?: string;
+  processedAt?: string;
+  failedAt?: string;
+  fileName?: string;
+  filePath?: string;
+}
+
+export interface LocalDaemonRunListResult {
+  plane: "daemon";
+  resource: "run";
+  runs: LocalDaemonRunSummary[];
+  text: string;
+  observedAt: string;
+}
+
+export interface LocalDaemonRunShowResult {
+  plane: "daemon";
+  resource: "run";
+  runKey: string;
+  run?: LocalDaemonRunSummary;
+  text: string;
+  observedAt: string;
+}
+
+export interface LocalDaemonEventsWatchResult {
+  plane: "daemon";
+  resource: "events";
+  events: SparkDaemonEvent[];
+  text: string;
+  observedAt: string;
+}
+
 export interface SparkDaemonWorkspace {
   id: string;
   serverUrl: string;
@@ -177,6 +255,17 @@ export interface SparkDaemonWorkspace {
   displayName: string;
   localPath: string;
   status: string;
+  workspaceClients?: SparkWorkspaceClientProjection[];
+  updatedAt?: string;
+}
+
+export interface SparkWorkspaceClientProjection {
+  clientId: string;
+  kind: SparkWorkspaceClientKind;
+  status: "connected" | "disconnected";
+  displayName?: string;
+  attachedAt?: string;
+  lastSeenAt?: string;
 }
 
 export type SparkWorkspaceClientKind = "interactive" | "headless" | "executor";
@@ -265,10 +354,43 @@ export interface SparkDaemonQueueCommand extends SparkDaemonCliCommandBase {
 
 export interface SparkDaemonSessionsCommand extends SparkDaemonCliCommandBase {
   action: "sessions";
-  subcommand: "list" | "export" | "replay";
+  subcommand:
+    | "list"
+    | "show"
+    | "tree"
+    | "fork"
+    | "clone"
+    | "export"
+    | "replay"
+    | "mailto"
+    | "inbox";
   sessionId?: string;
   format?: SparkSessionExportFormat;
   leafId?: string | null;
+  allWorkspaces?: boolean;
+  history?: boolean;
+  newSessionId?: string;
+  toSessionId?: string;
+  fromSessionId?: string;
+  subject?: string;
+  message?: string;
+  inboxAction?: "list" | "read" | "ack";
+  messageId?: string;
+  all?: boolean;
+}
+
+export interface SparkDaemonRunsCommand extends SparkDaemonCliCommandBase {
+  action: "runs";
+  subcommand: "list" | "show" | "cancel";
+  runId?: string;
+  state?: SparkDaemonCliQueueState;
+  limit?: number;
+}
+
+export interface SparkDaemonEventsCommand extends SparkDaemonCliCommandBase {
+  action: "events";
+  subcommand: "watch";
+  limit?: number;
 }
 
 export interface SparkDaemonStartCommand extends SparkDaemonCliCommandBase {
@@ -286,6 +408,8 @@ export type SparkDaemonCliCommand =
   | SparkDaemonSubmitCommand
   | SparkDaemonQueueCommand
   | SparkDaemonSessionsCommand
+  | SparkDaemonRunsCommand
+  | SparkDaemonEventsCommand
   | SparkDaemonStartCommand
   | SparkDaemonServiceCommand;
 
@@ -295,6 +419,8 @@ export type SparkDaemonCliResult =
   | SparkDaemonSubmitResult
   | SparkDaemonQueueResult
   | SparkDaemonSessionsResult
+  | SparkDaemonRunsResult
+  | SparkDaemonEventsResult
   | SparkDaemonStartResult;
 
 export interface SparkDaemonStatusResult {
@@ -314,7 +440,53 @@ export interface SparkDaemonQueueResult {
 
 export interface SparkDaemonSessionsResult {
   action: "sessions";
-  result: LocalDaemonSessionListResult | LocalDaemonSessionTextResult;
+  result:
+    | LocalDaemonSessionListResult
+    | LocalDaemonSessionTextResult
+    | LocalDaemonSessionMailtoResult
+    | LocalDaemonSessionInboxListResult
+    | LocalDaemonSessionMailMessageResult
+    | DaemonSessionListResult
+    | DaemonSessionShowResult
+    | DaemonSessionTreeResult
+    | DaemonSessionForkResult;
+}
+
+export interface LocalDaemonSessionMailtoResult {
+  subcommand: "mailto";
+  message: SparkSessionMailMessage;
+  filePath: string;
+  text: string;
+  observedAt: string;
+}
+
+export interface LocalDaemonSessionInboxListResult {
+  subcommand: "inbox";
+  sessionId: string;
+  messages: Array<
+    SparkSessionMailMessage & { status: "pending" | "read" | "acked"; preview: string }
+  >;
+  text: string;
+  observedAt: string;
+}
+
+export interface LocalDaemonSessionMailMessageResult {
+  subcommand: "inbox";
+  inboxAction: "read" | "ack";
+  sessionId: string;
+  message: SparkSessionMailMessage & { status: "pending" | "read" | "acked" };
+  text: string;
+  observedAt: string;
+}
+
+export interface SparkDaemonRunsResult {
+  action: "runs";
+  result: LocalDaemonRunListResult | LocalDaemonRunShowResult | LocalTurnCancelResult;
+}
+
+export interface SparkDaemonEventsResult {
+  action: "events";
+  result: LocalDaemonEventsWatchResult;
 }
 
 export interface SparkDaemonStartResult {
@@ -359,6 +531,11 @@ export function parseSparkDaemonCliArgs(argv: string[]): SparkDaemonCliCommand {
     case "session":
     case "sessions":
       return parseSparkDaemonSessionsCommand(parsed, json);
+    case "run":
+    case "runs":
+      return parseSparkDaemonRunsCommand(parsed, json);
+    case "events":
+      return parseSparkDaemonEventsCommand(parsed, json);
     case "start":
       return { action: "start", json };
     case "stop":
@@ -381,7 +558,74 @@ function parseSparkDaemonSessionsCommand(
   json: boolean,
 ): SparkDaemonSessionsCommand {
   const [subcommand = "list", maybeLeaf] = parsed.positionals;
-  if (subcommand === "list") return { action: "sessions", subcommand, json };
+  if (subcommand === "list") {
+    const allWorkspaces = readBooleanOption(parsed.options, "all-workspaces");
+    return {
+      action: "sessions",
+      subcommand,
+      json,
+      allWorkspaces,
+      history: readBooleanOption(parsed.options, "history") || allWorkspaces,
+    };
+  }
+  if (subcommand === "mailto") {
+    const toSessionId = readStringOption(parsed.options, "to")?.trim();
+    const message =
+      readStringOption(parsed.options, "message")?.trim() ||
+      parsed.positionals.slice(1).join(" ").trim();
+    if (!toSessionId) throw new Error("spark sessions mailto requires --to <session-id>");
+    if (!message)
+      throw new Error("spark sessions mailto requires --message <text> or trailing text");
+    return {
+      action: "sessions",
+      subcommand,
+      json,
+      toSessionId,
+      message,
+      fromSessionId: readStringOption(parsed.options, "from")?.trim(),
+      subject: readStringOption(parsed.options, "subject")?.trim(),
+    };
+  }
+  if (subcommand === "inbox") {
+    const [inboxActionOrMessageId, maybeMessageId] = parsed.positionals.slice(1);
+    const inboxAction =
+      inboxActionOrMessageId === "read" || inboxActionOrMessageId === "ack"
+        ? inboxActionOrMessageId
+        : "list";
+    const sessionId = readStringOption(parsed.options, "session")?.trim();
+    if (!sessionId) throw new Error("spark sessions inbox requires --session <session-id>");
+    return {
+      action: "sessions",
+      subcommand,
+      json,
+      sessionId,
+      inboxAction,
+      all: readBooleanOption(parsed.options, "all"),
+      ...(inboxAction === "list"
+        ? {}
+        : {
+            messageId:
+              maybeMessageId?.trim() || readStringOption(parsed.options, "message")?.trim(),
+          }),
+    };
+  }
+  if (
+    subcommand === "show" ||
+    subcommand === "tree" ||
+    subcommand === "fork" ||
+    subcommand === "clone"
+  ) {
+    const sessionId = readStringOption(parsed.options, "session")?.trim() || maybeLeaf?.trim();
+    if (!sessionId) throw new Error(STRINGS.sessionsReplayRequiresSession);
+    const newSessionId = readStringOption(parsed.options, "id")?.trim();
+    return {
+      action: "sessions",
+      subcommand,
+      json,
+      sessionId,
+      ...(newSessionId ? { newSessionId } : {}),
+    };
+  }
   if (subcommand === "export") {
     const sessionId = readStringOption(parsed.options, "session")?.trim();
     if (!sessionId) throw new Error(STRINGS.sessionsExportRequiresSession);
@@ -413,6 +657,33 @@ function parseSparkDaemonSessionsCommand(
   throw new Error(STRINGS.unknownSessionsCommand(subcommand));
 }
 
+function parseSparkDaemonRunsCommand(
+  parsed: ReturnType<typeof parseSparkCliOptions>,
+  json: boolean,
+): SparkDaemonRunsCommand {
+  const [subcommand = "list", maybeRunId] = parsed.positionals;
+  if (subcommand === "list") {
+    const state = readQueueState(readStringOption(parsed.options, "state") ?? "all");
+    const limit = readNumberOption(parsed.options, "limit");
+    return { action: "runs", subcommand, json, state, limit };
+  }
+  if (subcommand === "show" || subcommand === "cancel") {
+    const runId = readStringOption(parsed.options, "run")?.trim() || maybeRunId?.trim();
+    if (!runId) throw new Error(`${subcommand} requires --run <id> or a run id argument`);
+    return { action: "runs", subcommand, json, runId };
+  }
+  throw new Error(`unknown daemon run command: ${subcommand}`);
+}
+
+function parseSparkDaemonEventsCommand(
+  parsed: ReturnType<typeof parseSparkCliOptions>,
+  json: boolean,
+): SparkDaemonEventsCommand {
+  const [subcommand = "watch"] = parsed.positionals;
+  if (subcommand !== "watch") throw new Error(`unknown daemon events command: ${subcommand}`);
+  return { action: "events", subcommand, json, limit: readNumberOption(parsed.options, "limit") };
+}
+
 export async function handleSparkDaemonCliCommand(
   command: SparkDaemonCliCommand,
   client: SparkDaemonClientOptions = {},
@@ -437,6 +708,10 @@ export async function handleSparkDaemonCliCommand(
       };
     case "sessions":
       return { action: "sessions", result: await clientSessions(command, client) };
+    case "runs":
+      return { action: "runs", result: await clientRuns(command, client) };
+    case "events":
+      return { action: "events", result: await clientEvents(command, client) };
     case "start":
       await clientEnsureRunning(client);
       return { action: "start", daemon: await clientStatus(client) };
@@ -459,7 +734,15 @@ export async function runSparkDaemonCliCommand(
     output.write(result.text);
     return 0;
   }
-  if (result.action === "sessions" && !command.json) {
+  if (result.action === "events" && command.json) {
+    for (const event of result.result.events) output.write(`${JSON.stringify(event)}\n`);
+    return 0;
+  }
+  if ((result.action === "sessions" || result.action === "events") && !command.json) {
+    output.write(result.result.text);
+    return 0;
+  }
+  if (result.action === "runs" && !command.json && "text" in result.result) {
     output.write(result.result.text);
     return 0;
   }
@@ -613,10 +896,26 @@ export function createSparkDaemonNativeCommands(
   return {
     status: {
       description: STRINGS.nativeCommandDescriptions.status,
+      metadata: {
+        source: "extension",
+        extensionId: "spark-daemon-native",
+        plane: "daemon",
+        resource: "status",
+        verbs: ["show"],
+        canonicalCliTarget: "spark daemon status",
+      },
       handler: async () => formatNativeDaemonStatus(await clientStatus(client)),
     },
     queue: {
       description: STRINGS.nativeCommandDescriptions.queue,
+      metadata: {
+        source: "extension",
+        extensionId: "spark-daemon-native",
+        plane: "daemon",
+        resource: "queue",
+        verbs: ["list"],
+        canonicalCliTarget: "spark daemon queue",
+      },
       handler: async (args) => {
         const state = readNativeQueueState(args);
         return formatNativeDaemonQueue(await clientQueue({ state, limit: 10 }, client));
@@ -624,6 +923,14 @@ export function createSparkDaemonNativeCommands(
     },
     start: {
       description: STRINGS.nativeCommandDescriptions.start,
+      metadata: {
+        source: "extension",
+        extensionId: "spark-daemon-native",
+        plane: "daemon",
+        resource: "process",
+        verbs: ["start"],
+        canonicalCliTarget: "spark daemon start",
+      },
       handler: async () => {
         await clientEnsureRunning(client);
         return formatNativeDaemonStatus(await clientStatus(client));
@@ -678,12 +985,104 @@ export async function attachSparkWorkspaceClient(
 async function clientSessions(
   command: SparkDaemonSessionsCommand,
   client: SparkDaemonClientOptions,
-): Promise<LocalDaemonSessionListResult | LocalDaemonSessionTextResult> {
+): Promise<
+  | LocalDaemonSessionListResult
+  | LocalDaemonSessionTextResult
+  | LocalDaemonSessionMailtoResult
+  | LocalDaemonSessionInboxListResult
+  | LocalDaemonSessionMailMessageResult
+  | DaemonSessionListResult
+  | DaemonSessionShowResult
+  | DaemonSessionTreeResult
+  | DaemonSessionForkResult
+> {
   const paths = resolveSparkDaemonClientPaths(client);
+  if (command.subcommand === "mailto") {
+    const sessionStore = createLocalSessionStore(client);
+    await assertKnownLocalSession(sessionStore, command.toSessionId!);
+    const mailStore = createLocalSessionMailStore(client);
+    const sent = await mailStore.send({
+      toSessionId: command.toSessionId!,
+      fromSessionId: command.fromSessionId,
+      subject: command.subject,
+      body: command.message!,
+      source: "cli",
+    });
+    return {
+      subcommand: "mailto",
+      message: sent.message,
+      filePath: sent.path,
+      text: renderMailtoResult(sent.message, sent.path),
+      observedAt: observedAt(client),
+    };
+  }
+  if (command.subcommand === "inbox") {
+    const mailStore = createLocalSessionMailStore(client);
+    const sessionId = command.sessionId!;
+    if (command.inboxAction === "read" || command.inboxAction === "ack") {
+      const messageId = command.messageId?.trim();
+      if (!messageId)
+        throw new Error(`spark sessions inbox ${command.inboxAction} requires <message-id>`);
+      const message =
+        command.inboxAction === "read"
+          ? await mailStore.read(sessionId, messageId)
+          : await mailStore.ack(sessionId, messageId);
+      const withStatus = { ...message, status: sessionMailStatus(message) };
+      return {
+        subcommand: "inbox",
+        inboxAction: command.inboxAction,
+        sessionId,
+        message: withStatus,
+        text: renderInboxMessage(command.inboxAction, withStatus),
+        observedAt: observedAt(client),
+      };
+    }
+    const messages = (await mailStore.list(sessionId, { includeAcked: command.all })).map(
+      (message) => ({
+        ...message,
+        status: sessionMailStatus(message),
+        preview: previewMailBody(message.body),
+      }),
+    );
+    return {
+      subcommand: "inbox",
+      sessionId,
+      messages,
+      text: renderInboxList(sessionId, messages),
+      observedAt: observedAt(client),
+    };
+  }
   if (command.subcommand === "list") {
-    if (client.sessionList) return await client.sessionList(paths);
-    const sessions = await createLocalSessionStore(client).list();
-    return { sessions, text: formatSessionList(sessions), observedAt: observedAt(client) };
+    if (command.history || command.allWorkspaces) {
+      if (client.sessionList)
+        return await client.sessionList(paths, {
+          allWorkspaces: command.allWorkspaces,
+          history: true,
+        });
+      return await listDaemonSessions(createLocalSessionStore(client), {
+        allWorkspaces: command.allWorkspaces,
+        history: true,
+        observedAt: observedAt(client),
+      });
+    }
+    const workspaces = await clientWorkspaceList(client);
+    return listLiveDaemonSessions(workspaces.workspaces, { observedAt: workspaces.observedAt });
+  }
+  if (command.subcommand === "show") {
+    return await showDaemonSession(createLocalSessionStore(client), command.sessionId!, {
+      observedAt: observedAt(client),
+    });
+  }
+  if (command.subcommand === "tree") {
+    return await treeDaemonSession(createLocalSessionStore(client), command.sessionId!, {
+      observedAt: observedAt(client),
+    });
+  }
+  if (command.subcommand === "fork" || command.subcommand === "clone") {
+    return await forkDaemonSession(createLocalSessionStore(client), command.sessionId!, {
+      id: command.newSessionId,
+      observedAt: observedAt(client),
+    });
   }
   if (command.subcommand === "export") {
     const sessionId = command.sessionId!;
@@ -712,11 +1111,192 @@ async function clientSessions(
   };
 }
 
+async function clientRuns(
+  command: SparkDaemonRunsCommand,
+  client: SparkDaemonClientOptions,
+): Promise<LocalDaemonRunListResult | LocalDaemonRunShowResult | LocalTurnCancelResult> {
+  const paths = resolveSparkDaemonClientPaths(client);
+  if (command.subcommand === "cancel") {
+    return await clientCancelTurn(
+      { invocationId: command.runId!, reason: "spark daemon run cancel" },
+      client,
+    );
+  }
+  if (command.subcommand === "show") {
+    if (client.runShow) return await client.runShow(paths, { runId: command.runId! });
+    const runs = await clientRuns(
+      { action: "runs", subcommand: "list", json: true, state: "all", limit: 100 },
+      client,
+    );
+    const runList = runs as LocalDaemonRunListResult;
+    const run = runList.runs.find(
+      (item) => item.id === command.runId || item.runKey === command.runId,
+    );
+    return {
+      plane: "daemon",
+      resource: "run",
+      runKey: runKey(command.runId!),
+      ...(run ? { run } : {}),
+      text: run ? renderRunSummary(run) : `${runKey(command.runId!)} not found\n`,
+      observedAt: observedAt(client),
+    };
+  }
+  if (client.runList) {
+    return await client.runList(paths, { state: command.state, limit: command.limit });
+  }
+  const queue = await clientQueue({ state: command.state ?? "all", limit: command.limit }, client);
+  const runs = runsFromQueue(queue);
+  return {
+    plane: "daemon",
+    resource: "run",
+    runs,
+    text: runs.length ? runs.map(renderRunSummary).join("") : "No Spark daemon runs found.\n",
+    observedAt: observedAt(client),
+  };
+}
+
+async function clientEvents(
+  command: SparkDaemonEventsCommand,
+  client: SparkDaemonClientOptions,
+): Promise<LocalDaemonEventsWatchResult> {
+  const paths = resolveSparkDaemonClientPaths(client);
+  if (client.eventsWatch) return await client.eventsWatch(paths, { limit: command.limit });
+  return {
+    plane: "daemon",
+    resource: "events",
+    events: [],
+    text: "No Spark daemon events are available without a live daemon event stream.\n",
+    observedAt: observedAt(client),
+  };
+}
+
+function runsFromQueue(queue: LocalDaemonQueueResult): LocalDaemonRunSummary[] {
+  const entries: Array<{
+    state: SparkDaemonCliQueueState;
+    entry: NonNullable<LocalDaemonQueueResult["entries"]>[number];
+  }> = [];
+  if (queue.state !== "all") {
+    for (const entry of queue.entries ?? []) entries.push({ state: queue.state, entry });
+  }
+  for (const [state, items] of Object.entries(queue.byState ?? {})) {
+    for (const entry of items ?? []) {
+      entries.push({ state: state as SparkDaemonCliQueueState, entry });
+    }
+  }
+  if (queue.state === "all" && queue.entries) {
+    for (const entry of queue.entries) entries.push({ state: inferRunState(entry), entry });
+  }
+  return entries.map(({ state, entry }) => ({
+    runKey: runKey(entry.fileName),
+    id: entry.fileName,
+    state,
+    sessionKey: sessionKeyFromRun(entry.payload.task.sessionId),
+    prompt: entry.payload.task.prompt,
+    enqueuedAt: entry.payload.enqueuedAt,
+    ...(entry.payload.processedAt ? { processedAt: entry.payload.processedAt } : {}),
+    ...(entry.payload.failedAt ? { failedAt: entry.payload.failedAt } : {}),
+    fileName: entry.fileName,
+    filePath: entry.filePath,
+  }));
+}
+
+function inferRunState(
+  entry: NonNullable<LocalDaemonQueueResult["entries"]>[number],
+): SparkDaemonCliQueueState {
+  if (entry.payload.failedAt) return "failed";
+  if (entry.payload.processedAt) return "processed";
+  return "inbox";
+}
+
+function runKey(id: string): string {
+  return id.startsWith("run:") ? id : `run:${id}`;
+}
+
+function sessionKeyFromRun(id: string): string {
+  return id.startsWith("session:") ? id : `session:${id}`;
+}
+
+function renderRunSummary(run: LocalDaemonRunSummary): string {
+  const session = run.sessionKey ? ` ${run.sessionKey}` : "";
+  const prompt = run.prompt ? ` ${run.prompt}` : "";
+  return `${run.runKey} ${run.state}${session}${prompt}\n`;
+}
+
 function createLocalSessionStore(client: SparkDaemonClientOptions): SparkSessionStore {
   return new SparkSessionStore({
     cwd: process.cwd(),
     ...(client.sparkHome ? { sparkHome: client.sparkHome } : {}),
   });
+}
+
+function createLocalSessionMailStore(client: SparkDaemonClientOptions): SparkSessionMailStore {
+  return new SparkSessionMailStore({
+    ...(client.sparkHome ? { sparkHome: client.sparkHome } : {}),
+    now: client.now,
+  });
+}
+
+async function assertKnownLocalSession(store: SparkSessionStore, sessionId: string): Promise<void> {
+  const normalized = normalizeSessionKey(sessionId);
+  const sessions = await store.listAllPersistentSessions();
+  if (
+    sessions.some(
+      (session) =>
+        session.id === sessionId ||
+        session.id === normalized ||
+        `session:${session.id}` === sessionId,
+    )
+  ) {
+    return;
+  }
+  throw new Error(`Spark session not found: ${sessionId}`);
+}
+
+function normalizeSessionKey(sessionId: string): string {
+  return sessionId.startsWith("session:") ? sessionId.slice("session:".length) : sessionId;
+}
+
+function renderMailtoResult(message: SparkSessionMailMessage, filePath: string): string {
+  return `sent ${message.id} to ${message.toSessionId} (${filePath})\n`;
+}
+
+function renderInboxList(
+  sessionId: string,
+  messages: Array<
+    SparkSessionMailMessage & { status: "pending" | "read" | "acked"; preview: string }
+  >,
+): string {
+  if (messages.length === 0) return `No pending Spark session mail for ${sessionId}.\n`;
+  return (
+    messages
+      .map(
+        (message) =>
+          `${message.id} ${message.status} from=${message.fromSessionId} ${message.createdAt} ${message.preview}`,
+      )
+      .join("\n") + "\n"
+  );
+}
+
+function renderInboxMessage(
+  action: "read" | "ack",
+  message: SparkSessionMailMessage & { status: "pending" | "read" | "acked" },
+): string {
+  return (
+    [
+      `${action === "ack" ? "acknowledged" : "read"} ${message.id}`,
+      `to=${message.toSessionId}`,
+      `from=${message.fromSessionId}`,
+      `status=${message.status}`,
+      `subject=${message.subject ?? ""}`,
+      "",
+      message.body,
+    ].join("\n") + "\n"
+  );
+}
+
+function previewMailBody(body: string): string {
+  const oneLine = body.replace(/\s+/g, " ").trim();
+  return oneLine.length <= 80 ? oneLine : `${oneLine.slice(0, 77)}...`;
 }
 
 function observedAt(client: SparkDaemonClientOptions): string {
@@ -865,6 +1445,18 @@ async function clientSubmitStreaming(
   return await clientSubmit(input, client);
 }
 
+async function clientWorkspaceList(
+  client: SparkDaemonClientOptions,
+): Promise<LocalDaemonWorkspaceListResult> {
+  const paths = resolveSparkDaemonClientPaths(client);
+  await clientEnsureRunning(client);
+  if (client.workspaceList) return await client.workspaceList(paths);
+  return await localRpcRequest<LocalDaemonWorkspaceListResult>(
+    paths,
+    localRpcWireRequest("workspace.list"),
+  );
+}
+
 async function clientEnsureLocalWorkspace(
   input: LocalWorkspaceEnsureLocalInput,
   client: SparkDaemonClientOptions,
@@ -932,6 +1524,7 @@ async function clientEnsureRunning(client: SparkDaemonClientOptions): Promise<vo
     client.daemonStatus ||
     client.turnSubmit ||
     client.turnCancel ||
+    client.workspaceList ||
     client.workspaceEnsureLocal ||
     client.workspaceClientAttach
   ) {

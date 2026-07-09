@@ -2,6 +2,8 @@
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
   import { daemonDisplayStatus, type DaemonDisplayStatus } from "$lib/daemon-status";
+  import PageHeader from "$lib/ui/PageHeader.svelte";
+  import StatCard from "$lib/ui/StatCard.svelte";
   import { workspaceControlDisplay } from "$lib/workspace-control-display";
   import { workspacePath } from "$lib/workspace-routes";
 
@@ -43,29 +45,21 @@
   }
 </script>
 
+{#snippet workspaceSettingsAction()}
+  <a class="secondary-action" href={`${workspaceUrl}/settings`}>{t.hero.openSettings}</a>
+{/snippet}
+
 <svelte:head>
   <title>{data.workspaces.length === 0 ? t.emptyHeadTitle : t.headTitle}</title>
 </svelte:head>
 
 <section class="hero" aria-labelledby="home-title">
-  <div>
-    <p class="eyebrow">
-      {data.workspaces.length === 0
-        ? t.noWorkspaceHero.eyebrow
-        : t.hero.eyebrow}
-    </p>
-    <h1 id="home-title">
-      {data.workspaces.length === 0 ? t.noWorkspaceHero.title : t.hero.title}
-    </h1>
-    <p class="lede">
-      {data.workspaces.length === 0 ? t.noWorkspaceHero.lede : t.hero.lede}
-    </p>
-  </div>
-  <div class="hero-actions">
-    <a class="secondary-action" href={`${workspaceUrl}/settings`}
-      >{t.hero.openSettings}</a
-    >
-  </div>
+  <PageHeader
+    eyebrow={data.workspaces.length === 0 ? t.noWorkspaceHero.eyebrow : t.hero.eyebrow}
+    title={data.workspaces.length === 0 ? t.noWorkspaceHero.title : t.hero.title}
+    lede={data.workspaces.length === 0 ? t.noWorkspaceHero.lede : t.hero.lede}
+    actions={workspaceSettingsAction}
+  />
 </section>
 
 <section class="control-strip" aria-label={t.workspaceControl.aria}>
@@ -92,42 +86,35 @@
 </section>
 
 <section class="metrics" aria-label={t.metrics.aria}>
-  <article class="metric orange featured">
-    <div class="metric-icon"><Icon name="inbox" size={28} /></div>
-    <div>
-      <span>{t.metrics.pendingInbox}</span>
-      <strong>0</strong>
-      <small>{t.metrics.pendingInboxHint}</small>
-    </div>
-  </article>
-  <article class="metric blue">
-    <div class="metric-icon"><Icon name="folder" size={28} /></div>
-    <div>
-      <span>{t.metrics.workspaces}</span>
-      <strong>{data.workspaces.length}</strong>
-      <small>{data.ownerBindings.length} {common.boundToRunner}</small>
-    </div>
-  </article>
-  <article class="metric green">
-    <div class="metric-icon"><Icon name="activity" size={28} /></div>
-    <div>
-      <span>{t.metrics.runnerConnections}</span>
-      <strong>{data.runnerConnections.length}</strong>
-      <small
-        >{countRunners("online")}
-        {common.online} · {data.connectedSessionCount}
-        {common.activeWs}</small
-      >
-    </div>
-  </article>
-  <article class="metric purple">
-    <div class="metric-icon"><Icon name="cube" size={28} /></div>
-    <div>
-      <span>{t.metrics.workspaceBindings}</span>
-      <strong>{data.runnerBindings.length}</strong>
-      <small>{common.reportedByConnectedRunners}</small>
-    </div>
-  </article>
+  <StatCard
+    label={t.metrics.pendingInbox}
+    hint={t.metrics.pendingInboxHint}
+    value={data.pendingInboxCount}
+    tone="warning"
+    featured={data.pendingInboxCount > 0}
+    icon="inbox"
+  />
+  <StatCard
+    label={t.metrics.workspaces}
+    value={data.workspaces.length}
+    hint="{data.ownerBindings.length} {common.boundToRunner}"
+    tone="primary"
+    icon="folder"
+  />
+  <StatCard
+    label={t.metrics.runnerConnections}
+    value={data.runnerConnections.length}
+    hint="{countRunners('online')} {common.online} · {data.connectedSessionCount} {common.activeWs}"
+    tone="success"
+    icon="activity"
+  />
+  <StatCard
+    label={t.metrics.workspaceBindings}
+    value={data.runnerBindings.length}
+    hint={common.reportedByConnectedRunners}
+    tone="purple"
+    icon="cube"
+  />
 </section>
 
 <section class="dashboard-grid">
@@ -347,19 +334,11 @@
     text-transform: uppercase;
   }
 
-  h1,
   h2,
   h3,
   h4,
   p {
     margin: 0;
-  }
-
-  h1 {
-    color: var(--color-ink);
-    font-size: 34px;
-    letter-spacing: -0.03em;
-    line-height: 1.1;
   }
 
   .lede {
@@ -434,7 +413,6 @@
     margin-bottom: 24px;
   }
 
-  .metric,
   .panel {
     background: var(--color-surface);
     border: 1px solid var(--color-border);
@@ -442,20 +420,6 @@
     box-shadow: var(--shadow-card-raised);
   }
 
-  .metric {
-    align-items: center;
-    display: flex;
-    gap: 20px;
-    min-height: 138px;
-    padding: 24px;
-  }
-
-  .metric.featured {
-    background: var(--color-warning-weak);
-    border-color: var(--color-warning-soft);
-  }
-
-  .metric-icon,
   .empty-icon,
   .row-icon,
   .event-icon {
@@ -464,53 +428,6 @@
     display: grid;
     flex: 0 0 auto;
     place-items: center;
-  }
-
-  .metric-icon {
-    height: 64px;
-    width: 64px;
-  }
-
-  .metric span {
-    color: var(--color-ink-subtle);
-    display: block;
-    font-size: 13px;
-    font-weight: 700;
-    margin-bottom: 8px;
-  }
-
-  .metric strong {
-    color: var(--color-ink);
-    display: block;
-    font-size: 34px;
-    line-height: 1;
-    margin-bottom: 12px;
-  }
-
-  .metric small {
-    color: var(--color-ink-subtle);
-    font-size: 13px;
-  }
-
-  .blue .metric-icon,
-  .blue .row-icon {
-    background: var(--color-primary-weak);
-    color: var(--color-primary);
-  }
-
-  .green .metric-icon {
-    background: var(--color-success-soft);
-    color: var(--color-success);
-  }
-
-  .orange .metric-icon {
-    background: var(--color-warning-soft);
-    color: var(--color-warning);
-  }
-
-  .purple .metric-icon {
-    background: var(--color-purple-soft);
-    color: var(--color-purple);
   }
 
   .control-strip {

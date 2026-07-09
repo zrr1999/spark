@@ -1,3 +1,4 @@
+import type { CommandMetadata } from "@zendev-lab/spark-extension-api";
 import type { ReviewerRunner } from "./reviewer-runner.ts";
 import type { SparkEntryApplicationDeps } from "./spark-entry-application.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
@@ -15,6 +16,7 @@ export interface SparkCommandApi {
     config: {
       description: string;
       argumentHint?: string;
+      metadata?: CommandMetadata;
       getArgumentCompletions?: (
         argumentPrefix: string,
       ) =>

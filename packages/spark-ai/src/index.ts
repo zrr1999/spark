@@ -669,6 +669,30 @@ export class SparkRouteResolver {
     request: SparkRouteResolverRequest,
     executor: SparkRouteExecutor<TResult>,
   ): Promise<SparkRouteExecutionResult<TResult>> {
+    return this.#execute(request, executor, { failover: true });
+  }
+
+  /**
+   * Execute exactly one route attempt with full auth-slot/route accounting but
+   * no failover: a failure is recorded against the selected auth slot (with its
+   * real failure class) and then surfaced as a SparkRouteExecutionError instead
+   * of advancing to another route. Callers that want single-shot semantics
+   * (e.g. Spark leaf capabilities) use this so a failed call still degrades
+   * shared route/auth-slot health correctly rather than being logged as a
+   * success or silently retried on another route.
+   */
+  async executeOnce<TResult>(
+    request: SparkRouteResolverRequest,
+    executor: SparkRouteExecutor<TResult>,
+  ): Promise<SparkRouteExecutionResult<TResult>> {
+    return this.#execute(request, executor, { failover: false });
+  }
+
+  async #execute<TResult>(
+    request: SparkRouteResolverRequest,
+    executor: SparkRouteExecutor<TResult>,
+    options: { failover: boolean },
+  ): Promise<SparkRouteExecutionResult<TResult>> {
     const trace = new RouteTraceBuilder(
       request.traceMaxEvents ?? this.#traceMaxEvents,
       this.#clock,
@@ -715,7 +739,8 @@ export class SparkRouteResolver {
           authSlotId,
           reason: classification.failureClass,
         });
-        if (!classification.policy.failover) {
+        this.#clearSticky(request, decision.routeId);
+        if (!options.failover || !classification.policy.failover) {
           throw new SparkRouteExecutionError(
             `Spark route ${decision.routeId} failed with ${classification.failureClass}: ${classification.message}`,
             classification,
@@ -723,7 +748,6 @@ export class SparkRouteResolver {
           );
         }
         excluded.add(decision.routeId);
-        this.#clearSticky(request, decision.routeId);
       }
     }
 
@@ -817,6 +841,11 @@ export class SparkRouteResolver {
     const created = new SparkAuthSlotPool(pool, { clock: this.#clock });
     this.#authPools.set(key, created);
     return created;
+  }
+
+  /** Snapshot the auth-slot pools this resolver has touched, for health inspection/tests. */
+  authPoolSnapshots(): AuthSlotPoolSnapshot[] {
+    return [...this.#authPools.values()].map((pool) => pool.snapshot());
   }
 
   #stickyKey(request: SparkRouteResolverRequest): string | undefined {
@@ -1313,3 +1342,17 @@ export {
   streamBaiduOneApiAnthropic,
   streamBaiduOneApiOpenAIResponses,
 } from "./baidu-oneapi-provider.ts";
+export {
+  runSparkLeaf,
+  resolveLeafModelId,
+  type SparkLeafRequest,
+  type SparkLeafResult,
+  type SparkLeafDegradeReason,
+  type SparkLeafModelBinding,
+  type SparkLeafBindingResolver,
+  type SparkLeafRunnerDeps,
+} from "./leaf-runner.ts";
+export {
+  createProviderRegistryLeafRunner,
+  type SparkLeafHostRunnerOptions,
+} from "./leaf-host-runner.ts";

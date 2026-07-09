@@ -39,7 +39,9 @@ export interface SparkWebContentRecord {
   responseId: string;
   kind: "fetch" | "search";
   url?: string;
+  urls?: Array<{ url: string; responseId: string; title?: string }>;
   query?: string;
+  queries?: SparkWebSearchResponse[];
   title?: string;
   content: string;
   results?: SparkWebSearchResult[];
@@ -207,6 +209,7 @@ export async function searchSparkWeb(
   const record = await store.record({
     kind: "search",
     query: normalizedQueries.join("\n"),
+    queries: responses,
     content: markdown,
     results: responses.flatMap((response) => response.results),
   });

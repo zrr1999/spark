@@ -5,7 +5,7 @@ export interface SparkCliDispatcherStrings {
   dispatchFailure: (targetLabel: string, detail: string) => string;
   signalExit: (targetLabel: string, signal: string) => string;
   helpText: string;
-  targetLabel: (target: "tui" | "daemon" | "cockpit") => string;
+  targetLabel: (target: "tui" | "daemon" | "server" | "cockpit") => string;
   tuiRequiresTty: string;
 }
 
@@ -35,7 +35,7 @@ const DISPATCHER: Record<SparkLanguage, SparkCliDispatcherStrings> = {
     dispatchFailure: (targetLabel, detail) => `Unable to dispatch to ${targetLabel}: ${detail}`,
     signalExit: (targetLabel, signal) => `${targetLabel} exited due to signal ${signal}`,
     helpText:
-      'spark - Spark command dispatcher\n\nUsage:\n  spark\n  spark tui [initial message]\n  spark --print <prompt>\n  spark --mode json --print <prompt>\n  spark --mode rpc\n  spark --list-models [search]\n  spark install|remove|update|list|config [resource]\n  spark daemon <command> [args...]\n  spark cockpit [command] [args...]\n  spark --help\n  spark --version\n\nDispatches to Spark surfaces:\n  spark tui       interactive terminal UI and Pi-compatible CLI/resource shims\n  spark daemon    daemon administration\n  spark cockpit   local Cockpit production web app\n\nUnknown subcommands fail loudly instead of being interpreted as prompts. Use "spark tui ..." for interactive TUI input.\n',
+      'spark - Spark command dispatcher\n\nUsage:\n  spark\n  spark tui [initial message]\n  spark --print <prompt>\n  spark --mode json --print <prompt>\n  spark --mode rpc\n  spark --list-models [search]\n  spark install|remove|update|list|config [resource]\n  spark daemon <resource> <verb> [args...]\n  spark server <resource> <verb> [args...]\n  spark cockpit [args...]\n  spark tui <command> [args...]\n  spark --help\n  spark --version\n\nCanonical Spark command planes:\n  spark daemon    daemon execution plane: session, run, queue, events, logs, process state\n  spark server    server coordination plane: project, task, goal, artifact, review, workflow\n  spark tui       tui local control plane: interactive terminal UI, attach/resume, local UI settings\n\nCockpit web UI host:\n  spark cockpit   launch the Cockpit web UI (not a fourth plane)\n\nCompatibility aliases are documented in docs/specs/command-planes.md. Unknown subcommands fail loudly instead of being interpreted as prompts. Use "spark tui ..." for interactive TUI input.\n',
     tuiRequiresTty:
       'Spark TUI requires an interactive terminal (stdin and stdout must be TTYs). Use "spark --print <prompt>", "spark --mode rpc", or "spark daemon submit ..." for non-interactive/headless use.',
     targetLabel: (target) => {
@@ -44,6 +44,8 @@ const DISPATCHER: Record<SparkLanguage, SparkCliDispatcherStrings> = {
           return "Spark TUI";
         case "daemon":
           return "Spark daemon";
+        case "server":
+          return "Spark server";
         case "cockpit":
           return "Spark Cockpit";
       }
@@ -57,7 +59,7 @@ const DISPATCHER: Record<SparkLanguage, SparkCliDispatcherStrings> = {
     dispatchFailure: (targetLabel, detail) => `无法分发到 ${targetLabel}：${detail}`,
     signalExit: (targetLabel, signal) => `${targetLabel} 因信号 ${signal} 退出`,
     helpText:
-      'spark - Spark 命令分发器\n\n用法：\n  spark\n  spark tui [初始消息]\n  spark --print <prompt>\n  spark --mode json --print <prompt>\n  spark --mode rpc\n  spark --list-models [search]\n  spark install|remove|update|list|config [resource]\n  spark daemon <command> [args...]\n  spark cockpit [command] [args...]\n  spark --help\n  spark --version\n\n分发到 Spark 界面：\n  spark tui       交互式终端 UI 和 Pi 兼容 CLI/resource shim\n  spark daemon    daemon 管理\n  spark cockpit   本地 Cockpit 生产 Web 服务\n\n未知子命令会直接失败，不会被解释成 prompt。交互式 TUI 输入请使用 "spark tui ..."。\n',
+      'spark - Spark 命令分发器\n\n用法：\n  spark\n  spark tui [初始消息]\n  spark --print <prompt>\n  spark --mode json --print <prompt>\n  spark --mode rpc\n  spark --list-models [search]\n  spark install|remove|update|list|config [resource]\n  spark daemon <resource> <verb> [args...]\n  spark server <resource> <verb> [args...]\n  spark cockpit [args...]\n  spark tui <command> [args...]\n  spark --help\n  spark --version\n\nCanonical Spark command planes：\n  spark daemon    daemon execution plane：session、run、queue、events、logs、process state\n  spark server    server coordination plane：project、task、goal、artifact、review、workflow\n  spark tui       tui local control plane：interactive terminal UI、attach/resume、local UI settings\n\nCockpit web UI host：\n  spark cockpit   启动 Cockpit 网页 UI（不是第四平面）\n\nCompatibility aliases are documented in docs/specs/command-planes.md。未知子命令会直接失败，不会被解释成 prompt。交互式 TUI 输入请使用 "spark tui ..."。\n',
     tuiRequiresTty:
       'Spark TUI 需要交互式终端（stdin 和 stdout 必须是 TTY）。非交互/headless 使用请改用 "spark --print <prompt>"、"spark --mode rpc" 或 "spark daemon submit ..."。',
     targetLabel: (target) => {
@@ -66,6 +68,8 @@ const DISPATCHER: Record<SparkLanguage, SparkCliDispatcherStrings> = {
           return "Spark TUI";
         case "daemon":
           return "Spark daemon";
+        case "server":
+          return "Spark server";
         case "cockpit":
           return "Spark Cockpit";
       }
@@ -76,7 +80,7 @@ const DISPATCHER: Record<SparkLanguage, SparkCliDispatcherStrings> = {
 const TUI_CLI: Record<SparkLanguage, SparkTuiCliStrings> = {
   en: {
     helpText:
-      'spark-tui - Spark terminal UI\n\nUsage:\n  spark-tui [initial message]\n  spark-tui --print <prompt>\n  spark-tui --mode json --print <prompt>\n  spark-tui --mode rpc\n  spark-tui --list-models [search]\n  spark-tui install|remove|update|list|config [resource]\n  spark-tui --help\n\nRuns terminal UI rendering by default, but prompts are submitted to the Spark daemon over local IPC. Pi-compatible resource commands update ~/.spark/config.json and keep extensions/providers/skills/prompt templates/themes explicit. Use the root "spark daemon ..." dispatcher path for daemon administration.',
+      'spark-tui - Spark terminal UI\n\nUsage:\n  spark-tui [initial message]\n  spark-tui --print <prompt>\n  spark-tui --mode json --print <prompt>\n  spark-tui --mode rpc\n  spark-tui --list-models [search]\n  spark-tui install|remove|update|list|config [resource]\n  spark-tui --help\n\nSpark command planes:\n  spark daemon    daemon execution plane\n  spark server    server coordination plane\n  spark tui       tui local control plane\n\nZellij daemon session resume/attach:\n  zellij --session spark run -- spark tui\n  spark daemon session list --json\n  spark tui --session-id <session-id>\n  Spark session selection is workspace-bound; attach a session from the same canonical cwd/workspace hash.\n\nRuns terminal UI rendering by default, but prompts are submitted to the Spark daemon over local IPC. Pi-compatible resource commands update ~/.spark/config.json and keep extensions/providers/skills/prompt templates/themes explicit. Use the root "spark daemon ..." dispatcher path for daemon execution-plane administration.',
     printRequiresPrompt: "spark --print requires a prompt",
     tuiRequiresTty:
       'spark-tui requires an interactive terminal (stdin and stdout must be TTYs). Use "spark-tui --print <prompt>", "spark-tui --mode rpc", or "spark daemon submit ..." for non-interactive/headless use.',
@@ -94,7 +98,7 @@ const TUI_CLI: Record<SparkLanguage, SparkTuiCliStrings> = {
   },
   zh: {
     helpText:
-      'spark-tui - Spark 终端 UI\n\n用法：\n  spark-tui [初始消息]\n  spark-tui --print <prompt>\n  spark-tui --mode json --print <prompt>\n  spark-tui --mode rpc\n  spark-tui --list-models [search]\n  spark-tui install|remove|update|list|config [resource]\n  spark-tui --help\n\n默认运行终端 UI 渲染，但 prompt 会通过本地 IPC 提交给 Spark daemon。Pi 兼容 resource 命令会更新 ~/.spark/config.json，并显式维护 extensions/providers/skills/prompt templates/themes。daemon 管理请使用根命令 "spark daemon ..."。',
+      'spark-tui - Spark 终端 UI\n\n用法：\n  spark-tui [初始消息]\n  spark-tui --print <prompt>\n  spark-tui --mode json --print <prompt>\n  spark-tui --mode rpc\n  spark-tui --list-models [search]\n  spark-tui install|remove|update|list|config [resource]\n  spark-tui --help\n\nSpark command planes：\n  spark daemon    daemon execution plane\n  spark server    server coordination plane\n  spark tui       tui local control plane\n\nZellij daemon session resume/attach：\n  zellij --session spark run -- spark tui\n  spark daemon session list --json\n  spark tui --session-id <session-id>\n  Spark session selection is workspace-bound; attach a session from the same canonical cwd/workspace hash.\n\n默认运行终端 UI 渲染，但 prompt 会通过本地 IPC 提交给 Spark daemon。Pi 兼容 resource 命令会更新 ~/.spark/config.json，并显式维护 extensions/providers/skills/prompt templates/themes。daemon execution-plane 管理请使用根命令 "spark daemon ..."。',
     printRequiresPrompt: "spark --print 需要 prompt",
     tuiRequiresTty:
       'spark-tui 需要交互式终端（stdin 和 stdout 必须是 TTY）。非交互/headless 使用请改用 "spark-tui --print <prompt>"、"spark-tui --mode rpc" 或 "spark daemon submit ..."。',
@@ -527,7 +531,7 @@ const PI_PARITY_STRINGS: Record<SparkLanguage, SparkTuiPiParityStrings> = {
   },
 };
 
-const DAEMON_HELP_TEXT = `spark daemon - Spark daemon control surface\n\nUsage:\n  spark daemon [--workspace <name>]\n  spark daemon status [--json]\n  spark daemon start [--json]\n  spark daemon stop [--yes]\n  spark daemon restart [--yes]\n  spark daemon logs [--follow] [--lines <n>]\n  spark daemon submit --session <id> --prompt <text> [--reset] [--json]\n  spark daemon queue [--state inbox|processed|failed|all] [--limit <n>] [--json]\n  spark daemon sessions [list] [--json]\n  spark daemon sessions export --session <id|path> [--format jsonl|json|text] [--leaf <entry-id|root>] [--json]\n  spark daemon sessions replay --session <id|path> [--leaf <entry-id|root>] [--json]\n  spark daemon workspace register [path] --server-url <url> --token <token|-> --name <name>\n  spark daemon workspace ls [--json] [--all] [--full]\n  spark daemon workspace show [name] [--json]\n  spark daemon workspace stop <name> [--yes]\n\nSpark CLI never runs an independent queue worker; it starts/wakes the Spark daemon and talks over local IPC.`;
+const DAEMON_HELP_TEXT = `spark daemon - daemon execution plane\n\nUsage:\n  spark daemon [--workspace <name>]\n  spark daemon status [--json]\n  spark daemon start [--json]\n  spark daemon stop [--yes]\n  spark daemon restart [--yes]\n  spark daemon logs [--follow] [--lines <n>]\n  spark daemon submit --session <id> --prompt <text> [--reset] [--json]\n  spark daemon queue [--state inbox|processed|failed|all] [--limit <n>] [--json]\n  spark daemon session list [--json]\n  spark daemon session export --session <id|path> [--format jsonl|json|text] [--leaf <entry-id|root>] [--json]\n  spark daemon session replay --session <id|path> [--leaf <entry-id|root>] [--json]\n  spark sessions mailto --to <session-id> --message <text> [--from <session-id>] [--subject <text>] [--json]\n  spark sessions inbox --session <session-id> [--all] [--json]\n  spark sessions inbox read <message-id> --session <session-id> [--json]\n  spark sessions inbox ack <message-id> --session <session-id> [--json]\n  spark daemon run list [--json]\n  spark daemon events watch [--json]\n  spark daemon workspace register [path] --server-url <url> --token <token|-> --name <name>\n  spark daemon workspace ls [--json] [--all] [--full]\n  spark daemon workspace show [name] [--json]\n  spark daemon workspace stop <name> [--yes]\n\nSpark CLI never runs an independent queue worker; it starts/wakes the Spark daemon and talks over local IPC. Project/task/goal/review commands belong under spark server, the server coordination plane.`;
 
 const DAEMON_STRINGS: Record<SparkLanguage, SparkDaemonCliStrings> = {
   en: {

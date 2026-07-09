@@ -1,0 +1,44 @@
+.status-pill {
+  background: var(--color-surface-soft);
+  border-radius: var(--rounded-full);
+  color: var(--color-ink-subtle);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-caption-medium);
+  padding: 6px 10px;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.status-pill.online,
+.status-pill.running,
+.status-pill.delivered,
+.status-pill.sent,
+.status-pill.ready {
+  background: var(--color-primary-weak);
+  color: var(--color-primary);
+}
+
+.status-pill.done,
+.status-pill.completed,
+.status-pill.succeeded,
+.status-pill.resolved,
+.status-pill.acked {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.status-pill.blocked,
+.status-pill.pending,
+.status-pill.queued,
+.status-pill.offline,
+.status-pill.disconnected {
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+.status-pill.failed,
+.status-pill.cancelled,
+.status-pill.rejected {
+  background: var(--color-danger-soft);
+  color: var(--color-danger-strong);
+}

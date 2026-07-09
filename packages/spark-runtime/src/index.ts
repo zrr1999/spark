@@ -7,7 +7,6 @@ import {
   defaultUserRoleModelSettingsStore,
   parsePiJsonlEvents,
   resolveRoleModelSetting,
-  RoleRunCancelledError,
   RoleRunTimeoutError as PiRoleRunTimeoutError,
   runRole,
   type RoleRegistry,
@@ -29,12 +28,7 @@ import {
   type TaskRunCompletionSummary,
   type TaskTodo,
 } from "@zendev-lab/spark-extension-api";
-import type {
-  RoleInstruction,
-  RoleRunRecord,
-  RoleRunStatus,
-  RoleSpec,
-} from "@zendev-lab/spark-roles";
+import type { RoleInstruction, RoleRunRecord, RoleSpec } from "@zendev-lab/spark-roles";
 import {
   taskCompletionReadiness,
   type TaskGraph,
@@ -71,6 +65,8 @@ export interface SparkRoleRunResult {
     model?: string;
     sessionDir?: string;
     forkFromSession?: string;
+    noSession?: boolean;
+    sessionPersistence?: "anonymous" | "persistent";
   };
   stdout: string;
   stderr: string;
@@ -89,6 +85,8 @@ export interface SparkRoleInstructionExecutorInput {
   launch?: RoleLaunchMode;
   forkFromSession?: string;
   model?: string;
+  noSession?: boolean;
+  sessionPersistence?: "anonymous" | "persistent";
   env?: NodeJS.ProcessEnv;
   onEvent?: (event: unknown) => void | Promise<void>;
 }
@@ -157,10 +155,76 @@ const MAX_ROLE_RUN_ARTIFACT_JSON_EVENT_CHARS = 1_000;
 const DEFAULT_ROLE_RUN_FORCE_KILL_AFTER_MS = 1_000;
 const DEFAULT_ROLE_RUN_SHUTDOWN_WAIT_MS = 3_000;
 const ROLE_RUN_INPUT_ERROR_GRACE_MS = 75;
+const ROLE_RUN_SECRET_PATTERN = /(?:api[-_\s]?key|token|bearer)\s*[:=]\s*[^\s,;}]+/giu;
 const activeSparkRoleRunProcesses = new Map<RunRef, TrackedSparkRoleRunProcess>();
+
+export interface RoleRunFailureDiagnostic {
+  failureCategory: string;
+  executorKind: "daemon-native" | "process";
+  modelSelector?: string;
+  launch?: RoleLaunchMode;
+  exitOrTimeout: string;
+  sessionPersistence?: "anonymous" | "persistent";
+  nextAction: string;
+}
+
+export function buildRoleRunFailureDiagnostic(input: {
+  result: SparkRoleRunResult;
+  executorKind?: "daemon-native" | "process";
+  modelSelector?: string;
+  exitOrTimeout?: string;
+}): RoleRunFailureDiagnostic {
+  const { result } = input;
+  const emptyOutput =
+    result.stdout.trim().length === 0 &&
+    result.stderr.trim().length === 0 &&
+    result.jsonEvents.length === 0;
+  const providerFailure = result.jsonEvents.some((event) =>
+    JSON.stringify(event).includes("provider_resolution_failed"),
+  );
+  const failureCategory = providerFailure
+    ? "provider_resolution_failed"
+    : emptyOutput
+      ? "empty_output"
+      : "role_run_failed";
+  return {
+    failureCategory,
+    executorKind:
+      input.executorKind ?? (result.record.sessionPersistence ? "daemon-native" : "process"),
+    ...((input.modelSelector ?? result.record.model)
+      ? { modelSelector: redactDiagnosticText(input.modelSelector ?? result.record.model ?? "") }
+      : {}),
+    ...(result.record.launch ? { launch: result.record.launch } : {}),
+    exitOrTimeout: redactDiagnosticText(input.exitOrTimeout ?? result.record.status),
+    ...(result.record.sessionPersistence
+      ? { sessionPersistence: result.record.sessionPersistence }
+      : {}),
+    nextAction: diagnosticNextAction(failureCategory),
+  };
+}
+
+function diagnosticNextAction(failureCategory: string): string {
+  if (failureCategory === "provider_resolution_failed")
+    return "Check the native Spark provider registry/model selector and align role model settings with an available provider/model.";
+  if (failureCategory === "empty_output")
+    return "Inspect role executor configuration, model selection, and runtime stderr; rerun with diagnostics if the executor produced no stdout, stderr, or JSON events.";
+  return "Inspect stderr, JSON events, and role-run artifact tails for the failing run.";
+}
+
+function redactDiagnosticText(text: string): string {
+  return text.replace(ROLE_RUN_SECRET_PATTERN, (match) => {
+    const key = match.split(/[:=]/u, 1)[0]?.trim() || "secret";
+    return `${key}=<redacted>`;
+  });
+}
 
 function unknownErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function abortSignalReason(signal: AbortSignal | undefined): Error {
+  const reason = signal?.reason;
+  return reason instanceof Error ? reason : new Error(String(reason ?? "aborted"));
 }
 
 function combineAbortSignals(signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
@@ -222,49 +286,6 @@ function selectTrackedSparkRoleRunProcesses(options: {
     if (hasNameFilter && !runNames.has(record.runName ?? "")) return false;
     return true;
   });
-}
-
-function trackSparkRoleRunProcess(input: {
-  child: ChildProcess;
-  runRef: RunRef;
-  roleRef: RoleRef;
-  runName?: string;
-  cwd: string;
-  startedAt: string;
-}): TrackedSparkRoleRunProcess {
-  const tracked: TrackedSparkRoleRunProcess = {
-    runRef: input.runRef,
-    roleRef: input.roleRef,
-    runName: input.runName,
-    pid: input.child.pid,
-    cwd: input.cwd,
-    startedAt: input.startedAt,
-    child: input.child,
-    closed: input.child.exitCode !== null || input.child.signalCode !== null,
-  };
-  if (tracked.closed) return tracked;
-  input.child.stdin?.on("error", () => {
-    tracked.closed = true;
-    activeSparkRoleRunProcesses.delete(input.runRef);
-  });
-  activeSparkRoleRunProcesses.set(input.runRef, tracked);
-  input.child.once("close", () => {
-    tracked.closed = true;
-    if (tracked.forceKillTimer) clearTimeout(tracked.forceKillTimer);
-    activeSparkRoleRunProcesses.delete(input.runRef);
-  });
-  input.child.once("error", () => {
-    tracked.closed = true;
-    if (tracked.forceKillTimer) clearTimeout(tracked.forceKillTimer);
-    activeSparkRoleRunProcesses.delete(input.runRef);
-  });
-  return tracked;
-}
-
-function untrackSparkRoleRunProcess(runRef: RunRef): void {
-  const tracked = activeSparkRoleRunProcesses.get(runRef);
-  if (tracked?.forceKillTimer) clearTimeout(tracked.forceKillTimer);
-  activeSparkRoleRunProcesses.delete(runRef);
 }
 
 function snapshotSparkRoleRunProcess(
@@ -628,9 +649,17 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
   input.graph.recordRun(run);
   const heartbeatAbort = dryRun ? undefined : new AbortController();
   const runSignal = combineAbortSignals([input.signal, heartbeatAbort?.signal]);
-  const stopHeartbeat = dryRun
-    ? undefined
-    : startTaskClaimHeartbeat({
+  let stopHeartbeat: (() => void) | undefined;
+
+  try {
+    if (!dryRun) {
+      try {
+        input.graph.heartbeatTaskClaim(task.ref, { claimedBy, leaseMs });
+        await input.onHeartbeat?.(input.graph);
+      } catch (error) {
+        throw new TaskClaimHeartbeatError(error);
+      }
+      stopHeartbeat = startTaskClaimHeartbeat({
         graph: input.graph,
         taskRef: task.ref,
         claimedBy,
@@ -641,8 +670,8 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
           heartbeatAbort?.abort(new TaskClaimHeartbeatError(error));
         },
       });
+    }
 
-  try {
     const result = await runRoleInstructionOnly(
       input.registry,
       {
@@ -668,6 +697,7 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
       },
       runRef,
     );
+    if (runSignal?.aborted) throw abortSignalReason(runSignal);
 
     let outputArtifactRef: ArtifactRef | undefined;
     if (input.artifactStore) {
@@ -727,7 +757,7 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
     else input.graph.setTaskStatus(task.ref, succeeded ? "done" : "failed");
     return finished;
   } catch (error) {
-    if (error instanceof RoleRunTimeoutError && !dryRun) {
+    if (error instanceof PiRoleRunTimeoutError && !dryRun) {
       const errorMessage = error.message;
       const finishedAt = nowIso();
       const failed: TaskRun = {
@@ -754,7 +784,7 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
     const failed: TaskRun = {
       ...run,
       status: "failed",
-      failureKind: error instanceof RoleRunTimeoutError ? "runtime_timeout" : "runtime_error",
+      failureKind: error instanceof PiRoleRunTimeoutError ? "runtime_timeout" : "runtime_error",
       errorMessage,
       finishedAt,
       outputArtifacts: [],
@@ -770,7 +800,8 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
     };
     input.graph.recordRun(failed);
     input.graph.setTaskStatus(task.ref, dryRun ? originalStatus : "failed");
-    throw error;
+    if (error instanceof TaskClaimHeartbeatError) throw error;
+    return failed;
   } finally {
     stopHeartbeat?.();
   }
@@ -891,6 +922,9 @@ function createRoleRunArtifactBody(input: {
     stdout: createTextTail(result.stdout),
     stderr: createTextTail(result.stderr),
     jsonEvents: createJsonEventsTail(result.jsonEvents),
+    ...(result.record.status === "succeeded"
+      ? {}
+      : { diagnostic: buildRoleRunFailureDiagnostic({ result }) }),
   };
 }
 
@@ -1168,7 +1202,7 @@ export async function runRoleInstructionOnly(
   const roleOptions = {
     cwd: options.cwd ?? process.cwd(),
     piCommand: options.piCommand ?? "pi",
-    timeoutMs: options.timeoutMs ?? 600_000,
+    timeoutMs: options.timeoutMs && options.timeoutMs > 0 ? options.timeoutMs : 600_000,
     signal: options.signal,
     sessionDir: options.sessionDir,
     runName: baseRecord.runName,
@@ -1177,111 +1211,19 @@ export async function runRoleInstructionOnly(
     sessionModel: options.sessionModel,
     env: effectiveRoleRunEnv(options.env),
     allowedTools: options.allowedTools,
+    roleExecutor: options.roleExecutor,
+    onRoleEvent: options.onRoleEvent,
   };
 
-  if (options.roleExecutor) {
-    return runWithInjectedRoleExecutor(
-      role,
-      instruction,
-      { ...roleOptions, roleExecutor: options.roleExecutor },
-      baseRecord,
-    );
-  }
-
-  return runPiJsonRole(role, instruction, roleOptions, baseRecord.ref);
+  return runNativeSparkRole(role, instruction, roleOptions, baseRecord);
 }
 
 export function parseJsonlEvents(text: string): unknown[] {
   return parsePiJsonlEvents(text);
 }
 
-async function runWithInjectedRoleExecutor(
+async function runNativeSparkRole(
   role: RoleSpec,
-  instruction: RoleInstruction,
-  options: Required<Pick<RoleRunnerOptions, "cwd" | "piCommand" | "timeoutMs" | "roleExecutor">> &
-    Pick<
-      RoleRunnerOptions,
-      | "signal"
-      | "sessionDir"
-      | "runName"
-      | "launch"
-      | "forkFromSession"
-      | "sessionModel"
-      | "env"
-      | "allowedTools"
-      | "onRoleEvent"
-    >,
-  baseRecord: SparkRoleRunResult["record"],
-): Promise<SparkRoleRunResult> {
-  const roleModel = await resolveRoleModelSetting({
-    roleRef: role.ref,
-    roleId: role.id,
-    roleName: role.id,
-    projectStore: defaultProjectRoleModelSettingsStore(options.cwd),
-    userStore: defaultUserRoleModelSettingsStore(),
-  });
-  const model = roleModel?.model ?? (options.sessionModel?.trim() || undefined);
-  const timeoutAbort = new AbortController();
-  const signal = combineAbortSignals([options.signal, timeoutAbort.signal]);
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    timeoutAbort.abort(new Error(`role run timed out after ${options.timeoutMs}ms`));
-  }, options.timeoutMs);
-  timer.unref?.();
-
-  try {
-    const result = await options.roleExecutor({
-      role: {
-        ref: role.ref,
-        id: role.id,
-        systemPrompt: role.systemPrompt,
-        allowedTools: options.allowedTools ?? role.allowedTools,
-      },
-      instruction,
-      record: {
-        ...baseRecord,
-        launch: options.launch,
-        model,
-        sessionDir: options.sessionDir,
-        forkFromSession: options.forkFromSession,
-      },
-      cwd: options.cwd,
-      timeoutMs: options.timeoutMs,
-      signal,
-      sessionDir: options.sessionDir,
-      runName: options.runName,
-      launch: options.launch,
-      forkFromSession: options.forkFromSession,
-      model,
-      env: options.env,
-      onEvent: options.onRoleEvent,
-    });
-    if (timedOut) throw new RoleRunTimeoutError(options.timeoutMs);
-    return {
-      record: {
-        ...baseRecord,
-        ...result.record,
-        ref: baseRecord.ref,
-        roleRef: role.ref,
-        runName: result.record.runName ?? options.runName,
-        instruction: instruction.instruction,
-        model: result.record.model ?? model,
-      },
-      stdout: result.stdout ?? "",
-      stderr: result.stderr ?? "",
-      jsonEvents: result.jsonEvents ?? [],
-    };
-  } catch (error) {
-    if (timedOut) throw new RoleRunTimeoutError(options.timeoutMs);
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function runPiJsonRole(
-  role: Pick<RoleSpec, "ref" | "systemPrompt" | "allowedTools">,
   instruction: RoleInstruction,
   options: Required<Pick<RoleRunnerOptions, "cwd" | "piCommand" | "timeoutMs">> &
     Pick<
@@ -1294,78 +1236,54 @@ async function runPiJsonRole(
       | "sessionModel"
       | "env"
       | "allowedTools"
+      | "onRoleEvent"
+      | "roleExecutor"
     >,
-  runRef: RunRef,
+  baseRecord: SparkRoleRunResult["record"],
 ): Promise<SparkRoleRunResult> {
-  let tracked: TrackedSparkRoleRunProcess | undefined;
-  try {
-    const roleModel = await resolveRoleModelSetting({
+  const roleModel = await resolveRoleModelSetting({
+    roleRef: role.ref,
+    roleId: role.id,
+    roleName: role.id,
+    projectStore: defaultProjectRoleModelSettingsStore(options.cwd),
+    userStore: defaultUserRoleModelSettingsStore(),
+  });
+  const model = roleModel?.model ?? (options.sessionModel?.trim() || undefined);
+  const result = await runRole({
+    runRef: baseRecord.ref,
+    roleRef: role.ref,
+    roleId: role.id,
+    systemPrompt: role.systemPrompt,
+    instruction: instruction.instruction,
+    model,
+    allowedTools: options.allowedTools ?? role.allowedTools,
+    piCommand: options.piCommand,
+    cwd: options.cwd,
+    timeoutMs: options.timeoutMs,
+    signal: options.signal,
+    sessionDir: options.sessionDir,
+    launch: options.launch,
+    forkFromSession: options.forkFromSession,
+    env: options.env,
+    nativeExecutor: options.roleExecutor,
+    noSession: options.launch !== "forked",
+    onTimeout: () => undefined,
+  });
+  for (const event of result.jsonEvents) void options.onRoleEvent?.(event);
+  return {
+    record: {
+      ...baseRecord,
+      ...result.record,
+      ref: baseRecord.ref,
       roleRef: role.ref,
-      projectStore: defaultProjectRoleModelSettingsStore(options.cwd),
-      userStore: defaultUserRoleModelSettingsStore(),
-    });
-    const model = roleModel?.model ?? (options.sessionModel?.trim() || undefined);
-    if (!model && options.piCommand === "pi") {
-      throw new Error(
-        `role model unavailable for ${role.ref}; save one with role({ action: "model_set" }) or run with an active session model before dispatch`,
-      );
-    }
-    const result = await runRole({
-      runRef: runRef as `run:${string}`,
-      roleRef: role.ref as `role:${string}`,
-      systemPrompt: role.systemPrompt,
-      model,
-      allowedTools: options.allowedTools ?? role.allowedTools,
+      runName: options.runName,
       instruction: instruction.instruction,
-      runGuidance: sparkRoleRunGuidance(),
-      sessionDir: options.sessionDir,
-      launch: options.launch,
-      forkFromSession: options.forkFromSession,
-      piCommand: options.piCommand,
-      cwd: options.cwd,
-      timeoutMs: options.timeoutMs,
-      env: options.env,
-      signal: options.signal,
-      onChildProcess(child, startedAt) {
-        tracked = trackSparkRoleRunProcess({
-          child,
-          runRef,
-          roleRef: role.ref,
-          runName: options.runName,
-
-          cwd: options.cwd,
-          startedAt,
-        });
-      },
-      onTimeout() {
-        if (tracked) tracked.timedOutAt = nowIso();
-      },
-    });
-    untrackSparkRoleRunProcess(runRef);
-    return {
-      record: {
-        ref: runRef,
-        roleRef: role.ref,
-        runName: options.runName,
-        instruction: instruction.instruction,
-        launch: result.record.launch,
-        model,
-        status: result.record.status as RoleRunStatus,
-        startedAt: result.record.startedAt,
-        finishedAt: result.record.finishedAt,
-        sessionDir: result.record.sessionDir,
-        forkFromSession: result.record.forkFromSession,
-      },
-      stdout: result.stdout,
-      stderr: result.stderr,
-      jsonEvents: result.jsonEvents,
-    };
-  } catch (error) {
-    if (error instanceof PiRoleRunTimeoutError) throw new RoleRunTimeoutError(error.timeoutMs);
-    if (error instanceof RoleRunCancelledError) throw error;
-    untrackSparkRoleRunProcess(runRef);
-    throw error;
-  }
+      model: result.record.model ?? model,
+    },
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    jsonEvents: result.jsonEvents ?? [],
+  };
 }
 
 export function sparkTaskExecutorRoleRef(task: Task, defaultRoleRef?: RoleRef): RoleRef {

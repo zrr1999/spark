@@ -33,11 +33,10 @@ describe("project task display model", () => {
 
     expect(display.projectLine).toBe("Project MVP [Generic]");
     expect(display.taskCountsLine).toBe(
-      "Tasks: 2 total | 0 claimed | 0 current_session_claimed | ready_frontier=1 | ready=1 done=1",
+      "Tasks: 2 total | 0 claimed | ready_frontier=1 | ready=1 done=1",
     );
-    expect(display.tasksByRuntimeId["task-build"]?.title).toBe("@build: Build");
-    expect(display.tasksByRuntimeId["task-build"]?.statusLine).toBe(
-      "- [ready] @build: Build owner=@unassigned ready_frontier=yes",
-    );
+    expect(display.tasksByRuntimeId["task-build"]?.title).toBe("Build");
+    expect(display.tasksByRuntimeId["task-build"]?.statusLine).toBe("ready · ready frontier");
+    expect(display.tasksByRuntimeId["task-build"]?.handle).toBe("@build");
   });
 });

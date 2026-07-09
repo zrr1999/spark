@@ -3,7 +3,7 @@ import {
   defaultTaskTodoStore,
   type TaskGraph,
 } from "@zendev-lab/spark-tasks";
-import { sparkSessionKey, type SparkSessionContext } from "./session-identity.ts";
+import { sparkSessionKey, sparkStateCwd, type SparkSessionContext } from "./session-identity.ts";
 
 export {
   clearCurrentProjectRef,
@@ -67,21 +67,23 @@ export {
   sanitizeStoreScope,
   sparkSessionKey,
   sparkSessionOwnerKey,
+  sparkStateCwd,
+  sparkStateRootPath,
   type SparkSessionContext,
 } from "./session-identity.ts";
 
 export async function loadSparkGraph(
   cwd: string,
-  _ctx?: SparkSessionContext,
+  ctx?: SparkSessionContext,
 ): Promise<TaskGraph | null> {
-  return defaultTaskGraphStore(cwd).load();
+  return defaultTaskGraphStore(sparkStateCwd(cwd, ctx)).load();
 }
 
 export async function saveSparkGraphAndTodos(
   cwd: string,
   graph: TaskGraph,
-  _ctx?: SparkSessionContext,
-  store = defaultTaskGraphStore(cwd),
+  ctx?: SparkSessionContext,
+  store = defaultTaskGraphStore(sparkStateCwd(cwd, ctx)),
 ): Promise<void> {
   await store.withLock(async () => {
     await store.save(graph);
@@ -92,5 +94,5 @@ export function sparkTodoStore(
   cwd: string,
   ctx?: SparkSessionContext,
 ): ReturnType<typeof defaultTaskTodoStore> {
-  return defaultTaskTodoStore(cwd, sparkSessionKey(ctx));
+  return defaultTaskTodoStore(sparkStateCwd(cwd, ctx), sparkSessionKey(ctx));
 }

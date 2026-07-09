@@ -35,6 +35,8 @@ export interface SparkSessionGoal {
   version: 1;
   goalId: string;
   sessionKey: string;
+  /** Immutable objective captured when the current goal was started/set; edits may refine objective but must not weaken this original user goal. */
+  originalObjective: string;
   objective: string;
   status: SparkSessionGoalStatus;
   source: SparkSessionGoalSource;
@@ -94,6 +96,7 @@ export async function setSessionGoal(
     version: 1,
     goalId: existing ? existing.goalId : randomUUID(),
     sessionKey: sparkSessionOwnerKey(ctx),
+    originalObjective: objective,
     objective,
     status: input.status ?? "active",
     source: input.source,
@@ -260,6 +263,9 @@ function normalizeSessionGoal(
     version: 1,
     goalId: requireString(value.goalId, filePath, "goal.goalId"),
     sessionKey,
+    originalObjective:
+      optionalString(value.originalObjective, filePath, "goal.originalObjective") ??
+      requireString(value.objective, filePath, "goal.objective"),
     objective: requireString(value.objective, filePath, "goal.objective"),
     status,
     source,

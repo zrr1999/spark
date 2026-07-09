@@ -4,6 +4,7 @@
  */
 
 import { Type } from "typebox";
+import { nowIso } from "@zendev-lab/spark-extension-api";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 import {
   createSparkSessionRepro,
@@ -36,10 +37,10 @@ export function registerSparkReproTool(
     name: "repro",
     label: "Spark Repro",
     description:
-      "Manage the milestone-driven reproduction workflow. Actions: status (show current stage/phase/acceptance), start (begin repro drive), satisfy (mark acceptance condition met), gate (pass stage gate), advance (advance phase or stage), stop (clear repro drive).",
+      "Manage the milestone-driven reproduction workflow. Actions: status (show current stage/phase/acceptance), start (begin repro drive, optionally with objective), satisfy (mark acceptance condition met), gate (pass stage gate), advance (advance phase or stage), stop (clear repro drive).",
     promptGuidelines: [
       "Use repro action=status to inspect current repro stage, phase, and acceptance checklist.",
-      "Use repro action=start to begin the repro drive (clears goal/loop).",
+      "Use repro action=start to begin the repro drive (clears goal/loop); pass objective for user-supplied reproduction focus.",
       "Use repro action=satisfy with condition= to mark acceptance conditions met.",
       "Use repro action=gate to pass the current stage's deterministic gate.",
       "Use repro action=advance to advance to next phase or stage when conditions are met.",
@@ -60,6 +61,11 @@ export function registerSparkReproTool(
       evidenceRef: Type.Optional(
         Type.String({
           description: "Optional artifact ref as evidence for condition satisfaction.",
+        }),
+      ),
+      objective: Type.Optional(
+        Type.String({
+          description: "Optional user-supplied reproduction objective/focus for action=start.",
         }),
       ),
     }),
@@ -85,18 +91,33 @@ export function registerSparkReproTool(
       }
 
       if (action === "start") {
+        const objective = normalizeOptionalReproObjective(params.objective);
         const existing = await readSessionRepro(cwd, ctx);
         if (existing?.status === "active") {
+          const repro =
+            objective && existing.objective !== objective
+              ? { ...existing, objective, updatedAt: nowIso(), retryState: undefined }
+              : existing;
+          if (repro !== existing) await writeSessionRepro(cwd, repro, ctx);
+          await deps.refreshSparkWidget?.(cwd, ctx);
           return {
-            content: [{ type: "text" as const, text: "Repro drive is already active." }],
-            details: reproDetails(existing),
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  repro === existing
+                    ? "Repro drive is already active."
+                    : `Repro drive objective updated: ${objective}`,
+              },
+            ],
+            details: reproDetails(repro),
           };
         }
         // Clear mutually exclusive drives
         await clearSessionGoal(cwd, ctx);
         await clearSessionLoop(cwd, ctx);
         const sessionKey = sparkSessionOwnerKey(ctx);
-        const repro = createSparkSessionRepro(sessionKey);
+        const repro = createSparkSessionRepro(sessionKey, undefined, { objective });
         await writeSessionRepro(cwd, repro, ctx);
         ctx.sparkActiveLens = sparkActiveLens(repro.currentPhase, "repro");
         await deps.refreshSparkWidget?.(cwd, ctx);
@@ -284,12 +305,19 @@ function assertNeverReproAction(_action: never): never {
   throw new Error("Unknown repro action");
 }
 
+function normalizeOptionalReproObjective(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") throw new Error("repro objective must be a string");
+  return value.trim() || undefined;
+}
+
 function reproStatusResult(repro: SparkSessionRepro) {
   const stage = currentReproStage(repro);
   const allConditions = stage.acceptance;
 
   const lines = [
     `Repro drive: ${repro.status}`,
+    repro.objective ? `Objective: ${repro.objective}` : undefined,
     `Stage: ${stage.title} (${stage.name}) [${repro.currentStageIndex + 1}/${repro.stages.length}]`,
     `Phase: ${repro.currentPhase}`,
     "",
@@ -309,7 +337,7 @@ function reproStatusResult(repro: SparkSessionRepro) {
   lines.push("", `Phase complete: ${phaseComplete}`, `Stage complete: ${stageComplete}`);
 
   return {
-    content: [{ type: "text" as const, text: lines.join("\n") }],
+    content: [{ type: "text" as const, text: lines.filter(Boolean).join("\n") }],
     details: reproDetails(repro),
   };
 }
@@ -319,6 +347,7 @@ function reproDetails(repro: SparkSessionRepro): Record<string, unknown> {
   return {
     status: repro.status,
     reproId: repro.reproId,
+    objective: repro.objective,
     currentStage: stage.name,
     currentStageIndex: repro.currentStageIndex,
     totalStages: repro.stages.length,
@@ -346,6 +375,7 @@ export function renderReproTickInstruction(repro: SparkSessionRepro): string {
 
   const lines = [
     `Spark repro drive tick — Stage ${repro.currentStageIndex + 1}/${repro.stages.length}: ${stage.title} (${stage.name}), phase=${repro.currentPhase}.`,
+    repro.objective ? `Repro objective: ${repro.objective}` : undefined,
     "",
     "Milestone-driven reproduction workflow. Stages are linear (setup → scaffold → reproduce → scale → deliver); do one concrete step per tick.",
     "",
@@ -411,5 +441,5 @@ export function renderReproTickInstruction(repro: SparkSessionRepro): string {
     );
   }
 
-  return lines.join("\n");
+  return lines.filter((line): line is string => line !== undefined).join("\n");
 }

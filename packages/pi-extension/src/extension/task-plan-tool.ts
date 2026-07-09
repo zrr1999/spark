@@ -11,26 +11,45 @@ import { type TaskPlanResult } from "@zendev-lab/spark-tasks";
 
 export function taskPlanSchema() {
   return Type.Object({
-    objective: Type.Optional(Type.String({ description: "Plan objective for this task." })),
+    objective: Type.Optional(
+      Type.String({
+        description:
+          "High-bar, concrete objective for this task; avoid vague activity or low-threshold wording.",
+      }),
+    ),
     contextRefs: Type.Optional(
       Type.Array(Type.String({ description: "Relevant context refs/paths." })),
     ),
     constraints: Type.Optional(Type.Array(Type.String({ description: "Task constraints." }))),
     nonGoals: Type.Optional(Type.Array(Type.String({ description: "Explicit non-goals." }))),
     successCriteria: Type.Optional(
-      Type.Array(Type.String({ description: "Observable success criteria." })),
+      Type.Array(
+        Type.String({
+          description:
+            "Objectively verifiable success criterion, checkable by command/artifact/state/path/reviewer/metric evidence.",
+        }),
+      ),
     ),
     evidenceRequired: Type.Optional(
-      Type.Array(Type.String({ description: "Evidence required before completion." })),
+      Type.Array(
+        Type.String({
+          description:
+            "Concrete evidence required before completion, e.g. command output with exit code, test/artifact ref, changed files, screenshot, benchmark, or reviewer verdict.",
+        }),
+      ),
     ),
     items: Type.Optional(
       Type.Array(
         Type.Union([
-          Type.String({ description: "Plan item title." }),
+          Type.String({ description: "Concrete executable/checkable plan item title." }),
           Type.Object({
             id: Type.Optional(Type.String({ description: "Stable plan item id." })),
-            title: Type.Optional(Type.String({ description: "Short plan item title." })),
-            description: Type.Optional(Type.String({ description: "Plan item detail/context." })),
+            title: Type.Optional(
+              Type.String({ description: "Short concrete executable/checkable plan item title." }),
+            ),
+            description: Type.Optional(
+              Type.String({ description: "Plan item detail/context with concrete targets." }),
+            ),
             status: Type.Optional(
               Type.String({ description: "pending | in_progress | done | blocked | cancelled" }),
             ),

@@ -8,7 +8,7 @@ export const SPARK_CLI_VERSION = "0.1.0";
 
 const dispatcherStrings = sparkCliDispatcherStrings();
 
-export type SparkDispatcherTarget = "tui" | "daemon" | "cockpit";
+export type SparkDispatcherTarget = "tui" | "daemon" | "server" | "cockpit";
 
 export type SparkDispatcherCommand =
   | { kind: "dispatch"; target: SparkDispatcherTarget; argv: string[] }
@@ -36,7 +36,11 @@ export function parseSparkDispatcherArgs(argv: string[]): SparkDispatcherCommand
   if (first === "version" || first === "--version" || first === "-v") return { kind: "version" };
   if (first === "tui") return { kind: "dispatch", target: "tui", argv: rest };
   if (first === "daemon") return { kind: "dispatch", target: "daemon", argv: rest };
+  if (first === "server") return { kind: "dispatch", target: "server", argv: rest };
   if (first === "cockpit") return { kind: "dispatch", target: "cockpit", argv: rest };
+  if (first === "sessions" || first === "session") {
+    return { kind: "dispatch", target: "tui", argv };
+  }
   if (isSparkTuiCompatibilityCommand(first)) return { kind: "dispatch", target: "tui", argv };
   return {
     kind: "error",
@@ -101,11 +105,18 @@ function isSparkTuiResourceCommand(first: string): boolean {
 }
 
 function isSparkTuiHeadlessCompatibilityCommand(argv: readonly string[]): boolean {
-  if (argv.includes("--print") || argv.includes("-p") || argv.includes("--list-models")) {
+  if (
+    argv.includes("--help") ||
+    argv.includes("-h") ||
+    argv.includes("--print") ||
+    argv.includes("-p") ||
+    argv.includes("--list-models")
+  ) {
     return true;
   }
   const first = argv[0];
   if (first && isSparkTuiResourceCommand(first)) return true;
+  if (first === "sessions" || first === "session") return true;
   return argv.some((arg, index) => arg === "--mode" && argv[index + 1] === "rpc");
 }
 
@@ -137,23 +148,30 @@ const defaultLauncher: SparkDispatcherLauncher = {
   },
 };
 
-function resolveTargetCommand(target: SparkDispatcherTarget): {
+export function resolveTargetCommand(target: SparkDispatcherTarget): {
   command: string;
   args: string[];
   label: string;
 } {
   const local = localTargetCommand(target);
   if (local && existsSync(local)) {
-    return { command: local, args: [], label: targetLabel(target) };
+    return {
+      command: local,
+      args: target === "server" ? ["server"] : target === "daemon" ? ["daemon"] : [],
+      label: targetLabel(target),
+    };
   }
   switch (target) {
     case "tui":
       return { command: "spark-tui", args: [], label: targetLabel(target) };
     case "daemon":
-      // Package-bin fallback for installed layouts where the daemon package is
-      // resolved by the package manager. The public/operator surface remains
-      // the parent `spark daemon ...` command group.
-      return { command: "spark-daemon", args: [], label: targetLabel(target) };
+      // Route the public daemon execution-plane API through spark-tui's CLI
+      // adapter. The adapter delegates legacy daemon service commands
+      // (status/start/stop/logs/workspace) while also owning canonical
+      // session/run/events plane resources.
+      return { command: "spark-tui", args: ["daemon"], label: targetLabel(target) };
+    case "server":
+      return { command: "spark-tui", args: ["server"], label: targetLabel(target) };
     case "cockpit":
       return { command: "spark-cockpit", args: [], label: targetLabel(target) };
   }
@@ -168,7 +186,9 @@ function localTargetCommand(target: SparkDispatcherTarget): string | undefined {
     case "tui":
       return fileURLToPath(new URL("../../spark-tui/bin/spark-tui", import.meta.url));
     case "daemon":
-      return fileURLToPath(new URL("../../spark-daemon/dist/cli.js", import.meta.url));
+      return fileURLToPath(new URL("../../spark-tui/bin/spark-tui", import.meta.url));
+    case "server":
+      return fileURLToPath(new URL("../../spark-tui/bin/spark-tui", import.meta.url));
     case "cockpit":
       return fileURLToPath(new URL("../../spark-cockpit/bin/spark-cockpit", import.meta.url));
   }

@@ -5,20 +5,25 @@ APP_DIR="$SCRIPT_DIR/.."
 
 print_help() {
   cat <<'EOF'
-spark-cockpit - Spark Cockpit local web app
+spark cockpit - Cockpit web UI host
 
 Usage:
-  spark-cockpit [start]
-  spark-cockpit dev [vite args...]
-  spark-cockpit preview [vite args...]
-  spark-cockpit build
-  spark-cockpit --help
+  spark cockpit [start]
+  spark cockpit dev [vite args...]
+  spark cockpit preview [vite args...]
+  spark cockpit build
+  spark cockpit --help
 
 Commands:
-  start          Start the built Cockpit Node server with runtime WebSocket support (default)
-  dev            Start the explicit Cockpit development server on 127.0.0.1
+  start          Start the built Cockpit web UI (default)
+  dev            Start the Cockpit development server on 127.0.0.1
   preview        Start SvelteKit/Vite preview for an already-built Cockpit app
   build          Build the Cockpit production app
+
+Plane boundary:
+  Cockpit is the web UI host, not a fourth command plane.
+  Coordination commands belong under spark server.
+  Execution controls belong under spark daemon.
 
 Examples:
   spark cockpit build
@@ -57,7 +62,7 @@ case "$command" in
     exec pnpm run build -- "$@"
     ;;
   *)
-    printf 'Unknown spark-cockpit command: %s\nRun "spark-cockpit --help" for available commands.\n' "$command" >&2
+    printf 'Unknown spark-cockpit command: %s\nRun "spark cockpit --help" for available commands.\n' "$command" >&2
     exit 2
     ;;
 esac

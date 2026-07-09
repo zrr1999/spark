@@ -43,6 +43,8 @@ export interface SparkHeadlessRoleInstructionInput {
     model?: string;
     sessionDir?: string;
     forkFromSession?: string;
+    noSession?: boolean;
+    sessionPersistence?: "anonymous" | "persistent";
   };
   cwd: string;
   timeoutMs: number;
@@ -52,6 +54,8 @@ export interface SparkHeadlessRoleInstructionInput {
   launch?: "fresh" | "forked";
   forkFromSession?: string;
   model?: string;
+  noSession?: boolean;
+  sessionPersistence?: "anonymous" | "persistent";
   onEvent?: (event: unknown) => void | Promise<void>;
 }
 
@@ -160,8 +164,14 @@ export async function runSparkHeadlessRoleInstruction(
 ): Promise<SparkHeadlessRoleInstructionResult> {
   const launch = input.launch ?? input.record.launch ?? "fresh";
   const forkFromSession = input.forkFromSession ?? input.record.forkFromSession;
+  const noSession = input.noSession === true || input.record.noSession === true;
   if (launch === "forked" && !forkFromSession?.trim()) {
     throw new Error("Spark daemon-native forked role execution requires forkFromSession");
+  }
+  if (noSession && launch === "forked") {
+    throw new Error(
+      "Spark daemon-native anonymous role execution does not support forked sessions",
+    );
   }
   const startedAt = input.record.startedAt ?? new Date().toISOString();
   const jsonEvents: unknown[] = [];
@@ -173,13 +183,37 @@ export async function runSparkHeadlessRoleInstruction(
     systemPrompt: input.role.systemPrompt,
   } satisfies SparkCliHostServicesOptions);
 
-  applyAllowedTools(services, input.role.allowedTools);
-  if (input.model?.trim()) selectHeadlessModel(services, input.model.trim());
-
   const recordEvent = (event: unknown) => {
     jsonEvents.push(event);
     void input.onEvent?.(event);
   };
+
+  applyAllowedTools(services, input.role.allowedTools);
+  if (input.model?.trim()) {
+    try {
+      selectHeadlessModel(services, input.model.trim());
+    } catch (error) {
+      recordEvent(providerResolutionFailedEvent(input.model.trim(), error));
+      return {
+        record: {
+          ...input.record,
+          status: "failed",
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          launch,
+          model: input.model.trim(),
+          ...(noSession
+            ? { noSession: true, sessionPersistence: "anonymous" as const }
+            : { sessionPersistence: "persistent" as const }),
+        },
+        stdout: "",
+        stderr: [renderDiagnostics(services.diagnostics), errorMessage(error)]
+          .filter(Boolean)
+          .join("\n"),
+        jsonEvents,
+      };
+    }
+  }
   const unsubscribe = services.agentLoop.onEvent((event) => {
     recordEvent(serializeLoopEvent(event));
   });
@@ -193,13 +227,14 @@ export async function runSparkHeadlessRoleInstruction(
 
   try {
     const session = new SparkAgentSession(services);
+    const sessionRunInput = {
+      sessionId: headlessSessionId(input),
+      prompt: input.instruction.instruction,
+      reset: true,
+      ...(launch === "forked" && forkFromSession ? { forkFromSession } : {}),
+    };
     const result = await runWithHeadlessTimeout(
-      session.run({
-        sessionId: headlessSessionId(input),
-        prompt: input.instruction.instruction,
-        reset: true,
-        ...(launch === "forked" && forkFromSession ? { forkFromSession } : {}),
-      }),
+      noSession ? session.runAnonymous(sessionRunInput) : session.run(sessionRunInput),
       input.timeoutMs,
       abort,
     );
@@ -212,8 +247,11 @@ export async function runSparkHeadlessRoleInstruction(
         finishedAt: new Date().toISOString(),
         launch,
         model: input.model,
-        sessionDir: services.sessionStore.sessionDir,
+        ...(noSession ? {} : { sessionDir: services.sessionStore.sessionDir }),
         ...(launch === "forked" && forkFromSession ? { forkFromSession } : {}),
+        ...(noSession
+          ? { noSession: true, sessionPersistence: "anonymous" as const }
+          : { sessionPersistence: "persistent" as const }),
       },
       stdout: result.assistantText,
       stderr: renderDiagnostics(services.diagnostics),
@@ -230,6 +268,9 @@ export async function runSparkHeadlessRoleInstruction(
         launch,
         model: input.model,
         ...(launch === "forked" && forkFromSession ? { forkFromSession } : {}),
+        ...(noSession
+          ? { noSession: true, sessionPersistence: "anonymous" as const }
+          : { sessionPersistence: "persistent" as const }),
       },
       stdout: "",
       stderr: [renderDiagnostics(services.diagnostics), errorMessage(error)]
@@ -327,8 +368,21 @@ function resolveHeadlessModelSelection(
   const provider = services.providerRegistry
     .listProviders()
     .find((candidate) => candidate.models.some((candidateModel) => candidateModel.id === model));
-  if (!provider) throw new Error(`Unknown Spark headless model: ${model}`);
+  if (!provider)
+    throw new Error(
+      `Spark native provider registry cannot resolve model selector '${model}'. Set a role model using an available native Spark provider/model, or compare with Pi/Codex model selectors using spark-role-run-diagnostics.`,
+    );
   return { providerName: provider.name, modelId: model };
+}
+
+function providerResolutionFailedEvent(modelSelector: string, error: unknown): unknown {
+  return {
+    type: "provider_resolution_failed",
+    modelSelector,
+    message: errorMessage(error),
+    nextAction:
+      "Check the native Spark provider registry/model selector and align role model settings with an available provider/model.",
+  };
 }
 
 function statusForAssistant(

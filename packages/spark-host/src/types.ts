@@ -8,6 +8,7 @@
  */
 
 import type {
+  CommandMetadata,
   ExtensionContext,
   ExtensionUi,
   ToolConfig,
@@ -40,6 +41,7 @@ export interface RegisteredTool {
 export interface RegisteredCommand {
   description: string;
   argumentHint?: string;
+  metadata?: CommandMetadata;
   getArgumentCompletions?: (
     prefix: string,
   ) =>
@@ -129,6 +131,7 @@ export interface SparkHostRenderTheme {
   fg(color: string, text: string): string;
   bg(color: string, text: string): string;
   bold(text: string): string;
+  strikethrough?(text: string): string;
 }
 
 export interface SparkHostRenderComponent {

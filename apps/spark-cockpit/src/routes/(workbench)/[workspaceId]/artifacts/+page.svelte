@@ -1,10 +1,13 @@
 <script lang="ts">
   import Icon from "$lib/Icon.svelte";
-  import WorkspaceAgentProduct from "$lib/WorkspaceAgentProduct.svelte";
   import { enumLabel, formatByteSize, formatRelativeTime } from "$lib/i18n";
+  import EmptyState from "$lib/ui/EmptyState.svelte";
+  import PageHeader from "$lib/ui/PageHeader.svelte";
+  import Panel from "$lib/ui/Panel.svelte";
+  import StatCard from "$lib/ui/StatCard.svelte";
   import { workspacePath } from "$lib/workspace-routes";
 
-  let { data, form } = $props();
+  let { data } = $props();
   let t = $derived(data.messages.artifacts);
   let common = $derived(data.messages.common);
   let workspaceUrl = $derived(data.workspace ? workspacePath(data.workspace) : "/");
@@ -35,61 +38,25 @@
 </svelte:head>
 
 <section class="artifacts-page">
-  <header class="hero">
-    <div>
-      <p class="eyebrow">{t.hero.eyebrow}</p>
-      <h1>{t.hero.title}</h1>
-      <p class="lede">
-        {t.hero.lede}
-      </p>
-    </div>
-  </header>
+  <PageHeader eyebrow={t.hero.eyebrow} title={t.hero.title} lede={t.hero.lede} />
 
   <section class="metrics" aria-label={t.metrics.aria}>
-    <article>
-      <span>{t.metrics.total}</span>
-      <strong>{data.counts.total}</strong>
-    </article>
-    <article>
-      <span>{t.metrics.workspaceScope}</span>
-      <strong>{data.counts.workspace}</strong>
-    </article>
-    <article>
-      <span>{t.metrics.projectScope}</span>
-      <strong>{data.counts.project}</strong>
-    </article>
-    <article>
-      <span>{t.metrics.previewCached}</span>
-      <strong>{data.counts.cached}</strong>
-    </article>
+    <StatCard label={t.metrics.total} value={data.counts.total} tone="primary" icon="artifacts" />
+    <StatCard label={t.metrics.workspaceScope} value={data.counts.workspace} tone="purple" icon="workspace" />
+    <StatCard label={t.metrics.projectScope} value={data.counts.project} tone="primary" icon="folder" />
+    <StatCard label={t.metrics.previewCached} value={data.counts.cached} tone="success" icon="archive" />
   </section>
 
   {#if !data.workspace}
-    <section class="panel empty-state">
-      <div class="empty-icon"><Icon name="artifacts" size={28} /></div>
-      <h2>{t.emptyWorkspace.title}</h2>
-      <p>{t.emptyWorkspace.body}</p>
-      <a class="secondary-action" href={workspaceUrl}>{t.emptyWorkspace.action}</a>
-    </section>
+    <Panel>
+      <EmptyState title={t.emptyWorkspace.title} body={t.emptyWorkspace.body} icon="artifacts" actions={emptyWorkspaceAction} />
+    </Panel>
+  {:else if data.artifacts.length === 0}
+    <Panel>
+      <EmptyState title={t.empty.title} body={t.empty.body} icon="artifacts" />
+    </Panel>
   {:else}
-    <WorkspaceAgentProduct {data} {form} />
-  {/if}
-
-  {#if data.workspace && data.artifacts.length === 0}
-    <section class="panel empty-state">
-      <div class="empty-icon"><Icon name="artifacts" size={28} /></div>
-      <h2>{t.empty.title}</h2>
-      <p>{t.empty.body}</p>
-    </section>
-  {:else if data.workspace && data.artifacts.length > 0}
-    <section class="panel" aria-labelledby="artifact-list-title">
-      <div class="panel-header">
-          <div>
-            <p class="panel-kicker">{data.workspace.name}</p>
-          <h2 id="artifact-list-title">{t.list.title}</h2>
-        </div>
-        <span class="panel-badge">{data.artifacts.length} {t.list.projectedSuffix}</span>
-      </div>
+    <Panel title={t.list.title} kicker={data.workspace.name} badge="{data.artifacts.length} {t.list.projectedSuffix}" ariaLabelledby="artifact-list-title">
 
       <div class="artifact-list">
         {#each data.artifacts as artifact}
@@ -104,9 +71,8 @@
                 {artifact.kind} · {artifact.format} · {artifact.source} · {formatSize(artifact.sizeBytes)}
               </p>
               <small>
-                {artifact.projectName ?? common.fallback.workspaceEvidence}{artifact.runtimeInvocationId
-                  ? ` · ${artifact.runtimeInvocationId}`
-                  : ""} · {artifact.linkCount} {t.list.links} · {formatRelative(artifact.createdAt)}
+                {artifact.projectName ?? common.fallback.workspaceEvidence} · {artifact.linkCount}
+                {t.list.links} · {formatRelative(artifact.createdAt)}
               </small>
             </div>
             <div class="cache-copy">
@@ -118,108 +84,87 @@
           </a>
         {/each}
       </div>
-    </section>
+    </Panel>
   {/if}
 </section>
+
+{#snippet emptyWorkspaceAction()}
+  <a class="secondary-action" href={workspaceUrl}>{t.emptyWorkspace.action}</a>
+{/snippet}
 
 <style>
   .artifacts-page {
     display: grid;
-    gap: 24px;
+    gap: var(--spacing-xl);
   }
 
-  .hero {
-    align-items: center;
-    display: flex;
-    justify-content: space-between;
+  .metrics {
+    display: grid;
+    gap: var(--spacing-lg);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
-  .eyebrow,
-  .panel-kicker {
-    color: var(--color-primary);
-    font-size: 12px;
-    font-weight: 750;
-    letter-spacing: 0.08em;
-    margin: 0 0 8px;
-    text-transform: uppercase;
-  }
-
-  h1,
-  h2,
   h3,
   p {
     margin: 0;
   }
 
-  h1 {
-    font-size: 34px;
-    letter-spacing: -0.03em;
+  .artifact-list {
+    display: grid;
+    gap: var(--spacing-xs);
   }
 
-  .lede,
+  .artifact-row {
+    align-items: center;
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--rounded-md);
+    color: inherit;
+    display: grid;
+    gap: var(--spacing-md);
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    padding: var(--spacing-md);
+    text-decoration: none;
+    transition: border-color 120ms ease;
+  }
+
+  .artifact-row:hover {
+    border-color: var(--color-border);
+  }
+
   .artifact-row p,
   .artifact-row small,
-  .empty-state p,
   .cache-copy {
     color: var(--color-ink-subtle);
-    line-height: 1.55;
+    line-height: var(--leading-body);
   }
 
-  .lede {
-    margin-top: 10px;
-    max-width: 820px;
-  }
-
-  .metrics {
-    display: grid;
-    gap: 18px;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .metrics article,
-  .panel {
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 16px;
-    box-shadow: var(--shadow-card-raised);
-  }
-
-  .metrics article {
-    padding: 22px;
-  }
-
-  .metrics span {
-    color: var(--color-ink-subtle);
-    display: block;
-    font-size: 13px;
-    font-weight: 750;
-    margin-bottom: 10px;
-  }
-
-  .metrics strong {
-    color: var(--color-ink);
-    font-size: 32px;
-  }
-
-  .panel-header {
+  .row-icon {
     align-items: center;
-    border-bottom: 1px solid var(--color-border);
-    display: flex;
-    justify-content: space-between;
-    padding: 24px 28px;
+    background: var(--color-primary-weak);
+    border-radius: var(--rounded-full);
+    color: var(--color-primary);
+    display: grid;
+    height: 48px;
+    place-items: center;
+    width: 48px;
   }
 
-  .panel-badge,
+  .row-title {
+    align-items: center;
+    display: flex;
+    gap: var(--spacing-xs);
+    margin-bottom: var(--spacing-xxs);
+  }
+
   .scope-pill,
   .cache-pill {
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 800;
-    padding: 6px 10px;
+    border-radius: var(--rounded-full);
+    font-size: var(--text-caption);
+    font-weight: var(--weight-caption-medium);
+    padding: 4px 8px;
     text-transform: capitalize;
   }
 
-  .panel-badge,
   .scope-pill.project {
     background: var(--color-primary-weak);
     color: var(--color-primary);
@@ -237,60 +182,12 @@
 
   .cache-pill.ready {
     background: var(--color-success-soft);
-    color: var(--color-success);
+    color: var(--color-success-strong);
   }
 
   .cache-pill.missing {
     background: var(--color-warning-soft);
-    color: var(--color-warning);
-  }
-
-  .artifact-list {
-    display: grid;
-    gap: 10px;
-    padding: 18px;
-  }
-
-  .artifact-row {
-    align-items: center;
-    border: 1px solid var(--color-border);
-    border-radius: 14px;
-    color: inherit;
-    display: grid;
-    gap: 16px;
-    grid-template-columns: 48px minmax(0, 1fr) auto;
-    padding: 16px;
-    text-decoration: none;
-  }
-
-  .artifact-row:hover {
-    border-color: var(--color-primary-soft);
-  }
-
-  .row-icon,
-  .empty-icon {
-    background: var(--color-primary-weak);
-    border-radius: 999px;
-    color: var(--color-primary);
-    display: grid;
-    place-items: center;
-  }
-
-  .row-icon {
-    height: 48px;
-    width: 48px;
-  }
-
-  .empty-icon {
-    height: 64px;
-    width: 64px;
-  }
-
-  .row-title {
-    align-items: center;
-    display: flex;
-    gap: 10px;
-    margin-bottom: 4px;
+    color: var(--color-warning-strong);
   }
 
   .cache-copy {
@@ -299,26 +196,18 @@
     justify-items: end;
   }
 
-  .empty-state {
-    align-items: center;
-    display: grid;
-    gap: 14px;
-    justify-items: center;
-    padding: 42px;
-    text-align: center;
-  }
-
   .secondary-action {
     align-items: center;
-    background: white;
-    border: 1px solid var(--color-border);
-    border-radius: 12px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--rounded-md);
     color: var(--color-ink-muted);
     display: inline-flex;
-    font-weight: 800;
-    height: 44px;
+    font-size: var(--text-button);
+    font-weight: var(--weight-button);
+    min-height: 40px;
     justify-content: center;
-    padding: 0 16px;
+    padding: 0 var(--spacing-md);
     text-decoration: none;
   }
 

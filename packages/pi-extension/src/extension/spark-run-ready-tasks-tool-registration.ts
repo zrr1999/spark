@@ -158,6 +158,7 @@ export function registerSparkRunReadyTasksTool(
         registry,
         artifactStore,
         cwd,
+        piCommand: "pi",
         sessionModel: sessionModelName(ctx.model),
       });
       const result = await runReadyTasks({

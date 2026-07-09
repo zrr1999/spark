@@ -1,8 +1,11 @@
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { stdin as processStdin, stdout as processStdout } from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { sparkTuiCliStrings } from "@zendev-lab/spark-i18n/cli";
+import { SPARK_PROTOCOL_VERSION, type SparkTaskView } from "@zendev-lab/spark-protocol";
 
 import {
   attachSparkWorkspaceClient,
@@ -16,10 +19,19 @@ import {
   type SparkDaemonCliCommand,
 } from "./cli/daemon.ts";
 import {
+  parseSparkServerCliArgs,
+  runSparkServerCliCommand,
+  type SparkServerCliCommand,
+  type SparkServerCliOptions,
+} from "./cli/server.ts";
+import {
+  createSparkNativeLocalControlSlashCommands,
   createSparkNativeRuntimeSlashCommands,
   createSparkNativeUiTransport,
   runNativeSparkTui,
   type SparkNativeSlashCommandMap,
+  type SparkNativeTuiApp,
+  type SparkNativeWorkspaceSessionState,
 } from "./native-tui.ts";
 import {
   createSparkPiParitySlashCommands,
@@ -64,6 +76,7 @@ export interface SparkCliRuntimeOptions {
   session?: string;
   sessionId?: string;
   sessionDir?: string;
+  sparkSessionKey?: string;
   noSession?: boolean;
   name?: string;
   extensions?: string[];
@@ -96,7 +109,8 @@ export type SparkCliCommand =
       json?: boolean;
     }
   | { kind: "tui"; initialMessage?: string; options?: SparkCliRuntimeOptions }
-  | { kind: "daemon"; command: SparkDaemonCliCommand };
+  | { kind: "daemon"; command: SparkDaemonCliCommand }
+  | { kind: "server"; command: SparkServerCliCommand };
 
 export interface SparkCliTerminalState {
   stdinIsTTY?: boolean;
@@ -105,6 +119,7 @@ export interface SparkCliTerminalState {
 
 export interface RunSparkCliOptions {
   daemonClient?: SparkDaemonClientOptions;
+  serverClient?: SparkServerCliOptions;
   runTui?: typeof runNativeSparkTui;
   createHostServices?: (options?: SparkCliHostServicesOptions) => Promise<SparkCliHostServices>;
   terminal?: SparkCliTerminalState;
@@ -118,11 +133,20 @@ export function parseSparkCliArgs(argv: string[]): SparkCliArgs {
 
 export function parseSparkCliCommand(argv: string[]): SparkCliCommand {
   if (argv.length === 0) return { kind: "tui" };
-  if (argv.some((arg) => arg === "-h" || arg === "--help") && argv[0] !== "daemon") {
+  if (
+    argv.some((arg) => arg === "-h" || arg === "--help") &&
+    argv[0] !== "daemon" &&
+    argv[0] !== "server"
+  ) {
     return { kind: "help" };
   }
   if (argv[0] === "daemon")
     return { kind: "daemon", command: parseSparkDaemonCliArgs(argv.slice(1)) };
+  if (argv[0] === "server")
+    return { kind: "server", command: parseSparkServerCliArgs(argv.slice(1)) };
+  if (argv[0] === "sessions" || argv[0] === "session") {
+    return { kind: "daemon", command: parseSparkDaemonCliArgs(argv) };
+  }
 
   const resource = parseSparkResourceCliCommand(argv);
   if (resource) return resource;
@@ -249,6 +273,9 @@ function parseSparkPiCompatibleOptions(argv: string[]): ParsedSparkPiOptions {
       case "--session-dir":
         options.sessionDir = readRequired(argv, ++index, arg);
         break;
+      case "--spark-session-key":
+        options.sparkSessionKey = readRequired(argv, ++index, arg);
+        break;
       case "--no-session":
         options.noSession = true;
         break;
@@ -344,6 +371,256 @@ function compactRuntimeOptions(
     : undefined;
 }
 
+interface SparkCliSessionAttachResolution {
+  target?: string;
+  state: SparkNativeWorkspaceSessionState;
+  attachMatchesControlPlane: boolean;
+  shouldEmitSessionStart: boolean;
+}
+
+async function resolveSparkCliWorkspaceSessionState(
+  services: SparkCliHostServices,
+  lease: Awaited<ReturnType<typeof attachSparkWorkspaceClient>>,
+  runtimeOptions: SparkCliRuntimeOptions | undefined,
+): Promise<SparkCliSessionAttachResolution> {
+  const target = requestedSparkCliSessionTarget(runtimeOptions);
+  const baseState = {
+    workspaceDir: services.cwd,
+    workspaceHash: services.sessionStore.workspaceHash,
+    controlPlaneSessionId: lease.client.id,
+  } satisfies Omit<SparkNativeWorkspaceSessionState, "mode">;
+  if (!target) {
+    return {
+      state: { ...baseState, mode: "select" },
+      attachMatchesControlPlane: false,
+      shouldEmitSessionStart: false,
+    };
+  }
+
+  const mismatchDiagnostic = await workspaceSessionMismatchDiagnostic(services, target);
+  if (mismatchDiagnostic) {
+    return {
+      target,
+      state: { ...baseState, mode: "mismatch", attachTarget: target, mismatchDiagnostic },
+      attachMatchesControlPlane: false,
+      shouldEmitSessionStart: false,
+    };
+  }
+  return {
+    target,
+    state: { ...baseState, mode: "attached", attachTarget: target },
+    attachMatchesControlPlane: true,
+    shouldEmitSessionStart: true,
+  };
+}
+
+function requestedSparkCliSessionTarget(
+  options: SparkCliRuntimeOptions | undefined,
+): string | undefined {
+  return (
+    options?.sessionId?.trim() ||
+    options?.session?.trim() ||
+    options?.sessionDir?.trim() ||
+    options?.sparkSessionKey?.trim() ||
+    undefined
+  );
+}
+
+async function workspaceSessionMismatchDiagnostic(
+  services: SparkCliHostServices,
+  target: string,
+): Promise<string | undefined> {
+  if (looksLikeSparkSessionPath(target)) {
+    const normalizedTarget = target.startsWith("file://") ? fileURLToPath(target) : target;
+    const resolvedTarget = safeRealpath(normalizedTarget) ?? normalizedTarget;
+    const resolvedWorkspaceSessionDir =
+      safeRealpath(services.sessionStore.sessionDir) ?? services.sessionStore.sessionDir;
+    if (!isSameOrChildPath(resolvedTarget, resolvedWorkspaceSessionDir)) {
+      return `session path is outside workspace session directory ${services.sessionStore.sessionDir}`;
+    }
+    return undefined;
+  }
+
+  const existing = await services.sessionStore.findById(target);
+  if (!existing && !sparkDurableSessionExists(services, target)) {
+    return `session ${target} was not found in workspace ${services.sessionStore.workspaceHash}`;
+  }
+  return undefined;
+}
+
+function looksLikeSparkSessionPath(value: string): boolean {
+  return value.endsWith(".jsonl") || value.includes("/") || value.includes("\\");
+}
+
+function sparkDurableSessionExists(services: SparkCliHostServices, target: string): boolean {
+  const stateRoot = services.runtime.makeContext().sparkStateRoot?.trim();
+  if (!stateRoot) return false;
+  const sessionKey = normalizeSparkDurableSessionKey(target);
+  if (!sessionKey) return false;
+  return existsSync(join(stateRoot, "sessions", sanitizeSparkStoreScope(sessionKey)));
+}
+
+function normalizeSparkDurableSessionKey(target: string): string | undefined {
+  const trimmed = target.trim();
+  if (!trimmed || looksLikeSparkSessionPath(trimmed)) return undefined;
+  if (trimmed.startsWith("session:") || trimmed.startsWith("leaf:")) return trimmed;
+  return `session:${trimmed}`;
+}
+
+function sanitizeSparkStoreScope(scope: string): string {
+  return scope.replace(/[^a-zA-Z0-9._-]/gu, "-").replace(/-+/gu, "-") || "default";
+}
+
+function safeRealpath(path: string): string | undefined {
+  try {
+    return realpathSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
+function isSameOrChildPath(path: string, parent: string): boolean {
+  return path === parent || path.startsWith(parent.endsWith("/") ? parent : `${parent}/`);
+}
+
+async function durableSparkSessionListText(
+  services: SparkCliHostServices,
+): Promise<string | undefined> {
+  const stateRoot = services.runtime.makeContext().sparkStateRoot?.trim();
+  if (!stateRoot) return undefined;
+  const indexPath = join(stateRoot, "sessions", "index.json");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(indexPath, "utf8"));
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed) || !Array.isArray(parsed.sessions) || parsed.sessions.length === 0) {
+    return undefined;
+  }
+  const lines = ["Spark durable sessions:"];
+  for (const session of parsed.sessions.slice(0, 12)) {
+    if (!isRecord(session)) continue;
+    const sessionKey = stringField(session, "sessionKey") ?? "session:unknown";
+    const project = stringField(session, "currentProjectRef");
+    const task = stringField(session, "currentTaskRef");
+    const activeGoal = session.activeGoal === true ? " goal=active" : "";
+    const updated = stringField(session, "updatedAt");
+    lines.push(
+      `- ${sessionKey}${project ? ` project=${project}` : ""}${task ? ` task=${task}` : ""}${activeGoal}${updated ? ` updated=${updated}` : ""}`,
+    );
+  }
+  return lines.length > 1 ? lines.join("\n") : undefined;
+}
+
+async function hydrateNativeCockpitFromTaskRead(
+  services: SparkCliHostServices,
+  app: SparkNativeTuiApp,
+  workspaceSession: SparkNativeWorkspaceSessionState,
+): Promise<void> {
+  const tool = services.runtime.getTool("task_read")?.config;
+  if (!tool) return;
+  let details: Record<string, unknown> | undefined;
+  try {
+    const result = await tool.execute(
+      "native-cockpit-hydrate",
+      { action: "project_status", view: "active", format: "json", limit: 6 },
+      new AbortController().signal,
+      () => undefined,
+      services.runtime.makeContext(),
+    );
+    details = isRecord(result.details) ? result.details : parseFirstJsonContent(result.content);
+  } catch {
+    return;
+  }
+  if (!details?.found) return;
+  const selectedProject = isRecord(details.selectedProject)
+    ? details.selectedProject
+    : isRecord(details.activeProject)
+      ? details.activeProject
+      : undefined;
+  const projectTitle = stringField(selectedProject, "title");
+  const tasks: SparkTaskView[] = [];
+  addCompactTaskView(tasks, details.currentClaim);
+  addCompactTaskViews(tasks, details.ready);
+  addCompactTaskView(tasks, details.selectedTask);
+  app.hydrateCockpit({
+    sessionId: workspaceSession.attachTarget ?? workspaceSession.controlPlaneSessionId,
+    ...(projectTitle ? { sessionTitle: projectTitle } : {}),
+    sessionStatus: "idle",
+    tasks,
+  });
+}
+
+function addCompactTaskViews(output: SparkTaskView[], value: unknown): void {
+  if (!Array.isArray(value)) return;
+  for (const entry of value) addCompactTaskView(output, entry);
+}
+
+function addCompactTaskView(output: SparkTaskView[], value: unknown): void {
+  if (!isRecord(value)) return;
+  const ref = stringField(value, "ref");
+  const title = stringField(value, "title");
+  const status = stringField(value, "status");
+  if (!ref || !title || !status || output.some((task) => task.ref === ref)) return;
+  const todosRecord = isRecord(value.todos) ? value.todos : undefined;
+  const todoItems = Array.isArray(todosRecord?.items) ? todosRecord.items : [];
+  output.push({
+    version: SPARK_PROTOCOL_VERSION,
+    ref,
+    ...(stringField(value, "name") ? { name: stringField(value, "name") } : {}),
+    title,
+    ...(stringField(value, "kind") ? { kind: stringField(value, "kind") } : {}),
+    status,
+    ...(stringField(value, "projectRef") ? { projectRef: stringField(value, "projectRef") } : {}),
+    ...(stringField(value, "owner") ? { owner: stringField(value, "owner") } : {}),
+    todos: todoItems.filter(isRecord).map((todo) => ({
+      id: stringField(todo, "id") ?? "todo",
+      content: stringField(todo, "content") ?? "todo",
+      status: sparkTaskTodoStatus(stringField(todo, "status")),
+      notes: [],
+    })),
+    runRefs: [],
+    artifactRefs: [],
+    metadata: {},
+  });
+}
+
+function sparkTaskTodoStatus(value: string | undefined): SparkTaskView["todos"][number]["status"] {
+  if (
+    value === "pending" ||
+    value === "in_progress" ||
+    value === "blocked" ||
+    value === "done" ||
+    value === "cancelled"
+  ) {
+    return value;
+  }
+  return "pending";
+}
+
+function parseFirstJsonContent(
+  content: Array<{ type: "text"; text: string }>,
+): Record<string, unknown> | undefined {
+  const text = content.find((entry) => entry.type === "text")?.text;
+  if (!text) return undefined;
+  try {
+    const parsed = JSON.parse(text);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function stringField(record: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
 function readRequired(argv: string[], index: number, flag: string): string {
   const value = argv[index];
   if (!value) throw new Error(`${flag} requires a value`);
@@ -390,6 +667,8 @@ export async function runSparkCli(
       return 0;
     case "daemon":
       return await runSparkDaemonCliCommand(command.command, undefined, daemonClient);
+    case "server":
+      return await runSparkServerCliCommand(command.command, undefined, options.serverClient);
     case "resources": {
       const result = await runSparkResourceCommand(command.action, command.source, {
         kind: command.resourceKind,
@@ -461,15 +740,22 @@ export async function runSparkCli(
                 )(state, ctx)
               : undefined,
         });
+        const workspaceSession = await resolveSparkCliWorkspaceSessionState(
+          services,
+          lease,
+          command.options,
+        );
         registerSparkSessionsCommand(services.runtime, {
           store: services.sessionStore,
           getNavigationState: () => undefined,
+          listTextProvider: () => durableSparkSessionListText(services),
         });
         registerSparkNativeModelCommand(services);
         const runTui = options.runTui ?? runNativeSparkTui;
         await runTui({
           initialMessage: command.initialMessage,
           responder: createSparkDaemonNativeResponder(daemonClient),
+          workspaceSession: workspaceSession.state,
           slashCommands: createSparkNativeSlashCommands(services, daemonClient),
           autocompleteBasePath: services.cwd,
           keybindings: services.keybindings,
@@ -482,7 +768,17 @@ export async function runSparkCli(
           configureApp: async (app, session) => {
             pendingNativeUiTransport = createSparkNativeUiTransport(app, session);
             services.runtime.setUiTransport(pendingNativeUiTransport);
-            await services.runtime.emit("session_start", { source: "native-tui" });
+            app.setWorkspaceSession(workspaceSession.state);
+            await hydrateNativeCockpitFromTaskRead(services, app, workspaceSession.state);
+            if (workspaceSession.shouldEmitSessionStart) {
+              await services.runtime.emit("session_start", {
+                source: "native-tui",
+                workspaceDir: workspaceSession.state.workspaceDir,
+                workspaceHash: workspaceSession.state.workspaceHash,
+                controlPlaneSessionId: workspaceSession.state.controlPlaneSessionId,
+                attachTarget: workspaceSession.target,
+              });
+            }
           },
         });
         return 0;
@@ -502,19 +798,24 @@ function isInteractiveSparkCliTerminal(options: RunSparkCliOptions): boolean {
 
 const NATIVE_SLASH_COMMAND_EXCLUSIONS = [
   "help",
+  "exit",
+  "quit",
   "clear",
+  "reload",
   "stop",
   "retry",
   "cockpit",
   "workflows",
   "runs",
+  "run",
   "tasks",
+  "task",
   "artifacts",
+  "artifact",
   "evidence",
   "reviews",
+  "review",
   "graft",
-  "exit",
-  "quit",
 ] as const;
 
 function registerSparkNativeModelCommand(services: SparkCliHostServices): void {
@@ -522,6 +823,14 @@ function registerSparkNativeModelCommand(services: SparkCliHostServices): void {
   services.runtime.registerCommand("model", {
     description: tuiCliStrings.modelCommandDescription,
     argumentHint: tuiCliStrings.modelCommandArgumentHint,
+    metadata: {
+      source: "extension",
+      extensionId: "spark-model",
+      plane: "tui",
+      resource: "model",
+      verbs: ["select", "status"],
+      canonicalCliTarget: "spark tui --model <model-id>",
+    },
     getArgumentCompletions: (prefix) => modelArgumentCompletions(services, prefix),
     async handler(args, ctx) {
       const selection = await handleSparkNativeModelCommand(services, args);
@@ -579,12 +888,14 @@ function createSparkNativeSlashCommands(
 ): SparkNativeSlashCommandMap {
   registerSparkNativeModelCommand(services);
   const daemonCommands = createSparkDaemonNativeCommands(daemonClient);
+  const localControlCommands = createSparkNativeLocalControlSlashCommands();
   const piParityCommands = createSparkPiParitySlashCommands(services);
   const commandSessionId = `spark-native-command-${Date.now().toString(36)}`;
   const runtimeCommands = createSparkNativeRuntimeSlashCommands(services.runtime, {
     exclude: [
       ...NATIVE_SLASH_COMMAND_EXCLUSIONS,
       ...Object.keys(daemonCommands),
+      ...Object.keys(localControlCommands),
       ...PI_PARITY_COMMAND_NAMES,
     ],
     sendUserMessage: async (content) => {
@@ -606,10 +917,17 @@ function createSparkNativeSlashCommands(
       ...NATIVE_SLASH_COMMAND_EXCLUSIONS,
       ...Object.keys(runtimeCommands),
       ...Object.keys(daemonCommands),
+      ...Object.keys(localControlCommands),
       ...Object.keys(piParityCommands),
     ],
   });
-  return { ...runtimeCommands, ...daemonCommands, ...piParityCommands, ...promptTemplateCommands };
+  return {
+    ...runtimeCommands,
+    ...daemonCommands,
+    ...localControlCommands,
+    ...piParityCommands,
+    ...promptTemplateCommands,
+  };
 }
 
 async function hostServiceOptionsFromRuntime(
@@ -619,9 +937,21 @@ async function hostServiceOptionsFromRuntime(
   const config = await configFromRuntimeOptions(options);
   return {
     ...(config ? { config } : {}),
-    ...(options.sessionDir ? { sparkHome: options.sessionDir } : {}),
+    ...(options.sessionDir
+      ? { sparkHome: options.sessionDir, sparkStateRoot: options.sessionDir }
+      : {}),
+    ...(explicitSparkSessionKey(options)
+      ? { sessionManager: { getLeafId: () => explicitSparkSessionKey(options) } }
+      : {}),
     ...(options.noPromptTemplates ? { noPromptTemplates: true } : {}),
   };
+}
+
+function explicitSparkSessionKey(options: SparkCliRuntimeOptions): string | undefined {
+  const key = options.sparkSessionKey?.trim();
+  if (key) return key;
+  const sessionId = options.sessionId?.trim();
+  return sessionId ? `session:${sessionId}` : undefined;
 }
 
 async function configFromRuntimeOptions(

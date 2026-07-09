@@ -509,6 +509,8 @@ const messages = {
       receivedPrefix: "接收于",
       versionPrefix: "v",
       empty: "这个项目还没有收到任务图快照。",
+      emptyBody: "Spark 开始执行后，可运行和阻塞任务会出现在这里。",
+      emptyAction: "让 Spark 规划第一个任务",
       dependsOn: "依赖",
       noUpstream: "当前快照中没有上游阻塞项。",
       unblocks: "解除阻塞",
@@ -523,6 +525,8 @@ const messages = {
       kicker: "人在环中",
       title: "收件箱",
       empty: "还没有询问或评审。",
+      emptyBody: "需要你回答的决策会优先出现在这一列。",
+      emptyAction: "打开工作空间收件箱",
     },
     invocations: {
       kicker: "镜像自 Spark 运行时",
@@ -533,6 +537,8 @@ const messages = {
       kicker: "证据",
       title: "产物",
       empty: "还没有产物。",
+      emptyBody: "计划、diff 和评审证据会汇总到这一列。",
+      emptyAction: "浏览工作空间产物",
     },
     logs: {
       kicker: "运行输出",

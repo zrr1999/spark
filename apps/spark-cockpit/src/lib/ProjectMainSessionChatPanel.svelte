@@ -314,23 +314,23 @@
 <style>
   .main-session-panel {
     display: grid;
-    gap: 20px;
-    padding: 24px 28px;
+    gap: var(--spacing-md);
+    padding: var(--spacing-lg) var(--spacing-xl);
   }
 
   .main-session-header {
     align-items: start;
     display: grid;
-    gap: 18px;
-    grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
+    gap: var(--spacing-md);
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 360px);
   }
 
   .panel-kicker {
     color: var(--color-primary);
-    font-size: 12px;
-    font-weight: 750;
+    font-size: var(--text-caption);
+    font-weight: var(--weight-caption-medium);
     letter-spacing: 0.08em;
-    margin: 0 0 8px;
+    margin: 0 0 var(--spacing-xs);
     text-transform: uppercase;
   }
 
@@ -342,16 +342,14 @@
   .main-session-copy,
   .command-diagnostics p {
     color: var(--color-ink-subtle);
-    line-height: 1.55;
+    font-size: var(--text-body);
+    line-height: var(--leading-body);
   }
 
   .main-session-status {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
-  }
-
-  .main-session-status {
     justify-content: flex-end;
   }
 
@@ -359,14 +357,14 @@
     align-items: center;
     background: var(--color-canvas);
     border: 1px solid var(--color-border);
-    border-radius: 999px;
+    border-radius: var(--rounded-full);
     color: var(--color-ink-muted);
     display: inline-flex;
-    font-size: 12px;
-    font-weight: 750;
+    font-size: var(--text-caption);
+    font-weight: var(--weight-caption-medium);
     gap: 6px;
     max-width: 100%;
-    padding: 7px 10px;
+    padding: 6px 10px;
   }
 
   .context-chip.runtime.online,
@@ -377,12 +375,14 @@
   }
 
   .chat-shell {
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01));
+    background: var(--color-canvas);
     border: 1px solid var(--color-border);
-    border-radius: 18px;
+    border-radius: var(--rounded-lg);
     display: grid;
-    gap: 16px;
-    padding: 18px;
+    gap: var(--spacing-sm);
+    max-height: min(52vh, 560px);
+    overflow: auto;
+    padding: var(--spacing-md);
   }
 
   .chat-shell.busy {

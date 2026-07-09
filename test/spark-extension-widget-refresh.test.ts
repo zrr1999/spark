@@ -72,8 +72,10 @@ function executionReadyPlan(objective: string): TaskPlan {
     contextRefs: [],
     constraints: [],
     nonGoals: [],
-    successCriteria: [`${objective} succeeds`],
-    evidenceRequired: [`${objective} evidence is recorded`],
+    successCriteria: [`Validation command for ${objective} passes with exit code 0.`],
+    evidenceRequired: [
+      `Validation artifact records command output, exit code, and changed-file summary for ${objective}.`,
+    ],
     steps: [objective],
     riskLevel: "normal",
     openQuestions: [],
@@ -135,8 +137,7 @@ void test("Spark extension widget hides acknowledged and actionable DAG history"
       { action: "project_use", project: project.ref },
       ctx,
     );
-    assert.ok(widgetComponent);
-    assert.doesNotMatch(widgetComponent.render().join("\n"), /Background work:/);
+    assert.equal(widgetComponent, undefined);
 
     const dagStore = defaultWorkflowRunStore(dir);
     const acknowledgedRun = await dagStore.startRun({
@@ -154,7 +155,7 @@ void test("Spark extension widget hides acknowledged and actionable DAG history"
     });
     await dagStore.acknowledgeFailures({ runRef: acknowledgedRun.ref, sessionId: "session:test" });
     await handlers.get("session_tree")?.({}, ctx);
-    assert.doesNotMatch(widgetComponent.render().join("\n"), /Background work:/);
+    assert.equal(widgetComponent, undefined);
 
     const actionableRun = await dagStore.startRun({
       projectRef: project.ref,
@@ -170,7 +171,7 @@ void test("Spark extension widget hides acknowledged and actionable DAG history"
       timedOut: false,
     });
     await handlers.get("session_tree")?.({}, ctx);
-    assert.doesNotMatch(widgetComponent.render().join("\n"), /Background work:/);
+    assert.equal(widgetComponent, undefined);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -450,9 +451,8 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
       { action: "project_use", project: "Widget refresh project" },
       ctx,
     );
-    assert.equal(widgetCalls.length, 1);
-    assert.ok(widgetComponent);
-    assert.match(widgetComponent.render().join("\n"), /Widget refresh project/);
+    assert.equal(widgetCalls.length, 0);
+    assert.equal(widgetComponent, undefined);
 
     await executeTool(
       requireTool(tools, "task_write"),
@@ -470,6 +470,10 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
       },
       ctx,
     );
+    assert.equal(widgetCalls.length, 1);
+    const plannedWidget = widgetComponent as WidgetComponent | undefined;
+    assert.ok(plannedWidget);
+    assert.match(plannedWidget.render().join("\n"), /Widget refresh task/);
     renderRequests = 0;
 
     await executeTool(
@@ -484,8 +488,10 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
     assert.equal(widgetCalls[0]?.key, "spark-status");
     assert.deepEqual(widgetCalls[0]?.opts, { placement: "aboveEditor" });
     assert.equal(renderRequests, 1);
-    assert.match(widgetComponent.render().join("\n"), /→ @me Widget refresh task/);
-    assert.doesNotMatch(widgetComponent.render().join("\n"), /First child TODO/);
+    const claimedWidget = widgetComponent as WidgetComponent | undefined;
+    assert.ok(claimedWidget);
+    assert.match(claimedWidget.render().join("\n"), /→ @me Widget refresh task/);
+    assert.doesNotMatch(claimedWidget.render().join("\n"), /First child TODO/);
 
     for (const handler of handlers.get("tool_execution_end") ?? [])
       await handler({ toolName: "task_write" }, ctx);
@@ -506,8 +512,10 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
     );
     assert.equal(widgetCalls.length, 1);
     assert.equal(renderRequests, 3);
-    assert.match(widgetComponent.render().join("\n"), /First child TODO/);
-    assert.match(widgetComponent.render().join("\n"), /Second child TODO/);
+    const todoWidget = widgetComponent as WidgetComponent | undefined;
+    assert.ok(todoWidget);
+    assert.match(todoWidget.render().join("\n"), /First child TODO/);
+    assert.match(todoWidget.render().join("\n"), /Second child TODO/);
 
     for (const handler of handlers.get("tool_execution_end") ?? [])
       await handler({ toolName: "task_write" }, ctx);

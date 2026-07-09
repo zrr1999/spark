@@ -78,7 +78,7 @@ export async function clearCurrentProjectRef(
     return;
   }
   await rm(currentProjectStorePath(cwd, ctx), { force: true });
-  await rebuildSessionIndex(cwd);
+  await rebuildSessionIndex(cwd, ctx);
 }
 
 export async function saveSessionPhase(
@@ -132,5 +132,5 @@ async function saveCurrentProjectState(
   snapshot: CurrentProjectStoreSnapshot,
 ): Promise<void> {
   await writeJsonFileAtomic(currentProjectStorePath(cwd, ctx), snapshot);
-  await rebuildSessionIndex(cwd);
+  await rebuildSessionIndex(cwd, ctx);
 }

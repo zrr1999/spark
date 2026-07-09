@@ -67,7 +67,16 @@ function assertLineIncludes(line: string | undefined, fragments: string[]): void
 }
 
 void test("SparkWidget registers, invalidates renders, clears hidden state, and disposes", () => {
-  let state = widgetState();
+  let state = widgetState({
+    projects: [
+      {
+        title: "Initial non-empty project",
+        totalTasks: 1,
+        doneTasks: 0,
+        readyTasks: 0,
+      },
+    ],
+  });
   const registrations: SparkWidgetRegistration[] = [];
   let renderRequests = 0;
   const widgetTui: SparkWidgetTui = {
@@ -88,9 +97,9 @@ void test("SparkWidget registers, invalidates renders, clears hidden state, and 
 
   const component = registrations[0]?.cb?.(widgetTui, theme);
   assert.ok(component);
-  assert.match(component.render().join("\n"), /◆ Spark UX redesign/);
+  assert.match(component.render().join("\n"), /Initial non-empty project/);
   component.invalidate();
-  assert.match(component.render().join("\n"), /◆ Spark UX redesign/);
+  assert.match(component.render().join("\n"), /Initial non-empty project/);
 
   state = widgetState({
     tasks: [
@@ -183,6 +192,41 @@ void test("spark widget shows compact workflow-run progress above project detail
   assert.ok(!lines[0]?.includes("total="), lines[0]);
   assert.ok(!lines[0]?.includes("claimed="), lines[0]);
   assertLineIncludes(lines[1], ["Background work:", "1/3", "running", "run:abc"]);
+});
+
+void test("spark widget keeps goal/project summary free of static evidence review hints", () => {
+  const lines = renderSparkWidgetLines(
+    widgetState({
+      goal: { status: "active", objective: "replace pi from zellij" },
+      projects: [
+        {
+          title: "Spark daemon-first session UX and Pi/Codex parity hardening",
+          totalTasks: 16,
+          doneTasks: 14,
+          readyTasks: 2,
+          active: true,
+        },
+      ],
+      tasks: [
+        {
+          title: "Expose task/goal/evidence advantage",
+          status: "pending",
+          todos: [],
+        },
+      ],
+      taskCountTotal: 16,
+    }),
+    { terminal: { columns: 180 }, requestRender() {} },
+    theme,
+  );
+  const rendered = lines.join("\n");
+  assert.match(rendered, /Goal\(/u);
+  assert.match(rendered, /tasks 14\/16 · ready 2/u);
+  assert.doesNotMatch(rendered, /Evidence\/review/u);
+  const summaryLineCount = lines.filter((line) =>
+    /Goal\(|Spark daemon-first|Expose task\/goal\/evidence/.test(line),
+  ).length;
+  assert.ok(summaryLineCount <= 5, `summaryLineCount=${summaryLineCount}\n${rendered}`);
 });
 
 void test("spark widget shows active dynamic workflow snapshot progress", () => {
@@ -287,9 +331,7 @@ void test("spark widget hides terminal workflow-run history", () => {
     theme,
   );
 
-  assertLineIncludes(lines[0], ["Spark UX redesign"]);
-  assert.doesNotMatch(lines.join("\n"), /Background work:/);
-  assert.doesNotMatch(lines.join("\n"), /Spark DAG|Spark run/);
+  assert.deepEqual(lines, []);
 });
 
 void test("spark widget requires an active running workflow-run for background progress", () => {
@@ -306,8 +348,7 @@ void test("spark widget requires an active running workflow-run for background p
     theme,
   );
 
-  assertLineIncludes(lines[0], ["Spark UX redesign"]);
-  assert.doesNotMatch(lines.join("\n"), /Background work:/);
+  assert.deepEqual(lines, []);
 });
 
 void test("spark widget shows session goal before project task state", () => {
@@ -690,14 +731,80 @@ void test("spark widget controller hides unclaimed task plan items before render
   }
 });
 
-void test("spark widget shows project phase instead of idle task counts", () => {
+void test("spark widget shows project overview rows when no current project is selected", () => {
+  const lines = renderSparkWidgetLines(
+    widgetState({
+      projectTitle: undefined,
+      projects: [
+        {
+          title: "Planner project",
+          ref: "project:planner",
+          totalTasks: 3,
+          doneTasks: 1,
+          readyTasks: 2,
+        },
+        {
+          title: "Empty project",
+          ref: "project:empty",
+          totalTasks: 0,
+          doneTasks: 0,
+          readyTasks: 0,
+        },
+      ],
+    }),
+    { terminal: { columns: 120 }, requestRender() {} },
+    theme,
+  );
+
+  const text = lines.join("\n");
+  assert.match(text, /Planner project · tasks 1\/3 · ready 2/);
+  assert.doesNotMatch(text, /Empty project/);
+});
+
+void test("spark widget controller registers project overview without a selected current project", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-widget-project-overview-"));
+  try {
+    await mkdir(join(dir, ".spark"), { recursive: true });
+    const graph = new TaskGraph();
+    const project = graph.createProject({
+      title: "Unselected project",
+      description: "Exercise project overview widget state.",
+      outputLanguage: "en",
+    });
+    graph.createTask({
+      projectRef: project.ref,
+      name: "ready-overview-task",
+      title: "Ready overview task",
+      description: "Visible through project overview counts.",
+      status: "ready",
+    });
+    await defaultTaskGraphStore(dir).save(graph);
+
+    let component: ReturnType<NonNullable<SparkWidgetRegistration["cb"]>> | undefined;
+    const controller = new SparkWidgetController();
+    await controller.refresh(dir, {
+      ui: {
+        setWidget(_key: string, cb: SparkWidgetRegistration["cb"] | undefined) {
+          component = cb?.(tui, theme);
+        },
+      },
+    });
+
+    const text = component?.render().join("\n") ?? "";
+    assert.match(text, /Unselected project · tasks 0\/1/);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("spark widget hides empty project phase placeholders", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: "Spark UX redesign",
       tasks: [],
       independentTodos: [],
-      taskCountTotal: 5,
-      taskCountClaimed: 2,
+      taskCountTotal: 0,
+      taskCountClaimed: 0,
       taskCountClaimedBySession: 0,
       outputLanguage: "en",
     },
@@ -705,10 +812,7 @@ void test("spark widget shows project phase instead of idle task counts", () => 
     theme,
   );
 
-  const text = lines.join("\n");
-  assert.match(text, /◆ Spark UX redesign · Phase: research/);
-  assert.doesNotMatch(text, /Tasks\(/);
-  assert.doesNotMatch(text, /total=5|claimed=2\/0/);
+  assert.deepEqual(lines, []);
 });
 
 void test("spark widget only shows missing plan marker on task rows", () => {
@@ -1110,14 +1214,20 @@ void test("spark widget summarizes tasks and current-session in-memory running r
 
 void test("spark widget renders phase on the project header", () => {
   const planLines = renderSparkWidgetLines(
-    widgetState({ activeLens: { phase: "plan", drive: "assist" } }),
+    widgetState({
+      activeLens: { phase: "plan", drive: "assist" },
+      tasks: [{ title: "Planned task", status: "pending", todos: [] }],
+    }),
     { terminal: { columns: 120 }, requestRender() {} },
     theme,
   );
   assert.match(planLines[0] ?? "", /^◆ Spark UX redesign · Phase: plan/);
 
   const researchLines = renderSparkWidgetLines(
-    widgetState({ activeLens: { phase: "research", drive: "assist" } }),
+    widgetState({
+      activeLens: { phase: "research", drive: "assist" },
+      tasks: [{ title: "Research task", status: "pending", todos: [] }],
+    }),
     { terminal: { columns: 120 }, requestRender() {} },
     theme,
   );
@@ -1181,7 +1291,10 @@ void test("spark widget keeps task summary out of the project header", () => {
   assert.match(lines[0] ?? "", /^◆ Spark UX redesign · Phase: research/);
   assert.doesNotMatch(lines[0] ?? "", /Tasks\(/);
   assert.doesNotMatch(lines[0] ?? "", /a1b2c3d4|^├─/);
-  assert.match(lines[1] ?? "", /^├─ ⠧/);
+  assert.ok(
+    lines.some((line) => /^├─ ⠧/.test(line)),
+    lines.join("\n"),
+  );
 });
 
 void test("spark widget hides placeholder-only done plan item state", () => {

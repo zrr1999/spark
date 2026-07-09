@@ -154,6 +154,8 @@ export async function recordGoalSubjectReview(
     verdict: verdict as unknown as JsonValue,
     reviewPacket: {
       ...(input.projectRef ? { projectRef: input.projectRef } : {}),
+      originalObjective: input.originalObjective ?? goal.originalObjective ?? goal.objective,
+      objective: input.objective,
       currentProjectSelected: input.currentProjectSelected ?? false,
       projectEvidenceSource: input.projectEvidenceSource ?? "none",
       ...(input.projectStatus

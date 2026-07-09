@@ -67,7 +67,7 @@ export async function requestGoalCompletionReview(
   ctx: SparkToolContext,
   deps: GoalCompletionReviewDeps,
   active: GoalCompletionReviewActive,
-  _options: { trigger: GoalCompletionReviewTrigger },
+  options: { trigger: GoalCompletionReviewTrigger; completionClaimPlainLanguage?: string },
 ): Promise<GoalCompletionReviewOutcome> {
   const reviewContext = await goalReviewContext(ctx, active);
   if (!reviewContext.projectRef && reviewContext.evidenceRefs.length === 0) {
@@ -134,9 +134,11 @@ export async function requestGoalCompletionReview(
     projectEvidenceSource: reviewContext.projectEvidenceSource,
     projectStatus: reviewContext.projectStatus,
     goalId: active.goal.goalId,
+    originalObjective: active.goal.originalObjective ?? active.goal.objective,
     objective: active.goal.objective,
     status: active.goal.status,
     requestedStatus: "complete",
+    reason: options.completionClaimPlainLanguage,
     evidenceRefs: reviewContext.evidenceRefs,
     evidencePreviews: reviewContext.evidencePreviews,
     sessionKey: active.goal.sessionKey,
@@ -160,7 +162,11 @@ export async function requestGoalCompletionReview(
     reviewInput.projectStatus,
     reviewInput.evidenceRefs,
   );
-  const effectiveAchieved = verdict.achieved && !postReviewBlocker;
+  const effectiveAchieved =
+    verdict.achieved &&
+    verdict.evidenceValid !== false &&
+    verdict.objectiveSatisfied !== false &&
+    !postReviewBlocker;
   const reviewSummary = {
     achieved: effectiveAchieved,
     confidence: postReviewBlocker ? "deterministic-blocker" : verdict.confidence,
@@ -486,6 +492,7 @@ async function recordGoalReviewArtifact(
     ...(input.projectStatus ? { projectStatus: input.projectStatus } : {}),
     evidenceRefs: input.evidenceRefs,
     evidencePreviews: input.evidencePreviews ?? [],
+    ...(input.reason ? { completionClaimPlainLanguage: input.reason } : {}),
   };
   const previous = await store.tryGet(ref);
   const reviews = [
@@ -500,6 +507,7 @@ async function recordGoalReviewArtifact(
     body: {
       goalId: active.goal.goalId,
       ...(input.projectRef ? { projectRef: input.projectRef } : {}),
+      originalObjective: input.originalObjective ?? active.goal.objective,
       objective: active.goal.objective,
       reviewPacket,
       verdict,

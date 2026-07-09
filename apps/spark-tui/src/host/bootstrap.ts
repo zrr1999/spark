@@ -3,7 +3,10 @@
 import { basename, join, resolve } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import { stableId, type ExtensionAPI } from "@zendev-lab/spark-extension-api";
-import { createProviderRegistryStreamFunction } from "@zendev-lab/spark-ai";
+import {
+  createProviderRegistryLeafRunner,
+  createProviderRegistryStreamFunction,
+} from "@zendev-lab/spark-ai";
 
 import { renderSparkActiveSystemPrompt } from "../../../../packages/pi-extension/src/extension/spark-active-injection.ts";
 import { renderBaseSystemPromptsPrompt } from "../../../../packages/pi-extension/src/extension/spark-builtin-skills.ts";
@@ -72,6 +75,7 @@ export interface SparkCliHostServices {
 export interface SparkCliHostServicesOptions {
   cwd?: string;
   sparkHome?: string;
+  sparkStateRoot?: string;
   config?: SparkConfig;
   configPath?: string;
   keybindingsPath?: string;
@@ -118,6 +122,7 @@ export async function createSparkCliHostServices(
 
   const runtime = new SparkHostRuntime({
     cwd,
+    sparkStateRoot: options.sparkStateRoot,
     hasUI: options.hasUI ?? false,
     ui: options.ui,
     sessionManager: options.sessionManager,
@@ -154,6 +159,12 @@ export async function createSparkCliHostServices(
     });
   }
   const authResolver = new SparkProviderAuthResolver(authStore, { env: options.authEnv });
+  runtime.setLeafRunner(
+    createProviderRegistryLeafRunner({
+      registry: providerRegistry,
+      runnerOptions: { resolveApiKey: (provider) => authResolver.resolveApiKey(provider) },
+    }),
+  );
   const modelRegistry = new SparkHostModelRegistry(providerRegistry, {
     authResolver,
     getError: () => formatProviderLoadError(providerLoadResult),
@@ -169,6 +180,11 @@ export async function createSparkCliHostServices(
   registerSparkModelSelectorKeybindings(keybindings, modelSelector, {
     notify: (message, level) => runtime.makeContext().ui?.notify?.(message, level),
   });
+
+  const sessionStore = new SparkSessionStore({ cwd, sparkHome: options.sparkHome });
+  runtime.setSessionManager(
+    options.sessionManager ?? createSparkCliSessionManagerStub(sessionStore, cwd),
+  );
 
   const extensionLoadResult = await new SparkExtensionLoader({
     api: runtime as ExtensionAPI,
@@ -191,10 +207,11 @@ export async function createSparkCliHostServices(
   });
   for (const diagnostic of themeCatalog.diagnostics) diagnostics.push(diagnostic);
 
-  const sessionStore = new SparkSessionStore({ cwd, sparkHome: options.sparkHome });
-  runtime.setSessionManager(
-    options.sessionManager ?? createSparkCliSessionManagerStub(sessionStore, cwd),
-  );
+  runtime.setRoleRunner(async (input) => {
+    const { createSparkHeadlessRoleExecutor } = await import("../headless-role-executor.ts");
+    const executeRole = createSparkHeadlessRoleExecutor({ sparkHome: options.sparkHome });
+    return await executeRole(input);
+  });
   const skillResolver = new SparkSkillResolver({
     cwd,
     sparkHome: options.sparkHome,

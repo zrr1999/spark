@@ -5,7 +5,8 @@ import { basename, join } from "node:path";
 import test from "node:test";
 
 import { stableId } from "../packages/spark-extension-api/src/index.ts";
-import { parseSparkCliArgs } from "../apps/spark-tui/src/cli.ts";
+import { callLeafOrDegrade } from "../packages/spark-extension-api/src/index.ts";
+import { parseSparkCliArgs, parseSparkCliCommand } from "../apps/spark-tui/src/cli.ts";
 import {
   assistantMessageToText,
   createProviderRegistryWorkflowModelRunner,
@@ -50,7 +51,12 @@ function messageContentText(content: unknown): string {
 }
 
 function fakeProviderModule(
-  captured: { systemPrompt?: string; modelId?: string; userPrompt?: string } = {},
+  captured: {
+    systemPrompt?: string;
+    modelId?: string;
+    userPrompt?: string;
+    streamCalls?: number;
+  } = {},
 ) {
   return {
     default(api: { registerProvider(name: string, config: unknown): void }) {
@@ -62,6 +68,7 @@ function fakeProviderModule(
           _model: unknown,
           context: { messages?: Array<{ content?: unknown }>; systemPrompt?: string },
         ) => {
+          captured.streamCalls = (captured.streamCalls ?? 0) + 1;
           captured.systemPrompt = context.systemPrompt;
           captured.modelId = (_model as { id?: string }).id;
           captured.userPrompt = messageContentText(context.messages?.at(-1)?.content);
@@ -95,6 +102,16 @@ void test("parseSparkCliArgs keeps help separate from initial message", () => {
     help: false,
     initialMessage: "build this",
   });
+});
+
+void test("parseSparkCliCommand preserves explicit tui session options", () => {
+  assert.deepEqual(
+    parseSparkCliCommand(["--session-id", "abc123", "--session-dir", "/tmp/spark-home"]),
+    {
+      kind: "tui",
+      options: { sessionId: "abc123", sessionDir: "/tmp/spark-home" },
+    },
+  );
 });
 
 void test("createSparkCliHostServices constructs runtime, extensions, provider registry, sessions, skills, and agent loop", async () => {
@@ -144,7 +161,9 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
       true,
     );
     assert.equal(services.sessionStore.cwd, cwd);
-    const sessionManager = services.runtime.makeContext().sessionManager;
+    const baseContext = services.runtime.makeContext();
+    assert.equal(typeof baseContext.runRole, "function");
+    const sessionManager = baseContext.sessionManager;
     const sessionFile = sessionManager?.getSessionFile?.();
     assert.ok(sessionFile);
     assert.ok(sessionFile.endsWith(`${stableId(cwd)}.jsonl`));
@@ -176,6 +195,48 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
     assert.match(captured.systemPrompt ?? "", /# spark-graft/);
     assert.doesNotMatch(captured.systemPrompt ?? "", /at most one unfinished claimed task/);
     assert.match(captured.systemPrompt ?? "", /workspace-skill/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("native host installs explicit session manager before extension load", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-session-manager-order-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(sparkHome, { recursive: true });
+    let capturedLeaf: string | undefined;
+    const services = await createSparkCliHostServices({
+      cwd,
+      sparkHome,
+      sparkStateRoot: sparkHome,
+      config: { extensions: ["test-session-extension"], providers: [] },
+      extensions: ["test-session-extension"],
+      providers: [],
+      sessionManager: { getLeafId: () => "session:explicit-test" },
+      extensionImporter: async () => ({
+        default: (api: unknown) => {
+          const ctx = (
+            api as {
+              makeContext?: () => {
+                sparkStateRoot?: string;
+                sessionManager?: { getLeafId?: () => string };
+              };
+            }
+          ).makeContext?.();
+          capturedLeaf = ctx?.sessionManager?.getLeafId?.();
+          assert.equal(ctx?.sparkStateRoot, sparkHome);
+        },
+      }),
+    });
+
+    assert.equal(capturedLeaf, "session:explicit-test");
+    assert.equal(services.runtime.makeContext().sparkStateRoot, sparkHome);
+    assert.equal(
+      services.runtime.makeContext().sessionManager?.getLeafId?.(),
+      "session:explicit-test",
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -379,6 +440,104 @@ void test("provider registry workflow model runner rejects unknown provider and 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+void test("host ctx.runLeaf delegates to a single-shot spark-ai leaf and reports the model", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-runleaf-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(sparkHome, { recursive: true });
+    const captured: {
+      systemPrompt?: string;
+      modelId?: string;
+      userPrompt?: string;
+      streamCalls?: number;
+    } = {};
+    const services = await createSparkCliHostServices({
+      cwd,
+      sparkHome,
+      config: { extensions: [], providers: ["fake-provider"] },
+      extensions: [],
+      providers: ["fake-provider"],
+      providerImporter: async () => fakeProviderModule(captured),
+    });
+
+    const ctx = services.runtime.makeContext();
+    assert.equal(typeof ctx.runLeaf, "function");
+    const result = await ctx.runLeaf!({
+      role: "web-researcher",
+      brief: "Synthesize the provided results.",
+      input: "candidate one\ncandidate two",
+    });
+
+    assert.equal(result.degraded, false);
+    assert.equal(result.text, "boot ok:1");
+    assert.equal(result.model, "fake-provider/fake-model");
+    assert.equal(captured.streamCalls, 1);
+    assert.equal(captured.modelId, "fake-model");
+    assert.equal(captured.userPrompt, "candidate one\ncandidate two");
+    assert.match(captured.systemPrompt ?? "", /bounded Spark leaf capability/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("host ctx.runLeaf degrades without throwing for an unknown model override", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-runleaf-degrade-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(sparkHome, { recursive: true });
+    const services = await createSparkCliHostServices({
+      cwd,
+      sparkHome,
+      config: { extensions: [], providers: ["fake-provider"] },
+      extensions: [],
+      providers: ["fake-provider"],
+      providerImporter: async () => fakeProviderModule(),
+    });
+
+    const ctx = services.runtime.makeContext();
+    const result = await ctx.runLeaf!({
+      role: "web-researcher",
+      brief: "Synthesize.",
+      input: "data",
+      model: "missing-provider/missing-model",
+    });
+
+    assert.equal(result.degraded, true);
+    assert.equal(result.reasonCode, "model-binding-unavailable");
+    assert.equal(result.text, "");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("callLeafOrDegrade returns host-unsupported when a host omits runLeaf, without throwing", async () => {
+  const result = await callLeafOrDegrade(
+    {},
+    { role: "web-researcher", brief: "synthesize", input: "data" },
+  );
+  assert.equal(result.degraded, true);
+  assert.equal(result.reasonCode, "host-unsupported");
+  assert.equal(result.text, "");
+});
+
+void test("callLeafOrDegrade delegates to a present host runLeaf", async () => {
+  let calls = 0;
+  const result = await callLeafOrDegrade(
+    {
+      runLeaf: async () => {
+        calls += 1;
+        return { degraded: false, text: "synthesized", model: "p/m" };
+      },
+    },
+    { role: "web-researcher", brief: "synthesize", input: "data" },
+  );
+  assert.equal(calls, 1);
+  assert.equal(result.degraded, false);
+  assert.equal(result.text, "synthesized");
 });
 
 void test("spark-tui-app package keeps pi-coding-agent out of runtime dependencies", async () => {

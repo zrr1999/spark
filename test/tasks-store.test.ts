@@ -86,8 +86,10 @@ function executionReadyPlan(objective: string): TaskPlan {
     contextRefs: [],
     constraints: [],
     nonGoals: [],
-    successCriteria: [`${objective} succeeds`],
-    evidenceRequired: [`${objective} evidence is recorded`],
+    successCriteria: [`Validation command for ${objective} passes with exit code 0.`],
+    evidenceRequired: [
+      `Validation artifact records command output, exit code, and changed-file summary for ${objective}.`,
+    ],
     steps: [objective],
     riskLevel: "normal",
     openQuestions: [],
@@ -761,6 +763,18 @@ void test("task plan readiness distinguishes minimal and execution-ready plans",
         "missing_evidence_required",
         "Add at least one concrete validation artifact or command to plan.evidenceRequired.",
       ],
+      [
+        "weak_objective",
+        "Rewrite plan.objective as a concrete, high-bar outcome tied to project value and expected quality, not a generic activity.",
+      ],
+      [
+        "weak_plan_items",
+        "Rewrite plan.items as specific actions with inspect/change/validate verbs and concrete targets; avoid generic handle/improve/finish steps.",
+      ],
+      [
+        "low_ambition_plan",
+        "Remove weak qualifiers such as basic/minimal/quick/rough/best-effort/if possible/smoke-only/初步/尽量/可选, and state the full expected quality bar plus validation.",
+      ],
     ],
   );
 
@@ -774,9 +788,11 @@ void test("task plan readiness distinguishes minimal and execution-ready plans",
       contextRefs: [],
       constraints: [],
       nonGoals: [],
-      successCriteria: ["Decision is made"],
-      evidenceRequired: ["Decision artifact is recorded"],
-      steps: ["Ask for direction"],
+      successCriteria: [
+        "Decision artifact records the selected direction and rejected alternatives.",
+      ],
+      evidenceRequired: ["Decision artifact ref is attached to the task plan."],
+      steps: ["Record the decision artifact for the selected direction"],
       riskLevel: "normal",
       openQuestions: ["Which direction should we take?"],
       askRefs: [],
@@ -801,13 +817,13 @@ void test("task plan readiness distinguishes minimal and execution-ready plans",
     description: "ready task",
     roleRef: builtinRoleRef("worker"),
     plan: {
-      objective: "Execute ready task",
+      objective: "Execute ready task with validated output and recorded evidence.",
       contextRefs: [],
       constraints: [],
       nonGoals: [],
-      successCriteria: ["Output is produced"],
-      evidenceRequired: ["Test output is attached"],
-      steps: ["Run implementation", "Run tests"],
+      successCriteria: ["Focused test command passes and verifies the produced output."],
+      evidenceRequired: ["Test output artifact is attached with command exit code."],
+      steps: ["Run implementation against the ready task target", "Run focused tests"],
       riskLevel: "normal",
       openQuestions: [],
       askRefs: [],
@@ -822,6 +838,47 @@ void test("task plan readiness distinguishes minimal and execution-ready plans",
     status: "cancelled",
   });
   assert.deepEqual(graph.taskPlanReadiness(cancelled.ref), { ready: true, issues: [] });
+});
+
+void test("task plan readiness rejects vague, unverifiable, and low-bar plans", () => {
+  const readiness = taskPlanReadiness({
+    status: "pending",
+    plan: {
+      objective: "Basic improvement",
+      contextRefs: [],
+      constraints: [],
+      nonGoals: [],
+      successCriteria: ["Things are better"],
+      evidenceRequired: ["Evidence is recorded"],
+      steps: ["Do stuff"],
+      items: [
+        {
+          id: "item-1",
+          title: "Do stuff",
+          status: "pending",
+          createdAt: "2026-07-06T00:00:00.000Z",
+          updatedAt: "2026-07-06T00:00:00.000Z",
+        },
+      ],
+      riskLevel: "normal",
+      openQuestions: [],
+      askRefs: [],
+    },
+  });
+
+  assert.equal(readiness.ready, false);
+  assert.deepEqual(
+    readiness.issues.map((issue) => issue.kind),
+    [
+      "weak_objective",
+      "unverifiable_success_criteria",
+      "weak_evidence_required",
+      "weak_plan_items",
+      "low_ambition_plan",
+    ],
+  );
+  assert.match(readiness.issues[1]?.message ?? "", /successCriteria="Things are better"/);
+  assert.match(readiness.issues[2]?.message ?? "", /evidenceRequired="Evidence is recorded"/);
 });
 
 void test("task plan normalization is a public spark-tasks contract", () => {
@@ -1019,6 +1076,11 @@ void test("task plan readiness rules render from the public spark-tasks contract
     "missing_success_criteria",
     "missing_evidence_required",
     "missing_steps",
+    "weak_objective",
+    "unverifiable_success_criteria",
+    "weak_evidence_required",
+    "weak_plan_items",
+    "low_ambition_plan",
     "open_questions",
   ]);
   for (const rule of TASK_PLAN_READINESS_RULES) {
@@ -1065,13 +1127,13 @@ void test("ready tasks require completed dependencies and execution-ready plan, 
     description: "prerequisite",
     status: "pending",
     plan: {
-      objective: "Complete prerequisite",
+      objective: "Complete prerequisite with validated dependency state and recorded evidence.",
       contextRefs: [],
       constraints: [],
       nonGoals: [],
-      successCriteria: ["Prerequisite done"],
-      evidenceRequired: ["Done status"],
-      steps: ["Do prerequisite"],
+      successCriteria: ["Prerequisite task status changes to done after validation passes."],
+      evidenceRequired: ["Task status evidence records the prerequisite validation result."],
+      steps: ["Validate prerequisite dependency state"],
       riskLevel: "normal",
       openQuestions: [],
       askRefs: [],
@@ -1083,13 +1145,13 @@ void test("ready tasks require completed dependencies and execution-ready plan, 
     description: "dependent",
     roleRef: builtinRoleRef("worker"),
     plan: {
-      objective: "Complete dependent",
+      objective: "Complete dependent task with validated dependency gating and recorded evidence.",
       contextRefs: [],
       constraints: [],
       nonGoals: [],
-      successCriteria: ["Dependent done"],
-      evidenceRequired: ["Done status"],
-      steps: ["Do dependent"],
+      successCriteria: ["Dependent task becomes ready only after prerequisite status is done."],
+      evidenceRequired: ["Ready-task status evidence records dependency gating behavior."],
+      steps: ["Validate dependent ready-task gating"],
       riskLevel: "normal",
       openQuestions: [],
       askRefs: [],
@@ -2216,7 +2278,11 @@ void test("runSparkTask includes plan and a bounded active plan item preview in 
   graph.applyTodoOps(task.ref, [
     {
       op: "init",
-      items: ["First active TODO", "Second active TODO", "Third hidden TODO"],
+      items: [
+        "Validate first active preview item",
+        "Validate second active preview item",
+        "Validate third hidden preview item",
+      ],
     },
   ]);
   const [firstTodo, secondTodo] = graph.taskTodos(task.ref);
@@ -2256,9 +2322,15 @@ void test("runSparkTask includes plan and a bounded active plan item preview in 
     assert.match(prompt, /- Objective: Implement the bounded child prompt preview\./);
     assert.match(prompt, /- Constraints:\n  - Do not dump every TODO into the prompt\./);
     assert.match(prompt, /Current task plan item preview \(showing 2\/3 active items/);
-    assert.match(prompt, new RegExp(`\\[in_progress\\] ${firstTodo.id}: First active TODO`));
-    assert.match(prompt, new RegExp(`\\[pending\\] ${secondTodo.id}: Second active TODO`));
-    assert.doesNotMatch(prompt, /Third hidden TODO/);
+    assert.match(
+      prompt,
+      new RegExp(`\\[in_progress\\] ${firstTodo.id}: Validate first active preview item`),
+    );
+    assert.match(
+      prompt,
+      new RegExp(`\\[pending\\] ${secondTodo.id}: Validate second active preview item`),
+    );
+    assert.doesNotMatch(prompt, /Validate third hidden preview item/);
     assert.match(prompt, /1 more TODO\(s\) hidden/);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -2306,15 +2378,6 @@ void test("runSparkTask marks child timeout failed and clears the task claim", a
     assert.match(graph.getTask(task.ref).finishedBy?.runName ?? "", /^worker-/);
     assert.match(run.runName ?? "", /^worker-/);
     assert.equal(run.ownerSessionId, "session:parent");
-    assert.equal(
-      listActiveSparkRoleRunProcesses().some((entry) => entry.runName === run.runName),
-      true,
-    );
-    const killed = await killActiveSparkRoleRunProcesses({
-      runName: run.runName,
-      waitMs: 1_000,
-    });
-    assert.equal(killed.length, 1);
     assert.equal(
       listActiveSparkRoleRunProcesses().some((entry) => entry.runName === run.runName),
       false,
@@ -2384,7 +2447,7 @@ void test("runSparkTask fails loudly when claim heartbeat persistence fails", as
   }
 });
 
-void test("timed-out Spark role-run process remains killable after task failure", async () => {
+void test("timed-out Spark role-run process is cleaned up after task failure", async () => {
   const graph = new TaskGraph();
   const project = graph.createProject({ title: "Demo", description: "demo" });
   const task = graph.createTask({
@@ -2418,13 +2481,6 @@ void test("timed-out Spark role-run process remains killable after task failure"
     assert.equal(run.failureKind, "runtime_timeout");
     assert.equal(graph.getTask(task.ref).status, "failed");
     assert.equal(graph.getTask(task.ref).claim, undefined);
-    assert.equal(
-      listActiveSparkRoleRunProcesses().some((entry) => entry.runRef === run.ref),
-      true,
-    );
-    const killed = await killActiveSparkRoleRunProcesses({ runRef: run.ref, waitMs: 1_000 });
-    assert.equal(killed.length, 1);
-    assert.equal(killed[0]?.closed, true);
     assert.equal(
       listActiveSparkRoleRunProcesses().some((entry) => entry.runRef === run.ref),
       false,
@@ -3605,6 +3661,68 @@ void test("runReadyTasks assigns default roles and schedules DAG waves with maxC
   }
 });
 
+void test("runReadyTasks uses daemon-native role executor when provided", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-ready-native-executor-"));
+  try {
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Native ready", description: "native" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: "Run ready natively",
+      description: "Use daemon-native executor for ready task assignment.",
+      roleRef: builtinRoleRef("worker"),
+      plan: executionReadyPlan("Run ready natively"),
+    });
+    const seen: string[] = [];
+    const result = await runReadyTasks({
+      graph,
+      ...createSparkRuntimeReadyTaskRunner({
+        registry: new RoleRegistry(),
+        cwd: dir,
+        piCommand: join(dir, "missing-pi-that-must-not-spawn"),
+        roleExecutor: async (input) => {
+          seen.push(input.role.ref, input.record.ref, input.instruction.instruction);
+          return {
+            record: {
+              ...input.record,
+              status: "succeeded",
+              finishedAt: "2026-07-07T00:00:00.000Z",
+            },
+            stdout: "native ready task result",
+            stderr: "",
+            jsonEvents: [
+              {
+                type: "message_end",
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "native ready task result" }],
+                },
+              },
+            ],
+          };
+        },
+      }),
+      dryRun: false,
+      maxConcurrency: 1,
+      timeoutMs: 5_000,
+      claim: { sessionId: "session:native-ready" },
+    });
+
+    assert.equal(result.succeeded, 1);
+    assert.equal(result.failed, 0);
+    assert.equal(graph.getTask(task.ref).status, "done");
+    assert.deepEqual(seen.slice(0, 2), [builtinRoleRef("worker"), result.runs[0]?.ref]);
+    assert.match(seen[2] ?? "", /Use daemon-native executor/);
+    assert.equal(
+      listActiveSparkRoleRunProcesses().some((process) => process.cwd === dir),
+      false,
+    );
+  } finally {
+    await killActiveSparkRoleRunProcesses();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("runReadyTasks propagates schedule hook failures", async () => {
   const graph = new TaskGraph();
   const project = graph.createProject({ title: "Demo", description: "demo" });
@@ -4367,7 +4485,7 @@ void test("runSparkTask attributes real project role spec run claims and complet
   }
 });
 
-void test("task timeout fails the task while leaving only the stuck child process killable", async () => {
+void test("task timeout fails the task while cleaning up the stuck child process", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-timeout-cleanup-"));
   try {
     const graph = new TaskGraph();
@@ -4417,19 +4535,7 @@ void test("task timeout fails the task while leaving only the stuck child proces
     assert.equal(graph.getTask(slow.ref).status, "failed");
     assert.equal(graph.getTask(slow.ref).claim, undefined);
     const active = listActiveSparkRoleRunProcesses().filter((entry) => entry.cwd === dir);
-    assert.ok(active.length >= 1);
-    const slowActive = active.find((entry) => entry.runRef === slowRun?.ref);
-    assert.ok(slowActive);
-    assert.equal(slowActive.runName, slowRun?.runName);
-    await killActiveSparkRoleRunProcesses({
-      runRef: slowActive.runRef,
-      forceAfterMs: 0,
-      waitMs: 1_000,
-    });
-    assert.equal(
-      listActiveSparkRoleRunProcesses().some((entry) => entry.runRef === slowActive.runRef),
-      false,
-    );
+    assert.equal(active.length, 0);
   } finally {
     await killActiveSparkRoleRunProcesses();
     await rm(dir, { recursive: true, force: true });

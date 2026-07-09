@@ -36,6 +36,13 @@ void describe("SparkSessionRepro state machine", () => {
     assert.equal(repro.stages[4].name, "deliver");
   });
 
+  void it("preserves an optional user-supplied reproduction objective", () => {
+    const repro = createSparkSessionRepro("test-session", undefined, {
+      objective: "进行正经的复现对齐工作",
+    });
+    assert.equal(repro.objective, "进行正经的复现对齐工作");
+  });
+
   void it("currentReproStage returns the active stage", () => {
     const repro = makeRepro();
     const stage = currentReproStage(repro);

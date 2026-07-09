@@ -5,8 +5,13 @@
     type CommandDeliveryDisplayCommand,
   } from "$lib/command-delivery-display";
   import Icon from "$lib/Icon.svelte";
+  import ProjectMainSessionChatPanel from "$lib/ProjectMainSessionChatPanel.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
   import { buildCockpitProjectTaskDisplay } from "$lib/project-task-display";
+  import EmptyState from "$lib/ui/EmptyState.svelte";
+  import PageHeader from "$lib/ui/PageHeader.svelte";
+  import Panel from "$lib/ui/Panel.svelte";
+  import StatCard from "$lib/ui/StatCard.svelte";
   import { workspaceControlControlLabel } from "$lib/workspace-control-display";
   import { workspacePath } from "$lib/workspace-routes";
 
@@ -14,6 +19,9 @@
   let t = $derived(data.messages.project);
   let common = $derived(data.messages.common);
   let workspaceUrl = $derived(workspacePath({ slug: data.project.workspaceSlug }));
+  let pendingInboxCount = $derived(
+    data.inboxItems.filter((item) => item.status === "pending").length,
+  );
   let readyCount = $derived(data.taskSummary.byGroup.ready ?? 0);
   let blockedCount = $derived(data.taskSummary.byGroup.blocked ?? 0);
   let runningCount = $derived(data.taskSummary.byGroup.running ?? 0);
@@ -52,6 +60,11 @@
         }`
       : "",
   );
+  let taskPanelBadge = $derived(
+    data.latestSnapshot
+      ? `${t.tasks.versionPrefix}${data.latestSnapshot.snapshotVersion}`
+      : undefined,
+  );
 
   function formatRelative(value: string | null) {
     return formatRelativeTime(value, data.locale, common);
@@ -68,805 +81,449 @@
   function deliveryDetail(command: Command) {
     return commandDeliveryDetail(command, t.command.delivery, formatRelative);
   }
+
+  function taskMetaLine(task: (typeof data.tasks)[number]) {
+    const parts = [task.clusterTitle, task.agentRef].filter(Boolean);
+    return parts.length > 0 ? parts.join(" · ") : null;
+  }
 </script>
+
+{#snippet projectStatusBadge()}
+  <span class="status-pill {data.project.status}">{statusLabel(data.project.status)}</span>
+{/snippet}
 
 <svelte:head>
   <title>{data.project.name} · Spark</title>
 </svelte:head>
 
 <section class="project-page">
-  <header class="hero">
-    <div>
-      <p class="eyebrow">{data.project.workspaceName} / {t.hero.projectLabel}</p>
-      <h1>{data.project.name}</h1>
-      <p class="lede">{data.project.description ?? `/${data.project.slug}`}</p>
-    </div>
-    <span class="status-pill {data.project.status}">{statusLabel(data.project.status)}</span>
-  </header>
+  <PageHeader
+    eyebrow="{data.project.workspaceName} / {t.hero.projectLabel}"
+    title={data.project.name}
+    lede={data.project.description ?? `/${data.project.slug}`}
+    badge={projectStatusBadge}
+  />
 
   {#if data.projectKind && (data.projectKind.badge || data.projectKind.panels.length > 0)}
-    <section class="panel kind-panel" aria-label="Project kind">
-      <div class="kind-heading">
-        <div>
-          <p class="panel-kicker">Project kind</p>
-          <h2>{data.projectKind.title}</h2>
-        </div>
-        {#if data.projectKind.badge}
-          <span class="panel-badge">{data.projectKind.badge}</span>
-        {/if}
-      </div>
+    <Panel title={data.projectKind.title} kicker="Project kind" badge={data.projectKind.badge}>
       {#if data.projectKind.panels.length > 0}
         <div class="kind-panels">
           {#each data.projectKind.panels as panel}
-            <article>
+            <article class="kind-panel-item">
               <span>{panel.label}</span>
               <strong>{panel.text}</strong>
             </article>
           {/each}
         </div>
       {/if}
-    </section>
+    </Panel>
   {/if}
 
   <section class="metrics" aria-label={t.metrics.aria}>
-    <article>
-      <span>{t.metrics.pendingInbox}</span>
-      <strong>{data.inboxItems.filter((item) => item.status === "pending").length}</strong>
-    </article>
-    <article>
-      <span>{t.metrics.tasks}</span>
-      <strong>{data.taskSummary.total}</strong>
-    </article>
-    <article>
-      <span>{t.metrics.dependencies}</span>
-      <strong>{data.taskSummary.dependencyCount}</strong>
-    </article>
-    <article>
-      <span>{t.metrics.linkedInvocations}</span>
-      <strong>{data.taskSummary.linkedInvocationCount}</strong>
-    </article>
+    <StatCard
+      label={t.metrics.pendingInbox}
+      value={pendingInboxCount}
+      tone="warning"
+      featured={pendingInboxCount > 0}
+      icon="inbox"
+    />
+    <StatCard label={t.metrics.tasks} value={data.taskSummary.total} tone="primary" icon="activity" />
+    <StatCard
+      label={t.metrics.dependencies}
+      value={data.taskSummary.dependencyCount}
+      icon="cube"
+    />
+    <StatCard
+      label={t.metrics.linkedInvocations}
+      value={data.taskSummary.linkedInvocationCount}
+      tone="purple"
+      icon="agents"
+    />
   </section>
 
-  <section class="panel summary-panel" aria-labelledby="graph-summary-title">
-    <div class="summary-content">
-      <div>
-        <p class="panel-kicker">{t.graph.kicker}</p>
-        <h2 id="graph-summary-title">{t.graph.title}</h2>
-        <p class="summary-copy">
-          {t.graph.body}
-        </p>
-        <div class="spark-task-model" aria-label="spark-tasks project model">
-          <code>{projectTaskDisplay.projectLine}</code>
-          <code>{projectTaskDisplay.taskCountsLine}</code>
-        </div>
-      </div>
-      <div class="status-summary" aria-label={t.graph.statusSummaryAria}>
-        <span class="status-pill ready">{t.graph.ready} {readyCount}</span>
-        <span class="status-pill blocked">{t.graph.blocked} {blockedCount}</span>
-        <span class="status-pill running">{t.graph.running} {runningCount}</span>
-        <span class="status-pill done">{t.graph.done} {doneCount}</span>
-      </div>
+  <section class="status-summary" aria-label={t.graph.statusSummaryAria}>
+    <span class="status-pill ready">{t.graph.ready} {readyCount}</span>
+    <span class="status-pill blocked">{t.graph.blocked} {blockedCount}</span>
+    <span class="status-pill running">{t.graph.running} {runningCount}</span>
+    <span class="status-pill done">{t.graph.done} {doneCount}</span>
+  </section>
+
+  <section class="cockpit-board" aria-label={t.graph.title}>
+    <div class="board-tasks">
+      <Panel
+        title={t.tasks.title}
+        kicker={t.tasks.kicker}
+        badge={taskPanelBadge}
+        compact
+        ariaLabelledby="tasks-title"
+        note={data.latestSnapshot
+          ? `${t.tasks.receivedPrefix} ${formatRelative(data.latestSnapshot.receivedAt)}`
+          : undefined}
+      >
+        {#if data.tasks.length === 0}
+          <EmptyState title={t.tasks.empty} body={t.tasks.emptyBody} icon="activity" compact>
+            {#snippet actions()}
+              <button type="button" class="empty-cta" onclick={() => document.getElementById("cockpit-chat-prompt")?.focus()}>
+                {t.tasks.emptyAction}
+              </button>
+            {/snippet}
+          </EmptyState>
+        {:else}
+          <div class="task-list">
+            {#each data.tasks as task}
+              {@const taskDisplay = projectTaskDisplay.tasksByRuntimeId[task.runtimeTaskId]}
+              <article class="task-row">
+                <div class="task-main">
+                  <div class="task-heading">
+                    <div>
+                      <h3>{taskDisplay?.title ?? task.title}</h3>
+                      {#if taskDisplay?.handle && taskDisplay.handle !== "task"}
+                        <p class="task-handle">{taskDisplay.handle}</p>
+                      {/if}
+                      {#if taskDisplay?.statusLine}
+                        <p class="task-status-line">{taskDisplay.statusLine}</p>
+                      {/if}
+                      {#if taskMetaLine(task)}
+                        <p class="task-meta">{taskMetaLine(task)}</p>
+                      {/if}
+                    </div>
+                    <span class="status-pill {task.statusGroup}">{statusLabel(task.status)}</span>
+                  </div>
+                  {#if task.description && task.description !== task.title}
+                    <p class="task-description">{task.description}</p>
+                  {/if}
+
+                  {#if task.blockers.length > 0 || task.dependents.length > 0}
+                    <div class="dependency-grid">
+                      {#if task.blockers.length > 0}
+                        <div>
+                          <span class="meta-label">{t.tasks.dependsOn}</span>
+                          <div class="chip-list">
+                            {#each task.blockers as blocker}
+                              <span class="chip">{blocker.title}</span>
+                            {/each}
+                          </div>
+                        </div>
+                      {/if}
+                      {#if task.dependents.length > 0}
+                        <div>
+                          <span class="meta-label">{t.tasks.unblocks}</span>
+                          <div class="chip-list">
+                            {#each task.dependents as dependent}
+                              <span class="chip">{dependent.title}</span>
+                            {/each}
+                          </div>
+                        </div>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+
+                <aside class="task-side" aria-label={`${t.tasks.invocationLinksAria} ${task.title}`}>
+                  {#if task.invocationLinks.length > 0}
+                    <span class="meta-label">{t.tasks.invocationLinks}</span>
+                    <div class="invocation-links">
+                      {#each task.invocationLinks as invocation}
+                        <span class="chip">
+                          {invocation.agentName ?? common.fallback.runner}
+                          <small>{statusLabel(invocation.status)}</small>
+                        </span>
+                      {/each}
+                    </div>
+                  {/if}
+                  <p class="artifact-counts">
+                    {task.inputArtifactCount} {t.tasks.inputs} · {task.outputArtifactCount}
+                    {t.tasks.outputs}
+                  </p>
+                </aside>
+              </article>
+            {/each}
+          </div>
+        {/if}
+      </Panel>
     </div>
 
-    <form method="POST" action="?/startTask" class="task-start-form">
-      <div class="form-heading">
-        <div>
-          <p class="meta-label">{t.command.metaLabel}</p>
-          <h3>{t.command.title}</h3>
-        </div>
-        {#if data.ownerBinding}
-          <span class="status-pill {data.ownerBinding.runtimeStatus}"
-            >{statusLabel(data.ownerBinding.runtimeStatus)}</span
-          >
+    <div class="board-inbox">
+      <Panel
+        title={t.inbox.title}
+        kicker={t.inbox.kicker}
+        badge={pendingInboxCount > 0 ? String(pendingInboxCount) : undefined}
+        compact
+        ariaLabelledby="inbox-title"
+      >
+        {#if data.inboxItems.length === 0}
+          <EmptyState title={t.inbox.empty} body={t.inbox.emptyBody} icon="inbox" compact>
+            {#snippet actions()}
+              <a class="empty-cta" href={`${workspaceUrl}/inbox`}>{t.inbox.emptyAction}</a>
+            {/snippet}
+          </EmptyState>
         {:else}
-          <span class="status-pill blocked">{t.command.noOwner}</span>
-        {/if}
-      </div>
-
-      <label>
-        <span>{t.command.titleLabel}</span>
-        <input
-          name="title"
-          value={form?.values?.title ?? t.command.titleDefault}
-          placeholder={t.command.titleDefault}
-          required
-        />
-      </label>
-      <label>
-        <span>{t.command.promptLabel}</span>
-        <textarea
-          name="prompt"
-          rows="4"
-          placeholder={t.command.promptPlaceholder}
-          required>{form?.values?.prompt ?? ""}</textarea
-        >
-      </label>
-      {#if form?.message}
-        <p class:form-error={!form?.queuedCommandId} class="form-message">{form.message}</p>
-      {/if}
-      <button type="submit" disabled={!canStartTask}>
-        <Icon name="play" size={16} stroke={2.3} />
-        <span>{startButtonLabel}</span>
-      </button>
-      {#if ownerCommandNote}
-        <p class="command-note">{ownerCommandNote}</p>
-      {/if}
-
-      <div class="command-deliveries" aria-label={t.command.recentAria}>
-        <div class="command-deliveries-heading">
-          <span class="meta-label">{t.command.recentLabel}</span>
-          <small>{data.commands.length} {t.command.shownSuffix}</small>
-        </div>
-        {#if data.commands.length === 0}
-          <p class="command-note">{t.command.empty}</p>
-        {:else}
-          {#each data.commands as command}
-            <article class="command-delivery-row">
-              <header>
+          <div class="decision-list">
+            {#each data.inboxItems as item}
+              <a class="decision-row" href={`${workspaceUrl}/inbox/${item.id}`}>
                 <div>
-                  <strong>{command.title ?? command.kind}</strong>
-                  <small>{command.id} · {formatRelative(command.createdAt)}</small>
+                  <h3>{item.title}</h3>
+                  <p>{item.kind} · {item.urgency}</p>
                 </div>
-                <span class="status-pill {command.deliveryStatus ?? command.status}">
-                  {statusLabel(command.deliveryStatus ?? command.status)}
-                </span>
-              </header>
-              <p>{deliveryHeadline(command)}</p>
-              {#if deliveryDetail(command)}
-                <small>{deliveryDetail(command)}</small>
-              {/if}
-            </article>
-          {/each}
+                <span class="status-pill {item.status}">{statusLabel(item.status)}</span>
+              </a>
+            {/each}
+          </div>
         {/if}
-      </div>
-    </form>
-  </section>
-
-  <section class="grid">
-    <section class="panel" aria-labelledby="tasks-title">
-      <div class="panel-header">
-        <div>
-          <p class="panel-kicker">{t.tasks.kicker}</p>
-          <h2 id="tasks-title">{t.tasks.title}</h2>
-          {#if data.latestSnapshot}
-            <p class="panel-note">
-              {t.tasks.snapshotPrefix} {data.latestSnapshot.runtimeSnapshotId} · {t.tasks.receivedPrefix} {formatRelative(
-                data.latestSnapshot.receivedAt,
-              )}
-            </p>
-          {/if}
-        </div>
-        {#if data.latestSnapshot}
-          <span class="panel-badge">{t.tasks.versionPrefix}{data.latestSnapshot.snapshotVersion}</span>
-        {/if}
-      </div>
-
-      {#if data.tasks.length === 0}
-        <div class="compact-empty">
-          <Icon name="activity" size={24} />
-          <p>{t.tasks.empty}</p>
-        </div>
-      {:else}
-        <div class="graph-list">
-          {#each data.tasks as task}
-            {@const taskDisplay = projectTaskDisplay.tasksByRuntimeId[task.runtimeTaskId]}
-            <article class="graph-row">
-              <div class="task-main">
-                <div class="task-heading">
-                  <div>
-                    <h3>{taskDisplay?.title ?? task.title}</h3>
-                    <p class="task-status-line">
-                      {taskDisplay?.statusLine ?? task.runtimeTaskId}
-                    </p>
-                    <p class="task-runtime-line">
-                      {task.runtimeTaskId}{task.clusterTitle ? ` · ${task.clusterTitle}` : ""}{task.agentRef
-                        ? ` · ${task.agentRef}`
-                        : ""}
-                    </p>
-                  </div>
-                  <span class="status-pill {task.statusGroup}">{statusLabel(task.status)}</span>
-                </div>
-                {#if task.description}
-                  <p class="task-description">{task.description}</p>
-                {/if}
-
-                <div class="dependency-grid">
-                  <div>
-                    <span class="meta-label">{t.tasks.dependsOn}</span>
-                    {#if task.blockers.length === 0}
-                      <p class="muted">{t.tasks.noUpstream}</p>
-                    {:else}
-                      <div class="chip-list">
-                        {#each task.blockers as blocker}
-                          <span class="chip">{blocker.title} · {blocker.kind}</span>
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-                  <div>
-                    <span class="meta-label">{t.tasks.unblocks}</span>
-                    {#if task.dependents.length === 0}
-                      <p class="muted">{t.tasks.noDownstream}</p>
-                    {:else}
-                      <div class="chip-list">
-                        {#each task.dependents as dependent}
-                          <span class="chip">{dependent.title}</span>
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-                </div>
-              </div>
-
-              <aside class="task-side" aria-label={`${t.tasks.invocationLinksAria} ${task.title}`}>
-                <span class="meta-label">{t.tasks.invocationLinks}</span>
-                {#if task.invocationLinks.length === 0}
-                  <p class="muted">{t.tasks.noInvocation}</p>
-                {:else}
-                  <div class="invocation-links">
-                    {#each task.invocationLinks as invocation}
-                      <a href={`#invocation-${invocation.id}`}>
-                        <span>{invocation.agentName ?? common.fallback.runner}</span>
-                        <small>{statusLabel(invocation.status)}</small>
-                      </a>
-                    {/each}
-                  </div>
-                {/if}
-                <p class="artifact-counts">
-                  {task.inputArtifactCount} {t.tasks.inputs} · {task.outputArtifactCount} {t.tasks.outputs}
-                </p>
-              </aside>
-            </article>
-          {/each}
-        </div>
-      {/if}
-    </section>
-
-    <aside class="panel" aria-labelledby="inbox-title">
-      <div class="panel-header compact">
-        <div>
-          <p class="panel-kicker">{t.inbox.kicker}</p>
-          <h2 id="inbox-title">{t.inbox.title}</h2>
-        </div>
-      </div>
-
-      {#if data.inboxItems.length === 0}
-        <div class="compact-empty"><Icon name="inbox" size={24} /><p>{t.inbox.empty}</p></div>
-      {:else}
-        <div class="list compact-list">
-          {#each data.inboxItems as item}
-            <a class="row compact-row linked-row" href={`${workspaceUrl}/inbox/${item.id}`}>
-              <div>
-                <h3>{item.title}</h3>
-                <p>{item.kind} · {item.urgency}</p>
-              </div>
-              <span class="status-pill {item.status}">{statusLabel(item.status)}</span>
-            </a>
-          {/each}
-        </div>
-      {/if}
-    </aside>
-  </section>
-
-  <section class="grid lower">
-    <section class="panel" aria-labelledby="invocations-title">
-      <div class="panel-header compact">
-        <div>
-          <p class="panel-kicker">{t.invocations.kicker}</p>
-          <h2 id="invocations-title">{t.invocations.title}</h2>
-        </div>
-      </div>
-      {#if data.invocations.length === 0}
-        <div class="compact-empty"><Icon name="activity" size={24} /><p>{t.invocations.empty}</p></div>
-      {:else}
-        <div class="list compact-list">
-          {#each data.invocations as invocation}
-            <article id={`invocation-${invocation.id}`} class="row compact-row">
-              <div>
-                <h3>{invocation.agentName ?? common.fallback.runner}</h3>
-                <p>{invocation.runtimeInvocationId}</p>
-              </div>
-              <span class="status-pill {invocation.status}">{statusLabel(invocation.status)}</span>
-              <time>{formatRelative(invocation.updatedAt)}</time>
-            </article>
-          {/each}
-        </div>
-      {/if}
-    </section>
-
-    <section class="panel" aria-labelledby="artifacts-title">
-      <div class="panel-header compact">
-        <div>
-          <p class="panel-kicker">{t.artifacts.kicker}</p>
-          <h2 id="artifacts-title">{t.artifacts.title}</h2>
-        </div>
-      </div>
-      {#if data.artifacts.length === 0}
-        <div class="compact-empty"><Icon name="artifacts" size={24} /><p>{t.artifacts.empty}</p></div>
-      {:else}
-        <div class="list compact-list">
-          {#each data.artifacts as artifact}
-            <a class="row compact-row linked-row" href={`${workspaceUrl}/artifacts/${artifact.id}`}>
-              <div>
-                <h3>{artifact.title}</h3>
-                <p>{artifact.kind} · {artifact.format} · {artifact.source}</p>
-              </div>
-              <time>{formatRelative(artifact.createdAt)}</time>
-            </a>
-          {/each}
-        </div>
-      {/if}
-    </section>
-  </section>
-
-  <section class="panel logs-panel" aria-labelledby="logs-title">
-    <div class="panel-header compact">
-      <div>
-        <p class="panel-kicker">{t.logs.kicker}</p>
-        <h2 id="logs-title">{t.logs.title}</h2>
-      </div>
+      </Panel>
     </div>
-    {#if data.logChunks.length === 0}
-      <div class="compact-empty"><Icon name="activity" size={24} /><p>{t.logs.empty}</p></div>
-    {:else}
-      <div class="log-list">
-        {#each data.logChunks as log}
-          <article>
-            <header>
-              <span>{log.stream}</span>
-              <small>{log.runtimeInvocationId} · #{log.sequence}</small>
-            </header>
-            <pre>{log.content}</pre>
-          </article>
-        {/each}
-      </div>
-    {/if}
+
+    <div class="board-evidence">
+      <Panel
+        title={t.artifacts.title}
+        kicker={t.artifacts.kicker}
+        badge={data.artifacts.length > 0 ? String(data.artifacts.length) : undefined}
+        compact
+        ariaLabelledby="artifacts-title"
+      >
+        {#if data.artifacts.length === 0}
+          <EmptyState title={t.artifacts.empty} body={t.artifacts.emptyBody} icon="artifacts" compact>
+            {#snippet actions()}
+              <a class="empty-cta" href={`${workspaceUrl}/artifacts`}>{t.artifacts.emptyAction}</a>
+            {/snippet}
+          </EmptyState>
+        {:else}
+          <div class="evidence-list">
+            {#each data.artifacts as artifact}
+              <a class="evidence-row" href={`${workspaceUrl}/artifacts/${artifact.id}`}>
+                <div class="evidence-icon" aria-hidden="true">
+                  <Icon name="artifacts" size={18} />
+                </div>
+                <div>
+                  <h3>{artifact.title}</h3>
+                  <p>{artifact.kind} · {artifact.format}</p>
+                  <small>{formatRelative(artifact.createdAt)}</small>
+                </div>
+              </a>
+            {/each}
+          </div>
+        {/if}
+      </Panel>
+    </div>
   </section>
+
+  <ProjectMainSessionChatPanel
+    {data}
+    {form}
+    {canStartTask}
+    {startButtonLabel}
+    {ownerCommandNote}
+    {workspaceUrl}
+    {statusLabel}
+    {formatRelative}
+    {deliveryHeadline}
+    {deliveryDetail}
+  />
 </section>
 
 <style>
+  @import "$lib/ui/status-pill.css";
   .project-page {
     display: grid;
-    gap: 24px;
-  }
-
-  .hero {
-    align-items: center;
-    display: flex;
-    justify-content: space-between;
-  }
-
-  .eyebrow,
-  .panel-kicker {
-    color: var(--color-primary);
-    font-size: 12px;
-    font-weight: 750;
-    letter-spacing: 0.08em;
-    margin: 0 0 8px;
-    text-transform: uppercase;
-  }
-
-  h1,
-  h2,
-  h3,
-  p {
-    margin: 0;
-  }
-
-  h1 {
-    font-size: 34px;
-    letter-spacing: -0.03em;
-  }
-
-  .lede,
-  .row p,
-  .panel-note,
-  .compact-empty p,
-  .summary-copy,
-  .muted,
-  .task-description,
-  .artifact-counts {
-    color: var(--color-ink-subtle);
-    line-height: 1.55;
-  }
-
-  .metrics,
-  .grid {
-    display: grid;
-    gap: 18px;
+    gap: var(--spacing-xl);
   }
 
   .metrics {
+    display: grid;
+    gap: var(--spacing-lg);
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
-  .kind-heading,
   .kind-panels {
     display: flex;
-    gap: 16px;
-  }
-
-  .kind-heading {
-    align-items: center;
-    justify-content: space-between;
-    padding: 22px 24px 0;
-  }
-
-  .kind-heading h2 {
-    margin: 0;
-  }
-
-  .kind-panels {
     flex-wrap: wrap;
-    padding: 18px 24px 24px;
+    gap: var(--spacing-md);
   }
 
-  .kind-panels article {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid var(--color-border);
-    border-radius: 16px;
+  .kind-panel-item {
+    background: var(--color-surface-soft);
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--rounded-md);
     min-width: 180px;
-    padding: 14px 16px;
+    padding: var(--spacing-sm) var(--spacing-md);
   }
 
-  .kind-panels span {
+  .kind-panel-item span {
     color: var(--color-ink-subtle);
     display: block;
-    font-size: 12px;
+    font-size: var(--text-caption);
     text-transform: uppercase;
   }
 
-  .kind-panels strong {
-    display: block;
-    margin-top: 6px;
-  }
-
-  .metrics article,
-  .panel {
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 16px;
-    box-shadow: var(--shadow-card-raised);
-  }
-
-  .metrics article {
-    padding: 22px;
-  }
-
-  .metrics span {
-    color: var(--color-ink-subtle);
-    display: block;
-    font-size: 13px;
-    font-weight: 750;
-    margin-bottom: 10px;
-  }
-
-  .metrics strong {
+  .kind-panel-item strong {
     color: var(--color-ink);
-    font-size: 32px;
-  }
-
-  .summary-panel {
-    align-items: start;
-    display: grid;
-    gap: 24px;
-    grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
-    padding: 24px 28px;
-  }
-
-  .summary-content,
-  .task-start-form {
-    display: grid;
-    gap: 16px;
-  }
-
-  .summary-copy {
-    margin-top: 8px;
-  }
-
-  .spark-task-model {
-    display: grid;
-    gap: 8px;
-    margin-top: 14px;
-  }
-
-  .spark-task-model code,
-  .task-status-line {
-    background: var(--color-canvas);
-    border: 1px solid var(--color-border);
-    border-radius: 10px;
-    color: var(--color-ink-muted);
-    font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
-    line-height: 1.45;
-  }
-
-  .spark-task-model code {
     display: block;
-    overflow-wrap: anywhere;
-    padding: 8px 10px;
-  }
-
-  .task-status-line {
-    margin-top: 6px;
-    overflow-wrap: anywhere;
-    padding: 7px 9px;
-  }
-
-  .task-runtime-line {
-    color: var(--color-ink-subtle);
-    font-size: 12px;
-    line-height: 1.45;
-    margin-top: 6px;
+    font-size: var(--text-body-medium);
+    margin-top: var(--spacing-xxs);
   }
 
   .status-summary {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
-    justify-content: flex-end;
+    gap: var(--spacing-xs);
   }
 
-  .task-start-form {
-    border-left: 1px solid var(--color-border);
-    padding-left: 24px;
-  }
-
-  .form-heading {
+  .cockpit-board {
     align-items: start;
-    display: flex;
-    gap: 12px;
-    justify-content: space-between;
-  }
-
-  .task-start-form label {
-    color: var(--color-ink-muted);
     display: grid;
-    font-size: 12px;
-    font-weight: 800;
-    gap: 6px;
-    text-transform: uppercase;
+    gap: var(--spacing-lg);
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr);
   }
 
-  .task-start-form input,
-  .task-start-form textarea {
+  .decision-list,
+  .task-list,
+  .evidence-list {
+    display: grid;
+    gap: var(--spacing-xs);
+  }
+
+  .decision-row,
+  .task-row,
+  .evidence-row {
     background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
-    color: var(--color-ink);
-    font: inherit;
-    font-size: 14px;
-    line-height: 1.45;
-    padding: 9px 12px;
-    text-transform: none;
-  }
-
-  .task-start-form input:focus,
-  .task-start-form textarea:focus {
-    border-color: var(--color-focus-ring);
-    box-shadow: var(--shadow-focus);
-    outline: none;
-  }
-
-  .task-start-form button {
-    align-items: center;
-    background: var(--color-primary);
-    border: 0;
-    border-radius: 8px;
-    color: var(--color-surface);
-    display: inline-flex;
-    font-weight: 700;
-    gap: 8px;
-    justify-content: center;
-    min-height: 40px;
-    padding: 9px 14px;
-  }
-
-  .task-start-form button:not(:disabled):hover {
-    background: var(--color-primary-hover);
-  }
-
-  .task-start-form button:disabled {
-    background: var(--color-border);
-    color: var(--color-ink-disabled);
-    cursor: not-allowed;
-  }
-
-  .form-message,
-  .command-note {
-    color: var(--color-primary);
-    font-size: 12px;
-    line-height: 1.45;
-  }
-
-  .form-message.form-error {
-    color: var(--color-danger);
-  }
-
-  .command-deliveries {
-    border-top: 1px solid var(--color-border);
-    display: grid;
-    gap: 10px;
-    padding-top: 14px;
-  }
-
-  .command-deliveries-heading,
-  .command-delivery-row header {
-    align-items: center;
-    display: flex;
-    gap: 10px;
-    justify-content: space-between;
-  }
-
-  .command-deliveries-heading small,
-  .command-delivery-row small {
-    color: var(--color-ink-subtle);
-    font-size: 12px;
-  }
-
-  .command-delivery-row {
-    background: var(--color-canvas);
-    border: 1px solid var(--color-border);
-    border-radius: 12px;
-    display: grid;
-    gap: 8px;
-    padding: 12px;
-  }
-
-  .command-delivery-row strong {
-    color: var(--color-ink);
-    display: block;
-    font-size: 13px;
-  }
-
-  .command-delivery-row p {
-    color: var(--color-ink-muted);
-    font-size: 13px;
-    font-weight: 700;
-  }
-
-  .grid {
-    align-items: start;
-    grid-template-columns: minmax(0, 1fr) 380px;
-  }
-
-  .grid.lower {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .panel-header {
-    align-items: center;
-    border-bottom: 1px solid var(--color-border);
-    display: flex;
-    justify-content: space-between;
-    padding: 24px 28px;
-  }
-
-  .panel-header.compact {
-    padding: 22px 24px;
-  }
-
-  .panel-note {
-    font-size: 13px;
-  }
-
-  .panel-badge,
-  .status-pill {
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 800;
-    padding: 6px 10px;
-    text-transform: capitalize;
-    white-space: nowrap;
-  }
-
-  .panel-badge,
-  .status-pill.running,
-  .status-pill.delivered,
-  .status-pill.sent {
-    background: var(--color-primary-weak);
-    color: var(--color-primary);
-  }
-
-  .status-pill {
-    background: var(--color-surface-soft);
-    color: var(--color-ink-subtle);
-  }
-
-  .status-pill.done,
-  .status-pill.completed,
-  .status-pill.succeeded,
-  .status-pill.resolved,
-  .status-pill.acked {
-    background: var(--color-success-soft);
-    color: var(--color-success);
-  }
-
-  .status-pill.blocked,
-  .status-pill.pending,
-  .status-pill.queued,
-  .status-pill.ready {
-    background: var(--color-warning-soft);
-    color: var(--color-warning);
-  }
-
-  .status-pill.failed,
-  .status-pill.cancelled,
-  .status-pill.rejected {
-    background: var(--color-danger-soft);
-    color: var(--color-danger-strong);
-  }
-
-  .list,
-  .graph-list {
-    display: grid;
-    gap: 10px;
-    padding: 18px;
-  }
-
-  .compact-list {
-    padding: 14px;
-  }
-
-  .row,
-  .graph-row {
-    border: 1px solid var(--color-border);
-    border-radius: 14px;
-    gap: 14px;
-    padding: 16px;
-  }
-
-  .row {
-    align-items: center;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .graph-row {
-    align-items: start;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 220px;
-  }
-
-  .compact-row {
-    grid-template-columns: minmax(0, 1fr) auto auto;
-  }
-
-  .linked-row {
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--rounded-md);
     color: inherit;
     text-decoration: none;
+    transition:
+      background-color 120ms ease,
+      border-color 120ms ease;
   }
 
-  .linked-row:hover {
-    border-color: var(--color-primary-soft);
+  .decision-row,
+  .evidence-row {
+    align-items: center;
+    display: grid;
+    gap: var(--spacing-sm);
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 10px 12px;
+  }
+
+  .decision-row:hover,
+  .evidence-row:hover {
+    background: var(--color-surface-soft);
+    border-color: var(--color-border);
+  }
+
+  .task-row {
+    display: grid;
+    gap: var(--spacing-sm);
+    grid-template-columns: minmax(0, 1fr) 200px;
+    padding: var(--spacing-sm) var(--spacing-md);
+  }
+
+  .task-row:hover {
+    background: var(--color-surface-soft);
+    border-color: var(--color-border);
+  }
+
+  h3,
+  p {
+    margin: 0;
+  }
+
+  h3 {
+    color: var(--color-ink);
+    font-size: var(--text-card-title);
+    font-weight: var(--weight-card-title);
+    line-height: var(--leading-card-title);
+  }
+
+  .decision-row p,
+  .evidence-row p,
+  .task-description,
+  .artifact-counts,
+  .muted,
+  .task-meta {
+    color: var(--color-ink-subtle);
+    font-size: var(--text-caption);
+    line-height: var(--leading-caption);
+  }
+
+  .evidence-row small {
+    color: var(--color-ink-subtle);
+    display: block;
+    font-size: var(--text-caption);
+    margin-top: var(--spacing-xxs);
+  }
+
+  .evidence-icon {
+    align-items: center;
+    background: var(--color-primary-weak);
+    border-radius: var(--rounded-sm);
+    color: var(--color-primary);
+    display: none;
+    height: 32px;
+    justify-content: center;
+    width: 32px;
   }
 
   .task-main,
   .task-side {
     display: grid;
-    gap: 12px;
+    gap: var(--spacing-sm);
   }
 
   .task-heading {
     align-items: start;
     display: flex;
-    gap: 16px;
+    gap: var(--spacing-md);
     justify-content: space-between;
+  }
+
+  .task-status-line {
+    color: var(--color-ink-subtle);
+    font-size: var(--text-caption);
+    line-height: var(--leading-caption);
+    margin-top: var(--spacing-xxs);
+  }
+
+  .task-handle {
+    color: var(--color-ink-muted);
+    font-family: var(--font-mono);
+    font-size: var(--text-mono);
+    line-height: var(--leading-mono);
+    margin-top: 2px;
+  }
+
+  .empty-cta {
+    align-items: center;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--rounded-md);
+    color: var(--color-ink-muted);
+    display: inline-flex;
+    font: inherit;
+    font-size: var(--text-button);
+    font-weight: var(--weight-button);
+    min-height: 36px;
+    padding: 8px 12px;
+    text-decoration: none;
+  }
+
+  .empty-cta:hover {
+    border-color: var(--color-primary-soft);
+    color: var(--color-primary);
   }
 
   .dependency-grid {
     display: grid;
-    gap: 12px;
+    gap: var(--spacing-sm);
     grid-template-columns: 1fr 1fr;
   }
 
   .meta-label {
     color: var(--color-ink-muted);
     display: block;
-    font-size: 12px;
-    font-weight: 800;
+    font-size: var(--text-caption);
+    font-weight: var(--weight-caption-medium);
     letter-spacing: 0.04em;
-    margin-bottom: 6px;
+    margin-bottom: var(--spacing-xxs);
     text-transform: uppercase;
   }
 
@@ -877,121 +534,59 @@
     gap: 6px;
   }
 
-  .chip,
-  .invocation-links a {
+  .chip {
+    align-items: center;
     background: var(--color-canvas);
-    border: 1px solid var(--color-border);
-    border-radius: 999px;
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--rounded-full);
     color: var(--color-ink-muted);
-    font-size: 12px;
-    font-weight: 700;
-    padding: 6px 9px;
-  }
-
-  .invocation-links a {
     display: inline-flex;
+    font-size: var(--text-caption);
+    font-weight: var(--weight-caption-medium);
     gap: 6px;
-    text-decoration: none;
+    padding: 4px 8px;
   }
 
-  .invocation-links a:hover {
-    border-color: var(--color-focus-ring);
-    color: var(--color-primary);
-  }
-
-  .invocation-links small {
+  .chip small {
     color: var(--color-ink-subtle);
-    font-weight: 800;
+    font-weight: var(--weight-caption-medium);
   }
 
-  .artifact-counts,
-  .muted,
-  .task-description {
-    font-size: 13px;
+  @media (min-width: 1024px) and (max-width: 1279px) {
+    .cockpit-board {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+
+    .board-evidence {
+      grid-column: 1 / -1;
+    }
   }
 
-  .compact-empty {
-    align-items: center;
-    color: var(--color-primary);
-    display: flex;
-    gap: 12px;
-    padding: 24px;
-  }
-
-  .log-list {
-    display: grid;
-    gap: 10px;
-    padding: 16px;
-  }
-
-  .log-list article {
-    background: var(--color-ink);
-    border-radius: 8px;
-    color: var(--color-border);
-    overflow: hidden;
-  }
-
-  .log-list header {
-    align-items: center;
-    background: var(--color-code-surface-soft);
-    color: var(--color-ink-disabled);
-    display: flex;
-    font-size: 12px;
-    justify-content: space-between;
-    padding: 8px 12px;
-  }
-
-  .log-list span {
-    color: var(--color-border);
-    font-weight: 800;
-    text-transform: uppercase;
-  }
-
-  .log-list pre {
-    font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
-    line-height: 1.5;
-    margin: 0;
-    overflow-x: auto;
-    padding: 12px;
-    white-space: pre-wrap;
-  }
-
-  time {
-    color: var(--color-ink-subtle);
-    font-size: 12px;
-    white-space: nowrap;
-  }
-
-  @media (max-width: 1100px) {
+  @media (max-width: 1023px) {
     .metrics,
-    .grid,
-    .grid.lower,
-    .graph-row,
+    .cockpit-board {
+      grid-template-columns: 1fr;
+    }
+
+    .board-inbox {
+      order: 1;
+    }
+
+    .board-tasks {
+      order: 2;
+    }
+
+    .board-evidence {
+      order: 3;
+    }
+
+    .task-row,
     .dependency-grid {
       grid-template-columns: 1fr;
     }
 
-    .summary-panel,
-    .task-heading {
-      align-items: stretch;
-      grid-template-columns: 1fr;
-    }
-
-    .kind-heading,
     .task-heading {
       flex-direction: column;
-    }
-
-    .task-start-form {
-      border-left: 0;
-      border-top: 1px solid var(--color-border);
-      padding-left: 0;
-      padding-top: 20px;
-    }
-
-    .status-summary {
-      justify-content: flex-start;
     }
   }
 </style>

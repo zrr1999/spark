@@ -11,7 +11,7 @@ const PLANNING_AFFECTING_CHOICES =
 export const ASK_BEFORE_GUESSING = `Do not guess user intent. Unless the user explicitly asks you to infer or research, if a user-facing open question or decision would change ${PLANNING_AFFECTING_CHOICES}, call ask with context-specific questions before narrowing scope, planning durable work, or finishing execution.`;
 
 const DURABLE_PLANNING_RULES =
-  'Use task_write({ action: "plan" }) only for concrete executable/review/validation/research work with success criteria and evidence expectations. Never create standalone design/planning tasks; discuss design in conversation first, then embed the chosen design, rationale, constraints, alternatives, and success evidence inside each concrete task.plan.';
+  'Use task_write({ action: "plan" }) only for concrete executable/review/validation/research work with high-bar, objectively verifiable success criteria and concrete evidence expectations. Every planned task must set a substantive outcome, each success/evidence/plan item must be checkable, and low-threshold wording such as basic/minimal/quick/best-effort/if possible/smoke-only is not acceptable. Never create standalone design/planning tasks; discuss design in conversation first, then embed the chosen design, rationale, constraints, alternatives, and success evidence inside each concrete task.plan.';
 
 const NO_CANNED_ASKS =
   "Keep asks dynamic and grounded in inspected context; do not use canned intake templates or ask questions whose answers would not change the task plan.";
@@ -74,7 +74,7 @@ export function renderSparkPlanningModePrompt(
     "Before generating or changing a durable plan, outline the plan shape and keep clarifying until every material planning-affecting choice is either clear from inspected context or answered through context-specific ask questions.",
     "Ask when the user may want design options only, durable task planning, or execution toward completing all project tasks.",
     DURABLE_PLANNING_RULES,
-    'Once concrete executable/review/validation/research tasks have clear objectives, dependencies, success criteria, and evidence requirements, call task_write({ action: "plan" }) directly; refine by calling task_write({ action: "plan" }) again with concrete updates rather than using a separate dry-run/apply phase.',
+    'Once concrete executable/review/validation/research tasks have high-bar objectives, dependencies, objectively verifiable success criteria, concrete evidence requirements, and executable/checkable plan items, call task_write({ action: "plan" }) directly; refine by calling task_write({ action: "plan" }) again with concrete updates rather than using a separate dry-run/apply phase.',
     NO_CANNED_ASKS,
     ASK_BEFORE_GUESSING,
     "Do not execute tasks yet unless the user explicitly asks to switch to execution.",
@@ -119,7 +119,7 @@ export function renderModePrompt(
   graph: TaskGraph,
   selectedProjectRef: ProjectRef | undefined,
   focus: string | undefined,
-  phase: "Default research" | "Planning" | "Implementation" | "Workflow driver",
+  phase: "Default research" | "Planning" | "Implementation" | "Goal driver" | "Workflow driver",
   requirements: string[],
   extraContext?: string,
 ): string {
@@ -131,7 +131,9 @@ export function renderModePrompt(
     [
       phase === "Default research"
         ? "## Default research requirements"
-        : `## ${phase} phase requirements`,
+        : phase.endsWith("driver")
+          ? `## ${phase} requirements`
+          : `## ${phase} phase requirements`,
       ...scopedRequirements.map((item) => `- ${item}`),
     ].join("\n"),
   ].filter((section): section is string => Boolean(section));

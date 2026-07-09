@@ -35,6 +35,14 @@ export function registerSparkWorkflowCommands(
   pi.registerCommand("workflow", {
     description:
       "Enter Spark workflow execution mode; accepts optional selector like builtin:foo, workspace:foo, or user:foo. Empty /workflow opens the blocking workflow navigator.",
+    metadata: {
+      source: "extension",
+      extensionId: "spark-workflow",
+      plane: "server",
+      resource: "workflow",
+      verbs: ["start", "list"],
+      canonicalCliTarget: "spark server workflow list",
+    },
     async handler(args, ctx) {
       const parsed = parseWorkflowCommandArgs(args);
       await handlers.handleSparkWorkflowCommand(pi, ctx, parsed);
@@ -44,6 +52,15 @@ export function registerSparkWorkflowCommands(
   pi.registerCommand("workflows", {
     description:
       "Open the Spark workflow dashboard/navigator without requiring project state; shows dynamic runs and explicit controls.",
+    metadata: {
+      source: "extension",
+      extensionId: "spark-workflow",
+      plane: "server",
+      resource: "workflow",
+      verbs: ["list"],
+      canonicalCliTarget: "spark server workflow list",
+      deprecatedAliasFor: "/workflow list",
+    },
     async handler(args, ctx) {
       await handlers.handleSparkWorkflowCommand(pi, ctx, {
         focus: args.trim(),
@@ -55,6 +72,15 @@ export function registerSparkWorkflowCommands(
   pi.registerCommand("workflow-runs", {
     description: "Show the live dynamic workflow run dashboard. Usage: /workflow-runs [runRef].",
     argumentHint: "[runRef]",
+    metadata: {
+      source: "extension",
+      extensionId: "spark-workflow",
+      plane: "server",
+      resource: "workflow",
+      verbs: ["list"],
+      canonicalCliTarget: "spark server workflow list",
+      deprecatedAliasFor: "/workflow list",
+    },
     async handler(args, ctx) {
       await handlers.handleSparkDynamicWorkflowDashboardCommand(ctx, args.trim());
     },
@@ -64,6 +90,15 @@ export function registerSparkWorkflowCommands(
     pi.registerCommand(`workflow-${action}`, {
       description: `Dynamic workflow ${action}. Usage: /workflow-${action} <runRef>.`,
       argumentHint: "<runRef>",
+      metadata: {
+        source: "extension",
+        extensionId: "spark-workflow",
+        plane: "server",
+        resource: "workflow",
+        verbs: [action],
+        canonicalCliTarget: `spark server workflow ${action} <run>`,
+        deprecatedAliasFor: `/workflow ${action} <run>`,
+      },
       async handler(args, ctx) {
         await handlers.handleSparkDynamicWorkflowActionCommand(ctx, action, args.trim());
       },

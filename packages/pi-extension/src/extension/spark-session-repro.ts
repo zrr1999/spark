@@ -67,6 +67,8 @@ export interface SparkSessionRepro {
   reproId: string;
   sessionKey: string;
   status: SparkReproStatus;
+  /** User-supplied reproduction objective/focus, when started from /repro <prompt>. */
+  objective?: string;
   /** Index into stages array for the current stage. */
   currentStageIndex: number;
   /** Current phase within the current stage. */
@@ -312,14 +314,17 @@ export function passStageGate(repro: SparkSessionRepro): SparkSessionRepro | und
 export function createSparkSessionRepro(
   sessionKey: string,
   stages?: SparkReproStage[],
+  options: { objective?: string } = {},
 ): SparkSessionRepro {
   const resolvedStages = stages ?? structuredClone(DEFAULT_REPRO_STAGES);
   const reproId = crypto.randomUUID?.() ?? `repro-${Date.now()}`;
+  const objective = options.objective?.trim();
   return {
     version: 1,
     reproId,
     sessionKey,
     status: "active",
+    ...(objective ? { objective } : {}),
     currentStageIndex: 0,
     currentPhase: resolvedStages[0].phases[0],
     stages: resolvedStages,

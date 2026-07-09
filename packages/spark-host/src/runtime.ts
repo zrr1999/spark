@@ -33,6 +33,8 @@ import type {
   ExtensionAPI,
   ExtensionContext,
   ExtensionUi,
+  LeafCapabilityRunner,
+  ExtensionRoleRunner,
   ToolConfig,
   ToolInfo,
 } from "@zendev-lab/spark-extension-api";
@@ -72,11 +74,16 @@ import type {
 
 export interface SparkHostRuntimeOptions {
   cwd: string;
+  sparkStateRoot?: string;
   hasUI?: boolean;
   ui?: SparkHostUiTransport;
   sessionManager?: SparkHostSessionManagerStub;
   modelRegistry?: SparkHostModelRegistryLike;
   keybindings?: SparkKeybindings | SparkKeybindingsOptions;
+  /** Optional single-shot spark-ai leaf runner exposed to tools via ctx.runLeaf. */
+  leafRunner?: LeafCapabilityRunner;
+  /** Optional daemon-native role runner exposed to tools via ctx.runRole. */
+  roleRunner?: ExtensionRoleRunner;
 }
 
 const NOT_IMPLEMENTED = (name: string): Error =>
@@ -87,6 +94,7 @@ const NOT_IMPLEMENTED = (name: string): Error =>
 
 export class SparkHostRuntime implements ExtensionAPI {
   readonly cwd: string;
+  readonly sparkStateRoot: string | undefined;
   readonly hasUI: boolean;
   private readonly tools: RegisteredToolMap = new Map();
   private readonly commands: RegisteredCommandMap = new Map();
@@ -99,15 +107,20 @@ export class SparkHostRuntime implements ExtensionAPI {
   private uiTransport: SparkHostUiTransport;
   private sessionManager: SparkHostSessionManagerStub;
   private modelRegistry: SparkHostModelRegistryLike | undefined;
+  private leafRunner: LeafCapabilityRunner | undefined;
+  private roleRunner: ExtensionRoleRunner | undefined;
   private idle = true;
   private readonly keybindings: SparkKeybindings;
 
   constructor(options: SparkHostRuntimeOptions) {
     this.cwd = options.cwd;
+    this.sparkStateRoot = options.sparkStateRoot;
     this.hasUI = options.hasUI ?? false;
     this.uiTransport = options.ui ?? {};
     this.sessionManager = options.sessionManager ?? {};
     this.modelRegistry = options.modelRegistry;
+    this.leafRunner = options.leafRunner;
+    this.roleRunner = options.roleRunner;
     this.keybindings =
       options.keybindings instanceof SparkKeybindings
         ? options.keybindings
@@ -242,6 +255,16 @@ export class SparkHostRuntime implements ExtensionAPI {
     this.modelRegistry = modelRegistry;
   }
 
+  /** Install the single-shot leaf runner exposed to tools via ctx.runLeaf. */
+  setLeafRunner(leafRunner: LeafCapabilityRunner | undefined): void {
+    this.leafRunner = leafRunner;
+  }
+
+  /** Install the daemon-native role runner exposed to tools via ctx.runRole. */
+  setRoleRunner(roleRunner: ExtensionRoleRunner | undefined): void {
+    this.roleRunner = roleRunner;
+  }
+
   /** Snapshot of currently registered tools (active or not). */
   listTools(): RegisteredTool[] {
     return Array.from(this.tools.values());
@@ -351,11 +374,14 @@ export class SparkHostRuntime implements ExtensionAPI {
   } {
     return {
       cwd: this.cwd,
+      ...(this.sparkStateRoot ? { sparkStateRoot: this.sparkStateRoot } : {}),
       hasUI: this.hasUI,
       ui: this.uiTransport as ExtensionUi,
       isIdle: () => this.isIdle(),
       sessionManager: this.sessionManager,
       ...(this.modelRegistry ? { modelRegistry: this.modelRegistry } : {}),
+      ...(this.leafRunner ? { runLeaf: this.leafRunner } : {}),
+      ...(this.roleRunner ? { runRole: this.roleRunner } : {}),
       ...extra,
     };
   }
@@ -475,6 +501,7 @@ export class SparkHostRuntime implements ExtensionAPI {
     return {
       description: config.description,
       argumentHint: config.argumentHint,
+      metadata: config.metadata,
       getArgumentCompletions: config.getArgumentCompletions,
       handler: config.handler as RegisteredCommand["handler"],
     };

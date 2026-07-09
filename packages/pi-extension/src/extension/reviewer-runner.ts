@@ -13,6 +13,7 @@ import {
   newRef,
   nowIso,
   type ArtifactRef,
+  type ExtensionRoleRunner,
   type ProjectRef,
   type RoleRef,
   type RunRef,
@@ -72,6 +73,9 @@ export interface GoalReviewInput {
     }>;
   };
   goalId: string;
+  /** Immutable user goal captured when the goal was started/set. Reviewers must compare completion claims against this, not only against derived task descriptions. */
+  originalObjective?: string;
+  /** Current objective text after any approved edits; must remain equivalent to originalObjective. */
   objective: string;
   status: "active" | "paused" | "complete";
   requestedStatus: "paused" | "complete" | "edited";
@@ -103,6 +107,10 @@ export interface GoalReviewVerdict extends ReviewVerdict {
   targetKind: "goal";
   goalId: string;
   achieved: boolean;
+  /** Whether cited commands/files/tests are real and support the completion claim as evidence. */
+  evidenceValid?: boolean;
+  /** Whether the validated evidence semantically satisfies the immutable original user goal. */
+  objectiveSatisfied?: boolean;
   remainingWork: string;
 }
 
@@ -180,7 +188,9 @@ export interface PiRolesReviewerRunnerOptions {
   model?: string;
   sessionModel?: string;
   sessionDir?: string;
+  env?: NodeJS.ProcessEnv;
   reviewerThinkingLevel?: ReviewerThinkingLevel;
+  nativeExecutor?: ExtensionRoleRunner;
   now?: () => string;
   /** Maximum retry attempts for transient failures (timeout, overloaded). Default: 2. */
   maxRetries?: number;
@@ -223,11 +233,12 @@ const REVIEWER_JSON_SCHEMA = [
   "Return ONLY one valid JSON object. Do not include markdown, prose, comments, or tool calls.",
   'Use outcome exactly one of: "approved", "needs_changes", "blocked".',
   'Use confidence exactly one of: "low", "medium", "high".',
-  "For task reviews, omit achieved and remainingWork. For goal reviews, include both.",
+  "For task reviews, omit achieved, remainingWork, evidence_valid, and objective_satisfied.",
+  "For goal completion reviews, include achieved, evidence_valid, objective_satisfied, and remainingWork. Approve only when evidence_valid=true and objective_satisfied=true.",
   "Task review example:",
   '{"outcome":"approved","summary":"one sentence","findings":[],"blockers":[],"confidence":"high"}',
   "Goal review example:",
-  '{"outcome":"needs_changes","summary":"one sentence","findings":["actionable finding"],"blockers":["blocking issue"],"confidence":"medium","achieved":false,"remainingWork":"what remains"}',
+  '{"outcome":"needs_changes","summary":"one sentence","findings":["actionable finding"],"blockers":["blocking issue"],"confidence":"medium","achieved":false,"evidence_valid":true,"objective_satisfied":false,"remainingWork":"what remains"}',
 ].join("\n");
 
 const ASK_AUTO_ANSWER_JSON_SCHEMA = [
@@ -251,7 +262,9 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
   readonly #model?: string;
   readonly #sessionModel?: string;
   readonly #sessionDir?: string;
+  readonly #env?: NodeJS.ProcessEnv;
   readonly #reviewerThinkingLevel: ReviewerThinkingLevel;
+  readonly #nativeExecutor?: ExtensionRoleRunner;
   readonly #now: () => string;
 
   readonly #maxRetries: number;
@@ -266,7 +279,9 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
     this.#model = options.model;
     this.#sessionModel = options.sessionModel;
     this.#sessionDir = options.sessionDir;
+    this.#env = options.env;
     this.#reviewerThinkingLevel = options.reviewerThinkingLevel ?? DEFAULT_REVIEWER_THINKING_LEVEL;
+    this.#nativeExecutor = options.nativeExecutor;
     this.#now = options.now ?? nowIso;
     this.#maxRetries = options.maxRetries ?? 2;
     this.#retryBaseDelayMs = options.retryBaseDelayMs ?? 5_000;
@@ -323,11 +338,13 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
         noExtensions: true,
         launch: "fresh",
         sessionDir: this.#sessionDir,
+        env: this.#env,
         piCommand: this.#piCommand,
         cwd: input.cwd || this.#cwd,
         timeoutMs: this.#timeoutMs,
         signal,
         stdinMode: "ignore",
+        nativeExecutor: this.#nativeExecutor,
       });
     } catch (error) {
       const finishedAt = this.#now();
@@ -410,11 +427,13 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
         noExtensions: true,
         launch: "fresh",
         sessionDir: this.#sessionDir,
+        env: this.#env,
         piCommand: this.#piCommand,
         cwd: input.cwd || this.#cwd,
         timeoutMs: this.#timeoutMs,
         signal,
         stdinMode: "ignore",
+        nativeExecutor: this.#nativeExecutor,
       });
     } catch (error) {
       return { blocked: true, reason: `reviewer role run blocked: ${unknownErrorMessage(error)}` };
@@ -460,6 +479,7 @@ export function renderReviewerInstruction(input: ReviewInput): string {
           projectEvidenceSource: input.projectEvidenceSource,
           projectStatus: input.projectStatus,
           goalId: input.goalId,
+          originalObjective: input.originalObjective ?? input.objective,
           objective: input.objective,
           status: input.status,
           requestedStatus: input.requestedStatus,
@@ -477,12 +497,20 @@ export function renderReviewerInstruction(input: ReviewInput): string {
           "Reject a task finish when the selected task's own plan items, scope, or evidence remain incomplete, or when the evidence defers work that belongs to the selected task rather than to an explicitly separate downstream task.",
         ]
       : [
-          "For requestedStatus=complete, approve only when the objective is achieved; set achieved accordingly.",
-          'For requestedStatus=complete, a goal may complete without a current project only when evidenceRefs/projectStatus directly cover the objective. Otherwise, currentProjectSelected=false or projectEvidenceSource=project_evidence_fallback means the next step is research/plan: create/select a project with task_write({ action: "project_use", title, description }) and plan concrete tasks with task_write({ action: "plan" }); never use "no current project", "project cleared", or "all historical tasks are done" as the completion rationale.',
-          "If projectStatus.taskCounts.unfinished > 0, default to needs_changes unless the objective explicitly says this is planning-only/readiness-only and does not ask for project/task implementation completion.",
+          "For targetKind=goal, review semantic satisfaction of the immutable original user goal, not only whether evidence supports a task description, intermediate artifact, or latest completion wording.",
+          "For requestedStatus=complete, first answer internally: what was the user's original goal, does the current completion definition strictly cover it, and has anything been downgraded into an intermediate artifact, simulation, summary, manifest, wrapper, deterministic packaging result, or fixed-point-looking substitute?",
+          "For requestedStatus=complete, return evidence_valid=true only when the cited commands/files/tests are real and support the factual completion claim; return objective_satisfied=true only when that valid evidence satisfies originalObjective without scope drift or semantic laundering. Approve only if both are true.",
+          "For requestedStatus=complete, provide a plain-language assessment in summary/findings of what works now, what still cannot be done, and any Rust/native/trusted dependency that remains. If the packet lacks enough plain-language claim or evidence to answer honestly, use needs_changes.",
+          "Adversarial check: identify the most likely concept substitution in the completion claim and how a user would independently verify the original goal was truly implemented; if this cannot be ruled out, use needs_changes.",
+          "For compiler, self-hosting, bootstrap, interpreter, VM, or execution-engine goals, require core execution path proof: command/call trace, code that executed the core logic, Rust/native/trusted boundary list, and host-implementation dependencies. If trusted/native code still performs the core goal, do not claim self-host/self-compile completion.",
+          "For self-hosting/bootstrap goals, ask negative-counterexample questions: did the new compiler actually execute a compile function written in the target language; is a Rust helper/native primitive still doing core compilation; could byte-identical output be deterministic packaging; and if the Rust runner/helper is disabled, can stage1 still compile itself? If evidence does not answer these, use needs_changes.",
+          'Treat evidence terms such as "image runner", "summary", "trusted native", "manifest", "mock", "snapshot", "fixed point", or "wrapper" as high-risk naming-misleading indicators; verify they are not packaging around a weaker substitute before approving.',
+          "For requestedStatus=complete, require a user-reproducible acceptance command or equivalent direct validation that tests the original goal, not merely an internal task/subgoal. If only project task graph completion is shown but the original goal is not semantically met, use needs_changes and say the task graph is insufficient/create additional tasks/do not complete goal.",
+          'For requestedStatus=complete, a goal may complete without a current project only when evidenceRefs/projectStatus directly cover originalObjective. Otherwise, currentProjectSelected=false or projectEvidenceSource=project_evidence_fallback means the next step is research/plan: create/select a project with task_write({ action: "project_use", title, description }) and plan concrete tasks with task_write({ action: "plan" }); never use "no current project", "project cleared", or "all historical tasks are done" as the completion rationale.',
+          "If projectStatus.taskCounts.unfinished > 0, default to needs_changes unless originalObjective explicitly says this is planning-only/readiness-only and does not ask for project/task implementation completion.",
           "When unfinished project work remains, include concrete remainingWork using projectStatus.readyTasks and unfinishedTasks instead of treating planning evidence as implementation completion.",
           "For requestedStatus=paused, reject main-agent autonomous pauses; blockers should be resolved by doing or planning blocking work, not by pausing the goal.",
-          "For requestedStatus=edited, approve only when the proposed objective corrects a material description error or wrong direction in the current objective and does not reduce difficulty, remove required outcomes, narrow scope, or turn implementation work into planning-only/readiness-only work.",
+          "For requestedStatus=edited, approve only when the proposed objective corrects a material description error or wrong direction in the current objective and does not reduce difficulty, remove required outcomes, narrow scope, or turn implementation work into planning-only/readiness-only work; compare proposedObjective against originalObjective.",
         ];
   return [
     "Review this Spark state transition request.",
@@ -612,16 +640,43 @@ export function parseReviewerVerdictForInput(input: ReviewInput, text: string): 
       taskRef: input.task.ref,
       approved: parsed.outcome === "approved",
     };
-  const achieved =
+  const evidenceValid = parseBooleanAliasField(value, "evidence_valid", "evidenceValid");
+  const objectiveSatisfied = parseBooleanAliasField(
+    value,
+    "objective_satisfied",
+    "objectiveSatisfied",
+  );
+  const missingRequiredApprovalFields =
     input.requestedStatus === "complete" &&
     parsed.outcome === "approved" &&
-    (parseBooleanField(value, "achieved") ?? true);
-  const remainingWork = stringField(value, "remainingWork") ?? (achieved ? "" : parsed.summary);
+    (evidenceValid !== true || objectiveSatisfied !== true);
+  const outcome = missingRequiredApprovalFields ? "needs_changes" : parsed.outcome;
+  const blockers = missingRequiredApprovalFields
+    ? [
+        ...parsed.blockers,
+        "goal completion approval must explicitly set evidence_valid=true and objective_satisfied=true",
+      ]
+    : parsed.blockers;
+  const achieved =
+    input.requestedStatus === "complete" &&
+    outcome === "approved" &&
+    (parseBooleanField(value, "achieved") ?? true) &&
+    evidenceValid === true &&
+    objectiveSatisfied === true;
+  const summary = missingRequiredApprovalFields
+    ? "goal completion approval missing required evidence_valid/objective_satisfied semantic gate"
+    : parsed.summary;
+  const remainingWork = stringField(value, "remainingWork") ?? (achieved ? "" : summary);
   return {
     ...parsed,
+    outcome,
+    summary,
+    blockers,
     targetKind: "goal",
     goalId: input.goalId,
     achieved,
+    evidenceValid,
+    objectiveSatisfied,
     remainingWork,
   };
 }
@@ -971,6 +1026,17 @@ function stringArrayField(record: Record<string, unknown>, field: string): strin
 function parseBooleanField(record: Record<string, unknown>, field: string): boolean | undefined {
   const value = record[field];
   return typeof value === "boolean" ? value : undefined;
+}
+
+function parseBooleanAliasField(
+  record: Record<string, unknown>,
+  ...fields: string[]
+): boolean | undefined {
+  for (const field of fields) {
+    const value = parseBooleanField(record, field);
+    if (value !== undefined) return value;
+  }
+  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

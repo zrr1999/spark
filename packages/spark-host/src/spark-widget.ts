@@ -76,6 +76,7 @@ export interface SparkReproScheduleWidgetEntry {
 
 export interface SparkReproWidgetEntry {
   status: "active" | "complete";
+  objective?: string;
   stageName: string;
   stageIndex: number;
   totalStages: number;
@@ -83,6 +84,15 @@ export interface SparkReproWidgetEntry {
   acceptance: Array<{ description: string; satisfied: boolean }>;
   gate?: { id: string; passed: boolean };
   schedule?: SparkReproScheduleWidgetEntry;
+}
+
+export interface SparkProjectWidgetEntry {
+  title: string;
+  ref?: string;
+  active?: boolean;
+  totalTasks: number;
+  doneTasks: number;
+  readyTasks: number;
 }
 
 export interface SparkProjectKindWidgetPanel {
@@ -120,6 +130,7 @@ export interface SparkWidgetState {
   loop?: SparkLoopWidgetEntry;
   repro?: SparkReproWidgetEntry;
   projectKind?: SparkProjectKindWidgetEntry;
+  projects?: SparkProjectWidgetEntry[];
   tasks: TaskEntry[];
   independentTodos: SessionTodoEntry[];
   taskCountTotal: number;
@@ -201,15 +212,19 @@ function isVisibleTaskTodo(todo: SessionTodoEntry): boolean {
 function hasWidgetContent(state: SparkWidgetState | undefined): state is SparkWidgetState {
   return Boolean(
     state &&
-    (state.projectTitle ||
-      isRunningBackgroundRun(state.workflowRun) ||
+    (isRunningBackgroundRun(state.workflowRun) ||
       state.dynamicWorkflowRun ||
       state.goal ||
       state.loop ||
       state.repro ||
       (state.projectKind?.panels.length ?? 0) > 0 ||
+      hasVisibleProjects(state.projects) ||
       state.tasks.length > 0),
   );
+}
+
+function hasVisibleProjects(projects: SparkProjectWidgetEntry[] | undefined): boolean {
+  return Boolean(projects?.some((project) => project.totalTasks > 0));
 }
 
 function hasAnimatedWidgetContent(state: SparkWidgetState | undefined): boolean {
@@ -239,13 +254,13 @@ export function renderSparkWidgetLines(
   theme: SparkWidgetTheme,
 ): string[] {
   if (
-    !state.projectTitle &&
     !isRunningBackgroundRun(state.workflowRun) &&
     !state.dynamicWorkflowRun &&
     !state.goal &&
     !state.loop &&
     !state.repro &&
     (state.projectKind?.panels.length ?? 0) === 0 &&
+    !hasVisibleProjects(state.projects) &&
     state.tasks.length === 0
   )
     return [];
@@ -270,12 +285,11 @@ export function renderSparkWidgetLines(
     ? undefined
     : formatBackgroundLine(state.workflowRun, theme);
   const dynamicWorkflowLine = formatDynamicWorkflowLine(state.dynamicWorkflowRun, theme);
-
   const tasks = visibleTasks.map((task) => ({
     ...task,
     animationFrame: task.animationFrame ?? state.animationFrame ?? 0,
   }));
-  const projectRows = flattenTaskRows(tasks);
+  const projectRows = [...flattenProjectRows(state.projects ?? []), ...flattenTaskRows(tasks)];
   const fixedLineCount =
     [goalLine, projectHeaderLine, backgroundLine, dynamicWorkflowLine].filter(Boolean).length +
     projectKindLines.length;
@@ -329,13 +343,14 @@ function formatReproLine(
     : ACTIVE_GOAL_PULSE_FRAMES[frame % ACTIVE_GOAL_PULSE_FRAMES.length];
   const status = theme.fg("accent", statusContent);
   const stageLabel = `${repro.stageName} ${repro.stageIndex + 1}/${repro.totalStages}`;
+  const objectiveLabel = repro.objective ? `${repro.objective} · ` : "";
   const gateLabel = repro.gate && !repro.gate.passed ? " gate:○" : "";
   // Show current focus: first unsatisfied condition, or "✓ all passed" if done
   const nextCondition = repro.acceptance.find((c) => !c.satisfied);
   const focusLabel = nextCondition ? `○ ${nextCondition.description}` : `✓ ${satisfied}/${total}`;
   const body = `${theme.fg("dim", "Repro(")}${status}${theme.fg(
     "dim",
-    `): ${stageLabel} · ${focusLabel}${gateLabel}`,
+    `): ${objectiveLabel}${stageLabel} · ${focusLabel}${gateLabel}`,
   )}`;
   return `${theme.fg("accent", "◆")} ${body}`;
 }
@@ -489,10 +504,10 @@ function sparkWidgetActiveLensPhase(
 }
 
 function formatPhaseSummary(lens: SparkWidgetActiveLens | undefined): string {
-  const phase = sparkWidgetActiveLensPhase(lens);
   const mode = sparkWidgetActiveLensDriveMode(lens);
-  const modeSuffix = mode === "assist" ? "" : ` · Mode: ${mode}`;
-  return `Phase: ${phase}${modeSuffix}`;
+  if (mode !== "assist") return `Drive: ${mode}`;
+  const phase = sparkWidgetActiveLensPhase(lens);
+  return `Phase: ${phase}`;
 }
 
 function formatProjectKindLines(
@@ -598,8 +613,15 @@ function formatTaskTitle(task: TaskEntry, theme: SparkWidgetTheme): string {
 }
 
 type WidgetRow =
+  | { kind: "project"; project: SparkProjectWidgetEntry }
   | { kind: "task"; task: TaskEntry }
   | { kind: "task-todo"; todo: SessionTodoEntry; fallbackNumber: number };
+
+function flattenProjectRows(projects: SparkProjectWidgetEntry[]): WidgetRow[] {
+  return projects
+    .filter((project) => project.totalTasks > 0)
+    .map((project) => ({ kind: "project", project }));
+}
 
 function flattenTaskRows(tasks: TaskEntry[]): WidgetRow[] {
   const rows: WidgetRow[] = [];
@@ -675,11 +697,25 @@ function appendFormattedRows(
 
 function formatWidgetRow(row: WidgetRow, theme: SparkWidgetTheme, branch: "├─" | "└─"): string {
   switch (row.kind) {
+    case "project":
+      return `${theme.fg("dim", branch)} ${projectIcon(row.project, theme)} ${formatProjectTitle(row.project, theme)}`;
     case "task":
       return `${theme.fg("dim", branch)} ${taskIcon(row.task, theme)} ${formatTaskTitle(row.task, theme)}`;
     case "task-todo":
       return `${theme.fg("dim", `│  ${branch}`)} ${todoIcon(row.todo.status, theme)} #${todoDisplayNumber(row.todo, row.fallbackNumber)} ${formatTodoContent(row.todo, theme)}`;
   }
+}
+
+function projectIcon(project: SparkProjectWidgetEntry, theme: SparkWidgetTheme): string {
+  return theme.fg(project.active ? "accent" : "dim", project.active ? "▸" : "◇");
+}
+
+function formatProjectTitle(project: SparkProjectWidgetEntry, theme: SparkWidgetTheme): string {
+  const title = project.title.trim() || project.ref || "Untitled project";
+  const done = `${project.doneTasks}/${project.totalTasks}`;
+  const ready = project.readyTasks > 0 ? ` · ready ${project.readyTasks}` : "";
+  const summary = theme.fg("dim", ` · tasks ${done}${ready}`);
+  return `${project.active ? theme.bold(title) : title}${summary}`;
 }
 
 function todoDisplayNumber(todo: SessionTodoEntry, fallbackNumber: number): number {

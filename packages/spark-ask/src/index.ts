@@ -330,7 +330,7 @@ async function askUserViaInteraction(
 
 function createAskUserInteractionRequest(request: PiAskRequest): ExtensionInteractionRequest {
   return {
-    version: "1",
+    version: 1,
     kind: "askFlow",
     requestId: `ask_user:${Date.now().toString(36)}`,
     title: request.title?.trim() || "Ask user",

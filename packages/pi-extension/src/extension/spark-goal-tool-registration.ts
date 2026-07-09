@@ -73,7 +73,7 @@ export function registerSparkGoalTool(
       reason: Type.Optional(
         Type.String({
           description:
-            "Required for edit: explain the description/direction error being corrected. Pause reasons are not accepted for autonomous goal work.",
+            "For complete: plain-language completion claim covering what works, what still cannot be done, and native/Rust dependencies. Required for edit: explain the description/direction error being corrected. Pause reasons are not accepted for autonomous goal work.",
         }),
       ),
     }),
@@ -128,7 +128,10 @@ export function registerSparkGoalTool(
           ctx,
           deps,
           { graph: graph ?? undefined, project, goal: existingGoal },
-          { trigger: "tool" },
+          {
+            trigger: "tool",
+            completionClaimPlainLanguage: normalizeOptionalReason(params.reason),
+          },
         );
         await deps.syncAskAutoAnswerPolicy?.(ctx);
         return goalCompletionResult(existingGoal, action, completion);
@@ -323,6 +326,7 @@ async function reviewedEditCurrentSessionGoal(
     targetKind: "goal",
     cwd,
     goalId: existingGoal.goalId,
+    originalObjective: existingGoal.originalObjective ?? existingGoal.objective,
     objective: existingGoal.objective,
     status: existingGoal.status,
     requestedStatus: "edited",
@@ -367,6 +371,7 @@ export async function reviewedPauseCurrentSessionGoal(
     targetKind: "goal",
     cwd,
     goalId: existingGoal.goalId,
+    originalObjective: existingGoal.originalObjective ?? existingGoal.objective,
     objective: existingGoal.objective,
     status: existingGoal.status,
     requestedStatus: "paused",
@@ -491,6 +496,7 @@ async function recordGoalTransitionReviewArtifact(
     format: "json",
     body: {
       goalId: goal.goalId,
+      originalObjective: goal.originalObjective ?? goal.objective,
       objective: goal.objective,
       requestedStatus: request.requestedStatus,
       ...(request.reason ? { reason: request.reason } : {}),

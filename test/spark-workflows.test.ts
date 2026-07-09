@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import type { ExtensionRoleRunner } from "@zendev-lab/spark-extension-api";
 
 import {
   listSavedWorkflows,
@@ -1620,6 +1621,72 @@ return 'ok'`;
       (await eventStore.listDynamicWorkflowRunRecords()).map((record) => record.status),
     );
     assert.deepEqual(statuses, new Set(["succeeded", "paused", "stopped", "stale"]));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark workflow_run tool routes default agents through ctx.runRole", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-dynamic-workflow-native-role-"));
+  try {
+    type TestWorkflowRunTool = {
+      execute: (
+        toolCallId: string,
+        params: Record<string, unknown>,
+        signal: AbortSignal,
+        onUpdate: () => void,
+        ctx: {
+          cwd: string;
+          model?: { provider: string; id: string; api?: string };
+          runRole?: ExtensionRoleRunner;
+        },
+      ) => Promise<{
+        content: Array<{ type: "text"; text: string }>;
+        details: Record<string, unknown>;
+      }>;
+    };
+    const tools = new Map<string, TestWorkflowRunTool>();
+    registerSparkWorkflowRunTool((config) =>
+      tools.set(config.name, config as unknown as TestWorkflowRunTool),
+    );
+    const tool = tools.get("workflow_run");
+    assert.ok(tool, "missing workflow_run tool");
+
+    const nativeInputs: Parameters<ExtensionRoleRunner>[0][] = [];
+    const runRole: ExtensionRoleRunner = async (input) => {
+      nativeInputs.push(input);
+      return {
+        record: { ...input.record, status: "succeeded", finishedAt: "2026-06-22T00:00:00.000Z" },
+        stdout: "native workflow agent output",
+        stderr: "",
+        jsonEvents: [
+          {
+            type: "message_end",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "native workflow agent output" }],
+            },
+          },
+        ],
+      };
+    };
+
+    const script = `export const meta = { name: 'native role', description: 'native role workflow' }
+return await agent('use native role', { label: 'native-agent', model: 'test/model' })`;
+    const result = await tool.execute(
+      "tool-call",
+      { script, wait: true },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir, model: { provider: "test", id: "model", api: "openai-responses" }, runRole },
+    );
+
+    assert.match(result.content[0]?.text ?? "", /Workflow run completed/);
+    assert.equal(nativeInputs.length, 1);
+    assert.equal(nativeInputs[0]?.role.ref, "role:builtin-worker");
+    assert.match(nativeInputs[0]?.instruction.instruction ?? "", /use native role/);
+    assert.equal(nativeInputs[0]?.model, "test/model");
+    assert.equal(nativeInputs[0]?.cwd, dir);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

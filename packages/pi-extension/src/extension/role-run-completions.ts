@@ -1,14 +1,22 @@
 import {
   nowIso,
+  stableId,
+  type TaskRef,
+  type TaskRun,
   type TaskRunCompletionSummary,
+  type TaskStatus,
   type ProjectRef,
 } from "@zendev-lab/spark-extension-api";
-import type { TaskGraph } from "@zendev-lab/spark-tasks";
+import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/spark-tasks";
 import {
   loadHiddenRoleRunInboxState,
   saveHiddenRoleRunInboxState,
 } from "./hidden-role-run-inbox.ts";
-import { sparkSessionOwnerKey, type SparkSessionContext } from "./session-identity.ts";
+import {
+  sparkSessionOwnerKey,
+  sparkStateCwd,
+  type SparkSessionContext,
+} from "./session-identity.ts";
 import { loadSparkGraph } from "./session-state.ts";
 import { shortRoleLabel } from "./task-ownership.ts";
 import { truncateInline } from "./tool-rendering.ts";
@@ -20,6 +28,44 @@ const SPARK_HIDDEN_INBOX_MAX_DELIVERED = 1_000;
 export interface HiddenRoleRunInbox {
   summaries: TaskRunCompletionSummary[];
   remaining: number;
+}
+
+export interface HiddenRoleRunInboxProjection {
+  summary: TaskRunCompletionSummary;
+  workspaceHash: string;
+  sessionKey: string;
+  acknowledged: boolean;
+  historical: boolean;
+  actionable: boolean;
+  suppressedFromStartup: boolean;
+  taskStatus?: TaskStatus;
+}
+
+export function projectHiddenRoleRunInboxEntry(input: {
+  run: TaskRun;
+  summary: TaskRunCompletionSummary;
+  taskStatus?: TaskStatus;
+  workspaceHash: string;
+  sessionKey: string;
+  acknowledged: boolean;
+  recentCutoffMs: number;
+}): HiddenRoleRunInboxProjection {
+  const createdAtMs = Date.parse(input.summary.createdAt);
+  const staleByAge = Number.isFinite(createdAtMs) && createdAtMs < input.recentCutoffMs;
+  const terminalTask = input.taskStatus ? !isUnfinishedTaskStatus(input.taskStatus) : false;
+  const historical = staleByAge || (input.summary.status === "failed" && terminalTask);
+  const actionable =
+    input.run.ownerSessionId === input.sessionKey && !input.acknowledged && !historical;
+  return {
+    summary: cloneTaskRunCompletionSummary(input.summary),
+    workspaceHash: input.workspaceHash,
+    sessionKey: input.sessionKey,
+    acknowledged: input.acknowledged,
+    historical,
+    actionable,
+    suppressedFromStartup: !actionable,
+    ...(input.taskStatus ? { taskStatus: input.taskStatus } : {}),
+  };
 }
 
 export function collectRecentRoleRunCompletions(input: {
@@ -42,18 +88,31 @@ export async function collectUnreadHiddenRoleRunInbox(
   const graph = await loadSparkGraph(cwd, ctx);
   if (!graph) return { summaries: [], remaining: 0 };
   const ownerSessionId = sparkSessionOwnerKey(ctx);
+  const workspaceHash = stableId(sparkStateCwd(cwd, ctx));
   const deliveredRunRefs = new Set(
     (await loadHiddenRoleRunInboxState(cwd, ctx)).delivered.map((entry) => entry.runRef),
   );
   const recentCutoffMs = Date.now() - SPARK_HIDDEN_INBOX_RECENT_MS;
   const unread = graph
     .runs()
-    .filter((run) => run.ownerSessionId === ownerSessionId)
     .flatMap((run) => {
-      if (!run.completionSummary || deliveredRunRefs.has(run.ref)) return [];
-      const createdAtMs = Date.parse(run.completionSummary.createdAt);
-      if (Number.isFinite(createdAtMs) && createdAtMs < recentCutoffMs) return [];
-      return [run.completionSummary];
+      if (!run.completionSummary) return [];
+      let taskStatus: TaskStatus | undefined;
+      try {
+        taskStatus = graph.getTask(run.taskRef as TaskRef).status;
+      } catch {
+        taskStatus = undefined;
+      }
+      const projection = projectHiddenRoleRunInboxEntry({
+        run,
+        summary: run.completionSummary,
+        taskStatus,
+        workspaceHash,
+        sessionKey: ownerSessionId,
+        acknowledged: deliveredRunRefs.has(run.ref),
+        recentCutoffMs,
+      });
+      return projection.actionable ? [projection.summary] : [];
     })
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const summaries = unread

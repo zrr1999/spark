@@ -40,7 +40,7 @@ import {
   type SparkTaskView,
   type SparkViewModelEvent,
 } from "@zendev-lab/spark-protocol";
-import type { ExtensionCommandContext } from "@zendev-lab/spark-extension-api";
+import type { CommandMetadata, ExtensionCommandContext } from "@zendev-lab/spark-extension-api";
 
 import type { SparkKeybindingContext, SparkKeybindings } from "./host/keybindings.ts";
 import {
@@ -85,6 +85,9 @@ export interface SparkNativeMessage {
   toolName?: string;
   toolCallId?: string;
   toolStatus?: SparkNativeToolStatus;
+  createdAt?: string;
+  updatedAt?: string;
+  nativeOrder?: number;
 }
 
 export interface SparkNativeToolMessageInput {
@@ -149,6 +152,7 @@ export type SparkNativeSlashCommandHandler = (
 export interface SparkNativeSlashCommand {
   description: string;
   argumentHint?: string;
+  metadata?: CommandMetadata;
   getArgumentCompletions?: (
     argumentPrefix: string,
   ) =>
@@ -165,7 +169,7 @@ export interface SparkNativeRuntimeCommandHost {
     name: string;
     command: Pick<
       RegisteredCommand,
-      "description" | "argumentHint" | "getArgumentCompletions" | "handler"
+      "description" | "argumentHint" | "metadata" | "getArgumentCompletions" | "handler"
     >;
   }>;
   makeContext(
@@ -180,13 +184,27 @@ export interface SparkNativeRuntimeSlashCommandOptions {
   setEditorText?: (text: string) => void;
 }
 
+export const SPARK_NATIVE_KERNEL_SLASH_COMMANDS = [
+  "help",
+  "exit",
+  "quit",
+  "clear",
+  "reload",
+] as const;
+
 const MAX_TRANSCRIPT_MESSAGES = 80;
 const MAX_NATIVE_WIDGET_LINES = 12;
 
+interface SparkNativeWidgetComponent {
+  render(width?: number): string[];
+  invalidate?(): void;
+}
+
 interface SparkNativeWidget {
   key: string;
-  lines: string[];
   placement: "aboveEditor" | "belowEditor";
+  lines?: string[];
+  component?: SparkNativeWidgetComponent;
 }
 
 export type SparkNativeCockpitPanel =
@@ -264,12 +282,13 @@ export class SparkNativeSession {
   private processing = false;
   private activeTurnId = 0;
   private currentAbort: AbortController | undefined;
+  private nextNativeMessageOrder = 0;
 
   onChange?: () => void;
 
   constructor(responder: SparkNativeResponder = defaultSparkNativeResponder) {
     this.responder = responder;
-    this.messages.push({
+    this.pushMessage({
       role: "system",
       text: nativeTuiStrings.welcome,
     });
@@ -326,15 +345,27 @@ export class SparkNativeSession {
 
   addMessageView(message: SparkMessageView): void {
     const native = messageViewToNativeMessage(message);
-    const index = native.viewId
-      ? this.messages.findIndex((existing) => existing.viewId === native.viewId)
-      : -1;
+    const index = this.findMessageViewIndex(native);
     if (index >= 0) {
-      this.messages[index] = native;
+      this.messages[index] = this.normalizeMessage(native, this.messages[index]);
+      this.sortMessagesChronologically();
       this.emitChange();
       return;
     }
     this.pushMessage(native);
+  }
+
+  private findMessageViewIndex(native: SparkNativeMessage): number {
+    if (native.viewId) {
+      const byViewId = this.messages.findIndex((existing) => existing.viewId === native.viewId);
+      if (byViewId >= 0) return byViewId;
+    }
+    if (native.role === "tool" && native.toolCallId) {
+      return this.messages.findIndex(
+        (existing) => existing.role === "tool" && existing.toolCallId === native.toolCallId,
+      );
+    }
+    return -1;
   }
 
   toSessionView(sessionId: string = "native"): SparkSessionView {
@@ -357,7 +388,12 @@ export class SparkNativeSession {
   }
 
   applySessionView(view: SparkSessionView): void {
-    this.messages.splice(0, this.messages.length, ...view.messages.map(messageViewToNativeMessage));
+    this.messages.splice(
+      0,
+      this.messages.length,
+      ...view.messages.map((message) => this.normalizeMessage(messageViewToNativeMessage(message))),
+    );
+    this.sortMessagesChronologically();
     this.trimTranscript();
     this.emitChange();
   }
@@ -444,9 +480,31 @@ export class SparkNativeSession {
   }
 
   private pushMessage(message: SparkNativeMessage): void {
-    this.messages.push(message);
+    this.messages.push(this.normalizeMessage(message));
+    this.sortMessagesChronologically();
     this.trimTranscript();
     this.emitChange();
+  }
+
+  private normalizeMessage(
+    message: SparkNativeMessage,
+    existing?: SparkNativeMessage,
+  ): SparkNativeMessage {
+    return {
+      ...message,
+      createdAt: message.createdAt ?? existing?.createdAt ?? new Date().toISOString(),
+      updatedAt: message.updatedAt ?? existing?.updatedAt,
+      nativeOrder: existing?.nativeOrder ?? message.nativeOrder ?? ++this.nextNativeMessageOrder,
+    };
+  }
+
+  private sortMessagesChronologically(): void {
+    this.messages.sort((left, right) => {
+      const leftTime = nativeMessageTime(left);
+      const rightTime = nativeMessageTime(right);
+      if (leftTime !== rightTime) return leftTime - rightTime;
+      return (left.nativeOrder ?? 0) - (right.nativeOrder ?? 0);
+    });
   }
 
   private async process(input: string): Promise<void> {
@@ -587,6 +645,8 @@ function nativeMessageToView(message: SparkNativeMessage, index: number): SparkM
     toolName: message.toolName,
     customType: message.customType,
     display: message.display,
+    createdAt: message.createdAt,
+    updatedAt: message.updatedAt,
     metadata: nativeDetailsToMetadata(message.details),
   };
 }
@@ -602,8 +662,47 @@ function messageViewToNativeMessage(message: SparkMessageView): SparkNativeMessa
     toolName: message.toolName,
     toolCallId: message.toolCallId,
     toolStatus: message.status === "error" ? "error" : undefined,
+    createdAt: message.createdAt,
+    updatedAt: message.updatedAt,
     details: message.metadata,
   };
+}
+
+function nativeMessageTime(message: SparkNativeMessage): number {
+  const createdAt = message.createdAt ? Date.parse(message.createdAt) : NaN;
+  return Number.isFinite(createdAt) ? createdAt : 0;
+}
+
+function toolStatusIcon(status: SparkNativeToolStatus): string {
+  switch (status) {
+    case "pending":
+      return "◌";
+    case "error":
+      return "✗";
+    case "success":
+      return "✓";
+  }
+}
+
+function toolStatusColor(status: SparkNativeToolStatus): string {
+  switch (status) {
+    case "pending":
+      return "warning";
+    case "error":
+      return "error";
+    case "success":
+      return "success";
+  }
+}
+
+function compactToolPreview(text: string | undefined): string | undefined {
+  const firstLine = text
+    ?.split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  if (!firstLine) return undefined;
+  const normalized = firstLine.replace(/\s+/gu, " ");
+  return normalized.length > 96 ? `${normalized.slice(0, 93)}...` : normalized;
 }
 
 function nativeDetailsToMetadata(details: Record<string, unknown> | undefined): SparkJsonObject {
@@ -618,6 +717,14 @@ function nativeDetailsToMetadata(details: Record<string, unknown> | undefined): 
 function stringFromRecord(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function runTimeMs(run: SparkRunView): number {
+  const completedAt = run.completedAt ? Date.parse(run.completedAt) : NaN;
+  if (Number.isFinite(completedAt)) return completedAt;
+  const startedAt = run.startedAt ? Date.parse(run.startedAt) : NaN;
+  if (Number.isFinite(startedAt)) return startedAt;
+  return 0;
 }
 
 function isReviewArtifact(artifact: SparkArtifactView): boolean {
@@ -707,6 +814,93 @@ function parseSlashCommand(input: string): { name: string; args: string } | unde
   return { name: match[1].toLowerCase(), args: match[2] ?? "" };
 }
 
+export function createSparkNativeLocalControlSlashCommands(): SparkNativeSlashCommandMap {
+  const panelCommand = (
+    panel: SparkNativeCockpitPanel,
+    canonicalCliTarget: string,
+    resource: string,
+  ): SparkNativeSlashCommand => ({
+    description: `open the ${panel} cockpit panel`,
+    metadata: {
+      source: "extension",
+      extensionId: "spark-tui-local-control",
+      plane: canonicalCliTarget.startsWith("spark daemon")
+        ? "daemon"
+        : canonicalCliTarget.startsWith("spark server")
+          ? "server"
+          : "tui",
+      resource,
+      verbs: ["list", "open"],
+      canonicalCliTarget,
+    },
+    handler: (_args, ctx) => ctx.app.openCockpitPanel(panel) || undefined,
+  });
+  return {
+    stop: {
+      description: "stop the current Spark turn and clear queued follow-ups",
+      argumentHint: "[reason]",
+      metadata: {
+        source: "extension",
+        extensionId: "spark-tui-local-control",
+        plane: "daemon",
+        resource: "run",
+        verbs: ["cancel"],
+        canonicalCliTarget: "spark daemon run cancel <run>",
+      },
+      handler: (args, ctx) => {
+        const result = ctx.session.abort(args.trim() || "user stop");
+        if (result.restoredText) ctx.app.setEditorText(result.restoredText);
+        if (result.aborted) return;
+        return result.clearedQueued > 0
+          ? `Restored ${result.clearedQueued} queued input(s) to the editor.`
+          : nativeTuiStrings.noTurnRunning;
+      },
+    },
+    retry: {
+      description: "resubmit the previous user prompt",
+      metadata: {
+        source: "extension",
+        extensionId: "spark-tui-local-control",
+        plane: "tui",
+        resource: "session",
+        verbs: ["retry"],
+        canonicalCliTarget: "spark tui retry",
+      },
+      handler: (_args, ctx) => {
+        void ctx.session.retryLast();
+      },
+    },
+    cockpit: {
+      description: "show Spark cockpit panels",
+      argumentHint: "[overview|workflows|runs|tasks|artifacts|reviews|graft|off]",
+      metadata: {
+        source: "extension",
+        extensionId: "spark-tui-local-control",
+        plane: "server",
+        resource: "status",
+        verbs: ["open"],
+        canonicalCliTarget: "spark server status",
+      },
+      getArgumentCompletions: (prefix) =>
+        ["overview", "workflows", "runs", "tasks", "artifacts", "reviews", "graft", "off"]
+          .filter((value) => value.startsWith(prefix.toLowerCase()))
+          .map((value) => ({ value, label: value })),
+      handler: (args, ctx) => ctx.app.openCockpitPanelFromArgs(args) || undefined,
+    },
+    workflows: panelCommand("workflows", "spark server workflow list", "workflow"),
+    runs: panelCommand("runs", "spark daemon run list", "run"),
+    run: panelCommand("runs", "spark daemon run list", "run"),
+    tasks: panelCommand("tasks", "spark server task list", "task"),
+    task: panelCommand("tasks", "spark server task list", "task"),
+    artifacts: panelCommand("artifacts", "spark server artifact list", "artifact"),
+    artifact: panelCommand("artifacts", "spark server artifact list", "artifact"),
+    evidence: panelCommand("artifacts", "spark server artifact list", "artifact"),
+    reviews: panelCommand("reviews", "spark server review list", "review"),
+    review: panelCommand("reviews", "spark server review list", "review"),
+    graft: panelCommand("graft", "spark server status", "graft"),
+  };
+}
+
 export function createSparkNativeRuntimeSlashCommands(
   runtime: SparkNativeRuntimeCommandHost,
   options: SparkNativeRuntimeSlashCommandOptions = {},
@@ -719,6 +913,7 @@ export function createSparkNativeRuntimeSlashCommands(
     commands[normalizedName] = {
       description: command.description,
       argumentHint: command.argumentHint,
+      metadata: command.metadata ?? { source: "extension" },
       getArgumentCompletions: command.getArgumentCompletions,
       handler: async (args, context) => {
         const commandContext = runtime.makeContext({
@@ -736,34 +931,41 @@ export function createSparkNativeRuntimeSlashCommands(
   return commands;
 }
 
+function nativeKernelSlashCommandEntries(): Array<{
+  name: (typeof SPARK_NATIVE_KERNEL_SLASH_COMMANDS)[number];
+  description: string;
+  argumentHint?: string;
+}> {
+  return [
+    { name: "help", description: "show native TUI commands" },
+    { name: "exit", description: "exit the native TUI" },
+    { name: "quit", description: "exit the native TUI" },
+    { name: "clear", description: "clear the visible transcript" },
+    { name: "reload", description: "reload extension-owned slash command state" },
+  ];
+}
+
 function toIterable<T>(value: Iterable<T> | undefined): Iterable<T> {
   return value ?? [];
 }
 
-function normalizeNativeWidgetLines(
-  key: string,
-  content: unknown,
-  tui: TUI,
-  theme: SparkHostRenderTheme,
-): string[] {
+function normalizeNativeWidgetLines(content: unknown): string[] {
   if (content === undefined || content === null || content === false) return [];
-  const rawLines = nativeWidgetContentToLines(key, content, tui, theme);
-  return rawLines
+  const rawLines = nativeWidgetContentToLines(content);
+  return normalizeNativeWidgetRenderedLines(rawLines);
+}
+
+function normalizeNativeWidgetRenderedLines(lines: readonly unknown[]): string[] {
+  return lines
+    .flatMap((line) => String(line).split("\n"))
     .map((line) => line.trimEnd())
     .filter(Boolean)
     .slice(0, MAX_NATIVE_WIDGET_LINES);
 }
 
-function nativeWidgetContentToLines(
-  _key: string,
-  content: unknown,
-  tui: TUI,
-  theme: SparkHostRenderTheme,
-): string[] {
+function nativeWidgetContentToLines(content: unknown): string[] {
   if (Array.isArray(content)) return content.flatMap((line) => String(line).split("\n"));
   if (typeof content === "string") return content.split("\n");
-  if (typeof content === "function")
-    return renderNativeWidgetFactory(content as NativeWidgetFactory, tui, theme);
   return [JSON.stringify(content) ?? Object.prototype.toString.call(content)];
 }
 
@@ -772,16 +974,36 @@ type NativeWidgetFactory = (
   theme: SparkHostRenderTheme,
 ) => Component | { render(width?: number): string[]; invalidate?(): void } | undefined;
 
-function renderNativeWidgetFactory(
+function createNativeWidgetComponent(
   content: NativeWidgetFactory,
   tui: TUI,
   theme: SparkHostRenderTheme,
+  onRequestRender: () => void,
+): SparkNativeWidgetComponent | undefined {
+  try {
+    const widgetTheme = {
+      ...theme,
+      strikethrough: theme.strikethrough
+        ? (text: string) => theme.strikethrough?.(text) ?? text
+        : (text: string) => text,
+    };
+    const component = content(createNativeWidgetTui(tui, onRequestRender), widgetTheme);
+    if (!component || typeof component.render !== "function") return undefined;
+    return component;
+  } catch (error) {
+    const message = nativeTuiStrings.widgetRenderFailed(
+      error instanceof Error ? error.message : String(error),
+    );
+    return { render: () => [message] };
+  }
+}
+
+function renderNativeWidgetComponent(
+  component: SparkNativeWidgetComponent,
+  width: number,
 ): string[] {
   try {
-    const component = content(createNativeWidgetTui(tui), theme);
-    if (!component || typeof component.render !== "function") return [];
-    const width = Math.max(1, widgetTuiColumns(tui));
-    return component.render(width).flatMap((line) => String(line).split("\n"));
+    return normalizeNativeWidgetRenderedLines(component.render(width));
   } catch (error) {
     return [
       nativeTuiStrings.widgetRenderFailed(error instanceof Error ? error.message : String(error)),
@@ -789,14 +1011,20 @@ function renderNativeWidgetFactory(
   }
 }
 
-function createNativeWidgetTui(tui: TUI): { terminal: { columns: number }; requestRender(): void } {
+function createNativeWidgetTui(
+  tui: TUI,
+  onRequestRender?: () => void,
+): { terminal: { columns: number }; requestRender(): void } {
   return {
     terminal: {
       get columns() {
         return widgetTuiColumns(tui);
       },
     },
-    requestRender: () => tui.requestRender(),
+    requestRender: () => {
+      onRequestRender?.();
+      tui.requestRender();
+    },
   };
 }
 
@@ -1034,6 +1262,17 @@ function resolveSparkNativeInputPath(pathText: string, basePath: string): string
   return isAbsolute(expanded) ? expanded : resolvePath(basePath, expanded);
 }
 
+export type SparkNativeWorkspaceSessionMode = "select" | "attached" | "mismatch";
+
+export interface SparkNativeWorkspaceSessionState {
+  mode: SparkNativeWorkspaceSessionMode;
+  workspaceDir: string;
+  workspaceHash: string;
+  controlPlaneSessionId?: string;
+  attachTarget?: string;
+  mismatchDiagnostic?: string;
+}
+
 export interface SparkNativeTuiAppOptions {
   keybindings?: SparkKeybindings;
   keybindingContext?: SparkKeybindingContext;
@@ -1043,6 +1282,7 @@ export interface SparkNativeTuiAppOptions {
   autocompleteBasePath?: string;
   autocompleteFdPath?: string | null;
   interactionHandler?: SparkNativeInteractionHandler;
+  workspaceSession?: SparkNativeWorkspaceSessionState;
 }
 
 export class SparkNativeTuiApp implements Component, Focusable {
@@ -1058,6 +1298,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
   private readonly inputBasePath: string;
   private readonly theme: SparkTheme;
   private readonly renderTheme: SparkHostRenderTheme;
+  private workspaceSession?: SparkNativeWorkspaceSessionState;
   private cachedWidth?: number;
   private cachedLines?: string[];
   private readonly statuses = new Map<string, string>();
@@ -1085,6 +1326,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
     this.inputBasePath = options.autocompleteBasePath ?? process.cwd();
     this.theme = options.theme ?? DEFAULT_NATIVE_THEME;
     this.renderTheme = createSparkHostRenderTheme(this.theme);
+    this.workspaceSession = options.workspaceSession;
     this.registerToggleKeybindings(options.keybindings);
     this.editor = new Editor(tui, createEditorTheme(this.theme), { paddingX: 1 });
     this.installAutocompleteProvider(options);
@@ -1207,6 +1449,12 @@ export class SparkNativeTuiApp implements Component, Focusable {
     this.tui.requestRender();
   }
 
+  setWorkspaceSession(state: SparkNativeWorkspaceSessionState | undefined): void {
+    this.workspaceSession = state;
+    this.invalidate();
+    this.tui.requestRender();
+  }
+
   setStatus(key: string, text: string | undefined): void {
     if (!key) return;
     if (text === undefined || text.trim() === "") this.statuses.delete(key);
@@ -1221,14 +1469,22 @@ export class SparkNativeTuiApp implements Component, Focusable {
     options?: { placement?: "aboveEditor" | "belowEditor" },
   ): void {
     if (!key) return;
-    const lines = normalizeNativeWidgetLines(key, content, this.tui, this.renderTheme);
-    if (lines.length === 0) this.widgets.delete(key);
-    else {
-      this.widgets.set(key, {
-        key,
-        lines,
-        placement: options?.placement ?? "aboveEditor",
-      });
+    const placement = options?.placement ?? "aboveEditor";
+    if (content === undefined || content === null || content === false) {
+      this.widgets.delete(key);
+    } else if (typeof content === "function") {
+      const component = createNativeWidgetComponent(
+        content as NativeWidgetFactory,
+        this.tui,
+        this.renderTheme,
+        () => this.invalidate(),
+      );
+      if (!component) this.widgets.delete(key);
+      else this.widgets.set(key, { key, component, placement });
+    } else {
+      const lines = normalizeNativeWidgetLines(content);
+      if (lines.length === 0) this.widgets.delete(key);
+      else this.widgets.set(key, { key, lines, placement });
     }
     this.invalidate();
     this.tui.requestRender();
@@ -1419,6 +1675,23 @@ export class SparkNativeTuiApp implements Component, Focusable {
     return createBlockedInteractionResponse(request, nativeTuiStrings.noInteractionHandler);
   }
 
+  hydrateCockpit(input: {
+    sessionId?: string;
+    sessionTitle?: string;
+    sessionStatus?: SparkSessionView["status"];
+    tasks?: SparkTaskView[];
+    artifacts?: SparkArtifactView[];
+  }): void {
+    if (input.sessionId) this.cockpit.sessionId = input.sessionId;
+    if (input.sessionTitle) this.cockpit.sessionTitle = input.sessionTitle;
+    if (input.sessionStatus) this.cockpit.sessionStatus = input.sessionStatus;
+    for (const task of input.tasks ?? []) this.cockpit.tasks.set(task.ref, task);
+    for (const artifact of input.artifacts ?? [])
+      this.cockpit.artifacts.set(artifact.ref, artifact);
+    this.invalidate();
+    this.tui.requestRender();
+  }
+
   applyViewModelEvent(event: SparkViewModelEvent): void {
     const parsed = parseSparkViewModelEvent(event);
     switch (parsed.type) {
@@ -1431,30 +1704,12 @@ export class SparkNativeTuiApp implements Component, Focusable {
         break;
       case "run.update":
         this.recordRunView(parsed.run);
-        this.session.addCustomMessage({
-          customType: "run-view",
-          content: `${parsed.run.kind}:${parsed.run.id} [${parsed.run.status}]${parsed.run.summary ? ` ${parsed.run.summary}` : ""}`,
-          display: true,
-          details: { run: parsed.run },
-        });
         break;
       case "task.update":
         this.cockpit.tasks.set(parsed.task.ref, parsed.task);
-        this.session.addCustomMessage({
-          customType: "task-view",
-          content: `${parsed.task.ref} [${parsed.task.status}] ${parsed.task.title}`,
-          display: true,
-          details: { task: parsed.task },
-        });
         break;
       case "artifact.update":
         this.cockpit.artifacts.set(parsed.artifact.ref, parsed.artifact);
-        this.session.addCustomMessage({
-          customType: "artifact-view",
-          content: `${parsed.artifact.ref} ${parsed.artifact.title}`,
-          display: true,
-          details: { artifact: parsed.artifact },
-        });
         break;
     }
     this.invalidate();
@@ -1469,6 +1724,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
     this.cockpit.tasks.clear();
     this.cockpit.artifacts.clear();
     for (const run of view.runs) this.recordRunView(run);
+    if (view.runs.length === 0) this.recordActiveRunStatus();
     for (const task of view.tasks) this.cockpit.tasks.set(task.ref, task);
     for (const artifact of view.artifacts) this.cockpit.artifacts.set(artifact.ref, artifact);
   }
@@ -1476,6 +1732,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
   private recordRunView(run: SparkRunView): void {
     this.cockpit.runs.set(run.id, run);
     this.recordCacheUsageStatus(run);
+    this.recordActiveRunStatus();
     if (run.kind === "workflow") {
       const selector = stringFromRecord(run.metadata, "selector") ?? run.id;
       this.cockpit.workflows.set(selector, {
@@ -1492,6 +1749,19 @@ export class SparkNativeTuiApp implements Component, Focusable {
     if (run.summary && /\bcache read=\d+ write=\d+/iu.test(run.summary)) {
       this.statuses.set("cache-usage", run.summary);
     }
+  }
+
+  private recordActiveRunStatus(): void {
+    const activeRuns = [...this.cockpit.runs.values()]
+      .filter((run) => run.status === "queued" || run.status === "running")
+      .sort((left, right) => runTimeMs(left) - runTimeMs(right));
+    const active = activeRuns.at(-1);
+    if (!active) {
+      this.statuses.delete("active-run");
+      return;
+    }
+    const label = active.summary?.trim() || active.title?.trim() || active.id;
+    this.statuses.set("active-run", `${active.kind} ${active.status}: ${label}`);
   }
 
   private recordInteractionRequest(request: SparkInteractionRequest): void {
@@ -1568,16 +1838,10 @@ export class SparkNativeTuiApp implements Component, Focusable {
   }
 
   private builtInAutocompleteCommands(): SlashCommand[] {
-    return nativeTuiStrings.builtinCommands.map((command) => ({
-      ...command,
-      ...(command.name === "cockpit"
-        ? {
-            getArgumentCompletions: (prefix: string) =>
-              ["overview", "workflows", "runs", "tasks", "artifacts", "reviews", "graft", "off"]
-                .filter((value) => value.startsWith(prefix.toLowerCase()))
-                .map((value) => ({ value, label: value })),
-          }
-        : {}),
+    return nativeKernelSlashCommandEntries().map((command) => ({
+      name: command.name,
+      description: command.description,
+      argumentHint: command.argumentHint,
     }));
   }
 
@@ -1613,30 +1877,60 @@ export class SparkNativeTuiApp implements Component, Focusable {
     this.cachedWidth = undefined;
     this.cachedLines = undefined;
     this.editor.invalidate();
+    for (const widget of this.widgets.values()) widget.component?.invalidate?.();
   }
 
   render(width: number): string[] {
     if (this.cachedLines && this.cachedWidth === width) return this.cachedLines;
 
     const lines: string[] = [];
-    lines.push(truncateToWidth(nativeTuiStrings.appTitle, width));
-    lines.push(truncateToWidth(this.statusLine(), width));
+    lines.push(
+      truncateToWidth(
+        this.renderTheme.bold(this.renderTheme.fg("accent", nativeTuiStrings.appTitle)),
+        width,
+      ),
+    );
+    lines.push(truncateToWidth(this.renderTheme.fg("muted", this.statusLine()), width));
+    lines.push(...this.renderWorkspaceSessionState(width));
     lines.push(...this.renderWidgets("aboveEditor", width));
     lines.push(...this.renderActiveCockpitPanel(width));
-    lines.push("".padEnd(Math.min(width, 80), "─"));
+    lines.push(this.separatorLine(width));
 
     for (const message of this.session.messages) {
       lines.push(...this.renderMessage(message, width));
     }
 
-    lines.push("".padEnd(Math.min(width, 80), "─"));
+    lines.push(this.separatorLine(width));
     lines.push(...this.editor.render(width));
     lines.push(...this.renderWidgets("belowEditor", width));
-    lines.push(truncateToWidth(nativeTuiStrings.footer, width));
+    lines.push(truncateToWidth(this.renderTheme.fg("muted", nativeTuiStrings.footer), width));
 
     this.cachedWidth = width;
     this.cachedLines = lines.map((line) => truncateToWidth(line, width));
     return this.cachedLines;
+  }
+
+  private renderWorkspaceSessionState(width: number): string[] {
+    const state = this.workspaceSession;
+    if (!state) return [];
+    const title =
+      state.mode === "attached"
+        ? "Spark session attached"
+        : state.mode === "mismatch"
+          ? "Spark session attach blocked"
+          : "Select Spark session";
+    const details = [
+      title,
+      `workspace: ${state.workspaceDir}`,
+      `workspace hash: ${state.workspaceHash}`,
+      ...(state.controlPlaneSessionId
+        ? [`control-plane session: ${state.controlPlaneSessionId}`]
+        : []),
+      ...(state.attachTarget ? [`attach target: ${state.attachTarget}`] : []),
+      ...(state.mode === "select" ? ["attach a daemon-managed session"] : []),
+      ...(state.mismatchDiagnostic ? [`diagnostic: ${state.mismatchDiagnostic}`] : []),
+    ];
+    return [truncateToWidth(this.renderTheme.fg("muted", details.join(" • ")), width)];
   }
 
   private renderMessage(message: SparkNativeMessage, width: number): string[] {
@@ -1663,14 +1957,38 @@ export class SparkNativeTuiApp implements Component, Focusable {
     const toolName = message.toolName ?? "tool";
     const status = message.toolStatus ?? "success";
     const header = `tool:${toolName} [${status}]`;
+    const icon = toolStatusIcon(status);
+    const preview = compactToolPreview(message.text);
+    const styledHeader = this.renderToolHeader(header, status, icon);
     if (!this.toolsExpanded) {
-      return this.styleRoleLines("tool", [
-        truncateToWidth(nativeTuiStrings.toolFolded(header), width),
-      ]);
+      const suffix = this.renderTheme.fg("dim", " • folded (Ctrl+O expand)");
+      const previewText = preview ? ` ${this.renderTheme.fg("muted", `— ${preview}`)}` : "";
+      return [truncateToWidth(`${styledHeader}${previewText}${suffix}`, width)];
     }
-    const id = message.toolCallId ? ` (${message.toolCallId})` : "";
+
+    const id = message.toolCallId ? this.renderTheme.fg("dim", ` · ${message.toolCallId}`) : "";
     const body = this.renderToolBody(message.text || " ");
-    return this.styleRoleLines("tool", this.renderPrefixedBlock(`${header}${id}> `, body, width));
+    const innerWidth = Math.max(1, width - 2);
+    const lines = [
+      truncateToWidth(`${this.renderTheme.fg("border", "┌─")} ${styledHeader}${id}`, width),
+    ];
+    for (const line of body.split("\n")) {
+      for (const wrapped of wrapTextWithAnsi(line || " ", innerWidth)) {
+        lines.push(truncateToWidth(`${this.renderTheme.fg("border", "│")} ${wrapped}`, width));
+      }
+    }
+    lines.push(
+      truncateToWidth(
+        `${this.renderTheme.fg("border", "└─")} ${this.renderTheme.fg("dim", "Ctrl+O collapse")}`,
+        width,
+      ),
+    );
+    return lines;
+  }
+
+  private renderToolHeader(header: string, status: SparkNativeToolStatus, icon: string): string {
+    const color = toolStatusColor(status);
+    return `${this.renderTheme.fg(color, icon)} ${this.renderTheme.fg("tool", header)}`;
   }
 
   private renderThinkingMessage(message: SparkNativeMessage, width: number): string[] {
@@ -1727,6 +2045,10 @@ export class SparkNativeTuiApp implements Component, Focusable {
       .join("\n");
   }
 
+  private separatorLine(width: number): string {
+    return this.renderTheme.fg("border", "".padEnd(Math.max(1, width), "─"));
+  }
+
   private styleRoleLines(role: SparkNativeMessageRole, lines: string[]): string[] {
     return lines.map((line) => styleSparkRoleLine(this.theme, role, line));
   }
@@ -1753,17 +2075,22 @@ export class SparkNativeTuiApp implements Component, Focusable {
     return [...this.widgets.values()]
       .filter((widget) => widget.placement === placement)
       .sort((a, b) => a.key.localeCompare(b.key))
-      .flatMap((widget) => widget.lines.map((line) => truncateToWidth(line, width)));
+      .flatMap((widget) => {
+        const lines = widget.component
+          ? renderNativeWidgetComponent(widget.component, width)
+          : (widget.lines ?? []);
+        return lines.map((line) => truncateToWidth(line, width));
+      });
   }
 
   private renderActiveCockpitPanel(width: number): string[] {
     if (!this.activeCockpitPanel) return [];
-    return this.renderCockpitPanel(this.activeCockpitPanel).map((line) =>
+    return this.renderCockpitPanel(this.activeCockpitPanel, width).map((line) =>
       truncateToWidth(line, width),
     );
   }
 
-  private renderCockpitPanel(panel: SparkNativeCockpitPanel): string[] {
+  private renderCockpitPanel(panel: SparkNativeCockpitPanel, width?: number): string[] {
     switch (panel) {
       case "overview":
         return this.renderCockpitOverview();
@@ -1772,7 +2099,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
       case "runs":
         return this.renderRunCockpit();
       case "tasks":
-        return this.renderTaskCockpit();
+        return this.renderTaskCockpit(width);
       case "artifacts":
         return this.renderArtifactCockpit();
       case "reviews":
@@ -1861,15 +2188,18 @@ export class SparkNativeTuiApp implements Component, Focusable {
     return lines;
   }
 
-  private renderTaskCockpit(): string[] {
+  private renderTaskCockpit(width?: number): string[] {
     const lines = ["◆ Spark cockpit: task/project board"];
+    if (this.cockpit.sessionTitle) {
+      lines.push(...wrapTextWithAnsi(`│  Project: ${this.cockpit.sessionTitle}`, width ?? 100));
+    }
     for (const task of [...this.cockpit.tasks.values()].slice(0, MAX_COCKPIT_PANEL_ROWS)) {
       const doneTodos = task.todos.filter((todo) => todo.status === "done").length;
       const todoSummary = task.todos.length > 0 ? ` todos=${doneTodos}/${task.todos.length}` : "";
       const artifacts = task.artifactRefs.length > 0 ? ` evidence=${task.artifactRefs.length}` : "";
       lines.push(`├─ ${task.ref} [${task.status}]${todoSummary}${artifacts} ${task.title}`);
     }
-    if (lines.length === 1)
+    if (lines.length === (this.cockpit.sessionTitle ? 2 : 1))
       lines.push("└─ No task/project view-model updates have been published yet.");
     return lines;
   }
@@ -2043,39 +2373,15 @@ export class SparkNativeTuiApp implements Component, Focusable {
     }
   }
 
-  private builtInSlashCommand(name: string, args: string): string | undefined | false {
+  private builtInSlashCommand(name: string, _args: string): string | undefined | false {
     switch (name) {
       case "help":
         return this.renderCommandHelp();
       case "clear":
         this.session.clearTranscript();
         return false;
-      case "stop": {
-        const result = this.session.abort(args.trim() || "user stop");
-        if (result.restoredText) this.editor.setText(result.restoredText);
-        if (result.aborted) return false;
-        return result.clearedQueued > 0
-          ? `Restored ${result.clearedQueued} queued input(s) to the editor.`
-          : nativeTuiStrings.noTurnRunning;
-      }
-      case "retry":
-        void this.session.retryLast();
-        return false;
-      case "cockpit":
-        return this.openCockpitPanelFromArgs(args);
-      case "workflows":
-        return this.openCockpitPanel("workflows");
-      case "runs":
-        return this.openCockpitPanel("runs");
-      case "tasks":
-        return this.openCockpitPanel("tasks");
-      case "artifacts":
-      case "evidence":
-        return this.openCockpitPanel("artifacts");
-      case "reviews":
-        return this.openCockpitPanel("reviews");
-      case "graft":
-        return this.openCockpitPanel("graft");
+      case "reload":
+        return "Reload requested. Restart Spark TUI to reload extension state.";
       case "exit":
       case "quit":
         this.onExit();
@@ -2085,7 +2391,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
     }
   }
 
-  private openCockpitPanelFromArgs(args: string): string | false {
+  openCockpitPanelFromArgs(args: string): string | false {
     const requested = args.trim().toLowerCase();
     if (requested === "off" || requested === "close" || requested === "hide") {
       this.activeCockpitPanel = undefined;
@@ -2099,7 +2405,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
     return this.openCockpitPanel((requested as SparkNativeCockpitPanel | "") || "overview");
   }
 
-  private openCockpitPanel(panel: SparkNativeCockpitPanel): string | false {
+  openCockpitPanel(panel: SparkNativeCockpitPanel): string | false {
     this.activeCockpitPanel = panel;
     if (panel === "runs" || panel === "workflows") this.ensureWorkflowRunSelection();
     this.invalidate();
@@ -2115,16 +2421,35 @@ export class SparkNativeTuiApp implements Component, Focusable {
   }
 
   private renderCommandHelp(): string {
-    const extra = Object.entries(this.slashCommands)
+    const system = nativeKernelSlashCommandEntries().map((command) => {
+      const hint = command.argumentHint ? ` ${command.argumentHint}` : "";
+      return `/${command.name}${hint} — ${command.description}`;
+    });
+    const extensions = Object.entries(this.slashCommands)
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(([name, command]) => `/${name} — ${command.description}`);
-    return nativeTuiStrings.commandHelp(extra.length, extra);
+      .map(([name, command]) => {
+        const target = command.metadata?.canonicalCliTarget
+          ? ` → ${command.metadata.canonicalCliTarget}`
+          : "";
+        const source = command.metadata?.source ?? "extension";
+        const hint = command.argumentHint ? ` ${command.argumentHint}` : "";
+        return `/${name}${hint} — ${command.description} [${source}]${target}`;
+      });
+    return [
+      "Spark native TUI commands:",
+      "System",
+      ...system,
+      "Ctrl+K — toggle Spark cockpit overview; Shift+Ctrl+K — cycle cockpit panels",
+      "Extensions",
+      `${extensions.length} extension command${extensions.length === 1 ? "" : "s"} available.`,
+      ...extensions,
+    ].join("\n");
   }
 
   private commandAvailabilitySuffix(): string {
     const count = Object.keys(this.slashCommands).length;
     if (count === 0) return "";
-    return ` • ${count} registered command${count === 1 ? "" : "s"}`;
+    return " • " + count.toString() + " registered command" + (count === 1 ? "" : "s");
   }
 
   private extensionStatusSuffix(): string {
@@ -2132,7 +2457,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([, text]) => text.trim())
       .filter(Boolean);
-    return statuses.length > 0 ? ` • ${statuses.join(" • ")}` : "";
+    return statuses.length > 0 ? " • " + statuses.join(" • ") : "";
   }
 
   private messagePrefix(message: SparkNativeMessage): string {
@@ -2185,6 +2510,7 @@ export interface RunNativeSparkTuiOptions {
   keybindingContext?: SparkKeybindingContext;
   messageRenderers?: ReadonlyMap<string, SparkHostMessageRenderer>;
   theme?: SparkTheme;
+  workspaceSession?: SparkNativeWorkspaceSessionState;
   configureApp?: (app: SparkNativeTuiApp, session: SparkNativeSession) => void | Promise<void>;
 }
 
@@ -2209,6 +2535,7 @@ export async function runNativeSparkTui(input?: string | RunNativeSparkTuiOption
     keybindingContext: options.keybindingContext,
     messageRenderers: options.messageRenderers,
     theme: options.theme,
+    workspaceSession: options.workspaceSession,
   });
   await options.configureApp?.(app, session);
   tui.addChild(app);

@@ -178,6 +178,7 @@ export class SparkAgentLoop {
   private viewSessionId = "spark-agent";
   private viewRunCounter = 0;
   private currentViewRunId: string | undefined;
+  private currentAssistantMessageId: string | undefined;
   private readonly subscribers = new Set<(event: SparkAgentLoopEvent) => void>();
 
   constructor(options: SparkAgentLoopOptions) {
@@ -658,6 +659,7 @@ export class SparkAgentLoop {
   private startViewRun(summary: string): void {
     const runId = `${this.viewSessionId}:run:${Date.now().toString(36)}:${++this.viewRunCounter}`;
     this.currentViewRunId = runId;
+    this.currentAssistantMessageId = undefined;
     this.publishViewEvent({
       version: SPARK_PROTOCOL_VERSION,
       type: "run.update",
@@ -673,6 +675,17 @@ export class SparkAgentLoop {
         metadata: { source: "SparkAgentLoop" },
       },
     });
+  }
+
+  private assistantMessageId(): string {
+    this.currentAssistantMessageId ??= nextViewMessageId(this.viewSessionId, "assistant");
+    return this.currentAssistantMessageId;
+  }
+
+  private takeAssistantMessageId(): string {
+    const id = this.assistantMessageId();
+    this.currentAssistantMessageId = undefined;
+    return id;
   }
 
   private publish(event: SparkAgentLoopEvent): void {
@@ -716,7 +729,7 @@ export class SparkAgentLoop {
           sessionId: this.viewSessionId,
           message: assistantToMessageView(
             event.assistant,
-            currentAssistantViewId(this.viewSessionId, this.currentViewRunId),
+            this.takeAssistantMessageId(),
             event.reason === "error" ? "error" : "done",
           ),
         });
@@ -748,6 +761,12 @@ export class SparkAgentLoop {
   }
 
   private publishStreamViewEvent(event: AssistantMessageEvent): void {
+    if (event.type === "start") {
+      // A fresh assistant message begins: rotate to a new stable view id so
+      // multi-roundtrip turns append in chronological order instead of
+      // overwriting the first assistant bubble in place.
+      this.currentAssistantMessageId = nextViewMessageId(this.viewSessionId, "assistant");
+    }
     if (event.type === "text_delta" || event.type === "start") {
       const partial = "partial" in event ? event.partial : undefined;
       if (partial && typeof partial === "object") {
@@ -757,7 +776,7 @@ export class SparkAgentLoop {
           sessionId: this.viewSessionId,
           message: assistantToMessageView(
             partial as AssistantMessage,
-            currentAssistantViewId(this.viewSessionId, this.currentViewRunId),
+            this.assistantMessageId(),
             "streaming",
           ),
         });
@@ -1137,10 +1156,6 @@ let viewMessageCounter = 0;
 function nextViewMessageId(sessionId: string, role: string): string {
   viewMessageCounter += 1;
   return `${sessionId}:message:${role}:${Date.now().toString(36)}:${viewMessageCounter}`;
-}
-
-function currentAssistantViewId(sessionId: string, runId: string | undefined): string {
-  return runId ? `${runId}:assistant` : nextViewMessageId(sessionId, "assistant");
 }
 
 function messageToView(message: Message, id: string): SparkMessageView {

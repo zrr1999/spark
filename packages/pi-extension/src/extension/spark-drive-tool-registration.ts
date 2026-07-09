@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import type { Project } from "@zendev-lab/spark-extension-api";
+import { nowIso, type Project } from "@zendev-lab/spark-extension-api";
 import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import { currentSparkProject, loadSparkGraph, sparkSessionOwnerKey } from "./session-state.ts";
 import {
@@ -60,7 +60,7 @@ export function registerSparkDriveTool(
       objective: Type.Optional(
         Type.String({
           description:
-            "Objective for goal or loop drives. If omitted, Spark tries to infer a project-backed objective from current task state.",
+            "Objective for goal, loop, or repro drives. For goal/loop, Spark tries to infer a project-backed objective when omitted; repro may start without one but should keep user-supplied reproduction focus when available.",
         }),
       ),
       reason: Type.Optional(
@@ -110,11 +110,23 @@ export function registerSparkDriveTool(
         await clearSessionRepro(cwd, ctx);
       } else if (requestedDrive === "repro") {
         // repro and goal/loop are mutually exclusive
+        const objective = normalizeOptionalDriveObjective(params.objective);
         await clearSessionGoal(cwd, ctx);
         await clearSessionLoop(cwd, ctx);
         const existingRepro = await readSessionRepro(cwd, ctx);
-        if (!existingRepro || existingRepro.status !== "active")
-          await writeSessionRepro(cwd, createSparkSessionRepro(sparkSessionOwnerKey(ctx)), ctx);
+        if (!existingRepro || existingRepro.status !== "active") {
+          await writeSessionRepro(
+            cwd,
+            createSparkSessionRepro(sparkSessionOwnerKey(ctx), undefined, { objective }),
+            ctx,
+          );
+        } else if (objective && existingRepro.objective !== objective) {
+          await writeSessionRepro(
+            cwd,
+            { ...existingRepro, objective, updatedAt: nowIso(), retryState: undefined },
+            ctx,
+          );
+        }
       } else if (requestedDrive === "goal") {
         const objective = resolveDriveObjective(params.objective, graph, project, "goal");
         await clearSessionLoop(cwd, ctx);
@@ -198,15 +210,20 @@ async function driveSnapshot(
   };
 }
 
+function normalizeOptionalDriveObjective(explicit: unknown): string | undefined {
+  if (explicit === undefined || explicit === null) return undefined;
+  if (typeof explicit !== "string") throw new Error("drive objective must be a string");
+  return explicit.trim() || undefined;
+}
+
 function resolveDriveObjective(
   explicit: unknown,
   graph: TaskGraph | null,
   project: Project | undefined,
   drive: "goal" | "loop",
 ): string {
-  if (typeof explicit === "string" && explicit.trim()) return explicit.trim();
-  if (explicit !== undefined && explicit !== null)
-    throw new Error("drive objective must be a string");
+  const normalized = normalizeOptionalDriveObjective(explicit);
+  if (normalized) return normalized;
   const inferred = graph ? inferSessionGoalObjective(graph, project) : undefined;
   if (inferred) return inferred;
   throw new Error(

@@ -91,7 +91,7 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
     description:
       "Read-only project/task/TODO/run graph capability. Use action=task_status for one task, project_status for one project, workspace_status for the broad workspace summary, project_list for project lists, or run_status for task-run status.",
     promptGuidelines: [
-      "Use task_read for project/task/TODO/run graph inspection only.",
+      "Use task_read for project/task/TODO/run graph inspection; run_status also exposes explicit background-run controls such as inspect/reconcile/kill when runAction selects them.",
       "Use task_write for project/task/TODO graph mutations.",
       "Use assign for explicit role-run spawning; task_read never schedules or controls child runs.",
     ],
@@ -105,6 +105,18 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
       taskRef: Type.Optional(Type.String({ description: "Task ref/name/title selector." })),
       status: Type.Optional(Type.String({ description: "Project-list status filter." })),
       includeHistory: Type.Optional(Type.Boolean({ description: "Include terminal run history." })),
+      signal: Type.Optional(Type.String({ description: "run_status kill only; default SIGTERM." })),
+      forceAfterMs: Type.Optional(
+        Type.Number({ description: "run_status kill only; delay before force-kill scheduling." }),
+      ),
+      all: Type.Optional(
+        Type.Boolean({
+          description: "run_status kill only; required to kill all active children.",
+        }),
+      ),
+      message: Type.Optional(
+        Type.String({ description: "run_status reply/steer only; text to send to child stdin." }),
+      ),
       includeWorkspaceSummary: Type.Optional(
         Type.Boolean({
           description: "For scoped status actions, include broad workspace summary.",
@@ -115,7 +127,10 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
       ),
       runRef: Type.Optional(Type.String({ description: "Run ref selector." })),
       runAction: Type.Optional(
-        Type.String({ description: "For run_status: status | list | inspect | reconcile." }),
+        Type.String({
+          description:
+            "For run_status: status | list | inspect | reconcile | kill | reply | steer | ack | kill_active.",
+        }),
       ),
       view: Type.Optional(
         Type.String({
@@ -151,7 +166,7 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
       "Project/task/TODO graph mutation capability. Use intent-specific actions to select/finish/rename/update projects, claim/plan/finish tasks, update TODOs, or clean task-owned caches.",
     promptGuidelines: [
       "Use task_write for project/task/TODO graph mutations.",
-      "Creating or claiming a task is plan-locked: every task must have a bound task.plan before claim/creation completes.",
+      "Creating or claiming a task is plan-locked: every task must have a bound high-bar task.plan before claim/creation completes; objectives, success criteria, evidence, and plan items must be concrete and objectively verifiable.",
       "Use assign for explicit role-run spawning; task_write does not expose run_ready or run_control.",
     ],
     parameters: Type.Object({
@@ -189,8 +204,20 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
             "Executor role ref for hosts that bind reusable role specs; omit for normal task planning.",
         }),
       ),
-      plan: Type.Optional(Type.Any({ description: "Task plan patch or plan metadata." })),
-      tasks: Type.Optional(Type.Array(Type.Any({ description: "Concrete task plan entries." }))),
+      plan: Type.Optional(
+        Type.Any({
+          description:
+            "Task plan patch or plan metadata; must be high-bar, concrete, and objectively verifiable.",
+        }),
+      ),
+      tasks: Type.Optional(
+        Type.Array(
+          Type.Any({
+            description:
+              "Concrete task plan entries with high-bar objectives, verifiable success criteria, concrete evidence, and checkable plan items.",
+          }),
+        ),
+      ),
       dependsOn: Type.Optional(
         Type.Array(Type.String({ description: "Task dependency selectors." })),
       ),

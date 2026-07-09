@@ -3,11 +3,37 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import type { ExtensionRoleRunner } from "@zendev-lab/spark-extension-api";
 
 import { registerPiRolesTools } from "../packages/spark-roles/src/extension.ts";
 import { createDefaultRoleRegistry } from "../packages/spark-roles/src/index.ts";
 
 const DEFAULT_TEST_CWD = "/tmp/spark-roles-tool-default-cwd";
+
+const defaultNativeRoleRunner: ExtensionRoleRunner = async (input) => {
+  const text = input.instruction.instruction.includes("without final message")
+    ? ""
+    : "Fake worker result.";
+  const jsonEvents = input.instruction.instruction.includes("without final message")
+    ? [{ type: "agent_start" }, { type: "agent_end", messages: [] }]
+    : input.instruction.instruction.includes("protocol")
+      ? []
+      : [
+          {
+            type: "message_end",
+            message: { role: "assistant", content: [{ type: "text", text }] },
+          },
+        ];
+  const stdout = input.instruction.instruction.includes("protocol")
+    ? '"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta"}\n'
+    : text;
+  return {
+    record: { ...input.record, status: "succeeded", finishedAt: "2026-06-22T00:00:00.000Z" },
+    stdout,
+    stderr: "",
+    jsonEvents,
+  };
+};
 
 interface ToolConfig {
   name: string;
@@ -17,7 +43,11 @@ interface ToolConfig {
     params: Record<string, unknown>,
     signal: AbortSignal,
     onUpdate: (update: { content: Array<{ type: "text"; text: string }> }) => void,
-    ctx: { cwd?: string; model?: { provider: string; id: string; api?: string } },
+    ctx: {
+      cwd?: string;
+      model?: { provider: string; id: string; api?: string };
+      runRole?: ExtensionRoleRunner;
+    },
   ) => Promise<{
     content: Array<{ type: "text"; text: string }>;
     details?: Record<string, unknown>;
@@ -258,6 +288,7 @@ void test("call_role launches fresh role runs", async () => {
     await chmod(fakePi, 0o755);
 
     const tools = registerRoleToolsForTest();
+    let capturedNativeInput: Parameters<ExtensionRoleRunner>[0] | undefined;
     const result = await executeCallRole(
       tools,
       {
@@ -269,6 +300,12 @@ void test("call_role launches fresh role runs", async () => {
         timeoutMs: 5_000,
       },
       dir,
+      {
+        runRole: async (input) => {
+          capturedNativeInput = input;
+          return await defaultNativeRoleRunner(input);
+        },
+      },
     );
 
     assert.match(result.content[0]?.text ?? "", /Role call succeeded: worker/);
@@ -287,6 +324,14 @@ void test("call_role launches fresh role runs", async () => {
     assert.equal(details.record?.status, "succeeded");
     assert.equal(details.record?.launch, "fresh");
     assert.equal(details.jsonEventCount, 1);
+    assert.equal(capturedNativeInput?.role.id, "worker");
+    assert.match(capturedNativeInput?.role.systemPrompt ?? "", /Pi worker/);
+    assert.ok(capturedNativeInput?.role.allowedTools?.includes("edit"));
+    assert.equal(capturedNativeInput?.instruction.instruction, "Run the fake worker.");
+    assert.equal(capturedNativeInput?.launch, "fresh");
+    assert.equal(capturedNativeInput?.model, "test/model");
+    assert.equal(capturedNativeInput?.timeoutMs, 5_000);
+    assert.equal(capturedNativeInput?.cwd, dir);
     assert.equal(details.delivery?.status, "delivered");
     assert.equal(details.delivery?.hasFinalAssistantText, true);
 
@@ -366,7 +411,7 @@ void test("call_role does not expose raw JSON protocol fragments as output", asy
       tools,
       {
         role: "worker",
-        instruction: "Run the fake worker.",
+        instruction: "Run protocol fragment.",
         model: "test/model",
         piCommand: fakePi,
       },
@@ -496,13 +541,18 @@ void test("spark-roles tools require ctx cwd unless call_role cwd is explicit", 
   process.env.PI_ROLES_HOME = dir;
   try {
     const fakePi = await writeFakePi(dir);
-    const explicit = await executeRoleToolWithoutCwd(tools, "call_role", {
-      role: "worker",
-      instruction: "Run with explicit cwd.",
-      cwd: dir,
-      model: "test/model",
-      piCommand: fakePi,
-    });
+    const explicit = await executeRoleToolWithoutCwd(
+      tools,
+      "call_role",
+      {
+        role: "worker",
+        instruction: "Run with explicit cwd.",
+        cwd: dir,
+        model: "test/model",
+        piCommand: fakePi,
+      },
+      { runRole: defaultNativeRoleRunner },
+    );
     assert.match(explicit.content[0]?.text ?? "", /Role call succeeded: worker/);
   } finally {
     if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
@@ -696,8 +746,12 @@ function executeCallRole(
   tools: Map<string, ToolConfig>,
   params: Record<string, unknown>,
   cwd = DEFAULT_TEST_CWD,
+  ctxExtra: {
+    model?: { provider: string; id: string; api?: string };
+    runRole?: ExtensionRoleRunner;
+  } = {},
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }> {
-  return executeRoleTool(tools, "call_role", params, cwd);
+  return executeRoleTool(tools, "call_role", params, cwd, ctxExtra);
 }
 
 function executeRoleTool(
@@ -705,13 +759,17 @@ function executeRoleTool(
   name: string,
   params: Record<string, unknown>,
   cwd = DEFAULT_TEST_CWD,
-  ctxExtra: { model?: { provider: string; id: string; api?: string } } = {},
+  ctxExtra: {
+    model?: { provider: string; id: string; api?: string };
+    runRole?: ExtensionRoleRunner;
+  } = {},
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }> {
   const call = canonicalRoleToolCall(name, params);
   const tool = tools.get(call.name);
   assert.ok(tool, `missing ${call.name} tool`);
   return tool.execute("tool-call", call.params, new AbortController().signal, () => undefined, {
     cwd,
+    runRole: defaultNativeRoleRunner,
     ...ctxExtra,
   });
 }
@@ -720,11 +778,18 @@ function executeRoleToolWithoutCwd(
   tools: Map<string, ToolConfig>,
   name: string,
   params: Record<string, unknown>,
+  ctxExtra: { runRole?: ExtensionRoleRunner } = {},
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }> {
   const call = canonicalRoleToolCall(name, params);
   const tool = tools.get(call.name);
   assert.ok(tool, `missing ${call.name} tool`);
-  return tool.execute("tool-call", call.params, new AbortController().signal, () => undefined, {});
+  return tool.execute(
+    "tool-call",
+    call.params,
+    new AbortController().signal,
+    () => undefined,
+    ctxExtra,
+  );
 }
 
 function canonicalRoleToolCall(

@@ -4,10 +4,11 @@ import test from "node:test";
 import {
   helpText,
   parseSparkDispatcherArgs,
+  resolveTargetCommand,
   runSparkDispatcher,
 } from "../apps/spark-cli/src/cli.ts";
 
-void test("parseSparkDispatcherArgs routes default, tui, daemon, cockpit, and print commands", () => {
+void test("parseSparkDispatcherArgs routes default, tui, daemon, server/cockpit, sessions, and print commands", () => {
   assert.deepEqual(parseSparkDispatcherArgs([]), {
     kind: "dispatch",
     target: "tui",
@@ -23,10 +24,25 @@ void test("parseSparkDispatcherArgs routes default, tui, daemon, cockpit, and pr
     target: "daemon",
     argv: ["status", "--json"],
   });
+  assert.deepEqual(parseSparkDispatcherArgs(["server", "--port", "5174"]), {
+    kind: "dispatch",
+    target: "server",
+    argv: ["--port", "5174"],
+  });
   assert.deepEqual(parseSparkDispatcherArgs(["cockpit", "--port", "5174"]), {
     kind: "dispatch",
     target: "cockpit",
     argv: ["--port", "5174"],
+  });
+  assert.deepEqual(parseSparkDispatcherArgs(["sessions", "list", "--all-workspaces"]), {
+    kind: "dispatch",
+    target: "tui",
+    argv: ["sessions", "list", "--all-workspaces"],
+  });
+  assert.deepEqual(parseSparkDispatcherArgs(["session", "replay", "--session", "s1"]), {
+    kind: "dispatch",
+    target: "tui",
+    argv: ["session", "replay", "--session", "s1"],
   });
   assert.deepEqual(parseSparkDispatcherArgs(["--print", "hello"]), {
     kind: "dispatch",
@@ -45,6 +61,15 @@ void test("parseSparkDispatcherArgs routes default, tui, daemon, cockpit, and pr
   });
 });
 
+void test("spark dispatcher help snapshots canonical daemon, server, and TUI planes", () => {
+  const help = helpText();
+  assert.match(help, /spark daemon\s+daemon execution plane/u);
+  assert.match(help, /spark server\s+server coordination plane/u);
+  assert.match(help, /spark tui\s+tui local control plane/u);
+  assert.match(help, /Unknown subcommands fail loudly/u);
+  assert.doesNotMatch(help, /spark daemon sessions list --all-workspaces/u);
+});
+
 void test("parseSparkDispatcherArgs keeps help/version local and rejects unknown subcommands", () => {
   assert.deepEqual(parseSparkDispatcherArgs(["--help"]), { kind: "help" });
   assert.deepEqual(parseSparkDispatcherArgs(["version"]), { kind: "version" });
@@ -52,6 +77,12 @@ void test("parseSparkDispatcherArgs keeps help/version local and rejects unknown
   assert.equal(command.kind, "error");
   assert.match(command.kind === "error" ? command.message : "", /Unknown spark subcommand: build/u);
   assert.match(command.kind === "error" ? command.message : "", /spark tui build this/u);
+});
+
+void test("dispatcher resolves daemon plane through spark-tui adapter", () => {
+  const command = resolveTargetCommand("daemon");
+  assert.match(command.command, /spark-tui(?:$|\/bin\/spark-tui$)/u);
+  assert.deepEqual(command.args, ["daemon"]);
 });
 
 void test("runSparkDispatcher invokes injected launcher with the selected target", async () => {
@@ -85,7 +116,7 @@ void test("runSparkDispatcher fails fast for non-TTY TUI while preserving headle
     },
   };
   const launcher = {
-    run: async (target: "tui" | "daemon" | "cockpit", argv: string[]) => {
+    run: async (target: "tui" | "daemon" | "server" | "cockpit", argv: string[]) => {
       calls.push({ target, argv });
       return 0;
     },
@@ -97,10 +128,14 @@ void test("runSparkDispatcher fails fast for non-TTY TUI while preserving headle
   assert.match(stderr.join(""), /spark --print <prompt>/u);
 
   assert.equal(await runSparkDispatcher(["--print", "hello"], io, launcher), 0);
+  assert.equal(await runSparkDispatcher(["tui", "--help"], io, launcher), 0);
   assert.equal(await runSparkDispatcher(["tui", "--mode", "rpc"], io, launcher), 0);
+  assert.equal(await runSparkDispatcher(["sessions", "list"], io, launcher), 0);
   assert.deepEqual(calls, [
     { target: "tui", argv: ["--print", "hello"] },
+    { target: "tui", argv: ["--help"] },
     { target: "tui", argv: ["--mode", "rpc"] },
+    { target: "tui", argv: ["sessions", "list"] },
   ]);
 });
 

@@ -522,6 +522,8 @@ const messages = {
       receivedPrefix: "received",
       versionPrefix: "v",
       empty: "No task graph snapshot ingested for this project yet.",
+      emptyBody: "When Spark starts work, ready and blocked tasks will appear here.",
+      emptyAction: "Ask Spark to plan the first task",
       dependsOn: "Depends on",
       noUpstream: "No upstream blockers in this snapshot.",
       unblocks: "Unblocks",
@@ -536,6 +538,8 @@ const messages = {
       kicker: "Human in the loop",
       title: "Inbox",
       empty: "No asks or reviews yet.",
+      emptyBody: "Decisions that need your answer will land here first.",
+      emptyAction: "Open workspace inbox",
     },
     invocations: {
       kicker: "Mirrored from Spark runtime",
@@ -546,6 +550,8 @@ const messages = {
       kicker: "Evidence",
       title: "Artifacts",
       empty: "No artifacts produced yet.",
+      emptyBody: "Plans, diffs, and review evidence will collect in this column.",
+      emptyAction: "Browse workspace artifacts",
     },
     logs: {
       kicker: "Run output",

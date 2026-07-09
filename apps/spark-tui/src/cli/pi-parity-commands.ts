@@ -5,6 +5,7 @@ import { sparkTuiPiParityStrings } from "@zendev-lab/spark-i18n/cli";
 
 import type {
   SparkNativeMessage,
+  SparkNativeSlashCommand,
   SparkNativeSlashCommandContext,
   SparkNativeSlashCommandMap,
 } from "../native-tui.ts";
@@ -26,6 +27,11 @@ import {
   navigateSparkSessionBranchWithSummary,
 } from "../host/compaction.ts";
 import { listOAuthProviderSummaries } from "../host/auth.ts";
+import {
+  SparkSessionMailStore,
+  sessionMailStatus,
+  type SparkSessionMailMessage,
+} from "../host/session-mail-store.ts";
 import type { SparkCliHostServices } from "../host/index.ts";
 import type { SparkConfig } from "../host/config.ts";
 import type { SparkSessionMessage, SparkSessionRecord } from "../host/session-store.ts";
@@ -44,6 +50,8 @@ const PI_COMMANDS = [
   "copy",
   "name",
   "session",
+  "mailto",
+  "inbox",
   "changelog",
   "hotkeys",
   "fork",
@@ -55,7 +63,6 @@ const PI_COMMANDS = [
   "new",
   "compact",
   "resume",
-  "reload",
 ] as const;
 
 export const PI_PARITY_COMMAND_NAMES: readonly string[] = PI_COMMANDS;
@@ -63,7 +70,7 @@ export const PI_PARITY_COMMAND_NAMES: readonly string[] = PI_COMMANDS;
 export function createSparkPiParitySlashCommands(
   services: SparkCliHostServices,
 ): SparkNativeSlashCommandMap {
-  return {
+  return withPiParityMetadata({
     settings: {
       description: STRINGS.descriptions.settings,
       argumentHint: "[set thinking <off|minimal|low|medium|high|xhigh>|set theme <id>]",
@@ -102,7 +109,21 @@ export function createSparkPiParitySlashCommands(
     },
     session: {
       description: STRINGS.descriptions.session,
-      handler: (_args, ctx) => renderNativeSessionInfo(ctx.session.messages),
+      argumentHint: "[list]",
+      handler: async (args, ctx) => {
+        if (args.trim().toLowerCase() === "list") return await handleResumeCommand(services, "");
+        return renderNativeSessionInfo(ctx.session.messages);
+      },
+    },
+    mailto: {
+      description: "Send durable local mail to another Spark session without running it",
+      argumentHint: "<session-id> <message>",
+      handler: async (args) => handleMailtoCommand(services, args),
+    },
+    inbox: {
+      description: "List, read, or acknowledge durable Spark session mail",
+      argumentHint: "[session-id] | read <message-id> [session-id] | ack <message-id> [session-id]",
+      handler: async (args) => handleInboxCommand(services, args),
     },
     changelog: {
       description: STRINGS.descriptions.changelog,
@@ -157,11 +178,56 @@ export function createSparkPiParitySlashCommands(
       argumentHint: "[session-id|path]",
       handler: async (args) => handleResumeCommand(services, args),
     },
-    reload: {
-      description: STRINGS.descriptions.reload,
-      handler: () => STRINGS.reload,
-    },
+  });
+}
+
+function withPiParityMetadata(commands: SparkNativeSlashCommandMap): SparkNativeSlashCommandMap {
+  return Object.fromEntries(
+    Object.entries(commands).map(([name, command]) => [
+      name,
+      {
+        ...command,
+        metadata: command.metadata ?? piParityCommandMetadata(name, command),
+      } satisfies SparkNativeSlashCommand,
+    ]),
+  );
+}
+
+function piParityCommandMetadata(
+  name: string,
+  _command: SparkNativeSlashCommand,
+): SparkNativeSlashCommand["metadata"] {
+  const canonical = piParityCanonicalCliTarget(name);
+  return {
+    source: "extension",
+    extensionId: "spark-pi-parity",
+    plane: canonical.startsWith("spark daemon") ? "daemon" : "tui",
+    resource: name === "fork" || name === "clone" || name === "tree" ? "session" : name,
+    verbs: name === "session" ? ["show", "list"] : [name],
+    canonicalCliTarget: canonical,
+    ...(name === "fork" ? { deprecatedAliasFor: "/session fork --current" } : {}),
   };
+}
+
+function piParityCanonicalCliTarget(name: string): string {
+  switch (name) {
+    case "session":
+      return "spark daemon session list";
+    case "mailto":
+      return "spark sessions mailto --to <session> --message <text>";
+    case "inbox":
+      return "spark sessions inbox --session <session>";
+    case "fork":
+      return "spark daemon session fork --current";
+    case "clone":
+      return "spark daemon session clone --current";
+    case "tree":
+      return "spark daemon session tree <session>";
+    case "resume":
+      return "spark tui attach <session>";
+    default:
+      return `spark tui ${name}`;
+  }
 }
 
 function settingsCompletions(prefix: string): Array<{ value: string; label: string }> {
@@ -261,6 +327,97 @@ function renderScopedModels(services: SparkCliHostServices): string {
   return items
     .map((model) => `${model.active ? "*" : " "} ${model.value} — ${model.description}`)
     .join("\n");
+}
+
+async function handleMailtoCommand(services: SparkCliHostServices, args: string): Promise<string> {
+  const [toSessionId, ...bodyParts] = args.trim().split(/\s+/u).filter(Boolean);
+  const body = bodyParts.join(" ").trim();
+  if (!toSessionId || !body) return "Usage: /mailto <session-id> <message>";
+  await assertKnownMailSession(services, toSessionId);
+  const store = sparkSessionMailStore(services);
+  const sent = await store.send({
+    toSessionId,
+    fromSessionId: (await currentTuiMailSessionId(services)) ?? "session:tui",
+    body,
+    source: "tui",
+  });
+  return `Sent ${sent.message.id} to ${sent.message.toSessionId}.`;
+}
+
+async function handleInboxCommand(services: SparkCliHostServices, args: string): Promise<string> {
+  const tokens = args.trim().split(/\s+/u).filter(Boolean);
+  const action = tokens[0] === "read" || tokens[0] === "ack" ? tokens[0] : "list";
+  const store = sparkSessionMailStore(services);
+  if (action === "read" || action === "ack") {
+    const messageId = tokens[1];
+    const sessionId = tokens[2] ?? (await currentTuiMailSessionId(services));
+    if (!messageId || !sessionId) return `Usage: /inbox ${action} <message-id> [session-id]`;
+    const message =
+      action === "read"
+        ? await store.read(sessionId, messageId)
+        : await store.ack(sessionId, messageId);
+    return renderTuiInboxMessage(action, message);
+  }
+  const sessionId = tokens[0] ?? (await currentTuiMailSessionId(services));
+  if (!sessionId) return "Usage: /inbox [session-id]";
+  const messages = await store.list(sessionId);
+  return renderTuiInboxList(sessionId, messages);
+}
+
+function sparkSessionMailStore(services: SparkCliHostServices): SparkSessionMailStore {
+  return new SparkSessionMailStore({ sparkHome: dirname(services.sessionStore.sessionsRoot) });
+}
+
+async function currentTuiMailSessionId(
+  services: SparkCliHostServices,
+): Promise<string | undefined> {
+  return (await services.sessionStore.findMostRecent())?.id;
+}
+
+async function assertKnownMailSession(
+  services: SparkCliHostServices,
+  sessionId: string,
+): Promise<void> {
+  const normalized = sessionId.startsWith("session:")
+    ? sessionId.slice("session:".length)
+    : sessionId;
+  const sessions = await services.sessionStore.listAllPersistentSessions();
+  if (
+    sessions.some(
+      (session) =>
+        session.id === sessionId ||
+        session.id === normalized ||
+        `session:${session.id}` === sessionId,
+    )
+  )
+    return;
+  throw new Error(`Spark session not found: ${sessionId}`);
+}
+
+function renderTuiInboxList(sessionId: string, messages: SparkSessionMailMessage[]): string {
+  if (messages.length === 0) return `No pending Spark session mail for ${sessionId}.`;
+  return messages
+    .map(
+      (message) =>
+        `${message.id} ${sessionMailStatus(message)} from=${message.fromSessionId} ${previewMailBody(message.body)}`,
+    )
+    .join("\n");
+}
+
+function renderTuiInboxMessage(action: "read" | "ack", message: SparkSessionMailMessage): string {
+  return [
+    `${action === "ack" ? "Acknowledged" : "Read"} ${message.id}`,
+    `to=${message.toSessionId}`,
+    `from=${message.fromSessionId}`,
+    `status=${sessionMailStatus(message)}`,
+    "",
+    message.body,
+  ].join("\n");
+}
+
+function previewMailBody(body: string): string {
+  const oneLine = body.replace(/\s+/g, " ").trim();
+  return oneLine.length <= 80 ? oneLine : `${oneLine.slice(0, 77)}...`;
 }
 
 async function handleExportCommand(

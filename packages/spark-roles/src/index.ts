@@ -1,6 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import type { ExtensionRoleRunner } from "@zendev-lab/spark-extension-api";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { resolveRoleNativeExecutor } from "./native-executor.ts";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, sep } from "node:path";
 
@@ -111,6 +113,8 @@ export interface RoleRunLauncherInput extends RoleRunCommandInput {
    * best-effort follow-up delivery.
    */
   stdinMode?: "pipe" | "ignore";
+  roleId?: string;
+  nativeExecutor?: ExtensionRoleRunner;
   onChildProcess?: (child: ChildProcess, startedAt: string) => void;
   onTimeout?: () => void;
 }
@@ -122,6 +126,8 @@ export interface RoleRunResult {
     thinking?: RoleThinkingLevel;
     sessionDir?: string;
     forkFromSession?: string;
+    noSession?: boolean;
+    sessionPersistence?: "anonymous" | "persistent";
     failureKind?: string;
     errorMessage?: string;
   };
@@ -135,7 +141,7 @@ export interface ActiveRoleRun {
   roleRef: RoleRef;
   launch: RoleLaunchMode;
   model?: string;
-  child: ChildProcess;
+  child?: ChildProcess;
   startedAt: string;
   cancel(reason?: string): boolean;
 }
@@ -1159,45 +1165,6 @@ export class RoleRunCancelledError extends Error {
 }
 
 const activeRoleRuns = new Map<RoleRunRef, ActiveRoleRun>();
-const DEFAULT_ROLE_RUN_CAPTURE_LIMIT_BYTES = 1024 * 1024;
-
-interface BoundedOutputCapture {
-  push(chunk: Buffer): void;
-  text(): string;
-}
-
-function createBoundedOutputCapture(
-  label: "stdout" | "stderr",
-  limitBytes = DEFAULT_ROLE_RUN_CAPTURE_LIMIT_BYTES,
-): BoundedOutputCapture {
-  const chunks: Buffer[] = [];
-  let capturedBytes = 0;
-  let omittedBytes = 0;
-  return {
-    push(chunk: Buffer) {
-      chunks.push(chunk);
-      capturedBytes += chunk.length;
-      while (capturedBytes > limitBytes && chunks.length > 0) {
-        const excess = capturedBytes - limitBytes;
-        const first = chunks[0]!;
-        if (first.length <= excess) {
-          chunks.shift();
-          capturedBytes -= first.length;
-          omittedBytes += first.length;
-          continue;
-        }
-        chunks[0] = first.subarray(excess);
-        capturedBytes -= excess;
-        omittedBytes += excess;
-      }
-    },
-    text() {
-      const output = Buffer.concat(chunks).toString("utf8");
-      if (omittedBytes === 0) return output;
-      return `[spark-roles ${label} omitted first ${omittedBytes} bytes; showing last ${capturedBytes} bytes]\n${output}`;
-    },
-  };
-}
 
 export function listActiveRoleRuns(): ActiveRoleRun[] {
   return [...activeRoleRuns.values()];
@@ -1305,31 +1272,29 @@ function parseRoleRunDepth(value: string | undefined): number {
 
 export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResult> {
   if (input.signal?.aborted) throw new RoleRunCancelledError(abortSignalReason(input.signal));
-  const launch = normalizeRoleLaunchMode(input.launch);
-  const startedAt = input.now?.() ?? nowIso();
-  const childEnv = roleRunChildEnv(input.env);
-  const child = spawn(input.piCommand, buildRoleRunArgs(input), {
-    cwd: input.cwd,
-    env: childEnv,
-    stdio: [input.stdinMode === "ignore" ? "ignore" : "pipe", "pipe", "pipe"],
-  });
-  input.onChildProcess?.(child, startedAt);
-  const stdoutCapture = createBoundedOutputCapture("stdout");
-  const stderrCapture = createBoundedOutputCapture("stderr");
-  child.stdout?.on("data", (chunk: Buffer) => stdoutCapture.push(chunk));
-  child.stderr?.on("data", (chunk: Buffer) => stderrCapture.push(chunk));
+  // Preserve the recursion guard for nested role calls even though the run is
+  // now daemon-native rather than a child process.
+  const nativeEnv = roleRunChildEnv(input.env);
+  const nativeExecutor = await resolveRoleNativeExecutor({ runRole: input.nativeExecutor });
 
+  const launch = normalizeRoleLaunchMode(input.launch);
+  if (launch === "forked" && !input.forkFromSession?.trim()) {
+    throw new Error("forked role execution requires forkFromSession");
+  }
+  const startedAt = input.now?.() ?? nowIso();
+  const timeoutMs = input.timeoutMs ?? 600_000;
+  const abortController = new AbortController();
   let cancellationReason: string | undefined;
   const activeRun: ActiveRoleRun = {
     ref: input.runRef,
     roleRef: input.roleRef,
     launch,
     model: input.model?.trim() || undefined,
-    child,
     startedAt,
     cancel(reason?: string) {
-      cancellationReason = reason;
-      return child.kill("SIGTERM");
+      cancellationReason = reason ?? "cancelled";
+      if (!abortController.signal.aborted) abortController.abort(cancellationReason);
+      return true;
     },
   };
   activeRoleRuns.set(input.runRef, activeRun);
@@ -1339,56 +1304,107 @@ export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResul
   if (input.signal?.aborted) abort();
 
   try {
-    const timeoutMs = input.timeoutMs ?? 600_000;
-    const exitCode = await new Promise<number | null>((resolve, reject) => {
-      let settled = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const settle = (cb: () => void) => {
-        if (settled) return;
-        settled = true;
-        if (timer) clearTimeout(timer);
-        cb();
-      };
-      if (timeoutMs > 0) {
-        timer = setTimeout(() => {
-          cancellationReason = "timeout";
-          input.onTimeout?.();
-          child.kill("SIGTERM");
-          settle(() => reject(new RoleRunTimeoutError(timeoutMs)));
-        }, timeoutMs);
-        timer.unref?.();
-      }
-      child.once("error", (error) => settle(() => reject(error)));
-      child.once("close", (code) => {
-        if (cancellationReason) settle(() => reject(new RoleRunCancelledError(cancellationReason)));
-        else settle(() => resolve(code));
-      });
-    });
-
-    const stdout = stdoutCapture.text();
-    const stderr = stderrCapture.text();
-    return {
+    const nativeInput = {
+      role: {
+        ref: input.roleRef,
+        id: input.roleId ?? roleIdFromRef(input.roleRef),
+        systemPrompt: input.systemPrompt,
+        ...(input.allowedTools ? { allowedTools: input.allowedTools } : {}),
+      },
+      instruction: {
+        roleRef: input.roleRef,
+        instruction: input.instruction,
+      },
       record: {
         ref: input.runRef,
         roleRef: input.roleRef,
-        launch,
-        model: input.model?.trim() || undefined,
-        thinking: input.thinking,
-        status: exitCode === 0 ? "succeeded" : "failed",
         instruction: input.instruction,
+        status: "running" as const,
         startedAt,
-        finishedAt: input.now?.() ?? nowIso(),
-        sessionDir: input.sessionDir,
-        forkFromSession: launch === "forked" ? input.forkFromSession?.trim() : undefined,
-        errorMessage: exitCode === 0 ? undefined : `pi exited with code ${exitCode ?? "unknown"}`,
+        launch,
+        ...(input.model?.trim() ? { model: input.model.trim() } : {}),
+        ...(input.sessionDir ? { sessionDir: input.sessionDir } : {}),
+        ...(launch === "forked" && input.forkFromSession?.trim()
+          ? { forkFromSession: input.forkFromSession.trim() }
+          : {}),
+        ...(input.noSession ? { noSession: true, sessionPersistence: "anonymous" as const } : {}),
       },
-      stdout,
-      stderr,
-      jsonEvents: parsePiJsonlEvents(stdout),
+      cwd: input.cwd,
+      timeoutMs,
+      signal: abortController.signal,
+      ...(input.sessionDir ? { sessionDir: input.sessionDir } : {}),
+      launch,
+      ...(launch === "forked" && input.forkFromSession?.trim()
+        ? { forkFromSession: input.forkFromSession.trim() }
+        : {}),
+      ...(input.model?.trim() ? { model: input.model.trim() } : {}),
+      ...(input.noSession ? { noSession: true, sessionPersistence: "anonymous" as const } : {}),
+      env: nativeEnv,
     };
+
+    const result = await runNativeRoleWithTimeout({
+      execute: () => nativeExecutor(nativeInput),
+      timeoutMs,
+      onTimeout: () => {
+        cancellationReason = "timeout";
+        input.onTimeout?.();
+        activeRun.cancel("timeout");
+      },
+    });
+    if (cancellationReason && result.record.status !== "cancelled") {
+      throw new RoleRunCancelledError(cancellationReason);
+    }
+    return {
+      record: {
+        ...result.record,
+        ref: input.runRef,
+        roleRef: input.roleRef,
+        launch,
+        model: input.model?.trim() || result.record.model,
+        thinking: input.thinking,
+        instruction: input.instruction,
+        startedAt: result.record.startedAt ?? startedAt,
+        finishedAt: result.record.finishedAt ?? input.now?.() ?? nowIso(),
+        sessionDir: input.noSession ? undefined : (result.record.sessionDir ?? input.sessionDir),
+        forkFromSession: launch === "forked" ? input.forkFromSession?.trim() : undefined,
+        ...(input.noSession ? { noSession: true, sessionPersistence: "anonymous" as const } : {}),
+      },
+      stdout: result.stdout,
+      stderr: result.stderr,
+      jsonEvents: result.jsonEvents,
+    };
+  } catch (error) {
+    if (error instanceof RoleRunTimeoutError) throw error;
+    if (cancellationReason || input.signal?.aborted) {
+      throw new RoleRunCancelledError(cancellationReason ?? abortSignalReason(input.signal));
+    }
+    throw error;
   } finally {
     input.signal?.removeEventListener("abort", abort);
     activeRoleRuns.delete(input.runRef);
+  }
+}
+
+async function runNativeRoleWithTimeout<T>(input: {
+  execute: () => Promise<T>;
+  timeoutMs: number;
+  onTimeout: () => void;
+}): Promise<T> {
+  if (input.timeoutMs <= 0) return await input.execute();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      input.execute(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          input.onTimeout();
+          reject(new RoleRunTimeoutError(input.timeoutMs));
+        }, input.timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 

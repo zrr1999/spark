@@ -23,6 +23,9 @@
   "scripts": {
     "check": "pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && node scripts/check-pi-boundaries.mjs && node scripts/check-doc-terminology.mjs && vp check && node --experimental-strip-types --test \"test/*.test.ts\" && pnpm -r --filter './packages/*' --filter './apps/*' run check && pnpm --filter @zendev-lab/spark-cockpit run test && pnpm --filter @zendev-lab/spark-daemon run test",
     "check:tsc": "tsc -p tsconfig.json --noEmit",
+    "check:daemon-readiness": "node --experimental-strip-types scripts/spark-daemon-readiness.mts",
+    "check:cue-harness": "node --experimental-strip-types scripts/spark-cue-harness.mts --no-exercise",
+    "check:zellij-harness": "node --experimental-strip-types scripts/spark-zellij-harness.mts",
     "format": "vp fmt . --write",
     "test": "node --experimental-strip-types --test \"test/*.test.ts\"",
     "test:file": "node --experimental-strip-types --test",

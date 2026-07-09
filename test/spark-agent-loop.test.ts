@@ -365,6 +365,59 @@ void test("SparkAgentLoop projects user, streaming, final, and run updates to vi
   );
 });
 
+void test("SparkAgentLoop appends multi-roundtrip assistant messages in order without overwriting", async () => {
+  const viewEvents: any[] = [];
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-agent-loop-order-test",
+    ui: { publishView: (event) => viewEvents.push(event) },
+  });
+  host.registerTool({
+    name: "noop",
+    description: "noop",
+    parameters: { type: "object" },
+    async execute() {
+      return { content: [{ type: "text", text: "ok" }] };
+    },
+  });
+  const toolCallEnvelope: ToolCall = {
+    type: "toolCall",
+    id: "tc-order",
+    name: "noop",
+    arguments: {},
+  };
+  const firstAssistant = buildAssistant(
+    [{ type: "text", text: "before tool" }, toolCallEnvelope],
+    "toolUse",
+  );
+  const secondAssistant = buildAssistant([{ type: "text", text: "after tool" }]);
+  const fake = makeFakeStream({
+    rounds: [
+      [
+        { type: "start", partial: firstAssistant },
+        { type: "done", reason: "toolUse", message: firstAssistant },
+      ],
+      [
+        { type: "start", partial: secondAssistant },
+        { type: "done", reason: "stop", message: secondAssistant },
+      ],
+    ],
+  });
+  const loop = new SparkAgentLoop({ host, streamFunction: fake, getModel: () => TEST_MODEL });
+  loop.setViewSessionId("session-order-loop");
+
+  await loop.submit("do it");
+
+  const assistantMessages = viewEvents.filter(
+    (event) => event.type === "session.message" && event.message.role === "assistant",
+  );
+  const distinctIds = new Set(assistantMessages.map((event) => event.message.id));
+  assert.equal(distinctIds.size, 2, "each roundtrip's assistant message gets its own view id");
+  const doneTexts = assistantMessages
+    .filter((event) => event.message.status === "done")
+    .map((event) => event.message.text);
+  assert.deepEqual(doneTexts, ["before tool\n[tool call: noop]", "after tool"]);
+});
+
 void test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", async () => {
   const stopAssistant = buildAssistant([{ type: "text", text: "done" }]);
   const toolUseAssistant = buildAssistant(

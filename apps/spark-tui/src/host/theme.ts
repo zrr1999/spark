@@ -54,6 +54,7 @@ export interface SparkThemeLoadOptions {
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
+const STRIKETHROUGH = "\x1b[9m";
 
 export const BUILTIN_SPARK_THEMES: readonly SparkTheme[] = [
   {
@@ -150,6 +151,7 @@ export function createSparkHostRenderTheme(theme: SparkTheme): SparkHostRenderTh
     fg: (color, text) => ansiFg(resolveThemeColor(theme, color), text),
     bg: (color, text) => ansiBg(resolveThemeColor(theme, color), text),
     bold: (text) => `${BOLD}${text}${RESET}`,
+    strikethrough: (text) => `${STRIKETHROUGH}${text}${RESET}`,
   };
 }
 
