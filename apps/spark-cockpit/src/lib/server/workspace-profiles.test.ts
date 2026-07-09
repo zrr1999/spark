@@ -18,23 +18,23 @@ import {
 
 describe("workspace profiles", () => {
   it("parses GitHub profile repository and tree URLs", () => {
-    expect(parseGitHubProfileUrl("https://github.com/navia-dev/profiles")).toEqual({
-      cloneUrl: "https://github.com/navia-dev/profiles.git",
-      webUrl: "https://github.com/navia-dev/profiles",
+    expect(parseGitHubProfileUrl("https://github.com/spark-dev/profiles")).toEqual({
+      cloneUrl: "https://github.com/spark-dev/profiles.git",
+      webUrl: "https://github.com/spark-dev/profiles",
       ref: null,
       sourcePath: null,
     });
 
-    expect(parseGitHubProfileUrl("https://github.com/navia-dev/profiles/tree/main/paddle")).toEqual(
+    expect(parseGitHubProfileUrl("https://github.com/spark-dev/profiles/tree/main/paddle")).toEqual(
       {
-        cloneUrl: "https://github.com/navia-dev/profiles.git",
-        webUrl: "https://github.com/navia-dev/profiles",
+        cloneUrl: "https://github.com/spark-dev/profiles.git",
+        webUrl: "https://github.com/spark-dev/profiles",
         ref: "main",
         sourcePath: "paddle",
       },
     );
 
-    expect(() => parseGitHubProfileUrl("https://example.com/navia/profiles")).toThrow(
+    expect(() => parseGitHubProfileUrl("https://example.com/spark/profiles")).toThrow(
       "Profile must be an https://github.com/... URL.",
     );
   });
@@ -405,9 +405,9 @@ owner = "PaddlePaddle"
       "-c",
       "commit.gpgsign=false",
       "-c",
-      "user.name=Navia Test",
+      "user.name=Spark Test",
       "-c",
-      "user.email=navia@example.test",
+      "user.email=spark@example.test",
       "commit",
       "--no-gpg-sign",
       "-m",
@@ -417,10 +417,10 @@ owner = "PaddlePaddle"
       cwd: dir,
       env: {
         ...process.env,
-        GIT_AUTHOR_NAME: "Navia Test",
-        GIT_AUTHOR_EMAIL: "navia@example.test",
-        GIT_COMMITTER_NAME: "Navia Test",
-        GIT_COMMITTER_EMAIL: "navia@example.test",
+        GIT_AUTHOR_NAME: "Spark Test",
+        GIT_AUTHOR_EMAIL: "spark@example.test",
+        GIT_COMMITTER_NAME: "Spark Test",
+        GIT_COMMITTER_EMAIL: "spark@example.test",
       },
       stdio: "ignore",
     },

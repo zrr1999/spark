@@ -33,10 +33,6 @@ export interface SparkPaths {
   logDir: string;
   logFile: string;
   pidFile: string;
-  /** Legacy repo-local cockpit data directory (`.navia/`). Prefer XDG `spark/cockpit`. */
-  legacyRepoDataDir: string;
-  /** @deprecated Legacy `NAVIA_DATA_DIR` alias when no explicit cockpit data dir is set. */
-  legacyDataDirAlias: string | undefined;
 }
 
 const appDatabaseNames: Record<SparkApp, string> = {
@@ -50,7 +46,6 @@ export function resolveSparkPaths(options: ResolveSparkPathsOptions): SparkPaths
   const home = env.HOME || homedir();
   const app = options.app;
   const prefix = app === "daemon" ? "SPARK_DAEMON" : "SPARK_COCKPIT";
-  const legacyPrefix = app === "cockpit" ? "NAVIA_SERVER" : undefined;
   const overrides = options.overrides ?? {};
 
   const configHome = absoluteDir(env.XDG_CONFIG_HOME ?? join(home, ".config"), cwd);
@@ -61,30 +56,21 @@ export function resolveSparkPaths(options: ResolveSparkPathsOptions): SparkPaths
   const namespace = "spark";
   const configDir = join(configHome, namespace);
   const configFile = absoluteDir(overrides.configFile ?? join(configDir, `${app}.toml`), cwd);
-  const explicitDataDir = env[`${prefix}_DATA_DIR`] ?? legacyEnv(env, legacyPrefix, "DATA_DIR");
-  const legacyDataDirAlias = app === "cockpit" && !explicitDataDir ? env.NAVIA_DATA_DIR : undefined;
   const dataDir = absoluteDir(
-    overrides.dataDir ?? explicitDataDir ?? legacyDataDirAlias ?? join(dataHome, namespace, app),
+    overrides.dataDir ?? env[`${prefix}_DATA_DIR`] ?? join(dataHome, namespace, app),
     cwd,
   );
   const cacheDir = absoluteDir(
-    overrides.cacheDir ??
-      env[`${prefix}_CACHE_DIR`] ??
-      legacyEnv(env, legacyPrefix, "CACHE_DIR") ??
-      join(cacheHome, namespace, app),
+    overrides.cacheDir ?? env[`${prefix}_CACHE_DIR`] ?? join(cacheHome, namespace, app),
     cwd,
   );
   const stateDir = absoluteDir(
-    overrides.stateDir ??
-      env[`${prefix}_STATE_DIR`] ??
-      legacyEnv(env, legacyPrefix, "STATE_DIR") ??
-      join(stateHome, namespace, app),
+    overrides.stateDir ?? env[`${prefix}_STATE_DIR`] ?? join(stateHome, namespace, app),
     cwd,
   );
   const runtimeDir = absoluteDir(
     overrides.runtimeDir ??
       env[`${prefix}_RUNTIME_DIR`] ??
-      legacyEnv(env, legacyPrefix, "RUNTIME_DIR") ??
       (env.XDG_RUNTIME_DIR ? join(env.XDG_RUNTIME_DIR, namespace, app) : join(stateDir, "run")),
     cwd,
   );
@@ -108,17 +94,7 @@ export function resolveSparkPaths(options: ResolveSparkPathsOptions): SparkPaths
     logDir: join(stateDir, "logs"),
     logFile: join(stateDir, "logs", `${app}.jsonl`),
     pidFile: join(runtimeDir, `${app}.pid`),
-    legacyRepoDataDir: resolve(cwd, ".navia"),
-    legacyDataDirAlias,
   };
-}
-
-function legacyEnv(
-  env: Record<string, string | undefined>,
-  prefix: string | undefined,
-  suffix: string,
-): string | undefined {
-  return prefix ? env[`${prefix}_${suffix}`] : undefined;
 }
 
 function absoluteDir(path: string, cwd: string): string {

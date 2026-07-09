@@ -22,10 +22,4 @@ describe("Cockpit system paths", () => {
 
     expect(defaultArtifactCacheRoot()).toBe(join("/Users/example/spark-cache", "artifacts"));
   });
-
-  it("keeps NAVIA_SERVER_CACHE_DIR as a legacy artifact preview alias", () => {
-    process.env = { HOME: "/Users/example", NAVIA_SERVER_CACHE_DIR: "/Users/example/navia-cache" };
-
-    expect(defaultArtifactCacheRoot()).toBe(join("/Users/example/navia-cache", "artifacts"));
-  });
 });

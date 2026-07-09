@@ -418,14 +418,14 @@ describe("Spark daemon workspace store", () => {
     withSparkDaemonWorkspaceStore(({ db, root }) => {
       const first = addWorkspace(db, {
         serverUrl: "http://127.0.0.1:5173/",
-        localWorkspaceKey: "navia",
-        displayName: "navia",
+        localWorkspaceKey: "spark",
+        displayName: "spark",
         localPath: root,
       });
       const second = addWorkspace(db, {
-        serverUrl: "https://navia.example.com/",
-        localWorkspaceKey: "navia",
-        displayName: "navia",
+        serverUrl: "https://spark.example.com/",
+        localWorkspaceKey: "spark",
+        displayName: "spark",
         localPath: root,
       });
 
@@ -434,12 +434,12 @@ describe("Spark daemon workspace store", () => {
         expect.arrayContaining([
           expect.objectContaining({
             serverUrl: "http://127.0.0.1:5173/",
-            localWorkspaceKey: "navia",
+            localWorkspaceKey: "spark",
             localPath: realpathSync(root),
           }),
           expect.objectContaining({
-            serverUrl: "https://navia.example.com/",
-            localWorkspaceKey: "navia",
+            serverUrl: "https://spark.example.com/",
+            localWorkspaceKey: "spark",
             localPath: realpathSync(root),
           }),
         ]),
@@ -452,16 +452,16 @@ describe("Spark daemon workspace store", () => {
       registerWorkspace(db, {
         serverUrl: "http://127.0.0.1:5173/",
         localPath: root,
-        displayName: "navia",
+        displayName: "spark",
       });
 
       expect(() =>
         registerWorkspace(db, {
           serverUrl: "http://127.0.0.1:5173/",
           localPath: root,
-          displayName: "navia-again",
+          displayName: "spark-again",
         }),
-      ).toThrow(/already registered as navia/);
+      ).toThrow(/already registered as spark/);
     });
   });
 
@@ -501,7 +501,7 @@ describe("Spark daemon workspace store", () => {
 
       expect(() =>
         addWorkspace(db, {
-          serverUrl: "https://navia.example.com/",
+          serverUrl: "https://spark.example.com/",
           localWorkspaceKey: "child",
           localPath: child,
         }),
@@ -546,12 +546,12 @@ describe("Spark daemon workspace store", () => {
       expect(listWorkspaces(db)).toHaveLength(1);
 
       const planned = planWorkspaceRegistration(db, {
-        serverUrl: "https://navia.example.com/",
+        serverUrl: "https://spark.example.com/",
         localPath: sibling,
         displayName: "Sibling",
       });
       expect(planned).toMatchObject({
-        serverUrl: "https://navia.example.com/",
+        serverUrl: "https://spark.example.com/",
         localWorkspaceKey: "sibling",
         displayName: "Sibling",
       });
@@ -596,7 +596,7 @@ describe("Spark daemon workspace store", () => {
         localWorkspaceKey: "my-workspace",
         displayName: "My Workspace",
       });
-      expect(workspaceKeyForName("Navia Dev")).toBe("navia-dev");
+      expect(workspaceKeyForName("Spark Dev")).toBe("spark-dev");
       expect(workspaceKeyForPath("/")).toBe("workspace");
     });
   });
@@ -607,13 +607,13 @@ describe("Spark daemon workspace store", () => {
         serverUrl: "http://127.0.0.1:5173/",
         serverBindingId: "rtwb_11111111111141111111111111111111",
         localPath: join(root, "checkout"),
-        displayName: "Navia Dev",
+        displayName: "Spark Dev",
       });
 
       expect(workspace).toMatchObject({
         id: "rtwb_11111111111141111111111111111111",
-        localWorkspaceKey: "navia-dev",
-        displayName: "Navia Dev",
+        localWorkspaceKey: "spark-dev",
+        displayName: "Spark Dev",
       });
       expect(workspaceSummaries(db)[0]?.bindingId).toBe("rtwb_11111111111141111111111111111111");
     });
@@ -628,7 +628,7 @@ describe("Spark daemon workspace store", () => {
         serverWorkspaceId: "ws_11111111111141111111111111111111",
         serverBindingId: "rtwb_11111111111141111111111111111111",
         localPath: workspacePath,
-        displayName: "Navia Dev",
+        displayName: "Spark Dev",
         consumedRegistrationToken: "spark_wsreg_secret",
         serverCredential: {
           runtimeId: "rt_11111111111141111111111111111111",
@@ -687,7 +687,7 @@ describe("Spark daemon workspace store", () => {
         id: "rtwb_11111111111141111111111111111111",
         serverWorkspaceId: "ws_11111111111141111111111111111111",
         serverBindingId: "rtwb_11111111111141111111111111111111",
-        slug: "navia-dev",
+        slug: "spark-dev",
         localPath: realpathSync(workspacePath),
         lastKnownStatus: "available",
       });
@@ -749,7 +749,7 @@ describe("Spark daemon workspace store", () => {
           serverUrl: "http://127.0.0.1:5173/",
           serverBindingId: "rtwb_duplicate",
           localPath: workspacePath,
-          displayName: "Navia Dev",
+          displayName: "Spark Dev",
           consumedRegistrationToken: "spark_wsreg_secret",
         }),
       ).toThrow();
@@ -832,12 +832,12 @@ describe("Spark daemon workspace store", () => {
     withSparkDaemonWorkspaceStore(({ db, root }) => {
       const workspace = registerWorkspace(db, {
         localPath: join(root, "checkout"),
-        displayName: "Navia Dev",
+        displayName: "Spark Dev",
       });
 
       expect(workspace).toMatchObject({
-        localWorkspaceKey: "navia-dev",
-        displayName: "Navia Dev",
+        localWorkspaceKey: "spark-dev",
+        displayName: "Spark Dev",
       });
     });
   });
@@ -846,10 +846,10 @@ describe("Spark daemon workspace store", () => {
     withSparkDaemonWorkspaceStore(({ db, root }) => {
       const workspace = registerWorkspace(db, {
         localPath: join(root, "checkout"),
-        displayName: "Navia Dev",
+        displayName: "Spark Dev",
         profile: {
           sourceKind: "git",
-          ref: "./navia-profile",
+          ref: "./spark-profile",
           commit: "0123456789abcdef0123456789abcdef01234567",
           importedAt: "2026-05-26T00:00:00.000Z",
         },
@@ -859,7 +859,7 @@ describe("Spark daemon workspace store", () => {
         id: workspace.id,
         profile: {
           sourceKind: "git",
-          ref: "./navia-profile",
+          ref: "./spark-profile",
           commit: "0123456789abcdef0123456789abcdef01234567",
           importedAt: "2026-05-26T00:00:00.000Z",
         },

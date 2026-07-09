@@ -79,8 +79,8 @@ describe("runtime registration", () => {
 
     const token = createRuntimeEnrollmentToken(db, {
       label: "Workspace token",
-      workspaceName: "Navia Dev",
-      workspaceSlug: "navia-dev",
+      workspaceName: "Spark Dev",
+      workspaceSlug: "spark-dev",
       createdAt: "2026-05-25T00:00:00.000Z",
     });
 
@@ -97,8 +97,8 @@ describe("runtime registration", () => {
     };
 
     expect(stored).toEqual({
-      workspaceName: "Navia Dev",
-      workspaceSlug: "navia-dev",
+      workspaceName: "Spark Dev",
+      workspaceSlug: "spark-dev",
     });
     db.close();
   });
@@ -174,8 +174,8 @@ describe("runtime registration", () => {
     migrate(db);
     const enrollment = createRuntimeEnrollmentToken(db, {
       label: "Workspace enrollment",
-      workspaceName: "Navia Dev",
-      workspaceSlug: "navia-dev",
+      workspaceName: "Spark Dev",
+      workspaceSlug: "spark-dev",
       createdAt: "2026-05-25T00:00:00.000Z",
       ttlMs: durableEnrollmentTtlMs,
     });
@@ -205,7 +205,7 @@ describe("runtime registration", () => {
     }
     const workspace = db
       .prepare("SELECT id, slug, name FROM workspaces WHERE slug = ?")
-      .get("navia-dev") as { id: string; slug: string; name: string };
+      .get("spark-dev") as { id: string; slug: string; name: string };
     const binding = db
       .prepare(
         `SELECT id,
@@ -242,8 +242,8 @@ describe("runtime registration", () => {
 
     expect(workspace).toMatchObject({
       id: workspaceBinding.workspaceId,
-      slug: "navia-dev",
-      name: "Navia Dev",
+      slug: "spark-dev",
+      name: "Spark Dev",
     });
     expect(binding).toMatchObject({
       id: workspaceBinding.bindingId,
@@ -266,8 +266,8 @@ describe("runtime registration", () => {
     migrate(db);
     const initial = createRuntimeEnrollmentToken(db, {
       label: "Initial workspace enrollment",
-      workspaceName: "Navia Dev",
-      workspaceSlug: "navia-dev",
+      workspaceName: "Spark Dev",
+      workspaceSlug: "spark-dev",
       createdAt: "2026-05-25T00:00:00.000Z",
       ttlMs: durableEnrollmentTtlMs,
     });
@@ -276,8 +276,8 @@ describe("runtime registration", () => {
       {
         ...registrationRequest,
         workspaceRegistration: {
-          localWorkspaceKey: "navia-dev",
-          displayName: "Navia Dev",
+          localWorkspaceKey: "spark-dev",
+          displayName: "Spark Dev",
         },
       },
       initial.refreshToken,

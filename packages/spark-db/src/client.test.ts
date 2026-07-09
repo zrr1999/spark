@@ -17,9 +17,12 @@ describe("defaultDatabasePath", () => {
     );
   });
 
-  it("keeps NAVIA_DATA_DIR as a legacy Cockpit data override", () => {
-    process.env = { HOME: "/Users/example", NAVIA_DATA_DIR: "/Users/example/legacy-navia" };
+  it("uses SPARK_COCKPIT_DATA_DIR as the Cockpit data override", () => {
+    process.env = {
+      HOME: "/Users/example",
+      SPARK_COCKPIT_DATA_DIR: "/Users/example/spark-cockpit",
+    };
 
-    expect(defaultDatabasePath()).toBe(join("/Users/example/legacy-navia", "cockpit.sqlite"));
+    expect(defaultDatabasePath()).toBe(join("/Users/example/spark-cockpit", "cockpit.sqlite"));
   });
 });

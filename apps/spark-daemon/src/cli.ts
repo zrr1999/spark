@@ -51,7 +51,6 @@ import {
   workspaceNameForPath,
   WorkspacePathConflictError,
 } from "./store/workspaces.js";
-import { migrateLegacySparkDaemonState } from "./migration.js";
 import { readRunningPid, startSparkDaemonService, stopSparkDaemonService } from "./service.js";
 
 export interface CliIo {
@@ -88,7 +87,6 @@ class WorkspacePathValidationError extends Error {}
 
 function prepareSparkDaemonState(paths: ReturnType<typeof resolveSparkPaths>): void {
   ensureSparkPathDirs(paths);
-  migrateLegacySparkDaemonState(paths);
 }
 
 export async function main(argv = process.argv.slice(2), io: CliIo = defaultIo): Promise<number> {
@@ -171,7 +169,6 @@ function install(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): number
 
 function doctor(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): number {
   const config = readSparkDaemonConfig(paths);
-  const legacyExists = existsSync(paths.legacyRepoDataDir);
   io.stdout.write(
     JSON.stringify(
       {
@@ -186,12 +183,6 @@ function doctor(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): number 
           refreshTokenExpiresAt: config.refreshTokenExpiresAt,
           enrolled: Boolean(config.runtimeId && config.runtimeToken),
         },
-        legacyRepoData: legacyExists
-          ? {
-              path: paths.legacyRepoDataDir,
-              note: "Legacy .navia data is not migrated automatically. Copy data deliberately after backing it up.",
-            }
-          : null,
       },
       null,
       2,
@@ -1784,14 +1775,14 @@ function profileRegistrationFromRef(
 }
 
 function detectWorkspaceProfile(localPath: string): { ref: string; promptLabel: string } | null {
-  const directoryProfileSettings = resolve(localPath, "navia-profile", "settings.toml");
+  const directoryProfileSettings = resolve(localPath, "spark-profile", "settings.toml");
   if (existsSync(directoryProfileSettings)) {
-    return { ref: "./navia-profile", promptLabel: "./navia-profile" };
+    return { ref: "./spark-profile", promptLabel: "./spark-profile" };
   }
 
-  const inlineProfile = resolve(localPath, ".navia", "profile.toml");
+  const inlineProfile = resolve(localPath, ".spark", "profile.toml");
   if (existsSync(inlineProfile)) {
-    return { ref: "./.navia/profile.toml", promptLabel: "./.navia/profile.toml" };
+    return { ref: "./.spark/profile.toml", promptLabel: "./.spark/profile.toml" };
   }
 
   return null;

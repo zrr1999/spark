@@ -28,7 +28,7 @@ Reusable, Spark-independent pieces live in `spark-roles`; Spark keeps task/workf
 - Extension roles are registered by loaded extension packages at runtime, for example `spark-graft` registering `role:extension-patcher`; they are not writable Markdown store roles.
 - Spark role APIs use only `role:*`, `roleRef`, `runName`, and `role-run`; legacy agent-shaped names are rejected rather than migrated in place.
 
-See [role-run-modes.md](./role-run-modes.md) for operational guidance.
+See [roles-run-modes.md](./roles-run-modes.md) for operational guidance.
 
 ## Role terminology boundary
 

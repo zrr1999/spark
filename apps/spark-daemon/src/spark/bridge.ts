@@ -328,7 +328,7 @@ export async function runSparkCommandBridge(
         source: projectedArtifacts.assistantText ? "role_run_artifact" : "role_run_final",
       });
     }
-    const terminalStatus = naviaStatusForRun(run);
+    const terminalStatus = invocationStatusForRun(run);
     recordInvocationStatus(input.db, invocationId, terminalStatus, completedAt);
     const taskStatus = terminalStatus === "succeeded" ? "done" : "failed";
     input.emit(
@@ -448,7 +448,7 @@ async function ensureSparkTaskBinding(input: {
         .projects()
         .find((candidate) => candidate.description.includes(`cockpitProjectId=${projectKey}`)) ??
       graph.createProject({
-        title: `Navia project ${projectKey}`,
+        title: `Spark Cockpit project ${projectKey}`,
         description: `Spark daemon projected Spark project. cockpitProjectId=${projectKey}`,
         purpose: "Execute cockpit-requested tasks through Spark runtime primitives.",
       });
@@ -459,7 +459,7 @@ async function ensureSparkTaskBinding(input: {
       graph.createTask({
         projectRef: project.ref,
         name: taskName,
-        title: input.command.title ?? "Navia runtime task",
+        title: input.command.title ?? "Spark runtime task",
         description: input.prompt,
         kind: "implement",
         status: "ready",
@@ -502,7 +502,7 @@ async function projectSparkArtifacts(input: {
   let assistantText: string | undefined;
   for (const artifactRef of input.artifactRefs) {
     const artifact = await input.artifactStore.get(artifactRef);
-    const artifactId = naviaArtifactIdForSparkRef(artifactRef);
+    const artifactId = artifactIdForSparkRef(artifactRef);
     const serializedPreview = await input.artifactStore.getBody(artifactRef);
     assistantText ??= assistantTextFromProjectedArtifact({
       kind: artifact.kind,
@@ -678,7 +678,7 @@ function recordInvocationStatus(
   ).run(status, now, invocationId);
 }
 
-function naviaStatusForRun(run: TaskRun): "succeeded" | "failed" | "cancelled" | "timed_out" {
+function invocationStatusForRun(run: TaskRun): "succeeded" | "failed" | "cancelled" | "timed_out" {
   if (run.status === "succeeded") return "succeeded";
   if (run.status === "cancelled") return "cancelled";
   if (run.failureKind === "runtime_timeout") return "timed_out";
@@ -702,7 +702,7 @@ function retryOfInvocationId(command: ServerCommandPayload): string | undefined 
 
 function promptForCommand(command: ServerCommandPayload): string {
   if (typeof command.payload?.prompt === "string") return command.payload.prompt;
-  return command.title ?? "Run the requested Navia task for this workspace.";
+  return command.title ?? "Run the requested Spark task for this workspace.";
 }
 
 function taskRuntimeIdForCommand(command: ServerCommandPayload, invocationId: string): string {
@@ -751,7 +751,7 @@ function taskGraphForCommand(
   };
 }
 
-function naviaArtifactIdForSparkRef(ref: ArtifactRef): `art_${string}` {
+function artifactIdForSparkRef(ref: ArtifactRef): `art_${string}` {
   return `art_${createHash("sha256").update(ref).digest("hex").slice(0, 32)}`;
 }
 

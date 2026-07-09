@@ -38,7 +38,7 @@ describe("task summary artifact", () => {
       });
 
       expect(result.canonicalPath.startsWith(workspace.root)).toBe(true);
-      expect(result.canonicalPath).toContain(".navia/artifacts/inv_aaa/task-summary.md");
+      expect(result.canonicalPath).toContain(".spark/artifacts/inv_aaa/task-summary.md");
       const onDisk = readFileSync(result.canonicalPath, "utf8");
       expect(onDisk).toContain("# ✅ Task succeeded");
       expect(onDisk).toContain("Print hello world.");

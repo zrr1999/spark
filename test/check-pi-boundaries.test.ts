@@ -82,11 +82,12 @@ void test("boundary checker rejects pi-extension imports from app host internals
   assert.match(result.stderr, /Spark shared packages must not import Spark app host internals/u);
 });
 
-void test("boundary checker rejects unqualified legacy Navia package names in active docs", async () => {
+void test("documentation terminology checker rejects retired product package names in active docs", async () => {
   const root = await fixtureRoot();
+  const retiredProduct = ["na", "via"].join("");
   await writeFile(
     join(root, "README.md"),
-    "# Example\n\nUse @zendev-lab/navia-db as the product database package.\n",
+    `# Example\n\nUse @zendev-lab/${retiredProduct}-db as the product database package.\n`,
   );
 
   const boundaryResult = runBoundaryCheck(root);
@@ -94,23 +95,24 @@ void test("boundary checker rejects unqualified legacy Navia package names in ac
 
   assert.equal(boundaryResult.status, 0, boundaryResult.stderr);
   assert.notEqual(terminologyResult.status, 0);
-  assert.match(terminologyResult.stderr, /legacy navia-\* package name must be marked as legacy/u);
+  assert.match(terminologyResult.stderr, /retired product terminology/u);
 });
 
-void test("documentation terminology checker rejects retired Navia web names in active docs", async () => {
+void test("documentation terminology checker rejects retired product app names in active docs", async () => {
   const root = await fixtureRoot();
+  const retiredProduct = ["na", "via"].join("");
   await mkdir(join(root, "docs"), { recursive: true });
-  await writeFile(join(root, "docs/tools.md"), "# Tools\n\nUse apps/navia-web for the web app.\n");
+  await writeFile(
+    join(root, "docs/tools.md"),
+    `# Tools\n\nUse apps/${retiredProduct}-web for the web app.\n`,
+  );
 
   const boundaryResult = runBoundaryCheck(root);
   const terminologyResult = runDocTerminologyCheck(root);
 
   assert.equal(boundaryResult.status, 0, boundaryResult.stderr);
   assert.notEqual(terminologyResult.status, 0);
-  assert.match(
-    terminologyResult.stderr,
-    /retired Navia web package\/path name in active documentation/u,
-  );
+  assert.match(terminologyResult.stderr, /retired product terminology/u);
 });
 
 void test("boundary checker allows shared Spark system/database packages", async () => {

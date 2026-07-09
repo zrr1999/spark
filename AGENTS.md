@@ -15,7 +15,7 @@ Target package topology follows type-first names:
 - `packages/pi-extension` — legacy Pi-compatible extension facade (slated for retirement). It owns Spark command/tool policy and depends on `spark-extension-api` instead of concrete host runtimes.
 - `packages/spark-runtime`, `packages/spark-protocol`, `packages/spark-tui`, `packages/spark-db`, and `packages/spark-system` — Spark shared runtime, protocol/schema, reusable TUI boundary, SQLite/migration, and local-system helper packages.
 - `packages/spark-cockpit-*` — reserved for Cockpit-private implementation packages; do not put daemon/shared helpers behind Cockpit-private names.
-- `docs/` — current docs are split into `architecture/`, `specs/`, `research/`, and `records/`; `docs/navia/` keeps the pruned Spark Cockpit UI/product docs that originated under the Navia name.
+- `docs/` — current docs are split into `architecture/`, `specs/`, `operations/`, `cockpit/`, `research/`, and `records/`; keep `docs/README.md` as the concise map.
 
 ## Tooling
 
@@ -32,6 +32,8 @@ Target package topology follows type-first names:
 | `pnpm run check`                         | Run the root validation gate                                     |
 | `vp check`                               | Format + lint + type check (same path CI expects via pre-commit) |
 | `pnpm run check:tsc`                     | Typecheck only (`tsc --noEmit`)                                  |
+| `pnpm run check:daemon-readiness`        | Emit the Spark daemon readiness audit report                     |
+| `pnpm run check:zellij-harness`          | Emit the native TUI/zellij harness capability audit report       |
 | `pnpm test`                              | Root Node tests only (`test/*.test.ts`)                          |
 | `pnpm run build`                         | Build the Spark daemon CLI and Spark Cockpit web app             |
 | `pnpm run preview`                       | Start the local Spark Cockpit dev server                         |
@@ -60,5 +62,5 @@ Target package topology follows type-first names:
 - Public/default repo-owned tools should use canonical `tool({ action })` surfaces when operations share one domain/state/permission/render/result contract; do not keep fragmented duplicate aliases public, and render action tools as `tool action=<value> ...`.
 - Prefer `vp fmt` / `vp check` before committing when touching TS/Markdown; pre-commit runs `vp check --fix`.
 - Do not commit secrets or `.env` files.
-- **State directories** — Workspace agent runtime lives under `.spark/`; local learnings under `.learnings/`. Cockpit and daemon app databases live under XDG paths via `resolveSparkPaths()` (`~/.local/share/spark/cockpit`, `~/.local/share/spark/daemon`). Legacy repo-local `.navia/` and `NAVIA_*` env aliases remain for migration only and should not be used for new installs.
-- Boundary checks should keep retained `pi-*` packages independent from Spark product/Cockpit packages except for renamed Spark foundation packages, keep Spark shared packages independent from Cockpit/daemon adapter packages, and treat legacy `navia-*` names in active docs as historical/migration-only context.
+- **State directories** — Workspace agent runtime lives under `.spark/`; local learnings under `.learnings/`. Cockpit and daemon app databases live under XDG paths via `resolveSparkPaths()` (`~/.local/share/spark/cockpit`, `~/.local/share/spark/daemon`).
+- Boundary checks should keep retained `pi-*` packages independent from Spark product/Cockpit packages except for renamed Spark foundation packages, and keep Spark shared packages independent from Cockpit/daemon adapter packages.

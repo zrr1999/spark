@@ -63,15 +63,11 @@ describe("resolveSparkPaths", () => {
     expect(paths.pidFile).toBe("/daemon-run/daemon.pid");
   });
 
-  it("honors Spark Cockpit overrides before legacy Navia aliases", () => {
+  it("honors Spark Cockpit environment overrides", () => {
     const paths = resolveSparkPaths({
       app: "cockpit",
       env: {
         HOME: home,
-        NAVIA_DATA_DIR: "/legacy",
-        NAVIA_SERVER_DATA_DIR: "/legacy-server-data",
-        NAVIA_SERVER_CACHE_DIR: "/legacy-server-cache",
-        NAVIA_SERVER_STATE_DIR: "/legacy-server-state",
         SPARK_COCKPIT_DATA_DIR: "/cockpit-data",
         SPARK_COCKPIT_CACHE_DIR: "/cockpit-cache",
         SPARK_COCKPIT_STATE_DIR: "/cockpit-state",
@@ -82,24 +78,6 @@ describe("resolveSparkPaths", () => {
     expect(paths.dataDir).toBe("/cockpit-data");
     expect(paths.cacheDir).toBe("/cockpit-cache");
     expect(paths.stateDir).toBe("/cockpit-state");
-    expect(paths.legacyDataDirAlias).toBeUndefined();
-  });
-
-  it("keeps Navia data directory variables as Cockpit-only legacy aliases", () => {
-    const cockpitPaths = resolveSparkPaths({
-      app: "cockpit",
-      env: { HOME: home, NAVIA_DATA_DIR: "/legacy" },
-      cwd: "/",
-    });
-    const daemonPaths = resolveSparkPaths({
-      app: "daemon",
-      env: { HOME: home, NAVIA_DATA_DIR: "/legacy" },
-      cwd: "/",
-    });
-
-    expect(cockpitPaths.dataDir).toBe("/legacy");
-    expect(cockpitPaths.legacyDataDirAlias).toBe("/legacy");
-    expect(daemonPaths.dataDir).toBe(join(home, ".local", "share", "spark", "daemon"));
   });
 
   it("honors direct test overrides", () => {

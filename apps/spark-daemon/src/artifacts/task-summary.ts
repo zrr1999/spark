@@ -42,7 +42,7 @@ export interface TaskSummaryArtifact {
 /**
  * Build and persist a canonical Markdown task summary for a daemon-executed
  * `task.start.request`. The daemon owns the canonical content under
- * `<workspace>/.navia/artifacts/<invocationId>/task-summary.md`; the returned
+ * `<workspace>/.spark/artifacts/<invocationId>/task-summary.md`; the returned
  * `payload` carries enough metadata for the server to project, lazily cache,
  * and preview the artifact.
  */
@@ -106,7 +106,7 @@ export function buildTaskSummaryArtifact(input: TaskSummaryInput): TaskSummaryAr
 function canonicalArtifactPath(workspaceLocalPath: string, invocationId: string): string {
   return join(
     workspaceLocalPath,
-    ".navia",
+    ".spark",
     "artifacts",
     safeSegment(invocationId),
     "task-summary.md",

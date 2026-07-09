@@ -50,7 +50,7 @@ function setupWorkspace() {
 describe("artifact cache", () => {
   it("creates lazy preview cache metadata and writes inline previews when available", () => {
     const { db, now, runtimeWorkspaceBindingId, workspace } = setupWorkspace();
-    const cacheRoot = mkdtempSync(join(tmpdir(), "navia-artifact-cache-"));
+    const cacheRoot = mkdtempSync(join(tmpdir(), "spark-artifact-cache-"));
     const artifactId = createId("art");
 
     try {
@@ -91,7 +91,7 @@ describe("artifact cache", () => {
 
   it("replays linked spark.ui.v1 source and derived AST artifact previews", () => {
     const { db, now, runtimeWorkspaceBindingId, workspace } = setupWorkspace();
-    const cacheRoot = mkdtempSync(join(tmpdir(), "navia-artifact-cache-"));
+    const cacheRoot = mkdtempSync(join(tmpdir(), "spark-artifact-cache-"));
     const sourceArtifactId = "artifact:11111111-1111-4111-8111-111111111111";
     const astArtifactId = "artifact:22222222-2222-4222-8222-222222222222";
     const source = `## Build report
@@ -186,7 +186,7 @@ describe("artifact cache", () => {
 
   it("registers missing preview state for external runtime pointers", () => {
     const { db, now, runtimeWorkspaceBindingId, workspace } = setupWorkspace();
-    const cacheRoot = mkdtempSync(join(tmpdir(), "navia-artifact-cache-"));
+    const cacheRoot = mkdtempSync(join(tmpdir(), "spark-artifact-cache-"));
     const artifactId = createId("art");
 
     try {
@@ -219,7 +219,7 @@ describe("artifact cache", () => {
 
   it("marks blob-format artifacts as unsupported_binary without materializing inline content", () => {
     const { db, now, runtimeWorkspaceBindingId, workspace } = setupWorkspace();
-    const cacheRoot = mkdtempSync(join(tmpdir(), "navia-artifact-cache-"));
+    const cacheRoot = mkdtempSync(join(tmpdir(), "spark-artifact-cache-"));
     const artifactId = createId("art");
 
     try {
@@ -254,7 +254,7 @@ describe("artifact cache", () => {
 
   it("marks oversized inline previews as too_large and skips materialization", () => {
     const { db, now, runtimeWorkspaceBindingId, workspace } = setupWorkspace();
-    const cacheRoot = mkdtempSync(join(tmpdir(), "navia-artifact-cache-"));
+    const cacheRoot = mkdtempSync(join(tmpdir(), "spark-artifact-cache-"));
     const artifactId = createId("art");
     const huge = "x".repeat(MAX_PREVIEW_BYTES + 1024);
 
@@ -290,7 +290,7 @@ describe("artifact cache", () => {
 
   it("readArtifactPreviewContent returns the cached body when ready", () => {
     const { db, now, runtimeWorkspaceBindingId, workspace } = setupWorkspace();
-    const cacheRoot = mkdtempSync(join(tmpdir(), "navia-artifact-cache-"));
+    const cacheRoot = mkdtempSync(join(tmpdir(), "spark-artifact-cache-"));
     const artifactId = createId("art");
 
     try {
@@ -322,7 +322,7 @@ describe("artifact cache", () => {
 
   it("readArtifactPreviewContent does not return a body when preview is non-ready", () => {
     const { db, now, runtimeWorkspaceBindingId, workspace } = setupWorkspace();
-    const cacheRoot = mkdtempSync(join(tmpdir(), "navia-artifact-cache-"));
+    const cacheRoot = mkdtempSync(join(tmpdir(), "spark-artifact-cache-"));
     const artifactId = createId("art");
 
     try {
@@ -354,7 +354,7 @@ describe("artifact cache", () => {
 
   it("readArtifactPreviewContent transitions to read_error when the cached file vanishes", () => {
     const { db, now, runtimeWorkspaceBindingId, workspace } = setupWorkspace();
-    const cacheRoot = mkdtempSync(join(tmpdir(), "navia-artifact-cache-"));
+    const cacheRoot = mkdtempSync(join(tmpdir(), "spark-artifact-cache-"));
     const artifactId = createId("art");
 
     try {

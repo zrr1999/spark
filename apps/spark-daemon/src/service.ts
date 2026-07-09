@@ -4,7 +4,6 @@ import {
   openSync,
   readFileSync,
   realpathSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -14,7 +13,6 @@ import { spawn, spawnSync } from "node:child_process";
 import { launchctlCommand, type SparkPaths } from "@zendev-lab/spark-system";
 
 const launchdLabel = "dev.spark.daemon";
-const legacyLaunchdLabel = "dev.navia.runner";
 
 export interface SparkDaemonServiceResult {
   kind: "launchd" | "detached";
@@ -33,7 +31,6 @@ export function startSparkDaemonService(paths: SparkPaths): SparkDaemonServiceRe
 export function stopSparkDaemonService(paths: SparkPaths): SparkDaemonServiceResult | null {
   if (process.platform === "darwin") {
     const uid = readCurrentUid();
-    cleanupLegacyLaunchdService(uid);
     const target = `gui/${uid}/${launchdLabel}`;
     const stopped = runLaunchctl(["bootout", target]);
     if (stopped.status === 0) {
@@ -50,7 +47,6 @@ export function stopSparkDaemonService(paths: SparkPaths): SparkDaemonServiceRes
 
 function startLaunchdService(paths: SparkPaths): SparkDaemonServiceResult {
   const uid = readCurrentUid();
-  cleanupLegacyLaunchdService(uid);
   const plistPath = writeLaunchdPlist(paths);
   const target = `gui/${uid}/${launchdLabel}`;
 
@@ -213,14 +209,6 @@ function serviceEnvironment(): Record<string, string> {
     }
   }
   return env;
-}
-
-function cleanupLegacyLaunchdService(uid: number): void {
-  const home = process.env.HOME || homedir();
-  const legacyPlistPath = join(home, "Library", "LaunchAgents", `${legacyLaunchdLabel}.plist`);
-  runLaunchctl(["bootout", `gui/${uid}/${legacyLaunchdLabel}`]);
-  runLaunchctl(["bootout", `gui/${uid}`, legacyPlistPath]);
-  rmSync(legacyPlistPath, { force: true });
 }
 
 function runLaunchctl(args: string[]) {

@@ -16,7 +16,7 @@ export interface SparkDaemonResourceLoader {
   reload(): Promise<void>;
 }
 
-export function createNaviaResourceLoader(systemPrompt?: string): SparkDaemonResourceLoader {
+export function createSparkDaemonResourceLoader(systemPrompt?: string): SparkDaemonResourceLoader {
   return {
     getExtensions: () => ({ extensions: [], errors: [], runtime: {} }),
     getSkills: () => ({ skills: [], diagnostics: [] }),

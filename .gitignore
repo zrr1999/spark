@@ -27,4 +27,3 @@ build/
 playwright-report/
 test-results/
 *.tsbuildinfo
-.navia/

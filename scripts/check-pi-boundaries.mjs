@@ -165,9 +165,6 @@ function classifyBoundary(packageDir, manifest) {
       return "spark-app";
     }
   }
-  if (pathName.startsWith("navia-") || packageName.startsWith("@zendev-lab/navia-")) {
-    return "cockpit-package";
-  }
   if (
     pathName.startsWith("spark-cockpit-") ||
     packageName.startsWith("@zendev-lab/spark-cockpit-")
@@ -289,10 +286,8 @@ function isCockpitSpecifier(specifier) {
     specifier === "@zendev-lab/spark-cockpit" ||
     specifier === "@zendev-lab/spark-daemon" ||
     specifier.startsWith("@zendev-lab/spark-cockpit-") ||
-    specifier.startsWith("@zendev-lab/navia-") ||
     specifier.startsWith("spark-cockpit") ||
-    specifier.startsWith("spark-daemon") ||
-    specifier.startsWith("navia-")
+    specifier.startsWith("spark-daemon")
   );
 }
 

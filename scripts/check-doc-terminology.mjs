@@ -9,27 +9,22 @@ const root = (
   new URL("..", import.meta.url).pathname
 ).replace(/\/$/u, "");
 
+const retiredProduct = ["na", "via"].join("");
+const retiredProductPattern = new RegExp(
+  `\\b(?:${retiredProduct}|${retiredProduct}-[\\w-]*|@zendev-lab/${retiredProduct}-[\\w-]*|packages/${retiredProduct}-[\\w-]*)\\b`,
+  "iu",
+);
 const violations = [];
 const skippedActiveDocumentationPattern = /^docs\/archive\//u;
-const retiredNaviaWebPattern =
-  /\b(?:apps\/navia-web|@zendev-lab\/navia-web|navia-web|Navia web)\b/u;
-const legacyNaviaPackagePattern = /(?:@zendev-lab\/navia-|packages\/navia-|`navia-)/u;
-const intentionalLegacyNaviaLinePattern =
-  /\b(?:legacy|legacy-named|historical|migration|transition|retired|archived|former)\b/iu;
 
 for (const relativePath of await listActiveDocumentationFiles()) {
   const path = join(root, relativePath);
   const content = await readFile(path, "utf8");
   const lines = content.split(/\r?\n/u);
   lines.forEach((line, index) => {
-    if (retiredNaviaWebPattern.test(line)) {
+    if (retiredProductPattern.test(line)) {
       violations.push(
-        `${relativePath}:${index + 1}: retired Navia web package/path name in active documentation`,
-      );
-    }
-    if (legacyNaviaPackagePattern.test(line) && !intentionalLegacyNaviaLinePattern.test(line)) {
-      violations.push(
-        `${relativePath}:${index + 1}: legacy navia-* package name must be marked as legacy/migration/historical context`,
+        `${relativePath}:${index + 1}: retired product terminology in active documentation`,
       );
     }
   });

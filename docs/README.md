@@ -1,29 +1,51 @@
-# Spark documentation map
+# Spark docs
 
-This directory keeps current architecture contracts concise. Obsolete migration/evidence notes are removed instead of preserved in parallel when their durable essence is already covered by current docs or artifacts.
+Use this directory as the map of current Spark contracts. Prefer one concise source of truth per topic; delete or merge stale notes instead of keeping parallel histories.
 
-## Top-level authority
+## Start here
 
-- [`../DESIGN.md`](../DESIGN.md) — high-level design entry and boundary map.
-- [`../ARCHITECTURE.md`](../ARCHITECTURE.md) — package ownership and dependency direction.
-- [`../README.md`](../README.md) — product/package overview.
+- [`../DESIGN.md`](../DESIGN.md) — product and architecture entry point.
+- [`../README.md`](../README.md) — package and command overview.
+- [`architecture/packages.md`](./architecture/packages.md) — package ownership and dependency direction.
+- [`specs/tools.md`](./specs/tools.md) — public command/tool vocabulary.
+- [`records/implementation-status.md`](./records/implementation-status.md) — current implementation status.
 
-## Structure
+## Directory guide
 
-- [`architecture/`](./architecture/) — daemon, host, package, and capability architecture notes.
-- [`specs/`](./specs/) — current contracts for turns, tools, stores, roles, daemon workspace clients, and conventions.
-- [`research/`](./research/) — bounded research reports used to plan new capabilities.
-- [`records/`](./records/) — current implementation status and retained validation/status records.
-- [`navia/`](./navia/) — Spark Cockpit product/UI material from the older Navia naming era, pruned to files that still describe current Cockpit boundaries.
+| Directory | Purpose |
+| --- | --- |
+| [`architecture/`](./architecture/) | Durable system boundaries and ownership decisions. |
+| [`specs/`](./specs/) | Contracts that code, tests, or external users can rely on. |
+| [`operations/`](./operations/) | Validation gates, harnesses, and operator recipes. |
+| [`cockpit/`](./cockpit/) | Spark Cockpit product/UI design material. |
+| [`research/`](./research/) | Bounded research inputs for planned work. |
+| [`records/`](./records/) | Current status records worth retaining. |
 
-## Frequently used docs
+## Topic index
 
-- [`architecture/spark-host-architecture.md`](./architecture/spark-host-architecture.md) — Pi host, native TUI host, and daemon execution/transport boundaries.
-- [`architecture/spark-daemon-reference.md`](./architecture/spark-daemon-reference.md) — daemon execution-plane ADR/reference for lock, queue, local IPC, and cockpit transport adapters.
-- [`specs/spark-daemon-workspace-clients.md`](./specs/spark-daemon-workspace-clients.md) — daemon-owned workspace client/borrowed-workspace contract.
+### Architecture
+
+- [`architecture/hosts.md`](./architecture/hosts.md) — Pi host, Spark TUI host, and daemon execution boundaries.
+- [`architecture/daemon.md`](./architecture/daemon.md) — daemon lock, queue, local IPC, and transport reference.
+- [`architecture/cockpit-projection.md`](./architecture/cockpit-projection.md) — Cockpit SQLite projection vs Spark execution truth.
+- [`architecture/capabilities-ui.md`](./architecture/capabilities-ui.md) — capability naming and artifact-backed Generative UI direction.
+
+### Specs
+
+- [`specs/command-planes.md`](./specs/command-planes.md) — canonical `spark daemon/server/tui` command planes.
+- [`specs/daemon-workspace-clients.md`](./specs/daemon-workspace-clients.md) — daemon-owned workspace client contract.
+- [`specs/store-inventory.md`](./specs/store-inventory.md) — local `.spark/` store ownership and cleanup policy.
 - [`specs/turn.md`](./specs/turn.md) — turn/finish packet contract.
-- [`specs/tools.md`](./specs/tools.md) — public command/tool vocabulary and runtime behavior.
-- [`specs/spark-store-inventory.md`](./specs/spark-store-inventory.md) — local `.spark/` store ownership and cleanup policy.
-- [`specs/role-boundaries.md`](./specs/role-boundaries.md) — role spec/run terminology and package ownership.
-- [`architecture/spark-capabilities-and-generative-ui.md`](./architecture/spark-capabilities-and-generative-ui.md) — selected capability naming plus artifact-backed Generative UI direction.
-- [`research/pi-extension-ecosystem-2026-07.md`](./research/pi-extension-ecosystem-2026-07.md) — Pi extension ecosystem research and self-owned Spark capability plan.
+- [`specs/roles-api.md`](./specs/roles-api.md), [`specs/roles-boundaries.md`](./specs/roles-boundaries.md), [`specs/roles-run-modes.md`](./specs/roles-run-modes.md) — role contracts and launch modes.
+- [`specs/commits.md`](./specs/commits.md) — commit convention.
+
+### Operations and UI
+
+- [`operations/daemon-readiness.md`](./operations/daemon-readiness.md) — daemon readiness gate.
+- [`operations/zellij-harness.md`](./operations/zellij-harness.md) — native TUI/zellij harness.
+- [`cockpit/visual-design.md`](./cockpit/visual-design.md) — Spark Cockpit visual design authority.
+
+### Research
+
+- [`research/competitor-taxonomy-2026-07.md`](./research/competitor-taxonomy-2026-07.md) — competitor / adjacent-project taxonomy for Spark.
+- [`research/pi-extension-ecosystem-2026-07.md`](./research/pi-extension-ecosystem-2026-07.md) — Pi extension ecosystem notes for self-owned capabilities.

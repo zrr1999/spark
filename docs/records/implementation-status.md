@@ -2,7 +2,7 @@
 
 This repo has the Spark package skeleton, Spark-owned `spark-*` capability packages, the retained out-of-scope `pi-btw` package, and an end-to-end local vertical slice. Retired migration packages such as `spark-core` and `spark-goal` are no longer workspaces.
 
-Package naming now follows [`spark-capabilities-and-generative-ui.md`](../architecture/spark-capabilities-and-generative-ui.md): Spark-owned capabilities use `spark-*`, public tool names stay stable, and `pi-btw` remains out of scope.
+Package naming now follows [`capabilities-ui.md`](../architecture/capabilities-ui.md): Spark-owned capabilities use `spark-*`, public tool names stay stable, and `pi-btw` remains out of scope.
 
 ## Implemented
 

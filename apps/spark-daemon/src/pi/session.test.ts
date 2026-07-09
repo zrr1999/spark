@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { createNaviaResourceLoader } from "./resource-loader.js";
+import { createSparkDaemonResourceLoader } from "./resource-loader.js";
 import { extractFinalAssistantText, extractTextDelta } from "./session.js";
 
 describe("Spark daemon session compatibility surface", () => {
   it("uses a daemon-owned resource loader with no extension discovery by default", () => {
-    const loader = createNaviaResourceLoader();
+    const loader = createSparkDaemonResourceLoader();
 
     expect(loader.getExtensions().extensions).toEqual([]);
     expect(loader.getSkills().skills).toEqual([]);

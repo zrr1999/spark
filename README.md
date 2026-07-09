@@ -112,7 +112,6 @@ Spark Cockpit is the local web cockpit/projection product line while retaining s
 - `@zendev-lab/spark-protocol` is the consolidated Spark protocol package for runtime, Cockpit, interaction, and view-model schemas.
 - `@zendev-lab/spark-db` owns shared SQLite migrations, database helpers, and the Node SQLite dialect used by Spark Cockpit and the daemon.
 - `@zendev-lab/spark-system` owns shared filesystem path, permission, command, and local runtime helpers used by Spark Cockpit and the daemon.
-- Former `navia-domain` and `navia-ui` marker packages were removed instead of preserving empty shells.
 
 Typical merged-repo development commands:
 
@@ -152,10 +151,9 @@ Pi loads raw TypeScript from the package manifest; there is no build step.
 ## Docs
 
 - [`DESIGN.md`](./DESIGN.md)
-- [`ARCHITECTURE.md`](./ARCHITECTURE.md)
 - [`docs/README.md`](./docs/README.md)
-- [`docs/records/implementation-status.md`](./docs/records/implementation-status.md)
-- [`docs/specs/spark-store-inventory.md`](./docs/specs/spark-store-inventory.md)
+- [`docs/architecture/packages.md`](./docs/architecture/packages.md)
+- [`docs/architecture/hosts.md`](./docs/architecture/hosts.md)
 - [`docs/specs/tools.md`](./docs/specs/tools.md)
-- [`docs/architecture/spark-host-architecture.md`](./docs/architecture/spark-host-architecture.md)
-- [`docs/specs/commit-convention.md`](./docs/specs/commit-convention.md)
+- [`docs/specs/store-inventory.md`](./docs/specs/store-inventory.md)
+- [`docs/records/implementation-status.md`](./docs/records/implementation-status.md)

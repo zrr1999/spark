@@ -169,7 +169,7 @@ describe("Spark daemon CLI", () => {
   it("requires an explicit server URL for scripted workspace registration", async () => {
     const capture = createCliIo();
 
-    const code = await withTempNaviaEnv(async (root) => {
+    const code = await withTempSparkEnv(async (root) => {
       mkdirSync(join(root, "checkout"));
       process.env.INIT_CWD = root;
       return await main(["ws", "register", "checkout", "--token", "spark_wsreg_test"], capture.io);
@@ -198,7 +198,7 @@ describe("Spark daemon CLI", () => {
     );
     const capture = createCliIo({ registerWorkspaceInService });
 
-    const code = await withTempNaviaEnv(async (root) => {
+    const code = await withTempSparkEnv(async (root) => {
       mkdirSync(join(root, "checkout"));
       process.env.INIT_CWD = root;
       process.env.SPARK_WORKSPACE_REGISTRATION_TOKEN = "spark_wsreg_test";
@@ -242,7 +242,7 @@ describe("Spark daemon CLI", () => {
       }),
     );
 
-    const code = await withTempNaviaEnv(async (root) => {
+    const code = await withTempSparkEnv(async (root) => {
       mkdirSync(join(root, "checkout"));
       process.env.INIT_CWD = root;
       return await main(
@@ -271,7 +271,7 @@ describe("Spark daemon CLI", () => {
   it("rejects registration secrets embedded in the server URL", async () => {
     const capture = createCliIo();
 
-    const code = await withTempNaviaEnv(async (root) => {
+    const code = await withTempSparkEnv(async (root) => {
       mkdirSync(join(root, "checkout"));
       process.env.INIT_CWD = root;
       return await main(
@@ -301,7 +301,7 @@ describe("Spark daemon CLI", () => {
     });
     const capture = createCliIo({ registerWorkspaceInService });
 
-    const code = await withTempNaviaEnv(async (root) => {
+    const code = await withTempSparkEnv(async (root) => {
       mkdirSync(join(root, "checkout"));
       process.env.INIT_CWD = root;
       return await main(
@@ -327,7 +327,7 @@ describe("Spark daemon CLI", () => {
   it("installs Spark daemon config without initializing daemon-local SQLite", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async () => {
+    await withTempSparkEnv(async () => {
       const paths = resolveSparkPaths({ app: "daemon" });
 
       await expect(main(["install"], capture.io)).resolves.toBe(0);
@@ -341,7 +341,7 @@ describe("Spark daemon CLI", () => {
   it("prints the workspace registration hint when no default workspace exists", async () => {
     const capture = createCliIo();
 
-    const code = await withTempNaviaEnv(() => main(["--no-service"], capture.io));
+    const code = await withTempSparkEnv(() => main(["--no-service"], capture.io));
 
     expect(code).toBe(0);
     expect(capture.stdout()).toContain("no workspaces registered");
@@ -352,7 +352,7 @@ describe("Spark daemon CLI", () => {
   it("supports the spark daemon workspace register and ls surface", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const invocationCwd = join(root, "caller");
       const workspacePath = join(invocationCwd, "workspace");
       mkdirSync(workspacePath, { recursive: true });
@@ -483,7 +483,7 @@ describe("Spark daemon CLI", () => {
   });
 
   it("starts an interactive workspace shell from the default spark daemon command on a TTY", async () => {
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
@@ -520,7 +520,7 @@ describe("Spark daemon CLI", () => {
   });
 
   it("registers a workspace through the local daemon service when it is running", async () => {
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const workspacePath = join(root, "checkout");
       mkdirSync(workspacePath, { recursive: true });
       const realWorkspacePath = realpathSync(workspacePath);
@@ -574,7 +574,7 @@ describe("Spark daemon CLI", () => {
   });
 
   it("lazy-starts the Spark daemon before workspace registration", async () => {
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const workspacePath = join(root, "checkout");
       mkdirSync(workspacePath, { recursive: true });
       const realWorkspacePath = realpathSync(workspacePath);
@@ -632,7 +632,7 @@ describe("Spark daemon CLI", () => {
   });
 
   it("defaults scripted workspace registration to the invocation cwd", async () => {
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const realWorkspacePath = realpathSync(root);
       process.env.INIT_CWD = root;
       const paths = resolveSparkPaths({ app: "daemon" });
@@ -692,7 +692,7 @@ describe("Spark daemon CLI", () => {
   });
 
   it("lazy-starts the Spark daemon before workspace reads", async () => {
-    await withTempNaviaEnv(async () => {
+    await withTempSparkEnv(async () => {
       const startService = vi.fn(() => ({
         kind: "detached" as const,
         alreadyRunning: false,
@@ -713,7 +713,7 @@ describe("Spark daemon CLI", () => {
   });
 
   it("prompts for the full workspace registration form interactively", async () => {
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       process.env.INIT_CWD = root;
       const capture = createCliIo({
         stdin: interactiveStdin(["", "http://127.0.0.1:5173", "spark_wsreg_interactive", "Spore"]),
@@ -742,7 +742,7 @@ describe("Spark daemon CLI", () => {
   it("does not fall back to direct workspace reads when the running service is unreachable", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const workspacePath = join(root, "checkout");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
@@ -770,7 +770,7 @@ describe("Spark daemon CLI", () => {
   });
 
   it("does not fall back to direct workspace registration when the running service is unreachable", async () => {
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const workspacePath = join(root, "checkout");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
@@ -799,7 +799,7 @@ describe("Spark daemon CLI", () => {
   });
 
   it("restarts and retries workspace registration when the local RPC socket is missing", async () => {
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const workspacePath = join(root, "checkout");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
@@ -845,7 +845,7 @@ describe("Spark daemon CLI", () => {
   });
 
   it("reads workspace ls from the local daemon service when it is running", async () => {
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
@@ -882,7 +882,7 @@ describe("Spark daemon CLI", () => {
   });
 
   it("reads workspace show from the local daemon service when it is running", async () => {
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
@@ -950,7 +950,7 @@ describe("Spark daemon CLI", () => {
   });
 
   it("reattaches a detached workspace through the local daemon service when it is running", async () => {
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
@@ -1001,7 +1001,7 @@ describe("Spark daemon CLI", () => {
   });
 
   it("reattaches a detached workspace before showing a targeted workspace", async () => {
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
@@ -1043,7 +1043,7 @@ describe("Spark daemon CLI", () => {
   });
 
   it("pauses a workspace through the local daemon service when it is running", async () => {
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
@@ -1096,7 +1096,7 @@ describe("Spark daemon CLI", () => {
   it("derives the workspace slug from --name", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const workspacePath = join(root, "checkout");
       mkdirSync(workspacePath, { recursive: true });
       const realWorkspacePath = realpathSync(workspacePath);
@@ -1110,7 +1110,7 @@ describe("Spark daemon CLI", () => {
             "register",
             "checkout",
             "--name",
-            "Navia Dev",
+            "Spark Dev",
             "--token",
             "spark_wsreg_test",
             "--no-service",
@@ -1118,7 +1118,7 @@ describe("Spark daemon CLI", () => {
           capture.io,
         ),
       ).resolves.toBe(0);
-      expect(capture.stdout()).toContain("✓ workspace 'Navia Dev' registered");
+      expect(capture.stdout()).toContain("✓ workspace 'Spark Dev' registered");
 
       const listCapture = createCliIo();
       await expect(main(["ws", "ls", "--json", "--no-service"], listCapture.io)).resolves.toBe(0);
@@ -1129,15 +1129,15 @@ describe("Spark daemon CLI", () => {
         path: string;
       }>;
       expect(workspace).toMatchObject({
-        slug: "navia-dev",
-        name: "Navia Dev",
+        slug: "spark-dev",
+        name: "Spark Dev",
         serverUrl: "http://127.0.0.1:5173/",
         path: realWorkspacePath,
       });
 
       const showCapture = createCliIo();
       await expect(
-        main(["ws", "show", "navia-dev", "--json", "--no-service"], showCapture.io),
+        main(["ws", "show", "spark-dev", "--json", "--no-service"], showCapture.io),
       ).resolves.toBe(0);
       const detail = JSON.parse(showCapture.stdout()) as {
         slug: string;
@@ -1145,8 +1145,8 @@ describe("Spark daemon CLI", () => {
         serverUrl: string;
       };
       expect(detail).toMatchObject({
-        slug: "navia-dev",
-        name: "Navia Dev",
+        slug: "spark-dev",
+        name: "Spark Dev",
         serverUrl: "http://127.0.0.1:5173/",
       });
     });
@@ -1155,7 +1155,7 @@ describe("Spark daemon CLI", () => {
   it("emits connection capability timestamps in workspace show json", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const workspacePath = join(root, "checkout");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
@@ -1169,7 +1169,7 @@ describe("Spark daemon CLI", () => {
             "register",
             "checkout",
             "--name",
-            "Navia Dev",
+            "Spark Dev",
             "--token",
             "spark_wsreg_test",
             "--no-service",
@@ -1193,7 +1193,7 @@ describe("Spark daemon CLI", () => {
               message: "profile files are missing",
             },
           }),
-          "navia-dev",
+          "spark-dev",
         );
       } finally {
         db.close();
@@ -1201,7 +1201,7 @@ describe("Spark daemon CLI", () => {
 
       const showCapture = createCliIo();
       await expect(
-        main(["ws", "show", "navia-dev", "--json", "--no-service"], showCapture.io),
+        main(["ws", "show", "spark-dev", "--json", "--no-service"], showCapture.io),
       ).resolves.toBe(0);
       const detail = JSON.parse(showCapture.stdout()) as {
         connection: {
@@ -1235,7 +1235,7 @@ describe("Spark daemon CLI", () => {
   it("records explicit workspace profile metadata", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const workspacePath = join(root, "checkout");
       mkdirSync(workspacePath, { recursive: true });
       const profile = createGitProfile(workspacePath);
@@ -1249,7 +1249,7 @@ describe("Spark daemon CLI", () => {
             "register",
             "checkout",
             "--name",
-            "Navia Dev",
+            "Spark Dev",
             "--profile",
             profile.ref,
             "--token",
@@ -1263,7 +1263,7 @@ describe("Spark daemon CLI", () => {
 
       const showCapture = createCliIo();
       await expect(
-        main(["ws", "show", "navia-dev", "--json", "--no-service"], showCapture.io),
+        main(["ws", "show", "spark-dev", "--json", "--no-service"], showCapture.io),
       ).resolves.toBe(0);
       const detail = JSON.parse(showCapture.stdout()) as {
         profile?: {
@@ -1287,7 +1287,7 @@ describe("Spark daemon CLI", () => {
       stdin: interactiveStdin(["checkout", "", "spark_wsreg_interactive", "", "y"]),
     });
 
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const workspacePath = join(root, "checkout");
       mkdirSync(workspacePath, { recursive: true });
       const profile = createGitProfile(workspacePath);
@@ -1307,7 +1307,7 @@ describe("Spark daemon CLI", () => {
         };
       };
       expect(detail.profile).toMatchObject({
-        ref: "./navia-profile",
+        ref: "./spark-profile",
         commit: profile.commit,
       });
     });
@@ -1316,7 +1316,7 @@ describe("Spark daemon CLI", () => {
   it("does not import a detected profile during scripted registration", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const workspacePath = join(root, "checkout");
       mkdirSync(workspacePath, { recursive: true });
       createGitProfile(workspacePath);
@@ -1330,7 +1330,7 @@ describe("Spark daemon CLI", () => {
             "register",
             "checkout",
             "--name",
-            "Navia Dev",
+            "Spark Dev",
             "--token",
             "spark_wsreg_test",
             "--no-service",
@@ -1341,7 +1341,7 @@ describe("Spark daemon CLI", () => {
 
       const showCapture = createCliIo();
       await expect(
-        main(["ws", "show", "navia-dev", "--json", "--no-service"], showCapture.io),
+        main(["ws", "show", "spark-dev", "--json", "--no-service"], showCapture.io),
       ).resolves.toBe(0);
       const detail = JSON.parse(showCapture.stdout()) as { profile?: unknown };
       expect(detail.profile).toBeUndefined();
@@ -1353,7 +1353,7 @@ describe("Spark daemon CLI", () => {
     const fetchFn = stubRuntimeRegistrationFetch();
 
     try {
-      await withTempNaviaEnv(async (root) => {
+      await withTempSparkEnv(async (root) => {
         const workspacePath = join(root, "checkout");
         mkdirSync(workspacePath, { recursive: true });
         const realWorkspacePath = realpathSync(workspacePath);
@@ -1367,7 +1367,7 @@ describe("Spark daemon CLI", () => {
               "register",
               "checkout",
               "--name",
-              "Navia Dev",
+              "Spark Dev",
               "--token",
               "spark_wsreg_first",
               "--no-service",
@@ -1386,7 +1386,7 @@ describe("Spark daemon CLI", () => {
               "--token",
               "spark_wsreg_second",
               "--name",
-              "Navia Dev",
+              "Spark Dev",
               "--no-service",
             ],
             capture.io,
@@ -1405,14 +1405,14 @@ describe("Spark daemon CLI", () => {
         expect(workspaces).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
-              slug: "navia-dev",
-              name: "Navia Dev",
+              slug: "spark-dev",
+              name: "Spark Dev",
               serverUrl: "http://127.0.0.1:5173/",
               path: realWorkspacePath,
             }),
             expect.objectContaining({
-              slug: "navia-dev",
-              name: "Navia Dev",
+              slug: "spark-dev",
+              name: "Spark Dev",
               serverUrl: "http://127.0.0.1:5174/",
               path: realWorkspacePath,
             }),
@@ -1421,16 +1421,16 @@ describe("Spark daemon CLI", () => {
 
         const ambiguousCapture = createCliIo();
         await expect(
-          main(["ws", "show", "Navia Dev", "--no-service"], ambiguousCapture.io),
+          main(["ws", "show", "Spark Dev", "--no-service"], ambiguousCapture.io),
         ).resolves.toBe(1);
         expect(ambiguousCapture.stderr()).toContain("Ambiguous workspace name");
-        expect(ambiguousCapture.stderr()).toContain("Navia Dev@http://127.0.0.1:5173/");
-        expect(ambiguousCapture.stderr()).toContain("Navia Dev@http://127.0.0.1:5174/");
+        expect(ambiguousCapture.stderr()).toContain("Spark Dev@http://127.0.0.1:5173/");
+        expect(ambiguousCapture.stderr()).toContain("Spark Dev@http://127.0.0.1:5174/");
 
         const showCapture = createCliIo();
         await expect(
           main(
-            ["ws", "show", "Navia Dev@http://127.0.0.1:5174", "--json", "--no-service"],
+            ["ws", "show", "Spark Dev@http://127.0.0.1:5174", "--json", "--no-service"],
             showCapture.io,
           ),
         ).resolves.toBe(0);
@@ -1440,8 +1440,8 @@ describe("Spark daemon CLI", () => {
           serverUrl: string;
         };
         expect(detail).toMatchObject({
-          slug: "navia-dev",
-          name: "Navia Dev",
+          slug: "spark-dev",
+          name: "Spark Dev",
           serverUrl: "http://127.0.0.1:5174/",
         });
       });
@@ -1453,14 +1453,14 @@ describe("Spark daemon CLI", () => {
   it("requires a workspace registration token for every workspace registration", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const workspacePath = join(root, "checkout");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
       writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), testSparkDaemonConfig());
 
       await expect(
-        main(["ws", "register", "checkout", "--name", "Navia Dev", "--no-service"], capture.io),
+        main(["ws", "register", "checkout", "--name", "Spark Dev", "--no-service"], capture.io),
       ).resolves.toBe(1);
       expect(capture.stderr()).toContain("Missing workspace registration token");
 
@@ -1473,7 +1473,7 @@ describe("Spark daemon CLI", () => {
   it("returns conflict exit code when the workspace path does not exist", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       process.env.INIT_CWD = root;
       writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), testSparkDaemonConfig());
 
@@ -1490,7 +1490,7 @@ describe("Spark daemon CLI", () => {
   it("resolves workspace show from the invocation cwd when no name is passed", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const first = join(root, "first");
       const second = join(root, "second");
       mkdirSync(first, { recursive: true });
@@ -1573,7 +1573,7 @@ describe("Spark daemon CLI", () => {
   it("requires cwd to be under a workspace for unnamed workspace show", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const workspacePath = join(root, "workspace");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
@@ -1604,7 +1604,7 @@ describe("Spark daemon CLI", () => {
   it("requires --yes for workspace stop in non-interactive use", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const workspacePath = join(root, "workspace");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
@@ -1633,7 +1633,7 @@ describe("Spark daemon CLI", () => {
   it("requires an explicit workspace target for workspace stop", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const workspacePath = join(root, "workspace");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
@@ -1670,7 +1670,7 @@ describe("Spark daemon CLI", () => {
   it("returns conflict exit code for nested workspace registration", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const parent = join(root, "parent");
       const child = join(parent, "child");
       mkdirSync(child, { recursive: true });
@@ -1707,7 +1707,7 @@ describe("Spark daemon CLI", () => {
   it("returns conflict exit code when an existing workspace key points at another path", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const first = join(root, "first");
       const second = join(root, "second");
       mkdirSync(first, { recursive: true });
@@ -1754,7 +1754,7 @@ describe("Spark daemon CLI", () => {
   it("renders degraded workspace reasons and remediation", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const workspacePath = join(root, "workspace");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
@@ -1815,7 +1815,7 @@ describe("Spark daemon CLI", () => {
   it("renders disconnected offline state when the Spark daemon is running", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const workspacePath = join(root, "workspace");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
@@ -1870,7 +1870,7 @@ describe("Spark daemon CLI", () => {
   });
 
   it("renders service-stopped offline reason in workspace show", async () => {
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const listWorkspacesFromService = vi.fn(async () => ({
         observedAt: "2026-05-26T00:00:00.000Z",
         workspaces: [
@@ -1900,7 +1900,7 @@ describe("Spark daemon CLI", () => {
   it("prints daemon status without starting the Spark daemon", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async () => {
+    await withTempSparkEnv(async () => {
       await expect(main(["daemon", "status"], capture.io)).resolves.toBe(0);
       expect(capture.stdout()).toContain("not running");
       expect(capture.stdout()).toContain("spark daemon start");
@@ -1920,7 +1920,7 @@ describe("Spark daemon CLI", () => {
   });
 
   it("emits running daemon status from the local daemon service", async () => {
-    await withTempNaviaEnv(async (root) => {
+    await withTempSparkEnv(async (root) => {
       const workspacePath = join(root, "workspace");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
@@ -1968,7 +1968,7 @@ describe("Spark daemon CLI", () => {
   });
 
   it("reports unreachable daemon status when the Spark daemon cannot be reached", async () => {
-    await withTempNaviaEnv(async () => {
+    await withTempSparkEnv(async () => {
       const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
@@ -1988,7 +1988,7 @@ describe("Spark daemon CLI", () => {
   });
 
   it("reads running daemon status summaries from the local daemon service", async () => {
-    await withTempNaviaEnv(async () => {
+    await withTempSparkEnv(async () => {
       const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
@@ -1996,7 +1996,7 @@ describe("Spark daemon CLI", () => {
         observedAt: "2026-05-26T00:00:00.000Z",
         servers: [
           {
-            url: "https://navia.example.com/",
+            url: "https://spark.example.com/",
             workspaceCount: 3,
             wsConnected: true,
           },
@@ -2014,7 +2014,7 @@ describe("Spark daemon CLI", () => {
         stateDbPath: paths.databasePath,
         servers: [
           {
-            url: "https://navia.example.com/",
+            url: "https://spark.example.com/",
             workspaceCount: 3,
             wsConnected: true,
           },
@@ -2024,18 +2024,18 @@ describe("Spark daemon CLI", () => {
   });
 
   it("builds legacy status from daemon status instead of direct workspace reads", async () => {
-    await withTempNaviaEnv(async () => {
+    await withTempSparkEnv(async () => {
       const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
       writeSparkDaemonConfig(
         paths,
-        testSparkDaemonConfig({ serverUrl: "https://navia.example.com" }),
+        testSparkDaemonConfig({ serverUrl: "https://spark.example.com" }),
       );
       const daemonStatusFromService = vi.fn(async () => ({
         observedAt: "2026-05-26T00:00:00.000Z",
         servers: [
-          { url: "https://navia.example.com/", workspaceCount: 2, wsConnected: true },
+          { url: "https://spark.example.com/", workspaceCount: 2, wsConnected: true },
           { url: "http://127.0.0.1:5173/", workspaceCount: 1, wsConnected: false },
         ],
         queue: { inbox: 0, processed: 0, failed: 0 },
@@ -2056,7 +2056,7 @@ describe("Spark daemon CLI", () => {
   it("does not expose the legacy workspace reconcile command", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async () => {
+    await withTempSparkEnv(async () => {
       await expect(main(["ws", "reconcile"], capture.io)).resolves.toBe(1);
       expect(capture.stderr()).toContain("Usage: spark daemon workspace <register|ls|show|stop>");
     });
@@ -2065,7 +2065,7 @@ describe("Spark daemon CLI", () => {
   it("tails daemon logs with the requested line count", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async () => {
+    await withTempSparkEnv(async () => {
       const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.logDir, { recursive: true });
       writeFileSync(paths.logFile, "one\ntwo\nthree\nfour\n");
@@ -2079,7 +2079,7 @@ describe("Spark daemon CLI", () => {
   it("prints a clear daemon logs message before the log file exists", async () => {
     const capture = createCliIo();
 
-    await withTempNaviaEnv(async () => {
+    await withTempSparkEnv(async () => {
       const paths = resolveSparkPaths({ app: "daemon" });
 
       await expect(main(["daemon", "logs"], capture.io)).resolves.toBe(0);
@@ -2091,7 +2091,7 @@ describe("Spark daemon CLI", () => {
   it("requires --yes for Spark daemon stop in non-interactive use", async () => {
     const capture = createCliIo();
 
-    const code = await withTempNaviaEnv(() => main(["daemon", "stop"], capture.io));
+    const code = await withTempSparkEnv(() => main(["daemon", "stop"], capture.io));
 
     expect(code).toBe(4);
     expect(capture.stderr()).toContain("Pass --yes to confirm");
@@ -2099,7 +2099,7 @@ describe("Spark daemon CLI", () => {
   });
 
   it("requests the local daemon to stop before falling back to process termination", async () => {
-    await withTempNaviaEnv(async () => {
+    await withTempSparkEnv(async () => {
       const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.runtimeDir, { recursive: true });
       writeFileSync(paths.pidFile, `${process.pid}\n`);
@@ -2118,7 +2118,7 @@ describe("Spark daemon CLI", () => {
   });
 });
 
-async function withTempNaviaEnv<T>(callback: (root: string) => Promise<T>): Promise<T> {
+async function withTempSparkEnv<T>(callback: (root: string) => Promise<T>): Promise<T> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "spark-daemon-cli-")));
   const previousEnv = {
     HOME: process.env.HOME,
@@ -2182,16 +2182,16 @@ function interactiveStdin(lines: string[]): NodeJS.ReadStream {
 }
 
 function createGitProfile(workspacePath: string): { ref: string; commit: string } {
-  const ref = "navia-profile";
+  const ref = "spark-profile";
   const profilePath = join(workspacePath, ref);
   mkdirSync(profilePath, { recursive: true });
   writeFileSync(
     join(profilePath, "settings.toml"),
-    `schemaVersion = "navia.profile/v1"
+    `schemaVersion = "spark.profile/v1"
 
 [profile]
-id = "navia-dev"
-name = "Navia Dev"
+id = "spark-dev"
+name = "Spark Dev"
 `,
   );
   const git = gitCommand();
@@ -2201,9 +2201,9 @@ name = "Navia Dev"
     git,
     [
       "-c",
-      "user.email=navia@example.test",
+      "user.email=spark@example.test",
       "-c",
-      "user.name=Navia Test",
+      "user.name=Spark Test",
       "commit",
       "-m",
       "Initial profile",

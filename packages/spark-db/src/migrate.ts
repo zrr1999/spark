@@ -11,7 +11,7 @@ export interface Migration {
 
 const sourceMigrationsDir = join(dirname(fileURLToPath(import.meta.url)), "migrations");
 const repoMigrationsDir = resolve(
-  process.env.SPARK_REPO_ROOT ?? process.env.NAVIA_REPO_ROOT ?? findRepoRoot(process.cwd()),
+  process.env.SPARK_REPO_ROOT ?? findRepoRoot(process.cwd()),
   "packages/spark-db/src/migrations",
 );
 

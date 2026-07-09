@@ -182,7 +182,7 @@ export function listActiveRoleRuns(): ActiveRoleRun[];
 export function parsePiJsonlEvents(stdout: string): unknown[];
 ```
 
-Every run references an existing role. A run can be fresh or forked regardless of whether the role source is builtin, extension, project, or user. For usage guidance, safety constraints, and Spark attribution rules, see [role-run-modes.md](./role-run-modes.md).
+Every run references an existing role. A run can be fresh or forked regardless of whether the role source is builtin, extension, project, or user. For usage guidance, safety constraints, and Spark attribution rules, see [roles-run-modes.md](./roles-run-modes.md).
 
 ## Tool / runtime mapping
 
