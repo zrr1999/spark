@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
 import {
+  buildApprovalDecisionPayload,
+  buildApprovalDeliveryCommandPayload,
+  describeApprovalCenterItem,
+  type ApprovalDecision,
+} from "./approval-center";
+import {
   appendEvent,
   createProject,
   createWorkspaceWithOwnerBinding,
@@ -193,6 +199,142 @@ describe("projection services", () => {
         payload: { stream: "assistant", sequence: 2, content: " world" },
       },
     ]);
+    db.close();
+  });
+
+  it("records approval-center approve/reject decisions through the command outbox", () => {
+    const { db, runtimeWorkspaceBindingId, now } = setupRuntimeBinding();
+    const workspace = createWorkspaceWithOwnerBinding(db, {
+      slug: "local-default",
+      name: "Local default",
+      runtimeWorkspaceBindingId,
+      createdAt: now,
+    });
+    const cases = [
+      {
+        name: "ask",
+        requestKind: "ask_user",
+        title: "Choose database",
+        prompt: "Which database should Spark use?",
+        context: {},
+        approvalKind: "ask",
+      },
+      {
+        name: "workflow-risk",
+        requestKind: "approval",
+        title: "Approve generated workflow",
+        prompt: "Approve write-enabled fan-out?",
+        context: { approvalKind: "workflow-risk", risks: ["fan-out=4"] },
+        approvalKind: "workflow_risk",
+      },
+      {
+        name: "goal-review",
+        requestKind: "review",
+        title: "Goal completion reviewer gate",
+        prompt: "Approve completion?",
+        context: { reviewer: "goal", verdict: "pending" },
+        approvalKind: "goal_review",
+      },
+    ] as const;
+    const decisions: ApprovalDecision[] = ["approve", "reject"];
+
+    for (const testCase of cases) {
+      for (const decision of decisions) {
+        const runtimeRequestId = `${testCase.name}-${decision}`;
+        const request = recordHumanRequestFromRuntime(db, {
+          runtimeWorkspaceBindingId,
+          workspaceId: workspace.id,
+          runtimeRequestId,
+          payload: {
+            kind: testCase.requestKind,
+            title: testCase.title,
+            prompt: testCase.prompt,
+            questions: [],
+            context: testCase.context,
+            contextArtifactRefs: [],
+          },
+          createdAt: now,
+        });
+        const approval = describeApprovalCenterItem({
+          requestKind: testCase.requestKind,
+          title: testCase.title,
+          prompt: testCase.prompt,
+          context: testCase.context,
+        });
+        const responsePayload = buildApprovalDecisionPayload({
+          approval,
+          decision,
+          operatorNote: decision === "reject" ? `${testCase.name} blocked` : undefined,
+        });
+        const response = recordHumanResponse(db, {
+          humanRequestId: request.humanRequestId,
+          payload: responsePayload,
+          createdAt: "2026-05-22T00:00:01.000Z",
+        });
+        const command = queueCommandForWorkspaceOwner(db, {
+          workspaceId: workspace.id,
+          idempotencyKey: `approval:${request.humanRequestId}:${decision}`,
+          payload: buildApprovalDeliveryCommandPayload({
+            approval,
+            decision,
+            humanRequestId: request.humanRequestId,
+            humanResponseId: response.humanResponseId,
+            runtimeRequestId,
+            response: responsePayload,
+          }),
+          createdAt: "2026-05-22T00:00:02.000Z",
+        });
+
+        const row = db
+          .prepare(
+            `SELECT hr.status AS requestStatus,
+                    ii.status AS inboxStatus,
+                    hres.status AS responseStatus,
+                    hres.answer_json AS answerJson
+             FROM human_requests hr
+             JOIN inbox_items ii ON ii.human_request_id = hr.id
+             JOIN human_responses hres ON hres.human_request_id = hr.id
+             WHERE hres.id = ?`,
+          )
+          .get(response.humanResponseId) as {
+          requestStatus: string;
+          inboxStatus: string;
+          responseStatus: string;
+          answerJson: string;
+        };
+        expect(row.requestStatus).toBe("answered");
+        expect(row.inboxStatus).toBe("resolved");
+        expect(row.responseStatus).toBe("delivering");
+        expect(JSON.parse(row.answerJson)).toMatchObject({
+          status: "answered",
+          answers: {
+            decision,
+            approved: decision === "approve",
+            approvalKind: testCase.approvalKind,
+          },
+        });
+        const delivery = db
+          .prepare(
+            `SELECT c.kind, c.payload_json AS payloadJson, cd.status AS deliveryStatus
+             FROM commands c
+             JOIN command_deliveries cd ON cd.command_id = c.id
+             WHERE c.id = ?`,
+          )
+          .get(command.id) as { kind: string; payloadJson: string; deliveryStatus: string };
+        expect(delivery.kind).toBe("human.response.deliver.request");
+        expect(delivery.deliveryStatus).toBe("pending");
+        expect(JSON.parse(delivery.payloadJson)).toMatchObject({
+          kind: "human.response.deliver.request",
+          payload: {
+            humanRequestId: request.humanRequestId,
+            humanResponseId: response.humanResponseId,
+            runtimeRequestId,
+            approval: { kind: testCase.approvalKind },
+            response: { answers: { decision, approved: decision === "approve" } },
+          },
+        });
+      }
+    }
     db.close();
   });
 

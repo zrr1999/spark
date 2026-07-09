@@ -4,12 +4,20 @@ import type { Cookies } from "@sveltejs/kit";
 import {
   createLocalOwnerSession,
   createOwnerSession,
+  createRemoteOwnerSession,
   ensureCurrentOwnerSession,
   ensureLocalSystemUser,
   getCurrentUserId,
   hashSecret,
   sessionCookieName,
 } from "./auth";
+import {
+  bearerRemoteAccessToken,
+  isLoopbackClientAddress,
+  isRemoteAccessAllowed,
+  remoteAccessDecision,
+  verifyRemoteAccessToken,
+} from "./remote-access";
 
 describe("local owner auth", () => {
   it("creates a new session for an existing local owner", () => {
@@ -62,6 +70,18 @@ describe("local owner auth", () => {
     db.close();
   });
 
+  it("creates a remote owner session for the single-user token flow", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+
+    const session = createRemoteOwnerSession(db);
+
+    expect(session.userId).toMatch(/^usr_/);
+    expect(session.sessionToken).toMatch(/^spark_cockpit_sess_/);
+    expect(getCurrentUserId(db, session.sessionToken)).toBe(session.userId);
+    db.close();
+  });
+
   it("rejects revoked or expired sessions", () => {
     const db = openMemoryDatabase();
     migrate(db);
@@ -87,6 +107,106 @@ describe("local owner auth", () => {
     ).toBeNull();
 
     db.close();
+  });
+});
+
+describe("remote access auth", () => {
+  it("does not require token auth for loopback client addresses", () => {
+    expect(isLoopbackClientAddress("localhost")).toBe(true);
+    expect(isLoopbackClientAddress("127.0.0.1")).toBe(true);
+    expect(isLoopbackClientAddress("::1")).toBe(true);
+    expect(isLoopbackClientAddress("::ffff:127.0.0.1")).toBe(true);
+    expect(
+      remoteAccessDecision({
+        url: new URL("http://localhost:5173/inbox"),
+        clientAddress: "127.0.0.1",
+      }).required,
+    ).toBe(false);
+  });
+
+  it("requires token auth for protected non-loopback UI/API paths", () => {
+    expect(
+      remoteAccessDecision({
+        url: new URL("http://spark.tailnet.test:5173/inbox"),
+        clientAddress: "100.64.0.8",
+      }).required,
+    ).toBe(true);
+    expect(
+      remoteAccessDecision({
+        url: new URL("http://spark.tailnet.test:5173/api/search"),
+        clientAddress: "100.64.0.8",
+      }).required,
+    ).toBe(true);
+  });
+
+  it("does not trust a spoofed localhost Host header from a remote client", () => {
+    expect(
+      remoteAccessDecision({
+        url: new URL("http://localhost:5173/api/search"),
+        clientAddress: "100.64.0.8",
+      }).required,
+    ).toBe(true);
+  });
+
+  it("allows login, PWA assets, and runtime bearer endpoints before Cockpit login", () => {
+    for (const path of [
+      "/login",
+      "/manifest.webmanifest",
+      "/service-worker.js",
+      "/icons/spark-maskable.svg",
+      "/_app/immutable/start.js",
+      "/api/v1/runtime/runtimes/register",
+    ]) {
+      expect(
+        remoteAccessDecision({
+          url: new URL(`http://spark.tailnet.test:5173${path}`),
+          clientAddress: "100.64.0.8",
+        }),
+      ).toMatchObject({
+        required: false,
+        publicPath: true,
+      });
+    }
+  });
+
+  it("blocks protected remote paths unless a session or configured bearer token is present", () => {
+    const url = new URL("http://spark.tailnet.test:5173/api/search");
+    const env = { SPARK_COCKPIT_REMOTE_TOKEN: "test-token" };
+
+    expect(isRemoteAccessAllowed({ url, clientAddress: "100.64.0.8", env })).toBe(false);
+    expect(
+      isRemoteAccessAllowed({
+        url,
+        clientAddress: "100.64.0.8",
+        bearerToken: "wrong-token",
+        env,
+      }),
+    ).toBe(false);
+    expect(
+      isRemoteAccessAllowed({ url, clientAddress: "100.64.0.8", bearerToken: "test-token", env }),
+    ).toBe(true);
+    expect(
+      isRemoteAccessAllowed({ url, clientAddress: "100.64.0.8", sessionUserId: "usr_owner", env }),
+    ).toBe(true);
+    expect(
+      isRemoteAccessAllowed({
+        url: new URL("http://localhost:5173/api/search"),
+        clientAddress: "127.0.0.1",
+        env,
+      }),
+    ).toBe(true);
+  });
+
+  it("verifies configured bearer tokens without accepting missing or wrong tokens", () => {
+    const env = { SPARK_COCKPIT_REMOTE_TOKEN: "test-token" };
+    const request = new Request("http://spark.tailnet.test/api/search", {
+      headers: { authorization: "Bearer test-token" },
+    });
+
+    expect(bearerRemoteAccessToken(request)).toBe("test-token");
+    expect(verifyRemoteAccessToken("test-token", env)).toBe(true);
+    expect(verifyRemoteAccessToken("wrong-token", env)).toBe(false);
+    expect(verifyRemoteAccessToken("test-token", {})).toBe(false);
   });
 });
 

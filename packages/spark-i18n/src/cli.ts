@@ -35,7 +35,7 @@ const DISPATCHER: Record<SparkLanguage, SparkCliDispatcherStrings> = {
     dispatchFailure: (targetLabel, detail) => `Unable to dispatch to ${targetLabel}: ${detail}`,
     signalExit: (targetLabel, signal) => `${targetLabel} exited due to signal ${signal}`,
     helpText:
-      'spark - Spark command dispatcher\n\nUsage:\n  spark\n  spark tui [initial message]\n  spark --print <prompt>\n  spark --mode json --print <prompt>\n  spark --mode rpc\n  spark --list-models [search]\n  spark install|remove|update|list|config [resource]\n  spark daemon <resource> <verb> [args...]\n  spark server <resource> <verb> [args...]\n  spark cockpit [args...]\n  spark tui <command> [args...]\n  spark --help\n  spark --version\n\nCanonical Spark command planes:\n  spark daemon    daemon execution plane: session, run, queue, events, logs, process state\n  spark server    server coordination plane: project, task, goal, artifact, review, workflow\n  spark tui       tui local control plane: interactive terminal UI, attach/resume, local UI settings\n\nCockpit web UI host:\n  spark cockpit   launch the Cockpit web UI (not a fourth plane)\n\nCompatibility aliases are documented in docs/specs/command-planes.md. Unknown subcommands fail loudly instead of being interpreted as prompts. Use "spark tui ..." for interactive TUI input.\n',
+      'spark - Spark command dispatcher\n\nUsage:\n  spark\n  spark run [--json] [--resume <session>] <prompt>\n  spark bg [--session <id>] [--json] <prompt>\n  spark doctor\n  spark tui [initial message]\n  spark --print <prompt>\n  spark --mode json --print <prompt>\n  spark --mode rpc\n  spark --list-models [search]\n  spark install|remove|update|list|config [resource]\n  spark daemon <command> [args...]\n  spark server <command> [args...]\n  spark cockpit [command] [args...]\n  spark --help\n  spark --version\n\nDispatches to Spark surfaces:\n  spark run       foreground headless run (alias-friendly replacement for --print)\n  spark bg        submit a background turn to the Spark daemon queue\n  spark doctor    top-level Spark health check via the daemon CLI\n  spark tui       tui local control plane: interactive terminal UI, attach/resume, local UI settings\n  spark daemon    daemon execution plane: session, run, queue, events, logs, process state\n  spark server    server coordination plane: project, task, goal, artifact, review, workflow\n  spark cockpit   launch the Cockpit web UI (not a fourth command plane)\n\nCompatibility aliases are documented in docs/specs/command-planes.md. Unknown subcommands fail loudly instead of being interpreted as prompts. Use "spark tui ..." for interactive TUI input.\n',
     tuiRequiresTty:
       'Spark TUI requires an interactive terminal (stdin and stdout must be TTYs). Use "spark --print <prompt>", "spark --mode rpc", or "spark daemon submit ..." for non-interactive/headless use.',
     targetLabel: (target) => {
@@ -59,7 +59,7 @@ const DISPATCHER: Record<SparkLanguage, SparkCliDispatcherStrings> = {
     dispatchFailure: (targetLabel, detail) => `无法分发到 ${targetLabel}：${detail}`,
     signalExit: (targetLabel, signal) => `${targetLabel} 因信号 ${signal} 退出`,
     helpText:
-      'spark - Spark 命令分发器\n\n用法：\n  spark\n  spark tui [初始消息]\n  spark --print <prompt>\n  spark --mode json --print <prompt>\n  spark --mode rpc\n  spark --list-models [search]\n  spark install|remove|update|list|config [resource]\n  spark daemon <resource> <verb> [args...]\n  spark server <resource> <verb> [args...]\n  spark cockpit [args...]\n  spark tui <command> [args...]\n  spark --help\n  spark --version\n\nCanonical Spark command planes：\n  spark daemon    daemon execution plane：session、run、queue、events、logs、process state\n  spark server    server coordination plane：project、task、goal、artifact、review、workflow\n  spark tui       tui local control plane：interactive terminal UI、attach/resume、local UI settings\n\nCockpit web UI host：\n  spark cockpit   启动 Cockpit 网页 UI（不是第四平面）\n\nCompatibility aliases are documented in docs/specs/command-planes.md。未知子命令会直接失败，不会被解释成 prompt。交互式 TUI 输入请使用 "spark tui ..."。\n',
+      'spark - Spark 命令分发器\n\n用法：\n  spark\n  spark run [--json] [--resume <session>] <prompt>\n  spark bg [--session <id>] [--json] <prompt>\n  spark doctor\n  spark tui [初始消息]\n  spark --print <prompt>\n  spark --mode json --print <prompt>\n  spark --mode rpc\n  spark --list-models [search]\n  spark install|remove|update|list|config [resource]\n  spark daemon <command> [args...]\n  spark server <command> [args...]\n  spark cockpit [command] [args...]\n  spark --help\n  spark --version\n\n分发到 Spark 界面：\n  spark run       前台 headless 执行（替代 --print 的一等动词）\n  spark bg        将后台 turn 提交到 Spark daemon 队列\n  spark doctor    通过 daemon CLI 执行顶层 Spark 健康检查\n  spark tui       tui local control plane：interactive terminal UI、attach/resume、local UI settings\n  spark daemon    daemon execution plane：session、run、queue、events、logs、process state\n  spark server    server coordination plane：project、task、goal、artifact、review、workflow\n  spark cockpit   启动 Cockpit 网页 UI（不是第四命令平面）\n\nCompatibility aliases are documented in docs/specs/command-planes.md。未知子命令会直接失败，不会被解释成 prompt。交互式 TUI 输入请使用 "spark tui ..."。\n',
     tuiRequiresTty:
       'Spark TUI 需要交互式终端（stdin 和 stdout 必须是 TTY）。非交互/headless 使用请改用 "spark --print <prompt>"、"spark --mode rpc" 或 "spark daemon submit ..."。',
     targetLabel: (target) => {
@@ -159,8 +159,11 @@ export interface SparkNativeTuiStrings {
 
 const NATIVE_TUI: Record<SparkLanguage, SparkNativeTuiStrings> = {
   en: {
-    welcome:
-      "Spark native TUI is running through the Spark pi-tui adapter boundary. Enter queues steering updates while Spark is busy; Alt+Enter queues follow-up turns.",
+    welcome: [
+      "Spark native TUI is running.",
+      "Type a task, /plan for durable work, or /model to switch models.",
+      "Use /help for commands; Ctrl+C/Ctrl+D exits.",
+    ].join("\n"),
     stoppedTurn: (reason, clearedQueued) =>
       `Stopped current Spark turn (${reason}).${
         clearedQueued > 0 ? ` Restored ${clearedQueued} queued input(s) to the editor.` : ""
@@ -231,21 +234,22 @@ const NATIVE_TUI: Record<SparkLanguage, SparkNativeTuiStrings> = {
     commandHelp: (registeredCount, registeredCommands) =>
       [
         "Spark native TUI commands:",
-        `${registeredCount} registered host/daemon command${registeredCount === 1 ? "" : "s"} available.`,
-        "/help — show native TUI commands",
-        "/clear — clear the visible transcript",
-        "/stop [reason] — stop the current Spark turn and restore queued inputs to the editor",
-        "/retry — resubmit the previous user prompt",
-        "/cockpit [overview|workflows|runs|tasks|artifacts|reviews|graft|off] — show Spark cockpit panels",
-        "/workflows, /runs, /tasks, /artifacts, /reviews, /graft — open a focused cockpit panel",
-        "Ctrl+K — toggle Spark cockpit overview; Shift+Ctrl+K — cycle cockpit panels",
-        "/exit or /quit — exit the native TUI",
+        `${registeredCount} additional registered host/daemon command${registeredCount === 1 ? "" : "s"} available.`,
         ...registeredCommands,
+        "Basics:",
+        "- /help — show this help",
+        "- /clear — clear the visible transcript",
+        "- /stop [reason] — stop the current Spark turn and restore queued inputs to the editor",
+        "- /retry — resubmit the previous user prompt",
+        "- /exit or /quit — exit the native TUI",
       ].join("\n"),
   },
   zh: {
-    welcome:
-      "Spark native TUI 正通过 Spark pi-tui adapter boundary 运行。Spark 忙碌时，Enter 会排队 steering update；Alt+Enter 会排队 follow-up turn。",
+    welcome: [
+      "Spark native TUI 正在运行。",
+      "直接输入任务，或用 /plan 规划、/model 切换模型。",
+      "输入 /help 查看命令；Ctrl+C/Ctrl+D 退出。",
+    ].join("\n"),
     stoppedTurn: (reason, clearedQueued) =>
       `已停止当前 Spark turn（${reason}）。${
         clearedQueued > 0 ? `已将 ${clearedQueued} 条 queued input 恢复到编辑器。` : ""
@@ -312,16 +316,14 @@ const NATIVE_TUI: Record<SparkLanguage, SparkNativeTuiStrings> = {
     commandHelp: (registeredCount, registeredCommands) =>
       [
         "Spark native TUI 命令：",
-        `可用 host/daemon 注册命令：${registeredCount} 个。`,
-        "/help — 显示 native TUI 命令",
-        "/clear — 清空可见 transcript",
-        "/stop [reason] — 停止当前 Spark turn 并把 queued input 恢复到编辑器",
-        "/retry — 重新提交上一条用户 prompt",
-        "/cockpit [overview|workflows|runs|tasks|artifacts|reviews|graft|off] — 显示 Spark cockpit panel",
-        "/workflows, /runs, /tasks, /artifacts, /reviews, /graft — 打开 focused cockpit panel",
-        "Ctrl+K — 切换 Spark cockpit overview；Shift+Ctrl+K — 循环 cockpit panel",
-        "/exit 或 /quit — 退出 native TUI",
+        `额外 host/daemon 注册命令：${registeredCount} 个。`,
         ...registeredCommands,
+        "基础：",
+        "- /help — 显示此帮助",
+        "- /clear — 清空可见 transcript",
+        "- /stop [reason] — 停止当前 Spark turn 并把 queued input 恢复到编辑器",
+        "- /retry — 重新提交上一条用户 prompt",
+        "- /exit 或 /quit — 退出 native TUI",
       ].join("\n"),
   },
 };
@@ -447,7 +449,7 @@ const PI_PARITY_DESCRIPTIONS = {
   clone: "clone the current visible transcript into a new Spark session record",
   tree: "show persisted session tree or append a branch summary",
   trust: "show Spark project trust status and safe next steps",
-  login: "log in to a supported Spark OAuth provider or show auth status",
+  login: "store a Spark API key, log in to OAuth, or show auth status",
   logout: "remove a stored Spark OAuth/API credential",
   new: "start a new visible Spark transcript",
   compact: "summarize visible Spark transcript and clear older context",

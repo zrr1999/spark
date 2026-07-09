@@ -1,17 +1,69 @@
-export * from "./status_ready.js";
-export * from "./status_pending.js";
-export * from "./status_queued.js";
-export * from "./status_running.js";
-export * from "./status_blocked.js";
-export * from "./status_done.js";
-export * from "./status_completed.js";
-export * from "./status_failed.js";
-export * from "./status_cancelled.js";
-export * from "./status_rejected.js";
-export * from "./status_acked.js";
-export * from "./relative_never.js";
-export * from "./relative_just_now.js";
-export * from "./size_unknown.js";
-export * from "./goal_active.js";
-export * from "./goal_not_set.js";
-export type LocalizedString = import("../runtime.js").LocalizedString;
+type LocalizedString = import("../runtime.js").LocalizedString;
+type Locale = import("../runtime.js").Locale;
+type MessageParams = Record<string, unknown>;
+type MessageOptions = { locale?: Locale };
+
+export declare const status_ready: (
+  params?: MessageParams,
+  options?: MessageOptions,
+) => LocalizedString;
+export declare const status_pending: (
+  params?: MessageParams,
+  options?: MessageOptions,
+) => LocalizedString;
+export declare const status_queued: (
+  params?: MessageParams,
+  options?: MessageOptions,
+) => LocalizedString;
+export declare const status_running: (
+  params?: MessageParams,
+  options?: MessageOptions,
+) => LocalizedString;
+export declare const status_blocked: (
+  params?: MessageParams,
+  options?: MessageOptions,
+) => LocalizedString;
+export declare const status_done: (
+  params?: MessageParams,
+  options?: MessageOptions,
+) => LocalizedString;
+export declare const status_completed: (
+  params?: MessageParams,
+  options?: MessageOptions,
+) => LocalizedString;
+export declare const status_failed: (
+  params?: MessageParams,
+  options?: MessageOptions,
+) => LocalizedString;
+export declare const status_cancelled: (
+  params?: MessageParams,
+  options?: MessageOptions,
+) => LocalizedString;
+export declare const status_rejected: (
+  params?: MessageParams,
+  options?: MessageOptions,
+) => LocalizedString;
+export declare const status_acked: (
+  params?: MessageParams,
+  options?: MessageOptions,
+) => LocalizedString;
+export declare const relative_never: (
+  params?: MessageParams,
+  options?: MessageOptions,
+) => LocalizedString;
+export declare const relative_just_now: (
+  params?: MessageParams,
+  options?: MessageOptions,
+) => LocalizedString;
+export declare const size_unknown: (
+  params?: MessageParams,
+  options?: MessageOptions,
+) => LocalizedString;
+export declare const goal_active: (
+  params?: MessageParams,
+  options?: MessageOptions,
+) => LocalizedString;
+export declare const goal_not_set: (
+  params?: MessageParams,
+  options?: MessageOptions,
+) => LocalizedString;

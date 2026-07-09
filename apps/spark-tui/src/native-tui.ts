@@ -235,6 +235,15 @@ interface SparkNativeCockpitState {
   readonly interactions: Map<string, SparkInteractionRequest>;
 }
 
+interface SparkNativeFooterMetrics {
+  cacheRead?: number;
+  cacheWrite?: number;
+  costUsd?: number;
+  totalTokens?: number;
+  contextWindow?: number;
+  contextPercent?: number;
+}
+
 export interface SparkNativeCockpitSnapshot {
   activePanel?: SparkNativeCockpitPanel;
   sessionId?: string;
@@ -725,6 +734,107 @@ function runTimeMs(run: SparkRunView): number {
   const startedAt = run.startedAt ? Date.parse(run.startedAt) : NaN;
   if (Number.isFinite(startedAt)) return startedAt;
   return 0;
+}
+
+function numberFromRecord(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function footerMetricsFromRun(run: SparkRunView): SparkNativeFooterMetrics {
+  const fromMetadata = footerMetricsFromRecord(run.metadata);
+  const fromUsageTotals = footerMetricsFromRecord(
+    isRecord(run.metadata.usageTotals) ? run.metadata.usageTotals : {},
+  );
+  const fromSummary = footerMetricsFromSummary(run.summary);
+  return mergeFooterMetrics(mergeFooterMetrics(fromMetadata, fromUsageTotals), fromSummary);
+}
+
+function footerMetricsFromRecord(record: Record<string, unknown>): SparkNativeFooterMetrics {
+  return {
+    cacheRead:
+      numberFromRecord(record, "cacheRead") ??
+      numberFromRecord(record, "cacheReadTokens") ??
+      numberFromRecord(record, "promptCacheReadTokens"),
+    cacheWrite:
+      numberFromRecord(record, "cacheWrite") ??
+      numberFromRecord(record, "cacheWriteTokens") ??
+      numberFromRecord(record, "promptCacheWriteTokens"),
+    costUsd:
+      numberFromRecord(record, "costUsd") ??
+      numberFromRecord(record, "cost") ??
+      numberFromRecord(record, "costTotal"),
+    totalTokens:
+      numberFromRecord(record, "totalTokens") ??
+      numberFromRecord(record, "tokens") ??
+      numberFromRecord(record, "spentTokens"),
+    contextWindow: numberFromRecord(record, "contextWindow"),
+    contextPercent:
+      numberFromRecord(record, "contextPercent") ?? numberFromRecord(record, "contextPct"),
+  };
+}
+
+function footerMetricsFromSummary(summary: string | undefined): SparkNativeFooterMetrics {
+  if (!summary) return {};
+  const cache = /\bcache\s+read=(\d+(?:\.\d+)?)\s+write=(\d+(?:\.\d+)?)/iu.exec(summary);
+  const cost = /\bcost=\$?(\d+(?:\.\d+)?)/iu.exec(summary);
+  const tokens = /\b(?:tokens|totalTokens)=(\d+(?:\.\d+)?)/iu.exec(summary);
+  const ctx = /\bctx=(\d+(?:\.\d+)?)%/iu.exec(summary);
+  return {
+    ...(cache ? { cacheRead: Number(cache[1]), cacheWrite: Number(cache[2]) } : {}),
+    ...(cost ? { costUsd: Number(cost[1]) } : {}),
+    ...(tokens ? { totalTokens: Number(tokens[1]) } : {}),
+    ...(ctx ? { contextPercent: Number(ctx[1]) } : {}),
+  };
+}
+
+function mergeFooterMetrics(
+  current: SparkNativeFooterMetrics,
+  next: SparkNativeFooterMetrics,
+): SparkNativeFooterMetrics {
+  return {
+    cacheRead: next.cacheRead ?? current.cacheRead,
+    cacheWrite: next.cacheWrite ?? current.cacheWrite,
+    costUsd: next.costUsd ?? current.costUsd,
+    totalTokens: next.totalTokens ?? current.totalTokens,
+    contextWindow: next.contextWindow ?? current.contextWindow,
+    contextPercent: next.contextPercent ?? current.contextPercent,
+  };
+}
+
+function formatFooterMetrics(metrics: SparkNativeFooterMetrics): string | undefined {
+  const hasMetric = Object.values(metrics).some((value) => value !== undefined);
+  if (!hasMetric) return undefined;
+  const cacheTotal = (metrics.cacheRead ?? 0) + (metrics.cacheWrite ?? 0);
+  const cache =
+    metrics.cacheRead !== undefined || metrics.cacheWrite !== undefined
+      ? `cache ${cacheTotal > 0 ? Math.round(((metrics.cacheRead ?? 0) / cacheTotal) * 100) : 0}%`
+      : "cache --";
+  const cost = metrics.costUsd !== undefined ? `$${metrics.costUsd.toFixed(2)}` : "$--";
+  const contextPercent =
+    metrics.contextPercent ??
+    (metrics.totalTokens !== undefined && metrics.contextWindow
+      ? Math.round((metrics.totalTokens / metrics.contextWindow) * 100)
+      : undefined);
+  const context = contextPercent !== undefined ? `ctx ${contextPercent}%` : "ctx --";
+  return `${cache} · ${cost} · ${context}`;
+}
+
+function isDoneTaskStatus(status: string): boolean {
+  return ["done", "completed", "succeeded", "success"].includes(status.toLowerCase());
+}
+
+function cockpitTaskDeepLink(taskRef: string): string {
+  return `cockpit://tasks/${encodeURIComponent(taskRef)}`;
 }
 
 function isReviewArtifact(artifact: SparkArtifactView): boolean {
@@ -1304,7 +1414,9 @@ export class SparkNativeTuiApp implements Component, Focusable {
   private readonly statuses = new Map<string, string>();
   private readonly widgets = new Map<string, SparkNativeWidget>();
   private readonly cockpit = createSparkNativeCockpitState();
+  private readonly completedTaskSummaryKeys = new Set<string>();
   private activeCockpitPanel: SparkNativeCockpitPanel | undefined;
+  private footerMetrics: SparkNativeFooterMetrics = {};
   private focusedValue = false;
   private toolsExpanded = false;
   private thinkingExpanded = false;
@@ -1705,9 +1817,18 @@ export class SparkNativeTuiApp implements Component, Focusable {
       case "run.update":
         this.recordRunView(parsed.run);
         break;
-      case "task.update":
+      case "task.update": {
         this.cockpit.tasks.set(parsed.task.ref, parsed.task);
+        this.session.addCustomMessage({
+          customType: "task-view",
+          content: `${parsed.task.ref} [${parsed.task.status}] ${parsed.task.title}`,
+          display: true,
+          details: { task: parsed.task },
+        });
+        const evidenceSummary = this.taskCompletionEvidenceSummary(parsed.task);
+        if (evidenceSummary) this.session.addSystemMessage(evidenceSummary);
         break;
+      }
       case "artifact.update":
         this.cockpit.artifacts.set(parsed.artifact.ref, parsed.artifact);
         break;
@@ -1749,6 +1870,43 @@ export class SparkNativeTuiApp implements Component, Focusable {
     if (run.summary && /\bcache read=\d+ write=\d+/iu.test(run.summary)) {
       this.statuses.set("cache-usage", run.summary);
     }
+    this.footerMetrics = mergeFooterMetrics(this.footerMetrics, footerMetricsFromRun(run));
+  }
+
+  private taskCompletionEvidenceSummary(task: SparkTaskView): string | undefined {
+    if (!isDoneTaskStatus(task.status)) return undefined;
+    const key = `${task.ref}:${task.status}:${task.artifactRefs.join(",")}`;
+    if (this.completedTaskSummaryKeys.has(key)) return undefined;
+    this.completedTaskSummaryKeys.add(key);
+    const artifactCount = task.artifactRefs.length;
+    const reviewStatus = this.taskReviewStatus(task);
+    return [
+      "✔ task done",
+      `${artifactCount} artifact${artifactCount === 1 ? "" : "s"}`,
+      reviewStatus ? `review ${reviewStatus}` : "review not recorded",
+      cockpitTaskDeepLink(task.ref),
+    ].join(" · ");
+  }
+
+  private taskReviewStatus(task: SparkTaskView): string | undefined {
+    const metadataStatus =
+      stringFromRecord(task.metadata, "reviewStatus") ??
+      stringFromRecord(task.metadata, "reviewOutcome") ??
+      stringFromRecord(task.metadata, "review") ??
+      stringFromRecord(task.metadata, "verdict") ??
+      stringFromRecord(task.metadata, "outcome");
+    if (metadataStatus) return metadataStatus;
+    for (const ref of task.artifactRefs) {
+      const artifact = this.cockpit.artifacts.get(ref);
+      if (!artifact || !isReviewArtifact(artifact)) continue;
+      return (
+        stringFromRecord(artifact.metadata, "outcome") ??
+        stringFromRecord(artifact.metadata, "verdict") ??
+        artifact.status ??
+        "recorded"
+      );
+    }
+    return undefined;
   }
 
   private recordActiveRunStatus(): void {
@@ -1903,7 +2061,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
     lines.push(this.separatorLine(width));
     lines.push(...this.editor.render(width));
     lines.push(...this.renderWidgets("belowEditor", width));
-    lines.push(truncateToWidth(this.renderTheme.fg("muted", nativeTuiStrings.footer), width));
+    lines.push(truncateToWidth(this.renderTheme.fg("muted", this.footerLine()), width));
 
     this.cachedWidth = width;
     this.cachedLines = lines.map((line) => truncateToWidth(line, width));
@@ -2337,6 +2495,11 @@ export class SparkNativeTuiApp implements Component, Focusable {
     return `native pi-tui host • idle${commandSuffix}${statusSuffix}`;
   }
 
+  private footerLine(): string {
+    const metrics = formatFooterMetrics(this.footerMetrics);
+    return metrics ? `${nativeTuiStrings.footer} • ${metrics}` : nativeTuiStrings.footer;
+  }
+
   private async runSlashCommand(input: string): Promise<void> {
     const parsed = parseSlashCommand(input);
     if (!parsed) {
@@ -2382,6 +2545,36 @@ export class SparkNativeTuiApp implements Component, Focusable {
         return false;
       case "reload":
         return "Reload requested. Restart Spark TUI to reload extension state.";
+      case "stop": {
+        const result = this.session.abort(_args.trim() || "user stop");
+        if (result.restoredText) this.setEditorText(result.restoredText);
+        if (result.aborted) return false;
+        return result.clearedQueued > 0
+          ? `Restored ${result.clearedQueued} queued input(s) to the editor.`
+          : nativeTuiStrings.noTurnRunning;
+      }
+      case "retry":
+        void this.session.retryLast();
+        return false;
+      case "cockpit":
+        return this.openCockpitPanelFromArgs(_args);
+      case "workflows":
+        return this.openCockpitPanel("workflows");
+      case "runs":
+      case "run":
+        return this.openCockpitPanel("runs");
+      case "tasks":
+      case "task":
+        return this.openCockpitPanel("tasks");
+      case "artifacts":
+      case "artifact":
+      case "evidence":
+        return this.openCockpitPanel("artifacts");
+      case "reviews":
+      case "review":
+        return this.openCockpitPanel("reviews");
+      case "graft":
+        return this.openCockpitPanel("graft");
       case "exit":
       case "quit":
         this.onExit();
@@ -2440,8 +2633,23 @@ export class SparkNativeTuiApp implements Component, Focusable {
       "System",
       ...system,
       "Ctrl+K — toggle Spark cockpit overview; Shift+Ctrl+K — cycle cockpit panels",
+      "Everyday:",
+      "- ordinary input — send a prompt to Spark",
+      "- /plan — plan durable project work",
+      "- /implement — execute the selected concrete work",
+      "- /model — switch or inspect the active model",
+      "- /resume — resume or preview a persisted session",
+      "Advanced:",
+      "- /goal — run reviewer-gated autonomous goal work",
+      "- /loop — run an open-ended recurring loop",
+      "- /workflow — run saved or scripted multi-agent workflows",
+      "- /ultracode — run the advanced workflow-backed coding mode",
+      "Panels & controls:",
+      "/cockpit [overview|workflows|runs|tasks|artifacts|reviews|graft|off] — show Spark cockpit panels",
+      "/workflows, /runs, /tasks, /artifacts, /reviews, /graft — open a focused cockpit panel",
       "Extensions",
       `${extensions.length} extension command${extensions.length === 1 ? "" : "s"} available.`,
+      ...(extensions.length > 0 ? ["Other registered:"] : []),
       ...extensions,
     ].join("\n");
   }

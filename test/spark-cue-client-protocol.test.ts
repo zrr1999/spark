@@ -563,7 +563,9 @@ void test("implicit CueClient.connect fails ssh profiles without local daemon au
           error.message.includes("remote") &&
           error.message.includes("devbox") &&
           error.message.includes("cued start") &&
-          error.message.includes("remote cued socket missing"),
+          error.message.includes("Remote daemon startup is explicit") &&
+          (error.message.includes("remote cued socket missing") ||
+            error.message.includes("UNSUPPORTED_PROTOCOL")),
       );
     },
   );

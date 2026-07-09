@@ -152,7 +152,7 @@ export function createSparkPiParitySlashCommands(
     },
     login: {
       description: STRINGS.descriptions.login,
-      argumentHint: "[oauth-provider]",
+      argumentHint: "[oauth-provider|api-key <provider> <key>]",
       getArgumentCompletions: (prefix) => oauthProviderCompletions(prefix),
       handler: async (args, ctx) => handleLoginCommand(services, args, ctx),
     },
@@ -802,8 +802,12 @@ async function handleLoginCommand(
   ctx: SparkNativeSlashCommandContext,
 ): Promise<string> {
   if (!services.authStore) return STRINGS.authStoreUnavailable;
-  const providerId = args.trim();
+  const tokens = args.trim().split(/\s+/u).filter(Boolean);
+  const providerId = tokens.join(" ");
   if (!providerId) return renderAuthSummary(services);
+  if (tokens[0] === "api-key" || tokens[0] === "key") {
+    return await handleApiKeyLoginCommand(services, tokens.slice(1));
+  }
 
   const supported = listOAuthProviderSummaries();
   if (!supported.some((provider) => provider.id === providerId)) {
@@ -818,6 +822,30 @@ async function handleLoginCommand(
   const callbacks = createOAuthLoginCallbacks(services, ctx, progress);
   await services.authStore.loginOAuth(providerId, callbacks);
   return [`Logged in OAuth provider: ${providerId}`, ...progress].join("\n");
+}
+
+async function handleApiKeyLoginCommand(
+  services: SparkCliHostServices,
+  args: readonly string[],
+): Promise<string> {
+  if (!services.authStore) return STRINGS.authStoreUnavailable;
+  const [providerId, apiKey] = args;
+  if (!providerId || !apiKey) {
+    return "Usage: /login api-key <provider> <key>";
+  }
+  const provider = services.providerRegistry.getProvider(providerId);
+  if (!provider) {
+    return [`Unknown Spark provider: ${providerId}`, renderProviderSummary(services)].join("\n");
+  }
+  await services.authStore.set(providerId, {
+    type: "api_key",
+    provider: providerId,
+    apiKey,
+    updatedAt: new Date().toISOString(),
+  });
+  const status = services.authResolver?.status(provider);
+  const ref = status?.ref ? ` (${status.kind}:${status.ref})` : "";
+  return `Stored API key for Spark provider: ${providerId}${ref}.`;
 }
 
 async function handleLogoutCommand(services: SparkCliHostServices, args: string): Promise<string> {

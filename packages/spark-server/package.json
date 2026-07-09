@@ -13,6 +13,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./agents-product": "./src/agents-product.ts",
+    "./approval-center": "./src/approval-center.ts",
     "./artifact-cache": "./src/artifact-cache.ts",
     "./cockpit-queries": "./src/cockpit-queries.ts",
     "./command-submission": "./src/command-submission.ts",

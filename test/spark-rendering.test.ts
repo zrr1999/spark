@@ -492,6 +492,11 @@ void test("SparkNativeTuiApp handles local slash commands without submitting to 
 
   const rendered = app.render(100).join("\n");
   assert.equal(responderCalls, 0);
+  assert.match(rendered, /Everyday:/);
+  assert.match(rendered, /- \/plan — plan durable project work/);
+  assert.match(rendered, /Advanced:/);
+  assert.match(rendered, /- \/goal — run reviewer-gated autonomous goal work/);
+  assert.match(rendered, /Other registered:/);
   assert.match(rendered, /\/status — show daemon status/);
   assert.match(
     rendered,
@@ -762,7 +767,7 @@ void test("native UI transport consumes view model events without concrete TUI p
       status: "running",
       summary: "cache read=64 write=16",
       artifactRefs: [],
-      metadata: {},
+      metadata: { costUsd: 0.42, totalTokens: 4100, contextWindow: 10000 },
     },
   });
 
@@ -771,6 +776,48 @@ void test("native UI transport consumes view model events without concrete TUI p
   assert.doesNotMatch(rendered, /custom:run-view>/);
   assert.match(rendered, /native pi-tui host .*daemon running: cache read=64 write=16/);
   assert.match(rendered, /native pi-tui host .*cache read=64 write=16/);
+  assert.match(rendered, /Enter submit .* cache 80% · \$0\.42 · ctx 41%/);
+});
+
+void test("native UI transport prints task completion evidence summaries", () => {
+  const session = new SparkNativeSession();
+  const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
+  const ui = createSparkNativeUiTransport(app, session);
+
+  ui.publishView?.({
+    version: SPARK_PROTOCOL_VERSION,
+    type: "artifact.update",
+    artifact: {
+      version: SPARK_PROTOCOL_VERSION,
+      ref: "artifact:review",
+      title: "Review verdict",
+      kind: "record",
+      format: "json",
+      status: "passed",
+      producer: "review",
+      metadata: { outcome: "passed" },
+    },
+  });
+  ui.publishView?.({
+    version: SPARK_PROTOCOL_VERSION,
+    type: "task.update",
+    task: {
+      version: SPARK_PROTOCOL_VERSION,
+      ref: "task:visible",
+      title: "Visible evidence task",
+      status: "done",
+      todos: [],
+      runRefs: [],
+      artifactRefs: ["artifact:review", "artifact:trace"],
+      metadata: {},
+    },
+  });
+
+  const rendered = stripAnsi(app.render(120).join("\n"));
+  assert.match(
+    rendered,
+    /✔ task done · 2 artifacts · review passed · cockpit:\/\/tasks\/task%3Avisible/,
+  );
 });
 
 void test("native UI transport returns blocked protocol responses without handler", async () => {

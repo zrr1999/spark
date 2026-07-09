@@ -166,6 +166,22 @@ describe("Spark daemon CLI", () => {
     expect(capture.stderr()).toBe("");
   });
 
+  it("doctor reports daemon, credential, workspace, and cockpit checks", async () => {
+    const capture = createCliIo();
+
+    const code = await withTempSparkEnv(async () => await main(["doctor"], capture.io));
+
+    expect(code).toBe(0);
+    const payload = JSON.parse(capture.stdout()) as {
+      checks: Record<string, Record<string, unknown>>;
+    };
+    expect(payload.checks.daemon).toHaveProperty("ok");
+    expect(payload.checks.credentials).toHaveProperty("ok");
+    expect(payload.checks.workspace).toHaveProperty("ok");
+    expect(payload.checks.cockpit).toHaveProperty("ok");
+    expect(capture.stderr()).toBe("");
+  });
+
   it("requires an explicit server URL for scripted workspace registration", async () => {
     const capture = createCliIo();
 

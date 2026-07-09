@@ -1,4 +1,5 @@
 export * from "./agents-product.ts";
+export * from "./approval-center.ts";
 export * from "./artifact-cache.ts";
 export * from "./cockpit-queries.ts";
 export * from "./command-submission.ts";

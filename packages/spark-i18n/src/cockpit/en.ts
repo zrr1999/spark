@@ -572,8 +572,8 @@ const messages = {
     headTitle: "Inbox · Spark",
     hero: {
       eyebrow: "Human in the loop",
-      title: "Inbox",
-      lede: "Asks and reviews from Spark-backed runs wait here until an operator answers. Nothing times out automatically.",
+      title: "Approval center",
+      lede: "Asks, workflow risk approvals, and goal reviewer gates wait here until an operator approves, rejects, or answers them. Nothing times out automatically.",
     },
     metrics: {
       aria: "Inbox status",
@@ -591,7 +591,7 @@ const messages = {
       body: "When a Spark-backed run calls ask_user, review, approval, or blocker, the request shows up here.",
     },
     list: {
-      title: "Requests",
+      title: "Actionable requests",
       totalSuffix: "total",
       awaitingAnswer: "awaiting answer",
       acked: "acked",

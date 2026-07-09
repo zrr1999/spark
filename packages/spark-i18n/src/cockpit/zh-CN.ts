@@ -559,8 +559,8 @@ const messages = {
     headTitle: "收件箱 · Spark",
     hero: {
       eyebrow: "人在环中",
-      title: "收件箱",
-      lede: "来自 Spark 支撑运行的询问和评审会在这里等待操作员回答，不会自动超时。",
+      title: "审批中心",
+      lede: "来自 Spark 支撑运行的询问、workflow 风险审批和 goal reviewer 门禁会在这里等待操作员批准、拒绝或回答，不会自动超时。",
     },
     metrics: {
       aria: "收件箱状态",
@@ -578,7 +578,7 @@ const messages = {
       body: "当 Spark 支撑的运行调用 ask_user、review、approval 或 blocker 工具时，请求会出现在这里。",
     },
     list: {
-      title: "请求",
+      title: "可操作请求",
       totalSuffix: "总计",
       awaitingAnswer: "等待回答",
       acked: "已确认",

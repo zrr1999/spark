@@ -54,6 +54,27 @@ void test("parseSparkDispatcherArgs routes default, tui, daemon, server/cockpit,
     target: "tui",
     argv: ["--mode", "json", "--print", "hello"],
   });
+  assert.deepEqual(parseSparkDispatcherArgs(["run", "--json", "--resume", "s1", "hello"]), {
+    kind: "dispatch",
+    target: "tui",
+    argv: ["--print", "--mode", "json", "--session", "s1", "hello"],
+  });
+  assert.deepEqual(parseSparkDispatcherArgs(["doctor", "--json"]), {
+    kind: "dispatch",
+    target: "daemon",
+    argv: ["doctor", "--json"],
+  });
+  assert.deepEqual(parseSparkDispatcherArgs(["bg", "--json", "hello"]), {
+    kind: "dispatch",
+    target: "daemon",
+    argv: ["submit", "--json", "hello"],
+    autoSessionPrefix: "spark-bg",
+  });
+  assert.deepEqual(parseSparkDispatcherArgs(["bg", "--session", "s1", "hello"]), {
+    kind: "dispatch",
+    target: "daemon",
+    argv: ["submit", "--session", "s1", "hello"],
+  });
   assert.deepEqual(parseSparkDispatcherArgs(["install", "./skill", "--skill"]), {
     kind: "dispatch",
     target: "tui",
@@ -129,14 +150,38 @@ void test("runSparkDispatcher fails fast for non-TTY TUI while preserving headle
 
   assert.equal(await runSparkDispatcher(["--print", "hello"], io, launcher), 0);
   assert.equal(await runSparkDispatcher(["tui", "--help"], io, launcher), 0);
+  assert.equal(await runSparkDispatcher(["run", "--json", "hello"], io, launcher), 0);
   assert.equal(await runSparkDispatcher(["tui", "--mode", "rpc"], io, launcher), 0);
   assert.equal(await runSparkDispatcher(["sessions", "list"], io, launcher), 0);
   assert.deepEqual(calls, [
     { target: "tui", argv: ["--print", "hello"] },
     { target: "tui", argv: ["--help"] },
+    { target: "tui", argv: ["--print", "--mode", "json", "hello"] },
     { target: "tui", argv: ["--mode", "rpc"] },
     { target: "tui", argv: ["sessions", "list"] },
   ]);
+});
+
+void test("runSparkDispatcher generates a daemon session id for spark bg", async () => {
+  const calls: Array<{ target: string; argv: string[] }> = [];
+  const code = await runSparkDispatcher(
+    ["bg", "ship", "it"],
+    {},
+    {
+      run: async (target, argv) => {
+        calls.push({ target, argv });
+        return 0;
+      },
+    },
+  );
+
+  assert.equal(code, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.target, "daemon");
+  assert.equal(calls[0]?.argv[0], "submit");
+  assert.equal(calls[0]?.argv[1], "--session");
+  assert.match(calls[0]?.argv[2] ?? "", /^spark-bg-/u);
+  assert.deepEqual(calls[0]?.argv.slice(3), ["ship", "it"]);
 });
 
 void test("runSparkDispatcher renders help and unknown-command diagnostics without dispatching", async () => {

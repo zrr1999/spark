@@ -24,7 +24,7 @@ The extension packages depend on the shared `@zendev-lab/spark-extension-api` co
 
 Native TUI editor parity is intentionally implemented on the real `pi-tui` editor path: `@path` references become `<file>` context blocks, dragged/pasted image file paths or `@image` references become image attachment placeholders, `!command` submits captured shell output, and `!!command` records a folded shell tool result without sending output to the model. Busy input also follows Pi semantics: `Enter` queues steering updates, `Alt+Enter` queues follow-up turns, `Escape` aborts and restores queued text, and `Alt+Up` retrieves queued text. Clipboard binary image extraction and the `Alt+Enter` chord remain terminal/platform dependent; terminals such as Windows Terminal should paste image file paths and use terminal/keybinding remaps where needed.
 
-Spark native CLI parity includes Pi-style global surfaces routed through the daemon-first app: `spark --mode json --print <prompt>` emits JSONL lifecycle/queue events, `spark --mode rpc` starts a JSONL command loop for prompt/state/message/session commands, `spark --list-models [search]` lists registered provider models, and top-level `spark install|remove|update|list|config` manages config-backed extensions/providers/skills/prompt templates/themes without implicit secret deletion or network package mutation. The `@zendev-lab/spark-tui-app` package exports SDK building blocks (`createSparkCliHostServices`, `SparkAgentSession`, session store, provider/model registry, config/resource helpers) while `@zendev-lab/spark-host` and `@zendev-lab/spark-turn` expose the reusable host/turn core for embedding without spawning Pi.
+Spark native CLI parity includes Pi-style global surfaces routed through the daemon-first app: `spark run <prompt>` is the first-class foreground headless verb, `spark run --json <prompt>` emits JSONL lifecycle/queue events, `spark run --resume <session> <prompt>` targets an existing session, `spark bg <prompt>` submits to the daemon queue and returns, `spark doctor` reports daemon/auth/workspace/cockpit health, `spark --mode rpc` starts a JSONL command loop for prompt/state/message/session commands, `spark --list-models [search]` lists registered provider models, and top-level `spark install|remove|update|list|config` manages config-backed extensions/providers/skills/prompt templates/themes without implicit secret deletion or network package mutation. Legacy `spark --print`, `spark -p`, and `spark --mode json --print` remain aliases; new third-party integrations should use [`docs/specs/spark-runtime-integration.md`](./docs/specs/spark-runtime-integration.md). The `@zendev-lab/spark-tui-app` package exports SDK building blocks (`createSparkCliHostServices`, `SparkAgentSession`, session store, provider/model registry, config/resource helpers) while `@zendev-lab/spark-host` and `@zendev-lab/spark-turn` expose the reusable host/turn core for embedding without spawning Pi.
 
 ### Research workflow
 
@@ -120,6 +120,7 @@ pnpm run check                                    # full validation gate
 pnpm run build                                    # daemon + cockpit production builds
 pnpm run preview                                  # start the local cockpit dev server
 spark cockpit                                     # start the built cockpit production server through the CLI
+HOST=0.0.0.0 SPARK_COCKPIT_REMOTE_TOKEN=... spark cockpit  # opt-in single-user remote/PWA access; see docs/specs/spark-cockpit-remote-access.md
 pnpm install -g .                                 # link the unified spark CLI
 pnpm run publish                                  # validate, build, publish public packages
 ```
@@ -154,6 +155,7 @@ Pi loads raw TypeScript from the package manifest; there is no build step.
 - [`docs/README.md`](./docs/README.md)
 - [`docs/architecture/packages.md`](./docs/architecture/packages.md)
 - [`docs/architecture/hosts.md`](./docs/architecture/hosts.md)
+- [`docs/specs/spark-runtime-integration.md`](./docs/specs/spark-runtime-integration.md)
 - [`docs/specs/tools.md`](./docs/specs/tools.md)
 - [`docs/specs/store-inventory.md`](./docs/specs/store-inventory.md)
 - [`docs/records/implementation-status.md`](./docs/records/implementation-status.md)

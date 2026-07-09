@@ -88,6 +88,8 @@ export interface ProjectCockpitTask {
   agentRef: string | null;
   runtimeClusterId: string | null;
   clusterTitle: string | null;
+  inputArtifactIds: string[];
+  outputArtifactIds: string[];
   inputArtifactCount: number;
   outputArtifactCount: number;
   runIds: string[];
@@ -300,6 +302,8 @@ export function loadProjectCockpit(db: DatabaseSync, projectId: string) {
     taskRows.map((task) => [task.runtimeTaskId, normalizeTaskStatus(task.status)]),
   );
   const tasks: ProjectCockpitTask[] = taskRows.map((task) => {
+    const inputArtifactIds = parseJsonArray(task.inputArtifactIdsJson);
+    const outputArtifactIds = parseJsonArray(task.outputArtifactIdsJson);
     const runIds = parseJsonArray(task.runIdsJson);
     const invocationLinks = invocationRows
       .filter(
@@ -329,8 +333,10 @@ export function loadProjectCockpit(db: DatabaseSync, projectId: string) {
       agentRef: task.agentRef,
       runtimeClusterId: task.runtimeClusterId,
       clusterTitle: task.clusterTitle,
-      inputArtifactCount: parseJsonArray(task.inputArtifactIdsJson).length,
-      outputArtifactCount: parseJsonArray(task.outputArtifactIdsJson).length,
+      inputArtifactIds,
+      outputArtifactIds,
+      inputArtifactCount: inputArtifactIds.length,
+      outputArtifactCount: outputArtifactIds.length,
       runIds,
       blockers,
       dependents: dependencyRows

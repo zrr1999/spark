@@ -110,7 +110,7 @@ export async function main(argv = process.argv.slice(2), io: CliIo = defaultIo):
       case "install":
         return install(paths, io);
       case "doctor":
-        return doctor(paths, io);
+        return await doctor(paths, io);
       case "status":
         return await status(paths, io);
       case "logs":
@@ -167,12 +167,40 @@ function install(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): number
   return 0;
 }
 
-function doctor(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): number {
+async function doctor(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): Promise<number> {
+  prepareSparkDaemonState(paths);
   const config = readSparkDaemonConfig(paths);
+  const daemon = await buildDaemonStatus(paths, io);
+  const workspace = await buildDoctorWorkspaceStatus(paths, io, daemon);
+  const serverUrl = configuredServerUrl(config);
+  const credentialsOk = serverUrl
+    ? hasRunnableSparkDaemonCredentialsForServer(config, serverUrl)
+    : false;
+  const cockpit = buildDoctorCockpitStatus();
   io.stdout.write(
     JSON.stringify(
       {
         version: sparkDaemonVersion,
+        checks: {
+          daemon: {
+            ok: daemon.running === true,
+            running: daemon.running,
+            socketPath: daemon.socketPath,
+            ...(daemon.running ? { queue: daemon.queue } : {}),
+            ...("unreachable" in daemon && daemon.unreachable
+              ? { unreachable: true, error: daemon.error }
+              : {}),
+          },
+          credentials: {
+            ok: credentialsOk,
+            enrolled: Boolean(config.runtimeId && config.runtimeToken),
+            serverUrl: serverUrl ?? null,
+            runtimeTokenExpiresAt: config.runtimeTokenExpiresAt,
+            refreshTokenExpiresAt: config.refreshTokenExpiresAt,
+          },
+          workspace,
+          cockpit,
+        },
         paths,
         config: {
           installationId: config.installationId,
@@ -189,6 +217,56 @@ function doctor(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): number 
     ) + "\n",
   );
   return 0;
+}
+
+async function buildDoctorWorkspaceStatus(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  io: CliIo,
+  daemon: DaemonStatus,
+): Promise<Record<string, unknown>> {
+  if (!daemon.running) {
+    return {
+      ok: false,
+      reachable: false,
+      workspaces: 0,
+      detail: "Spark daemon is not running; workspace state was not queried.",
+    };
+  }
+  try {
+    const result = await (io.listWorkspacesFromService ?? requestWorkspaceList)(paths);
+    return {
+      ok: true,
+      reachable: true,
+      workspaces: result.workspaces.length,
+      observedAt: result.observedAt,
+    };
+  } catch (error) {
+    return { ok: false, reachable: false, workspaces: 0, error: errorMessage(error) };
+  }
+}
+
+function errorCode(error: Error | undefined): string | undefined {
+  return typeof error === "object" && error !== null && "code" in error
+    ? String(error.code)
+    : undefined;
+}
+
+function buildDoctorCockpitStatus(): Record<string, unknown> {
+  const packagePath = fileURLToPath(new URL("../../spark-cockpit/package.json", import.meta.url));
+  const packageAvailable = existsSync(packagePath);
+  const command = "spark-cockpit";
+  const commandProbe = spawnSync(command, ["--help"], { stdio: "ignore", timeout: 1_000 });
+  const commandErrorCode = errorCode(commandProbe.error);
+  const commandAvailable = !commandProbe.error || commandErrorCode !== "ENOENT";
+  return {
+    ok: packageAvailable || commandAvailable,
+    packageAvailable,
+    command,
+    commandAvailable,
+    ...(commandProbe.error && commandErrorCode !== "ENOENT"
+      ? { error: commandProbe.error.message }
+      : {}),
+  };
 }
 
 async function status(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): Promise<number> {

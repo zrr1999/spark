@@ -66,6 +66,7 @@ describe("SparkCommand vocabulary", () => {
       "task.start.request",
       "invocation.cancel.request",
       "artifact.content.request",
+      "human.response.deliver.request",
       "diagnostics.request",
     ]);
     expect(sparkCommandKindForRuntimeServerCommand("task.start.request")).toBe(

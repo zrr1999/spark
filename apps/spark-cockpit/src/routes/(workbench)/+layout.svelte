@@ -2,6 +2,7 @@
   import { goto } from "$app/navigation";
   import { page } from "$app/state";
   import { onMount } from "svelte";
+  import CockpitNotifications from "$lib/CockpitNotifications.svelte";
   import Icon from "$lib/Icon.svelte";
   import SparkLogo from "$lib/SparkLogo.svelte";
   import {
@@ -435,6 +436,10 @@
               </a>
             {/each}
           {/if}
+
+          <div class="account-separator"></div>
+
+          <CockpitNotifications />
 
           <div class="account-separator"></div>
 

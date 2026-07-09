@@ -25,10 +25,16 @@ Plane boundary:
   Coordination commands belong under spark server.
   Execution controls belong under spark daemon.
 
+Environment:
+  HOST=0.0.0.0                 Intentionally listen on all interfaces
+  SPARK_COCKPIT_REMOTE_TOKEN    Required for non-localhost browser/API access
+  PORT=5174                     Override the default port
+
 Examples:
   spark cockpit build
   spark cockpit
   PORT=5174 spark cockpit
+  HOST=0.0.0.0 SPARK_COCKPIT_REMOTE_TOKEN=... spark cockpit
 EOF
 }
 

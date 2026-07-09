@@ -6,7 +6,9 @@
   } from "$lib/command-delivery-display";
   import Icon from "$lib/Icon.svelte";
   import ProjectMainSessionChatPanel from "$lib/ProjectMainSessionChatPanel.svelte";
+  import ProjectTaskBoard from "$lib/ProjectTaskBoard.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
+  import { buildProjectTaskBoard } from "$lib/project-task-board";
   import { buildCockpitProjectTaskDisplay } from "$lib/project-task-display";
   import EmptyState from "$lib/ui/EmptyState.svelte";
   import PageHeader from "$lib/ui/PageHeader.svelte";
@@ -52,6 +54,13 @@
   );
   let workspaceControlLabel = $derived(
     workspaceControlControlLabel(data.workspaceControl.control, data.messages.home.workspaceControl),
+  );
+  let taskBoard = $derived(
+    buildProjectTaskBoard({
+      tasks: data.tasks,
+      artifacts: data.artifacts,
+      canAssign: canStartTask,
+    }),
   );
   let ownerCommandNote = $derived(
     data.ownerBinding
@@ -169,6 +178,8 @@
             {/snippet}
           </EmptyState>
         {:else}
+          <ProjectTaskBoard columns={taskBoard} {workspaceUrl} />
+
           <div class="task-list">
             {#each data.tasks as task}
               {@const taskDisplay = projectTaskDisplay.tasksByRuntimeId[task.runtimeTaskId]}

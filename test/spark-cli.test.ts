@@ -50,10 +50,9 @@ void test("runSparkCli rejects implicit TUI launch in non-interactive terminals"
   }
 });
 
-void test("runSparkCli keeps explicit print mode usable without an interactive terminal", async () => {
-  const logs: string[] = [];
-  const submissions: Array<{ sessionId: string; prompt: string; reset?: boolean }> = [];
-  const previousLog = console.log;
+function fakeHeadlessDaemonClient(
+  submissions: Array<{ sessionId: string; prompt: string; reset?: boolean }> = [],
+): SparkDaemonClientOptions {
   const now = new Date(0).toISOString();
   const workspace = {
     id: "ws_test",
@@ -71,7 +70,7 @@ void test("runSparkCli keeps explicit print mode usable without an interactive t
     attachedAt: now,
     lastSeenAt: now,
   };
-  const daemonClient = {
+  return {
     daemonStatus: async () => ({
       observedAt: now,
       servers: [],
@@ -95,6 +94,13 @@ void test("runSparkCli keeps explicit print mode usable without an interactive t
       };
     },
   } satisfies SparkDaemonClientOptions;
+}
+
+void test("runSparkCli keeps explicit print mode usable without an interactive terminal", async () => {
+  const logs: string[] = [];
+  const submissions: Array<{ sessionId: string; prompt: string; reset?: boolean }> = [];
+  const previousLog = console.log;
+  const daemonClient = fakeHeadlessDaemonClient(submissions);
 
   try {
     console.log = (...args: unknown[]) => {
@@ -110,6 +116,38 @@ void test("runSparkCli keeps explicit print mode usable without an interactive t
     assert.equal(submissions.length, 1);
     assert.equal(submissions[0]?.prompt, "hello spark");
     assert.match(logs.join("\n"), /turn\.json/u);
+  } finally {
+    console.log = previousLog;
+  }
+});
+
+void test("runSparkCli JSON print emits documented JSONL event order", async () => {
+  const logs: string[] = [];
+  const submissions: Array<{ sessionId: string; prompt: string; reset?: boolean }> = [];
+  const previousLog = console.log;
+  const daemonClient = fakeHeadlessDaemonClient(submissions);
+
+  try {
+    console.log = (...args: unknown[]) => {
+      logs.push(args.map(String).join(" "));
+    };
+
+    const code = await runSparkCli(["--mode", "json", "--print", "hello", "spark"], {
+      daemonClient,
+      terminal: { stdinIsTTY: false, stdoutIsTTY: false },
+    });
+
+    assert.equal(code, 0);
+    const events = logs.map((line) => JSON.parse(line) as { type: string; result?: unknown });
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ["session", "agent_start", "turn_start", "queue_update", "turn_end", "agent_end"],
+    );
+    assert.deepEqual((events[3] as { followUp?: string[] }).followUp, ["hello spark"]);
+    assert.equal(
+      (events[4]?.result as { result?: { fileName?: string } })?.result?.fileName,
+      "turn.json",
+    );
   } finally {
     console.log = previousLog;
   }

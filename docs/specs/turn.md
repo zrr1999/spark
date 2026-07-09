@@ -106,6 +106,7 @@ adapter during migration.
 | `diagnostics.request` | `diagnostics.request` | Ask the daemon to emit diagnostic output. |
 | `project.create.request` | `project.create.request` | Reserved server project creation intent. |
 | `artifact.content.request` | `artifact.content.request` | Reserved artifact content request intent. |
+| `human.response.deliver.request` | Deliver a Cockpit approval/answer decision recorded by the human-response outbox. |
 
 Example task start command after adaptation:
 

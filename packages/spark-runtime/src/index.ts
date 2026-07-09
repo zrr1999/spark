@@ -1,6 +1,6 @@
 export * from "./workflow-role-run-adapter.ts";
 
-import type { ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import {
   buildRoleRunArgs as buildGenericRoleRunArgs,
   defaultProjectRoleModelSettingsStore,
@@ -1249,6 +1249,9 @@ async function runNativeSparkRole(
     userStore: defaultUserRoleModelSettingsStore(),
   });
   const model = roleModel?.model ?? (options.sessionModel?.trim() || undefined);
+  if (!options.roleExecutor) {
+    return await runProcessSparkRole(role, instruction, options, baseRecord, model);
+  }
   const result = await runRole({
     runRef: baseRecord.ref,
     roleRef: role.ref,
@@ -1283,6 +1286,145 @@ async function runNativeSparkRole(
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
     jsonEvents: result.jsonEvents ?? [],
+  };
+}
+
+async function runProcessSparkRole(
+  role: RoleSpec,
+  instruction: RoleInstruction,
+  options: Required<Pick<RoleRunnerOptions, "cwd" | "piCommand" | "timeoutMs">> &
+    Pick<
+      RoleRunnerOptions,
+      | "signal"
+      | "sessionDir"
+      | "runName"
+      | "launch"
+      | "forkFromSession"
+      | "env"
+      | "allowedTools"
+      | "onRoleEvent"
+    >,
+  baseRecord: SparkRoleRunResult["record"],
+  model: string | undefined,
+): Promise<SparkRoleRunResult> {
+  const args = buildRoleRunArgs({
+    roleRef: role.ref,
+    systemPrompt: role.systemPrompt,
+    instruction: instruction.instruction,
+    model,
+    allowedTools: options.allowedTools ?? role.allowedTools,
+    sessionDir: options.sessionDir,
+    launch: options.launch,
+    forkFromSession: options.forkFromSession,
+    noSession: options.launch !== "forked",
+  });
+  const child = spawn(options.piCommand, args, {
+    cwd: options.cwd,
+    env: options.env,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const startedAt = baseRecord.startedAt ?? nowIso();
+  const tracked: TrackedSparkRoleRunProcess = {
+    child,
+    closed: false,
+    runRef: baseRecord.ref,
+    roleRef: role.ref,
+    runName: options.runName,
+    pid: child.pid,
+    cwd: options.cwd,
+    startedAt,
+  };
+  activeSparkRoleRunProcesses.set(baseRecord.ref, tracked);
+
+  const stdoutChunks: Buffer[] = [];
+  const stderrChunks: Buffer[] = [];
+  let spawnError: Error | undefined;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let abortCleanup: (() => void) | undefined;
+  let timedOut = false;
+
+  const terminateForTimeout = () => {
+    timedOut = true;
+    tracked.timedOutAt = nowIso();
+    tracked.terminationReason = `role run timed out after ${options.timeoutMs}ms`;
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // Best-effort; close/error handlers below turn the child state into a timeout result.
+    }
+    tracked.forceKillTimer = setTimeout(() => {
+      if (!tracked.closed) child.kill("SIGKILL");
+    }, DEFAULT_ROLE_RUN_FORCE_KILL_AFTER_MS);
+    tracked.forceKillTimer.unref?.();
+  };
+
+  if (options.timeoutMs > 0) {
+    timeout = setTimeout(terminateForTimeout, options.timeoutMs);
+    timeout.unref?.();
+  }
+  if (options.signal) {
+    const abort = () => {
+      tracked.terminationReason = unknownErrorMessage(abortSignalReason(options.signal));
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Best-effort abort; close/error handlers handle process state.
+      }
+    };
+    options.signal.addEventListener("abort", abort, { once: true });
+    abortCleanup = () => options.signal?.removeEventListener("abort", abort);
+    if (options.signal.aborted) abort();
+  }
+
+  child.stdout?.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+  child.stderr?.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+  child.once("error", (error) => {
+    spawnError = error;
+  });
+
+  const { code, signal } = await new Promise<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+  }>((resolve) => {
+    child.once("close", (code, signal) => resolve({ code, signal }));
+  });
+  if (timeout) clearTimeout(timeout);
+  if (tracked.forceKillTimer) clearTimeout(tracked.forceKillTimer);
+  abortCleanup?.();
+  tracked.closed = true;
+  activeSparkRoleRunProcesses.delete(baseRecord.ref);
+
+  const stdout = Buffer.concat(stdoutChunks).toString("utf8");
+  const stderr = Buffer.concat(stderrChunks).toString("utf8");
+  const jsonEvents = parsePiJsonlEvents(stdout);
+  for (const event of jsonEvents) void options.onRoleEvent?.(event);
+  if (timedOut) throw new RoleRunTimeoutError(options.timeoutMs);
+
+  const errorOutput = [
+    stderr.trim(),
+    spawnError ? unknownErrorMessage(spawnError) : "",
+    tracked.terminationReason && code !== 0 ? tracked.terminationReason : "",
+    signal ? `signal ${signal}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const status = code === 0 && !spawnError ? "succeeded" : "failed";
+  return {
+    record: {
+      ...baseRecord,
+      status,
+      finishedAt: nowIso(),
+      launch: options.launch ?? "fresh",
+      model,
+      sessionDir: options.launch === "forked" ? options.sessionDir : undefined,
+      forkFromSession: options.launch === "forked" ? options.forkFromSession : undefined,
+      ...(options.launch === "forked"
+        ? {}
+        : { noSession: true, sessionPersistence: "anonymous" as const }),
+    },
+    stdout,
+    stderr: errorOutput || stderr,
+    jsonEvents,
   };
 }
 

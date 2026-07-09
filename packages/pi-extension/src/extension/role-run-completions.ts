@@ -53,7 +53,8 @@ export function projectHiddenRoleRunInboxEntry(input: {
   const createdAtMs = Date.parse(input.summary.createdAt);
   const staleByAge = Number.isFinite(createdAtMs) && createdAtMs < input.recentCutoffMs;
   const terminalTask = input.taskStatus ? !isUnfinishedTaskStatus(input.taskStatus) : false;
-  const historical = staleByAge || (input.summary.status === "failed" && terminalTask);
+  const historical =
+    staleByAge || (input.summary.status === "failed" && terminalTask && input.acknowledged);
   const actionable =
     input.run.ownerSessionId === input.sessionKey && !input.acknowledged && !historical;
   return {

@@ -17,7 +17,7 @@ import {
   type TaskGraph,
 } from "@zendev-lab/spark-tasks";
 import { reconcileSparkWorkflowRunsWithActiveProcesses } from "./background-runs.ts";
-import { defaultWorkflowRunStore } from "@zendev-lab/spark-workflows";
+import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 import { ensureRoleModelSettingsForProject } from "./role-model-settings.ts";
 import { hasLocalSparkDirectory } from "./spark-activation.ts";
 import { currentSparkProject, loadSparkGraph, sparkSessionOwnerKey } from "./session-state.ts";
@@ -55,7 +55,7 @@ export class SparkWorkflowRunManagerController {
       this.timers.delete(cwd);
       if (!(await hasLocalSparkDirectory(cwd))) return;
       const result = await this.runOnce(cwd, ctx);
-      const control = await defaultWorkflowRunStore(cwd).loadControl();
+      const control = await defaultSparkWorkflowRunStore(cwd).loadControl();
       if (result.continuePolling && (!control || control.status === "running")) {
         this.schedule(cwd, tick, WORKFLOW_RUN_MANAGER_POLL_INTERVAL_MS);
       }
@@ -79,7 +79,7 @@ export class SparkWorkflowRunManagerController {
     const registry = await createSparkRoleRegistry(cwd);
     const artifactStore = defaultArtifactStore(cwd);
     const touched = new Set<TaskRef>();
-    const runStore = defaultWorkflowRunStore(cwd);
+    const runStore = defaultSparkWorkflowRunStore(cwd);
     const currentProject = await currentSparkProject(cwd, ctx, graph);
     const control = await runStore.loadControl();
     if (control && control.status !== "running") return { continuePolling: false };

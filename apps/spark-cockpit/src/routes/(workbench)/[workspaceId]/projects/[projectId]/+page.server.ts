@@ -10,6 +10,7 @@ import { titleFromPrompt } from "$lib/server/agents-product";
 import { getDatabase } from "$lib/server/db";
 import { formText } from "$lib/server/form-data";
 import { submitServerCommand } from "$lib/server/command-submission";
+import { buildProjectTaskAssignCommandPayload } from "$lib/server/project-task-assign";
 import { requireWorkspaceByRouteId } from "$lib/server/workspace-routing";
 import type { Actions, PageServerLoad } from "./$types";
 
@@ -22,6 +23,46 @@ export const load: PageServerLoad = ({ params }) => {
 };
 
 export const actions: Actions = {
+  assignTask: async ({ cookies, locals, params, request }) => {
+    const t = getRequestDictionary({
+      cookieLocale: cookies.get(localeCookieName),
+      acceptLanguage: request.headers.get("accept-language"),
+    }).project.formMessages;
+    const db = getDatabase();
+    const workspace = requireWorkspaceByRouteId(db, params.workspaceId);
+    const project = requireProjectForWorkspace(db, params.projectId, workspace.id);
+    if (!project) throw error(404, "Project not found");
+    const page = loadProjectPage(db, params.workspaceId, params.projectId);
+    if (!page) throw error(404, "Project not found");
+
+    const formData = await request.formData();
+    const runtimeTaskId = formText(formData, "runtimeTaskId").trim();
+    const task = page.tasks.find((candidate) => candidate.runtimeTaskId === runtimeTaskId);
+    if (!task || !task.readyFrontier) {
+      return fail(400, { message: t.queueFailed });
+    }
+
+    try {
+      const command = submitServerCommand(db, {
+        workspaceId: project.workspaceId,
+        projectId: project.id,
+        requestedByUserId: getCurrentUserIdBySessionToken(db, locals.sessionToken),
+        idempotencyKey: createId("idem"),
+        payload: buildProjectTaskAssignCommandPayload(task),
+      });
+
+      return {
+        message: t.queued,
+        queuedCommandId: command.id,
+        assignedRuntimeTaskId: task.runtimeTaskId,
+      };
+    } catch (caught) {
+      return fail(400, {
+        message: caught instanceof Error ? caught.message : t.queueFailed,
+      });
+    }
+  },
+
   startTask: async ({ cookies, locals, params, request }) => {
     const t = getRequestDictionary({
       cookieLocale: cookies.get(localeCookieName),

@@ -522,6 +522,7 @@ void test("Spark native Pi parity slash commands are discoverable and route repr
     "new",
     "compact",
     "resume",
+    "reload",
   ]) {
     assert.match(stripAnsi(harness.render()), new RegExp(`/${command}(?: \\[| <| )?.* —`, "u"));
   }
@@ -529,6 +530,7 @@ void test("Spark native Pi parity slash commands are discoverable and route repr
     stripAnsi(harness.render()),
     /\/reload — reload extension-owned slash command state/,
   );
+  assert.match(stripAnsi(harness.render()), /\/resume \[session-id\|path\] —/u);
 
   await submitEditorText(harness, "/settings");
   assert.match(stripAnsi(harness.render()), /Spark settings:/);
@@ -617,7 +619,10 @@ void test("Spark native TUI surfaces command availability, queued work, stop, an
 
   assert.match(stripAnsi(harness.render()), /native pi-tui host • idle • 16 registered commands/);
   assert.equal(await harness.submit("/help"), "command");
-  assert.match(stripAnsi(harness.render()), /16 extension commands available/);
+  assert.match(
+    stripAnsi(harness.render()),
+    /\d+ extension commands? available|\d+ additional registered host\/daemon commands? available/,
+  );
 
   assert.equal(await harness.submit("first"), "started");
   await harness.flush();

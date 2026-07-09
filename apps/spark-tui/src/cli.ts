@@ -59,6 +59,7 @@ import {
   createSparkModelPickerFromCustomUi,
   type SparkModelSelectorCustomUi,
 } from "./tui/model-selector.ts";
+import { renderSparkFirstRunOnboarding } from "./cli/onboarding.ts";
 
 const tuiCliStrings = sparkTuiCliStrings();
 
@@ -745,6 +746,9 @@ export async function runSparkCli(
           lease,
           command.options,
         );
+        const firstRunOnboarding = command.initialMessage
+          ? undefined
+          : renderSparkFirstRunOnboarding(services);
         registerSparkSessionsCommand(services.runtime, {
           store: services.sessionStore,
           getNavigationState: () => undefined,
@@ -777,6 +781,13 @@ export async function runSparkCli(
                 workspaceHash: workspaceSession.state.workspaceHash,
                 controlPlaneSessionId: workspaceSession.state.controlPlaneSessionId,
                 attachTarget: workspaceSession.target,
+              });
+            }
+            if (firstRunOnboarding) {
+              session.addCustomMessage({
+                customType: "first-run-onboarding",
+                content: firstRunOnboarding,
+                display: true,
               });
             }
           },

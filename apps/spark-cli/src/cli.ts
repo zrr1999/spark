@@ -11,7 +11,12 @@ const dispatcherStrings = sparkCliDispatcherStrings();
 export type SparkDispatcherTarget = "tui" | "daemon" | "server" | "cockpit";
 
 export type SparkDispatcherCommand =
-  | { kind: "dispatch"; target: SparkDispatcherTarget; argv: string[] }
+  | {
+      kind: "dispatch";
+      target: SparkDispatcherTarget;
+      argv: string[];
+      autoSessionPrefix?: string;
+    }
   | { kind: "help" }
   | { kind: "version" }
   | { kind: "error"; message: string };
@@ -34,6 +39,9 @@ export function parseSparkDispatcherArgs(argv: string[]): SparkDispatcherCommand
   if (!first) return { kind: "dispatch", target: "tui", argv: [] };
   if (first === "help" || first === "--help" || first === "-h") return { kind: "help" };
   if (first === "version" || first === "--version" || first === "-v") return { kind: "version" };
+  if (first === "run") return parseSparkRunCommand(rest);
+  if (first === "bg") return parseSparkBackgroundCommand(rest);
+  if (first === "doctor") return { kind: "dispatch", target: "daemon", argv: ["doctor", ...rest] };
   if (first === "tui") return { kind: "dispatch", target: "tui", argv: rest };
   if (first === "daemon") return { kind: "dispatch", target: "daemon", argv: rest };
   if (first === "server") return { kind: "dispatch", target: "server", argv: rest };
@@ -66,21 +74,115 @@ export async function runSparkDispatcher(
     case "error":
       stderr.write(`${command.message}\n`);
       return 2;
-    case "dispatch":
+    case "dispatch": {
+      const dispatchArgv = command.autoSessionPrefix
+        ? withGeneratedSession(command.argv, command.autoSessionPrefix)
+        : command.argv;
       if (
         command.target === "tui" &&
-        !isSparkTuiHeadlessCompatibilityCommand(command.argv) &&
+        !isSparkTuiHeadlessCompatibilityCommand(dispatchArgv) &&
         !isInteractiveTerminal(io)
       ) {
         stderr.write(`${dispatcherStrings.tuiRequiresTty}\n`);
         return 2;
       }
-      return await launcher.run(command.target, command.argv, { stdio: "inherit" });
+      return await launcher.run(command.target, dispatchArgv, { stdio: "inherit" });
+    }
   }
 }
 
 export function helpText(): string {
   return dispatcherStrings.helpText;
+}
+
+function parseSparkRunCommand(argv: string[]): SparkDispatcherCommand {
+  const mapped = ["--print"];
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]!;
+    if (arg === "--") {
+      mapped.push(...argv.slice(index));
+      break;
+    }
+    if (arg === "--json") {
+      mapped.push("--mode", "json");
+      continue;
+    }
+    if (arg === "--resume") {
+      const session = argv[++index];
+      if (!session) return errorCommand("spark run --resume requires a session id");
+      mapped.push("--session", session);
+      continue;
+    }
+    if (arg.startsWith("--resume=")) {
+      const session = arg.slice("--resume=".length);
+      if (!session) return errorCommand("spark run --resume requires a session id");
+      mapped.push("--session", session);
+      continue;
+    }
+    mapped.push(arg);
+  }
+  return { kind: "dispatch", target: "tui", argv: mapped };
+}
+
+function parseSparkBackgroundCommand(argv: string[]): SparkDispatcherCommand {
+  const mapped = ["submit"];
+  let hasSession = false;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]!;
+    if (arg === "--") {
+      mapped.push(...argv.slice(index));
+      break;
+    }
+    if (arg === "--resume" || arg === "--session" || arg === "-s") {
+      const session = argv[++index];
+      if (!session) return errorCommand(`spark bg ${arg} requires a session id`);
+      mapped.push("--session", session);
+      hasSession = true;
+      continue;
+    }
+    if (arg === "--session-id") {
+      const session = argv[++index];
+      if (!session) return errorCommand("spark bg --session-id requires a session id");
+      mapped.push("--session", session);
+      hasSession = true;
+      continue;
+    }
+    if (arg.startsWith("--resume=")) {
+      const session = arg.slice("--resume=".length);
+      if (!session) return errorCommand("spark bg --resume requires a session id");
+      mapped.push(`--session=${session}`);
+      hasSession = true;
+      continue;
+    }
+    if (arg.startsWith("--session=") || arg.startsWith("--session-id=")) {
+      const session = arg.slice(arg.indexOf("=") + 1);
+      if (!session) return errorCommand("spark bg --session requires a session id");
+      mapped.push(`--session=${session}`);
+      hasSession = true;
+      continue;
+    }
+    mapped.push(arg);
+  }
+  return {
+    kind: "dispatch",
+    target: "daemon",
+    argv: mapped,
+    ...(hasSession ? {} : { autoSessionPrefix: "spark-bg" }),
+  };
+}
+
+function errorCommand(message: string): SparkDispatcherCommand {
+  return { kind: "error", message };
+}
+
+function withGeneratedSession(argv: string[], prefix: string): string[] {
+  const sessionId = generatedSessionId(prefix);
+  if (argv[0] === "submit") return [argv[0], "--session", sessionId, ...argv.slice(1)];
+  return ["--session", sessionId, ...argv];
+}
+
+function generatedSessionId(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function isSparkTuiCompatibilityCommand(first: string): boolean {

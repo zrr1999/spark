@@ -74,6 +74,10 @@ export function createLocalOwnerSession(db: DatabaseSync): CreatedOwnerSession {
   return insertSession(db, owner.id, new Date());
 }
 
+export function createRemoteOwnerSession(db: DatabaseSync): CreatedOwnerSession {
+  return insertSession(db, ensureLocalSystemUser(db), new Date());
+}
+
 export function getCurrentUserId(
   db: DatabaseSync,
   sessionToken: string | null,
@@ -137,12 +141,16 @@ export function ensureLocalSystemUser(db: DatabaseSync): string {
   return userId;
 }
 
-export function setSessionCookie(cookies: Cookies, session: CreatedOwnerSession): void {
+export function setSessionCookie(
+  cookies: Cookies,
+  session: CreatedOwnerSession,
+  options: { secure?: boolean } = {},
+): void {
   cookies.set(sessionCookieName, session.sessionToken, {
     path: "/",
     httpOnly: true,
     sameSite: "lax",
-    secure: false,
+    secure: options.secure ?? false,
     expires: new Date(session.expiresAt),
   });
 }

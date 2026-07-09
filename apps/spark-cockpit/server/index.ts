@@ -1,6 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { getDatabase } from "../src/lib/server/db.js";
+import { isRemoteAccessConfigured } from "../src/lib/server/remote-access.js";
 import { attachRuntimeWebSocket, authenticateRuntimeToken } from "../src/lib/server/runtime-ws.js";
+import { startWebPushEventDispatcher } from "../src/lib/server/web-push.js";
 import { WebSocketServer } from "ws";
 
 const host = process.env.HOST ?? "127.0.0.1";
@@ -40,6 +42,18 @@ server.on("upgrade", (request, socket, head) => {
   });
 });
 
+const stopWebPushDispatcher = startWebPushEventDispatcher({ db: getDatabase() });
+server.on("close", () => stopWebPushDispatcher());
+
 server.listen(port, host, () => {
   console.log(`Spark Cockpit server listening on http://${host}:${port}`);
+  if (host === "0.0.0.0") {
+    if (isRemoteAccessConfigured()) {
+      console.log("Spark Cockpit remote access is protected by SPARK_COCKPIT_REMOTE_TOKEN.");
+    } else {
+      console.warn(
+        "Spark Cockpit is listening on all interfaces; non-localhost access is blocked until SPARK_COCKPIT_REMOTE_TOKEN is set.",
+      );
+    }
+  }
 });

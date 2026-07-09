@@ -2,7 +2,7 @@
 
 > Auto-generated i18n message functions. Import `messages.js` to use translated strings.
 
-Compiled from: `/Users/zhanrongrui/workspace/zrr1999/spark/packages/spark-i18n/project.inlang`
+Compiled from: `/root/paddlejob/gpfsspace/workspace/zendev-lab/spark/packages/spark-i18n/project.inlang`
 
 
 ## What is this folder?

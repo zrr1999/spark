@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { renderSparkFirstRunOnboarding } from "../apps/spark-tui/src/cli/onboarding.ts";
 import { createSparkPiParitySlashCommands } from "../apps/spark-tui/src/cli/pi-parity-commands.ts";
 import { SparkNativeSession } from "../apps/spark-tui/src/native-tui.ts";
 import {
@@ -182,6 +183,76 @@ void test("native /login and /logout mutate Spark auth store and model availabil
     assert.match(String(logoutResult), /Removed stored Spark credential/);
     assert.equal(store.has("test-oauth"), false);
     assert.deepEqual(modelRegistry.getAvailable(), []);
+  });
+});
+
+void test("native /login api-key stores a provider key without echoing the secret", async () => {
+  await withAuthDir(async (dir, authPath) => {
+    const store = new SparkAuthStore({ path: authPath });
+    await store.reload();
+    const authResolver = new SparkProviderAuthResolver(store);
+    const providerRegistry = new SparkProviderRegistry();
+    providerRegistry.registerProvider("oauth-provider", providerConfig("MISSING_KEY"));
+    providerRegistry.setActive({ providerName: "oauth-provider", modelId: "model-a" });
+    const modelRegistry = new SparkHostModelRegistry(providerRegistry, { authResolver });
+    assert.deepEqual(modelRegistry.getAvailable(), []);
+
+    const services = {
+      cwd: dir,
+      config: { extensions: [], providers: [] },
+      runtime: new SparkHostRuntime({ cwd: dir }),
+      providerRegistry,
+      authStore: store,
+      authResolver,
+      modelRegistry,
+      diagnostics: [],
+    } as unknown as SparkCliHostServices;
+    const commands = createSparkPiParitySlashCommands(services);
+    const context = { app: {} as never, session: new SparkNativeSession(), exit: () => undefined };
+
+    const loginResult = await commands.login!.handler(
+      "api-key oauth-provider stored-secret",
+      context,
+    );
+    assert.match(String(loginResult), /Stored API key for Spark provider: oauth-provider/);
+    assert.doesNotMatch(String(loginResult), /stored-secret/);
+    assert.equal(store.get("oauth-provider")?.type, "api_key");
+    assert.equal(authResolver.resolveApiKey(providerConfig("MISSING_KEY")), "stored-secret");
+    assert.equal(modelRegistry.getAvailable().length, 1);
+  });
+});
+
+void test("first-run onboarding renders a no-credential setup guide", async () => {
+  await withAuthDir(async (dir, authPath) => {
+    const store = new SparkAuthStore({ path: authPath });
+    await store.reload();
+    const authResolver = new SparkProviderAuthResolver(store);
+    const providerRegistry = new SparkProviderRegistry();
+    providerRegistry.registerProvider("oauth-provider", providerConfig("MISSING_KEY"));
+    providerRegistry.setActive({ providerName: "oauth-provider", modelId: "model-a" });
+    const services = {
+      cwd: dir,
+      config: { extensions: [], providers: [] },
+      runtime: new SparkHostRuntime({ cwd: dir }),
+      providerRegistry,
+      authStore: store,
+      authResolver,
+      diagnostics: [],
+    } as unknown as SparkCliHostServices;
+
+    const message = renderSparkFirstRunOnboarding(services);
+    assert.match(message ?? "", /Spark first-run setup/);
+    assert.match(message ?? "", /Missing credentials for oauth-provider/);
+    assert.match(message ?? "", /\/login api-key <provider> <key>/);
+    assert.match(message ?? "", /\/model \[provider\/model\]/);
+
+    await store.set("oauth-provider", {
+      type: "api_key",
+      provider: "oauth-provider",
+      apiKey: "stored-secret",
+      updatedAt: "2026-01-02T03:04:05.000Z",
+    });
+    assert.equal(renderSparkFirstRunOnboarding(services), undefined);
   });
 });
 

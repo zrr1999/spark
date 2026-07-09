@@ -46,6 +46,7 @@ export const sparkCommandKindOptions = [
   "task.start.request",
   "invocation.cancel.request",
   "artifact.content.request",
+  "human.response.deliver.request",
   "diagnostics.request",
 ] as const;
 export const sparkCommandKindSchema = z.enum(sparkCommandKindOptions);
@@ -226,6 +227,7 @@ export const runtimeServerCommandKindOptions = [
   "task.start.request",
   "invocation.cancel.request",
   "artifact.content.request",
+  "human.response.deliver.request",
   "diagnostics.request",
 ] as const satisfies readonly SparkCommandKind[];
 export type RuntimeServerCommandKind = (typeof runtimeServerCommandKindOptions)[number];
