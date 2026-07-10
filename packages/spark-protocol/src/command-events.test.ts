@@ -40,6 +40,10 @@ describe("SparkCommand vocabulary", () => {
       "turn.submit",
       "turn.cancel",
       "turn.stream",
+      "channel.status",
+      "channel.configure",
+      "channel.reload",
+      "channel.notify",
       "workspace.list",
       "workspace.register",
       "workspace.ensure-local",
@@ -49,13 +53,36 @@ describe("SparkCommand vocabulary", () => {
       "workspace.client.heartbeat",
       "workspace.client.release",
       "workspace.executor.ensure",
+      "session.list",
+      "session.get",
+      "session.create",
+      "session.bind",
+      "session.unbind",
+      "session.archive",
+      "session.model.set",
+      "model.catalog",
+      "model.default.set",
+      "provider.auth.api-key.set",
+      "provider.auth.logout",
+      "provider.auth.login.start",
+      "provider.auth.login.status",
+      "provider.auth.login.respond",
+      "provider.auth.login.cancel",
     ]);
     expect(sparkCommandKindForLocalRpcMethod("turn.submit")).toBe("turn.submit.request");
     expect(sparkCommandKindForLocalRpcMethod("turn.cancel")).toBe("turn.cancel.request");
     expect(sparkCommandKindForLocalRpcMethod("daemon.queue")).toBe("turn.status.request");
+    expect(sparkCommandKindForLocalRpcMethod("channel.configure")).toBe(
+      "channel.configure.request",
+    );
     expect(sparkCommandKindForLocalRpcMethod("workspace.register")).toBe(
       "workspace.register.request",
     );
+    expect(sparkCommandKindForLocalRpcMethod("session.create")).toBe("session.create.request");
+    expect(sparkCommandKindForLocalRpcMethod("session.model.set")).toBe(
+      "session.model.set.request",
+    );
+    expect(sparkCommandKindForLocalRpcMethod("model.catalog")).toBe("model.catalog.request");
     expect(sparkCommandKindForLocalRpcMethod("unknown.method")).toBeNull();
   });
 
@@ -64,6 +91,11 @@ describe("SparkCommand vocabulary", () => {
       "workspace.snapshot.request",
       "project.create.request",
       "task.start.request",
+      "assignment.create.request",
+      "session.create.request",
+      "session.bind.request",
+      "session.unbind.request",
+      "session.archive.request",
       "invocation.cancel.request",
       "artifact.content.request",
       "human.response.deliver.request",
@@ -71,6 +103,9 @@ describe("SparkCommand vocabulary", () => {
     ]);
     expect(sparkCommandKindForRuntimeServerCommand("task.start.request")).toBe(
       "task.start.request",
+    );
+    expect(sparkCommandKindForRuntimeServerCommand("assignment.create.request")).toBe(
+      "assignment.create.request",
     );
     expect(sparkCommandKindForRuntimeServerCommand("diagnostics.request")).toBe(
       "diagnostics.request",

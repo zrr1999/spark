@@ -1,0 +1,30 @@
+{
+  "name": "@zendev-lab/spark-channels",
+  "version": "0.1.0",
+  "description": "Spark IM channel adapters (Feishu, Infoflow): I/O-only ingress and explicit outbound notify.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc -p tsconfig.json --noEmit && vp test run",
+    "test": "vp test run"
+  },
+  "dependencies": {
+    "@core-workspace/infoflow-sdk-nodejs": "2026.6.12-beta.1",
+    "@zendev-lab/spark-protocol": "workspace:^"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vitest": "catalog:"
+  }
+}

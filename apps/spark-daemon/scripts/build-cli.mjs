@@ -7,7 +7,7 @@ await build({
   },
   bundle: true,
   entryPoints: ["src/cli.ts"],
-  external: ["ws"],
+  external: ["ws", "@core-workspace/infoflow-sdk-nodejs", "axios", "protobufjs", "lodash.merge"],
   format: "esm",
   outfile: "dist/cli.js",
   platform: "node",

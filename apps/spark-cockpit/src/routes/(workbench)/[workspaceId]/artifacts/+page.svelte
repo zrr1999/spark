@@ -43,7 +43,7 @@
   <section class="metrics" aria-label={t.metrics.aria}>
     <StatCard label={t.metrics.total} value={data.counts.total} tone="primary" icon="artifacts" />
     <StatCard label={t.metrics.workspaceScope} value={data.counts.workspace} tone="purple" icon="workspace" />
-    <StatCard label={t.metrics.projectScope} value={data.counts.project} tone="primary" icon="folder" />
+    <StatCard label={t.metrics.linkedRuns} value={data.counts.project} tone="primary" icon="folder" />
     <StatCard label={t.metrics.previewCached} value={data.counts.cached} tone="success" icon="archive" />
   </section>
 
@@ -71,7 +71,7 @@
                 {artifact.kind} · {artifact.format} · {artifact.source} · {formatSize(artifact.sizeBytes)}
               </p>
               <small>
-                {artifact.projectName ?? common.fallback.workspaceEvidence} · {artifact.linkCount}
+                  {common.fallback.workspaceEvidence} · {artifact.linkCount}
                 {t.list.links} · {formatRelative(artifact.createdAt)}
               </small>
             </div>
@@ -127,6 +127,10 @@
     transition: border-color 120ms ease;
   }
 
+  .artifact-row > div {
+    min-width: 0;
+  }
+
   .artifact-row:hover {
     border-color: var(--color-border);
   }
@@ -152,8 +156,17 @@
   .row-title {
     align-items: center;
     display: flex;
+    flex-wrap: wrap;
     gap: var(--spacing-xs);
     margin-bottom: var(--spacing-xxs);
+    min-width: 0;
+  }
+
+  .row-title h3,
+  .artifact-row p,
+  .artifact-row small,
+  .cache-copy small {
+    overflow-wrap: anywhere;
   }
 
   .scope-pill,

@@ -25,6 +25,7 @@
     "check:tsc": "tsc -p tsconfig.json --noEmit",
     "check:daemon-readiness": "node --experimental-strip-types scripts/spark-daemon-readiness.mts",
     "check:cue-harness": "node --experimental-strip-types scripts/spark-cue-harness.mts --no-exercise",
+    "check:cue-contract": "node --experimental-strip-types scripts/spark-cue-contract-harness.mts",
     "check:zellij-harness": "node --experimental-strip-types scripts/spark-zellij-harness.mts",
     "format": "vp fmt . --write",
     "test": "node --experimental-strip-types --test \"test/*.test.ts\"",
@@ -32,13 +33,14 @@
     "build": "pnpm --filter @zendev-lab/spark-daemon run build && pnpm --filter @zendev-lab/spark-cockpit run build",
     "preview": "pnpm --filter @zendev-lab/spark-cockpit run dev",
     "publish": "pnpm run check && pnpm run build && pnpm -r --filter './apps/*' --filter @zendev-lab/pi-extension publish --access public",
-    "prepare": "pnpx @j178/prek install --hook-type commit-msg --hook-type pre-commit"
+    "prepare": "corepack pnpm dlx @j178/prek install --hook-type commit-msg --hook-type pre-commit"
   },
   "dependencies": {
     "@zendev-lab/pi-btw": "workspace:^",
     "@zendev-lab/spark-ai": "workspace:^",
     "@zendev-lab/spark-artifacts": "workspace:^",
     "@zendev-lab/spark-ask": "workspace:^",
+    "@zendev-lab/spark-channels": "workspace:^",
     "@zendev-lab/spark-context": "workspace:^",
     "@zendev-lab/spark-cue": "workspace:^",
     "@zendev-lab/spark-extension-api": "workspace:^",
@@ -53,6 +55,7 @@
     "@zendev-lab/spark-roles": "workspace:^",
     "@zendev-lab/spark-runtime": "workspace:^",
     "@zendev-lab/spark-server": "workspace:^",
+    "@zendev-lab/spark-session": "workspace:^",
     "@zendev-lab/spark-tasks": "workspace:^",
     "@zendev-lab/spark-tui": "workspace:^",
     "@zendev-lab/spark-tui-app": "workspace:^",

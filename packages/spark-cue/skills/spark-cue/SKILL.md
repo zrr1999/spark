@@ -23,6 +23,10 @@ auto-start remote daemons. The extension automatically passes the current
 working directory (cwd) to each command via `:run(cwd=...)` mode param; with
 SSH profiles, that cwd must be valid on the remote host.
 
+Credential-like environment variables are not forwarded in session handshakes
+unless `SPARK_CUE_FORWARD_SENSITIVE_ENV=1` is explicitly set. `cue_scope`
+redacts sensitive values from all model-visible environment output.
+
 ## Tool reference (10 resource-oriented tools)
 
 | Category      | Tool            | Purpose                                     | Key parameters                                                                          |
@@ -35,7 +39,7 @@ SSH profiles, that cwd must be valid on the remote host.
 | **Jobs**      | `cue_jobs`      | List/status/wait/stop jobs                  | `action` (list/status/wait/stop), `id?`, `status?`, `limit?`, `timeout?`, `tail_bytes?` |
 | **Resources** | `cue_resources` | Inspect providers and resource snapshots    | `action?` (providers/resources)                                                         |
 | **Schedule**  | `cue_schedule`  | Add/list/pause/resume/remove scheduled jobs | `action` (add/list/pause/resume/remove), `schedule?`, `command?`, `id?`, `limit?`       |
-| **Scope**     | `cue_scope`     | Inspect scopes, env, or config              | `action` (list/env/config), `limit?`, `includeEnv?`, `tail_bytes?`                      |
+| **Scope**     | `cue_scope`     | Inspect or update the session scope         | `action` (list/env/config/status/env_set/env_unset/path_prepend/cd/refresh), `limit?`, `includeEnv?`, `tail_bytes?` |
 | **History**   | `cue_history`   | Show recent history for a job/cron or all   | `id?`, `limit?`, `tail_bytes?`                                                          |
 
 Tool names are resource-oriented: `cue_exec` is for direct commands, `cue_run` is for real `.cue` files, `cue_script` is for inline `.cue` script bodies, and `script_run`/`script_eval` are generic explicit-language script runners. Compact managers cover jobs, schedules, scopes, and history.
@@ -141,14 +145,14 @@ cue_exec(command="system_profiler SPFontsDataType", tail_bytes=4096)    # smalle
 
 ```text
 cue_exec(command="npm install")
-cue_exec(command="pip install -r requirements.txt")
+cue_exec(command="uv pip install -r requirements.txt")
 ```
 
 ### Long-running processes (background)
 
 ```text
 cue_exec(command="npm run dev", background=true)
-cue_exec(command="python -m http.server 8080", background=true)
+cue_exec(command="uv run python -m http.server 8080", background=true)
 ```
 
 ### Resource-gated commands
@@ -156,7 +160,7 @@ cue_exec(command="python -m http.server 8080", background=true)
 ```text
 cue_resources(action="providers")
 cue_resources(action="resources")
-cue_exec(command="python train.py", needs={ gpu: 1, gpu_mem: "24GiB" }, background=true)
+cue_exec(command="uv run --script train.py", needs={ gpu: 1, gpu_mem: "24GiB" }, background=true)
 cue_exec(command="run-licensed-tool", needs={ license: 1 })
 cue_jobs(action="list")          # pending jobs show resource pending reasons
 cue_jobs(action="status", id="J42")
@@ -186,7 +190,7 @@ a broader overview first.
 
 ```text
 cue_scope(action="list")                         # compact scope list, no env dump
-cue_scope(action="list", includeEnv=true)          # include HEAD env, tailed by default
+cue_scope(action="list", includeEnv=true)          # include redacted HEAD env, tailed by default
 cue_history()                                 # recent global history only
 cue_history(id="J42")                         # recent target history
 cue_history(id="J42", limit=120, tail_bytes=32768)  # larger bounded target history
@@ -255,7 +259,7 @@ or error out:
 | `cmd1 && cmd2`                     | Keep `cmd1 && cmd2` inside one job, or use `cmd1 -> cmd2` for tracked jobs | `&&` is valid cue-shell job logic; `->` is tracked serial-on-success |
 | `echo $(date)`                     | Not supported                                                     | No command substitution (`$()` / backtick)              |
 | heredoc: `cat << EOF ... EOF`      | Write a file first, then `cue_exec(command="cat /tmp/x")`         | heredoc syntax not available                            |
-| `python3 -c "...nested quotes..."` | Write a temp script, then `cue_exec(command="python3 /tmp/s.py")` | Quote nesting in `-c` is fragile; use a temp file       |
+| `python3 -c "...nested quotes..."` | Write a temp script, then `script_run(path="/tmp/s.py", language="python")` | Quote nesting in `-c` is fragile; use a temp file       |
 | `cd /some/path` inside `command`   | `cue_exec(command="ls", cwd="/some/path")`                        | Scope changes belong in `cwd` parameter or chain syntax |
 | `cmd1 \| cmd2`                     | `cmd1 \|> cmd2`                                                   | `                                                       | `is reserved; use`\|>` for stdout pipe |
 
@@ -319,8 +323,14 @@ ssh user@example.com "cued start"
 ## Output limits
 
 - Max buffered output per stream: 4 MiB
+- Typed output reports truncation and `utf8`/`base64` encoding per stream. For
+  non-UTF-8 bytes, model-visible text is explicitly lossy and the typed base64
+  field is the exact representation.
 - Default timeout: 300 seconds (5 min)
 - File-system commands (mv, cp, rm, ls, cat, find, ...): 10 seconds
+- Foreground aborts and timeouts cancel the daemon execution and wait for it to stop. Only an explicit `background=true` execution detaches.
+- Cancelled records retain `cancelReason` (`User`, `ChainAborted`, or `Timeout`)
+  even though the compatibility status string is `Cancelled`.
 - **`cue_exec`**: runs with `pty=false` by default; stdout/stderr are tailed to 16 KiB per stream by default. `tail_bytes` must be positive.
 - **Cue-shell scripts** (`cue_run`, `cue_script`, `script_run language=cue-shell`, `script_eval language=cue-shell`): successful no-output items are summarized; failed/message/output-producing items remain expanded.
 - **`cue_jobs(action="status")` / `cue_jobs(action="wait")`**: default to 16 KiB per stream. Chain output summarizes clean successful leaves and prioritizes failed/running/non-clean leaves. `tail_bytes` must be positive.

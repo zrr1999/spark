@@ -35,6 +35,7 @@ export const idPrefixSchema = z.enum([
   "blob",
   "msg",
   "idem",
+  "asn",
 ]);
 
 export type IdPrefix = z.infer<typeof idPrefixSchema>;

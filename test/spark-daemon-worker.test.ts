@@ -102,12 +102,15 @@ void test("SparkDaemonWorkerLoop supports poll/wake and bounded stop", async () 
     const loop = new SparkDaemonWorkerLoop({ context, pollIntervalMs: 5 });
     await loop.start();
 
-    await queue.enqueue({ type: "session.run", sessionId: "s", prompt: "wake task" });
+    const entry = await queue.enqueue({ type: "session.run", sessionId: "s", prompt: "wake task" });
     loop.wake();
-    await waitFor(async () => processed.includes("wake task"));
+    await waitFor(
+      async () =>
+        processed.includes("wake task") && (await queue.list("processed")).includes(entry.fileName),
+    );
 
     await loop.stop();
-    assert.deepEqual(await queue.list("processed"), await queue.list("processed"));
+    assert.deepEqual(await queue.list("processed"), [entry.fileName]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

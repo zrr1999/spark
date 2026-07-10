@@ -66,12 +66,16 @@ void test("dispatcher, daemon, server, and TUI help snapshots expose the three-p
   const daemonHelp = sparkDaemonHelpText();
   assert.match(daemonHelp, /spark daemon - daemon execution plane/u);
   assert.match(daemonHelp, /spark daemon session list \[--json\]/u);
+  assert.match(daemonHelp, /spark daemon session mailto --to <session-id>/u);
+  assert.match(daemonHelp, /spark daemon session inbox --session <session-id>/u);
   assert.match(daemonHelp, /spark daemon run list \[--json\]/u);
   assert.match(daemonHelp, /spark daemon events watch \[--json\]/u);
   assert.match(daemonHelp, /server coordination plane/u);
   assert.doesNotMatch(daemonHelp, /task claim/u);
   assert.doesNotMatch(daemonHelp, /goal complete/u);
   assert.doesNotMatch(daemonHelp, /spark daemon sessions list --all-workspaces/u);
+  assert.doesNotMatch(daemonHelp, /spark sessions mailto/u);
+  assert.doesNotMatch(daemonHelp, /spark sessions inbox/u);
 
   const { stdout: cockpitHelp } = await execFileAsync(
     fileURLToPath(new URL("../apps/spark-cockpit/bin/spark-cockpit", import.meta.url)),

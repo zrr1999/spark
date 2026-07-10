@@ -11,15 +11,8 @@
 
   let t = $derived(data.messages.home);
   let common = $derived(data.messages.common);
-  let workspaceUrl = $derived(
-    data.workspaces[0] ? workspacePath(data.workspaces[0]) : "/",
-  );
-  let availableRunnerBindings = $derived(
-    data.runnerBindings.filter(
-      (binding) =>
-        binding.status === "available" && binding.runtimeStatus === "online",
-    ),
-  );
+  let workspace = $derived(data.workspaces[0]!);
+  let workspaceUrl = $derived(workspacePath(workspace));
   const runnerStatusOrder: DaemonDisplayStatus[] = [
     "online",
     "registered",
@@ -50,14 +43,14 @@
 {/snippet}
 
 <svelte:head>
-  <title>{data.workspaces.length === 0 ? t.emptyHeadTitle : t.headTitle}</title>
+  <title>{workspace.name} · {t.headTitle}</title>
 </svelte:head>
 
 <section class="hero" aria-labelledby="home-title">
   <PageHeader
-    eyebrow={data.workspaces.length === 0 ? t.noWorkspaceHero.eyebrow : t.hero.eyebrow}
-    title={data.workspaces.length === 0 ? t.noWorkspaceHero.title : t.hero.title}
-    lede={data.workspaces.length === 0 ? t.noWorkspaceHero.lede : t.hero.lede}
+    eyebrow={t.hero.eyebrow}
+    title={workspace.name}
+    lede={t.hero.lede}
     actions={workspaceSettingsAction}
   />
 </section>
@@ -96,7 +89,7 @@
   />
   <StatCard
     label={t.metrics.workspaces}
-    value={data.workspaces.length}
+    value={1}
     hint="{data.ownerBindings.length} {common.boundToRunner}"
     tone="primary"
     icon="folder"
@@ -127,86 +120,17 @@
       <span class="panel-badge">{t.panels.sqliteBacked}</span>
     </div>
 
-    {#if data.workspaces.length === 0}
-      <div class="empty-state">
-        <div class="empty-icon"><Icon name="folder" size={34} /></div>
-        <h3>{t.emptyWorkspace.title}</h3>
-        <p>
-          {t.emptyWorkspace.body}
-        </p>
-        <div class="steps" aria-label={t.emptyWorkspace.stepsAria}>
-          {#each t.emptyWorkspace.steps as step, index}
-            <article>
-              <span>{index + 1}</span>
-              <div>
-                <h4>{step.title}</h4>
-                <p>
-                  {step.description}
-                </p>
-              </div>
-            </article>
-          {/each}
-          {#if availableRunnerBindings.length > 0}
-            <form
-              class="workspace-create-form"
-              method="POST"
-              action="?/createWorkspace"
-            >
-              <label>
-                <span>{t.emptyWorkspace.form.name}</span>
-                <input
-                  name="name"
-                  value={availableRunnerBindings[0].displayName}
-                  required
-                />
-              </label>
-              <label>
-                <span>{t.emptyWorkspace.form.slug}</span>
-                <input
-                  name="slug"
-                  value={availableRunnerBindings[0].localWorkspaceKey}
-                  required
-                />
-              </label>
-              <label>
-                <span>{t.emptyWorkspace.form.runnerBinding}</span>
-                <select name="runtimeWorkspaceBindingId" required>
-                  {#each availableRunnerBindings as binding}
-                    <option value={binding.id}
-                      >{binding.displayName} · {binding.runtimeName}</option
-                    >
-                  {/each}
-                </select>
-              </label>
-              <button class="primary-action" type="submit"
-                >{t.emptyWorkspace.form.submit}</button
-              >
-            </form>
-          {:else}
-            <button class="disabled-action" type="button" disabled>
-              <span>{t.emptyWorkspace.action}</span>
-              <small class="soon-badge">{common.comingSoon}</small>
-            </button>
-          {/if}
+    <div class="workspace-list">
+      <article class="workspace-row">
+        <div class="row-icon"><Icon name="folder" size={24} /></div>
+        <div>
+          <h3>{workspace.name}</h3>
+          <p>{workspace.description ?? `/${workspace.slug}`}</p>
         </div>
-      </div>
-    {:else}
-      <div class="workspace-list">
-        {#each data.workspaces as workspace}
-          <article class="workspace-row">
-            <div class="row-icon"><Icon name="folder" size={24} /></div>
-            <div>
-              <h3>{workspace.name}</h3>
-              <p>{workspace.description ?? `/${workspace.slug}`}</p>
-            </div>
-            <span class="status-pill {workspace.status}"
-              >{statusLabel(workspace.status)}</span
-            >
-            <time>{t.updatedPrefix} {formatRelative(workspace.updatedAt)}</time>
-          </article>
-        {/each}
-      </div>
-    {/if}
+        <span class="status-pill {workspace.status}">{statusLabel(workspace.status)}</span>
+        <time>{t.updatedPrefix} {formatRelative(workspace.updatedAt)}</time>
+      </article>
+    </div>
   </section>
 
   <aside class="panel side-panel" aria-labelledby="connections-title">
@@ -336,7 +260,6 @@
 
   h2,
   h3,
-  h4,
   p {
     margin: 0;
   }
@@ -355,54 +278,18 @@
     gap: 12px;
   }
 
-  .primary-action,
   .secondary-action {
     align-items: center;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
     border-radius: 12px;
+    color: var(--color-ink-muted);
     display: inline-flex;
     font-weight: 750;
     height: 44px;
     justify-content: center;
     padding: 0 16px;
     text-decoration: none;
-    white-space: nowrap;
-  }
-
-  .primary-action {
-    background: var(--color-primary);
-    color: var(--color-surface);
-  }
-
-  .secondary-action {
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    color: var(--color-ink-muted);
-  }
-
-  .disabled-action {
-    align-items: center;
-    background: var(--color-canvas);
-    border: 1px dashed var(--color-border-strong);
-    border-radius: 12px;
-    color: var(--color-ink-subtle);
-    cursor: not-allowed;
-    display: inline-flex;
-    font: inherit;
-    font-weight: 800;
-    gap: 8px;
-    height: 42px;
-    justify-content: center;
-    justify-self: start;
-    padding: 0 14px;
-  }
-
-  .disabled-action .soon-badge {
-    background: var(--color-primary-weak);
-    border-radius: 999px;
-    color: var(--color-primary);
-    font-size: 11px;
-    font-weight: 800;
-    padding: 4px 8px;
     white-space: nowrap;
   }
 
@@ -577,48 +464,28 @@
     padding: 6px 10px;
   }
 
-  .empty-state {
-    display: grid;
-    justify-items: center;
-    padding: 54px 42px 46px;
-    text-align: center;
-  }
-
   .empty-icon {
     background: var(--color-primary-weak);
     color: var(--color-primary);
-    height: 72px;
-    margin-bottom: 20px;
-    width: 72px;
-  }
-
-  .empty-icon.small {
     height: 46px;
     margin: 0;
     width: 46px;
   }
 
-  .empty-state h3,
   .compact-empty h3 {
     color: var(--color-ink);
     font-size: 18px;
     margin-bottom: 10px;
   }
 
-  .empty-state > p,
   .compact-empty p,
   .workspace-row p,
   .binding-row p,
   .connection-row p,
-  .event-row p,
-  .steps p {
+  .event-row p {
     color: var(--color-ink-subtle);
     font-size: 13px;
     line-height: 1.55;
-  }
-
-  .empty-state > p {
-    max-width: 680px;
   }
 
   code {
@@ -629,87 +496,6 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 0.92em;
     padding: 1px 5px;
-  }
-
-  .steps {
-    display: grid;
-    gap: 14px;
-    margin-top: 30px;
-    max-width: 780px;
-    text-align: left;
-    width: 100%;
-  }
-
-  .steps article {
-    align-items: flex-start;
-    background: var(--color-canvas);
-    border: 1px solid var(--color-border);
-    border-radius: 14px;
-    display: flex;
-    gap: 14px;
-    padding: 16px;
-  }
-
-  .steps span {
-    background: var(--color-primary);
-    border-radius: 999px;
-    color: var(--color-surface);
-    display: grid;
-    flex: 0 0 auto;
-    font-size: 12px;
-    font-weight: 850;
-    height: 26px;
-    place-items: center;
-    width: 26px;
-  }
-
-  .steps h4 {
-    color: var(--color-ink);
-    font-size: 14px;
-    margin-bottom: 4px;
-  }
-
-  .workspace-create-form {
-    background: var(--color-surface);
-    border: 1px solid var(--color-primary-soft);
-    border-radius: 16px;
-    display: grid;
-    gap: 14px;
-    grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
-    padding: 16px;
-  }
-
-  .workspace-create-form label {
-    display: grid;
-    gap: 6px;
-  }
-
-  .workspace-create-form label span {
-    background: transparent;
-    color: var(--color-ink-subtle);
-    display: block;
-    font-size: 12px;
-    font-weight: 750;
-    height: auto;
-    text-transform: uppercase;
-    width: auto;
-  }
-
-  .workspace-create-form input,
-  .workspace-create-form select {
-    background: var(--color-canvas);
-    border: 1px solid var(--color-border-strong);
-    border-radius: 10px;
-    color: var(--color-ink);
-    font: inherit;
-    min-height: 42px;
-    padding: 0 12px;
-  }
-
-  .workspace-create-form .primary-action {
-    align-self: end;
-    border: 0;
-    cursor: pointer;
   }
 
   .compact-empty {

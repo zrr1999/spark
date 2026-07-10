@@ -268,9 +268,14 @@ const SPARK_COCKPIT_PANELS: readonly SparkNativeCockpitPanel[] = [
   "graft",
 ];
 const MAX_COCKPIT_PANEL_ROWS = 6;
+const SPARK_NATIVE_LOCAL_CONTROL_EXTENSION_ID = "spark-tui-local-control";
 
 function isSparkNativeCockpitPanel(value: string): value is SparkNativeCockpitPanel {
   return (SPARK_COCKPIT_PANELS as readonly string[]).includes(value);
+}
+
+function isSparkNativeLocalControlCommand(command: SparkNativeSlashCommand): boolean {
+  return command.metadata?.extensionId === SPARK_NATIVE_LOCAL_CONTROL_EXTENSION_ID;
 }
 
 function createSparkNativeCockpitState(): SparkNativeCockpitState {
@@ -933,7 +938,7 @@ export function createSparkNativeLocalControlSlashCommands(): SparkNativeSlashCo
     description: `open the ${panel} cockpit panel`,
     metadata: {
       source: "extension",
-      extensionId: "spark-tui-local-control",
+      extensionId: SPARK_NATIVE_LOCAL_CONTROL_EXTENSION_ID,
       plane: canonicalCliTarget.startsWith("spark daemon")
         ? "daemon"
         : canonicalCliTarget.startsWith("spark server")
@@ -951,7 +956,7 @@ export function createSparkNativeLocalControlSlashCommands(): SparkNativeSlashCo
       argumentHint: "[reason]",
       metadata: {
         source: "extension",
-        extensionId: "spark-tui-local-control",
+        extensionId: SPARK_NATIVE_LOCAL_CONTROL_EXTENSION_ID,
         plane: "daemon",
         resource: "run",
         verbs: ["cancel"],
@@ -970,7 +975,7 @@ export function createSparkNativeLocalControlSlashCommands(): SparkNativeSlashCo
       description: "resubmit the previous user prompt",
       metadata: {
         source: "extension",
-        extensionId: "spark-tui-local-control",
+        extensionId: SPARK_NATIVE_LOCAL_CONTROL_EXTENSION_ID,
         plane: "tui",
         resource: "session",
         verbs: ["retry"],
@@ -985,7 +990,7 @@ export function createSparkNativeLocalControlSlashCommands(): SparkNativeSlashCo
       argumentHint: "[overview|workflows|runs|tasks|artifacts|reviews|graft|off]",
       metadata: {
         source: "extension",
-        extensionId: "spark-tui-local-control",
+        extensionId: SPARK_NATIVE_LOCAL_CONTROL_EXTENSION_ID,
         plane: "server",
         resource: "status",
         verbs: ["open"],
@@ -1433,7 +1438,10 @@ export class SparkNativeTuiApp implements Component, Focusable {
     this.messageRenderers = options.messageRenderers ?? new Map();
     this.keybindings = options.keybindings;
     this.keybindingContext = options.keybindingContext ?? { hasUI: true };
-    this.slashCommands = options.slashCommands ?? {};
+    this.slashCommands = {
+      ...createSparkNativeLocalControlSlashCommands(),
+      ...(options.slashCommands ?? {}),
+    };
     this.interactionHandler = options.interactionHandler;
     this.inputBasePath = options.autocompleteBasePath ?? process.cwd();
     this.theme = options.theme ?? DEFAULT_NATIVE_THEME;
@@ -1985,7 +1993,11 @@ export class SparkNativeTuiApp implements Component, Focusable {
 
   private autocompleteSlashCommands(): SlashCommand[] {
     const registered = Object.entries(this.slashCommands)
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([leftName, left], [rightName, right]) => {
+        const leftRank = isSparkNativeLocalControlCommand(left) ? 1 : 0;
+        const rightRank = isSparkNativeLocalControlCommand(right) ? 1 : 0;
+        return leftRank - rightRank || leftName.localeCompare(rightName);
+      })
       .map(([name, command]) => ({
         name,
         description: command.description,
@@ -2655,7 +2667,9 @@ export class SparkNativeTuiApp implements Component, Focusable {
   }
 
   private commandAvailabilitySuffix(): string {
-    const count = Object.keys(this.slashCommands).length;
+    const count = Object.values(this.slashCommands).filter(
+      (command) => !isSparkNativeLocalControlCommand(command),
+    ).length;
     if (count === 0) return "";
     return " • " + count.toString() + " registered command" + (count === 1 ? "" : "s");
   }

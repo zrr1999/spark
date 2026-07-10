@@ -9,10 +9,12 @@ import {
   watchFile,
   unwatchFile,
 } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { createSparkProviderControl } from "@zendev-lab/spark-ai/control";
 import { ensureSparkPathDirs, gitCommand, resolveSparkPaths } from "@zendev-lab/spark-system";
 import { sparkDaemonCliStrings } from "@zendev-lab/spark-i18n/cli";
 import {
@@ -21,9 +23,16 @@ import {
   writeSparkDaemonConfig,
 } from "./config.js";
 import { sparkDaemonVersion, startSparkDaemon } from "./daemon.js";
-import { SparkDaemonInvocationRegistry, acquireSparkDaemonLock } from "./core/index.ts";
+import { createSparkDaemonModelControl } from "./model-control.ts";
+import { createDaemonChannelIngressRuntime } from "./channels/ingress.ts";
+import {
+  SparkDaemonInvocationRegistry,
+  SparkDaemonQueue,
+  acquireSparkDaemonLock,
+} from "./core/index.ts";
 import {
   LocalRpcUnavailableError,
+  createDaemonSessionRegistry,
   createSparkDaemonLocalEventBus,
   localRpcSocketPath,
   requestDaemonQueue,
@@ -308,21 +317,55 @@ async function start(paths: ReturnType<typeof resolveSparkPaths>): Promise<numbe
   process.once("SIGTERM", onShutdownSignal);
   const localEventBus = createSparkDaemonLocalEventBus();
   const invocationRegistry = new SparkDaemonInvocationRegistry();
+  const queue = new SparkDaemonQueue({ paths });
+  const sparkHome = process.env.SPARK_HOME?.trim() || join(homedir(), ".spark");
+  const sessionRegistry = createDaemonSessionRegistry(sparkHome);
+  const modelControl = createSparkDaemonModelControl({
+    providerControl: createSparkProviderControl({ sparkHome }),
+    sessionRegistry,
+  });
+  const channelIngress = createDaemonChannelIngressRuntime({
+    sparkHome,
+    sessionRegistry,
+    hooks: {
+      onAssignment: async (assignment) => {
+        const model = await modelControl.effectiveModel(assignment.sessionId);
+        await modelControl.prepareModel(model);
+        await queue.enqueue({
+          type: "session.run",
+          sessionId: assignment.sessionId,
+          prompt: assignment.goal,
+          model: `${model.providerName}/${model.modelId}`,
+          assignment: assignment.assignment,
+          workspaceId: assignment.channelReply.workspaceId,
+          channelReply: assignment.channelReply,
+        });
+      },
+    },
+  });
   const localRpc = await startLocalRpcServer({
     paths,
+    sparkHome,
     db,
     onStop: () => shutdown.abort(),
     eventBus: localEventBus,
     invocationRegistry,
+    channelIngress,
+    sessionRegistry,
+    modelControl,
   });
   try {
     await startSparkDaemon({
       paths,
+      sparkHome,
       config: readSparkDaemonConfig(paths),
       db,
       signal: shutdown.signal,
       localEventSink: (event) => localEventBus.publish(event),
       invocationRegistry,
+      queue,
+      channelIngress,
+      modelControl,
     });
     return 0;
   } finally {

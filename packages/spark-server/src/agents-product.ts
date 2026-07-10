@@ -1,8 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
+import { sparkAgentsCockpitSource } from "@zendev-lab/spark-protocol";
 import { readArtifactPreviewContent } from "./artifact-cache.ts";
 import { loadWorkspaceServerControl } from "./projection-services.ts";
 
-export const agentsCockpitSource = "agents-cockpit";
+export { sparkAgentsCockpitSource as agentsCockpitSource };
 
 export type AgentsProductCommand = {
   id: string;
@@ -173,6 +174,8 @@ export function loadAgentsProductProjection(db: DatabaseSync, workspaceId: strin
   };
 }
 
+export type AgentsProductProjection = ReturnType<typeof loadAgentsProductProjection>;
+
 export function titleFromPrompt(prompt: string) {
   const normalized = prompt.replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -190,7 +193,7 @@ function isAgentsCockpitCommand(command: { payloadJson: string }) {
       payload &&
       typeof payload === "object" &&
       !Array.isArray(payload) &&
-      (payload as { source?: unknown }).source === agentsCockpitSource,
+      (payload as { source?: unknown }).source === sparkAgentsCockpitSource,
     );
   } catch {
     return false;

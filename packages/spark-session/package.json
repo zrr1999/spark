@@ -1,0 +1,29 @@
+{
+  "name": "@zendev-lab/spark-session",
+  "version": "0.1.0",
+  "description": "Daemon-owned Spark session registry: create, bind, archive, and resolve channel bindings.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit && vp test run",
+    "test": "vp test run"
+  },
+  "dependencies": {
+    "@zendev-lab/spark-protocol": "workspace:^"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vitest": "catalog:"
+  }
+}

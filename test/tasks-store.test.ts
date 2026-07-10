@@ -1,15 +1,5 @@
 import assert from "node:assert/strict";
-import {
-  chmod,
-  mkdir,
-  mkdtemp,
-  readFile,
-  readdir,
-  rm,
-  stat,
-  utimes,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -17,7 +7,8 @@ import test from "node:test";
 import {
   RoleRegistry,
   builtinRoleRef,
-  defaultUserRoleModelSettingsStore,
+  cancelRoleRun,
+  listActiveRoleRuns,
 } from "@zendev-lab/spark-roles";
 import { ArtifactStore } from "@zendev-lab/spark-artifacts";
 import {
@@ -28,6 +19,7 @@ import {
   type RunRef,
   type TaskPlan,
   type TaskRef,
+  type TaskRun,
 } from "@zendev-lab/spark-extension-api";
 import {
   WorkflowRunStoreFormatError,
@@ -46,6 +38,8 @@ import {
   runSparkTask,
   sparkTaskExecutorRoleRef,
   sweepExpiredTaskClaims,
+  type SparkRoleInstructionExecutorInput,
+  type SparkRoleRunResult,
 } from "@zendev-lab/spark-runtime";
 import {
   TaskGraph,
@@ -133,7 +127,9 @@ type ChildOutputSuccessCase = {
   taskTitle: string;
   taskDescription: string;
   planObjective: string;
-  fakePiLines: string[];
+  stdout?: string;
+  stderr?: string;
+  jsonEvents?: unknown[];
   assertRun?: (run: RunSparkTaskResult, graph: TaskGraph, taskRef: TaskRef) => void | Promise<void>;
 };
 
@@ -145,6 +141,27 @@ function testSparkContext(cwd: string, sessionName: string) {
       getSessionFile: () => sessionFile,
       getLeafId: () => `${sessionName}-leaf`,
     },
+  };
+}
+
+function testRoleRunResult(
+  input: SparkRoleInstructionExecutorInput,
+  options: {
+    status?: SparkRoleRunResult["record"]["status"];
+    stdout?: string;
+    stderr?: string;
+    jsonEvents?: unknown[];
+  } = {},
+): SparkRoleRunResult {
+  return {
+    record: {
+      ...input.record,
+      status: options.status ?? "succeeded",
+      finishedAt: nowIso(),
+    },
+    stdout: options.stdout ?? "",
+    stderr: options.stderr ?? "",
+    jsonEvents: options.jsonEvents ?? [],
   };
 }
 
@@ -177,10 +194,6 @@ async function assertRunSparkTaskSucceedsWithChildOutput(
     const artifactStore = new ArtifactStore({
       rootDir: join(dir, "artifacts"),
     });
-    const fakePi = join(dir, "fake-pi.cjs");
-    await writeFile(fakePi, ["#!/usr/bin/env node", ...testCase.fakePiLines].join("\n"), "utf8");
-    await chmod(fakePi, 0o755);
-
     const run = await runSparkTask({
       graph,
       taskRef: task.ref,
@@ -188,7 +201,12 @@ async function assertRunSparkTaskSucceedsWithChildOutput(
       artifactStore,
       cwd: dir,
       dryRun: false,
-      piCommand: fakePi,
+      roleExecutor: async (input) =>
+        testRoleRunResult(input, {
+          stdout: testCase.stdout,
+          stderr: testCase.stderr,
+          jsonEvents: testCase.jsonEvents,
+        }),
       claim: { sessionId: "session:parent" },
     });
 
@@ -2291,19 +2309,7 @@ void test("runSparkTask includes plan and a bounded active plan item preview in 
   graph.applyTodoOps(task.ref, [{ op: "start", id: firstTodo.id }]);
   const dir = await mkdtemp(join(tmpdir(), "spark-task-instruction-preview-"));
   try {
-    const fakePi = join(dir, "fake-pi.cjs");
-    const argsPath = join(dir, "args.json");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "const { writeFileSync } = require('node:fs');",
-        `writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify(process.argv.slice(2)));`,
-        "process.stdout.write(JSON.stringify({ type: 'done' }) + '\\n');",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
+    let prompt = "";
 
     await runSparkTask({
       graph,
@@ -2311,13 +2317,14 @@ void test("runSparkTask includes plan and a bounded active plan item preview in 
       registry: new RoleRegistry(),
       cwd: dir,
       dryRun: false,
-      piCommand: fakePi,
+      roleExecutor: async (input) => {
+        prompt = input.instruction.instruction;
+        return testRoleRunResult(input, { stdout: "preview validated\n" });
+      },
       timeoutMs: 5_000,
       claim: { sessionId: "session:preview" },
     });
 
-    const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
-    const prompt = args.at(-1) ?? "";
     assert.match(prompt, /Task plan \(execution contract\):/);
     assert.match(prompt, /- Objective: Implement the bounded child prompt preview\./);
     assert.match(prompt, /- Constraints:\n  - Do not dump every TODO into the prompt\./);
@@ -2349,13 +2356,6 @@ void test("runSparkTask marks child timeout failed and clears the task claim", a
       roleRef: builtinRoleRef("worker"),
       plan: executionReadyPlan("Plan"),
     });
-    const fakePi = join(dir, "fake-pi.mjs");
-    await writeFile(
-      fakePi,
-      "#!/usr/bin/env node\nprocess.on('SIGTERM', () => {}); setInterval(() => {}, 1_000);\n",
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
     const registry = new RoleRegistry();
     const run = await runSparkTask({
       graph,
@@ -2363,7 +2363,6 @@ void test("runSparkTask marks child timeout failed and clears the task claim", a
       registry,
       cwd: dir,
       dryRun: false,
-      piCommand: fakePi,
       timeoutMs: 1,
       claim: { sessionId: "session:parent" },
     });
@@ -2400,14 +2399,6 @@ void test("runSparkTask fails loudly when claim heartbeat persistence fails", as
       roleRef: builtinRoleRef("worker"),
       plan: executionReadyPlan("Plan"),
     });
-    const fakePi = join(dir, "fake-pi.mjs");
-    await writeFile(
-      fakePi,
-      "#!/usr/bin/env node\nprocess.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1_000);\n",
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-
     let heartbeatAttempts = 0;
     await assert.rejects(
       () =>
@@ -2417,7 +2408,6 @@ void test("runSparkTask fails loudly when claim heartbeat persistence fails", as
           registry: new RoleRegistry(),
           cwd: dir,
           dryRun: false,
-          piCommand: fakePi,
           timeoutMs: 5_000,
           heartbeatIntervalMs: 5,
           onHeartbeat: () => {
@@ -2459,20 +2449,12 @@ void test("timed-out Spark role-run process is cleaned up after task failure", a
   });
   const dir = await mkdtemp(join(tmpdir(), "spark-kill-pi-"));
   try {
-    const fakePi = join(dir, "fake-pi.mjs");
-    await writeFile(
-      fakePi,
-      "#!/usr/bin/env node\nprocess.on('SIGTERM', () => {}); setInterval(() => {}, 1_000);\n",
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
     const run = await runSparkTask({
       graph,
       taskRef: task.ref,
       registry: new RoleRegistry(),
       cwd: dir,
       dryRun: false,
-      piCommand: fakePi,
       timeoutMs: 1,
       claim: { sessionId: "session:parent" },
     });
@@ -2491,7 +2473,7 @@ void test("timed-out Spark role-run process is cleaned up after task failure", a
   }
 });
 
-void test("background cleanup does not kill role-runs without an owned task graph", async () => {
+void test("background cleanup does not cancel role-runs without an owned task graph", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-shutdown-scope-"));
   let runRef: RunRef | undefined;
   let runPromise: Promise<unknown> | undefined;
@@ -2505,13 +2487,6 @@ void test("background cleanup does not kill role-runs without an owned task grap
       roleRef: builtinRoleRef("worker"),
       plan: executionReadyPlan("Plan"),
     });
-    const fakePi = join(dir, "fake-pi.mjs");
-    await writeFile(
-      fakePi,
-      "#!/usr/bin/env node\nprocess.on('SIGTERM', () => {}); setInterval(() => {}, 1_000);\n",
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
 
     runPromise = runSparkTask({
       graph,
@@ -2519,17 +2494,24 @@ void test("background cleanup does not kill role-runs without an owned task grap
       registry: new RoleRegistry(),
       cwd: dir,
       dryRun: false,
-      piCommand: fakePi,
+      roleExecutor: async (input) =>
+        new Promise<SparkRoleRunResult>((resolve) => {
+          input.signal?.addEventListener(
+            "abort",
+            () => resolve(testRoleRunResult(input, { status: "cancelled" })),
+            { once: true },
+          );
+        }),
       timeoutMs: 10_000,
       claim: { sessionId: "session:owner" },
     }).catch((error: unknown) => error);
-    await waitFor(() => listActiveSparkRoleRunProcesses().some((entry) => entry.cwd === dir));
-    const activeRun = listActiveSparkRoleRunProcesses().find((entry) => entry.cwd === dir);
+    await waitFor(() => listActiveRoleRuns().length > 0);
+    const activeRun = listActiveRoleRuns()[0];
     assert.ok(activeRun);
-    runRef = activeRun.runRef;
+    runRef = activeRun.ref as RunRef;
 
     assert.equal(
-      listActiveSparkRoleRunProcesses().some((entry) => entry.runRef === runRef),
+      listActiveRoleRuns().some((entry) => entry.ref === runRef),
       true,
     );
 
@@ -2543,11 +2525,11 @@ void test("background cleanup does not kill role-runs without an owned task grap
 
     assert.equal(killed, 0);
     assert.equal(
-      listActiveSparkRoleRunProcesses().some((entry) => entry.runRef === runRef),
+      listActiveRoleRuns().some((entry) => entry.ref === runRef),
       true,
     );
   } finally {
-    if (runRef) await killActiveSparkRoleRunProcesses({ runRef, forceAfterMs: 0, waitMs: 1_000 });
+    if (runRef) cancelRoleRun(runRef, "test cleanup");
     await killActiveSparkRoleRunProcesses({ forceAfterMs: 0, waitMs: 1_000 });
     await runPromise?.catch(() => undefined);
     await rm(dir, { recursive: true, force: true });
@@ -2627,23 +2609,8 @@ void test("background resume persists plan items through the task graph without 
 
 void test("Spark DAG manager reports widget refresh failures without failing completed DAG work", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dag-refresh-failure-"));
-  const previousPath = process.env.PATH;
-  const previousPiRolesHome = process.env.PI_ROLES_HOME;
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
-    const binDir = join(dir, "bin");
-    await mkdir(binDir, { recursive: true });
-    const fakePi = join(binDir, "pi");
-    await writeFile(
-      fakePi,
-      "#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify({ type: 'done', ok: true }) + '\\n');\n",
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-    process.env.PATH = `${binDir}${previousPath ? `:${previousPath}` : ""}`;
-    process.env.PI_ROLES_HOME = dir;
-    await defaultUserRoleModelSettingsStore(dir).save(builtinRoleRef("worker"), "test-model");
-
     const graph = new TaskGraph();
     const project = graph.createProject({ title: "Demo", description: "demo" });
     const task = graph.createTask({
@@ -2668,11 +2635,26 @@ void test("Spark DAG manager reports widget refresh failures without failing com
 
     const result = await manager.runOnce(dir, {
       ...ctx,
+      model: { provider: "test", id: "model" },
       ui: {
         notify(message: string, level?: "info" | "warning" | "error" | "success") {
           notifications.push({ message, level });
         },
       },
+      runRole: async (input) => ({
+        record: { ...input.record, status: "succeeded", finishedAt: nowIso() },
+        stdout: "completed work before widget refresh\n",
+        stderr: "",
+        jsonEvents: [
+          {
+            type: "message_end",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "completed work before widget refresh" }],
+            },
+          },
+        ],
+      }),
     });
 
     const stored = await defaultTaskGraphStore(dir).load();
@@ -2691,10 +2673,6 @@ void test("Spark DAG manager reports widget refresh failures without failing com
       ),
     );
   } finally {
-    if (previousPath === undefined) delete process.env.PATH;
-    else process.env.PATH = previousPath;
-    if (previousPiRolesHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousPiRolesHome;
     await killActiveSparkRoleRunProcesses({ forceAfterMs: 0, waitMs: 1_000 });
     await rm(dir, { recursive: true, force: true });
   }
@@ -3587,14 +3565,6 @@ void test("runReadyTasks assigns default roles and schedules DAG waves with maxC
       plan: executionReadyPlan("Wave 2"),
     });
     for (const task of firstWave) graph.addDependency(secondWave.ref, task.ref);
-    const fakePi = join(dir, "fake-pi.mjs");
-    await writeFile(
-      fakePi,
-      "#!/usr/bin/env node\nsetTimeout(() => { process.stdout.write(JSON.stringify({ type: 'done' }) + '\\n'); process.exit(0); }, 50);\n",
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-
     const events: Array<
       | { kind: "schedule"; taskRef: TaskRef; running: number; scheduled: number }
       | { kind: "progress"; taskRef: TaskRef; running: number; completed: number }
@@ -3604,7 +3574,23 @@ void test("runReadyTasks assigns default roles and schedules DAG waves with maxC
       ...createSparkRuntimeReadyTaskRunner({
         registry: new RoleRegistry(),
         cwd: dir,
-        piCommand: fakePi,
+        roleExecutor: async (input) => {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          return {
+            record: { ...input.record, status: "succeeded", finishedAt: nowIso() },
+            stdout: "ready task completed\n",
+            stderr: "",
+            jsonEvents: [
+              {
+                type: "message_end",
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "ready task completed" }],
+                },
+              },
+            ],
+          };
+        },
       }),
       dryRun: false,
       maxConcurrency: 4,
@@ -3679,7 +3665,6 @@ void test("runReadyTasks uses daemon-native role executor when provided", async 
       ...createSparkRuntimeReadyTaskRunner({
         registry: new RoleRegistry(),
         cwd: dir,
-        piCommand: join(dir, "missing-pi-that-must-not-spawn"),
         roleExecutor: async (input) => {
           seen.push(input.role.ref, input.record.ref, input.instruction.instruction);
           return {
@@ -3760,14 +3745,6 @@ void test("runReadyTasks aborts launched child work when schedule hook fails", a
       status: "pending",
       plan: executionReadyPlan("Scheduled task"),
     });
-    const fakePi = join(dir, "fake-pi.mjs");
-    await writeFile(
-      fakePi,
-      "#!/usr/bin/env node\nprocess.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1_000);\n",
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-
     await assert.rejects(
       () =>
         runReadyTasks({
@@ -3775,7 +3752,6 @@ void test("runReadyTasks aborts launched child work when schedule hook fails", a
           ...createSparkRuntimeReadyTaskRunner({
             registry: new RoleRegistry(),
             cwd: dir,
-            piCommand: fakePi,
           }),
           dryRun: false,
           timeoutMs: 5_000,
@@ -3847,16 +3823,17 @@ void test("runReadyTasks reports failed child runs in aggregate result", async (
       roleRef: builtinRoleRef("worker"),
       plan: executionReadyPlan("No output"),
     });
-    const fakePi = join(dir, "fake-pi.mjs");
-    await writeFile(fakePi, "#!/usr/bin/env node\nprocess.exit(0);\n", "utf8");
-    await chmod(fakePi, 0o755);
-
     const result = await runReadyTasks({
       graph,
       ...createSparkRuntimeReadyTaskRunner({
         registry: new RoleRegistry(),
         cwd: dir,
-        piCommand: fakePi,
+        roleExecutor: async (input) => ({
+          record: { ...input.record, status: "failed", finishedAt: nowIso() },
+          stdout: "",
+          stderr: "child failed before producing task output",
+          jsonEvents: [],
+        }),
       }),
       dryRun: false,
       timeoutMs: 5_000,
@@ -3893,7 +3870,9 @@ void test("runReadyTasks returns the recorded failed run when child launch fails
       ...createSparkRuntimeReadyTaskRunner({
         registry: new RoleRegistry(),
         cwd: dir,
-        piCommand: join(dir, "missing-pi"),
+        roleExecutor: async () => {
+          throw new Error("child launch failed");
+        },
       }),
       dryRun: false,
       timeoutMs: 5_000,
@@ -3960,21 +3939,36 @@ void test("runReadyTasks treats timeoutMs as a foreground wait budget", async ()
       roleRef: builtinRoleRef("reviewer"),
     });
     graph.addDependency(pendingTask.ref, slowTask.ref);
-    const fakePi = join(dir, "fake-pi.mjs");
-    await writeFile(
-      fakePi,
-      "#!/usr/bin/env node\nprocess.on('SIGTERM', () => {}); setTimeout(() => {}, 10_000);\n",
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-
     const result = await runReadyTasks({
       graph,
-      ...createSparkRuntimeReadyTaskRunner({
-        registry: new RoleRegistry(),
-        cwd: dir,
-        piCommand: fakePi,
-      }),
+      runTask: async ({ graph: runningGraph, taskRef, claim }) => {
+        const task = runningGraph.getTask(taskRef);
+        const roleRef = task.roleRef ?? builtinRoleRef("worker");
+        const runRef = newRef("run");
+        const runName = createRoleRunName(roleRef, runRef);
+        runningGraph.claimTask(taskRef, {
+          kind: "role-run",
+          claimedBy: `session:parent/${runName}`,
+          roleRef,
+          runName,
+          sessionId: claim?.sessionId,
+          runRef,
+          leaseMs: claim?.leaseMs ?? DEFAULT_TASK_CLAIM_LEASE_MS,
+        });
+        const run: TaskRun = {
+          ref: runRef,
+          projectRef: task.projectRef,
+          taskRef,
+          roleRef,
+          runName,
+          ownerSessionId: claim?.sessionId,
+          status: "running",
+          startedAt: nowIso(),
+          outputArtifacts: [],
+        };
+        runningGraph.recordRun(run);
+        return new Promise<TaskRun>(() => undefined);
+      },
       dryRun: false,
       maxConcurrency: 4,
       timeoutMs: 20,
@@ -4004,7 +3998,10 @@ void test("runReadyTasks treats timeoutMs as a foreground wait budget", async ()
     assert.equal(backgroundRuns[0]?.taskRef, slowTask.ref);
     assert.match(backgroundRuns[0]?.errorMessage ?? "", /foreground wait expired/);
     assert.match(backgroundRuns[0]?.errorMessage ?? "", /keeping child run claim in background/);
-    assert.equal(listActiveSparkRoleRunProcesses().length, 1);
+    assert.deepEqual(
+      result.detachedRunRefs,
+      backgroundRuns.map((run) => run.ref),
+    );
   } finally {
     await killActiveSparkRoleRunProcesses();
     await rm(dir, { recursive: true, force: true });
@@ -4027,10 +4024,6 @@ void test("runSparkTask does not complete real tasks when the role run never sta
       rootDir: join(dir, "artifacts"),
     });
 
-    const fakePi = join(dir, "fake-pi.mjs");
-    await writeFile(fakePi, "#!/usr/bin/env node\nprocess.exit(0);\n", "utf8");
-    await chmod(fakePi, 0o755);
-
     const run = await runSparkTask({
       graph,
       taskRef: task.ref,
@@ -4038,13 +4031,13 @@ void test("runSparkTask does not complete real tasks when the role run never sta
       artifactStore,
       cwd: dir,
       dryRun: false,
-      piCommand: fakePi,
+      roleExecutor: async (input) => testRoleRunResult(input, { status: "not_started" }),
       claim: { sessionId: "session:parent" },
     });
 
     assert.equal(run.status, "failed");
     assert.equal(run.failureKind, "runtime_error");
-    assert.match(run.errorMessage ?? "", /without producing task output/);
+    assert.match(run.errorMessage ?? "", /did not start and produced no output/);
     assert.equal(graph.getTask(task.ref).status, "failed");
     assert.equal(graph.getTask(task.ref).claim, undefined);
     const [artifact] = await artifactStore.list({ kind: "trace" });
@@ -4064,8 +4057,8 @@ void test("runSparkTask does not complete real tasks when the role run never sta
     assert.equal(body.runRef, run.ref);
     assert.equal(body.taskRef, task.ref);
     assert.equal(body.roleRef, builtinRoleRef("worker"));
-    assert.equal(body.status, "succeeded");
-    assert.equal(body.record?.status, "succeeded");
+    assert.equal(body.status, "not_started");
+    assert.equal(body.record?.status, "not_started");
     assert.equal(body.record?.instruction, undefined);
     assert.equal(body.stdout?.tail, "");
     assert.equal(body.stdout?.bytes, 0);
@@ -4087,16 +4080,16 @@ const childOutputSuccessCases: ChildOutputSuccessCase[] = [
     taskTitle: "Blocked mode task",
     taskDescription: "should complete because child Spark mode markers are session-local",
     planObjective: "Blocked mode task",
-    fakePiLines: [
-      "process.stdout.write(JSON.stringify({",
-      "  type: 'message_start',",
-      "  message: {",
-      "    role: 'custom',",
-      "    customType: 'spark-mode-request',",
-      "    content: 'Spark mode request could not proceed.',",
-      "    details: { status: 'blocked', reason: 'no_selection' },",
-      "  },",
-      "}) + '\\n');",
+    jsonEvents: [
+      {
+        type: "message_start",
+        message: {
+          role: "custom",
+          customType: "spark-mode-request",
+          content: "Spark mode request could not proceed.",
+          details: { status: "blocked", reason: "no_selection" },
+        },
+      },
     ],
     assertRun(run) {
       assert.equal(run.outputArtifacts.length, 1);
@@ -4108,7 +4101,7 @@ const childOutputSuccessCases: ChildOutputSuccessCase[] = [
     taskTitle: "Blocked text task",
     taskDescription: "should complete because child Spark mode markers are session-local",
     planObjective: "Blocked text task",
-    fakePiLines: ["process.stdout.write('Spark auto mode selection blocked; no_selection\\n');"],
+    stdout: "Spark auto mode selection blocked; no_selection\n",
   },
   {
     name: "runSparkTask succeeds when child role has task output despite blocked Spark control text",
@@ -4116,10 +4109,7 @@ const childOutputSuccessCases: ChildOutputSuccessCase[] = [
     taskTitle: "Control text with output",
     taskDescription: "should complete when actual task output exists",
     planObjective: "Control text with output",
-    fakePiLines: [
-      "process.stdout.write('Spark auto mode selection blocked; no_selection\\n');",
-      "process.stdout.write('researched result: useful findings\\n');",
-    ],
+    stdout: "Spark auto mode selection blocked; no_selection\nresearched result: useful findings\n",
     assertRun(run) {
       assert.match(run.completionSummary?.summary ?? "", /researched result/);
     },
@@ -4130,9 +4120,7 @@ const childOutputSuccessCases: ChildOutputSuccessCase[] = [
     taskTitle: "Ordinary output task",
     taskDescription: "ordinary successful output should still complete",
     planObjective: "Ordinary output task",
-    fakePiLines: [
-      "process.stdout.write(JSON.stringify({ type: 'done', summary: 'ordinary completion' }) + '\\n');",
-    ],
+    stdout: "ordinary completion\n",
   },
 ];
 
@@ -4157,19 +4145,6 @@ void test("runSparkTask summarizes final assistant text instead of raw Pi contro
     const artifactStore = new ArtifactStore({
       rootDir: join(dir, "artifacts"),
     });
-    const fakePi = join(dir, "fake-pi.cjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "process.stdout.write(JSON.stringify({ type: 'session', version: 3 }) + '\\n');",
-        "process.stdout.write(JSON.stringify({ type: 'agent_start' }) + '\\n');",
-        "process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Final scout report: use a mailbox artifact.' }] } }) + '\\n');",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-
     const run = await runSparkTask({
       graph,
       taskRef: task.ref,
@@ -4177,7 +4152,20 @@ void test("runSparkTask summarizes final assistant text instead of raw Pi contro
       artifactStore,
       cwd: dir,
       dryRun: false,
-      piCommand: fakePi,
+      roleExecutor: async (input) =>
+        testRoleRunResult(input, {
+          jsonEvents: [
+            { type: "session", version: 3 },
+            { type: "agent_start" },
+            {
+              type: "message_end",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "Final scout report: use a mailbox artifact." }],
+              },
+            },
+          ],
+        }),
       claim: { sessionId: "session:parent" },
     });
 
@@ -4209,19 +4197,7 @@ void test("runSparkTask writes compact role-run artifacts for large output", asy
     const artifactStore = new ArtifactStore({
       rootDir: join(dir, "artifacts"),
     });
-    const fakePi = join(dir, "fake-pi.cjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "const payload = 'P'.repeat(100_000);",
-        "process.stdout.write('A'.repeat(200_000) + '\\n');",
-        "process.stdout.write(JSON.stringify({ type: 'done', payload }) + '\\n');",
-        "process.stderr.write('E'.repeat(80_000));",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
+    const payload = "P".repeat(100_000);
 
     const run = await runSparkTask({
       graph,
@@ -4230,7 +4206,12 @@ void test("runSparkTask writes compact role-run artifacts for large output", asy
       artifactStore,
       cwd: dir,
       dryRun: false,
-      piCommand: fakePi,
+      roleExecutor: async (input) =>
+        testRoleRunResult(input, {
+          stdout: `${"A".repeat(200_000)}\n${JSON.stringify({ type: "done", payload })}\n`,
+          stderr: "E".repeat(80_000),
+          jsonEvents: [{ type: "done", payload }],
+        }),
       claim: { sessionId: "session:parent" },
     });
 
@@ -4362,7 +4343,7 @@ void test("runSparkTask dry-run records validation without completing the task",
   }
 });
 
-void test("runSparkTask can request explicit forked Pi mode when a parent session is provided", async () => {
+void test("runSparkTask forwards explicit forked launch to the role executor", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-forked-run-"));
   try {
     const graph = new TaskGraph();
@@ -4374,20 +4355,8 @@ void test("runSparkTask can request explicit forked Pi mode when a parent sessio
       roleRef: builtinRoleRef("reviewer"),
       plan: executionReadyPlan("Forked spec implementation"),
     });
-    const fakePi = join(dir, "fake-pi.mjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "const args = process.argv.slice(2);",
-        "const forkIndex = args.indexOf('--fork');",
-        "if (forkIndex < 0) process.exit(12);",
-        "if (args[forkIndex + 1] !== 'parent-session.json') process.exit(13);",
-        "process.stdout.write(JSON.stringify({ type: 'forked', parent: args[forkIndex + 1] }) + '\\n');",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
+    let seenLaunch: string | undefined;
+    let seenForkFromSession: string | undefined;
 
     const run = await runSparkTask({
       graph,
@@ -4395,9 +4364,16 @@ void test("runSparkTask can request explicit forked Pi mode when a parent sessio
       registry: new RoleRegistry(),
       cwd: dir,
       dryRun: false,
-      piCommand: fakePi,
       launch: "forked",
       forkFromSession: "parent-session.json",
+      roleExecutor: async (input) => {
+        seenLaunch = input.launch;
+        seenForkFromSession = input.forkFromSession;
+        return testRoleRunResult(input, {
+          stdout: "forked role completed\n",
+          jsonEvents: [{ type: "forked", parent: input.forkFromSession }],
+        });
+      },
       claim: { sessionId: "session:parent" },
     });
 
@@ -4405,6 +4381,8 @@ void test("runSparkTask can request explicit forked Pi mode when a parent sessio
     assert.equal(run.roleRef, builtinRoleRef("reviewer"));
     assert.match(run.runName ?? "", /^reviewer-/);
     assert.equal(run.ownerSessionId, "session:parent");
+    assert.equal(seenLaunch, "forked");
+    assert.equal(seenForkFromSession, "parent-session.json");
     assert.equal(graph.getTask(task.ref).status, "done");
   } finally {
     await killActiveSparkRoleRunProcesses();
@@ -4435,19 +4413,9 @@ void test("runSparkTask attributes real project role spec run claims and complet
       createdAt: "2026-05-20T00:00:00.000Z",
       updatedAt: "2026-05-20T00:00:00.000Z",
     });
-    const fakePi = join(dir, "fake-pi.mjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "const args = process.argv.slice(2);",
-        "if (args.includes('--fork')) process.exit(12);",
-        "if (!args.includes('--session-dir')) process.exit(13);",
-        "process.stdout.write(JSON.stringify({ type: 'done', ok: true }) + '\\n');",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
+    const sessionDir = join(dir, "sessions");
+    let seenSessionDir: string | undefined;
+    let seenLaunch: string | undefined;
 
     const run = await runSparkTask({
       graph,
@@ -4455,8 +4423,12 @@ void test("runSparkTask attributes real project role spec run claims and complet
       registry,
       cwd: dir,
       dryRun: false,
-      piCommand: fakePi,
-      sessionDir: join(dir, "sessions"),
+      sessionDir,
+      roleExecutor: async (input) => {
+        seenSessionDir = input.sessionDir;
+        seenLaunch = input.launch;
+        return testRoleRunResult(input, { stdout: "project role completed\n" });
+      },
       claim: { sessionId: "session:parent" },
     });
 
@@ -4465,6 +4437,8 @@ void test("runSparkTask attributes real project role spec run claims and complet
     assert.equal(run.roleRef, roleRef);
     assert.match(run.runName ?? "", /^test-worker-/);
     assert.equal(run.ownerSessionId, "session:parent");
+    assert.equal(seenSessionDir, sessionDir);
+    assert.equal(seenLaunch, "fresh");
     assert.equal(finishedTask.status, "done");
     assert.equal(finishedTask.claim, undefined);
     assert.deepEqual(finishedTask.finishedBy, {
@@ -4497,24 +4471,11 @@ void test("task timeout fails the task while cleaning up the stuck child process
       roleRef: builtinRoleRef("reviewer"),
       plan: executionReadyPlan("Slow task"),
     });
-    const fakePi = join(dir, "fake-pi.mjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "process.on('SIGTERM', () => {});",
-        "setInterval(() => {}, 1_000);",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-
     const result = await runReadyTasks({
       graph,
       ...createSparkRuntimeReadyTaskRunner({
         registry: new RoleRegistry(),
         cwd: dir,
-        piCommand: fakePi,
       }),
       dryRun: false,
       maxConcurrency: 2,

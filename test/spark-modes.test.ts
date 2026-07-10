@@ -5,6 +5,7 @@ import {
   BUILTIN_MODES,
   MODE_TOOL_STATUS_ACTION,
   assembleModeSystemPrompt,
+  composeAgentSystemPrompt,
   createModeRegistry,
   createModeTool,
   normalizeModeToolAction,
@@ -167,6 +168,13 @@ void test("renderModeMarker shows phase only for assist and drive for autonomous
   assert.equal(
     renderModeMarker({ mode: "plan", driver: "loop", toolsHint: "Tools: x" }),
     "Drive: loop. Tools: x",
+  );
+});
+
+void test("composeAgentSystemPrompt drops empty sections", () => {
+  assert.equal(
+    composeAgentSystemPrompt(["identity", "  ", undefined, "surface", null, ""]),
+    "identity\n\nsurface",
   );
 });
 

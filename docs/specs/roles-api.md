@@ -1,6 +1,8 @@
 # `spark-roles` API design
 
-`spark-roles` is the Spark-independent package for reusable coding roles and simple child Pi executions. It replaces the earlier split-package direction with one generic role-spec and role-run package.
+`spark-roles` is the Spark-independent package for reusable coding roles and
+simple role executions. It replaces the earlier split-package direction with
+one generic role-spec and role-run package.
 
 ## Goals
 
@@ -179,10 +181,22 @@ export function buildRoleRunArgs(input: RoleRunCommandInput): string[];
 export function runRole(input: RoleRunLauncherInput): Promise<RoleRunResult>;
 export function cancelRoleRun(runRef: RoleRunRef, reason?: string): boolean;
 export function listActiveRoleRuns(): ActiveRoleRun[];
+export function sendInputToRoleRun(
+   runRef: RoleRunRef,
+   text: string,
+): Promise<RoleRunInputDeliveryResult | undefined>;
 export function parsePiJsonlEvents(stdout: string): unknown[];
 ```
 
-Every run references an existing role. A run can be fresh or forked regardless of whether the role source is builtin, extension, project, or user. For usage guidance, safety constraints, and Spark attribution rules, see [roles-run-modes.md](./roles-run-modes.md).
+Every run references an existing role. A run can be fresh or forked regardless
+of whether the role source is builtin, extension, project, or user.
+`ActiveRoleRun.inputControl` and `sendInputToRoleRun()` are the owning control
+contract for follow-up input delivery. Process-backed runs may expose `stdin`;
+daemon-native hosts register a `native` input controller that feeds the
+SparkAgentLoop outbox; Spark task/runtime surfaces adapt that result rather
+than reading process internals. For usage guidance, safety constraints, and
+Spark attribution rules, see
+[roles-run-modes.md](./roles-run-modes.md).
 
 ## Tool / runtime mapping
 

@@ -257,6 +257,14 @@ export type ExtensionRoleRunStatus =
   | "cancelled"
   | "not_started";
 
+export interface ExtensionRoleRunInputController {
+  send(text: string): void | Promise<void>;
+}
+
+export interface ExtensionRoleRunInputControl {
+  register(controller: ExtensionRoleRunInputController): () => void;
+}
+
 export interface ExtensionRoleRunRequest {
   role: {
     ref: RoleRef;
@@ -296,6 +304,7 @@ export interface ExtensionRoleRunRequest {
   sessionPersistence?: "anonymous" | "persistent";
   env?: NodeJS.ProcessEnv;
   onEvent?: (event: unknown) => void | Promise<void>;
+  inputControl?: ExtensionRoleRunInputControl;
 }
 
 export interface ExtensionRoleRunResult {
@@ -311,6 +320,8 @@ export type ExtensionRoleRunner = (
 
 export interface ExtensionContext {
   cwd?: string;
+  /** Current Spark view/session identity for session-scoped extension state. */
+  sessionId?: string;
   /** Optional absolute path to the Spark state root directory (`.../.spark`). */
   sparkStateRoot?: string;
   model?: SessionModelRef;

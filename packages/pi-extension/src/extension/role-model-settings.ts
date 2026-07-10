@@ -36,7 +36,9 @@ export async function ensureRoleModelSettingsForProject(input: {
   registry: RoleRegistry;
   cwd: string;
   ctx: RoleModelSettingsContext;
+  piCommand?: string;
 }): Promise<RoleModelSettingsPreflightResult> {
+  const piCommand = input.piCommand ?? "pi";
   const roleRefs = uniqueRoleRefs(
     input.graph.readyTasks(input.projectRef).map((task) => sparkTaskExecutorRoleRef(task)),
   );
@@ -72,7 +74,7 @@ export async function ensureRoleModelSettingsForProject(input: {
       continue;
     }
     try {
-      await validateRoleModel({ piCommand: "pi", model, cwd: input.cwd });
+      await validateRoleModel({ piCommand, model, cwd: input.cwd });
       const entry = await userStore.save(roleRef, model);
       boundRoleRefs.push(roleRef);
       resolvedModels.push({

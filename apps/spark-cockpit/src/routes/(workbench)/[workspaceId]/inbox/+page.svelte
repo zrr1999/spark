@@ -81,7 +81,7 @@
                 </div>
                 <p>{item.summary}</p>
                 <small>
-                  {item.projectName ?? common.fallback.workspaceScope} · {formatRelative(item.createdAt)}
+                  {common.fallback.workspaceScope} · {formatRelative(item.createdAt)}
                 </small>
               </div>
               <span class="status-pill {item.status}">{statusLabel(item.status)}</span>
@@ -110,7 +110,7 @@
                 </div>
                 <p>{item.summary}</p>
                 <small>
-                  {item.projectName ?? common.fallback.workspaceScope} · {formatRelative(item.createdAt)}
+                  {common.fallback.workspaceScope} · {formatRelative(item.createdAt)}
                 </small>
               </div>
               <div class="delivery-copy">

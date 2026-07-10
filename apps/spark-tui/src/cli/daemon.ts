@@ -1,21 +1,27 @@
 /** `spark daemon ...` command parsing and Spark daemon IPC client operations. */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync } from "node:fs";
 import { createConnection } from "node:net";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
+import type { ChannelNotifySendResult } from "@zendev-lab/spark-channels";
 import {
   parseSparkDaemonEvent,
   sparkCommandKindForLocalRpcMethod,
   sparkProtocolJsonObjectSchema,
   type SparkCommand,
+  type SparkAssignment,
   type SparkDaemonEvent,
 } from "@zendev-lab/spark-protocol";
 import { sparkDaemonCliStrings } from "@zendev-lab/spark-i18n/cli";
+import {
+  requestSparkDaemonLocalRpcWire,
+  SparkDaemonLocalRpcRemoteError,
+} from "@zendev-lab/spark-system/daemon-local-rpc";
 
 import {
   exportSparkSessionRecord,
@@ -40,6 +46,12 @@ import {
   type DaemonSessionShowResult,
   type DaemonSessionTreeResult,
 } from "./daemon-session.ts";
+import {
+  createDaemonManagedSessionsClient,
+  renderManagedSession,
+  type SparkDaemonManagedSessionsClient,
+} from "./session-registry.ts";
+import type { ChannelStatusSnapshot } from "./channel-status.ts";
 import type { SparkNativeSlashCommandMap } from "../native-tui.ts";
 import {
   consoleSparkCliOutput,
@@ -58,6 +70,7 @@ export type SparkDaemonCliAction =
   | "queue"
   | "start"
   | "sessions"
+  | "channel"
   | "runs"
   | "events"
   | "service";
@@ -76,13 +89,14 @@ export interface SparkDaemonClientOptions {
   paths?: SparkDaemonClientPaths;
   startService?: (paths: SparkDaemonClientPaths) => unknown;
   daemonStatus?: (paths: SparkDaemonClientPaths) => Promise<SparkDaemonLocalStatus>;
+  channelStatus?: (paths: SparkDaemonClientPaths) => Promise<ChannelStatusSnapshot>;
   daemonQueue?: (
     paths: SparkDaemonClientPaths,
     params: { state?: SparkDaemonCliQueueState; limit?: number },
   ) => Promise<LocalDaemonQueueResult>;
   turnSubmit?: (
     paths: SparkDaemonClientPaths,
-    input: { sessionId: string; prompt: string; reset?: boolean },
+    input: SparkDaemonTurnSubmitInput,
   ) => Promise<LocalTurnSubmitResult>;
   turnCancel?: (
     paths: SparkDaemonClientPaths,
@@ -90,7 +104,7 @@ export interface SparkDaemonClientOptions {
   ) => Promise<LocalTurnCancelResult>;
   turnStream?: (
     paths: SparkDaemonClientPaths,
-    input: { sessionId: string; prompt: string; reset?: boolean },
+    input: SparkDaemonTurnSubmitInput,
     handlers: { onEvent?: (event: SparkDaemonEvent) => void; signal?: AbortSignal },
   ) => Promise<LocalTurnSubmitResult>;
   workspaceEnsureLocal?: (
@@ -135,6 +149,7 @@ export interface SparkDaemonClientOptions {
     params?: { limit?: number },
   ) => Promise<LocalDaemonEventsWatchResult>;
   serviceCommand?: (argv: string[]) => Promise<number>;
+  managedSessions?: SparkDaemonManagedSessionsClient;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   sparkHome?: string;
@@ -152,6 +167,24 @@ export interface SparkDaemonLocalStatus {
   queue: Record<"inbox" | "processed" | "failed", number>;
 }
 
+export interface SparkDaemonTurnSubmitInput {
+  sessionId: string;
+  prompt: string;
+  model?: string;
+  reset?: boolean;
+  assignment?: SparkAssignment;
+}
+
+export interface SparkDaemonTurnSubmitTask extends SparkDaemonTurnSubmitInput {
+  type: "session.run";
+  actor?: string;
+  note?: string;
+  input?: string;
+  workspaceBindingId?: string;
+  workspaceId?: string;
+  projectId?: string;
+}
+
 export interface SparkDaemonClientStatus {
   running: boolean;
   [key: string]: unknown;
@@ -160,7 +193,7 @@ export interface SparkDaemonClientStatus {
 export interface LocalTurnSubmitResult {
   fileName: string;
   filePath: string;
-  task: { type: "session.run"; sessionId: string; prompt: string; reset?: boolean };
+  task: SparkDaemonTurnSubmitTask;
   observedAt: string;
 }
 
@@ -197,7 +230,7 @@ export interface LocalDaemonQueueResult {
     filePath: string;
     payload: {
       enqueuedAt: string;
-      task: { type: "session.run"; sessionId: string; prompt: string; reset?: boolean };
+      task: SparkDaemonTurnSubmitTask;
       processedAt?: string;
       result?: unknown;
       failedAt?: string;
@@ -344,6 +377,7 @@ export interface SparkDaemonSubmitCommand extends SparkDaemonCliCommandBase {
   sessionId: string;
   prompt: string;
   reset?: boolean;
+  assignment?: SparkAssignment;
 }
 
 export interface SparkDaemonQueueCommand extends SparkDaemonCliCommandBase {
@@ -363,12 +397,18 @@ export interface SparkDaemonSessionsCommand extends SparkDaemonCliCommandBase {
     | "export"
     | "replay"
     | "mailto"
-    | "inbox";
+    | "inbox"
+    | "create"
+    | "bind"
+    | "unbind"
+    | "archive";
   sessionId?: string;
   format?: SparkSessionExportFormat;
   leafId?: string | null;
   allWorkspaces?: boolean;
   history?: boolean;
+  registry?: boolean;
+  includeArchived?: boolean;
   newSessionId?: string;
   toSessionId?: string;
   fromSessionId?: string;
@@ -377,6 +417,21 @@ export interface SparkDaemonSessionsCommand extends SparkDaemonCliCommandBase {
   inboxAction?: "list" | "read" | "ack";
   messageId?: string;
   all?: boolean;
+  workspaceId?: string;
+  title?: string;
+  role?: string;
+  externalKey?: string;
+}
+
+export interface SparkDaemonChannelCommand extends SparkDaemonCliCommandBase {
+  action: "channel";
+  subcommand: "list" | "status" | "notify";
+  workspaceId: string;
+  notifyAction?: "test" | "send";
+  route?: string;
+  adapter?: string;
+  recipient?: string;
+  text?: string;
 }
 
 export interface SparkDaemonRunsCommand extends SparkDaemonCliCommandBase {
@@ -408,6 +463,7 @@ export type SparkDaemonCliCommand =
   | SparkDaemonSubmitCommand
   | SparkDaemonQueueCommand
   | SparkDaemonSessionsCommand
+  | SparkDaemonChannelCommand
   | SparkDaemonRunsCommand
   | SparkDaemonEventsCommand
   | SparkDaemonStartCommand
@@ -419,6 +475,7 @@ export type SparkDaemonCliResult =
   | SparkDaemonSubmitResult
   | SparkDaemonQueueResult
   | SparkDaemonSessionsResult
+  | SparkDaemonChannelResult
   | SparkDaemonRunsResult
   | SparkDaemonEventsResult
   | SparkDaemonStartResult;
@@ -449,7 +506,23 @@ export interface SparkDaemonSessionsResult {
     | DaemonSessionListResult
     | DaemonSessionShowResult
     | DaemonSessionTreeResult
-    | DaemonSessionForkResult;
+    | DaemonSessionForkResult
+    | ManagedSessionRegistryResult;
+}
+
+export interface ManagedSessionRegistryResult {
+  plane: "daemon";
+  resource: "session";
+  subcommand: "create" | "bind" | "unbind" | "archive" | "list";
+  sessions?: Array<Record<string, unknown>>;
+  session?: Record<string, unknown>;
+  text: string;
+  observedAt: string;
+}
+
+export interface SparkDaemonChannelResult {
+  action: "channel";
+  result: ChannelStatusSnapshot | ChannelNotifySendResult;
 }
 
 export interface LocalDaemonSessionMailtoResult {
@@ -531,6 +604,47 @@ export function parseSparkDaemonCliArgs(argv: string[]): SparkDaemonCliCommand {
     case "session":
     case "sessions":
       return parseSparkDaemonSessionsCommand(parsed, json);
+    case "channel":
+    case "channels": {
+      const [subcommand = "status"] = parsed.positionals;
+      if (subcommand === "list" || subcommand === "status") {
+        const workspaceId = readStringOption(parsed.options, "workspace");
+        if (!workspaceId?.trim()) {
+          throw new Error("spark daemon channel status requires --workspace <workspaceId>");
+        }
+        return { action: "channel", subcommand, json, workspaceId: workspaceId.trim() };
+      }
+      if (subcommand === "notify") {
+        const notifyActionRaw = readStringOption(parsed.options, "action") ?? "test";
+        if (notifyActionRaw !== "test" && notifyActionRaw !== "send") {
+          throw new Error("spark daemon channel notify --action must be test or send");
+        }
+        const workspaceId = readStringOption(parsed.options, "workspace");
+        if (!workspaceId?.trim()) {
+          throw new Error("spark daemon channel notify requires --workspace <workspaceId>");
+        }
+        return {
+          action: "channel",
+          subcommand: "notify",
+          json,
+          workspaceId: workspaceId.trim(),
+          notifyAction: notifyActionRaw,
+          ...(readStringOption(parsed.options, "route")
+            ? { route: readStringOption(parsed.options, "route") }
+            : {}),
+          ...(readStringOption(parsed.options, "adapter")
+            ? { adapter: readStringOption(parsed.options, "adapter") }
+            : {}),
+          ...(readStringOption(parsed.options, "recipient")
+            ? { recipient: readStringOption(parsed.options, "recipient") }
+            : {}),
+          ...(readStringOption(parsed.options, "text")
+            ? { text: readStringOption(parsed.options, "text") }
+            : {}),
+        };
+      }
+      throw new Error(`unknown spark daemon channel command: ${subcommand}`);
+    }
     case "run":
     case "runs":
       return parseSparkDaemonRunsCommand(parsed, json);
@@ -566,16 +680,51 @@ function parseSparkDaemonSessionsCommand(
       json,
       allWorkspaces,
       history: readBooleanOption(parsed.options, "history") || allWorkspaces,
+      registry: readBooleanOption(parsed.options, "registry"),
+      includeArchived: readBooleanOption(parsed.options, "include-archived"),
+      workspaceId: readStringOption(parsed.options, "workspace")?.trim(),
     };
+  }
+  if (subcommand === "create") {
+    const workspaceId = readStringOption(parsed.options, "workspace")?.trim() || maybeLeaf?.trim();
+    if (!workspaceId) throw new Error("spark daemon session create requires --workspace <id>");
+    return {
+      action: "sessions",
+      subcommand,
+      json,
+      workspaceId,
+      title: readStringOption(parsed.options, "title")?.trim(),
+      role: readStringOption(parsed.options, "role")?.trim(),
+      sessionId: readStringOption(parsed.options, "id")?.trim(),
+    };
+  }
+  if (subcommand === "bind" || subcommand === "unbind") {
+    const sessionId = readStringOption(parsed.options, "session")?.trim() || maybeLeaf?.trim();
+    const externalKey = readStringOption(parsed.options, "external-key")?.trim();
+    if (!sessionId) throw new Error(`spark daemon session ${subcommand} requires <session-id>`);
+    if (!externalKey)
+      throw new Error(`spark daemon session ${subcommand} requires --external-key <key>`);
+    return {
+      action: "sessions",
+      subcommand,
+      json,
+      sessionId,
+      externalKey,
+    };
+  }
+  if (subcommand === "archive") {
+    const sessionId = readStringOption(parsed.options, "session")?.trim() || maybeLeaf?.trim();
+    if (!sessionId) throw new Error("spark daemon session archive requires <session-id>");
+    return { action: "sessions", subcommand, json, sessionId };
   }
   if (subcommand === "mailto") {
     const toSessionId = readStringOption(parsed.options, "to")?.trim();
     const message =
       readStringOption(parsed.options, "message")?.trim() ||
       parsed.positionals.slice(1).join(" ").trim();
-    if (!toSessionId) throw new Error("spark sessions mailto requires --to <session-id>");
+    if (!toSessionId) throw new Error("spark daemon session mailto requires --to <session-id>");
     if (!message)
-      throw new Error("spark sessions mailto requires --message <text> or trailing text");
+      throw new Error("spark daemon session mailto requires --message <text> or trailing text");
     return {
       action: "sessions",
       subcommand,
@@ -593,7 +742,7 @@ function parseSparkDaemonSessionsCommand(
         ? inboxActionOrMessageId
         : "list";
     const sessionId = readStringOption(parsed.options, "session")?.trim();
-    if (!sessionId) throw new Error("spark sessions inbox requires --session <session-id>");
+    if (!sessionId) throw new Error("spark daemon session inbox requires --session <session-id>");
     return {
       action: "sessions",
       subcommand,
@@ -697,7 +846,12 @@ export async function handleSparkDaemonCliCommand(
       return {
         action: "submit",
         result: await clientSubmit(
-          { sessionId: command.sessionId, prompt: command.prompt, reset: command.reset },
+          {
+            sessionId: command.sessionId,
+            prompt: command.prompt,
+            reset: command.reset,
+            ...(command.assignment ? { assignment: command.assignment } : {}),
+          },
           client,
         ),
       };
@@ -708,6 +862,14 @@ export async function handleSparkDaemonCliCommand(
       };
     case "sessions":
       return { action: "sessions", result: await clientSessions(command, client) };
+    case "channel":
+      if (command.subcommand === "notify") {
+        return {
+          action: "channel",
+          result: await clientChannelNotify(command, client),
+        };
+      }
+      return { action: "channel", result: await clientChannelStatus(command, client) };
     case "runs":
       return { action: "runs", result: await clientRuns(command, client) };
     case "events":
@@ -738,7 +900,10 @@ export async function runSparkDaemonCliCommand(
     for (const event of result.result.events) output.write(`${JSON.stringify(event)}\n`);
     return 0;
   }
-  if ((result.action === "sessions" || result.action === "events") && !command.json) {
+  if (
+    (result.action === "sessions" || result.action === "events" || result.action === "channel") &&
+    !command.json
+  ) {
     output.write(result.result.text);
     return 0;
   }
@@ -995,8 +1160,60 @@ async function clientSessions(
   | DaemonSessionShowResult
   | DaemonSessionTreeResult
   | DaemonSessionForkResult
+  | ManagedSessionRegistryResult
 > {
   const paths = resolveSparkDaemonClientPaths(client);
+  const managedSessions = clientManagedSessions(client);
+  if (command.subcommand === "create") {
+    const session = await managedSessions.create({
+      workspaceId: command.workspaceId!,
+      title: command.title,
+      role: command.role,
+      sessionId: command.sessionId,
+      cwd: process.cwd(),
+    });
+    return {
+      plane: "daemon",
+      resource: "session",
+      subcommand: "create",
+      session,
+      text: renderManagedSession(session),
+      observedAt: observedAt(client),
+    };
+  }
+  if (command.subcommand === "bind") {
+    const session = await managedSessions.bind(command.sessionId!, command.externalKey!);
+    return {
+      plane: "daemon",
+      resource: "session",
+      subcommand: "bind",
+      session,
+      text: renderManagedSession(session),
+      observedAt: observedAt(client),
+    };
+  }
+  if (command.subcommand === "unbind") {
+    const session = await managedSessions.unbind(command.sessionId!, command.externalKey!);
+    return {
+      plane: "daemon",
+      resource: "session",
+      subcommand: "unbind",
+      session,
+      text: renderManagedSession(session),
+      observedAt: observedAt(client),
+    };
+  }
+  if (command.subcommand === "archive") {
+    const session = await managedSessions.archive(command.sessionId!);
+    return {
+      plane: "daemon",
+      resource: "session",
+      subcommand: "archive",
+      session,
+      text: renderManagedSession(session),
+      observedAt: observedAt(client),
+    };
+  }
   if (command.subcommand === "mailto") {
     const sessionStore = createLocalSessionStore(client);
     await assertKnownLocalSession(sessionStore, command.toSessionId!);
@@ -1022,7 +1239,7 @@ async function clientSessions(
     if (command.inboxAction === "read" || command.inboxAction === "ack") {
       const messageId = command.messageId?.trim();
       if (!messageId)
-        throw new Error(`spark sessions inbox ${command.inboxAction} requires <message-id>`);
+        throw new Error(`spark daemon session inbox ${command.inboxAction} requires <message-id>`);
       const message =
         command.inboxAction === "read"
           ? await mailStore.read(sessionId, messageId)
@@ -1053,6 +1270,23 @@ async function clientSessions(
     };
   }
   if (command.subcommand === "list") {
+    if (command.registry) {
+      const sessions = await managedSessions.list({
+        includeArchived: command.includeArchived,
+        workspaceId: command.workspaceId,
+      });
+      return {
+        plane: "daemon",
+        resource: "session",
+        subcommand: "list",
+        sessions,
+        text:
+          sessions.length === 0
+            ? "No managed Spark sessions in registry.\n"
+            : sessions.map(renderManagedSession).join(""),
+        observedAt: observedAt(client),
+      };
+    }
     if (command.history || command.allWorkspaces) {
       if (client.sessionList)
         return await client.sessionList(paths, {
@@ -1109,6 +1343,19 @@ async function clientSessions(
     text: formatSessionReplay(record, leafId),
     observedAt: observedAt(client),
   };
+}
+
+export async function clientGetManagedSession(
+  sessionId: string,
+  client: SparkDaemonClientOptions = {},
+) {
+  return await clientManagedSessions(client).get(sessionId);
+}
+
+function clientManagedSessions(client: SparkDaemonClientOptions): SparkDaemonManagedSessionsClient {
+  if (client.managedSessions) return client.managedSessions;
+  const paths = resolveSparkDaemonClientPaths(client);
+  return createDaemonManagedSessionsClient({ paths: { runtimeDir: paths.runtimeDir } });
 }
 
 async function clientRuns(
@@ -1318,6 +1565,12 @@ function localRpcWireRequest(
   const kind = sparkCommandKindForLocalRpcMethod(method);
   if (!kind) throw new Error(`Unknown Spark daemon local RPC method: ${method}`);
   const payload = sparkProtocolJsonObjectSchema.safeParse(params ?? {});
+  const commandPayload =
+    method === "provider.auth.api-key.set" || method === "provider.auth.login.respond"
+      ? {}
+      : payload.success
+        ? payload.data
+        : {};
   return {
     id,
     method,
@@ -1327,7 +1580,7 @@ function localRpcWireRequest(
       id,
       kind,
       route: localRpcCommandRoute(method, params),
-      payload: payload.success ? payload.data : {},
+      payload: commandPayload,
       transport: { kind: "local-rpc", method, requestId: id },
     },
   };
@@ -1395,6 +1648,38 @@ async function clientStatus(client: SparkDaemonClientOptions): Promise<SparkDaem
   }
 }
 
+async function clientChannelStatus(
+  command: SparkDaemonChannelCommand,
+  client: SparkDaemonClientOptions,
+): Promise<ChannelStatusSnapshot> {
+  const paths = resolveSparkDaemonClientPaths(client);
+  if (client.channelStatus) return await client.channelStatus(paths);
+  return await localRpcRequest<ChannelStatusSnapshot>(
+    paths,
+    localRpcWireRequest("channel.status", { workspaceId: command.workspaceId }),
+  );
+}
+
+async function clientChannelNotify(
+  command: SparkDaemonChannelCommand,
+  client: SparkDaemonClientOptions,
+): Promise<ChannelNotifySendResult> {
+  const paths = resolveSparkDaemonClientPaths(client);
+  await clientEnsureRunning(client);
+  const params = {
+    workspaceId: command.workspaceId,
+    action: command.notifyAction ?? "test",
+    ...(command.route ? { route: command.route } : {}),
+    ...(command.adapter ? { adapter: command.adapter } : {}),
+    ...(command.recipient ? { recipient: command.recipient } : {}),
+    ...(command.text ? { text: command.text } : {}),
+  };
+  return await localRpcRequest<ChannelNotifySendResult>(
+    paths,
+    localRpcWireRequest("channel.notify", params),
+  );
+}
+
 async function clientQueue(
   params: { state?: SparkDaemonCliQueueState; limit?: number },
   client: SparkDaemonClientOptions,
@@ -1408,7 +1693,7 @@ async function clientQueue(
 }
 
 async function clientSubmit(
-  input: { sessionId: string; prompt: string; reset?: boolean },
+  input: SparkDaemonTurnSubmitInput,
   client: SparkDaemonClientOptions,
 ): Promise<LocalTurnSubmitResult> {
   const paths = resolveSparkDaemonClientPaths(client);
@@ -1418,6 +1703,17 @@ async function clientSubmit(
     paths,
     localRpcWireRequest("turn.submit", input),
   );
+}
+
+/** Shared daemon-owned model/auth control request used by native TUI adapters. */
+export async function requestSparkDaemonControl<T>(
+  method: string,
+  params: unknown,
+  client: SparkDaemonClientOptions = {},
+): Promise<T> {
+  const paths = resolveSparkDaemonClientPaths(client);
+  await clientEnsureRunning(client);
+  return await localRpcRequest<T>(paths, localRpcWireRequest(method, params));
 }
 
 export async function clientCancelTurn(
@@ -1434,7 +1730,7 @@ export async function clientCancelTurn(
 }
 
 async function clientSubmitStreaming(
-  input: { sessionId: string; prompt: string; reset?: boolean },
+  input: SparkDaemonTurnSubmitInput,
   client: SparkDaemonClientOptions,
   handlers: { onEvent?: (event: SparkDaemonEvent) => void; signal?: AbortSignal } = {},
 ): Promise<LocalTurnSubmitResult> {
@@ -1542,12 +1838,23 @@ async function clientEnsureRunning(client: SparkDaemonClientOptions): Promise<vo
     }
   }
   const service = sparkDaemonServiceCliCommand();
-  const child = spawn(service.command, [...service.args, "start"], {
-    detached: true,
-    stdio: "ignore",
-    env: process.env,
-  });
-  child.unref();
+  // Keep channel/SDK diagnostics: stdio:"ignore" sent everything to /dev/null and
+  // made Infoflow autoRegister / inbound frames impossible to observe.
+  const logDir = join(dirname(paths.runtimeDir), "logs");
+  mkdirSync(logDir, { recursive: true, mode: 0o700 });
+  const stdout = openSync(join(logDir, "service.stdout.log"), "a", 0o600);
+  const stderr = openSync(join(logDir, "service.stderr.log"), "a", 0o600);
+  try {
+    const child = spawn(service.command, [...service.args, "start"], {
+      detached: true,
+      stdio: ["ignore", stdout, stderr],
+      env: process.env,
+    });
+    child.unref();
+  } finally {
+    closeSync(stdout);
+    closeSync(stderr);
+  }
   await waitForDaemonRpc(paths, client);
 }
 
@@ -1624,43 +1931,25 @@ async function localRpcRequest<T>(
   paths: SparkDaemonClientPaths,
   request: LocalRpcWireRequest,
 ): Promise<T> {
-  return await new Promise<T>((resolvePromise, reject) => {
-    const socket = createConnection(paths.socketPath);
-    let buffer = "";
-    const fail = (error: Error) => {
-      socket.destroy();
-      reject(error);
-    };
-    socket.setTimeout(1_000, () => fail(new Error(`Timed out connecting to ${paths.socketPath}`)));
-    socket.once("error", fail);
-    socket.on("connect", () => socket.write(`${JSON.stringify(request)}\n`));
-    socket.on("data", (chunk) => {
-      buffer += chunk.toString("utf8");
-      const newline = buffer.indexOf("\n");
-      if (newline === -1) return;
-      socket.end();
-      try {
-        const response = JSON.parse(buffer.slice(0, newline)) as {
-          id?: unknown;
-          ok?: boolean;
-          result?: T;
-          error?: { message?: string };
-        };
-        if (response.ok !== true) {
-          reject(new Error(response.error?.message ?? STRINGS.localRpcFailed));
-          return;
-        }
-        resolvePromise(response.result as T);
-      } catch (error) {
-        reject(error);
-      }
+  try {
+    return await requestSparkDaemonLocalRpcWire<T>(request, {
+      socketPath: paths.socketPath,
     });
-  });
+  } catch (error) {
+    if (error instanceof SparkDaemonLocalRpcRemoteError) {
+      const message =
+        isRecord(error.payload) && typeof error.payload.message === "string"
+          ? error.payload.message
+          : STRINGS.localRpcFailed;
+      throw new Error(message);
+    }
+    throw error;
+  }
 }
 
 async function localRpcTurnStream(
   paths: SparkDaemonClientPaths,
-  input: { sessionId: string; prompt: string; reset?: boolean },
+  input: SparkDaemonTurnSubmitInput,
   handlers: { onEvent?: (event: SparkDaemonEvent) => void; signal?: AbortSignal } = {},
 ): Promise<LocalTurnSubmitResult> {
   const requestId = localRequestId();

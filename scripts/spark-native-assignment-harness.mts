@@ -72,7 +72,6 @@ async function main(): Promise<void> {
       ...createSparkRuntimeReadyTaskRunner({
         registry: new RoleRegistry(),
         cwd,
-        piCommand: join(dir, "missing-pi-that-must-not-spawn"),
         roleExecutor: async (input) => {
           nativeCalls.push({
             roleRef: input.role.ref,

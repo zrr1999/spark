@@ -130,7 +130,7 @@ Automatic behavior:
      `.spark/workflow-runs.json`
    - before reporting status or starting another background wave,
      Spark reconciles stale `running` workflow-run records from the
-     current task graph and active role-run process tracker; runs
+     current task graph and active role-run registry; runs
      may be marked `succeeded`, `failed`, `timed_out`, or `stale`
    - completed Spark workflow-run scheduler runs persist a concise completion
      follow-up with summary and next actions; workflow-run completion emits
@@ -143,17 +143,20 @@ Automatic behavior:
      preserved, and recent terminal windows are retained globally and per
      project.
    - background role observability is registry-backed: Spark builds a
-     `roleRunRegistry` from task runs, active child-process tracking, workflow
+     `roleRunRegistry` from task runs, active role-run tracking, workflow
      parent links, usage, recovery, and durable activity events. The
      `spark-role-runs` status/widget surfaces show active, waiting, failed,
      stale/interrupted, and done role-runs without parsing raw role text.
    - `task_read({ action: "run_status" })` can inspect visible background
-     role-runs, and internal controls can stop, reply, or steer them. Reply/steer require a non-empty message and exactly one active
-     target: pass `runRef` or `taskRef` to disambiguate, because broad controls
-     are refused when multiple active role-runs are visible. Successful replies
-     and steers record control artifacts and registry-visible activity events;
-     failed delivery is recorded as a failed attempt and does not synthesize a
-     `replied` success transition.
+     role-runs, and internal controls can stop them. Reply/steer require a
+     non-empty message, exactly one active target, and a role-run input control
+     channel: pass `runRef` or `taskRef` to disambiguate, because broad controls
+     are refused when multiple active role-runs are visible. Daemon-native
+     role-runs can expose a native input controller; process-backed compatibility
+     runs without a controller report not delivered. Delivered replies and
+     steers record control artifacts and registry-visible activity events;
+     missing-channel or failed delivery is recorded as a failed attempt and does
+     not synthesize a `replied` success transition.
    - the same `run_status` surface renders persisted dynamic `workflow_run`
      records from the v2 event store under `.spark/dynamic-workflows/runs/<run-id>/` with
      phase/fan-out/helper/nested trees, event tails, agent journal metadata/result snippets,
@@ -339,7 +342,7 @@ Resource-oriented tools:
 - `cue_run` — run a `.cue` file via cue-shell script mode, mirroring `cue run <file.cue>`. Top-level items execute sequentially and fail fast; per-item stdout/stderr are tailed by default.
 - `cue_script` — run an inline `.cue` script body. Use this when the script content is generated in the Pi session; prefer `cue_run` when a real `.cue` file exists on disk.
 - `script_run` — run a script file with an explicit `language`. First batch supports `cue-shell` and `python`; `cue-shell` delegates to RunScript, while `python` runs through `uv run --script <path>` (or `uv run --python <venv>/bin/python --script <path>` when `venv` is supplied) via cue-shell job execution.
-- `script_eval` — run an inline script body with an explicit `language`. Inline Python is piped to `uv run --script -` or `uv run --python <venv>/bin/python --script -`. For script runners, `venv` is python-only and `scope` is cue-shell-only.
+- `script_eval` — run an inline script body with an explicit `language`. Inline Python is piped to `uv run --script -` or `uv run --python <venv>/bin/python --script -`. For script runners, `venv` is python-only; `scope` is not a `script_run`/`script_eval` parameter. Cue-shell script isolation is owned by `RunScript { path, input }`, which always runs in a fresh isolated scope forked from the current session.
 - `cue_jobs` — list, inspect, wait for, and stop jobs via `action`. List output is limited to 20 rows by default; `action=status` / `action=wait` output is tailed by default.
 - `cue_resources` — inspect resource providers and snapshots via `action: "providers"` or `action: "resources"`.
 - `cue_schedule` — add/list/pause/resume/remove scheduled or one-shot jobs. List output is limited to 20 rows by default.

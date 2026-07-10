@@ -252,6 +252,38 @@ function buildTaskStartEnvelope(workspaceBindingId: string) {
   });
 }
 
+function buildAssignmentEnvelope(
+  workspaceBindingId: string,
+  payload: Record<string, unknown> = {
+    goal: "Assign the daemon session.",
+    target: {
+      sessionId: "sess_ws_assign",
+      workspaceId: "ws_22222222222222222222222222222222",
+    },
+    constraints: ["preserve metadata"],
+    evidence: ["runtime websocket"],
+    source: { kind: "cockpit" },
+    title: "Assign session",
+  },
+) {
+  return serverCommandEnvelopeSchema.parse({
+    protocolVersion: runtimeProtocolVersion,
+    messageId: createId("msg"),
+    type: "server.command",
+    sentAt: new Date().toISOString(),
+    runtimeId: "rt_11111111111111111111111111111111",
+    workspaceBindingId,
+    workspaceId: "ws_22222222222222222222222222222222",
+    projectId: "proj_33333333333333333333333333333333",
+    commandId: createId("cmd"),
+    payload: {
+      kind: "assignment.create.request",
+      title: "Assign session",
+      payload,
+    },
+  });
+}
+
 function buildCancelEnvelope(workspaceBindingId: string, invocationId: string) {
   return serverCommandEnvelopeSchema.parse({
     protocolVersion: runtimeProtocolVersion,
@@ -656,6 +688,81 @@ describe("Spark daemon handleCommand task.start.request", () => {
       ).toMatchObject({
         status: "succeeded",
         workspaceBindingId: harness.workspace.id,
+      });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("normalizes assignment.create.request through SparkAssignment before bridge execution", async () => {
+    const harness = makeHarness();
+    try {
+      const ws = new CapturingSocket();
+      const assignment = {
+        goal: "Review the runtime assignment path.",
+        target: {
+          sessionId: "sess_ws_assign",
+          workspaceId: "ws_22222222222222222222222222222222",
+          role: "role:reviewer",
+        },
+        constraints: ["preserve metadata"],
+        evidence: ["runtime websocket"],
+        source: { kind: "cockpit" },
+        title: "Review assignment",
+      };
+      const command = buildAssignmentEnvelope(harness.workspace.id, assignment);
+      let bridgePayload: BridgeInput["command"]["payload"] | undefined;
+      const context = makeContext(harness, async (input) => {
+        bridgePayload = input.command.payload;
+        emitFakeSparkSuccess(input, ["assigned"]);
+        return {
+          invocationId: (input as { __fakeInvocationId?: string }).__fakeInvocationId!,
+          taskRuntimeId: `task-${(input as { __fakeInvocationId?: string }).__fakeInvocationId}`,
+          status: "succeeded",
+          outputArtifactIds: ["art_fake"],
+        };
+      });
+
+      await handleCommand(ws, command, context);
+
+      expect(bridgePayload).toMatchObject({
+        kind: "task.start.request",
+        title: "Assign session",
+        payload: {
+          ...assignment,
+          prompt: assignment.goal,
+          sessionId: assignment.target.sessionId,
+          assignment,
+        },
+      });
+      expect(ws.sent[0]).toMatchObject({ type: "runtime.command.ack" });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("rejects invalid assignment.create.request payloads before bridge execution", async () => {
+    const harness = makeHarness();
+    try {
+      const ws = new CapturingSocket();
+      const command = buildAssignmentEnvelope(harness.workspace.id, {
+        goal: "Run invalid assignment",
+        target: { sessionId: "sess_ws_assign" },
+        source: { kind: "legacy-chat" },
+      });
+      const context = makeContext(harness, async () => {
+        throw new Error("invalid assignment must not invoke bridge");
+      });
+
+      await handleCommand(ws, command, context);
+
+      expect(ws.sent).toHaveLength(1);
+      expect(ws.sent[0]).toMatchObject({
+        type: "runtime.command.reject",
+        payload: {
+          reasonCode: "ASSIGNMENT_INVALID",
+          retryable: false,
+        },
       });
     } finally {
       harness.cleanup();

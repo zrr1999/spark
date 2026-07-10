@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
+import {
+  createId,
+  runtimeProtocolVersion,
+  sparkAgentsCockpitSource,
+} from "@zendev-lab/spark-protocol";
 import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
 import {
   buildApprovalDecisionPayload,
@@ -124,7 +128,7 @@ describe("projection services", () => {
       payload: {
         kind: "task.start.request",
         title: "Agents prompt",
-        payload: { source: "agents-cockpit", runtimeTaskId: "task-1" },
+        payload: { source: sparkAgentsCockpitSource, runtimeTaskId: "task-1" },
       },
       createdAt: "2026-05-22T00:00:01.000Z",
     });

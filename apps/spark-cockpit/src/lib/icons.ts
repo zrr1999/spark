@@ -13,6 +13,7 @@ import {
   Home,
   Inbox,
   LogOut,
+  Menu,
   MessageSquareText,
   PackageOpen,
   PanelsTopLeft,
@@ -22,6 +23,7 @@ import {
   Settings,
   Sparkles,
   TriangleAlert,
+  X,
   type LucideIcon,
 } from "@lucide/svelte";
 
@@ -40,6 +42,7 @@ export const iconMap = {
   home: Home,
   inbox: Inbox,
   logout: LogOut,
+  menu: Menu,
   play: Play,
   plus: Plus,
   repos: GitBranch,
@@ -48,6 +51,7 @@ export const iconMap = {
   spark: Sparkles,
   workspace: PanelsTopLeft,
   warning: TriangleAlert,
+  close: X,
 } satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof iconMap;

@@ -1,0 +1,139 @@
+import {
+  parseSparkAuthFlow,
+  parseSparkModelControlSnapshot,
+  parseSparkSessionRegistryRecord,
+  type SparkAuthFlow,
+  type SparkModelControlSnapshot,
+  type SparkModelRef,
+  type SparkSessionRegistryRecord,
+} from "@zendev-lab/spark-protocol";
+import {
+  requestSparkDaemonLocalRpc,
+  SparkDaemonLocalRpcUnavailableError,
+} from "@zendev-lab/spark-system";
+
+export interface CockpitModelControlClient {
+  request(method: string, params?: unknown): Promise<unknown>;
+}
+
+export interface CockpitModelControlState {
+  available: boolean;
+  snapshot: SparkModelControlSnapshot;
+  error?: string;
+}
+
+const daemonModelControlClient: CockpitModelControlClient = {
+  request: async (method, params) => await requestSparkDaemonLocalRpc<unknown>(method, params),
+};
+
+const emptySnapshot: SparkModelControlSnapshot = {
+  providers: [],
+  diagnostics: [],
+};
+
+export async function loadModelControlForCockpit(
+  sessionId?: string,
+  client: CockpitModelControlClient = daemonModelControlClient,
+): Promise<CockpitModelControlState> {
+  try {
+    const snapshot = parseSparkModelControlSnapshot(
+      await client.request("model.catalog", sessionId ? { sessionId } : {}),
+    );
+    return { available: true, snapshot };
+  } catch (error) {
+    if (error instanceof SparkDaemonLocalRpcUnavailableError) {
+      return { available: false, snapshot: emptySnapshot, error: error.message };
+    }
+    throw error;
+  }
+}
+
+export async function setDefaultModelForCockpit(
+  model: SparkModelRef,
+  client: CockpitModelControlClient = daemonModelControlClient,
+): Promise<SparkModelControlSnapshot> {
+  return parseSparkModelControlSnapshot(await client.request("model.default.set", { model }));
+}
+
+export async function setSessionModelForCockpit(
+  sessionId: string,
+  model: SparkModelRef,
+  client: CockpitModelControlClient = daemonModelControlClient,
+): Promise<SparkSessionRegistryRecord> {
+  return parseSparkSessionRegistryRecord(
+    await client.request("session.model.set", { sessionId, model }),
+  );
+}
+
+export async function setProviderApiKeyForCockpit(
+  providerName: string,
+  apiKey: string,
+  client: CockpitModelControlClient = daemonModelControlClient,
+): Promise<SparkModelControlSnapshot> {
+  return parseSparkModelControlSnapshot(
+    await client.request("provider.auth.api-key.set", { providerName, apiKey }),
+  );
+}
+
+export async function logoutProviderForCockpit(
+  providerName: string,
+  client: CockpitModelControlClient = daemonModelControlClient,
+): Promise<{ removed: boolean; snapshot: SparkModelControlSnapshot }> {
+  const value = await client.request("provider.auth.logout", { providerName });
+  if (!isRecord(value) || typeof value.removed !== "boolean") {
+    throw new Error("Invalid Spark daemon provider logout response.");
+  }
+  return {
+    removed: value.removed,
+    snapshot: parseSparkModelControlSnapshot(value.snapshot),
+  };
+}
+
+export async function startProviderOAuthForCockpit(
+  providerName: string,
+  client: CockpitModelControlClient = daemonModelControlClient,
+): Promise<SparkAuthFlow> {
+  return parseSparkAuthFlow(await client.request("provider.auth.login.start", { providerName }));
+}
+
+export async function getProviderOAuthFlowForCockpit(
+  flowId: string,
+  client: CockpitModelControlClient = daemonModelControlClient,
+): Promise<SparkAuthFlow> {
+  return parseSparkAuthFlow(await client.request("provider.auth.login.status", { flowId }));
+}
+
+export async function respondProviderOAuthForCockpit(
+  flowId: string,
+  promptId: string,
+  value: string,
+  client: CockpitModelControlClient = daemonModelControlClient,
+): Promise<SparkAuthFlow> {
+  return parseSparkAuthFlow(
+    await client.request("provider.auth.login.respond", { flowId, promptId, value }),
+  );
+}
+
+export async function cancelProviderOAuthForCockpit(
+  flowId: string,
+  client: CockpitModelControlClient = daemonModelControlClient,
+): Promise<SparkAuthFlow> {
+  return parseSparkAuthFlow(await client.request("provider.auth.login.cancel", { flowId }));
+}
+
+export function parseModelValue(value: string): SparkModelRef {
+  const trimmed = value.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0 || slash === trimmed.length - 1) {
+    throw new Error("Select a valid provider/model.");
+  }
+  return { providerName: trimmed.slice(0, slash), modelId: trimmed.slice(slash + 1) };
+}
+
+export function modelValue(model: SparkModelRef): string {
+  return `${model.providerName}/${model.modelId}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}

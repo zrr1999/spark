@@ -26,6 +26,7 @@ import {
   RoleRunCancelledError,
   RoleRunTimeoutError,
   runRole,
+  sendInputToRoleRun,
   validateRoleModel,
 } from "@zendev-lab/spark-roles";
 import {
@@ -74,7 +75,7 @@ void test("spark-roles includes resolved user model in JSON Pi role args", () =>
   assert.deepEqual(args.slice(0, 5), ["--print", "--mode", "json", "--model", "openai/gpt-5.5"]);
 });
 
-void test("spark-roles can pass a child Pi tool allowlist", () => {
+void test("spark-roles can pass a role tool allowlist", () => {
   const args = buildRoleRunArgs({
     roleRef: "role:builtin-worker",
     launch: "fresh",
@@ -286,7 +287,6 @@ void test("spark runtime role dispatch can run native roles without model settin
       {
         dryRun: false,
         cwd: dir,
-        piCommand: "pi",
         timeoutMs: 5_000,
         roleExecutor: async (input) => {
           capturedModel = input.model;
@@ -321,7 +321,6 @@ void test("spark runtime role dispatch times out hanging native executors", asyn
           {
             dryRun: false,
             cwd: dir,
-            piCommand: "pi",
             timeoutMs: 25,
             sessionModel: "test/model",
             runName,
@@ -341,7 +340,7 @@ void test("spark runtime role dispatch times out hanging native executors", asyn
   }
 });
 
-void test("runSparkTask records native timeout failure and leaves no active child", async () => {
+void test("runSparkTask records native timeout failure and leaves no active role-run", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-task-runtime-timeout-cleanup-"));
   const runName = "task-timeout-cleanup-test";
   try {
@@ -350,19 +349,21 @@ void test("runSparkTask records native timeout failure and leaves no active chil
     const task = graph.createTask({
       projectRef: project.ref,
       title: "Timeout child",
-      description: "Run a child that must be timed out.",
+      description: "Run a role execution that must be timed out.",
       roleRef: "role:builtin-worker",
       plan: {
-        objective: "Verify runtime timeout cleanup for a nonresponsive child role-run.",
+        objective: "Verify runtime timeout cleanup for a nonresponsive role-run.",
         contextRefs: [],
         constraints: [],
         nonGoals: [],
         successCriteria: [
           "Test assertion verifies the task run is failed with runtime_timeout.",
-          "Test assertion verifies the active role-run registry has no child for the timed-out run name.",
+          "Test assertion verifies the active role-run registry has no entry for the timed-out run name.",
         ],
-        evidenceRequired: ["Focused test assertions cover task status and active child cleanup."],
-        steps: ["Run a fake Pi child that ignores SIGTERM and assert cleanup after timeout."],
+        evidenceRequired: [
+          "Focused test assertions cover task status and active role-run cleanup.",
+        ],
+        steps: ["Run a fake native role executor and assert cleanup after timeout."],
         riskLevel: "normal",
         openQuestions: [],
         askRefs: [],
@@ -375,7 +376,6 @@ void test("runSparkTask records native timeout failure and leaves no active chil
       registry: new RoleRegistry(),
       cwd: dir,
       dryRun: false,
-      piCommand: "pi",
       timeoutMs: 25,
       sessionModel: "test/model",
       roleExecutor: async () => await new Promise<never>(() => undefined),
@@ -609,7 +609,6 @@ void test("spark-roles runs daemon-native executor and records run metadata", as
       roleRef: "role:builtin-worker",
       systemPrompt: "You are a worker.",
       instruction: "Implement.",
-      piCommand: "ignored-pi",
       cwd: dir,
       sessionDir: join(dir, "sessions"),
       now: () => "2026-05-21T00:00:00.000Z",
@@ -645,7 +644,6 @@ void test("runRole forwards noSession to native executor", async () => {
       roleRef: "role:builtin-reviewer",
       systemPrompt: "You are a reviewer.",
       instruction: "Review anonymously.",
-      piCommand: "ignored-pi",
       cwd: dir,
       sessionDir: join(dir, "sessions"),
       noSession: true,
@@ -676,7 +674,7 @@ void test("runRole forwards noSession to native executor", async () => {
   }
 });
 
-void test("spark-roles daemon-native runs do not depend on child stdin", async () => {
+void test("spark-roles daemon-native runs do not depend on stdin input control", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-ignore-stdin-"));
   try {
     const result = await runRole({
@@ -684,7 +682,6 @@ void test("spark-roles daemon-native runs do not depend on child stdin", async (
       roleRef: "role:builtin-reviewer",
       systemPrompt: "You are a reviewer.",
       instruction: "Review.",
-      piCommand: "ignored-pi",
       cwd: dir,
       timeoutMs: 15_000,
       stdinMode: "ignore",
@@ -711,7 +708,6 @@ void test("spark-roles preserves daemon-native stdout and JSONL results", async 
       roleRef: "role:builtin-worker",
       systemPrompt: "You are a worker.",
       instruction: "Report after large output.",
-      piCommand: "ignored-pi",
       cwd: dir,
       nativeExecutor: async (input) => ({
         record: { ...input.record, status: "succeeded", finishedAt: new Date().toISOString() },
@@ -757,7 +753,6 @@ void test("spark-roles decrements role run depth for daemon-native runs", async 
       roleRef: "role:builtin-worker",
       systemPrompt: "You are a worker.",
       instruction: "Report depth.",
-      piCommand: "ignored-pi",
       cwd: dir,
       env: roleDepthTestEnv(),
       nativeExecutor: depthExecutor,
@@ -769,7 +764,6 @@ void test("spark-roles decrements role run depth for daemon-native runs", async 
       roleRef: "role:builtin-worker",
       systemPrompt: "You are a worker.",
       instruction: "Report depth.",
-      piCommand: "ignored-pi",
       cwd: dir,
       env: roleDepthTestEnv("2"),
       nativeExecutor: depthExecutor,
@@ -781,23 +775,17 @@ void test("spark-roles decrements role run depth for daemon-native runs", async 
 });
 
 void test("spark-roles refuses to spawn when role run depth is exhausted", async () => {
-  let spawned = false;
   await assert.rejects(
     runRole({
       runRef: "run:depth-exhausted-test",
       roleRef: "role:builtin-worker",
       systemPrompt: "You are a worker.",
       instruction: "Should not spawn.",
-      piCommand: "pi",
       cwd: process.cwd(),
       env: roleDepthTestEnv("0"),
-      onChildProcess: () => {
-        spawned = true;
-      },
     }),
     /PI_ROLE_DEPTH exhausted/,
   );
-  assert.equal(spawned, false);
 
   await assert.rejects(
     runRole({
@@ -805,7 +793,6 @@ void test("spark-roles refuses to spawn when role run depth is exhausted", async
       roleRef: "role:builtin-worker",
       systemPrompt: "You are a worker.",
       instruction: "Should not spawn.",
-      piCommand: "pi",
       cwd: process.cwd(),
       env: roleDepthTestEnv("-1"),
     }),
@@ -821,7 +808,6 @@ void test("spark-roles tracks and cancels active daemon-native runs", async () =
       roleRef: "role:builtin-worker",
       systemPrompt: "You are a worker.",
       instruction: "Wait.",
-      piCommand: "ignored-pi",
       cwd: dir,
       timeoutMs: 15_000,
       nativeExecutor: async (input) =>
@@ -832,6 +818,12 @@ void test("spark-roles tracks and cancels active daemon-native runs", async () =
         }),
     });
     await eventually(() => listActiveRoleRuns().some((entry) => entry.ref === "run:cancel-test"));
+    const active = listActiveRoleRuns().find((entry) => entry.ref === "run:cancel-test");
+    assert.equal(active?.inputControl, "none");
+    const delivery = await sendInputToRoleRun("run:cancel-test", "continue");
+    assert.equal(delivery?.delivered, false);
+    assert.equal(delivery?.inputControl, "none");
+    assert.match(delivery?.errorMessage ?? "", /no input control channel/);
     assert.equal(cancelRoleRun("run:cancel-test", "test cancellation"), true);
     await assert.rejects(run, RoleRunCancelledError);
     assert.equal(
@@ -839,6 +831,55 @@ void test("spark-roles tracks and cancels active daemon-native runs", async () =
       false,
     );
   } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark-roles delivers input through native role-run controller", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-roles-native-input-"));
+  let received = "";
+  try {
+    const run = runRole({
+      runRef: "run:native-input-test",
+      roleRef: "role:builtin-worker",
+      systemPrompt: "You are a worker.",
+      instruction: "Wait for input.",
+      cwd: dir,
+      timeoutMs: 15_000,
+      nativeExecutor: async (input) => {
+        const unregister = input.inputControl?.register({
+          send: async (text) => {
+            received = text;
+          },
+        });
+        try {
+          await eventually(() => received.length > 0);
+          return {
+            record: { ...input.record, status: "succeeded", finishedAt: new Date().toISOString() },
+            stdout: received.trim(),
+            stderr: "",
+            jsonEvents: [],
+          };
+        } finally {
+          unregister?.();
+        }
+      },
+    });
+    await eventually(() =>
+      listActiveRoleRuns().some(
+        (entry) => entry.ref === "run:native-input-test" && entry.inputControl === "native",
+      ),
+    );
+    const delivery = await sendInputToRoleRun("run:native-input-test", "continue");
+    assert.equal(delivery?.delivered, true);
+    assert.equal(delivery?.inputControl, "native");
+    assert.equal(received, "continue\n");
+
+    const result = await run;
+    assert.equal(result.record.status, "succeeded");
+    assert.equal(result.stdout, "continue");
+  } finally {
+    cancelRoleRun("run:native-input-test", "test cleanup");
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -852,7 +893,6 @@ void test("spark-roles enforces timeout control for daemon-native runs", async (
         roleRef: "role:builtin-worker",
         systemPrompt: "You are a worker.",
         instruction: "Wait.",
-        piCommand: "ignored-pi",
         cwd: dir,
         timeoutMs: 10,
         nativeExecutor: async () => await new Promise(() => undefined),

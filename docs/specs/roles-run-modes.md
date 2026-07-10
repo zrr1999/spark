@@ -1,6 +1,6 @@
 # Role specs and launch modes
 
-This document defines how Spark and `spark-roles` distinguish reusable role definitions from concrete child Pi executions.
+This document defines how Spark and `spark-roles` distinguish reusable role definitions from concrete role executions.
 
 ## Vocabulary
 
@@ -44,7 +44,7 @@ Safety constraints:
 - Keep task dependencies satisfied before scheduling the run.
 - Use runtime timeouts, claim leases, and heartbeats for non-dry-run execution.
 - Let `spark-roles` own generic Pi subprocess launch, cancellation, timeout signalling, stdout/stderr capture, and JSONL parsing.
-- Let `spark-runtime` own single-task Spark adaptation: claims, heartbeat leases, task status transitions, artifact persistence, and Spark-specific active child process tracking.
+- Let `spark-runtime` own single-task Spark adaptation: claims, heartbeat leases, task status transitions, artifact persistence, and Spark-specific projection of `spark-roles` active-run control results.
 - Let `spark-workflows` own graph-level ready task scheduling, dispatch-time executor role assignment, and workflow-run state.
 - Prefer Spark-native ready-task execution over manually spawning nested `pi` processes, except when explicitly testing Pi CLI behavior.
 
@@ -59,25 +59,29 @@ Attribution in Spark:
 ### Spark role-run observability and controls
 
 Spark keeps role-run UI state canonical by building a `roleRunRegistry` from
-structured task runs, active process tracking, workflow parent links, usage, and
+structured task runs, active role-run tracking, workflow parent links, usage, and
 activity events. UI renderers such as `spark-role-runs` consume that registry;
 they do not parse raw role output.
 
 Visible background roles can be inspected and stopped through the workflow-run
-surface. Reply and steer controls are intentionally deterministic:
+surface. Reply and steer delivery is available only when the selected active
+role-run exposes an input control channel. Daemon-native role-runs expose that
+channel by registering a native controller with `spark-roles`; process-backed
+compatibility runs without a controller report `inputControl: "none"`. Control
+attempts are intentionally deterministic:
 
 - a control message must be non-empty;
 - an explicit `runRef` or `taskRef` narrows the active target before ambiguity
   checks;
 - a broad control is refused when multiple active background roles are visible;
 - a no-active target is refused rather than queued silently;
-- successful reply/steer attempts record a control artifact and add
+- delivered reply/steer attempts record a control artifact and add
   registry-visible `waiting_for_user`/`replied` or `message_activity` events;
-- failed delivery records the failed attempt and must not create a successful
-  `replied` transition.
+- missing-channel or failed delivery records the failed attempt and must not
+  create a successful `replied` transition.
 
-The active child process tracker is workspace-scoped. A role-run from another
-cwd is not a valid target for inspect/stop/reply/steer in the current workspace.
+The active role-run tracker is workspace-scoped. A role-run from another cwd is
+not a valid target for inspect/stop/reply/steer in the current workspace.
 
 ### Stale task-claim recovery
 

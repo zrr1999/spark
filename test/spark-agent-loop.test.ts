@@ -505,12 +505,14 @@ void test("SparkAgentLoop dispatches tool calls and feeds tool results back into
     ui: { publishView: (event) => viewEvents.push(event) },
   });
   let toolCalls = 0;
+  let toolSessionId: string | undefined;
   host.registerTool({
     name: "echo",
     description: "echo input",
     parameters: { type: "object" },
-    async execute(_id, params) {
+    async execute(_id, params, _signal, _onUpdate, ctx) {
       toolCalls += 1;
+      toolSessionId = ctx.sessionId;
       return {
         content: [{ type: "text", text: `echoed:${(params as { x?: string }).x ?? ""}` }],
         details: {
@@ -560,11 +562,14 @@ void test("SparkAgentLoop dispatches tool calls and feeds tool results back into
     ],
   });
   const loop = new SparkAgentLoop({ host, streamFunction: fake, getModel: () => TEST_MODEL });
+  loop.setViewSessionId("session:tool-context");
   const events: SparkAgentLoopEvent[] = [];
   loop.onEvent((event) => events.push(event));
 
   await loop.submit("call the echo tool");
   assert.equal(toolCalls, 1);
+  assert.equal(toolSessionId, "session:tool-context");
+  assert.equal(host.makeContext().sessionId, "session:tool-context");
   const messages = loop.getMessages();
   assert.equal(messages.length, 4, "user + asst toolUse + toolResult + asst stop");
   assert.equal(messages[2]!.role, "toolResult");

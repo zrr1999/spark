@@ -59,7 +59,6 @@ void test("runSparkTask can execute through a daemon-native role executor withou
       registry: new RoleRegistry(),
       cwd: dir,
       dryRun: false,
-      piCommand: join(dir, "missing-pi-that-must-not-spawn"),
       roleExecutor,
       claim: { sessionId: "spark-daemon:test", runName: "spark-daemon-native-test" },
     });

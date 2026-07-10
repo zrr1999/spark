@@ -1,6 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import type { ExtensionRoleRunner } from "@zendev-lab/spark-extension-api";
+import type {
+  ExtensionRoleRunInputController,
+  ExtensionRoleRunner,
+} from "@zendev-lab/spark-extension-api";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { resolveRoleNativeExecutor } from "./native-executor.ts";
 import { homedir } from "node:os";
@@ -60,6 +63,7 @@ export type RoleRunStatus =
   | "failed"
   | "cancelled"
   | "not_started";
+export type RoleRunInputControl = "stdin" | "native" | "none";
 
 export interface RoleRunRecord {
   ref: RoleRunRef;
@@ -76,17 +80,19 @@ export interface RoleRunRecord {
 export interface RoleRunRequest {
   roleRef: RoleRef;
   instruction: string;
+  /** Human-readable name for this concrete run, used by task/workflow observability. */
+  runName?: string;
   launch?: RoleLaunchMode;
   systemPrompt?: string;
   /** Concrete Pi model to use for this run (usually current session model, unless overridden). */
   model?: string;
-  /** Optional child Pi thinking/reasoning level. */
+  /** Optional role thinking/reasoning level. */
   thinking?: RoleThinkingLevel;
-  /** Optional child Pi tool allowlist. Hosts/presets own which tools are appropriate. */
+  /** Optional role tool allowlist. Hosts/presets own which tools are appropriate. */
   allowedTools?: string[];
   /** Launch Pi without saving or reusing a session. Useful for short verifier gates. */
   noSession?: boolean;
-  /** Disable extension discovery for child Pi. Useful for self-contained verifier gates. */
+  /** Disable extension discovery for process-backed role runs. Useful for self-contained verifier gates. */
   noExtensions?: boolean;
   sessionDir?: string;
   forkFromSession?: string;
@@ -100,22 +106,20 @@ export interface RoleRunCommandInput extends RoleRunRequest {
 
 export interface RoleRunLauncherInput extends RoleRunCommandInput {
   runRef: RoleRunRef;
-  piCommand: string;
   cwd: string;
   timeoutMs?: number;
   signal?: AbortSignal;
   now?: () => string;
   env?: NodeJS.ProcessEnv;
   /**
-   * Non-interactive role runs pass the prompt through argv and should not keep a
-   * child stdin pipe open, because Pi --print may wait for stdin EOF when stdin
-   * is a pipe. Interactive/background adapters can keep the default pipe for
-   * best-effort follow-up delivery.
+   * Legacy process-backed role runs pass the prompt through argv and should not
+   * keep a stdin pipe open, because Pi --print may wait for stdin EOF when
+   * stdin is a pipe. Interactive/background adapters can keep the default pipe
+   * for best-effort follow-up delivery.
    */
   stdinMode?: "pipe" | "ignore";
   roleId?: string;
   nativeExecutor?: ExtensionRoleRunner;
-  onChildProcess?: (child: ChildProcess, startedAt: string) => void;
   onTimeout?: () => void;
 }
 
@@ -139,11 +143,32 @@ export interface RoleRunResult {
 export interface ActiveRoleRun {
   ref: RoleRunRef;
   roleRef: RoleRef;
+  runName?: string;
   launch: RoleLaunchMode;
   model?: string;
+  pid?: number;
+  cwd: string;
   child?: ChildProcess;
   startedAt: string;
+  timedOutAt?: string;
+  inputControl: RoleRunInputControl;
   cancel(reason?: string): boolean;
+}
+
+export interface RoleRunInputDeliveryResult {
+  ref: RoleRunRef;
+  roleRef: RoleRef;
+  runName?: string;
+  launch: RoleLaunchMode;
+  model?: string;
+  pid?: number;
+  cwd: string;
+  startedAt: string;
+  timedOutAt?: string;
+  inputControl: RoleRunInputControl;
+  bytes: number;
+  delivered: boolean;
+  errorMessage?: string;
 }
 
 export const builtinRoleIds = ["scout", "worker", "reviewer"] as const;
@@ -1165,6 +1190,8 @@ export class RoleRunCancelledError extends Error {
 }
 
 const activeRoleRuns = new Map<RoleRunRef, ActiveRoleRun>();
+const activeRoleRunInputControllers = new Map<RoleRunRef, ExtensionRoleRunInputController>();
+const ROLE_RUN_INPUT_ERROR_GRACE_MS = 75;
 
 export function listActiveRoleRuns(): ActiveRoleRun[] {
   return [...activeRoleRuns.values()];
@@ -1172,6 +1199,95 @@ export function listActiveRoleRuns(): ActiveRoleRun[] {
 
 export function cancelRoleRun(runRef: RoleRunRef, reason?: string): boolean {
   return activeRoleRuns.get(runRef)?.cancel(reason) ?? false;
+}
+
+export async function sendInputToRoleRun(
+  runRef: RoleRunRef,
+  text: string,
+): Promise<RoleRunInputDeliveryResult | undefined> {
+  const record = activeRoleRuns.get(runRef);
+  if (!record) return undefined;
+  return await deliverInputToActiveRoleRun(record, text);
+}
+
+async function deliverInputToActiveRoleRun(
+  record: ActiveRoleRun,
+  text: string,
+): Promise<RoleRunInputDeliveryResult> {
+  let delivered = false;
+  let errorMessage: string | undefined;
+  const payload = text.endsWith("\n") ? text : `${text}\n`;
+  const controller = activeRoleRunInputControllers.get(record.ref);
+  const child = record.child;
+  if (controller) {
+    try {
+      await controller.send(payload);
+      delivered = activeRoleRuns.has(record.ref);
+      if (!delivered) errorMessage = "active role-run was no longer registered";
+    } catch (error) {
+      errorMessage = unknownErrorMessage(error);
+    }
+  } else if (record.inputControl === "none" || !child) {
+    errorMessage = "active role-run has no input control channel";
+  } else if (!child.stdin?.writable) {
+    errorMessage = "role-run input control channel is not writable";
+  } else {
+    const stdin = child.stdin;
+    try {
+      errorMessage = await new Promise<string | undefined>((resolve) => {
+        let settled = false;
+        let graceTimer: ReturnType<typeof setTimeout> | undefined;
+        const settle = (message: string | undefined): void => {
+          if (settled) return;
+          settled = true;
+          if (graceTimer) clearTimeout(graceTimer);
+          setImmediate(() => stdin.off("error", onError));
+          resolve(message);
+        };
+        const onError = (error: Error): void => {
+          delivered = false;
+          settle(unknownErrorMessage(error));
+        };
+        stdin.on("error", onError);
+        stdin.write(payload, (error?: Error | null) => {
+          if (error) {
+            delivered = false;
+            settle(unknownErrorMessage(error));
+            return;
+          }
+          if (!activeRoleRuns.has(record.ref) || stdin.destroyed || !stdin.writable) {
+            delivered = false;
+            settle("role-run input control channel is not writable");
+            return;
+          }
+          graceTimer = setTimeout(() => {
+            delivered = activeRoleRuns.has(record.ref) && !stdin.destroyed && stdin.writable;
+            settle(delivered ? undefined : "role-run input control channel is not writable");
+          }, ROLE_RUN_INPUT_ERROR_GRACE_MS);
+          graceTimer.unref?.();
+        });
+      });
+    } catch (error) {
+      delivered = false;
+      errorMessage = unknownErrorMessage(error);
+    }
+  }
+  const pid = record.pid ?? record.child?.pid;
+  return {
+    ref: record.ref,
+    roleRef: record.roleRef,
+    launch: record.launch,
+    cwd: record.cwd,
+    startedAt: record.startedAt,
+    inputControl: record.inputControl,
+    bytes: Buffer.byteLength(payload),
+    delivered,
+    errorMessage,
+    ...(record.runName ? { runName: record.runName } : {}),
+    ...(record.model ? { model: record.model } : {}),
+    ...(pid !== undefined ? { pid } : {}),
+    ...(record.timedOutAt ? { timedOutAt: record.timedOutAt } : {}),
+  };
 }
 
 export function normalizeRoleLaunchMode(value: unknown): RoleLaunchMode {
@@ -1272,8 +1388,8 @@ function parseRoleRunDepth(value: string | undefined): number {
 
 export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResult> {
   if (input.signal?.aborted) throw new RoleRunCancelledError(abortSignalReason(input.signal));
-  // Preserve the recursion guard for nested role calls even though the run is
-  // now daemon-native rather than a child process.
+  // Preserve the recursion guard for nested role calls even when the run is
+  // daemon-native rather than process-backed.
   const nativeEnv = roleRunChildEnv(input.env);
   const nativeExecutor = await resolveRoleNativeExecutor({ runRole: input.nativeExecutor });
 
@@ -1288,9 +1404,12 @@ export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResul
   const activeRun: ActiveRoleRun = {
     ref: input.runRef,
     roleRef: input.roleRef,
+    runName: input.runName?.trim() || undefined,
     launch,
     model: input.model?.trim() || undefined,
+    cwd: input.cwd,
     startedAt,
+    inputControl: "none",
     cancel(reason?: string) {
       cancellationReason = reason ?? "cancelled";
       if (!abortController.signal.aborted) abortController.abort(cancellationReason);
@@ -1298,6 +1417,18 @@ export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResul
     },
   };
   activeRoleRuns.set(input.runRef, activeRun);
+
+  const inputControl = {
+    register(controller: ExtensionRoleRunInputController): () => void {
+      activeRoleRunInputControllers.set(input.runRef, controller);
+      activeRun.inputControl = "native";
+      return () => {
+        if (activeRoleRunInputControllers.get(input.runRef) !== controller) return;
+        activeRoleRunInputControllers.delete(input.runRef);
+        activeRun.inputControl = activeRun.child?.stdin?.writable ? "stdin" : "none";
+      };
+    },
+  };
 
   const abort = () => activeRun.cancel(abortSignalReason(input.signal));
   input.signal?.addEventListener("abort", abort, { once: true });
@@ -1340,6 +1471,7 @@ export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResul
       ...(input.model?.trim() ? { model: input.model.trim() } : {}),
       ...(input.noSession ? { noSession: true, sessionPersistence: "anonymous" as const } : {}),
       env: nativeEnv,
+      inputControl,
     };
 
     const result = await runNativeRoleWithTimeout({
@@ -1347,6 +1479,7 @@ export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResul
       timeoutMs,
       onTimeout: () => {
         cancellationReason = "timeout";
+        activeRun.timedOutAt = input.now?.() ?? nowIso();
         input.onTimeout?.();
         activeRun.cancel("timeout");
       },
@@ -1381,6 +1514,7 @@ export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResul
     throw error;
   } finally {
     input.signal?.removeEventListener("abort", abort);
+    activeRoleRunInputControllers.delete(input.runRef);
     activeRoleRuns.delete(input.runRef);
   }
 }

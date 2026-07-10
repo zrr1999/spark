@@ -182,7 +182,7 @@ export function registerSparkWorkflowRunsTool(
     name: "impl_workflow_runs",
     label: "Spark Workflow Runs",
     description:
-      "Inspect and control Spark background workflow runs: status/list/inspect active child role-runs, kill/reply/steer/reconcile/ack background work, and prune/clear retained terminal records. Compact summaries include transcript refs/tail metadata, task claims, pids, run refs, and next actions.",
+      "Inspect and control Spark background workflow runs: status/list/inspect active child role-runs, kill/reply/steer/reconcile/ack background work, and prune/clear retained terminal records. Reply/steer delivery requires a selected active role-run with an input control channel such as daemon-native control; attempts without one are recorded as not delivered. Compact summaries include transcript refs/tail metadata, task claims, pids, run refs, control capability, and next actions.",
     parameters: Type.Object({
       action: Type.Optional(
         Type.String({
@@ -224,7 +224,7 @@ export function registerSparkWorkflowRunsTool(
       message: Type.Optional(
         Type.String({
           description:
-            "reply/steer only; text to send to exactly one selected active background role-run stdin. Select with runRef or taskRef, or omit only when exactly one active child is visible.",
+            "reply/steer only; text to deliver to exactly one selected active background role-run input control channel. Select with runRef or taskRef, or omit only when exactly one active child is visible; daemon-native runs can expose native control, while runs without an input control channel return not delivered and record the attempt.",
         }),
       ),
       workflowId: Type.Optional(
@@ -657,6 +657,7 @@ export function registerSparkWorkflowRunsTool(
           ...(entry.pid !== undefined ? { pid: entry.pid } : {}),
           cwd: entry.cwd,
           startedAt: entry.startedAt,
+          inputControl: entry.inputControl,
           bytes: entry.bytes,
           delivered: entry.delivered,
           ...(entry.errorMessage ? { errorMessage: entry.errorMessage } : {}),

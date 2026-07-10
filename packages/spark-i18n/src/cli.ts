@@ -533,16 +533,16 @@ const PI_PARITY_STRINGS: Record<SparkLanguage, SparkTuiPiParityStrings> = {
   },
 };
 
-const DAEMON_HELP_TEXT = `spark daemon - daemon execution plane\n\nUsage:\n  spark daemon [--workspace <name>]\n  spark daemon status [--json]\n  spark daemon start [--json]\n  spark daemon stop [--yes]\n  spark daemon restart [--yes]\n  spark daemon logs [--follow] [--lines <n>]\n  spark daemon submit --session <id> --prompt <text> [--reset] [--json]\n  spark daemon queue [--state inbox|processed|failed|all] [--limit <n>] [--json]\n  spark daemon session list [--json]\n  spark daemon session export --session <id|path> [--format jsonl|json|text] [--leaf <entry-id|root>] [--json]\n  spark daemon session replay --session <id|path> [--leaf <entry-id|root>] [--json]\n  spark sessions mailto --to <session-id> --message <text> [--from <session-id>] [--subject <text>] [--json]\n  spark sessions inbox --session <session-id> [--all] [--json]\n  spark sessions inbox read <message-id> --session <session-id> [--json]\n  spark sessions inbox ack <message-id> --session <session-id> [--json]\n  spark daemon run list [--json]\n  spark daemon events watch [--json]\n  spark daemon workspace register [path] --server-url <url> --token <token|-> --name <name>\n  spark daemon workspace ls [--json] [--all] [--full]\n  spark daemon workspace show [name] [--json]\n  spark daemon workspace stop <name> [--yes]\n\nSpark CLI never runs an independent queue worker; it starts/wakes the Spark daemon and talks over local IPC. Project/task/goal/review commands belong under spark server, the server coordination plane.`;
+const DAEMON_HELP_TEXT = `spark daemon - daemon execution plane\n\nUsage:\n  spark daemon [--workspace <name>]\n  spark daemon status [--json]\n  spark daemon start [--json]\n  spark daemon stop [--yes]\n  spark daemon restart [--yes]\n  spark daemon logs [--follow] [--lines <n>]\n  spark daemon submit --session <id> --prompt <text> [--reset] [--json]\n  spark daemon queue [--state inbox|processed|failed|all] [--limit <n>] [--json]\n  spark daemon session list [--json] [--registry] [--include-archived]\n  spark daemon session create --workspace <id> [--title <text>] [--role <role>] [--json]\n  spark daemon session bind <session-id> --external-key <key> [--json]\n  spark daemon session unbind <session-id> --external-key <key> [--json]\n  spark daemon session archive <session-id> [--json]\n  spark daemon session export --session <id|path> [--format jsonl|json|text] [--leaf <entry-id|root>] [--json]\n  spark daemon session replay --session <id|path> [--leaf <entry-id|root>] [--json]\n  spark daemon session mailto --to <session-id> --message <text> [--from <session-id>] [--subject <text>] [--json]\n  spark daemon session inbox --session <session-id> [--all] [--json]\n  spark daemon session inbox read <message-id> --session <session-id> [--json]\n  spark daemon session inbox ack <message-id> --session <session-id> [--json]\n  spark daemon channel list [--json]\n  spark daemon channel status [--json]\n  spark daemon run list [--json]\n  spark daemon events watch [--json]\n  spark daemon workspace register [path] --server-url <url> --token <token|-> --name <name>\n  spark daemon workspace ls [--json] [--all] [--full]\n  spark daemon workspace show [name] [--json]\n  spark daemon workspace stop <name> [--yes]\n\nSpark CLI never runs an independent queue worker; it starts/wakes the Spark daemon and talks over local IPC. Project/task/goal/review/assign commands belong under spark server, the server coordination plane. Session registry and channel listeners are daemon-owned (see docs/specs/assignment-and-channels.md).`;
 
 const DAEMON_STRINGS: Record<SparkLanguage, SparkDaemonCliStrings> = {
   en: {
     submitRequiresSession: "spark daemon submit requires --session <id>",
     submitRequiresPrompt: "spark daemon submit requires --prompt <text> or trailing text",
     unknownCommand: (command) => `unknown spark daemon command: ${command}`,
-    unknownSessionsCommand: (command) => `unknown spark daemon sessions command: ${command}`,
-    sessionsExportRequiresSession: "spark daemon sessions export requires --session <id|path>",
-    sessionsReplayRequiresSession: "spark daemon sessions replay requires --session <id|path>",
+    unknownSessionsCommand: (command) => `unknown spark daemon session command: ${command}`,
+    sessionsExportRequiresSession: "spark daemon session export requires --session <id|path>",
+    sessionsReplayRequiresSession: "spark daemon session replay requires --session <id|path>",
     serviceCommandMustUseServiceRunner:
       "spark daemon service commands must be run through runSparkDaemonCliCommand",
     helpText: DAEMON_HELP_TEXT,
@@ -572,9 +572,9 @@ const DAEMON_STRINGS: Record<SparkLanguage, SparkDaemonCliStrings> = {
     submitRequiresSession: "spark daemon submit 需要 --session <id>",
     submitRequiresPrompt: "spark daemon submit 需要 --prompt <text> 或 trailing text",
     unknownCommand: (command) => `未知 spark daemon 命令：${command}`,
-    unknownSessionsCommand: (command) => `未知 spark daemon sessions 命令：${command}`,
-    sessionsExportRequiresSession: "spark daemon sessions export 需要 --session <id|path>",
-    sessionsReplayRequiresSession: "spark daemon sessions replay 需要 --session <id|path>",
+    unknownSessionsCommand: (command) => `未知 spark daemon session 命令：${command}`,
+    sessionsExportRequiresSession: "spark daemon session export 需要 --session <id|path>",
+    sessionsReplayRequiresSession: "spark daemon session replay 需要 --session <id|path>",
     serviceCommandMustUseServiceRunner:
       "spark daemon service 命令必须通过 runSparkDaemonCliCommand 运行",
     helpText: DAEMON_HELP_TEXT,

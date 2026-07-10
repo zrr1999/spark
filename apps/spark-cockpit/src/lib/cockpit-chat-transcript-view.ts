@@ -11,6 +11,7 @@ export type CockpitChatCommand = {
 export type CockpitChatInvocation = {
   id: string;
   runtimeInvocationId: string;
+  commandId: string | null;
   taskRuntimeId: string | null;
   agentName: string | null;
   status: string;
@@ -67,16 +68,16 @@ export function buildCockpitChatTranscriptTurns(
   labels: CockpitChatTranscriptLabels = defaultCockpitChatTranscriptLabels,
 ) {
   return sourceCommands
-    .filter((command) => command.kind === "task.start.request")
+    .filter(
+      (command) =>
+        command.kind === "task.start.request" || command.kind === "assignment.create.request",
+    )
     .slice()
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .map((command): CockpitChatTranscriptTurn => {
       const payload = parseCommandPayload(command);
       const relatedInvocations = sourceInvocations
-        .filter(
-          (invocation) =>
-            Boolean(payload.runtimeTaskId) && invocation.taskRuntimeId === payload.runtimeTaskId,
-        )
+        .filter((invocation) => invocationBelongsToCommand(command, payload, invocation))
         .slice()
         .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
       const relatedLogs = sourceLogs.filter((log) =>
@@ -90,16 +91,25 @@ export function buildCockpitChatTranscriptTurns(
       return {
         id: command.id,
         command,
-        prompt: payload.prompt || command.title || command.kind,
+        prompt: payload.prompt || payload.goal || command.title || command.kind,
         runtimeTaskId: payload.runtimeTaskId,
         invocations: relatedInvocations,
         logs: relatedLogs,
         status,
-        answer: assistantAnswer(status, relatedLogs, labels),
+        answer: assistantAnswer(status, relatedLogs, labels, relatedInvocations, command),
         renderSource: assistantRenderSource(status, relatedLogs),
         currentActivity,
       };
     });
+}
+
+function invocationBelongsToCommand(
+  command: CockpitChatCommand,
+  payload: ReturnType<typeof parseCommandPayload>,
+  invocation: CockpitChatInvocation,
+) {
+  if (invocation.commandId === command.id) return true;
+  return Boolean(payload.runtimeTaskId) && invocation.taskRuntimeId === payload.runtimeTaskId;
 }
 
 export function parseCommandPayload(command: CockpitChatCommand) {
@@ -108,11 +118,12 @@ export function parseCommandPayload(command: CockpitChatCommand) {
     const payload = isRecord(parsed) && isRecord(parsed.payload) ? parsed.payload : {};
     return {
       prompt: typeof payload.prompt === "string" ? payload.prompt.trim() : null,
+      goal: typeof payload.goal === "string" ? payload.goal.trim() : null,
       runtimeTaskId:
         typeof payload.runtimeTaskId === "string" ? payload.runtimeTaskId.trim() : null,
     };
   } catch {
-    return { prompt: null, runtimeTaskId: null };
+    return { prompt: null, goal: null, runtimeTaskId: null };
   }
 }
 
@@ -148,6 +159,7 @@ function turnStatus(
   if (relatedLogs.some((log) => activityKind(log) === "error")) return "error";
   if (relatedInvocations.some((invocation) => isCancelledStatus(invocation.status)))
     return "cancelled";
+  if (relatedInvocations.some((invocation) => isStaleRunningInvocation(invocation))) return "error";
   if (relatedInvocations.some((invocation) => isRunningStatus(invocation.status))) return "running";
   if (
     relatedInvocations.length > 0 &&
@@ -155,7 +167,18 @@ function turnStatus(
   ) {
     return "completed";
   }
-  if (command.status === "acked" || command.deliveryStatus === "acked") return "running";
+  // Acked without a live invocation for >2 minutes is treated as lost projection.
+  if (command.status === "acked" || command.deliveryStatus === "acked") {
+    const createdAtMs = Date.parse(command.createdAt);
+    if (
+      relatedInvocations.length === 0 &&
+      Number.isFinite(createdAtMs) &&
+      Date.now() - createdAtMs >= 2 * 60_000
+    ) {
+      return "error";
+    }
+    return "running";
+  }
   return "waiting";
 }
 
@@ -163,8 +186,25 @@ function assistantAnswer(
   status: CockpitChatTurnStatus,
   logs: CockpitChatLogChunk[],
   labels: CockpitChatTranscriptLabels,
+  relatedInvocations: CockpitChatInvocation[] = [],
+  command?: CockpitChatCommand,
 ) {
-  if (status === "error") return labels.errorAnswer;
+  if (status === "error") {
+    if (relatedInvocations.some((invocation) => isStaleRunningInvocation(invocation))) {
+      return "This run stopped updating. Spark likely finished or the daemon disconnected — refresh or start a new assign.";
+    }
+    if (relatedInvocations.some((invocation) => normalizeStatus(invocation.status) === "lost")) {
+      return "Spark lost the projection for this run. The daemon may have disconnected before a terminal status arrived.";
+    }
+    if (
+      relatedInvocations.length === 0 &&
+      command &&
+      (command.status === "acked" || command.deliveryStatus === "acked")
+    ) {
+      return "Spark lost the projection for this run. The daemon may have disconnected before a terminal status arrived.";
+    }
+    return labels.errorAnswer;
+  }
   if (status === "cancelled") return labels.cancelledAnswer;
   const output = orderedAssistantOutput(logs) ?? latestReadableOutput(logs);
   if (output) return `${labels.latestOutputPrefix}\n${output}`;
@@ -307,7 +347,21 @@ function isCancelledStatus(value: string) {
 }
 
 function isErrorStatus(value: string) {
-  return ["failed", "error", "timed-out", "timeout", "rejected"].includes(normalizeStatus(value));
+  return ["failed", "error", "timed-out", "timeout", "rejected", "lost", "stale"].includes(
+    normalizeStatus(value),
+  );
+}
+
+/** Treat long-running projections as lost when the mirror has gone stale. */
+export function isStaleRunningInvocation(
+  invocation: Pick<CockpitChatInvocation, "status" | "updatedAt">,
+  nowMs = Date.now(),
+  staleAfterMs = 35 * 60_000,
+) {
+  if (!isRunningStatus(invocation.status)) return false;
+  const updatedAtMs = Date.parse(invocation.updatedAt);
+  if (!Number.isFinite(updatedAtMs)) return false;
+  return nowMs - updatedAtMs >= staleAfterMs;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -38,6 +38,7 @@ const defaultNativeRoleRunner: ExtensionRoleRunner = async (input) => {
 interface ToolConfig {
   name: string;
   description?: string;
+  parameters?: unknown;
   execute: (
     toolCallId: string,
     params: Record<string, unknown>,
@@ -180,7 +181,6 @@ void test("role action tool manages role model settings", async () => {
         action: "call",
         role: "worker",
         instruction: "Run with the saved project role model setting.",
-        piCommand: fakePi,
         timeoutMs: 5_000,
       },
       dir,
@@ -231,6 +231,13 @@ void test("builtin role prompts and direct-call tool copy stay host-neutral", ()
   const tools = registerRoleToolsForTest();
   const roleToolDescription = tools.get("role")?.description ?? "";
   assert.doesNotMatch(roleToolDescription, /Spark tasks or DAG runs/);
+  const roleToolParameters = tools.get("role")?.parameters as
+    | { properties?: Record<string, { description?: string }> }
+    | undefined;
+  assert.match(
+    roleToolParameters?.properties?.piCommand?.description ?? "",
+    /model_set validation/,
+  );
 
   const registry = createDefaultRoleRegistry({ now: "2026-01-01T00:00:00.000Z" });
   const prompts = registry
@@ -272,21 +279,6 @@ void test("call_role launches fresh role runs", async () => {
   const previousBindingHome = process.env.PI_ROLES_HOME;
   process.env.PI_ROLES_HOME = dir;
   try {
-    const fakePi = join(dir, "fake-pi.mjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "const args = process.argv.slice(2);",
-        "if (args[0] === '--list-models' && args[1] === 'test/model') process.exit(0);",
-        "if (!args.includes('--print')) process.exit(10);",
-        "if (!args.includes('--model') || args[args.indexOf('--model') + 1] !== 'test/model') process.exit(11);",
-        "process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Fake worker result.' }] }, args }) + '\\n');",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-
     const tools = registerRoleToolsForTest();
     let capturedNativeInput: Parameters<ExtensionRoleRunner>[0] | undefined;
     const result = await executeCallRole(
@@ -296,7 +288,6 @@ void test("call_role launches fresh role runs", async () => {
         instruction: "Run the fake worker.",
         launch: "fresh",
         model: "test/model",
-        piCommand: fakePi,
         timeoutMs: 5_000,
       },
       dir,
@@ -344,7 +335,6 @@ void test("call_role launches fresh role runs", async () => {
         instruction: "Run the fake worker through the canonical role tool.",
         launch: "fresh",
         model: "test/model",
-        piCommand: fakePi,
         timeoutMs: 5_000,
       },
       dir,
@@ -362,7 +352,6 @@ void test("call_role inherits the active session model when no role model is sav
   const previousBindingHome = process.env.PI_ROLES_HOME;
   process.env.PI_ROLES_HOME = dir;
   try {
-    const fakePi = await writeFakePi(dir);
     const tools = registerRoleToolsForTest();
 
     const result = await executeRoleTool(
@@ -372,7 +361,6 @@ void test("call_role inherits the active session model when no role model is sav
         action: "call",
         role: "worker",
         instruction: "Run with the inherited session model.",
-        piCommand: fakePi,
         timeoutMs: 5_000,
       },
       dir,
@@ -393,19 +381,6 @@ void test("call_role does not expose raw JSON protocol fragments as output", asy
   const previousBindingHome = process.env.PI_ROLES_HOME;
   process.env.PI_ROLES_HOME = dir;
   try {
-    const fakePi = join(dir, "fake-pi-fragment.mjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "const args = process.argv.slice(2);",
-        "if (args[0] === '--list-models' && args[1] === 'test/model') process.exit(0);",
-        'process.stdout.write(\'"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta"}\\n\');',
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-
     const tools = registerRoleToolsForTest();
     const result = await executeCallRole(
       tools,
@@ -413,7 +388,6 @@ void test("call_role does not expose raw JSON protocol fragments as output", asy
         role: "worker",
         instruction: "Run protocol fragment.",
         model: "test/model",
-        piCommand: fakePi,
       },
       dir,
     );
@@ -435,20 +409,6 @@ void test("call_role exposes empty delivery when JSON events have no final assis
   const previousBindingHome = process.env.PI_ROLES_HOME;
   process.env.PI_ROLES_HOME = dir;
   try {
-    const fakePi = join(dir, "fake-pi-empty-delivery.mjs");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "const args = process.argv.slice(2);",
-        "if (args[0] === '--list-models' && args[1] === 'test/model') process.exit(0);",
-        "process.stdout.write(JSON.stringify({ type: 'agent_start' }) + '\\n');",
-        "process.stdout.write(JSON.stringify({ type: 'agent_end', messages: [] }) + '\\n');",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-
     const tools = registerRoleToolsForTest();
     const result = await executeCallRole(
       tools,
@@ -456,7 +416,6 @@ void test("call_role exposes empty delivery when JSON events have no final assis
         role: "worker",
         instruction: "Run without final message.",
         model: "test/model",
-        piCommand: fakePi,
       },
       dir,
     );
@@ -540,7 +499,6 @@ void test("spark-roles tools require ctx cwd unless call_role cwd is explicit", 
   const previousBindingHome = process.env.PI_ROLES_HOME;
   process.env.PI_ROLES_HOME = dir;
   try {
-    const fakePi = await writeFakePi(dir);
     const explicit = await executeRoleToolWithoutCwd(
       tools,
       "call_role",
@@ -549,7 +507,6 @@ void test("spark-roles tools require ctx cwd unless call_role cwd is explicit", 
         instruction: "Run with explicit cwd.",
         cwd: dir,
         model: "test/model",
-        piCommand: fakePi,
       },
       { runRole: defaultNativeRoleRunner },
     );
@@ -694,10 +651,10 @@ void test("spark-roles tools reject invalid explicit parameters instead of using
   await assert.rejects(
     executeCallRole(tools, {
       role: "worker",
-      instruction: "Run with an invalid pi command.",
-      piCommand: 42,
+      instruction: "Run with a removed pi command parameter.",
+      piCommand: "custom-pi",
     }),
-    /call_role piCommand must be a string/,
+    /call_role piCommand is no longer supported/,
   );
   await assert.rejects(
     executeCallRole(tools, {
@@ -717,24 +674,6 @@ void test("spark-roles tools reject invalid explicit parameters instead of using
     /call_role forkFromSession must be a string/,
   );
 });
-
-async function writeFakePi(dir: string): Promise<string> {
-  const fakePi = join(dir, "fake-pi.mjs");
-  await writeFile(
-    fakePi,
-    [
-      "#!/usr/bin/env node",
-      "const args = process.argv.slice(2);",
-      "if (args[0] === '--list-models' && args[1] === 'test/model') process.exit(0);",
-      "if (!args.includes('--print')) process.exit(10);",
-      "if (!args.includes('--model') || args[args.indexOf('--model') + 1] !== 'test/model') process.exit(11);",
-      "process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Fake worker result.' }] }, args }) + '\\n');",
-    ].join("\n"),
-    "utf8",
-  );
-  await chmod(fakePi, 0o755);
-  return fakePi;
-}
 
 function registerRoleToolsForTest(): Map<string, ToolConfig> {
   const tools = new Map<string, ToolConfig>();

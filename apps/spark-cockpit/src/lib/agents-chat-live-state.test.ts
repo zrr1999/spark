@@ -1,8 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { AgentsProductProjection } from "@zendev-lab/spark-server/agents-product";
 import {
   addOptimisticAgentsChatCommand,
   applyAgentsChatEvent,
+  agentsCockpitSource,
   createAgentsChatLiveState,
+  type AgentsChatCommandLive,
+  type AgentsChatInvocationLive,
+  type AgentsChatLogChunkLive,
   type AgentsChatSerializedEvent,
 } from "./agents-chat-live-state";
 
@@ -25,6 +30,18 @@ function event(overrides: Partial<AgentsChatSerializedEvent> = {}): AgentsChatSe
 }
 
 describe("agents chat live state", () => {
+  it("uses the agents product projection rows as its live read model", () => {
+    expectTypeOf<AgentsChatCommandLive>().toEqualTypeOf<
+      AgentsProductProjection["commands"][number]
+    >();
+    expectTypeOf<AgentsChatInvocationLive>().toEqualTypeOf<
+      AgentsProductProjection["invocations"][number]
+    >();
+    expectTypeOf<AgentsChatLogChunkLive>().toEqualTypeOf<
+      AgentsProductProjection["logChunks"][number]
+    >();
+  });
+
   it("merges queued agents commands and ignores non-agents commands", () => {
     const state = createAgentsChatLiveState({
       workspaceId,
@@ -46,7 +63,7 @@ describe("agents chat live state", () => {
               id: "cmd_other",
               kind: "task.start.request",
               title: "Other",
-              payload: { kind: "task.start.request", payload: { source: "project-chat" } },
+              payload: { kind: "task.start.request", payload: { source: "workspace-chat" } },
               status: "queued",
               deliveryStatus: "pending",
             },
@@ -71,7 +88,7 @@ describe("agents chat live state", () => {
               payload: {
                 kind: "task.start.request",
                 title: "Agents",
-                payload: { source: "agents-cockpit", prompt: "hello" },
+                payload: { source: agentsCockpitSource, prompt: "hello" },
               },
               status: "queued",
               deliveryStatus: "pending",
@@ -123,7 +140,7 @@ describe("agents chat live state", () => {
               payload: {
                 kind: "task.start.request",
                 title: "Real",
-                payload: { source: "agents-cockpit", prompt: "hello optimistic" },
+                payload: { source: agentsCockpitSource, prompt: "hello optimistic" },
               },
               status: "queued",
               deliveryStatus: "pending",
@@ -146,7 +163,7 @@ describe("agents chat live state", () => {
           kind: "task.start.request",
           title: "Agents",
           payloadJson: JSON.stringify({
-            payload: { source: "agents-cockpit", runtimeTaskId: "task_live" },
+            payload: { source: agentsCockpitSource, runtimeTaskId: "task_live" },
           }),
           status: "acked",
           deliveryStatus: "acked",

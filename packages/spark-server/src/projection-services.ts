@@ -572,7 +572,15 @@ function assertWorkspaceServerMutationAllowed(
 }
 
 function isServerWorkspaceMutation(kind: ServerCommandPayload["kind"]): boolean {
-  return kind === "project.create.request" || kind === "task.start.request";
+  return (
+    kind === "project.create.request" ||
+    kind === "task.start.request" ||
+    kind === "assignment.create.request" ||
+    kind === "session.create.request" ||
+    kind === "session.bind.request" ||
+    kind === "session.unbind.request" ||
+    kind === "session.archive.request"
+  );
 }
 
 function latestWorkspaceSnapshotPayload(

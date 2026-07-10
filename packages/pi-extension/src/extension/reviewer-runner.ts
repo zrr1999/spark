@@ -182,7 +182,6 @@ export interface ReviewerRunner {
 export interface PiRolesReviewerRunnerOptions {
   registry: RoleRegistry;
   cwd: string;
-  piCommand?: string;
   timeoutMs?: number;
   reviewerRoleRef?: RoleRef;
   model?: string;
@@ -256,7 +255,6 @@ const ASK_AUTO_ANSWER_JSON_SCHEMA = [
 export class PiRolesReviewerRunner implements ReviewerRunner {
   readonly #registry: RoleRegistry;
   readonly #cwd: string;
-  readonly #piCommand: string;
   readonly #timeoutMs: number;
   readonly #reviewerRoleRef: RoleRef;
   readonly #model?: string;
@@ -273,7 +271,6 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
   constructor(options: PiRolesReviewerRunnerOptions) {
     this.#registry = options.registry;
     this.#cwd = options.cwd;
-    this.#piCommand = options.piCommand ?? "pi";
     this.#timeoutMs = options.timeoutMs ?? reviewerTimeoutMsFromEnv(process.env);
     this.#reviewerRoleRef = options.reviewerRoleRef ?? builtinRoleRef("reviewer");
     this.#model = options.model;
@@ -339,7 +336,6 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
         launch: "fresh",
         sessionDir: this.#sessionDir,
         env: this.#env,
-        piCommand: this.#piCommand,
         cwd: input.cwd || this.#cwd,
         timeoutMs: this.#timeoutMs,
         signal,
@@ -428,7 +424,6 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
         launch: "fresh",
         sessionDir: this.#sessionDir,
         env: this.#env,
-        piCommand: this.#piCommand,
         cwd: input.cwd || this.#cwd,
         timeoutMs: this.#timeoutMs,
         signal,

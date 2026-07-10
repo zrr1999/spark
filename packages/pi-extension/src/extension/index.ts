@@ -136,7 +136,6 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     return new PiRolesReviewerRunner({
       registry: await createSparkRoleRegistry(cwd),
       cwd,
-      piCommand: "pi",
       sessionModel: sessionModelName(ctx.model),
       reviewerThinkingLevel: capReviewerThinkingLevel(pi.getThinkingLevel?.()),
       nativeExecutor: ctx.runRole,
@@ -212,6 +211,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
 
   registerSparkRunReadyTasksTool(registerSparkImplementationTool, {
     ensureWorkflowRunManager: (cwd, ctx) => workflowRunManagerController.ensure(cwd, ctx),
+    piCommand: () => pi.getPiCommand?.(),
   });
 
   registerSparkWorkflowRunsTool(registerSparkImplementationTool, { refreshSparkWidget });

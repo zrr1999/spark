@@ -7,6 +7,8 @@ import {
   createProviderRegistryLeafRunner,
   createProviderRegistryStreamFunction,
 } from "@zendev-lab/spark-ai";
+import { DEFAULT_SPARK_IDENTITY_PROMPT } from "@zendev-lab/spark-host/system-prompt";
+import { composeAgentSystemPrompt } from "@zendev-lab/spark-modes";
 
 import { renderSparkActiveSystemPrompt } from "../../../../packages/pi-extension/src/extension/spark-active-injection.ts";
 import { renderBaseSystemPromptsPrompt } from "../../../../packages/pi-extension/src/extension/spark-builtin-skills.ts";
@@ -93,9 +95,6 @@ export interface SparkCliHostServicesOptions {
   systemPrompt?: string;
   noPromptTemplates?: boolean;
 }
-
-const DEFAULT_SPARK_SYSTEM_PROMPT =
-  "You are a coding assistant running in the native spark-tui host. Use Spark as the project/task coordination layer, not as your assistant identity.";
 
 export async function createSparkCliHostServices(
   options: SparkCliHostServicesOptions = {},
@@ -229,7 +228,7 @@ export async function createSparkCliHostServices(
   }
   const builtinSkillsPrompt = await renderBaseSystemPromptsPrompt();
   const skillsPrompt = await skillResolver.formatAvailableSkillsForPrompt();
-  const baseSystemPrompt = options.systemPrompt ?? DEFAULT_SPARK_SYSTEM_PROMPT;
+  const baseSystemPrompt = options.systemPrompt ?? DEFAULT_SPARK_IDENTITY_PROMPT;
   const streamFunction = createProviderRegistryStreamFunction(providerRegistry, {
     resolveApiKey: (provider) => authResolver.resolveApiKey(provider),
   });
@@ -292,9 +291,11 @@ async function renderSparkCliAgentSystemPrompt(
   skillsPrompt: string,
 ): Promise<string> {
   const mode = (await loadSparkMode(cwd, ctx)).mode;
-  return [renderSparkActiveSystemPrompt(baseSystemPrompt, mode), builtinSkillsPrompt, skillsPrompt]
-    .filter(Boolean)
-    .join("\n");
+  return composeAgentSystemPrompt([
+    renderSparkActiveSystemPrompt(baseSystemPrompt, mode),
+    builtinSkillsPrompt,
+    skillsPrompt,
+  ]);
 }
 
 export {

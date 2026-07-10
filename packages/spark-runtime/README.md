@@ -13,7 +13,7 @@ Responsibilities:
 - enforce run timeout/lease defaults
 - refresh active claim leases with a heartbeat loop during non-dry-run execution
 - sweep persisted expired claims with `sweepExpiredTaskClaims()`
-- maintain Spark-specific active child process tracking for timeout/reconciliation UI and kill controls
+- adapt `spark-roles` active-run tracking for timeout/reconciliation UI and kill/reply/steer result surfaces
 - persist task-run artifacts through `@zendev-lab/spark-artifacts`
 - read bounded role-run artifact previews for background-run inspection
 - compact historical role-run transcript artifacts through `collectRoleRunArtifactRetentionPlan()`
@@ -33,9 +33,9 @@ Default launch mode:
 
 Timeout semantics:
 
-- Generic `@zendev-lab/spark-roles` timeouts send `SIGTERM` and reject with `RoleRunTimeoutError`.
-- `@zendev-lab/spark-runtime` maps that generic error to Spark `RoleRunTimeoutError`, records the `TaskRun` as `running` with `failureKind: "runtime_timeout"`, and keeps the child in Spark's active role-run tracker so the parent session can inspect or kill it.
-- Other subprocess launch failures become failed Spark runs and clear the Spark active role-run tracker.
+- Generic `@zendev-lab/spark-roles` timeouts abort the active run and reject with `RoleRunTimeoutError`.
+- `@zendev-lab/spark-runtime` maps that generic error to Spark `RoleRunTimeoutError`, records the `TaskRun` as `running` with `failureKind: "runtime_timeout"`, and leaves the active role-run registry visible so the parent session can inspect or kill the run while cleanup completes.
+- Other launch failures become failed Spark runs and clear the Spark active role-run tracker.
 - Stale claim timeout means no heartbeat refreshed the lease; sweepers release the claim, mark the run `cancelled` with `failureKind: "claim_stale"`, and return the task to `pending` for retry.
 
 Attribution:

@@ -11,6 +11,14 @@ import {
   saveSparkConfig,
 } from "../apps/spark-tui/src/host/index.ts";
 
+void test("default Spark providers keep Cursor opt-in and preserve Baidu OneAPI", () => {
+  assert.deepEqual(DEFAULT_SPARK_CONFIG.providers, ["@zendev-lab/spark-ai/baidu-oneapi-provider"]);
+  assert.equal(
+    DEFAULT_SPARK_CONFIG.providers.includes("@zendev-lab/spark-ai/cursor-provider"),
+    false,
+  );
+});
+
 void test("loadSparkConfig returns default config when file is missing", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-config-missing-"));
   try {

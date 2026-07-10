@@ -33,19 +33,20 @@ export interface SparkDaemonCommandPolicyInput {
 
 export interface SparkDaemonCommandPolicyDecision {
   accepted: boolean;
-  tools: string[];
   reasonCode?: string;
   message?: string;
   retryable?: boolean;
 }
 
-const readOnlyTools = ["read", "grep", "find", "ls"] as const;
-const mutationTools = ["bash", "edit", "write"] as const;
 const runtimeServerCommandKinds = new Set<SparkCommandKind>(runtimeServerCommandKindOptions);
 const borrowedWorkspaceAllowedKinds = new Set<SparkCommandKind>([
   "workspace.snapshot.request",
   "diagnostics.request",
   "invocation.cancel.request",
+]);
+const secretBearingLocalRpcMethods = new Set([
+  "provider.auth.api-key.set",
+  "provider.auth.login.respond",
 ]);
 
 export function sparkCommandFromLocalRpcRequest(request: LocalRpcCommandRequestLike): SparkCommand {
@@ -57,7 +58,12 @@ export function sparkCommandFromLocalRpcRequest(request: LocalRpcCommandRequestL
     id: request.id,
     kind,
     route: localRpcRoute(request.method, request.params),
-    payload: jsonObjectPayload(request.params),
+    // Credential-bearing inputs are validated and handled directly by the
+    // daemon runtime and must never enter generic command traces.
+    payload:
+      request.method === "channel.configure" || secretBearingLocalRpcMethods.has(request.method)
+        ? {}
+        : jsonObjectPayload(request.params),
     transport: {
       kind: "local-rpc",
       method: request.method,
@@ -124,7 +130,6 @@ export function decideSparkDaemonCommandPolicy(
     ) {
       return {
         accepted: false,
-        tools: [],
         reasonCode: "UNKNOWN_WORKSPACE_BINDING",
         message: "Command referenced a workspace binding this Spark daemon does not own.",
       };
@@ -134,7 +139,6 @@ export function decideSparkDaemonCommandPolicy(
   if (input.workspaceAccess?.detached && input.command.kind !== "invocation.cancel.request") {
     return {
       accepted: false,
-      tools: [],
       reasonCode: "WORKSPACE_DETACHED",
       message: "Workspace is paused and is not accepting new commands.",
       retryable: true,
@@ -144,7 +148,6 @@ export function decideSparkDaemonCommandPolicy(
   if (input.workspaceAccess?.borrowed && !borrowedWorkspaceAllowedKinds.has(input.command.kind)) {
     return {
       accepted: false,
-      tools: [],
       reasonCode: "WORKSPACE_BORROWED",
       message:
         "Workspace is borrowed by an interactive client and is snapshot-only for server mutations.",
@@ -152,20 +155,18 @@ export function decideSparkDaemonCommandPolicy(
     };
   }
 
-  const needsMutation = input.command.kind === "task.start.request";
+  const needsMutation =
+    input.command.kind === "task.start.request" ||
+    input.command.kind === "assignment.create.request";
   if (needsMutation && input.allowMutation === false) {
     return {
       accepted: false,
-      tools: [...readOnlyTools],
       reasonCode: "MUTATION_NOT_ALLOWED",
       message: "This command needs mutating tools, but mutation is disabled for this Spark daemon.",
     };
   }
 
-  return {
-    accepted: true,
-    tools: needsMutation ? [...readOnlyTools, ...mutationTools] : [...readOnlyTools],
-  };
+  return { accepted: true };
 }
 
 function requiresOwnedWorkspace(kind: SparkCommandKind): boolean {
@@ -185,6 +186,9 @@ function localRpcRoute(method: string, params: unknown): Partial<SparkCommand["r
   }
   if (method === "turn.cancel" && typeof params.invocationId === "string") {
     return { invocationId: params.invocationId };
+  }
+  if (method.startsWith("session.") && typeof params.sessionId === "string") {
+    return { sessionId: params.sessionId };
   }
   if (
     (method === "workspace.register" || method === "workspace.ensure-local") &&

@@ -1,14 +1,18 @@
 export * from "./workflow-role-run-adapter.ts";
 
-import { spawn, type ChildProcess } from "node:child_process";
 import {
   buildRoleRunArgs as buildGenericRoleRunArgs,
+  cancelRoleRun,
   defaultProjectRoleModelSettingsStore,
   defaultUserRoleModelSettingsStore,
+  listActiveRoleRuns,
   parsePiJsonlEvents,
   resolveRoleModelSetting,
   RoleRunTimeoutError as PiRoleRunTimeoutError,
   runRole,
+  sendInputToRoleRun,
+  type ActiveRoleRun,
+  type RoleRunInputControl,
   type RoleRegistry,
   type RoleLaunchMode,
 } from "@zendev-lab/spark-roles";
@@ -93,14 +97,16 @@ export interface SparkRoleInstructionExecutorInput {
 
 /**
  * Host-provided role execution hook. Spark daemon uses this to run headless
- * roles in-process instead of spawning `pi --print --mode json`. Packages that
- * do not provide it keep the legacy Pi child process launcher.
+ * roles through the native executor instead of spawning `pi --print --mode json`.
+ * Packages that do not provide it use the shared headless executor fallback.
  */
 export type SparkRoleInstructionExecutor = (
   input: SparkRoleInstructionExecutorInput,
 ) => Promise<SparkRoleRunResult>;
 
 export { type RoleLaunchMode } from "@zendev-lab/spark-roles";
+
+export type SparkRoleRunInputControl = RoleRunInputControl;
 
 export interface ActiveSparkRoleRunProcess {
   runRef: RunRef;
@@ -110,6 +116,7 @@ export interface ActiveSparkRoleRunProcess {
   cwd: string;
   startedAt: string;
   timedOutAt?: string;
+  inputControl: SparkRoleRunInputControl;
 }
 
 export interface KillSparkRoleRunProcessOptions {
@@ -139,24 +146,14 @@ export interface SendSparkRoleRunInputResult extends ActiveSparkRoleRunProcess {
   errorMessage?: string;
 }
 
-interface TrackedSparkRoleRunProcess extends ActiveSparkRoleRunProcess {
-  child: ChildProcess;
-  closed: boolean;
-  forceKillTimer?: ReturnType<typeof setTimeout>;
-  terminationReason?: string;
-}
-
 const EMPTY_ROLE_RUN_FAILURE_KIND = "runtime_error";
 const MAX_TASK_ROLE_INSTRUCTION_CHARS = 6_000;
 const MAX_TASK_ROLE_TODO_PREVIEW_ITEMS = 2;
 const MAX_ROLE_RUN_ARTIFACT_TEXT_TAIL_BYTES = 12 * 1024;
 const MAX_ROLE_RUN_ARTIFACT_JSON_EVENT_TAIL_COUNT = 10;
 const MAX_ROLE_RUN_ARTIFACT_JSON_EVENT_CHARS = 1_000;
-const DEFAULT_ROLE_RUN_FORCE_KILL_AFTER_MS = 1_000;
 const DEFAULT_ROLE_RUN_SHUTDOWN_WAIT_MS = 3_000;
-const ROLE_RUN_INPUT_ERROR_GRACE_MS = 75;
 const ROLE_RUN_SECRET_PATTERN = /(?:api[-_\s]?key|token|bearer)\s*[:=]\s*[^\s,;}]+/giu;
-const activeSparkRoleRunProcesses = new Map<RunRef, TrackedSparkRoleRunProcess>();
 
 export interface RoleRunFailureDiagnostic {
   failureCategory: string;
@@ -242,14 +239,14 @@ function effectiveRoleRunEnv(
 }
 
 export function listActiveSparkRoleRunProcesses(): ActiveSparkRoleRunProcess[] {
-  return [...activeSparkRoleRunProcesses.values()].map(snapshotSparkRoleRunProcess);
+  return listActiveRoleRuns().map(snapshotActiveRoleRun);
 }
 
 export async function killActiveSparkRoleRunProcesses(
   options: KillSparkRoleRunProcessOptions = {},
 ): Promise<KillSparkRoleRunProcessResult[]> {
-  const targets = selectTrackedSparkRoleRunProcesses(options);
-  return Promise.all(targets.map((record) => killTrackedSparkRoleRunProcess(record, options)));
+  const targets = selectActiveRoleRuns(options);
+  return Promise.all(targets.map((record) => cancelActiveRoleRun(record, options)));
 }
 
 export async function sendInputToActiveSparkRoleRunProcesses(options: {
@@ -259,18 +256,16 @@ export async function sendInputToActiveSparkRoleRunProcesses(options: {
   runNames?: string[];
   text: string;
 }): Promise<SendSparkRoleRunInputResult[]> {
-  const targets = selectTrackedSparkRoleRunProcesses(options);
-  return Promise.all(
-    targets.map((record) => sendInputToTrackedSparkRoleRunProcess(record, options.text)),
-  );
+  const targets = selectActiveRoleRuns(options);
+  return Promise.all(targets.map((record) => sendInputToActiveRoleRun(record, options.text)));
 }
 
-function selectTrackedSparkRoleRunProcesses(options: {
+function selectActiveRoleRuns(options: {
   runRef?: RunRef;
   runRefs?: RunRef[];
   runName?: string;
   runNames?: string[];
-}): TrackedSparkRoleRunProcess[] {
+}): ActiveRoleRun[] {
   const hasRunFilter = options.runRef !== undefined || options.runRefs !== undefined;
   const hasNameFilter = options.runName !== undefined || options.runNames !== undefined;
   const runRefs = new Set([
@@ -281,151 +276,73 @@ function selectTrackedSparkRoleRunProcesses(options: {
     ...(options.runNames ?? []),
     ...(options.runName ? [options.runName] : []),
   ]);
-  return [...activeSparkRoleRunProcesses.values()].filter((record) => {
-    if (hasRunFilter && !runRefs.has(record.runRef)) return false;
+  return listActiveRoleRuns().filter((record) => {
+    if (hasRunFilter && !runRefs.has(record.ref as RunRef)) return false;
     if (hasNameFilter && !runNames.has(record.runName ?? "")) return false;
     return true;
   });
 }
 
-function snapshotSparkRoleRunProcess(
-  record: TrackedSparkRoleRunProcess,
-): ActiveSparkRoleRunProcess {
+function snapshotActiveRoleRun(record: ActiveRoleRun): ActiveSparkRoleRunProcess {
   return {
-    runRef: record.runRef,
+    runRef: record.ref as RunRef,
     roleRef: record.roleRef,
     runName: record.runName,
     pid: record.pid,
     cwd: record.cwd,
     startedAt: record.startedAt,
     timedOutAt: record.timedOutAt,
+    inputControl: record.inputControl,
   };
 }
 
-async function killTrackedSparkRoleRunProcess(
-  record: TrackedSparkRoleRunProcess,
+async function cancelActiveRoleRun(
+  record: ActiveRoleRun,
   options: KillSparkRoleRunProcessOptions,
 ): Promise<KillSparkRoleRunProcessResult> {
   const signal = options.signal ?? "SIGTERM";
   const forceSignal = options.forceSignal ?? "SIGKILL";
-  const forceAfterMs = options.forceAfterMs ?? DEFAULT_ROLE_RUN_FORCE_KILL_AFTER_MS;
   const waitMs = options.waitMs ?? DEFAULT_ROLE_RUN_SHUTDOWN_WAIT_MS;
-  record.terminationReason = options.reason;
-  let signalSent = false;
-  let errorMessage: string | undefined;
-
-  if (!record.closed) {
-    try {
-      signalSent = record.child.kill(signal);
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : String(error);
-    }
-  }
-
-  let forceScheduled = false;
-  if (!record.closed && forceAfterMs >= 0) {
-    forceScheduled = true;
-    record.forceKillTimer = setTimeout(() => {
-      if (!record.closed) record.child.kill(forceSignal);
-    }, forceAfterMs);
-    record.forceKillTimer.unref?.();
-  }
-
-  const closed = await waitForTrackedSparkRoleRunClose(record, waitMs);
+  const signalSent = cancelRoleRun(record.ref, options.reason ?? `spark role-run ${signal}`);
+  const closed = await waitForActiveRoleRunInactive(record.ref, waitMs);
   return {
-    ...snapshotSparkRoleRunProcess(record),
+    ...snapshotActiveRoleRun(record),
     signal,
     forceSignal,
     signalSent,
-    forceScheduled,
+    forceScheduled: false,
     closed,
-    errorMessage,
+    ...(signalSent ? {} : { errorMessage: "active role-run was no longer registered" }),
   };
 }
 
-async function sendInputToTrackedSparkRoleRunProcess(
-  record: TrackedSparkRoleRunProcess,
+async function sendInputToActiveRoleRun(
+  record: ActiveRoleRun,
   text: string,
 ): Promise<SendSparkRoleRunInputResult> {
-  let delivered = false;
-  let errorMessage: string | undefined;
   const payload = text.endsWith("\n") ? text : `${text}\n`;
-  if (record.closed) {
-    errorMessage = "role-run process is already closed";
-  } else if (!record.child.stdin?.writable) {
-    errorMessage = "role-run process stdin is not writable";
-  } else {
-    const stdin = record.child.stdin;
-    try {
-      errorMessage = await new Promise<string | undefined>((resolve) => {
-        let settled = false;
-        let graceTimer: ReturnType<typeof setTimeout> | undefined;
-        const settle = (message: string | undefined): void => {
-          if (settled) return;
-          settled = true;
-          if (graceTimer) clearTimeout(graceTimer);
-          setImmediate(() => stdin.off("error", onError));
-          resolve(message);
-        };
-        const onError = (error: Error): void => {
-          delivered = false;
-          settle(unknownErrorMessage(error));
-        };
-        stdin.on("error", onError);
-        stdin.write(payload, (error?: Error | null) => {
-          if (error) {
-            delivered = false;
-            settle(unknownErrorMessage(error));
-            return;
-          }
-          if (record.closed || stdin.destroyed || !stdin.writable) {
-            delivered = false;
-            settle("role-run process stdin is not writable");
-            return;
-          }
-          graceTimer = setTimeout(() => {
-            delivered = !record.closed && !stdin.destroyed && stdin.writable;
-            settle(delivered ? undefined : "role-run process stdin is not writable");
-          }, ROLE_RUN_INPUT_ERROR_GRACE_MS);
-          graceTimer.unref?.();
-        });
-      });
-    } catch (error) {
-      delivered = false;
-      errorMessage = unknownErrorMessage(error);
-    }
-  }
+  const delivery = await sendInputToRoleRun(record.ref, text);
   return {
-    ...snapshotSparkRoleRunProcess(record),
-    bytes: Buffer.byteLength(payload),
-    delivered,
-    errorMessage,
+    ...snapshotActiveRoleRun(record),
+    ...(delivery ? { inputControl: delivery.inputControl } : {}),
+    bytes: delivery?.bytes ?? Buffer.byteLength(payload),
+    delivered: delivery?.delivered ?? false,
+    errorMessage: delivery?.errorMessage ?? "active role-run was no longer registered",
   };
 }
 
-async function waitForTrackedSparkRoleRunClose(
-  record: TrackedSparkRoleRunProcess,
-  waitMs: number,
-): Promise<boolean> {
-  if (record.closed) return true;
-  return new Promise<boolean>((resolve) => {
-    const done = () => {
-      cleanup();
-      resolve(true);
-    };
-    const timeout = setTimeout(() => {
-      cleanup();
-      resolve(record.closed);
-    }, waitMs);
-    const cleanup = () => {
-      clearTimeout(timeout);
-      record.child.off("close", done);
-      record.child.off("error", done);
-    };
-    timeout.unref?.();
-    record.child.once("close", done);
-    record.child.once("error", done);
-  });
+async function waitForActiveRoleRunInactive(runRef: RunRef, waitMs: number): Promise<boolean> {
+  if (!isActiveRoleRunRegistered(runRef)) return true;
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    if (!isActiveRoleRunRegistered(runRef)) return true;
+  }
+  return !isActiveRoleRunRegistered(runRef);
+}
+
+function isActiveRoleRunRegistered(runRef: RunRef): boolean {
+  return listActiveRoleRuns().some((record) => record.ref === runRef);
 }
 
 export function createRoleRunName(roleRef: RoleRef, runRef: RunRef, roleId?: string): string {
@@ -506,7 +423,6 @@ export function buildRoleRunArgs(input: PiRoleCommandInput): string[] {
 
 export interface RoleRunnerOptions {
   cwd: string;
-  piCommand?: string;
   dryRun?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -531,7 +447,6 @@ export interface SparkTaskRunOptions {
   defaultRoleRef?: RoleRef;
   artifactStore?: ArtifactStore;
   cwd?: string;
-  piCommand?: string;
   dryRun?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -681,7 +596,6 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
       },
       {
         cwd: input.cwd ?? process.cwd(),
-        piCommand: input.piCommand,
         dryRun,
         timeoutMs: input.timeoutMs,
         signal: runSignal,
@@ -1201,7 +1115,6 @@ export async function runRoleInstructionOnly(
 
   const roleOptions = {
     cwd: options.cwd ?? process.cwd(),
-    piCommand: options.piCommand ?? "pi",
     timeoutMs: options.timeoutMs && options.timeoutMs > 0 ? options.timeoutMs : 600_000,
     signal: options.signal,
     sessionDir: options.sessionDir,
@@ -1225,7 +1138,7 @@ export function parseJsonlEvents(text: string): unknown[] {
 async function runNativeSparkRole(
   role: RoleSpec,
   instruction: RoleInstruction,
-  options: Required<Pick<RoleRunnerOptions, "cwd" | "piCommand" | "timeoutMs">> &
+  options: Required<Pick<RoleRunnerOptions, "cwd" | "timeoutMs">> &
     Pick<
       RoleRunnerOptions,
       | "signal"
@@ -1249,9 +1162,6 @@ async function runNativeSparkRole(
     userStore: defaultUserRoleModelSettingsStore(),
   });
   const model = roleModel?.model ?? (options.sessionModel?.trim() || undefined);
-  if (!options.roleExecutor) {
-    return await runProcessSparkRole(role, instruction, options, baseRecord, model);
-  }
   const result = await runRole({
     runRef: baseRecord.ref,
     roleRef: role.ref,
@@ -1260,7 +1170,6 @@ async function runNativeSparkRole(
     instruction: instruction.instruction,
     model,
     allowedTools: options.allowedTools ?? role.allowedTools,
-    piCommand: options.piCommand,
     cwd: options.cwd,
     timeoutMs: options.timeoutMs,
     signal: options.signal,
@@ -1286,145 +1195,6 @@ async function runNativeSparkRole(
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
     jsonEvents: result.jsonEvents ?? [],
-  };
-}
-
-async function runProcessSparkRole(
-  role: RoleSpec,
-  instruction: RoleInstruction,
-  options: Required<Pick<RoleRunnerOptions, "cwd" | "piCommand" | "timeoutMs">> &
-    Pick<
-      RoleRunnerOptions,
-      | "signal"
-      | "sessionDir"
-      | "runName"
-      | "launch"
-      | "forkFromSession"
-      | "env"
-      | "allowedTools"
-      | "onRoleEvent"
-    >,
-  baseRecord: SparkRoleRunResult["record"],
-  model: string | undefined,
-): Promise<SparkRoleRunResult> {
-  const args = buildRoleRunArgs({
-    roleRef: role.ref,
-    systemPrompt: role.systemPrompt,
-    instruction: instruction.instruction,
-    model,
-    allowedTools: options.allowedTools ?? role.allowedTools,
-    sessionDir: options.sessionDir,
-    launch: options.launch,
-    forkFromSession: options.forkFromSession,
-    noSession: options.launch !== "forked",
-  });
-  const child = spawn(options.piCommand, args, {
-    cwd: options.cwd,
-    env: options.env,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  const startedAt = baseRecord.startedAt ?? nowIso();
-  const tracked: TrackedSparkRoleRunProcess = {
-    child,
-    closed: false,
-    runRef: baseRecord.ref,
-    roleRef: role.ref,
-    runName: options.runName,
-    pid: child.pid,
-    cwd: options.cwd,
-    startedAt,
-  };
-  activeSparkRoleRunProcesses.set(baseRecord.ref, tracked);
-
-  const stdoutChunks: Buffer[] = [];
-  const stderrChunks: Buffer[] = [];
-  let spawnError: Error | undefined;
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  let abortCleanup: (() => void) | undefined;
-  let timedOut = false;
-
-  const terminateForTimeout = () => {
-    timedOut = true;
-    tracked.timedOutAt = nowIso();
-    tracked.terminationReason = `role run timed out after ${options.timeoutMs}ms`;
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      // Best-effort; close/error handlers below turn the child state into a timeout result.
-    }
-    tracked.forceKillTimer = setTimeout(() => {
-      if (!tracked.closed) child.kill("SIGKILL");
-    }, DEFAULT_ROLE_RUN_FORCE_KILL_AFTER_MS);
-    tracked.forceKillTimer.unref?.();
-  };
-
-  if (options.timeoutMs > 0) {
-    timeout = setTimeout(terminateForTimeout, options.timeoutMs);
-    timeout.unref?.();
-  }
-  if (options.signal) {
-    const abort = () => {
-      tracked.terminationReason = unknownErrorMessage(abortSignalReason(options.signal));
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        // Best-effort abort; close/error handlers handle process state.
-      }
-    };
-    options.signal.addEventListener("abort", abort, { once: true });
-    abortCleanup = () => options.signal?.removeEventListener("abort", abort);
-    if (options.signal.aborted) abort();
-  }
-
-  child.stdout?.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
-  child.stderr?.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
-  child.once("error", (error) => {
-    spawnError = error;
-  });
-
-  const { code, signal } = await new Promise<{
-    code: number | null;
-    signal: NodeJS.Signals | null;
-  }>((resolve) => {
-    child.once("close", (code, signal) => resolve({ code, signal }));
-  });
-  if (timeout) clearTimeout(timeout);
-  if (tracked.forceKillTimer) clearTimeout(tracked.forceKillTimer);
-  abortCleanup?.();
-  tracked.closed = true;
-  activeSparkRoleRunProcesses.delete(baseRecord.ref);
-
-  const stdout = Buffer.concat(stdoutChunks).toString("utf8");
-  const stderr = Buffer.concat(stderrChunks).toString("utf8");
-  const jsonEvents = parsePiJsonlEvents(stdout);
-  for (const event of jsonEvents) void options.onRoleEvent?.(event);
-  if (timedOut) throw new RoleRunTimeoutError(options.timeoutMs);
-
-  const errorOutput = [
-    stderr.trim(),
-    spawnError ? unknownErrorMessage(spawnError) : "",
-    tracked.terminationReason && code !== 0 ? tracked.terminationReason : "",
-    signal ? `signal ${signal}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-  const status = code === 0 && !spawnError ? "succeeded" : "failed";
-  return {
-    record: {
-      ...baseRecord,
-      status,
-      finishedAt: nowIso(),
-      launch: options.launch ?? "fresh",
-      model,
-      sessionDir: options.launch === "forked" ? options.sessionDir : undefined,
-      forkFromSession: options.launch === "forked" ? options.forkFromSession : undefined,
-      ...(options.launch === "forked"
-        ? {}
-        : { noSession: true, sessionPersistence: "anonymous" as const }),
-    },
-    stdout,
-    stderr: errorOutput || stderr,
-    jsonEvents,
   };
 }
 

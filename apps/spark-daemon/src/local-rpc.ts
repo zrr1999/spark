@@ -1,11 +1,46 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync } from "node:fs";
-import { createConnection, createServer, type Socket } from "node:net";
+import { createServer, type Socket } from "node:net";
 import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import type { SparkCommand, SparkDaemonEvent } from "@zendev-lab/spark-protocol";
+import {
+  parseSparkAssignment,
+  parseSparkDefaultModelSetRequest,
+  parseSparkSessionSetModelRequest,
+  sparkSessionArchiveRequestSchema,
+  sparkSessionBindRequestSchema,
+  sparkSessionCreateRequestSchema,
+  sparkSessionGetRequestSchema,
+  sparkSessionListRequestSchema,
+  sparkSessionUnbindRequestSchema,
+  type SparkAssignment,
+  type SparkCommand,
+  type SparkDaemonEvent,
+  type SparkSessionArchiveRequest,
+  type SparkSessionBindRequest,
+  type SparkSessionCreateRequest,
+  type SparkSessionGetRequest,
+  type SparkSessionListRequest,
+  type SparkSessionUnbindRequest,
+} from "@zendev-lab/spark-protocol";
+import {
+  parseChannelsConfig,
+  type ChannelNotifyInput,
+  type ChannelsConfig,
+} from "@zendev-lab/spark-channels";
+import { SparkSessionRegistryError } from "@zendev-lab/spark-session";
 import type { SparkPaths } from "@zendev-lab/spark-system";
+import {
+  requestSparkDaemonLocalRpcWire,
+  SparkDaemonLocalRpcError,
+  SparkDaemonLocalRpcRemoteError,
+  SparkDaemonLocalRpcUnavailableError,
+} from "@zendev-lab/spark-system/daemon-local-rpc";
 import { sparkCommandFromLocalRpcRequest } from "./command-dispatcher.ts";
+import type {
+  DaemonChannelIngressRuntime,
+  DaemonChannelIngressStatus,
+} from "./channels/ingress.ts";
 import {
   SparkDaemonInvocationRegistry,
   SparkDaemonQueue,
@@ -35,6 +70,14 @@ import {
   RegistrationGrantRefusedError,
   verifySparkDaemonWorkspaceConnection,
 } from "./registration.js";
+import { createDaemonSessionRegistry, type DaemonSessionRegistry } from "./session-registry.ts";
+import type { SparkDaemonModelControl } from "./model-control.ts";
+
+export {
+  createDaemonSessionRegistry,
+  createSerializedDaemonSessionRegistry,
+  type DaemonSessionRegistry,
+} from "./session-registry.ts";
 
 export interface LocalRpcServer {
   socketPath: string;
@@ -148,11 +191,38 @@ export interface LocalWorkspaceClientResult {
 interface LocalRpcHandlerOptions {
   ensureSparkDaemonRegistrationForWorkspace?: typeof ensureSparkDaemonRegistrationForWorkspace;
   verifySparkDaemonWorkspaceConnection?: typeof verifySparkDaemonWorkspaceConnection;
+  channelIngress?: Pick<DaemonChannelIngressRuntime, "status" | "configure" | "reload" | "notify">;
+  sessionRegistry?: DaemonSessionRegistry;
+  modelControl?: SparkDaemonModelControl;
 }
 
 type LocalRpcRequest =
   | { id: string; method: "daemon.status"; sparkCommand: SparkCommand }
   | { id: string; method: "daemon.stop"; sparkCommand: SparkCommand }
+  | {
+      id: string;
+      method: "channel.status";
+      params: { workspaceId: string };
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "channel.reload";
+      params: { workspaceId: string };
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "channel.configure";
+      params: { workspaceId: string; config: ChannelsConfig };
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "channel.notify";
+      params: ChannelNotifyInput & { workspaceId: string };
+      sparkCommand: SparkCommand;
+    }
   | {
       id: string;
       method: "daemon.queue";
@@ -213,6 +283,84 @@ type LocalRpcRequest =
       method: "workspace.executor.ensure";
       params: LocalWorkspaceExecutorEnsureParams;
       sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "session.list";
+      params: SparkSessionListRequest;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "session.get";
+      params: SparkSessionGetRequest;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "session.create";
+      params: SparkSessionCreateRequest;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "session.bind";
+      params: SparkSessionBindRequest;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "session.unbind";
+      params: SparkSessionUnbindRequest;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "session.archive";
+      params: SparkSessionArchiveRequest;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "session.model.set";
+      params: ReturnType<typeof parseSparkSessionSetModelRequest>;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "model.catalog";
+      params: { sessionId?: string };
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "model.default.set";
+      params: ReturnType<typeof parseSparkDefaultModelSetRequest>;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "provider.auth.api-key.set";
+      params: { providerName: string; apiKey: string };
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "provider.auth.logout" | "provider.auth.login.start";
+      params: { providerName: string };
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "provider.auth.login.status" | "provider.auth.login.cancel";
+      params: { flowId: string };
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "provider.auth.login.respond";
+      params: { flowId: string; promptId: string; value: string };
+      sparkCommand: SparkCommand;
     };
 
 type LocalRpcWireRequest = {
@@ -226,7 +374,7 @@ type LocalTurnCancelParams = LocalTurnCancelRequest;
 
 type LocalRpcErrorPayload = {
   message: string;
-  code?: "workspace_path_conflict" | "registration_grant_refused";
+  code?: string;
   kind?: WorkspacePathConflictError["kind"];
 };
 
@@ -242,15 +390,20 @@ export function localRpcSocketPath(paths: SparkPaths): string {
 
 export async function startLocalRpcServer(options: {
   paths: SparkPaths;
+  sparkHome: string;
   db: DatabaseSync;
   onStop?: () => void | Promise<void>;
   eventBus?: SparkDaemonLocalEventBus;
   invocationRegistry?: SparkDaemonInvocationRegistry;
+  channelIngress?: DaemonChannelIngressRuntime;
+  sessionRegistry?: DaemonSessionRegistry;
+  modelControl?: SparkDaemonModelControl;
 }): Promise<LocalRpcServer> {
   const socketPath = localRpcSocketPath(options.paths);
   mkdirSync(dirname(socketPath), { recursive: true, mode: 0o700 });
   rmSync(socketPath, { force: true });
 
+  const sessionRegistry = options.sessionRegistry ?? createDaemonSessionRegistry(options.sparkHome);
   const server = createServer((socket) => {
     handleLocalRpcSocket(
       socket,
@@ -258,6 +411,11 @@ export async function startLocalRpcServer(options: {
       options.db,
       options.onStop,
       options.eventBus,
+      {
+        sessionRegistry,
+        ...(options.channelIngress ? { channelIngress: options.channelIngress } : {}),
+        ...(options.modelControl ? { modelControl: options.modelControl } : {}),
+      },
       options.invocationRegistry,
     );
   });
@@ -302,6 +460,63 @@ export async function requestDaemonStatus(paths: SparkPaths): Promise<LocalDaemo
 
 export async function requestDaemonStop(paths: SparkPaths): Promise<LocalDaemonStopResult> {
   return localRpcRequest(paths, { id: localRequestId(), method: "daemon.stop" }, daemonStop);
+}
+
+export async function requestChannelStatus(
+  paths: SparkPaths,
+  workspaceId: string,
+): Promise<DaemonChannelIngressStatus> {
+  return localRpcRequest(
+    paths,
+    {
+      id: localRequestId(),
+      method: "channel.status",
+      params: { workspaceId },
+    },
+    channelIngressStatus,
+  );
+}
+
+export async function requestChannelConfigure(
+  paths: SparkPaths,
+  workspaceId: string,
+  config: ChannelsConfig,
+): Promise<DaemonChannelIngressStatus> {
+  return localRpcRequest(
+    paths,
+    {
+      id: localRequestId(),
+      method: "channel.configure",
+      params: { workspaceId, config },
+    },
+    channelIngressStatus,
+  );
+}
+
+export async function requestChannelReload(
+  paths: SparkPaths,
+  workspaceId: string,
+): Promise<DaemonChannelIngressStatus> {
+  return localRpcRequest(
+    paths,
+    {
+      id: localRequestId(),
+      method: "channel.reload",
+      params: { workspaceId },
+    },
+    channelIngressStatus,
+  );
+}
+
+export async function requestChannelNotify(
+  paths: SparkPaths,
+  params: ChannelNotifyInput & { workspaceId: string },
+): Promise<unknown> {
+  return localRpcRequest(
+    paths,
+    { id: localRequestId(), method: "channel.notify", params },
+    (value) => value,
+  );
 }
 
 export async function requestDaemonQueue(
@@ -455,46 +670,21 @@ async function localRpcRequest<T>(
   parseResult: (value: unknown) => T,
 ): Promise<T> {
   const socketPath = localRpcSocketPath(paths);
-  return await new Promise<T>((resolve, reject) => {
-    const socket = createConnection(socketPath);
-    let buffer = "";
-
-    const fail = (error: Error) => {
-      socket.destroy();
-      reject(new LocalRpcUnavailableError(error.message));
-    };
-
-    socket.setTimeout(1_000, () => {
-      fail(new Error(`Timed out connecting to ${socketPath}`));
-    });
-    socket.once("error", fail);
-    socket.on("connect", () => {
-      socket.setTimeout(30_000, () => {
-        fail(new Error(`Timed out waiting for daemon RPC response from ${socketPath}`));
-      });
-      socket.write(`${JSON.stringify(request)}\n`);
-    });
-    socket.on("data", (chunk) => {
-      buffer += chunk.toString("utf8");
-      const newline = buffer.indexOf("\n");
-      if (newline === -1) {
-        return;
-      }
-
-      const line = buffer.slice(0, newline);
-      socket.end();
-      try {
-        const response = parseLocalRpcResponse(line, request.id);
-        if (!response.ok) {
-          reject(new Error(response.error.message));
-          return;
-        }
-        resolve(parseResult(response.result));
-      } catch (error) {
-        reject(error);
-      }
-    });
-  });
+  try {
+    const result = await requestSparkDaemonLocalRpcWire<unknown>(request, { socketPath });
+    return parseResult(result);
+  } catch (error) {
+    if (error instanceof SparkDaemonLocalRpcUnavailableError) {
+      throw new LocalRpcUnavailableError(error.message);
+    }
+    if (error instanceof SparkDaemonLocalRpcRemoteError) {
+      throw localRpcResponseError(error.payload);
+    }
+    if (error instanceof SparkDaemonLocalRpcError) {
+      throw new Error(error.message);
+    }
+    throw error;
+  }
 }
 
 function handleLocalRpcSocket(
@@ -503,6 +693,7 @@ function handleLocalRpcSocket(
   db: DatabaseSync,
   onStop: (() => void | Promise<void>) | undefined,
   eventBus: SparkDaemonLocalEventBus | undefined,
+  handlerOptions: LocalRpcHandlerOptions,
   invocationRegistry: SparkDaemonInvocationRegistry | undefined,
 ): void {
   let buffer = "";
@@ -517,10 +708,10 @@ function handleLocalRpcSocket(
     while (newline !== -1) {
       const line = buffer.slice(0, newline);
       buffer = buffer.slice(newline + 1);
-      if (handleLocalRpcStreamLine(line, socket, paths, eventBus)) {
+      if (handleLocalRpcStreamLine(line, socket, paths, eventBus, handlerOptions)) {
         return;
       }
-      void handleLocalRpcLine(line, paths, db, onStop, undefined, invocationRegistry).then(
+      void handleLocalRpcLine(line, paths, db, onStop, handlerOptions, invocationRegistry).then(
         (response) => {
           writeLocalRpcResponse(socket, response);
         },
@@ -535,6 +726,7 @@ function handleLocalRpcStreamLine(
   socket: Socket,
   paths: SparkPaths,
   eventBus: SparkDaemonLocalEventBus | undefined,
+  handlerOptions: LocalRpcHandlerOptions,
 ): boolean {
   let request: { id: string; method: string; params?: unknown };
   try {
@@ -572,11 +764,14 @@ function handleLocalRpcStreamLine(
     try {
       const params = parseLocalTurnSubmitParams(request.params);
       const queue = new SparkDaemonQueue({ paths });
+      const model = await effectiveTurnModel(handlerOptions, params.sessionId);
       const entry = await queue.enqueue({
         type: "session.run",
         sessionId: params.sessionId,
         prompt: params.prompt,
+        ...(model ? { model } : {}),
         ...(params.reset !== undefined ? { reset: params.reset } : {}),
+        ...(params.assignment ? { assignment: params.assignment } : {}),
         actor: "spark-daemon-local-rpc",
       });
       taskFileName = entry.fileName;
@@ -672,6 +867,33 @@ export async function handleLocalRpcLine(
             observedAt: new Date().toISOString(),
           },
         };
+      case "channel.status": {
+        const channelIngress = requireChannelIngress(options);
+        return {
+          id: request.id,
+          ok: true,
+          result: channelIngress.status(request.params.workspaceId),
+        };
+      }
+      case "channel.configure": {
+        const channelIngress = requireChannelIngress(options);
+        const result = await channelIngress.configure(
+          request.params.workspaceId,
+          request.params.config,
+        );
+        return { id: request.id, ok: true, result };
+      }
+      case "channel.reload": {
+        const channelIngress = requireChannelIngress(options);
+        const result = await channelIngress.reload(request.params.workspaceId);
+        return { id: request.id, ok: true, result };
+      }
+      case "channel.notify": {
+        const channelIngress = requireChannelIngress(options);
+        const { workspaceId, ...notifyInput } = request.params;
+        const result = await channelIngress.notify(workspaceId, notifyInput);
+        return { id: request.id, ok: true, result };
+      }
       case "daemon.queue": {
         const queue = new SparkDaemonQueue({ paths });
         const result = await queueList(queue, request.params);
@@ -679,11 +901,14 @@ export async function handleLocalRpcLine(
       }
       case "turn.submit": {
         const queue = new SparkDaemonQueue({ paths });
+        const model = await effectiveTurnModel(options, request.params.sessionId);
         const entry = await queue.enqueue({
           type: "session.run",
           sessionId: request.params.sessionId,
           prompt: request.params.prompt,
+          ...(model ? { model } : {}),
           ...(request.params.reset !== undefined ? { reset: request.params.reset } : {}),
+          ...(request.params.assignment ? { assignment: request.params.assignment } : {}),
           actor: "spark-daemon-local-rpc",
         });
         return {
@@ -801,6 +1026,85 @@ export async function handleLocalRpcLine(
         const client = ensureWorkspaceExecutorClient(db, request.params);
         return { id: request.id, ok: true, result: workspaceClientResult(db, client) };
       }
+      case "session.list": {
+        const sessions = await requireSessionRegistry(options).list(request.params);
+        return { id: request.id, ok: true, result: sessions };
+      }
+      case "session.get": {
+        const session = await requireSessionRegistry(options).get(request.params.sessionId);
+        if (!session) {
+          throw new SparkSessionRegistryError(
+            "session_not_found",
+            `unknown session: ${request.params.sessionId}`,
+          );
+        }
+        return { id: request.id, ok: true, result: session };
+      }
+      case "session.create": {
+        const session = await requireSessionRegistry(options).create(request.params);
+        return { id: request.id, ok: true, result: session };
+      }
+      case "session.bind": {
+        const session = await requireSessionRegistry(options).bind(request.params);
+        return { id: request.id, ok: true, result: session };
+      }
+      case "session.unbind": {
+        const session = await requireSessionRegistry(options).unbind(
+          request.params.sessionId,
+          request.params.externalKey,
+        );
+        return { id: request.id, ok: true, result: session };
+      }
+      case "session.archive": {
+        const session = await requireSessionRegistry(options).archive(request.params.sessionId);
+        return { id: request.id, ok: true, result: session };
+      }
+      case "session.model.set": {
+        const session = await requireModelControl(options).setSessionModel(
+          request.params.sessionId,
+          request.params.model,
+        );
+        return { id: request.id, ok: true, result: session };
+      }
+      case "model.catalog": {
+        const snapshot = await requireModelControl(options).snapshot(request.params.sessionId);
+        return { id: request.id, ok: true, result: snapshot };
+      }
+      case "model.default.set": {
+        const snapshot = await requireModelControl(options).setDefaultModel(request.params.model);
+        return { id: request.id, ok: true, result: snapshot };
+      }
+      case "provider.auth.api-key.set": {
+        const snapshot = await requireModelControl(options).setApiKey(
+          request.params.providerName,
+          request.params.apiKey,
+        );
+        return { id: request.id, ok: true, result: snapshot };
+      }
+      case "provider.auth.logout": {
+        const result = await requireModelControl(options).logout(request.params.providerName);
+        return { id: request.id, ok: true, result };
+      }
+      case "provider.auth.login.start": {
+        const flow = await requireModelControl(options).startOAuth(request.params.providerName);
+        return { id: request.id, ok: true, result: flow };
+      }
+      case "provider.auth.login.status": {
+        const flow = await requireModelControl(options).oauthStatus(request.params.flowId);
+        return { id: request.id, ok: true, result: flow };
+      }
+      case "provider.auth.login.respond": {
+        const flow = await requireModelControl(options).respondOAuth(
+          request.params.flowId,
+          request.params.promptId,
+          request.params.value,
+        );
+        return { id: request.id, ok: true, result: flow };
+      }
+      case "provider.auth.login.cancel": {
+        const flow = await requireModelControl(options).cancelOAuth(request.params.flowId);
+        return { id: request.id, ok: true, result: flow };
+      }
     }
   } catch (error) {
     return {
@@ -823,6 +1127,9 @@ function workspaceClientResult(
 }
 
 function localRpcError(error: unknown): LocalRpcErrorPayload {
+  if (error instanceof SparkSessionRegistryError) {
+    return { message: error.message, code: error.code };
+  }
   if (error instanceof WorkspacePathConflictError) {
     return {
       message: error.message,
@@ -839,6 +1146,39 @@ function localRpcError(error: unknown): LocalRpcErrorPayload {
   return { message: error instanceof Error ? error.message : String(error) };
 }
 
+function requireSessionRegistry(options: LocalRpcHandlerOptions): DaemonSessionRegistry {
+  if (!options.sessionRegistry) {
+    throw new Error("Spark daemon session registry is not available.");
+  }
+  return options.sessionRegistry;
+}
+
+function requireModelControl(options: LocalRpcHandlerOptions): SparkDaemonModelControl {
+  if (!options.modelControl) {
+    throw new Error("Spark daemon model/auth control is not available.");
+  }
+  return options.modelControl;
+}
+
+async function effectiveTurnModel(
+  options: LocalRpcHandlerOptions,
+  sessionId: string,
+): Promise<string | undefined> {
+  if (!options.modelControl) return undefined;
+  const model = await options.modelControl.effectiveModel(sessionId);
+  await options.modelControl.prepareModel(model);
+  return `${model.providerName}/${model.modelId}`;
+}
+
+function requireChannelIngress(
+  options: LocalRpcHandlerOptions,
+): NonNullable<LocalRpcHandlerOptions["channelIngress"]> {
+  if (!options.channelIngress) {
+    throw new Error("Spark daemon channel runtime is not available.");
+  }
+  return options.channelIngress;
+}
+
 function parseLocalRpcRequest(line: string): LocalRpcRequest {
   const value = JSON.parse(line) as unknown;
   if (!isRecord(value) || typeof value.id !== "string") {
@@ -849,6 +1189,27 @@ function parseLocalRpcRequest(line: string): LocalRpcRequest {
   }
   if (value.method === "daemon.stop") {
     return withSparkCommand({ id: value.id, method: value.method });
+  }
+  if (value.method === "channel.status" || value.method === "channel.reload") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: parseLocalChannelWorkspaceParams(value.params),
+    });
+  }
+  if (value.method === "channel.configure") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: parseLocalChannelConfigureParams(value.params),
+    });
+  }
+  if (value.method === "channel.notify") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: parseLocalChannelNotifyParams(value.params),
+    });
   }
   if (value.method === "daemon.queue") {
     return withSparkCommand({
@@ -929,6 +1290,100 @@ function parseLocalRpcRequest(line: string): LocalRpcRequest {
       params: parseLocalWorkspaceExecutorEnsureParams(value.params),
     });
   }
+  if (value.method === "session.list") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkSessionListRequestSchema.parse(value.params ?? {}),
+    });
+  }
+  if (value.method === "session.get") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkSessionGetRequestSchema.parse(value.params),
+    });
+  }
+  if (value.method === "session.create") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkSessionCreateRequestSchema.parse(value.params),
+    });
+  }
+  if (value.method === "session.bind") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkSessionBindRequestSchema.parse(value.params),
+    });
+  }
+  if (value.method === "session.unbind") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkSessionUnbindRequestSchema.parse(value.params),
+    });
+  }
+  if (value.method === "session.archive") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkSessionArchiveRequestSchema.parse(value.params),
+    });
+  }
+  if (value.method === "session.model.set") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: parseSparkSessionSetModelRequest(value.params),
+    });
+  }
+  if (value.method === "model.catalog") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: parseOptionalSessionId(value.params),
+    });
+  }
+  if (value.method === "model.default.set") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: parseSparkDefaultModelSetRequest(value.params),
+    });
+  }
+  if (value.method === "provider.auth.api-key.set") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: parseProviderApiKeyParams(value.params),
+    });
+  }
+  if (value.method === "provider.auth.logout" || value.method === "provider.auth.login.start") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: parseProviderNameParams(value.params),
+    });
+  }
+  if (
+    value.method === "provider.auth.login.status" ||
+    value.method === "provider.auth.login.cancel"
+  ) {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: parseOAuthFlowIdParams(value.params),
+    });
+  }
+  if (value.method === "provider.auth.login.respond") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: parseOAuthFlowResponseParams(value.params),
+    });
+  }
   if (typeof value.method !== "string") {
     throw new Error("Invalid local RPC request.");
   }
@@ -953,6 +1408,7 @@ type LocalTurnSubmitParams = {
   sessionId: string;
   prompt: string;
   reset?: boolean;
+  assignment?: SparkAssignment;
 };
 
 type LocalWorkspaceRegisterParams = {
@@ -983,6 +1439,7 @@ function localTurnSubmitParams(params: LocalTurnSubmitParams): LocalTurnSubmitPa
     sessionId: params.sessionId,
     prompt: params.prompt,
     ...(params.reset !== undefined ? { reset: params.reset } : {}),
+    ...(params.assignment ? { assignment: params.assignment } : {}),
   };
 }
 
@@ -1073,6 +1530,52 @@ function parseLocalDaemonQueueParams(value: unknown): LocalDaemonQueueParams {
   return params;
 }
 
+function parseLocalChannelWorkspaceParams(value: unknown): { workspaceId: string } {
+  if (!isRecord(value) || typeof value.workspaceId !== "string" || !value.workspaceId.trim()) {
+    throw new Error("channel.status/reload requires workspaceId.");
+  }
+  return { workspaceId: value.workspaceId.trim() };
+}
+
+function parseLocalChannelConfigureParams(value: unknown): {
+  workspaceId: string;
+  config: ChannelsConfig;
+} {
+  if (!isRecord(value) || value.config === undefined) {
+    throw new Error("Invalid local RPC channel configure params.");
+  }
+  if (typeof value.workspaceId !== "string" || !value.workspaceId.trim()) {
+    throw new Error("channel.configure requires workspaceId.");
+  }
+  return {
+    workspaceId: value.workspaceId.trim(),
+    config: parseChannelsConfig(value.config),
+  };
+}
+
+function parseLocalChannelNotifyParams(
+  value: unknown,
+): ChannelNotifyInput & { workspaceId: string } {
+  if (!isRecord(value) || typeof value.action !== "string") {
+    throw new Error("Invalid local RPC channel notify params.");
+  }
+  if (typeof value.workspaceId !== "string" || !value.workspaceId.trim()) {
+    throw new Error("channel.notify requires workspaceId.");
+  }
+  const action = value.action;
+  if (action !== "send" && action !== "test" && action !== "list") {
+    throw new Error("channel.notify action must be send, test, or list.");
+  }
+  return {
+    workspaceId: value.workspaceId.trim(),
+    action,
+    ...(typeof value.adapter === "string" ? { adapter: value.adapter } : {}),
+    ...(typeof value.route === "string" ? { route: value.route } : {}),
+    ...(typeof value.recipient === "string" ? { recipient: value.recipient } : {}),
+    ...(typeof value.text === "string" ? { text: value.text } : {}),
+  };
+}
+
 function parseLocalTurnSubmitParams(value: unknown): LocalTurnSubmitParams {
   if (!isRecord(value) || typeof value.sessionId !== "string" || typeof value.prompt !== "string") {
     throw new Error("Invalid local RPC turn submit params.");
@@ -1085,6 +1588,9 @@ function parseLocalTurnSubmitParams(value: unknown): LocalTurnSubmitParams {
     sessionId,
     prompt: value.prompt,
     ...(typeof value.reset === "boolean" ? { reset: value.reset } : {}),
+    ...(value.assignment === undefined
+      ? {}
+      : { assignment: parseSparkAssignment(value.assignment) }),
   };
 }
 
@@ -1100,6 +1606,54 @@ function parseLocalTurnCancelParams(value: unknown): LocalTurnCancelParams {
       ? { reason: value.reason.trim() }
       : {}),
   };
+}
+
+function parseOptionalSessionId(value: unknown): { sessionId?: string } {
+  if (value === undefined) return {};
+  if (!isRecord(value)) throw new Error("Invalid model.catalog params.");
+  const sessionId = typeof value.sessionId === "string" ? value.sessionId.trim() : "";
+  return sessionId ? { sessionId } : {};
+}
+
+function parseProviderNameParams(value: unknown): { providerName: string } {
+  if (!isRecord(value) || typeof value.providerName !== "string") {
+    throw new Error("Provider auth request requires providerName.");
+  }
+  const providerName = value.providerName.trim();
+  if (!providerName) throw new Error("Provider auth request requires providerName.");
+  return { providerName };
+}
+
+function parseProviderApiKeyParams(value: unknown): { providerName: string; apiKey: string } {
+  const { providerName } = parseProviderNameParams(value);
+  if (!isRecord(value) || typeof value.apiKey !== "string" || !value.apiKey.trim()) {
+    throw new Error("Provider API key request requires apiKey.");
+  }
+  return { providerName, apiKey: value.apiKey };
+}
+
+function parseOAuthFlowIdParams(value: unknown): { flowId: string } {
+  if (!isRecord(value) || typeof value.flowId !== "string" || !value.flowId.trim()) {
+    throw new Error("OAuth flow request requires flowId.");
+  }
+  return { flowId: value.flowId.trim() };
+}
+
+function parseOAuthFlowResponseParams(value: unknown): {
+  flowId: string;
+  promptId: string;
+  value: string;
+} {
+  const { flowId } = parseOAuthFlowIdParams(value);
+  if (
+    !isRecord(value) ||
+    typeof value.promptId !== "string" ||
+    !value.promptId.trim() ||
+    typeof value.value !== "string"
+  ) {
+    throw new Error("OAuth flow response requires promptId and value.");
+  }
+  return { flowId, promptId: value.promptId.trim(), value: value.value };
 }
 
 function parseLocalWorkspaceRegisterParams(value: unknown): LocalWorkspaceRegisterParams {
@@ -1194,38 +1748,27 @@ function parseLocalWorkspaceExecutorEnsureParams(
   };
 }
 
-function parseLocalRpcResponse(line: string, expectedId: string): LocalRpcResponse {
-  const value = JSON.parse(line) as unknown;
-  if (!isRecord(value) || value.id !== expectedId || typeof value.ok !== "boolean") {
-    throw new Error("Invalid local RPC response.");
-  }
-  if (value.ok === false) {
-    const message =
-      isRecord(value.error) && typeof value.error.message === "string"
-        ? value.error.message
-        : "Local RPC failed.";
-    const code =
-      isRecord(value.error) && value.error.code === "workspace_path_conflict"
-        ? value.error.code
-        : isRecord(value.error) && value.error.code === "registration_grant_refused"
-          ? value.error.code
-          : undefined;
-    const kind =
-      isRecord(value.error) &&
-      (value.error.kind === "same-path" ||
-        value.error.kind === "same-key" ||
-        value.error.kind === "nested")
-        ? value.error.kind
+function localRpcResponseError(value: unknown): Error {
+  const message =
+    isRecord(value) && typeof value.message === "string" ? value.message : "Local RPC failed.";
+  const code =
+    isRecord(value) && value.code === "workspace_path_conflict"
+      ? value.code
+      : isRecord(value) && value.code === "registration_grant_refused"
+        ? value.code
         : undefined;
-    if (code === "workspace_path_conflict" && kind) {
-      throw new WorkspacePathConflictError(message, kind);
-    }
-    if (code === "registration_grant_refused") {
-      throw new RegistrationGrantRefusedError(message);
-    }
-    return { id: value.id, ok: false, error: { message } };
+  const kind =
+    isRecord(value) &&
+    (value.kind === "same-path" || value.kind === "same-key" || value.kind === "nested")
+      ? value.kind
+      : undefined;
+  if (code === "workspace_path_conflict" && kind) {
+    return new WorkspacePathConflictError(message, kind);
   }
-  return { id: value.id, ok: true, result: value.result };
+  if (code === "registration_grant_refused") {
+    return new RegistrationGrantRefusedError(message);
+  }
+  return new Error(message);
 }
 
 function workspaceList(value: unknown): WorkspaceListResult {
@@ -1247,6 +1790,71 @@ function daemonStatus(value: unknown): LocalDaemonStatusResult {
     queue: queueCountsResult(value.queue),
     observedAt: typeof value.observedAt === "string" ? value.observedAt : new Date().toISOString(),
   };
+}
+
+function channelIngressStatus(value: unknown): DaemonChannelIngressStatus {
+  if (
+    !isRecord(value) ||
+    value.plane !== "daemon" ||
+    value.resource !== "channel" ||
+    value.available !== true ||
+    typeof value.workspaceId !== "string" ||
+    typeof value.configPath !== "string" ||
+    typeof value.configured !== "boolean" ||
+    typeof value.ingressEnabled !== "boolean" ||
+    !isChannelRuntimeState(value.state) ||
+    !Array.isArray(value.adapters) ||
+    !Array.isArray(value.routes) ||
+    typeof value.text !== "string"
+  ) {
+    throw new Error("Invalid local RPC channel status result.");
+  }
+  return {
+    plane: "daemon",
+    resource: "channel",
+    workspaceId: value.workspaceId,
+    configPath: value.configPath,
+    available: true,
+    configured: value.configured,
+    ingressEnabled: value.ingressEnabled,
+    state: value.state,
+    adapters: value.adapters.map((adapter) => channelAdapterStatus(adapter)),
+    routes: value.routes.map((route) => channelRouteStatus(route)),
+    ...(typeof value.lastReloadedAt === "string" ? { lastReloadedAt: value.lastReloadedAt } : {}),
+    ...(typeof value.error === "string" ? { error: value.error } : {}),
+    observedAt: typeof value.observedAt === "string" ? value.observedAt : new Date().toISOString(),
+    text: value.text,
+  };
+}
+
+function isChannelRuntimeState(value: unknown): value is DaemonChannelIngressStatus["state"] {
+  return (
+    value === "unconfigured" || value === "running" || value === "stopped" || value === "degraded"
+  );
+}
+
+function channelAdapterStatus(value: unknown): DaemonChannelIngressStatus["adapters"][number] {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    typeof value.type !== "string" ||
+    typeof value.running !== "boolean"
+  ) {
+    throw new Error("Invalid local RPC channel adapter status.");
+  }
+  return { id: value.id, type: value.type, running: value.running };
+}
+
+function channelRouteStatus(value: unknown): DaemonChannelIngressStatus["routes"][number] {
+  if (
+    !isRecord(value) ||
+    typeof value.name !== "string" ||
+    typeof value.adapter !== "string" ||
+    typeof value.recipient !== "string"
+  ) {
+    throw new Error("Invalid local RPC channel route status.");
+  }
+  return { name: value.name, adapter: value.adapter, recipient: value.recipient };
 }
 
 function daemonQueue(value: unknown): LocalDaemonQueueResult {
@@ -1418,6 +2026,9 @@ function validateTurnSubmitTask(value: unknown): SparkDaemonTask {
     ...(typeof value.actor === "string" ? { actor: value.actor } : {}),
     ...(typeof value.note === "string" ? { note: value.note } : {}),
     ...(typeof value.input === "string" ? { input: value.input } : {}),
+    ...(value.assignment === undefined
+      ? {}
+      : { assignment: parseSparkAssignment(value.assignment) }),
   };
 }
 

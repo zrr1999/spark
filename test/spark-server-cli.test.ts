@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { TaskGraph } from "@zendev-lab/spark-tasks";
 
+import type { SparkDaemonClientOptions } from "../apps/spark-tui/src/cli/daemon.ts";
 import { parseSparkCliCommand } from "../apps/spark-tui/src/cli.ts";
 import {
   handleSparkServerCliCommand,
@@ -276,6 +281,99 @@ void test("runSparkServerCliCommand prints JSON for server status and task list"
   assert.equal(tasks.result.plane, "server");
   assert.equal(tasks.result.resource, "task");
   assert.equal(tasks.result.tasks.length, 3);
+});
+
+void test("spark server assign submits the daemon session.run path without a side assignment store", async () => {
+  const root = await mkdtemp(join(tmpdir(), "spark-server-assign-"));
+  const sparkHome = join(root, "spark-home");
+  const previousSparkHome = process.env.SPARK_HOME;
+  const submissions: Array<{
+    sessionId: string;
+    prompt: string;
+    reset?: boolean;
+    assignment?: unknown;
+  }> = [];
+  const now = "2026-07-09T00:00:00.000Z";
+  try {
+    process.env.SPARK_HOME = sparkHome;
+    const session = {
+      sessionId: "sess_cli_assign",
+      workspaceId: "ws_cli",
+      title: "CLI assign",
+      status: "ready" as const,
+      bindings: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    const daemonClient = {
+      sparkHome,
+      managedSessions: {
+        get: async () => session,
+        create: async () => session,
+        list: async () => [session],
+        bind: async () => session,
+        unbind: async () => session,
+        archive: async () => ({ ...session, status: "archived" as const }),
+      },
+      daemonStatus: async () => ({
+        observedAt: now,
+        servers: [],
+        queue: { inbox: 0, processed: 0, failed: 0 },
+      }),
+      turnSubmit: async (_paths, input) => {
+        submissions.push(input);
+        return {
+          fileName: "assignment.json",
+          filePath: join(sparkHome, "daemon", "inbox", "assignment.json"),
+          task: { type: "session.run" as const, ...input },
+          observedAt: now,
+        };
+      },
+    } satisfies SparkDaemonClientOptions;
+
+    const result = await handleSparkServerCliCommand(
+      {
+        resource: "assign",
+        verb: "create",
+        json: true,
+        sessionId: session.sessionId,
+        goal: "ship the assign path",
+        title: "Ship assign",
+        role: "role:reviewer",
+        workspaceId: "ws_override",
+      },
+      { graph: new TaskGraph(), daemonClient } as SparkServerCliOptions & {
+        daemonClient: SparkDaemonClientOptions;
+      },
+    );
+
+    assert.equal(result.action, "assign");
+    assert.equal(result.result.commandKind, "assignment.create.request");
+    assert.deepEqual(submissions, [
+      {
+        sessionId: "sess_cli_assign",
+        prompt: "ship the assign path",
+        reset: undefined,
+        assignment: {
+          goal: "ship the assign path",
+          target: {
+            sessionId: "sess_cli_assign",
+            role: "role:reviewer",
+            workspaceId: "ws_override",
+          },
+          constraints: [],
+          evidence: [],
+          source: { kind: "cli" },
+          title: "Ship assign",
+        },
+      },
+    ]);
+    assert.equal(existsSync(join(sparkHome, "assignments", "v1", "assignments.json")), false);
+  } finally {
+    if (previousSparkHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousSparkHome;
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 function fixtureServerOptions() {

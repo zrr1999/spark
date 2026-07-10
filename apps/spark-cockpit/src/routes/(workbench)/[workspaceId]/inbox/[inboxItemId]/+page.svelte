@@ -1,14 +1,12 @@
 <script lang="ts">
   import Icon from "$lib/Icon.svelte";
-  import { canActOnInboxApproval, canQuickDecideInboxApproval } from "$lib/inbox-approval-display";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
+  import { workspacePath } from "$lib/workspace-routes";
 
   let { data, form } = $props();
   let t = $derived(data.messages.inboxDetail);
   let common = $derived(data.messages.common);
   let latestResponse = $derived(data.latestResponses[0]);
-  let canAct = $derived(canActOnInboxApproval(data.item));
-  let canQuickDecide = $derived(canQuickDecideInboxApproval(data.item));
 
   function formatRelative(value: string | null) {
     return formatRelativeTime(value, data.locale, common);
@@ -28,6 +26,16 @@
 </svelte:head>
 
 <section class="inbox-detail-page">
+  <nav class="page-actions" aria-label={t.navigation.aria}>
+    <a href={workspacePath({ slug: data.item.workspaceSlug }, "/inbox")}>
+      <span class="back-icon"><Icon name="chevron" size={15} /></span>{t.navigation.back}
+    </a>
+    {#if data.item.sessionId}
+      <a href={`/sessions/${encodeURIComponent(data.item.sessionId)}`}>
+        <Icon name="spark" size={15} />{t.navigation.conversation}
+      </a>
+    {/if}
+  </nav>
   <header class="hero">
     <div>
       <p class="eyebrow">{data.item.requestKind} · {data.item.runtimeName}</p>
@@ -39,8 +47,8 @@
 
   <section class="meta-grid" aria-label={t.meta.aria}>
     <article>
-      <span>{t.meta.project}</span>
-      <strong>{data.item.projectName ?? common.fallback.workspaceScope}</strong>
+      <span>{t.meta.scope}</span>
+      <strong>{common.fallback.workspaceScope}</strong>
     </article>
     <article>
       <span>{t.meta.runnerWorkspace}</span>
@@ -67,35 +75,6 @@
 
       {#if form?.message}
         <div class="form-error" role="alert">{form.message}</div>
-      {/if}
-
-      {#if canAct && data.item.approval.actionable}
-        <section class="approval-card" aria-label="Approval center">
-          <p class="panel-kicker">Approval center</p>
-          <h3>{data.item.approval.title}</h3>
-          <p>{data.item.approval.summary}</p>
-          {#if data.item.approval.riskSummary.length > 0}
-            <ul>
-              {#each data.item.approval.riskSummary as risk}
-                <li>{risk}</li>
-              {/each}
-            </ul>
-          {/if}
-          {#if canQuickDecide}
-            <form method="POST" action="?/decide" class="approval-form">
-              <label class="question-block">
-                <span>{t.response.operatorNote}</span>
-                <textarea name="operatorNote" rows="3" placeholder={t.response.operatorNotePlaceholder}></textarea>
-              </label>
-              <div class="form-actions">
-                <button class="primary-action" type="submit" name="decision" value="approve">{data.item.approval.approveLabel}</button>
-                <button class="danger-action" type="submit" name="decision" value="reject">{data.item.approval.rejectLabel}</button>
-              </div>
-            </form>
-          {:else}
-            <p class="approval-hint">Answer the required questions below, or cancel the request to reject it.</p>
-          {/if}
-        </section>
       {/if}
 
       {#if data.item.status === "pending" && data.item.requestStatus === "pending"}
@@ -221,10 +200,36 @@
     gap: 24px;
   }
 
+  .page-actions {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+  }
+
+  .page-actions a {
+    align-items: center;
+    color: var(--color-ink-muted);
+    display: inline-flex;
+    font-size: 13px;
+    font-weight: 750;
+    gap: 5px;
+    text-decoration: none;
+  }
+
+  .back-icon {
+    display: inline-flex;
+    transform: rotate(180deg);
+  }
+
   .hero {
     align-items: center;
     display: flex;
     justify-content: space-between;
+  }
+
+  .hero > div {
+    min-width: 0;
   }
 
   .eyebrow,
@@ -247,6 +252,7 @@
   h1 {
     font-size: 34px;
     letter-spacing: -0.03em;
+    overflow-wrap: anywhere;
   }
 
   .lede,
@@ -346,31 +352,6 @@
     padding: 22px 24px 24px;
   }
 
-  .approval-card {
-    background: var(--color-primary-weak);
-    border: 1px solid var(--color-primary-soft);
-    border-radius: 14px;
-    display: grid;
-    gap: 12px;
-    margin: 22px 24px 0;
-    padding: 18px;
-  }
-
-  .approval-card ul {
-    color: var(--color-ink-subtle);
-    margin: 0;
-    padding-left: 20px;
-  }
-
-  .approval-form {
-    padding: 0;
-  }
-
-  .approval-hint {
-    color: var(--color-ink-subtle);
-    font-weight: 700;
-  }
-
   .question-block {
     border: 0;
     display: grid;
@@ -425,8 +406,7 @@
   }
 
   .primary-action,
-  .secondary-action,
-  .danger-action {
+  .secondary-action {
     align-items: center;
     border-radius: 12px;
     display: inline-flex;
@@ -447,13 +427,6 @@
     background: white;
     border: 1px solid var(--color-border);
     color: var(--color-ink-muted);
-    cursor: pointer;
-  }
-
-  .danger-action {
-    background: var(--color-danger-soft);
-    border: 0;
-    color: var(--color-danger-strong);
     cursor: pointer;
   }
 
@@ -515,33 +488,19 @@
   }
 
   @media (max-width: 640px) {
-    .hero,
-    .panel-header {
+    .hero {
       align-items: flex-start;
       flex-direction: column;
-      gap: 14px;
+      gap: 12px;
     }
 
-    .approval-card {
-      margin: 16px 16px 0;
-      padding: 16px;
+    h1 {
+      font-size: 28px;
     }
 
-    form,
-    .audit-list,
-    details {
-      padding: 18px 16px 20px;
-    }
-
-    .form-actions {
-      display: grid;
-      grid-template-columns: 1fr;
-    }
-
-    .primary-action,
-    .secondary-action,
-    .danger-action {
-      width: 100%;
+    .panel-header,
+    .panel-header.compact {
+      padding: 18px;
     }
   }
 </style>

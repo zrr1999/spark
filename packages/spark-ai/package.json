@@ -11,7 +11,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./control": "./src/control/index.ts",
     "./baidu-oneapi-provider": "./src/baidu-oneapi-provider.ts",
+    "./cursor-provider": "./src/cursor-provider.ts",
     "./models-extension": "./src/models-extension.ts"
   },
   "publishConfig": {
@@ -21,7 +23,8 @@
     "check": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.80.3",
+    "@cursor/sdk": "1.0.23",
+    "@earendil-works/pi-ai": "^0.80.6",
     "@zendev-lab/spark-extension-api": "workspace:^",
     "typebox": "^1.2.13"
   }

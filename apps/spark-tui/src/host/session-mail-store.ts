@@ -63,7 +63,7 @@ export class SparkSessionMailStore {
   ): Promise<{ message: SparkSessionMailMessage; path: string }> {
     const toSessionId = normalizeRequiredSessionId(input.toSessionId, "toSessionId");
     const body = input.body.trim();
-    if (!body) throw new Error("spark sessions mailto requires --message <text>");
+    if (!body) throw new Error("spark daemon session mailto requires --message <text>");
     const message: SparkSessionMailMessage = {
       id: `mail:${randomUUID()}`,
       toSessionId,

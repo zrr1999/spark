@@ -1,4 +1,7 @@
-export const agentsCockpitSource = "agents-cockpit";
+import { sparkAgentsCockpitSource } from "@zendev-lab/spark-protocol/command-sources";
+import type { AgentsProductProjection } from "@zendev-lab/spark-server/agents-product";
+
+export const agentsCockpitSource = sparkAgentsCockpitSource;
 
 export interface AgentsChatSerializedEvent {
   id: string;
@@ -13,45 +16,9 @@ export interface AgentsChatSerializedEvent {
   createdAt: string;
 }
 
-export interface AgentsChatCommandLive {
-  id: string;
-  kind: string;
-  title: string | null;
-  payloadJson: string;
-  status: string;
-  deliveryStatus: string | null;
-  createdAt: string;
-  updatedAt: string;
-  attemptCount: number | null;
-  lastAttemptAt: string | null;
-  ackedAt: string | null;
-  rejectedAt: string | null;
-  rejectCode: string | null;
-  rejectMessage: string | null;
-  runtimeWorkspaceName: string | null;
-  runtimeName: string | null;
-  runtimeStatus: string | null;
-}
-
-export interface AgentsChatInvocationLive {
-  id: string;
-  runtimeInvocationId: string;
-  commandId: string | null;
-  taskRuntimeId: string | null;
-  agentName: string | null;
-  status: string;
-  updatedAt: string;
-}
-
-export interface AgentsChatLogChunkLive {
-  id: string;
-  runtimeInvocationId: string;
-  agentName: string | null;
-  stream: string;
-  sequence: number;
-  content: string;
-  createdAt: string;
-}
+export type AgentsChatCommandLive = AgentsProductProjection["commands"][number];
+export type AgentsChatInvocationLive = AgentsProductProjection["invocations"][number];
+export type AgentsChatLogChunkLive = AgentsProductProjection["logChunks"][number];
 
 export interface AgentsChatLiveState {
   workspaceId: string;

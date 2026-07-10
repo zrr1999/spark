@@ -13,19 +13,23 @@ import {
 } from "./projection-services";
 import { loadProjectCockpit } from "./project-cockpit";
 
+function offsetIso(baseIso: string, offsetMs: number) {
+  return new Date(Date.parse(baseIso) + offsetMs).toISOString();
+}
+
 function setupProject() {
   const db = openMemoryDatabase();
   migrate(db);
 
-  const now = "2026-05-22T00:00:00.000Z";
+  const now = new Date(Date.now() - 10_000).toISOString();
   const runtimeId = createId("rt");
   const runtimeWorkspaceBindingId = createId("rtwb");
 
   db.prepare(
     `INSERT INTO runtime_connections
-      (id, installation_id, name, status, protocol_version, capabilities_json, labels_json, created_at, updated_at)
-     VALUES (?, ?, ?, 'online', ?, '{}', '{}', ?, ?)`,
-  ).run(runtimeId, "install-test", "Test runtime", runtimeProtocolVersion, now, now);
+      (id, installation_id, name, status, protocol_version, capabilities_json, labels_json, last_heartbeat_at, created_at, updated_at)
+     VALUES (?, ?, ?, 'online', ?, '{}', '{}', ?, ?, ?)`,
+  ).run(runtimeId, "install-test", "Test runtime", runtimeProtocolVersion, now, now, now);
 
   db.prepare(
     `INSERT INTO runtime_workspace_bindings
@@ -158,7 +162,7 @@ describe("project cockpit projection", () => {
         title: "Pending project task",
         payload: { prompt: "Inspect the workspace." },
       },
-      createdAt: "2026-05-22T00:00:02.000Z",
+      createdAt: offsetIso(now, 2_000),
     });
     const ackedCommand = queueCommandForWorkspaceOwner(db, {
       workspaceId: workspace.id,
@@ -168,7 +172,7 @@ describe("project cockpit projection", () => {
         title: "Acked project task",
         payload: { prompt: "Run the workspace." },
       },
-      createdAt: "2026-05-22T00:00:01.000Z",
+      createdAt: offsetIso(now, 1_000),
     });
     const rejectedCommand = queueCommandForWorkspaceOwner(db, {
       workspaceId: workspace.id,
@@ -187,7 +191,7 @@ describe("project cockpit projection", () => {
       projectId: project.id,
       commandId: ackedCommand.id,
       payload: { accepted: true, invocationId: createId("inv") },
-      acknowledgedAt: "2026-05-22T00:00:03.000Z",
+      acknowledgedAt: offsetIso(now, 3_000),
     });
     recordCommandReject(db, {
       runtimeWorkspaceBindingId,
@@ -195,7 +199,7 @@ describe("project cockpit projection", () => {
       projectId: project.id,
       commandId: rejectedCommand.id,
       payload: { reasonCode: "policy_denied", message: "Mutation disabled" },
-      rejectedAt: "2026-05-22T00:00:04.000Z",
+      rejectedAt: offsetIso(now, 4_000),
     });
     const invocationId = createId("inv");
 
@@ -245,18 +249,28 @@ describe("project cockpit projection", () => {
         title: "Acked project task",
         status: "acked",
         deliveryStatus: "acked",
-        ackedAt: "2026-05-22T00:00:03.000Z",
+        ackedAt: offsetIso(now, 3_000),
       },
       {
         id: rejectedCommand.id,
         title: "Rejected project task",
         status: "rejected",
         deliveryStatus: "rejected",
-        rejectedAt: "2026-05-22T00:00:04.000Z",
+        rejectedAt: offsetIso(now, 4_000),
         rejectCode: "policy_denied",
         rejectMessage: "Mutation disabled",
       },
     ]);
+    expect(cockpit?.invocations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          commandId: ackedCommand.id,
+          runtimeInvocationId: invocationId,
+          agentName: "pi",
+          status: "running",
+        }),
+      ]),
+    );
     expect(cockpit?.logChunks).toMatchObject([
       {
         runtimeInvocationId: invocationId,

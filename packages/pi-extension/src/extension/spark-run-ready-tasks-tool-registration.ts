@@ -23,6 +23,7 @@ import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registra
 
 interface SparkRunReadyTasksToolDeps {
   ensureWorkflowRunManager: (cwd: string, ctx: SparkToolContext) => void;
+  piCommand?: (cwd: string, ctx: SparkToolContext) => string | undefined;
 }
 
 export function normalizeSparkRunReadyTasksBoolean(
@@ -105,6 +106,7 @@ export function registerSparkRunReadyTasksTool(
           details: { found: false, error: "no_current_project" },
         };
       const registry = await createSparkRoleRegistry(cwd);
+      const piCommand = deps.piCommand?.(cwd, ctx) ?? "pi";
       if (!dryRun) {
         const settingsResult = await ensureRoleModelSettingsForProject({
           graph,
@@ -112,6 +114,7 @@ export function registerSparkRunReadyTasksTool(
           registry,
           cwd,
           ctx,
+          piCommand,
         });
         if (!settingsResult.ready) {
           return {
@@ -158,7 +161,6 @@ export function registerSparkRunReadyTasksTool(
         registry,
         artifactStore,
         cwd,
-        piCommand: "pi",
         sessionModel: sessionModelName(ctx.model),
       });
       const result = await runReadyTasks({

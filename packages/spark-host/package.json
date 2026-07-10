@@ -13,6 +13,7 @@
     ".": "./src/runtime.ts",
     "./headless-loader": "./src/headless-loader.ts",
     "./keybindings": "./src/keybindings.ts",
+    "./system-prompt": "./src/system-prompt.ts",
     "./spark-widget": "./src/spark-widget.ts",
     "./spark-command-registration": "./src/spark-command-registration.ts",
     "./spark-command-workflow-registration": "./src/spark-command-workflow-registration.ts",

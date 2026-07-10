@@ -9,6 +9,8 @@ export const load: LayoutServerLoad = ({ cookies, request, url }) => {
     acceptLanguage: request.headers.get("accept-language"),
   });
 
+  // Only persist an explicit language choice. Do not seed the cookie from
+  // Accept-Language — otherwise a one-off English probe pins the UI forever.
   if (requestedLocale) {
     cookies.set(localeCookieName, locale, {
       path: "/",

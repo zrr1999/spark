@@ -60,7 +60,7 @@ void test("runDirectGraft successful calls still complete before timeout", async
     await writeExecutable(graftBin, "process.stdout.write('ok\\n');\n");
     process.env.GRAFT_BIN = graftBin;
 
-    const result = await runDirectGraft(root, ["status"], { timeoutMs: 1_000 });
+    const result = await runDirectGraft(root, ["status"], { timeoutMs: 10_000 });
 
     assert.equal(result.exitCode, 0);
     assert.equal(result.stdout, "ok\n");

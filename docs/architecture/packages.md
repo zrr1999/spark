@@ -30,6 +30,8 @@ the boundary checker.
 ```text
 spark-extension-api   # host/tool contracts, refs, light fs/json/time helpers
 spark-protocol        # daemon/server protocol schemas, state-ownership constants, fixtures
+spark-session         # daemon-owned session registry + channel binding table
+spark-channels        # Feishu/Infoflow adapters, routes, notify (I/O only; no session ownership)
 
 spark-artifacts       # artifact/evidence store and canonical artifact tool
 spark-loop            # generic loop/goal primitives plus session goal/loop stores

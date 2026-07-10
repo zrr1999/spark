@@ -185,8 +185,8 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
 
     const response = await services.agentLoop.submit("hello");
     assert.equal(response ? assistantMessageToText(response) : "", "boot ok:1");
-    assert.match(captured.systemPrompt ?? "", /native spark-tui host/);
-    assert.doesNotMatch(captured.systemPrompt ?? "", /You are Spark,/);
+    assert.match(captured.systemPrompt ?? "", /You are Spark,/);
+    assert.doesNotMatch(captured.systemPrompt ?? "", /running in the native spark-tui host/);
     assert.match(captured.systemPrompt ?? "", /Spark default research phase\./);
     assert.match(captured.systemPrompt ?? "", /Tools: task_read, task_write, assign/);
     assert.match(captured.systemPrompt ?? "", /<base_system_prompts>/);

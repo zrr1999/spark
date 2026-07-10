@@ -55,7 +55,7 @@
       <p class="eyebrow">{data.artifact.kind} · {data.artifact.format}</p>
       <h1>{data.artifact.title}</h1>
       <p class="lede">
-        {data.artifact.projectName ?? data.artifact.workspaceName} · {data.artifact.source} {t.evidenceLabel} · {formatRelative(data.artifact.createdAt)}
+        {data.artifact.workspaceName} · {data.artifact.source} {t.evidenceLabel} · {formatRelative(data.artifact.createdAt)}
       </p>
     </div>
     <span class="scope-pill {data.artifact.scope}">{scopeLabel(data.artifact.scope)}</span>
@@ -90,12 +90,16 @@
       </div>
 
       <div class="provenance-list">
+        {#if data.artifact.sessionId}
+          <article>
+            <span>{t.provenance.conversation}</span>
+            <a href={`/sessions/${encodeURIComponent(data.artifact.sessionId)}`}>{data.artifact.sessionId}</a>
+          </article>
+        {/if}
         {#if data.artifact.projectId}
           <article>
-            <span>{t.provenance.project}</span>
-            <a href={`${workspaceUrl}/projects/${data.artifact.projectId}`}
-              >{data.artifact.projectName}</a
-            >
+            <span>{t.provenance.context}</span>
+            <strong>{data.artifact.workspaceName}</strong>
           </article>
         {/if}
         {#if data.artifact.runtimeInvocationId}
@@ -123,7 +127,7 @@
         {/if}
       </div>
 
-      <details open>
+      <details>
         <summary>{t.provenance.json}</summary>
         <pre>{formatJson(data.artifact.provenance)}</pre>
       </details>
@@ -259,6 +263,10 @@
     justify-content: space-between;
   }
 
+  .hero > div {
+    min-width: 0;
+  }
+
   .eyebrow,
   .panel-kicker {
     color: var(--color-primary);
@@ -279,6 +287,7 @@
   h1 {
     font-size: 34px;
     letter-spacing: -0.03em;
+    overflow-wrap: anywhere;
   }
 
   .lede,
@@ -592,6 +601,23 @@
     .meta-grid,
     .grid {
       grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .hero {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    h1 {
+      font-size: 28px;
+    }
+
+    .panel-header,
+    .panel-header.compact {
+      padding: 18px;
     }
   }
 </style>

@@ -33,6 +33,7 @@ Use this directory as the map of current Spark contracts. Prefer one concise sou
 ### Specs
 
 - [`specs/command-planes.md`](./specs/command-planes.md) — canonical `spark daemon/server/tui` command planes.
+- [`specs/assignment-and-channels.md`](./specs/assignment-and-channels.md) — unified session management; Assign ≡ channel entry surfaces.
 - [`specs/daemon-workspace-clients.md`](./specs/daemon-workspace-clients.md) — daemon-owned workspace client contract.
 - [`specs/store-inventory.md`](./specs/store-inventory.md) — local `.spark/` store ownership and cleanup policy.
 - [`specs/turn.md`](./specs/turn.md) — turn/finish packet contract.

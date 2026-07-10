@@ -5,7 +5,7 @@ import {
   loadEventBatch,
   serializeEventRow,
 } from "$lib/server/events";
-import { sweepStaleRuntimeConnections } from "$lib/server/liveness";
+import { sweepStaleInvocations, sweepStaleRuntimeConnections } from "$lib/server/liveness";
 import type { EventCursor } from "$lib/server/events";
 import type { RequestHandler } from "@sveltejs/kit";
 
@@ -25,6 +25,7 @@ export const GET: RequestHandler = ({ request, url }) => {
       };
       const flushEvents = () => {
         sweepStaleRuntimeConnections(db);
+        sweepStaleInvocations(db);
         const rows = loadEventBatch(db, cursor);
         for (const row of rows) {
           const serialized = serializeEventRow(row);

@@ -203,6 +203,7 @@ void test("Spark role-run registry distinguishes active, interrupted, and stale 
       cwd: "/tmp/spark",
       pid: 123,
       startedAt: active.startedAt ?? "2026-06-17T00:00:01.000Z",
+      inputControl: "stdin",
     },
   ];
   const snapshot = buildSparkRoleRunRegistry({

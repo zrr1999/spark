@@ -1,27 +1,15 @@
 import type { IconName } from "./icons";
 
 export interface WorkbenchNavLabels {
-  home: string;
   overview: string;
-  projects: string;
+  sessions: string;
   inbox: string;
-  repos: string;
-  agents: string;
   artifacts: string;
-  settings: string;
-}
-
-export interface WorkbenchNavGroupLabels {
-  work: string;
-  library: string;
-  runtime: string;
-  system: string;
+  repos: string;
 }
 
 export interface WorkbenchPageLabels {
-  setupGuide: string;
   overview: string;
-  settings: string;
   comingSoon: string;
 }
 
@@ -29,50 +17,28 @@ export interface WorkbenchNavItem {
   href: string;
   label: string;
   icon: IconName;
-  disabled?: boolean;
 }
 
-export interface WorkbenchNavGroup {
-  id: keyof WorkbenchNavGroupLabels;
-  label: string;
-  items: WorkbenchNavItem[];
-}
-
-export function buildWorkbenchNavGroups(input: {
+export function buildWorkbenchNavItems(input: {
   activeWorkspacePath: string;
   hasActiveWorkspace: boolean;
   nav: WorkbenchNavLabels;
-  groups: WorkbenchNavGroupLabels;
-}): WorkbenchNavGroup[] {
-  const workspaceRoot = input.activeWorkspacePath || "/";
-  const workspaceRoute = (suffix: string) => `${input.activeWorkspacePath}${suffix}` || suffix;
+}): WorkbenchNavItem[] {
+  const workspaceRoot = input.activeWorkspacePath;
+  if (!input.hasActiveWorkspace || !workspaceRoot) return [];
 
+  const workspaceRoute = (suffix: string) => `${workspaceRoot}${suffix}`;
+
+  // Sessions live in the persistent sidebar rail; keep only secondary surfaces here.
   return [
     {
-      id: "work",
-      label: input.groups.work,
-      items: [
-        {
-          href: workspaceRoot,
-          label: input.hasActiveWorkspace ? input.nav.overview : input.nav.home,
-          icon: "home",
-        },
-        { href: workspaceRoute("/projects"), label: input.nav.projects, icon: "folder" },
-        { href: workspaceRoute("/inbox"), label: input.nav.inbox, icon: "inbox" },
-      ],
+      href: workspaceRoot,
+      label: input.nav.overview,
+      icon: "home",
     },
-    {
-      id: "library",
-      label: input.groups.library,
-      items: [
-        { href: workspaceRoute("/artifacts"), label: input.nav.artifacts, icon: "artifacts" },
-      ],
-    },
-    {
-      id: "system",
-      label: input.groups.system,
-      items: [{ href: workspaceRoute("/settings"), label: input.nav.settings, icon: "settings" }],
-    },
+    { href: workspaceRoute("/inbox"), label: input.nav.inbox, icon: "inbox" },
+    { href: workspaceRoute("/artifacts"), label: input.nav.artifacts, icon: "artifacts" },
+    { href: workspaceRoute("/repos"), label: input.nav.repos, icon: "repos" },
   ];
 }
 
@@ -81,11 +47,17 @@ export function isWorkbenchNavItemActive(input: {
   href: string;
   activeWorkspacePath: string;
 }): boolean {
+  if (!input.href) return false;
+
   if (
     input.href === "/" ||
     (input.activeWorkspacePath && input.href === input.activeWorkspacePath)
   ) {
     return input.pathname === input.href;
+  }
+
+  if (input.href === "/sessions") {
+    return input.pathname === "/sessions" || input.pathname.startsWith("/sessions/");
   }
 
   return input.pathname === input.href || input.pathname.startsWith(`${input.href}/`);
@@ -96,20 +68,55 @@ export function currentWorkbenchPageLabel(input: {
   nav: WorkbenchNavLabels;
   pages: WorkbenchPageLabels;
 }): string {
-  if (input.pathname === "/") {
-    return input.pages.setupGuide;
-  }
+  const segments = input.pathname.split("/").filter(Boolean);
+  const top = segments[0] ?? "";
+  if (top === "sessions") return input.nav.sessions;
 
-  const section = input.pathname.split("/").filter(Boolean)[1] ?? "";
+  const section = segments[1] ?? "";
   if (!section) {
     return input.pages.overview;
   }
 
-  if (section === "projects") return input.nav.projects;
   if (section === "inbox") return input.nav.inbox;
   if (section === "agents") return input.nav.artifacts;
   if (section === "artifacts") return input.nav.artifacts;
-  if (section === "settings") return input.pages.settings;
+  if (section === "repos") return input.nav.repos;
 
   return input.pages.comingSoon;
+}
+
+export function isWorkspaceScopedPath(pathname: string, activeWorkspacePath: string): boolean {
+  return (
+    Boolean(activeWorkspacePath) &&
+    (pathname === activeWorkspacePath || pathname.startsWith(`${activeWorkspacePath}/`))
+  );
+}
+
+export function workspaceSwitcherHref(input: {
+  pathname: string;
+  origin: string;
+  activeWorkspacePath: string;
+  targetWorkspaceSlug: string;
+  workspacePath: (workspace: { slug: string }, suffix?: string) => string;
+}): string {
+  const { pathname } = input;
+  if (
+    pathname === "/sessions" ||
+    pathname.startsWith("/sessions/") ||
+    pathname === "/settings" ||
+    pathname.startsWith("/settings/") ||
+    pathname === "/workspaces/new" ||
+    pathname.startsWith("/workspaces/new/")
+  ) {
+    const url = new URL(pathname, input.origin);
+    url.searchParams.set("workspace", input.targetWorkspaceSlug);
+    return `${url.pathname}?${url.searchParams.toString()}`;
+  }
+
+  if (isWorkspaceScopedPath(pathname, input.activeWorkspacePath)) {
+    const suffix = pathname.slice(input.activeWorkspacePath.length);
+    return input.workspacePath({ slug: input.targetWorkspaceSlug }, suffix);
+  }
+
+  return input.workspacePath({ slug: input.targetWorkspaceSlug });
 }

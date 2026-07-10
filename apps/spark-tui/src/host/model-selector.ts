@@ -145,10 +145,18 @@ export class SparkModelSelector {
 
   /** Open the injected picker and persist the selected model id. */
   async openPicker(ctx?: SparkKeybindingContext): Promise<SparkActiveSelection | undefined> {
-    if (!this.picker) return undefined;
-    const result = await this.picker(this.getPickerState(), ctx);
+    const result = await this.pick(this.getPickerState(), ctx);
     if (!result) return undefined;
     return this.select(result);
+  }
+
+  /** Render the host picker without mutating config. Daemon-backed adapters use this. */
+  async pick(
+    state: SparkModelPickerState = this.getPickerState(),
+    ctx?: SparkKeybindingContext,
+  ): Promise<SparkActiveSelection | undefined> {
+    if (!this.picker) return undefined;
+    return (await this.picker(state, ctx)) ?? undefined;
   }
 
   private resolveCycleTarget(

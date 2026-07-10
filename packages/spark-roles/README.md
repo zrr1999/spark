@@ -1,6 +1,6 @@
 # spark-roles
 
-`@zendev-lab/spark-roles` owns reusable Pi coding role definitions and simple single-role runs.
+`@zendev-lab/spark-roles` owns reusable Spark coding role definitions and simple single-role runs.
 
 It deliberately does **not** own managed task graphs, task claims, artifacts,
 reviews, asks, scheduler policy, or delegation topology. It owns only the
@@ -10,7 +10,7 @@ profiles.
 ## Concepts
 
 - `RoleSpec` — reusable coding role/persona definition.
-- `RoleRun` — one concrete child Pi execution using a role.
+- `RoleRun` — one concrete role execution using a role.
 - `RoleSource` — storage/provenance scope: `builtin`, `extension`, `project`, or `user`.
 - `RoleOrigin` — optional metadata such as `manual`, `generated`, `builtin`, or `extension`.
   Generated roles are represented here rather than as a primary source.
@@ -38,10 +38,14 @@ settings. There is no legacy binding fallback.
 
 ## Runtime scope
 
-`runRole()` launches a single Pi child process with `fresh | forked` mode,
-timeout/cancel handling, stdout/stderr capture, and tolerant JSONL parsing. Host
-packages can adapt these primitives to task runtimes while graph-level scheduling
-stays outside this package.
+`runRole()` executes a single role with `fresh | forked` mode, timeout/cancel
+handling, stdout/stderr capture, tolerant JSONL parsing, and active-run control
+state. Daemon-native hosts provide the executor; `spark-roles` owns the active
+run registry, cancellation, and input-delivery capability reporting. A native
+executor can register an input controller so follow-up text is delivered through
+the host's turn queue instead of a process stdin pipe. Host packages can adapt
+these primitives to task runtimes while graph-level scheduling stays outside
+this package.
 
 ## Tool surface
 
@@ -69,7 +73,7 @@ decisions, and unresolved ambiguities upward in their final response.
 
 `role({ action: "call" })` launch modes:
 
-- default / `launch: "fresh"` — launch a new child Pi session from the role and instruction.
+- default / `launch: "fresh"` — launch a new role session from the role and instruction.
 - `launch: "forked"` — launch with explicit parent context; requires `forkFromSession`.
 
 `role({ action: "call" })` intentionally stays below managed task execution: it does not claim tasks, write task artifacts, or schedule workflow work. Host facades should route managed task execution through their task/workflow scheduler instead.

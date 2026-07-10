@@ -1,0 +1,147 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { createServer, type Server } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import {
+  requestSparkDaemonLocalRpcWire,
+  SparkDaemonLocalRpcError,
+  SparkDaemonLocalRpcRemoteError,
+  SparkDaemonLocalRpcUnavailableError,
+} from "./daemon-local-rpc.js";
+
+describe("Spark daemon local RPC transport", () => {
+  it("uses the response timeout after connecting instead of retaining the connect timeout", async () => {
+    const fixture = await rpcFixture((request, socket) => {
+      setTimeout(() => {
+        socket.end(`${JSON.stringify({ id: request.id, ok: true, result: "ready" })}\n`);
+      }, 60);
+    });
+
+    try {
+      await expect(
+        requestSparkDaemonLocalRpcWire<string>(
+          { id: "delayed-response", method: "daemon.status" },
+          {
+            socketPath: fixture.socketPath,
+            connectTimeoutMs: 10,
+            responseTimeoutMs: 500,
+          },
+        ),
+      ).resolves.toBe("ready");
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("preserves caller-owned wire fields and exposes remote error details", async () => {
+    const fixture = await rpcFixture((request, socket) => {
+      socket.end(
+        `${JSON.stringify({
+          id: request.id,
+          ok: false,
+          error: { message: String(request.marker), code: "example" },
+        })}\n`,
+      );
+    });
+    const request = {
+      id: "wire-fields",
+      method: "daemon.status",
+      marker: "preserved",
+    };
+
+    try {
+      const error = await requestSparkDaemonLocalRpcWire(request, {
+        socketPath: fixture.socketPath,
+      }).catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(SparkDaemonLocalRpcRemoteError);
+      expect(error).toMatchObject({
+        message: "preserved",
+        payload: { message: "preserved", code: "example" },
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("reports an old daemon that rejects a new method as unavailable", async () => {
+    const fixture = await rpcFixture((_request, socket) => {
+      socket.end(
+        `${JSON.stringify({
+          id: "unknown",
+          ok: false,
+          error: { message: "Unknown local RPC method: session.list" },
+        })}\n`,
+      );
+    });
+
+    try {
+      const error = await requestSparkDaemonLocalRpcWire(
+        { id: "new-method", method: "session.list", params: {} },
+        { socketPath: fixture.socketPath },
+      ).catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(SparkDaemonLocalRpcUnavailableError);
+      expect(error).toMatchObject({
+        message:
+          "The running Spark daemon does not support session.list; restart or upgrade it. Unknown local RPC method: session.list",
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("bounds a response before accumulating an unbounded line", async () => {
+    const fixture = await rpcFixture((_request, socket) => {
+      socket.end("x".repeat(128));
+    });
+
+    try {
+      const error = await requestSparkDaemonLocalRpcWire(
+        { id: "oversized", method: "daemon.status" },
+        { socketPath: fixture.socketPath, maxResponseBytes: 64 },
+      ).catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(SparkDaemonLocalRpcError);
+      expect(error).toMatchObject({
+        message: "Spark daemon local RPC response exceeded 64 bytes.",
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+});
+
+async function rpcFixture(
+  respond: (request: Record<string, unknown>, socket: import("node:net").Socket) => void,
+): Promise<{ socketPath: string; close(): Promise<void> }> {
+  const root = mkdtempSync(join(tmpdir(), "spark-local-rpc-"));
+  const socketPath = join(root, "daemon.sock");
+  const server = createServer((socket) => {
+    let buffer = "";
+    socket.on("data", (chunk) => {
+      buffer += chunk.toString("utf8");
+      const newline = buffer.indexOf("\n");
+      if (newline === -1) return;
+      respond(JSON.parse(buffer.slice(0, newline)) as Record<string, unknown>, socket);
+    });
+  });
+  await listen(server, socketPath);
+  return {
+    socketPath,
+    async close() {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+async function listen(server: Server, socketPath: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+}

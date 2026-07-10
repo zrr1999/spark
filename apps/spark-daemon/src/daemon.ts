@@ -1,20 +1,28 @@
 import { existsSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import WebSocket, { type RawData } from "ws";
 import {
   createId,
   humanResponseDeliverEnvelopeSchema,
+  normalizeServerCommandForExecution,
   runtimeProtocolVersion,
   runtimeReconcileRequestEnvelopeSchema,
   serverCommandEnvelopeSchema,
   serverHelloAckEnvelopeSchema,
   type SparkDaemonEvent,
+  type SparkCommand,
   type RuntimeFeature,
   type RuntimeWorkspaceBindingSummary,
 } from "@zendev-lab/spark-protocol";
 import { writePrivateFile, type SparkPaths } from "@zendev-lab/spark-system";
 import { readSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
+import {
+  createDaemonChannelIngressRuntime,
+  type DaemonChannelIngressRuntime,
+} from "./channels/ingress.ts";
 import {
   createSparkDaemonWorkerContext,
   runSparkDaemonWorkerIteration,
@@ -32,6 +40,7 @@ import {
 } from "./core/human-waits.ts";
 import { sparkCommandFromServerCommandEnvelope } from "./command-dispatcher.ts";
 import { decideCommandPolicy } from "./policy.js";
+import type { SparkDaemonModelControl } from "./model-control.ts";
 import {
   commandAck,
   commandReject,
@@ -60,7 +69,7 @@ import {
   type RunSparkCommandFn,
   type CancelSparkInvocationFn,
 } from "./spark/bridge.js";
-import { createSparkDaemonQueueTaskExecutor } from "./spark/session-run.js";
+import { createChannelAwareQueueTaskExecutor } from "./spark/session-run.js";
 import {
   nextSparkDaemonTokenRefreshDelayMs,
   refreshSparkDaemonCredentials,
@@ -93,6 +102,9 @@ export interface ServerSocket {
 
 export interface StartSparkDaemonOptions {
   paths: SparkPaths;
+  /** Global Spark provider/auth control root (normally ~/.spark). */
+  sparkHome?: string;
+  modelControl?: SparkDaemonModelControl;
   config: SparkDaemonConfig;
   db: DatabaseSync;
   once?: boolean;
@@ -114,6 +126,7 @@ export interface StartSparkDaemonOptions {
   invocationRegistry?: SparkDaemonInvocationRegistry;
   humanWaits?: SparkDaemonHumanWaitRegistry;
   localEventSink?: SparkDaemonEventSink;
+  channelIngress?: DaemonChannelIngressRuntime;
 }
 
 export async function startSparkDaemon(options: StartSparkDaemonOptions): Promise<void> {
@@ -136,7 +149,14 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
           active: { files: new Set(), sessions: new Set(), invocations: invocationRegistry },
           executeTask:
             options.executeQueueTask ??
-            createSparkDaemonQueueTaskExecutor({ paths: options.paths, cwd: process.cwd() }),
+            createChannelAwareQueueTaskExecutor({
+              paths: options.paths,
+              cwd: process.cwd(),
+              controlSparkHome:
+                (options.sparkHome ?? process.env.SPARK_HOME?.trim()) || join(homedir(), ".spark"),
+              ...(options.modelControl ? { modelControl: options.modelControl } : {}),
+              channelIngress: options.channelIngress,
+            }),
           emitEvent: emitQueueEvent,
           taskTimeoutMs: options.queueTaskTimeoutMs,
         });
@@ -158,6 +178,14 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
     await queueLoop.start();
   }
   options.signal?.addEventListener("abort", stopQueueLoop, { once: true });
+
+  const channelIngress = await maybeStartChannelIngress(options);
+  const stopChannelIngress = () => {
+    void channelIngress?.stop().catch((error: unknown) => {
+      sendErrorLog(options.db, options.config.runtimeId ?? "unknown", error);
+    });
+  };
+  options.signal?.addEventListener("abort", stopChannelIngress, { once: true });
 
   try {
     if (options.once) {
@@ -202,6 +230,12 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
     }
   } finally {
     options.signal?.removeEventListener("abort", stopQueueLoop);
+    options.signal?.removeEventListener("abort", stopChannelIngress);
+    try {
+      await channelIngress?.stop();
+    } catch (error) {
+      sendErrorLog(options.db, options.config.runtimeId ?? "unknown", error);
+    }
     await queueLoop?.stop();
     if (queueContext) {
       await waitForSparkDaemonActiveTasks(queueContext.active);
@@ -210,6 +244,44 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
       rmSync(options.paths.pidFile, { force: true });
     }
   }
+}
+
+async function maybeStartChannelIngress(
+  options: StartSparkDaemonOptions,
+): Promise<DaemonChannelIngressRuntime | null> {
+  if (options.once || options.runQueue === false) return null;
+  const sparkHome = process.env.SPARK_HOME?.trim() || join(homedir(), ".spark");
+  const queue = options.queue ?? new SparkDaemonQueue({ paths: options.paths });
+  const runtime =
+    options.channelIngress ??
+    createDaemonChannelIngressRuntime({
+      sparkHome,
+      hooks: {
+        onAssignment: async (assignment) => {
+          const model = options.modelControl
+            ? await options.modelControl.effectiveModel(assignment.sessionId)
+            : undefined;
+          if (model) await options.modelControl?.prepareModel(model);
+          await queue.enqueue({
+            type: "session.run",
+            sessionId: assignment.sessionId,
+            prompt: assignment.goal,
+            ...(model ? { model: `${model.providerName}/${model.modelId}` } : {}),
+            assignment: assignment.assignment,
+            workspaceId: assignment.channelReply.workspaceId,
+            channelReply: assignment.channelReply,
+          });
+        },
+      },
+    });
+  try {
+    await runtime.start();
+  } catch (error) {
+    sendErrorLog(options.db, options.config.runtimeId ?? "unknown", error);
+  }
+  // Keep the runtime reachable through local RPC even when startup config is
+  // absent or invalid so an operator can repair it without restarting daemon.
+  return runtime;
 }
 
 interface SparkDaemonServerConnectionOptions extends StartSparkDaemonOptions {
@@ -376,6 +448,8 @@ async function runSparkDaemonServerConnection(
         runtimeId,
         runSparkCommand: options.runSparkCommand ?? runSparkCommandBridge,
         cancelSparkInvocation: options.cancelSparkInvocation ?? cancelSparkBridgeInvocation,
+        ...(options.sparkHome ? { sparkHome: options.sparkHome } : {}),
+        ...(options.modelControl ? { modelControl: options.modelControl } : {}),
         invocationRegistry: options.invocationRegistry,
         humanWaits: options.humanWaits,
         get runtimeSessionId() {
@@ -457,6 +531,7 @@ export interface MessageContext {
   config: SparkDaemonConfig;
   db: DatabaseSync;
   runtimeId: string;
+  sparkHome?: string;
   runtimeSessionId: string | undefined;
   setRuntimeSessionId(value: string): void;
   ensureHeartbeat(intervalMs: number): void;
@@ -464,6 +539,7 @@ export interface MessageContext {
   cancelSparkInvocation: CancelSparkInvocationFn;
   invocationRegistry?: SparkDaemonInvocationRegistry;
   humanWaits?: SparkDaemonHumanWaitRegistry;
+  modelControl?: SparkDaemonModelControl;
 }
 
 export function createDaemonHumanWait(
@@ -572,7 +648,8 @@ export async function handleCommand(
   const commandWorkspace = command.workspaceBindingId
     ? getWorkspaceById(context.db, command.workspaceBindingId)
     : null;
-  const sparkCommand = sparkCommandFromServerCommandEnvelope(command);
+  let sparkCommand = sparkCommandFromServerCommandEnvelope(command);
+  let commandForBridge = command;
   const policy = decideCommandPolicy({
     command: sparkCommand,
     workspaceBindingId: command.workspaceBindingId,
@@ -710,7 +787,10 @@ export async function handleCommand(
     return;
   }
 
-  if (sparkCommand.kind !== "task.start.request") {
+  if (
+    sparkCommand.kind !== "task.start.request" &&
+    sparkCommand.kind !== "assignment.create.request"
+  ) {
     sendJson(
       ws,
       commandReject(
@@ -723,6 +803,27 @@ export async function handleCommand(
       ),
     );
     return;
+  }
+
+  if (sparkCommand.kind === "assignment.create.request") {
+    const normalized = normalizeServerCommandForExecution(command);
+    if (!normalized.ok) {
+      sendJson(
+        ws,
+        commandReject(
+          {
+            reasonCode: normalized.reasonCode,
+            message: normalized.message,
+            retryable: normalized.retryable,
+          },
+          route,
+        ),
+      );
+      return;
+    }
+
+    commandForBridge = normalized.envelope;
+    sparkCommand = sparkCommandFromServerCommandEnvelope(commandForBridge);
   }
 
   const workspace = command.workspaceBindingId
@@ -743,16 +844,39 @@ export async function handleCommand(
     return;
   }
 
+  let selectedModel: Awaited<ReturnType<SparkDaemonModelControl["effectiveModel"]>> | undefined;
+  if (context.modelControl) {
+    try {
+      selectedModel = await context.modelControl.effectiveModel(sessionIdForModel(sparkCommand));
+      await context.modelControl.prepareModel(selectedModel);
+    } catch (error) {
+      sendJson(
+        ws,
+        commandReject(
+          {
+            reasonCode: "MODEL_UNAVAILABLE",
+            message: error instanceof Error ? error.message : String(error),
+            retryable: false,
+          },
+          route,
+        ),
+      );
+      return;
+    }
+  }
+
   const invocation = context.invocationRegistry?.start({
     invocationId: createId("inv"),
     kind: sparkCommand.kind,
   });
   try {
     await context.runSparkCommand({
-      command,
+      command: commandForBridge,
       workspace,
       route: invocation ? { ...route, invocationId: invocation.invocationId } : route,
       paths: context.paths,
+      ...(selectedModel ? { model: `${selectedModel.providerName}/${selectedModel.modelId}` } : {}),
+      ...(context.sparkHome ? { controlSparkHome: context.sparkHome } : {}),
       db: context.db,
       ...(invocation ? { invocationId: invocation.invocationId, signal: invocation.signal } : {}),
       emit(message) {
@@ -762,6 +886,23 @@ export async function handleCommand(
   } finally {
     invocation?.finish();
   }
+}
+
+function sessionIdForModel(command: SparkCommand): string | undefined {
+  if (command.route.sessionId) return command.route.sessionId;
+  const target = recordField(command.payload, "target");
+  const sessionId = target?.sessionId;
+  return typeof sessionId === "string" && sessionId.trim() ? sessionId.trim() : undefined;
+}
+
+function recordField(
+  value: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | undefined {
+  const field = value[key];
+  return typeof field === "object" && field !== null && !Array.isArray(field)
+    ? (field as Record<string, unknown>)
+    : undefined;
 }
 
 function runtimeInvocationIdForCancel(payload: Record<string, unknown> | undefined): string | null {

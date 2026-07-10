@@ -1,59 +1,54 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildWorkbenchNavGroups,
+  buildWorkbenchNavItems,
   currentWorkbenchPageLabel,
   isWorkbenchNavItemActive,
-  type WorkbenchNavGroupLabels,
+  workspaceSwitcherHref,
   type WorkbenchNavLabels,
   type WorkbenchPageLabels,
 } from "./workbench-nav";
+import { workspacePath } from "./workspace-routes";
 
 const nav: WorkbenchNavLabels = {
-  home: "Home",
   overview: "Overview",
-  projects: "Projects",
+  sessions: "Sessions",
   inbox: "Inbox",
-  repos: "Repos",
-  agents: "Agents",
   artifacts: "Artifacts",
-  settings: "Settings",
-};
-
-const groups: WorkbenchNavGroupLabels = {
-  work: "Work",
-  library: "Library",
-  runtime: "Runtime",
-  system: "System",
+  repos: "Resources",
 };
 
 const pages: WorkbenchPageLabels = {
-  setupGuide: "Setup guide",
   overview: "Overview",
-  settings: "Settings",
   comingSoon: "Coming soon",
 };
 
 describe("workbench nav", () => {
-  it("builds the grouped Spark Cockpit navigation taxonomy", () => {
-    const result = buildWorkbenchNavGroups({
+  it("builds a flat secondary nav without group labels", () => {
+    const result = buildWorkbenchNavItems({
       activeWorkspacePath: "/local",
       hasActiveWorkspace: true,
       nav,
-      groups,
     });
 
-    expect(result.map((group) => [group.id, group.label])).toEqual([
-      ["work", "Work"],
-      ["library", "Library"],
-      ["system", "System"],
+    expect(result.map((item) => item.label)).toEqual([
+      "Overview",
+      "Inbox",
+      "Artifacts",
+      "Resources",
     ]);
-    expect(result.map((group) => group.items.map((item) => item.label))).toEqual([
-      ["Overview", "Projects", "Inbox"],
-      ["Artifacts"],
-      ["Settings"],
-    ]);
-    expect(result[0]?.items[0]).toMatchObject({ href: "/local", icon: "home" });
-    expect(result[1]?.items[0]).toMatchObject({ href: "/local/artifacts", icon: "artifacts" });
+    expect(result[0]).toMatchObject({ href: "/local", icon: "home" });
+    expect(result[2]).toMatchObject({ href: "/local/artifacts", icon: "artifacts" });
+    expect(result[3]).toMatchObject({ href: "/local/repos", icon: "repos" });
+  });
+
+  it("returns no secondary items when no workspace is active", () => {
+    const result = buildWorkbenchNavItems({
+      activeWorkspacePath: "",
+      hasActiveWorkspace: false,
+      nav,
+    });
+
+    expect(result).toEqual([]);
   });
 
   it("keeps root overview active exact and nested sections active by prefix", () => {
@@ -66,28 +61,49 @@ describe("workbench nav", () => {
     ).toBe(true);
     expect(
       isWorkbenchNavItemActive({
-        pathname: "/local/projects/abc",
-        href: "/local/projects",
+        pathname: "/sessions/sess_1",
+        href: "/sessions",
         activeWorkspacePath: "/local",
       }),
     ).toBe(true);
     expect(
       isWorkbenchNavItemActive({
-        pathname: "/local/projects",
+        pathname: "/sessions",
         href: "/local",
         activeWorkspacePath: "/local",
       }),
     ).toBe(false);
   });
 
-  it("derives breadcrumb page labels for existing routes and nested detail pages", () => {
-    expect(currentWorkbenchPageLabel({ pathname: "/", nav, pages })).toBe("Setup guide");
+  it("derives breadcrumb page labels for workbench routes", () => {
     expect(currentWorkbenchPageLabel({ pathname: "/local", nav, pages })).toBe("Overview");
+    expect(currentWorkbenchPageLabel({ pathname: "/sessions/sess_1", nav, pages })).toBe(
+      "Sessions",
+    );
     expect(currentWorkbenchPageLabel({ pathname: "/local/artifacts/art-1", nav, pages })).toBe(
       "Artifacts",
     );
+    expect(currentWorkbenchPageLabel({ pathname: "/local/repos", nav, pages })).toBe("Resources");
+  });
+
+  it("keeps global routes on switch and preserves workspace-scoped suffixes", () => {
     expect(
-      currentWorkbenchPageLabel({ pathname: "/local/settings/registration", nav, pages }),
-    ).toBe("Settings");
+      workspaceSwitcherHref({
+        pathname: "/sessions",
+        origin: "http://127.0.0.1:5173",
+        activeWorkspacePath: "/local",
+        targetWorkspaceSlug: "other",
+        workspacePath,
+      }),
+    ).toBe("/sessions?workspace=other");
+    expect(
+      workspaceSwitcherHref({
+        pathname: "/local/inbox",
+        origin: "http://127.0.0.1:5173",
+        activeWorkspacePath: "/local",
+        targetWorkspaceSlug: "other",
+        workspacePath,
+      }),
+    ).toBe("/other/inbox");
   });
 });

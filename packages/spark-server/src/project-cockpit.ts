@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { normalizePiTaskStatusGroup } from "@zendev-lab/spark-tasks";
+import { sweepStaleInvocations, sweepStaleRuntimeConnections } from "./liveness.ts";
 import { loadWorkspaceServerControl } from "./projection-services";
 
 function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
@@ -59,6 +60,7 @@ export interface ProjectCockpitTaskLink {
 export interface ProjectCockpitInvocationLink {
   id: string;
   runtimeInvocationId: string;
+  commandId: string | null;
   agentName: string | null;
   status: string;
   updatedAt: string;
@@ -138,6 +140,8 @@ export interface ProjectCockpitLogChunk {
 }
 
 export function loadProjectCockpit(db: DatabaseSync, projectId: string) {
+  sweepStaleRuntimeConnections(db);
+  sweepStaleInvocations(db);
   const project = db
     .prepare(
       `SELECT p.id,
@@ -279,6 +283,7 @@ export function loadProjectCockpit(db: DatabaseSync, projectId: string) {
     .prepare(
       `SELECT id,
               runtime_invocation_id AS runtimeInvocationId,
+              command_id AS commandId,
               task_runtime_id AS taskRuntimeId,
               agent_name AS agentName,
               status,
@@ -291,6 +296,7 @@ export function loadProjectCockpit(db: DatabaseSync, projectId: string) {
     .all(project.id) as Array<{
     id: string;
     runtimeInvocationId: string;
+    commandId: string | null;
     taskRuntimeId: string | null;
     agentName: string | null;
     status: string;
@@ -471,3 +477,5 @@ export function loadProjectCockpit(db: DatabaseSync, projectId: string) {
     logChunks,
   };
 }
+
+export type ProjectCockpit = NonNullable<ReturnType<typeof loadProjectCockpit>>;

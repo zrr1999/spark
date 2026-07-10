@@ -12,8 +12,8 @@ spark <plane> <resource> <verb> [args...]
 
 | Namespace | Role | Owns | Does not own |
 | --- | --- | --- | --- |
-| `spark daemon` | daemon execution plane | runtime sessions, local queue, runs, events, logs, process state | project/task/goal/review policy decisions |
-| `spark server` | server coordination plane | project, task, goal, review, artifact/evidence, workflow, workspace coordination state | local queue workers, process logs, TUI rendering, Cockpit UI hosting |
+| `spark daemon` | daemon execution plane | runtime sessions (create/list/show/bind/archive/fork), channel listeners, local queue, runs, events, logs, process state | project/task/goal/review policy decisions |
+| `spark server` | server coordination plane | project, task, goal, review, artifact/evidence, workflow, workspace coordination state, **assign** intent | local queue workers, process logs, TUI rendering, Cockpit UI hosting, session registry writes, channel sockets |
 | `spark cockpit` | Cockpit web UI host (not a fourth plane) | start/preview the SvelteKit Cockpit UI that mounts `spark-server` | coordination commands (`spark server ...`), daemon execution, TUI rendering |
 | `spark tui` | tui local control plane | local interactive terminal UI, attach/resume/new visible transcript, theme/keymap/export/share | canonical business state mutations |
 | slash `system` | TUI kernel command source | `/help`, `/exit`, `/quit`, `/clear`, `/reload` | project/task/goal/session/workflow business commands |
@@ -26,6 +26,11 @@ spark <plane> <resource> <verb> [args...]
 ```bash
 spark daemon session list --json
 spark daemon session show <session-id> --json
+spark daemon session create --workspace <id> --title "..." --json
+spark daemon session bind <session-id> --external-key feishu:chat:oc_xxx --json
+spark daemon session archive <session-id> --json
+spark daemon channel list --json
+spark daemon channel status --json
 spark daemon run list --json
 spark daemon events watch --json
 
@@ -33,10 +38,16 @@ spark server status --json
 spark server project list --json
 spark server task list --project <project-ref> --json
 spark server goal status --json
+spark server assign --session <session-id> --goal "..." --json
 
 spark tui attach <session-id>
 spark tui --help
 ```
+
+Session lifecycle, channel bindings, and assignment equivalence are specified in
+[`assignment-and-channels.md`](./assignment-and-channels.md). Cockpit Assign and
+IM channels are entry surfaces for the same assignment intent; they must not
+create private session namespaces.
 
 ## Disallowed canonical placements
 
@@ -48,7 +59,9 @@ spark daemon task claim <task-ref>
 spark daemon goal complete
 spark server queue clear
 spark server events watch
+spark server session create
 spark tui task list
+spark gateway ...
 ```
 
 ## Slash command ownership

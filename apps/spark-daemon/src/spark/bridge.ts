@@ -24,6 +24,7 @@ type SparkRoleInstructionExecutorLike = (
 ) => Promise<Record<string, unknown>>;
 type CreateSparkHeadlessRoleExecutorFn = (options?: {
   sparkHome?: string;
+  controlSparkHome?: string;
 }) => SparkRoleInstructionExecutorLike;
 
 type TaskGraphStoreLike = {
@@ -99,6 +100,10 @@ export interface SparkDaemonBridgeInput {
   workspace: SparkDaemonWorkspace;
   route: RouteContext;
   paths: SparkPaths;
+  /** Canonical provider/model selected for this conversation turn. */
+  model?: string;
+  /** Global provider config/auth root, separate from daemon role session files. */
+  controlSparkHome?: string;
   db: DatabaseSync;
   emit(message: unknown): void;
   invocationId?: string;
@@ -281,7 +286,15 @@ export async function runSparkCommandBridge(
       dryRun: false,
       timeoutMs: DEFAULT_SPARK_TIMEOUT_MS,
       signal: input.signal,
-      ...(spark ? { roleExecutor: spark.createSparkHeadlessRoleExecutor() } : {}),
+      ...(input.model ? { sessionModel: input.model } : {}),
+      ...(spark
+        ? {
+            roleExecutor: spark.createSparkHeadlessRoleExecutor({
+              ...(input.paths.piAgentDir ? { sparkHome: input.paths.piAgentDir } : {}),
+              ...(input.controlSparkHome ? { controlSparkHome: input.controlSparkHome } : {}),
+            }),
+          }
+        : {}),
       onRoleEvent: (event: unknown) => {
         const delta = extractTextDelta(event);
         const eventType = eventTypeOf(event);
@@ -701,6 +714,9 @@ function retryOfInvocationId(command: ServerCommandPayload): string | undefined 
 }
 
 function promptForCommand(command: ServerCommandPayload): string {
+  if (typeof command.payload?.goal === "string" && command.payload.goal.trim()) {
+    return command.payload.goal.trim();
+  }
   if (typeof command.payload?.prompt === "string") return command.payload.prompt;
   return command.title ?? "Run the requested Spark task for this workspace.";
 }

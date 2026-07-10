@@ -17,7 +17,7 @@ describe("Spark daemon command policy", () => {
     });
   });
 
-  it("uses read-only tools for diagnostics", () => {
+  it("admits diagnostics without pretending to select runtime tools", () => {
     const decision = decideCommandPolicy({
       workspaceBindingId,
       knownWorkspaceBindingIds: new Set([workspaceBindingId]),
@@ -25,10 +25,10 @@ describe("Spark daemon command policy", () => {
     });
 
     expect(decision.accepted).toBe(true);
-    expect(decision.tools).toEqual(["read", "grep", "find", "ls"]);
+    expect("tools" in decision).toBe(false);
   });
 
-  it("adds mutating tools for task starts when mutation is allowed", () => {
+  it("admits task starts when mutation is allowed", () => {
     const decision = decideCommandPolicy({
       workspaceBindingId,
       knownWorkspaceBindingIds: new Set([workspaceBindingId]),
@@ -37,7 +37,7 @@ describe("Spark daemon command policy", () => {
     });
 
     expect(decision.accepted).toBe(true);
-    expect(decision.tools).toEqual(["read", "grep", "find", "ls", "bash", "edit", "write"]);
+    expect("tools" in decision).toBe(false);
   });
 
   it("rejects task starts when mutation is disabled", () => {

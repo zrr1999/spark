@@ -106,12 +106,14 @@ export class SparkWorkflowRunManagerController {
         );
       return { continuePolling: false };
     }
+    const piCommand = this.hooks.piCommand?.(cwd, ctx) ?? "pi";
     const settingsResult = await ensureRoleModelSettingsForProject({
       graph,
       projectRef: currentProject.ref,
       registry,
       cwd,
       ctx,
+      piCommand,
     });
     if (!settingsResult.ready) {
       if (control && currentProject.ref === control.projectRef)
@@ -126,7 +128,6 @@ export class SparkWorkflowRunManagerController {
       registry,
       artifactStore,
       cwd,
-      piCommand: this.hooks.piCommand?.(cwd, ctx) ?? "pi",
       sessionModel: sessionModelName(ctx.model),
       roleExecutor: ctx.runRole,
     });

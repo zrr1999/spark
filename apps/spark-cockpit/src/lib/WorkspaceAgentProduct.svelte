@@ -13,14 +13,37 @@
     buildCockpitChatTranscriptTurns,
     type CockpitChatTranscriptTurn,
   } from "$lib/cockpit-chat-transcript-view";
-  import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
+  import {
+    formatRelativeTime,
+    statusLabel as getStatusLabel,
+    type AppMessages,
+    type Locale,
+  } from "$lib/i18n";
   import { workspaceControlControlLabel } from "$lib/workspace-control-display";
+  import type { AgentsProductProjection } from "@zendev-lab/spark-server/agents-product";
 
-  type AgentProductMessages = Record<string, string>;
+  type WorkspaceAgentProductData = AgentsProductProjection & {
+    locale: Locale;
+    messages: AppMessages;
+    workspace: {
+      id: string;
+      name: string;
+    };
+  };
 
-  let { data, form = null }: { data: any; form?: any } = $props();
+  type WorkspaceAgentProductForm = {
+    intent?: string;
+    message?: string;
+    queuedCommandId?: string;
+    values?: {
+      prompt?: string;
+    };
+  } | null;
+
+  let { data, form = null }: { data: WorkspaceAgentProductData; form?: WorkspaceAgentProductForm } =
+    $props();
   let t = $derived(data.messages.agents);
-  let product = $derived(t.product as AgentProductMessages);
+  let product = $derived(t.product);
   let common = $derived(data.messages.common);
   let taskForm = $derived(form?.intent === "chat" ? form : null);
   let selectedRunId = $state("current");
@@ -45,11 +68,6 @@
     if (taskForm?.values?.prompt) draftPrompt = taskForm.values.prompt;
   });
 
-  type Command = {
-    status: string;
-    deliveryStatus: string | null;
-  };
-
   let runtimeStatus = $derived(data.ownerBinding?.runtimeStatus ?? "blocked");
   let runtimeContext = $derived(
     data.ownerBinding
@@ -65,7 +83,7 @@
   );
   let hasInFlightCommand = $derived(
     liveState.commands.some(
-      (command: Command) =>
+      (command) =>
         command.status === "queued" ||
         command.status === "delivered" ||
         command.deliveryStatus === "pending" ||
@@ -256,17 +274,6 @@
       <p class="chat-copy">{product.body}</p>
     </div>
     <div class="toolbar-actions">
-      <label class="history-picker">
-        <span>{product.historyLabel}</span>
-        <select bind:value={selectedRunId} disabled={historyTurns.length === 0}>
-          <option value="current">{product.currentOption}</option>
-          {#each historyTurns as turn}
-            <option value={turn.id}>
-              {formatRelative(turn.command.createdAt)} · {statusLabel(turn.status)} · {turn.prompt}
-            </option>
-          {/each}
-        </select>
-      </label>
       <span class="sync-chip" class:live={hasActiveRun}>
         <Icon name="activity" size={14} />{hasActiveRun ? product.liveSync : product.idleSync}
       </span>
@@ -284,160 +291,198 @@
     {/if}
   </div>
 
-  <article class="product-stage {selectedTurn?.status ?? 'empty'}" class:busy={hasActiveRun}>
-    <header class="stage-header">
-      <div>
-        <span class="stage-kicker">{selectedRunId === "current" ? product.currentLabel : product.historyLabel}</span>
-        <h3>{selectedTurn?.prompt ?? product.emptyTitle}</h3>
+  <div class="product-workbench">
+    <aside class="run-rail" aria-label={product.historyLabel}>
+      <div class="run-rail-header">
+        <span>{product.historyLabel}</span>
+        <strong>{historyTurns.length + 1}</strong>
       </div>
-      <span class="status-pill {selectedTurn?.status ?? runtimeStatus}">
-        {statusLabel(selectedTurn?.status ?? runtimeStatus)}
-      </span>
-    </header>
-
-    {#if hasDisplaySource}
-      <div class="genui-canvas">
-        <AgentMdxStream source={displaySource} streaming={selectedTurn?.status === "running"} />
-      </div>
-    {:else}
-      <div class="empty-product">
-        <div class="empty-icon"><Icon name="spark" size={28} /></div>
-        <div>
-          <h3>{product.emptyTitle}</h3>
-          <p>{selectedTurn ? selectedTurn.answer : product.emptyBody}</p>
-        </div>
-      </div>
-    {/if}
-
-    {#if selectedTurn?.currentActivity}
-      <p class="activity-line"><strong>{product.activityLabel}</strong> {selectedTurn.currentActivity}</p>
-    {/if}
-
-    {#if selectedTurn}
-      <details class="run-details" open={selectedTurn.status === "running"}>
-        <summary>
-          <span><Icon name="activity" size={15} />{product.runDetails}</span>
-          <small>{selectedTurn.invocations.length} {t.chat.invocationMetaLabel} · {selectedTurn.logs.length} {t.chat.logMetaLabel}</small>
-        </summary>
-        <div class="run-detail-grid">
-          <section>
-            <h4>{product.invocationsLabel}</h4>
-            {#if selectedTurn.invocations.length === 0}
-              <p class="details-empty">{t.chat.noRunDetails}</p>
-            {:else}
-              <div class="invocation-stack">
-                {#each selectedTurn.invocations as invocation}
-                  <article class="invocation-card">
-                    <div>
-                      <strong>{invocation.agentName ?? t.chat.assistantLabel}</strong>
-                      <small>{invocation.runtimeInvocationId}</small>
-                    </div>
-                    <span class="status-pill {invocation.status}">{statusLabel(invocation.status)}</span>
-                    <time>{formatRelative(invocation.updatedAt)}</time>
-                  </article>
-                {/each}
-              </div>
-            {/if}
-          </section>
-          <section>
-            <h4>{product.recentActivityLabel}</h4>
-            {#if selectedLogs.length === 0}
-              <p class="details-empty">{t.chat.noRunDetails}</p>
-            {:else}
-              <div class="activity-stack">
-                {#each selectedLogs as log}
-                  <article class="activity-row {activityKind(log)}">
-                    <header>
-                      <span>{log.stream}</span>
-                      <small>{log.runtimeInvocationId} · #{log.sequence} · {formatRelative(log.createdAt)}</small>
-                    </header>
-                    <pre aria-label={t.chat.rawLogOutput}>{log.content}</pre>
-                  </article>
-                {/each}
-              </div>
-            {/if}
-          </section>
-        </div>
-      </details>
-    {/if}
-  </article>
-
-  <section class="task-launcher" aria-labelledby="agents-task-launcher-title">
-    <div>
-      <p class="panel-kicker">{product.launcherKicker}</p>
-      <h2 id="agents-task-launcher-title">{product.launcherTitle}</h2>
-      <p>{product.launcherBody}</p>
-    </div>
-
-    <div class="suggested-prompts" aria-label={t.chat.suggestionsLabel}>
-      {#each taskSuggestions as suggestion}
-        <form method="POST" action="?/sendChat" onsubmit={(event) => handleSuggestedSubmit(event, suggestion.prompt)}>
-          <input type="hidden" name="prompt" value={suggestion.prompt} />
-          <button type="submit" disabled={!canStartTask || hasActiveRun} title={suggestion.prompt}>
-            {suggestion.label}
-          </button>
-        </form>
-      {/each}
-    </div>
-
-    <form method="POST" action="?/sendChat" class="task-form" onsubmit={handleTaskSubmit}>
-      <label for="agents-task-prompt">{product.promptLabel}</label>
-      <textarea
-        id="agents-task-prompt"
-        name="prompt"
-        bind:value={draftPrompt}
-        rows="3"
-        placeholder={product.placeholder}
-        disabled={!canStartTask || hasActiveRun}
-        required
-      ></textarea>
-      <div class="task-form-footer">
-        <div class="form-hints">
-          <span>{product.uniqueWorkspaceNote}</span>
-          <span>{product.watchNote}</span>
-        </div>
-        <div class="submit-controls">
-          {#if hasActiveRun}
+      <button
+        type="button"
+        class="run-item"
+        class:active={selectedRunId === "current"}
+        onclick={() => (selectedRunId = "current")}
+      >
+        <span class="run-dot {currentTurn?.status ?? runtimeStatus}" aria-hidden="true"></span>
+        <span class="run-copy">
+          <strong>{product.currentOption}</strong>
+          <small>{currentTurn?.prompt ?? product.emptyTitle}</small>
+        </span>
+        <em>{statusLabel(currentTurn?.status ?? runtimeStatus)}</em>
+      </button>
+      <div class="run-list">
+        {#if historyTurns.length === 0}
+          <p class="details-empty">{product.emptyBody}</p>
+        {:else}
+          {#each historyTurns as turn}
             <button
-              type="submit"
-              form="agents-product-cancel-run-form"
-              class="stop-button"
-              disabled={!latestActiveInvocationId}
-              title={!latestActiveInvocationId ? t.chat.stopUnavailable : undefined}
+              type="button"
+              class="run-item"
+              class:active={selectedRunId === turn.id}
+              onclick={() => (selectedRunId = turn.id)}
             >
-              <Icon name="warning" size={16} stroke={2.3} />
-              <span>{t.chat.stop}</span>
+              <span class="run-dot {turn.status}" aria-hidden="true"></span>
+              <span class="run-copy">
+                <strong>{turn.prompt}</strong>
+                <small>{formatRelative(turn.command.createdAt)}</small>
+              </span>
+              <em>{statusLabel(turn.status)}</em>
             </button>
-          {/if}
-          <button type="submit" disabled={!canStartTask || hasActiveRun}>
-            <Icon name="play" size={16} stroke={2.3} />
-            <span>{taskActionLabel}</span>
-          </button>
-        </div>
+          {/each}
+        {/if}
       </div>
-      {#if taskForm?.message}
-        <p class:form-error={!taskForm?.queuedCommandId} class="form-message">{taskForm.message}</p>
-      {/if}
-      {#if !canStartTask}
-        <p class="unavailable-note">{t.chat.unavailableBody}</p>
-      {/if}
-    </form>
+    </aside>
 
-    <form id="agents-product-cancel-run-form" method="POST" action="?/cancelRun" class="stop-form">
-      <input type="hidden" name="runtimeInvocationId" value={latestActiveInvocationId ?? ""} />
-    </form>
-  </section>
+    <article class="product-stage {selectedTurn?.status ?? 'empty'}" class:busy={hasActiveRun}>
+      <header class="stage-header">
+        <div>
+          <span class="stage-kicker">{selectedRunId === "current" ? product.currentLabel : product.historyLabel}</span>
+          <h3>{selectedTurn?.prompt ?? product.emptyTitle}</h3>
+        </div>
+        <span class="status-pill {selectedTurn?.status ?? runtimeStatus}">
+          {statusLabel(selectedTurn?.status ?? runtimeStatus)}
+        </span>
+      </header>
+
+      {#if hasDisplaySource}
+        <div class="genui-canvas">
+          <AgentMdxStream source={displaySource} streaming={selectedTurn?.status === "running"} />
+        </div>
+      {:else}
+        <div class="empty-product">
+          <div class="empty-icon"><Icon name="spark" size={28} /></div>
+          <div>
+            <h3>{product.emptyTitle}</h3>
+            <p>{selectedTurn ? selectedTurn.answer : product.emptyBody}</p>
+          </div>
+        </div>
+      {/if}
+
+      {#if selectedTurn?.currentActivity}
+        <p class="activity-line"><strong>{product.activityLabel}</strong> {selectedTurn.currentActivity}</p>
+      {/if}
+
+      {#if selectedTurn}
+        <details class="run-details" open={selectedTurn.status === "running"}>
+          <summary>
+            <span><Icon name="activity" size={15} />{product.runDetails}</span>
+            <small>{selectedTurn.invocations.length} {t.chat.invocationMetaLabel} · {selectedTurn.logs.length} {t.chat.logMetaLabel}</small>
+          </summary>
+          <div class="run-detail-grid">
+            <section>
+              <h4>{product.invocationsLabel}</h4>
+              {#if selectedTurn.invocations.length === 0}
+                <p class="details-empty">{t.chat.noRunDetails}</p>
+              {:else}
+                <div class="invocation-stack">
+                  {#each selectedTurn.invocations as invocation}
+                    <article class="invocation-card">
+                      <div>
+                        <strong>{invocation.agentName ?? t.chat.assistantLabel}</strong>
+                        <small>{invocation.runtimeInvocationId}</small>
+                      </div>
+                      <span class="status-pill {invocation.status}">{statusLabel(invocation.status)}</span>
+                      <time>{formatRelative(invocation.updatedAt)}</time>
+                    </article>
+                  {/each}
+                </div>
+              {/if}
+            </section>
+            <section>
+              <h4>{product.recentActivityLabel}</h4>
+              {#if selectedLogs.length === 0}
+                <p class="details-empty">{t.chat.noRunDetails}</p>
+              {:else}
+                <div class="activity-stack">
+                  {#each selectedLogs as log}
+                    <article class="activity-row {activityKind(log)}">
+                      <header>
+                        <span>{log.stream}</span>
+                        <small>{log.runtimeInvocationId} · #{log.sequence} · {formatRelative(log.createdAt)}</small>
+                      </header>
+                      <pre aria-label={t.chat.rawLogOutput}>{log.content}</pre>
+                    </article>
+                  {/each}
+                </div>
+              {/if}
+            </section>
+          </div>
+        </details>
+      {/if}
+    </article>
+
+    <section class="task-launcher" aria-labelledby="agents-task-launcher-title">
+      <div>
+        <p class="panel-kicker">{product.launcherKicker}</p>
+        <h2 id="agents-task-launcher-title">{product.launcherTitle}</h2>
+        <p>{product.launcherBody}</p>
+      </div>
+
+      <div class="suggested-prompts" aria-label={t.chat.suggestionsLabel}>
+        {#each taskSuggestions as suggestion}
+          <form method="POST" action="?/sendChat" onsubmit={(event) => handleSuggestedSubmit(event, suggestion.prompt)}>
+            <input type="hidden" name="prompt" value={suggestion.prompt} />
+            <button type="submit" disabled={!canStartTask || hasActiveRun} title={suggestion.prompt}>
+              {suggestion.label}
+            </button>
+          </form>
+        {/each}
+      </div>
+
+      <form method="POST" action="?/sendChat" class="task-form" onsubmit={handleTaskSubmit}>
+        <label for="agents-task-prompt">{product.promptLabel}</label>
+        <textarea
+          id="agents-task-prompt"
+          name="prompt"
+          bind:value={draftPrompt}
+          rows="4"
+          placeholder={product.placeholder}
+          disabled={!canStartTask || hasActiveRun}
+          required
+        ></textarea>
+        <div class="task-form-footer">
+          <div class="form-hints">
+            <span>{product.uniqueWorkspaceNote}</span>
+            <span>{product.watchNote}</span>
+          </div>
+          <div class="submit-controls">
+            {#if hasActiveRun}
+              <button
+                type="submit"
+                form="agents-product-cancel-run-form"
+                class="stop-button"
+                disabled={!latestActiveInvocationId}
+                title={!latestActiveInvocationId ? t.chat.stopUnavailable : undefined}
+              >
+                <Icon name="warning" size={16} stroke={2.3} />
+                <span>{t.chat.stop}</span>
+              </button>
+            {/if}
+            <button type="submit" disabled={!canStartTask || hasActiveRun}>
+              <Icon name="play" size={16} stroke={2.3} />
+              <span>{taskActionLabel}</span>
+            </button>
+          </div>
+        </div>
+        {#if taskForm?.message}
+          <p class:form-error={!taskForm?.queuedCommandId} class="form-message">{taskForm.message}</p>
+        {/if}
+        {#if !canStartTask}
+          <p class="unavailable-note">{t.chat.unavailableBody}</p>
+        {/if}
+      </form>
+
+      <form id="agents-product-cancel-run-form" method="POST" action="?/cancelRun" class="stop-form">
+        <input type="hidden" name="runtimeInvocationId" value={latestActiveInvocationId ?? ""} />
+      </form>
+    </section>
+  </div>
 </section>
 
 <style>
   .product-shell {
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 16px;
-    box-shadow: var(--shadow-card-raised);
     display: grid;
     gap: 18px;
-    padding: 24px 28px;
   }
 
   .product-toolbar,
@@ -490,27 +535,8 @@
   }
 
   .toolbar-actions {
-    align-items: end;
+    align-items: start;
     justify-content: flex-end;
-  }
-
-  .history-picker {
-    color: var(--color-ink-muted);
-    display: grid;
-    font-size: 12px;
-    font-weight: 800;
-    gap: 6px;
-    min-width: min(360px, 72vw);
-  }
-
-  .history-picker select {
-    background: var(--color-canvas);
-    border: 1px solid var(--color-border);
-    border-radius: 10px;
-    color: var(--color-ink);
-    font: inherit;
-    max-width: 420px;
-    padding: 8px 10px;
   }
 
   .context-chip,
@@ -539,17 +565,158 @@
     color: var(--color-ink-subtle);
   }
 
+  .product-workbench {
+    align-items: start;
+    display: grid;
+    gap: 18px;
+    grid-template-columns: minmax(210px, 0.52fr) minmax(0, 1.4fr) minmax(320px, 0.78fr);
+  }
+
+  .run-rail,
   .product-stage,
   .task-launcher {
     background: var(--color-surface);
     border: 1px solid var(--color-border);
-    border-radius: 16px;
+    border-radius: 8px;
+    box-shadow: var(--shadow-card);
+  }
+
+  .run-rail {
+    display: grid;
+    gap: 10px;
+    max-height: calc(100vh - 150px);
+    min-height: 0;
+    overflow: hidden;
+    padding: 12px;
+    position: sticky;
+    top: 18px;
+  }
+
+  .run-rail-header {
+    align-items: center;
+    color: var(--color-ink-subtle);
+    display: flex;
+    font-size: 11px;
+    font-weight: 800;
+    justify-content: space-between;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .run-rail-header strong {
+    align-items: center;
+    background: var(--color-surface-soft);
+    border-radius: 999px;
+    color: var(--color-ink-muted);
+    display: inline-flex;
+    font-size: 11px;
+    justify-content: center;
+    min-width: 22px;
+    padding: 4px 7px;
+  }
+
+  .run-list {
+    display: grid;
+    gap: 6px;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .run-item {
+    align-items: start;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    color: var(--color-ink-muted);
+    cursor: pointer;
+    display: grid;
+    gap: 8px;
+    grid-template-columns: 8px minmax(0, 1fr);
+    padding: 9px 8px;
+    text-align: left;
+    transition:
+      background 120ms ease,
+      border-color 120ms ease,
+      color 120ms ease;
+    width: 100%;
+  }
+
+  .run-item:hover,
+  .run-item.active {
+    background: var(--color-primary-weak);
+    border-color: var(--color-primary-soft);
+    color: var(--color-primary);
+  }
+
+  .run-dot {
+    background: var(--color-ink-disabled);
+    border-radius: 999px;
+    height: 8px;
+    margin-top: 5px;
+    width: 8px;
+  }
+
+  .run-dot.running,
+  .run-dot.waiting,
+  .run-dot.online,
+  .run-dot.available {
+    background: var(--color-primary);
+  }
+
+  .run-dot.completed,
+  .run-dot.succeeded,
+  .run-dot.success {
+    background: var(--color-success);
+  }
+
+  .run-dot.error,
+  .run-dot.failed,
+  .run-dot.cancelled,
+  .run-dot.canceled {
+    background: var(--color-danger);
+  }
+
+  .run-copy {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .run-copy strong,
+  .run-copy small,
+  .run-item em {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .run-copy strong {
+    color: var(--color-ink);
+    font-size: 13px;
+    font-weight: 650;
+    line-height: 1.35;
+  }
+
+  .run-copy small {
+    color: var(--color-ink-subtle);
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .run-item em {
+    color: var(--color-ink-subtle);
+    font-size: 10px;
+    font-style: normal;
+    font-weight: 800;
+    grid-column: 2;
+    line-height: 1;
+    text-transform: capitalize;
   }
 
   .product-stage {
     display: grid;
     gap: 16px;
-    min-height: 420px;
+    min-height: 0;
     padding: 18px;
   }
 
@@ -596,23 +763,21 @@
   }
 
   .genui-canvas {
-    background:
-      radial-gradient(circle at top left, rgba(102, 126, 234, 0.12), transparent 32%),
-      var(--color-canvas);
+    background: var(--color-canvas);
     border: 1px solid var(--color-border);
-    border-radius: 18px;
-    min-height: 300px;
+    border-radius: 8px;
+    min-height: clamp(220px, 30vw, 360px);
     padding: 18px;
   }
 
   .empty-product {
-    align-items: center;
+    align-items: flex-start;
     background: var(--color-canvas);
     border: 1px dashed var(--color-border);
-    border-radius: 18px;
+    border-radius: 8px;
     display: flex;
     gap: 14px;
-    min-height: 260px;
+    min-height: 150px;
     padding: 22px;
   }
 
@@ -711,9 +876,12 @@
   }
 
   .task-launcher {
+    background: var(--color-canvas);
     display: grid;
     gap: 14px;
     padding: 18px;
+    position: sticky;
+    top: 18px;
   }
 
   .suggested-prompts form,
@@ -763,6 +931,7 @@
     color: var(--color-ink);
     font: inherit;
     line-height: 1.5;
+    min-height: 138px;
     padding: 12px 14px;
     resize: vertical;
   }
@@ -828,6 +997,17 @@
     width: 46px;
   }
 
+  @media (max-width: 1280px) {
+    .product-workbench {
+      grid-template-columns: minmax(200px, 0.55fr) minmax(0, 1fr);
+    }
+
+    .task-launcher {
+      grid-column: 1 / -1;
+      position: static;
+    }
+  }
+
   @media (max-width: 1100px) {
     .product-toolbar,
     .stage-header,
@@ -842,14 +1022,14 @@
       justify-content: flex-start;
     }
 
-    .history-picker {
-      min-width: 0;
-      width: 100%;
+    .product-workbench {
+      grid-template-columns: 1fr;
     }
 
-    .history-picker select {
-      max-width: 100%;
-      width: 100%;
+    .run-rail,
+    .task-launcher {
+      max-height: none;
+      position: static;
     }
 
     .run-detail-grid {

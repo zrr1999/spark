@@ -24,20 +24,25 @@
     "doctor": "pnpm run build && node dist/cli.js doctor"
   },
   "dependencies": {
+    "@core-workspace/infoflow-sdk-nodejs": "2026.6.12-beta.1",
+    "@zendev-lab/spark-ai": "workspace:^",
     "@zendev-lab/spark-artifacts": "workspace:^",
+    "@zendev-lab/spark-channels": "workspace:^",
     "@zendev-lab/spark-extension-api": "workspace:^",
     "@zendev-lab/spark-host": "workspace:^",
     "@zendev-lab/spark-i18n": "workspace:^",
+    "@zendev-lab/spark-modes": "workspace:^",
+    "@zendev-lab/spark-protocol": "workspace:^",
     "@zendev-lab/spark-roles": "workspace:^",
     "@zendev-lab/spark-runtime": "workspace:^",
+    "@zendev-lab/spark-session": "workspace:^",
+    "@zendev-lab/spark-system": "workspace:^",
     "@zendev-lab/spark-tasks": "workspace:^",
     "ws": "^8.18.3"
   },
   "devDependencies": {
     "@types/ws": "^8.18.1",
     "@zendev-lab/spark-db": "workspace:*",
-    "@zendev-lab/spark-protocol": "workspace:*",
-    "@zendev-lab/spark-system": "workspace:*",
     "esbuild": "^0.28.0",
     "typescript": "^6.0.3",
     "vitest": "catalog:"

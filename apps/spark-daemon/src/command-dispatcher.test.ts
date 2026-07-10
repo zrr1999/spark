@@ -35,6 +35,16 @@ describe("Spark daemon command dispatcher", () => {
       params: { state: "inbox" },
     });
     expect(status.kind).toBe("turn.status.request");
+
+    const credential = sparkCommandFromLocalRpcRequest({
+      id: "auth_key",
+      method: "provider.auth.api-key.set",
+      params: { providerName: "openai", apiKey: "must-not-enter-command-traces" },
+    });
+    expect(credential).toMatchObject({
+      kind: "provider.auth.api_key.set.request",
+      payload: {},
+    });
   });
 
   it("adapts runtime server.command envelopes into SparkCommand intents", () => {

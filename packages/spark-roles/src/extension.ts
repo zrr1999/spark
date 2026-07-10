@@ -90,7 +90,6 @@ export interface CallRoleToolParams {
   role: string;
   instruction: string;
   launch?: RoleLaunchMode;
-  piCommand?: string;
   cwd?: string;
   sessionDir?: string;
   forkFromSession?: string;
@@ -282,11 +281,8 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
           description: "fresh | forked. Defaults to fresh; forked requires forkFromSession.",
         }),
       ),
-      piCommand: Type.Optional(
-        Type.String({ description: "Pi executable to launch. Defaults to pi." }),
-      ),
       cwd: Type.Optional(Type.String({ description: "Working directory for the child run." })),
-      sessionDir: Type.Optional(Type.String({ description: "Explicit Pi session directory." })),
+      sessionDir: Type.Optional(Type.String({ description: "Explicit role session directory." })),
       forkFromSession: Type.Optional(
         Type.String({
           description: "Parent session/context for forked launch. Required when launch=forked.",
@@ -330,7 +326,6 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
         role,
         explicitModel: p.model,
         sessionModel: sessionModelName(ctx.model),
-        piCommand: p.piCommand ?? "pi",
         cwd,
         actualRun: true,
         ui: ctx.ui,
@@ -344,7 +339,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
         instruction: p.instruction,
         sessionDir: p.sessionDir,
         forkFromSession: p.forkFromSession,
-        piCommand: p.piCommand ?? "pi",
+        piCommand: "pi",
         cwd,
         timeoutMs: p.timeoutMs,
         signal,
@@ -553,7 +548,9 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       allowedTools: Type.Optional(Type.Array(Type.String())),
       instruction: Type.Optional(Type.String({ description: "Instruction for call." })),
       launch: Type.Optional(Type.String({ description: "fresh | forked for call." })),
-      piCommand: Type.Optional(Type.String()),
+      piCommand: Type.Optional(
+        Type.String({ description: "Pi executable for model_set validation only." }),
+      ),
       cwd: Type.Optional(Type.String()),
       sessionDir: Type.Optional(Type.String()),
       forkFromSession: Type.Optional(Type.String()),
@@ -719,7 +716,6 @@ async function resolveRoleModelForCall(input: {
   role: RoleSpec;
   explicitModel?: string;
   sessionModel?: string;
-  piCommand: string;
   cwd: string;
   actualRun: boolean;
   ui?: {
@@ -754,6 +750,10 @@ function normalizeCallRoleToolParams(params: Record<string, unknown>): CallRoleT
     throw new Error(
       "call_role dryRun is no longer supported; call_role always launches a daemon-native run",
     );
+  if (Object.hasOwn(params, "piCommand"))
+    throw new Error(
+      "call_role piCommand is no longer supported; use role model_set piCommand for model validation",
+    );
   const forkFromSession = normalizeOptionalString(
     params.forkFromSession,
     "call_role forkFromSession",
@@ -764,7 +764,6 @@ function normalizeCallRoleToolParams(params: Record<string, unknown>): CallRoleT
     role,
     instruction,
     launch,
-    piCommand: normalizeOptionalString(params.piCommand, "call_role piCommand"),
     cwd: normalizeOptionalString(params.cwd, "call_role cwd"),
     sessionDir: normalizeOptionalString(params.sessionDir, "call_role sessionDir"),
     forkFromSession,

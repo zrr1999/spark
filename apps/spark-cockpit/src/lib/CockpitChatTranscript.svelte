@@ -52,7 +52,10 @@
     detailsSummary: string;
   };
 
-  type RunDetailView = Pick<CockpitChatTranscriptTurn, "id" | "invocations" | "logs" | "status" | "currentActivity">;
+  type RunDetailView = Pick<
+    CockpitChatTranscriptTurn,
+    "id" | "invocations" | "logs" | "status" | "currentActivity"
+  >;
 
   let {
     t,
@@ -126,106 +129,98 @@
   onscroll={handleTranscriptScroll}
 >
   {#if transcriptTurns.length === 0 && detachedInvocations.length === 0}
-    <article class="message assistant-message">
-      <div class="avatar"><Icon name="spark" size={18} stroke={2.2} /></div>
-      <div class="bubble assistant-bubble">
-        <div class="message-heading">
-          <strong>{t.emptyAssistantTitle}</strong>
-          <span class="status-pill {hasActiveRun ? 'running' : runtimeStatus}">{statusLabel(hasActiveRun ? "running" : runtimeStatus)}</span>
-        </div>
-        <p class="message-text">{t.emptyAssistantBody}</p>
-        <div class="context-line">
-          <span>{assistantState}</span>
-          {#if ownerCommandNote}
-            <span>{ownerCommandNote}</span>
-          {/if}
-        </div>
+    <article class="turn empty-turn">
+      <div class="turn-meta">
+        <span class="role">{t.emptyAssistantTitle}</span>
+        <span class="status-pill {hasActiveRun ? 'running' : runtimeStatus}">
+          {statusLabel(hasActiveRun ? "running" : runtimeStatus)}
+        </span>
+      </div>
+      <p class="message-text muted">{t.emptyAssistantBody}</p>
+      <div class="context-line">
+        <span>{assistantState}</span>
+        {#if ownerCommandNote}
+          <span>{ownerCommandNote}</span>
+        {/if}
       </div>
     </article>
   {:else}
     {#each transcriptTurns as turn}
-      <article class="message user-message">
-        <div class="bubble user-bubble">
-          <div class="message-heading">
-            <strong>{t.userLabel}</strong>
-            <small>{formatRelative(turn.command.createdAt)}</small>
-          </div>
-          <p class="message-text">{turn.prompt}</p>
-          <small class="meta-line">{t.commandMetaLabel}: {statusLabel(turn.command.deliveryStatus ?? turn.command.status)}</small>
+      <article class="turn user-turn">
+        <div class="user-prompt">{turn.prompt}</div>
+        <div class="turn-meta quiet">
+          <span class="role">{t.userLabel}</span>
+          <small>{formatRelative(turn.command.createdAt)}</small>
         </div>
       </article>
 
-      <article class="message assistant-message {turn.status}">
-        <div class="avatar"><Icon name={turn.status === "error" ? "warning" : "spark"} size={18} stroke={2.2} /></div>
-        <div class="bubble assistant-bubble">
-          <div class="message-heading">
-            <strong>{turn.status === "error" ? t.systemLabel : t.assistantLabel}</strong>
-            <span class="status-pill {turn.status}">{statusLabel(turn.status)}</span>
-          </div>
-          {#if turn.status === "running"}
-            <div class="working-indicator">
-              <span class="pulse" aria-hidden="true"></span>
-              <span>{t.workingLabel}</span>
-              <small>{t.elapsedLabel}: {formatRelative(turn.command.createdAt)}</small>
-            </div>
-          {/if}
-          {#if turn.renderSource}
-            <AgentMdxStream source={turn.renderSource} streaming={turn.status === "running"} />
-          {:else}
-            <p class="message-text" class:streaming-text={turn.status === "running"}>
-              {turn.answer}{#if turn.status === "running"}<span class="streaming-caret" aria-hidden="true"></span>{/if}
-            </p>
-          {/if}
-          {#if turn.currentActivity}
-            <small class="meta-line">{t.currentActivityLabel}: {turn.currentActivity}</small>
-          {/if}
-          {@render RunDetails(turn)}
+      <article class="turn assistant-turn {turn.status}">
+        <div class="turn-meta">
+          <span class="role">{turn.status === "error" ? t.systemLabel : t.assistantLabel}</span>
+          <span class="status-pill {turn.status}">{statusLabel(turn.status)}</span>
         </div>
+
+        {#if turn.status === "running"}
+          <div class="working-line">
+            <span class="pulse" aria-hidden="true"></span>
+            <span>{t.workingLabel}</span>
+            <small>{t.elapsedLabel}: {formatRelative(turn.command.createdAt)}</small>
+          </div>
+        {/if}
+
+        {#if turn.renderSource}
+          <div class="answer-body">
+            <AgentMdxStream source={turn.renderSource} streaming={turn.status === "running"} />
+          </div>
+        {:else}
+          <p class="message-text" class:streaming-text={turn.status === "running"}>
+            {turn.answer}{#if turn.status === "running"}<span class="streaming-caret" aria-hidden="true"></span>{/if}
+          </p>
+        {/if}
+
+        {#if turn.currentActivity && turn.status === "running"}
+          <p class="activity-line">{t.currentActivityLabel}: {turn.currentActivity}</p>
+        {/if}
+
+        {@render RunDetails(turn)}
       </article>
     {/each}
 
     {#if detachedInvocations.length > 0}
-      <article class="message assistant-message running">
-        <div class="avatar"><Icon name="activity" size={18} stroke={2.2} /></div>
-        <div class="bubble assistant-bubble">
-          <div class="message-heading">
-            <strong>{t.assistantLabel}</strong>
-            <span class="status-pill running">{statusLabel("running")}</span>
-          </div>
-          <p class="message-text">{hasActiveRun ? t.runningAnswer : t.completedAnswer}</p>
-          {@render RunDetails({
-            id: "detached-run-details",
-            invocations: detachedInvocations,
-            logs: detachedLogs,
-            status: hasActiveRun ? "running" : "completed",
-            currentActivity: latestActivity(detachedLogs),
-          })}
+      <article class="turn assistant-turn running">
+        <div class="turn-meta">
+          <span class="role">{t.assistantLabel}</span>
+          <span class="status-pill running">{statusLabel("running")}</span>
         </div>
+        <p class="message-text">{hasActiveRun ? t.runningAnswer : t.completedAnswer}</p>
+        {@render RunDetails({
+          id: "detached-run-details",
+          invocations: detachedInvocations,
+          logs: detachedLogs,
+          status: hasActiveRun ? "running" : "completed",
+          currentActivity: latestActivity(detachedLogs),
+        })}
       </article>
     {/if}
   {/if}
 </div>
 
 {#snippet RunDetails(detail: RunDetailView)}
-  <details class="run-details">
-    <summary>
-      <span><Icon name="activity" size={15} />{t.runDetails}</span>
-      <small>
-        {detail.invocations.length} {t.invocationMetaLabel} · {detail.logs.length} {t.logMetaLabel}
-      </small>
-    </summary>
-    {#if detail.invocations.length === 0 && detail.logs.length === 0}
-      <p class="details-empty">{t.noRunDetails}</p>
-    {:else}
-      <div class="run-detail-grid">
-        <section>
-          <h4>{t.detailsSummary}</h4>
-          {#if detail.invocations.length === 0}
-            <p class="details-empty">{t.noRunDetails}</p>
-          {:else}
+  {#if detail.invocations.length > 0 || detail.logs.length > 0}
+    <details class="run-details">
+      <summary>
+        <span><Icon name="activity" size={14} />{t.runDetails}</span>
+        <small>
+          {detail.invocations.length} {t.invocationMetaLabel} · {detail.logs.length} {t.logMetaLabel}
+        </small>
+      </summary>
+      <div class="run-detail-stack">
+        {#if detail.invocations.length > 0}
+          <section>
+            <h4>{t.detailsSummary}</h4>
             <div class="invocation-stack">
               {#each detail.invocations as invocation}
-                <article class="invocation-card">
+                <article class="invocation-row">
                   <div>
                     <strong>{invocation.agentName ?? t.assistantLabel}</strong>
                     <small>{invocation.runtimeInvocationId}</small>
@@ -235,111 +230,137 @@
                 </article>
               {/each}
             </div>
-          {/if}
-        </section>
-        <section>
-          <h4>{t.toolActivity}</h4>
-          {#if detail.logs.length === 0}
-            <p class="details-empty">{t.noRunDetails}</p>
-          {:else}
+          </section>
+        {/if}
+        {#if detail.logs.length > 0}
+          <section>
+            <h4>{t.toolActivity}</h4>
             <div class="activity-stack">
               {#each detail.logs as log}
                 <article class="activity-row {activityKind(log)}">
                   <header>
                     <span>{log.stream}</span>
-                    <small>{log.runtimeInvocationId} · #{log.sequence} · {formatRelative(log.createdAt)}</small>
+                    <small>#{log.sequence} · {formatRelative(log.createdAt)}</small>
                   </header>
                   <pre aria-label={t.rawLogOutput}>{log.content}</pre>
                 </article>
               {/each}
             </div>
-          {/if}
-        </section>
+          </section>
+        {/if}
       </div>
-    {/if}
-  </details>
+    </details>
+  {/if}
 {/snippet}
 
 <style>
   .transcript {
     display: grid;
-    gap: 14px;
+    gap: 22px;
+    min-height: 0;
   }
 
-  .message {
+  .turn {
     display: grid;
-    gap: 12px;
+    gap: 8px;
+    max-width: min(720px, 100%);
+    min-width: 0;
   }
 
-  .assistant-message {
-    align-items: start;
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .user-message {
+  .user-turn {
     justify-items: end;
+    margin-left: auto;
   }
 
-  .avatar {
-    align-items: center;
+  .assistant-turn,
+  .empty-turn {
+    justify-items: start;
+  }
+
+  .user-prompt {
     background: var(--color-primary-weak);
     border: 1px solid var(--color-primary-soft);
-    border-radius: 999px;
-    color: var(--color-primary);
-    display: inline-flex;
-    height: 36px;
-    justify-content: center;
-    width: 36px;
-  }
-
-  .assistant-message.error .avatar {
-    background: var(--color-danger-soft);
-    border-color: var(--color-danger);
-    color: var(--color-danger-strong);
-  }
-
-  .bubble {
-    border: 1px solid var(--color-border);
-    border-radius: 16px;
-    display: grid;
-    gap: 10px;
-    max-width: min(760px, 100%);
-    padding: 16px;
-  }
-
-  .assistant-bubble {
-    background: var(--color-surface);
-  }
-
-  .user-bubble {
-    background: var(--color-primary-weak);
-    border-color: var(--color-primary-soft);
-  }
-
-  .message-heading,
-  .context-line,
-  .working-indicator,
-  .run-details summary,
-  .invocation-card,
-  .activity-row header {
-    align-items: center;
-    display: flex;
-    gap: 10px;
-  }
-
-  .message-heading {
-    justify-content: space-between;
-  }
-
-  .message-text {
+    border-radius: 14px 14px 4px 14px;
     color: var(--color-ink);
-    line-height: 1.55;
-    margin: 0;
+    line-height: 1.5;
+    max-width: min(560px, 100%);
+    padding: 10px 14px;
     white-space: pre-wrap;
   }
 
-  .streaming-text {
+  .turn-meta {
+    align-items: center;
+    display: flex;
+    gap: 8px;
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .turn-meta.quiet {
+    justify-content: flex-end;
+    opacity: 0.72;
+  }
+
+  .role {
+    color: var(--color-ink-muted);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+
+  .answer-body,
+  .message-text {
     color: var(--color-ink);
+    line-height: 1.6;
+    margin: 0;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .message-text {
+    white-space: pre-wrap;
+  }
+
+  .message-text.muted,
+  .context-line,
+  .activity-line,
+  .working-line small {
+    color: var(--color-ink-subtle);
+  }
+
+  .context-line {
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 12px;
+    gap: 8px;
+  }
+
+  .working-line,
+  .activity-line {
+    align-items: center;
+    color: var(--color-primary);
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 12px;
+    font-weight: 700;
+    gap: 8px;
+    margin: 0;
+  }
+
+  .activity-line {
+    background: transparent;
+    border: 0;
+    font-weight: 600;
+    padding: 0;
+  }
+
+  .pulse {
+    animation: pulse 1.4s infinite ease-in-out;
+    background: currentColor;
+    border-radius: 999px;
+    display: inline-block;
+    height: 7px;
+    width: 7px;
   }
 
   .streaming-caret {
@@ -353,126 +374,85 @@
     width: 7px;
   }
 
-  @keyframes caret-blink {
-    0%, 45% { opacity: 1; }
-    46%, 100% { opacity: 0.15; }
-  }
-
-  .assistant-bubble .message-text,
-  .context-line,
-  .meta-line,
-  .working-indicator small,
-  .details-empty {
-    color: var(--color-ink-subtle);
-  }
-
-  .context-line {
-    flex-wrap: wrap;
-    font-size: 12px;
-  }
-
-  .meta-line,
-  .message-heading small,
-  time {
-    color: var(--color-ink-subtle);
-    font-size: 12px;
-  }
-
-  .working-indicator {
-    background: var(--color-primary-weak);
-    border: 1px solid var(--color-primary-soft);
-    border-radius: 999px;
-    color: var(--color-primary);
-    flex-wrap: wrap;
-    font-size: 12px;
-    font-weight: 800;
-    justify-content: flex-start;
-    padding: 7px 10px;
-    width: fit-content;
-  }
-
-  .pulse {
-    animation: pulse 1.4s infinite ease-in-out;
-    background: currentColor;
-    border-radius: 999px;
-    display: inline-block;
-    height: 8px;
-    width: 8px;
-  }
-
   .run-details {
-    border-top: 1px solid var(--color-border);
-    display: grid;
-    gap: 12px;
+    border-top: 1px solid var(--color-border-soft);
     margin-top: 4px;
-    padding-top: 10px;
+    padding-top: 8px;
+    width: 100%;
   }
 
   .run-details summary {
-    color: var(--color-ink-muted);
+    align-items: center;
+    color: var(--color-ink-subtle);
     cursor: pointer;
-    font-size: 13px;
-    font-weight: 800;
+    display: flex;
+    font-size: 12px;
+    font-weight: 700;
+    gap: 10px;
     justify-content: space-between;
+    list-style: none;
+  }
+
+  .run-details summary::-webkit-details-marker {
+    display: none;
   }
 
   .run-details summary span {
     align-items: center;
     display: inline-flex;
-    gap: 7px;
+    gap: 6px;
   }
 
-  .run-details summary small {
-    color: var(--color-ink-subtle);
-    font-size: 12px;
-  }
-
-  .run-detail-grid {
+  .run-detail-stack {
     display: grid;
     gap: 12px;
-    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-    padding-top: 12px;
+    padding-top: 10px;
   }
 
-  .run-detail-grid h4 {
-    color: var(--color-ink-muted);
-    font-size: 12px;
+  .run-detail-stack h4 {
+    color: var(--color-ink-subtle);
+    font-size: 11px;
     letter-spacing: 0.04em;
-    margin: 0 0 8px;
+    margin: 0 0 6px;
     text-transform: uppercase;
   }
 
   .invocation-stack,
   .activity-stack {
     display: grid;
-    gap: 8px;
+    gap: 6px;
   }
 
-  .invocation-card,
+  .invocation-row,
   .activity-row {
-    background: var(--color-canvas);
-    border: 1px solid var(--color-border);
-    border-radius: 12px;
-    padding: 10px;
+    background: var(--color-surface-soft);
+    border: 1px solid var(--color-border-soft);
+    border-radius: 10px;
+    padding: 8px 10px;
   }
 
-  .invocation-card {
-    justify-content: space-between;
+  .invocation-row {
+    align-items: center;
+    display: grid;
+    gap: 8px;
+    grid-template-columns: minmax(0, 1fr) auto auto;
   }
 
-  .invocation-card strong,
-  .invocation-card small {
+  .invocation-row strong,
+  .invocation-row small {
     display: block;
   }
 
-  .invocation-card small {
+  .invocation-row small,
+  .activity-row header small,
+  time {
     color: var(--color-ink-subtle);
-    margin-top: 3px;
+    font-size: 11px;
   }
 
   .activity-row {
     display: grid;
-    gap: 8px;
+    gap: 6px;
   }
 
   .activity-row.error {
@@ -488,8 +468,10 @@
   }
 
   .activity-row header {
+    align-items: center;
     color: var(--color-ink-muted);
-    font-size: 12px;
+    display: flex;
+    font-size: 11px;
     justify-content: space-between;
   }
 
@@ -502,9 +484,9 @@
     color: var(--color-ink);
     font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 12px;
-    line-height: 1.5;
+    line-height: 1.45;
     margin: 0;
-    max-height: 240px;
+    max-height: 180px;
     overflow: auto;
     white-space: pre-wrap;
   }
@@ -513,9 +495,9 @@
     background: var(--color-surface-soft);
     border-radius: 999px;
     color: var(--color-ink-subtle);
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 800;
-    padding: 6px 10px;
+    padding: 4px 8px;
     text-transform: capitalize;
     white-space: nowrap;
   }
@@ -552,7 +534,9 @@
   .status-pill.failed,
   .status-pill.cancelled,
   .status-pill.canceled,
-  .status-pill.rejected {
+  .status-pill.rejected,
+  .status-pill.lost,
+  .status-pill.stale {
     background: var(--color-danger-soft);
     color: var(--color-danger-strong);
   }
@@ -569,17 +553,14 @@
     }
   }
 
-  @media (max-width: 900px) {
-    .assistant-message {
-      grid-template-columns: 1fr;
+  @keyframes caret-blink {
+    0%,
+    45% {
+      opacity: 1;
     }
-
-    .avatar {
-      display: none;
-    }
-
-    .run-detail-grid {
-      grid-template-columns: 1fr;
+    46%,
+    100% {
+      opacity: 0.15;
     }
   }
 </style>

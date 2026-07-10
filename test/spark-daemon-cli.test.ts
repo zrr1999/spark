@@ -17,6 +17,7 @@ import {
   handleSparkDaemonCliCommand,
   parseSparkDaemonCliArgs,
   runSparkDaemonCliCommand,
+  type ManagedSessionRegistryResult,
   type SparkDaemonClientOptions,
 } from "../apps/spark-tui/src/cli/daemon.ts";
 import { loadSparkHeadlessSessionModule } from "../apps/spark-daemon/src/spark/session-run.ts";
@@ -54,6 +55,9 @@ void test("parseSparkCliCommand routes daemon and print commands without changin
         json: true,
         allWorkspaces: true,
         history: true,
+        registry: false,
+        includeArchived: false,
+        workspaceId: undefined,
       },
     },
   );
@@ -65,6 +69,9 @@ void test("parseSparkCliCommand routes daemon and print commands without changin
       json: true,
       allWorkspaces: true,
       history: true,
+      registry: false,
+      includeArchived: false,
+      workspaceId: undefined,
     },
   });
   assert.deepEqual(parseSparkCliCommand(["session", "replay", "--session", "s1"]), {
@@ -73,7 +80,8 @@ void test("parseSparkCliCommand routes daemon and print commands without changin
   });
   assert.deepEqual(
     parseSparkCliCommand([
-      "sessions",
+      "daemon",
+      "session",
       "mailto",
       "--to",
       "session-b",
@@ -96,7 +104,8 @@ void test("parseSparkCliCommand routes daemon and print commands without changin
   );
   assert.deepEqual(
     parseSparkCliCommand([
-      "sessions",
+      "daemon",
+      "session",
       "inbox",
       "read",
       "mail:1",
@@ -117,9 +126,177 @@ void test("parseSparkCliCommand routes daemon and print commands without changin
       },
     },
   );
+  assert.deepEqual(
+    parseSparkCliCommand(["daemon", "channel", "status", "--workspace", "ws_demo", "--json"]),
+    {
+      kind: "daemon",
+      command: {
+        action: "channel",
+        subcommand: "status",
+        json: true,
+        workspaceId: "ws_demo",
+      },
+    },
+  );
 });
 
-void test("spark sessions mailto and inbox send list read ack without daemon turn execution", async () => {
+void test("daemon channel status is read from daemon local RPC client", async () => {
+  let calls = 0;
+  const result = await handleSparkDaemonCliCommand(
+    { action: "channel", subcommand: "status", json: true, workspaceId: "ws_demo" },
+    {
+      channelStatus: async () => {
+        calls += 1;
+        return {
+          plane: "daemon",
+          resource: "channel",
+          workspaceId: "ws_demo",
+          configPath: "/tmp/spark/workspaces/ws_demo/channels/config.json",
+          available: true,
+          configured: true,
+          ingressEnabled: true,
+          state: "running",
+          adapters: [{ id: "feishu", type: "feishu", running: true }],
+          routes: [{ name: "ops", adapter: "feishu", recipient: "oc_ops" }],
+          observedAt: "2026-07-10T00:00:00.000Z",
+          text: "channels workspace=ws_demo running adapters=1/1 routes=1 ingress=on\n",
+        };
+      },
+    },
+  );
+
+  assert.equal(calls, 1);
+  assert.equal(result.action, "channel");
+  assert.ok("adapters" in result.result);
+  assert.equal(result.result.adapters[0]?.running, true);
+  assert.match(result.result.text, /channels workspace=ws_demo running/u);
+});
+
+void test("daemon managed session commands wait for the daemon-owned RPC client", async () => {
+  const calls: string[] = [];
+  const session = {
+    sessionId: "sess_rpc",
+    workspaceId: "ws_rpc",
+    title: "RPC session",
+    status: "ready" as const,
+    bindings: [],
+    createdAt: "2026-07-10T00:00:00.000Z",
+    updatedAt: "2026-07-10T00:00:00.000Z",
+  };
+  const managedSessions: NonNullable<SparkDaemonClientOptions["managedSessions"]> = {
+    create: async (input) => {
+      calls.push(`create:${input.workspaceId}`);
+      return session;
+    },
+    list: async (options) => {
+      calls.push(`list:${options?.workspaceId ?? "all"}`);
+      return [session];
+    },
+    get: async (sessionId) => {
+      calls.push(`get:${sessionId}`);
+      return session;
+    },
+    bind: async (sessionId, externalKey) => {
+      calls.push(`bind:${sessionId}:${externalKey}`);
+      return session;
+    },
+    unbind: async (sessionId, externalKey) => {
+      calls.push(`unbind:${sessionId}:${externalKey}`);
+      return session;
+    },
+    archive: async (sessionId) => {
+      calls.push(`archive:${sessionId}`);
+      return { ...session, status: "archived" };
+    },
+  };
+  const client = { managedSessions } satisfies SparkDaemonClientOptions;
+
+  const created = await handleSparkDaemonCliCommand(
+    {
+      action: "sessions",
+      subcommand: "create",
+      json: true,
+      workspaceId: "ws_rpc",
+      sessionId: "sess_rpc",
+    },
+    client,
+  );
+  assert.equal(created.action, "sessions");
+  if (created.action !== "sessions") throw new Error("expected sessions result");
+  assert.equal((created.result as ManagedSessionRegistryResult).session?.sessionId, "sess_rpc");
+  await handleSparkDaemonCliCommand(
+    {
+      action: "sessions",
+      subcommand: "bind",
+      json: true,
+      sessionId: "sess_rpc",
+      externalKey: "feishu:chat:oc_rpc",
+    },
+    client,
+  );
+  await handleSparkDaemonCliCommand(
+    {
+      action: "sessions",
+      subcommand: "list",
+      registry: true,
+      json: true,
+      workspaceId: "ws_rpc",
+    },
+    client,
+  );
+  await handleSparkDaemonCliCommand(
+    {
+      action: "sessions",
+      subcommand: "archive",
+      json: true,
+      sessionId: "sess_rpc",
+    },
+    client,
+  );
+
+  assert.deepEqual(calls, [
+    "create:ws_rpc",
+    "bind:sess_rpc:feishu:chat:oc_rpc",
+    "list:ws_rpc",
+    "archive:sess_rpc",
+  ]);
+});
+
+void test("daemon managed session mutation fails explicitly when daemon RPC is unavailable", async () => {
+  const managedSessions: NonNullable<SparkDaemonClientOptions["managedSessions"]> = {
+    create: async () => {
+      throw new Error("Spark daemon is offline");
+    },
+    list: async () => [],
+    get: async () => {
+      throw new Error("Spark daemon is offline");
+    },
+    bind: async () => {
+      throw new Error("Spark daemon is offline");
+    },
+    unbind: async () => {
+      throw new Error("Spark daemon is offline");
+    },
+    archive: async () => {
+      throw new Error("Spark daemon is offline");
+    },
+  };
+
+  await assert.rejects(
+    handleSparkDaemonCliCommand(
+      {
+        action: "sessions",
+        subcommand: "create",
+        json: true,
+        workspaceId: "ws_rpc",
+      },
+      { managedSessions },
+    ),
+    /Spark daemon is offline/u,
+  );
+});
+
+void test("spark daemon session mailto and inbox send list read ack without daemon turn execution", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-mail-"));
   const sparkHome = join(dir, "spark-home");
   try {
@@ -369,6 +546,9 @@ void test("daemon sessions plural alias routes to live list", () => {
     json: true,
     allWorkspaces: false,
     history: false,
+    registry: false,
+    includeArchived: false,
+    workspaceId: undefined,
   });
   assert.deepEqual(parseSparkDaemonCliArgs(["session", "list", "--history", "--json"]), {
     action: "sessions",
@@ -376,6 +556,9 @@ void test("daemon sessions plural alias routes to live list", () => {
     json: true,
     allWorkspaces: false,
     history: true,
+    registry: false,
+    includeArchived: false,
+    workspaceId: undefined,
   });
 });
 
@@ -752,6 +935,22 @@ void test("parseSparkDaemonCliArgs parses daemon IPC commands", async () => {
     subcommand: "replay",
     sessionId: "s1",
   });
+  assert.throws(
+    () => parseSparkDaemonCliArgs(["session", "export"]),
+    /spark daemon session export requires --session <id\|path>/u,
+  );
+  assert.throws(
+    () => parseSparkDaemonCliArgs(["session", "mailto"]),
+    /spark daemon session mailto requires --to <session-id>/u,
+  );
+  assert.throws(
+    () => parseSparkDaemonCliArgs(["session", "inbox"]),
+    /spark daemon session inbox requires --session <session-id>/u,
+  );
+  assert.throws(
+    () => parseSparkDaemonCliArgs(["session", "wat"]),
+    /unknown spark daemon session command: wat/u,
+  );
   assert.deepEqual(parseSparkDaemonCliArgs(["session", "show", "session:fixture-a", "--json"]), {
     action: "sessions",
     json: true,

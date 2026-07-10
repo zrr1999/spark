@@ -91,6 +91,7 @@ void test("stale claim recovery refuses while an active role-run process exists"
     cwd: process.cwd(),
     startedAt: "2026-06-17T00:00:00.000Z",
     pid: 12345,
+    inputControl: "stdin",
   };
 
   const decision = await evaluateSparkTaskClaimRecovery({

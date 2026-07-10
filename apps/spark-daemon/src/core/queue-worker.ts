@@ -20,9 +20,15 @@ import {
 
 export { createSparkDaemonActiveTasks };
 
-export const DEFAULT_SPARK_DAEMON_QUEUE_LAUNCH_LIMIT = Number.POSITIVE_INFINITY;
-export const DEFAULT_SPARK_DAEMON_QUEUE_CONCURRENCY = Number.POSITIVE_INFINITY;
+/**
+ * Keep daemon fan-out deliberately small by default. Individual deployments can
+ * still opt into a higher value, but an omitted setting must not turn one inbox
+ * batch into an unbounded number of model and command processes.
+ */
+export const DEFAULT_SPARK_DAEMON_QUEUE_LAUNCH_LIMIT = 4;
+export const DEFAULT_SPARK_DAEMON_QUEUE_CONCURRENCY = 4;
 export const DEFAULT_SPARK_DAEMON_QUEUE_TASK_TIMEOUT_MS = 600_000;
+export const DEFAULT_SPARK_DAEMON_QUEUE_ABORT_DRAIN_MS = 1_000;
 
 export interface ProcessSparkDaemonQueueBatchOptions {
   queue: SparkDaemonQueue;
@@ -33,6 +39,8 @@ export interface ProcessSparkDaemonQueueBatchOptions {
   limit?: number;
   concurrency?: number;
   taskTimeoutMs?: number;
+  /** Maximum time to retain a worker slot while an aborted executor cleans up. */
+  taskAbortDrainMs?: number;
 }
 
 export interface WaitForSparkDaemonActiveTasksOptions {
@@ -89,6 +97,7 @@ function launchQueueTask(
   });
   options.active.files.add(options.fileName);
   if (sessionId) options.active.sessions.add(sessionId);
+  let executorSettled: Promise<void> | undefined;
 
   emitDaemonEvent(options.emitEvent, daemonTaskLifecycleEvent(options, "running"));
 
@@ -97,6 +106,9 @@ function launchQueueTask(
     invocationId: invocation.invocationId,
     signal: invocation.signal,
     cancelInvocation: (reason?: string) => invocation.cancel(reason),
+    trackExecutorSettlement: (settled) => {
+      executorSettled = settled;
+    },
   })
     .catch((error) => {
       console.error(
@@ -104,9 +116,20 @@ function launchQueueTask(
       );
     })
     .finally(() => {
-      invocation.finish();
       options.active.files.delete(options.fileName);
-      if (sessionId) options.active.sessions.delete(sessionId);
+      const releaseSessionFence = () => {
+        invocation.finish();
+        if (sessionId) options.active.sessions.delete(sessionId);
+      };
+      if (executorSettled) {
+        // Cancellation may release the bounded worker slot after taskAbortDrainMs,
+        // but the underlying executor still owns its session until it really
+        // settles. Keeping this fence separate prevents an abort-ignoring task
+        // from overlapping a later invocation for the same session.
+        void executorSettled.then(releaseSessionFence);
+      } else {
+        releaseSessionFence();
+      }
     });
 }
 
@@ -117,6 +140,7 @@ async function runQueueTask(
     invocationId: string;
     signal: AbortSignal;
     cancelInvocation: (reason?: string) => boolean;
+    trackExecutorSettlement: (settled: Promise<void>) => void;
   },
 ): Promise<void> {
   try {
@@ -143,6 +167,7 @@ async function executeQueueTaskWithTimeout(
     invocationId: string;
     signal: AbortSignal;
     cancelInvocation: (reason?: string) => boolean;
+    trackExecutorSettlement: (settled: Promise<void>) => void;
     timeoutMs: number;
   },
 ): Promise<unknown> {
@@ -155,6 +180,11 @@ async function executeQueueTaskWithTimeout(
     emitEvent: options.emitEvent,
   };
   const taskPromise = options.executeTask(options.entry.payload.task, context);
+  const executorSettled = taskPromise.then(
+    () => undefined,
+    () => undefined,
+  );
+  options.trackExecutorSettlement(executorSettled);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   let abort: (() => void) | undefined;
@@ -184,10 +214,35 @@ async function executeQueueTaskWithTimeout(
 
   try {
     return await Promise.race(races);
+  } catch (error) {
+    if (options.signal.aborted) {
+      await drainAbortedTask(
+        taskPromise,
+        normalizeNonNegativeInteger(
+          options.taskAbortDrainMs,
+          DEFAULT_SPARK_DAEMON_QUEUE_ABORT_DRAIN_MS,
+        ),
+      );
+    }
+    throw error;
   } finally {
     if (timer) clearTimeout(timer);
     if (abort) options.signal.removeEventListener("abort", abort);
   }
+}
+
+async function drainAbortedTask(task: Promise<unknown>, timeoutMs: number): Promise<void> {
+  const settled = task.then(
+    () => undefined,
+    () => undefined,
+  );
+  if (timeoutMs <= 0) return;
+  await Promise.race([
+    settled,
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, timeoutMs);
+    }),
+  ]);
 }
 
 export class SparkDaemonQueueTaskTimeoutError extends Error {
@@ -376,6 +431,11 @@ function normalizeQueueTaskTimeoutMs(value: number | undefined): number {
   if (!Number.isFinite(value)) return DEFAULT_SPARK_DAEMON_QUEUE_TASK_TIMEOUT_MS;
   const normalized = Math.floor(value);
   return normalized > 0 ? normalized : 0;
+}
+
+function normalizeNonNegativeInteger(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.floor(value));
 }
 
 export async function waitForSparkDaemonActiveTasks(

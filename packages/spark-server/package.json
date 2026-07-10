@@ -24,7 +24,7 @@
     "./runtime-registration": "./src/runtime-registration.ts",
     "./runtime-ws": "./src/runtime-ws.ts",
     "./routing": "./src/routing.ts",
-    "./search": "./src/search.ts",
+    "./session-activity": "./src/session-activity.ts",
     "./security": "./src/security.ts"
   },
   "scripts": {

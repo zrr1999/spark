@@ -109,6 +109,7 @@ export class SparkHostRuntime implements ExtensionAPI {
   private modelRegistry: SparkHostModelRegistryLike | undefined;
   private leafRunner: LeafCapabilityRunner | undefined;
   private roleRunner: ExtensionRoleRunner | undefined;
+  private sessionId: string | undefined;
   private idle = true;
   private readonly keybindings: SparkKeybindings;
 
@@ -363,6 +364,12 @@ export class SparkHostRuntime implements ExtensionAPI {
     this.triggerTurnHandler = handler;
   }
 
+  /** Keep extension event/tool contexts bound to the active Spark session. */
+  setSessionId(sessionId: string | undefined): void {
+    const normalized = sessionId?.trim();
+    this.sessionId = normalized || undefined;
+  }
+
   /**
    * Build a fresh ExtensionContext with the current UI transport and
    * sessionManager view bound. Each call returns a new object so the host can
@@ -374,6 +381,7 @@ export class SparkHostRuntime implements ExtensionAPI {
   } {
     return {
       cwd: this.cwd,
+      ...(this.sessionId ? { sessionId: this.sessionId } : {}),
       ...(this.sparkStateRoot ? { sparkStateRoot: this.sparkStateRoot } : {}),
       hasUI: this.hasUI,
       ui: this.uiTransport as ExtensionUi,

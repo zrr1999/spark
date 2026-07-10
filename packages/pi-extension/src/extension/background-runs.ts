@@ -13,6 +13,7 @@ import type {
 } from "@zendev-lab/spark-workflows";
 import {
   listActiveSparkRoleRunProcesses,
+  type SparkRoleRunInputControl,
   type KillSparkRoleRunProcessResult,
   type RoleRunArtifactPreview,
   type RoleRunJsonEventsTail,
@@ -128,6 +129,7 @@ export interface SparkBackgroundChildRunView {
   startedAt?: string;
   finishedAt?: string;
   timedOutAt?: string;
+  inputControl?: SparkRoleRunInputControl;
   activeProcess: boolean;
   status: SparkBackgroundChildStatus;
   summary?: string;

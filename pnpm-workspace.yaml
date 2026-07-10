@@ -15,8 +15,16 @@ catalog:
 
 minimumReleaseAgeExclude:
   - "@types/node@26.0.1"
+  - "@earendil-works/pi-agent-core@0.80.6"
+  - "@earendil-works/pi-ai@0.80.6"
+  - "@earendil-works/pi-coding-agent@0.80.6"
+  - "@earendil-works/pi-tui@0.80.6"
 
 overrides:
+  "@connectrpc/connect-node>undici": "6.27.0"
+  "@cursor/sdk>zod": "3.25.76"
+  "@earendil-works/pi-coding-agent>undici": "8.7.0"
+  "@sveltejs/kit>cookie": "0.7.2"
   vite: "catalog:"
   vite-plus: "catalog:"
   vitest: "catalog:"

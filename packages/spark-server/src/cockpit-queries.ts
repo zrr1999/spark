@@ -1,7 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { createId } from "@zendev-lab/spark-protocol";
 import { ensureArtifactPreviewCache, readArtifactPreviewContent } from "./artifact-cache.ts";
-import { loadAgentsProductProjection } from "./agents-product.ts";
 import { loadProjectCockpit } from "./project-cockpit.ts";
 import { loadWorkspaceServerControl } from "./projection-services.ts";
 import { listRuntimeEnrollmentTokens } from "./runtime-registration.ts";
@@ -68,18 +67,29 @@ export interface PendingWorkspaceBindingSetup {
   enrollmentTokenId?: string;
 }
 
-export function loadWorkbenchLayout(db: DatabaseSync, pathname: string) {
+export function loadWorkbenchLayout(
+  db: DatabaseSync,
+  pathname: string,
+  options: { preferredWorkspaceSlug?: string | null } = {},
+) {
   const workspaces = db
     .prepare(
       `SELECT id, slug, name
        FROM workspaces
-       ORDER BY updated_at DESC, created_at DESC
-       LIMIT 8`,
+       WHERE status = 'active'
+       ORDER BY updated_at DESC, created_at DESC`,
     )
     .all() as unknown as WorkbenchWorkspaceSummary[];
 
   const workspaceId = workspaceIdFromPath(pathname);
-  const activeWorkspace = workspaceId ? (loadWorkspaceByRouteId(db, workspaceId) ?? null) : null;
+  const pathWorkspace = workspaceId ? (loadWorkspaceByRouteId(db, workspaceId) ?? null) : null;
+  const preferredSlug = options.preferredWorkspaceSlug?.trim() || null;
+  const preferredWorkspace = preferredSlug
+    ? (workspaces.find((workspace) => workspace.slug === preferredSlug) ??
+      loadWorkspaceByRouteId(db, preferredSlug) ??
+      null)
+    : null;
+  const activeWorkspace = pathWorkspace ?? preferredWorkspace ?? workspaces[0] ?? null;
   return { activeWorkspace, workspaces };
 }
 
@@ -327,7 +337,7 @@ export function loadArtifactsPage(db: DatabaseSync, workspaceRouteId: string) {
     },
     { total: 0, workspace: 0, project: 0, cached: 0 },
   );
-  return { workspace, artifacts, counts, ...loadAgentsProductProjection(db, workspace.id) };
+  return { workspace, artifacts, counts };
 }
 
 export interface ArtifactDetailRow {
@@ -351,6 +361,7 @@ export interface ArtifactDetailRow {
   runtimeWorkspaceBindingId: string | null;
   runtimeWorkspaceName: string | null;
   runtimeName: string | null;
+  sessionId: string | null;
   invocationId: string | null;
   runtimeInvocationId: string | null;
   invocationStatus: string | null;
@@ -386,6 +397,11 @@ export function loadArtifactDetail(db: DatabaseSync, artifactId: string) {
               mi.runtime_invocation_id AS runtimeInvocationId,
               mi.status AS invocationStatus,
               mi.agent_name AS agentName,
+              CASE
+                WHEN json_valid(c.payload_json)
+                THEN CAST(json_extract(c.payload_json, '$.payload.target.sessionId') AS TEXT)
+                ELSE NULL
+              END AS sessionId,
               a.human_request_id AS humanRequestId,
               hr.title AS humanRequestTitle
        FROM artifacts a
@@ -394,6 +410,7 @@ export function loadArtifactDetail(db: DatabaseSync, artifactId: string) {
        LEFT JOIN runtime_workspace_bindings rb ON rb.id = a.runtime_workspace_binding_id
        LEFT JOIN runtime_connections rc ON rc.id = rb.runtime_id
        LEFT JOIN mirrored_invocations mi ON mi.id = a.invocation_id
+       LEFT JOIN commands c ON c.id = mi.command_id
        LEFT JOIN human_requests hr ON hr.id = a.human_request_id
        WHERE a.id = ?
        LIMIT 1`,
@@ -607,13 +624,24 @@ export function loadInboxDetail(db: DatabaseSync, inboxItemId: string) {
               p.name AS projectName,
               rb.id AS runtimeWorkspaceBindingId,
               rb.display_name AS runtimeWorkspaceName,
-              rc.name AS runtimeName
+              rc.name AS runtimeName,
+              CASE
+                WHEN json_valid(c.payload_json)
+                THEN CAST(json_extract(c.payload_json, '$.payload.target.sessionId') AS TEXT)
+                ELSE NULL
+              END AS sessionId
        FROM inbox_items ii
        JOIN workspaces w ON w.id = ii.workspace_id
        JOIN human_requests hr ON hr.id = ii.human_request_id
        LEFT JOIN projects p ON p.id = ii.project_id
        JOIN runtime_workspace_bindings rb ON rb.id = hr.runtime_workspace_binding_id
        JOIN runtime_connections rc ON rc.id = rb.runtime_id
+       LEFT JOIN commands c
+         ON c.id = CASE
+           WHEN json_valid(hr.context_json)
+           THEN CAST(json_extract(hr.context_json, '$.commandId') AS TEXT)
+           ELSE NULL
+         END
        WHERE ii.id = ?
        LIMIT 1`,
     )
@@ -765,7 +793,8 @@ export function loadWorkspaceSettings(db: DatabaseSync, workspaceRouteId: string
 export function updateWorkspaceSettings(
   db: DatabaseSync,
   input: { workspaceId: string; name: string; slug: string; description: string | null },
-): "ok" | "duplicate_slug" {
+): "ok" | "duplicate_slug" | "reserved_slug" {
+  if (isReservedWorkbenchPathSegment(input.slug)) return "reserved_slug";
   const duplicate = db
     .prepare(
       `SELECT id
@@ -1061,21 +1090,28 @@ function findOnlyAvailableWorkspaceBindingForRuntime(
   return rows.length === 1 ? (rows[0] ?? null) : null;
 }
 
-const reservedTopLevelSegments = new Set([
+export const reservedWorkbenchPathSegments = [
   "api",
   "setup",
   "logout",
   "workspaces",
   "settings",
+  "sessions",
   "agents",
   "projects",
   "inbox",
   "repos",
   "artifacts",
-]);
+] as const;
+
+const reservedTopLevelSegments = new Set<string>(reservedWorkbenchPathSegments);
+
+export function isReservedWorkbenchPathSegment(segment: string): boolean {
+  return reservedTopLevelSegments.has(segment.trim().toLowerCase());
+}
 
 function workspaceIdFromPath(pathname: string) {
   const segment = pathname.split("/").filter(Boolean)[0];
-  if (!segment || reservedTopLevelSegments.has(segment)) return null;
+  if (!segment || isReservedWorkbenchPathSegment(segment)) return null;
   return decodeURIComponent(segment);
 }

@@ -102,6 +102,7 @@ export function collectBackgroundChildRuns(input: {
       startedAt: activeProcess?.startedAt ?? taskRun?.startedAt,
       finishedAt: taskRun?.finishedAt,
       timedOutAt: activeProcess?.timedOutAt,
+      inputControl: activeProcess?.inputControl,
       activeProcess: Boolean(activeProcess),
       status,
       summary: taskRun?.completionSummary?.summary,
@@ -150,6 +151,8 @@ export async function enrichBackgroundChildRunsWithRoleRunArtifacts(input: {
 }
 
 function backgroundChildNextAction(child: SparkBackgroundChildRunView): string | undefined {
+  if (child.activeProcess && child.inputControl && child.inputControl !== "none")
+    return `wait for completion, reply/steer with a selected target, or kill ${child.runRef} if this child is non-responsive`;
   if (child.activeProcess)
     return `wait for completion, or kill ${child.runRef} if this child is non-responsive`;
   if (child.status === "failed")

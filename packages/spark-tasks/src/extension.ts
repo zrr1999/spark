@@ -115,7 +115,10 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
         }),
       ),
       message: Type.Optional(
-        Type.String({ description: "run_status reply/steer only; text to send to child stdin." }),
+        Type.String({
+          description:
+            "run_status reply/steer only; text to deliver to a selected active role-run input control channel, including daemon-native control when exposed. Runs without a channel report not delivered.",
+        }),
       ),
       includeWorkspaceSummary: Type.Optional(
         Type.Boolean({

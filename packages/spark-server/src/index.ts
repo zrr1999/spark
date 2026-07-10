@@ -10,5 +10,5 @@ export * from "./projection-services.ts";
 export * from "./runtime-registration.ts";
 export * from "./runtime-ws.ts";
 export * from "./routing.ts";
-export * from "./search.ts";
+export * from "./session-activity.ts";
 export * from "./security.ts";

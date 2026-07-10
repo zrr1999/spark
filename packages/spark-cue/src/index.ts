@@ -25,6 +25,7 @@
 
 import type { ExtensionAPI } from "@zendev-lab/spark-extension-api";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as nodePath from "node:path";
 import { truncateToWidth } from "@zendev-lab/spark-tui/text";
 import { Type } from "typebox";
@@ -93,13 +94,26 @@ class ToolCallText implements ToolCallComponent {
   }
 }
 
-export { CueClient, CueError, defaultSocketPath, resolveCueTransport } from "./cue-client.ts";
+export {
+  CueClient,
+  CueError,
+  CueTransportError,
+  cueOperationId,
+  cueOperationStep,
+  defaultSocketPath,
+  isRetryableCueTransportError,
+  resolveCueTransport,
+} from "./cue-client.ts";
 export type {
+  CueOperationKey,
   CueResolvedTransport,
   CueSessionOptions,
+  CancelReason,
   JobInfo,
+  JobOutputResult,
   JobResult,
   JobStatus,
+  OutputEncoding,
   ResourceNeeds,
   ScriptItemSummary,
   ScriptResult,
@@ -118,25 +132,49 @@ export type { DaemonVersion, VersionCheckOptions, VersionVerdict } from "./versi
 import {
   CueClient,
   CueError,
+  cueOperationId,
+  type CueOperationKey,
   type CueResolvedTransport,
   type CueSessionOptions,
   type JobInfo,
   type JobStatus,
   type ResourceNeeds,
   type ScriptResult,
+  isSensitiveCueEnvKey,
+  isRetryableCueTransportError,
   resolveCueTransport,
 } from "./cue-client.ts";
 import { checkAndWarn as checkCuedVersionAndWarn } from "./version-check.ts";
 
 // ── Shared state ───────────────────────────────────────────────────────────
 
-let client: CueClient | null = null;
-let clientTransportKey: string | null = null;
+type CueClientOwner = symbol;
+
+interface CueClientRegistryEntry {
+  readonly key: string;
+  readonly sessionId: string;
+  readonly owners: Set<CueClientOwner>;
+  connectPromise: Promise<CueClient>;
+  client?: CueClient;
+}
+
+const clientRegistry = new Map<string, CueClientRegistryEntry>();
 
 export function __resetPiCueClientForTests(): void {
-  client?.close();
-  client = null;
-  clientTransportKey = null;
+  for (const entry of clientRegistry.values()) closeClientRegistryEntry(entry);
+  clientRegistry.clear();
+}
+
+function closeClientRegistryEntry(entry: CueClientRegistryEntry): void {
+  if (clientRegistry.get(entry.key) === entry) clientRegistry.delete(entry.key);
+  if (entry.client) {
+    entry.client.close();
+    return;
+  }
+  void entry.connectPromise.then(
+    (connected) => connected.close(),
+    () => undefined,
+  );
 }
 
 function cueTransportKey(transport: CueResolvedTransport): string {
@@ -169,26 +207,44 @@ function cueSessionIdFromContext(ctx: PiCueToolContext | undefined, cwd: string)
 }
 
 function stableStringHash(value: string): string {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash.toString(16).padStart(8, "0");
+  return createHash("sha256").update(value).digest("hex").slice(0, 32);
 }
 
-async function getClient(ctx?: PiCueToolContext): Promise<CueClient> {
-  if (ctx?.cueClient) return ctx.cueClient;
-  const transport = await resolveCueTransport();
-  const session = cueSessionOptionsFromContext(ctx);
-  const transportKey = `${cueTransportKey(transport)}|session:${session.sessionId}`;
-  if (client && !client.isClosed && clientTransportKey === transportKey) return client;
-  if (client && !client.isClosed) client.close();
-  client = null;
-  clientTransportKey = null;
+function releaseClientOwner(owner: CueClientOwner, ctx?: PiCueToolContext): void {
+  const ownedEntries = Array.from(clientRegistry.values()).filter((entry) =>
+    entry.owners.has(owner),
+  );
+  const hasSessionIdentity = Boolean(
+    ctx?.sessionId?.trim() ||
+    ctx?.cwd?.trim() ||
+    ctx?.sessionManager?.getSessionFile?.()?.trim() ||
+    ctx?.sessionManager?.getLeafId?.()?.trim() ||
+    process.env.PI_SESSION_ID?.trim() ||
+    process.env.SPARK_SESSION_ID?.trim(),
+  );
+  let sessionId = hasSessionIdentity
+    ? cueSessionIdFromContext(ctx, resolveCueWorkingDirectory(undefined, ctx?.cwd))
+    : undefined;
+  if (!sessionId) {
+    const ownedSessionIds = new Set(ownedEntries.map((entry) => entry.sessionId));
+    if (ownedSessionIds.size !== 1) return;
+    sessionId = ownedSessionIds.values().next().value;
+  }
+
+  for (const entry of ownedEntries) {
+    if (entry.sessionId !== sessionId) continue;
+    if (!entry.owners.delete(owner)) continue;
+    if (entry.owners.size === 0) closeClientRegistryEntry(entry);
+  }
+}
+
+async function connectClient(
+  transport: CueResolvedTransport,
+  session: Required<CueSessionOptions>,
+  ctx?: PiCueToolContext,
+): Promise<CueClient> {
   try {
-    client = await CueClient.connectResolved(transport, session);
-    clientTransportKey = transportKey;
+    return await CueClient.connectResolved(transport, session);
   } catch (error) {
     if (error instanceof CueError && error.code === "UNSUPPORTED_PROTOCOL") throw error;
     if (transport.transport === "ssh") throw error;
@@ -207,8 +263,7 @@ async function getClient(ctx?: PiCueToolContext): Promise<CueClient> {
     }
     // Retry connection after starting.
     try {
-      client = await CueClient.connectResolved(transport, session);
-      clientTransportKey = transportKey;
+      return await CueClient.connectResolved(transport, session);
     } catch (err) {
       if (err instanceof CueError && err.code === "UNSUPPORTED_PROTOCOL") throw err;
       const msg = [
@@ -219,12 +274,160 @@ async function getClient(ctx?: PiCueToolContext): Promise<CueClient> {
       throw new CueError("DAEMON_UNREACHABLE", msg);
     }
   }
+}
+
+async function getClient(
+  ctx: PiCueToolContext | undefined,
+  owner: CueClientOwner,
+): Promise<CueClient> {
+  if (ctx?.cueClient) return ctx.cueClient;
+  const transport = await resolveCueTransport();
+  const session = cueSessionOptionsFromContext(ctx);
+  const key = `${cueTransportKey(transport)}|session:${session.sessionId}`;
+  let entry = clientRegistry.get(key);
+  if (entry?.client?.isClosed) {
+    closeClientRegistryEntry(entry);
+    entry = undefined;
+  }
+
+  if (!entry) {
+    const pendingEntry: CueClientRegistryEntry = {
+      key,
+      sessionId: session.sessionId,
+      owners: new Set(),
+      connectPromise: connectClient(transport, session, ctx),
+    };
+    pendingEntry.connectPromise = pendingEntry.connectPromise
+      .then((connected) => {
+        pendingEntry.client = connected;
+        if (clientRegistry.get(key) !== pendingEntry || pendingEntry.owners.size === 0) {
+          connected.close();
+        }
+        return connected;
+      })
+      .catch((error) => {
+        if (clientRegistry.get(key) === pendingEntry) clientRegistry.delete(key);
+        throw error;
+      });
+    entry = pendingEntry;
+    clientRegistry.set(key, entry);
+  }
+
+  entry.owners.add(owner);
+  const client = await entry.connectPromise;
+  if (client.isClosed) {
+    closeClientRegistryEntry(entry);
+    throw new CueError(
+      "DAEMON_UNREACHABLE",
+      `cue-shell connection closed during initialization for session ${session.sessionId}`,
+    );
+  }
 
   // Best-effort outdated-cued warning, fired at most once per process.
   // Detached on purpose: the warning hits GitHub for the latest release
   // and we never want that to delay the first IPC call.
   void checkCuedVersionAndWarn(client, ctx);
   return client;
+}
+
+function cueToolOperation(
+  ctx: PiCueToolContext | undefined,
+  toolCallId: string,
+  kind: string,
+): CueOperationKey {
+  return {
+    sessionId: cueSessionOptionsFromContext(ctx).sessionId,
+    toolCallId,
+    kind,
+  };
+}
+
+async function invalidateManagedClientForRetry(client: CueClient): Promise<void> {
+  for (const entry of [...clientRegistry.values()]) {
+    if (entry.client !== client) continue;
+    if (clientRegistry.get(entry.key) === entry) clientRegistry.delete(entry.key);
+  }
+  client.close();
+  await client.closed;
+}
+
+interface CueSideEffectRetryOptions {
+  /** False until the daemon exposes enough query state to reconstruct the result. */
+  replaySafe?: boolean;
+  /** Execution budget shared by attempts; the initial connection is excluded. */
+  deadlineMs?: number;
+}
+
+interface CueSideEffectAttempt {
+  attempt: 1 | 2;
+  remainingMs?: number;
+}
+
+async function withCueIdempotentRetry<T>(
+  ctx: PiCueToolContext | undefined,
+  owner: CueClientOwner,
+  operation: CueOperationKey,
+  run: (client: CueClient, attempt: CueSideEffectAttempt) => Promise<T>,
+  options: CueSideEffectRetryOptions = {},
+): Promise<T> {
+  const firstClient = await getClient(ctx, owner);
+  const deadlineAt =
+    options.deadlineMs === undefined ? undefined : Date.now() + Math.max(0, options.deadlineMs);
+  const attemptContext = (attempt: 1 | 2): CueSideEffectAttempt => {
+    if (deadlineAt === undefined) return { attempt };
+    const remainingMs = Math.max(0, deadlineAt - Date.now());
+    // Even with no wait budget left, attempt two must replay the same key to
+    // recover the authoritative id and immediately observe/cancel it. Refusing
+    // the replay here could strand an accepted foreground execution.
+    return { attempt, remainingMs };
+  };
+  const firstInstanceId = firstClient.daemonInstanceId;
+  try {
+    return await run(firstClient, attemptContext(1));
+  } catch (error) {
+    if (!isRetryableCueTransportError(error)) throw error;
+    const operationId = cueOperationId(operation);
+    if (ctx?.cueClient) {
+      throw new CueError(
+        "IDEMPOTENT_RETRY_UNAVAILABLE",
+        `operation ${operationId} became transport-ambiguous, and an externally injected CueClient cannot be rebuilt safely: ${cueErrorDetail(error)}`,
+      );
+    }
+
+    // Close the old transport before reconnecting. A late response on the old
+    // request id must not race the replay on the new connection.
+    await invalidateManagedClientForRetry(firstClient);
+    if (options.replaySafe === false) {
+      throw new CueError(
+        "IDEMPOTENT_RECOVERY_UNSUPPORTED",
+        `operation ${operationId} may have executed, but its result cannot yet be reconstructed after reconnect`,
+      );
+    }
+
+    const retryClient = await getClient(ctx, owner);
+    if (
+      firstInstanceId === null ||
+      retryClient.daemonInstanceId === null ||
+      retryClient.daemonInstanceId !== firstInstanceId
+    ) {
+      const retryInstanceId = retryClient.daemonInstanceId;
+      await invalidateManagedClientForRetry(retryClient);
+      throw new CueError(
+        "IDEMPOTENT_DAEMON_CHANGED",
+        `operation ${operationId} cannot be replayed because cued changed from instance ${firstInstanceId ?? "unknown"} to ${retryInstanceId ?? "unknown"}`,
+      );
+    }
+    try {
+      return await run(retryClient, attemptContext(2));
+    } catch (retryError) {
+      if (!isRetryableCueTransportError(retryError)) throw retryError;
+      await invalidateManagedClientForRetry(retryClient);
+      throw new CueError(
+        "IDEMPOTENT_RETRY_EXHAUSTED",
+        `operation ${operationId} remained transport-ambiguous after one same-key replay: ${cueErrorDetail(retryError)}`,
+      );
+    }
+  }
 }
 
 export const DEFAULT_CUED_AUTOSTART_TIMEOUT_MS = 10_000;
@@ -427,7 +630,7 @@ const CUE_SCHEDULE_STATUS_FILTERS = [
   "paused",
   "completed",
   "expired",
-  "active",
+  "failed",
 ] as const;
 const CUE_SCOPE_ACTIONS = [
   "list",
@@ -490,7 +693,7 @@ export function renderCueScriptResult(
   const lines: string[] = [headerParts.join("  |  ")];
   if (result.timedOut) {
     lines.push(
-      `Script timed out after ${options.timeout}s. Submitted jobs may still be running; inspect via cue_jobs action=list.`,
+      `Script timed out after ${options.timeout}s and its active execution was cancelled.`,
     );
   }
 
@@ -699,33 +902,23 @@ function formatJobListLine(job: JobInfo): string {
   return line;
 }
 
-type CueJobOutputReader = Pick<CueClient, "jobOutput" | "jobError">;
+type CueJobOutputReader = Pick<CueClient, "jobOutput">;
 
 async function collectJobOutputLines(
   cued: CueJobOutputReader,
   job: JobInfo,
   tailBytes: number,
 ): Promise<{ lines: string[]; hasOutput: boolean }> {
+  const output = await cued.jobOutput(job.id, tailBytes);
   const lines: string[] = [];
-  let stdout = "";
-  try {
-    const out = await cued.jobOutput(job.id, tailBytes);
-    stdout = normalizeCueTerminalOutput(out.stdout);
-    const display = tailStr(stdout, tailBytes);
-    if (display.text.trim()) lines.push("", display.text.trimEnd());
-    if (display.truncated || out.truncated) lines.push("[stdout truncated]");
-  } catch {
-    /* output may not be ready */
-  }
+  const stdout = normalizeCueTerminalOutput(output.stdout);
+  const stdoutDisplay = tailStr(stdout, tailBytes);
+  if (stdoutDisplay.text.trim()) lines.push("", stdoutDisplay.text.trimEnd());
+  if (stdoutDisplay.truncated || output.truncated) lines.push("[stdout truncated]");
 
-  try {
-    const errOut = await cued.jobError(job.id, tailBytes);
-    const err = tailStr(normalizeCueStderrForDisplay(errOut.stderr, stdout), tailBytes);
-    if (err.text.trim()) lines.push("", "[stderr]", err.text.trimEnd());
-    if (err.truncated || errOut.truncated) lines.push("[stderr truncated]");
-  } catch {
-    /* stderr may not be ready */
-  }
+  const stderrDisplay = tailStr(normalizeCueStderrForDisplay(output.stderr, stdout), tailBytes);
+  if (stderrDisplay.text.trim()) lines.push("", "[stderr]", stderrDisplay.text.trimEnd());
+  if (stderrDisplay.truncated || output.stderrTruncated) lines.push("[stderr truncated]");
   return { lines, hasOutput: lines.length > 0 };
 }
 
@@ -927,6 +1120,18 @@ function parseCueEnvValue(text: string, key: string): string | undefined {
   return line?.slice(prefix.length);
 }
 
+function redactCueEnvText(text: string): string {
+  return text
+    .split(/\r?\n/u)
+    .map((line) => {
+      const separator = line.indexOf("=");
+      if (separator <= 0) return line;
+      const key = line.slice(0, separator);
+      return isSensitiveCueEnvKey(key) ? `${key}=<redacted>` : line;
+    })
+    .join("\n");
+}
+
 export function normalizeCueResourceNeeds(
   value: unknown,
   field = "needs",
@@ -973,6 +1178,8 @@ async function runPythonScriptJob(
     tailBytes: number;
     cwd: string;
     venv?: string;
+    signal?: AbortSignal;
+    operation: CueOperationKey;
   },
 ) {
   const inline = options.inlineScript !== undefined;
@@ -985,6 +1192,8 @@ async function runPythonScriptJob(
   const result = await cued.runJob(command, {
     timeout: options.timeout,
     cwd: options.cwd,
+    signal: options.signal,
+    operation: options.operation,
   });
   const stdout = normalizeCueTerminalOutput(result.stdout);
   const stderr = normalizeCueStderrForDisplay(result.stderr, stdout);
@@ -994,12 +1203,16 @@ async function runPythonScriptJob(
   if (stdout.trim()) {
     const out = tailStr(stdout, options.tailBytes);
     lines.push("", out.text.trimEnd());
-    if (out.truncated) lines.push(truncationLine("stdout", result.jobId));
+    if (out.truncated || result.stdoutTruncated) {
+      lines.push(truncationLine("stdout", result.jobId));
+    }
   }
   if (stderr.trim()) {
     const err = tailStr(stderr, options.tailBytes);
     lines.push("", "[stderr]", err.text.trimEnd());
-    if (err.truncated) lines.push(truncationLine("stderr", result.jobId));
+    if (err.truncated || result.stderrTruncated) {
+      lines.push(truncationLine("stderr", result.jobId));
+    }
   }
   const details = {
     language: "python",
@@ -1010,6 +1223,12 @@ async function runPythonScriptJob(
     exitCode: result.exitCode,
     timedOut: result.timedOut,
     warnings: result.warnings,
+    stdoutEncoding: result.stdoutEncoding,
+    stderrEncoding: result.stderrEncoding,
+    stdoutTruncated: result.stdoutTruncated,
+    stderrTruncated: result.stderrTruncated,
+    ...(result.stdoutBase64 ? { stdoutBase64: result.stdoutBase64 } : {}),
+    ...(result.stderrBase64 ? { stderrBase64: result.stderrBase64 } : {}),
     pythonRunner: runner,
     resolvedScriptPath: scriptPath,
     ...(runner.python ? { pythonInterpreter: runner.python } : {}),
@@ -1192,6 +1411,8 @@ function truncateInline(value: string, maxLength: number): string {
 // ── Extension ──────────────────────────────────────────────────────────────
 
 export function registerPiCueTools(pi: PiCueExtensionApi) {
+  const clientOwner: CueClientOwner = Symbol("spark-cue-extension");
+
   // ═══════════════════════════════════════════════════════════════════
   //  cue_exec — execute a command and create a job
   // ═══════════════════════════════════════════════════════════════════
@@ -1269,9 +1490,9 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       );
     },
     async execute(
-      _toolCallId: string,
+      toolCallId: string,
       params: Record<string, unknown>,
-      _signal: AbortSignal,
+      signal: AbortSignal,
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: PiCueToolContext,
     ) {
@@ -1294,10 +1515,13 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         isFileOp(command) ? SHORT_TIMEOUT_S : 300,
         "cue_exec timeout",
       );
-      const cued = await getClient(ctx);
+      signal.throwIfAborted();
 
       if (background) {
-        const result = await cued.startJob(command, { cwd, pty, needs });
+        const operation = cueToolOperation(ctx, toolCallId, "cue_exec/background");
+        const result = await withCueIdempotentRetry(ctx, clientOwner, operation, (cued) =>
+          cued.startJob(command, { cwd, pty, needs, operation }),
+        );
         const lines: string[] = [];
         if (result.kind === "chain" && result.chain) {
           const chain = result.chain;
@@ -1323,38 +1547,57 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         };
       }
 
-      const result = await cued.runJob(command, {
-        timeout: effectiveTimeout,
-        cwd,
-        pty,
-        needs,
-      });
+      const operation = cueToolOperation(ctx, toolCallId, "cue_exec/foreground");
+      const result = await withCueIdempotentRetry(
+        ctx,
+        clientOwner,
+        operation,
+        (cued, attempt) =>
+          cued.runJob(command, {
+            timeout: (attempt.remainingMs ?? effectiveTimeout * 1_000) / 1_000,
+            cwd,
+            pty,
+            needs,
+            signal,
+            operation,
+          }),
+        { deadlineMs: effectiveTimeout * 1_000 },
+      );
 
       if (result.timedOut) {
         const stdout = normalizeCueTerminalOutput(result.stdout);
         const stderr = normalizeCueStderrForDisplay(result.stderr, stdout);
         const lines = [
-          `Job ${result.jobId}: Timed out after ${effectiveTimeout}s — switched to background.`,
-          `Track with cue_jobs action=status/wait using id ${result.jobId}.`,
+          `Job ${result.jobId}: Cancelled after timing out at ${effectiveTimeout}s.`,
           ...warningLines(result.warnings),
         ];
         if (stdout.trim()) {
           const t = tailStr(stdout, tailBytes);
           lines.push("", "[stdout so far]", t.text.trimEnd());
-          if (t.truncated) lines.push(truncationLine("stdout", result.jobId));
+          if (t.truncated || result.stdoutTruncated) {
+            lines.push(truncationLine("stdout", result.jobId));
+          }
         }
         if (stderr.trim()) {
           const t = tailStr(stderr, tailBytes);
           lines.push("", "[stderr so far]", t.text.trimEnd());
-          if (t.truncated) lines.push(truncationLine("stderr", result.jobId));
+          if (t.truncated || result.stderrTruncated) {
+            lines.push(truncationLine("stderr", result.jobId));
+          }
         }
         return {
           content: [{ type: "text" as const, text: lines.join("\n") }],
           details: {
             jobId: result.jobId,
             timedOut: true,
-            switchedToBackground: true,
+            switchedToBackground: false,
             warnings: result.warnings,
+            stdoutEncoding: result.stdoutEncoding,
+            stderrEncoding: result.stderrEncoding,
+            stdoutTruncated: result.stdoutTruncated,
+            stderrTruncated: result.stderrTruncated,
+            ...(result.stdoutBase64 ? { stdoutBase64: result.stdoutBase64 } : {}),
+            ...(result.stderrBase64 ? { stderrBase64: result.stderrBase64 } : {}),
           },
         };
       }
@@ -1373,12 +1616,16 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         if (stdout.trim()) {
           const t = tailStr(stdout, tailBytes);
           parts.push("\n" + t.text.trimEnd());
-          if (t.truncated) parts.push(`\n${truncationLine("stdout", result.jobId)}`);
+          if (t.truncated || result.stdoutTruncated) {
+            parts.push(`\n${truncationLine("stdout", result.jobId)}`);
+          }
         }
         if (stderr.trim()) {
           const t = tailStr(stderr, Math.min(tailBytes, 2_000));
           parts.push("\n[stderr tail]\n" + t.text.trimEnd());
-          if (t.truncated) parts.push(`\n${truncationLine("stderr", result.jobId)}`);
+          if (t.truncated || result.stderrTruncated) {
+            parts.push(`\n${truncationLine("stderr", result.jobId)}`);
+          }
         }
         throw new Error(parts.join(""));
       }
@@ -1389,12 +1636,16 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       if (stdout.trim()) {
         const t = tailStr(stdout, tailBytes);
         out.push("\n" + t.text.trimEnd());
-        if (t.truncated) out.push(`\n${truncationLine("stdout", result.jobId)}`);
+        if (t.truncated || result.stdoutTruncated) {
+          out.push(`\n${truncationLine("stdout", result.jobId)}`);
+        }
       }
       if (stderr.trim()) {
         const t = tailStr(stderr, tailBytes);
         out.push("\n[stderr]\n" + t.text.trimEnd());
-        if (t.truncated) out.push(`\n${truncationLine("stderr", result.jobId)}`);
+        if (t.truncated || result.stderrTruncated) {
+          out.push(`\n${truncationLine("stderr", result.jobId)}`);
+        }
       }
 
       return {
@@ -1404,6 +1655,13 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           status: result.status,
           exitCode: result.exitCode,
           warnings: result.warnings,
+          cancelReason: result.cancelReason ?? null,
+          stdoutEncoding: result.stdoutEncoding,
+          stderrEncoding: result.stderrEncoding,
+          stdoutTruncated: result.stdoutTruncated,
+          stderrTruncated: result.stderrTruncated,
+          ...(result.stdoutBase64 ? { stdoutBase64: result.stdoutBase64 } : {}),
+          ...(result.stderrBase64 ? { stderrBase64: result.stderrBase64 } : {}),
         },
       };
     },
@@ -1421,19 +1679,32 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       timeout: number;
       tailBytes: number;
       toolName: "cue_run" | "cue_script" | "script_run" | "script_eval";
+      toolCallId: string;
+      signal: AbortSignal;
     },
     ctx: PiCueToolContext,
   ) {
-    const { resolvedPath, body, pathLabel, timeout, tailBytes, toolName } = options;
+    const { resolvedPath, body, pathLabel, timeout, tailBytes, toolName, toolCallId, signal } =
+      options;
+    signal.throwIfAborted();
     if (!body.trim()) {
       throw new Error(`${toolName} body is empty (cue-shell rejects empty scripts)`);
     }
-    const cued = await getClient(ctx);
-    const result = await cued.runScript({
-      path: resolvedPath,
-      input: body,
-      timeout,
-    });
+    const operation = cueToolOperation(ctx, toolCallId, `${toolName}/run-script`);
+    const result = await withCueIdempotentRetry(
+      ctx,
+      clientOwner,
+      operation,
+      (cued, attempt) =>
+        cued.runScript({
+          path: resolvedPath,
+          input: body,
+          timeout: (attempt.remainingMs ?? timeout * 1_000) / 1_000,
+          signal,
+          operation,
+        }),
+      { replaySafe: true, deadlineMs: timeout * 1_000 },
+    );
     const lines = renderCueScriptResult(result, { pathLabel, timeout, tailBytes });
     const summary = result.items.map((item) => ({
       index: item.index,
@@ -1471,7 +1742,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       "Top-level items execute sequentially with fail-fast semantics inside a fresh isolated scope forked from HEAD. " +
       "Each item may use cue-shell composition operators (`|>`, `&&`, `||`, `->`, `~>`, `|||`, `|?|`) but must not use bash-shell syntax (`;`, redirection). " +
       "For inline bodies (no file on disk) use cue_script instead. " +
-      "Foreground only: blocks until ScriptFinished or `timeout` seconds elapse, in which case the script is reported as timed out (its jobs may continue running and can be inspected via cue_jobs).",
+      "Foreground only: blocks until ScriptFinished or `timeout` seconds elapse; timeout cancels the active script execution before returning.",
     parameters: Type.Object({
       path: Type.String({
         description:
@@ -1480,7 +1751,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       timeout: Type.Optional(
         Type.Number({
           description:
-            "Foreground wait budget in seconds. Default: 300. On timeout the tool returns with timedOut=true; submitted jobs may keep running.",
+            "Foreground wait budget in seconds. Default: 300. On timeout the active script execution is cancelled before the tool returns timedOut=true.",
           default: 300,
         }),
       ),
@@ -1503,9 +1774,9 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       );
     },
     async execute(
-      _toolCallId: string,
+      toolCallId: string,
       params: Record<string, unknown>,
-      _signal: AbortSignal,
+      signal: AbortSignal,
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: PiCueToolContext,
     ) {
@@ -1530,7 +1801,16 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         throw new Error(`cue_run failed to read ${resolvedPath}: ${(err as Error).message}`);
       }
       return runCueScript(
-        { resolvedPath, body, pathLabel: resolvedPath, timeout, tailBytes, toolName: "cue_run" },
+        {
+          resolvedPath,
+          body,
+          pathLabel: resolvedPath,
+          timeout,
+          tailBytes,
+          toolName: "cue_run",
+          toolCallId,
+          signal,
+        },
         ctx,
       );
     },
@@ -1545,7 +1825,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       "Each item may use cue-shell composition operators (`|>`, `&&`, `||`, `->`, `~>`, `|||`, `|?|`) but must not use bash-shell syntax (`;`, redirection). " +
       "If you have a real .cue file on disk, prefer cue_run. " +
       "Optionally provide `pathLabel` to label the inline script in TUI history. " +
-      "Foreground only: blocks until ScriptFinished or `timeout` seconds elapse, in which case the script is reported as timed out (its jobs may continue running and can be inspected via cue_jobs).",
+      "Foreground only: blocks until ScriptFinished or `timeout` seconds elapse; timeout cancels the active script execution before returning.",
     parameters: Type.Object({
       script: Type.String({
         description:
@@ -1559,7 +1839,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       timeout: Type.Optional(
         Type.Number({
           description:
-            "Foreground wait budget in seconds. Default: 300. On timeout the tool returns with timedOut=true; submitted jobs may keep running.",
+            "Foreground wait budget in seconds. Default: 300. On timeout the active script execution is cancelled before the tool returns timedOut=true.",
           default: 300,
         }),
       ),
@@ -1590,9 +1870,9 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       );
     },
     async execute(
-      _toolCallId: string,
+      toolCallId: string,
       params: Record<string, unknown>,
-      _signal: AbortSignal,
+      signal: AbortSignal,
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: PiCueToolContext,
     ) {
@@ -1613,6 +1893,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           timeout,
           tailBytes,
           toolName: "cue_script",
+          toolCallId,
+          signal,
         },
         ctx,
       );
@@ -1662,9 +1944,9 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       );
     },
     async execute(
-      _toolCallId: string,
+      toolCallId: string,
       params: Record<string, unknown>,
-      _signal: AbortSignal,
+      signal: AbortSignal,
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: PiCueToolContext,
     ) {
@@ -1692,8 +1974,6 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           ? venvParam
           : resolve(baseCwd, venvParam)
         : undefined;
-      const cued = await getClient(ctx);
-
       if (language === "cue-shell") {
         if (!resolvedPath.endsWith(".cue")) {
           throw new Error(
@@ -1715,18 +1995,30 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             timeout,
             tailBytes,
             toolName: "script_run",
+            toolCallId,
+            signal,
           },
           ctx,
         );
       }
 
-      return runPythonScriptJob(cued, {
-        path: resolvedPath,
-        timeout,
-        tailBytes,
-        cwd: baseCwd,
-        venv,
-      });
+      const operation = cueToolOperation(ctx, toolCallId, "script_run/python");
+      return withCueIdempotentRetry(
+        ctx,
+        clientOwner,
+        operation,
+        (cued, attempt) =>
+          runPythonScriptJob(cued, {
+            path: resolvedPath,
+            timeout: (attempt.remainingMs ?? timeout * 1_000) / 1_000,
+            tailBytes,
+            cwd: baseCwd,
+            venv,
+            signal,
+            operation,
+          }),
+        { deadlineMs: timeout * 1_000 },
+      );
     },
   });
 
@@ -1776,9 +2068,9 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       );
     },
     async execute(
-      _toolCallId: string,
+      toolCallId: string,
       params: Record<string, unknown>,
-      _signal: AbortSignal,
+      signal: AbortSignal,
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: PiCueToolContext,
     ) {
@@ -1807,8 +2099,6 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           ? venvParam
           : resolve(baseCwd, venvParam)
         : undefined;
-      const cued = await getClient(ctx);
-
       if (language === "cue-shell") {
         return runCueScript(
           {
@@ -1818,19 +2108,31 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             timeout,
             tailBytes,
             toolName: "script_eval",
+            toolCallId,
+            signal,
           },
           ctx,
         );
       }
 
-      return runPythonScriptJob(cued, {
-        inlineScript: script,
-        pathLabel,
-        timeout,
-        tailBytes,
-        cwd: baseCwd,
-        venv,
-      });
+      const operation = cueToolOperation(ctx, toolCallId, "script_eval/python");
+      return withCueIdempotentRetry(
+        ctx,
+        clientOwner,
+        operation,
+        (cued, attempt) =>
+          runPythonScriptJob(cued, {
+            inlineScript: script,
+            pathLabel,
+            timeout: (attempt.remainingMs ?? timeout * 1_000) / 1_000,
+            tailBytes,
+            cwd: baseCwd,
+            venv,
+            signal,
+            operation,
+          }),
+        { deadlineMs: timeout * 1_000 },
+      );
     },
   });
 
@@ -1842,14 +2144,19 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     name: "cue_jobs",
     label: "Cue Jobs",
     description:
-      "Manage cue-shell jobs. action='list' lists jobs, action='status' inspects one job or cron ID, action='wait' waits for a job, and action='stop' stops a job or removes a cron.",
+      "Manage cue-shell jobs. action='list' lists jobs, action='status' inspects a job, chain, or cron, action='wait' waits for a job or chain, and action='stop' stops a job or removes a cron.",
     parameters: Type.Object({
       action: Type.Optional(
         Type.String({
           description: "Action: list, status, wait, stop. Default: list.",
         }),
       ),
-      id: Type.Optional(Type.String({ description: "Job ID (J<n>) or cron ID (C<n>)." })),
+      id: Type.Optional(
+        Type.String({
+          description:
+            "Target ID: job J<n>; chain CH<n> for status/wait; cron C<n> for status/stop.",
+        }),
+      ),
       status: Type.Optional(
         Type.String({
           description:
@@ -1884,7 +2191,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       );
     },
     async execute(
-      _toolCallId: string,
+      toolCallId: string,
       params: Record<string, unknown>,
       _signal: AbortSignal,
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
@@ -1905,7 +2212,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         DEFAULT_CUE_TAIL_BYTES,
         "cue_jobs tail_bytes",
       );
-      const cued = await getClient(ctx);
+      const cued = await getClient(ctx, clientOwner);
 
       if (action === "list") {
         let jobs = await cued.listJobs();
@@ -1933,7 +2240,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         };
 
       if (action === "stop") {
-        await cued.stopJob(id);
+        const operation = cueToolOperation(ctx, toolCallId, "cue_jobs/stop");
+        await withCueIdempotentRetry(ctx, clientOwner, operation, (client) =>
+          client.stopJob(id, operation),
+        );
         return {
           content: [{ type: "text" as const, text: `Stopped ${id}.` }],
           details: { targetId: id },
@@ -2145,7 +2455,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         CUE_RESOURCE_ACTIONS,
         "cue_resources action",
       );
-      const cued = await getClient(ctx);
+      const cued = await getClient(ctx, clientOwner);
       const command = action === "providers" ? ":providers" : ":resources";
       const text = await cued.evalText(command);
       const hint = cueResourceProviderHint(text);
@@ -2209,7 +2519,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       status: Type.Optional(
         Type.String({
           description:
-            "Filter for action='list': scheduled, paused, completed, expired, active, all. Default: all.",
+            "Filter for action='list': scheduled, paused, completed, expired, failed, all. Default: all.",
         }),
       ),
       limit: Type.Optional(
@@ -2237,7 +2547,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       );
     },
     async execute(
-      _toolCallId: string,
+      toolCallId: string,
       params: Record<string, unknown>,
       _signal: AbortSignal,
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
@@ -2259,7 +2569,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         "cue_schedule status",
       );
       const limit = normalizeCueLimit(params.limit, DEFAULT_LIST_LIMIT, "cue_schedule limit");
-      const cued = await getClient(ctx);
+      const cued = await getClient(ctx, clientOwner);
 
       // add
       if (action === "add") {
@@ -2274,7 +2584,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             details: {},
           };
         }
-        const cronId = await cued.addCron(schedule, command);
+        const operation = cueToolOperation(ctx, toolCallId, "cue_schedule/add");
+        const cronId = await withCueIdempotentRetry(ctx, clientOwner, operation, (client) =>
+          client.addCron(schedule, command, operation),
+        );
         return {
           content: [
             {
@@ -2329,7 +2642,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       }
 
       if (action === "pause") {
-        await cued.pauseCron(id);
+        const operation = cueToolOperation(ctx, toolCallId, "cue_schedule/pause");
+        await withCueIdempotentRetry(ctx, clientOwner, operation, (client) =>
+          client.pauseCron(id, operation),
+        );
         return {
           content: [
             {
@@ -2341,7 +2657,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         };
       }
       if (action === "resume") {
-        await cued.resumeCron(id);
+        const operation = cueToolOperation(ctx, toolCallId, "cue_schedule/resume");
+        await withCueIdempotentRetry(ctx, clientOwner, operation, (client) =>
+          client.resumeCron(id, operation),
+        );
         return {
           content: [
             {
@@ -2353,7 +2672,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         };
       }
       if (action === "remove") {
-        await cued.stopJob(id);
+        const operation = cueToolOperation(ctx, toolCallId, "cue_schedule/remove");
+        await withCueIdempotentRetry(ctx, clientOwner, operation, (client) =>
+          client.removeCron(id, operation),
+        );
         return {
           content: [
             {
@@ -2425,7 +2747,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       );
     },
     async execute(
-      _toolCallId: string,
+      toolCallId: string,
       params: Record<string, unknown>,
       _signal: AbortSignal,
       _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
@@ -2440,12 +2762,15 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         DEFAULT_CUE_TAIL_BYTES,
         "cue_scope tail_bytes",
       );
-      const cued = await getClient(ctx);
+      const cued = await getClient(ctx, clientOwner);
 
       if (action === "env_set") {
         const key = normalizeCueEnvKey(params.key, "cue_scope key");
         const value = normalizeCueEnvValue(params.value, "cue_scope value");
-        const scope = await cued.setEnv({ [key]: value });
+        const operation = cueToolOperation(ctx, toolCallId, "cue_scope/env_set");
+        const scope = await withCueIdempotentRetry(ctx, clientOwner, operation, (client) =>
+          client.setEnv({ [key]: value }, operation),
+        );
         return {
           content: [
             {
@@ -2459,7 +2784,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
 
       if (action === "env_unset") {
         const key = normalizeCueEnvKey(params.key, "cue_scope key");
-        const scope = await cued.unsetEnv([key]);
+        const operation = cueToolOperation(ctx, toolCallId, "cue_scope/env_unset");
+        const scope = await withCueIdempotentRetry(ctx, clientOwner, operation, (client) =>
+          client.unsetEnv([key], operation),
+        );
         return {
           content: [
             {
@@ -2476,7 +2804,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         const envText = await cued.showEnv();
         const currentPath = parseCueEnvValue(envText, "PATH") ?? "";
         const nextPath = currentPath ? `${path}:${currentPath}` : path;
-        const scope = await cued.setEnv({ PATH: nextPath });
+        const operation = cueToolOperation(ctx, toolCallId, "cue_scope/path_prepend");
+        const scope = await withCueIdempotentRetry(ctx, clientOwner, operation, (client) =>
+          client.setEnv({ PATH: nextPath }, operation),
+        );
         return {
           content: [
             {
@@ -2490,7 +2821,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
 
       if (action === "cd") {
         const path = normalizeCueSessionPath(params.path, "cue_scope path");
-        const scope = await cued.changeDirectory(path);
+        const operation = cueToolOperation(ctx, toolCallId, "cue_scope/cd");
+        const scope = await withCueIdempotentRetry(ctx, clientOwner, operation, (client) =>
+          client.changeDirectory(path, operation),
+        );
         return {
           content: [{ type: "text" as const, text: `Changed cue session cwd.\n${scope.summary}` }],
           details: { action, path, scope },
@@ -2547,7 +2881,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
 
       if (action === "env" || action === "config") {
         const raw = action === "env" ? await cued.showEnv() : await cued.showConfig();
-        const tailed = tailStr(raw, tailBytes);
+        const safe = action === "env" ? redactCueEnvText(raw) : raw;
+        const tailed = tailStr(safe, tailBytes);
         const lines = [tailed.text.trimEnd()];
         if (tailed.truncated)
           lines.push(`[${action} truncated — use a larger bounded tail_bytes value]`);
@@ -2575,7 +2910,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       );
       if (all.length > visible.length) lines.push(`… ${all.length - visible.length} more scope(s)`);
       if (includeEnv) {
-        const env = tailStr(await cued.showEnv(), tailBytes);
+        const env = tailStr(redactCueEnvText(await cued.showEnv()), tailBytes);
         lines.push("", "--- HEAD env ---", env.text.trimEnd());
         if (env.truncated)
           lines.push("[HEAD env truncated — use a larger bounded tail_bytes value]");
@@ -2638,7 +2973,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         DEFAULT_CUE_TAIL_BYTES,
         "cue_history tail_bytes",
       );
-      const cued = await getClient(ctx);
+      const cued = await getClient(ctx, clientOwner);
       const raw = await cued.showLog(id, limit, tailBytes);
       const tailed = tailStr(raw, tailBytes);
       const limited = limitLines(tailed.text, limit);
@@ -2672,11 +3007,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     pi.setActiveTools(withoutBash);
   });
 
-  pi.on?.("session_shutdown", async () => {
-    if (client && !client.isClosed) {
-      client.close();
-      client = null;
-    }
+  pi.on?.("session_shutdown", (_event, ctx) => {
+    releaseClientOwner(clientOwner, ctx as PiCueToolContext | undefined);
   });
 }
 

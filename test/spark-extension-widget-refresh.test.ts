@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -249,21 +249,26 @@ void test("Spark extension widget reconciles stale DAG records when an owned chi
     await handlers.get("session_tree")?.({}, ctx);
     assert.doesNotMatch(widgetComponent.render().join("\n"), /Background work:/);
 
-    const fakePi = join(dir, "fake-pi.mjs");
-    await writeFile(
-      fakePi,
-      "#!/usr/bin/env node\nprocess.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1_000);\n",
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
     runPromise = runSparkTask({
       graph,
       taskRef: task.ref,
       registry: new RoleRegistry(),
       cwd: dir,
       dryRun: false,
-      piCommand: fakePi,
       timeoutMs: 10_000,
+      roleExecutor: async (input) => {
+        if (input.signal && !input.signal.aborted) {
+          await new Promise<void>((resolve) =>
+            input.signal?.addEventListener("abort", () => resolve(), { once: true }),
+          );
+        }
+        return {
+          record: { ...input.record, status: "cancelled", finishedAt: new Date().toISOString() },
+          stdout: "",
+          stderr: "",
+          jsonEvents: [],
+        };
+      },
       claim: { sessionId: "session:widget" },
     }).catch((error: unknown) => error);
     await waitFor(() => listActiveSparkRoleRunProcesses().some((process) => process.cwd === dir));

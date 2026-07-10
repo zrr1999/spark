@@ -104,6 +104,7 @@ export interface SparkTurnOutboxEnvelope {
 
 export interface SparkTurnHost {
   setTriggerTurnHandler(handler: (() => void | Promise<void>) | undefined): void;
+  setSessionId?(sessionId: string | undefined): void;
   emit(event: string, payload: unknown): Promise<unknown[]>;
   getTool(name: string): SparkTurnRegisteredTool | undefined;
   makeContext(extra?: Partial<ExtensionContext>): ExtensionContext;
@@ -200,6 +201,7 @@ export class SparkAgentLoop {
       options.interactionTimeoutMs,
       DEFAULT_SPARK_AGENT_LOOP_INTERACTION_TIMEOUT_MS,
     );
+    this.host.setSessionId?.(this.viewSessionId);
     this.host.setTriggerTurnHandler(() => this.triggerNextTurn());
   }
 
@@ -212,6 +214,7 @@ export class SparkAgentLoop {
   setViewSessionId(sessionId: string | undefined): void {
     const normalized = sessionId?.trim();
     this.viewSessionId = normalized || "spark-agent";
+    this.host.setSessionId?.(this.viewSessionId);
   }
 
   getViewSessionId(): string {
@@ -448,7 +451,10 @@ export class SparkAgentLoop {
       return errorToolResult(toolCall, `unknown tool: ${toolCall.name}`);
     }
 
-    const ctx: ExtensionContext = this.host.makeContext({ model: this.getModel() });
+    const ctx: ExtensionContext = this.host.makeContext({
+      model: this.getModel(),
+      sessionId: this.viewSessionId,
+    });
     try {
       const approval = await this.requestToolApprovalIfNeeded(toolCall, tool.config, signal);
       if (!approval.approved) return errorToolResult(toolCall, approval.message);

@@ -84,7 +84,7 @@
                     <span class="kind-pill">{kindLabel(resource.kind)}</span>
                   </div>
                   <p>{resource.uri ?? common.fallback.noUri}</p>
-                  <small>{resource.projectCount} {t.list.linkedProjects} · {t.list.updatedPrefix} {formatRelative(resource.updatedAt)}</small>
+                  <small>{resource.projectCount} {t.list.linkedUses} · {t.list.updatedPrefix} {formatRelative(resource.updatedAt)}</small>
                 </div>
                 <span class="status-pill {resource.status}">{statusLabel(resource.status)}</span>
                 <form method="POST" action={resource.status === "archived" ? "?/restoreResource" : "?/archiveResource"}>

@@ -37,6 +37,12 @@ import {
   createSparkPiParitySlashCommands,
   PI_PARITY_COMMAND_NAMES,
 } from "./cli/pi-parity-commands.ts";
+import {
+  createSparkDaemonModelAuthClient,
+  daemonSnapshotToPickerState,
+  resolveDaemonModelSelection,
+  type SparkDaemonModelAuthClient,
+} from "./cli/model-control.ts";
 import { createSparkPromptTemplateSlashCommands } from "./cli/prompt-template-commands.ts";
 import {
   formatSparkResourceResult,
@@ -49,6 +55,9 @@ import {
   loadSparkConfig,
   registerSparkSessionsCommand,
   resolveSparkModelSelectionById,
+  SPARK_MODEL_CYCLE_NEXT_BINDING_ID,
+  SPARK_MODEL_CYCLE_PREV_BINDING_ID,
+  SPARK_MODEL_PICKER_BINDING_ID,
   type SparkActiveSelection,
   type SparkCliHostServices,
   type SparkCliHostServicesOptions,
@@ -754,13 +763,15 @@ export async function runSparkCli(
           getNavigationState: () => undefined,
           listTextProvider: () => durableSparkSessionListText(services),
         });
-        registerSparkNativeModelCommand(services);
+        const modelControl = createSparkDaemonModelAuthClient(daemonClient);
+        registerSparkNativeModelCommand(services, modelControl);
+        registerSparkDaemonModelKeybindings(services, modelControl);
         const runTui = options.runTui ?? runNativeSparkTui;
         await runTui({
           initialMessage: command.initialMessage,
           responder: createSparkDaemonNativeResponder(daemonClient),
           workspaceSession: workspaceSession.state,
-          slashCommands: createSparkNativeSlashCommands(services, daemonClient),
+          slashCommands: createSparkNativeSlashCommands(services, daemonClient, modelControl),
           autocompleteBasePath: services.cwd,
           keybindings: services.keybindings,
           theme: services.theme,
@@ -829,7 +840,10 @@ const NATIVE_SLASH_COMMAND_EXCLUSIONS = [
   "graft",
 ] as const;
 
-function registerSparkNativeModelCommand(services: SparkCliHostServices): void {
+function registerSparkNativeModelCommand(
+  services: SparkCliHostServices,
+  modelControl?: SparkDaemonModelAuthClient,
+): void {
   if (services.runtime.getCommand("model")) return;
   services.runtime.registerCommand("model", {
     description: tuiCliStrings.modelCommandDescription,
@@ -844,7 +858,7 @@ function registerSparkNativeModelCommand(services: SparkCliHostServices): void {
     },
     getArgumentCompletions: (prefix) => modelArgumentCompletions(services, prefix),
     async handler(args, ctx) {
-      const selection = await handleSparkNativeModelCommand(services, args);
+      const selection = await handleSparkNativeModelCommand(services, args, modelControl);
       ctx.ui?.notify?.(formatSparkModelSelection(selection), "info");
     },
   });
@@ -853,13 +867,126 @@ function registerSparkNativeModelCommand(services: SparkCliHostServices): void {
 async function handleSparkNativeModelCommand(
   services: SparkCliHostServices,
   args: string,
+  modelControl?: SparkDaemonModelAuthClient,
 ): Promise<SparkActiveSelection> {
+  if (modelControl) {
+    const snapshot = await modelControl.snapshot();
+    const query = args.trim();
+    const selection = query
+      ? resolveDaemonModelSelection(snapshot, query)
+      : await services.modelSelector.pick(daemonSnapshotToPickerState(snapshot), { hasUI: true });
+    const active = selection ?? modelRefToSelection(snapshot.defaultModel);
+    if (!active) throw new Error(tuiCliStrings.noActiveModel);
+    await modelControl.setDefaultModel(active);
+    synchronizeLocalModelSelection(services, active);
+    return active;
+  }
   const query = args.trim();
   if (query) return await services.modelSelector.select(resolveSparkModelArgument(services, query));
   const picked = await services.modelSelector.openPicker({ hasUI: true });
   const active = picked ?? services.modelSelector.getActive();
   if (!active) throw new Error(tuiCliStrings.noActiveModel);
   return active;
+}
+
+function registerSparkDaemonModelKeybindings(
+  services: SparkCliHostServices,
+  modelControl: SparkDaemonModelAuthClient,
+): void {
+  const keybindings = services.keybindings as SparkCliHostServices["keybindings"] & {
+    register?: SparkCliHostServices["keybindings"]["register"];
+  };
+  if (typeof keybindings.register !== "function") return;
+  const notify = (selection: SparkActiveSelection | undefined) => {
+    if (selection) {
+      services.runtime.makeContext().ui?.notify?.(formatSparkModelSelection(selection), "info");
+    }
+  };
+  keybindings.register({
+    id: SPARK_MODEL_PICKER_BINDING_ID,
+    defaultKey: "ctrl+l",
+    description: "Open the model selector",
+    handler: async (ctx) => {
+      const snapshot = await modelControl.snapshot();
+      const selection = await services.modelSelector.pick(
+        daemonSnapshotToPickerState(snapshot),
+        ctx,
+      );
+      if (!selection) return;
+      await modelControl.setDefaultModel(selection);
+      synchronizeLocalModelSelection(services, selection);
+      notify(selection);
+    },
+  });
+  registerDaemonModelCycleKeybinding(
+    services,
+    modelControl,
+    SPARK_MODEL_CYCLE_NEXT_BINDING_ID,
+    "ctrl+p",
+    "next",
+    notify,
+  );
+  registerDaemonModelCycleKeybinding(
+    services,
+    modelControl,
+    SPARK_MODEL_CYCLE_PREV_BINDING_ID,
+    "shift+ctrl+p",
+    "prev",
+    notify,
+  );
+}
+
+function registerDaemonModelCycleKeybinding(
+  services: SparkCliHostServices,
+  modelControl: SparkDaemonModelAuthClient,
+  id: string,
+  defaultKey: string,
+  direction: "next" | "prev",
+  notify: (selection: SparkActiveSelection | undefined) => void,
+): void {
+  services.keybindings.register({
+    id,
+    defaultKey,
+    description: `Cycle to the ${direction} Spark model`,
+    handler: async () => {
+      const snapshot = await modelControl.snapshot();
+      const items = daemonSnapshotToPickerState(snapshot).items;
+      if (items.length === 0) return;
+      const activeValue = snapshot.defaultModel
+        ? `${snapshot.defaultModel.providerName}/${snapshot.defaultModel.modelId}`
+        : undefined;
+      const activeIndex = activeValue ? items.findIndex((item) => item.value === activeValue) : -1;
+      const step = direction === "next" ? 1 : -1;
+      const index =
+        activeIndex < 0
+          ? direction === "next"
+            ? 0
+            : items.length - 1
+          : (activeIndex + step + items.length) % items.length;
+      const item = items[index]!;
+      const selection = { providerName: item.providerName, modelId: item.modelId };
+      await modelControl.setDefaultModel(selection);
+      synchronizeLocalModelSelection(services, selection);
+      notify(selection);
+    },
+  });
+}
+
+function synchronizeLocalModelSelection(
+  services: SparkCliHostServices,
+  selection: SparkActiveSelection,
+): void {
+  try {
+    services.providerRegistry.setActive(selection);
+  } catch {
+    // The daemon catalog is authoritative; a presentation adapter may have a narrower catalog.
+  }
+}
+
+function modelRefToSelection(
+  model: { providerName: string; modelId: string } | undefined,
+): SparkActiveSelection | undefined {
+  return model ? { providerName: model.providerName, modelId: model.modelId } : undefined;
 }
 
 function resolveSparkModelArgument(
@@ -896,11 +1023,12 @@ function modelCompletionItems(
 function createSparkNativeSlashCommands(
   services: SparkCliHostServices,
   daemonClient: SparkDaemonClientOptions,
+  modelControl: SparkDaemonModelAuthClient = createSparkDaemonModelAuthClient(daemonClient),
 ): SparkNativeSlashCommandMap {
-  registerSparkNativeModelCommand(services);
+  registerSparkNativeModelCommand(services, modelControl);
   const daemonCommands = createSparkDaemonNativeCommands(daemonClient);
   const localControlCommands = createSparkNativeLocalControlSlashCommands();
-  const piParityCommands = createSparkPiParitySlashCommands(services);
+  const piParityCommands = createSparkPiParitySlashCommands(services, modelControl);
   const commandSessionId = `spark-native-command-${Date.now().toString(36)}`;
   const runtimeCommands = createSparkNativeRuntimeSlashCommands(services.runtime, {
     exclude: [

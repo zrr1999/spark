@@ -12,9 +12,11 @@ import {
   type ServerCommandPayload,
 } from "./runtime-v1/messages.ts";
 import { runtimeProtocolVersion } from "./runtime-v1/envelope.ts";
+import { sparkAssignmentSchema } from "./session-assignment.ts";
 import { assertSparkRuntimeProtocolVersion } from "./version.ts";
 
 export type { ServerCommandPayload };
+export type ServerCommandEnvelope = ReturnType<typeof serverCommandEnvelopeSchema.parse>;
 
 export interface ServerCommandRouting {
   runtimeId: string;
@@ -59,4 +61,63 @@ export function parseServerCommandEnvelope(value: unknown) {
 
 export function serializeServerCommandEnvelope(input: CreateServerCommandEnvelopeInput): string {
   return JSON.stringify(createServerCommandEnvelope(input));
+}
+
+export type ServerCommandExecutionNormalizationResult =
+  | { ok: true; envelope: ServerCommandEnvelope }
+  | {
+      ok: false;
+      reasonCode: "ASSIGNMENT_INVALID";
+      message: string;
+      retryable: false;
+    };
+
+export function normalizeServerCommandForExecution(
+  envelope: ServerCommandEnvelope,
+): ServerCommandExecutionNormalizationResult {
+  if (envelope.payload.kind !== "assignment.create.request") {
+    return { ok: true, envelope };
+  }
+
+  const assignmentResult = sparkAssignmentSchema.safeParse(envelope.payload.payload);
+  if (!assignmentResult.success) {
+    return {
+      ok: false,
+      reasonCode: "ASSIGNMENT_INVALID",
+      message:
+        assignmentResult.error.issues[0]?.message ?? "Invalid assignment.create.request payload.",
+      retryable: false,
+    };
+  }
+
+  const assignment = assignmentResult.data;
+  return {
+    ok: true,
+    envelope: serverCommandEnvelopeSchema.parse({
+      ...envelope,
+      payload: serverCommandPayloadSchema.parse({
+        ...envelope.payload,
+        kind: "task.start.request",
+        title: titleForAssignmentExecution(
+          envelope.payload.title,
+          assignment.title,
+          assignment.goal,
+        ),
+        payload: {
+          ...assignment,
+          prompt: assignment.goal,
+          sessionId: assignment.target.sessionId,
+          assignment,
+        },
+      }),
+    }),
+  };
+}
+
+function titleForAssignmentExecution(
+  payloadTitle: string | undefined,
+  assignmentTitle: string | undefined,
+  goal: string,
+): string {
+  return payloadTitle?.trim() || assignmentTitle?.trim() || goal.trim().slice(0, 80);
 }

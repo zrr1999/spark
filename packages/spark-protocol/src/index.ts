@@ -1,12 +1,16 @@
 import { z } from "zod";
+import { sparkModelRefSchema } from "./model-control.ts";
 
 export * from "./command-delivery.ts";
 export * from "./command-events.ts";
+export * from "./command-sources.ts";
 export * from "./errors.ts";
+export * from "./model-control.ts";
 export * from "./refs.ts";
 export * from "./runtime-v1/envelope.ts";
 export * from "./runtime-v1/messages.ts";
 export * from "./runtime-v1/registration.ts";
+export * from "./session-assignment.ts";
 export * from "./state-ownership.ts";
 export { SPARK_PROTOCOL_VERSION } from "./version.ts";
 export type {
@@ -84,13 +88,6 @@ export const sparkRunStatusSchema = z.enum([
   "cancelled",
   "timed_out",
 ]);
-
-export const sparkModelRefSchema = z.object({
-  providerName: z.string().min(1),
-  modelId: z.string().min(1),
-  providerLabel: z.string().min(1).optional(),
-  modelLabel: z.string().min(1).optional(),
-});
 
 export const sparkMessageViewSchema = z.object({
   version: sparkProtocolVersionSchema.default(SPARK_PROTOCOL_VERSION),

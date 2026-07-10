@@ -41,7 +41,22 @@ export function assembleModeSystemPrompt(input: {
 }): string {
   const definition = input.registry.require(input.mode);
   const requirements = definition.renderRequirements(input.context);
-  return [input.basePrompt, input.marker, requirements, input.trailingContext]
+  return composeAgentSystemPrompt([
+    input.basePrompt,
+    input.marker,
+    requirements,
+    input.trailingContext,
+  ]);
+}
+
+/**
+ * Join identity / surface / mode / skills sections into one system prompt.
+ * Empty sections are dropped; remaining sections are separated by a blank line.
+ */
+export function composeAgentSystemPrompt(
+  sections: ReadonlyArray<string | undefined | null>,
+): string {
+  return sections
     .map((section) => section?.trim())
     .filter((section): section is string => Boolean(section))
     .join("\n\n");

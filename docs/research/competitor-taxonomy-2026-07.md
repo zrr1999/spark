@@ -8,9 +8,9 @@
 
 | 类别 | 项目 | 与 Spark 的关系 |
 | --- | --- | --- |
-| A. 多智能体平台 / 运行时 | Multica、nyakore、Hermes Agent | 最接近「daemon + 协调 + 多客户端」形态 |
+| A. 多智能体平台 / 运行时 | Multica、nyakore、nyako、Hermes Agent | 最接近「daemon + 协调 + 多客户端」形态 |
 | B. 终端编码 Agent / TUI | snow-cli、oh-my-pi | 对照本地控制平面与 TUI 体验 |
-| C. Pi 生态扩展 / 打磨 | pi-spark（zlliang） | 同生态；注意与本仓库 Spark 产品名撞名 |
+| C. Pi 生态扩展 / 打磨 | pi-spark（zlliang）、pi-channels、pi-feishu | 同生态；channel 扩展对照 Assign 入口 |
 | D. Skills / 方法论框架 | agent-skills、superpowers | 对照 workflow/skill 资产与开发方法论 |
 | E. Goal / 工作流循环 | architect-loop | 对照 goal loop、高低配模型分工 |
 | F. 本地检索 / Memory | qmd | 对照 `spark-memory` / 混合检索 |
@@ -40,7 +40,15 @@
 
 - **Multica**：产品叙事最接近——agent 当队友，派任务、跟进度。
 - **nyakore**：运行时模型最接近——session/activity/mailbox 可观测；网页是控制面入口，不是定义仓库。
+- **nyako**：定义仓（agents/tools/skills）；与 nyakore 的 runtime/definition 分离对照 Spark 的 session registry vs role/skill 资产。
 - **Hermes**：管理台 + 成长闭环可后置；首要不是嵌完整 TUI，而是 **派活与跟踪**。
+
+Spark 派活边界（见 [`specs/assignment-and-channels.md`](../specs/assignment-and-channels.md)）：
+
+- **统一 session 管理**（daemon）是底座。
+- **Cockpit Assign** 与 **IM channels** 是同一 assignment 意图的两种入口，不是两套产品。
+- 产品面学 **pi-channels**（adapters / routes / notify / ingress）；运行时语义学 **nyakore**（adapter 不跑 prompt、显式 reply）。
+- 不引入 `gateway` 第二服务；不把 bot 长连接放进 TUI/Cockpit。
 
 ### [multica-ai/multica](https://github.com/multica-ai/multica)
 
@@ -55,6 +63,14 @@
 - **语言**：TypeScript
 - **为何归此类**：强调 runtime/definition 分离、session 路由、NNP 消息、薄 Pi host 适配与只读 dashboard。
 - **对 Spark 网页的启发**：派活对象应是 **session/runtime activity**，不是抽象「聊天框」；dashboard 要能看到谁在跑、卡在哪、mailbox 积压；定义（role/skill）与运行时状态分离。
+- **对 Spark channels 的启发**：adapter 只做 I/O；入站投递到 `conv_*` 式 session；出站显式 reply；已接 Telegram + Infoflow（非 Discord/Slack）。
+
+### [ShigureLab/nyako](https://github.com/ShigureLab/nyako)
+
+- **一句话**：赛博养猫定义仓——agents / tools / skills / schedules；runtime 由 nyakore 提供。
+- **语言**：TypeScript
+- **为何归此类**：与 nyakore 成对；对照 Spark「定义/资产」与「daemon session 真相」分离。
+- **对 Spark 的启发**：固定 hub session + 外部 `conv_*` / `bridge_*`；聊天入口（nyako）与中枢（hub-neko）分工；平台会话不承担中枢职责。
 
 ### [nousresearch/hermes-agent](https://github.com/nousresearch/hermes-agent)
 
@@ -92,6 +108,20 @@
 - **为何归此类**：Pi 扩展/皮肤层，不是独立三平面产品。
 - **注意**：与本仓库产品名 **Spark** 撞名；文档与对外沟通需区分「zlliang/pi-spark 扩展」与「zendev Spark monorepo」。
 - **对 Spark 的启发**：TUI chrome（editor/footer/credits）；Pi 扩展分发形态。
+
+### [@amaster.ai/pi-channels](https://pi.dev/packages/@amaster.ai/pi-channels?name=feishu)
+
+- **一句话**：Pi 多通道 messaging 扩展——Feishu / WeCom / DingTalk / webhook；adapters、routes、`notify`、bridge。
+- **语言**：TypeScript
+- **为何归此类**：channel 产品面最接近 Spark 要抄的配置与工具形状。
+- **对 Spark 的启发**：`adapters` + `routes` + ingress 开关；飞书 WebSocket 优先、HTTP 可选；**不要**抄「bridge 拉起 Pi 子进程」——Spark 入站应进 daemon session/assignment。
+
+### [pi-feishu](https://pi.dev/packages/pi-feishu?name=%E9%A3%9E%E4%B9%A6)
+
+- **一句话**：飞书专用 Pi 聊天桥——进度卡片、中间文本、Typing reaction、媒体双向。
+- **语言**：TypeScript
+- **为何归此类**：单通道厚 UX；与 pi-channels 对照。
+- **对 Spark 的启发**：飞书体验细节可后置参考；v1 不把进度卡片/reaction 当底座。Spark 取 **pi-channels 面 + nyakore 语义**，不以 pi-feishu 为长期架构。
 
 ---
 

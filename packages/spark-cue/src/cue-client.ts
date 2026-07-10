@@ -10,6 +10,7 @@
  * Max message size: 16 MiB.
  */
 
+import { isUtf8 } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -17,6 +18,11 @@ import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { env } from "node:process";
+import {
+  validateCueErrorPayload,
+  validateCueEventPayload,
+  validateCueOkPayload,
+} from "./cue-wire-validators.ts";
 
 // ── Default socket path ────────────────────────────────────────────────────
 
@@ -25,7 +31,7 @@ const SOCK_NAME = "cued.sock";
 
 /** Resolve the default cue-shell daemon socket path. */
 export function defaultSocketPath(): string {
-  const runtimeDir = env.XDG_RUNTIME_DIR ?? tmpdir();
+  const runtimeDir = env.XDG_RUNTIME_DIR?.trim() || tmpdir();
   return join(runtimeDir, APP_DIR, SOCK_NAME);
 }
 
@@ -236,6 +242,8 @@ export type Mode = "Job" | "Cron";
 export interface RequestEnvelope {
   type: "request";
   id: number;
+  /** Stable logical side-effect key; omitted for queries and connection-local requests. */
+  operation_id?: string;
   payload: RequestPayload;
 }
 
@@ -252,12 +260,20 @@ export type RequestPayload =
     }
   | { Subscribe: { channels: string[] } }
   | { Unsubscribe: { channels: string[] } }
+  | { FgAttach: { id: string } }
+  | { FgDetach: Record<string, never> }
+  | { FgInput: { data: string } }
+  | { FgResize: { cols: number; rows: number } }
+  | { Complete: { input: string; cursor: number } }
+  | { Highlight: { input: string } }
   | { ListJobs: { limit?: number | null } }
   | { ListCrons: { limit?: number | null } }
   | { ListScopes: { limit?: number | null } }
+  | { ScriptInfo: { id: string } }
   | { ShowLog: { id?: string | null; limit?: number | null; tail_bytes?: number | null } }
   | { JobOutput: { id: string; stdout_bytes?: number | null; stderr_bytes?: number | null } }
   | { KillJob: { id: string } }
+  | { CancelExecution: { id: string } }
   | { RemoveCron: { id: string } }
   | { ShowEnv: { tail_bytes?: number | null } }
   | { ShowConfig: { tail_bytes?: number | null } }
@@ -277,11 +293,11 @@ export type OkPayload =
   | { JobCreated: JobCreatedPayload }
   | { ChainCreated: ChainCreatedPayload }
   | { ScriptCreated: ScriptCreatedPayload }
+  | { ScriptInfo: ScriptInfoPayload }
   | { JobInfo: JobInfo }
   | { JobList: JobInfo[] }
   | { JobListPage: { jobs: JobInfo[]; page: PageInfo } }
   | { CronAdded: { cron_id: string } }
-  | { CronRemoved: { cron_id: string } }
   | { CronList: CronInfo[] }
   | { CronListPage: { crons: CronInfo[]; page: PageInfo } }
   | { ScopeInfo: ScopeInfo }
@@ -290,29 +306,40 @@ export type OkPayload =
   | { ScopeCreated: ScopeCreatedPayload }
   | { Pong: PongPayload }
   | { EvalText: { text: string } }
-  | { TextOutput: { text: string; truncated: boolean } }
-  | { Output: { id: string; data: string; truncated: boolean } }
   | {
-      JobOutput: {
-        id: string;
-        stdout: StreamText;
-        stderr: StreamText;
-        stderr_pty_merged: boolean;
+      TextOutput: {
+        text: string;
+        truncated: boolean;
+        encoding?: OutputEncoding;
+        base64?: string;
       };
     }
-  | Record<string, unknown>;
+  | {
+      Output: {
+        id: string;
+        data: string;
+        truncated: boolean;
+        encoding?: OutputEncoding;
+        base64?: string;
+      };
+    }
+  | { JobOutput: JobOutputPayload }
+  | { CompletionList: { items: CompletionItem[] } }
+  | { HighlightResult: { spans: HighlightSpan[] } }
+  | { FgAttached: { id: string } };
 
 /**
  * Daemon Pong payload.
  *
- * `version` carries `cued`'s `CARGO_PKG_VERSION`. Daemons predating the
- * Pong-version field (<= cue-shell 0.1.0 era builds) reply with `{}` and
- * leave `version` undefined, which clients use to detect outdated daemons.
+ * All fields are required by IPC v2. Older daemons are rejected during
+ * connection initialization rather than being treated as a partial protocol.
  */
 export interface PongPayload {
-  version?: string;
-  protocol_version?: number;
-  capabilities?: string[];
+  version: string;
+  protocol_version: number;
+  capabilities: string[];
+  /** Unique to one daemon process lifetime; ledger replay is valid only within it. */
+  instance_id: string;
 }
 
 export interface ScopeCreatedPayload {
@@ -378,18 +405,40 @@ export interface ScriptSubmitError {
 
 export interface ScriptCreatedPayload {
   script_id: string;
-  source?: ScriptSource;
+  source: ScriptSource;
   items: ScriptItemInfo[];
   submit_error: ScriptSubmitError | null;
 }
 
 export type ScriptRunStatus = "done" | "failed";
 
+export type ScriptInfoStatus = "running" | ScriptRunStatus;
+
+export interface ScriptInfoPayload {
+  script_id: string;
+  status: ScriptInfoStatus;
+  items: ScriptItemInfo[];
+  exit_code: number | null;
+  failed_item_index: number | null;
+  submit_error: ScriptSubmitError | null;
+}
+
 export interface ScriptFinishedEvent {
   script_id: string;
   status: ScriptRunStatus;
   exit_code: number;
   failed_item_index: number | null;
+}
+
+interface ScriptTerminalState {
+  status: ScriptRunStatus;
+  exit_code: number | null;
+  failed_item_index: number | null;
+}
+
+export interface ScriptItemCreatedEvent {
+  script_id: string;
+  item: ScriptItemInfo;
 }
 
 export interface ChainInfo {
@@ -407,9 +456,11 @@ export interface ChainJobInfo {
   start_scope?: string;
   end_scope?: string;
   open_hint?: "stream" | "fg";
+  /** Structured reason when status is Cancelled. */
+  cancelReason?: CancelReason;
 }
 
-export type CronStatus = "active" | "paused" | "completed" | "expired";
+export type CronStatus = "scheduled" | "paused" | "completed" | "expired" | "failed";
 
 export interface CronInfo {
   id: string;
@@ -419,6 +470,7 @@ export interface CronInfo {
 }
 
 export type JobStatus = "Pending" | "Running" | "Done" | "Failed" | "Killed" | "Cancelled";
+export type CancelReason = "User" | "ChainAborted" | "Timeout";
 
 export interface JobInfo {
   id: string;
@@ -432,6 +484,8 @@ export interface JobInfo {
   chain_index?: number;
   chain_total?: number;
   pending_reason?: string | null;
+  /** Structured reason when status is Cancelled. */
+  cancelReason?: CancelReason;
 }
 
 export interface ScopeInfo {
@@ -449,17 +503,18 @@ export interface EventEnvelope {
 export type EventPayload =
   | { JobStateChanged: JobStateChangedEvent }
   | { JobCreated: JobCreatedEvent }
-  | { ChainStarted: { chain: ChainInfo } }
   | { ChainProgress: { chain: ChainInfo } }
-  | { ChainFinished: { chain_id: string; success: boolean } }
+  | { ScriptItemCreated: ScriptItemCreatedEvent }
   | { ScriptFinished: ScriptFinishedEvent }
   | { JobRemoved: { job_id: string } }
+  | { CronTriggered: { cron_id: string; job_id: string } }
+  | { CronRemoved: { cron_id: string } }
   | { OutputChunk: OutputChunkEvent }
   | { OutputChunkBinary: OutputChunkBinaryEvent }
   | { OutputEof: { id: string } }
-  | { ShuttingDown: { reason: string } }
-  | { DaemonReady: Record<string, never> }
-  | Record<string, unknown>;
+  | { FgOutput: { data: string } }
+  | { FgExited: { id: string; reason: string } }
+  | { ShuttingDown: { reason: string } };
 
 export interface JobStateChangedEvent {
   job_id: string;
@@ -468,6 +523,8 @@ export interface JobStateChangedEvent {
   end_scope?: string;
   chain_id?: string;
   chain_index?: number;
+  /** Structured reason for new_state when new_state is Cancelled. */
+  cancelReason?: CancelReason;
 }
 
 export interface JobCreatedEvent {
@@ -502,18 +559,309 @@ export interface PageInfo {
 export interface StreamText {
   data: string;
   truncated: boolean;
+  encoding?: OutputEncoding;
+  base64?: string;
+}
+
+export type OutputEncoding = "utf8" | "base64";
+
+export type CompletionKind = "Command" | "Param" | "Id" | "Path" | "Operator";
+
+export interface CompletionItem {
+  label: string;
+  insert_text: string;
+  kind: CompletionKind;
+  detail: string | null;
+}
+
+export type HighlightKind =
+  | "CommandPrefix"
+  | "CommandName"
+  | "ModeParam"
+  | "Operator"
+  | "IdRef"
+  | "Word"
+  | "String"
+  | "Number"
+  | "Error";
+
+export interface HighlightSpan {
+  start: number;
+  end: number;
+  kind: HighlightKind;
+}
+
+interface JobOutputPayload {
+  id: string;
+  stdout: StreamText;
+  stderr: StreamText;
+  stderr_pty_merged: boolean;
 }
 
 export type CueMessage = RequestEnvelope | ResponseEnvelope | EventEnvelope;
 
+type InboundCueMessage = ResponseEnvelope | EventEnvelope;
+type WireRecord = Record<string, unknown>;
+
+const JOB_STATUS_VARIANTS = new Set<JobStatus>([
+  "Pending",
+  "Running",
+  "Done",
+  "Failed",
+  "Killed",
+  "Cancelled",
+]);
+const CANCEL_REASONS = new Set(["User", "ChainAborted", "Timeout"]);
+
+function invalidIpc(path: string, message: string): Error {
+  return new Error(`invalid cue-shell IPC message at ${path}: ${message}`);
+}
+
+function wireRecord(value: unknown, path: string): WireRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw invalidIpc(path, "expected an object");
+  }
+  return value as WireRecord;
+}
+
+function requireString(record: WireRecord, key: string, path: string): string {
+  const value = record[key];
+  if (typeof value !== "string") throw invalidIpc(`${path}.${key}`, "expected a string");
+  return value;
+}
+
+function requireInteger(record: WireRecord, key: string, path: string, max?: number): number {
+  const value = record[key];
+  if (
+    !Number.isSafeInteger(value) ||
+    (value as number) < 0 ||
+    (max !== undefined && (value as number) > max)
+  ) {
+    throw invalidIpc(`${path}.${key}`, "expected a non-negative integer");
+  }
+  return value as number;
+}
+
+function assertEnvelopeKeys(record: WireRecord, expected: string[], path: string): void {
+  const expectedKeys = new Set(expected);
+  for (const key of Object.keys(record)) {
+    if (!expectedKeys.has(key)) throw invalidIpc(path, `unknown field ${key}`);
+  }
+  for (const key of expected) {
+    if (!(key in record)) throw invalidIpc(path, `missing field ${key}`);
+  }
+}
+
+function singleVariant(
+  value: unknown,
+  variants: ReadonlySet<string>,
+  path: string,
+): [string, unknown] {
+  const record = wireRecord(value, path);
+  const keys = Object.keys(record);
+  if (keys.length !== 1) throw invalidIpc(path, "expected exactly one protocol variant");
+  const variant = keys[0]!;
+  if (!variants.has(variant)) throw invalidIpc(path, `unknown protocol variant ${variant}`);
+  return [variant, record[variant]];
+}
+
+function decodeJobStatusDetail(
+  value: unknown,
+  path: string,
+): { status: JobStatus; cancelReason?: CancelReason } {
+  if (typeof value === "string") {
+    if (JOB_STATUS_VARIANTS.has(value as JobStatus)) return { status: value as JobStatus };
+    throw invalidIpc(path, `unknown job status ${value}`);
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw invalidIpc(path, "unknown job status");
+  }
+  const cancelled = value as WireRecord;
+  const keys = Object.keys(cancelled);
+  if (
+    keys.length === 1 &&
+    keys[0] === "Cancelled" &&
+    typeof cancelled.Cancelled === "string" &&
+    CANCEL_REASONS.has(cancelled.Cancelled)
+  ) {
+    return { status: "Cancelled", cancelReason: cancelled.Cancelled as CancelReason };
+  }
+  throw invalidIpc(path, "unknown job status");
+}
+
+function decodeJobStatus(value: unknown, path: string): JobStatus {
+  return decodeJobStatusDetail(value, path).status;
+}
+
+function validateOkPayload(value: unknown): OkPayload {
+  const payload = validateCueOkPayload(value) as OkPayload;
+  normalizeOkPayloadStatuses(payload);
+  return payload;
+}
+
+function validateEventPayload(value: unknown): EventPayload {
+  const payload = validateCueEventPayload(value) as EventPayload;
+  normalizeEventPayloadStatuses(payload);
+  return payload;
+}
+
+function normalizeOkPayloadStatuses(payload: OkPayload): void {
+  if ("JobInfo" in payload) {
+    normalizeJobInfoStatus(payload.JobInfo, "response.payload.Ok.JobInfo");
+  } else if ("JobList" in payload) {
+    payload.JobList.forEach((job, index) =>
+      normalizeJobInfoStatus(job, `response.payload.Ok.JobList[${index}]`),
+    );
+  } else if ("JobListPage" in payload) {
+    payload.JobListPage.jobs.forEach((job, index) =>
+      normalizeJobInfoStatus(job, `response.payload.Ok.JobListPage.jobs[${index}]`),
+    );
+  } else if ("ChainCreated" in payload) {
+    normalizeChainStatuses(payload.ChainCreated.chain, "response.payload.Ok.ChainCreated.chain");
+  } else if ("ScriptCreated" in payload) {
+    payload.ScriptCreated.items.forEach((item, index) =>
+      normalizeScriptItemStatuses(item, `response.payload.Ok.ScriptCreated.items[${index}]`),
+    );
+  } else if ("ScriptInfo" in payload) {
+    payload.ScriptInfo.items.forEach((item, index) =>
+      normalizeScriptItemStatuses(item, `response.payload.Ok.ScriptInfo.items[${index}]`),
+    );
+  }
+}
+
+function normalizeEventPayloadStatuses(payload: EventPayload): void {
+  if ("JobStateChanged" in payload) {
+    const change = payload.JobStateChanged;
+    const oldState = decodeJobStatusDetail(
+      (change as { old_state: unknown }).old_state,
+      "event.payload.JobStateChanged.old_state",
+    );
+    const newState = decodeJobStatusDetail(
+      (change as { new_state: unknown }).new_state,
+      "event.payload.JobStateChanged.new_state",
+    );
+    change.old_state = oldState.status;
+    change.new_state = newState.status;
+    if (newState.cancelReason) change.cancelReason = newState.cancelReason;
+  } else if ("ChainProgress" in payload) {
+    normalizeChainStatuses(payload.ChainProgress.chain, "event.payload.ChainProgress.chain");
+  } else if ("ScriptItemCreated" in payload) {
+    normalizeScriptItemStatuses(
+      payload.ScriptItemCreated.item,
+      "event.payload.ScriptItemCreated.item",
+    );
+  }
+}
+
+function normalizeJobInfoStatus(job: JobInfo, path: string): void {
+  const decoded = decodeJobStatusDetail((job as { status: unknown }).status, `${path}.status`);
+  job.status = decoded.status;
+  if (decoded.cancelReason) job.cancelReason = decoded.cancelReason;
+}
+
+function normalizeChainStatuses(chain: ChainInfo, path: string): void {
+  chain.jobs.forEach((job, index) => {
+    const decoded = decodeJobStatusDetail(
+      (job as { status: unknown }).status,
+      `${path}.jobs[${index}].status`,
+    );
+    job.status = decoded.status;
+    if (decoded.cancelReason) job.cancelReason = decoded.cancelReason;
+  });
+}
+
+function normalizeScriptItemStatuses(item: ScriptItemInfo, path: string): void {
+  if (item.result.kind === "chain") {
+    normalizeChainStatuses(item.result.chain, `${path}.result.chain`);
+  }
+}
+
+function mergeScriptItemInfo(
+  existing: ScriptItemInfo | undefined,
+  incoming: ScriptItemInfo,
+  incomingAuthoritative = false,
+): ScriptItemInfo {
+  if (!existing) return incoming;
+  if (
+    existing.result.kind !== "chain" ||
+    incoming.result.kind !== "chain" ||
+    existing.result.chain_id !== incoming.result.chain_id
+  ) {
+    // Script item identity/result kind is immutable. A typed snapshot is
+    // authoritative; ordinary live-event reconciliation remains monotonic.
+    return incomingAuthoritative ? incoming : existing;
+  }
+
+  const jobsByIndex = new Map<number, ChainJobInfo>();
+  const firstJobs = incomingAuthoritative ? existing.result.chain.jobs : incoming.result.chain.jobs;
+  const secondJobs = incomingAuthoritative
+    ? incoming.result.chain.jobs
+    : existing.result.chain.jobs;
+  for (const job of firstJobs) jobsByIndex.set(job.index, job);
+  for (const job of secondJobs) {
+    const prior = jobsByIndex.get(job.index);
+    jobsByIndex.set(job.index, prior ? { ...prior, ...job } : job);
+  }
+  const jobIds = [...new Set([...existing.result.job_ids, ...incoming.result.job_ids])];
+  const baseChain = incomingAuthoritative ? existing.result.chain : incoming.result.chain;
+  const overlayChain = incomingAuthoritative ? incoming.result.chain : existing.result.chain;
+  const baseResult = incomingAuthoritative ? existing.result : incoming.result;
+  const overlayResult = incomingAuthoritative ? incoming.result : existing.result;
+  return {
+    ...(incomingAuthoritative ? existing : incoming),
+    ...(incomingAuthoritative ? incoming : existing),
+    result: {
+      ...baseResult,
+      ...overlayResult,
+      job_ids: jobIds,
+      chain: {
+        ...baseChain,
+        ...overlayChain,
+        total_jobs: Math.max(
+          incoming.result.chain.total_jobs,
+          existing.result.chain.total_jobs,
+          jobIds.length,
+        ),
+        jobs: [...jobsByIndex.values()].sort((left, right) => left.index - right.index),
+      },
+    },
+  };
+}
+
+function decodeInboundCueMessage(value: unknown): InboundCueMessage {
+  const envelope = wireRecord(value, "envelope");
+  const type = requireString(envelope, "type", "envelope");
+  if (type === "response") {
+    assertEnvelopeKeys(envelope, ["type", "id", "payload"], "response envelope");
+    const id = requireInteger(envelope, "id", "response envelope", 0xffff_ffff);
+    const [variant, body] = singleVariant(
+      envelope.payload,
+      new Set(["Ok", "Err"]),
+      "response.payload",
+    );
+    const payload: ResponsePayload =
+      variant === "Ok"
+        ? { Ok: validateOkPayload(body) }
+        : (() => {
+            const error = wireRecord(validateCueErrorPayload(body), "response.payload.Err");
+            return {
+              Err: {
+                code: requireString(error, "code", "response.payload.Err"),
+                message: requireString(error, "message", "response.payload.Err"),
+              },
+            };
+          })();
+    return { type, id, payload };
+  }
+  if (type === "event") {
+    assertEnvelopeKeys(envelope, ["type", "payload"], "event envelope");
+    return { type, payload: validateEventPayload(envelope.payload) };
+  }
+  throw invalidIpc("envelope.type", `unexpected inbound message type ${type}`);
+}
+
 function normalizeJobStatus(status: unknown): JobStatus {
-  if (typeof status === "string") {
-    return status as JobStatus;
-  }
-  if (status && typeof status === "object" && "Cancelled" in (status as Record<string, unknown>)) {
-    return "Cancelled";
-  }
-  return "Pending";
+  return decodeJobStatus(status, "job.status");
 }
 
 function normalizeJob(job: JobInfo): JobInfo {
@@ -523,19 +871,148 @@ function normalizeJob(job: JobInfo): JobInfo {
   };
 }
 
-function textFromOutputEvent(event: EventPayload): OutputChunkEvent | null {
+function abortError(signal: AbortSignal): Error {
+  const reason = signal.reason;
+  const error = new Error(
+    reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "Aborted",
+  );
+  error.name = "AbortError";
+  if (reason !== undefined) (error as Error & { cause?: unknown }).cause = reason;
+  return error;
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw abortError(signal);
+}
+
+interface DecodedOutputChunk {
+  id: string;
+  stream: "stdout" | "stderr";
+  bytes: Buffer;
+  encoding: OutputEncoding;
+}
+
+function outputChunkFromEvent(event: EventPayload): DecodedOutputChunk | null {
   if ("OutputChunk" in event) {
-    return (event as { OutputChunk: OutputChunkEvent }).OutputChunk;
+    const chunk = (event as { OutputChunk: OutputChunkEvent }).OutputChunk;
+    return { id: chunk.id, stream: chunk.stream, bytes: Buffer.from(chunk.data), encoding: "utf8" };
   }
   if ("OutputChunkBinary" in event) {
     const chunk = (event as { OutputChunkBinary: OutputChunkBinaryEvent }).OutputChunkBinary;
     return {
       id: chunk.id,
       stream: chunk.stream,
-      data: Buffer.from(chunk.base64, "base64").toString("utf8"),
+      bytes: Buffer.from(chunk.base64, "base64"),
+      encoding: "base64",
     };
   }
   return null;
+}
+
+function bytesFromStreamText(stream: StreamText): Buffer {
+  if (stream.encoding === "base64" && typeof stream.base64 === "string") {
+    return Buffer.from(stream.base64, "base64");
+  }
+  return Buffer.from(stream.data, "utf8");
+}
+
+interface OutputView {
+  text: string;
+  encoding: OutputEncoding;
+  base64?: string;
+}
+
+function outputView(bytes: Buffer): OutputView {
+  if (isUtf8(bytes)) return { text: bytes.toString("utf8"), encoding: "utf8" };
+  return {
+    text: bytes.toString("utf8"),
+    encoding: "base64",
+    base64: bytes.toString("base64"),
+  };
+}
+
+function bytesFromJobOutput(output: JobOutputResult, stream: "stdout" | "stderr"): Buffer {
+  const encoding = stream === "stdout" ? output.stdoutEncoding : output.stderrEncoding;
+  const base64 = stream === "stdout" ? output.stdoutBase64 : output.stderrBase64;
+  const text = stream === "stdout" ? output.stdout : output.stderr;
+  return encoding === "base64" && base64 ? Buffer.from(base64, "base64") : Buffer.from(text);
+}
+
+function joinOutputParts(parts: Buffer[], separator: string): Buffer {
+  if (parts.length === 0) return Buffer.alloc(0);
+  if (!separator) return Buffer.concat(parts);
+  const joined: Buffer[] = [];
+  for (const [index, part] of parts.entries()) {
+    if (index > 0) joined.push(Buffer.from(separator));
+    joined.push(part);
+  }
+  return Buffer.concat(joined);
+}
+
+function buildJobResult(input: {
+  jobId: string;
+  status: JobStatus;
+  cancelReason?: CancelReason;
+  stdout: Buffer;
+  stderr: Buffer;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
+  exitCode: number | null;
+  timedOut: boolean;
+  warnings: string[];
+}): JobResult {
+  const stdout = outputView(input.stdout);
+  const stderr = outputView(input.stderr);
+  const warnings = [...input.warnings];
+  if (stdout.encoding === "base64") {
+    warnings.push(
+      "stdout contains non-UTF-8 bytes; stdout is a lossy view and stdoutBase64 is exact",
+    );
+  }
+  if (stderr.encoding === "base64") {
+    warnings.push(
+      "stderr contains non-UTF-8 bytes; stderr is a lossy view and stderrBase64 is exact",
+    );
+  }
+  return {
+    jobId: input.jobId,
+    status: input.status,
+    ...(input.cancelReason ? { cancelReason: input.cancelReason } : {}),
+    stdout: stdout.text,
+    stderr: stderr.text,
+    stdoutEncoding: stdout.encoding,
+    stderrEncoding: stderr.encoding,
+    ...(stdout.base64 ? { stdoutBase64: stdout.base64 } : {}),
+    ...(stderr.base64 ? { stderrBase64: stderr.base64 } : {}),
+    stdoutTruncated: input.stdoutTruncated,
+    stderrTruncated: input.stderrTruncated,
+    exitCode: input.exitCode,
+    timedOut: input.timedOut,
+    warnings,
+  };
+}
+
+function reconcileCollectedStream(input: {
+  live: Buffer;
+  liveOverflowed: boolean;
+  sawEofForEveryJob: boolean;
+  buffered: Buffer;
+  bufferedTruncated: boolean;
+}): { bytes: Buffer; truncated: boolean } {
+  if (!input.sawEofForEveryJob || input.live.length === 0) {
+    return { bytes: input.buffered, truncated: input.bufferedTruncated };
+  }
+  if (!input.bufferedTruncated) {
+    if (!input.liveOverflowed && input.live.equals(input.buffered)) {
+      return { bytes: input.live, truncated: false };
+    }
+    return { bytes: input.buffered, truncated: false };
+  }
+
+  // The daemon's completed-job snapshot is a 1 MiB tail. A longer live
+  // capture is more useful, but the pre-subscription prefix cannot be proven
+  // complete, so keep truncation explicit instead of silently claiming it.
+  return { bytes: input.live, truncated: true };
 }
 
 function okRecord(response: ResponsePayload): Record<string, unknown> {
@@ -573,14 +1050,28 @@ const MAX_OUTPUT_BUFFER = 4 * 1024 * 1024; // 4 MiB per stream, per job
 const MAX_SSH_STDERR_SNAPSHOT = 64 * 1024; // keep recent gateway diagnostics bounded
 const REQUIRED_IPC_PROTOCOL_VERSION = 2;
 const REQUIRED_IPC_CAPABILITY_SESSION_HANDSHAKE_REQUIRED = "session-handshake-required";
+const REQUIRED_IPC_CAPABILITIES = [
+  REQUIRED_IPC_CAPABILITY_SESSION_HANDSHAKE_REQUIRED,
+  "script-item-created",
+  "cancel-execution",
+  "operation-idempotency",
+  "script-info-recovery",
+] as const;
+const MAX_PENDING_REQUESTS = 1_024;
+const REQUEST_TIMEOUT_MS = 30_000;
+const SETTLED_RESPONSE_RETENTION_MS = 100;
+const MAX_REQUEST_ID = 0xffff_ffff;
 const PROCESS_SESSION_ID = `spark-cue:process:${process.pid}:${Date.now().toString(36)}:${randomUUID().slice(0, 8)}`;
 
 // ── Connection state ───────────────────────────────────────────────────────
 
 interface PendingRequest {
+  promise: Promise<ResponsePayload>;
   resolve: (value: ResponsePayload) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  claimed: boolean;
+  settled: boolean;
 }
 
 interface CueClientStream {
@@ -591,16 +1082,113 @@ interface CueClientStream {
   destroy(error?: Error): void;
 }
 
+/** Stable inputs used to derive a bounded daemon operation id. */
+export interface CueOperationKey {
+  /** Logical Spark/cue-shell session identity, not a transport connection id. */
+  sessionId: string;
+  /** Pi's stable tool-call id. */
+  toolCallId: string;
+  /** A distinct semantic step within the tool call (for example submit or cancel). */
+  kind: string;
+}
+
+function requireOperationPart(value: string, label: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new CueError("INVALID_OPERATION_KEY", `${label} must be a non-empty string`);
+  }
+  return value;
+}
+
+/**
+ * Derive the wire operation id without randomness. The digest keeps arbitrary
+ * session/tool ids safely below cue-shell's 128-byte envelope limit.
+ */
+export function cueOperationId(operation: CueOperationKey): string {
+  const canonical = JSON.stringify([
+    "spark-cue-operation-v1",
+    requireOperationPart(operation.sessionId, "operation sessionId"),
+    requireOperationPart(operation.toolCallId, "operation toolCallId"),
+    requireOperationPart(operation.kind, "operation kind"),
+  ]);
+  return `spark-cue:v1:${createHash("sha256").update(canonical).digest("base64url")}`;
+}
+
+/** Derive a non-colliding child step while retaining the same logical tool call. */
+export function cueOperationStep(
+  operation: CueOperationKey | undefined,
+  step: string,
+): CueOperationKey | undefined {
+  if (!operation) return undefined;
+  return {
+    ...operation,
+    kind: `${requireOperationPart(operation.kind, "operation kind")}/${requireOperationPart(step, "operation step")}`,
+  };
+}
+
+function nextRequestId(id: number): number {
+  return id >= MAX_REQUEST_ID ? 1 : id + 1;
+}
+
 function stableHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+export function isSensitiveCueEnvKey(key: string): boolean {
+  // Keep this classifier in lockstep with cue-shell's daemon-side scope
+  // persistence policy. Spark must use at least the same superset because the
+  // handshake and cue_scope output cross the model boundary before cue-shell's
+  // persistence guard can protect them.
+  const words = key
+    .split(/[^a-z0-9]+/iu)
+    .filter(Boolean)
+    .map((word) => word.toUpperCase());
+  const compact = words.join("");
+  const sensitiveWords = new Set([
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "PASS",
+    "CREDENTIAL",
+    "CREDENTIALS",
+    "AUTH",
+    "AUTHORIZATION",
+    "OAUTH",
+    "COOKIE",
+    "DSN",
+    "PASSPHRASE",
+  ]);
+  if (words.some((word) => sensitiveWords.has(word))) return true;
+  if (
+    compact.endsWith("TOKEN") ||
+    compact.endsWith("SECRET") ||
+    compact.includes("PASSWORD") ||
+    compact.endsWith("CREDENTIAL") ||
+    compact.endsWith("CREDENTIALS") ||
+    compact.endsWith("COOKIE") ||
+    compact.includes("APIKEY") ||
+    compact.includes("ACCESSKEY") ||
+    compact.includes("PRIVATEKEY")
+  ) {
+    return true;
+  }
+  const namesDatabase = ["DATABASE", "REDIS", "MONGO", "MONGODB", "POSTGRES", "POSTGRESQL"].some(
+    (backend) => compact.includes(backend),
+  );
+  const namesConnectionLocator =
+    words.some((word) => word === "URL" || word === "URI" || word === "CONNECTIONSTRING") ||
+    compact.includes("CONNECTIONSTRING");
+  return namesDatabase && namesConnectionLocator;
 }
 
 function normalizeSessionEnv(
   input: Record<string, string | undefined> | undefined,
 ): Record<string, string> {
   const source = input ?? process.env;
+  const forwardSensitive = process.env.SPARK_CUE_FORWARD_SENSITIVE_ENV === "1";
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(source)) {
+    if (!forwardSensitive && isSensitiveCueEnvKey(key)) continue;
     if (typeof value === "string") result[key] = value;
   }
   return result;
@@ -792,9 +1380,11 @@ export class CueClient {
   #nextId = 1;
   #pending = new Map<number, PendingRequest>();
   #listeners = new Map<string, Set<(event: EventPayload) => void>>();
+  #recentScriptItems: ScriptItemCreatedEvent[] = [];
   #recentScriptFinished: ScriptFinishedEvent[] = [];
   #buffer = Buffer.alloc(0);
   #closed = false;
+  #daemonInstanceId: string | null = null;
   #closePromise: Promise<void>;
   #resolveClose!: () => void;
 
@@ -806,12 +1396,25 @@ export class CueClient {
     });
 
     socket.on("data", (chunk: Buffer) => this.#onData(chunk));
-    socket.on("error", (err: Error) => this.#onError(err));
+    socket.on("error", (err: Error) => this.#onTransportError(err));
     socket.on("close", () => {
       this.#closed = true;
-      this.#rejectAll(new Error("connection closed"));
+      this.#rejectAll(new CueTransportError("connection closed"));
       this.#resolveClose();
     });
+  }
+
+  /** Test-only hook for exercising the u32 request-id wrap boundary. */
+  static __setNextRequestIdForTests(client: CueClient, nextId: number): void {
+    if (!Number.isInteger(nextId) || nextId < 1 || nextId > MAX_REQUEST_ID) {
+      throw new Error("test request id must be an unsigned non-zero 32-bit integer");
+    }
+    client.#nextId = nextId;
+  }
+
+  /** Test-only observable for bounded pending-request lifecycle assertions. */
+  static __pendingRequestCountForTests(client: CueClient): number {
+    return client.#pending.size;
   }
 
   /**
@@ -846,16 +1449,25 @@ export class CueClient {
     return this.#closed;
   }
 
+  /** Daemon process-lifetime identity established by the required initialization Ping. */
+  get daemonInstanceId(): string | null {
+    return this.#daemonInstanceId;
+  }
+
   // ── Requests ────────────────────────────────────────────────────────
 
   /** Send an Eval request for literal cue-shell commands (:kill, :jobs, :out). */
-  async #rawEval(input: string, mode: Mode = "Job"): Promise<number> {
-    return this.#send({ Eval: { input, mode } });
+  async #rawEval(input: string, mode: Mode = "Job", operation?: CueOperationKey): Promise<number> {
+    return this.#send({ Eval: { input, mode } }, operation);
   }
 
   /** Send a raw Eval request and wait for the response payload. */
-  async #rawEvalAndWait(input: string, mode: Mode = "Job"): Promise<ResponsePayload> {
-    const requestId = await this.#rawEval(input, mode);
+  async #rawEvalAndWait(
+    input: string,
+    mode: Mode = "Job",
+    operation?: CueOperationKey,
+  ): Promise<ResponsePayload> {
+    const requestId = await this.#rawEval(input, mode, operation);
     return this.#waitForResponse(requestId);
   }
 
@@ -885,13 +1497,82 @@ export class CueClient {
     if (opts.cwd) modeParams.push(`cwd=${quoteModeParamValue(opts.cwd)}`);
     modeParams.push(...resourceNeedModeParams(opts.needs));
     const modeParamText = modeParams.length > 0 ? `(${modeParams.join(",")})` : "";
-    return this.#send({ Eval: { input: `:run${modeParamText} ${input}`, mode } });
+    return this.#send({ Eval: { input: `:run${modeParamText} ${input}`, mode } }, opts.operation);
   }
 
   /** Subscribe to one or more event channels. */
   async subscribe(channels: string[]): Promise<void> {
     const id = await this.#send({ Subscribe: { channels } });
     await this.#waitForResponse(id);
+  }
+
+  /** Remove one or more event-channel subscriptions. */
+  async unsubscribe(channels: string[]): Promise<void> {
+    if (channels.length === 0) return;
+    const id = await this.#send({ Unsubscribe: { channels } });
+    await this.#waitForResponse(id);
+  }
+
+  /** Attach this client to a live foreground PTY job. */
+  async fgAttach(jobId: string): Promise<string> {
+    const id = await this.#send({ FgAttach: { id: jobId } });
+    const ok = okRecord(await this.#waitForResponse(id));
+    if ("FgAttached" in ok) {
+      return (ok as { FgAttached: { id: string } }).FgAttached.id;
+    }
+    throw new CueError("UNEXPECTED_RESPONSE", "expected FgAttached response");
+  }
+
+  /** Detach this client from its foreground PTY job. */
+  async fgDetach(): Promise<void> {
+    const id = await this.#send({ FgDetach: {} });
+    const ok = okRecord(await this.#waitForResponse(id));
+    if (!("Ack" in ok)) throw new CueError("UNEXPECTED_RESPONSE", "expected Ack response");
+  }
+
+  /** Send raw bytes to the attached foreground PTY. */
+  async fgInput(data: string | Uint8Array): Promise<void> {
+    const base64 = Buffer.from(data).toString("base64");
+    const id = await this.#send({ FgInput: { data: base64 } });
+    const ok = okRecord(await this.#waitForResponse(id));
+    if (!("Ack" in ok)) throw new CueError("UNEXPECTED_RESPONSE", "expected Ack response");
+  }
+
+  /** Resize the attached foreground PTY. */
+  async fgResize(cols: number, rows: number): Promise<void> {
+    if (
+      !Number.isInteger(cols) ||
+      cols < 0 ||
+      cols > 0xffff ||
+      !Number.isInteger(rows) ||
+      rows < 0 ||
+      rows > 0xffff
+    ) {
+      throw new CueError("INVALID_REQUEST", "foreground PTY size must use unsigned 16-bit values");
+    }
+    const id = await this.#send({ FgResize: { cols, rows } });
+    const ok = okRecord(await this.#waitForResponse(id));
+    if (!("Ack" in ok)) throw new CueError("UNEXPECTED_RESPONSE", "expected Ack response");
+  }
+
+  /** Request parser-aware completions from cue-shell. */
+  async complete(input: string, cursor: number): Promise<CompletionItem[]> {
+    const id = await this.#send({ Complete: { input, cursor } });
+    const ok = okRecord(await this.#waitForResponse(id));
+    if ("CompletionList" in ok) {
+      return (ok as { CompletionList: { items: CompletionItem[] } }).CompletionList.items;
+    }
+    throw new CueError("UNEXPECTED_RESPONSE", "expected CompletionList response");
+  }
+
+  /** Request syntax-highlight spans from cue-shell. */
+  async highlight(input: string): Promise<HighlightSpan[]> {
+    const id = await this.#send({ Highlight: { input } });
+    const ok = okRecord(await this.#waitForResponse(id));
+    if ("HighlightResult" in ok) {
+      return (ok as { HighlightResult: { spans: HighlightSpan[] } }).HighlightResult.spans;
+    }
+    throw new CueError("UNEXPECTED_RESPONSE", "expected HighlightResult response");
   }
 
   /** Send and acknowledge the cue-shell session handshake. */
@@ -953,11 +1634,23 @@ export class CueClient {
       );
     }
     const capabilities = Array.isArray(pong.capabilities) ? pong.capabilities : [];
-    if (!capabilities.includes(REQUIRED_IPC_CAPABILITY_SESSION_HANDSHAKE_REQUIRED)) {
+    for (const capability of REQUIRED_IPC_CAPABILITIES) {
+      if (!capabilities.includes(capability)) {
+        throw unsupportedProtocolError(
+          `cue-shell daemon is missing required IPC capability ${capability}; upgrade/restart cued`,
+        );
+      }
+    }
+    const instanceId = pong.instance_id;
+    if (typeof instanceId !== "string" || instanceId.length === 0) {
       throw unsupportedProtocolError(
-        `cue-shell daemon is missing required IPC capability ${REQUIRED_IPC_CAPABILITY_SESSION_HANDSHAKE_REQUIRED}; upgrade/restart cued`,
+        "cue-shell daemon Pong is missing instance_id; upgrade/restart cued",
       );
     }
+    if (this.#daemonInstanceId !== null && this.#daemonInstanceId !== instanceId) {
+      throw unsupportedProtocolError("cue-shell daemon changed instance_id on one connection");
+    }
+    this.#daemonInstanceId = instanceId;
     return version;
   }
 
@@ -975,13 +1668,20 @@ export class CueClient {
     const cwd = opts?.cwd;
     const pty = opts?.pty ?? false;
     const needs = opts?.needs;
+    const signal = opts?.signal;
+    throwIfAborted(signal);
 
     // Subscribe to global jobs channel before issuing the command.
     await this.#ensureSubscribed("jobs");
 
     // Issue the eval.  The daemon sends job/chain events before the
     // response for successful runs.
-    const requestId = await this.eval(command, "Job", { cwd, pty, needs });
+    const requestId = await this.eval(command, "Job", {
+      cwd,
+      pty,
+      needs,
+      operation: cueOperationStep(opts?.operation, "submit"),
+    });
     const response = await this.#waitForResponse(requestId);
 
     if ("Err" in response) {
@@ -1023,20 +1723,27 @@ export class CueClient {
       throw new CueError("UNEXPECTED_RESPONSE", "no job id from response");
     }
 
-    // Subscribe to output channels for all jobs in the chain.
-    for (const id of allJobIds) {
-      await this.subscribe([`output:${id}`]);
+    const cancelTarget = chainId ?? firstJobId;
+    const outputChannels = allJobIds.map((id) => `output:${id}`);
+    try {
+      if (signal?.aborted) {
+        await this.cancelExecution(cancelTarget, cueOperationStep(opts?.operation, "cancel"));
+        throw abortError(signal);
+      }
+      for (const channel of outputChannels) await this.subscribe([channel]);
+      return await this.#collectJobOutput(
+        firstJobId,
+        allJobIds,
+        timeoutMs,
+        warnings,
+        chainId,
+        expectedJobCount,
+        signal,
+        opts?.operation,
+      );
+    } finally {
+      await this.unsubscribe(outputChannels).catch(() => {});
     }
-
-    // Collect output and wait for completion
-    return this.#collectJobOutput(
-      firstJobId,
-      allJobIds,
-      timeoutMs,
-      warnings,
-      chainId,
-      expectedJobCount,
-    );
   }
 
   /**
@@ -1050,6 +1757,7 @@ export class CueClient {
       cwd: opts?.cwd,
       pty: opts?.pty ?? false,
       needs: opts?.needs,
+      operation: cueOperationStep(opts?.operation, "submit"),
     });
     const response = await this.#waitForResponse(requestId);
 
@@ -1105,10 +1813,15 @@ export class CueClient {
   async runScript(opts: RunScriptOptions): Promise<ScriptResult> {
     const { path, input } = opts;
     const timeoutMs = (opts.timeout ?? 300) * 1000;
+    const signal = opts.signal;
+    throwIfAborted(signal);
 
     await this.#ensureSubscribed("jobs");
 
-    const requestId = await this.#send({ RunScript: { path, input } });
+    const requestId = await this.#send(
+      { RunScript: { path, input } },
+      cueOperationStep(opts.operation, "submit"),
+    );
     const response = await this.#waitForResponse(requestId);
     if ("Err" in response) {
       throw new CueError(response.Err.code, response.Err.message);
@@ -1127,13 +1840,23 @@ export class CueClient {
       );
     }
 
+    if (signal?.aborted) {
+      await this.cancelExecution(created.script_id, cueOperationStep(opts.operation, "cancel"));
+      throw abortError(signal);
+    }
+
+    const scriptItems = new Map<number, ScriptItemInfo>(
+      created.items.map((item) => [item.index, item]),
+    );
     const itemJobIds = new Map<number, string[]>();
     const allKnownJobIds = new Set<string>();
     const stdoutByJob = new Map<string, string[]>();
     const stderrByJob = new Map<string, string[]>();
     const stdoutLenByJob = new Map<string, number>();
     const stderrLenByJob = new Map<string, number>();
-    const unknownJobIds: string[] = [];
+    const binaryNoticeByJob = new Set<string>();
+    const subscribedOutputChannels = new Set<string>();
+    let acceptingOutputSubscriptions = true;
 
     const ensureJobBuffers = (jobId: string) => {
       if (!stdoutByJob.has(jobId)) {
@@ -1171,11 +1894,18 @@ export class CueClient {
       if (!allKnownJobIds.has(jobId)) {
         allKnownJobIds.add(jobId);
         ensureJobBuffers(jobId);
-        await this.subscribe([`output:${jobId}`]);
+        const channel = `output:${jobId}`;
+        if (!acceptingOutputSubscriptions) return;
+        await this.subscribe([channel]);
+        if (acceptingOutputSubscriptions) {
+          subscribedOutputChannels.add(channel);
+        } else {
+          await this.unsubscribe([channel]).catch(() => {});
+        }
       }
     };
 
-    for (const item of created.items) {
+    for (const item of scriptItems.values()) {
       if (item.result.kind === "job") {
         await trackJob(item.index, item.result.job_id);
       } else if (item.result.kind === "chain") {
@@ -1185,27 +1915,61 @@ export class CueClient {
       }
     }
 
-    return new Promise<ScriptResult>((resolve, reject) => {
-      let finished: ScriptFinishedEvent | null = null;
-      let resolved = false;
-      const unsubs: Array<() => void> = [];
+    if (signal?.aborted) {
+      await this.cancelExecution(created.script_id, cueOperationStep(opts.operation, "cancel"));
+      await this.unsubscribe([...subscribedOutputChannels]).catch(() => {});
+      throw abortError(signal);
+    }
 
-      const cleanup = () => {
+    return new Promise<ScriptResult>((resolve, reject) => {
+      let finished: ScriptTerminalState | null = null;
+      let resolved = false;
+      let snapshotTerminalReconciled = false;
+      let snapshotPoll: ReturnType<typeof setInterval> | undefined;
+      let snapshotQueryInFlight = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let timerArmed = false;
+      const waitDeadline = Date.now() + timeoutMs;
+      const unsubs: Array<() => void> = [];
+      const pendingItemRegistrations = new Set<Promise<void>>();
+
+      const cleanupListeners = () => {
+        acceptingOutputSubscriptions = false;
+        if (snapshotPoll) clearInterval(snapshotPoll);
+        signal?.removeEventListener("abort", onAbort);
         for (const off of unsubs) off();
+      };
+
+      const releaseOutputChannels = async () => {
+        await this.unsubscribe([...subscribedOutputChannels]).catch(() => {});
+        subscribedOutputChannels.clear();
+      };
+
+      const failRecovery = async (error: unknown) => {
+        if (resolved) return;
+        resolved = true;
+        if (timer) clearTimeout(timer);
+        cleanupListeners();
+        await releaseOutputChannels();
+        reject(error);
       };
 
       const finalize = async () => {
         if (resolved) return;
-        if (!finished) return;
+        if (!finished || !snapshotTerminalReconciled) return;
         resolved = true;
-        clearTimeout(timer);
-        cleanup();
+        if (timer) clearTimeout(timer);
+        cleanupListeners();
 
         await new Promise((r) => setTimeout(r, 50));
+        await Promise.all([...pendingItemRegistrations]);
 
         try {
           const itemResults: ScriptItemSummary[] = [];
-          for (const item of created.items) {
+          const authoritativeItems = [...scriptItems.values()].sort(
+            (left, right) => left.index - right.index,
+          );
+          for (const item of authoritativeItems) {
             const summary = await this.#summarizeScriptItem(
               item,
               itemJobIds.get(item.index) ?? [],
@@ -1215,94 +1979,7 @@ export class CueClient {
             itemResults.push(summary);
           }
 
-          const knownSummaryJobs = new Set<string>();
-          for (const summary of itemResults) {
-            for (const jobId of summary.jobIds) knownSummaryJobs.add(jobId);
-          }
-          const inferredJobIds: string[] = [];
-          const knownNumbers = [...knownSummaryJobs]
-            .map((jobId) => Number(jobId.replace(/^J/, "")))
-            .filter((value) => Number.isFinite(value));
-          if (knownNumbers.length > 0) {
-            const maxKnownNumber = Math.max(...knownNumbers);
-            const inferenceJobs = await this.listJobs().catch(() => [] as JobInfo[]);
-            for (const job of inferenceJobs) {
-              const n = Number(job.id.replace(/^J/, ""));
-              if (Number.isFinite(n) && n > maxKnownNumber && !knownSummaryJobs.has(job.id)) {
-                inferredJobIds.push(job.id);
-              }
-            }
-          }
-          const extraJobIds: string[] = [];
-          for (const jobId of [...unknownJobIds, ...inferredJobIds]) {
-            if (!knownSummaryJobs.has(jobId) && !extraJobIds.includes(jobId))
-              extraJobIds.push(jobId);
-          }
-          if (extraJobIds.length > 0) {
-            const allJobs = await this.listJobs().catch(() => [] as JobInfo[]);
-            const jobsById = new Map(allJobs.map((job) => [job.id, job]));
-            const chainIds: string[] = [];
-            const singleJobIds: string[] = [];
-            for (const jobId of extraJobIds) {
-              const job = jobsById.get(jobId);
-              const chainId = job?.chain_id == null ? undefined : String(job.chain_id);
-              if (chainId) {
-                if (!chainIds.includes(chainId)) chainIds.push(chainId);
-              } else if (!singleJobIds.includes(jobId)) {
-                singleJobIds.push(jobId);
-              }
-            }
-            let nextIndex = itemResults.reduce((max, item) => Math.max(max, item.index), -1) + 1;
-            for (const chainId of chainIds) {
-              const jobs = allJobs
-                .filter((job) => String(job.chain_id ?? "") === chainId)
-                .sort((a, b) => (a.chain_index ?? 0) - (b.chain_index ?? 0));
-              if (jobs.length === 0) continue;
-              const chain = this.#chainInfoFromJobs(
-                chainId,
-                jobs.map((job) => job.pipeline).join(" -> "),
-                jobs.length,
-                jobs,
-              );
-              const item: ScriptItemInfo = {
-                index: nextIndex++,
-                source: chain.pipeline,
-                result: {
-                  kind: "chain",
-                  chain_id: chainId,
-                  job_ids: jobs.map((job) => job.id),
-                  chain,
-                },
-              };
-              itemResults.push(
-                await this.#summarizeScriptItem(
-                  item,
-                  jobs.map((job) => job.id),
-                  stdoutByJob,
-                  stderrByJob,
-                ),
-              );
-              for (const job of jobs) knownSummaryJobs.add(job.id);
-            }
-            for (const jobId of singleJobIds) {
-              if (knownSummaryJobs.has(jobId)) continue;
-              const job = jobsById.get(jobId);
-              const item: ScriptItemInfo = {
-                index: nextIndex++,
-                source: job?.pipeline ?? jobId,
-                result: {
-                  kind: "job",
-                  job_id: jobId,
-                  start_scope: job?.start_scope,
-                  open_hint: "stream",
-                },
-              };
-              itemResults.push(
-                await this.#summarizeScriptItem(item, [jobId], stdoutByJob, stderrByJob),
-              );
-            }
-          }
-
+          await releaseOutputChannels();
           resolve({
             scriptId: created.script_id,
             source: created.source ?? { kind: "inline" },
@@ -1313,35 +1990,67 @@ export class CueClient {
             timedOut: false,
           });
         } catch (error) {
+          await releaseOutputChannels();
           reject(error);
         }
       };
 
-      const timer = setTimeout(() => {
+      const stopForeground = async (kind: "abort" | "timeout") => {
         if (resolved) return;
         resolved = true;
-        cleanup();
-        resolve({
-          scriptId: created.script_id,
-          source: created.source ?? { kind: "inline" },
-          status: "failed",
-          exitCode: null,
-          failedItemIndex: null,
-          items: [],
-          timedOut: true,
-        });
-      }, timeoutMs);
+        if (timer) clearTimeout(timer);
+        cleanupListeners();
+        try {
+          await this.cancelExecution(created.script_id, cueOperationStep(opts.operation, "cancel"));
+          await releaseOutputChannels();
+          if (kind === "abort" && signal) {
+            reject(abortError(signal));
+            return;
+          }
+          resolve({
+            scriptId: created.script_id,
+            source: created.source ?? { kind: "inline" },
+            status: "failed",
+            exitCode: null,
+            failedItemIndex: null,
+            items: [],
+            timedOut: true,
+          });
+        } catch (error) {
+          await releaseOutputChannels();
+          reject(error);
+        }
+      };
+
+      const armTimeout = () => {
+        if (resolved || timerArmed) return;
+        timerArmed = true;
+        timer = setTimeout(
+          () => void stopForeground("timeout"),
+          Math.max(0, waitDeadline - Date.now()),
+        );
+      };
+      const onAbort = () => void stopForeground("abort");
+      signal?.addEventListener("abort", onAbort, { once: true });
 
       const onOutput = (event: EventPayload) => {
-        const chunk = textFromOutputEvent(event);
+        const chunk = outputChunkFromEvent(event);
         if (!chunk) return;
-        if (!allKnownJobIds.has(chunk.id) && !unknownJobIds.includes(chunk.id)) {
-          unknownJobIds.push(chunk.id);
-        }
+        if (!allKnownJobIds.has(chunk.id)) return;
+        const text = chunk.bytes.toString("utf8");
         if (chunk.stream === "stdout") {
-          appendCappedOutput(stdoutByJob, stdoutLenByJob, chunk.id, chunk.data);
+          appendCappedOutput(stdoutByJob, stdoutLenByJob, chunk.id, text);
         } else {
-          appendCappedOutput(stderrByJob, stderrLenByJob, chunk.id, chunk.data);
+          appendCappedOutput(stderrByJob, stderrLenByJob, chunk.id, text);
+        }
+        if (chunk.encoding === "base64" && !binaryNoticeByJob.has(chunk.id)) {
+          binaryNoticeByJob.add(chunk.id);
+          appendCappedOutput(
+            stderrByJob,
+            stderrLenByJob,
+            chunk.id,
+            "[non-UTF-8 process output rendered as a lossy UTF-8 view; OutputChunkBinary.base64 preserves the exact bytes]\n",
+          );
         }
       };
 
@@ -1353,52 +2062,143 @@ export class CueClient {
       };
       for (const jid of allKnownJobIds) ensureForwarder(jid);
 
-      const cachedFinished = this.#recentScriptFinished.find(
-        (fin) => fin.script_id === created.script_id,
-      );
-      if (cachedFinished) {
-        finished = cachedFinished;
-        void finalize();
-      }
+      const registerScriptItem = async (item: ScriptItemInfo, reconcileChain = false) => {
+        const merged = mergeScriptItemInfo(scriptItems.get(item.index), item, reconcileChain);
+        scriptItems.set(merged.index, merged);
+        const jobIds =
+          merged.result.kind === "job"
+            ? [merged.result.job_id]
+            : merged.result.kind === "chain"
+              ? merged.result.job_ids
+              : [];
+        if (reconcileChain && merged.result.kind === "chain") {
+          const chainId = merged.result.chain_id;
+          const durableIds = (await this.listJobs())
+            .filter((job) => job.chain_id != null && String(job.chain_id) === chainId)
+            .map((job) => job.id);
+          for (const jobId of durableIds) {
+            if (!jobIds.includes(jobId)) jobIds.push(jobId);
+          }
+          merged.result.job_ids = jobIds;
+        }
+        for (const jobId of jobIds) {
+          await trackJob(merged.index, jobId);
+          ensureForwarder(jobId);
+        }
+      };
+
+      const scheduleScriptItem = (item: ScriptItemInfo) => {
+        const registration = registerScriptItem(item);
+        pendingItemRegistrations.add(registration);
+        void registration
+          .catch((error) => failRecovery(error))
+          .finally(() => pendingItemRegistrations.delete(registration));
+      };
+      let reconcileSnapshot!: () => Promise<void>;
 
       const onJobs = (event: EventPayload) => {
-        if ("ScriptFinished" in event) {
-          const fin = (event as { ScriptFinished: ScriptFinishedEvent }).ScriptFinished;
-          if (fin.script_id === created.script_id) {
-            finished = fin;
-            void finalize();
+        if ("ScriptItemCreated" in event) {
+          const createdItem = (event as { ScriptItemCreated: ScriptItemCreatedEvent })
+            .ScriptItemCreated;
+          if (createdItem.script_id === created.script_id) {
+            scheduleScriptItem(createdItem.item);
           }
           return;
         }
-        if ("JobCreated" in event) {
-          const job = (event as { JobCreated: JobCreatedEvent }).JobCreated;
-          const jid = job.job_id;
-          if (!allKnownJobIds.has(jid)) {
-            if (!unknownJobIds.includes(jid)) unknownJobIds.push(jid);
-            ensureJobBuffers(jid);
-            void this.subscribe([`output:${jid}`]).then(() => ensureForwarder(jid));
+        if ("ScriptFinished" in event) {
+          const fin = (event as { ScriptFinished: ScriptFinishedEvent }).ScriptFinished;
+          if (fin.script_id === created.script_id) {
+            finished = {
+              status: fin.status,
+              exit_code: fin.exit_code,
+              failed_item_index: fin.failed_item_index,
+            };
+            void reconcileSnapshot();
           }
           return;
         }
         if ("ChainProgress" in event) {
           const progress = (event as { ChainProgress: { chain: ChainInfo } }).ChainProgress;
-          const item = created.items.find(
+          const item = [...scriptItems.values()].find(
             (it) => it.result.kind === "chain" && it.result.chain_id === progress.chain.id,
           );
+          if (!item || item.result.kind !== "chain") return;
+          const jobIds = progress.chain.jobs.flatMap((job) => (job.job_id ? [job.job_id] : []));
+          item.result.chain = progress.chain;
+          item.result.job_ids = [...new Set([...item.result.job_ids, ...jobIds])];
           for (const job of progress.chain.jobs) {
             const jid = job.job_id;
             if (!jid) continue;
-            if (item) {
-              void trackJob(item.index, jid).then(() => ensureForwarder(jid));
-            } else if (!allKnownJobIds.has(jid)) {
-              if (!unknownJobIds.includes(jid)) unknownJobIds.push(jid);
-              ensureJobBuffers(jid);
-              void this.subscribe([`output:${jid}`]).then(() => ensureForwarder(jid));
-            }
+            void trackJob(item.index, jid).then(() => ensureForwarder(jid));
           }
         }
       };
       unsubs.push(this.onEvent("jobs", onJobs));
+
+      for (const cached of this.#recentScriptItems) {
+        if (cached.script_id === created.script_id) scheduleScriptItem(cached.item);
+      }
+      const cachedFinished = this.#recentScriptFinished.find(
+        (fin) => fin.script_id === created.script_id,
+      );
+      if (cachedFinished) {
+        finished = {
+          status: cachedFinished.status,
+          exit_code: cachedFinished.exit_code,
+          failed_item_index: cachedFinished.failed_item_index,
+        };
+      }
+
+      reconcileSnapshot = async () => {
+        if (resolved || snapshotQueryInFlight) return;
+        snapshotQueryInFlight = true;
+        try {
+          const snapshot = await this.scriptInfo(created.script_id);
+          if (resolved) return;
+          for (const item of snapshot.items) await registerScriptItem(item, true);
+          if (snapshot.submit_error) {
+            const error = snapshot.submit_error;
+            await failRecovery(
+              new CueError(
+                error.code,
+                `script ${snapshot.script_id} submission failed at item ${error.index}: ${error.message}`,
+              ),
+            );
+            return;
+          }
+          if (snapshot.status !== "running") {
+            snapshotTerminalReconciled = true;
+            finished = {
+              status: snapshot.status,
+              exit_code: snapshot.exit_code,
+              failed_item_index: snapshot.failed_item_index,
+            };
+            await finalize();
+          } else {
+            armTimeout();
+          }
+        } catch (error) {
+          await failRecovery(error);
+        } finally {
+          snapshotQueryInFlight = false;
+        }
+      };
+
+      // Listener-first reconciliation closes all three races: terminal before
+      // reconnect, middle items missed while disconnected, and a still-running
+      // script that finishes after the new connection is established.
+      if (!resolved) {
+        snapshotPoll = setInterval(() => void reconcileSnapshot(), 100);
+        snapshotPoll.unref?.();
+        void reconcileSnapshot();
+        void this.closed.then(() =>
+          failRecovery(
+            new CueTransportError(
+              `connection closed while waiting for script ${created.script_id}`,
+            ),
+          ),
+        );
+      }
     });
   }
 
@@ -1415,31 +2215,27 @@ export class CueClient {
     const jobStatuses: JobInfo[] = [];
 
     for (const jobId of jobIds) {
-      let info: JobInfo | null = null;
-      try {
-        info = await this.jobStatus(jobId);
-      } catch {
-        info = null;
-      }
+      const info = await this.jobStatus(jobId);
       if (info) {
         jobStatuses.push(info);
         if (info.status !== "Done" && status === "Done") status = info.status;
-        if (info.exit_code != null && info.exit_code !== 0) exitCode = info.exit_code;
+        if (info.exit_code != null && (exitCode === null || info.exit_code !== 0)) {
+          exitCode = info.exit_code;
+        }
       }
 
       try {
-        const out = await this.jobOutput(jobId);
-        stdoutParts.push(out.stdout);
+        const output = await this.jobOutput(jobId);
+        stdoutParts.push(output.stdout);
+        stderrParts.push(output.stderr);
+        if (output.stdoutEncoding === "base64" || output.stderrEncoding === "base64") {
+          stderrParts.push(
+            "[non-UTF-8 process output rendered as a lossy UTF-8 view; use typed jobOutput base64 fields for exact bytes]\n",
+          );
+        }
       } catch {
-        const chunks = stdoutByJob.get(jobId) ?? [];
-        stdoutParts.push(chunks.join(""));
-      }
-      try {
-        const err = await this.jobError(jobId);
-        stderrParts.push(err.stderr);
-      } catch {
-        const chunks = stderrByJob.get(jobId) ?? [];
-        stderrParts.push(chunks.join(""));
+        stdoutParts.push((stdoutByJob.get(jobId) ?? []).join(""));
+        stderrParts.push((stderrByJob.get(jobId) ?? []).join(""));
       }
     }
 
@@ -1461,46 +2257,50 @@ export class CueClient {
     };
   }
 
-  /** Stop (kill) a running job or remove a cron. */
-  async stopJob(jobId: string): Promise<void> {
-    try {
-      const requestId = await this.#send(
-        jobId.startsWith("C") ? { RemoveCron: { id: jobId } } : { KillJob: { id: jobId } },
-      );
-      okRecord(await this.#waitForResponse(requestId));
-      return;
-    } catch (error) {
-      if (!(error instanceof CueError)) throw error;
+  /** Query the daemon-lifetime authoritative snapshot for a script run. */
+  async scriptInfo(scriptId: string): Promise<ScriptInfoPayload> {
+    const requestId = await this.#send({ ScriptInfo: { id: scriptId } });
+    const ok = okRecord(await this.#waitForResponse(requestId));
+    if ("ScriptInfo" in ok) {
+      return (ok as { ScriptInfo: ScriptInfoPayload }).ScriptInfo;
     }
-    const requestId = await this.#rawEval(`:kill ${jobId}`);
+    throw new CueError("UNEXPECTED_RESPONSE", "expected ScriptInfo response");
+  }
+
+  /** Stop (kill) a running job or remove a cron. */
+  async stopJob(targetId: string, operation?: CueOperationKey): Promise<void> {
+    const payload: RequestPayload = /^C\d+$/u.test(targetId)
+      ? { RemoveCron: { id: targetId } }
+      : /^CH\d+$/u.test(targetId)
+        ? { CancelExecution: { id: targetId } }
+        : { KillJob: { id: targetId } };
+    const requestId = await this.#send(payload, operation);
     okRecord(await this.#waitForResponse(requestId));
   }
 
-  /** List all jobs via `:jobs`. */
-  async listJobs(limit?: number): Promise<JobInfo[]> {
-    let response: ResponsePayload;
-    try {
-      const requestId = await this.#send({ ListJobs: { limit: limit ?? null } });
-      response = await this.#waitForResponse(requestId);
-    } catch (error) {
-      if (!(error instanceof CueError)) throw error;
-      response = await this.#rawEvalAndWait(":jobs");
-    }
+  /** Idempotently cancel a job, chain, or script and wait for it to stop. */
+  async cancelExecution(targetId: string, operation?: CueOperationKey): Promise<void> {
+    const requestId = await this.#send({ CancelExecution: { id: targetId } }, operation);
+    okRecord(await this.#waitForResponse(requestId));
+  }
 
-    const ok = okRecord(response);
-    if (ok && "JobListPage" in ok) {
+  /** List all jobs through the typed IPC query. */
+  async listJobs(limit?: number): Promise<JobInfo[]> {
+    const requestId = await this.#send({ ListJobs: { limit: limit ?? null } });
+    const ok = okRecord(await this.#waitForResponse(requestId));
+    if ("JobListPage" in ok) {
       return (ok as { JobListPage: { jobs: JobInfo[]; page: PageInfo } }).JobListPage.jobs.map(
         normalizeJob,
       );
     }
-    if (ok && "JobList" in ok) {
+    if ("JobList" in ok) {
       return (ok as { JobList: JobInfo[] }).JobList.map(normalizeJob);
     }
-    if (ok && "JobInfo" in ok) {
+    if ("JobInfo" in ok) {
       const job = (ok as { JobInfo: JobInfo }).JobInfo;
       return [normalizeJob(job)];
     }
-    return [];
+    throw new CueError("UNEXPECTED_RESPONSE", "expected JobListPage, JobList, or JobInfo response");
   }
 
   /** Get job status via `:jobs`. */
@@ -1543,6 +2343,7 @@ export class CueClient {
         start_scope: job.start_scope,
         end_scope: job.end_scope,
         open_hint: job.open_hint,
+        ...(job.cancelReason ? { cancelReason: job.cancelReason } : {}),
       })),
     };
   }
@@ -1571,124 +2372,106 @@ export class CueClient {
   }
 
   /** Get buffered stdout from the daemon. */
-  async jobOutput(
-    jobId: string,
-    tailBytes?: number,
-  ): Promise<{ stdout: string; stderr: string; truncated?: boolean }> {
-    try {
-      const requestId = await this.#send({
-        JobOutput: { id: jobId, stdout_bytes: tailBytes ?? null, stderr_bytes: tailBytes ?? null },
-      });
-      const ok = okRecord(await this.#waitForResponse(requestId));
-      if (ok && "JobOutput" in ok) {
-        const out = (
-          ok as {
-            JobOutput: {
-              stdout: StreamText;
-              stderr: StreamText;
-              stderr_pty_merged: boolean;
-            };
-          }
-        ).JobOutput;
-        return {
-          stdout: out.stdout.data,
-          stderr: out.stderr.data,
-          truncated: out.stdout.truncated,
-        };
-      }
-    } catch (error) {
-      if (!(error instanceof CueError)) throw error;
-      if (isNoBufferedOutputError(error)) return { stdout: "", stderr: "", truncated: false };
+  async jobOutput(jobId: string, tailBytes?: number): Promise<JobOutputResult> {
+    const output = await this.#queryJobOutput(jobId, tailBytes ?? null, tailBytes ?? null);
+    if (!output) {
+      return {
+        stdout: "",
+        stderr: "",
+        stdoutEncoding: "utf8",
+        stderrEncoding: "utf8",
+        truncated: false,
+        stderrTruncated: false,
+      };
     }
-
-    const response = await this.#rawEvalAndWait(`:out ${jobId}`);
-    const ok = okRecord(response);
-    if (ok && "Output" in ok) {
-      const out = (ok as { Output: { id: string; data: string; truncated: boolean } }).Output;
-      return { stdout: out.data, stderr: "", truncated: out.truncated };
-    }
-
-    const text = textOutputFromOk(ok);
-    if (text !== null) return { stdout: text, stderr: "", truncated: false };
-
-    return { stdout: "", stderr: "", truncated: false };
+    const stdout = outputView(bytesFromStreamText(output.stdout));
+    const stderr = outputView(bytesFromStreamText(output.stderr));
+    return {
+      stdout: stdout.text,
+      stderr: stderr.text,
+      stdoutEncoding: stdout.encoding,
+      stderrEncoding: stderr.encoding,
+      ...(stdout.base64 ? { stdoutBase64: stdout.base64 } : {}),
+      ...(stderr.base64 ? { stderrBase64: stderr.base64 } : {}),
+      truncated: output.stdout.truncated,
+      stderrTruncated: output.stderr.truncated,
+    };
   }
 
   /** Get buffered stderr from the daemon. */
   async jobError(
     jobId: string,
     tailBytes?: number,
-  ): Promise<{ stderr: string; truncated?: boolean }> {
+  ): Promise<{
+    stderr: string;
+    encoding: OutputEncoding;
+    base64?: string;
+    truncated?: boolean;
+  }> {
+    const output = await this.#queryJobOutput(jobId, null, tailBytes ?? null);
+    if (!output) return { stderr: "", encoding: "utf8", truncated: false };
+    const stderr = outputView(bytesFromStreamText(output.stderr));
+    return {
+      stderr: stderr.text,
+      encoding: stderr.encoding,
+      ...(stderr.base64 ? { base64: stderr.base64 } : {}),
+      truncated: output.stderr.truncated,
+    };
+  }
+
+  async #queryJobOutput(
+    jobId: string,
+    stdoutBytes: number | null,
+    stderrBytes: number | null,
+  ): Promise<JobOutputPayload | null> {
     try {
       const requestId = await this.#send({
-        JobOutput: { id: jobId, stdout_bytes: null, stderr_bytes: tailBytes ?? null },
+        JobOutput: { id: jobId, stdout_bytes: stdoutBytes, stderr_bytes: stderrBytes },
       });
       const ok = okRecord(await this.#waitForResponse(requestId));
-      if (ok && "JobOutput" in ok) {
-        const out = (
-          ok as {
-            JobOutput: {
-              stdout: StreamText;
-              stderr: StreamText;
-              stderr_pty_merged: boolean;
-            };
-          }
-        ).JobOutput;
-        return { stderr: out.stderr.data, truncated: out.stderr.truncated };
-      }
+      if ("JobOutput" in ok) return (ok as { JobOutput: JobOutputPayload }).JobOutput;
+      throw new CueError("UNEXPECTED_RESPONSE", "expected JobOutput response");
     } catch (error) {
-      if (!(error instanceof CueError)) throw error;
-      if (isNoBufferedOutputError(error)) return { stderr: "", truncated: false };
+      if (error instanceof CueError && isNoBufferedOutputError(error)) return null;
+      throw error;
     }
-
-    const response = await this.#rawEvalAndWait(`:err ${jobId}`);
-    const ok = okRecord(response);
-    if (ok && "Output" in ok) {
-      const out = (ok as { Output: { id: string; data: string; truncated: boolean } }).Output;
-      return { stderr: out.data, truncated: out.truncated };
-    }
-
-    const text = textOutputFromOk(ok);
-    if (text !== null) return { stderr: text, truncated: false };
-
-    return { stderr: "", truncated: false };
   }
 
   /** Send stdin to a running job. */
-  async sendInput(id: string, data: string): Promise<void> {
-    const response = await this.#rawEvalAndWait(`:send ${id} ${data}`);
+  async sendInput(id: string, data: string, operation?: CueOperationKey): Promise<void> {
+    const response = await this.#rawEvalAndWait(`:send ${id} ${data}`, "Job", operation);
     if ("Err" in response) {
       throw new CueError(response.Err.code, response.Err.message);
     }
   }
 
   /** Cancel a pending/running job. */
-  async cancelJob(id: string): Promise<void> {
-    const response = await this.#rawEvalAndWait(`:cancel ${id}`);
+  async cancelJob(id: string, operation?: CueOperationKey): Promise<void> {
+    const response = await this.#rawEvalAndWait(`:cancel ${id}`, "Job", operation);
     if ("Err" in response) {
       throw new CueError(response.Err.code, response.Err.message);
     }
   }
 
   /** Pause a cron. */
-  async pauseCron(id: string): Promise<void> {
-    const response = await this.#rawEvalAndWait(`:pause ${id}`);
+  async pauseCron(id: string, operation?: CueOperationKey): Promise<void> {
+    const response = await this.#rawEvalAndWait(`:pause ${id}`, "Job", operation);
     if ("Err" in response) {
       throw new CueError(response.Err.code, response.Err.message);
     }
   }
 
   /** Resume a cron. */
-  async resumeCron(id: string): Promise<void> {
-    const response = await this.#rawEvalAndWait(`:resume ${id}`);
+  async resumeCron(id: string, operation?: CueOperationKey): Promise<void> {
+    const response = await this.#rawEvalAndWait(`:resume ${id}`, "Job", operation);
     if ("Err" in response) {
       throw new CueError(response.Err.code, response.Err.message);
     }
   }
 
   /** Retry a terminal job. */
-  async retryJob(id: string): Promise<StartJobResult> {
-    const response = await this.#rawEvalAndWait(`:retry ${id}`);
+  async retryJob(id: string, operation?: CueOperationKey): Promise<StartJobResult> {
+    const response = await this.#rawEvalAndWait(`:retry ${id}`, "Job", operation);
     if ("Err" in response) {
       throw new CueError(response.Err.code, response.Err.message);
     }
@@ -1735,9 +2518,12 @@ export class CueClient {
   }
 
   /** Mutate the current session environment with `:env set KEY=VALUE ...`. */
-  async setEnv(assignments: Record<string, string>): Promise<ScopeCreatedPayload> {
+  async setEnv(
+    assignments: Record<string, string>,
+    operation?: CueOperationKey,
+  ): Promise<ScopeCreatedPayload> {
     const parts = Object.entries(assignments).map(([key, value]) => `${key}=${value}`);
-    const response = await this.#rawEvalAndWait(`:env set ${parts.join(" ")}`);
+    const response = await this.#rawEvalAndWait(`:env set ${parts.join(" ")}`, "Job", operation);
     const ok = okRecord(response);
     const scope = scopeCreatedFromOk(ok);
     if (scope) return scope;
@@ -1745,8 +2531,8 @@ export class CueClient {
   }
 
   /** Remove keys from the current session environment with `:env unset KEY ...`. */
-  async unsetEnv(keys: string[]): Promise<ScopeCreatedPayload> {
-    const response = await this.#rawEvalAndWait(`:env unset ${keys.join(" ")}`);
+  async unsetEnv(keys: string[], operation?: CueOperationKey): Promise<ScopeCreatedPayload> {
+    const response = await this.#rawEvalAndWait(`:env unset ${keys.join(" ")}`, "Job", operation);
     const ok = okRecord(response);
     const scope = scopeCreatedFromOk(ok);
     if (scope) return scope;
@@ -1754,81 +2540,64 @@ export class CueClient {
   }
 
   /** Change the current cue session directory. */
-  async changeDirectory(path: string): Promise<ScopeCreatedPayload> {
-    const response = await this.#rawEvalAndWait(`:cd ${path}`);
+  async changeDirectory(path: string, operation?: CueOperationKey): Promise<ScopeCreatedPayload> {
+    const response = await this.#rawEvalAndWait(`:cd ${path}`, "Job", operation);
     const ok = okRecord(response);
     const scope = scopeCreatedFromOk(ok);
     if (scope) return scope;
     throw new CueError("UNEXPECTED_RESPONSE", "expected ScopeCreated response");
   }
 
-  /** List all scopes. */
+  /** List all scopes through the typed IPC query. */
   async listScopes(limit?: number): Promise<ScopeInfo[]> {
-    let response: ResponsePayload;
-    try {
-      const requestId = await this.#send({ ListScopes: { limit: limit ?? null } });
-      response = await this.#waitForResponse(requestId);
-    } catch (error) {
-      if (!(error instanceof CueError)) throw error;
-      response = await this.#rawEvalAndWait(":scopes");
-    }
-
-    const ok = okRecord(response);
-    if (ok && "ScopeListPage" in ok) {
+    const requestId = await this.#send({ ListScopes: { limit: limit ?? null } });
+    const ok = okRecord(await this.#waitForResponse(requestId));
+    if ("ScopeListPage" in ok) {
       return (ok as { ScopeListPage: { scopes: ScopeInfo[]; page: PageInfo } }).ScopeListPage
         .scopes;
     }
-    if (ok && "ScopeList" in ok) {
+    if ("ScopeList" in ok) {
       return (ok as { ScopeList: ScopeInfo[] }).ScopeList;
     }
-    if (ok && "ScopeInfo" in ok) {
+    if ("ScopeInfo" in ok) {
       return [(ok as { ScopeInfo: ScopeInfo }).ScopeInfo];
     }
-    return [];
+    throw new CueError(
+      "UNEXPECTED_RESPONSE",
+      "expected ScopeListPage, ScopeList, or ScopeInfo response",
+    );
   }
 
-  /** Show current env snapshot. */
+  /** Show the current env snapshot through the typed IPC query. */
   async showEnv(): Promise<string> {
-    try {
-      const requestId = await this.#send({ ShowEnv: { tail_bytes: null } });
-      const text = textOutputFromOk(okRecord(await this.#waitForResponse(requestId)));
-      if (text !== null) return text;
-    } catch (error) {
-      if (!(error instanceof CueError)) throw error;
-    }
-    return this.evalText(":env");
+    const requestId = await this.#send({ ShowEnv: { tail_bytes: null } });
+    const text = textOutputFromOk(okRecord(await this.#waitForResponse(requestId)));
+    if (text !== null) return text;
+    throw new CueError("UNEXPECTED_RESPONSE", "expected TextOutput or EvalText response");
   }
 
-  /** Show current config. */
+  /** Show the current config through the typed IPC query. */
   async showConfig(): Promise<string> {
-    try {
-      const requestId = await this.#send({ ShowConfig: { tail_bytes: null } });
-      const text = textOutputFromOk(okRecord(await this.#waitForResponse(requestId)));
-      if (text !== null) return text;
-    } catch (error) {
-      if (!(error instanceof CueError)) throw error;
-    }
-    return this.evalText(":config");
+    const requestId = await this.#send({ ShowConfig: { tail_bytes: null } });
+    const text = textOutputFromOk(okRecord(await this.#waitForResponse(requestId)));
+    if (text !== null) return text;
+    throw new CueError("UNEXPECTED_RESPONSE", "expected TextOutput or EvalText response");
   }
 
   /** Show log output. */
   async showLog(id?: string, limit?: number, tailBytes?: number): Promise<string> {
-    try {
-      const requestId = await this.#send({
-        ShowLog: { id: id ?? null, limit: limit ?? null, tail_bytes: tailBytes ?? null },
-      });
-      const text = textOutputFromOk(okRecord(await this.#waitForResponse(requestId)));
-      if (text !== null) return text;
-    } catch (error) {
-      if (!(error instanceof CueError)) throw error;
-    }
-    return this.evalText(id ? `:log ${id}` : ":log");
+    const requestId = await this.#send({
+      ShowLog: { id: id ?? null, limit: limit ?? null, tail_bytes: tailBytes ?? null },
+    });
+    const text = textOutputFromOk(okRecord(await this.#waitForResponse(requestId)));
+    if (text !== null) return text;
+    throw new CueError("UNEXPECTED_RESPONSE", "expected TextOutput or EvalText response");
   }
 
   /** Schedule a recurring or one-shot cron job.  Returns the cron id. */
-  async addCron(schedule: string, command: string): Promise<string> {
+  async addCron(schedule: string, command: string, operation?: CueOperationKey): Promise<string> {
     const input = `:cron ${schedule} ${command}`;
-    const requestId = await this.#rawEval(input);
+    const requestId = await this.#rawEval(input, "Job", operation);
     const response = await this.#waitForResponse(requestId);
 
     if ("Err" in response) {
@@ -1842,30 +2611,29 @@ export class CueClient {
     throw new CueError("UNEXPECTED_RESPONSE", "expected CronAdded response");
   }
 
-  /** List all cron jobs. */
+  /** List all cron jobs through the typed IPC query. */
   async listCrons(limit?: number): Promise<CronInfo[]> {
-    let response: ResponsePayload;
-    try {
-      const requestId = await this.#send({ ListCrons: { limit: limit ?? null } });
-      response = await this.#waitForResponse(requestId);
-    } catch (error) {
-      if (!(error instanceof CueError)) throw error;
-      response = await this.#rawEvalAndWait(":crons");
-    }
-
-    const ok = okRecord(response);
-    if (ok && "CronListPage" in ok) {
+    const requestId = await this.#send({ ListCrons: { limit: limit ?? null } });
+    const ok = okRecord(await this.#waitForResponse(requestId));
+    if ("CronListPage" in ok) {
       return (ok as { CronListPage: { crons: CronInfo[]; page: PageInfo } }).CronListPage.crons;
     }
-    if (ok && "CronList" in ok) {
+    if ("CronList" in ok) {
       return (ok as { CronList: CronInfo[] }).CronList;
     }
-    return [];
+    throw new CueError("UNEXPECTED_RESPONSE", "expected CronListPage or CronList response");
   }
 
   /** Remove a cron job. */
-  async removeCron(cronId: string): Promise<void> {
-    await this.stopJob(cronId);
+  async removeCron(cronId: string, operation?: CueOperationKey): Promise<void> {
+    const requestId = await this.#send({ RemoveCron: { id: cronId } }, operation);
+    okRecord(await this.#waitForResponse(requestId));
+  }
+
+  /** Ask the daemon to shut down. */
+  async shutdown(operation?: CueOperationKey): Promise<void> {
+    const requestId = await this.#send({ Shutdown: {} }, operation);
+    okRecord(await this.#waitForResponse(requestId));
   }
 
   // ── Event listeners ─────────────────────────────────────────────────
@@ -1901,25 +2669,99 @@ export class CueClient {
     this.#subscribedChannels.add(channel);
   }
 
-  #send(payload: RequestPayload): Promise<number> {
-    if (this.#closed) throw new Error("connection closed");
+  #send(payload: RequestPayload, operation?: CueOperationKey): Promise<number> {
+    if (this.#closed) throw new CueTransportError("connection closed");
+    if (this.#pending.size >= MAX_PENDING_REQUESTS) {
+      throw new CueError(
+        "CLIENT_REQUEST_LIMIT",
+        `refusing to exceed ${MAX_PENDING_REQUESTS} pending cue-shell requests`,
+      );
+    }
 
-    const id = this.#nextId++;
-    const request: RequestEnvelope = { type: "request", id, payload };
+    const id = this.#allocateRequestId();
+    let resolveResponse!: (value: ResponsePayload) => void;
+    let rejectResponse!: (error: Error) => void;
+    const promise = new Promise<ResponsePayload>((resolve, reject) => {
+      resolveResponse = resolve;
+      rejectResponse = reject;
+    });
+    // A caller may intentionally use eval() as fire-and-forget. Keep that from
+    // becoming an unhandled rejection while preserving the original promise
+    // for callers that do claim the response.
+    void promise.catch(() => {});
+    const pending: PendingRequest = {
+      promise,
+      resolve: resolveResponse,
+      reject: rejectResponse,
+      claimed: false,
+      settled: false,
+      timer: setTimeout(() => {
+        if (this.#pending.get(id) !== pending) return;
+        if (!pending.settled) {
+          pending.settled = true;
+          pending.reject(
+            new CueTransportError(`request ${id} timed out after ${REQUEST_TIMEOUT_MS}ms`),
+          );
+        }
+        this.#retainUnclaimedResponse(id, pending);
+      }, REQUEST_TIMEOUT_MS),
+    };
+    // Register before write(): a test stream, local transport, or very fast
+    // daemon is allowed to deliver the response synchronously from write().
+    this.#pending.set(id, pending);
+    const request: RequestEnvelope = {
+      type: "request",
+      id,
+      ...(operation ? { operation_id: cueOperationId(operation) } : {}),
+      payload,
+    };
     const frame = this.#encodeFrame(request);
-    this.#socket.write(frame);
+    try {
+      this.#socket.write(frame);
+    } catch (error) {
+      clearTimeout(pending.timer);
+      this.#pending.delete(id);
+      pending.settled = true;
+      const writeError = asCueTransportError(error, "request write failed");
+      pending.reject(writeError);
+      throw writeError;
+    }
 
     return Promise.resolve(id);
   }
 
-  #waitForResponse(id: number, timeoutMs = 30_000): Promise<ResponsePayload> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.#pending.delete(id);
-        reject(new Error(`request ${id} timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
+  #allocateRequestId(): number {
+    // At most pending.size occupied ids can be encountered before a free slot,
+    // and the pending cap keeps this scan bounded independently of u32 wrap.
+    for (let attempts = 0; attempts <= this.#pending.size; attempts += 1) {
+      const id = this.#nextId;
+      this.#nextId = nextRequestId(id);
+      if (!this.#pending.has(id)) return id;
+    }
+    throw new CueError("CLIENT_REQUEST_LIMIT", "no free cue-shell request id is available");
+  }
 
-      this.#pending.set(id, { resolve, reject, timer });
+  #retainUnclaimedResponse(id: number, pending: PendingRequest): void {
+    clearTimeout(pending.timer);
+    if (pending.claimed) {
+      this.#pending.delete(id);
+      return;
+    }
+    pending.timer = setTimeout(() => {
+      if (this.#pending.get(id) === pending && !pending.claimed) this.#pending.delete(id);
+    }, SETTLED_RESPONSE_RETENTION_MS);
+    pending.timer.unref?.();
+  }
+
+  #waitForResponse(id: number): Promise<ResponsePayload> {
+    const pending = this.#pending.get(id);
+    if (!pending) return Promise.reject(new Error(`unknown or expired request ${id}`));
+    pending.claimed = true;
+    return pending.promise.finally(() => {
+      if (this.#pending.get(id) === pending) {
+        clearTimeout(pending.timer);
+        this.#pending.delete(id);
+      }
     });
   }
 
@@ -1929,7 +2771,7 @@ export class CueClient {
     while (this.#buffer.length >= 4) {
       const len = this.#buffer.readUInt32BE(0);
       if (len > MAX_MESSAGE_SIZE) {
-        this.#onError(new Error(`message too large: ${len} bytes`));
+        this.#onProtocolError(new Error(`message too large: ${len} bytes`));
         return;
       }
       if (this.#buffer.length < 4 + len) break; // need more data
@@ -1938,27 +2780,29 @@ export class CueClient {
       this.#buffer = this.#buffer.subarray(4 + len);
 
       try {
-        const msg: CueMessage = JSON.parse(body.toString("utf-8"));
+        const msg = decodeInboundCueMessage(JSON.parse(body.toString("utf-8")));
         this.#dispatch(msg);
       } catch (err) {
-        this.#onError(new Error(`failed to parse message: ${(err as Error).message}`));
+        this.#onProtocolError(new Error(`failed to parse message: ${(err as Error).message}`));
         return;
       }
     }
   }
 
-  #dispatch(msg: CueMessage): void {
+  #dispatch(msg: InboundCueMessage): void {
     if (msg.type === "response") {
       const pending = this.#pending.get(msg.id);
-      if (pending) {
-        clearTimeout(pending.timer);
-        this.#pending.delete(msg.id);
-        pending.resolve(msg.payload);
+      if (!pending) {
+        this.#onProtocolError(new Error(`response for unknown or expired request ${msg.id}`));
+        return;
       }
-    } else if (msg.type === "event") {
+      if (pending.settled) return;
+      pending.settled = true;
+      pending.resolve(msg.payload);
+      this.#retainUnclaimedResponse(msg.id, pending);
+    } else {
       this.#dispatchEvent(msg.payload);
     }
-    // request messages are not expected on the client side
   }
 
   #dispatchEvent(payload: EventPayload): void {
@@ -1969,11 +2813,12 @@ export class CueClient {
       channel = `jobs`;
     } else if ("JobCreated" in payload) {
       channel = `jobs`;
-    } else if ("ChainStarted" in payload) {
-      channel = `jobs`;
     } else if ("ChainProgress" in payload) {
       channel = `jobs`;
-    } else if ("ChainFinished" in payload) {
+    } else if ("ScriptItemCreated" in payload) {
+      const created = (payload as { ScriptItemCreated: ScriptItemCreatedEvent }).ScriptItemCreated;
+      this.#recentScriptItems.push(created);
+      if (this.#recentScriptItems.length > 128) this.#recentScriptItems.shift();
       channel = `jobs`;
     } else if ("ScriptFinished" in payload) {
       const fin = (payload as { ScriptFinished: ScriptFinishedEvent }).ScriptFinished;
@@ -1982,8 +2827,14 @@ export class CueClient {
       channel = `jobs`;
     } else if ("JobRemoved" in payload) {
       channel = `jobs`;
+    } else if ("CronTriggered" in payload || "CronRemoved" in payload) {
+      channel = `crons`;
+    } else if ("FgOutput" in payload || "FgExited" in payload) {
+      channel = `fg`;
+    } else if ("ShuttingDown" in payload) {
+      channel = `system`;
     } else {
-      const chunk = textFromOutputEvent(payload);
+      const chunk = outputChunkFromEvent(payload);
       if (!chunk) {
         if ("OutputEof" in payload) {
           const jobId = (payload as { OutputEof: { id: string } }).OutputEof.id;
@@ -2010,19 +2861,33 @@ export class CueClient {
     }
   }
 
-  #onError(err: Error): void {
+  #onTransportError(err: Error): void {
     if (!this.#closed) {
-      this.#rejectAll(err);
+      this.#rejectAll(asCueTransportError(err));
+      this.#socket.destroy();
+    }
+  }
+
+  #onProtocolError(err: Error): void {
+    if (!this.#closed) {
+      // The daemon may already have committed a side effect before a malformed
+      // or uncorrelatable response makes its result unknowable. Treat this as
+      // transport ambiguity so Pi can replay only with the exact same key.
+      this.#rejectAll(new CueTransportError(`protocol failure: ${err.message}`));
       this.#socket.destroy();
     }
   }
 
   #rejectAll(error: Error): void {
-    for (const [, pending] of this.#pending) {
-      clearTimeout(pending.timer);
-      pending.reject(error);
+    for (const [id, pending] of this.#pending) {
+      if (!pending.settled) {
+        pending.settled = true;
+        pending.reject(error);
+      }
+      // Keep an unclaimed promise long enough for the send() caller to enter
+      // waitForResponse() after a synchronous response/error/close cycle.
+      this.#retainUnclaimedResponse(id, pending);
     }
-    this.#pending.clear();
   }
 
   #encodeFrame(msg: CueMessage): Buffer {
@@ -2037,42 +2902,63 @@ export class CueClient {
     chainJobIds: string[],
     warnings: string[] = [],
   ): Promise<JobResult> {
-    const stdoutParts: string[] = [];
-    const stderrParts: string[] = [];
+    const stdoutParts: Buffer[] = [];
+    const stderrParts: Buffer[] = [];
     let finalStatus: JobStatus = "Done";
+    let cancelReason: CancelReason | undefined;
     let finalExit: number | null = null;
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
+    let stdoutTotal = 0;
+    let stderrTotal = 0;
 
     for (const jobId of chainJobIds) {
       const info = await this.jobStatus(jobId);
       if (info) {
         if (info.status !== "Done") finalStatus = info.status;
-        if (info.exit_code != null && info.exit_code !== 0) finalExit = info.exit_code;
+        if (info.cancelReason) cancelReason = info.cancelReason;
+        if (info.exit_code != null && (finalExit === null || info.exit_code !== 0)) {
+          finalExit = info.exit_code;
+        }
       }
 
-      const out = await this.jobOutput(jobId);
-      if (chainJobIds.length === 1) {
-        stdoutParts.push(out.stdout);
-      } else if (out.stdout.length > 0) {
-        stdoutParts.push(out.stdout.trimEnd());
+      const output = await this.jobOutput(jobId, MAX_OUTPUT_BUFFER);
+      const stdout =
+        chainJobIds.length > 1 && output.stdoutEncoding === "utf8"
+          ? Buffer.from(output.stdout.trimEnd())
+          : bytesFromJobOutput(output, "stdout");
+      const stderr =
+        chainJobIds.length > 1 && output.stderrEncoding === "utf8"
+          ? Buffer.from(output.stderr.trimEnd())
+          : bytesFromJobOutput(output, "stderr");
+      const stdoutRemaining = MAX_OUTPUT_BUFFER - stdoutTotal;
+      const stderrRemaining = MAX_OUTPUT_BUFFER - stderrTotal;
+      if (stdout.length > 0 && stdoutRemaining > 0) {
+        const kept = stdout.subarray(0, stdoutRemaining);
+        stdoutParts.push(kept);
+        stdoutTotal += kept.length;
       }
-
-      const err = await this.jobError(jobId);
-      if (chainJobIds.length === 1) {
-        stderrParts.push(err.stderr);
-      } else if (err.stderr.length > 0) {
-        stderrParts.push(err.stderr.trimEnd());
+      if (stderr.length > 0 && stderrRemaining > 0) {
+        const kept = stderr.subarray(0, stderrRemaining);
+        stderrParts.push(kept);
+        stderrTotal += kept.length;
       }
+      stdoutTruncated ||= output.truncated || stdout.length > stdoutRemaining;
+      stderrTruncated ||= output.stderrTruncated || stderr.length > stderrRemaining;
     }
 
-    return {
+    return buildJobResult({
       jobId: firstJobId,
       status: finalStatus,
-      stdout: stdoutParts.join(chainJobIds.length === 1 ? "" : "\n"),
-      stderr: stderrParts.join(chainJobIds.length === 1 ? "" : "\n"),
+      ...(cancelReason ? { cancelReason } : {}),
+      stdout: joinOutputParts(stdoutParts, chainJobIds.length === 1 ? "" : "\n"),
+      stderr: joinOutputParts(stderrParts, chainJobIds.length === 1 ? "" : "\n"),
+      stdoutTruncated,
+      stderrTruncated,
       exitCode: finalExit,
       timedOut: false,
       warnings,
-    };
+    });
   }
 
   async #collectJobOutput(
@@ -2082,6 +2968,8 @@ export class CueClient {
     warnings: string[] = [],
     chainId?: string,
     expectedJobCount = chainJobIds.length,
+    signal?: AbortSignal,
+    operation?: CueOperationKey,
   ): Promise<JobResult> {
     let expectedJobs = expectedJobCount;
     const dynamicChain = expectedJobs > chainJobIds.length;
@@ -2111,46 +2999,76 @@ export class CueClient {
     }
 
     const isChain = expectedJobs > 1;
+    const cancelTarget = chainId ?? firstJobId;
+
+    if (signal?.aborted) {
+      await this.cancelExecution(cancelTarget, cueOperationStep(operation, "cancel"));
+      throw abortError(signal);
+    }
 
     return new Promise((resolve, reject) => {
-      const stdoutChunks: string[] = [];
-      const stderrChunks: string[] = [];
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
       let stdoutLen = 0;
       let stderrLen = 0;
+      let stdoutOverflowed = false;
+      let stderrOverflowed = false;
       let resolved = false;
       let poll: ReturnType<typeof setInterval> | undefined;
       const terminal: JobStatus[] = ["Done", "Failed", "Killed", "Cancelled"];
 
-      const timer = setTimeout(() => {
+      const stopForeground = async (kind: "abort" | "timeout") => {
         if (resolved) return;
         resolved = true;
+        clearTimeout(timer);
         if (poll) clearInterval(poll);
         cleanup();
-        resolve({
-          jobId: firstJobId,
-          status: "Running",
-          stdout: stdoutChunks.join(""),
-          stderr: stderrChunks.join(""),
-          exitCode: null,
-          timedOut: true,
-          warnings,
-        });
-      }, timeoutMs);
+        try {
+          await this.cancelExecution(cancelTarget, cueOperationStep(operation, "cancel"));
+          if (kind === "abort" && signal) {
+            reject(abortError(signal));
+            return;
+          }
+          const result = await this.#readBufferedJobResult(firstJobId, chainJobIds, warnings);
+          resolve({ ...result, timedOut: true });
+        } catch (error) {
+          reject(error);
+        }
+      };
+
+      const timer = setTimeout(() => void stopForeground("timeout"), timeoutMs);
+      const onAbort = () => void stopForeground("abort");
+      signal?.addEventListener("abort", onAbort, { once: true });
 
       const unsubs: Array<() => void> = [];
       const onOutput = (event: EventPayload) => {
-        const chunk = textFromOutputEvent(event);
+        if ("OutputEof" in event) {
+          const eof = (event as { OutputEof: { id: string } }).OutputEof;
+          if (chainJobIds.includes(eof.id)) outputEof.add(eof.id);
+          return;
+        }
+        const chunk = outputChunkFromEvent(event);
         if (!chunk) return;
         if (chunk.stream === "stdout") {
-          if (stdoutLen < MAX_OUTPUT_BUFFER) {
-            stdoutChunks.push(chunk.data);
-            stdoutLen += chunk.data.length;
+          const remaining = MAX_OUTPUT_BUFFER - stdoutLen;
+          if (remaining <= 0) {
+            stdoutOverflowed = true;
+            return;
           }
+          const kept = chunk.bytes.subarray(0, remaining);
+          stdoutChunks.push(kept);
+          stdoutLen += kept.length;
+          stdoutOverflowed ||= kept.length < chunk.bytes.length;
         } else {
-          if (stderrLen < MAX_OUTPUT_BUFFER) {
-            stderrChunks.push(chunk.data);
-            stderrLen += chunk.data.length;
+          const remaining = MAX_OUTPUT_BUFFER - stderrLen;
+          if (remaining <= 0) {
+            stderrOverflowed = true;
+            return;
           }
+          const kept = chunk.bytes.subarray(0, remaining);
+          stderrChunks.push(kept);
+          stderrLen += kept.length;
+          stderrOverflowed ||= kept.length < chunk.bytes.length;
         }
       };
       for (const jid of chainJobIds) unsubs.push(this.onEvent(`output:${jid}`, onOutput));
@@ -2159,12 +3077,12 @@ export class CueClient {
         if (chainJobIds.includes(jobId)) return;
         chainJobIds.push(jobId);
         unsubs.push(this.onEvent(`output:${jobId}`, onOutput));
-        void this.subscribe([`output:${jobId}`]);
       };
 
       // Track terminal state per job. Polling covers the race where the terminal
       // event arrives before this collector has installed its listener.
       const terminalSet = new Set<string>();
+      const outputEof = new Set<string>();
 
       const maybeResolve = async () => {
         if (resolved) return;
@@ -2180,7 +3098,59 @@ export class CueClient {
         await new Promise((r) => setTimeout(r, 50));
         cleanup();
         try {
-          resolve(await this.#readBufferedJobResult(firstJobId, chainJobIds, warnings));
+          const buffered = await this.#readBufferedJobResult(firstJobId, chainJobIds, warnings);
+          const stdout = reconcileCollectedStream({
+            live: Buffer.concat(stdoutChunks),
+            liveOverflowed: stdoutOverflowed,
+            sawEofForEveryJob: trackedJobIds.every((id) => outputEof.has(id)),
+            buffered: bytesFromJobOutput(
+              {
+                stdout: buffered.stdout,
+                stderr: buffered.stderr,
+                stdoutEncoding: buffered.stdoutEncoding,
+                stderrEncoding: buffered.stderrEncoding,
+                ...(buffered.stdoutBase64 ? { stdoutBase64: buffered.stdoutBase64 } : {}),
+                ...(buffered.stderrBase64 ? { stderrBase64: buffered.stderrBase64 } : {}),
+                truncated: buffered.stdoutTruncated,
+                stderrTruncated: buffered.stderrTruncated,
+              },
+              "stdout",
+            ),
+            bufferedTruncated: buffered.stdoutTruncated,
+          });
+          const stderr = reconcileCollectedStream({
+            live: Buffer.concat(stderrChunks),
+            liveOverflowed: stderrOverflowed,
+            sawEofForEveryJob: trackedJobIds.every((id) => outputEof.has(id)),
+            buffered: bytesFromJobOutput(
+              {
+                stdout: buffered.stdout,
+                stderr: buffered.stderr,
+                stdoutEncoding: buffered.stdoutEncoding,
+                stderrEncoding: buffered.stderrEncoding,
+                ...(buffered.stdoutBase64 ? { stdoutBase64: buffered.stdoutBase64 } : {}),
+                ...(buffered.stderrBase64 ? { stderrBase64: buffered.stderrBase64 } : {}),
+                truncated: buffered.stdoutTruncated,
+                stderrTruncated: buffered.stderrTruncated,
+              },
+              "stderr",
+            ),
+            bufferedTruncated: buffered.stderrTruncated,
+          });
+          resolve(
+            buildJobResult({
+              jobId: buffered.jobId,
+              status: buffered.status,
+              ...(buffered.cancelReason ? { cancelReason: buffered.cancelReason } : {}),
+              stdout: stdout.bytes,
+              stderr: stderr.bytes,
+              stdoutTruncated: stdout.truncated,
+              stderrTruncated: stderr.truncated,
+              exitCode: buffered.exitCode,
+              timedOut: false,
+              warnings: buffered.warnings,
+            }),
+          );
         } catch (error) {
           reject(error);
         }
@@ -2207,14 +3177,6 @@ export class CueClient {
               expectedJobs = progress.chain.jobs.filter((job) => job.job_id).length;
               void maybeResolve();
             }
-          }
-        }
-        if ("ChainFinished" in event && chainId) {
-          const finished = (event as { ChainFinished: { chain_id: string; success: boolean } })
-            .ChainFinished;
-          if (finished.chain_id === chainId) {
-            expectedJobs = chainJobIds.length;
-            void maybeResolve();
           }
         }
         if ("JobStateChanged" in event) {
@@ -2273,6 +3235,7 @@ export class CueClient {
       }, 100);
 
       function cleanup() {
+        signal?.removeEventListener("abort", onAbort);
         unsubJob();
         for (const u of unsubs) u();
       }
@@ -2291,11 +3254,15 @@ export interface RunEvalOptions {
   pty?: boolean;
   /** Resource quantities to reserve before spawning, encoded as `need.<key>=<quantity>`. */
   needs?: ResourceNeeds;
+  /** Stable logical key for the daemon-global side effect. */
+  operation?: CueOperationKey;
 }
 
 export interface RunJobOptions extends RunEvalOptions {
   /** Timeout in seconds (default: 300 = 5 min). */
   timeout?: number;
+  /** Cancels the daemon-side foreground execution and waits for it to stop. */
+  signal?: AbortSignal;
 }
 
 export interface StartJobOptions extends RunEvalOptions {}
@@ -2307,6 +3274,10 @@ export interface RunScriptOptions {
   input: string;
   /** Foreground wait budget in seconds. Defaults to 300. */
   timeout?: number;
+  /** Cancels the daemon-side script and waits for its active item to stop. */
+  signal?: AbortSignal;
+  /** Stable logical key; submit and cancel use distinct derived child steps. */
+  operation?: CueOperationKey;
 }
 
 export interface ScriptItemSummary {
@@ -2335,11 +3306,30 @@ export interface ScriptResult {
   timedOut: boolean;
 }
 
+export interface JobOutputResult {
+  /** Backward-compatible UTF-8 view. Lossy when the corresponding encoding is base64. */
+  stdout: string;
+  stderr: string;
+  stdoutEncoding: OutputEncoding;
+  stderrEncoding: OutputEncoding;
+  stdoutBase64?: string;
+  stderrBase64?: string;
+  truncated: boolean;
+  stderrTruncated: boolean;
+}
+
 export interface JobResult {
   jobId: string;
   status: JobStatus;
+  cancelReason?: CancelReason;
   stdout: string;
   stderr: string;
+  stdoutEncoding: OutputEncoding;
+  stderrEncoding: OutputEncoding;
+  stdoutBase64?: string;
+  stderrBase64?: string;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
   exitCode: number | null;
   timedOut: boolean;
   warnings: string[];
@@ -2365,6 +3355,24 @@ export class CueError extends Error {
     this.name = "CueError";
     this.code = code;
   }
+}
+
+/** A transport-ambiguous failure that may be retried only with the same operation id. */
+export class CueTransportError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CueTransportError";
+  }
+}
+
+export function isRetryableCueTransportError(error: unknown): error is CueTransportError {
+  return error instanceof CueTransportError;
+}
+
+function asCueTransportError(error: unknown, prefix?: string): CueTransportError {
+  if (error instanceof CueTransportError && !prefix) return error;
+  const detail = error instanceof Error ? error.message : String(error);
+  return new CueTransportError(prefix ? `${prefix}: ${detail}` : detail);
 }
 
 function unsupportedProtocolError(message: string, cause?: unknown): CueError {

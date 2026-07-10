@@ -12,6 +12,10 @@ import {
   newRef,
   stableId,
   type ArtifactRef,
+  type ExtensionRoleRunRequest,
+  type ExtensionRoleRunResult,
+  type ExtensionRoleRunStatus,
+  type ExtensionRoleRunner,
   type RoleRef,
   type RunRef,
   type TaskPlan,
@@ -37,6 +41,7 @@ import {
 import { registerPiArtifactTool } from "@zendev-lab/spark-artifacts/extension";
 import piAskExtension from "../packages/spark-ask/src/extension.ts";
 import sparkExtension from "../packages/pi-extension/src/extension/index.ts";
+import { SparkWorkflowRunManagerController } from "../packages/pi-extension/src/extension/spark-workflow-run-manager.ts";
 import { JsonStoreFormatError } from "../packages/pi-extension/src/extension/json-store.ts";
 import type { SparkToolContext } from "../packages/pi-extension/src/extension/spark-tool-registration.ts";
 import {
@@ -659,6 +664,7 @@ type TestSparkContext = {
   waitForIdle?: () => Promise<void>;
   hasUI: boolean;
   notifications: TestNotification[];
+  runRole?: ExtensionRoleRunner;
   selected?: string;
   inputValue?: string;
   editorText?: string;
@@ -8784,21 +8790,14 @@ void test("impl_status reconciles DAG runs with current workspace active childre
       status: "pending",
       plan: executionReadyPlan("Other child"),
     });
-    const fakePi = join(otherDir, "fake-pi.mjs");
-    await writeFile(
-      fakePi,
-      "#!/usr/bin/env node\nprocess.on('SIGTERM', () => {}); setInterval(() => {}, 1_000);\n",
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
     otherRunPromise = runSparkTask({
       graph: otherGraph,
       taskRef: otherTask.ref,
       registry: new RoleRegistry(),
       cwd: otherDir,
       dryRun: false,
-      piCommand: fakePi,
       timeoutMs: 10_000,
+      roleExecutor: createTestRoleRunner({ waitForCancel: true, inputControl: false }),
       claim: { sessionId: "session:other-workspace" },
     }).catch((error: unknown) => error);
     await waitFor(() => {
@@ -8872,21 +8871,14 @@ void test("impl_workflow_runs kill_active only targets current workspace role-ru
       status: "pending",
       plan: executionReadyPlan("Other child"),
     });
-    const fakePi = join(otherDir, "fake-pi.mjs");
-    await writeFile(
-      fakePi,
-      "#!/usr/bin/env node\nprocess.on('SIGTERM', () => {}); setInterval(() => {}, 1_000);\n",
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
     otherRunPromise = runSparkTask({
       graph: otherGraph,
       taskRef: otherTask.ref,
       registry: new RoleRegistry(),
       cwd: otherDir,
       dryRun: false,
-      piCommand: fakePi,
       timeoutMs: 10_000,
+      roleExecutor: createTestRoleRunner({ waitForCancel: true, inputControl: false }),
       claim: { sessionId: "session:other-workspace" },
     }).catch((error: unknown) => error);
     await waitFor(() => {
@@ -9520,6 +9512,7 @@ void test("impl_workflow_runs exposes active child runs and refuses broad kill",
     process.env.PI_ROLES_HOME = dir;
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
+    ctx.runRole = createTestRoleRunner({ waitForCancel: true, inputControl: false });
     const roleStatuses: Array<{ key: string; text: string | undefined }> = [];
     const roleWidgets: Array<{ key: string; value: unknown; placement?: string }> = [];
     ctx.ui.setStatus = (key, text) => {
@@ -9604,7 +9597,7 @@ void test("impl_workflow_runs exposes active child runs and refuses broad kill",
     assert.match(statusText, /Active children:/);
     assert.match(statusText, /task=@background-child/);
     assert.match(statusText, /task=@background-child-two/);
-    assert.match(statusText, /pid=\d+/);
+    assert.match(statusText, /control=kill/);
     const statusDetails = status.details as {
       background?: {
         summary?: { state?: string; activeChildren?: number };
@@ -9614,6 +9607,7 @@ void test("impl_workflow_runs exposes active child runs and refuses broad kill",
           activeProcess?: boolean;
           pid?: number;
           claimKind?: string;
+          inputControl?: string;
         }>;
       };
     };
@@ -9629,7 +9623,8 @@ void test("impl_workflow_runs exposes active child runs and refuses broad kill",
     assert.ok(sibling.runRef);
     assert.notEqual(child.runRef, sibling.runRef);
     assert.equal(child.claimKind, "role-run");
-    assert.equal(typeof child.pid, "number");
+    assert.equal(child.pid, undefined);
+    assert.equal(child.inputControl, "none");
 
     const ambiguousReply = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
       action: "reply",
@@ -9647,6 +9642,10 @@ void test("impl_workflow_runs exposes active child runs and refuses broad kill",
     });
     assert.match(toolText(inspect), new RegExp(`Background child run: ${child.runRef} active`));
     assert.match(toolText(inspect), /Task: @background-child/);
+    assert.match(
+      toolText(inspect),
+      /Control: kill available; reply\/steer unavailable \(no input control channel\)/,
+    );
 
     const replied = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
       action: "reply",
@@ -9655,12 +9654,18 @@ void test("impl_workflow_runs exposes active child runs and refuses broad kill",
     });
     assert.match(
       toolText(replied),
-      new RegExp(`Spark background role-run reply: sent to ${child.runRef}`),
+      new RegExp(`Spark background role-run reply: not delivered to ${child.runRef}`),
     );
     assert.match(toolText(replied), /Control artifact: artifact:/);
     const replyDetails = replied.details as {
       controlArtifactRef?: string;
-      sent?: Array<{ delivered?: boolean; bytes?: number; runRef?: string }>;
+      sent?: Array<{
+        delivered?: boolean;
+        bytes?: number;
+        runRef?: string;
+        inputControl?: string;
+        errorMessage?: string;
+      }>;
       background?: {
         roleRunRegistry?: {
           entries?: Array<{
@@ -9672,8 +9677,10 @@ void test("impl_workflow_runs exposes active child runs and refuses broad kill",
     };
     assert.match(replyDetails.controlArtifactRef ?? "", /^artifact:/);
     assert.equal(replyDetails.sent?.[0]?.runRef, child.runRef);
-    assert.equal(replyDetails.sent?.[0]?.delivered, true);
+    assert.equal(replyDetails.sent?.[0]?.delivered, false);
+    assert.equal(replyDetails.sent?.[0]?.inputControl, "none");
     assert.ok((replyDetails.sent?.[0]?.bytes ?? 0) > 0);
+    assert.match(replyDetails.sent?.[0]?.errorMessage ?? "", /input control channel/);
     assert.match(roleStatuses.at(-1)?.text ?? "", /roles:/);
     assert.equal(roleWidgets.at(-1)?.key, "spark-role-runs");
     assert.equal(roleWidgets.at(-1)?.placement, "belowEditor");
@@ -9684,17 +9691,17 @@ void test("impl_workflow_runs exposes active child runs and refuses broad kill",
       replyEntry?.events
         ?.filter((event) => event.type === "waiting_for_user" || event.type === "replied")
         .map((event) => event.type),
-      ["waiting_for_user", "replied"],
+      [],
     );
     assert.deepEqual(
       replyEntry?.events?.filter((event) => event.type === "replied").map((event) => event.message),
-      ["continue with the visible task"],
+      [],
     );
     assert.deepEqual(
       replyEntry?.events
         ?.filter((event) => event.type === "replied")
         .flatMap((event) => event.artifactRefs ?? []),
-      [replyDetails.controlArtifactRef],
+      [],
     );
 
     const steered = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
@@ -9704,16 +9711,26 @@ void test("impl_workflow_runs exposes active child runs and refuses broad kill",
     });
     assert.match(
       toolText(steered),
-      new RegExp(`Spark background role-run steer: sent to ${child.runRef}`),
+      new RegExp(`Spark background role-run steer: not delivered to ${child.runRef}`),
     );
     assert.match(toolText(steered), /Control artifact: artifact:/);
     const steerDetails = steered.details as {
+      sent?: Array<{
+        delivered?: boolean;
+        runRef?: string;
+        inputControl?: string;
+        errorMessage?: string;
+      }>;
       background?: {
         roleRunRegistry?: {
           entries?: Array<{ runRef?: string; events?: Array<{ type?: string; message?: string }> }>;
         };
       };
     };
+    assert.equal(steerDetails.sent?.[0]?.runRef, child.runRef);
+    assert.equal(steerDetails.sent?.[0]?.delivered, false);
+    assert.equal(steerDetails.sent?.[0]?.inputControl, "none");
+    assert.match(steerDetails.sent?.[0]?.errorMessage ?? "", /input control channel/);
     const steerEntry = steerDetails.background?.roleRunRegistry?.entries?.find(
       (entry) => entry.runRef === child.runRef,
     );
@@ -9721,7 +9738,7 @@ void test("impl_workflow_runs exposes active child runs and refuses broad kill",
       steerEntry?.events
         ?.filter((event) => event.type === "message_activity")
         .map((event) => event.message),
-      ["prioritize tests"],
+      [],
     );
 
     const refused = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
@@ -9785,7 +9802,8 @@ void test("impl_workflow_runs exposes active child runs and refuses broad kill",
     }
     if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
     else process.env.PI_ROLES_HOME = previousBindingHome;
-    process.env.PATH = previousPath;
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
@@ -9793,13 +9811,12 @@ void test("impl_workflow_runs exposes active child runs and refuses broad kill",
 void test("impl_workflow_runs reply records failed delivery without successful activity transition", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-workflow-runs-reply-failed-delivery-"));
   const previousBindingHome = process.env.PI_ROLES_HOME;
-  const previousPath = process.env.PATH;
-  const previousClosedStdinFile = process.env.CLOSED_STDIN_FILE;
   let runPromise: Promise<unknown> | undefined;
   try {
     process.env.PI_ROLES_HOME = dir;
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
+    ctx.runRole = createTestRoleRunner({ waitForCancel: true, inputControl: false });
     const store = defaultTaskGraphStore(dir);
     const graph = await store.load();
     assert.ok(graph);
@@ -9807,36 +9824,15 @@ void test("impl_workflow_runs reply records failed delivery without successful a
     assert.ok(project);
     const task = graph.createTask({
       projectRef: project.ref,
-      name: "closed-stdin-child",
-      title: "Closed stdin child task",
-      description: "Run a long-lived fake role-run that closes stdin before control delivery.",
+      name: "no-input-control-child",
+      title: "No input-control child task",
+      description: "Run a long-lived fake role-run without an input control channel.",
       kind: "implement",
       status: "pending",
       roleRef: "role:builtin-worker" as RoleRef,
-      plan: executionReadyPlan("Closed stdin child task"),
+      plan: executionReadyPlan("No input-control child task"),
     });
     await store.save(graph);
-    const fakePi = join(dir, "pi");
-    const closedStdinFile = join(dir, "closed-stdin-ready");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "const fs = require('node:fs');",
-        "const args = process.argv.slice(2);",
-        "if (args[0] === '--list-models' && args[1] === 'test/model') process.exit(0);",
-        "if (args[0] === '--list-models') { process.stdout.write('No models matching ' + args[1] + '\\n'); process.exit(0); }",
-        "fs.closeSync(0);",
-        "if (process.env.CLOSED_STDIN_FILE) fs.writeFileSync(process.env.CLOSED_STDIN_FILE, 'closed');",
-        "process.on('SIGTERM', () => process.exit(0));",
-        "setTimeout(() => process.exit(0), 2000);",
-        "setInterval(() => {}, 1000);",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-    process.env.PATH = `${dir}:${process.env.PATH ?? ""}`;
-    process.env.CLOSED_STDIN_FILE = closedStdinFile;
     ctx.inputValue = "test/model";
 
     const { tools } = registerSparkToolsForTest();
@@ -9847,8 +9843,8 @@ void test("impl_workflow_runs reply records failed delivery without successful a
       registry: new RoleRegistry(),
       cwd: dir,
       dryRun: false,
-      piCommand: fakePi,
       timeoutMs: 10_000,
+      roleExecutor: ctx.runRole,
       claim: { sessionId: ctxSessionKey(ctx) },
     }).catch((error: unknown) => error);
     await waitFor(
@@ -9857,8 +9853,7 @@ void test("impl_workflow_runs reply records failed delivery without successful a
     );
     const active = listActiveSparkRoleRunProcesses().find((process) => process.cwd === dir);
     assert.ok(active);
-    await waitFor(() => existsSync(closedStdinFile), 5_000);
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.equal(active.inputControl, "none");
     const failedDeliveryMessage = "x".repeat(1024 * 1024);
 
     const replied = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
@@ -9874,7 +9869,7 @@ void test("impl_workflow_runs reply records failed delivery without successful a
     assert.match(toolText(replied), /Control artifact: artifact:/);
     const details = replied.details as {
       controlArtifactRef?: string;
-      sent?: Array<{ delivered?: boolean; runRef?: string }>;
+      sent?: Array<{ delivered?: boolean; runRef?: string; inputControl?: string }>;
       background?: {
         roleRunRegistry?: {
           entries?: Array<{ runRef?: string; events?: Array<{ type?: string }> }>;
@@ -9884,17 +9879,24 @@ void test("impl_workflow_runs reply records failed delivery without successful a
     assert.match(details.controlArtifactRef ?? "", /^artifact:/);
     assert.equal(details.sent?.[0]?.runRef, active.runRef);
     assert.equal(details.sent?.[0]?.delivered, false);
+    assert.equal(details.sent?.[0]?.inputControl, "none");
     const controlArtifact = await defaultArtifactStore(dir).get(
       details.controlArtifactRef as ArtifactRef,
     );
     assert.equal(controlArtifact.provenance.runRef, active.runRef);
     const controlBody = controlArtifact.body as {
-      sent?: Array<{ delivered?: boolean; runRef?: string; errorMessage?: string }>;
+      sent?: Array<{
+        delivered?: boolean;
+        runRef?: string;
+        inputControl?: string;
+        errorMessage?: string;
+      }>;
     };
     assert.equal(controlBody.sent?.[0]?.runRef, active.runRef);
     assert.equal(controlBody.sent?.[0]?.delivered, false);
+    assert.equal(controlBody.sent?.[0]?.inputControl, "none");
     if (controlBody.sent?.[0]?.errorMessage)
-      assert.match(controlBody.sent[0].errorMessage, /EPIPE|stdin/i);
+      assert.match(controlBody.sent[0].errorMessage, /EPIPE|input control channel/i);
     const entry = details.background?.roleRunRegistry?.entries?.find(
       (candidate) => candidate.runRef === active.runRef,
     );
@@ -9924,9 +9926,126 @@ void test("impl_workflow_runs reply records failed delivery without successful a
     await runPromise?.catch(() => undefined);
     if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
     else process.env.PI_ROLES_HOME = previousBindingHome;
-    if (previousClosedStdinFile === undefined) delete process.env.CLOSED_STDIN_FILE;
-    else process.env.CLOSED_STDIN_FILE = previousClosedStdinFile;
-    process.env.PATH = previousPath;
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("impl_workflow_runs reply delivers through native role-run input control", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-workflow-runs-reply-native-delivery-"));
+  const previousBindingHome = process.env.PI_ROLES_HOME;
+  let runPromise: Promise<unknown> | undefined;
+  try {
+    process.env.PI_ROLES_HOME = dir;
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    ctx.runRole = createTestRoleRunner({ waitForCancel: true });
+    const store = defaultTaskGraphStore(dir);
+    const graph = await store.load();
+    assert.ok(graph);
+    const [project] = graph.projects();
+    assert.ok(project);
+    const task = graph.createTask({
+      projectRef: project.ref,
+      name: "native-input-child",
+      title: "Native input-control child task",
+      description: "Run a long-lived daemon-native role-run with an input control channel.",
+      kind: "implement",
+      status: "pending",
+      roleRef: "role:builtin-worker" as RoleRef,
+      plan: executionReadyPlan("Native input-control child task"),
+    });
+    await store.save(graph);
+
+    const { tools } = registerSparkToolsForTest();
+    await useOnlySparkProject(tools, ctx);
+    runPromise = runSparkTask({
+      graph,
+      taskRef: task.ref,
+      registry: new RoleRegistry(),
+      cwd: dir,
+      dryRun: false,
+      timeoutMs: 10_000,
+      roleExecutor: ctx.runRole,
+      claim: { sessionId: ctxSessionKey(ctx) },
+    }).catch((error: unknown) => error);
+    await waitFor(
+      () =>
+        listActiveSparkRoleRunProcesses().some(
+          (process) => process.cwd === dir && process.inputControl === "native",
+        ),
+      5_000,
+    );
+    const active = listActiveSparkRoleRunProcesses().find((process) => process.cwd === dir);
+    assert.ok(active);
+    assert.equal(active.inputControl, "native");
+    await store.update((current) => {
+      current.mergeTaskProgressFrom(graph, [task.ref]);
+    });
+
+    const replied = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
+      action: "reply",
+      runRef: active.runRef,
+      message: "continue with native input",
+    });
+
+    assert.match(
+      toolText(replied),
+      new RegExp(`Spark background role-run reply: sent to ${active.runRef}`),
+    );
+    assert.match(toolText(replied), /Control artifact: artifact:/);
+    const details = replied.details as {
+      controlArtifactRef?: string;
+      sent?: Array<{ delivered?: boolean; runRef?: string; inputControl?: string }>;
+      background?: {
+        roleRunRegistry?: {
+          entries?: Array<{
+            runRef?: string;
+            events?: Array<{ type?: string; message?: string; artifactRefs?: string[] }>;
+          }>;
+        };
+      };
+    };
+    assert.match(details.controlArtifactRef ?? "", /^artifact:/);
+    assert.equal(details.sent?.[0]?.runRef, active.runRef);
+    assert.equal(details.sent?.[0]?.delivered, true);
+    assert.equal(details.sent?.[0]?.inputControl, "native");
+    const entry = details.background?.roleRunRegistry?.entries?.find(
+      (candidate) => candidate.runRef === active.runRef,
+    );
+    assert.deepEqual(
+      (entry?.events ?? [])
+        .filter((event) => event.type === "waiting_for_user" || event.type === "replied")
+        .map((event) => event.type),
+      ["waiting_for_user", "replied"],
+    );
+    assert.deepEqual(
+      (entry?.events ?? [])
+        .filter((event) => event.type === "replied")
+        .map((event) => event.message),
+      ["continue with native input"],
+    );
+    assert.match(
+      (entry?.events ?? [])
+        .filter((event) => event.type === "replied")
+        .flatMap((event) => event.artifactRefs ?? [])
+        .at(0) ?? "",
+      /^artifact:/,
+    );
+
+    await executeSparkTool(tools, "impl_workflow_runs", ctx, {
+      action: "kill",
+      runRef: active.runRef,
+      forceAfterMs: 0,
+    });
+    await waitFor(
+      () => !listActiveSparkRoleRunProcesses().some((process) => process.runRef === active.runRef),
+      5_000,
+    );
+  } finally {
+    await killActiveSparkRoleRunProcesses({ forceAfterMs: 0, waitMs: 1_000 });
+    await runPromise?.catch(() => undefined);
+    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousBindingHome;
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
@@ -9952,22 +10071,14 @@ void test("impl_workflow_runs reports failed workflow run with stuck child as at
       status: "pending",
       plan: executionReadyPlan("Failed stuck child"),
     });
-    const fakePi = join(dir, "fake-pi.mjs");
-    await writeFile(
-      fakePi,
-      "#!/usr/bin/env node\nprocess.on('SIGTERM', () => {}); setInterval(() => {}, 1_000);\n",
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-
     runPromise = runSparkTask({
       graph,
       taskRef: task.ref,
       registry: new RoleRegistry(),
       cwd: dir,
       dryRun: false,
-      piCommand: fakePi,
       timeoutMs: 10_000,
+      roleExecutor: createTestRoleRunner({ waitForCancel: true, inputControl: false }),
       claim: { sessionId: ctxSessionKey(ctx) },
     }).catch((error: unknown) => error);
     await waitFor(() => listActiveSparkRoleRunProcesses().some((process) => process.cwd === dir));
@@ -10436,7 +10547,7 @@ void test("legacy /run commands are not registered", () => {
   assert.equal(commands.get("run-parallel"), undefined);
 });
 
-void test("impl_run_ready_tasks preflights only the current ready frontier", async () => {
+void test("impl_run_ready_tasks preflights current ready frontier with configured Pi command", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-frontier-preflight-"));
   const previousBindingHome = process.env.PI_ROLES_HOME;
   const previousPath = process.env.PATH;
@@ -10469,22 +10580,23 @@ void test("impl_run_ready_tasks preflights only the current ready frontier", asy
       plan: executionReadyPlan("Blocked reviewer task"),
     });
     await store.save(graph);
-    const fakePi = join(dir, "pi");
+    const emptyPathDir = join(dir, "empty-path");
+    await mkdir(emptyPathDir);
+    const fakePi = join(dir, "custom-pi");
     await writeFile(
       fakePi,
       [
-        "#!/usr/bin/env node",
-        "const args = process.argv.slice(2);",
-        "if (args[0] === '--list-models' && args[1] === 'test/model') process.exit(0);",
-        "if (args[0] === '--list-models') { process.stdout.write('No models matching ' + args[1] + '\\n'); process.exit(0); }",
-        "process.stdout.write(JSON.stringify({ type: 'done' }) + '\\n');",
+        "#!/bin/sh",
+        'if [ "$1" = "--list-models" ] && [ "$2" = "test/model" ]; then exit 0; fi',
+        'if [ "$1" = "--list-models" ]; then printf "No models matching %s\\n" "$2"; exit 0; fi',
+        `printf '%s\\n' '${JSON.stringify({ type: "done" })}'`,
       ].join("\n"),
       "utf8",
     );
     await chmod(fakePi, 0o755);
-    process.env.PATH = `${dir}:${process.env.PATH ?? ""}`;
+    process.env.PATH = emptyPathDir;
 
-    const { tools } = registerSparkToolsForTest();
+    const { tools } = registerSparkToolsForTest({ piCommand: fakePi });
     await useOnlySparkProject(tools, ctx);
     const result = await executeSparkTool(tools, "impl_run_ready_tasks", ctx, {
       dryRun: false,
@@ -10511,6 +10623,244 @@ void test("impl_run_ready_tasks preflights only the current ready frontier", asy
   } finally {
     if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
     else process.env.PI_ROLES_HOME = previousBindingHome;
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("workflow-run manager preflights role models with configured Pi command", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-manager-pi-command-"));
+  const previousBindingHome = process.env.PI_ROLES_HOME;
+  const previousPath = process.env.PATH;
+  try {
+    process.env.PI_ROLES_HOME = dir;
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    ctx.inputValue = "test/model";
+    ctx.runRole = createTestRoleRunner({
+      stdout: `${JSON.stringify({ type: "done" })}\n`,
+      jsonEvents: [{ type: "done" }],
+    });
+    const store = defaultTaskGraphStore(dir);
+    const graph = await store.load();
+    assert.ok(graph);
+    const [project] = graph.projects();
+    assert.ok(project);
+    graph.createTask({
+      projectRef: project.ref,
+      name: "manager-configured-pi",
+      title: "Manager configured Pi task",
+      description: "Run scheduler preflight through the configured Pi command.",
+      kind: "implement",
+      status: "pending",
+      plan: executionReadyPlan("Manager configured Pi task"),
+    });
+    await store.save(graph);
+    await saveCurrentProjectRef(dir, ctx, project.ref);
+    await defaultWorkflowRunStore(dir).setControl({
+      projectRef: project.ref,
+      status: "running",
+      policy: { maxConcurrency: 1, timeoutMs: 1_000 },
+    });
+
+    const emptyPathDir = join(dir, "empty-path");
+    await mkdir(emptyPathDir);
+    const fakePi = join(dir, "custom-pi");
+    await writeFile(
+      fakePi,
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "--list-models" ] && [ "$2" = "test/model" ]; then exit 0; fi',
+        'if [ "$1" = "--list-models" ]; then printf "No models matching %s\\n" "$2"; exit 0; fi',
+        "exit 1",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+    process.env.PATH = emptyPathDir;
+
+    const manager = new SparkWorkflowRunManagerController({
+      refreshSparkWidget: async () => undefined,
+      piCommand: () => fakePi,
+    });
+    const result = await manager.runOnce(dir, ctx);
+
+    assert.equal(result.continuePolling, false);
+    const settingsFile = JSON.parse(
+      await readFile(join(dir, ".agents", "role-model-settings.json"), "utf8"),
+    ) as { roleModels: Record<string, string> };
+    assert.deepEqual(settingsFile.roleModels, { "role:builtin-worker": "test/model" });
+    const dagStatus = await defaultWorkflowRunStore(dir).status();
+    assert.equal(dagStatus.succeeded, 1);
+    assert.equal(dagStatus.lastRun?.projectRef, project.ref);
+  } finally {
+    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousBindingHome;
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("impl_run_ready_tasks scheduler exposes native reply control on active children", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-native-reply-"));
+  const previousBindingHome = process.env.PI_ROLES_HOME;
+  const previousPath = process.env.PATH;
+  const deliveredInputs: string[] = [];
+  try {
+    process.env.PI_ROLES_HOME = dir;
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    ctx.runRole = createTestRoleRunner({ waitForCancel: true, deliveredInputs });
+    ctx.inputValue = "test/model";
+    const store = defaultTaskGraphStore(dir);
+    const graph = await store.load();
+    assert.ok(graph);
+    const [project] = graph.projects();
+    assert.ok(project);
+    graph.createTask({
+      projectRef: project.ref,
+      name: "scheduler-native-child",
+      title: "Scheduler native child task",
+      description: "Run a long-lived native child through the workflow-run scheduler.",
+      kind: "implement",
+      status: "pending",
+      plan: executionReadyPlan("Scheduler native child task"),
+    });
+    await store.save(graph);
+    const fakePi = join(dir, "pi");
+    await writeFile(
+      fakePi,
+      [
+        "#!/usr/bin/env node",
+        "const args = process.argv.slice(2);",
+        "if (args[0] === '--list-models' && args[1] === 'test/model') process.exit(0);",
+        "if (args[0] === '--list-models') { process.stdout.write('No models matching ' + args[1] + '\\n'); process.exit(0); }",
+        "process.exit(0);",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakePi, 0o755);
+    process.env.PATH = `${dir}:${process.env.PATH ?? ""}`;
+
+    const { tools } = registerSparkToolsForTest({ piCommand: fakePi });
+    await useOnlySparkProject(tools, ctx);
+    const started = await executeSparkTool(tools, "impl_run_ready_tasks", ctx, {
+      dryRun: false,
+      maxConcurrency: 1,
+      timeoutMs: 10_000,
+    });
+    assert.match(toolText(started), /Spark workflow-run scheduler started/);
+
+    let child:
+      | {
+          runRef: string;
+          taskName?: string;
+          activeProcess?: boolean;
+          inputControl?: string;
+        }
+      | undefined;
+    await waitFor(async () => {
+      const status = await executeSparkTool(tools, "task_read", ctx, {
+        action: "run_status",
+        runAction: "status",
+      });
+      const background = (
+        status.details as {
+          background?: {
+            childRuns?: Array<{
+              runRef: string;
+              taskName?: string;
+              activeProcess?: boolean;
+              inputControl?: string;
+            }>;
+          };
+        }
+      ).background;
+      child = background?.childRuns?.find(
+        (entry) =>
+          entry.taskName === "scheduler-native-child" &&
+          entry.activeProcess &&
+          entry.inputControl === "native",
+      );
+      return Boolean(child);
+    }, 5_000);
+    assert.ok(child);
+
+    const status = await executeSparkTool(tools, "task_read", ctx, {
+      action: "run_status",
+      runAction: "status",
+    });
+    assert.match(toolText(status), /control=kill\/reply\/steer/);
+
+    const inspect = await executeSparkTool(tools, "task_read", ctx, {
+      action: "run_status",
+      runAction: "inspect",
+      runRef: child.runRef,
+    });
+    assert.match(toolText(inspect), /Control: kill\/reply\/steer available/);
+
+    const message = "continue through scheduler native input";
+    const replied = await executeSparkTool(tools, "task_read", ctx, {
+      action: "run_status",
+      runAction: "reply",
+      runRef: child.runRef,
+      message,
+    });
+    assert.match(
+      toolText(replied),
+      new RegExp(`Spark background role-run reply: sent to ${child.runRef}`),
+    );
+    assert.deepEqual(deliveredInputs, [`${message}\n`]);
+    const details = replied.details as {
+      sent?: Array<{ delivered?: boolean; runRef?: string; inputControl?: string }>;
+      background?: {
+        roleRunRegistry?: {
+          entries?: Array<{
+            runRef?: string;
+            events?: Array<{ type?: string; message?: string }>;
+          }>;
+        };
+      };
+    };
+    assert.equal(details.sent?.[0]?.runRef, child.runRef);
+    assert.equal(details.sent?.[0]?.delivered, true);
+    assert.equal(details.sent?.[0]?.inputControl, "native");
+    const entry = details.background?.roleRunRegistry?.entries?.find(
+      (candidate) => candidate.runRef === child?.runRef,
+    );
+    assert.deepEqual(
+      (entry?.events ?? [])
+        .filter((event) => event.type === "waiting_for_user" || event.type === "replied")
+        .map((event) => event.type),
+      ["waiting_for_user", "replied"],
+    );
+    assert.deepEqual(
+      (entry?.events ?? [])
+        .filter((event) => event.type === "replied")
+        .map((event) => event.message),
+      [message],
+    );
+
+    await executeSparkTool(tools, "task_read", ctx, {
+      action: "run_status",
+      runAction: "kill",
+      runRef: child.runRef,
+      forceAfterMs: 0,
+    });
+    await waitFor(
+      () => !listActiveSparkRoleRunProcesses().some((process) => process.runRef === child?.runRef),
+      5_000,
+    );
+  } finally {
+    await killActiveSparkRoleRunProcesses({ forceAfterMs: 0, waitMs: 1_000 });
+    await waitFor(
+      () => !listActiveSparkRoleRunProcesses().some((process) => process.cwd === dir),
+      5_000,
+    ).catch(() => undefined);
+    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
+    else process.env.PI_ROLES_HOME = previousBindingHome;
     process.env.PATH = previousPath;
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -10523,6 +10873,10 @@ void test("impl_run_ready_tasks reports workflow-run completion without queuing 
     process.env.PI_ROLES_HOME = dir;
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
+    ctx.runRole = createTestRoleRunner({
+      stdout: `${JSON.stringify({ type: "done" })}\n`,
+      jsonEvents: [{ type: "done" }],
+    });
     ctx.inputValue = "test/model";
     const store = defaultTaskGraphStore(dir);
     const graph = await store.load();
@@ -10574,11 +10928,14 @@ void test("impl_run_ready_tasks reports workflow-run completion without queuing 
     const { tools, messages } = extension;
     await useOnlySparkProject(tools, ctx);
     await executeSparkTool(tools, "impl_run_ready_tasks", ctx, { dryRun: false });
+    await waitFor(async () => {
+      const status = await defaultWorkflowRunStore(dir).status();
+      return status.succeeded === 1 || status.failed > 0;
+    }, 10_000);
     await waitFor(
-      () => ctx.notifications.some((notice) => notice.message.includes("Workflow run:")),
+      () => Boolean(ctx.notifications.at(-1)?.message.includes("Workflow run:")),
       10_000,
     );
-    await waitFor(() => !ctx.notifications.at(-1)?.message.includes("running"), 10_000);
 
     const dagStatus = await defaultWorkflowRunStore(dir).status();
     assert.equal(dagStatus.succeeded, 1);
@@ -10711,6 +11068,7 @@ void test("impl_run_ready_tasks marks Spark workflow-run scheduler failed when c
     process.env.PI_ROLES_HOME = dir;
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
+    ctx.runRole = createTestRoleRunner();
     ctx.inputValue = "test/model";
     const store = defaultTaskGraphStore(dir);
     const graph = await store.load();
@@ -10736,11 +11094,14 @@ void test("impl_run_ready_tasks marks Spark workflow-run scheduler failed when c
     const { tools, messages } = extension;
     await useOnlySparkProject(tools, ctx);
     await executeSparkTool(tools, "impl_run_ready_tasks", ctx, { dryRun: false });
+    await waitFor(async () => {
+      const status = await defaultWorkflowRunStore(dir).status();
+      return status.failed === 1;
+    }, 3_000);
     await waitFor(
-      () => ctx.notifications.some((notice) => notice.message.includes("Workflow run:")),
+      () => Boolean(ctx.notifications.at(-1)?.message.includes("Workflow run:")),
       3_000,
     );
-    await waitFor(() => !ctx.notifications.at(-1)?.message.includes("running"), 3_000);
 
     const dagStatus = await defaultWorkflowRunStore(dir).status();
     assert.equal(dagStatus.succeeded, 0);
@@ -12519,6 +12880,65 @@ function testSparkContext(cwd: string, sessionName: string): TestSparkContext {
     },
   };
   return context;
+}
+
+function createTestRoleRunner(
+  options: {
+    status?: ExtensionRoleRunStatus;
+    stdout?: string;
+    stderr?: string;
+    jsonEvents?: unknown[];
+    waitForCancel?: boolean;
+    inputControl?: boolean;
+    deliveredInputs?: string[];
+  } = {},
+): ExtensionRoleRunner {
+  return async (request) => {
+    const signal = request.signal;
+    const unregister =
+      options.inputControl === false
+        ? undefined
+        : request.inputControl?.register({
+            send: async (text) => {
+              options.deliveredInputs?.push(text);
+            },
+          });
+    try {
+      if (options.waitForCancel && signal && !signal.aborted) {
+        await new Promise<void>((resolve) =>
+          signal.addEventListener("abort", () => resolve(), { once: true }),
+        );
+      }
+      return testExtensionRoleRunResult(request, {
+        ...options,
+        status: request.signal?.aborted ? "cancelled" : options.status,
+      });
+    } finally {
+      unregister?.();
+    }
+  };
+}
+
+function testExtensionRoleRunResult(
+  request: ExtensionRoleRunRequest,
+  options: {
+    status?: ExtensionRoleRunStatus;
+    stdout?: string;
+    stderr?: string;
+    jsonEvents?: unknown[];
+  } = {},
+): ExtensionRoleRunResult {
+  const status = options.status ?? "succeeded";
+  return {
+    record: {
+      ...request.record,
+      status,
+      finishedAt: new Date().toISOString(),
+    },
+    stdout: options.stdout ?? "",
+    stderr: options.stderr ?? "",
+    jsonEvents: options.jsonEvents ?? [],
+  };
 }
 
 async function waitFor(

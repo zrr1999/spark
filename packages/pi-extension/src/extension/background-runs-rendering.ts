@@ -27,6 +27,17 @@ function jsonEventsTailMetadata(tail: RoleRunJsonEventsTail): string {
   return `${tail.count} event(s)${shown}${suffix}`;
 }
 
+function roleRunControlLabel(child: SparkBackgroundChildRunView): string | undefined {
+  if (!child.activeProcess) return undefined;
+  return child.inputControl && child.inputControl !== "none" ? "kill/reply/steer" : "kill";
+}
+
+function roleRunControlDetail(child: SparkBackgroundChildRunView): string | undefined {
+  if (!child.activeProcess) return undefined;
+  if (child.inputControl && child.inputControl !== "none") return "kill/reply/steer available";
+  return "kill available; reply/steer unavailable (no input control channel)";
+}
+
 function appendBackgroundChildSummaryLines(
   lines: string[],
   child: SparkBackgroundChildRunView,
@@ -108,6 +119,8 @@ export function renderSparkBackgroundRunsText(
       lines.push(
         `  Claim: ${child.claimKind}${child.ownerSessionId ? ` owner=${child.ownerSessionId}` : ""}`,
       );
+    const control = roleRunControlDetail(child);
+    if (control) lines.push(`  Control: ${control}`);
     appendBackgroundChildSummaryLines(lines, child, "  ");
     lines.push(`  Next: ${child.nextAction ?? details.summary.nextAction}.`);
     return lines.join("\n");
@@ -146,9 +159,11 @@ export function renderSparkBackgroundRunsText(
           ? ` task=${child.taskRef}`
           : "";
       const pidLabel = child.pid ? ` pid=${child.pid}` : "";
+      const controlLabel = roleRunControlLabel(child);
+      const control = controlLabel ? ` control=${controlLabel}` : "";
       const summaryLabel = child.summary ? ` — ${child.summary}` : "";
       lines.push(
-        `  - ${child.runRef} ${child.roleRef ? shortRoleLabel(child.roleRef) : "unknown"}${taskLabel}${pidLabel}${summaryLabel}`,
+        `  - ${child.runRef} ${child.roleRef ? shortRoleLabel(child.roleRef) : "unknown"}${taskLabel}${pidLabel}${control}${summaryLabel}`,
       );
     }
     if (activeChildren.length > BACKGROUND_ACTIVE_CHILD_LIMIT)

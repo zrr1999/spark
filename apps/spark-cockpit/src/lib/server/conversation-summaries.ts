@@ -1,0 +1,156 @@
+import type { DatabaseSync } from "node:sqlite";
+import type { SparkSessionRegistryRecord } from "@zendev-lab/spark-protocol";
+
+interface ConversationCommandRow {
+  commandStatus: string;
+  deliveryStatus: string | null;
+  invocationStatus: string | null;
+  sessionId: string;
+  updatedAt: string;
+}
+
+export type ConversationActivityStatus =
+  | "ready"
+  | "queued"
+  | "running"
+  | "blocked"
+  | "completed"
+  | "failed";
+
+export type CockpitConversationSummary = SparkSessionRegistryRecord & {
+  activityStatus: ConversationActivityStatus;
+  activityUpdatedAt: string;
+};
+
+/**
+ * Enrich daemon-owned sessions with the latest user-visible conversation state.
+ * Project/task/run records remain internal projections; the sidebar only needs
+ * their rolled-up status and last activity time.
+ */
+export function loadConversationSummaries(
+  db: DatabaseSync,
+  sessions: SparkSessionRegistryRecord[],
+): CockpitConversationSummary[] {
+  if (sessions.length === 0) return [];
+
+  const visibleSessionIds = [...new Set(sessions.map((session) => session.sessionId))];
+  const latestBySession = new Map<
+    string,
+    { activityStatus: ConversationActivityStatus; activityUpdatedAt: string }
+  >();
+  const rows = db
+    .prepare(
+      `WITH visible_sessions AS (
+         SELECT CAST(value AS TEXT) AS sessionId
+           FROM json_each(?)
+       ),
+       candidate_commands AS (
+         SELECT visible_sessions.sessionId,
+                c.id AS commandId,
+                c.created_at AS commandCreatedAt,
+                c.status AS commandStatus,
+                MAX(
+                  c.updated_at,
+                  COALESCE(cd.updated_at, c.updated_at),
+                  COALESCE(mi.updated_at, c.updated_at)
+                ) AS updatedAt,
+                cd.status AS deliveryStatus,
+                mi.status AS invocationStatus
+           FROM commands c
+           JOIN visible_sessions
+             ON visible_sessions.sessionId = CASE
+               WHEN json_valid(c.payload_json)
+               THEN CAST(json_extract(c.payload_json, '$.payload.target.sessionId') AS TEXT)
+               ELSE NULL
+             END
+           LEFT JOIN command_deliveries cd
+             ON cd.id = (
+               SELECT cd2.id
+                 FROM command_deliveries cd2
+                WHERE cd2.command_id = c.id
+                ORDER BY cd2.updated_at DESC
+                LIMIT 1
+             )
+           LEFT JOIN mirrored_invocations mi
+             ON mi.id = (
+               SELECT mi2.id
+                 FROM mirrored_invocations mi2
+                WHERE mi2.command_id = c.id
+                ORDER BY mi2.updated_at DESC
+                LIMIT 1
+             )
+          WHERE c.kind = 'assignment.create.request'
+       ),
+       ranked_commands AS (
+         SELECT sessionId,
+                commandStatus,
+                deliveryStatus,
+                invocationStatus,
+                updatedAt,
+                ROW_NUMBER() OVER (
+                  PARTITION BY sessionId
+                  ORDER BY updatedAt DESC, commandCreatedAt DESC, commandId DESC
+                ) AS rowNumber
+           FROM candidate_commands
+       )
+       SELECT sessionId,
+              commandStatus,
+              deliveryStatus,
+              invocationStatus,
+              updatedAt
+         FROM ranked_commands
+        WHERE rowNumber = 1`,
+    )
+    .all(JSON.stringify(visibleSessionIds)) as unknown as ConversationCommandRow[];
+
+  for (const row of rows) {
+    latestBySession.set(row.sessionId, {
+      activityStatus: conversationActivityStatus(
+        row.invocationStatus ?? row.deliveryStatus ?? row.commandStatus,
+      ),
+      activityUpdatedAt: row.updatedAt,
+    });
+  }
+
+  return sessions.map((session) => {
+    const latest = latestBySession.get(session.sessionId);
+    return {
+      ...session,
+      activityStatus: latest?.activityStatus ?? sessionFallbackStatus(session.status),
+      activityUpdatedAt: latest?.activityUpdatedAt ?? session.updatedAt,
+    };
+  });
+}
+
+export function conversationActivityStatus(status: string): ConversationActivityStatus {
+  const normalized = status.trim().toLowerCase().replaceAll("-", "_");
+  if (
+    ["failed", "error", "rejected", "lost", "timeout", "timed_out", "cancelled"].includes(
+      normalized,
+    )
+  ) {
+    return "failed";
+  }
+  if (
+    ["blocked", "waiting", "needs_input", "awaiting_input", "approval_required", "paused"].includes(
+      normalized,
+    )
+  ) {
+    return "blocked";
+  }
+  if (["succeeded", "success", "completed", "done", "resolved"].includes(normalized)) {
+    return "completed";
+  }
+  if (["running", "active", "started", "starting", "in_progress"].includes(normalized)) {
+    return "running";
+  }
+  if (["queued", "pending", "sent", "delivered", "acked", "accepted"].includes(normalized)) {
+    return "queued";
+  }
+  return "ready";
+}
+
+function sessionFallbackStatus(status: string): ConversationActivityStatus {
+  if (["failed", "error"].includes(status.trim().toLowerCase())) return "failed";
+  return "ready";
+}

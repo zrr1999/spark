@@ -27,7 +27,32 @@ import {
   waitForSparkDaemonActiveTasks,
 } from "../apps/spark-daemon/src/core/index.ts";
 
-type AssistantMessage = any;
+type FakeStreamSimple = (context: {
+  messages?: unknown[];
+}) => AssistantMessage | Promise<AssistantMessage>;
+type AssistantMessage = {
+  role: "assistant";
+  content: Array<{ type: "text"; text: string }>;
+  api: string;
+  provider: string;
+  model: string;
+  usage: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
+    cost: {
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+      total: number;
+    };
+  };
+  stopReason: "stop";
+  timestamp: number;
+};
 
 const ESC = String.fromCharCode(27);
 const ANSI_PATTERN = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]`, "gu");
@@ -229,6 +254,74 @@ void test("Spark headless role executor forwards live events through onEvent", a
       streamed.some((event: any) => event.type === "stream_event" && event.event?.type === "done"),
       true,
     );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark headless role executor routes input control into a follow-up turn", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-headless-role-input-control-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(cwd, { recursive: true });
+    const firstStreamStarted = deferred<void>();
+    const releaseFirstStream = deferred<void>();
+    let streamCalls = 0;
+    let controller: { send(text: string): void | Promise<void> } | undefined;
+    const executeRole = createSparkHeadlessRoleExecutor({
+      sparkHome,
+      createServices: async (options = {}) =>
+        await makeFakeServices(options, {
+          streamSimple: async (context) => {
+            streamCalls += 1;
+            if (streamCalls === 1) {
+              firstStreamStarted.resolve();
+              await releaseFirstStream.promise;
+            }
+            return assistant(`count:${context.messages?.length ?? 0}`);
+          },
+        }),
+    });
+
+    const resultPromise = executeRole({
+      role: {
+        ref: "role:test",
+        id: "test",
+        systemPrompt: "You are a role with follow-up input.",
+      },
+      instruction: {
+        roleRef: "role:test",
+        instruction: "start work",
+      },
+      record: {
+        ref: "run:input-control",
+        roleRef: "role:test",
+        instruction: "start work",
+        status: "queued",
+      },
+      cwd,
+      timeoutMs: 1_000,
+      inputControl: {
+        register(inputController) {
+          controller = inputController;
+          return () => {
+            if (controller === inputController) controller = undefined;
+          };
+        },
+      },
+    });
+
+    await firstStreamStarted.promise;
+    assert.ok(controller);
+    await controller.send("continue with follow-up context");
+    releaseFirstStream.resolve();
+
+    const result = await resultPromise;
+    assert.equal(result.record.status, "succeeded");
+    assert.equal(result.stdout, "count:3");
+    assert.equal(streamCalls, 2);
+    assert.equal(controller, undefined);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -457,7 +550,10 @@ async function listSessionFileNames(sessionDir: string): Promise<string[]> {
   }
 }
 
-async function makeFakeServices(options: SparkCliHostServicesOptions) {
+async function makeFakeServices(
+  options: SparkCliHostServicesOptions,
+  fake: { streamSimple?: FakeStreamSimple } = {},
+) {
   const config: SparkConfig = {
     extensions: [],
     providers: ["fake-provider"],
@@ -471,11 +567,11 @@ async function makeFakeServices(options: SparkCliHostServicesOptions) {
     config,
     extensions: [],
     providers: ["fake-provider"],
-    providerImporter: async () => fakeProviderModule(),
+    providerImporter: async () => fakeProviderModule(fake),
   });
 }
 
-function fakeProviderModule() {
+function fakeProviderModule(fake: { streamSimple?: FakeStreamSimple } = {}) {
   return {
     default(api: { registerProvider(name: string, config: unknown): void }) {
       api.registerProvider("fake-provider", {
@@ -483,12 +579,19 @@ function fakeProviderModule() {
         baseUrl: "https://fake.test",
         api: "openai-completions",
         streamSimple: (_model: unknown, context: { messages?: unknown[] }) => {
-          const message = assistant(`count:${context.messages?.length ?? 0}`);
+          let messagePromise: Promise<AssistantMessage> | undefined;
+          const resolveMessage = async () => {
+            messagePromise ??= Promise.resolve(
+              fake.streamSimple?.(context) ?? assistant(`count:${context.messages?.length ?? 0}`),
+            );
+            return await messagePromise;
+          };
           return {
             async *[Symbol.asyncIterator]() {
+              const message = await resolveMessage();
               yield { type: "done", reason: "stop", message };
             },
-            result: async () => message,
+            result: async () => await resolveMessage(),
           };
         },
         models: [
@@ -525,4 +628,18 @@ function assistant(text: string): AssistantMessage {
     stopReason: "stop",
     timestamp: Date.now(),
   };
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T | PromiseLike<T>): void;
+  reject(error: unknown): void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((innerResolve, innerReject) => {
+    resolve = innerResolve;
+    reject = innerReject;
+  });
+  return { promise, resolve, reject };
 }

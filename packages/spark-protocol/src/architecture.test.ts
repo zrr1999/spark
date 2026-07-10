@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createServerCommandEnvelope,
+  normalizeServerCommandForExecution,
   parseServerCommandEnvelope,
   serializeServerCommandEnvelope,
 } from "./command-delivery.ts";
@@ -69,6 +70,87 @@ describe("server command delivery", () => {
       payload: envelope.payload,
     });
     expect(JSON.parse(serialized)).toEqual(envelope);
+  });
+
+  it("normalizes assignment.create.request into the task execution payload", () => {
+    const assignment = {
+      goal: "Review the assignment execution path.",
+      target: {
+        sessionId: "sess_runtime_assign",
+        workspaceId: routing.workspaceId,
+        role: "role:reviewer",
+      },
+      constraints: ["preserve assignment metadata"],
+      evidence: ["runtime websocket"],
+      source: { kind: "cockpit" },
+      title: "Review assignment",
+    };
+    const envelope = createServerCommandEnvelope({
+      ...routing,
+      payload: {
+        kind: "assignment.create.request",
+        title: "Assign reviewer",
+        payload: assignment,
+      },
+    });
+
+    const result = normalizeServerCommandForExecution(envelope);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.message);
+    expect(result.envelope).toMatchObject({
+      ...envelope,
+      payload: {
+        kind: "task.start.request",
+        title: "Assign reviewer",
+        payload: {
+          ...assignment,
+          prompt: assignment.goal,
+          sessionId: assignment.target.sessionId,
+          assignment,
+        },
+      },
+    });
+  });
+
+  it("rejects invalid assignment.create.request payloads before execution normalization", () => {
+    const envelope = createServerCommandEnvelope({
+      ...routing,
+      payload: {
+        kind: "assignment.create.request",
+        payload: {
+          goal: "Invalid assignment",
+          target: { sessionId: "sess_runtime_assign" },
+          source: { kind: "legacy-chat" },
+        },
+      },
+    });
+
+    expect(normalizeServerCommandForExecution(envelope)).toMatchObject({
+      ok: false,
+      reasonCode: "ASSIGNMENT_INVALID",
+      retryable: false,
+    });
+  });
+
+  it("rejects blank assignment goals before deriving an execution title", () => {
+    const envelope = createServerCommandEnvelope({
+      ...routing,
+      payload: {
+        kind: "assignment.create.request",
+        payload: {
+          goal: "   ",
+          target: { sessionId: "sess_runtime_assign" },
+          source: { kind: "cockpit" },
+        },
+      },
+    });
+
+    expect(normalizeServerCommandForExecution(envelope)).toMatchObject({
+      ok: false,
+      reasonCode: "ASSIGNMENT_INVALID",
+      message: "goal must be non-blank",
+    });
   });
 });
 

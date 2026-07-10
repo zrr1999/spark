@@ -700,6 +700,25 @@ function daemonControlInvariants(before: unknown, after: unknown) {
 }
 
 async function main(): Promise<void> {
+  if (backend === "cue-contract") {
+    const { cueContractHarnessExitCode, runSparkCueContractHarness } =
+      await import("./spark-cue-contract-harness.mts");
+    const report = await runSparkCueContractHarness({
+      strict,
+      outputPath:
+        typeof args.get("output") === "string"
+          ? String(args.get("output"))
+          : "/tmp/spark-cue-contract-harness-report.json",
+      cueShellRoot:
+        typeof args.get("cue-shell-root") === "string"
+          ? String(args.get("cue-shell-root"))
+          : undefined,
+      cuedBin: typeof args.get("cued-bin") === "string" ? String(args.get("cued-bin")) : undefined,
+      retainTemp: args.get("retain-temp") === true,
+    });
+    process.exitCode = cueContractHarnessExitCode(report, strict);
+    return;
+  }
   if (backend === "cue") {
     const { runSparkCueHarness } = await import("./spark-cue-harness.mts");
     await runSparkCueHarness({

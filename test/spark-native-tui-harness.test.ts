@@ -617,7 +617,7 @@ void test("Spark native TUI surfaces command availability, queued work, stop, an
     },
   });
 
-  assert.match(stripAnsi(harness.render()), /native pi-tui host • idle • 16 registered commands/);
+  assert.match(stripAnsi(harness.render()), /native pi-tui host • idle • 2 registered commands/);
   assert.equal(await harness.submit("/help"), "command");
   assert.match(
     stripAnsi(harness.render()),

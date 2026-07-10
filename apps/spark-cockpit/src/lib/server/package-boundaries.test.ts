@@ -17,7 +17,7 @@ const sparkServerAdapters = [
   "projection-services.ts",
   "runtime-registration.ts",
   "runtime-ws.ts",
-  "search.ts",
+  "session-activity.ts",
 ];
 
 describe("package boundaries", () => {
@@ -74,10 +74,40 @@ describe("package boundaries", () => {
     expect(agentsProduct).not.toMatch(/readFileSync|new DatabaseSync/u);
   });
 
+  it("keeps the artifacts route focused on the read-only artifact library", () => {
+    const artifactsRoute = join(webRoot, "src/routes/(workbench)/[workspaceId]/artifacts");
+    const page = readFileSync(join(artifactsRoute, "+page.svelte"), "utf8");
+    const pageServer = readFileSync(join(artifactsRoute, "+page.server.ts"), "utf8");
+
+    expect(pageServer).toContain("loadArtifactsPage");
+    expect(pageServer).not.toContain("export const actions");
+    expect(pageServer).not.toContain("task.start.request");
+    expect(pageServer).not.toContain("invocation.cancel.request");
+    expect(page).not.toContain("WorkspaceAgentProduct");
+  });
+
   it("does not import Spark daemon internals from the cockpit app", () => {
     const sourceFiles = collectSourceFiles(join(webRoot, "src"));
     const violations = sourceFiles.filter((file) =>
       /from\s+["']@zendev-lab\/spark-daemon/u.test(readFileSync(file, "utf8")),
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps client session mutations behind daemon local RPC", () => {
+    const clientRoots = [join(webRoot, "src"), join(repoRoot, "apps/spark-tui/src/cli")];
+    const violations = clientRoots.flatMap((root) =>
+      collectSourceFiles(root)
+        .filter((file) => !file.endsWith(".test.ts"))
+        .filter((file) => {
+          const source = readFileSync(file, "utf8");
+          return (
+            source.includes("@zendev-lab/spark-session") ||
+            source.includes("session-registry/v1") ||
+            /(?:writeFile[\s\S]*session-registry|session-registry[\s\S]*writeFile)/u.test(source)
+          );
+        }),
     );
 
     expect(violations).toEqual([]);

@@ -1,5 +1,10 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { RoleRef, RunRef } from "@zendev-lab/spark-extension-api";
+import { join } from "node:path";
+import type {
+  ExtensionRoleRunInputControl,
+  RoleRef,
+  RunRef,
+} from "@zendev-lab/spark-extension-api";
 
 import {
   assistantMessageToText,
@@ -57,6 +62,7 @@ export interface SparkHeadlessRoleInstructionInput {
   noSession?: boolean;
   sessionPersistence?: "anonymous" | "persistent";
   onEvent?: (event: unknown) => void | Promise<void>;
+  inputControl?: ExtensionRoleRunInputControl;
 }
 
 export interface SparkHeadlessRoleInstructionResult {
@@ -70,10 +76,13 @@ export interface SparkHeadlessSessionRunInput {
   cwd: string;
   sessionId: string;
   prompt: string;
+  model?: string;
   reset?: boolean;
   signal?: AbortSignal;
   timeoutMs?: number;
   sparkHome?: string;
+  /** Optional base identity/surface prompt; defaults to Spark host identity. */
+  systemPrompt?: string;
   onEvent?: (event: unknown) => void | Promise<void>;
 }
 
@@ -89,6 +98,7 @@ export interface SparkHeadlessSessionRunResult {
 
 export interface SparkHeadlessRoleExecutorOptions {
   sparkHome?: string;
+  controlSparkHome?: string;
   createServices?: typeof createSparkCliHostServices;
 }
 
@@ -113,8 +123,11 @@ export async function runSparkHeadlessSession(
   const services = await createServices({
     cwd: input.cwd,
     sparkHome: options.sparkHome ?? input.sparkHome,
+    ...controlPlaneServicePaths(options.controlSparkHome),
     hasUI: false,
+    ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
   } satisfies SparkCliHostServicesOptions);
+  if (input.model?.trim()) selectHeadlessModel(services, input.model.trim());
 
   const recordEvent = (event: unknown) => {
     jsonEvents.push(event);
@@ -179,6 +192,7 @@ export async function runSparkHeadlessRoleInstruction(
   const services = await createServices({
     cwd: input.cwd,
     sparkHome: options.sparkHome,
+    ...controlPlaneServicePaths(options.controlSparkHome),
     hasUI: false,
     systemPrompt: input.role.systemPrompt,
   } satisfies SparkCliHostServicesOptions);
@@ -224,6 +238,14 @@ export async function runSparkHeadlessRoleInstruction(
   const abortFromSignal = () => abort();
   if (input.signal?.aborted) abortFromSignal();
   else input.signal?.addEventListener("abort", abortFromSignal, { once: true });
+  const unregisterInputControl = input.inputControl?.register({
+    send: async (text) => {
+      services.runtime.sendUserMessage(text, {
+        deliverAs: "followUp",
+        streamingBehavior: "followUp",
+      });
+    },
+  });
 
   try {
     const session = new SparkAgentSession(services);
@@ -280,6 +302,7 @@ export async function runSparkHeadlessRoleInstruction(
     };
   } finally {
     input.signal?.removeEventListener("abort", abortFromSignal);
+    unregisterInputControl?.();
     unsubscribe();
     unsubscribeDaemon();
   }
@@ -342,6 +365,16 @@ function selectHeadlessModel(
 ): void {
   const selection = resolveHeadlessModelSelection(services, model);
   services.providerRegistry.setActive(selection);
+}
+
+function controlPlaneServicePaths(
+  controlSparkHome: string | undefined,
+): Pick<SparkCliHostServicesOptions, "configPath" | "authPath"> {
+  if (!controlSparkHome) return {};
+  return {
+    configPath: join(controlSparkHome, "config.json"),
+    authPath: join(controlSparkHome, "auth.json"),
+  };
 }
 
 function resolveHeadlessModelSelection(

@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname } from "node:path";
 import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai/oauth";
 import { sparkTuiPiParityStrings } from "@zendev-lab/spark-i18n/cli";
+import type {
+  SparkAuthFlow,
+  SparkModelCatalogProvider,
+  SparkModelControlSnapshot,
+} from "@zendev-lab/spark-protocol";
 
 import type {
   SparkNativeMessage,
@@ -35,6 +40,7 @@ import {
 import type { SparkCliHostServices } from "../host/index.ts";
 import type { SparkConfig } from "../host/config.ts";
 import type { SparkSessionMessage, SparkSessionRecord } from "../host/session-store.ts";
+import type { SparkDaemonModelAuthClient } from "./model-control.ts";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 const STRINGS = sparkTuiPiParityStrings();
@@ -69,6 +75,7 @@ export const PI_PARITY_COMMAND_NAMES: readonly string[] = PI_COMMANDS;
 
 export function createSparkPiParitySlashCommands(
   services: SparkCliHostServices,
+  modelAuthClient?: SparkDaemonModelAuthClient,
 ): SparkNativeSlashCommandMap {
   return withPiParityMetadata({
     settings: {
@@ -152,15 +159,21 @@ export function createSparkPiParitySlashCommands(
     },
     login: {
       description: STRINGS.descriptions.login,
-      argumentHint: "[oauth-provider|api-key <provider> <key>]",
-      getArgumentCompletions: (prefix) => oauthProviderCompletions(prefix),
-      handler: async (args, ctx) => handleLoginCommand(services, args, ctx),
+      argumentHint: "[provider|api-key <provider> <key>]",
+      getArgumentCompletions: (prefix) => authProviderCompletions(services, prefix),
+      handler: async (args, ctx) =>
+        modelAuthClient
+          ? handleDaemonLoginCommand(services, modelAuthClient, args, ctx)
+          : handleLoginCommand(services, args, ctx),
     },
     logout: {
       description: STRINGS.descriptions.logout,
       argumentHint: "<provider>",
       getArgumentCompletions: (prefix) => storedCredentialCompletions(services, prefix),
-      handler: async (args) => handleLogoutCommand(services, args),
+      handler: async (args) =>
+        modelAuthClient
+          ? handleDaemonLogoutCommand(modelAuthClient, args)
+          : handleLogoutCommand(services, args),
     },
     new: {
       description: STRINGS.descriptions.new,
@@ -214,9 +227,9 @@ function piParityCanonicalCliTarget(name: string): string {
     case "session":
       return "spark daemon session list";
     case "mailto":
-      return "spark sessions mailto --to <session> --message <text>";
+      return "spark daemon session mailto --to <session> --message <text>";
     case "inbox":
-      return "spark sessions inbox --session <session>";
+      return "spark daemon session inbox --session <session>";
     case "fork":
       return "spark daemon session fork --current";
     case "clone":
@@ -251,9 +264,17 @@ function exportCompletions(prefix: string): Array<{ value: string; label: string
   }));
 }
 
-function oauthProviderCompletions(prefix: string): Array<{ value: string; label: string }> {
+function authProviderCompletions(
+  services: SparkCliHostServices,
+  prefix: string,
+): Array<{ value: string; label: string }> {
   return filterValues(
-    listOAuthProviderSummaries().map((provider) => provider.id),
+    [
+      ...new Set([
+        ...services.providerRegistry.listProviders().map((provider) => provider.name),
+        ...listOAuthProviderSummaries().map((provider) => provider.id),
+      ]),
+    ],
     prefix,
   ).map((value) => ({ value, label: value }));
 }
@@ -794,6 +815,251 @@ function sparkHomeForExports(services: SparkCliHostServices): string | undefined
 
 function lastAssistantMessage(messages: readonly SparkNativeMessage[]): string | undefined {
   return [...messages].reverse().find((message) => message.role === "assistant")?.text;
+}
+
+async function handleDaemonLoginCommand(
+  services: SparkCliHostServices,
+  client: SparkDaemonModelAuthClient,
+  args: string,
+  ctx: SparkNativeSlashCommandContext,
+): Promise<string> {
+  const snapshot = await client.snapshot();
+  const providerId = args.trim();
+  if (!providerId) return renderDaemonAuthSummary(snapshot);
+
+  const provider = findDaemonAuthProvider(snapshot, providerId);
+  if (!provider) {
+    return [
+      `Unknown Spark provider: ${providerId}`,
+      `Known providers: ${snapshot.providers.map((entry) => entry.providerName).join(", ") || "none"}`,
+    ].join("\n");
+  }
+
+  if (provider.auth.kind === "none") {
+    return `Provider ${provider.label} does not require login.`;
+  }
+  if (provider.auth.source === "environment" || provider.auth.source === "literal") {
+    return `Provider ${provider.label} already uses ${provider.auth.source} authentication; update that source instead of the Spark daemon credential store.`;
+  }
+  if (provider.auth.kind === "api_key") {
+    const apiKey = await services.runtime
+      .makeContext()
+      .ui?.input?.(`Enter API key for ${provider.label}`);
+    if (apiKey === undefined)
+      return `Login cancelled for ${provider.label}; no credential was stored.`;
+    const normalizedApiKey = apiKey.trim();
+    if (!normalizedApiKey) return `API key for ${provider.label} must be non-empty.`;
+    await client.setApiKey(provider.providerName, normalizedApiKey);
+    return `Stored API key for ${provider.label} in the Spark daemon credential store.`;
+  }
+
+  const oauthProviderId = provider.auth.reference ?? provider.providerName;
+  let flow: SparkAuthFlow | undefined;
+  try {
+    flow = await client.startOAuth(oauthProviderId);
+    return await driveDaemonOAuthFlow(services, client, provider, flow, ctx);
+  } catch (error) {
+    if (flow && !isTerminalOAuthFlow(flow)) {
+      try {
+        await client.cancelOAuth(flow.id);
+      } catch {
+        // The daemon may already have completed or expired the flow.
+      }
+    }
+    return `OAuth login failed for ${provider.label}: ${safeAuthError(error)}`;
+  }
+}
+
+async function handleDaemonLogoutCommand(
+  client: SparkDaemonModelAuthClient,
+  args: string,
+): Promise<string> {
+  const snapshot = await client.snapshot();
+  const providerId = args.trim();
+  if (!providerId) {
+    const configured = configuredDaemonCredentialIds(snapshot);
+    return configured.length
+      ? `Usage: /logout <provider>\nConfigured providers: ${configured.join(", ")}`
+      : "Usage: /logout <provider>\nNo daemon-managed credentials are configured.";
+  }
+
+  const provider = findDaemonAuthProvider(snapshot, providerId);
+  if (!provider) {
+    return `Unknown Spark provider: ${providerId}`;
+  }
+  if (provider.auth.kind === "none") {
+    return `Provider ${provider.label} does not use a daemon-managed credential.`;
+  }
+  if (provider.auth.source === "environment" || provider.auth.source === "literal") {
+    return `Provider ${provider.label} uses ${provider.auth.source} authentication; remove it from that source instead of the Spark daemon credential store.`;
+  }
+
+  const credentialId = daemonCredentialId(provider);
+  const removed = await client.logout(credentialId);
+  return removed
+    ? `Removed stored Spark credential: ${credentialId}`
+    : `No stored Spark credential found for: ${credentialId}`;
+}
+
+interface DaemonOAuthProgressState {
+  authorizationUrl?: string;
+  deviceCode?: string;
+  progressCount: number;
+}
+
+async function driveDaemonOAuthFlow(
+  services: SparkCliHostServices,
+  client: SparkDaemonModelAuthClient,
+  provider: SparkModelCatalogProvider,
+  initialFlow: SparkAuthFlow,
+  ctx: SparkNativeSlashCommandContext,
+): Promise<string> {
+  const seen: DaemonOAuthProgressState = { progressCount: 0 };
+  let flow = initialFlow;
+  while (true) {
+    publishDaemonOAuthProgress(flow, seen, ctx);
+    if (flow.status === "succeeded") return `Logged in OAuth provider: ${provider.label}`;
+    if (flow.status === "failed") {
+      return `OAuth login failed for ${provider.label}: ${safeAuthError(flow.error ?? "unknown error")}`;
+    }
+    if (flow.status === "cancelled") return `OAuth login cancelled for ${provider.label}.`;
+
+    if (flow.prompt) {
+      const value = await collectDaemonOAuthPrompt(services, flow.prompt);
+      if (value === undefined) {
+        flow = await client.cancelOAuth(flow.id);
+        publishDaemonOAuthProgress(flow, seen, ctx);
+        return `OAuth login cancelled for ${provider.label}.`;
+      }
+      flow = await client.respondOAuth(flow.id, flow.prompt.id, value);
+      continue;
+    }
+
+    await waitForDaemonOAuthPoll(flow);
+    flow = await client.oauthStatus(flow.id);
+  }
+}
+
+function publishDaemonOAuthProgress(
+  flow: SparkAuthFlow,
+  seen: DaemonOAuthProgressState,
+  ctx: SparkNativeSlashCommandContext,
+): void {
+  if (flow.authorization && flow.authorization.url !== seen.authorizationUrl) {
+    seen.authorizationUrl = flow.authorization.url;
+    ctx.session.addSystemMessage(
+      [
+        `Open OAuth authorization URL: ${flow.authorization.url}`,
+        flow.authorization.instructions
+          ? `Instructions: ${flow.authorization.instructions}`
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+  if (flow.deviceCode && flow.deviceCode.userCode !== seen.deviceCode) {
+    seen.deviceCode = flow.deviceCode.userCode;
+    ctx.session.addSystemMessage(
+      [
+        `OAuth device code: ${flow.deviceCode.userCode}`,
+        `Verification URL: ${flow.deviceCode.verificationUri}`,
+        flow.deviceCode.expiresInSeconds
+          ? `Expires in: ${flow.deviceCode.expiresInSeconds}s`
+          : undefined,
+        flow.deviceCode.intervalSeconds
+          ? `Polling interval: ${flow.deviceCode.intervalSeconds}s`
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+  for (const message of flow.progress.slice(seen.progressCount)) {
+    ctx.session.addSystemMessage(`OAuth: ${message}`);
+  }
+  seen.progressCount = flow.progress.length;
+}
+
+async function collectDaemonOAuthPrompt(
+  services: SparkCliHostServices,
+  prompt: NonNullable<SparkAuthFlow["prompt"]>,
+): Promise<string | undefined> {
+  const ui = services.runtime.makeContext().ui;
+  if (prompt.kind === "select") {
+    const choices = prompt.options.map((option) =>
+      option.label === option.id ? option.label : `${option.label} (${option.id})`,
+    );
+    const selected = await ui?.select?.(prompt.message, choices);
+    const selectedIndex = selected === undefined ? -1 : choices.indexOf(selected);
+    return selectedIndex < 0 ? undefined : prompt.options[selectedIndex]?.id;
+  }
+  const value = await ui?.input?.(prompt.message, prompt.placeholder);
+  if (value !== undefined) return value;
+  return prompt.allowEmpty ? "" : undefined;
+}
+
+async function waitForDaemonOAuthPoll(flow: SparkAuthFlow): Promise<void> {
+  const requestedMs = (flow.deviceCode?.intervalSeconds ?? 0.5) * 1_000;
+  const delayMs = Math.max(250, Math.min(2_000, requestedMs));
+  await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+}
+
+function renderDaemonAuthSummary(snapshot: SparkModelControlSnapshot): string {
+  const lines = ["Spark daemon provider authentication:"];
+  if (snapshot.providers.length === 0) return `${lines[0]}\nNo providers registered.`;
+  for (const provider of snapshot.providers) {
+    lines.push(
+      `${provider.providerName}: ${provider.auth.kind} ${provider.auth.configured ? "configured" : "missing"}`,
+    );
+  }
+  lines.push("Use /login <provider> to configure a missing credential.");
+  return lines.join("\n");
+}
+
+function findDaemonAuthProvider(
+  snapshot: SparkModelControlSnapshot,
+  providerId: string,
+): SparkModelCatalogProvider | undefined {
+  const normalized = providerId.toLocaleLowerCase();
+  return snapshot.providers.find(
+    (provider) =>
+      provider.providerName.toLocaleLowerCase() === normalized ||
+      provider.auth.reference?.toLocaleLowerCase() === normalized,
+  );
+}
+
+function daemonCredentialId(provider: SparkModelCatalogProvider): string {
+  return provider.auth.kind === "oauth"
+    ? (provider.auth.reference ?? provider.providerName)
+    : provider.providerName;
+}
+
+function configuredDaemonCredentialIds(snapshot: SparkModelControlSnapshot): string[] {
+  return [
+    ...new Set(
+      snapshot.providers
+        .filter(
+          (provider) =>
+            provider.auth.configured &&
+            provider.auth.kind !== "none" &&
+            provider.auth.source !== "environment" &&
+            provider.auth.source !== "literal",
+        )
+        .map(daemonCredentialId),
+    ),
+  ];
+}
+
+function isTerminalOAuthFlow(flow: SparkAuthFlow): boolean {
+  return ["succeeded", "failed", "cancelled"].includes(flow.status);
+}
+
+function safeAuthError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .replace(/(token|secret|api[_ -]?key)(\s*[:=]\s*)\S+/giu, "$1$2[redacted]")
+    .replace(/Bearer\s+\S+/giu, "Bearer [redacted]");
 }
 
 async function handleLoginCommand(

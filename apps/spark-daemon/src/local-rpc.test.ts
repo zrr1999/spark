@@ -4,10 +4,17 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { resolveSparkPaths } from "@zendev-lab/spark-system";
+import { defaultSparkSessionRegistryRoot, SparkSessionRegistry } from "@zendev-lab/spark-session";
 import { SparkDaemonInvocationRegistry } from "./core/index.js";
-import { handleLocalRpcLine } from "./local-rpc.js";
+import {
+  createSerializedDaemonSessionRegistry,
+  handleLocalRpcLine,
+  requestWorkspaceEnsureLocal,
+  startLocalRpcServer,
+} from "./local-rpc.js";
 import { openSparkDaemonDatabase } from "./store/schema.js";
-import { listWorkspaces } from "./store/workspaces.js";
+import { listWorkspaces, WorkspacePathConflictError } from "./store/workspaces.js";
+import type { SparkDaemonModelControl } from "./model-control.ts";
 
 describe("Spark daemon local RPC", () => {
   it("commits workspace registration only after server grant and websocket verification", async () => {
@@ -209,11 +216,23 @@ describe("Spark daemon local RPC", () => {
     const db = openSparkDaemonDatabase(paths);
 
     try {
+      const assignment = {
+        goal: "continue work",
+        target: {
+          sessionId: "session-a",
+          role: "role:implementer",
+          workspaceId: "ws-a",
+        },
+        constraints: ["keep the diff small"],
+        evidence: ["queue contract"],
+        source: { kind: "cli" },
+        title: "Continue work",
+      };
       const submitted = await handleLocalRpcLine(
         JSON.stringify({
           id: "turn_submit",
           method: "turn.submit",
-          params: { sessionId: "session-a", prompt: "continue work" },
+          params: { sessionId: "session-a", prompt: "continue work", assignment },
         }),
         paths,
         db,
@@ -228,6 +247,7 @@ describe("Spark daemon local RPC", () => {
             sessionId: "session-a",
             prompt: "continue work",
             actor: "spark-daemon-local-rpc",
+            assignment,
           },
         },
       });
@@ -262,7 +282,12 @@ describe("Spark daemon local RPC", () => {
           entries: [
             {
               payload: {
-                task: { type: "session.run", sessionId: "session-a", prompt: "continue work" },
+                task: {
+                  type: "session.run",
+                  sessionId: "session-a",
+                  prompt: "continue work",
+                  assignment,
+                },
               },
             },
           ],
@@ -426,6 +451,40 @@ describe("Spark daemon local RPC", () => {
     }
   });
 
+  it("preserves structured workspace conflict errors through the shared unary transport", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-client-"));
+    const workspacePath = join(root, "workspace");
+    const nestedPath = join(workspacePath, "nested");
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    mkdirSync(nestedPath, { recursive: true });
+    const server = await startLocalRpcServer({
+      paths,
+      sparkHome: join(root, ".spark"),
+      db,
+    });
+
+    try {
+      await requestWorkspaceEnsureLocal(paths, { localPath: workspacePath });
+      await expect(
+        requestWorkspaceEnsureLocal(paths, { localPath: nestedPath }),
+      ).rejects.toBeInstanceOf(WorkspacePathConflictError);
+    } finally {
+      await server.close();
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("attaches, heartbeats, and releases workspace clients over local RPC", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-"));
     const paths = resolveSparkPaths({
@@ -574,6 +633,278 @@ describe("Spark daemon local RPC", () => {
           workspace: { executor: { state: "online", clientId: "exec-rpc-1" } },
         },
       });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("serves authoritative channel status and acknowledges configure/reload", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-channel-"));
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const runningStatus = {
+      plane: "daemon" as const,
+      resource: "channel" as const,
+      workspaceId: "ws_demo",
+      configPath: join(root, ".spark", "workspaces", "ws_demo", "channels", "config.json"),
+      available: true as const,
+      configured: true,
+      ingressEnabled: true,
+      state: "running" as const,
+      adapters: [{ id: "feishu", type: "feishu", running: true }],
+      routes: [{ name: "ops", adapter: "feishu", recipient: "oc_ops" }],
+      observedAt: "2026-07-10T00:00:00.000Z",
+      text: "channels workspace=ws_demo running adapters=1/1 routes=1 ingress=on\n",
+    };
+    const channelIngress = {
+      status: vi.fn(() => runningStatus),
+      configure: vi.fn(async () => runningStatus),
+      reload: vi.fn(async () => runningStatus),
+      notify: vi.fn(async () => ({ action: "list" as const, adapters: [], routes: [] })),
+    };
+
+    try {
+      const status = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "channel_status",
+          method: "channel.status",
+          params: { workspaceId: "ws_demo" },
+        }),
+        paths,
+        db,
+        undefined,
+        { channelIngress },
+      );
+      expect(status).toEqual({ id: "channel_status", ok: true, result: runningStatus });
+      expect(channelIngress.status).toHaveBeenCalledWith("ws_demo");
+
+      const config = {
+        adapters: {
+          feishu: {
+            type: "feishu",
+            event_mode: "websocket",
+            app_id: "cli_demo",
+            app_secret: "secret_demo",
+          },
+        },
+        routes: { ops: { adapter: "feishu", recipient: "oc_ops" } },
+        ingress: { enabled: true, on_unbound: "reject" },
+      };
+      const configured = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "channel_configure",
+          method: "channel.configure",
+          params: { workspaceId: "ws_demo", config },
+        }),
+        paths,
+        db,
+        undefined,
+        { channelIngress },
+      );
+      expect(configured).toEqual({ id: "channel_configure", ok: true, result: runningStatus });
+      expect(channelIngress.configure).toHaveBeenCalledWith("ws_demo", config);
+
+      const reloaded = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "channel_reload",
+          method: "channel.reload",
+          params: { workspaceId: "ws_demo" },
+        }),
+        paths,
+        db,
+        undefined,
+        { channelIngress },
+      );
+      expect(reloaded).toEqual({ id: "channel_reload", ok: true, result: runningStatus });
+      expect(channelIngress.reload).toHaveBeenCalledWith("ws_demo");
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("owns managed session create/list/get/bind/unbind/archive behind local RPC", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-session-"));
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const sessionRegistry = createSerializedDaemonSessionRegistry(
+      new SparkSessionRegistry({
+        rootDir: defaultSparkSessionRegistryRoot(join(root, ".spark")),
+      }),
+    );
+    const request = async (id: string, method: string, params?: unknown) =>
+      await handleLocalRpcLine(
+        JSON.stringify({ id, method, ...(params === undefined ? {} : { params }) }),
+        paths,
+        db,
+        undefined,
+        { sessionRegistry },
+      );
+
+    try {
+      const [first, second] = await Promise.all([
+        request("session_create_a", "session.create", {
+          sessionId: "sess_a",
+          workspaceId: "ws_a",
+          title: "First",
+        }),
+        request("session_create_b", "session.create", {
+          sessionId: "sess_b",
+          workspaceId: "ws_b",
+        }),
+      ]);
+      expect(first).toMatchObject({ ok: true, result: { sessionId: "sess_a" } });
+      expect(second).toMatchObject({ ok: true, result: { sessionId: "sess_b" } });
+
+      const listed = await request("session_list", "session.list", {
+        workspaceId: "ws_a",
+      });
+      expect(listed).toMatchObject({
+        ok: true,
+        result: [{ sessionId: "sess_a", workspaceId: "ws_a" }],
+      });
+      const fetched = await request("session_get", "session.get", { sessionId: "sess_a" });
+      expect(fetched).toMatchObject({ ok: true, result: { title: "First" } });
+
+      const bound = await request("session_bind", "session.bind", {
+        sessionId: "sess_a",
+        externalKey: "feishu:chat:oc_demo",
+      });
+      expect(bound).toMatchObject({
+        ok: true,
+        result: { bindings: [{ externalKey: "feishu:chat:oc_demo" }] },
+      });
+      const unbound = await request("session_unbind", "session.unbind", {
+        sessionId: "sess_a",
+        externalKey: "feishu:chat:oc_demo",
+      });
+      expect(unbound).toMatchObject({ ok: true, result: { bindings: [] } });
+      const archived = await request("session_archive", "session.archive", {
+        sessionId: "sess_a",
+      });
+      expect(archived).toMatchObject({ ok: true, result: { status: "archived" } });
+
+      const missing = await request("session_missing", "session.get", {
+        sessionId: "sess_missing",
+      });
+      expect(missing).toEqual({
+        id: "session_missing",
+        ok: false,
+        error: { code: "session_not_found", message: "unknown session: sess_missing" },
+      });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("serves model/auth control and freezes the effective model on submitted turns", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-model-rpc-"));
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const model = { providerName: "baidu-oneapi", modelId: "ernie-4.5" };
+    const snapshot = {
+      providers: [],
+      defaultModel: model,
+      session: { sessionId: "sess_model", model },
+      diagnostics: [],
+    };
+    const setApiKey = vi.fn(async () => snapshot);
+    const prepareModel = vi.fn(async () => undefined);
+    const modelControl = {
+      snapshot: vi.fn(async () => snapshot),
+      setDefaultModel: vi.fn(async () => snapshot),
+      setSessionModel: vi.fn(async () => ({
+        sessionId: "sess_model",
+        workspaceId: "ws_model",
+        model,
+        bindings: [],
+        status: "ready" as const,
+        createdAt: "2026-07-10T00:00:00.000Z",
+        updatedAt: "2026-07-10T00:01:00.000Z",
+      })),
+      setApiKey,
+      logout: vi.fn(async () => ({ removed: true, snapshot })),
+      startOAuth: vi.fn(),
+      oauthStatus: vi.fn(),
+      respondOAuth: vi.fn(),
+      cancelOAuth: vi.fn(),
+      effectiveModel: vi.fn(async () => model),
+      prepareModel,
+    } satisfies SparkDaemonModelControl;
+
+    try {
+      const catalog = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "model_catalog",
+          method: "model.catalog",
+          params: { sessionId: "sess_model" },
+        }),
+        paths,
+        db,
+        undefined,
+        { modelControl },
+      );
+      expect(catalog).toMatchObject({ ok: true, result: { defaultModel: model } });
+
+      const credential = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "auth_set",
+          method: "provider.auth.api-key.set",
+          params: { providerName: "baidu-oneapi", apiKey: "secret-value" },
+        }),
+        paths,
+        db,
+        undefined,
+        { modelControl },
+      );
+      expect(credential).toMatchObject({ ok: true });
+      expect(setApiKey).toHaveBeenCalledWith("baidu-oneapi", "secret-value");
+
+      const submitted = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "turn_model",
+          method: "turn.submit",
+          params: { sessionId: "sess_model", prompt: "Use the selected model" },
+        }),
+        paths,
+        db,
+        undefined,
+        { modelControl },
+      );
+      expect(submitted).toMatchObject({
+        ok: true,
+        result: { task: { model: "baidu-oneapi/ernie-4.5" } },
+      });
+      expect(prepareModel).toHaveBeenCalledWith(model);
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });

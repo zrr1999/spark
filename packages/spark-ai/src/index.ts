@@ -1343,6 +1343,42 @@ export {
   streamBaiduOneApiOpenAIResponses,
 } from "./baidu-oneapi-provider.ts";
 export {
+  CURSOR_API_KEY_ENV,
+  CURSOR_PROVIDER_API,
+  CURSOR_PROVIDER_BASE_URL,
+  CURSOR_PROVIDER_ID,
+  default as registerCursorProvider,
+  type RegisterCursorProviderOptions,
+} from "./cursor-provider.ts";
+export {
+  buildCursorPrompt,
+  createCursorStreamFunction,
+  streamCursor,
+  type CursorSdkRuntime,
+  type CursorStreamDependencies,
+} from "./cursor-stream.ts";
+export {
+  buildCursorModelSelection,
+  convertCursorModelItems,
+  getCursorModelMetadata,
+  getCursorModelMetadataEntries,
+  type CursorModelMetadata,
+} from "./cursor-model-catalog.ts";
+export {
+  discoverCursorModels,
+  sanitizeCursorDiscoveryError,
+  type CursorCatalogFallbackIssue,
+  type CursorCatalogFallbackReason,
+  type DiscoverCursorModelsOptions,
+} from "./cursor-model-discovery.ts";
+export {
+  DEFAULT_CURSOR_MODEL_CACHE_TTL_MS,
+  defaultCursorModelCachePath,
+  fingerprintCursorApiKey,
+  loadCursorModelCache,
+  saveCursorModelCache,
+} from "./cursor-model-cache.ts";
+export {
   runSparkLeaf,
   resolveLeafModelId,
   type SparkLeafRequest,

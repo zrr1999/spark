@@ -1,5 +1,6 @@
 import { type TaskGraph } from "@zendev-lab/spark-tasks";
 import type { Project, ProjectRef, Task, TaskRef } from "@zendev-lab/spark-extension-api";
+import { createId, parseSparkAssignment } from "@zendev-lab/spark-protocol";
 
 import {
   consoleSparkCliOutput,
@@ -14,6 +15,11 @@ import {
   loadSparkServerCoordinationState,
   type SparkServerCoordinationState,
 } from "./server-adapter.ts";
+import {
+  clientGetManagedSession,
+  handleSparkDaemonCliCommand,
+  type SparkDaemonClientOptions,
+} from "./daemon.ts";
 
 export type SparkServerCliResource =
   | "help"
@@ -23,7 +29,8 @@ export type SparkServerCliResource =
   | "goal"
   | "artifact"
   | "review"
-  | "workflow";
+  | "workflow"
+  | "assign";
 
 export interface SparkServerCliCommand {
   resource: SparkServerCliResource;
@@ -31,10 +38,17 @@ export interface SparkServerCliCommand {
   json?: boolean;
   selector?: string;
   limit?: number;
+  sessionId?: string;
+  goal?: string;
+  title?: string;
+  role?: string;
+  workspaceId?: string;
 }
 
 export interface SparkServerCliOptions {
   cwd?: string;
+  sparkHome?: string;
+  daemonClient?: SparkDaemonClientOptions;
   graph?: TaskGraph | null;
   currentProjectRef?: ProjectRef;
   currentSessionKey?: string | null;
@@ -88,7 +102,19 @@ export type SparkServerCliResult =
   | { action: "goal"; result: SparkServerGoalResult }
   | { action: "artifact"; result: SparkServerArtifactListResult }
   | { action: "review"; result: SparkServerReviewListResult }
-  | { action: "workflow"; result: SparkServerWorkflowListResult };
+  | { action: "workflow"; result: SparkServerWorkflowListResult }
+  | { action: "assign"; result: SparkServerAssignResult };
+
+export interface SparkServerAssignResult {
+  plane: "server";
+  resource: "assign";
+  assignmentId: string;
+  sessionId: string;
+  goal: string;
+  status: string;
+  commandKind: "assignment.create.request";
+  text: string;
+}
 
 export interface SparkServerStatusResult {
   plane: "server";
@@ -234,6 +260,26 @@ export function parseSparkServerCliArgs(argv: string[]): SparkServerCliCommand {
         limit,
         selector: selector ?? positionalSelector,
       };
+    case "assign": {
+      const sessionId =
+        readStringOption(parsed.options, "session")?.trim() || positionalSelector?.trim();
+      const goal =
+        readStringOption(parsed.options, "goal")?.trim() ||
+        parsed.positionals
+          .slice(verb === "create" || verb === "run" ? 1 : 0)
+          .join(" ")
+          .trim();
+      return {
+        resource: "assign",
+        verb: verb === "create" || verb === "run" ? verb : "create",
+        json,
+        sessionId,
+        goal: goal || undefined,
+        title: readStringOption(parsed.options, "title")?.trim(),
+        role: readStringOption(parsed.options, "role")?.trim(),
+        workspaceId: readStringOption(parsed.options, "workspace")?.trim(),
+      };
+    }
     default:
       throw new Error(`unknown spark server resource: ${resourceToken}`);
   }
@@ -260,6 +306,8 @@ export async function handleSparkServerCliCommand(
       return { action: "review", result: serverReviews(state, command) };
     case "workflow":
       return { action: "workflow", result: serverWorkflows(state, command) };
+    case "assign":
+      return { action: "assign", result: await serverAssign(command, options) };
   }
 }
 
@@ -282,7 +330,7 @@ export async function runSparkServerCliCommand(
 }
 
 export function sparkServerHelpText(): string {
-  return `spark server - server coordination plane\n\nUsage:\n  spark server status [--json]\n  spark server project list [--json]\n  spark server project status <project-ref> [--json]\n  spark server task list [--project <project-ref>] [--json]\n  spark server task status <task-ref> [--json]\n  spark server goal status [--json]\n  spark server artifact list [--json]\n  spark server review list [--json]\n  spark server workflow list [--json]\n\nPlane boundary:\n  spark server is the coordination plane, not a network service in this phase.\n  Launch the Cockpit web UI with spark cockpit (not spark server).\n  Execution controls belong under spark daemon run/session/events.\n`;
+  return `spark server - server coordination plane\n\nUsage:\n  spark server status [--json]\n  spark server project list [--json]\n  spark server project status <project-ref> [--json]\n  spark server task list [--project <project-ref>] [--json]\n  spark server task status <task-ref> [--json]\n  spark server goal status [--json]\n  spark server artifact list [--json]\n  spark server review list [--json]\n  spark server workflow list [--json]\n  spark server assign --session <session-id> --goal <text> [--title <text>] [--role <role>] [--workspace <id>] [--json]\n\nPlane boundary:\n  spark server is the coordination plane, not a network service in this phase.\n  Launch the Cockpit web UI with spark cockpit (not spark server).\n  Assign and IM channels share one assignment intent against daemon-owned sessions.\n  Execution controls belong under spark daemon run/session/events.\n`;
 }
 
 type LoadedServerState = SparkServerCoordinationState;
@@ -497,6 +545,69 @@ function resolveProject(graph: TaskGraph, selector: string | undefined): Project
 
 function findProject(graph: TaskGraph, ref: ProjectRef): Project | undefined {
   return graph.projects().find((project) => project.ref === ref);
+}
+
+async function serverAssign(
+  command: SparkServerCliCommand,
+  options: SparkServerCliOptions,
+): Promise<SparkServerAssignResult> {
+  const sessionId = command.sessionId?.trim();
+  const goal = command.goal?.trim();
+  if (!sessionId) throw new Error("spark server assign requires --session <session-id>");
+  if (!goal) throw new Error("spark server assign requires --goal <text>");
+
+  const sparkHome = options.daemonClient?.sparkHome ?? options.sparkHome;
+  const session = await clientGetManagedSession(sessionId, {
+    ...(options.daemonClient ?? {}),
+    ...(sparkHome ? { sparkHome } : {}),
+  });
+  if (session.status === "archived") {
+    throw new Error(`cannot assign to archived session: ${sessionId}`);
+  }
+
+  const role = command.role?.trim();
+  const title = command.title?.trim();
+  const assignment = parseSparkAssignment({
+    goal,
+    target: {
+      sessionId,
+      ...(role ? { role } : {}),
+      workspaceId: command.workspaceId?.trim() || session.workspaceId,
+    },
+    constraints: [],
+    evidence: [],
+    source: { kind: "cli" },
+    ...(title ? { title } : {}),
+  });
+  const assignmentId = createId("asn");
+  const daemonClient: SparkDaemonClientOptions = {
+    ...(options.daemonClient ?? {}),
+    ...(sparkHome ? { sparkHome } : {}),
+  };
+  const submitted = await handleSparkDaemonCliCommand(
+    {
+      action: "submit",
+      json: true,
+      sessionId,
+      prompt: goal,
+      assignment,
+    },
+    daemonClient,
+  );
+  if (submitted.action !== "submit") {
+    throw new Error("spark server assign expected daemon submit result");
+  }
+
+  return {
+    plane: "server",
+    resource: "assign",
+    assignmentId,
+    sessionId,
+    goal,
+    status: "queued",
+    commandKind: "assignment.create.request",
+    text: `queued assignment ${assignmentId} -> session ${sessionId} (${submitted.result.fileName})\n`,
+  };
 }
 
 function resolveTask(graph: TaskGraph, selector: string | undefined): Task {

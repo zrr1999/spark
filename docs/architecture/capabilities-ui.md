@@ -177,24 +177,37 @@ state and artifacts:
 The catalog is a rendering policy, not a storage policy. The AST remains
 JSON-serializable and renderer-agnostic.
 
-## Cockpit side navigation taxonomy
+## Cockpit dual-track navigation
 
-Spark Cockpit should move from a flat sidebar to grouped workbench navigation.
-Existing routes remain; the grouping communicates product areas and leaves room
-for generated UI/artifact surfaces without adding placeholder pages.
+Spark Cockpit splits **Workbench** (daily assignment/ops) from **Console**
+(setup/admin). Existing routes remain; shells differ.
 
-| Group | Entries | Existing route |
+### Workbench sidebar
+
+| Area | Entries | Route |
 | --- | --- | --- |
-| Work | Overview | `/<workspace>` |
-| Work | Projects | `/<workspace>/projects` |
-| Work | Inbox | `/<workspace>/inbox` |
-| Library | Artifacts | `/<workspace>/artifacts` |
-| Library | Repos | `/<workspace>/repos` |
-| Runtime | Agents | `/<workspace>/agents` |
-| System | Settings | `/<workspace>/settings` |
+| Session rail | Sessions list + new session | `/sessions`, `/sessions/<id>` |
+| Secondary nav | Overview | `/<workspace>` |
+| Secondary nav | Inbox | `/<workspace>/inbox` |
+| Secondary nav | Artifacts | `/<workspace>/artifacts` |
+| Settings buttons | Global settings | `/settings` |
+| Settings buttons | Workspace settings | `/<workspace>/settings` |
+| Account control | Switch / create workspace | popover only |
 
-Workspace switching, global search, active-state behavior, breadcrumbs, and
-nested detail routes must continue to work after the sidebar is grouped.
+### Console navigation
+
+| Group | Entries | Route |
+| --- | --- | --- |
+| Global | Global settings | `/settings` |
+| Global | Channels | `/settings/channels` |
+| Workspace | Workspace settings | `/<workspace>/settings` |
+| Workspace | Registration | `/<workspace>/settings/registration` |
+| Setup | Create workspace | `/workspaces/new` |
+
+Workbench settings buttons and Console nav are the entry points into Console.
+The Workbench account control only switches or creates workspaces. Workspace
+search, breadcrumbs, and nested detail routes stay on the Workbench shell;
+Console uses its own top bar with **Back to workbench**.
 
 ## Implementation sequence
 
@@ -205,7 +218,7 @@ nested detail routes must continue to work after the sidebar is grouped.
 3. Render streaming `spark.ui.v1` output in Cockpit chat with raw fallback.
 4. Persist source and derived UI AST artifacts and replay them in artifact detail
    views.
-5. Rework Cockpit sidebar grouping around the taxonomy above.
+5. Keep Cockpit dual-track Workbench/Console shells aligned with the taxonomy above.
 6. Rename core capability packages (`extension-api`, `artifacts`, `tasks`,
    `workflows`, `loop`, `modes`).
 7. Rename remaining non-`btw` adapter capabilities (`ask`, `context`, `cue`,

@@ -5,6 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  CueError,
+  defaultSocketPath,
   type JobInfo,
   type ScriptResult,
   type PiCueExtensionApi,
@@ -23,6 +25,17 @@ import {
 } from "../packages/spark-cue/src/index.ts";
 
 type RegisteredPiCueTool = Parameters<PiCueExtensionApi["registerTool"]>[0];
+
+void test("defaultSocketPath treats an empty XDG_RUNTIME_DIR as unset", () => {
+  const previous = process.env.XDG_RUNTIME_DIR;
+  process.env.XDG_RUNTIME_DIR = "";
+  try {
+    assert.equal(defaultSocketPath(), join(tmpdir(), "cue-shell", "cued.sock"));
+  } finally {
+    if (previous === undefined) delete process.env.XDG_RUNTIME_DIR;
+    else process.env.XDG_RUNTIME_DIR = previous;
+  }
+});
 
 void test("normalizeCueTerminalOutput keeps final carriage-return frame", () => {
   assert.equal(normalizeCueTerminalOutput("Working 1\rWorking 2\rDone\n"), "Done\n");
@@ -181,21 +194,19 @@ void test("renderCueScriptResult compacts clean successful items", () => {
   assert.match(rendered, /visible/);
 });
 
-void test("renderCueChainStatus prioritizes non-clean leaves and compacts clean leaves", async () => {
+void test("renderCueChainStatus reads each leaf output once and propagates failures", async () => {
   const outputRequests: Array<{ id: string; tailBytes?: number }> = [];
-  const errorRequests: Array<{ id: string; tailBytes?: number }> = [];
   const reader = {
     async jobOutput(id: string, tailBytes?: number) {
       outputRequests.push({ id, tailBytes });
       return {
         stdout: id === "J3" ? "done output\n" : id === "J4" ? "failed output\n" : "",
-        stderr: "",
+        stderr: id === "J4" ? "failed stderr\n" : "",
+        stdoutEncoding: "utf8" as const,
+        stderrEncoding: "utf8" as const,
         truncated: false,
+        stderrTruncated: false,
       };
-    },
-    async jobError(id: string, tailBytes?: number) {
-      errorRequests.push({ id, tailBytes });
-      return { stderr: id === "J4" ? "failed stderr\n" : "", truncated: false };
     },
   };
   const jobs = [
@@ -224,7 +235,19 @@ void test("renderCueChainStatus prioritizes non-clean leaves and compacts clean 
     { id: "J3", tailBytes: 2048 },
     { id: "J4", tailBytes: 2048 },
   ]);
-  assert.deepEqual(errorRequests, outputRequests);
+  await assert.rejects(
+    renderCueChainStatus(
+      {
+        async jobOutput() {
+          throw new CueError("INTERNAL", "output store unavailable");
+        },
+      },
+      "CH1",
+      jobs,
+      2048,
+    ),
+    (error) => error instanceof CueError && error.code === "INTERNAL",
+  );
 });
 
 function chainJob(
@@ -576,6 +599,105 @@ void test("spark-cue tool descriptions match cue-shell chain operator contract",
   assert.match(scriptTool.description, /`\|\?\|`/);
 });
 
+void test("cue_jobs exposes chain IDs for status and wait", async () => {
+  const jobsTool = registerCueToolsForTest().get("cue_jobs");
+  assert.ok(jobsTool);
+
+  const contract = `${jobsTool.description} ${JSON.stringify(jobsTool.parameters)}`;
+  assert.match(contract, /action='status' inspects a job, chain, or cron/);
+  assert.match(contract, /action='wait' waits for a job or chain/);
+  assert.match(contract, /chain CH<n> for status\/wait/);
+
+  const jobs = [
+    {
+      id: "J1",
+      status: "Done" as const,
+      pipeline: "true",
+      exit_code: 0,
+      open_hint: "stream" as const,
+      chain_id: "CH1",
+      chain_index: 0,
+      chain_total: 2,
+    },
+    {
+      id: "J2",
+      status: "Done" as const,
+      pipeline: "true",
+      exit_code: 0,
+      open_hint: "stream" as const,
+      chain_id: "CH1",
+      chain_index: 1,
+      chain_total: 2,
+    },
+  ];
+  const ctx = {
+    cueClient: {
+      isClosed: false,
+      async listJobs() {
+        return jobs;
+      },
+      async jobOutput() {
+        return { stdout: "", stderr: "", truncated: false, stderrTruncated: false };
+      },
+    },
+  } as unknown as PiCueToolContext;
+
+  for (const action of ["status", "wait"] as const) {
+    const result = await jobsTool.execute(
+      `call-chain-${action}`,
+      { action, id: "CH1", timeout: 1 },
+      new AbortController().signal,
+      () => undefined,
+      ctx,
+    );
+    assert.match(result.content[0]?.text ?? "", /done — chain CH1/);
+    assert.equal((result.details as { chainId?: string }).chainId, "CH1");
+  }
+});
+
+void test("cue_schedule filters the cron statuses emitted by cue-shell", async () => {
+  const scheduleTool = registerCueToolsForTest().get("cue_schedule");
+  assert.ok(scheduleTool);
+
+  const description = `${scheduleTool.description} ${JSON.stringify(scheduleTool.parameters)}`;
+  assert.match(description, /scheduled, paused, completed, expired, failed, all/);
+  assert.doesNotMatch(description, /scheduled, paused, completed, expired, active/);
+
+  const ctx = {
+    cueClient: {
+      isClosed: false,
+      async listCrons() {
+        return [
+          { id: "C1", schedule: "in 1h", command: "true", status: "scheduled" as const },
+          { id: "C2", schedule: "in 1m", command: "false", status: "failed" as const },
+        ];
+      },
+    },
+  } as unknown as PiCueToolContext;
+
+  const failed = await scheduleTool.execute(
+    "call-list-failed",
+    { action: "list", status: "failed" },
+    new AbortController().signal,
+    () => undefined,
+    ctx,
+  );
+  assert.match(failed.content[0]?.text ?? "", /C2  \[failed\]/);
+  assert.doesNotMatch(failed.content[0]?.text ?? "", /C1/);
+
+  await assert.rejects(
+    () =>
+      scheduleTool.execute(
+        "call-list-active",
+        { action: "list", status: "active" },
+        new AbortController().signal,
+        () => undefined,
+        ctx,
+      ),
+    /cue_schedule status must be all, scheduled, paused, completed, expired, or failed/,
+  );
+});
+
 void test("spark-cue docs document script runner venv and uv script behavior", async () => {
   const skill = await readFile("packages/spark-cue/skills/spark-cue/SKILL.md", "utf8");
   const readme = await readFile("packages/spark-cue/README.md", "utf8");
@@ -600,6 +722,9 @@ void test("spark-cue docs document script runner venv and uv script behavior", a
   assert.match(toolsDoc, /`cue_resources` — inspect resource providers and snapshots/);
   assert.match(toolsDoc, /uv run --script -/);
   assert.match(toolsDoc, /`venv` is python-only/);
+  assert.match(toolsDoc, /`scope` is not a `script_run`\/`script_eval` parameter/);
+  assert.match(toolsDoc, /`RunScript \{ path, input \}`/);
+  assert.doesNotMatch(toolsDoc, /scope` is cue-shell-only/);
   assert.doesNotMatch(toolsDoc, /temporary `\.py` file/);
 });
 

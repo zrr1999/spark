@@ -21,7 +21,6 @@ export interface SparkRuntimeReadyTaskRunnerOptions {
   defaultRoleRef?: RoleRef;
   artifactStore?: ArtifactStore;
   cwd?: string;
-  piCommand?: string;
   sessionDir?: string;
   launch?: RoleLaunchMode;
   forkFromSession?: string;
@@ -43,7 +42,6 @@ export function createSparkRuntimeReadyTaskRunner(
         defaultRoleRef: options.defaultRoleRef,
         artifactStore: options.artifactStore,
         cwd: options.cwd,
-        piCommand: options.piCommand,
         dryRun: input.dryRun,
         timeoutMs: input.timeoutMs,
         signal: input.signal,
