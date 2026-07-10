@@ -46,6 +46,8 @@ export interface CockpitChannelEditorValues {
   infoflowGroupPolicy: "disabled" | "allowlist" | "open";
   /** Comma/space-separated group ids when policy is allowlist. */
   infoflowAllowedGroupIds: string;
+  /** Custom Infoflow system-prompt overlay (operator copy). */
+  infoflowSystemPrompt: string;
   routeName: string;
   routeAdapter: "feishu" | "infoflow";
   routeRecipient: string;
@@ -121,6 +123,7 @@ export function emptyChannelEditorValues(): CockpitChannelEditorValues {
     infoflowAllowedUserIds: "",
     infoflowGroupPolicy: "disabled",
     infoflowAllowedGroupIds: "",
+    infoflowSystemPrompt: "",
     routeName: "ops",
     routeAdapter: "infoflow",
     routeRecipient: "",
@@ -233,6 +236,10 @@ export function channelEditorValuesFromConfig(
       infoflowEntry && infoflowEntry[1].type === "infoflow"
         ? (infoflowEntry[1].allowed_group_ids ?? []).join(", ")
         : "",
+    infoflowSystemPrompt:
+      infoflowEntry && infoflowEntry[1].type === "infoflow"
+        ? (infoflowEntry[1].system_prompt ?? "")
+        : "",
     routeName: routeEntry?.[0] ?? defaults.routeName,
     routeAdapter: infoflowReady
       ? "infoflow"
@@ -305,6 +312,9 @@ export function channelsConfigFromEditorValues(
         : values.infoflowGroupPolicy === "allowlist"
           ? { allowed_group_ids: [] }
           : {}),
+      ...(values.infoflowSystemPrompt.trim()
+        ? { system_prompt: values.infoflowSystemPrompt.trim() }
+        : {}),
     };
   }
 

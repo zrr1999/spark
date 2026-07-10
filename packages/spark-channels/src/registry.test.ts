@@ -209,6 +209,22 @@ describe("ChannelRegistry", () => {
       allowed_group_ids: ["10838226"],
     });
   });
+
+  it("parses infoflow system_prompt custom overlay", () => {
+    const config = parseChannelsConfig({
+      adapters: {
+        infoflow: {
+          type: "infoflow",
+          system_prompt: "  如流自定义  ",
+        },
+      },
+      routes: {},
+    });
+    expect(config.adapters.infoflow).toMatchObject({
+      type: "infoflow",
+      system_prompt: "如流自定义",
+    });
+  });
 });
 
 describe("adapter parseInbound", () => {
@@ -238,5 +254,15 @@ describe("adapter parseInbound", () => {
         chat_id: "10838226",
       }).externalKey,
     ).toBe("infoflow:group:10838226");
+    expect(
+      infoflow.parseInbound({
+        user_id: "u_x",
+        text: "@spark hi",
+        chat_type: "group",
+        chat_id: "10838226",
+        mentions: ["spark"],
+        mentioned_self: true,
+      }),
+    ).toMatchObject({ mentions: ["spark"], mentionedSelf: true });
   });
 });

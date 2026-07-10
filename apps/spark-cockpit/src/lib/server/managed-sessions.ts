@@ -1,9 +1,11 @@
 import {
   parseSparkSessionRegistryRecord,
   parseSparkSessionRegistryRecords,
+  sparkSessionViewSchema,
   type SparkSessionCreateRequest,
   type SparkSessionListRequest,
   type SparkSessionRegistryRecord,
+  type SparkSessionView,
 } from "@zendev-lab/spark-protocol";
 import {
   requestSparkDaemonLocalRpc,
@@ -13,6 +15,7 @@ import {
 export interface CockpitManagedSessionsClient {
   list(options?: SparkSessionListRequest): Promise<SparkSessionRegistryRecord[]>;
   get(sessionId: string): Promise<SparkSessionRegistryRecord>;
+  snapshot(sessionId: string): Promise<SparkSessionView>;
   create(input: SparkSessionCreateRequest): Promise<SparkSessionRegistryRecord>;
   archive(sessionId: string): Promise<SparkSessionRegistryRecord>;
 }
@@ -25,6 +28,10 @@ const daemonManagedSessionsClient: CockpitManagedSessionsClient = {
   get: async (sessionId) =>
     parseSparkSessionRegistryRecord(
       await requestSparkDaemonLocalRpc<unknown>("session.get", { sessionId }),
+    ),
+  snapshot: async (sessionId) =>
+    sparkSessionViewSchema.parse(
+      await requestSparkDaemonLocalRpc<unknown>("session.snapshot", { sessionId }),
     ),
   create: async (input) =>
     parseSparkSessionRegistryRecord(
@@ -53,6 +60,13 @@ export async function getManagedSessionForCockpit(
   client: CockpitManagedSessionsClient = daemonManagedSessionsClient,
 ): Promise<SparkSessionRegistryRecord> {
   return await client.get(sessionId);
+}
+
+export async function getManagedSessionSnapshotForCockpit(
+  sessionId: string,
+  client: CockpitManagedSessionsClient = daemonManagedSessionsClient,
+): Promise<SparkSessionView> {
+  return await client.snapshot(sessionId);
 }
 
 export async function createManagedSessionForCockpit(

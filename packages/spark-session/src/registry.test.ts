@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -17,6 +17,60 @@ async function tempRegistry(): Promise<SparkSessionRegistry> {
 }
 
 describe("SparkSessionRegistry", () => {
+  it("reads v1 workspace records as canonical workspace ownership", async () => {
+    const registry = await tempRegistry();
+    await writeFile(
+      registry.filePath,
+      `${JSON.stringify({
+        version: 1,
+        sessions: [
+          {
+            sessionId: "sess_legacy",
+            workspaceId: "legacy-workspace",
+            status: "ready",
+            bindings: [],
+            createdAt: "2026-07-10T00:00:00.000Z",
+            updatedAt: "2026-07-10T00:00:00.000Z",
+          },
+        ],
+      })}\n`,
+      "utf8",
+    );
+
+    await expect(registry.get("sess_legacy")).resolves.toMatchObject({
+      scope: { kind: "workspace", workspaceId: "legacy-workspace" },
+      workspaceId: "legacy-workspace",
+    });
+
+    await registry.create({ workspaceId: "ws_new" });
+    expect(JSON.parse(await readFile(registry.filePath, "utf8"))).toMatchObject({
+      version: 2,
+      sessions: [
+        { sessionId: "sess_legacy", scope: { kind: "workspace" } },
+        { scope: { kind: "workspace", workspaceId: "ws_new" } },
+      ],
+    });
+  });
+
+  it("stores and filters daemon-global sessions without a workspace alias", async () => {
+    const registry = await tempRegistry();
+    const global = await registry.create({
+      sessionId: "sess_global",
+      scope: { kind: "daemon", daemonId: "install-test" },
+      cwd: "/daemon/base",
+    });
+    await registry.create({ workspaceId: "ws_other" });
+
+    expect(global).toMatchObject({
+      scope: { kind: "daemon", daemonId: "install-test" },
+      cwd: "/daemon/base",
+    });
+    expect(global).not.toHaveProperty("workspaceId");
+    await expect(
+      registry.list({ scope: { kind: "daemon", daemonId: "install-test" } }),
+    ).resolves.toEqual([global]);
+  });
+
   it("creates, binds, lists, and archives sessions", async () => {
     const registry = await tempRegistry();
     const created = await registry.create({
@@ -124,5 +178,51 @@ describe("SparkSessionRegistry", () => {
     await expect(registry.setModel(created.sessionId, model)).rejects.toMatchObject({
       code: "session_archived",
     } satisfies Partial<SparkSessionRegistryError>);
+  });
+
+  it("records a completed native transcript idempotently without moving updatedAt backwards", async () => {
+    const registry = await tempRegistry();
+    const created = await registry.create({
+      sessionId: "sess_recorded",
+      workspaceId: "ws_recorded",
+      now: new Date("2026-07-10T08:00:00.000Z"),
+    });
+    const first = await registry.recordRun({
+      sessionId: created.sessionId,
+      sessionPath: "/tmp/sessions/sess_recorded.jsonl",
+      now: new Date("2026-07-10T08:05:00.000Z"),
+    });
+    const replayed = await registry.recordRun({
+      sessionId: created.sessionId,
+      sessionPath: "/tmp/sessions/sess_recorded.jsonl",
+      now: new Date("2026-07-10T08:04:00.000Z"),
+    });
+
+    expect(first.sessionPath).toBe("/tmp/sessions/sess_recorded.jsonl");
+    expect(first.status).toBe("ready");
+    expect(replayed.updatedAt).toBe("2026-07-10T08:05:00.000Z");
+    await expect(registry.get(created.sessionId)).resolves.toEqual(replayed);
+  });
+
+  it("tracks queued and settled turns for rail ordering", async () => {
+    const registry = await tempRegistry();
+    const created = await registry.create({
+      sessionId: "sess_turn",
+      workspaceId: "ws_turn",
+      now: new Date("2026-07-10T08:00:00.000Z"),
+    });
+    const running = await registry.recordTurnQueued(
+      created.sessionId,
+      new Date("2026-07-10T08:01:00.000Z"),
+    );
+    expect(running).toMatchObject({
+      status: "running",
+      updatedAt: "2026-07-10T08:01:00.000Z",
+    });
+    const ready = await registry.recordTurnSettled(
+      created.sessionId,
+      new Date("2026-07-10T08:02:00.000Z"),
+    );
+    expect(ready).toMatchObject({ status: "ready", updatedAt: "2026-07-10T08:02:00.000Z" });
   });
 });

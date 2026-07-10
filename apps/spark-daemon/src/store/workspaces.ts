@@ -575,6 +575,32 @@ export function getWorkspaceById(db: DatabaseSync, id: string): SparkDaemonWorks
   return row ? mapWorkspaceRow(row, db) : null;
 }
 
+/** Resolve session ownership ids to the daemon-local execution directory. */
+export function resolveWorkspaceLocalPath(
+  db: DatabaseSync,
+  workspaceId: string,
+): string | undefined {
+  const direct = getWorkspaceById(db, workspaceId);
+  if (direct) return direct.localPath;
+
+  const serverMatches = db
+    .prepare(
+      `SELECT w.local_path AS localPath
+       FROM workspaces w
+       JOIN daemon_workspaces dw ON dw.id = w.id
+       WHERE dw.server_workspace_id = ?
+       LIMIT 2`,
+    )
+    .all(workspaceId) as Array<{ localPath: string }>;
+  if (serverMatches.length === 1) return serverMatches[0]!.localPath;
+
+  // v1 session records used daemon-local slugs (for example "spark").
+  const legacyMatches = listWorkspaces(db).filter(
+    (workspace) => workspace.localWorkspaceKey === workspaceId,
+  );
+  return legacyMatches.length === 1 ? legacyMatches[0]!.localPath : undefined;
+}
+
 export function getWorkspaceByKey(
   db: DatabaseSync,
   serverUrl: string,

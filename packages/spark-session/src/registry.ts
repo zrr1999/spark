@@ -6,11 +6,13 @@ import {
   parseSparkSessionRegistryRecord,
   type SparkSessionChannelBinding,
   type SparkSessionRegistryRecord,
+  type SparkSessionScope,
   type SparkSessionStatus,
 } from "@zendev-lab/spark-protocol/session-assignment";
 import type { SparkModelRef } from "@zendev-lab/spark-protocol/model-control";
 
-const REGISTRY_VERSION = 1 as const;
+const LEGACY_REGISTRY_VERSION = 1 as const;
+const REGISTRY_VERSION = 2 as const;
 
 export type SparkSessionUnboundPolicy = "reject" | "create";
 
@@ -26,7 +28,10 @@ export interface SparkSessionRegistryOptions {
 
 export interface CreateSparkSessionInput {
   sessionId?: string;
-  workspaceId: string;
+  /** Canonical durable owner. */
+  scope?: SparkSessionScope;
+  /** @deprecated Prefer scope.kind=workspace. */
+  workspaceId?: string;
   title?: string;
   role?: string;
   cwd?: string;
@@ -38,6 +43,12 @@ export interface CreateSparkSessionInput {
 export interface BindSparkSessionInput {
   sessionId: string;
   externalKey: string;
+  now?: Date;
+}
+
+export interface RecordSparkSessionRunInput {
+  sessionId: string;
+  sessionPath: string;
   now?: Date;
 }
 
@@ -74,9 +85,12 @@ export class SparkSessionRegistry {
     if (file.sessions.some((session) => session.sessionId === sessionId)) {
       throw new SparkSessionRegistryError("session_exists", `session already exists: ${sessionId}`);
     }
+    const scope = createScope(input);
+    const ownership =
+      scope.kind === "workspace" ? { scope, workspaceId: scope.workspaceId } : { scope };
     const record: SparkSessionRegistryRecord = {
       sessionId,
-      workspaceId: input.workspaceId,
+      ...ownership,
       status: input.status ?? "ready",
       bindings: [],
       createdAt: now,
@@ -92,13 +106,18 @@ export class SparkSessionRegistry {
   }
 
   async list(
-    options: { includeArchived?: boolean; workspaceId?: string } = {},
+    options: { includeArchived?: boolean; scope?: SparkSessionScope; workspaceId?: string } = {},
   ): Promise<SparkSessionRegistryRecord[]> {
     const file = await this.loadFile();
     return file.sessions
       .filter((session) => {
         if (!options.includeArchived && session.status === "archived") return false;
-        if (options.workspaceId && session.workspaceId !== options.workspaceId) return false;
+        const scope =
+          options.scope ??
+          (options.workspaceId
+            ? ({ kind: "workspace", workspaceId: options.workspaceId } as const)
+            : undefined);
+        if (scope && !sameSessionScope(session.scope, scope)) return false;
         return true;
       })
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -233,6 +252,51 @@ export class SparkSessionRegistry {
     return updated;
   }
 
+  /**
+   * Record the durable native transcript produced by a completed turn.
+   * Re-applying the same path is safe; the supplied observation time is kept
+   * monotonic so a delayed retry cannot move the session backwards.
+   */
+  async recordRun(input: RecordSparkSessionRunInput): Promise<SparkSessionRegistryRecord> {
+    const file = await this.loadFile();
+    const index = file.sessions.findIndex((session) => session.sessionId === input.sessionId);
+    if (index < 0) {
+      throw new SparkSessionRegistryError(
+        "session_not_found",
+        `unknown session: ${input.sessionId}`,
+      );
+    }
+    const current = file.sessions[index]!;
+    const sessionPath = input.sessionPath.trim();
+    if (!sessionPath) {
+      throw new SparkSessionRegistryError(
+        "invalid_session_path",
+        `session path must not be blank: ${input.sessionId}`,
+      );
+    }
+    const observedAt = (input.now ?? new Date()).toISOString();
+    const updated: SparkSessionRegistryRecord = {
+      ...current,
+      sessionPath,
+      status: current.status === "archived" ? "archived" : "ready",
+      updatedAt: observedAt > current.updatedAt ? observedAt : current.updatedAt,
+    };
+    file.sessions[index] = updated;
+    await this.saveFile(file);
+    return updated;
+  }
+
+  async recordTurnQueued(sessionId: string, now = new Date()): Promise<SparkSessionRegistryRecord> {
+    return await this.recordTurnStatus(sessionId, "running", now);
+  }
+
+  async recordTurnSettled(
+    sessionId: string,
+    now = new Date(),
+  ): Promise<SparkSessionRegistryRecord> {
+    return await this.recordTurnStatus(sessionId, "ready", now);
+  }
+
   async resolveBinding(input: ResolveBindingInput): Promise<SparkSessionRegistryRecord> {
     const externalKey = normalizeChannelExternalKey(input.externalKey);
     const file = await this.loadFile();
@@ -278,6 +342,34 @@ export class SparkSessionRegistry {
     }
   }
 
+  private async recordTurnStatus(
+    sessionId: string,
+    status: "ready" | "running",
+    now: Date,
+  ): Promise<SparkSessionRegistryRecord> {
+    const file = await this.loadFile();
+    const index = file.sessions.findIndex((session) => session.sessionId === sessionId);
+    if (index < 0) {
+      throw new SparkSessionRegistryError("session_not_found", `unknown session: ${sessionId}`);
+    }
+    const current = file.sessions[index]!;
+    if (current.status === "archived") {
+      throw new SparkSessionRegistryError(
+        "session_archived",
+        `cannot queue a turn for archived session: ${sessionId}`,
+      );
+    }
+    const observedAt = now.toISOString();
+    const updated: SparkSessionRegistryRecord = {
+      ...current,
+      status,
+      updatedAt: observedAt > current.updatedAt ? observedAt : current.updatedAt,
+    };
+    file.sessions[index] = updated;
+    await this.saveFile(file);
+    return updated;
+  }
+
   private async saveFile(file: SparkSessionRegistryFile): Promise<void> {
     await mkdir(dirname(this.filePath), { recursive: true });
     const tempPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
@@ -287,6 +379,8 @@ export class SparkSessionRegistry {
 }
 
 export function defaultSparkSessionRegistryRoot(sparkHome: string): string {
+  // Keep the established directory so existing installations are migrated in
+  // place; registry.json carries its own independently versioned file format.
   return join(sparkHome, "session-registry", "v1");
 }
 
@@ -295,7 +389,7 @@ function parseRegistryFile(value: unknown): SparkSessionRegistryFile {
     throw new SparkSessionRegistryError("invalid_registry", "registry root must be an object");
   }
   const record = value as Record<string, unknown>;
-  if (record.version !== REGISTRY_VERSION) {
+  if (record.version !== LEGACY_REGISTRY_VERSION && record.version !== REGISTRY_VERSION) {
     throw new SparkSessionRegistryError(
       "invalid_registry",
       `unsupported registry version: ${String(record.version)}`,
@@ -312,4 +406,31 @@ function parseRegistryFile(value: unknown): SparkSessionRegistryFile {
 
 function createSessionId(): string {
   return `sess_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function createScope(input: CreateSparkSessionInput): SparkSessionScope {
+  if (input.scope) {
+    if (
+      input.workspaceId &&
+      (input.scope.kind !== "workspace" || input.scope.workspaceId !== input.workspaceId)
+    ) {
+      throw new SparkSessionRegistryError(
+        "invalid_scope",
+        "workspaceId must match workspace session scope",
+      );
+    }
+    return input.scope;
+  }
+  const workspaceId = input.workspaceId?.trim();
+  if (!workspaceId) {
+    throw new SparkSessionRegistryError("invalid_scope", "session scope is required");
+  }
+  return { kind: "workspace", workspaceId };
+}
+
+function sameSessionScope(left: SparkSessionScope, right: SparkSessionScope): boolean {
+  if (left.kind !== right.kind) return false;
+  return left.kind === "workspace"
+    ? left.workspaceId === (right as Extract<SparkSessionScope, { kind: "workspace" }>).workspaceId
+    : left.daemonId === (right as Extract<SparkSessionScope, { kind: "daemon" }>).daemonId;
 }

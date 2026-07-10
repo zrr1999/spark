@@ -41,6 +41,7 @@ import {
 import { sparkCommandFromServerCommandEnvelope } from "./command-dispatcher.ts";
 import { decideCommandPolicy } from "./policy.js";
 import type { SparkDaemonModelControl } from "./model-control.ts";
+import type { DaemonSessionRegistry } from "./session-registry.ts";
 import {
   commandAck,
   commandReject,
@@ -60,6 +61,7 @@ import {
   markSparkDaemonServerConnected,
   markServerWorkspacesDisconnected,
   reconcileWorkspaces,
+  resolveWorkspaceLocalPath,
   workspaceSummaries,
 } from "./store/workspaces.js";
 import {
@@ -105,6 +107,7 @@ export interface StartSparkDaemonOptions {
   /** Global Spark provider/auth control root (normally ~/.spark). */
   sparkHome?: string;
   modelControl?: SparkDaemonModelControl;
+  sessionRegistry?: DaemonSessionRegistry;
   config: SparkDaemonConfig;
   db: DatabaseSync;
   once?: boolean;
@@ -154,7 +157,10 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
               cwd: process.cwd(),
               controlSparkHome:
                 (options.sparkHome ?? process.env.SPARK_HOME?.trim()) || join(homedir(), ".spark"),
+              channelsSparkHome:
+                (options.sparkHome ?? process.env.SPARK_HOME?.trim()) || join(homedir(), ".spark"),
               ...(options.modelControl ? { modelControl: options.modelControl } : {}),
+              ...(options.sessionRegistry ? { sessionRegistry: options.sessionRegistry } : {}),
               channelIngress: options.channelIngress,
             }),
           emitEvent: emitQueueEvent,
@@ -256,20 +262,37 @@ async function maybeStartChannelIngress(
     options.channelIngress ??
     createDaemonChannelIngressRuntime({
       sparkHome,
+      ...(options.sessionRegistry ? { sessionRegistry: options.sessionRegistry } : {}),
       hooks: {
         onAssignment: async (assignment) => {
           const model = options.modelControl
             ? await options.modelControl.effectiveModel(assignment.sessionId)
             : undefined;
           if (model) await options.modelControl?.prepareModel(model);
+          const session = await options.sessionRegistry?.get(assignment.sessionId);
+          if (session && session.scope.kind !== "workspace") {
+            throw new Error(`channel session ${assignment.sessionId} has no workspace owner`);
+          }
+          const workspaceId =
+            session?.scope.kind === "workspace"
+              ? session.scope.workspaceId
+              : assignment.channelReply.workspaceId;
+          const cwd = session?.cwd?.trim() ?? resolveWorkspaceLocalPath(options.db, workspaceId);
+          if (!cwd) {
+            throw new Error(
+              `channel session ${assignment.sessionId} has no daemon-local execution directory`,
+            );
+          }
           await queue.enqueue({
             type: "session.run",
             sessionId: assignment.sessionId,
             prompt: assignment.goal,
             ...(model ? { model: `${model.providerName}/${model.modelId}` } : {}),
             assignment: assignment.assignment,
-            workspaceId: assignment.channelReply.workspaceId,
+            workspaceId,
+            cwd,
             channelReply: assignment.channelReply,
+            ...(assignment.channelContext ? { channelContext: assignment.channelContext } : {}),
           });
         },
       },

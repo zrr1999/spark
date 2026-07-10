@@ -10,6 +10,7 @@ export {
   DEFAULT_INFOFLOW_API_HOST,
   DEFAULT_INFOFLOW_WS_GATEWAY,
   ensureHttpsHost,
+  extractInfoflowBodyContent,
   normalizeInfoflowInbound,
   signInfoflowAppSecret,
 } from "./infoflow-transport.ts";
@@ -19,6 +20,13 @@ export {
   isInfoflowPrivateAllowed,
   resolveInfoflowGroupPolicy,
 } from "./infoflow-policy.ts";
+export {
+  renderInfoflowInternalSystemPrompt,
+  renderInfoflowMessageContextPrompt,
+  renderInfoflowPolicySummary,
+  resolveInfoflowCustomSystemPrompt,
+} from "./infoflow-prompts.ts";
+export type { InfoflowMessageContext, InfoflowPromptScope } from "./infoflow-prompts.ts";
 export { ChannelRegistry, ChannelRegistryError, parseChannelsConfig } from "./registry.ts";
 export { FakeChannelTransport } from "./transport.ts";
 export type {

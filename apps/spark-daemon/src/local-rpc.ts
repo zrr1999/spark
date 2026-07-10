@@ -6,6 +6,7 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   parseSparkAssignment,
   parseSparkDefaultModelSetRequest,
+  parseSparkSessionView,
   parseSparkSessionSetModelRequest,
   sparkSessionArchiveRequestSchema,
   sparkSessionBindRequestSchema,
@@ -21,6 +22,7 @@ import {
   type SparkSessionCreateRequest,
   type SparkSessionGetRequest,
   type SparkSessionListRequest,
+  type SparkSessionView,
   type SparkSessionUnbindRequest,
 } from "@zendev-lab/spark-protocol";
 import {
@@ -28,7 +30,7 @@ import {
   type ChannelNotifyInput,
   type ChannelsConfig,
 } from "@zendev-lab/spark-channels";
-import { SparkSessionRegistryError } from "@zendev-lab/spark-session";
+import { loadSparkSessionSnapshot, SparkSessionRegistryError } from "@zendev-lab/spark-session";
 import type { SparkPaths } from "@zendev-lab/spark-system";
 import {
   requestSparkDaemonLocalRpcWire,
@@ -37,6 +39,7 @@ import {
   SparkDaemonLocalRpcUnavailableError,
 } from "@zendev-lab/spark-system/daemon-local-rpc";
 import { sparkCommandFromLocalRpcRequest } from "./command-dispatcher.ts";
+import { readSparkDaemonConfig } from "./config.ts";
 import type {
   DaemonChannelIngressRuntime,
   DaemonChannelIngressStatus,
@@ -64,6 +67,7 @@ import {
   type SparkDaemonWorkspace,
   type SparkDaemonWorkspaceClient,
   WorkspacePathConflictError,
+  resolveWorkspaceLocalPath,
 } from "./store/workspaces.js";
 import {
   ensureSparkDaemonRegistrationForWorkspace,
@@ -298,6 +302,12 @@ type LocalRpcRequest =
     }
   | {
       id: string;
+      method: "session.snapshot";
+      params: SparkSessionGetRequest;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
       method: "session.create";
       params: SparkSessionCreateRequest;
       sparkCommand: SparkCommand;
@@ -403,7 +413,14 @@ export async function startLocalRpcServer(options: {
   mkdirSync(dirname(socketPath), { recursive: true, mode: 0o700 });
   rmSync(socketPath, { force: true });
 
-  const sessionRegistry = options.sessionRegistry ?? createDaemonSessionRegistry(options.sparkHome);
+  const config = readSparkDaemonConfig(options.paths);
+  const sessionRegistry =
+    options.sessionRegistry ??
+    createDaemonSessionRegistry(options.sparkHome, {
+      daemonId: config.installationId,
+      daemonCwd: process.cwd(),
+      resolveWorkspaceCwd: (workspaceId) => resolveWorkspaceLocalPath(options.db, workspaceId),
+    });
   const server = createServer((socket) => {
     handleLocalRpcSocket(
       socket,
@@ -664,6 +681,17 @@ export async function requestWorkspaceExecutorEnsure(
   );
 }
 
+export async function requestSessionSnapshot(
+  paths: SparkPaths,
+  sessionId: string,
+): Promise<SparkSessionView> {
+  return localRpcRequest(
+    paths,
+    { id: localRequestId(), method: "session.snapshot", params: { sessionId } },
+    parseSparkSessionView,
+  );
+}
+
 async function localRpcRequest<T>(
   paths: SparkPaths,
   request: LocalRpcWireRequest,
@@ -708,7 +736,7 @@ function handleLocalRpcSocket(
     while (newline !== -1) {
       const line = buffer.slice(0, newline);
       buffer = buffer.slice(newline + 1);
-      if (handleLocalRpcStreamLine(line, socket, paths, eventBus, handlerOptions)) {
+      if (handleLocalRpcStreamLine(line, socket, paths, db, eventBus, handlerOptions)) {
         return;
       }
       void handleLocalRpcLine(line, paths, db, onStop, handlerOptions, invocationRegistry).then(
@@ -725,6 +753,7 @@ function handleLocalRpcStreamLine(
   line: string,
   socket: Socket,
   paths: SparkPaths,
+  db: DatabaseSync,
   eventBus: SparkDaemonLocalEventBus | undefined,
   handlerOptions: LocalRpcHandlerOptions,
 ): boolean {
@@ -765,15 +794,20 @@ function handleLocalRpcStreamLine(
       const params = parseLocalTurnSubmitParams(request.params);
       const queue = new SparkDaemonQueue({ paths });
       const model = await effectiveTurnModel(handlerOptions, params.sessionId);
-      const entry = await queue.enqueue({
-        type: "session.run",
-        sessionId: params.sessionId,
-        prompt: params.prompt,
-        ...(model ? { model } : {}),
-        ...(params.reset !== undefined ? { reset: params.reset } : {}),
-        ...(params.assignment ? { assignment: params.assignment } : {}),
-        actor: "spark-daemon-local-rpc",
-      });
+      const route = await sessionTurnRoute(handlerOptions, db, params.sessionId, params.assignment);
+      const entry = await enqueueManagedSessionTurn(handlerOptions, params.sessionId, () =>
+        queue.enqueue({
+          type: "session.run",
+          sessionId: params.sessionId,
+          prompt: params.prompt,
+          ...(model ? { model } : {}),
+          ...(params.reset !== undefined ? { reset: params.reset } : {}),
+          ...(route.cwd ? { cwd: route.cwd } : {}),
+          ...(route.workspaceId ? { workspaceId: route.workspaceId } : {}),
+          ...(params.assignment ? { assignment: params.assignment } : {}),
+          actor: "spark-daemon-local-rpc",
+        }),
+      );
       taskFileName = entry.fileName;
       writeLocalRpcStreamMessage(socket, {
         id: request.id,
@@ -902,15 +936,25 @@ export async function handleLocalRpcLine(
       case "turn.submit": {
         const queue = new SparkDaemonQueue({ paths });
         const model = await effectiveTurnModel(options, request.params.sessionId);
-        const entry = await queue.enqueue({
-          type: "session.run",
-          sessionId: request.params.sessionId,
-          prompt: request.params.prompt,
-          ...(model ? { model } : {}),
-          ...(request.params.reset !== undefined ? { reset: request.params.reset } : {}),
-          ...(request.params.assignment ? { assignment: request.params.assignment } : {}),
-          actor: "spark-daemon-local-rpc",
-        });
+        const route = await sessionTurnRoute(
+          options,
+          db,
+          request.params.sessionId,
+          request.params.assignment,
+        );
+        const entry = await enqueueManagedSessionTurn(options, request.params.sessionId, () =>
+          queue.enqueue({
+            type: "session.run",
+            sessionId: request.params.sessionId,
+            prompt: request.params.prompt,
+            ...(model ? { model } : {}),
+            ...(request.params.reset !== undefined ? { reset: request.params.reset } : {}),
+            ...(route.cwd ? { cwd: route.cwd } : {}),
+            ...(route.workspaceId ? { workspaceId: route.workspaceId } : {}),
+            ...(request.params.assignment ? { assignment: request.params.assignment } : {}),
+            actor: "spark-daemon-local-rpc",
+          }),
+        );
         return {
           id: request.id,
           ok: true,
@@ -1039,6 +1083,27 @@ export async function handleLocalRpcLine(
           );
         }
         return { id: request.id, ok: true, result: session };
+      }
+      case "session.snapshot": {
+        const session = await requireSessionRegistry(options).get(request.params.sessionId);
+        if (!session) {
+          throw new SparkSessionRegistryError(
+            "session_not_found",
+            `unknown session: ${request.params.sessionId}`,
+          );
+        }
+        if (!paths.piAgentDir) {
+          throw new Error("Spark daemon native session storage is not available.");
+        }
+        const snapshot = await loadSparkSessionSnapshot({
+          sessionsRoot: join(paths.piAgentDir, "sessions"),
+          session,
+        });
+        return {
+          id: request.id,
+          ok: true,
+          result: await projectPendingSessionTurns(paths, snapshot),
+        };
       }
       case "session.create": {
         const session = await requireSessionRegistry(options).create(request.params);
@@ -1170,6 +1235,105 @@ async function effectiveTurnModel(
   return `${model.providerName}/${model.modelId}`;
 }
 
+async function sessionTurnRoute(
+  options: LocalRpcHandlerOptions,
+  db: DatabaseSync,
+  sessionId: string,
+  assignment?: SparkAssignment,
+): Promise<{ cwd?: string; workspaceId?: string }> {
+  if (!options.sessionRegistry) {
+    // Lightweight test/embedding callers may omit registry ownership. The
+    // production local server always supplies it.
+    return assignment?.target.workspaceId ? { workspaceId: assignment.target.workspaceId } : {};
+  }
+  const session = await options.sessionRegistry.get(sessionId);
+  if (!session) {
+    throw new SparkSessionRegistryError("session_not_found", `unknown session: ${sessionId}`);
+  }
+  if (session.scope.kind === "daemon") {
+    if (assignment?.target.workspaceId) {
+      throw new SparkSessionRegistryError(
+        "session_scope_mismatch",
+        `daemon-global session ${sessionId} cannot target a workspace`,
+      );
+    }
+    const cwd = session.cwd?.trim();
+    if (!cwd) {
+      throw new SparkSessionRegistryError(
+        "session_cwd_unavailable",
+        `daemon-global session ${sessionId} has no execution directory`,
+      );
+    }
+    return { cwd };
+  }
+  const workspaceId = session.scope.workspaceId;
+  if (assignment?.target.workspaceId && assignment.target.workspaceId !== workspaceId) {
+    throw new SparkSessionRegistryError(
+      "session_scope_mismatch",
+      `session ${sessionId} belongs to workspace ${workspaceId}, not ${assignment.target.workspaceId}`,
+    );
+  }
+  const cwd = session.cwd ?? resolveWorkspaceLocalPath(db, workspaceId);
+  if (!cwd?.trim()) {
+    throw new SparkSessionRegistryError(
+      "session_cwd_unavailable",
+      `workspace session ${sessionId} has no daemon-local execution directory`,
+    );
+  }
+  return { workspaceId, cwd: cwd.trim() };
+}
+
+async function projectPendingSessionTurns(
+  paths: SparkPaths,
+  snapshot: SparkSessionView,
+): Promise<SparkSessionView> {
+  const queue = new SparkDaemonQueue({ paths });
+  const pending = (await queue.listEntries("inbox"))
+    .filter((entry) => entry.payload.task.sessionId === snapshot.sessionId)
+    .sort((left, right) => left.payload.enqueuedAt.localeCompare(right.payload.enqueuedAt));
+  if (pending.length === 0) return snapshot;
+
+  const messages = pending.map((entry) => ({
+    id: `queue:${entry.fileName}`,
+    role: "user" as const,
+    text: entry.payload.task.prompt,
+    status: "pending" as const,
+    createdAt: entry.payload.enqueuedAt,
+    metadata: {
+      source: "daemon.queue",
+      taskFileName: entry.fileName,
+    },
+  }));
+  const pendingUpdatedAt = messages.at(-1)!.createdAt;
+  return parseSparkSessionView({
+    ...snapshot,
+    status: "running",
+    messages: [...snapshot.messages, ...messages],
+    updatedAt:
+      snapshot.updatedAt && snapshot.updatedAt > pendingUpdatedAt
+        ? snapshot.updatedAt
+        : pendingUpdatedAt,
+  });
+}
+
+async function enqueueManagedSessionTurn<T>(
+  options: LocalRpcHandlerOptions,
+  sessionId: string,
+  enqueue: () => Promise<T>,
+): Promise<T> {
+  await options.sessionRegistry?.recordTurnQueued(sessionId);
+  try {
+    return await enqueue();
+  } catch (error) {
+    try {
+      await options.sessionRegistry?.recordTurnSettled(sessionId);
+    } catch (settleError) {
+      console.error("[spark-daemon] failed to settle rejected session turn", settleError);
+    }
+    throw error;
+  }
+}
+
 function requireChannelIngress(
   options: LocalRpcHandlerOptions,
 ): NonNullable<LocalRpcHandlerOptions["channelIngress"]> {
@@ -1298,6 +1462,13 @@ function parseLocalRpcRequest(line: string): LocalRpcRequest {
     });
   }
   if (value.method === "session.get") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkSessionGetRequestSchema.parse(value.params),
+    });
+  }
+  if (value.method === "session.snapshot") {
     return withSparkCommand({
       id: value.id,
       method: value.method,

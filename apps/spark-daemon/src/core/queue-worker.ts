@@ -396,7 +396,7 @@ function daemonEventsFromResult(
   });
 }
 
-function daemonTaskRouteMetadata(task: SparkDaemonTask | undefined): SparkJsonObject {
+export function daemonTaskRouteMetadata(task: SparkDaemonTask | undefined): SparkJsonObject {
   return {
     ...(task?.workspaceBindingId ? { workspaceBindingId: task.workspaceBindingId } : {}),
   };

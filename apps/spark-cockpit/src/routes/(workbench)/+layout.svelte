@@ -15,6 +15,7 @@
   } from "$lib/workbench-nav";
   import { workspaceAvatarStyle, workspaceInitial } from "$lib/workspace-avatar";
   import { workspacePath } from "$lib/workspace-routes";
+  import { workbenchSessionScope } from "$lib/workbench-session-scope";
 
   interface WorkbenchSearchResult {
     id: string;
@@ -27,7 +28,10 @@
 
   interface SessionSearchRecord {
     sessionId: string;
-    workspaceId: string;
+    workspaceId?: string;
+    scope?:
+      | { kind: "workspace"; workspaceId: string }
+      | { kind: "daemon"; daemonId?: string; daemonLabel?: string };
     title?: string;
     status: string;
     activityStatus?: string;
@@ -204,23 +208,40 @@
     const workspaceById = new Map(input.workspaces.map((workspace) => [workspace.id, workspace]));
     const sessionResults = input.sessions
       .filter((session) => {
-        const workspace = workspaceById.get(session.workspaceId);
-        return [session.sessionId, session.title ?? "", workspace?.name ?? "", workspace?.slug ?? ""]
+        const scope = workbenchSessionScope(session);
+        const workspace =
+          scope.kind === "workspace" ? workspaceById.get(scope.workspaceId) : undefined;
+        const scopeSearchText =
+          scope.kind === "daemon"
+            ? `${data.messages.sessions.daemonGroup} ${scope.daemonLabel ?? scope.daemonId}`
+            : "";
+        return [
+          session.sessionId,
+          session.title ?? "",
+          workspace?.name ?? "",
+          workspace?.slug ?? "",
+          scopeSearchText,
+        ]
           .join("\n")
           .toLowerCase()
           .includes(query);
       })
       .slice(0, 6)
       .map((session): WorkbenchSearchResult => {
-        const workspace = workspaceById.get(session.workspaceId);
+        const scope = workbenchSessionScope(session);
+        const workspace =
+          scope.kind === "workspace" ? workspaceById.get(scope.workspaceId) : undefined;
         const activityStatus = session.activityStatus ?? session.status;
         return {
           id: session.sessionId,
           type: "session",
           title: session.title || data.messages.sessions.untitledConversation,
-          description: workspace
-            ? `${workspace.name} · ${statusLabel(activityStatus)}`
-            : statusLabel(activityStatus),
+          description:
+            scope.kind === "daemon"
+              ? `${data.messages.sessions.daemonGroup} · ${scope.daemonLabel ?? scope.daemonId} · ${statusLabel(activityStatus)}`
+              : workspace
+                ? `${workspace.name} · ${statusLabel(activityStatus)}`
+                : statusLabel(activityStatus),
           status: activityStatus,
           href: `/sessions/${session.sessionId}`,
         };
@@ -316,20 +337,23 @@
       <WorkbenchSessionRail
         sessions={sidebarSessions}
         workspaces={workspaceOptions}
+        activeWorkspaceId={data.activeWorkspace?.id ?? null}
         selectedSessionId={selectedSessionId}
         locale={data.locale}
         common={common}
         messages={{
-          newSession: data.messages.sessions.newSession,
+          workspaceConversation: data.messages.sessions.workspaceConversation,
+          daemonConversation: data.messages.sessions.daemonConversation,
           searchPlaceholder: data.messages.sessions.searchPlaceholder,
           emptyTitle: data.messages.sessions.emptyTitle,
           listLabel: data.messages.sessions.listLabel,
           untitledConversation: data.messages.sessions.untitledConversation,
           unknownWorkspace: data.messages.sessions.unknownWorkspace,
+          daemonGroup: data.messages.sessions.daemonGroup,
         }}
       />
 
-      {#if navItems.length > 0}
+      <div class="sidebar-bottom">
         <nav class="secondary-nav" aria-label={t.aria.workspaceNavigation}>
           {#each navItems as item}
             <a class="nav-link" class:active={isActive(item.href)} href={item.href}>
@@ -337,22 +361,21 @@
               <span>{item.label}</span>
             </a>
           {/each}
-        </nav>
-      {/if}
-
-      <div class="sidebar-footer">
-        <div class="settings-actions">
-          <a class="settings-link" href="/settings">
-            <Icon name="settings" size={16} stroke={2.2} />
+          <a class="nav-link" class:active={page.url.pathname.startsWith("/settings")} href="/settings">
+            <Icon name="settings" size={18} stroke={2.2} />
             <span>{t.user.globalSettings}</span>
           </a>
           {#if data.activeWorkspace}
-            <a class="settings-link" href={`${activeWorkspacePath}/settings`}>
-              <Icon name="folder" size={16} stroke={2.2} />
+            <a
+              class="nav-link"
+              class:active={page.url.pathname.startsWith(`${activeWorkspacePath}/settings`)}
+              href={`${activeWorkspacePath}/settings`}
+            >
+              <Icon name="folder" size={18} stroke={2.2} />
               <span>{t.user.workspaceSettings}</span>
             </a>
           {/if}
-        </div>
+        </nav>
 
         <div
           class="account-menu sidebar-account"
@@ -622,11 +645,8 @@
   }
 
   .secondary-nav {
-    border-top: 1px solid var(--color-border-soft);
     display: grid;
-    flex: 0 0 auto;
     gap: 2px;
-    padding-top: 8px;
   }
 
   .nav-link {
@@ -786,39 +806,13 @@
     padding: 5px 6px;
   }
 
-  .sidebar-footer {
+  .sidebar-bottom {
     border-top: 1px solid var(--color-border-soft);
     display: grid;
     flex: 0 0 auto;
-    gap: 6px;
+    gap: 4px;
     margin-top: auto;
     padding-top: 8px;
-  }
-
-  .settings-actions {
-    display: grid;
-    gap: 2px;
-  }
-
-  .settings-link {
-    align-items: center;
-    border-radius: 8px;
-    color: var(--color-ink-muted);
-    display: flex;
-    font-size: 13px;
-    font-weight: 500;
-    gap: 10px;
-    min-height: 34px;
-    padding: 0 10px;
-    text-decoration: none;
-    transition:
-      background 120ms ease,
-      color 120ms ease;
-  }
-
-  .settings-link:hover {
-    background: var(--color-surface-soft);
-    color: var(--color-ink);
   }
 
   .account-menu {

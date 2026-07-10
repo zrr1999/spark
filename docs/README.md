@@ -49,6 +49,7 @@ Use this directory as the map of current Spark contracts. Prefer one concise sou
 - [`operations/daemon-readiness.md`](./operations/daemon-readiness.md) — daemon readiness gate.
 - [`operations/zellij-harness.md`](./operations/zellij-harness.md) — native TUI/zellij harness.
 - [`cockpit/visual-design.md`](./cockpit/visual-design.md) — Spark Cockpit visual design authority.
+- [`cockpit/agent-conversation-ui.md`](./cockpit/agent-conversation-ui.md) — provider-neutral Svelte agent conversation UI adoption plan.
 
 ### Research
 

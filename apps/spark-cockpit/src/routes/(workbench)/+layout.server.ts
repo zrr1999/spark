@@ -5,6 +5,7 @@ import {
 import { loadConversationSummaries } from "$lib/server/conversation-summaries";
 import { getDatabase } from "$lib/server/db";
 import { loadShellWorkspaceLayout } from "$lib/server/shell-layout";
+import { workspaceIdForWorkbenchSession } from "$lib/workbench-session-scope";
 import type { LayoutServerLoad } from "./$types";
 
 export const load: LayoutServerLoad = async ({ cookies, url }) => {
@@ -18,7 +19,7 @@ export const load: LayoutServerLoad = async ({ cookies, url }) => {
     cookies,
     pathname: url.pathname,
     protocol: url.protocol,
-    preferredWorkspaceId: selectedSession?.workspaceId ?? null,
+    preferredWorkspaceId: selectedSession ? workspaceIdForWorkbenchSession(selectedSession) : null,
     preferredWorkspaceSlug: url.searchParams.get("workspace"),
   });
   const sessions = loadConversationSummaries(getDatabase(), managedSessions);

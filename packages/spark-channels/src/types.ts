@@ -6,9 +6,14 @@ export interface IncomingMessage {
   adapter: ChannelAdapterType;
   externalKey: string;
   senderId?: string;
+  senderName?: string;
   chatId?: string;
   text: string;
   messageId?: string;
+  /** Display names / ids extracted from AT body parts (Infoflow). */
+  mentions?: string[];
+  /** True when an AT targeted this bot (when detectable). */
+  mentionedSelf?: boolean;
   raw?: unknown;
 }
 
@@ -56,6 +61,11 @@ export interface InfoflowAdapterConfig {
   group_policy?: InfoflowGroupPolicy;
   /** Used when `group_policy` is `allowlist`. */
   allowed_group_ids?: string[];
+  /**
+   * Custom system-prompt overlay for Infoflow channel sessions.
+   * Policy/surface facts are generated in code; this field is operator copy only.
+   */
+  system_prompt?: string;
 }
 
 export type ChannelAdapterConfig = FeishuAdapterConfig | InfoflowAdapterConfig;
@@ -144,4 +154,7 @@ export interface InfoflowInboundRaw {
   chat_id?: string;
   message_id?: string;
   sender_name?: string;
+  mentions?: string[];
+  /** Transport-detected self mention after platform ids are still available. */
+  mentioned_self?: boolean;
 }

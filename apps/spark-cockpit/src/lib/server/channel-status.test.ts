@@ -136,6 +136,7 @@ describe("cockpit channel status", () => {
         infoflowAllowedUserIds: "",
         infoflowGroupPolicy: "disabled",
         infoflowAllowedGroupIds: "",
+        infoflowSystemPrompt: "",
         routeName: "ops",
         routeAdapter: "infoflow",
         routeRecipient: "",

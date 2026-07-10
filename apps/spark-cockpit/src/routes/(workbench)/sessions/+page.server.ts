@@ -1,10 +1,7 @@
-import { createId } from "@zendev-lab/spark-protocol";
 import { fail, redirect } from "@sveltejs/kit";
-import { getCurrentUserIdBySessionToken } from "@zendev-lab/spark-server/cockpit-queries";
 import { getRequestDictionary, localeCookieName, resolveRequestLocale } from "$lib/i18n";
 import { titleFromPrompt } from "$lib/server/agents-product";
-import { submitServerCommand } from "$lib/server/command-submission";
-import { getDatabase } from "$lib/server/db";
+import { submitConversationTurnForCockpit } from "$lib/server/conversation-control";
 import { formText } from "$lib/server/form-data";
 import {
   archiveManagedSessionForCockpit,
@@ -14,9 +11,11 @@ import {
 } from "$lib/server/managed-sessions";
 import {
   loadModelControlForCockpit,
+  modelValue,
   parseModelValue,
   setSessionModelForCockpit,
 } from "$lib/server/model-control";
+import { workspaceIdForWorkbenchSession } from "../../../lib/workbench-session-scope";
 import type { Actions, PageServerLoad } from "./$types";
 
 export const load: PageServerLoad = async () => {
@@ -33,18 +32,19 @@ export const load: PageServerLoad = async () => {
 };
 
 export const actions: Actions = {
-  startConversation: async ({ cookies, locals, request }) => {
+  startConversation: async ({ cookies, request }) => {
     const t = getRequestDictionary({
       cookieLocale: cookies.get(localeCookieName),
       acceptLanguage: request.headers.get("accept-language"),
     }).sessions;
     const formData = await request.formData();
     const workspaceId = formText(formData, "workspaceId").trim();
+    const scopeKind = formText(formData, "scopeKind").trim() === "daemon" ? "daemon" : "workspace";
     const message = formText(formData, "message").trim();
     const model = formText(formData, "model").trim();
-    const values = { workspaceId, message, model };
+    const values = { scopeKind, workspaceId, message, model };
 
-    if (!workspaceId) {
+    if (scopeKind === "workspace" && !workspaceId) {
       return fail(400, {
         intent: "startConversation",
         success: false,
@@ -65,10 +65,18 @@ export const actions: Actions = {
 
     let session;
     try {
-      session = await createManagedSessionForCockpit({
-        workspaceId,
-        title: titleFromPrompt(message),
-      });
+      session = await createManagedSessionForCockpit(
+        scopeKind === "daemon"
+          ? {
+              scope: { kind: "daemon" },
+              title: titleFromPrompt(message),
+            }
+          : {
+              scope: { kind: "workspace", workspaceId },
+              workspaceId,
+              title: titleFromPrompt(message),
+            },
+      );
     } catch (caught) {
       const error = caught instanceof Error ? caught.message : t.createFailed;
       return fail(400, {
@@ -82,11 +90,10 @@ export const actions: Actions = {
 
     try {
       if (model) await setSessionModelForCockpit(session.sessionId, parseModelValue(model));
-      submitConversationMessage({
-        workspaceId,
+      await submitConversationMessage({
+        workspaceId: workspaceIdForWorkbenchSession(session) ?? undefined,
         sessionId: session.sessionId,
         message,
-        requestedByUserId: getCurrentUserIdBySessionToken(getDatabase(), locals.sessionToken),
       });
     } catch (caught) {
       try {
@@ -108,7 +115,7 @@ export const actions: Actions = {
     redirect(303, `/sessions/${session.sessionId}`);
   },
 
-  sendMessage: async ({ cookies, locals, request }) => {
+  sendMessage: async ({ cookies, request }) => {
     const t = getRequestDictionary({
       cookieLocale: cookies.get(localeCookieName),
       acceptLanguage: request.headers.get("accept-language"),
@@ -170,18 +177,17 @@ export const actions: Actions = {
     }
 
     try {
-      const command = submitConversationMessage({
-        workspaceId: session.workspaceId,
+      const turn = await submitConversationMessage({
+        workspaceId: workspaceIdForWorkbenchSession(session) ?? undefined,
         sessionId,
         message,
-        requestedByUserId: getCurrentUserIdBySessionToken(getDatabase(), locals.sessionToken),
       });
 
       return {
         intent: "sendMessage",
         success: true,
         message: t.assignQueued,
-        queuedCommandId: command.id,
+        queuedTurnId: turn.turnId,
         values: { sessionId, message: "" },
       };
     } catch (caught) {
@@ -214,12 +220,23 @@ export const actions: Actions = {
       });
     }
     try {
-      await setSessionModelForCockpit(sessionId, parseModelValue(model));
+      const updatedSession = await setSessionModelForCockpit(sessionId, parseModelValue(model));
+      if (!updatedSession.model) {
+        throw new Error(
+          isZh
+            ? "Spark daemon 未返回会话的有效模型。"
+            : "The Spark daemon did not return an effective conversation model.",
+        );
+      }
+      const effectiveModel = modelValue(updatedSession.model);
       return {
         intent: "selectModel",
         success: true,
-        message: isZh ? "会话模型已更新。" : "Conversation model updated.",
-        values: { sessionId, model },
+        message: isZh
+          ? `已切换到 ${effectiveModel}。该设置从下一条尚未入队的消息开始生效。`
+          : `Switched to ${effectiveModel}. This applies starting with the next message that has not yet been queued.`,
+        model: effectiveModel,
+        values: { sessionId, model: effectiveModel },
       };
     } catch (caught) {
       return fail(400, {
@@ -264,28 +281,16 @@ export const actions: Actions = {
   },
 };
 
-function submitConversationMessage(input: {
-  workspaceId: string;
+async function submitConversationMessage(input: {
+  workspaceId?: string;
   sessionId: string;
   message: string;
-  requestedByUserId: string | null;
 }) {
   const title = titleFromPrompt(input.message);
-  return submitServerCommand(getDatabase(), {
+  return await submitConversationTurnForCockpit({
     workspaceId: input.workspaceId,
-    requestedByUserId: input.requestedByUserId,
-    idempotencyKey: createId("idem"),
-    payload: {
-      kind: "assignment.create.request",
-      title,
-      payload: {
-        goal: input.message,
-        title,
-        target: { sessionId: input.sessionId, workspaceId: input.workspaceId },
-        constraints: [],
-        evidence: [],
-        source: { kind: "cockpit" },
-      },
-    },
+    sessionId: input.sessionId,
+    prompt: input.message,
+    title,
   });
 }

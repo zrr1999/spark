@@ -60,13 +60,22 @@ export class InfoflowAdapter implements ChannelAdapter {
       chatType === "group" && groupId
         ? createChannelExternalKey("infoflow", "group", groupId)
         : createDefaultChannelExternalKey("infoflow", userId);
+    const mentionMeta = extractInfoflowMentionMeta(raw, this.config);
+    const mentionedSelf = mentionMeta.mentionedSelf ?? payload.mentioned_self;
+    const mentions =
+      mentionMeta.mentions.length > 0
+        ? mentionMeta.mentions
+        : (payload.mentions ?? []).map((entry) => entry.trim()).filter(Boolean);
     return {
       adapter: "infoflow",
       externalKey,
       senderId: userId,
+      ...(payload.sender_name?.trim() ? { senderName: payload.sender_name.trim() } : {}),
       ...(groupId ? { chatId: groupId } : {}),
       text: payload.text,
       messageId: payload.message_id,
+      ...(mentions.length > 0 ? { mentions } : {}),
+      ...(typeof mentionedSelf === "boolean" ? { mentionedSelf } : {}),
       raw,
     };
   }
@@ -120,6 +129,16 @@ function parseInfoflowInbound(raw: unknown): InfoflowInboundRaw {
     ...(typeof record.chat_id === "string" ? { chat_id: record.chat_id } : {}),
     ...(typeof record.message_id === "string" ? { message_id: record.message_id } : {}),
     ...(typeof record.sender_name === "string" ? { sender_name: record.sender_name } : {}),
+    ...(Array.isArray(record.mentions)
+      ? {
+          mentions: record.mentions
+            .filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim()))
+            .map((entry) => entry.trim()),
+        }
+      : {}),
+    ...(typeof record.mentioned_self === "boolean"
+      ? { mentioned_self: record.mentioned_self }
+      : {}),
   };
 }
 
@@ -136,4 +155,53 @@ function createDefaultInfoflowTransport(config: InfoflowAdapterConfig): ChannelT
       throw new Error("InfoflowAdapter requires app_key and app_secret");
     },
   };
+}
+
+function extractInfoflowMentionMeta(
+  raw: unknown,
+  config: InfoflowAdapterConfig,
+): { mentions: string[]; mentionedSelf?: boolean } {
+  const record =
+    raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+  const message =
+    record?.message && typeof record.message === "object" && !Array.isArray(record.message)
+      ? (record.message as Record<string, unknown>)
+      : null;
+  const body = Array.isArray(message?.body)
+    ? message.body
+    : Array.isArray(record?.body)
+      ? record.body
+      : [];
+  const mentions: string[] = [];
+  const agentId = config.app_agent_id?.trim();
+  let mentionedSelf: boolean | undefined =
+    typeof record?.mentioned_self === "boolean" ? record.mentioned_self : undefined;
+  for (const item of body) {
+    if (!item || typeof item !== "object") continue;
+    const entry = item as Record<string, unknown>;
+    const type = infoflowScalar(entry.type).toUpperCase();
+    if (type !== "AT" && type !== "@") continue;
+    const name = firstInfoflowScalar(entry.name, entry.userid, entry.robotid);
+    if (name) mentions.push(name);
+    const targetId = firstInfoflowScalar(entry.userid, entry.robotid, entry.atuserid);
+    if (agentId && (targetId === agentId || name === agentId)) {
+      mentionedSelf = true;
+    }
+  }
+  return {
+    mentions,
+    ...(typeof mentionedSelf === "boolean" ? { mentionedSelf } : {}),
+  };
+}
+
+function firstInfoflowScalar(...values: unknown[]): string {
+  for (const value of values) {
+    const normalized = infoflowScalar(value);
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+function infoflowScalar(value: unknown): string {
+  return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
 }

@@ -38,6 +38,7 @@ export {
   DEFAULT_SPARK_PROVIDER_SPECS,
   defaultSparkProviderConfigPath,
   loadSparkProviderCatalog,
+  mergeSparkProviderSpecs,
   readSparkProviderConfig,
   writeSparkDefaultModel,
 } from "./provider-catalog.ts";

@@ -1343,6 +1343,14 @@ export {
   streamBaiduOneApiOpenAIResponses,
 } from "./baidu-oneapi-provider.ts";
 export {
+  OPENAI_CODEX_API,
+  OPENAI_CODEX_BASE_URL,
+  OPENAI_CODEX_PROVIDER_ID,
+  default as registerOpenAICodexProvider,
+} from "./openai-codex-provider.ts";
+export { piAiProviderConfig, registerPiAiProvider } from "./pi-provider-adapter.ts";
+export type { PiProviderAdapterOptions } from "./pi-provider-adapter.ts";
+export {
   CURSOR_API_KEY_ENV,
   CURSOR_PROVIDER_API,
   CURSOR_PROVIDER_BASE_URL,

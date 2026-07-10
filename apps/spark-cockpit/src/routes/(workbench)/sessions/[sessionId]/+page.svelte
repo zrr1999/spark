@@ -18,6 +18,7 @@
   common={data.messages.common}
   locale={data.locale}
   activity={data.sessionActivity}
+  sessionView={data.sessionSnapshot}
   formMessage={form?.message ?? null}
   formIntent={form?.intent ?? null}
   formValues={form?.values ?? null}

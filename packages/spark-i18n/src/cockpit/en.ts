@@ -343,12 +343,15 @@ const messages = {
     aria: "Conversation workspace",
     kicker: "Workspace",
     title: "Conversations",
-    lede: "Continue conversations with Spark across workspaces. Sending a message assigns work; Spark creates internal tasks automatically.",
+    lede: "Continue the active workspace or global daemon conversation. Sending a message assigns work; Spark creates internal tasks automatically.",
     newSession: "New conversation",
+    workspaceConversation: "Workspace chat",
+    daemonConversation: "Global chat",
+    daemonGroup: "Global daemon",
     searchPlaceholder: "Filter conversations",
     emptyTitle: "No conversations yet",
     emptyBody:
-      "Choose a workspace and send the first message. Spark creates the conversation and internal tasks automatically.",
+      "Choose workspace chat or global chat and send the first message. Spark creates internal tasks automatically.",
     createTitle: "Start a conversation",
     createWorkspaceLabel: "Workspace",
     createTitleLabel: "First message",
@@ -479,6 +482,10 @@ const messages = {
     infoflowAllowedGroupIdsHint:
       "List of group ids when policy is allowlist. Comma/space-separated; multiple ids are supported.",
     infoflowAllowedGroupIdsPlaceholder: "group_id_1, group_id_2",
+    infoflowSystemPrompt: "Custom system prompt",
+    infoflowSystemPromptHint:
+      "Optional operator overlay for Infoflow sessions. Ingress policy is still generated automatically.",
+    infoflowSystemPromptPlaceholder: "You are the Infoflow assistant for this workspace…",
     infoflowAppKey: "App key",
     infoflowAppSecret: "App secret",
     secretStored: "Stored — leave blank to keep",

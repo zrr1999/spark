@@ -4,7 +4,9 @@
 
   let { data, form } = $props();
   let t = $derived(data.messages.sessions);
-  let showCreate = $derived(page.url.searchParams.get("new") === "1");
+  let startScope = $derived(
+    page.url.searchParams.get("new") === "daemon" ? ("daemon" as const) : ("workspace" as const),
+  );
 </script>
 
 <svelte:head>
@@ -16,7 +18,7 @@
   workspaces={data.workspaces ?? []}
   selectedSessionId={data.selectedSessionId}
   activeWorkspaceId={data.activeWorkspace?.id ?? null}
-  showCreate={showCreate}
+  {startScope}
   messages={t}
   common={data.messages.common}
   locale={data.locale}

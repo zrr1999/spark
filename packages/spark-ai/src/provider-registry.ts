@@ -20,7 +20,10 @@ export interface ProviderModelDefinition {
 }
 
 export interface ProviderConfig {
+  /** Stable provider id inside the registry. */
   name: string;
+  /** Human-readable name supplied by the provider plugin. */
+  label?: string;
   baseUrl: string;
   /**
    * API key sentinel. May be:
@@ -57,7 +60,7 @@ export class SparkProviderRegistry implements ProviderRegistrationAPI {
     if (!Array.isArray(config.models) || config.models.length === 0) {
       throw new Error(`Provider plugin "${name}" must declare at least one model`);
     }
-    this.#providers.set(name, { ...config, name });
+    this.#providers.set(name, { ...config, name, label: config.label ?? config.name });
   }
 
   hasProvider(name: string): boolean {

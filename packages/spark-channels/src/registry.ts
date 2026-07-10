@@ -290,6 +290,9 @@ function parseAdapterConfig(value: unknown): ChannelAdapterConfig {
       ...(record.allowed_group_ids !== undefined
         ? { allowed_group_ids: parseStringList(record.allowed_group_ids, "allowed_group_ids") }
         : {}),
+      ...(typeof record.system_prompt === "string" && record.system_prompt.trim()
+        ? { system_prompt: record.system_prompt.trim() }
+        : {}),
     };
   }
   throw new ChannelRegistryError("invalid_config", `unsupported adapter type: ${String(type)}`);

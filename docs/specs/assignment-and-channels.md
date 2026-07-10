@@ -1,18 +1,19 @@
 # Assignment and channels
 
-Spark treats **assignment** as the single “give work to a session” intent.
-**Cockpit Assign** and **IM channels** (Feishu, Infoflow, …) are entry surfaces for
-that intent. Both depend on one **daemon-owned session** lifecycle.
+The user-facing unit is a **conversation turn**. Cockpit and IM channels
+(Feishu, Infoflow, ...) are entry surfaces for the same daemon-owned session;
+projects, tasks, and assignments are internal execution projections created by
+Spark rather than separate objects the user must create first.
 
-One-line rule: *Session is managed by the daemon; Assign and channel are two
-ways to create the same assignment against a session.*
+One-line rule: *the daemon owns the conversation; every surface submits a turn
+to it, and Spark derives any internal work records it needs.*
 
 ## Product equivalence
 
 | Entry | Shape | User |
 | --- | --- | --- |
-| Cockpit Sessions (`/sessions`) | Cross-workspace session list + assign stage | Browser operator |
-| Channels (Feishu / Infoflow) | Inbound chat → bind/reuse session → assignment | Chat operator |
+| Cockpit Sessions (`/sessions`) | Current-workspace + daemon-global conversations | Browser operator |
+| Channels (Feishu / Infoflow) | Inbound chat -> bind/reuse workspace session -> turn | Chat operator |
 | Legacy project chat `task.start.request` | Compatibility only | Must converge onto Assign |
 
 Cockpit primary Assign surface is **Sessions** (not the project page). Cockpit
@@ -33,13 +34,28 @@ it from the config file. Message I/O is daemon↔IM only (no server/cockpit rela
 Legacy `$SPARK_HOME/channels/config.json` is migrated into a workspace on first
 load/configure.
 
-Do **not** maintain a second state machine for channels. Channel ingress
-normalizes to the same assignment path as Cockpit.
+Do **not** maintain a second state machine for channels. Channel ingress and
+Cockpit both submit through the daemon session/turn control plane. The
+`SparkAssignment` carried on a queued run is internal context, not a second
+conversation or a user-managed task.
 
 ## Session management (foundation)
 
 Daemon owns session lifecycle and the channel binding table. TUI, Cockpit, and
 channel adapters are clients.
+
+Every new record has an explicit durable scope:
+
+- `{ kind: "workspace", workspaceId }` belongs to one workspace. Cockpit shows
+  it only while that workspace is active.
+- `{ kind: "daemon", daemonId }` is a daemon-global conversation. The receiving
+  daemon injects its stable installation id; clients cannot choose or spoof it.
+
+The Cockpit rail shows only the active workspace scope plus explicit
+daemon-global scopes. Legacy records that only carry `workspaceId` remain
+workspace-scoped; they are never guessed to be global. This is why an old
+`workspaceId="spark"` session does not appear as an "unknown workspace" while
+the `spore` workspace is active, while its registry data remains intact.
 
 | Capability | Command surface | Notes |
 | --- | --- | --- |
@@ -61,6 +77,13 @@ Infoflow ingress policy (nyakore-aligned, on the adapter config):
 | `allowed_user_ids` | Private allowlist (sender id or name). Empty = allow all private. |
 | `group_policy` | `disabled` (default) \| `allowlist` \| `open` |
 | `allowed_group_ids` | Used when `group_policy` is `allowlist` |
+| `system_prompt` | Optional custom system-prompt overlay (operator copy only) |
+
+Prompt layers for Infoflow channel runs: shared Spark identity + internal
+surface/policy summary + optional `system_prompt`; per-message sender/group
+facts live in a dynamic system-prompt section. The canonical user message is
+only the human's text, so Cockpit does not render transport plumbing in the
+transcript.
 
 Private chats bind as `infoflow:user:<senderId>`; group chats bind as
 `infoflow:group:<groupId>` (one session per group, not per sender).
@@ -89,10 +112,11 @@ type SparkAssignment = {
 };
 ```
 
-- Coordination: `spark server assign ...` / `assignment.create.request`
-- Execution: daemon normalizes to `session.run` (or a strict superset of
-  `task.start.request`)
-- Cockpit and channel adapters both emit that path after session resolve
+- Cockpit execution: daemon local RPC `turn.submit`
+- Channel execution: binding resolve followed by the same daemon `session.run`
+  queue primitive
+- `SparkAssignment` remains an internal envelope for goal/source/target context
+  and does not imply a user-created project or task
 
 ## Channel adapters
 
@@ -142,9 +166,9 @@ on_unbound = "create"
 | Resource | Plane | Notes |
 | --- | --- | --- |
 | `session` create/list/show/bind/archive/fork | `spark daemon` | execution truth |
-| `assign` | `spark server` (intent) → daemon (run) | coordination then execution |
+| conversation turn | `spark daemon` | `turn.submit` -> `session.run`; execution truth |
 | `channel` list/status/configure/reload | `spark daemon` | config + listener lifecycle |
-| Cockpit Assign UI | `spark cockpit` host | submits server assign; no SDK sockets |
+| Cockpit conversation UI | `spark cockpit` host | submits daemon turns over local RPC |
 | TUI attach | `spark tui` | not an ingress plane |
 
 ## Non-goals (v1)

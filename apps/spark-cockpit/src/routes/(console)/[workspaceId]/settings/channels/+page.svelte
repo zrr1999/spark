@@ -19,6 +19,7 @@
     infoflowAllowedUserIds: string;
     infoflowGroupPolicy: "disabled" | "allowlist" | "open";
     infoflowAllowedGroupIds: string;
+    infoflowSystemPrompt: string;
     routeName: string;
     routeAdapter: "feishu" | "infoflow";
     routeRecipient: string;
@@ -311,6 +312,17 @@
                 placeholder={t.infoflowAllowedGroupIdsPlaceholder}
                 disabled={values.infoflowGroupPolicy !== "allowlist"}
               />
+            </label>
+            <label class="span-2">
+              <span>{t.infoflowSystemPrompt}</span>
+              <small class="field-hint">{t.infoflowSystemPromptHint}</small>
+              <textarea
+                name="infoflowSystemPrompt"
+                rows="4"
+                autocomplete="off"
+                bind:value={values.infoflowSystemPrompt}
+                placeholder={t.infoflowSystemPromptPlaceholder}
+              ></textarea>
             </label>
           </div>
         </details>

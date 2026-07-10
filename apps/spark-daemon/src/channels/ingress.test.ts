@@ -85,6 +85,7 @@ describe("channel ingress", () => {
         },
       },
     ]);
+    await expect(registry.get(session.sessionId)).resolves.toMatchObject({ status: "running" });
     expect(controller.status().configured).toBe(true);
   });
 
@@ -94,6 +95,7 @@ describe("channel ingress", () => {
     const assignments: ChannelIngressAssignment[] = [];
     const resolveBinding = vi.fn(async () => ({
       sessionId: "session_owned",
+      scope: { kind: "workspace" as const, workspaceId: "ws_owned" },
       workspaceId: "ws_owned",
       status: "ready" as const,
       bindings: [],
@@ -119,7 +121,12 @@ describe("channel ingress", () => {
     });
 
     await controller.start();
-    transport.emitInbound({ user_id: "u_owned", text: "owned mutation" });
+    transport.emitInbound({
+      user_id: "u_owned",
+      sender_name: "Owned User",
+      text: "owned mutation",
+      message_id: "infoflow-message-1",
+    });
     await vi.waitFor(() => expect(assignments).toHaveLength(1));
     await controller.stop();
 
@@ -131,6 +138,17 @@ describe("channel ingress", () => {
     await expect(
       readFile(join(defaultSparkSessionRegistryRoot(sparkHome), "registry.json"), "utf8"),
     ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(assignments[0]).toMatchObject({
+      goal: "owned mutation",
+      assignment: { goal: "owned mutation" },
+      channelContext: {
+        externalKey: "infoflow:user:u_owned",
+        senderId: "u_owned",
+        senderName: "Owned User",
+        messageId: "infoflow-message-1",
+      },
+    });
+    expect(assignments[0]?.goal).not.toContain("You are handling an Infoflow");
   });
 
   it("loads missing workspace config as null", async () => {

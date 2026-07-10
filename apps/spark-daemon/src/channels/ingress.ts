@@ -23,6 +23,7 @@ import { writePrivateFile } from "@zendev-lab/spark-system";
 import { mkdir, readdir, readFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createDaemonSessionRegistry, type DaemonSessionRegistry } from "../session-registry.ts";
+import type { SparkDaemonChannelContext } from "../core/types.ts";
 
 export interface ChannelIngressAssignment {
   sessionId: string;
@@ -35,6 +36,8 @@ export interface ChannelIngressAssignment {
     adapterId: string;
     recipient: string;
   };
+  /** Platform facts for this inbound turn, kept out of the canonical user message body. */
+  channelContext?: SparkDaemonChannelContext;
 }
 
 export interface ChannelIngressHooks {
@@ -173,7 +176,8 @@ export function createChannelIngressController(input: {
   sparkHome: string;
   config: ChannelsConfig;
   hooks: ChannelIngressHooks;
-  sessionRegistry?: Pick<DaemonSessionRegistry, "resolveBinding">;
+  sessionRegistry?: Pick<DaemonSessionRegistry, "resolveBinding"> &
+    Partial<Pick<DaemonSessionRegistry, "recordTurnQueued" | "recordTurnSettled">>;
   workspaceId: string;
   createTransport?: ChannelRegistryOptions["createTransport"];
 }): ChannelIngressController {
@@ -200,8 +204,9 @@ export function createChannelIngressController(input: {
       },
     });
     const channel = message.adapter;
+    const rawGoal = message.text.trim();
     const assignment = parseSparkAssignment({
-      goal: message.text.trim(),
+      goal: rawGoal,
       target: { sessionId: session.sessionId, workspaceId: input.workspaceId },
       source: {
         kind: "channel",
@@ -214,22 +219,33 @@ export function createChannelIngressController(input: {
       console.error("[spark-channels] inbound missing reply recipient", message.externalKey);
       return;
     }
-    await input.hooks.onAssignment({
-      sessionId: session.sessionId,
-      goal: assignment.goal,
-      assignment,
-      source: {
-        kind: "channel",
-        channel,
-        ...(message.messageId ? { externalRef: message.messageId } : {}),
-      },
-      externalKey: message.externalKey,
-      channelReply: {
-        workspaceId: input.workspaceId,
-        adapterId: channel,
-        recipient: replyRecipient,
-      },
-    });
+    await sessionRegistry.recordTurnQueued?.(session.sessionId);
+    try {
+      await input.hooks.onAssignment({
+        sessionId: session.sessionId,
+        goal: assignment.goal,
+        assignment,
+        source: {
+          kind: "channel",
+          channel,
+          ...(message.messageId ? { externalRef: message.messageId } : {}),
+        },
+        externalKey: message.externalKey,
+        channelReply: {
+          workspaceId: input.workspaceId,
+          adapterId: channel,
+          recipient: replyRecipient,
+        },
+        ...(channel === "infoflow" ? { channelContext: channelContextFromIncoming(message) } : {}),
+      });
+    } catch (error) {
+      try {
+        await sessionRegistry.recordTurnSettled?.(session.sessionId);
+      } catch (settleError) {
+        console.error("[spark-channels] failed to settle rejected inbound", settleError);
+      }
+      throw error;
+    }
   }
 
   return {
@@ -250,6 +266,20 @@ export function createChannelIngressController(input: {
         recipient: route.recipient,
       })),
     }),
+  };
+}
+
+function channelContextFromIncoming(message: IncomingMessage): SparkDaemonChannelContext {
+  return {
+    externalKey: message.externalKey,
+    ...(message.senderId?.trim() ? { senderId: message.senderId.trim() } : {}),
+    ...(message.senderName?.trim() ? { senderName: message.senderName.trim() } : {}),
+    ...(message.chatId?.trim() ? { chatId: message.chatId.trim() } : {}),
+    ...(message.messageId?.trim() ? { messageId: message.messageId.trim() } : {}),
+    ...(message.mentions?.length
+      ? { mentions: message.mentions.map((entry) => entry.trim()).filter(Boolean) }
+      : {}),
+    ...(typeof message.mentionedSelf === "boolean" ? { mentionedSelf: message.mentionedSelf } : {}),
   };
 }
 

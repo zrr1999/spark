@@ -57,6 +57,7 @@ import {
   type RegisterWorkspaceOptions,
   type SparkDaemonWorkspace,
   type WorkspaceProfileRegistration,
+  resolveWorkspaceLocalPath,
   workspaceNameForPath,
   WorkspacePathConflictError,
 } from "./store/workspaces.js";
@@ -319,7 +320,16 @@ async function start(paths: ReturnType<typeof resolveSparkPaths>): Promise<numbe
   const invocationRegistry = new SparkDaemonInvocationRegistry();
   const queue = new SparkDaemonQueue({ paths });
   const sparkHome = process.env.SPARK_HOME?.trim() || join(homedir(), ".spark");
-  const sessionRegistry = createDaemonSessionRegistry(sparkHome);
+  const config = existsSync(paths.configFile)
+    ? readSparkDaemonConfig(paths)
+    : defaultSparkDaemonConfig();
+  if (!existsSync(paths.configFile)) writeSparkDaemonConfig(paths, config);
+  const daemonCwd = process.cwd();
+  const sessionRegistry = createDaemonSessionRegistry(sparkHome, {
+    daemonId: config.installationId,
+    daemonCwd,
+    resolveWorkspaceCwd: (workspaceId) => resolveWorkspaceLocalPath(db, workspaceId),
+  });
   const modelControl = createSparkDaemonModelControl({
     providerControl: createSparkProviderControl({ sparkHome }),
     sessionRegistry,
@@ -331,14 +341,27 @@ async function start(paths: ReturnType<typeof resolveSparkPaths>): Promise<numbe
       onAssignment: async (assignment) => {
         const model = await modelControl.effectiveModel(assignment.sessionId);
         await modelControl.prepareModel(model);
+        const session = await sessionRegistry.get(assignment.sessionId);
+        if (!session || session.scope.kind !== "workspace") {
+          throw new Error(`channel session ${assignment.sessionId} has no workspace owner`);
+        }
+        const workspaceId = session.scope.workspaceId;
+        const cwd = session.cwd?.trim() ?? resolveWorkspaceLocalPath(db, workspaceId);
+        if (!cwd) {
+          throw new Error(
+            `channel session ${assignment.sessionId} has no daemon-local execution directory`,
+          );
+        }
         await queue.enqueue({
           type: "session.run",
           sessionId: assignment.sessionId,
           prompt: assignment.goal,
           model: `${model.providerName}/${model.modelId}`,
           assignment: assignment.assignment,
-          workspaceId: assignment.channelReply.workspaceId,
+          workspaceId,
+          cwd,
           channelReply: assignment.channelReply,
+          ...(assignment.channelContext ? { channelContext: assignment.channelContext } : {}),
         });
       },
     },
@@ -358,13 +381,14 @@ async function start(paths: ReturnType<typeof resolveSparkPaths>): Promise<numbe
     await startSparkDaemon({
       paths,
       sparkHome,
-      config: readSparkDaemonConfig(paths),
+      config,
       db,
       signal: shutdown.signal,
       localEventSink: (event) => localEventBus.publish(event),
       invocationRegistry,
       queue,
       channelIngress,
+      sessionRegistry,
       modelControl,
     });
     return 0;

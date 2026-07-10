@@ -6,6 +6,7 @@ import {
   SparkProviderRegistry,
   createProviderRegistryStreamFunction,
   registerBaiduOneApiProvider,
+  registerOpenAICodexProvider,
   type ProviderConfig,
 } from "../packages/spark-ai/src/index.ts";
 
@@ -266,4 +267,41 @@ void test("SparkProviderRegistry accepts the production baidu-oneapi-provider pl
   const gpt56Profile = registry.buildProfile("baidu-oneapi", "gpt-5.6-sol");
   assert.equal(gpt56Profile.routes[0]?.transportApi, "openai-responses");
   assert.equal(gpt56Profile.routes[0]?.transportModelId, "gpt-5.6-sol");
+});
+
+void test("SparkProviderRegistry adapts pi-ai's production OpenAI Codex provider", () => {
+  const registry = new SparkProviderRegistry();
+  registerOpenAICodexProvider(registry);
+
+  const provider = registry.getProvider("openai-codex");
+  assert.ok(provider);
+  assert.equal(provider.name, "openai-codex");
+  assert.equal(provider.label, "OpenAI Codex");
+  assert.equal(provider.apiKey, "oauth:openai-codex");
+  assert.equal(provider.api, "openai-codex-responses");
+  assert.deepEqual(
+    provider.models.map((model) => model.id),
+    [
+      "gpt-5.3-codex-spark",
+      "gpt-5.4",
+      "gpt-5.4-mini",
+      "gpt-5.5",
+      "gpt-5.6-luna",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+    ],
+  );
+
+  const model = registry.buildModel("openai-codex", "gpt-5.6-sol");
+  assert.equal(model.provider, "openai-codex");
+  assert.equal(model.api, "openai-codex-responses");
+  assert.equal(model.baseUrl, "https://chatgpt.com/backend-api");
+  assert.equal(model.contextWindow, 372_000);
+  assert.deepEqual(model.input, ["text", "image"]);
+
+  const profile = registry.buildProfile("openai-codex", "gpt-5.6-sol");
+  assert.deepEqual(profile.authPools?.[0]?.slots[0]?.authRef, {
+    kind: "provider",
+    id: "openai-codex:auth",
+  });
 });

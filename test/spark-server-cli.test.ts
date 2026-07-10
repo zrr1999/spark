@@ -298,6 +298,7 @@ void test("spark server assign submits the daemon session.run path without a sid
     process.env.SPARK_HOME = sparkHome;
     const session = {
       sessionId: "sess_cli_assign",
+      scope: { kind: "workspace" as const, workspaceId: "ws_cli" },
       workspaceId: "ws_cli",
       title: "CLI assign",
       status: "ready" as const,

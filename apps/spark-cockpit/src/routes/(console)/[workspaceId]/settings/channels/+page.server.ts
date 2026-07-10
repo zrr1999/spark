@@ -101,6 +101,7 @@ function readEditorValues(formData: FormData): CockpitChannelEditorValues {
     infoflowAllowedUserIds: formText(formData, "infoflowAllowedUserIds"),
     infoflowGroupPolicy: parseGroupPolicy(formText(formData, "infoflowGroupPolicy")),
     infoflowAllowedGroupIds: formText(formData, "infoflowAllowedGroupIds"),
+    infoflowSystemPrompt: formText(formData, "infoflowSystemPrompt"),
     routeName: formText(formData, "routeName") || "ops",
     routeAdapter: routeAdapterRaw === "infoflow" ? "infoflow" : "feishu",
     routeRecipient: formText(formData, "routeRecipient"),

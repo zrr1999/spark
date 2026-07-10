@@ -114,10 +114,13 @@ export function loadConversationSummaries(
 
   return sessions.map((session) => {
     const latest = latestBySession.get(session.sessionId);
+    const daemonOwnsLatestState = !latest || session.updatedAt > latest.activityUpdatedAt;
     return {
       ...session,
-      activityStatus: latest?.activityStatus ?? sessionFallbackStatus(session.status),
-      activityUpdatedAt: latest?.activityUpdatedAt ?? session.updatedAt,
+      activityStatus: daemonOwnsLatestState
+        ? sessionFallbackStatus(session.status)
+        : latest.activityStatus,
+      activityUpdatedAt: daemonOwnsLatestState ? session.updatedAt : latest.activityUpdatedAt,
     };
   });
 }
@@ -151,6 +154,8 @@ export function conversationActivityStatus(status: string): ConversationActivity
 }
 
 function sessionFallbackStatus(status: string): ConversationActivityStatus {
-  if (["failed", "error"].includes(status.trim().toLowerCase())) return "failed";
+  const normalized = status.trim().toLowerCase();
+  if (["failed", "error"].includes(normalized)) return "failed";
+  if (normalized === "running") return "running";
   return "ready";
 }

@@ -9,6 +9,18 @@ import { SparkDaemonInvocationRegistry } from "./invocations.ts";
 
 export type SparkDaemonTask = SparkDaemonSessionRunTask;
 
+/** Normalized platform facts captured with one inbound channel message. */
+export interface SparkDaemonChannelContext {
+  /** Stable binding used to identify the conversation surface. */
+  externalKey: string;
+  senderId?: string;
+  senderName?: string;
+  chatId?: string;
+  messageId?: string;
+  mentions?: string[];
+  mentionedSelf?: boolean;
+}
+
 export interface SparkDaemonSessionRunTask {
   type: "session.run";
   sessionId: string;
@@ -19,6 +31,8 @@ export interface SparkDaemonSessionRunTask {
   actor?: string;
   note?: string;
   input?: string;
+  /** Execution directory frozen from the durable session owner at enqueue time. */
+  cwd?: string;
   workspaceBindingId?: string;
   workspaceId?: string;
   projectId?: string;
@@ -29,6 +43,8 @@ export interface SparkDaemonSessionRunTask {
     adapterId: string;
     recipient: string;
   };
+  /** Inbound platform facts for this turn; never part of the persisted user message body. */
+  channelContext?: SparkDaemonChannelContext;
 }
 
 export interface SparkDaemonQueuePayload<TTask extends SparkDaemonTask = SparkDaemonTask> {
@@ -120,12 +136,16 @@ export function validateSparkDaemonTask(value: unknown): SparkDaemonTask {
     actor: nonEmptyString(task.actor),
     note: nonEmptyString(task.note),
     input: nonEmptyString(task.input),
+    cwd: nonEmptyString(task.cwd),
     workspaceBindingId: nonEmptyString(task.workspaceBindingId),
     workspaceId: nonEmptyString(task.workspaceId),
     projectId: nonEmptyString(task.projectId),
     assignment: task.assignment === undefined ? undefined : parseSparkAssignment(task.assignment),
     ...(parseChannelReply(task.channelReply)
       ? { channelReply: parseChannelReply(task.channelReply) }
+      : {}),
+    ...(parseChannelContext(task.channelContext)
+      ? { channelContext: parseChannelContext(task.channelContext) }
       : {}),
   };
 }
@@ -138,6 +158,27 @@ function parseChannelReply(value: unknown): SparkDaemonSessionRunTask["channelRe
   const recipient = nonEmptyString(record.recipient);
   if (!workspaceId || !adapterId || !recipient) return undefined;
   return { workspaceId, adapterId, recipient };
+}
+
+function parseChannelContext(value: unknown): SparkDaemonChannelContext | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const externalKey = nonEmptyString(record.externalKey)?.trim();
+  if (!externalKey) return undefined;
+  const mentions = Array.isArray(record.mentions)
+    ? record.mentions
+        .map((entry) => nonEmptyString(entry)?.trim())
+        .filter((entry): entry is string => Boolean(entry))
+    : undefined;
+  return {
+    externalKey,
+    senderId: nonEmptyString(record.senderId)?.trim(),
+    senderName: nonEmptyString(record.senderName)?.trim(),
+    chatId: nonEmptyString(record.chatId)?.trim(),
+    messageId: nonEmptyString(record.messageId)?.trim(),
+    ...(mentions?.length ? { mentions } : {}),
+    ...(typeof record.mentionedSelf === "boolean" ? { mentionedSelf: record.mentionedSelf } : {}),
+  };
 }
 
 function nonEmptyString(value: unknown): string | undefined {

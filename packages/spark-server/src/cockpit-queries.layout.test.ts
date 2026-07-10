@@ -4,6 +4,7 @@ import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
 import {
   isReservedWorkbenchPathSegment,
   loadArtifactDetailPage,
+  loadInboxDetailPage,
   loadWorkbenchLayout,
   updateWorkspaceSettings,
 } from "./cockpit-queries";
@@ -11,6 +12,7 @@ import {
   createProject,
   createWorkspaceWithOwnerBinding,
   queueCommandForWorkspaceOwner,
+  recordHumanRequestFromRuntime,
   recordInvocationUpdate,
 } from "./projection-services";
 
@@ -199,6 +201,44 @@ describe("artifact conversation provenance", () => {
 
     const page = loadArtifactDetailPage(db, "spore", "art_conversation");
     expect(page?.artifact.sessionId).toBe(sessionId);
+    db.close();
+  });
+});
+
+describe("inbox conversation provenance", () => {
+  it("links a runtime human request back to its owning conversation", () => {
+    const { db, workspace, bindingId } = setupWorkspace("spore");
+    const sessionId = "sess_inbox_context";
+    const command = queueCommandForWorkspaceOwner(db, {
+      workspaceId: workspace.id,
+      payload: {
+        kind: "assignment.create.request",
+        title: "Ask for scope",
+        payload: {
+          goal: "Ask for scope",
+          target: { sessionId, workspaceId: workspace.id },
+          source: { kind: "cockpit" },
+        },
+      },
+    });
+    const request = recordHumanRequestFromRuntime(db, {
+      runtimeWorkspaceBindingId: bindingId,
+      workspaceId: workspace.id,
+      commandId: command.id,
+      runtimeRequestId: "runtime-request-inbox-context",
+      payload: {
+        kind: "ask_user",
+        title: "Choose scope",
+        prompt: "Which scope should Spark use?",
+        questions: [],
+        context: {},
+        contextArtifactRefs: [],
+      },
+    });
+
+    const page = loadInboxDetailPage(db, "spore", request.inboxItemId);
+
+    expect(page?.detail.sessionId).toBe(sessionId);
     db.close();
   });
 });

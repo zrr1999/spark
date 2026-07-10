@@ -7,9 +7,8 @@ import type {
   SparkProviderControl,
   SparkProviderControlSnapshot,
 } from "@zendev-lab/spark-ai/control";
-import { SparkSessionRegistry, defaultSparkSessionRegistryRoot } from "@zendev-lab/spark-session";
 import { createSparkDaemonModelControl } from "./model-control.js";
-import { createSerializedDaemonSessionRegistry } from "./session-registry.js";
+import { createDaemonSessionRegistry } from "./session-registry.js";
 
 const roots: string[] = [];
 const model = { providerName: "baidu-oneapi", modelId: "ernie-4.5" };
@@ -22,9 +21,10 @@ describe("daemon model control", () => {
   it("projects one catalog and persists a conversation-scoped model", async () => {
     const root = await mkdtemp(join(tmpdir(), "spark-model-control-"));
     roots.push(root);
-    const sessionRegistry = createSerializedDaemonSessionRegistry(
-      new SparkSessionRegistry({ rootDir: defaultSparkSessionRegistryRoot(root) }),
-    );
+    const sessionRegistry = createDaemonSessionRegistry(root, {
+      daemonId: "install-model-control",
+      daemonCwd: root,
+    });
     await sessionRegistry.create({ sessionId: "sess_demo", workspaceId: "ws_demo" });
     const prepareModel = vi.fn(async () => undefined);
     const control = createSparkDaemonModelControl({
@@ -55,9 +55,10 @@ describe("daemon model control", () => {
   it("maps OAuth interaction state without credential material", async () => {
     const root = await mkdtemp(join(tmpdir(), "spark-model-oauth-"));
     roots.push(root);
-    const sessionRegistry = createSerializedDaemonSessionRegistry(
-      new SparkSessionRegistry({ rootDir: defaultSparkSessionRegistryRoot(root) }),
-    );
+    const sessionRegistry = createDaemonSessionRegistry(root, {
+      daemonId: "install-model-oauth",
+      daemonCwd: root,
+    });
     const providerControl = fakeProviderControl();
     const control = createSparkDaemonModelControl({ providerControl, sessionRegistry });
 

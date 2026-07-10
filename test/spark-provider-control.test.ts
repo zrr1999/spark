@@ -97,6 +97,7 @@ void test("provider control lists auth safely and patches only the default model
     );
     const control = createSparkProviderControl({
       sparkHome,
+      providerSpecs: ["env-plugin"],
       importer: providerImporter,
       env: {},
     });
@@ -121,6 +122,39 @@ void test("provider control lists auth safely and patches only the default model
     assert.equal(persisted.activeModelId, "env-provider/model-a");
     assert.equal("activeProvider" in persisted, false);
     assert.equal("activeModel" in persisted, false);
+  });
+});
+
+void test("legacy provider config still exposes the bundled OpenAI Codex catalog", async () => {
+  await withSparkHome(async (sparkHome) => {
+    await writeFile(
+      join(sparkHome, "config.json"),
+      `${JSON.stringify({
+        providers: ["@zendev-lab/spark-ai/baidu-oneapi-provider"],
+        activeModelId: "baidu-oneapi/gpt-5.5",
+      })}\n`,
+    );
+    const control = createSparkProviderControl({ sparkHome, env: {} });
+
+    const snapshot = await control.snapshot();
+    const codex = snapshot.providers.find((provider) => provider.id === "openai-codex");
+    assert.equal(codex?.name, "OpenAI Codex");
+    assert.equal(codex?.modelCount, 7);
+    assert.equal(codex?.auth.kind, "oauth");
+    assert.equal(codex?.auth.configured, false);
+    assert.equal(snapshot.models.filter((model) => model.providerId === "openai-codex").length, 7);
+    assert.equal(
+      snapshot.models
+        .filter((model) => model.providerId === "openai-codex")
+        .every((model) => !model.available),
+      true,
+    );
+    assert.equal(
+      snapshot.loadOutcomes.find(
+        (outcome) => outcome.specifier === "@zendev-lab/spark-ai/openai-codex-provider",
+      )?.ok,
+      true,
+    );
   });
 });
 

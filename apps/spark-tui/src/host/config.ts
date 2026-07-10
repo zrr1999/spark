@@ -3,9 +3,9 @@
  *
  * Two parallel plugin lists:
  *   - `extensions[]` — module specifiers loaded as ExtensionAPI plugins
- *   - `providers[]`  — module specifiers loaded as ProviderRegistrationAPI
- *                      plugins. Default includes spark-ai's bundled
- *                      `baidu-oneapi-provider`.
+ *   - `providers[]`  — additional module specifiers loaded as
+ *                      ProviderRegistrationAPI plugins. Spark always merges
+ *                      its bundled Baidu OneAPI and OpenAI Codex adapters.
  *
  * Both lists are loaded by the same `loadPlugins(...)` helper in
  * `plugin-loader.ts`, but the runtime API surface they receive differs.
@@ -24,6 +24,11 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+
+import {
+  DEFAULT_SPARK_PROVIDER_SPECS,
+  mergeSparkProviderSpecs,
+} from "@zendev-lab/spark-ai/control";
 
 export interface SparkConfig {
   extensions: string[];
@@ -52,7 +57,7 @@ export const DEFAULT_SPARK_CONFIG: SparkConfig = {
     "@zendev-lab/spark-graft/extension",
     "@zendev-lab/pi-extension/extension",
   ],
-  providers: ["@zendev-lab/spark-ai/baidu-oneapi-provider"],
+  providers: [...DEFAULT_SPARK_PROVIDER_SPECS],
   skills: [],
   promptTemplates: [],
   themes: [],
@@ -99,7 +104,7 @@ export function mergeWithDefault(raw: unknown): SparkConfig {
   const fields = raw as Partial<Record<keyof SparkConfig, unknown>>;
   return {
     extensions: stringArray(fields.extensions, DEFAULT_SPARK_CONFIG.extensions),
-    providers: stringArray(fields.providers, DEFAULT_SPARK_CONFIG.providers),
+    providers: mergeSparkProviderSpecs(stringArray(fields.providers, [])),
     skills: stringArray(fields.skills, DEFAULT_SPARK_CONFIG.skills ?? []),
     promptTemplates: stringArray(
       fields.promptTemplates,

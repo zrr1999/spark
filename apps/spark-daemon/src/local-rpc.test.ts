@@ -1,19 +1,23 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { resolveSparkPaths } from "@zendev-lab/spark-system";
-import { defaultSparkSessionRegistryRoot, SparkSessionRegistry } from "@zendev-lab/spark-session";
-import { SparkDaemonInvocationRegistry } from "./core/index.js";
+import { SparkDaemonInvocationRegistry, SparkDaemonQueue } from "./core/index.js";
 import {
-  createSerializedDaemonSessionRegistry,
+  createDaemonSessionRegistry,
   handleLocalRpcLine,
   requestWorkspaceEnsureLocal,
   startLocalRpcServer,
 } from "./local-rpc.js";
 import { openSparkDaemonDatabase } from "./store/schema.js";
-import { listWorkspaces, WorkspacePathConflictError } from "./store/workspaces.js";
+import {
+  ensureLocalWorkspace,
+  listWorkspaces,
+  resolveWorkspaceLocalPath,
+  WorkspacePathConflictError,
+} from "./store/workspaces.js";
 import type { SparkDaemonModelControl } from "./model-control.ts";
 
 describe("Spark daemon local RPC", () => {
@@ -246,6 +250,7 @@ describe("Spark daemon local RPC", () => {
             type: "session.run",
             sessionId: "session-a",
             prompt: "continue work",
+            workspaceId: "ws-a",
             actor: "spark-daemon-local-rpc",
             assignment,
           },
@@ -746,11 +751,10 @@ describe("Spark daemon local RPC", () => {
       },
     });
     const db = openSparkDaemonDatabase(paths);
-    const sessionRegistry = createSerializedDaemonSessionRegistry(
-      new SparkSessionRegistry({
-        rootDir: defaultSparkSessionRegistryRoot(join(root, ".spark")),
-      }),
-    );
+    const sessionRegistry = createDaemonSessionRegistry(join(root, ".spark"), {
+      daemonId: "install-rpc-session",
+      daemonCwd: root,
+    });
     const request = async (id: string, method: string, params?: unknown) =>
       await handleLocalRpcLine(
         JSON.stringify({ id, method, ...(params === undefined ? {} : { params }) }),
@@ -817,6 +821,341 @@ describe("Spark daemon local RPC", () => {
     }
   });
 
+  it("injects daemon ownership and freezes owner cwd on submitted turns", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-session-scope-"));
+    const daemonCwd = join(root, "daemon-base");
+    const workspaceCwd = join(root, "workspace");
+    mkdirSync(daemonCwd);
+    mkdirSync(workspaceCwd);
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const workspace = ensureLocalWorkspace(db, {
+      localPath: workspaceCwd,
+      localWorkspaceKey: "scope-workspace",
+    });
+    const sessionRegistry = createDaemonSessionRegistry(join(root, ".spark"), {
+      daemonId: "install-scope-test",
+      daemonCwd,
+      resolveWorkspaceCwd: (workspaceId) => resolveWorkspaceLocalPath(db, workspaceId),
+    });
+    const request = async (id: string, method: string, params?: unknown) =>
+      await handleLocalRpcLine(
+        JSON.stringify({ id, method, ...(params === undefined ? {} : { params }) }),
+        paths,
+        db,
+        undefined,
+        { sessionRegistry },
+      );
+
+    try {
+      const global = await request("create_global", "session.create", {
+        sessionId: "sess_global",
+        scope: { kind: "daemon" },
+      });
+      expect(global).toMatchObject({
+        ok: true,
+        result: {
+          sessionId: "sess_global",
+          scope: { kind: "daemon", daemonId: "install-scope-test" },
+          cwd: daemonCwd,
+        },
+      });
+      expect(global).not.toHaveProperty("result.workspaceId");
+
+      const workspaceSession = await request("create_workspace", "session.create", {
+        sessionId: "sess_workspace",
+        workspaceId: workspace.id,
+      });
+      expect(workspaceSession).toMatchObject({
+        ok: true,
+        result: {
+          scope: { kind: "workspace", workspaceId: workspace.id },
+          workspaceId: workspace.id,
+          cwd: workspace.localPath,
+        },
+      });
+
+      const unresolvedWorkspace = await request("create_unresolved", "session.create", {
+        sessionId: "sess_unresolved",
+        workspaceId: "ws_missing",
+      });
+      expect(unresolvedWorkspace).toMatchObject({
+        ok: false,
+        error: { code: "workspace_cwd_unavailable" },
+      });
+
+      const globalList = await request("list_global", "session.list", {
+        scope: { kind: "daemon" },
+      });
+      expect(globalList).toMatchObject({
+        ok: true,
+        result: [{ sessionId: "sess_global" }],
+      });
+
+      const globalTurn = await request("turn_global", "turn.submit", {
+        sessionId: "sess_global",
+        prompt: "global work",
+      });
+      expect(globalTurn).toMatchObject({
+        ok: true,
+        result: { task: { sessionId: "sess_global", cwd: daemonCwd } },
+      });
+      expect(
+        (globalTurn as { result?: { task?: { workspaceId?: string } } }).result?.task?.workspaceId,
+      ).toBeUndefined();
+
+      const workspaceTurn = await request("turn_workspace", "turn.submit", {
+        sessionId: "sess_workspace",
+        prompt: "workspace work",
+      });
+      expect(workspaceTurn).toMatchObject({
+        ok: true,
+        result: {
+          task: {
+            sessionId: "sess_workspace",
+            cwd: workspace.localPath,
+            workspaceId: workspace.id,
+          },
+        },
+      });
+
+      const spoofed = await request("turn_spoofed", "turn.submit", {
+        sessionId: "sess_global",
+        prompt: "wrong owner",
+        assignment: {
+          goal: "wrong owner",
+          target: { sessionId: "sess_global", workspaceId: workspace.id },
+          source: { kind: "cockpit" },
+        },
+      });
+      expect(spoofed).toMatchObject({
+        ok: false,
+        error: { code: "session_scope_mismatch" },
+      });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a display-safe active-branch session snapshot from daemon native storage", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-snapshot-"));
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const sessionRegistry = createDaemonSessionRegistry(join(root, ".spark"), {
+      daemonId: "install-rpc-snapshot",
+      daemonCwd: root,
+    });
+    const request = async (id: string) =>
+      await handleLocalRpcLine(
+        JSON.stringify({ id, method: "session.snapshot", params: { sessionId: "sess_view" } }),
+        paths,
+        db,
+        undefined,
+        { sessionRegistry },
+      );
+
+    try {
+      await sessionRegistry.create({
+        sessionId: "sess_view",
+        workspaceId: "ws_view",
+        title: "Unified conversation",
+      });
+
+      const empty = await request("snapshot_empty");
+      expect(empty).toMatchObject({
+        ok: true,
+        result: {
+          sessionId: "sess_view",
+          title: "Unified conversation",
+          messages: [],
+          metadata: { workspaceId: "ws_view", registryStatus: "ready" },
+        },
+      });
+      expect(JSON.stringify(empty)).not.toContain("sessionPath");
+
+      const queue = new SparkDaemonQueue({ paths });
+      const queued = await queue.enqueue({
+        type: "session.run",
+        sessionId: "sess_view",
+        prompt: "Queued follow-up",
+      });
+      const pending = await request("snapshot_pending");
+      expect(pending).toMatchObject({
+        ok: true,
+        result: {
+          status: "running",
+          messages: [
+            {
+              id: `queue:${queued.fileName}`,
+              role: "user",
+              text: "Queued follow-up",
+              status: "pending",
+              metadata: { source: "daemon.queue", taskFileName: queued.fileName },
+            },
+          ],
+        },
+      });
+      await queue.markProcessed(queued.fileName);
+      const settled = await request("snapshot_pending_settled");
+      expect(settled).toMatchObject({ ok: true, result: { messages: [] } });
+
+      const fallbackPath = join(
+        paths.piAgentDir!,
+        "sessions",
+        "workspace-hash",
+        "2026-07-10T08-00-00-000Z_sess_view.jsonl",
+      );
+      mkdirSync(join(paths.piAgentDir!, "sessions", "workspace-hash"), { recursive: true });
+      writeFileSync(
+        fallbackPath,
+        `${[
+          {
+            type: "session",
+            version: 3,
+            id: "sess_view",
+            timestamp: "2026-07-10T08:00:00.000Z",
+            cwd: "/workspace/view",
+          },
+          {
+            type: "message",
+            id: "user-root",
+            parentId: null,
+            timestamp: "2026-07-10T08:00:01.000Z",
+            message: { role: "user", content: "root question" },
+          },
+          {
+            type: "message",
+            id: "inactive-assistant",
+            parentId: "user-root",
+            timestamp: "2026-07-10T08:00:02.000Z",
+            message: { role: "assistant", content: "inactive answer" },
+          },
+          {
+            type: "message",
+            id: "branch-user",
+            parentId: "user-root",
+            timestamp: "2026-07-10T08:00:03.000Z",
+            message: { role: "user", content: [{ type: "text", text: "branch question" }] },
+          },
+          {
+            type: "message",
+            id: "system-hidden",
+            parentId: "branch-user",
+            timestamp: "2026-07-10T08:00:04.000Z",
+            message: { role: "system", content: "system-secret" },
+          },
+          {
+            type: "message",
+            id: "tool-hidden",
+            parentId: "system-hidden",
+            timestamp: "2026-07-10T08:00:05.000Z",
+            message: {
+              role: "toolResult",
+              content: [{ type: "text", text: "tool-secret" }],
+              details: { token: "secret-input" },
+            },
+          },
+          {
+            type: "message",
+            id: "branch-assistant",
+            parentId: "tool-hidden",
+            timestamp: "2026-07-10T08:00:06.000Z",
+            message: {
+              role: "assistant",
+              content: [
+                { type: "text", text: "branch answer" },
+                { type: "toolCall", name: "unsafe", arguments: { token: "secret-input" } },
+              ],
+            },
+          },
+          {
+            type: "message",
+            id: "custom-visible",
+            parentId: "branch-assistant",
+            timestamp: "2026-07-10T08:00:07.000Z",
+            message: { role: "custom", content: "visible note" },
+          },
+        ]
+          .map((entry) => JSON.stringify(entry))
+          .join("\n")}\n`,
+      );
+
+      const fallback = await request("snapshot_fallback");
+      expect(fallback).toMatchObject({
+        ok: true,
+        result: {
+          sessionId: "sess_view",
+          activeLeafId: "custom-visible",
+          messages: [
+            { id: "user-root", role: "user", text: "root question" },
+            { id: "branch-user", role: "user", text: "branch question" },
+            { id: "branch-assistant", role: "assistant", text: "branch answer" },
+            { id: "custom-visible", role: "custom", text: "visible note" },
+          ],
+        },
+      });
+      expect(JSON.stringify(fallback)).not.toMatch(
+        /inactive answer|system-secret|tool-secret|secret-input|sessionPath/u,
+      );
+
+      const preferredPath = join(
+        paths.piAgentDir!,
+        "sessions",
+        "preferred",
+        "2026-07-10T09-00-00-000Z_sess_view.jsonl",
+      );
+      mkdirSync(join(paths.piAgentDir!, "sessions", "preferred"), { recursive: true });
+      writeFileSync(
+        preferredPath,
+        `${JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "sess_view",
+          timestamp: "2026-07-10T09:00:00.000Z",
+          cwd: "/workspace/view",
+        })}\n${JSON.stringify({
+          type: "message",
+          id: "preferred-user",
+          parentId: null,
+          timestamp: "2026-07-10T09:00:01.000Z",
+          message: { role: "user", content: "preferred transcript" },
+        })}\n`,
+      );
+      await sessionRegistry.recordRun({
+        sessionId: "sess_view",
+        sessionPath: preferredPath,
+      });
+      const preferred = await request("snapshot_preferred");
+      expect(preferred).toMatchObject({
+        ok: true,
+        result: { messages: [{ id: "preferred-user", text: "preferred transcript" }] },
+      });
+      expect(JSON.stringify(preferred)).not.toContain(preferredPath);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("serves model/auth control and freezes the effective model on submitted turns", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-model-rpc-"));
     const paths = resolveSparkPaths({
@@ -844,6 +1183,7 @@ describe("Spark daemon local RPC", () => {
       setDefaultModel: vi.fn(async () => snapshot),
       setSessionModel: vi.fn(async () => ({
         sessionId: "sess_model",
+        scope: { kind: "workspace" as const, workspaceId: "ws_model" },
         workspaceId: "ws_model",
         model,
         bindings: [],

@@ -176,6 +176,7 @@ void test("daemon managed session commands wait for the daemon-owned RPC client"
   const calls: string[] = [];
   const session = {
     sessionId: "sess_rpc",
+    scope: { kind: "workspace" as const, workspaceId: "ws_rpc" },
     workspaceId: "ws_rpc",
     title: "RPC session",
     status: "ready" as const,
@@ -189,7 +190,13 @@ void test("daemon managed session commands wait for the daemon-owned RPC client"
       return session;
     },
     list: async (options) => {
-      calls.push(`list:${options?.workspaceId ?? "all"}`);
+      const workspaceId =
+        options?.scope?.kind === "workspace"
+          ? options.scope.workspaceId
+          : options && "workspaceId" in options
+            ? options.workspaceId
+            : undefined;
+      calls.push(`list:${workspaceId ?? "all"}`);
       return [session];
     },
     get: async (sessionId) => {

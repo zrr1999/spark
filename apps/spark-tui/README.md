@@ -53,13 +53,15 @@ Default shape:
       "@zendev-lab/spark-graft/extension",
       "@zendev-lab/pi-extension/extension"
    ],
-   "providers": ["@zendev-lab/spark-ai/baidu-oneapi-provider"],
-   "activeProvider": "baidu-oneapi",
-   "activeModel": "claude-opus-4.8"
+   "providers": [
+      "@zendev-lab/spark-ai/baidu-oneapi-provider",
+      "@zendev-lab/spark-ai/openai-codex-provider"
+   ],
+   "activeModelId": "baidu-oneapi/claude-opus-4.8"
 }
 ```
 
-Keybindings live at `~/.spark/agent/keybindings.json` and override host defaults by binding id. Config-backed resource lists live in `~/.spark/config.json`: `extensions`, `providers`, `skills`, `promptTemplates`, `themes`, `contextFiles`, and `trustedWorkspaces`. `spark-tui install/remove/list/config` manages those lists without silently fetching or deleting secrets.
+Keybindings live at `~/.spark/agent/keybindings.json` and override host defaults by binding id. Config-backed resource lists live in `~/.spark/config.json`: `extensions`, additional `providers`, `skills`, `promptTemplates`, `themes`, `contextFiles`, and `trustedWorkspaces`. Spark always merges its bundled Baidu OneAPI and OpenAI Codex providers; `spark-tui install/remove/list/config` manages additional entries without silently fetching or deleting secrets.
 
 Prompt templates are Spark-native Markdown files loaded non-recursively from `~/.spark/prompts/*.md`, `<workspace>/.spark/prompts/*.md`, and any configured `promptTemplates` file/directory paths. The file stem becomes `/name`; optional frontmatter `description` and `argument-hint` feed slash autocomplete, and Pi-style `$1`, `$@`, `$ARGUMENTS`, `${1:-default}`, `${@:N}`, and `${@:N:L}` substitutions expand before the prompt is submitted.
 

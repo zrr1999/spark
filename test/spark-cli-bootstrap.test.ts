@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { stableId } from "../packages/spark-extension-api/src/index.ts";
 import { callLeafOrDegrade } from "../packages/spark-extension-api/src/index.ts";
+import { DEFAULT_SPARK_PROVIDER_SPECS } from "../packages/spark-ai/src/control/provider-catalog.ts";
 import { parseSparkCliArgs, parseSparkCliCommand } from "../apps/spark-tui/src/cli.ts";
 import {
   assistantMessageToText,
@@ -361,7 +362,7 @@ void test("createSparkCliHostServices loads config from explicit sparkHome by de
       providerImporter: async () => fakeProviderModule(),
     });
 
-    assert.equal(services.config.providers[0], "fake-provider");
+    assert.deepEqual(services.config.providers, [...DEFAULT_SPARK_PROVIDER_SPECS, "fake-provider"]);
     assert.equal(services.providerRegistry.getActive()?.providerName, "fake-provider");
   } finally {
     await rm(dir, { recursive: true, force: true });

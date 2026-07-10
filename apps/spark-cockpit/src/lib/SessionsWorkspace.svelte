@@ -4,14 +4,27 @@
   import AgentMdxStream from "$lib/AgentMdxStream.svelte";
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
+  import { buildSessionTimeline } from "$lib/session-timeline";
+  import {
+    workbenchSessionScope,
+    workspaceIdForWorkbenchSession,
+  } from "$lib/workbench-session-scope";
   import { workspacePath } from "$lib/workspace-routes";
-  import type { SparkModelControlSnapshot, SparkModelRef } from "@zendev-lab/spark-protocol";
+  import type {
+    SparkModelCatalogProvider,
+    SparkModelControlSnapshot,
+    SparkModelRef,
+    SparkSessionView,
+  } from "@zendev-lab/spark-protocol";
   import type { SubmitFunction } from "@sveltejs/kit";
   import { onMount } from "svelte";
 
   type SessionRecord = {
     sessionId: string;
-    workspaceId: string;
+    workspaceId?: string;
+    scope?:
+      | { kind: "workspace"; workspaceId: string }
+      | { kind: "daemon"; daemonId?: string; daemonLabel?: string };
     title?: string;
     status: string;
     role?: string;
@@ -58,6 +71,7 @@
 
   type FormValues = {
     workspaceId?: string;
+    scopeKind?: string;
     sessionId?: string;
     message?: string;
     model?: string;
@@ -71,20 +85,8 @@
 
   type SubmissionState = "idle" | "submitting" | "success" | "error";
 
-  type TimelineItem = {
-    id: string;
-    actor: "user" | "spark";
-    body: string;
-    title: string | null;
-    status: string | null;
-    timestamp: string;
-    meta: string | null;
-    order: number;
-  };
-
   type Messages = {
     aria: string;
-    createWorkspaceLabel: string;
     createNoWorkspaceTitle: string;
     createNoWorkspaceBody: string;
     createWorkspaceAction: string;
@@ -106,11 +108,12 @@
     workspaces: WorkspaceOption[];
     selectedSessionId: string | null;
     activeWorkspaceId?: string | null;
-    showCreate?: boolean;
+    startScope?: "workspace" | "daemon";
     messages: Messages;
     common: Parameters<typeof getStatusLabel>[1];
     locale: string;
     activity?: SessionActivity | null;
+    sessionView?: SparkSessionView | null;
     formMessage?: string | null;
     formIntent?: string | null;
     formValues?: FormValues | null;
@@ -123,10 +126,12 @@
     workspaces,
     selectedSessionId,
     activeWorkspaceId = null,
+    startScope = "workspace",
     messages,
     common,
     locale,
     activity = null,
+    sessionView = null,
     formMessage = null,
     formIntent = null,
     formValues = null,
@@ -137,12 +142,18 @@
   let selected = $derived(
     sessions.find((session) => session.sessionId === selectedSessionId) ?? null,
   );
+  let selectedWorkspaceId = $derived(
+    selected ? workspaceIdForWorkbenchSession(selected) : null,
+  );
+  let selectedWorkspaceHref = $derived(workspaceHref(selectedWorkspaceId));
   let activityCommands = $derived(activity?.commands ?? []);
   let activityReports = $derived(activity?.reports ?? []);
-  let defaultWorkspaceId = $derived(
-    (activeWorkspaceId && workspaces.some((workspace) => workspace.id === activeWorkspaceId)
-      ? activeWorkspaceId
-      : workspaces[0]?.id) ?? "",
+  let sessionMessages = $derived(sessionView?.messages ?? []);
+  let modelProviders = $derived(
+    modelControl.snapshot.providers.filter((provider) => provider.models.length > 0),
+  );
+  let activeWorkspace = $derived(
+    workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null,
   );
   let availableModels = $derived(
     modelControl.snapshot.providers.flatMap((provider) =>
@@ -160,7 +171,6 @@
     ),
   );
   let modelReady = $derived(modelControl.available && effectiveModelAvailable);
-  let startWorkspaceId = $state("");
   let startModel = $state("");
   let sessionModel = $state("");
   let startMessage = $state("");
@@ -183,7 +193,13 @@
     isZh
       ? {
           newConversation: "新对话",
-          startHint: "选择工作空间，然后直接说要做什么。发送首条消息后，Spark 会自动建立会话和内部任务。",
+          workspaceConversation: "工作区对话",
+          daemonConversation: "全局对话",
+          scopeChoiceLabel: "对话范围",
+          workspaceStartHint: "在当前工作区中直接说要做什么。发送首条消息后，Spark 会自动建立会话和内部任务。",
+          daemonStartHint: "直接与当前 Spark daemon 对话，不绑定任何工作区。",
+          daemonScope: "当前 Spark daemon",
+          scopeLabel: "范围",
           messageLabel: "消息",
           startPlaceholder: "告诉 Spark 你想完成什么……",
           messagePlaceholder: "继续说明、补充约束或调整方向……",
@@ -206,13 +222,21 @@
           modelUnavailable: "没有已登录且可用的模型",
           currentModelUnavailable: "当前模型不可用，请先切换模型",
           configureModels: "配置 Provider",
-          modelUpdated: "会话模型已更新。",
+          providerLoginRequired: "登录后可用",
+          modelUpdated: "模型已切换；从下一条尚未入队的消息开始生效。",
           modelFailed: "无法切换模型。",
         }
       : {
           newConversation: "New conversation",
-          startHint:
-            "Choose a workspace and say what you need. Spark creates the conversation and internal tasks when you send the first message.",
+          workspaceConversation: "Workspace chat",
+          daemonConversation: "Global chat",
+          scopeChoiceLabel: "Conversation scope",
+          workspaceStartHint:
+            "Say what you need in the current workspace. Spark creates the conversation and internal tasks when you send the first message.",
+          daemonStartHint:
+            "Talk directly to this Spark daemon without binding the conversation to a workspace.",
+          daemonScope: "This Spark daemon",
+          scopeLabel: "Scope",
           messageLabel: "Message",
           startPlaceholder: "Tell Spark what you want to accomplish…",
           messagePlaceholder: "Add context, constraints, or steer the work…",
@@ -235,57 +259,25 @@
           modelUnavailable: "No authenticated model is available",
           currentModelUnavailable: "Current model unavailable — choose another model",
           configureModels: "Configure providers",
-          modelUpdated: "Conversation model updated.",
+          providerLoginRequired: "Available after login",
+          modelUpdated:
+            "Model updated; it applies starting with the next message that has not yet been queued.",
           modelFailed: "Could not switch models.",
         },
   );
 
-  let timelineItems = $derived.by(() => {
-    const items: TimelineItem[] = [];
-    const submittedMessages = new Set<string>();
-
-    for (const command of activityCommands) {
-      const body = command.goal?.trim() || command.title?.trim() || command.id;
-      submittedMessages.add(normalizeMessage(body));
-      items.push({
-        id: "command:" + command.id,
-        actor: "user",
-        body,
-        title: null,
-        status: commandStatus(command),
-        timestamp: command.createdAt,
-        meta: null,
-        order: 0,
-      });
-    }
-
-    for (const report of activityReports) {
-      if (report.kind === "daemon.task.lifecycle" || report.role === "tool") continue;
-      const actor = isUserRole(report.role) ? "user" : "spark";
-      if (actor === "user" && submittedMessages.has(normalizeMessage(report.text))) continue;
-      items.push({
-        id: "report:" + report.id,
-        actor,
-        body: report.text,
-        title: actor === "user" ? null : report.title,
-        status: report.status,
-        timestamp: report.createdAt,
-        meta: report.role && !["assistant", "user"].includes(report.role) ? report.role : null,
-        order: 1,
-      });
-    }
-
-    return items.sort((left, right) => {
-      const time = Date.parse(left.timestamp) - Date.parse(right.timestamp);
-      if (Number.isFinite(time) && time !== 0) return time;
-      const lexical = left.timestamp.localeCompare(right.timestamp);
-      return lexical || left.order - right.order || left.id.localeCompare(right.id);
-    });
-  });
+  let timelineItems = $derived(
+    buildSessionTimeline({
+      messages: sessionMessages,
+      commands: activityCommands,
+      reports: activityReports,
+      fallbackTimestamp:
+        sessionView?.updatedAt ?? selected?.updatedAt ?? new Date(0).toISOString(),
+    }),
+  );
 
   $effect(() => {
     if (!initialFormValuesApplied) {
-      startWorkspaceId = formValues?.workspaceId ?? "";
       startMessage =
         formIntent === "startConversation" ? (formValues?.message ?? "") : startMessage;
       startModel = formValues?.model ?? startModel;
@@ -293,16 +285,19 @@
       initialFormValuesApplied = true;
     }
 
-    if (!startWorkspaceId || !workspaces.some((workspace) => workspace.id === startWorkspaceId)) {
-      startWorkspaceId = defaultWorkspaceId;
-    }
     const defaultModelValue = effectiveModelValue;
     if (!startModel || !availableModels.some((entry) => modelValue(entry.model) === startModel)) {
       startModel = effectiveModelAvailable
         ? defaultModelValue
         : modelValue(availableModels[0]?.model);
     }
-    if (sessionModel !== defaultModelValue) sessionModel = defaultModelValue;
+  });
+
+  // Follow daemon truth when the effective model changes. Keep this separate from
+  // the form-initialization effect so choosing an option does not immediately reset
+  // the bound value before the enhanced form can submit it.
+  $effect(() => {
+    sessionModel = effectiveModelValue;
   });
 
   $effect(() => {
@@ -367,7 +362,21 @@
     );
   }
 
-  function workspaceHref(workspaceId: string) {
+  function sessionScopeLabel(session: SessionRecord) {
+    const scope = workbenchSessionScope(session);
+    if (scope.kind === "workspace") return workspaceLabel(scope.workspaceId);
+    if (scope.kind === "daemon") {
+      return scope.daemonLabel ? `${copy.daemonScope} · ${scope.daemonLabel}` : copy.daemonScope;
+    }
+    return messages.unknownWorkspace;
+  }
+
+  function sessionIsWorkspaceScoped(session: SessionRecord) {
+    return workbenchSessionScope(session).kind === "workspace";
+  }
+
+  function workspaceHref(workspaceId: string | null) {
+    if (!workspaceId) return null;
     const workspace = workspaces.find((item) => item.id === workspaceId);
     return workspace ? workspacePath(workspace) : null;
   }
@@ -384,14 +393,6 @@
     return command.invocationStatus ?? command.deliveryStatus ?? command.status;
   }
 
-  function normalizeMessage(value: string) {
-    return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
-  }
-
-  function isUserRole(role: string | null) {
-    return role === "user" || role === "human" || role === "operator";
-  }
-
   function resultMessage(result: unknown, fallback: string) {
     if (!result || typeof result !== "object") return fallback;
 
@@ -403,6 +404,19 @@
       return result.error.message;
     }
     return fallback;
+  }
+
+  function resultModel(result: unknown) {
+    if (!result || typeof result !== "object" || !("data" in result)) return null;
+    const data = result.data;
+    if (!data || typeof data !== "object" || !("model" in data)) return null;
+    return typeof data.model === "string" && data.model.trim() ? data.model : null;
+  }
+
+  function providerGroupLabel(provider: SparkModelCatalogProvider) {
+    return provider.auth.configured
+      ? provider.label
+      : `${provider.label} · ${copy.providerLoginRequired}`;
   }
 
   const enhanceStartConversation: SubmitFunction = () => {
@@ -454,11 +468,13 @@
       await update({ reset: false });
       if (result.type === "success") {
         modelState = "success";
+        sessionModel = resultModel(result) ?? sessionModel;
         modelFeedback = resultMessage(result, copy.modelUpdated);
         await invalidateAll();
         return;
       }
       modelState = "error";
+      sessionModel = effectiveModelValue;
       modelFeedback = resultMessage(result, copy.modelFailed);
     };
   };
@@ -485,12 +501,12 @@
           <dd><span class="status-pill {selected.status}">{statusLabel(selected.status)}</span></dd>
         </div>
         <div>
-          <dt>{messages.workspaceLabel}</dt>
+          <dt>{sessionIsWorkspaceScoped(selected) ? messages.workspaceLabel : copy.scopeLabel}</dt>
           <dd>
-            {#if workspaceHref(selected.workspaceId)}
-              <a href={workspaceHref(selected.workspaceId)}>{workspaceLabel(selected.workspaceId)}</a>
+            {#if selectedWorkspaceHref}
+              <a href={selectedWorkspaceHref}>{sessionScopeLabel(selected)}</a>
             {:else}
-              {workspaceLabel(selected.workspaceId)}
+              {sessionScopeLabel(selected)}
             {/if}
           </dd>
         </div>
@@ -532,7 +548,7 @@
         </div>
       </details>
 
-      {#if !compact}
+      {#if !compact && sessionIsWorkspaceScoped(selected)}
         <section class="channel-routing">
           <h3>{messages.channelRoutingTitle}</h3>
           <p class="muted">{messages.channelRoutingBody}</p>
@@ -572,7 +588,7 @@
   <main class="stage-pane">
     {#if !selected}
       <div class="conversation-start">
-        {#if workspaces.length === 0}
+        {#if startScope === "workspace" && !activeWorkspace}
           <div class="stage-empty">
             <Icon name="agents" size={28} />
             <div>
@@ -587,9 +603,20 @@
             <div>
               <p class="kicker">Spark</p>
               <h1>{copy.newConversation}</h1>
-              <p>{copy.startHint}</p>
+              <p>{startScope === "daemon" ? copy.daemonStartHint : copy.workspaceStartHint}</p>
             </div>
           </div>
+
+          <nav class="start-scope-actions" aria-label={copy.scopeChoiceLabel}>
+            <a class:active={startScope === "workspace"} href="/sessions?new=workspace">
+              <Icon name="workspace" size={15} stroke={2.2} />
+              <span>{copy.workspaceConversation}</span>
+            </a>
+            <a class:active={startScope === "daemon"} href="/sessions?new=daemon">
+              <Icon name="spark" size={15} stroke={2.2} />
+              <span>{copy.daemonConversation}</span>
+            </a>
+          </nav>
 
           <form
             method="POST"
@@ -598,30 +625,38 @@
             aria-busy={startState === "submitting"}
             use:enhance={enhanceStartConversation}
           >
+            <input type="hidden" name="scopeKind" value={startScope} />
+            {#if startScope === "workspace" && activeWorkspace}
+              <input type="hidden" name="workspaceId" value={activeWorkspace.id} />
+            {/if}
             <div class="composer-selects">
-              <label class="workspace-select">
-                <span>{messages.createWorkspaceLabel}</span>
-                <select name="workspaceId" required bind:value={startWorkspaceId}>
-                  {#each workspaces as workspace}
-                    <option value={workspace.id}>{workspace.name}</option>
-                  {/each}
-                </select>
-              </label>
-              {#if availableModels.length > 0}
-                <label class="workspace-select model-select">
+              {#if modelProviders.length > 0}
+                <label class="model-select">
                   <span>{copy.modelLabel}</span>
-                  <select name="model" required bind:value={startModel}>
-                    {#each modelControl.snapshot.providers as provider}
-                      {#if provider.models.some((entry) => entry.available)}
-                        <optgroup label={provider.label}>
-                          {#each provider.models.filter((entry) => entry.available) as entry}
-                            <option value={modelValue(entry.model)}>{entry.model.modelLabel ?? entry.model.modelId}</option>
-                          {/each}
-                        </optgroup>
-                      {/if}
+                  <select
+                    name="model"
+                    required
+                    bind:value={startModel}
+                    disabled={availableModels.length === 0}
+                  >
+                    {#each modelProviders as provider}
+                      <optgroup
+                        label={providerGroupLabel(provider)}
+                        disabled={!provider.models.some((entry) => entry.available)}
+                      >
+                        {#each provider.models.filter((entry) => entry.available) as entry}
+                          <option value={modelValue(entry.model)}>{entry.model.modelLabel ?? entry.model.modelId}</option>
+                        {/each}
+                        {#if !provider.models.some((entry) => entry.available)}
+                          <option disabled>{copy.providerLoginRequired} · {provider.models.length}</option>
+                        {/if}
+                      </optgroup>
                     {/each}
                   </select>
                 </label>
+                <a class="model-settings-link" href="/settings/models">
+                  <Icon name="settings" size={14} />{copy.configureModels}
+                </a>
               {:else}
                 <a class="model-settings-link" href="/settings/models">
                   <Icon name="settings" size={14} />{copy.configureModels}
@@ -663,7 +698,7 @@
         <div class="stage-title">
           <p class="kicker">{copy.timelineTitle}</p>
           <h1>{selected.title || copy.newConversation}</h1>
-          <p>{workspaceLabel(selected.workspaceId)}</p>
+          <p>{sessionScopeLabel(selected)}</p>
         </div>
         <span class="status-pill {selected.status}">{statusLabel(selected.status)}</span>
       </header>
@@ -747,7 +782,7 @@
         ></textarea>
         <div class="composer-toolbar">
           <div class="composer-context">
-            {#if availableModels.length > 0}
+            {#if modelProviders.length > 0}
               <label class="conversation-model-select">
                 <Icon name="spark" size={13} />
                 <span class="sr-only">{copy.modelLabel}</span>
@@ -755,30 +790,42 @@
                   form="session-model-form"
                   name="model"
                   bind:value={sessionModel}
-                  disabled={modelState === "submitting"}
+                  disabled={modelState === "submitting" || availableModels.length === 0}
                   onchange={submitModelSelection}
                   aria-label={copy.modelLabel}
                 >
                   {#if effectiveModel && !effectiveModelAvailable}
                     <option value={effectiveModelValue} disabled>{copy.currentModelUnavailable}</option>
                   {/if}
-                  {#each modelControl.snapshot.providers as provider}
-                    {#if provider.models.some((entry) => entry.available)}
-                      <optgroup label={provider.label}>
-                        {#each provider.models.filter((entry) => entry.available) as entry}
-                          <option value={modelValue(entry.model)}>{modelLabel(entry.model)}</option>
-                        {/each}
-                      </optgroup>
-                    {/if}
+                  {#each modelProviders as provider}
+                    <optgroup
+                      label={providerGroupLabel(provider)}
+                      disabled={!provider.models.some((entry) => entry.available)}
+                    >
+                      {#each provider.models.filter((entry) => entry.available) as entry}
+                        <option value={modelValue(entry.model)}>{modelLabel(entry.model)}</option>
+                      {/each}
+                      {#if !provider.models.some((entry) => entry.available)}
+                        <option disabled>{copy.providerLoginRequired} · {provider.models.length}</option>
+                      {/if}
+                    </optgroup>
                   {/each}
                 </select>
               </label>
+              <a
+                class="model-settings-shortcut"
+                href="/settings/models"
+                aria-label={copy.configureModels}
+                title={copy.configureModels}
+              >
+                <Icon name="settings" size={13} />
+              </a>
             {:else}
               <a class="model-settings-link compact" href="/settings/models">
                 <Icon name="warning" size={13} />{copy.modelUnavailable}
               </a>
             {/if}
-            <span>{workspaceLabel(selected.workspaceId)}</span>
+            <span>{sessionScopeLabel(selected)}</span>
             {#if selected.role}<span>{selected.role}</span>{/if}
             <p
               class="form-feedback {sendState}"
@@ -916,6 +963,7 @@
   }
 
   .start-heading,
+  .start-scope-actions,
   .start-composer {
     max-width: 720px;
     width: 100%;
@@ -926,7 +974,46 @@
     display: grid;
     gap: 14px;
     grid-template-columns: auto minmax(0, 1fr);
-    margin-bottom: 20px;
+    margin-bottom: 14px;
+  }
+
+  .start-scope-actions {
+    background: var(--color-surface-soft);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    display: grid;
+    gap: 4px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-bottom: 12px;
+    padding: 4px;
+  }
+
+  .start-scope-actions a {
+    align-items: center;
+    border-radius: 7px;
+    color: var(--color-ink-muted);
+    display: flex;
+    font-size: 13px;
+    font-weight: 600;
+    gap: 7px;
+    justify-content: center;
+    min-height: 34px;
+    padding: 0 10px;
+    text-decoration: none;
+    transition:
+      background 120ms ease,
+      box-shadow 120ms ease,
+      color 120ms ease;
+  }
+
+  .start-scope-actions a:hover {
+    color: var(--color-ink);
+  }
+
+  .start-scope-actions a.active {
+    background: var(--color-surface);
+    box-shadow: 0 1px 3px rgb(15 23 42 / 10%);
+    color: var(--color-primary);
   }
 
   .spark-mark {
@@ -1147,21 +1234,21 @@
     margin-right: 8px;
   }
 
-  .workspace-select {
+  .model-select {
     align-items: center;
     display: flex;
     gap: 10px;
     width: fit-content;
   }
 
-  .workspace-select > span {
+  .model-select > span {
     color: var(--color-ink-subtle);
     font-size: 11px;
     font-weight: 650;
     text-transform: uppercase;
   }
 
-  .workspace-select select {
+  .model-select select {
     background: var(--color-surface-soft);
     border: 1px solid var(--color-border);
     border-radius: 8px;
@@ -1174,13 +1261,14 @@
     padding: 0 30px 0 10px;
   }
 
-  .workspace-select select:focus {
+  .model-select select:focus {
     border-color: var(--color-focus-ring);
     box-shadow: var(--shadow-focus);
   }
 
   .conversation-model-select,
-  .model-settings-link {
+  .model-settings-link,
+  .model-settings-shortcut {
     align-items: center;
     background: var(--color-surface-soft);
     border: 1px solid var(--color-border);
@@ -1205,6 +1293,12 @@
     max-width: 270px;
     outline: none;
     padding: 0;
+  }
+
+  .model-settings-shortcut {
+    justify-content: center;
+    padding: 0;
+    width: 30px;
   }
 
   .model-settings-link.compact {
@@ -1584,13 +1678,13 @@
       padding: 11px 12px;
     }
 
-    .workspace-select {
+    .model-select {
       align-items: stretch;
       display: grid;
       width: 100%;
     }
 
-    .workspace-select select {
+    .model-select select {
       max-width: none;
       width: 100%;
     }

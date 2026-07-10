@@ -38,19 +38,18 @@ describe("remote PWA assets", () => {
     expect(serviceWorker).toContain("notificationclick");
   });
 
-  it("keeps approval and task review surfaces responsive on phone-width viewports", () => {
+  it("keeps approval and conversation detail surfaces responsive on phone-width viewports", () => {
     const inboxDetail = readAppFile(
       "src/routes/(workbench)/[workspaceId]/inbox/[inboxItemId]/+page.svelte",
     );
-    const projectDetail = readAppFile(
-      "src/routes/(workbench)/[workspaceId]/projects/[projectId]/+page.svelte",
-    );
+    const conversationDetail = readAppFile("src/lib/SessionsWorkspace.svelte");
     const workbenchLayout = readAppFile("src/routes/(workbench)/+layout.svelte");
 
     expect(inboxDetail).toContain("@media (max-width: 640px)");
-    expect(inboxDetail).toContain(".approval-card");
+    expect(inboxDetail).toContain(".question-block");
     expect(inboxDetail).toContain("grid-template-columns: 1fr");
-    expect(projectDetail).toMatch(/@media \(max-width: (700|1023)px\)/);
+    expect(conversationDetail).toContain(".mobile-details");
+    expect(conversationDetail).toMatch(/@media \(max-width: (640|960)px\)/);
     expect(workbenchLayout).toMatch(/@media \(max-width: (700|1023)px\)/);
   });
 });

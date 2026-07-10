@@ -1,10 +1,18 @@
 <script lang="ts">
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
+  import {
+    daemonIdentityForWorkbenchSession,
+    isSessionVisibleInWorkbenchRail,
+    workbenchSessionScope,
+  } from "$lib/workbench-session-scope";
 
   type SessionRecord = {
     sessionId: string;
-    workspaceId: string;
+    workspaceId?: string;
+    scope?:
+      | { kind: "workspace"; workspaceId: string }
+      | { kind: "daemon"; daemonId?: string; daemonLabel?: string };
     title?: string;
     status: string;
     activityStatus?: string;
@@ -22,6 +30,7 @@
   let {
     sessions,
     workspaces,
+    activeWorkspaceId = null,
     selectedSessionId = null,
     locale,
     common,
@@ -29,16 +38,19 @@
   }: {
     sessions: SessionRecord[];
     workspaces: WorkspaceOption[];
+    activeWorkspaceId?: string | null;
     selectedSessionId?: string | null;
     locale: string;
     common: Parameters<typeof getStatusLabel>[1];
     messages: {
-      newSession: string;
+      workspaceConversation: string;
+      daemonConversation: string;
       searchPlaceholder: string;
       emptyTitle: string;
       listLabel: string;
       untitledConversation: string;
       unknownWorkspace: string;
+      daemonGroup: string;
     };
   } = $props();
 
@@ -46,13 +58,14 @@
 
   let filteredSessions = $derived(
     sessions.filter((session) => {
+      if (!isSessionVisibleInWorkbenchRail(session, activeWorkspaceId)) return false;
       const query = filter.trim().toLowerCase();
       if (!query) return true;
-      const workspaceName = workspaceLabel(session.workspaceId).toLowerCase();
+      const scopeLabel = sessionScopeLabel(session).toLowerCase();
       return (
         session.sessionId.toLowerCase().includes(query) ||
         (session.title ?? "").toLowerCase().includes(query) ||
-        workspaceName.includes(query)
+        scopeLabel.includes(query)
       );
     }),
   );
@@ -66,22 +79,50 @@
     );
   }
 
-  function groupByWorkspace(items: SessionRecord[]) {
-    const map = new Map<string, SessionRecord[]>();
-    for (const session of items) {
-      const list = map.get(session.workspaceId) ?? [];
-      list.push(session);
-      map.set(session.workspaceId, list);
+  function sessionScopeLabel(session: SessionRecord) {
+    const scope = workbenchSessionScope(session);
+    if (scope.kind === "workspace") return workspaceLabel(scope.workspaceId);
+    if (scope.kind === "daemon") {
+      const identity = daemonIdentityForWorkbenchSession(session);
+      return `${messages.daemonGroup} · ${identity?.label ?? scope.daemonId}`;
     }
-    return [...map.entries()].map(([workspaceId, groupSessions]) => ({
-      workspaceId,
-      label: workspaceLabel(workspaceId),
-      sessions: groupSessions.sort(
-        (left, right) =>
-          new Date(right.activityUpdatedAt ?? right.updatedAt).getTime() -
-          new Date(left.activityUpdatedAt ?? left.updatedAt).getTime(),
-      ),
-    }));
+    return messages.unknownWorkspace;
+  }
+
+  function groupByWorkspace(items: SessionRecord[]) {
+    const map = new Map<
+      string,
+      { kind: "workspace" | "daemon"; label: string; sessions: SessionRecord[] }
+    >();
+    for (const session of items) {
+      const scope = workbenchSessionScope(session);
+      if (scope.kind === "unknown") continue;
+      const key =
+        scope.kind === "workspace"
+          ? `workspace:${scope.workspaceId}`
+          : `daemon:${scope.daemonId}`;
+      const current = map.get(key) ?? {
+        kind: scope.kind,
+        label: sessionScopeLabel(session),
+        sessions: [],
+      };
+      current.sessions.push(session);
+      map.set(key, current);
+    }
+    return [...map.entries()]
+      .map(([key, group]) => ({
+        key,
+        ...group,
+        sessions: group.sessions.sort(
+          (left, right) =>
+            new Date(right.activityUpdatedAt ?? right.updatedAt).getTime() -
+            new Date(left.activityUpdatedAt ?? left.updatedAt).getTime(),
+        ),
+      }))
+      .sort((left, right) => {
+        if (left.kind !== right.kind) return left.kind === "workspace" ? -1 : 1;
+        return left.label.localeCompare(right.label);
+      });
   }
 
   function relative(value: string) {
@@ -98,10 +139,18 @@
 </script>
 
 <div class="session-rail">
-  <a class="new-session" href="/sessions?new=1">
-    <Icon name="plus" size={16} stroke={2.2} />
-    <span>{messages.newSession}</span>
-  </a>
+  <div class="new-session-actions">
+    {#if activeWorkspaceId}
+      <a class="new-session" href="/sessions?new=workspace">
+        <Icon name="workspace" size={15} stroke={2.2} />
+        <span>{messages.workspaceConversation}</span>
+      </a>
+    {/if}
+    <a class="new-session" href="/sessions?new=daemon">
+      <Icon name="spark" size={15} stroke={2.2} />
+      <span>{messages.daemonConversation}</span>
+    </a>
+  </div>
 
   <label class="session-filter">
     <Icon name="search" size={15} stroke={2.1} />
@@ -117,7 +166,7 @@
     <p class="session-empty">{messages.emptyTitle}</p>
   {:else}
     <div class="session-groups" aria-label={messages.listLabel}>
-      {#each grouped as group}
+      {#each grouped as group (group.key)}
         <section class="session-group">
           <h2>
             <span>{group.label}</span>
@@ -158,6 +207,16 @@
     min-height: 0;
   }
 
+  .new-session-actions {
+    display: grid;
+    gap: 4px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .new-session-actions > :only-child {
+    grid-column: 1 / -1;
+  }
+
   .new-session {
     align-items: center;
     background: var(--color-surface-soft);
@@ -167,9 +226,11 @@
     display: inline-flex;
     font-size: 13px;
     font-weight: 600;
-    gap: 8px;
+    gap: 6px;
+    justify-content: center;
     min-height: 36px;
-    padding: 0 12px;
+    padding: 0 8px;
+    text-align: center;
     text-decoration: none;
     transition:
       background 120ms ease,

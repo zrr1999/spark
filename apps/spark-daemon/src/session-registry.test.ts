@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
-import { defaultSparkSessionRegistryRoot, SparkSessionRegistry } from "@zendev-lab/spark-session";
+import {
+  defaultSparkSessionRegistryRoot,
+  SparkSessionRegistry,
+  type CreateSparkSessionInput,
+} from "@zendev-lab/spark-session";
 import {
   createSerializedDaemonSessionRegistry,
   type DaemonSessionRegistry,
@@ -36,13 +40,16 @@ describe("daemon session registry", () => {
       }
     };
     const tracked: DaemonSessionRegistry = {
-      create: (input) => track(() => backing.create(input)),
-      list: (options) => backing.list(options),
+      create: (input) => track(() => backing.create(toBackingCreateInput(input))),
+      list: (options) => backing.list(toBackingListOptions(options)),
       get: (sessionId) => backing.get(sessionId),
       bind: (input) => track(() => backing.bind(input)),
       unbind: (sessionId, externalKey) => track(() => backing.unbind(sessionId, externalKey)),
       archive: (sessionId) => track(() => backing.archive(sessionId)),
       setModel: (sessionId, model) => track(() => backing.setModel(sessionId, model)),
+      recordTurnQueued: (sessionId, now) => track(() => backing.recordTurnQueued(sessionId, now)),
+      recordTurnSettled: (sessionId, now) => track(() => backing.recordTurnSettled(sessionId, now)),
+      recordRun: (input) => track(() => backing.recordRun(input)),
       resolveBinding: (input) => track(() => backing.resolveBinding(input)),
     };
     const registry = createSerializedDaemonSessionRegistry(tracked);
@@ -80,3 +87,41 @@ describe("daemon session registry", () => {
     ]);
   });
 });
+
+function toBackingCreateInput(
+  input: Parameters<DaemonSessionRegistry["create"]>[0],
+): CreateSparkSessionInput {
+  if (input.scope?.kind === "daemon") {
+    const { scope: _scope, workspaceId: _workspaceId, ...rest } = input;
+    return { ...rest, scope: { kind: "daemon", daemonId: "install-serialized-test" } };
+  }
+  if (input.scope?.kind === "workspace") {
+    return { ...input, scope: input.scope, workspaceId: input.scope.workspaceId };
+  }
+  const workspaceId = "workspaceId" in input ? input.workspaceId : undefined;
+  if (workspaceId) {
+    return {
+      workspaceId,
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      ...(input.title ? { title: input.title } : {}),
+      ...(input.role ? { role: input.role } : {}),
+      ...(input.cwd ? { cwd: input.cwd } : {}),
+      ...(input.sessionPath ? { sessionPath: input.sessionPath } : {}),
+      ...(input.status ? { status: input.status } : {}),
+    };
+  }
+  throw new Error("test daemon session create requires a scope");
+}
+
+function toBackingListOptions(
+  input: Parameters<DaemonSessionRegistry["list"]>[0],
+): Parameters<SparkSessionRegistry["list"]>[0] {
+  if (!input?.scope) return { includeArchived: input?.includeArchived };
+  if (input.scope.kind === "workspace") {
+    return { includeArchived: input.includeArchived, scope: input.scope };
+  }
+  return {
+    includeArchived: input.includeArchived,
+    scope: { kind: "daemon", daemonId: "install-serialized-test" },
+  };
+}

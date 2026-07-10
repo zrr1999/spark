@@ -5,7 +5,10 @@ import { dirname, join, resolve } from "node:path";
 import { SparkProviderRegistry, type ProviderRegistrationAPI } from "../provider-registry.ts";
 import { withPathMutation } from "./path-mutation.ts";
 
-export const DEFAULT_SPARK_PROVIDER_SPECS = ["@zendev-lab/spark-ai/baidu-oneapi-provider"] as const;
+export const DEFAULT_SPARK_PROVIDER_SPECS = [
+  "@zendev-lab/spark-ai/baidu-oneapi-provider",
+  "@zendev-lab/spark-ai/openai-codex-provider",
+] as const;
 
 export type SparkProviderImporter = (specifier: string) => Promise<unknown>;
 
@@ -87,7 +90,7 @@ export async function readSparkProviderConfig(
       loadError = `Invalid Spark config JSON: ${error.message}`;
     else throw error;
   }
-  const providerSpecs = stringArray(raw.providers) ?? [...DEFAULT_SPARK_PROVIDER_SPECS];
+  const providerSpecs = mergeSparkProviderSpecs(stringArray(raw.providers));
   const activeModelId = readActiveModelId(raw);
   return {
     path: resolvedPath,
@@ -96,6 +99,11 @@ export async function readSparkProviderConfig(
     ...(activeModelId ? { activeModelId } : {}),
     ...(loadError ? { loadError } : {}),
   };
+}
+
+/** Bundled providers are product capabilities; config.providers adds plugins. */
+export function mergeSparkProviderSpecs(configured: readonly string[] | undefined): string[] {
+  return [...new Set([...DEFAULT_SPARK_PROVIDER_SPECS, ...(configured ?? [])])];
 }
 
 export async function writeSparkDefaultModel(path: string, activeModelId: string): Promise<void> {

@@ -55,6 +55,7 @@ describe("SparkCommand vocabulary", () => {
       "workspace.executor.ensure",
       "session.list",
       "session.get",
+      "session.snapshot",
       "session.create",
       "session.bind",
       "session.unbind",
@@ -79,6 +80,7 @@ describe("SparkCommand vocabulary", () => {
       "workspace.register.request",
     );
     expect(sparkCommandKindForLocalRpcMethod("session.create")).toBe("session.create.request");
+    expect(sparkCommandKindForLocalRpcMethod("session.snapshot")).toBe("session.snapshot.request");
     expect(sparkCommandKindForLocalRpcMethod("session.model.set")).toBe(
       "session.model.set.request",
     );

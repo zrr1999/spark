@@ -11,8 +11,11 @@ import {
   saveSparkConfig,
 } from "../apps/spark-tui/src/host/index.ts";
 
-void test("default Spark providers keep Cursor opt-in and preserve Baidu OneAPI", () => {
-  assert.deepEqual(DEFAULT_SPARK_CONFIG.providers, ["@zendev-lab/spark-ai/baidu-oneapi-provider"]);
+void test("default Spark providers include shared Baidu OneAPI and OpenAI Codex adapters", () => {
+  assert.deepEqual(DEFAULT_SPARK_CONFIG.providers, [
+    "@zendev-lab/spark-ai/baidu-oneapi-provider",
+    "@zendev-lab/spark-ai/openai-codex-provider",
+  ]);
   assert.equal(
     DEFAULT_SPARK_CONFIG.providers.includes("@zendev-lab/spark-ai/cursor-provider"),
     false,
@@ -66,6 +69,7 @@ void test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", 
     ]);
     assert.deepEqual(config.providers, [
       "@zendev-lab/spark-ai/baidu-oneapi-provider",
+      "@zendev-lab/spark-ai/openai-codex-provider",
       "my-provider",
     ]);
     assert.equal(config.activeModelId, "baidu-oneapi/claude-opus-4.7");
@@ -80,6 +84,18 @@ void test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+void test("mergeSparkConfigWithDefault restores bundled providers to legacy provider lists", () => {
+  const merged = mergeSparkConfigWithDefault({
+    providers: ["@zendev-lab/spark-ai/baidu-oneapi-provider", "my-provider"],
+  });
+
+  assert.deepEqual(merged.providers, [
+    "@zendev-lab/spark-ai/baidu-oneapi-provider",
+    "@zendev-lab/spark-ai/openai-codex-provider",
+    "my-provider",
+  ]);
 });
 
 void test("mergeSparkConfigWithDefault migrates legacy activeProvider/activeModel to activeModelId", () => {

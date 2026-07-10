@@ -64,6 +64,7 @@ describe("conversation summaries", () => {
     const [summary] = loadConversationSummaries(db, [
       {
         sessionId: "sess_visible",
+        scope: { kind: "workspace", workspaceId },
         workspaceId,
         status: "ready",
         bindings: [],
@@ -149,6 +150,7 @@ describe("conversation summaries", () => {
     const [summary] = loadConversationSummaries(db, [
       {
         sessionId: "sess_visible",
+        scope: { kind: "workspace", workspaceId: workspace.id },
         workspaceId: workspace.id,
         status: "ready",
         bindings: [],
@@ -160,6 +162,71 @@ describe("conversation summaries", () => {
     expect(summary).toMatchObject({
       sessionId: "sess_visible",
       activityStatus: "running",
+    });
+  });
+
+  it("uses newer daemon conversation state instead of stale Web-only command state", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    const now = "2026-07-10T00:00:00.000Z";
+    const runtimeId = createId("rt");
+    const bindingId = createId("rtwb");
+    db.prepare(
+      `INSERT INTO runtime_connections
+        (id, installation_id, name, status, protocol_version, capabilities_json, labels_json, created_at, updated_at)
+       VALUES (?, 'install', 'Runtime', 'online', ?, '{}', '{}', ?, ?)`,
+    ).run(runtimeId, runtimeProtocolVersion, now, now);
+    db.prepare(
+      `INSERT INTO runtime_workspace_bindings
+        (id, runtime_id, local_workspace_key, display_name, status, capabilities_json, diagnostics_json, created_at, updated_at)
+       VALUES (?, ?, 'local', 'Local', 'available', '{}', '{}', ?, ?)`,
+    ).run(bindingId, runtimeId, now, now);
+    const workspace = createWorkspaceWithOwnerBinding(db, {
+      slug: "local",
+      name: "Local",
+      runtimeWorkspaceBindingId: bindingId,
+      createdAt: now,
+    });
+    const command = queueCommandForWorkspaceOwner(db, {
+      workspaceId: workspace.id,
+      createdAt: "2026-07-10T00:01:00.000Z",
+      payload: {
+        kind: "assignment.create.request",
+        title: "Legacy Web turn",
+        payload: {
+          goal: "Legacy Web turn",
+          target: { sessionId: "sess_unified", workspaceId: workspace.id },
+          source: { kind: "cockpit" },
+        },
+      },
+    });
+    recordInvocationUpdate(db, {
+      runtimeWorkspaceBindingId: bindingId,
+      workspaceId: workspace.id,
+      commandId: command.id,
+      payload: {
+        runtimeInvocationId: "inv_legacy",
+        status: "succeeded",
+        agentName: "spark-runtime",
+        payload: {},
+      },
+    });
+
+    const [summary] = loadConversationSummaries(db, [
+      {
+        sessionId: "sess_unified",
+        scope: { kind: "workspace", workspaceId: workspace.id },
+        workspaceId: workspace.id,
+        status: "running",
+        bindings: [],
+        createdAt: now,
+        updatedAt: "2099-07-10T00:10:00.000Z",
+      },
+    ]);
+
+    expect(summary).toMatchObject({
+      activityStatus: "running",
+      activityUpdatedAt: "2099-07-10T00:10:00.000Z",
     });
   });
 

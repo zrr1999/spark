@@ -34,6 +34,8 @@ export type InfoflowNormalizedInbound = {
   chat_id?: string;
   message_id?: string;
   sender_name?: string;
+  mentions?: string[];
+  mentioned_self?: boolean;
 };
 
 /**
@@ -204,13 +206,16 @@ export function createInfoflowTransport(
     ) {
       return;
     }
-    const normalized = normalizeInfoflowSdkEvent(event);
+    const normalized = normalizeInfoflowSdkEvent(event, { agentId: appAgentId });
     if (!normalized) {
       console.error(`[spark-channels] infoflow skipped sdk event type=${String(event.type ?? "")}`);
       return;
     }
     console.error(
-      `[spark-channels] infoflow inbound ${normalized.chat_type} textChars=${normalized.text.length}`,
+      `[spark-channels] infoflow inbound ${normalized.chat_type}` +
+        ` textChars=${normalized.text.length}` +
+        ` preview=${JSON.stringify(normalized.text.slice(0, 120))}` +
+        (normalized.mentions?.length ? ` mentions=${JSON.stringify(normalized.mentions)}` : ""),
     );
     onMessage?.(normalized);
   }
@@ -308,6 +313,7 @@ function scalarString(value: unknown): string {
 /** Convert SDK event → Spark transport raw shape expected by InfoflowAdapter. */
 export function normalizeInfoflowSdkEvent(
   event: EventMessage<NormalizedEventData>,
+  options: { agentId?: string } = {},
 ): InfoflowNormalizedInbound | null {
   const data = ((event as { data?: unknown }).data ?? event) as Record<string, unknown>;
   const raw = ((data.raw as unknown) ?? data) as Record<string, unknown>;
@@ -352,23 +358,12 @@ export function normalizeInfoflowSdkEvent(
       ? message.body
       : Array.isArray(raw.body)
         ? raw.body
-        : [];
-    const textParts: string[] = [];
-    for (const item of body) {
-      if (!item || typeof item !== "object") continue;
-      const entry = item as Record<string, unknown>;
-      const type = scalarString(entry.type).toUpperCase();
-      if (type === "TEXT" || type === "MD" || type === "MARKDOWN") {
-        if (typeof entry.content === "string") textParts.push(entry.content);
-        continue;
-      }
-      if (type === "AT" || type === "@") {
-        const name = scalarString(entry.name ?? entry.userid ?? entry.robotid).trim();
-        if (name) textParts.push(`@${name}`);
-      }
-    }
-    const text =
-      textParts.join("").replace(/\s+/g, " ").trim() || scalarString(data.content).trim();
+        : Array.isArray(data.body)
+          ? data.body
+          : [];
+    const extracted = extractInfoflowBodyContent(body);
+    const mentionedSelf = detectInfoflowMentionedSelf(raw, header, body, options.agentId);
+    const text = extracted.text || scalarString(data.content).trim();
     if (!groupId || !userId || !text) return null;
     const messageId = header.messageid ?? header.msgid ?? header.clientmsgid ?? raw.msgid2;
     const senderName =
@@ -382,26 +377,84 @@ export function normalizeInfoflowSdkEvent(
       ...(typeof senderName === "string" && senderName.trim()
         ? { sender_name: senderName.trim() }
         : {}),
+      ...(extracted.mentions.length > 0 ? { mentions: extracted.mentions } : {}),
+      ...(typeof mentionedSelf === "boolean" ? { mentioned_self: mentionedSelf } : {}),
     };
   }
   return null;
 }
 
+/**
+ * Build readable text from Infoflow MIXED body parts.
+ * AT segments must become `@name` — dropping them leaves holes like `你和 什么关系？`.
+ */
+export function extractInfoflowBodyContent(body: unknown): {
+  text: string;
+  mentions: string[];
+} {
+  if (!Array.isArray(body)) return { text: "", mentions: [] };
+  const parts: string[] = [];
+  const mentions: string[] = [];
+  for (const item of body) {
+    if (!item || typeof item !== "object") continue;
+    const entry = item as Record<string, unknown>;
+    const type = scalarString(entry.type).toUpperCase();
+    if (type === "AT" || type === "@") {
+      const label = scalarString(
+        entry.name ?? entry.display ?? entry.displayname ?? entry.userid ?? entry.robotid,
+      )
+        .trim()
+        .replace(/^@+/u, "");
+      if (!label) continue;
+      const display = `@${label}`;
+      mentions.push(label);
+      const previous = parts.at(-1);
+      if (previous && !/[ \t\n]$/u.test(previous)) parts.push(" ");
+      parts.push(display);
+      parts.push(" ");
+      continue;
+    }
+    if (type === "TEXT" || type === "MD" || type === "MARKDOWN" || type === "") {
+      const rawContent =
+        typeof entry.content === "string"
+          ? entry.content
+          : typeof entry.text === "string"
+            ? entry.text
+            : "";
+      if (!rawContent) continue;
+      const previous = parts.at(-1);
+      if (previous === " " && /^[ \t]+/u.test(rawContent)) parts.pop();
+      parts.push(rawContent);
+    }
+  }
+  const text = parts
+    .join("")
+    .replace(/[ \t]+\n/gu, "\n")
+    .replace(/\n{3,}/gu, "\n\n")
+    .replace(/[ \t]{2,}/gu, " ")
+    .trim();
+  return { text, mentions };
+}
+
 /** Fixture/helper normalizer for flat or group payloads (unit tests + FakeChannelTransport). */
 export function normalizeInfoflowInbound(
   payload: Record<string, unknown>,
+  options: { agentId?: string } = {},
 ): InfoflowNormalizedInbound | null {
   const groupId = payload.groupid ?? payload.groupId;
   if (groupId != null && payload.message && typeof payload.message === "object") {
-    return normalizeInfoflowSdkEvent({
-      type: "group.text",
-      data: {
-        chatType: "group",
-        msgType: "text",
-        raw: payload,
-      },
-      timestamp: Date.now(),
-    } as EventMessage<NormalizedEventData>);
+    return normalizeInfoflowSdkEvent(
+      {
+        type: "group.text",
+        data: {
+          chatType: "group",
+          msgType: "text",
+          raw: payload,
+        },
+        timestamp: Date.now(),
+      } as EventMessage<NormalizedEventData>,
+      options,
+    );
   }
 
   const userId = scalarString(
@@ -432,4 +485,49 @@ export function normalizeInfoflowInbound(
       ? { sender_name: senderName.trim() }
       : {}),
   };
+}
+
+function detectInfoflowMentionedSelf(
+  raw: Record<string, unknown>,
+  header: Record<string, unknown>,
+  body: unknown[],
+  agentId: string | undefined,
+): boolean | undefined {
+  const explicit = raw.mentioned_self ?? raw.mentionedSelf;
+  if (typeof explicit === "boolean") return explicit;
+
+  const expectedAgentId = agentId?.trim();
+  if (!expectedAgentId) return undefined;
+  const directTargets: string[] = [];
+  let hasRobotMention = false;
+  for (const item of body) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const entry = item as Record<string, unknown>;
+    const type = scalarString(entry.type).trim().toUpperCase();
+    if (type !== "AT" && type !== "@") continue;
+    const robotId = scalarString(entry.robotid ?? entry.robotId).trim();
+    if (robotId) hasRobotMention = true;
+    const target = scalarString(
+      entry.userid ?? entry.userId ?? entry.robotid ?? entry.robotId ?? entry.atuserid,
+    ).trim();
+    if (target) directTargets.push(target);
+  }
+  if (directTargets.includes(expectedAgentId)) return true;
+
+  const at =
+    header.at && typeof header.at === "object" && !Array.isArray(header.at)
+      ? (header.at as Record<string, unknown>)
+      : null;
+  const robotTargets = Array.isArray(at?.atrobotids)
+    ? at.atrobotids.map((value) => scalarString(value).trim()).filter(Boolean)
+    : [];
+  if (robotTargets.includes(expectedAgentId)) return true;
+
+  // Infoflow uses different ids for an app agent and its robot account. When
+  // this event is routed to the configured agent, a robot AT in the body is the
+  // remaining reliable signal that the bot itself was mentioned.
+  const routedAgentId = scalarString(raw.targetAgentId ?? raw.agentid).trim();
+  return routedAgentId === expectedAgentId && (hasRobotMention || robotTargets.length > 0)
+    ? true
+    : undefined;
 }

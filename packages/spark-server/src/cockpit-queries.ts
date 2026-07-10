@@ -596,6 +596,7 @@ export type InboxDetailRow = {
   runtimeWorkspaceBindingId: string;
   runtimeWorkspaceName: string | null;
   runtimeName: string | null;
+  sessionId: string | null;
 };
 
 export function loadInboxDetail(db: DatabaseSync, inboxItemId: string) {

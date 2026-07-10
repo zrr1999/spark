@@ -55,18 +55,25 @@ Authentication:
 
 spark-ai does not alias `oneapi` credentials or `OPENAI_API_KEY` into `baidu-oneapi`.
 
+## OpenAI Codex provider
+
+`@zendev-lab/spark-ai/openai-codex-provider` is the thin Spark adapter over
+pi-ai's maintained OpenAI Codex catalog and transport. The daemon and native
+TUI load it as a bundled provider, while Spark's shared provider control owns
+model selection and its own OAuth credential store. Configure it from Cockpit
+or the native login flow; Spark does not read Pi or Codex CLI auth files at
+runtime.
+
 ## Cursor SDK provider (opt-in)
 
 `@zendev-lab/spark-ai/cursor-provider` registers Cursor models through the local
-`@cursor/sdk` agent runtime. It is not enabled by default. Add the provider to
-`~/.spark/config.json` explicitly while retaining any existing providers:
+`@cursor/sdk` agent runtime. It is not enabled by default. Add it to
+`~/.spark/config.json`; `providers` adds plugins on top of Spark's bundled
+providers:
 
 ```json
 {
-  "providers": [
-    "@zendev-lab/spark-ai/baidu-oneapi-provider",
-    "@zendev-lab/spark-ai/cursor-provider"
-  ]
+  "providers": ["@zendev-lab/spark-ai/cursor-provider"]
 }
 ```
 

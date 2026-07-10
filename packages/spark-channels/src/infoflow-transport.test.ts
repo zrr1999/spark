@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import {
   createInfoflowTransport,
   normalizeInfoflowInbound,
   signInfoflowAppSecret,
 } from "./infoflow-transport.ts";
 
-void describe("infoflow transport", () => {
-  void it("signs app secrets as lowercase md5 hex", () => {
+describe("infoflow transport", () => {
+  it("signs app secrets as lowercase md5 hex", () => {
     assert.equal(signInfoflowAppSecret("secret"), "5ebe2294ecd0e0f08eab7690d2a6ee69");
   });
 
-  void it("fetches a token and sends a private text message", async () => {
+  it("fetches a token and sends a private text message", async () => {
     const calls: Array<{ url: string; body: unknown; authorization?: string }> = [];
     const fetchImpl: typeof fetch = async (input, init) => {
       const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
@@ -67,7 +67,7 @@ void describe("infoflow transport", () => {
     });
   });
 
-  void it("sends group messages with nyakore payload shape", async () => {
+  it("sends group messages with nyakore payload shape", async () => {
     const calls: Array<{ url: string; body: unknown }> = [];
     const fetchImpl: typeof fetch = async (input, init) => {
       const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
@@ -111,7 +111,7 @@ void describe("infoflow transport", () => {
     assert.deepEqual(body.message?.body, [{ type: "TEXT", content: "group reply" }]);
   });
 
-  void it("fails when nested data.errcode is non-zero", async () => {
+  it("fails when nested data.errcode is non-zero", async () => {
     const fetchImpl: typeof fetch = async (input) => {
       const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
       if (url.endsWith("/api/v1/auth/app_access_token")) {
@@ -148,7 +148,7 @@ void describe("infoflow transport", () => {
     );
   });
 
-  void it("normalizes private and group inbound payloads", () => {
+  it("normalizes private and group inbound payloads", () => {
     assert.deepEqual(
       normalizeInfoflowInbound({
         FromUserId: "alice",
@@ -190,7 +190,41 @@ void describe("infoflow transport", () => {
         chat_type: "group",
         chat_id: "42",
         message_id: "10",
+        mentions: ["spark-bot"],
       },
     );
+  });
+
+  it("keeps both robot and user @ mentions from real MIXED payloads", () => {
+    // Captured from service.stdout.log group.mixed (2026-07-10).
+    const normalized = normalizeInfoflowInbound(
+      {
+        eventtype: "MESSAGE_RECEIVE",
+        agentid: 43163,
+        groupid: 10838226,
+        message: {
+          header: {
+            fromuserid: "xuxiaojian",
+            toid: 10838226,
+            totype: "GROUP",
+            msgtype: "MIXED",
+            messageid: "1870315656716618699",
+            at: { atrobotids: [], atuserids: ["zhanrongrui"] },
+          },
+          body: [
+            { type: "AT", robotid: 4105004371, name: "神经蛙" },
+            { type: "TEXT", content: " 你和 " },
+            { type: "AT", userid: "zhanrongrui", name: "詹荣瑞" },
+            { type: "TEXT", content: " 什么关系？" },
+          ],
+        },
+        targetAgentId: 43163,
+      },
+      { agentId: "43163" },
+    );
+    assert.equal(normalized?.text, "@神经蛙 你和 @詹荣瑞 什么关系？");
+    assert.deepEqual(normalized?.mentions, ["神经蛙", "詹荣瑞"]);
+    assert.equal(normalized?.mentioned_self, true);
+    assert.match(normalized?.text ?? "", /@詹荣瑞/);
   });
 });

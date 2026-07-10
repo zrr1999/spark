@@ -15,7 +15,13 @@ import {
   renderSparkChannelSurfacePrompt,
 } from "@zendev-lab/spark-host/system-prompt";
 import { composeAgentSystemPrompt } from "@zendev-lab/spark-modes";
-import type { DaemonChannelIngressRuntime } from "../channels/ingress.ts";
+import {
+  renderInfoflowInternalSystemPrompt,
+  renderInfoflowMessageContextPrompt,
+  resolveInfoflowCustomSystemPrompt,
+} from "@zendev-lab/spark-channels";
+import type { InfoflowAdapterConfig } from "@zendev-lab/spark-channels";
+import { loadDaemonChannelsConfig, type DaemonChannelIngressRuntime } from "../channels/ingress.ts";
 import type {
   SparkDaemonSessionRunTask,
   SparkDaemonTask,
@@ -23,13 +29,21 @@ import type {
   SparkDaemonTaskExecutor,
 } from "../core/types.ts";
 import type { SparkDaemonModelControl } from "../model-control.ts";
+import type { DaemonSessionRegistry } from "../session-registry.ts";
+import { daemonTaskRouteMetadata } from "../core/queue-worker.ts";
 
 export interface SparkDaemonQueueTaskExecutorOptions {
   paths: SparkPaths;
   cwd?: string;
   /** Global provider/auth control root; daemon session files remain isolated. */
   controlSparkHome?: string;
+  /** Workspace channels config root (`$SPARK_HOME`); defaults to controlSparkHome. */
+  channelsSparkHome?: string;
   modelControl?: Pick<SparkDaemonModelControl, "effectiveModel" | "prepareModel">;
+  sessionRegistry?: Pick<
+    DaemonSessionRegistry,
+    "recordRun" | "recordTurnQueued" | "recordTurnSettled"
+  >;
   createSparkHeadlessSessionExecutor?: CreateSparkHeadlessSessionExecutorFn;
 }
 
@@ -54,11 +68,18 @@ export function createSparkDaemonQueueTaskExecutor(
 
   return async (task, context) => {
     if (task.type === "session.run") {
-      const effectiveTask = await withEffectiveTaskModel(task, options.modelControl);
-      return await executeSparkDaemonSessionRunTask(effectiveTask, context, {
-        ...options,
-        executeSession: await getSessionExecutor(),
-      });
+      try {
+        await options.sessionRegistry?.recordTurnQueued(task.sessionId);
+        const effectiveTask = await withEffectiveTaskModel(task, options.modelControl);
+        const result = await executeSparkDaemonSessionRunTask(effectiveTask, context, {
+          ...options,
+          executeSession: await getSessionExecutor(),
+        });
+        return await recordCompletedSessionRun(effectiveTask, result, options.sessionRegistry);
+      } catch (error) {
+        await settleFailedSessionRun(task.sessionId, options.sessionRegistry);
+        throw error;
+      }
     }
     throw new Error(`Unsupported Spark daemon queue task type: ${(task as SparkDaemonTask).type}`);
   };
@@ -122,9 +143,9 @@ export async function executeSparkDaemonSessionRunTask(
   context: SparkDaemonTaskExecutionContext,
   options: SparkDaemonQueueTaskExecutorOptions & { executeSession: SparkHeadlessSessionExecutor },
 ): Promise<unknown> {
-  const systemPrompt = systemPromptForChannelSession(task);
+  const systemPrompt = await systemPromptForChannelSession(task, options);
   return await options.executeSession({
-    cwd: options.cwd ?? process.cwd(),
+    cwd: task.cwd ?? options.cwd ?? process.cwd(),
     sparkHome: options.paths.piAgentDir,
     sessionId: task.sessionId,
     prompt: task.prompt,
@@ -137,24 +158,60 @@ export async function executeSparkDaemonSessionRunTask(
   });
 }
 
-function systemPromptForChannelSession(task: SparkDaemonSessionRunTask): string | undefined {
+async function systemPromptForChannelSession(
+  task: SparkDaemonSessionRunTask,
+  options: SparkDaemonQueueTaskExecutorOptions,
+): Promise<string | undefined> {
   const reply = task.channelReply;
   if (!reply) return undefined;
-  const scope = reply.recipient.startsWith("group:") ? "group" : "user";
-  const externalKey =
-    reply.adapterId === "infoflow"
-      ? scope === "group"
-        ? `infoflow:${reply.recipient}`
-        : `infoflow:user:${reply.recipient}`
-      : undefined;
+  const externalKey = task.channelContext?.externalKey;
+  const scope =
+    externalKey?.startsWith("infoflow:group:") || reply.recipient.startsWith("group:")
+      ? "group"
+      : "user";
+
+  if (reply.adapterId === "infoflow") {
+    const bindingKey =
+      externalKey ??
+      (scope === "group" ? `infoflow:${reply.recipient}` : `infoflow:user:${reply.recipient}`);
+    const infoflow = await loadInfoflowAdapterConfig(options, reply.workspaceId);
+    return composeAgentSystemPrompt([
+      DEFAULT_SPARK_IDENTITY_PROMPT,
+      renderInfoflowInternalSystemPrompt({
+        ...(infoflow ? { config: infoflow } : {}),
+        scope,
+        externalKey: bindingKey,
+      }),
+      infoflow ? resolveInfoflowCustomSystemPrompt(infoflow) : undefined,
+      task.channelContext ? renderInfoflowMessageContextPrompt(task.channelContext) : undefined,
+    ]);
+  }
+
   return composeAgentSystemPrompt([
     DEFAULT_SPARK_IDENTITY_PROMPT,
     renderSparkChannelSurfacePrompt({
       adapter: reply.adapterId,
       scope,
-      ...(externalKey ? { externalKey } : {}),
     }),
   ]);
+}
+
+async function loadInfoflowAdapterConfig(
+  options: SparkDaemonQueueTaskExecutorOptions,
+  workspaceId: string,
+): Promise<InfoflowAdapterConfig | undefined> {
+  const sparkHome = options.channelsSparkHome ?? options.controlSparkHome;
+  if (!sparkHome) return undefined;
+  try {
+    const loaded = await loadDaemonChannelsConfig(sparkHome, workspaceId);
+    const adapter = Object.values(loaded.config?.adapters ?? {}).find(
+      (entry) => entry.type === "infoflow",
+    );
+    return adapter?.type === "infoflow" ? adapter : undefined;
+  } catch (error) {
+    console.error("[spark-daemon] failed to load infoflow channel config for prompts", error);
+    return undefined;
+  }
 }
 
 function emitHeadlessEvent(
@@ -180,7 +237,9 @@ function daemonEventFromHeadlessEvent(
         type: "daemon.view_event",
         source: "daemon",
         emittedAt: new Date().toISOString(),
-        metadata: {},
+        ...(task.workspaceId ? { workspaceId: task.workspaceId } : {}),
+        ...(task.projectId ? { projectId: task.projectId } : {}),
+        metadata: daemonTaskRouteMetadata(task),
         sessionId: task.sessionId,
         invocationId,
         view,
@@ -195,14 +254,84 @@ function daemonEventFromHeadlessEvent(
       return {
         ...event,
         emittedAt: event.emittedAt ?? new Date().toISOString(),
+        ...(task.workspaceId && !event.workspaceId ? { workspaceId: task.workspaceId } : {}),
+        ...(task.projectId && !event.projectId ? { projectId: task.projectId } : {}),
         sessionId: event.sessionId ?? task.sessionId,
         invocationId: event.invocationId ?? invocationId,
+        metadata: {
+          ...daemonTaskRouteMetadata(task),
+          ...event.metadata,
+        },
       };
     } catch {
       return undefined;
     }
   }
   return undefined;
+}
+
+async function recordCompletedSessionRun(
+  task: SparkDaemonSessionRunTask,
+  result: unknown,
+  registry: Pick<DaemonSessionRegistry, "recordRun" | "recordTurnSettled"> | undefined,
+): Promise<unknown> {
+  if (!registry) return result;
+  const sessionPath =
+    isRecord(result) && typeof result.sessionPath === "string" && result.sessionPath.trim()
+      ? result.sessionPath.trim()
+      : undefined;
+  if (!sessionPath) {
+    await settleSessionRun(task.sessionId, registry, "missing native sessionPath");
+    return registryWarning(
+      result,
+      `session ${task.sessionId} completed without a native sessionPath`,
+    );
+  }
+  try {
+    await registry.recordRun({ sessionId: task.sessionId, sessionPath });
+    return result;
+  } catch (error) {
+    const message = `failed to index completed session ${task.sessionId}: ${errorMessage(error)}`;
+    console.error(`[spark-daemon] ${message}`);
+    // The transcript and model turn have already committed. Keep the queue item
+    // processed and surface the indexing failure in its durable result so a
+    // retry cannot duplicate the completed user turn.
+    await settleSessionRun(task.sessionId, registry, "registry persistence failure");
+    return registryWarning(result, message);
+  }
+}
+
+async function settleFailedSessionRun(
+  sessionId: string,
+  registry: Pick<DaemonSessionRegistry, "recordTurnSettled"> | undefined,
+): Promise<void> {
+  await settleSessionRun(sessionId, registry, "execution error");
+}
+
+async function settleSessionRun(
+  sessionId: string,
+  registry: Pick<DaemonSessionRegistry, "recordTurnSettled"> | undefined,
+  reason: string,
+): Promise<void> {
+  if (!registry) return;
+  try {
+    await registry.recordTurnSettled(sessionId);
+  } catch (error) {
+    console.error(
+      `[spark-daemon] failed to settle session ${sessionId} after ${reason}: ${errorMessage(error)}`,
+    );
+  }
+}
+
+function registryWarning(result: unknown, message: string): Record<string, unknown> {
+  return {
+    ...(isRecord(result) ? result : { result }),
+    registryPersistence: { status: "failed", message },
+  };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

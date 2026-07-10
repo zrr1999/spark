@@ -153,7 +153,7 @@ class LocalSparkProviderControl implements SparkProviderControl {
       const auth = this.#authSnapshot(provider);
       return {
         id: provider.name,
-        name: provider.name,
+        name: provider.label ?? provider.name,
         auth,
         modelCount: provider.models.length,
       };

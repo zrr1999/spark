@@ -5,16 +5,18 @@
   let {
     source,
     streaming = false,
+    showSource = false,
   }: {
     source: string;
     streaming?: boolean;
+    showSource?: boolean;
   } = $props();
 
   let document = $derived(parseSparkUiSource(source));
 </script>
 
 <div class="agent-mdx-stream" class:streaming>
-  <SparkUiRenderer {document} {source} />
+  <SparkUiRenderer {document} {source} {showSource} />
   {#if streaming}
     <span class="streaming-caret" aria-hidden="true"></span>
   {/if}
