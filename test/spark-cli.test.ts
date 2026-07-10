@@ -210,6 +210,8 @@ void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => 
       api?: string;
       transportModelId?: string;
       baseUrl?: string;
+      contextWindow: number;
+      maxTokens: number;
       aliases?: string[];
       thinkingLevelMap?: Record<string, string | null>;
       cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
@@ -229,6 +231,8 @@ void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => 
       ["claude-sonnet-5", "Claude Sonnet 5", true, undefined],
       ["claude-fable-5", "Claude Fable 5", true, undefined],
       ["gpt-5.5", "GPT-5.5", true, undefined],
+      ["gpt-5.6-sol", "GPT-5.6 Sol", true, undefined],
+      ["gpt-5.6-terra", "GPT-5.6 Terra", true, undefined],
     ],
   );
   assert.equal(
@@ -269,6 +273,33 @@ void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => 
     cacheRead: 0.05,
     cacheWrite: 0,
   });
+  assert.deepEqual(
+    config.models
+      .filter((model) => model.id.startsWith("gpt-5.6-"))
+      .map((model) => [
+        model.id,
+        model.transportModelId,
+        model.contextWindow,
+        model.maxTokens,
+        model.cost,
+      ]),
+    [
+      [
+        "gpt-5.6-sol",
+        "gpt-5.6-sol",
+        372000,
+        128000,
+        { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0.625 },
+      ],
+      [
+        "gpt-5.6-terra",
+        "gpt-5.6-terra",
+        372000,
+        128000,
+        { input: 0.25, output: 1.5, cacheRead: 0.025, cacheWrite: 0.3125 },
+      ],
+    ],
+  );
   assert.deepEqual(config.models.find((model) => model.id === "claude-fable-5")?.cost, {
     input: 1.1,
     output: 5.5,

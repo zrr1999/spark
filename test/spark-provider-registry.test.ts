@@ -202,7 +202,7 @@ void test("SparkProviderRegistry accepts the production baidu-oneapi-provider pl
   assert.equal(registry.hasProvider("baidu-oneapi"), true);
   const provider = registry.getProvider("baidu-oneapi")!;
   assert.equal(provider.api, "baidu-oneapi");
-  assert.equal(provider.models.length, 6);
+  assert.equal(provider.models.length, 8);
   assert.equal(
     provider.models.some((m) => m.id === "claude-opus-4.8"),
     true,
@@ -218,6 +218,10 @@ void test("SparkProviderRegistry accepts the production baidu-oneapi-provider pl
   assert.equal(
     provider.models.some((m) => m.id === "gpt-5.5"),
     true,
+  );
+  assert.deepEqual(
+    provider.models.filter((model) => model.id.startsWith("gpt-5.6-")).map((model) => model.id),
+    ["gpt-5.6-sol", "gpt-5.6-terra"],
   );
 
   const model = registry.buildModel("baidu-oneapi", "claude-opus-4.6");
@@ -240,6 +244,12 @@ void test("SparkProviderRegistry accepts the production baidu-oneapi-provider pl
   assert.equal(gptModel.maxTokens, 32_768);
   const gptAliasModel = registry.buildModel("baidu-oneapi", "gpt-5.5-coding-plan");
   assert.equal(gptAliasModel.id, "gpt-5.5");
+  for (const id of ["gpt-5.6-sol", "gpt-5.6-terra"]) {
+    const model = registry.buildModel("baidu-oneapi", id);
+    assert.equal(model.contextWindow, 372_000);
+    assert.equal(model.maxTokens, 128_000);
+    assert.equal(model.baseUrl, "https://oneapi-comate.baidu-int.com/v1");
+  }
 
   const opusProfile = registry.buildProfile("baidu-oneapi", "claude-opus-4.8");
   assert.equal(opusProfile.id, "baidu-oneapi/claude-opus-4.8");
@@ -252,4 +262,8 @@ void test("SparkProviderRegistry accepts the production baidu-oneapi-provider pl
   assert.equal(gptProfile.id, "baidu-oneapi/gpt-5.5");
   assert.equal(gptProfile.routes[0]?.transportApi, "openai-responses");
   assert.equal(gptProfile.routes[0]?.transportModelId, "gpt-5.5-coding-plan");
+
+  const gpt56Profile = registry.buildProfile("baidu-oneapi", "gpt-5.6-sol");
+  assert.equal(gpt56Profile.routes[0]?.transportApi, "openai-responses");
+  assert.equal(gpt56Profile.routes[0]?.transportModelId, "gpt-5.6-sol");
 });

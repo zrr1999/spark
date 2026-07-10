@@ -24,8 +24,15 @@ const GATEWAY_MODEL_BY_ID: Record<string, string> = {
   "claude-fable-5": "Fable 5",
   "gpt-5.5": "gpt-5.5-coding-plan",
   "gpt-5.5-coding-plan": "gpt-5.5-coding-plan",
+  "gpt-5.6-sol": "gpt-5.6-sol",
+  "gpt-5.6-terra": "gpt-5.6-terra",
 };
-const BAIDU_ONEAPI_OPENAI_RESPONSES_MODEL_IDS = new Set(["gpt-5.5", "gpt-5.5-coding-plan"]);
+const BAIDU_ONEAPI_OPENAI_RESPONSES_MODEL_IDS = new Set([
+  "gpt-5.5",
+  "gpt-5.5-coding-plan",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+]);
 
 type BaiduOneApiTransportApi = "anthropic-messages" | "openai-responses";
 type BaiduOneApiStream = AsyncIterable<AssistantMessageEvent> & {
@@ -54,7 +61,9 @@ const baiduOneApiOpenAIResponsesApi =
   );
 
 const GPT_5_5_COST = { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 };
-const GPT_5_5_THINKING_LEVEL_MAP = { minimal: "low", xhigh: "xhigh" };
+const GPT_5_6_SOL_COST = { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0.625 };
+const GPT_5_6_TERRA_COST = { input: 0.25, output: 1.5, cacheRead: 0.025, cacheWrite: 0.3125 };
+const GPT_THINKING_LEVEL_MAP = { minimal: "low", xhigh: "xhigh" };
 const CLAUDE_FABLE_5_COST = { input: 1.1, output: 5.5, cacheRead: 0.11, cacheWrite: 1.375 };
 const CLAUDE_SONNET_5_COST = { input: 1.1, output: 5.5, cacheRead: 0.11, cacheWrite: 1.375 };
 const CLAUDE_OPUS_4_6_COST = {
@@ -414,11 +423,37 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
         transportApi: "openai-responses",
         transportModelId: "gpt-5.5-coding-plan",
         reasoning: true,
-        thinkingLevelMap: GPT_5_5_THINKING_LEVEL_MAP,
+        thinkingLevelMap: GPT_THINKING_LEVEL_MAP,
         input: ["text", "image"],
         cost: GPT_5_5_COST,
         contextWindow: 258000,
         maxTokens: 32768,
+      },
+      {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        baseUrl: process.env.BAIDU_ONEAPI_OPENAI_BASE_URL ?? BAIDU_ONEAPI_OPENAI_BASE_URL,
+        transportApi: "openai-responses",
+        transportModelId: "gpt-5.6-sol",
+        reasoning: true,
+        thinkingLevelMap: GPT_THINKING_LEVEL_MAP,
+        input: ["text", "image"],
+        cost: GPT_5_6_SOL_COST,
+        contextWindow: 372000,
+        maxTokens: 128000,
+      },
+      {
+        id: "gpt-5.6-terra",
+        name: "GPT-5.6 Terra",
+        baseUrl: process.env.BAIDU_ONEAPI_OPENAI_BASE_URL ?? BAIDU_ONEAPI_OPENAI_BASE_URL,
+        transportApi: "openai-responses",
+        transportModelId: "gpt-5.6-terra",
+        reasoning: true,
+        thinkingLevelMap: GPT_THINKING_LEVEL_MAP,
+        input: ["text", "image"],
+        cost: GPT_5_6_TERRA_COST,
+        contextWindow: 372000,
+        maxTokens: 128000,
       },
     ],
   });

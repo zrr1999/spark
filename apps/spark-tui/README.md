@@ -116,7 +116,7 @@ Shared extension behavior should stay in extension packages and target `@zendev-
 
 ## Baidu OneAPI provider
 
-The `@zendev-lab/spark-ai` package contains the standalone `baidu-oneapi` provider implementation for Spark's native model runtime (`@zendev-lab/spark-ai/baidu-oneapi-provider`). It exposes local adaptive-friendly model ids (`claude-opus-4.6`, `claude-opus-4.7`, `claude-opus-4.8`, `claude-sonnet-5`, `claude-fable-5`, `gpt-5.5`, `gpt-5.5-coding-plan`) with provider-specific prices in USD per million tokens, while rewriting outbound payloads back to the gateway-required spelling (`Claude Opus 4.6`, `Claude Opus 4.7`, `Opus 4.8 Coding Plan`, `Claude Sonnet 5`, `Fable 5`, `gpt-5.5-coding-plan`).
+The `@zendev-lab/spark-ai` package contains the standalone `baidu-oneapi` provider implementation for Spark's native model runtime (`@zendev-lab/spark-ai/baidu-oneapi-provider`). It exposes local adaptive-friendly model ids (`claude-opus-4.6`, `claude-opus-4.7`, `claude-opus-4.8`, `claude-sonnet-5`, `claude-fable-5`, `gpt-5.5`, `gpt-5.5-coding-plan`, `gpt-5.6-sol`, `gpt-5.6-terra`) with provider-specific prices in USD per million tokens, while rewriting outbound payloads back to the gateway-required spelling (`Claude Opus 4.6`, `Claude Opus 4.7`, `Opus 4.8 Coding Plan`, `Claude Sonnet 5`, `Fable 5`, `gpt-5.5-coding-plan`, `gpt-5.6-sol`, `gpt-5.6-terra`).
 
 Authentication:
 
