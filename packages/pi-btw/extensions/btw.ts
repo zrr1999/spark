@@ -1,14 +1,13 @@
-import {
-  buildSessionContext,
-  createAgentSession,
-  createExtensionRuntime,
-  SessionManager,
-  type AgentSession,
-  type AgentSessionEvent,
-  type ExtensionAPI,
-  type ExtensionCommandContext,
-  type ExtensionContext,
-  type ResourceLoader,
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import type {
+  AgentSession,
+  AgentSessionEvent,
+  ExtensionAPI,
+  ExtensionCommandContext,
+  ExtensionContext,
+  ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
 import {
   type AssistantMessage,
@@ -69,6 +68,63 @@ type SessionModel = NonNullable<ExtensionCommandContext["model"]>;
  * session entries. Resolved to a full SessionModel via ctx.modelRegistry.find(...).
  */
 type BtwModelRef = Pick<SessionModel, "provider" | "id" | "api">;
+
+// Avoid a value import from @earendil-works/pi-coding-agent here. Pi's Node-mode jiti
+// loader aliases that package through its own install path, and vite-plus cache paths can
+// contain `#<uuid>` segments that jiti treats as URL fragments. Loading by file URL from
+// pi-btw's installed dependency keeps extension startup working in those cache layouts.
+type PiCodingAgentRuntime = Pick<
+  typeof import("@earendil-works/pi-coding-agent"),
+  "buildSessionContext" | "createAgentSession" | "createExtensionRuntime" | "SessionManager"
+>;
+
+let piCodingAgentRuntimePromise: Promise<PiCodingAgentRuntime> | null = null;
+
+function getPiCodingAgentRuntimeCandidates(): string[] {
+  const extensionDir = dirname(fileURLToPath(import.meta.url));
+  return [
+    join(
+      extensionDir,
+      "..",
+      "node_modules",
+      "@earendil-works",
+      "pi-coding-agent",
+      "dist",
+      "index.js",
+    ),
+    join(extensionDir, "..", "..", "@earendil-works", "pi-coding-agent", "dist", "index.js"),
+    join(extensionDir, "..", "..", "..", "@earendil-works", "pi-coding-agent", "dist", "index.js"),
+  ];
+}
+
+function selectPiCodingAgentRuntime(
+  module: typeof import("@earendil-works/pi-coding-agent"),
+): PiCodingAgentRuntime {
+  return {
+    buildSessionContext: module.buildSessionContext,
+    createAgentSession: module.createAgentSession,
+    createExtensionRuntime: module.createExtensionRuntime,
+    SessionManager: module.SessionManager,
+  };
+}
+
+async function loadPiCodingAgentRuntime(): Promise<PiCodingAgentRuntime> {
+  piCodingAgentRuntimePromise ??= (async () => {
+    for (const candidate of getPiCodingAgentRuntimeCandidates()) {
+      if (!existsSync(candidate)) {
+        continue;
+      }
+
+      const runtimeModule = (await import(
+        pathToFileURL(candidate).href
+      )) as typeof import("@earendil-works/pi-coding-agent");
+      return selectPiCodingAgentRuntime(runtimeModule);
+    }
+
+    return selectPiCodingAgentRuntime(await import("@earendil-works/pi-coding-agent"));
+  })();
+  return piCodingAgentRuntimePromise;
+}
 
 type BtwDetails = {
   question: string;
@@ -195,6 +251,7 @@ function stripDynamicSystemPromptFooter(systemPrompt: string): string {
 
 function createBtwResourceLoader(
   ctx: ExtensionCommandContext,
+  createExtensionRuntime: PiCodingAgentRuntime["createExtensionRuntime"],
   appendSystemPrompt: string[] = [BTW_SYSTEM_PROMPT],
 ): ResourceLoader {
   const extensionsResult = { extensions: [], errors: [], runtime: createExtensionRuntime() };
@@ -293,6 +350,7 @@ function buildBtwSeedState(
   thread: BtwDetails[],
   mode: BtwThreadMode,
   sessionModel: SessionModel | null,
+  buildContext: PiCodingAgentRuntime["buildSessionContext"],
 ): { messages: Message[]; sideThreadStartIndex: number } {
   const messages: Message[] = [];
 
@@ -300,7 +358,7 @@ function buildBtwSeedState(
     try {
       messages.push(
         ...(
-          buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId())
+          buildContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId())
             .messages as Message[]
         ).filter((message) => !isVisibleBtwMessage(message)),
       );
@@ -1368,7 +1426,9 @@ class BtwOverlayComponent extends Container implements Focusable {
   }
 }
 
-export default function (pi: ExtensionAPI) {
+export default async function (pi: ExtensionAPI) {
+  const { buildSessionContext, createAgentSession, createExtensionRuntime, SessionManager } =
+    await loadPiCodingAgentRuntime();
   let pendingThread: BtwDetails[] = [];
   let pendingMode: BtwThreadMode = "contextual";
   let btwModelOverride: SessionModel | null = null;
@@ -1685,7 +1745,7 @@ export default function (pi: ExtensionAPI) {
       thinkingLevel: settings.thinkingLevel,
       // Keep BTW side sessions aligned with spark-cue's no-bash command policy.
       tools: ["read", "edit", "write"],
-      resourceLoader: createBtwResourceLoader(ctx),
+      resourceLoader: createBtwResourceLoader(ctx, createExtensionRuntime),
     });
 
     const { messages: seedMessages, sideThreadStartIndex } = buildBtwSeedState(
@@ -1693,6 +1753,7 @@ export default function (pi: ExtensionAPI) {
       pendingThread,
       mode,
       settings.model,
+      buildSessionContext,
     );
     if (seedMessages.length > 0) {
       session.agent.state.messages = seedMessages as typeof session.state.messages;
@@ -2286,7 +2347,9 @@ export default function (pi: ExtensionAPI) {
       modelRegistry: ctx.modelRegistry as AgentSession["modelRegistry"],
       thinkingLevel: "off",
       tools: [],
-      resourceLoader: createBtwResourceLoader(ctx, [BTW_SUMMARIZE_SYSTEM_PROMPT]),
+      resourceLoader: createBtwResourceLoader(ctx, createExtensionRuntime, [
+        BTW_SUMMARIZE_SYSTEM_PROMPT,
+      ]),
     });
 
     try {
