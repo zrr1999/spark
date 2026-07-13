@@ -8,6 +8,7 @@
   } from "$lib/components/conversation";
   import type { ConversationPartLabels } from "$lib/components/conversation/types";
   import { ModelPicker, type ModelPickerGroup } from "$lib/components/model-selector";
+  import { visibleSessionStatus } from "$lib/conversation-status";
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
   import { buildSessionTimeline } from "$lib/session-timeline";
@@ -460,10 +461,6 @@
     return getStatusLabel(status, common);
   }
 
-  function showSessionStatus(status: string) {
-    return !["ready", "completed", "done"].includes(status);
-  }
-
   function relative(value: string | null) {
     return formatRelativeTime(value, locale as "en" | "zh-CN", common);
   }
@@ -599,12 +596,13 @@
 
 {#snippet sessionDetails(compact = false)}
   {#if selected}
+    {@const displayedSessionStatus = visibleSessionStatus(selected.status)}
     <div class:compact-details={compact} class="details-content">
       <dl class="details-grid">
-        {#if showSessionStatus(selected.status)}
+        {#if displayedSessionStatus}
           <div>
             <dt>{messages.statusLabel}</dt>
-            <dd><span class="status-pill {selected.status}">{statusLabel(selected.status)}</span></dd>
+            <dd><span class="status-pill {displayedSessionStatus}">{statusLabel(displayedSessionStatus)}</span></dd>
           </div>
         {/if}
         <div>
@@ -766,14 +764,15 @@
         {/if}
       </div>
     {:else}
+      {@const displayedSessionStatus = visibleSessionStatus(selected.status)}
       <header class="stage-header">
         <div class="stage-title">
           <p class="kicker">{copy.timelineTitle}</p>
           <h1>{sessionTitle(selected.title)}</h1>
           <p>{sessionScopeLabel(selected)}</p>
         </div>
-        {#if showSessionStatus(selected.status)}
-          <span class="status-pill {selected.status}">{statusLabel(selected.status)}</span>
+        {#if displayedSessionStatus}
+          <span class="status-pill {displayedSessionStatus}">{statusLabel(displayedSessionStatus)}</span>
         {/if}
       </header>
 

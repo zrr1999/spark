@@ -1,5 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SparkSessionRegistryRecord } from "@zendev-lab/spark-protocol";
+import {
+  conversationActivityStatus,
+  type ConversationActivityStatus,
+} from "../conversation-status";
+
+export { conversationActivityStatus } from "../conversation-status";
 
 interface ConversationCommandRow {
   commandStatus: string;
@@ -8,14 +14,6 @@ interface ConversationCommandRow {
   sessionId: string;
   updatedAt: string;
 }
-
-export type ConversationActivityStatus =
-  | "ready"
-  | "queued"
-  | "running"
-  | "blocked"
-  | "completed"
-  | "failed";
 
 export type CockpitConversationSummary = SparkSessionRegistryRecord & {
   activityStatus: ConversationActivityStatus;
@@ -123,34 +121,6 @@ export function loadConversationSummaries(
       activityUpdatedAt: daemonOwnsLatestState ? session.updatedAt : latest.activityUpdatedAt,
     };
   });
-}
-
-export function conversationActivityStatus(status: string): ConversationActivityStatus {
-  const normalized = status.trim().toLowerCase().replaceAll("-", "_");
-  if (
-    ["failed", "error", "rejected", "lost", "timeout", "timed_out", "cancelled"].includes(
-      normalized,
-    )
-  ) {
-    return "failed";
-  }
-  if (
-    ["blocked", "waiting", "needs_input", "awaiting_input", "approval_required", "paused"].includes(
-      normalized,
-    )
-  ) {
-    return "blocked";
-  }
-  if (["succeeded", "success", "completed", "done", "resolved"].includes(normalized)) {
-    return "completed";
-  }
-  if (["running", "active", "started", "starting", "in_progress"].includes(normalized)) {
-    return "running";
-  }
-  if (["queued", "pending", "sent", "delivered", "acked", "accepted"].includes(normalized)) {
-    return "queued";
-  }
-  return "ready";
 }
 
 function sessionFallbackStatus(status: string): ConversationActivityStatus {

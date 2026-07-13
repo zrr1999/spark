@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from "$lib/Icon.svelte";
+  import { visibleConversationActivityStatus } from "$lib/conversation-status";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
   import {
     daemonIdentityForWorkbenchSession,
@@ -137,8 +138,8 @@
     return session.activityStatus ?? session.status;
   }
 
-  function showActivityStatus(session: SessionRecord) {
-    return !["ready", "completed", "done", "available"].includes(activityStatus(session));
+  function displayedActivityStatus(session: SessionRecord) {
+    return visibleConversationActivityStatus(activityStatus(session));
   }
 
   function sessionTitle(session: SessionRecord) {
@@ -187,6 +188,7 @@
             <span>{group.sessions.length}</span>
           </h2>
           {#each group.sessions as session}
+            {@const displayedStatus = displayedActivityStatus(session)}
             <a
               class="session-item"
               class:active={session.sessionId === selectedSessionId}
@@ -195,13 +197,13 @@
             >
               <span class="session-title-row">
                 <strong>{sessionTitle(session)}</strong>
-                {#if showActivityStatus(session)}
+                {#if displayedStatus}
                 <span
-                  class="session-status {activityStatus(session)}"
-                  title={statusLabel(activityStatus(session))}
+                  class="session-status {displayedStatus}"
+                  title={statusLabel(displayedStatus)}
                 >
                   <span aria-hidden="true"></span>
-                  <span>{statusLabel(activityStatus(session))}</span>
+                  <span>{statusLabel(displayedStatus)}</span>
                 </span>
                 {/if}
               </span>
