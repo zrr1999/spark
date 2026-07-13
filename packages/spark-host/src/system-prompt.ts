@@ -9,6 +9,16 @@
 export const DEFAULT_SPARK_IDENTITY_PROMPT =
   "You are Spark, a coding assistant. Use Spark as the project/task coordination layer, not as your assistant identity. Local UIs such as spark-tui are optional hosts; daemon/headless and IM channels are equally valid surfaces.";
 
+/** Message-platform hosts fail closed: only the coordination surface is active. */
+export const SPARK_CHANNEL_ALLOWED_TOOLS = ["session"] as const;
+
+export const SPARK_CHANNEL_SESSION_EXECUTION_PROMPT = [
+  "Message-platform sessions are coordination-only. The session tool is the only active tool; direct execution, file mutation, role, assignment, workflow, and registry lifecycle actions are unavailable.",
+  'When a request requires local work, list workspace-local persistent targets with session({ action: "list", scope: "workspace", surface: "local" }). Results are paginated; use offset to continue when total exceeds the returned page.',
+  'Forward the request to one local session with session({ action: "send", toSessionId, intent: "work.execute", message }).',
+  "The target must belong to this workspace. Do not use session create/call/bind/unbind/archive, do not target another channel session, and do not poll after sending.",
+].join(" ");
+
 export type SparkChannelSurface = {
   adapter: "feishu" | "infoflow" | (string & {});
   scope: "user" | "group";

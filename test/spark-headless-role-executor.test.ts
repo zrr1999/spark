@@ -6,6 +6,13 @@ import { runSparkHeadlessSession } from "../apps/spark-tui/src/headless-role-exe
 void test("runSparkHeadlessSession times out a never-resolving agent turn", async () => {
   const unsubscribed: string[] = [];
   let abortedReason: string | undefined;
+  let capturedServiceOptions:
+    | {
+        sessionSurface?: "local" | "channel";
+        allowedTools?: readonly string[];
+        sparkStateRoot?: string;
+      }
+    | undefined;
   const record = {
     header: { id: "session-timeout" },
     path: "/tmp/session-timeout.jsonl",
@@ -43,12 +50,23 @@ void test("runSparkHeadlessSession times out a never-resolving agent turn", asyn
         sessionId: "session-timeout",
         prompt: "hang",
         timeoutMs: 10,
+        sessionSurface: "channel",
+        allowedTools: ["session"],
       },
-      { createServices: async () => services as never },
+      {
+        controlSparkHome: "/tmp/control-spark-home",
+        createServices: async (options) => {
+          capturedServiceOptions = options;
+          return services as never;
+        },
+      },
     ),
     /Spark headless session timed out after 10ms/u,
   );
 
   assert.equal(abortedReason, "Spark headless session timed out after 10ms");
+  assert.equal(capturedServiceOptions?.sessionSurface, "channel");
+  assert.deepEqual(capturedServiceOptions?.allowedTools, ["session"]);
+  assert.equal(capturedServiceOptions?.sparkStateRoot, "/tmp/control-spark-home");
   assert.deepEqual(unsubscribed.sort(), ["agentLoop", "runtime"]);
 });

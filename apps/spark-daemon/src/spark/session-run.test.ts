@@ -246,15 +246,24 @@ describe("daemon native session execution", () => {
           systemPrompt?: string;
           messageMetadata?: Record<string, unknown>;
           approvalMethod?: string;
+          sessionSurface?: string;
+          allowedTools?: readonly string[];
         }
       | undefined;
     expect(input?.prompt).toBe("@神经蛙 你叫什么名字");
     expect(input?.approvalMethod).toBe("auto");
+    expect(input?.sessionSurface).toBe("channel");
+    expect(input?.allowedTools).toEqual(["session"]);
     expect(input?.systemPrompt).toContain(
       "Current conversation surface: Infoflow (如流) group chat",
     );
     expect(input?.systemPrompt).toContain("Use platform-supplied sender metadata for identity");
     expect(input?.systemPrompt).toContain("Dynamic context checkpoint: infoflow-message.");
+    expect(input?.systemPrompt).toContain("Message-platform sessions are coordination-only");
+    expect(input?.systemPrompt).toContain(
+      'session({ action: "list", scope: "workspace", surface: "local" })',
+    );
+    expect(input?.systemPrompt).toContain('session({ action: "send", toSessionId');
     expect(input?.systemPrompt).toContain('senderId: "zhanrongrui"');
     expect(input?.systemPrompt).toContain('groupId: "10838226"');
     expect(input?.systemPrompt).toContain('messageId: "1870319775739153405"');
@@ -276,6 +285,45 @@ describe("daemon native session execution", () => {
     });
     expect(input?.systemPrompt).not.toContain("@神经蛙 你叫什么名字");
     expect(input?.systemPrompt).not.toContain("You are handling an Infoflow");
+  });
+
+  it("keeps channel-bound sessions restricted on non-channel submitted turns", async () => {
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_channel_bound",
+      prompt: "run this locally",
+    };
+    const executeSession = vi.fn(async () => ({ assistantText: "forwarded" }));
+
+    await executeSparkDaemonSessionRunTask(task, context(task), {
+      paths,
+      executeSession,
+      sessionRegistry: {
+        get: vi.fn(
+          async () =>
+            ({
+              bindings: [
+                {
+                  kind: "channel",
+                  adapter: "feishu",
+                  externalKey: "feishu:chat:oc_1",
+                },
+              ],
+            }) as never,
+        ),
+        recordRun: vi.fn(async () => ({}) as never),
+        recordTurnQueued: vi.fn(async () => ({}) as never),
+        recordTurnSettled: vi.fn(async () => ({}) as never),
+      },
+    });
+
+    expect(executeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionSurface: "channel",
+        allowedTools: ["session"],
+        systemPrompt: expect.stringContaining('session({ action: "send", toSessionId'),
+      }),
+    );
   });
 
   it("indexes the durable transcript and preserves task routing on streamed view events", async () => {

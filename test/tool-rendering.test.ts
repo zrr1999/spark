@@ -9,6 +9,7 @@ import piAskExtension from "../packages/spark-ask/src/extension.ts";
 import { registerPiCueTools } from "../packages/spark-cue/src/index.ts";
 import piGraftExtension from "../packages/spark-graft/src/extension.ts";
 import { registerPiRolesTools } from "../packages/spark-roles/src/extension.ts";
+import { registerPiSessionTool } from "../packages/spark-session/src/extension.ts";
 import sparkExtension from "../packages/pi-extension/src/extension/index.ts";
 
 interface RenderTheme {
@@ -197,6 +198,17 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
     ]),
     join(snapshotDir, "tool-rendering-role.txt"),
     textSnapshot,
+  );
+
+  const sessionTools = new Map<string, RenderableToolConfig>();
+  registerPiSessionTool({
+    registerTool: (config) => sessionTools.set(config.name, config),
+  });
+  assertAllToolsHaveCallRenderers(sessionTools);
+  assert.deepEqual([...sessionTools.keys()], ["session"]);
+  assert.match(
+    renderCall(sessionTools, "session", { action: "list", surface: "local" }, 80),
+    /session action=list surface=local/u,
   );
 
   const graftTools = registerGraftToolsForRendering();

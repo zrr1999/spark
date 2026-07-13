@@ -7,14 +7,14 @@ import test from "node:test";
 import type { ToolConfig } from "@zendev-lab/spark-extension-api";
 import { SparkSessionMailStore, sanitizeSessionMailScope } from "@zendev-lab/spark-session";
 import type { SparkSessionRegistryRecord } from "@zendev-lab/spark-protocol";
-import { registerPiRolesTools } from "../packages/spark-roles/src/extension.ts";
-import type { RoleSessionContext } from "../packages/spark-roles/src/session-actions.ts";
+import { registerPiSessionTool } from "../packages/spark-session/src/extension.ts";
+import type { SparkSessionToolContext } from "../packages/spark-session/src/action-tool.ts";
 
 const NOW = "2026-07-13T00:00:00.000Z";
 
 type SessionToolResult = Awaited<ReturnType<ToolConfig["execute"]>>;
 
-void test("role tool merges anonymous roles, persistent sessions, and messaging actions", () => {
+void test("session tool exposes persistent lifecycle, calls, classification, and mail", () => {
   const tool = registerTestTool({
     request: async () => assert.fail("request should not run during registration"),
     mailStore: () => assert.fail("mail store should not run during registration"),
@@ -24,6 +24,7 @@ void test("role tool merges anonymous roles, persistent sessions, and messaging 
     "list",
     "get",
     "create",
+    "call",
     "bind",
     "unbind",
     "archive",
@@ -35,14 +36,27 @@ void test("role tool merges anonymous roles, persistent sessions, and messaging 
   ]) {
     assert.match(schema, new RegExp(action));
   }
-  assert.match(tool.description, /Canonical role and session capability/u);
+  assert.match(tool.description, /Canonical persistent session capability/u);
 });
 
-void test("role tool routes managed session actions through daemon RPC", async () => {
+void test("session tool routes managed actions through daemon RPC and classifies surfaces", async () => {
   const calls: Array<{ method: string; params: unknown }> = [];
   const records = new Map<string, SparkSessionRegistryRecord>([
     ["session:a", sessionRecord("session:a")],
-    ["session:b", sessionRecord("session:b")],
+    [
+      "session:b",
+      {
+        ...sessionRecord("session:b"),
+        bindings: [
+          {
+            kind: "channel",
+            adapter: "infoflow",
+            externalKey: "infoflow:user:b",
+            boundAt: NOW,
+          },
+        ],
+      },
+    ],
   ]);
   const request = async <T>(method: string, params?: unknown): Promise<T> => {
     calls.push({ method, params });
@@ -93,11 +107,39 @@ void test("role tool routes managed session actions through daemon RPC", async (
   const tool = registerTestTool({ request, mailStore: () => assert.fail("unexpected mail store") });
   const ctx = context("session:a");
 
-  const listed = await execute(tool, ctx, { action: "list", resource: "session", limit: 1 });
-  assert.equal((listed.details as { sessions: unknown[] }).sessions.length, 1);
-  assert.equal((listed.details as { total: number }).total, 2);
+  const listed = await execute(tool, ctx, { action: "list", limit: 2 });
+  const listedSessions = (
+    listed.details as {
+      sessions: Array<{ sessionId: string; surface: string; channelAdapters: string[] }>;
+    }
+  ).sessions;
+  assert.deepEqual(
+    listedSessions.map((session) => [session.sessionId, session.surface]),
+    [
+      ["session:a", "local"],
+      ["session:b", "channel"],
+    ],
+  );
+  const channelOnly = await execute(tool, ctx, {
+    action: "list",
+    surface: "channel",
+    adapter: "infoflow",
+  });
+  assert.deepEqual(
+    (channelOnly.details as { sessions: Array<{ sessionId: string }> }).sessions.map(
+      (session) => session.sessionId,
+    ),
+    ["session:b"],
+  );
+  const page = await execute(tool, ctx, { action: "list", offset: 1, limit: 1 });
+  assert.deepEqual(
+    (page.details as { sessions: Array<{ sessionId: string }> }).sessions.map(
+      (session) => session.sessionId,
+    ),
+    ["session:b"],
+  );
 
-  const selected = await execute(tool, ctx, { action: "get", resource: "session" });
+  const selected = await execute(tool, ctx, { action: "get" });
   assert.equal(
     (selected.details as { session: { sessionId: string } }).session.sessionId,
     "session:a",
@@ -105,7 +147,6 @@ void test("role tool routes managed session actions through daemon RPC", async (
 
   const created = await execute(tool, ctx, {
     action: "create",
-    resource: "session",
     sessionId: "session:new",
     title: "New session",
   });
@@ -140,6 +181,8 @@ void test("role tool routes managed session actions through daemon RPC", async (
     calls.map((call) => call.method),
     [
       "session.list",
+      "session.list",
+      "session.list",
       "session.get",
       "workspace.ensure-local",
       "session.create",
@@ -150,7 +193,98 @@ void test("role tool routes managed session actions through daemon RPC", async (
   );
 });
 
-void test("role call uses daemon turn.submit for persistent session continuity", async () => {
+void test("channel sessions can coordinate only with local sessions in their workspace", async () => {
+  const channelCurrent: SparkSessionRegistryRecord = {
+    ...sessionRecord("session:channel"),
+    bindings: [
+      {
+        kind: "channel",
+        adapter: "infoflow",
+        externalKey: "infoflow:group:channel",
+        boundAt: NOW,
+      },
+    ],
+  };
+  const localTarget = sessionRecord("session:local");
+  const channelPeer: SparkSessionRegistryRecord = {
+    ...sessionRecord("session:channel-peer"),
+    bindings: [
+      {
+        kind: "channel",
+        adapter: "qqbot",
+        externalKey: "qqbot:group:peer",
+        boundAt: NOW,
+      },
+    ],
+  };
+  const otherWorkspace: SparkSessionRegistryRecord = {
+    ...sessionRecord("session:other-workspace"),
+    scope: { kind: "workspace", workspaceId: "workspace:other" },
+    workspaceId: "workspace:other",
+  };
+  const records = new Map(
+    [channelCurrent, localTarget, channelPeer, otherWorkspace].map((record) => [
+      record.sessionId,
+      record,
+    ]),
+  );
+  const calls: Array<{ method: string; params: unknown }> = [];
+  const request = async <T>(method: string, params?: unknown): Promise<T> => {
+    calls.push({ method, params });
+    if (method === "session.get") {
+      return records.get(String((params as { sessionId?: string }).sessionId)) as T;
+    }
+    if (method === "session.list") return [...records.values()] as T;
+    return assert.fail(`unexpected RPC method: ${method}`);
+  };
+  const tool = registerTestTool({ request, mailStore: () => assert.fail("unexpected mail store") });
+  const ctx = { ...context(channelCurrent.sessionId), sessionSurface: "channel" as const };
+
+  const listed = await execute(tool, ctx, { action: "list" });
+  assert.deepEqual(
+    (listed.details as { sessions: Array<{ sessionId: string }> }).sessions.map(
+      (session) => session.sessionId,
+    ),
+    [localTarget.sessionId],
+  );
+  assert.deepEqual(calls.find((call) => call.method === "session.list")?.params, {
+    scope: { kind: "workspace", workspaceId: "workspace:test" },
+    workspaceId: "workspace:test",
+    includeArchived: false,
+  });
+
+  const selected = await execute(tool, ctx, {
+    action: "get",
+    sessionId: localTarget.sessionId,
+  });
+  assert.equal(
+    (selected.details as { session: { sessionId: string } }).session.sessionId,
+    localTarget.sessionId,
+  );
+  for (const sessionId of [channelPeer.sessionId, otherWorkspace.sessionId]) {
+    await assert.rejects(
+      () => execute(tool, ctx, { action: "get", sessionId }),
+      /must be local sessions in the current workspace/u,
+    );
+  }
+  await assert.rejects(
+    () => execute(tool, ctx, { action: "list", scope: "daemon" }),
+    /their own workspace only/u,
+  );
+  await assert.rejects(
+    () => execute(tool, ctx, { action: "list", surface: "channel" }),
+    /can list local sessions only/u,
+  );
+
+  for (const action of ["create", "call", "bind", "unbind", "archive"] as const) {
+    await assert.rejects(
+      () => execute(tool, ctx, { action }),
+      new RegExp(`cannot use session action=${action}`, "u"),
+    );
+  }
+});
+
+void test("session call uses daemon turn.submit for persistent continuity", async () => {
   const calls: Array<{ method: string; params: unknown }> = [];
   const request = async <T>(method: string, params?: unknown): Promise<T> => {
     calls.push({ method, params });
@@ -190,13 +324,16 @@ void test("role call uses daemon turn.submit for persistent session continuity",
 
   await assert.rejects(
     () =>
-      execute(tool, context("session:caller"), {
-        action: "call",
-        role: "worker",
-        sessionId: "session:persistent",
-        instruction: "Ambiguous target",
-      }),
-    /either role for an anonymous call or sessionId for a persistent call/u,
+      execute(
+        tool,
+        { ...context("session:caller"), sessionSurface: "channel" },
+        {
+          action: "call",
+          sessionId: "session:persistent",
+          instruction: "Channel sessions must forward",
+        },
+      ),
+    /message-platform sessions cannot use session action=call/u,
   );
   await assert.rejects(
     () =>
@@ -206,7 +343,7 @@ void test("role call uses daemon turn.submit for persistent session continuity",
         instruction: "Ambiguous options",
         timeoutMs: 5_000,
       }),
-    /persistent role call does not accept timeoutMs/u,
+    /session call does not accept timeoutMs/u,
   );
   await assert.rejects(
     () =>
@@ -216,11 +353,11 @@ void test("role call uses daemon turn.submit for persistent session continuity",
         instruction: "Invalid reset",
         reset: "yes",
       }),
-    /role reset must be a boolean/u,
+    /session reset must be a boolean/u,
   );
 });
 
-void test("role send follows NNP request/reply causality without executing the target", async () => {
+void test("session send follows NNP request/reply causality without executing the target", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-tool-"));
   try {
     const mailStore = new SparkSessionMailStore({ sparkHome: dir, now: () => Date.parse(NOW) });
@@ -229,6 +366,26 @@ void test("role send follows NNP request/reply causality without executing the t
       requestCalls.push(method);
       if (method !== "session.get") return assert.fail(`unexpected RPC method: ${method}`);
       const sessionId = String((params as { sessionId?: string }).sessionId);
+      if (sessionId === "session:c") {
+        return {
+          ...sessionRecord(sessionId),
+          bindings: [
+            {
+              kind: "channel",
+              adapter: "qqbot",
+              externalKey: "qqbot:c2c:c",
+              boundAt: NOW,
+            },
+          ],
+        } as T;
+      }
+      if (sessionId === "session:d") {
+        return {
+          ...sessionRecord(sessionId),
+          scope: { kind: "workspace", workspaceId: "workspace:other" },
+          workspaceId: "workspace:other",
+        } as T;
+      }
       return sessionRecord(sessionId) as T;
     };
     const tool = registerTestTool({ request, mailStore: () => mailStore });
@@ -267,6 +424,19 @@ void test("role send follows NNP request/reply causality without executing the t
     assert.deepEqual(sentDetails.message.payload, { body: "Please inspect the failure" });
     assert.match(toolText(sent), /not executed or queued; do not poll/u);
 
+    const forwarded = await execute(
+      tool,
+      { ...ctx, sessionSurface: "channel" },
+      {
+        action: "send",
+        toSessionId: "session:b",
+        intent: "work.execute",
+        message: "Run this in the local session",
+      },
+      "call-channel-local-forward",
+    );
+    assert.equal((forwarded.details as { created: boolean }).created, true);
+
     const retried = await execute(
       tool,
       ctx,
@@ -299,6 +469,36 @@ void test("role send follows NNP request/reply causality without executing the t
       /idempotency key .* was reused for a different message/u,
     );
     assert.equal((await mailStore.list("session:c")).length, 0);
+    await assert.rejects(
+      () =>
+        execute(
+          tool,
+          { ...ctx, sessionSurface: "channel" },
+          {
+            action: "send",
+            toSessionId: "session:c",
+            intent: "work.execute",
+            message: "Run this elsewhere",
+          },
+          "call-channel-forward",
+        ),
+      /must be local sessions in the current workspace/u,
+    );
+    await assert.rejects(
+      () =>
+        execute(
+          tool,
+          { ...ctx, sessionSurface: "channel" },
+          {
+            action: "send",
+            toSessionId: "session:d",
+            intent: "work.execute",
+            message: "Run this in another workspace",
+          },
+          "call-channel-cross-workspace",
+        ),
+      /must be local sessions in the current workspace/u,
+    );
 
     const incoming = await mailStore.send({
       toSessionId: "session:a",
@@ -330,7 +530,7 @@ void test("role send follows NNP request/reply causality without executing the t
   }
 });
 
-void test("role mail uses the host Spark state root", async () => {
+void test("session mail uses the host Spark state root", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-state-root-"));
   try {
     const tool = registerTestTool({
@@ -354,7 +554,7 @@ void test("role mail uses the host Spark state root", async () => {
   }
 });
 
-void test("role inbox is current-session private and supports read and ack", async () => {
+void test("session inbox is current-session private and supports read and ack", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-inbox-tool-"));
   try {
     const mailStore = new SparkSessionMailStore({ sparkHome: dir });
@@ -492,22 +692,22 @@ void test("session mailbox serializes concurrent sends without losing messages",
 });
 
 function registerTestTool(
-  session: NonNullable<Parameters<typeof registerPiRolesTools>[1]>["session"],
+  deps: NonNullable<Parameters<typeof registerPiSessionTool>[1]>["deps"],
 ): ToolConfig {
   const tools = new Map<string, ToolConfig>();
-  registerPiRolesTools(
+  registerPiSessionTool(
     { registerTool: (config) => tools.set(config.name, config as ToolConfig) },
-    { session },
+    { deps },
   );
-  const tool = tools.get("role");
+  const tool = tools.get("session");
   assert.ok(tool);
-  assert.deepEqual([...tools.keys()], ["role"]);
+  assert.deepEqual([...tools.keys()], ["session"]);
   return tool;
 }
 
 async function execute(
   tool: ToolConfig,
-  ctx: RoleSessionContext,
+  ctx: SparkSessionToolContext,
   params: Record<string, unknown>,
   toolCallId = `call-${String(params.action)}`,
 ): Promise<SessionToolResult> {
@@ -520,7 +720,7 @@ async function execute(
   );
 }
 
-function context(sessionId: string): RoleSessionContext {
+function context(sessionId: string): SparkSessionToolContext {
   return {
     cwd: "/workspace/test",
     sessionId,

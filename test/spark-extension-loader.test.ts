@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { SPARK_CHANNEL_ALLOWED_TOOLS } from "@zendev-lab/spark-host/system-prompt";
 import {
   DEFAULT_SPARK_EXTENSION_SPECS,
   SparkExtensionLoader,
@@ -21,6 +22,7 @@ void test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin 
     "@zendev-lab/spark-ai/models-extension",
     "@zendev-lab/spark-memory/extension",
     "@zendev-lab/spark-roles/extension",
+    "@zendev-lab/spark-session/extension",
     "@zendev-lab/spark-web/extension",
     "@zendev-lab/spark-graft/extension",
     "@zendev-lab/pi-extension/extension",
@@ -39,8 +41,12 @@ void test("root Pi extension list and native builtins both expose self-extension
     pi?: { extensions?: string[] };
   };
   assert.ok(rootPackage.pi?.extensions?.includes("./packages/spark-memory/src/extension-entry.ts"));
+  assert.ok(
+    rootPackage.pi?.extensions?.includes("./packages/spark-session/src/extension-entry.ts"),
+  );
   assert.ok(rootPackage.pi?.extensions?.includes("./packages/spark-web/src/extension-entry.ts"));
   assert.ok([...DEFAULT_SPARK_EXTENSION_SPECS].includes("@zendev-lab/spark-memory/extension"));
+  assert.ok([...DEFAULT_SPARK_EXTENSION_SPECS].includes("@zendev-lab/spark-session/extension"));
   assert.ok([...DEFAULT_SPARK_EXTENSION_SPECS].includes("@zendev-lab/spark-web/extension"));
 });
 
@@ -55,6 +61,7 @@ void test("SparkExtensionLoader loads builtin factories through explicit imports
       "@zendev-lab/spark-ai/models-extension",
       "@zendev-lab/spark-memory/extension",
       "@zendev-lab/spark-roles/extension",
+      "@zendev-lab/spark-session/extension",
       "@zendev-lab/spark-web/extension",
       "@zendev-lab/spark-graft/extension",
       "@zendev-lab/pi-extension/extension",
@@ -74,6 +81,7 @@ void test("SparkExtensionLoader loads builtin factories through explicit imports
   assert.ok(tools.includes("models"));
   assert.ok(tools.includes("memory"));
   assert.ok(tools.includes("role"));
+  assert.ok(tools.includes("session"));
   assert.ok(tools.includes("web_search"));
   assert.ok(tools.includes("fetch_content"));
   assert.ok(tools.includes("get_search_content"));
@@ -94,6 +102,22 @@ void test("SparkExtensionLoader loads builtin factories through explicit imports
   assert.ok(!commands.includes("research"));
   assert.ok(commands.includes("workflow:research"));
   assert.ok(!commands.some((command) => command.startsWith("graft-")));
+});
+
+void test("channel host keeps only explicitly allowed tools active after extension handlers", async () => {
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-extension-loader-channel",
+    sessionSurface: "channel",
+    allowedTools: SPARK_CHANNEL_ALLOWED_TOOLS,
+  });
+  const result = await new SparkExtensionLoader({ api: host }).load();
+  assert.equal(
+    result.outcomes.every((outcome) => outcome.ok),
+    true,
+  );
+
+  await host.emit("session_start", { reason: "channel-turn" });
+  assert.deepEqual(host.getActiveTools(), ["session"]);
 });
 
 void test("SparkExtensionLoader isolates one extension failure and continues loading later extensions", async () => {

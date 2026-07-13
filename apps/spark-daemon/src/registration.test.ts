@@ -25,7 +25,7 @@ describe("Spark daemon workspace registration", () => {
     const fetchFn = vi.fn(async (url: URL | string, init?: RequestInit) => {
       const requestUrl = new URL(String(url));
       if (requestUrl.pathname === "/api/v1/runtime/device-authorizations") {
-        expect(JSON.parse(String(init?.body))).toMatchObject({
+        expect(parseRequestJson(init)).toMatchObject({
           installationId: "install-test",
           displayName: "Test daemon",
         });
@@ -45,7 +45,7 @@ describe("Spark daemon workspace registration", () => {
 
       tokenPolls += 1;
       expect(requestUrl.pathname).toBe("/api/v1/runtime/device-authorizations/token");
-      expect(JSON.parse(String(init?.body))).toEqual({
+      expect(parseRequestJson(init)).toEqual({
         deviceCode: "spark_device_code_000000000000000000000000",
       });
       if (tokenPolls === 1) {
@@ -130,7 +130,7 @@ describe("Spark daemon workspace registration", () => {
         "wss://cockpit.example.test/api/v1/runtime/runtimes/rt_11111111111141111111111111111111/ws",
     });
     const fetchFn = vi.fn(async (_url: URL | string, init?: RequestInit) => {
-      expect(JSON.parse(String(init?.body))).toEqual({
+      expect(parseRequestJson(init)).toEqual({
         workspaceRegistration: {
           localWorkspaceKey: "local-spore",
           displayName: "Local Spore checkout",
@@ -194,9 +194,7 @@ describe("Spark daemon workspace registration", () => {
   });
 
   it("requires HTTPS for non-loopback Cockpit credentials unless explicitly acknowledged", () => {
-    expect(validateRegistrationServerUrl("http://127.0.0.1:5173")).toBe(
-      "http://127.0.0.1:5173/",
-    );
+    expect(validateRegistrationServerUrl("http://127.0.0.1:5173")).toBe("http://127.0.0.1:5173/");
     expect(() => validateRegistrationServerUrl("http://192.168.1.8:5173")).toThrow(
       /plaintext HTTP.*--allow-insecure-http/,
     );
@@ -390,6 +388,12 @@ function jsonResponse(value: unknown, status: number): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+function parseRequestJson(init?: RequestInit): unknown {
+  const body = init?.body;
+  if (typeof body !== "string") throw new TypeError("Expected a JSON string request body");
+  return JSON.parse(body) as unknown;
 }
 
 function runtimeRegistrationResponse() {

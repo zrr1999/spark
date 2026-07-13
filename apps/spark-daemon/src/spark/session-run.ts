@@ -12,6 +12,8 @@ import {
 } from "@zendev-lab/spark-host/headless-loader";
 import {
   DEFAULT_SPARK_IDENTITY_PROMPT,
+  SPARK_CHANNEL_ALLOWED_TOOLS,
+  SPARK_CHANNEL_SESSION_EXECUTION_PROMPT,
   renderSparkChannelSurfacePrompt,
 } from "@zendev-lab/spark-host/system-prompt";
 import { composeAgentSystemPrompt } from "@zendev-lab/spark-modes";
@@ -46,7 +48,8 @@ export interface SparkDaemonQueueTaskExecutorOptions {
   sessionRegistry?: Pick<
     DaemonSessionRegistry,
     "recordRun" | "recordTurnQueued" | "recordTurnSettled"
-  >;
+  > &
+    Partial<Pick<DaemonSessionRegistry, "get">>;
   createSparkHeadlessSessionExecutor?: CreateSparkHeadlessSessionExecutorFn;
 }
 
@@ -203,7 +206,8 @@ export async function executeSparkDaemonSessionRunTask(
   context: SparkDaemonTaskExecutionContext,
   options: SparkDaemonQueueTaskExecutorOptions & { executeSession: SparkHeadlessSessionExecutor },
 ): Promise<unknown> {
-  const systemPrompt = await systemPromptForChannelSession(task, options);
+  const sessionSurface = await sessionSurfaceForTask(task, options.sessionRegistry);
+  const systemPrompt = await systemPromptForChannelSession(task, options, sessionSurface);
   const messageMetadata = channelMessageMetadata(task);
   return await options.executeSession({
     cwd: task.cwd ?? options.cwd ?? process.cwd(),
@@ -217,8 +221,13 @@ export async function executeSparkDaemonSessionRunTask(
     timeoutMs: context.timeoutMs,
     ...(systemPrompt ? { systemPrompt } : {}),
     ...(messageMetadata ? { messageMetadata } : {}),
-    // Channel-created session runs default to auto tool approval for cue/etc.
-    ...(task.channelReply ? { approvalMethod: "auto" as const } : {}),
+    ...(sessionSurface ? { sessionSurface } : {}),
+    ...(sessionSurface === "channel"
+      ? {
+          allowedTools: SPARK_CHANNEL_ALLOWED_TOOLS,
+          approvalMethod: "auto" as const,
+        }
+      : {}),
     onEvent: (event) => emitHeadlessEvent(event, task, context),
   });
 }
@@ -243,12 +252,29 @@ function channelMessageMetadata(
   };
 }
 
+async function sessionSurfaceForTask(
+  task: SparkDaemonSessionRunTask,
+  registry: SparkDaemonQueueTaskExecutorOptions["sessionRegistry"],
+): Promise<"local" | "channel" | undefined> {
+  if (task.channelReply) return "channel";
+  const session = await registry?.get?.(task.sessionId);
+  if (!session) return undefined;
+  return session.bindings.length > 0 ? "channel" : "local";
+}
+
 async function systemPromptForChannelSession(
   task: SparkDaemonSessionRunTask,
   options: SparkDaemonQueueTaskExecutorOptions,
+  sessionSurface: "local" | "channel" | undefined,
 ): Promise<string | undefined> {
+  if (sessionSurface !== "channel") return undefined;
   const reply = task.channelReply;
-  if (!reply) return undefined;
+  if (!reply) {
+    return composeAgentSystemPrompt([
+      DEFAULT_SPARK_IDENTITY_PROMPT,
+      SPARK_CHANNEL_SESSION_EXECUTION_PROMPT,
+    ]);
+  }
   const externalKey = task.channelContext?.externalKey;
   const scope =
     externalKey?.startsWith("infoflow:group:") ||
@@ -272,6 +298,7 @@ async function systemPromptForChannelSession(
         externalKey: bindingKey,
       }),
       infoflow ? resolveInfoflowCustomSystemPrompt(infoflow) : undefined,
+      SPARK_CHANNEL_SESSION_EXECUTION_PROMPT,
       task.channelContext ? renderInfoflowMessageContextPrompt(task.channelContext) : undefined,
     ]);
   }
@@ -287,6 +314,7 @@ async function systemPromptForChannelSession(
         ...(externalKey ? { externalKey } : {}),
       }),
       custom || undefined,
+      SPARK_CHANNEL_SESSION_EXECUTION_PROMPT,
     ]);
   }
 
@@ -296,6 +324,7 @@ async function systemPromptForChannelSession(
       adapter: reply.adapterId,
       scope,
     }),
+    SPARK_CHANNEL_SESSION_EXECUTION_PROMPT,
   ]);
 }
 

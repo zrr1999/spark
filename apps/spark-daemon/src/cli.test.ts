@@ -368,7 +368,7 @@ describe("Spark daemon CLI", () => {
     const fetchFn = vi.fn(async (url: URL | string, init?: RequestInit) => {
       const requestUrl = new URL(String(url));
       if (requestUrl.pathname === "/api/v1/runtime/device-authorizations") {
-        submittedInstallationId = (JSON.parse(String(init?.body)) as { installationId?: string })
+        submittedInstallationId = (parseRequestJson(init) as { installationId?: string })
           .installationId;
         return new Response(
           JSON.stringify({
@@ -2418,6 +2418,12 @@ function deviceLoginRegistrationResponse() {
     staleAfterMs: 45_000,
     registeredAt: "2026-07-13T01:00:00.000Z",
   };
+}
+
+function parseRequestJson(init?: RequestInit): unknown {
+  const body = init?.body;
+  if (typeof body !== "string") throw new TypeError("Expected a JSON string request body");
+  return JSON.parse(body) as unknown;
 }
 
 function stdinFrom(value: string, isTTY = false): NodeJS.ReadStream {

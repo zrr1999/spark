@@ -75,6 +75,9 @@ import type {
 export interface SparkHostRuntimeOptions {
   cwd: string;
   sparkStateRoot?: string;
+  sessionSurface?: "local" | "channel";
+  /** When present, this host instance must never activate tools outside this allowlist. */
+  allowedTools?: readonly string[];
   hasUI?: boolean;
   ui?: SparkHostUiTransport;
   sessionManager?: SparkHostSessionManagerStub;
@@ -95,8 +98,10 @@ const NOT_IMPLEMENTED = (name: string): Error =>
 export class SparkHostRuntime implements ExtensionAPI {
   readonly cwd: string;
   readonly sparkStateRoot: string | undefined;
+  readonly sessionSurface: "local" | "channel" | undefined;
   readonly hasUI: boolean;
   private readonly tools: RegisteredToolMap = new Map();
+  private readonly allowedTools: ReadonlySet<string> | undefined;
   private readonly commands: RegisteredCommandMap = new Map();
   private readonly listeners: EventListenerMap = new Map();
   private readonly outbox: OutboxEnvelope[] = [];
@@ -116,6 +121,8 @@ export class SparkHostRuntime implements ExtensionAPI {
   constructor(options: SparkHostRuntimeOptions) {
     this.cwd = options.cwd;
     this.sparkStateRoot = options.sparkStateRoot;
+    this.sessionSurface = options.sessionSurface;
+    this.allowedTools = options.allowedTools ? new Set(options.allowedTools) : undefined;
     this.hasUI = options.hasUI ?? false;
     this.uiTransport = options.ui ?? {};
     this.sessionManager = options.sessionManager ?? {};
@@ -133,7 +140,10 @@ export class SparkHostRuntime implements ExtensionAPI {
   registerTool = (config: ToolConfig): void => {
     if (!config.name) throw new Error("SparkHostRuntime.registerTool requires a tool name");
     const existing = this.tools.get(config.name);
-    const entry: RegisteredTool = { config, active: existing?.active ?? true };
+    const entry: RegisteredTool = {
+      config,
+      active: this.isToolAllowed(config.name) && (existing?.active ?? true),
+    };
     this.tools.set(config.name, entry);
     for (const listener of Array.from(this.toolRegistrationListeners)) {
       try {
@@ -232,7 +242,7 @@ export class SparkHostRuntime implements ExtensionAPI {
   setActiveTools = (names: string[]): void => {
     const requested = new Set(names);
     for (const [name, tool] of Array.from(this.tools)) {
-      tool.active = requested.has(name);
+      tool.active = this.isToolAllowed(name) && requested.has(name);
     }
   };
 
@@ -264,6 +274,10 @@ export class SparkHostRuntime implements ExtensionAPI {
   /** Install the daemon-native role runner exposed to tools via ctx.runRole. */
   setRoleRunner(roleRunner: ExtensionRoleRunner | undefined): void {
     this.roleRunner = roleRunner;
+  }
+
+  private isToolAllowed(name: string): boolean {
+    return this.allowedTools?.has(name) ?? true;
   }
 
   /** Snapshot of currently registered tools (active or not). */
@@ -383,6 +397,7 @@ export class SparkHostRuntime implements ExtensionAPI {
       cwd: this.cwd,
       ...(this.sessionId ? { sessionId: this.sessionId } : {}),
       ...(this.sparkStateRoot ? { sparkStateRoot: this.sparkStateRoot } : {}),
+      ...(this.sessionSurface ? { sessionSurface: this.sessionSurface } : {}),
       hasUI: this.hasUI,
       ui: this.uiTransport as ExtensionUi,
       isIdle: () => this.isIdle(),

@@ -10,7 +10,8 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./extension": "./src/extension.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -20,10 +21,18 @@
     "test": "vp test run"
   },
   "dependencies": {
-    "@zendev-lab/spark-protocol": "workspace:^"
+    "@zendev-lab/spark-extension-api": "workspace:^",
+    "@zendev-lab/spark-protocol": "workspace:^",
+    "@zendev-lab/spark-system": "workspace:^",
+    "typebox": "^1.2.13"
   },
   "devDependencies": {
     "typescript": "^6.0.3",
     "vitest": "catalog:"
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension-entry.ts"
+    ]
   }
 }

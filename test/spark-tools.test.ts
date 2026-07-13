@@ -8,6 +8,7 @@ import test from "node:test";
 
 import { RoleRegistry } from "@zendev-lab/spark-roles";
 import { registerPiRolesTools } from "@zendev-lab/spark-roles/extension";
+import { registerPiSessionTool } from "@zendev-lab/spark-session/extension";
 import {
   newRef,
   stableId,
@@ -7864,7 +7865,7 @@ void test("Spark extension exposes canonical tools instead of removed spark_* to
   assert.ok(run.tools.has("learning"));
   assert.ok(run.tools.has("ask"));
   assert.ok(run.tools.has("role"));
-  assert.equal(run.tools.has("session"), false);
+  assert.ok(run.tools.has("session"));
   assert.ok(run.tools.has("goal"));
   assert.ok(run.tools.has("loop"));
   assert.ok(run.tools.has("repro"));
@@ -12768,6 +12769,9 @@ function registerSparkToolsForTest(
     registerTool: (config) => registerExternalTool(config as SparkToolConfig),
   });
   registerPiRolesTools({
+    registerTool: (config) => registerExternalTool(config as SparkToolConfig),
+  });
+  registerPiSessionTool({
     registerTool: (config) => registerExternalTool(config as SparkToolConfig),
   });
   registerPiWorkflowTool({

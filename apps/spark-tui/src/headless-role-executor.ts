@@ -83,6 +83,8 @@ export interface SparkHeadlessSessionRunInput {
   signal?: AbortSignal;
   timeoutMs?: number;
   sparkHome?: string;
+  sessionSurface?: "local" | "channel";
+  allowedTools?: readonly string[];
   /** Optional base identity/surface prompt; defaults to Spark host identity. */
   systemPrompt?: string;
   /** Display-safe metadata persisted on the submitted user message only. */
@@ -134,6 +136,9 @@ export async function runSparkHeadlessSession(
     cwd: input.cwd,
     sparkHome: options.sparkHome ?? input.sparkHome,
     ...controlPlaneServicePaths(options.controlSparkHome),
+    ...(options.controlSparkHome ? { sparkStateRoot: options.controlSparkHome } : {}),
+    sessionSurface: input.sessionSurface,
+    allowedTools: input.allowedTools,
     hasUI: false,
     ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
     ...(input.approvalMethod ? { approvalMethod: input.approvalMethod } : {}),

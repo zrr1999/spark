@@ -83,6 +83,8 @@ export interface SparkCliHostServicesOptions {
   cwd?: string;
   sparkHome?: string;
   sparkStateRoot?: string;
+  sessionSurface?: "local" | "channel";
+  allowedTools?: readonly string[];
   config?: SparkConfig;
   configPath?: string;
   keybindingsPath?: string;
@@ -134,6 +136,8 @@ export async function createSparkCliHostServices(
   const runtime = new SparkHostRuntime({
     cwd,
     sparkStateRoot: options.sparkStateRoot,
+    sessionSurface: options.sessionSurface,
+    allowedTools: options.allowedTools,
     hasUI: options.hasUI ?? false,
     ui: options.ui,
     sessionManager: options.sessionManager,

@@ -65,6 +65,29 @@ void test("SparkHostRuntime setActiveTools toggles getAllTools view", () => {
   assert.equal(host.listTools().length, 2, "all tools remain registered, only active flag flips");
 });
 
+void test("SparkHostRuntime permanently excludes tools outside the host allowlist", () => {
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-host-runtime-channel-test",
+    sessionSurface: "channel",
+    allowedTools: ["session"],
+  });
+  for (const name of ["cue_exec", "cue_jobs", "session"]) {
+    host.registerTool({
+      name,
+      description: name,
+      parameters: {},
+      async execute() {
+        return { content: [{ type: "text", text: name }] };
+      },
+    });
+  }
+
+  assert.deepEqual(host.getActiveTools(), ["session"]);
+  host.setActiveTools(["cue_exec", "cue_jobs", "session"]);
+  assert.deepEqual(host.getActiveTools(), ["session"]);
+  assert.equal(host.makeContext().sessionSurface, "channel");
+});
+
 void test("SparkHostRuntime registerCommand adds numeric suffix for duplicate names", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
   let aCalled = 0;

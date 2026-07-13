@@ -1,6 +1,6 @@
 # spark-roles
 
-`@zendev-lab/spark-roles` owns the canonical role/session tool, reusable coding role definitions, and anonymous single-role runs. Persistent session state remains owned by `@zendev-lab/spark-session` and the daemon; this package composes those mechanisms behind one public capability.
+`@zendev-lab/spark-roles` owns the canonical `role` tool, reusable coding role definitions, model settings, and anonymous single-role runs. Persistent continuity is exposed separately by `@zendev-lab/spark-session`; both call paths reuse the same headless host and `SparkAgentSession` execution engine.
 
 It deliberately does **not** own managed task graphs, task claims, artifacts,
 reviews, asks, scheduler policy, or delegation topology. It owns only the
@@ -11,7 +11,6 @@ profiles.
 
 - `RoleSpec` — reusable coding role/persona definition.
 - `RoleRun` — one concrete anonymous or internal role execution using a role.
-- `Session` — persistent conversation continuity that can be called repeatedly and can exchange explicit durable messages.
 - `RoleSource` — storage/provenance scope: `builtin`, `extension`, `project`, or `user`.
 - `RoleOrigin` — optional metadata such as `manual`, `generated`, `builtin`, or `extension`.
   Generated roles are represented here rather than as a primary source.
@@ -52,13 +51,11 @@ this package.
 
 `@zendev-lab/spark-roles` registers one public/default action tool:
 
-- `role` with `list | get | create` manages role definitions by default; pass `resource: "session"` for persistent sessions.
+- `list | get | create` manage role definitions.
 - `role({ action: "call", role, instruction })` runs an anonymous role session.
-- `role({ action: "call", sessionId, instruction })` submits a turn to an existing persistent session.
-- `bind | unbind | archive | send | mailto | inbox | read | ack` manage persistent session bindings and messages.
 - `model_list | model_get | model_set | model_delete` manage role model settings.
 
-There is no separate public `session` tool. Role and session remain different data types behind the merged capability: roles are reusable definitions; sessions are execution continuity.
+Persistent lifecycle, classification, calls, and mail use the separate canonical `session` tool. The split is an agent-facing concept boundary, not a second execution backend.
 
 Historical fragmented implementation functions may remain internal dispatch targets behind `role`, but they are not active public/default tools.
 
@@ -77,11 +74,6 @@ interactive and orchestration tools such as `ask`, `task`, `task_read`,
 `task_write`, `goal`, `role`, `assign`, `workflow`, and `graft_patch`. Builtin roles report blockers, missing
 decisions, and unresolved ambiguities upward in their final response.
 
-`role({ action: "call" })` has two explicit targets:
-
-- `role` — launch a fresh anonymous role session; it is excluded from persistent session selectors.
-- `sessionId` — submit to an existing persistent session through daemon `turn.submit`.
-
-The targets are mutually exclusive. Internal task/reviewer/workflow role-run primitives may still use fresh/forked launch mechanics, but the public direct-call continuity path is `sessionId`.
+`role({ action: "call" })` accepts one reusable `role` target and launches a fresh anonymous session. Internal task/reviewer/workflow role-run primitives may still use fresh/forked mechanics; public persistent continuity uses `session({ action: "call", sessionId, instruction })`.
 
 `role({ action: "call" })` intentionally stays below managed task execution: it does not claim tasks, write task artifacts, or schedule workflow work. Host facades should route managed task execution through their task/workflow scheduler instead.

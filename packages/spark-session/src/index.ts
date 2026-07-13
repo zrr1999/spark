@@ -12,6 +12,16 @@ export {
 } from "./registry.ts";
 export { loadSparkSessionSnapshot, type LoadSparkSessionSnapshotInput } from "./snapshot.ts";
 export {
+  executePersistentSessionCall,
+  executeSparkSessionAction,
+  type ExecuteSparkSessionActionInput,
+  type SparkSessionAction,
+  type SparkSessionActionDeps,
+  type SparkSessionProjection,
+  type SparkSessionSurface,
+  type SparkSessionToolContext,
+} from "./action-tool.ts";
+export {
   SparkSessionMailStore,
   defaultSparkHome,
   sanitizeSessionMailScope,

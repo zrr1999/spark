@@ -202,11 +202,12 @@ Spark attribution rules, see
 
 | Surface                      | `spark-roles` / runtime concept                                                                 |
 | ---------------------------- | -------------------------------------------------------------------------------------------- |
-| `role({ action: "list|get|create" })` | Role-spec management by default; persistent sessions when `resource="session"` |
-| `role({ action: "call", role, instruction })` | Anonymous one-off role invocation; no persistent session continuity |
-| `role({ action: "call", sessionId, instruction })` | Daemon-backed turn submission to existing persistent continuity |
-| `role({ action: "bind|unbind|archive" })` | Persistent session lifecycle and channel binding management |
-| `role({ action: "send|mailto|inbox|read|ack" })` | Explicit durable session messages; send does not execute the target |
+| `role({ action: "list|get|create" })` | Reusable role-spec management |
+| `role({ action: "call", role, instruction })` | Anonymous one-off invocation through the shared headless session engine |
+| `session({ action: "list|get|create" })` | Persistent registry management with explicit `local | channel` surface classification |
+| `session({ action: "call", sessionId, instruction })` | Daemon-backed turn submission through the same headless session engine |
+| `session({ action: "bind|unbind|archive" })` | Persistent lifecycle and channel binding management |
+| `session({ action: "send|mailto|inbox|read|ack" })` | Explicit durable messages; send does not execute or wake the target |
 | Task executor binding        | `Task.roleRef` string resolved by `RoleRegistry` at the host/runtime boundary                 |
 | Task execution               | `spark-runtime` calls `runRole()` behind explicit `assign` scheduling                         |
 | Runtime claim                | `TaskClaim.kind = "role-run"`, `roleRef`, `runName`, `runRef` attribution                    |

@@ -624,15 +624,6 @@ importers:
       '@zendev-lab/spark-host':
         specifier: workspace:^
         version: link:../spark-host
-      '@zendev-lab/spark-protocol':
-        specifier: workspace:^
-        version: link:../spark-protocol
-      '@zendev-lab/spark-session':
-        specifier: workspace:^
-        version: link:../spark-session
-      '@zendev-lab/spark-system':
-        specifier: workspace:^
-        version: link:../spark-system
       '@zendev-lab/spark-tui':
         specifier: workspace:^
         version: link:../spark-tui
@@ -688,9 +679,18 @@ importers:
 
   packages/spark-session:
     dependencies:
+      '@zendev-lab/spark-extension-api':
+        specifier: workspace:^
+        version: link:../spark-extension-api
       '@zendev-lab/spark-protocol':
         specifier: workspace:^
         version: link:../spark-protocol
+      '@zendev-lab/spark-system':
+        specifier: workspace:^
+        version: link:../spark-system
+      typebox:
+        specifier: ^1.2.13
+        version: 1.2.13
     devDependencies:
       typescript:
         specifier: ^6.0.3

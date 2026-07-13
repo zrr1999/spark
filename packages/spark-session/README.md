@@ -2,14 +2,21 @@
 
 Daemon-owned persistent session registry and durable mailbox mechanism for Spark.
 
-Owns create / list / show / bind / unbind / archive, channel binding resolution,
-and local mailbox persistence. Transcript JSONL remains in the host session
-store. This package holds shared session metadata and message facts so Cockpit,
-channels, TUI, and the merged `role` capability share one `sessionId` namespace.
+Owns the canonical `session({ action })` tool, create/list/get/bind/unbind/archive,
+local-vs-channel classification, channel binding resolution, daemon-backed
+persistent calls, and local mailbox persistence. Transcript JSONL remains in the
+shared host session store.
 
-`@zendev-lab/spark-roles` exposes the public role/session tool. Keeping the
-registry and mailbox here preserves the data boundary: roles are reusable
-definitions; sessions are persistent execution continuity. Mailbox send does not
-execute or wake a target session; persistent execution is an explicit daemon turn.
+`session list` projects `surface: local | channel`, `channelAdapters`, and
+`externalKeys`, and supports surface/adapter/workspace/archive filters. Mailbox
+send does not execute or wake a target session; persistent execution is an explicit
+daemon turn. Anonymous `role call` and persistent `session call` expose different
+continuity semantics while reusing the same headless host and `SparkAgentSession`.
+
+Message-platform sessions are coordination-only: the host activates only the
+canonical `session` tool, which permits read/mail coordination actions only.
+Listing and targets are restricted to the current workspace, lifecycle and call
+actions are rejected, and execution requests must be forwarded with `session send`
+to a `surface=local` persistent session.
 
 See `docs/specs/assignment-and-channels.md`.

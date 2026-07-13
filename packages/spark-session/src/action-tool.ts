@@ -4,10 +4,11 @@ import {
   sessionMailStatus,
   type SparkSessionMailKind,
   type SparkSessionMailMessage,
-} from "@zendev-lab/spark-session";
+} from "./mail-store.ts";
 import {
   parseSparkSessionRegistryRecord,
   parseSparkSessionRegistryRecords,
+  type SparkChannelAdapter,
   type SparkSessionCreateRequest,
   type SparkSessionListRequest,
   type SparkSessionRegistryRecord,
@@ -16,11 +17,29 @@ import { requestSparkDaemonLocalRpc } from "@zendev-lab/spark-system/daemon-loca
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
+const CHANNEL_ALLOWED_ACTIONS: ReadonlySet<SparkSessionAction> = new Set([
+  "list",
+  "get",
+  "send",
+  "mailto",
+  "inbox",
+  "read",
+  "ack",
+]);
 
-export type RoleSessionAction =
+export type SparkSessionSurface = "local" | "channel";
+
+export type SparkSessionProjection = SparkSessionRegistryRecord & {
+  surface: SparkSessionSurface;
+  channelAdapters: SparkChannelAdapter[];
+  externalKeys: string[];
+};
+
+export type SparkSessionAction =
   | "list"
   | "get"
   | "create"
+  | "call"
   | "bind"
   | "unbind"
   | "archive"
@@ -30,87 +49,123 @@ export type RoleSessionAction =
   | "read"
   | "ack";
 
-export interface RoleSessionContext {
+export interface SparkSessionToolContext {
   cwd?: string;
   sessionId?: string;
   sparkStateRoot?: string;
+  sessionSurface?: "local" | "channel";
   sessionManager?: {
     getSessionFile?: () => string | undefined;
   };
 }
 
-export interface RoleSessionActionDeps {
+export interface SparkSessionActionDeps {
   request?: typeof requestSparkDaemonLocalRpc;
-  mailStore?: (ctx: RoleSessionContext) => SparkSessionMailStore;
+  mailStore?: (ctx: SparkSessionToolContext) => SparkSessionMailStore;
 }
 
-export interface ExecuteRoleSessionActionInput {
-  action: RoleSessionAction;
+export interface ExecuteSparkSessionActionInput {
+  action: SparkSessionAction;
   toolCallId: string;
   params: Record<string, unknown>;
   signal: AbortSignal;
-  ctx: RoleSessionContext;
+  ctx: SparkSessionToolContext;
 }
 
-export async function executeRoleSessionAction(
-  input: ExecuteRoleSessionActionInput,
-  deps: RoleSessionActionDeps = {},
+export async function executeSparkSessionAction(
+  input: ExecuteSparkSessionActionInput,
+  deps: SparkSessionActionDeps = {},
 ) {
   const { action, params, signal, ctx } = input;
   const request = deps.request ?? requestSparkDaemonLocalRpc;
+  assertChannelActionAllowed(action, ctx);
+  const channelWorkspaceId = await currentChannelWorkspaceId(ctx, request, signal);
 
   switch (action) {
     case "list": {
-      const requestParams = await listRequest(params, ctx, request, signal);
-      const sessions = parseSparkSessionRegistryRecords(
+      const requestParams = await listRequest(params, ctx, request, signal, channelWorkspaceId);
+      const records = parseSparkSessionRegistryRecords(
         await request<unknown>("session.list", requestParams, { signal }),
       );
+      const requestedSurface = normalizeSessionSurface(params.surface);
+      if (channelWorkspaceId && requestedSurface === "channel") {
+        throw new Error("message-platform sessions can list local sessions only");
+      }
+      const surface = channelWorkspaceId ? "local" : requestedSurface;
+      const adapter = normalizeChannelAdapter(params.adapter);
+      const sessions = records
+        .map(projectSession)
+        .filter(
+          (session) =>
+            !channelWorkspaceId ||
+            (session.scope.kind === "workspace" &&
+              session.scope.workspaceId === channelWorkspaceId),
+        )
+        .filter((session) => !surface || session.surface === surface)
+        .filter((session) => !adapter || session.channelAdapters.includes(adapter));
       const limit = normalizeLimit(params.limit);
-      const visible = sessions.slice(0, limit);
-      return sessionResult(renderSessionList(visible, sessions.length), {
+      const offset = normalizeOffset(params.offset);
+      const visible = sessions.slice(offset, offset + limit);
+      return sessionResult(renderSessionList(visible, sessions.length, offset), {
         action,
-        resource: "session",
         sessions: visible,
         total: sessions.length,
+        unfilteredTotal: records.length,
         limit,
+        offset,
+        surface: surface ?? "all",
+        adapter: adapter ?? null,
       });
     }
     case "get": {
       const sessionId = await targetSessionId(params.sessionId, ctx, "get");
-      const session = await requestSession(request, sessionId, signal);
-      return sessionResult(renderSession(session), { action, resource: "session", session });
+      const record = await requestSession(request, sessionId, signal);
+      if (channelWorkspaceId) {
+        assertChannelLocalTarget(record, channelWorkspaceId, "get");
+      }
+      const session = projectSession(record);
+      return sessionResult(renderSession(session), { action, session });
     }
     case "create": {
       const createRequest = await sessionCreateRequest(params, ctx, request, signal);
-      const session = parseSparkSessionRegistryRecord(
-        await request<unknown>("session.create", createRequest, { signal }),
+      const session = projectSession(
+        parseSparkSessionRegistryRecord(
+          await request<unknown>("session.create", createRequest, { signal }),
+        ),
       );
       return sessionResult(`Created persistent Spark session.\n${renderSession(session)}`, {
         action,
-        resource: "session",
         session,
       });
     }
+    case "call":
+      return await executePersistentSessionCall({ params, signal, ctx }, deps);
     case "bind":
     case "unbind": {
-      const sessionId = requiredString(params.sessionId, `role ${action} requires sessionId`);
-      const externalKey = requiredString(params.externalKey, `role ${action} requires externalKey`);
-      const session = parseSparkSessionRegistryRecord(
-        await request<unknown>(`session.${action}`, { sessionId, externalKey }, { signal }),
+      const sessionId = requiredString(params.sessionId, `session ${action} requires sessionId`);
+      const externalKey = requiredString(
+        params.externalKey,
+        `session ${action} requires externalKey`,
+      );
+      const session = projectSession(
+        parseSparkSessionRegistryRecord(
+          await request<unknown>(`session.${action}`, { sessionId, externalKey }, { signal }),
+        ),
       );
       return sessionResult(
         `${action === "bind" ? "Bound" : "Unbound"} persistent Spark session.\n${renderSession(session)}`,
-        { action, resource: "session", session, externalKey },
+        { action, session, externalKey },
       );
     }
     case "archive": {
-      const sessionId = requiredString(params.sessionId, "role archive requires sessionId");
-      const session = parseSparkSessionRegistryRecord(
-        await request<unknown>("session.archive", { sessionId }, { signal }),
+      const sessionId = requiredString(params.sessionId, "session archive requires sessionId");
+      const session = projectSession(
+        parseSparkSessionRegistryRecord(
+          await request<unknown>("session.archive", { sessionId }, { signal }),
+        ),
       );
       return sessionResult(`Archived persistent Spark session.\n${renderSession(session)}`, {
         action,
-        resource: "session",
         session,
       });
     }
@@ -131,21 +186,24 @@ export async function executeRoleSessionAction(
       const intent =
         optionalString(params.intent, "intent") ??
         (action === "mailto" ? "session.mail" : undefined);
-      if (!intent) throw new Error("role send requires intent");
+      if (!intent) throw new Error("session send requires intent");
       const rawPayload = normalizePayload(params.payload);
       const message = optionalString(params.message, "message");
       if (!message && Object.keys(rawPayload).length === 0)
-        throw new Error("role send requires message or a non-empty payload");
+        throw new Error("session send requires message or a non-empty payload");
       const payload =
         message && typeof rawPayload.text !== "string" && typeof rawPayload.body !== "string"
           ? { ...rawPayload, body: message }
           : rawPayload;
-      await requestSession(request, toSessionId, signal);
+      const targetSession = await requestSession(request, toSessionId, signal);
+      if (channelWorkspaceId) {
+        assertChannelLocalTarget(targetSession, channelWorkspaceId, action);
+      }
       const requestedCorrelationId = optionalString(params.correlationId, "correlationId");
       const correlationId = original?.correlationId ?? requestedCorrelationId;
       if (original && requestedCorrelationId && requestedCorrelationId !== original.correlationId) {
         throw new Error(
-          `role send correlationId must match the original request ${original.correlationId}`,
+          `session send correlationId must match the original request ${original.correlationId}`,
         );
       }
       const sent = await store.send({
@@ -173,7 +231,6 @@ export async function executeRoleSessionAction(
         {
           action: action === "mailto" ? "send" : action,
           compatibilityAction: action === "mailto" ? "mailto" : undefined,
-          resource: "session",
           message: withMailStatus(sent.message),
           filePath: sent.path,
           created: sent.created,
@@ -192,7 +249,6 @@ export async function executeRoleSessionAction(
       }));
       return sessionResult(renderInbox(sessionId, messages, allMessages.length), {
         action,
-        resource: "session",
         sessionId,
         messages,
         total: allMessages.length,
@@ -203,7 +259,7 @@ export async function executeRoleSessionAction(
     case "read":
     case "ack": {
       const sessionId = await currentInboxSessionId(params.sessionId, ctx, action);
-      const messageId = requiredString(params.messageId, `role ${action} requires messageId`);
+      const messageId = requiredString(params.messageId, `session ${action} requires messageId`);
       const store = mailStoreForContext(ctx, deps);
       const message =
         action === "read"
@@ -212,7 +268,6 @@ export async function executeRoleSessionAction(
       const result = withMailStatus(message);
       return sessionResult(renderMailMessage(action, result), {
         action,
-        resource: "session",
         sessionId,
         message: result,
       });
@@ -224,26 +279,32 @@ export async function executePersistentSessionCall(
   input: {
     params: Record<string, unknown>;
     signal: AbortSignal;
-    ctx: RoleSessionContext;
+    ctx: SparkSessionToolContext;
   },
-  deps: RoleSessionActionDeps = {},
+  deps: SparkSessionActionDeps = {},
 ) {
+  if (input.ctx.sessionSurface === "channel") {
+    throw new Error(
+      "message-platform sessions cannot call another session directly; forward the request with session action=send",
+    );
+  }
   const request = deps.request ?? requestSparkDaemonLocalRpc;
-  const sessionId = requiredString(input.params.sessionId, "role call requires sessionId or role");
-  const instruction = requiredString(input.params.instruction, "role call instruction is required");
-  if (optionalString(input.params.role, "role"))
-    throw new Error(
-      "role call accepts either role for an anonymous call or sessionId for a persistent call, not both",
-    );
-  if (input.params.launch !== undefined || input.params.forkFromSession !== undefined)
-    throw new Error("persistent role call does not accept launch or forkFromSession");
-  if (input.params.model !== undefined)
-    throw new Error(
-      "persistent role call uses the session model; change it through session model control",
-    );
-  for (const field of ["cwd", "timeoutMs", "includeUser", "sessionDir", "piCommand"]) {
-    if (input.params[field] !== undefined)
-      throw new Error(`persistent role call does not accept ${field}`);
+  const sessionId = requiredString(input.params.sessionId, "session call requires sessionId");
+  const instruction = requiredString(
+    input.params.instruction,
+    "session call instruction is required",
+  );
+  for (const field of [
+    "timeoutMs",
+    "cwd",
+    "model",
+    "role",
+    "launch",
+    "includeUser",
+    "sessionDir",
+    "piCommand",
+  ]) {
+    if (input.params[field] !== undefined) throw new Error(`session call does not accept ${field}`);
   }
   const reset = optionalBooleanValue(input.params.reset, "reset");
   const session = await requestSession(request, sessionId, input.signal);
@@ -264,8 +325,7 @@ export async function executePersistentSessionCall(
     `Queued persistent Spark session call: ${sessionId}${fileName ? ` (${fileName})` : ""}.`,
     {
       action: "call",
-      resource: "session",
-      session,
+      session: projectSession(session),
       sessionId,
       sessionPersistence: "persistent",
       submitted,
@@ -275,13 +335,24 @@ export async function executePersistentSessionCall(
 
 async function listRequest(
   params: Record<string, unknown>,
-  ctx: RoleSessionContext,
+  ctx: SparkSessionToolContext,
   request: typeof requestSparkDaemonLocalRpc,
   signal: AbortSignal,
+  channelWorkspaceId?: string,
 ): Promise<SparkSessionListRequest> {
   const includeArchived = optionalBoolean(params.includeArchived, false, "includeArchived");
   const workspaceId = optionalString(params.workspaceId, "workspaceId");
   const scope = optionalScope(params.scope);
+  if (channelWorkspaceId) {
+    if (scope === "daemon" || (workspaceId && workspaceId !== channelWorkspaceId)) {
+      throw new Error("message-platform sessions can list sessions in their own workspace only");
+    }
+    return {
+      scope: { kind: "workspace", workspaceId: channelWorkspaceId },
+      workspaceId: channelWorkspaceId,
+      includeArchived,
+    };
+  }
   if (scope === "daemon") return { scope: { kind: "daemon" }, includeArchived };
   if (workspaceId)
     return {
@@ -302,7 +373,7 @@ async function listRequest(
 
 async function sessionCreateRequest(
   params: Record<string, unknown>,
-  ctx: RoleSessionContext,
+  ctx: SparkSessionToolContext,
   request: typeof requestSparkDaemonLocalRpc,
   signal: AbortSignal,
 ): Promise<SparkSessionCreateRequest> {
@@ -329,11 +400,11 @@ async function sessionCreateRequest(
 }
 
 async function currentWorkspaceId(
-  ctx: RoleSessionContext,
+  ctx: SparkSessionToolContext,
   request: typeof requestSparkDaemonLocalRpc,
   signal: AbortSignal,
 ): Promise<string> {
-  const cwd = requiredString(ctx.cwd, "role session action requires ctx.cwd");
+  const cwd = requiredString(ctx.cwd, "session action requires ctx.cwd");
   const result = await request<unknown>("workspace.ensure-local", { localPath: cwd }, { signal });
   if (!isRecord(result) || typeof result.id !== "string" || !result.id.trim())
     throw new Error("Spark daemon returned an invalid workspace.ensure-local result");
@@ -350,9 +421,49 @@ async function requestSession(
   );
 }
 
+function assertChannelActionAllowed(
+  action: SparkSessionAction,
+  ctx: SparkSessionToolContext,
+): void {
+  if (ctx.sessionSurface !== "channel" || CHANNEL_ALLOWED_ACTIONS.has(action)) return;
+  throw new Error(
+    `message-platform sessions cannot use session action=${action}; forward work with session action=send`,
+  );
+}
+
+async function currentChannelWorkspaceId(
+  ctx: SparkSessionToolContext,
+  request: typeof requestSparkDaemonLocalRpc,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  if (ctx.sessionSurface !== "channel") return undefined;
+  const sessionId = await requireCurrentSessionId(ctx, "workspace scope");
+  const current = await requestSession(request, sessionId, signal);
+  if (current.scope.kind !== "workspace") {
+    throw new Error("message-platform sessions require a workspace-scoped current session");
+  }
+  return current.scope.workspaceId;
+}
+
+function assertChannelLocalTarget(
+  target: SparkSessionRegistryRecord,
+  workspaceId: string,
+  action: "get" | "send" | "mailto",
+): void {
+  if (
+    target.scope.kind !== "workspace" ||
+    target.scope.workspaceId !== workspaceId ||
+    projectSession(target).surface !== "local"
+  ) {
+    throw new Error(
+      `message-platform session ${action} targets must be local sessions in the current workspace`,
+    );
+  }
+}
+
 function mailStoreForContext(
-  ctx: RoleSessionContext,
-  deps: RoleSessionActionDeps,
+  ctx: SparkSessionToolContext,
+  deps: SparkSessionActionDeps,
 ): SparkSessionMailStore {
   return (
     deps.mailStore?.(ctx) ??
@@ -362,36 +473,40 @@ function mailStoreForContext(
 
 async function targetSessionId(
   value: unknown,
-  ctx: RoleSessionContext,
+  ctx: SparkSessionToolContext,
   action: "get",
 ): Promise<string> {
   const target = optionalString(value, "sessionId") ?? (await currentSessionId(ctx));
-  if (!target) throw new Error(`role ${action} requires sessionId when no current session exists`);
+  if (!target)
+    throw new Error(`session ${action} requires sessionId when no current session exists`);
   return target;
 }
 
 async function currentInboxSessionId(
   value: unknown,
-  ctx: RoleSessionContext,
+  ctx: SparkSessionToolContext,
   action: "inbox" | "read" | "ack",
 ): Promise<string> {
   const current = await requireCurrentSessionId(ctx, action);
   const requested = optionalString(value, "sessionId");
   if (requested && requested !== current) {
     throw new Error(
-      `role ${action} only supports the current session inbox (${current}); another session's inbox is private`,
+      `session ${action} only supports the current session inbox (${current}); another session's inbox is private`,
     );
   }
   return current;
 }
 
-async function requireCurrentSessionId(ctx: RoleSessionContext, action: string): Promise<string> {
+async function requireCurrentSessionId(
+  ctx: SparkSessionToolContext,
+  action: string,
+): Promise<string> {
   const current = await currentSessionId(ctx);
-  if (!current) throw new Error(`role ${action} requires a current persistent session`);
+  if (!current) throw new Error(`session ${action} requires a current persistent session`);
   return current;
 }
 
-async function currentSessionId(ctx: RoleSessionContext): Promise<string | undefined> {
+async function currentSessionId(ctx: SparkSessionToolContext): Promise<string | undefined> {
   const direct = ctx.sessionId?.trim();
   if (direct) return direct;
   const path = ctx.sessionManager?.getSessionFile?.()?.trim();
@@ -423,14 +538,14 @@ function resolveSendTarget(input: {
   const causalTarget = input.original?.fromSessionId;
   if (causalTarget && input.requestedTarget && input.requestedTarget !== causalTarget) {
     throw new Error(
-      `role send target ${input.requestedTarget} does not match original sender ${causalTarget}`,
+      `session send target ${input.requestedTarget} does not match original sender ${causalTarget}`,
     );
   }
   const target = causalTarget ?? input.requestedTarget;
   if (!target)
-    throw new Error("role send requires toSessionId unless replyToMessageId is provided");
+    throw new Error("session send requires toSessionId unless replyToMessageId is provided");
   if (target === input.currentSessionId)
-    throw new Error("role send must target a different session");
+    throw new Error("session send must target a different session");
   return target;
 }
 
@@ -440,7 +555,7 @@ function validateCausalSend(input: {
   original?: SparkSessionMailMessage;
 }): void {
   if (!input.original) {
-    if (input.kind === "reply") throw new Error("role reply requires replyToMessageId");
+    if (input.kind === "reply") throw new Error("session reply requires replyToMessageId");
     return;
   }
   if (input.original.toSessionId !== input.currentSessionId) {
@@ -464,12 +579,12 @@ function normalizeMailKind(
     return action === "mailto" ? "inform" : "request";
   }
   if (value === "request" || value === "inform" || value === "reply") return value;
-  throw new Error("role kind must be request, inform, or reply");
+  throw new Error("session kind must be request, inform, or reply");
 }
 
 function normalizePayload(value: unknown): Record<string, unknown> {
   if (value === undefined || value === null) return {};
-  if (!isRecord(value)) throw new Error("role payload must be a JSON object");
+  if (!isRecord(value)) throw new Error("session payload must be a JSON object");
   try {
     const serialized = JSON.stringify(value);
     if (serialized === undefined) throw new Error("payload is not JSON-serializable");
@@ -478,7 +593,7 @@ function normalizePayload(value: unknown): Record<string, unknown> {
     return parsed;
   } catch (error) {
     throw new Error(
-      `role payload must be JSON-serializable: ${error instanceof Error ? error.message : String(error)}`,
+      `session payload must be JSON-serializable: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }
@@ -504,18 +619,38 @@ function sessionSendIdempotencyKey(input: {
   ])}`;
 }
 
+function normalizeSessionSurface(value: unknown): SparkSessionSurface | undefined {
+  if (value === undefined || value === null || value === "" || value === "all") return undefined;
+  if (value === "local" || value === "channel") return value;
+  throw new Error("session surface must be all, local, or channel");
+}
+
+function normalizeChannelAdapter(value: unknown): SparkChannelAdapter | undefined {
+  if (value === undefined || value === null || value === "" || value === "all") return undefined;
+  if (value === "feishu" || value === "infoflow" || value === "qqbot") return value;
+  throw new Error("session adapter must be all, feishu, infoflow, or qqbot");
+}
+
 function optionalScope(value: unknown): "workspace" | "daemon" | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   if (value === "workspace" || value === "daemon") return value;
-  throw new Error("role session scope must be workspace or daemon");
+  throw new Error("session scope must be workspace or daemon");
+}
+
+function normalizeOffset(value: unknown): number {
+  if (value === undefined || value === null) return 0;
+  if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value))
+    throw new Error("session offset must be a finite integer");
+  if (value < 0) throw new Error("session offset must be non-negative");
+  return value;
 }
 
 function normalizeLimit(value: unknown): number {
   if (value === undefined || value === null) return DEFAULT_LIMIT;
   if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value))
-    throw new Error("role session limit must be a finite integer");
+    throw new Error("session limit must be a finite integer");
   if (value < 1 || value > MAX_LIMIT)
-    throw new Error(`role session limit must be between 1 and ${MAX_LIMIT}`);
+    throw new Error(`session limit must be between 1 and ${MAX_LIMIT}`);
   return value;
 }
 
@@ -525,13 +660,13 @@ function optionalBoolean(value: unknown, fallback: boolean, field: string): bool
 
 function optionalBooleanValue(value: unknown, field: string): boolean | undefined {
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== "boolean") throw new Error(`role ${field} must be a boolean`);
+  if (typeof value !== "boolean") throw new Error(`session ${field} must be a boolean`);
   return value;
 }
 
 function optionalString(value: unknown, field: string): string | undefined {
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== "string") throw new Error(`role ${field} must be a string`);
+  if (typeof value !== "string") throw new Error(`session ${field} must be a string`);
   return value.trim() || undefined;
 }
 
@@ -541,21 +676,36 @@ function requiredString(value: unknown, message: string): string {
   return result;
 }
 
-function renderSessionList(sessions: SparkSessionRegistryRecord[], total: number): string {
+function projectSession(session: SparkSessionRegistryRecord): SparkSessionProjection {
+  const channelAdapters = Array.from(new Set(session.bindings.map((binding) => binding.adapter)));
+  return {
+    ...session,
+    surface: channelAdapters.length > 0 ? "channel" : "local",
+    channelAdapters,
+    externalKeys: session.bindings.map((binding) => binding.externalKey),
+  };
+}
+
+function renderSessionList(
+  sessions: SparkSessionProjection[],
+  total: number,
+  offset: number,
+): string {
   if (sessions.length === 0) return "No persistent Spark sessions found.";
-  const suffix = total > sessions.length ? `\n… ${total - sessions.length} more session(s)` : "";
-  return `Persistent Spark sessions (${sessions.length}/${total}):\n${sessions
+  const end = offset + sessions.length;
+  const suffix = total > end ? `\n… ${total - end} more session(s)` : "";
+  return `Persistent Spark sessions (${offset + 1}-${end}/${total}):\n${sessions
     .map(renderSession)
     .join("\n")}${suffix}`;
 }
 
-function renderSession(session: SparkSessionRegistryRecord): string {
+function renderSession(session: SparkSessionProjection): string {
   const scope =
     session.scope.kind === "workspace"
       ? `workspace:${session.scope.workspaceId}`
       : `daemon:${session.scope.daemonId}`;
-  const bindings = session.bindings.map((binding) => binding.externalKey).join(", ") || "none";
-  return `${session.sessionId} ${session.status} scope=${scope} bindings=${bindings}${
+  const channels = session.channelAdapters.join(",") || "none";
+  return `${session.sessionId} ${session.status} surface=${session.surface} channels=${channels} scope=${scope}${
     session.title ? ` title=${JSON.stringify(session.title)}` : ""
   }`;
 }

@@ -105,7 +105,8 @@ Spark package names are type-first:
 - `@zendev-lab/spark-recall` — controlled explicit-scope recall candidate store/tool, separate from `.learnings/` and automatic memory.
 - `@zendev-lab/spark-cue` — reusable Pi/cue-shell execution substrate.
 - `@zendev-lab/spark-ask` — canonical public/default `ask` action tool with shared focused/flow protocol, state, renderer, and direct custom input handling behind that surface.
-- `@zendev-lab/spark-roles` — canonical merged `role`/session action tool plus reusable `RoleSpec` definitions, builtin/extension/project/user role discovery, project/user Markdown stores, role model settings, anonymous direct role calls, and adapters for daemon-owned persistent session lifecycle/calls/mail. Roles remain definitions and sessions remain execution continuity; `@zendev-lab/spark-session` owns the registry/mailbox mechanisms. Internal role-run primitives retain fresh/forked launch, timeout/cancel, stdout/stderr capture, model-setting resolution, and tolerant JSONL parsing; Spark task DAGs, asks, artifacts, and review gates remain outside this package.
+- `@zendev-lab/spark-roles` — canonical `role` action tool plus reusable `RoleSpec` definitions, builtin/extension/project/user role discovery, role model settings, and anonymous direct role calls. Internal role-run primitives retain fresh/forked launch, timeout/cancel, stdout/stderr capture, model-setting resolution, and tolerant JSONL parsing.
+- `@zendev-lab/spark-session` — canonical `session` action tool plus daemon-owned persistent registry, channel classification/bindings, explicit persistent calls, and durable NNP-inspired peer mail. Role and session expose separate concepts while sharing the same headless host and `SparkAgentSession` execution engine.
 
 Spark Cockpit is the local web cockpit/projection product line while retaining separate implementation package boundaries:
 

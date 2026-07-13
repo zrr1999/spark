@@ -329,6 +329,8 @@ export interface ExtensionContext {
   sessionId?: string;
   /** Optional absolute path to the Spark state root directory (`.../.spark`). */
   sparkStateRoot?: string;
+  /** Execution surface policy supplied by the host for this session. */
+  sessionSurface?: "local" | "channel";
   model?: SessionModelRef;
   hasUI?: boolean;
   ui?: ExtensionUi;

@@ -67,7 +67,9 @@ Package naming now follows [`capabilities-ui.md`](../architecture/capabilities-u
 - `spark-roles`
   - reusable `RoleSpec` definitions with `builtin | extension | project | user` sources
   - builtin roles (`scout`, `reviewer`, `worker`) as generic role specs with audited capability profiles: scout=`read+net`, reviewer=`read+net+exec`, worker=`read+net+exec+write`; no builtin role receives `interact`, `spawn`, `ask`, `task`, `task_read`, `task_write`, `goal`, `role`, `assign`, `workflow`, or `graft_patch`
-  - extension role registration, project/user Markdown role stores, canonical public/default `role` action tool merged with persistent session management, anonymous direct role calls, daemon-backed persistent session calls, NNP-inspired durable session mail, internal fresh/forked run mechanics, JSONL parsing, active-run listing/cancellation/input delivery, and timeout signalling
+  - extension role registration, project/user Markdown role stores, canonical `role` tool for definitions/model settings/anonymous calls, internal fresh/forked run mechanics, JSONL parsing, active-run listing/cancellation/input delivery, and timeout signalling
+- `spark-session`
+  - canonical `session` tool for persistent lifecycle, local/channel classification, daemon-backed calls, and NNP-inspired durable mail; message-platform hosts expose only this tool, restrict it to read/mail coordination actions in the current workspace, and must forward execution work with `session send` to local sessions
 - `spark-runtime`
   - Spark single-task adapter over `spark-roles`
   - dry-run and real task execution, runtime-created role-run claims, heartbeat loop, artifact persistence, timeout/reconciliation tracking, Spark projection of `spark-roles` active-run controls, failed-delivery reporting, and role-run transcript compaction support
@@ -110,7 +112,7 @@ Package naming now follows [`capabilities-ui.md`](../architecture/capabilities-u
 - `artifact({ action })` owns evidence/artifact records.
 - `learning({ action })` owns evidence-backed reusable learnings.
 - `ask({ action })` owns user-question UX and result semantics.
-- `context({ action })`, `recall`, `workflow({ action })`, `role({ action })`, `spark-cue`, and `spark-graft` tools remain canonical generic surfaces; patcher-style child runs belong to explicit extension roles, not the Spark facade.
+- `context({ action })`, `recall`, `workflow({ action })`, `role({ action })`, `session({ action })`, `spark-cue`, and `spark-graft` tools remain canonical generic surfaces; patcher-style child runs belong to explicit extension roles, not the Spark facade.
 - Public/default action tools render as `tool action=<value> ...`; do not keep fragmented duplicate surfaces public when a canonical action tool owns the domain.
 
 ## Deferred by design

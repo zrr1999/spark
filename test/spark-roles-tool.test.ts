@@ -119,6 +119,26 @@ void test("role action tool dispatches canonical list, get, and create actions",
       dir,
     );
     assert.match(got.content[0]?.text ?? "", /source: project/);
+
+    assert.throws(
+      () => executeRoleTool(tools, "role", { action: "send", toSessionId: "session:b" }, dir),
+      /role\.action must be list, get, create, call/u,
+    );
+    await assert.rejects(
+      () =>
+        executeRoleTool(
+          tools,
+          "role",
+          {
+            action: "call",
+            role: "worker",
+            sessionId: "session:persistent",
+            instruction: "Do not accept persistent session targets here.",
+          },
+          dir,
+        ),
+      /role does not manage persistent sessions/u,
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -446,7 +466,7 @@ void test("call_role exposes empty delivery when JSON events have no final assis
   }
 });
 
-void test("call_role directs continuity requests to persistent sessionId calls", async () => {
+void test("call_role directs persistent continuity to the session tool", async () => {
   const tools = registerRoleToolsForTest();
   await assert.rejects(
     executeCallRole(tools, {
@@ -454,7 +474,7 @@ void test("call_role directs continuity requests to persistent sessionId calls",
       instruction: "Review with context.",
       launch: "forked",
     }),
-    /forked launch was replaced by persistent session calls; pass sessionId instead/,
+    /forked launch is not public; use the session tool for continuity/,
   );
 });
 
@@ -674,7 +694,7 @@ void test("spark-roles tools reject invalid explicit parameters instead of using
       instruction: "Run with a persistent-only reset option.",
       reset: true,
     }),
-    /call_role reset is only supported for persistent sessionId calls/,
+    /call_role reset is not supported; use session action=call/,
   );
   await assert.rejects(
     executeCallRole(tools, {
@@ -683,7 +703,7 @@ void test("spark-roles tools reject invalid explicit parameters instead of using
       launch: "forked",
       forkFromSession: 42,
     }),
-    /call_role forked launch was replaced by persistent session calls|call_role forkFromSession was replaced by persistent session calls/,
+    /call_role forked launch is not public|call_role forkFromSession is not public/,
   );
 });
 

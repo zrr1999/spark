@@ -103,7 +103,8 @@ Rules:
 2. Channel inbound only uses session resolve/bind; adapters never keep a private
    session table.
 3. TUI attach/resume consumes the same `sessionId`.
-4. Session mail remains explicit session↔session peer mail behind `role({ action: "send" })`; it does not replace bind and does not execute the target session.
+4. Session mail remains explicit session↔session peer mail behind `session({ action: "send" })`; it does not replace bind and does not execute the target session.
+5. Message-platform sessions are classified as `surface=channel`. Their host activates only the canonical `session` tool; that tool allows read/mail coordination actions only, forces listing and targets into the current workspace, rejects lifecycle/call actions, and permits execution delegation only by sending mail to a `surface=local` session.
 
 ## Assignment intent
 

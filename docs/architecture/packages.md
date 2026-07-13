@@ -48,7 +48,7 @@ spark-learnings       # evidence-backed learning records, reflection pipeline, a
 spark-memory          # unified explicit memory store/search/policy layer
 spark-web             # native web_search/fetch_content/get_search_content capability
 spark-recall          # explicit lightweight recall candidates
-spark-roles           # merged public role/session tool, reusable role specs, anonymous role-run helpers
+spark-roles           # public role tool, reusable role specs, anonymous role-run helpers
 pi-btw                # Pi-specific side-conversation workflow, excluded from this rename wave
 
 spark-ai              # model-routing contracts, provider registry compatibility, pi-ai bridge
@@ -112,7 +112,7 @@ Allowed high-level usage:
 - `apps/spark-daemon` is execution truth and local arbitration. Local RPC, runtime
   WebSocket/server uplink, queues, locks, dispatch policy, and headless `session.run`
   enter the daemon dispatcher; transports must not bypass it.
-- `RoleSpec` objects are definition-layer objects; managed sessions are persistent execution continuity. Internal role-run launch mode remains `fresh | forked`, while the public direct-call surface chooses anonymous continuity with `role` or persistent continuity with `sessionId`. Do not expose legacy `managed` as a runtime-facing mode or primary source.
+- `RoleSpec` objects are definition-layer objects; managed sessions are persistent execution continuity. Internal role-run launch mode remains `fresh | forked`; the public `role` tool exposes anonymous calls and the public `session` tool exposes persistent calls. Both enter the same headless host and `SparkAgentSession` engine. Do not expose legacy `managed` as a runtime-facing mode or primary source.
 
 Forbidden dependencies:
 
@@ -140,7 +140,7 @@ are compatibility adapters; shared implementation belongs in `packages/spark-tur
 - Evidence is `artifact({ action: ... })`.
 - Reusable learnings are `learning({ action: ... })`.
 - User decisions are `ask({ action: "ask" | "flow" })`.
-- Role definitions, anonymous role calls, persistent session calls/lifecycle, and session mail share the canonical `role({ action: ... })` surface; no separate public `session` tool exists.
+- Role definitions and anonymous calls use `role({ action: ... })`; persistent lifecycle, classification, calls, and mail use `session({ action: ... })`. These are separate agent surfaces over shared host/session execution mechanisms, not separate backends.
 - Saved workflow discovery is `workflow({ action: ... })`; Spark commands decide when/how
   to execute workflow policy.
 - Execution shell integration is `spark-cue`.
