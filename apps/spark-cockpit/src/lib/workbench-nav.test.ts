@@ -3,6 +3,7 @@ import {
   buildWorkbenchNavItems,
   currentWorkbenchPageLabel,
   isWorkbenchNavItemActive,
+  settingsHubHref,
   workspaceSwitcherHref,
   type WorkbenchNavLabels,
   type WorkbenchPageLabels,
@@ -105,5 +106,13 @@ describe("workbench nav", () => {
         workspacePath,
       }),
     ).toBe("/other/inbox");
+  });
+
+  it("builds one settings hub link while preserving the active workspace context", () => {
+    expect(settingsHubHref("local")).toBe("/settings?workspace=local");
+    expect(settingsHubHref("workspace with spaces")).toBe(
+      "/settings?workspace=workspace+with+spaces",
+    );
+    expect(settingsHubHref(null)).toBe("/settings");
   });
 });

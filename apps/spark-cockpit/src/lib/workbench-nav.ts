@@ -92,6 +92,14 @@ export function isWorkspaceScopedPath(pathname: string, activeWorkspacePath: str
   );
 }
 
+export function settingsHubHref(activeWorkspaceSlug?: string | null): string {
+  const workspace = activeWorkspaceSlug?.trim();
+  if (!workspace) return "/settings";
+
+  const search = new URLSearchParams({ workspace });
+  return `/settings?${search.toString()}`;
+}
+
 export function workspaceSwitcherHref(input: {
   pathname: string;
   origin: string;

@@ -11,6 +11,7 @@
     currentWorkbenchPageLabel,
     isWorkbenchNavItemActive,
     isWorkspaceScopedPath,
+    settingsHubHref,
     workspaceSwitcherHref as buildWorkspaceSwitcherHref,
   } from "$lib/workbench-nav";
   import { workspaceAvatarStyle, workspaceInitial } from "$lib/workspace-avatar";
@@ -66,6 +67,7 @@
   let activeWorkspaceLabel = $derived(
     data.activeWorkspace?.name ?? t.user.workspaceSection,
   );
+  let settingsHref = $derived(settingsHubHref(data.activeWorkspace?.slug));
   let selectedSessionId = $derived(sessionIdFromPath(page.url.pathname));
   let sidebarSessions = $derived((data.sessions ?? []) as SessionSearchRecord[]);
   let searchResults = $derived(
@@ -361,20 +363,10 @@
               <span>{item.label}</span>
             </a>
           {/each}
-          <a class="nav-link" class:active={page.url.pathname.startsWith("/settings")} href="/settings">
+          <a class="nav-link" href={settingsHref}>
             <Icon name="settings" size={18} stroke={2.2} />
-            <span>{t.user.globalSettings}</span>
+            <span>{t.user.settings}</span>
           </a>
-          {#if data.activeWorkspace}
-            <a
-              class="nav-link"
-              class:active={page.url.pathname.startsWith(`${activeWorkspacePath}/settings`)}
-              href={`${activeWorkspacePath}/settings`}
-            >
-              <Icon name="folder" size={18} stroke={2.2} />
-              <span>{t.user.workspaceSettings}</span>
-            </a>
-          {/if}
         </nav>
 
         <div
@@ -657,7 +649,7 @@
     font-size: 13px;
     font-weight: 500;
     gap: 10px;
-    min-height: 34px;
+    min-height: 40px;
     padding: 0 10px;
     position: relative;
     text-decoration: none;

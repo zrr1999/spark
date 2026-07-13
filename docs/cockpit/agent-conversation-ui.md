@@ -432,10 +432,11 @@ Rejected. Use a focused virtualization library and reviewed accessible primitive
 
 P0 deliberately keeps the existing text timeline and scoped token CSS. It does not need AI SDK, a new provider runtime, Tailwind, or a virtual viewport dependency.
 
-The implemented scope slice also keeps the primary navigation, settings links,
-and workspace switcher in one bottom sidebar region. This is shell composition
-only; it does not move settings or workspace ownership into the conversation
-component.
+The implemented scope slice also keeps the primary navigation, one settings-hub
+entry, and the workspace switcher in one bottom sidebar region. The hub preserves
+the active workspace context while its Console navigation keeps global and
+workspace settings as separate ownership scopes. This is shell composition only;
+it does not move settings or workspace ownership into the conversation component.
 
 ### P1: requires daemon/protocol support
 

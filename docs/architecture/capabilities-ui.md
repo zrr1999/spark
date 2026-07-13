@@ -190,8 +190,7 @@ Spark Cockpit splits **Workbench** (daily assignment/ops) from **Console**
 | Secondary nav | Overview | `/<workspace>` |
 | Secondary nav | Inbox | `/<workspace>/inbox` |
 | Secondary nav | Artifacts | `/<workspace>/artifacts` |
-| Settings buttons | Global settings | `/settings` |
-| Settings buttons | Workspace settings | `/<workspace>/settings` |
+| Settings entry | Settings hub (global + active workspace) | `/settings?workspace=<workspace>` |
 | Account control | Switch / create workspace | popover only |
 
 ### Console navigation
@@ -199,8 +198,9 @@ Spark Cockpit splits **Workbench** (daily assignment/ops) from **Console**
 | Group | Entries | Route |
 | --- | --- | --- |
 | Global | Global settings | `/settings` |
-| Global | Channels | `/settings/channels` |
+| Global | Models and providers | `/settings/models` |
 | Workspace | Workspace settings | `/<workspace>/settings` |
+| Workspace | Channels | `/<workspace>/settings/channels` |
 | Workspace | Registration | `/<workspace>/settings/registration` |
 | Setup | Create workspace | `/workspaces/new` |
 
