@@ -1,6 +1,6 @@
 # Spark Cockpit agent conversation UI
 
-Status: active; Phase 1 source-derived conversation shell implemented, structured parts in progress
+Status: active; Phase 1 shell and source-derived model selector implemented, structured parts in progress
 
 Last reviewed: 2026-07-13
 
@@ -214,7 +214,7 @@ The live Sessions UI is already one workbench composition and should be split al
 | Workbench navigation and conversation rail | `(workbench)/+layout.svelte` + `WorkbenchSessionRail.svelte` | Keep route/session selection and global search in the outer shell |
 | Session header and effective status/model context | `SessionsWorkspace.svelte` | Extract a presentational header after model read-back is canonical |
 | Conversation viewport | `components/conversation/ConversationViewport.svelte` + `session-timeline.ts` | Projection remains in TypeScript; the component owns scroll position and bounded announcements only |
-| Prompt composer and model selector | `components/conversation/Composer.svelte` inside the Sessions form | Presentation is extracted while SvelteKit form actions and daemon turn submission remain authoritative |
+| Prompt composer and model selector | `components/conversation/Composer.svelte` + `components/model-selector/ModelPicker.svelte` inside the Sessions form | Presentation is extracted while SvelteKit form actions and daemon turn submission remain authoritative |
 | Run/session details | Desktop aside and mobile disclosure in `SessionsWorkspace.svelte` | Share one details component between responsive placements |
 
 The intended desktop shell remains conversation rail, central conversation, and right-side details. On narrow screens the rail is owned by the existing workbench drawer and details remain a disclosure. The viewport library and vendored message primitives fit inside the central surface; they do not introduce another router, sidebar, or chat store.
@@ -237,6 +237,11 @@ apps/spark-cockpit/src/lib/components/conversation/
   Composer.svelte
   conversation-view.ts
   types.ts
+  VENDOR.md
+  UPSTREAM-LICENSE.txt
+
+apps/spark-cockpit/src/lib/components/model-selector/
+  ModelPicker.svelte
   VENDOR.md
   UPSTREAM-LICENSE.txt
 ```
@@ -265,6 +270,7 @@ Keep this in a small `VENDOR.md` beside the components. Upstream updates are rev
 | Sources | Svelte AI Elements Sources | Vendor with safe URL handling and provenance fields |
 | Task/run | Svelte AI Elements Task | Vendor visuals; bind to Spark task/run refs and statuses |
 | Approval/confirmation | Svelte AI Elements Confirmation | Bind actions to Spark ask/review/approval commands |
+| Model selection | Svelte AI Elements Model Selector | Source-derived searchable dialog; adapt Spark provider groups and use Bits UI only for accessible Dialog/Command behavior |
 | Prompt composer | Sessions form in `SessionsWorkspace.svelte` plus selected Prompt Input ideas | Extract and evolve locally; do not import `FileUIPart` or provider transport |
 | Markdown/MDX | Existing `SafeMarkdown` / `AgentMdxStream` | Retain current security boundary initially |
 | Generative UI | Existing `SparkUiRenderer` and `spark.ui.v1` | Keep separate and embed as an artifact/generative part |
@@ -430,7 +436,9 @@ Rejected. Use a focused virtualization library and reviewed accessible primitive
 - Display and read back the effective session model from the daemon after a switch.
 - Add deterministic tests for repeated equal messages, snapshot/event reconciliation, form submission, reload, and responsive shell behavior.
 
-P0 deliberately keeps the existing text timeline and scoped token CSS. It does not need AI SDK, a new provider runtime, Tailwind, or a virtual viewport dependency.
+P0 deliberately keeps the existing text timeline and scoped token CSS. The model selector uses the
+small Bits UI Dialog/Command boundary for focus, keyboard, and accessibility behavior; it does not add
+AI SDK, a new provider runtime, Tailwind, or a virtual viewport dependency.
 
 The implemented scope slice also keeps the primary navigation, one settings-hub
 entry, and the workspace switcher in one bottom sidebar region. The hub preserves

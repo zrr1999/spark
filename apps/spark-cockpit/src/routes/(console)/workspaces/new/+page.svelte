@@ -3,7 +3,7 @@
   import { invalidateAll } from "$app/navigation";
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime } from "$lib/i18n";
-  import PageHeader from "$lib/ui/PageHeader.svelte";
+  import { Button, Field, Input, PageHeader } from "$lib/ui";
   import { slugifyWorkspaceIdentifier } from "$lib/slugify";
   import type { SubmitFunction } from "@sveltejs/kit";
 
@@ -369,9 +369,9 @@
 
                   <div class="profile-fields">
                     {#if selectedProfileSource === "git"}
-                      <label>
-                        <span>{t.emptyWorkspace.form.profileUrl}</span>
-                        <input
+                      <Field id="workspace-profile-url" label={t.emptyWorkspace.form.profileUrl} required>
+                        <Input
+                          id="workspace-profile-url"
                           name="profileUrl"
                           placeholder={t.emptyWorkspace.form
                             .profileUrlPlaceholder}
@@ -379,49 +379,48 @@
                           value={registrationProfile.profileUrl}
                           required
                         />
-                      </label>
+                      </Field>
                     {:else}
                       <input type="hidden" name="profileUrl" value="" />
                     {/if}
 
                     <div class="field-pair">
-                      <label>
-                        <span>{t.emptyWorkspace.form.name}</span>
-                        <input
+                      <Field id="workspace-name" label={t.emptyWorkspace.form.name} required>
+                        <Input
+                          id="workspace-name"
                           name="name"
                           placeholder={t.emptyWorkspace.form.namePlaceholder}
                           value={currentWorkspaceName}
                           oninput={handleWorkspaceNameInput}
                           required
                         />
-                      </label>
+                      </Field>
 
-                      <label>
-                        <span>{t.emptyWorkspace.form.slug}</span>
-                        <small>{t.emptyWorkspace.form.slugHint}</small>
-                        <input
+                      <Field id="workspace-slug" label={t.emptyWorkspace.form.slug} hint={t.emptyWorkspace.form.slugHint}>
+                        <Input
+                          id="workspace-slug"
                           name="slug"
                           placeholder={t.emptyWorkspace.form.slugPlaceholder}
                           value={currentWorkspaceSlug}
                           oninput={handleWorkspaceSlugInput}
                         />
-                      </label>
+                      </Field>
                     </div>
 
                     <div class="profile-submit-row">
-                      <label>
-                        <span>{t.emptyWorkspace.form.description}</span>
-                        <input
+                      <Field id="workspace-description" label={t.emptyWorkspace.form.description}>
+                        <Input
+                          id="workspace-description"
                           name="description"
                           placeholder={t.emptyWorkspace.form
                             .descriptionPlaceholder}
                           value={registrationProfile.description ?? ""}
                         />
-                      </label>
-                      <button class="primary-action" type="submit">
+                      </Field>
+                      <Button type="submit">
                         <Icon name="check" size={16} stroke={2.4} />
                         <span>{t.emptyWorkspace.stepActions.createToken}</span>
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 </div>
@@ -442,25 +441,27 @@
                   </div>
                   <div class="command-row">
                     <pre>{currentCommand.enrollCommand}</pre>
-                    <button
-                      class="secondary-action copy-action"
-                      type="button"
-                      title={copyButtonTitle()}
-                      onclick={() => copyCommand(currentCommand.enrollCommand)}
-                    >
-                      <Icon
-                        name={commandCopyStatus === "copied" ? "check" : "copy"}
-                        size={15}
-                        stroke={2.2}
-                      />
-                      <span aria-live="polite">
-                        {commandCopyStatus === "copied"
-                          ? t.emptyWorkspace.stepActions.copiedCommand
-                          : commandCopyStatus === "failed"
-                            ? t.emptyWorkspace.stepActions.copyFailed
-                            : t.emptyWorkspace.stepActions.copyCommand}
-                      </span>
-                    </button>
+                    <div class="command-action">
+                      <Button
+                        variant="secondary"
+                        type="button"
+                        title={copyButtonTitle()}
+                        onclick={() => copyCommand(currentCommand.enrollCommand)}
+                      >
+                        <Icon
+                          name={commandCopyStatus === "copied" ? "check" : "copy"}
+                          size={15}
+                          stroke={2.2}
+                        />
+                        <span aria-live="polite">
+                          {commandCopyStatus === "copied"
+                            ? t.emptyWorkspace.stepActions.copiedCommand
+                            : commandCopyStatus === "failed"
+                              ? t.emptyWorkspace.stepActions.copyFailed
+                              : t.emptyWorkspace.stepActions.copyCommand}
+                        </span>
+                      </Button>
+                    </div>
                   </div>
                   {#if commandCopyStatus === "failed" && commandCopyError}
                     <small class="copy-diagnostic" role="status"
@@ -528,10 +529,10 @@
                     >{targetBinding.runtimeName} · {targetBinding.localWorkspaceKey}</small
                   >
                 </div>
-                <button class="primary-action" type="submit">
+                <Button type="submit">
                   <Icon name="check" size={16} stroke={2.4} />
                   <span>{t.emptyWorkspace.form.submit}</span>
-                </button>
+                </Button>
               </form>
             {:else}
               <p class="step-note">
@@ -566,32 +567,6 @@
     line-height: 1.35;
   }
 
-  .primary-action,
-  .secondary-action {
-    align-items: center;
-    border-radius: 8px;
-    display: inline-flex;
-    font-weight: 750;
-    gap: 6px;
-    height: 40px;
-    justify-content: center;
-    padding: 0 14px;
-    text-decoration: none;
-    white-space: nowrap;
-  }
-
-  .primary-action {
-    background: var(--color-primary);
-    border: 0;
-    color: var(--color-surface);
-  }
-
-  .secondary-action {
-    background: var(--color-surface);
-    border: 1px solid var(--color-border-strong);
-    color: var(--color-ink-muted);
-  }
-
   .setup-panel {
     display: grid;
   }
@@ -610,7 +585,7 @@
   .steps article {
     background: var(--color-surface);
     border: 1px solid var(--color-border);
-    border-radius: 8px;
+    border-radius: var(--rounded-lg);
     display: grid;
     gap: 14px;
     padding: 16px;
@@ -733,16 +708,10 @@
     overflow: hidden;
   }
 
-  .copy-action {
+  .command-action {
     align-self: stretch;
-    background: var(--color-code-surface-soft);
-    border: 0;
     border-left: 1px solid var(--color-ink-muted);
-    border-radius: 0;
-    color: var(--color-border);
-    height: auto;
-    min-height: 100%;
-    padding: 0 14px;
+    display: grid;
   }
 
   .token-created p,
@@ -780,7 +749,7 @@
   .workspace-directory-summary {
     background: var(--color-surface);
     border: 1px solid var(--color-border-strong);
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     display: grid;
     gap: 3px;
     min-width: 0;
@@ -875,10 +844,6 @@
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .profile-submit-row .primary-action {
-    min-width: 96px;
-  }
-
   .profile-fields {
     display: grid;
     gap: 12px;
@@ -891,22 +856,10 @@
     grid-template-columns: minmax(0, 1fr) minmax(180px, 0.72fr);
   }
 
-  .profile-form label {
-    display: grid;
-    gap: 6px;
-  }
-
-  .workspace-directory-summary span,
-  .profile-form label span {
+  .workspace-directory-summary span {
     color: var(--color-ink-subtle);
     font-size: 12px;
     font-weight: 750;
-  }
-
-  .profile-form label > small {
-    color: var(--color-ink-subtle);
-    font-size: 12px;
-    line-height: 1.4;
   }
 
   .workspace-directory-summary strong {
@@ -927,24 +880,6 @@
     white-space: nowrap;
   }
 
-  .workspace-create-form input,
-  .profile-form input:not([type="radio"]) {
-    background: var(--color-surface);
-    border: 1px solid var(--color-border-strong);
-    border-radius: 8px;
-    color: var(--color-ink);
-    font: inherit;
-    min-height: 40px;
-    padding: 0 11px;
-  }
-
-  .workspace-create-form input:focus-visible,
-  .profile-form input:not([type="radio"]):focus-visible {
-    border-color: var(--color-focus-ring);
-    box-shadow: var(--shadow-focus);
-    outline: none;
-  }
-
   .form-message {
     background: var(--color-warning-weak);
     border: 1px solid var(--color-warning-soft);
@@ -953,10 +888,6 @@
     font-size: 13px;
     grid-column: 1 / -1;
     padding: 10px 12px;
-  }
-
-  .workspace-create-form button {
-    cursor: pointer;
   }
 
   @media (max-width: 900px) {
@@ -968,13 +899,12 @@
       grid-template-columns: 1fr;
     }
 
-    .copy-action,
-    .profile-submit-row .primary-action {
+    .command-action {
       justify-self: stretch;
       width: 100%;
     }
 
-    .copy-action {
+    .command-action {
       border-left: 0;
       border-top: 1px solid var(--color-ink-muted);
       min-height: 40px;

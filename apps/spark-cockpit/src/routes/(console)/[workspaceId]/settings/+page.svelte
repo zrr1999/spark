@@ -1,8 +1,7 @@
 <script lang="ts">
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
-  import PageHeader from "$lib/ui/PageHeader.svelte";
-  import Panel from "$lib/ui/Panel.svelte";
+  import { Button, Field, Input, PageHeader, Panel } from "$lib/ui";
 
   let { data, form } = $props();
 
@@ -35,32 +34,31 @@
 
   <Panel ariaLabel={t.workspace.title}>
     <form class="workspace-form" method="POST" action="?/updateWorkspace">
-      <label>
-        <span>{t.workspace.name}</span>
-        <input name="name" value={data.workspace.name} required />
-      </label>
-      <label>
-        <span>{t.workspace.slug}</span>
-        <input name="slug" value={data.workspace.slug} required />
-        <small>{t.workspace.slugHint}</small>
-      </label>
-      <label class="wide-field">
-        <span>{t.workspace.description}</span>
-        <input
-          name="description"
-          value={data.workspace.description ?? ""}
-          placeholder={t.workspace.descriptionPlaceholder}
-        />
-      </label>
+      <Field id="workspace-name" label={t.workspace.name} required>
+        <Input id="workspace-name" name="name" value={data.workspace.name} required />
+      </Field>
+      <Field id="workspace-slug" label={t.workspace.slug} hint={t.workspace.slugHint} required>
+        <Input id="workspace-slug" name="slug" value={data.workspace.slug} required />
+      </Field>
+      <div class="wide-field">
+        <Field id="workspace-description" label={t.workspace.description}>
+          <Input
+            id="workspace-description"
+            name="description"
+            value={data.workspace.description ?? ""}
+            placeholder={t.workspace.descriptionPlaceholder}
+          />
+        </Field>
+      </div>
       <div class="workspace-actions">
         <div class="workspace-meta">
           <span>{t.workspace.created} {formatRelative(data.workspace.createdAt)}</span>
           <span>{t.workspace.updated} {formatRelative(data.workspace.updatedAt)}</span>
         </div>
-        <button class="primary-action" type="submit">
+        <Button type="submit">
           <Icon name="check" size={16} stroke={2.4} />
           <span>{t.workspace.save}</span>
-        </button>
+        </Button>
       </div>
     </form>
 
@@ -85,23 +83,6 @@
     grid-template-columns: minmax(0, 1fr) minmax(220px, 0.66fr);
   }
 
-  .workspace-form label {
-    display: grid;
-    gap: 6px;
-  }
-
-  .workspace-form label span {
-    color: var(--color-ink-subtle);
-    font-size: 12px;
-    font-weight: 750;
-  }
-
-  .workspace-form label small {
-    color: var(--color-ink-subtle);
-    font-size: var(--text-caption);
-    line-height: var(--leading-caption);
-  }
-
   .wide-field,
   .workspace-actions {
     grid-column: 1 / -1;
@@ -122,41 +103,6 @@
     flex-wrap: wrap;
     font-size: 12px;
     gap: 8px 14px;
-  }
-
-  input {
-    background: var(--color-surface);
-    border: 1px solid var(--color-border-strong);
-    border-radius: 8px;
-    color: var(--color-ink);
-    font: inherit;
-    min-height: 40px;
-    padding: 0 11px;
-  }
-
-  input:focus-visible {
-    border-color: var(--color-focus-ring);
-    box-shadow: var(--shadow-focus);
-    outline: none;
-  }
-
-  .primary-action {
-    align-items: center;
-    border-radius: 8px;
-    display: inline-flex;
-    font-weight: 750;
-    gap: 6px;
-    height: 40px;
-    justify-content: center;
-    padding: 0 14px;
-    text-decoration: none;
-    white-space: nowrap;
-  }
-
-  .primary-action {
-    background: var(--color-primary);
-    border: 0;
-    color: var(--color-surface);
   }
 
   .form-message {

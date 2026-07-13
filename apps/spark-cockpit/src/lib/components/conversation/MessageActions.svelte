@@ -41,14 +41,14 @@
   .message-actions {
     align-items: center;
     display: flex;
-    min-height: 28px;
+    min-height: 32px;
   }
 
   button {
     align-items: center;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 7px;
+    border-radius: var(--rounded-md);
     color: var(--color-ink-subtle);
     cursor: pointer;
     display: inline-flex;
@@ -56,7 +56,7 @@
     font-size: 11px;
     font-weight: 600;
     gap: 5px;
-    min-height: 28px;
+    min-height: 32px;
     padding: 0 7px;
   }
 

@@ -110,7 +110,7 @@
     backdrop-filter: blur(10px);
     background: color-mix(in srgb, var(--color-surface) 88%, transparent);
     border: 1px solid var(--color-border);
-    border-radius: 999px;
+    border-radius: var(--rounded-full);
     bottom: 10px;
     box-shadow: var(--shadow-card, 0 4px 16px rgb(15 23 42 / 12%));
     color: var(--color-ink-muted);
@@ -118,10 +118,10 @@
     display: inline-flex;
     font: inherit;
     font-size: 12px;
-    font-weight: 650;
+    font-weight: 600;
     gap: 6px;
     left: 50%;
-    min-height: 36px;
+    min-height: 40px;
     padding: 0 12px;
     position: absolute;
     transform: translateX(-50%);

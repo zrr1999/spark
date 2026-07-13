@@ -52,7 +52,7 @@
     gap: 10px;
     grid-template-columns: minmax(0, 1fr) auto auto;
     list-style: none;
-    min-height: 38px;
+    min-height: 40px;
     padding: 0 10px;
   }
 

@@ -3,6 +3,7 @@
   import SparkUiRenderer from "$lib/SparkUiRenderer.svelte";
   import { buildArtifactSparkUiReplay } from "$lib/artifact-ui-replay";
   import { enumLabel, formatByteSize, formatRelativeTime } from "$lib/i18n";
+  import { Button, Panel } from "$lib/ui";
   import { workspacePath } from "$lib/workspace-routes";
 
   let { data, form } = $props();
@@ -66,11 +67,10 @@
     <span class="scope-pill {data.artifact.scope}">{scopeLabel(data.artifact.scope)}</span>
   </header>
 
-  <section class="panel preview-panel" aria-labelledby="preview-title">
-    <div class="panel-header">
-      <h2 id="preview-title">{t.preview.title}</h2>
+  <Panel class="preview-panel" title={t.preview.title} ariaLabelledby="preview-title" padded={false}>
+    {#snippet headerActions()}
       <span class="preview-pill {preview.status}">{previewStatusLabel(preview.status)}</span>
-    </div>
+    {/snippet}
 
     {#if form?.message}
       <div class="form-error" role="alert">{form.message}</div>
@@ -89,14 +89,14 @@
         <pre class="preview-body">{preview.body.text}</pre>
         <div class="preview-actions">
           {#if preview.body.truncated}<span>{t.preview.truncatedPrefix} {formatSize(preview.inlineLimitBytes)}.</span>{/if}
-          <a class="secondary-action" href={`/api/v1/artifacts/${data.artifact.id}/content`}>
+          <Button variant="secondary" href={`/api/v1/artifacts/${data.artifact.id}/content`}>
             {preview.body.truncated ? t.preview.openFull : t.preview.openRaw}
-          </a>
+          </Button>
         </div>
       {:else}
         <div class="preview-empty">
           <p>{t.preview.nonTextPrefix}</p>
-          <a class="primary-action" href={`/api/v1/artifacts/${data.artifact.id}/content`}>{t.preview.contentEndpoint}</a>
+          <Button href={`/api/v1/artifacts/${data.artifact.id}/content`}>{t.preview.contentEndpoint}</Button>
         </div>
       {/if}
     {:else}
@@ -105,12 +105,12 @@
         <h3>{previewStatusLabel(preview.status)}</h3>
         <p>{previewStatusHint(preview.status)}</p>
         <form method="POST" action="?/preparePreview">
-          <button class="primary-action" type="submit">{t.cache.prepare}</button>
-          <a class="secondary-action" href={`/api/v1/artifacts/${data.artifact.id}/content`}>{t.preview.probe}</a>
+          <Button type="submit">{t.cache.prepare}</Button>
+          <Button variant="secondary" href={`/api/v1/artifacts/${data.artifact.id}/content`}>{t.preview.probe}</Button>
         </form>
       </div>
     {/if}
-  </section>
+  </Panel>
 
   <details class="technical-details">
     <summary><span><strong>{t.technicalTitle}</strong><small>{t.technicalHint}</small></span></summary>
@@ -159,7 +159,7 @@
         {:else}
           <p class="muted">{t.cache.notPrepared}</p>
         {/if}
-        <a class="secondary-action" href={`/api/v1/artifacts/${data.artifact.id}/cache`}>{t.cache.openApi}</a>
+        <Button variant="secondary" href={`/api/v1/artifacts/${data.artifact.id}/cache`}>{t.cache.openApi}</Button>
       </section>
 
       <details class="raw-details">
@@ -214,16 +214,16 @@
   .preview-pill.missing, .preview-pill.fetching, .preview-pill.evicted { background: var(--color-warning-soft); color: var(--color-warning-strong); }
   .preview-pill.error { background: var(--color-danger-soft); color: var(--color-danger-strong); }
 
-  .panel, .technical-details {
+  .technical-details {
     background: var(--color-surface);
     border: 1px solid var(--color-border);
-    border-radius: var(--rounded-xl);
+    border-radius: var(--rounded-lg);
     box-shadow: var(--shadow-card);
     overflow: hidden;
   }
 
-  .panel-header { align-items: center; border-bottom: 1px solid var(--color-border); display: flex; gap: var(--spacing-md); justify-content: space-between; padding: var(--spacing-lg) var(--spacing-xl); }
   .spark-ui-replay-body { padding: var(--spacing-xl); }
+  :global(.preview-panel .ui-panel-body) { gap: 0; }
   .preview-body { background: var(--color-ink); color: var(--color-border); font-size: var(--text-caption); margin: 0; max-height: 60vh; overflow: auto; padding: var(--spacing-xl); white-space: pre-wrap; }
 
   .preview-empty { align-items: center; display: grid; gap: var(--spacing-sm); justify-items: center; padding: var(--spacing-xxl); text-align: center; }
@@ -232,9 +232,6 @@
   .preview-icon { align-items: center; background: var(--color-primary-weak); border-radius: var(--rounded-full); color: var(--color-primary); display: flex; height: 52px; justify-content: center; width: 52px; }
   .preview-actions { align-items: center; color: var(--color-ink-subtle); display: flex; flex-wrap: wrap; gap: var(--spacing-md); justify-content: space-between; padding: var(--spacing-md) var(--spacing-xl); }
 
-  .primary-action, .secondary-action { align-items: center; border-radius: var(--rounded-md); display: inline-flex; font: inherit; font-size: var(--text-button); font-weight: var(--weight-button); justify-content: center; min-height: 40px; padding: 0 var(--spacing-md); text-decoration: none; }
-  .primary-action { background: var(--color-primary); border: 0; color: var(--color-on-primary); cursor: pointer; }
-  .secondary-action { background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-ink-muted); }
   .form-error { background: var(--color-danger-weak); color: var(--color-danger-strong); padding: var(--spacing-sm) var(--spacing-xl); }
 
   .technical-details > summary { cursor: pointer; list-style: none; padding: var(--spacing-lg) var(--spacing-xl); }
@@ -259,7 +256,7 @@
   .chip { background: var(--color-surface-soft); color: var(--color-ink-muted); }
 
   .raw-details { border-top: 1px solid var(--color-border-soft); padding-top: var(--spacing-sm); }
-  .raw-details summary { color: var(--color-ink-muted); cursor: pointer; font-weight: var(--weight-button); }
+  .raw-details summary { align-items: center; color: var(--color-ink-muted); cursor: pointer; display: flex; font-weight: var(--weight-button); min-height: 40px; }
   .raw-details pre { background: var(--color-ink); border-radius: var(--rounded-md); color: var(--color-border); font-size: var(--text-caption); margin: var(--spacing-sm) 0 0; overflow: auto; padding: var(--spacing-md); white-space: pre-wrap; }
 
   @media (max-width: 760px) {

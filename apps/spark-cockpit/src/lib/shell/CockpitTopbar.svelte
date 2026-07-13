@@ -205,7 +205,7 @@
 
   .brand-name {
     font-size: 15px;
-    font-weight: 750;
+    font-weight: 600;
     letter-spacing: -0.01em;
   }
 
@@ -240,12 +240,12 @@
     align-items: center;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     color: var(--color-ink-muted);
     cursor: pointer;
     display: inline-flex;
     gap: 8px;
-    min-height: 36px;
+    min-height: 40px;
     padding: 4px 7px;
   }
 
@@ -260,7 +260,7 @@
   .user-copy {
     color: var(--color-ink);
     font-size: 13px;
-    font-weight: 650;
+    font-weight: 600;
     max-width: 150px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -291,7 +291,7 @@
   .account-popover {
     background: var(--color-surface);
     border: 1px solid var(--color-border);
-    border-radius: 12px;
+    border-radius: var(--rounded-lg);
     box-shadow: var(--shadow-popover);
     min-width: 260px;
     opacity: 0;
@@ -343,14 +343,14 @@
   .account-menu-item {
     align-items: center;
     background: transparent;
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     color: var(--color-ink-muted);
     display: grid;
     font-size: 13px;
     font-weight: 500;
     gap: 10px;
     grid-template-columns: 24px minmax(0, 1fr) 16px;
-    min-height: 36px;
+    min-height: 40px;
     padding: 6px 10px;
     text-decoration: none;
   }

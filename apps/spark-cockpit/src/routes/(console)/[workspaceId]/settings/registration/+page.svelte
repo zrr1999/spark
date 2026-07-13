@@ -2,7 +2,7 @@
   import Icon from "$lib/Icon.svelte";
   import { daemonDisplayStatus, type DaemonDisplayStatus } from "$lib/daemon-status";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
-  import PageHeader from "$lib/ui/PageHeader.svelte";
+  import { Button, Field, Input, PageHeader } from "$lib/ui";
 
   let { data, form } = $props();
 
@@ -72,14 +72,13 @@
 
   <section class="panel-card">
     <form class="token-form" method="POST" action="?/createEnrollmentToken">
-      <label>
-        <span>{t.enrollment.label}</span>
-        <input name="label" placeholder={t.enrollment.labelPlaceholder} />
-      </label>
-      <button class="primary-action" type="submit">
+      <Field id="enrollment-label" label={t.enrollment.label}>
+        <Input id="enrollment-label" name="label" placeholder={t.enrollment.labelPlaceholder} />
+      </Field>
+      <Button type="submit">
         <Icon name="plus" size={16} stroke={2.4} />
         <span>{t.enrollment.createToken}</span>
-      </button>
+      </Button>
     </form>
 
     {#if form?.intent === "runnerEnrollment" && form?.enrollCommand}
@@ -135,9 +134,9 @@
               </time>
               <form method="POST" action="?/revokeEnrollmentToken">
                 <input type="hidden" name="tokenId" value={token.id} />
-                <button class="secondary-action compact" type="submit" disabled={status !== "ready"}>
+                <Button variant="secondary" size="compact" type="submit" disabled={status !== "ready"}>
                   {t.enrollment.revoke}
-                </button>
+                </Button>
               </form>
             </div>
           {/each}
@@ -271,7 +270,7 @@
   .panel-card {
     background: var(--color-surface);
     border: 1px solid var(--color-border);
-    border-radius: 8px;
+    border-radius: var(--rounded-lg);
   }
 
   .summary-card {
@@ -323,70 +322,15 @@
     grid-template-columns: minmax(220px, 1fr) auto;
   }
 
-  .token-form label,
   .token-display {
     display: grid;
     gap: 6px;
   }
 
-  .token-form label span,
   .token-display span {
     color: var(--color-ink-subtle);
     font-size: 12px;
     font-weight: 750;
-  }
-
-  input {
-    background: var(--color-surface);
-    border: 1px solid var(--color-border-strong);
-    border-radius: 8px;
-    color: var(--color-ink);
-    font: inherit;
-    min-height: 40px;
-    padding: 0 11px;
-  }
-
-  input:focus-visible {
-    border-color: var(--color-focus-ring);
-    box-shadow: var(--shadow-focus);
-    outline: none;
-  }
-
-  .primary-action,
-  .secondary-action {
-    align-items: center;
-    border-radius: 8px;
-    display: inline-flex;
-    font-weight: 750;
-    gap: 6px;
-    height: 40px;
-    justify-content: center;
-    padding: 0 14px;
-    text-decoration: none;
-    white-space: nowrap;
-  }
-
-  .primary-action {
-    background: var(--color-primary);
-    border: 0;
-    color: var(--color-surface);
-  }
-
-  .secondary-action {
-    background: var(--color-surface);
-    border: 1px solid var(--color-border-strong);
-    color: var(--color-ink-muted);
-  }
-
-  .secondary-action.compact {
-    font-size: 13px;
-    height: 30px;
-  }
-
-  button:disabled {
-    color: var(--color-ink-disabled);
-    cursor: not-allowed;
-    opacity: 0.65;
   }
 
   .token-created,
@@ -523,7 +467,7 @@
   .connection-diagnostics {
     background: var(--color-surface);
     border: 1px solid var(--color-border);
-    border-radius: 8px;
+    border-radius: var(--rounded-lg);
     overflow: hidden;
   }
 

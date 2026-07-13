@@ -5,9 +5,7 @@
     formatRelativeTime,
     statusLabel as getStatusLabel,
   } from "$lib/i18n";
-  import EmptyState from "$lib/ui/EmptyState.svelte";
-  import PageHeader from "$lib/ui/PageHeader.svelte";
-  import Panel from "$lib/ui/Panel.svelte";
+  import { Button, EmptyState, PageHeader, Panel } from "$lib/ui";
   import { workspacePath } from "$lib/workspace-routes";
 
   let { data } = $props();
@@ -44,7 +42,7 @@
     <Panel>
       <EmptyState title={t.emptyWorkspace.title} body={t.emptyWorkspace.body} icon="inbox">
         {#snippet actions()}
-          <a class="empty-cta" href={workspaceUrl}>{t.emptyWorkspace.action}</a>
+          <Button variant="secondary" href={workspaceUrl}>{t.emptyWorkspace.action}</Button>
         {/snippet}
       </EmptyState>
     </Panel>
@@ -121,7 +119,7 @@
     font-size: var(--text-caption);
     font-weight: var(--weight-caption-medium);
     gap: var(--spacing-xs);
-    min-height: 34px;
+    min-height: 40px;
     padding: 0 var(--spacing-sm);
   }
 
@@ -223,20 +221,6 @@
   .urgency.low {
     background: var(--color-surface-soft);
     color: var(--color-ink-subtle);
-  }
-
-  .empty-cta {
-    align-items: center;
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: var(--rounded-md);
-    color: var(--color-ink-muted);
-    display: inline-flex;
-    font-size: var(--text-button);
-    font-weight: var(--weight-button);
-    min-height: 36px;
-    padding: 8px 12px;
-    text-decoration: none;
   }
 
   @media (max-width: 900px) {

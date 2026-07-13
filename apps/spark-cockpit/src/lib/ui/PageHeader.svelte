@@ -3,6 +3,7 @@
 
   let {
     eyebrow,
+    id,
     title,
     description,
     lede,
@@ -12,6 +13,7 @@
     actions,
   }: {
     eyebrow?: string;
+    id?: string;
     title: string;
     description?: string;
     lede?: string;
@@ -29,7 +31,7 @@
     {#if eyebrow}
       <p class="ui-kicker">{eyebrow}</p>
     {/if}
-    <h1>{title}</h1>
+    <h1 {id}>{title}</h1>
     {#if body}
       <p class="ui-lede">{body}</p>
     {/if}

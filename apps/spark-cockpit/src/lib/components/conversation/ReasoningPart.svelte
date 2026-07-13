@@ -43,7 +43,7 @@
     font-weight: 650;
     gap: 7px;
     list-style: none;
-    min-height: 30px;
+    min-height: 40px;
     width: fit-content;
   }
 

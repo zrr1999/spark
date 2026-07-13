@@ -71,7 +71,7 @@
   .ui-panel {
     background: var(--color-surface);
     border: 1px solid var(--color-border);
-    border-radius: var(--rounded-xl);
+    border-radius: var(--rounded-lg);
     box-shadow: var(--shadow-card);
     display: grid;
     min-width: 0;

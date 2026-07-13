@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
+  import { Button, Field, Panel, Textarea } from "$lib/ui";
   import { workspacePath } from "$lib/workspace-routes";
 
   let { data, form } = $props();
@@ -46,13 +47,13 @@
   </header>
 
   <section class="response-stack">
-    <section class="panel" aria-labelledby="response-title">
-      <div class="panel-header">
-        <div>
-          <p class="panel-kicker">{t.response.kicker}</p>
-          <h2 id="response-title">{t.response.title}</h2>
-        </div>
-      </div>
+    <Panel
+      class="response-panel"
+      title={t.response.title}
+      kicker={t.response.kicker}
+      ariaLabelledby="response-title"
+      padded={false}
+    >
 
       {#if form?.message}
         <div class="form-error" role="alert">{form.message}</div>
@@ -61,10 +62,15 @@
       {#if data.item.status === "pending" && data.item.requestStatus === "pending"}
         <form method="POST" action="?/respond">
           {#if data.item.questions.length === 0}
-            <label class="question-block">
-              <span>{t.response.answer}</span>
-              <textarea name="answer:message" rows="6" placeholder={t.response.answerPlaceholder} required></textarea>
-            </label>
+            <Field id="answer-message" label={t.response.answer} required>
+              <Textarea
+                id="answer-message"
+                name="answer:message"
+                rows={6}
+                placeholder={t.response.answerPlaceholder}
+                required
+              />
+            </Field>
           {:else}
             {#each data.item.questions as question}
               <fieldset class="question-block">
@@ -97,7 +103,13 @@
                 {:else if question.type === "preview"}
                   <p class="preview-copy">{t.response.previewOnly}</p>
                 {:else}
-                  <textarea name={`answer:${question.id}`} rows="5" required={question.required}></textarea>
+                  <Textarea
+                    id={`answer-${question.id}`}
+                    name={`answer:${question.id}`}
+                    rows={5}
+                    required={question.required}
+                    aria-label={question.prompt}
+                  />
                 {/if}
               </fieldset>
             {/each}
@@ -105,20 +117,24 @@
 
           <details class="optional-note">
             <summary>{t.response.operatorNote}</summary>
-            <label class="question-block">
-              <textarea name="operatorNote" rows="3" placeholder={t.response.operatorNotePlaceholder}></textarea>
-            </label>
+            <Textarea
+              id="operator-note"
+              name="operatorNote"
+              rows={3}
+              placeholder={t.response.operatorNotePlaceholder}
+              aria-label={t.response.operatorNote}
+            />
           </details>
 
           <div class="form-actions">
-            <button class="primary-action" type="submit" name="status" value="answered">{t.response.send}</button>
-            <button class="secondary-action" type="submit" name="status" value="cancelled">{t.response.cancel}</button>
+            <Button type="submit" name="status" value="answered">{t.response.send}</Button>
+            <Button variant="secondary" type="submit" name="status" value="cancelled">{t.response.cancel}</Button>
           </div>
 
           <details class="optional-note more-actions">
             <summary>{t.response.moreActions}</summary>
             <p>{t.response.archiveHint}</p>
-            <button class="secondary-action" type="submit" name="status" value="archived">{t.response.archive}</button>
+            <Button variant="secondary" type="submit" name="status" value="archived">{t.response.archive}</Button>
           </details>
         </form>
       {:else if latestResponse}
@@ -139,7 +155,7 @@
           </div>
         </div>
       {/if}
-    </section>
+    </Panel>
 
     <details class="technical-details">
       <summary><span><strong>{t.audit.title}</strong><small>{t.audit.kicker}</small></span></summary>
@@ -216,17 +232,7 @@
     min-width: 0;
   }
 
-  .panel-kicker {
-    color: var(--color-primary);
-    font-size: 12px;
-    font-weight: 750;
-    letter-spacing: 0.08em;
-    margin: 0 0 8px;
-    text-transform: uppercase;
-  }
-
   h1,
-  h2,
   h3,
   p {
     margin: 0;
@@ -257,13 +263,6 @@
     margin-top: var(--spacing-xs);
   }
 
-  .panel {
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 16px;
-    box-shadow: var(--shadow-card-raised);
-  }
-
   .audit-list span {
     color: var(--color-ink-subtle);
     font-size: 12px;
@@ -276,17 +275,7 @@
     gap: var(--spacing-lg);
   }
 
-  .panel-header {
-    align-items: center;
-    border-bottom: 1px solid var(--color-border);
-    display: flex;
-    justify-content: space-between;
-    padding: 24px 28px;
-  }
-
-  .panel-header.compact {
-    padding: 22px 24px;
-  }
+  :global(.response-panel .ui-panel-body) { gap: 0; }
 
   .status-pill {
     background: var(--color-surface-soft);
@@ -322,9 +311,12 @@
   }
 
   .optional-note summary {
+    align-items: center;
     color: var(--color-ink-muted);
     cursor: pointer;
+    display: flex;
     font-weight: var(--weight-button);
+    min-height: 40px;
   }
 
   .optional-note[open] summary { margin-bottom: var(--spacing-sm); }
@@ -344,22 +336,11 @@
     padding: 0;
   }
 
-  .question-block > span,
   legend {
     color: var(--color-ink);
     font-size: 14px;
     font-weight: 800;
     padding: 0;
-  }
-
-  textarea {
-    background: var(--color-canvas);
-    border: 1px solid var(--color-border-strong);
-    border-radius: 12px;
-    color: var(--color-ink);
-    font: inherit;
-    padding: 12px;
-    resize: vertical;
   }
 
   .option-list {
@@ -386,31 +367,6 @@
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
-  }
-
-  .primary-action,
-  .secondary-action {
-    align-items: center;
-    border-radius: 12px;
-    display: inline-flex;
-    font-weight: 800;
-    height: 44px;
-    justify-content: center;
-    padding: 0 16px;
-  }
-
-  .primary-action {
-    background: var(--color-primary);
-    border: 0;
-    color: white;
-    cursor: pointer;
-  }
-
-  .secondary-action {
-    background: white;
-    border: 1px solid var(--color-border);
-    color: var(--color-ink-muted);
-    cursor: pointer;
   }
 
   .form-error {
@@ -444,15 +400,18 @@
   }
 
   .raw-context summary {
+    align-items: center;
     color: var(--color-ink-muted);
     cursor: pointer;
+    display: flex;
     font-weight: 800;
+    min-height: 40px;
   }
 
   .technical-details {
     background: var(--color-surface);
     border: 1px solid var(--color-border);
-    border-radius: var(--rounded-xl);
+    border-radius: var(--rounded-lg);
     overflow: hidden;
   }
 
@@ -491,9 +450,5 @@
       font-size: 28px;
     }
 
-    .panel-header,
-    .panel-header.compact {
-      padding: 18px;
-    }
   }
 </style>

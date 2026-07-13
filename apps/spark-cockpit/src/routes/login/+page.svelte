@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { Button, Field, Input, Panel } from "$lib/ui";
+
   let { data, form } = $props();
   let t = $derived(data.messages.login);
 </script>
@@ -8,9 +10,9 @@
 </svelte:head>
 
 <section class="login-shell">
-  <article class="login-card">
+  <Panel class="login-card" ariaLabelledby="login-title">
     <p class="eyebrow">{t.eyebrow}</p>
-    <h1>{t.title}</h1>
+    <h1 id="login-title">{t.title}</h1>
     <p class="lede">{t.lede}</p>
 
     {#if !data.remoteAccessConfigured}
@@ -25,13 +27,19 @@
 
     <form method="POST">
       <input type="hidden" name="next" value={data.next} />
-      <label>
-        <span>{t.tokenLabel}</span>
-        <input name="token" type="password" autocomplete="current-password" placeholder={t.tokenPlaceholder} required />
-      </label>
-      <button type="submit" disabled={!data.remoteAccessConfigured}>{t.action}</button>
+      <Field id="login-token" label={t.tokenLabel} required>
+        <Input
+          id="login-token"
+          name="token"
+          type="password"
+          autocomplete="current-password"
+          placeholder={t.tokenPlaceholder}
+          required
+        />
+      </Field>
+      <Button class="login-submit" type="submit" disabled={!data.remoteAccessConfigured}>{t.action}</Button>
     </form>
-  </article>
+  </Panel>
 </section>
 
 <style>
@@ -46,16 +54,9 @@
     padding: clamp(18px, 5vw, 64px);
   }
 
-  .login-card {
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 24px;
-    box-shadow: var(--shadow-panel);
-    display: grid;
-    gap: 18px;
+  :global(.login-card) {
     margin: 0 auto;
     max-width: 520px;
-    padding: clamp(24px, 5vw, 42px);
     width: min(100%, 520px);
   }
 
@@ -81,43 +82,12 @@
     margin: 0;
   }
 
-  form,
-  label {
+  form {
     display: grid;
     gap: 10px;
   }
 
-  label span {
-    font-size: 13px;
-    font-weight: 800;
-  }
-
-  input {
-    background: var(--color-canvas);
-    border: 1px solid var(--color-border-strong);
-    border-radius: 12px;
-    color: var(--color-ink);
-    font: inherit;
-    min-height: 46px;
-    padding: 0 14px;
-  }
-
-  button {
-    background: var(--color-primary);
-    border: 0;
-    border-radius: 12px;
-    color: white;
-    cursor: pointer;
-    font: inherit;
-    font-weight: 850;
-    min-height: 46px;
-    padding: 0 16px;
-  }
-
-  button:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
+  :global(.login-submit) { width: 100%; }
 
   .notice,
   .error {
@@ -136,5 +106,4 @@
     background: var(--color-danger-weak);
     color: var(--color-danger-strong);
   }
-
 </style>

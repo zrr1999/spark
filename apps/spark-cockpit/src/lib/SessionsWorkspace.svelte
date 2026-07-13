@@ -7,9 +7,11 @@
     Message as ConversationMessage,
   } from "$lib/components/conversation";
   import type { ConversationPartLabels } from "$lib/components/conversation/types";
+  import { ModelPicker, type ModelPickerGroup } from "$lib/components/model-selector";
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
   import { buildSessionTimeline } from "$lib/session-timeline";
+  import { Button } from "$lib/ui";
   import {
     workbenchSessionScope,
     workspaceIdForWorkbenchSession,
@@ -22,7 +24,7 @@
     SparkSessionView,
   } from "@zendev-lab/spark-protocol";
   import type { SubmitFunction } from "@sveltejs/kit";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
 
   type SessionRecord = {
     sessionId: string;
@@ -157,6 +159,7 @@
   let modelProviders = $derived(
     modelControl.snapshot.providers.filter((provider) => provider.models.length > 0),
   );
+  let modelGroups = $derived(buildModelGroups(modelProviders));
   let activeWorkspace = $derived(
     workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null,
   );
@@ -187,7 +190,9 @@
   let startFeedback = $state<string | null>(null);
   let sendFeedback = $state<string | null>(null);
   let modelFeedback = $state<string | null>(null);
+  let modelFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
   let refreshingActivity = $state(false);
+  let sessionModelForm = $state<HTMLFormElement | null>(null);
   let startModelReady = $derived(
     modelControl.available &&
       availableModels.some((entry) => modelValue(entry.model) === startModel),
@@ -224,6 +229,12 @@
           conversationContext: "会话上下文",
           collapseDetails: "会话与运行详情",
           modelLabel: "模型",
+          chooseModel: "选择模型",
+          chooseModelHint: "搜索模型或 Provider；选择后会保留 Spark 的会话与执行状态。",
+          searchModels: "搜索模型或 Provider…",
+          noModelsFound: "没有匹配的模型",
+          closeModelPicker: "关闭模型选择器",
+          clearModelSearch: "清除搜索",
           modelUnavailable: "没有已登录且可用的模型",
           currentModelUnavailable: "当前模型不可用，请先切换模型",
           configureModels: "配置 Provider",
@@ -272,6 +283,12 @@
           conversationContext: "Conversation context",
           collapseDetails: "Conversation and run details",
           modelLabel: "Model",
+          chooseModel: "Choose a model",
+          chooseModelHint: "Search models or providers. Spark keeps the current conversation and execution state.",
+          searchModels: "Search models or providers…",
+          noModelsFound: "No matching models",
+          closeModelPicker: "Close model picker",
+          clearModelSearch: "Clear search",
           modelUnavailable: "No authenticated model is available",
           currentModelUnavailable: "Current model unavailable — choose another model",
           configureModels: "Configure providers",
@@ -389,6 +406,7 @@
       clearInterval(fallbackInterval);
       eventSource?.close();
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (modelFeedbackTimer) clearTimeout(modelFeedbackTimer);
     };
   });
 
@@ -474,10 +492,33 @@
     return typeof data.model === "string" && data.model.trim() ? data.model : null;
   }
 
-  function providerGroupLabel(provider: SparkModelCatalogProvider) {
-    return provider.auth.configured
-      ? provider.label
-      : `${provider.label} · ${copy.providerLoginRequired}`;
+  function buildModelGroups(providers: SparkModelCatalogProvider[]): ModelPickerGroup[] {
+    return providers.map((provider) => {
+      const available = provider.models.filter((entry) => entry.available);
+      return {
+        id: provider.providerName,
+        label: provider.label,
+        description: provider.auth.configured ? undefined : copy.providerLoginRequired,
+        options:
+          available.length > 0
+            ? available.map((entry) => ({
+                value: modelValue(entry.model),
+                label: entry.model.modelLabel ?? entry.model.modelId,
+                description:
+                  entry.model.modelLabel && entry.model.modelLabel !== entry.model.modelId
+                    ? entry.model.modelId
+                    : undefined,
+                keywords: [entry.model.modelId, provider.providerName],
+              }))
+            : [
+                {
+                  value: `unavailable:${provider.providerName}`,
+                  label: `${copy.providerLoginRequired} · ${provider.models.length}`,
+                  disabled: true,
+                },
+              ],
+      };
+    });
   }
 
   const enhanceStartConversation: SubmitFunction = () => {
@@ -523,6 +564,7 @@
   };
 
   const enhanceSelectModel: SubmitFunction = () => {
+    if (modelFeedbackTimer) clearTimeout(modelFeedbackTimer);
     modelState = "submitting";
     modelFeedback = copy.sending;
     return async ({ result, update }) => {
@@ -530,7 +572,11 @@
       if (result.type === "success") {
         modelState = "success";
         sessionModel = resultModel(result) ?? sessionModel;
-        modelFeedback = resultMessage(result, copy.modelUpdated);
+        modelFeedback = copy.modelUpdated;
+        modelFeedbackTimer = setTimeout(() => {
+          modelFeedback = null;
+          modelFeedbackTimer = null;
+        }, 3_500);
         await invalidateAll();
         return;
       }
@@ -544,12 +590,10 @@
     return model ? `${model.providerName}/${model.modelId}` : "";
   }
 
-  function modelLabel(model: SparkModelRef) {
-    return `${model.modelLabel ?? model.modelId} · ${model.providerLabel ?? model.providerName}`;
-  }
-
-  function submitModelSelection(event: Event) {
-    (event.currentTarget as HTMLSelectElement).form?.requestSubmit();
+  async function submitModelSelection(nextValue: string) {
+    sessionModel = nextValue;
+    await tick();
+    sessionModelForm?.requestSubmit();
   }
 </script>
 
@@ -615,10 +659,10 @@
           {#if !compact}<p class="muted">{messages.archiveBody}</p>{/if}
           <form method="POST" action="?/archiveSession">
             <input type="hidden" name="sessionId" value={selected.sessionId} />
-            <button class="danger-action" type="submit">
+            <Button variant="danger" type="submit">
               <Icon name="archive" size={15} stroke={2.1} />
               <span>{messages.archiveSubmit}</span>
-            </button>
+            </Button>
           </form>
         </section>
       {/if}
@@ -677,29 +721,25 @@
               {#snippet header()}
                 <div class="composer-selects">
                   {#if modelProviders.length > 0}
-                    <label class="model-select">
+                    <div class="model-select">
                       <span>{copy.modelLabel}</span>
-                      <select
+                      <ModelPicker
+                        id="start-conversation-model"
                         name="model"
                         required
                         bind:value={startModel}
                         disabled={availableModels.length === 0}
-                      >
-                        {#each modelProviders as provider}
-                          <optgroup
-                            label={providerGroupLabel(provider)}
-                            disabled={!provider.models.some((entry) => entry.available)}
-                          >
-                            {#each provider.models.filter((entry) => entry.available) as entry}
-                              <option value={modelValue(entry.model)}>{entry.model.modelLabel ?? entry.model.modelId}</option>
-                            {/each}
-                            {#if !provider.models.some((entry) => entry.available)}
-                              <option disabled>{copy.providerLoginRequired} · {provider.models.length}</option>
-                            {/if}
-                          </optgroup>
-                        {/each}
-                      </select>
-                    </label>
+                        groups={modelGroups}
+                        label={copy.modelLabel}
+                        title={copy.chooseModel}
+                        description={copy.chooseModelHint}
+                        placeholder={copy.modelUnavailable}
+                        searchPlaceholder={copy.searchModels}
+                        emptyLabel={copy.noModelsFound}
+                        closeLabel={copy.closeModelPicker}
+                        clearSearchLabel={copy.clearModelSearch}
+                      />
+                    </div>
                     <a class="model-settings-link" href="/settings/models">
                       <Icon name="settings" size={14} />{copy.configureModels}
                     </a>
@@ -710,14 +750,16 @@
                   {/if}
                 </div>
               {/snippet}
-              {#snippet context()}
+              {#snippet feedback()}
+                {#if startFeedback}
                 <p
                   class="form-feedback {startState}"
                   role={startState === "error" ? "alert" : "status"}
                   aria-live="polite"
                 >
-                  {startFeedback ?? ""}
+                  {startFeedback}
                 </p>
+                {/if}
               {/snippet}
             </Composer>
           </form>
@@ -772,6 +814,7 @@
 
       <form
         id="session-model-form"
+        bind:this={sessionModelForm}
         method="POST"
         action="?/selectModel"
         use:enhance={enhanceSelectModel}
@@ -801,35 +844,25 @@
         >
           {#snippet context()}
             {#if modelProviders.length > 0}
-              <label class="conversation-model-select">
-                <Icon name="spark" size={13} />
-                <span class="sr-only">{copy.modelLabel}</span>
-                <select
-                  form="session-model-form"
-                  name="model"
-                  bind:value={sessionModel}
-                  disabled={modelState === "submitting" || availableModels.length === 0}
-                  onchange={submitModelSelection}
-                  aria-label={copy.modelLabel}
-                >
-                  {#if effectiveModel && !effectiveModelAvailable}
-                    <option value={effectiveModelValue} disabled>{copy.currentModelUnavailable}</option>
-                  {/if}
-                  {#each modelProviders as provider}
-                    <optgroup
-                      label={providerGroupLabel(provider)}
-                      disabled={!provider.models.some((entry) => entry.available)}
-                    >
-                      {#each provider.models.filter((entry) => entry.available) as entry}
-                        <option value={modelValue(entry.model)}>{modelLabel(entry.model)}</option>
-                      {/each}
-                      {#if !provider.models.some((entry) => entry.available)}
-                        <option disabled>{copy.providerLoginRequired} · {provider.models.length}</option>
-                      {/if}
-                    </optgroup>
-                  {/each}
-                </select>
-              </label>
+              <ModelPicker
+                id="conversation-model"
+                form="session-model-form"
+                name="model"
+                bind:value={sessionModel}
+                groups={modelGroups}
+                disabled={modelState === "submitting" || availableModels.length === 0}
+                label={copy.modelLabel}
+                title={copy.chooseModel}
+                description={copy.chooseModelHint}
+                placeholder={copy.modelUnavailable}
+                selectedLabel={!effectiveModelAvailable ? copy.currentModelUnavailable : undefined}
+                searchPlaceholder={copy.searchModels}
+                emptyLabel={copy.noModelsFound}
+                closeLabel={copy.closeModelPicker}
+                clearSearchLabel={copy.clearModelSearch}
+                compact
+                onValueChange={submitModelSelection}
+              />
               <a
                 class="model-settings-shortcut"
                 href="/settings/models"
@@ -844,13 +877,17 @@
               </a>
             {/if}
             {#if selected.role}<span>{selected.role}</span>{/if}
-            <p
-              class="form-feedback {sendState}"
-              role={sendState === "error" ? "alert" : "status"}
-              aria-live="polite"
-            >
-              {sendFeedback ?? ""}
-            </p>
+          {/snippet}
+          {#snippet feedback()}
+            {#if sendFeedback}
+              <p
+                class="form-feedback {sendState}"
+                role={sendState === "error" ? "alert" : "status"}
+                aria-live="polite"
+              >
+                {sendFeedback}
+              </p>
+            {/if}
             {#if modelFeedback}
               <p class="form-feedback {modelState}" role={modelState === "error" ? "alert" : "status"}>
                 {modelFeedback}
@@ -1061,57 +1098,26 @@
     text-transform: uppercase;
   }
 
-  .model-select select {
-    background: var(--color-surface-soft);
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
-    color: var(--color-ink);
-    font: inherit;
-    font-size: 13px;
-    max-width: 260px;
-    min-height: 34px;
-    outline: none;
-    padding: 0 30px 0 10px;
-  }
-
-  .model-select select:focus {
-    border-color: var(--color-focus-ring);
-    box-shadow: var(--shadow-focus);
-  }
-
-  .conversation-model-select,
   .model-settings-link,
   .model-settings-shortcut {
     align-items: center;
     background: var(--color-surface-soft);
     border: 1px solid var(--color-border);
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     color: var(--color-ink-muted);
     display: inline-flex;
     font-size: 11px;
-    font-weight: 650;
+    font-weight: 600;
     gap: 5px;
-    min-height: 30px;
+    min-height: 40px;
     padding: 0 8px;
     text-decoration: none;
-  }
-
-  .conversation-model-select select {
-    appearance: none;
-    background: transparent;
-    border: 0;
-    color: inherit;
-    cursor: pointer;
-    font: inherit;
-    max-width: 270px;
-    outline: none;
-    padding: 0;
   }
 
   .model-settings-shortcut {
     justify-content: center;
     padding: 0;
-    width: 30px;
+    width: 40px;
   }
 
   .model-settings-link.compact {
@@ -1121,13 +1127,13 @@
   .primary-action,
   .secondary-action {
     align-items: center;
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     display: inline-flex;
     font-size: 13px;
-    font-weight: 650;
+    font-weight: 600;
     gap: 6px;
     justify-content: center;
-    min-height: 36px;
+    min-height: 40px;
     padding: 0 13px;
     text-decoration: none;
     width: fit-content;
@@ -1152,9 +1158,10 @@
 
   .form-feedback {
     color: var(--color-ink-subtle);
-    flex: 1;
     font-size: 12px;
-    min-height: 1.4em;
+    line-height: 1.4;
+    margin: 0;
+    overflow-wrap: anywhere;
   }
 
   .form-feedback.success {
@@ -1223,6 +1230,7 @@
     font-weight: 650;
     justify-content: space-between;
     list-style: none;
+    min-height: 40px;
   }
 
   .run-details summary::-webkit-details-marker,
@@ -1317,22 +1325,6 @@
     color: var(--color-ink);
     font-size: 12px;
     font-weight: 650;
-  }
-
-  .danger-action {
-    align-items: center;
-    background: var(--color-danger-weak, #fef2f2);
-    border: 1px solid var(--color-danger-soft, #fecaca);
-    border-radius: 8px;
-    color: var(--color-danger-strong, #b91c1c);
-    cursor: pointer;
-    display: inline-flex;
-    font-size: 12px;
-    font-weight: 650;
-    gap: 7px;
-    min-height: 34px;
-    padding: 0 11px;
-    width: fit-content;
   }
 
   .status-pill {
@@ -1456,9 +1448,5 @@
       width: 100%;
     }
 
-    .model-select select {
-      max-width: none;
-      width: 100%;
-    }
   }
 </style>

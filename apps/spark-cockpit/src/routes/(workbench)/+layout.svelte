@@ -161,7 +161,6 @@
 
 <style>
   :global(body) {
-    margin: 0;
     background: var(--color-canvas);
     color: var(--color-ink);
     font-family:
@@ -170,10 +169,6 @@
       ui-sans-serif,
       system-ui,
       sans-serif;
-  }
-
-  :global(*) {
-    box-sizing: border-box;
   }
 
   .shell {
@@ -215,7 +210,7 @@
     font-size: 13px;
     font-weight: 500;
     gap: 10px;
-    min-height: 38px;
+    min-height: 40px;
     padding: 0 10px;
     text-decoration: none;
   }

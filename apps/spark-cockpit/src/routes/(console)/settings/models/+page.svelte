@@ -2,6 +2,8 @@
   import { enhance } from "$app/forms";
   import { invalidateAll } from "$app/navigation";
   import Icon from "$lib/Icon.svelte";
+  import { ModelPicker, type ModelPickerGroup } from "$lib/components/model-selector";
+  import { Button, Field, Input, PageHeader, Select } from "$lib/ui";
   import type { SparkModelCatalogProvider } from "@zendev-lab/spark-protocol";
 
   let { data, form } = $props();
@@ -19,6 +21,9 @@
         availableModels.some((entry) => modelValue(entry.model) === modelValue(snapshot.defaultModel!)),
     ),
   );
+  let selectedDefaultModel = $state("");
+  let oauthPromptId = $state("");
+  let oauthResponse = $state("");
   let copy = $derived(
     isZh
       ? {
@@ -29,6 +34,12 @@
           daemonUnavailable: "模型设置暂时不可用。请确认 Spark 正在运行后重试。",
           noAvailableModels: "请先连接至少一个模型服务，然后再选择默认模型。",
           currentModelUnavailable: "当前默认模型暂不可用",
+          chooseModel: "选择默认模型",
+          chooseModelHint: "按模型或 Provider 搜索。保存后，新对话会默认使用此模型。",
+          searchModels: "搜索模型或 Provider…",
+          noModelsFound: "没有匹配的模型",
+          closeModelPicker: "关闭模型选择器",
+          clearModelSearch: "清除搜索",
           defaultTitle: "默认模型",
           defaultBody: "新对话会使用这个模型；你仍可以在对话中临时切换。",
           saveDefault: "保存默认模型",
@@ -85,6 +96,12 @@
           daemonUnavailable: "Model settings are temporarily unavailable. Make sure Spark is running, then try again.",
           noAvailableModels: "Connect at least one model provider before choosing a default model.",
           currentModelUnavailable: "Current default model is unavailable",
+          chooseModel: "Choose the default model",
+          chooseModelHint: "Search models or providers. New conversations use the saved selection by default.",
+          searchModels: "Search models or providers…",
+          noModelsFound: "No matching models",
+          closeModelPicker: "Close model picker",
+          clearModelSearch: "Clear search",
           defaultTitle: "Default model",
           defaultBody: "New conversations use this model. You can still switch models inside a conversation.",
           saveDefault: "Save default model",
@@ -134,6 +151,36 @@
           flowCancelled: "Cancelled",
         },
   );
+  let defaultModelGroups = $derived(buildModelGroups(snapshot.providers));
+  let selectedDefaultModelAvailable = $derived(
+    availableModels.some((entry) => modelValue(entry.model) === selectedDefaultModel),
+  );
+  let oauthPromptOptions = $derived(
+    flow?.prompt?.kind === "select"
+      ? [
+          {
+            id: flow.prompt.id,
+            options: flow.prompt.options.map((option) => ({ value: option.id, label: option.label })),
+          },
+        ]
+      : [],
+  );
+
+  $effect(() => {
+    const configured = snapshot.defaultModel ? modelValue(snapshot.defaultModel) : "";
+    const selectable = availableModels.map((entry) => modelValue(entry.model));
+    const known = defaultModelGroups.flatMap((group) => group.options).some((option) => option.value === selectedDefaultModel);
+    if (!selectedDefaultModel || !known) {
+      selectedDefaultModel = configured || selectable[0] || "";
+    }
+  });
+
+  $effect(() => {
+    const prompt = flow?.prompt;
+    if (!prompt || prompt.kind !== "select" || prompt.id === oauthPromptId) return;
+    oauthPromptId = prompt.id;
+    oauthResponse = prompt.options[0]?.id ?? "";
+  });
 
   $effect(() => {
     if (!flow || terminal(flow.status)) return;
@@ -149,8 +196,38 @@
     return `${model.providerName}/${model.modelId}`;
   }
 
-  function modelLabel(model: { providerName: string; modelId: string; providerLabel?: string; modelLabel?: string }) {
-    return `${model.modelLabel ?? model.modelId} · ${model.providerLabel ?? model.providerName}`;
+  function buildModelGroups(providers: SparkModelCatalogProvider[]): ModelPickerGroup[] {
+    const groups: ModelPickerGroup[] = providers.map((provider) => ({
+      id: provider.providerName,
+      label: provider.label,
+      options: provider.models
+        .filter((entry) => entry.available)
+        .map((entry) => ({
+          value: modelValue(entry.model),
+          label: entry.model.modelLabel ?? entry.model.modelId,
+          description:
+            entry.model.modelLabel && entry.model.modelLabel !== entry.model.modelId
+              ? entry.model.modelId
+              : undefined,
+          keywords: [entry.model.modelId, provider.providerName],
+        })),
+    }));
+    if (snapshot.defaultModel && !defaultModelAvailable) {
+      groups.unshift({
+        id: "unavailable-default",
+        label: copy.currentModelUnavailable,
+        options: [
+          {
+            value: modelValue(snapshot.defaultModel),
+            label: snapshot.defaultModel.modelLabel ?? snapshot.defaultModel.modelId,
+            description: snapshot.defaultModel.providerLabel ?? snapshot.defaultModel.providerName,
+            disabled: true,
+            keywords: [snapshot.defaultModel.modelId, snapshot.defaultModel.providerName],
+          },
+        ],
+      });
+    }
+    return groups.filter((group) => group.options.length > 0);
   }
 
   function sourceLabel(source: string | undefined) {
@@ -183,11 +260,7 @@
 <svelte:head><title>{copy.headTitle}</title></svelte:head>
 
 <section class="models-settings" aria-labelledby="models-title">
-  <header class="page-heading">
-    <p class="eyebrow">{copy.eyebrow}</p>
-    <h1 id="models-title">{copy.title}</h1>
-    <p>{copy.lede}</p>
-  </header>
+  <PageHeader id="models-title" eyebrow={copy.eyebrow} title={copy.title} lede={copy.lede} />
 
   {#if !data.control.available}
     <div class="notice error" role="alert"><Icon name="warning" size={18} />{copy.daemonUnavailable}</div>
@@ -205,9 +278,9 @@
       {#if flow}
         <p class="flow-provider">{flow.providerLabel ?? flow.providerName}</p>
         {#if flow.authorization}
-          <a class="primary-action" href={flow.authorization.url} target="_blank" rel="noreferrer">
+          <Button href={flow.authorization.url} target="_blank" rel="noreferrer">
             <Icon name="play" size={15} />{copy.openAuthorization}
-          </a>
+          </Button>
           {#if flow.authorization.instructions}<p class="muted">{flow.authorization.instructions}</p>{/if}
         {/if}
         {#if flow.deviceCode}
@@ -217,25 +290,39 @@
           <form method="POST" action="?/respondOAuth" class="prompt-form">
             <input type="hidden" name="flowId" value={flow.id} />
             <input type="hidden" name="promptId" value={flow.prompt.id} />
-            <label>
-              <span>{flow.prompt.message}</span>
+            <Field
+              id="oauth-response"
+              label={flow.prompt.message}
+              required={flow.prompt.kind === "select" || flow.prompt.allowEmpty !== true}
+            >
               {#if flow.prompt.kind === "select"}
-                <select name="response" required>
-                  {#each flow.prompt.options as option}<option value={option.id}>{option.label}</option>{/each}
-                </select>
+                <Select
+                  id="oauth-response"
+                  name="response"
+                  label={flow.prompt.message}
+                  groups={oauthPromptOptions}
+                  bind:value={oauthResponse}
+                  required
+                />
               {:else}
-                <input name="response" placeholder={flow.prompt.placeholder ?? ""} required={flow.prompt.allowEmpty !== true} autocomplete="off" />
+                <Input
+                  id="oauth-response"
+                  name="response"
+                  placeholder={flow.prompt.placeholder ?? ""}
+                  required={flow.prompt.allowEmpty !== true}
+                  autocomplete="off"
+                />
               {/if}
-            </label>
-            <button type="submit">{copy.response}</button>
+            </Field>
+            <Button type="submit">{copy.response}</Button>
           </form>
         {/if}
         {#if flow.progress.length > 0}<p class="muted">{flow.progress.at(-1)}</p>{/if}
         {#if flow.error}<p class="error-text">{flow.error}</p>{/if}
         {#if flow.status === "succeeded"}
-          <a class="secondary-action" href="/settings/models">{copy.done} · {copy.close}</a>
+          <Button variant="secondary" href="/settings/models">{copy.done} · {copy.close}</Button>
         {:else if !terminal(flow.status)}
-          <form method="POST" action="?/cancelOAuth"><input type="hidden" name="flowId" value={flow.id} /><button class="secondary-action" type="submit">{copy.cancel}</button></form>
+          <form method="POST" action="?/cancelOAuth"><input type="hidden" name="flowId" value={flow.id} /><Button variant="secondary" type="submit">{copy.cancel}</Button></form>
         {/if}
       {/if}
     </section>
@@ -247,17 +334,24 @@
     </div>
     {#if availableModels.length > 0}
       <form method="POST" action="?/setDefaultModel" class="inline-form" use:enhance>
-        <select
+        <div class="default-model-picker">
+          <ModelPicker
+          id="default-model"
           name="model"
-          aria-label={copy.defaultTitle}
-          value={snapshot.defaultModel ? modelValue(snapshot.defaultModel) : undefined}
-        >
-          {#if snapshot.defaultModel && !defaultModelAvailable}
-            <option value={modelValue(snapshot.defaultModel)} disabled>{copy.currentModelUnavailable}</option>
-          {/if}
-          {#each availableModels as entry}<option value={modelValue(entry.model)}>{modelLabel(entry.model)}</option>{/each}
-        </select>
-        <button type="submit">{copy.saveDefault}</button>
+          bind:value={selectedDefaultModel}
+          groups={defaultModelGroups}
+          label={copy.defaultTitle}
+          title={copy.chooseModel}
+          description={copy.chooseModelHint}
+          placeholder={copy.currentModelUnavailable}
+          searchPlaceholder={copy.searchModels}
+          emptyLabel={copy.noModelsFound}
+          closeLabel={copy.closeModelPicker}
+          clearSearchLabel={copy.clearModelSearch}
+          required
+        />
+        </div>
+        <Button type="submit" disabled={!selectedDefaultModelAvailable}>{copy.saveDefault}</Button>
       </form>
     {:else}<p class="muted">{data.control.available ? copy.noAvailableModels : copy.daemonUnavailable}</p>{/if}
   </section>
@@ -284,22 +378,23 @@
                 <summary>{provider.auth.configured ? copy.updateKey : copy.addKey}</summary>
                 <form method="POST" action="?/saveApiKey" class="credential-form" use:enhance>
                   <input type="hidden" name="providerName" value={provider.providerName} />
-                  <label
-                    ><span>{copy.apiKey}</span><input
+                  <Field id={`api-key-${provider.providerName}`} label={copy.apiKey} required>
+                    <Input
+                      id={`api-key-${provider.providerName}`}
                       name="apiKey"
                       type="password"
                       autocomplete="new-password"
                       placeholder={copy.apiKeyPlaceholder}
                       required
-                    /></label
-                  >
-                  <button type="submit">{copy.saveKey}</button>
+                    />
+                  </Field>
+                  <Button type="submit">{copy.saveKey}</Button>
                 </form>
               </details>
               {#if provider.auth.source === "stored"}
                 <form method="POST" action="?/logout" use:enhance>
                   <input type="hidden" name="providerName" value={provider.providerName} />
-                  <button class="link-action" type="submit">{copy.logout}</button>
+                  <Button variant="secondary" type="submit">{copy.logout}</Button>
                 </form>
               {:else if provider.auth.configured}<p class="muted ambient-note">{copy.ambient}</p>{/if}
             </div>
@@ -308,12 +403,12 @@
               {#if provider.auth.configured}
                 <form method="POST" action="?/logout" use:enhance>
                   <input type="hidden" name="providerName" value={provider.providerName} />
-                  <button class="link-action" type="submit">{copy.logout}</button>
+                  <Button variant="secondary" type="submit">{copy.logout}</Button>
                 </form>
               {:else}
                 <form method="POST" action="?/startOAuth">
                   <input type="hidden" name="providerName" value={provider.providerName} />
-                  <button type="submit">{copy.login}</button>
+                  <Button type="submit">{copy.login}</Button>
                 </form>
               {/if}
             </div>
@@ -364,25 +459,12 @@
     width: 100%;
   }
 
-  h1,
   h2,
   h3,
   p {
     margin: 0;
   }
 
-  .page-heading {
-    display: grid;
-    gap: 7px;
-    max-width: 720px;
-  }
-
-  .page-heading h1 {
-    font-size: 25px;
-    letter-spacing: -0.02em;
-  }
-
-  .page-heading > p:last-child,
   .card-heading p,
   .provider-heading p,
   .section-heading p,
@@ -405,7 +487,7 @@
   .technical-details {
     background: var(--color-surface);
     border: 1px solid var(--color-border);
-    border-radius: 14px;
+    border-radius: var(--rounded-lg);
   }
 
   .settings-card,
@@ -425,7 +507,8 @@
     justify-content: space-between;
   }
 
-  .inline-form select {
+  .default-model-picker {
+    display: grid;
     flex: 1 1 auto;
     min-width: 0;
   }
@@ -511,7 +594,7 @@
     display: flex;
     font-size: 13px;
     font-weight: 700;
-    min-height: 38px;
+    min-height: 40px;
     width: fit-content;
   }
 
@@ -527,65 +610,6 @@
   .prompt-form {
     display: grid;
     gap: 10px;
-  }
-
-  label {
-    display: grid;
-    gap: 5px;
-  }
-
-  label span {
-    color: var(--color-ink-muted);
-    font-size: 12px;
-    font-weight: 650;
-  }
-
-  input,
-  select {
-    background: var(--color-canvas);
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
-    color: var(--color-ink);
-    font: inherit;
-    min-height: 40px;
-    padding: 7px 10px;
-  }
-
-  button,
-  .primary-action,
-  .secondary-action {
-    align-items: center;
-    border-radius: 8px;
-    cursor: pointer;
-    display: inline-flex;
-    font: inherit;
-    font-size: 13px;
-    font-weight: 700;
-    gap: 6px;
-    justify-content: center;
-    min-height: 40px;
-    padding: 0 13px;
-    text-decoration: none;
-    width: fit-content;
-  }
-
-  button,
-  .primary-action {
-    background: var(--color-primary);
-    border: 0;
-    color: var(--color-on-primary);
-  }
-
-  .secondary-action {
-    background: var(--color-surface-soft);
-    border: 1px solid var(--color-border);
-    color: var(--color-ink-muted);
-  }
-
-  .link-action {
-    background: transparent;
-    border: 1px solid var(--color-border);
-    color: var(--color-danger);
   }
 
   .ambient-note {
@@ -755,16 +779,15 @@
       align-self: flex-start;
     }
 
-    .inline-form select,
-    .inline-form button,
+    .default-model-picker,
     .provider-actions,
     .provider-actions > form,
-    .provider-actions button,
-    .credential-editor,
-    .credential-form button,
-    .primary-action,
-    .secondary-action {
+    .credential-editor {
       width: 100%;
+    }
+
+    .provider-actions > form {
+      display: grid;
     }
 
     .technical-details > summary {

@@ -2,7 +2,7 @@
   import { enhance } from "$app/forms";
   import { invalidateAll } from "$app/navigation";
   import { statusLabel } from "$lib/i18n";
-  import PageHeader from "$lib/ui/PageHeader.svelte";
+  import { Button, Field, Input, PageHeader, Select, Textarea } from "$lib/ui";
   import type { SubmitFunction } from "@sveltejs/kit";
   import { untrack } from "svelte";
 
@@ -34,7 +34,26 @@
   let common = $derived(data.messages.common);
   let status = $derived(data.channelStatus);
   let defaultEndpoint = $derived(data.defaults.infoflowEndpoint);
-
+  let groupPolicyOptions = $derived([
+    {
+      id: "infoflow-group-policy",
+      options: [
+        { value: "disabled", label: t.infoflowGroupPolicyDisabled },
+        { value: "allowlist", label: t.infoflowGroupPolicyAllowlist },
+        { value: "open", label: t.infoflowGroupPolicyOpen },
+      ],
+    },
+  ]);
+  let groupTriggerOptions = $derived([
+    {
+      id: "infoflow-group-trigger",
+      options: [
+        { value: "mention", label: t.infoflowGroupTriggerMention },
+        { value: "command", label: t.infoflowGroupTriggerCommand },
+        { value: "all", label: t.infoflowGroupTriggerAll },
+      ],
+    },
+  ]);
   let values = $state<ChannelEditorValues>(structuredClone(untrack(() => data.editor)));
   let saveState = $state<"idle" | "saving" | "saved" | "error">("idle");
   let saveMessage = $state<string | null>(null);
@@ -187,26 +206,26 @@
       </label>
       {#if values.feishuEnabled}
         <div class="field-grid">
-          <label>
-            <span>{t.feishuAppId}</span>
-            <input
+          <Field id="feishu-app-id" label={t.feishuAppId}>
+            <Input
+              id="feishu-app-id"
               name="feishuAppId"
               type="text"
               autocomplete="off"
               bind:value={values.feishuAppId}
               placeholder="cli_xxx"
             />
-          </label>
-          <label>
-            <span>{t.feishuAppSecret}</span>
-            <input
+          </Field>
+          <Field id="feishu-app-secret" label={t.feishuAppSecret}>
+            <Input
+              id="feishu-app-secret"
               name="feishuAppSecret"
               type="password"
               autocomplete="off"
               bind:value={values.feishuAppSecret}
               placeholder={values.feishuAppSecretSet ? t.secretStored : "••••••••"}
             />
-          </label>
+          </Field>
         </div>
       {/if}
     </section>
@@ -234,74 +253,73 @@
       </label>
       {#if values.infoflowEnabled}
         <div class="field-grid">
-          <label>
-            <span>{t.infoflowAppAgentId}</span>
-            <small class="field-hint">{t.infoflowAppAgentIdHint}</small>
-            <input
+          <Field id="infoflow-app-agent-id" label={t.infoflowAppAgentId} hint={t.infoflowAppAgentIdHint}>
+            <Input
+              id="infoflow-app-agent-id"
               name="infoflowAppAgentId"
               type="text"
               autocomplete="off"
               bind:value={values.infoflowAppAgentId}
             />
-          </label>
-          <label>
-            <span>{t.infoflowAppKey}</span>
-            <input
+          </Field>
+          <Field id="infoflow-app-key" label={t.infoflowAppKey}>
+            <Input
+              id="infoflow-app-key"
               name="infoflowAppKey"
               type="text"
               autocomplete="off"
               bind:value={values.infoflowAppKey}
             />
-          </label>
-          <label>
-            <span>{t.infoflowAppSecret}</span>
-            <input
+          </Field>
+          <Field id="infoflow-app-secret" label={t.infoflowAppSecret}>
+            <Input
+              id="infoflow-app-secret"
               name="infoflowAppSecret"
               type="password"
               autocomplete="off"
               bind:value={values.infoflowAppSecret}
               placeholder={values.infoflowAppSecretSet ? t.secretStored : "••••••••"}
             />
-          </label>
+          </Field>
         </div>
         <details class="advanced">
           <summary>{t.infoflowAdvanced}</summary>
           <div class="field-grid">
-            <label>
-              <span>{t.infoflowEndpoint}</span>
-              <small class="field-hint">{t.infoflowEndpointHint}</small>
-              <input
+            <Field id="infoflow-endpoint" label={t.infoflowEndpoint} hint={t.infoflowEndpointHint}>
+              <Input
+                id="infoflow-endpoint"
                 name="infoflowEndpoint"
                 type="url"
                 autocomplete="off"
                 bind:value={values.infoflowEndpoint}
                 placeholder={defaultEndpoint}
               />
-            </label>
-            <label class="span-2">
-              <span>{t.infoflowAllowedUserIds}</span>
-              <small class="field-hint">{t.infoflowAllowedUserIdsHint}</small>
-              <input
-                name="infoflowAllowedUserIds"
-                type="text"
-                autocomplete="off"
-                bind:value={values.infoflowAllowedUserIds}
-                placeholder={t.infoflowAllowedUserIdsPlaceholder}
+            </Field>
+            <div class="span-2">
+              <Field id="infoflow-allowed-users" label={t.infoflowAllowedUserIds} hint={t.infoflowAllowedUserIdsHint}>
+                <Input
+                  id="infoflow-allowed-users"
+                  name="infoflowAllowedUserIds"
+                  type="text"
+                  autocomplete="off"
+                  bind:value={values.infoflowAllowedUserIds}
+                  placeholder={t.infoflowAllowedUserIdsPlaceholder}
+                />
+              </Field>
+            </div>
+            <Field id="infoflow-group-policy" label={t.infoflowGroupPolicy} hint={t.infoflowGroupPolicyHint}>
+              <Select
+                id="infoflow-group-policy"
+                name="infoflowGroupPolicy"
+                label={t.infoflowGroupPolicy}
+                groups={groupPolicyOptions}
+                value={values.infoflowGroupPolicy}
+                onValueChange={(value) => (values.infoflowGroupPolicy = value as ChannelEditorValues["infoflowGroupPolicy"])}
               />
-            </label>
-            <label>
-              <span>{t.infoflowGroupPolicy}</span>
-              <small class="field-hint">{t.infoflowGroupPolicyHint}</small>
-              <select name="infoflowGroupPolicy" bind:value={values.infoflowGroupPolicy}>
-                <option value="disabled">{t.infoflowGroupPolicyDisabled}</option>
-                <option value="allowlist">{t.infoflowGroupPolicyAllowlist}</option>
-                <option value="open">{t.infoflowGroupPolicyOpen}</option>
-              </select>
-            </label>
-            <label>
-              <span>{t.infoflowAllowedGroupIds}</span>
-              <small class="field-hint">{t.infoflowAllowedGroupIdsHint}</small>
-              <input
+            </Field>
+            <Field id="infoflow-allowed-groups" label={t.infoflowAllowedGroupIds} hint={t.infoflowAllowedGroupIdsHint}>
+              <Input
+                id="infoflow-allowed-groups"
                 name="infoflowAllowedGroupIds"
                 type="text"
                 autocomplete="off"
@@ -309,27 +327,29 @@
                 placeholder={t.infoflowAllowedGroupIdsPlaceholder}
                 disabled={values.infoflowGroupPolicy !== "allowlist"}
               />
-            </label>
-            <label>
-              <span>{t.infoflowGroupTrigger}</span>
-              <small class="field-hint">{t.infoflowGroupTriggerHint}</small>
-              <select name="infoflowGroupTrigger" bind:value={values.infoflowGroupTrigger}>
-                <option value="mention">{t.infoflowGroupTriggerMention}</option>
-                <option value="command">{t.infoflowGroupTriggerCommand}</option>
-                <option value="all">{t.infoflowGroupTriggerAll}</option>
-              </select>
-            </label>
-            <label class="span-2">
-              <span>{t.infoflowSystemPrompt}</span>
-              <small class="field-hint">{t.infoflowSystemPromptHint}</small>
-              <textarea
-                name="infoflowSystemPrompt"
-                rows="4"
-                autocomplete="off"
-                bind:value={values.infoflowSystemPrompt}
-                placeholder={t.infoflowSystemPromptPlaceholder}
-              ></textarea>
-            </label>
+            </Field>
+            <Field id="infoflow-group-trigger" label={t.infoflowGroupTrigger} hint={t.infoflowGroupTriggerHint}>
+              <Select
+                id="infoflow-group-trigger"
+                name="infoflowGroupTrigger"
+                label={t.infoflowGroupTrigger}
+                groups={groupTriggerOptions}
+                value={values.infoflowGroupTrigger}
+                onValueChange={(value) => (values.infoflowGroupTrigger = value as ChannelEditorValues["infoflowGroupTrigger"])}
+              />
+            </Field>
+            <div class="span-2">
+              <Field id="infoflow-system-prompt" label={t.infoflowSystemPrompt} hint={t.infoflowSystemPromptHint}>
+                <Textarea
+                  id="infoflow-system-prompt"
+                  name="infoflowSystemPrompt"
+                  rows={4}
+                  autocomplete="off"
+                  bind:value={values.infoflowSystemPrompt}
+                  placeholder={t.infoflowSystemPromptPlaceholder}
+                />
+              </Field>
+            </div>
           </div>
         </details>
       {/if}
@@ -347,9 +367,9 @@
     {/if}
 
     <div class="form-actions">
-      <button class="primary-action" type="submit" disabled={saveState === "saving"}>
+      <Button type="submit" disabled={saveState === "saving"}>
         {saveState === "saving" ? t.saving : t.saveManual}
-      </button>
+      </Button>
     </div>
   </form>
 </section>
@@ -423,7 +443,7 @@
 
   .panel {
     border: 1px solid var(--color-border);
-    border-radius: 16px;
+    border-radius: var(--rounded-lg);
   }
 
   .editor .adapter-block:first-of-type {
@@ -546,11 +566,14 @@
   }
 
   .advanced summary {
+    align-items: center;
     color: var(--color-ink-muted);
     cursor: pointer;
+    display: flex;
     font-size: 13px;
     font-weight: 600;
     list-style: none;
+    min-height: 40px;
     padding: 10px 0;
   }
 
@@ -563,66 +586,14 @@
     margin-bottom: 12px;
   }
 
-  .advanced label {
-    display: grid;
-    gap: 6px;
-    padding-bottom: 12px;
-  }
-
-  .field-hint {
-    color: var(--color-ink-subtle);
-    font-size: 12px;
-    line-height: 1.4;
-  }
-
   .field-grid {
     display: grid;
     gap: 12px;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .field-grid label,
-  .adapter-block > label:not(.toggle-row) {
-    display: grid;
-    gap: 6px;
-  }
-
   .field-grid .span-2 {
     grid-column: 1 / -1;
-  }
-
-  label span {
-    color: var(--color-ink-subtle);
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-  }
-
-  input[type="text"],
-  input[type="password"],
-  input[type="url"],
-  select {
-    background: var(--color-surface-soft);
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
-    color: inherit;
-    font: inherit;
-    min-height: 38px;
-    outline: none;
-    padding: 8px 12px;
-    transition:
-      background 120ms ease,
-      border-color 120ms ease,
-      box-shadow 120ms ease;
-    width: 100%;
-  }
-
-  input:focus,
-  select:focus {
-    background: var(--color-surface);
-    border-color: var(--color-focus-ring);
-    box-shadow: var(--shadow-focus);
   }
 
   .mono {
@@ -641,23 +612,6 @@
     display: flex;
     flex-wrap: wrap;
     gap: 12px 16px;
-  }
-
-  .primary-action {
-    background: var(--color-primary);
-    border: 0;
-    border-radius: 8px;
-    color: var(--color-on-primary);
-    cursor: pointer;
-    font-weight: 500;
-    min-height: 36px;
-    padding: 0 14px;
-    width: fit-content;
-  }
-
-  .primary-action:disabled {
-    cursor: wait;
-    opacity: 0.7;
   }
 
   .status-pill {

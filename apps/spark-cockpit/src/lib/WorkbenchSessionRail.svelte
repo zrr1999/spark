@@ -237,14 +237,14 @@
     align-items: center;
     background: var(--color-surface-soft);
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     color: var(--color-ink);
     display: inline-flex;
     font-size: 13px;
     font-weight: 600;
     gap: 6px;
     justify-content: center;
-    min-height: 36px;
+    min-height: 40px;
     padding: 0 8px;
     text-align: center;
     text-decoration: none;
@@ -264,11 +264,11 @@
     align-items: center;
     background: var(--color-surface-soft);
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     color: var(--color-ink-subtle);
     display: flex;
     gap: 8px;
-    min-height: 36px;
+    min-height: 40px;
     padding: 0 10px;
     transition:
       background 120ms ease,
@@ -289,6 +289,7 @@
     color: inherit;
     font: inherit;
     font-size: 13px;
+    min-height: 38px;
     outline: none;
     width: 100%;
   }

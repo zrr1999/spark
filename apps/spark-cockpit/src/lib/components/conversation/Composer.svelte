@@ -18,6 +18,7 @@
     roomy?: boolean;
     header?: Snippet;
     context?: Snippet;
+    feedback?: Snippet;
   };
 
   let {
@@ -36,6 +37,7 @@
     roomy = false,
     header,
     context,
+    feedback,
   }: Props = $props();
 
   function submitOnEnter(event: KeyboardEvent) {
@@ -62,6 +64,7 @@
     {disabled}
     onkeydown={submitOnEnter}
   ></textarea>
+  {#if feedback}<div class="composer-feedback">{@render feedback()}</div>{/if}
   <div class="composer-toolbar">
     <div class="composer-context">
       {#if context}{@render context()}{/if}
@@ -94,6 +97,10 @@
 
   .composer-header {
     min-width: 0;
+  }
+
+  .composer-feedback {
+    display: contents;
   }
 
   textarea {
@@ -129,7 +136,7 @@
     display: flex;
     gap: 12px;
     justify-content: space-between;
-    min-height: 38px;
+    min-height: 40px;
     padding-top: 10px;
   }
 
@@ -153,17 +160,17 @@
     align-items: center;
     background: var(--color-primary);
     border: 0;
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     color: var(--color-on-primary, #fff);
     cursor: pointer;
     display: inline-flex;
     flex: 0 0 auto;
     font: inherit;
     font-size: 13px;
-    font-weight: 650;
+    font-weight: 600;
     gap: 6px;
     justify-content: center;
-    min-height: 36px;
+    min-height: 40px;
     padding: 0 13px;
   }
 
