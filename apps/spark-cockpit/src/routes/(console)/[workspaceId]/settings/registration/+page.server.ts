@@ -2,6 +2,12 @@ import { fail, error as kitError } from "@sveltejs/kit";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import { ensureCurrentOwnerSession } from "$lib/server/auth";
 import { getDatabase } from "$lib/server/db";
+import {
+  buildDaemonLoginCommand,
+  buildDaemonWorkspaceRegistrationCommand,
+  isInsecureRemoteServerOrigin,
+  isLoopbackServerOrigin,
+} from "$lib/server/daemon-registration-commands";
 import { formText } from "$lib/server/form-data";
 import {
   createRuntimeEnrollmentToken,
@@ -18,6 +24,15 @@ export const load: PageServerLoad = ({ params, url }) => {
     ...page,
     backSettingsPath: workspacePath(page.workspace, "/settings"),
     serverOrigin: url.origin,
+    deviceLoginCommand: buildDaemonLoginCommand(url.origin),
+    workspaceRegisterCommand: buildDaemonWorkspaceRegistrationCommand({
+      serverOrigin: url.origin,
+      displayName: page.workspace.name,
+      workspaceName: page.workspace.name,
+      workspaceSlug: page.workspace.slug,
+    }),
+    loopbackServerOrigin: isLoopbackServerOrigin(url),
+    insecureRemoteServerOrigin: isInsecureRemoteServerOrigin(url),
   };
 };
 
@@ -79,17 +94,9 @@ export const actions: Actions = {
 };
 
 function buildEnrollCommand(serverOrigin: string, refreshToken: string, workspaceName: string) {
-  return [
-    "spark daemon workspace register",
-    `--server-url ${shellQuote(serverOrigin)}`,
-    `--token ${shellQuote(refreshToken)}`,
-    `--name ${shellQuote(workspaceName)}`,
-  ].join(" ");
-}
-
-function shellQuote(value: string): string {
-  if (/^[A-Za-z0-9_./:=@%+-]+$/.test(value)) {
-    return value;
-  }
-  return `'${value.replace(/'/g, `'\\''`)}'`;
+  return buildDaemonWorkspaceRegistrationCommand({
+    serverOrigin,
+    displayName: workspaceName,
+    registrationToken: refreshToken,
+  });
 }

@@ -69,6 +69,8 @@ describe("Spark daemon local RPC", () => {
             serverUrl: "http://127.0.0.1:5173/",
             localPath: workspacePath,
             displayName: "Spore",
+            workspaceName: "Spore profile",
+            workspaceSlug: "spore-profile",
             registrationToken: "spark_wsreg_local_rpc",
           },
         }),
@@ -100,6 +102,8 @@ describe("Spark daemon local RPC", () => {
           workspaceRegistration: {
             localWorkspaceKey: "spore",
             displayName: "Spore",
+            workspaceName: "Spore profile",
+            workspaceSlug: "spore-profile",
           },
         }),
       );

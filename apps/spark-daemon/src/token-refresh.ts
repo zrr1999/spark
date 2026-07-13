@@ -1,6 +1,7 @@
 import { runtimeTokenRefreshResponseSchema } from "@zendev-lab/spark-protocol";
 import type { SparkPaths } from "@zendev-lab/spark-system";
 import { readSparkDaemonConfig, writeSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
+import { fetchRegistrationEndpoint } from "./registration-http.js";
 
 const refreshLeadMs = 5 * 60 * 1000;
 const refreshRetryMs = 60 * 1000;
@@ -48,22 +49,23 @@ export async function refreshSparkDaemonCredentials(options: {
 }): Promise<SparkDaemonConfig> {
   const runtimeId = requireConfig(options.config.runtimeId, "runtimeId");
   const refreshToken = requireConfig(options.config.refreshToken, "refreshToken");
-  const fetchFn = options.fetchFn ?? fetch;
-  const response = await fetchFn(
-    new URL(
-      `/api/v1/runtime/runtimes/${runtimeId}/token/refresh`,
-      resolveServerUrl(options.config),
-    ),
+  const url = new URL(
+    `/api/v1/runtime/runtimes/${runtimeId}/token/refresh`,
+    resolveServerUrl(options.config),
+  );
+  const response = await fetchRegistrationEndpoint(
+    url,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ refreshToken }),
     },
+    options.fetchFn,
   );
 
   if (!response.ok) {
     throw new Error(
-      `Runtime token refresh failed: HTTP ${response.status} ${await response.text()}`,
+      `Runtime token refresh failed at ${url.toString()}: HTTP ${response.status} ${await response.text()}`,
     );
   }
 

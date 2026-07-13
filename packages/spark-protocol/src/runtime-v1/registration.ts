@@ -41,7 +41,7 @@ export const runtimeRegistrationResponseSchema = z.object({
 });
 
 export const runtimeWorkspaceRegistrationRequestSchema = z.object({
-  registrationToken: z.string().min(1),
+  registrationToken: z.string().min(1).optional(),
   workspaceRegistration: runtimeWorkspaceRegistrationDetailsSchema,
 });
 
@@ -64,6 +64,23 @@ export const runtimeTokenRefreshResponseSchema = z.object({
   refreshedAt: isoDateTimeSchema,
 });
 
+export const runtimeDeviceAuthorizationRequestSchema = runtimeRegistrationRequestSchema.omit({
+  workspaceRegistration: true,
+});
+
+export const runtimeDeviceAuthorizationResponseSchema = z.object({
+  deviceCode: z.string().min(32),
+  userCode: z.string().min(4),
+  verificationUri: z.string().url(),
+  verificationUriComplete: z.string().url(),
+  expiresIn: z.number().int().positive(),
+  interval: z.number().int().positive(),
+});
+
+export const runtimeDeviceTokenRequestSchema = z.object({
+  deviceCode: z.string().min(32),
+});
+
 export type RuntimeRegistrationRequest = z.infer<typeof runtimeRegistrationRequestSchema>;
 export type RuntimeRegistrationResponse = z.infer<typeof runtimeRegistrationResponseSchema>;
 export type RuntimeWorkspaceRegistrationRequest = z.infer<
@@ -74,3 +91,10 @@ export type RuntimeWorkspaceRegistrationResponse = z.infer<
 >;
 export type RuntimeTokenRefreshRequest = z.infer<typeof runtimeTokenRefreshRequestSchema>;
 export type RuntimeTokenRefreshResponse = z.infer<typeof runtimeTokenRefreshResponseSchema>;
+export type RuntimeDeviceAuthorizationRequest = z.infer<
+  typeof runtimeDeviceAuthorizationRequestSchema
+>;
+export type RuntimeDeviceAuthorizationResponse = z.infer<
+  typeof runtimeDeviceAuthorizationResponseSchema
+>;
+export type RuntimeDeviceTokenRequest = z.infer<typeof runtimeDeviceTokenRequestSchema>;

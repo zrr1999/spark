@@ -29,6 +29,7 @@
   };
 
   type RegistrationCommand = {
+    registrationMode: "device" | "token";
     enrollCommand: string;
     enrollmentExpiresAt: string | null;
     profileSetup: RegistrationProfile;
@@ -171,6 +172,12 @@
   });
 
   $effect(() => {
+    if (!registrationCommand && data.pendingDeviceRegistrationCommand) {
+      registrationCommand = data.pendingDeviceRegistrationCommand;
+    }
+  });
+
+  $effect(() => {
     if (
       form?.intent !== "workspaceRegistration" ||
       !form.enrollCommand ||
@@ -180,6 +187,7 @@
     }
 
     registrationCommand = {
+      registrationMode: form.registrationMode === "token" ? "token" : "device",
       enrollCommand: form.enrollCommand,
       enrollmentExpiresAt: form.enrollmentExpiresAt ?? null,
       profileSetup: form.profileSetup,
@@ -323,7 +331,7 @@
               <form
                 class="profile-form"
                 method="POST"
-                action="?/createEnrollmentToken"
+                action="?/prepareRegistration"
                 use:enhance={keepRegistrationCommandVisible}
               >
                 {#if form?.intent === "workspaceRegistration" && form?.message && !form?.enrollCommand}
@@ -417,10 +425,24 @@
                           value={registrationProfile.description ?? ""}
                         />
                       </Field>
-                      <Button type="submit">
-                        <Icon name="check" size={16} stroke={2.4} />
-                        <span>{t.emptyWorkspace.stepActions.createToken}</span>
-                      </Button>
+                      <div class="registration-actions">
+                        <Button
+                          type="submit"
+                          name="registrationMethod"
+                          value="device"
+                        >
+                          <Icon name="spark" size={16} stroke={2.4} />
+                          <span>{t.emptyWorkspace.stepActions.createDeviceCommand}</span>
+                        </Button>
+                        <Button
+                          type="submit"
+                          variant="secondary"
+                          name="registrationMethod"
+                          value="token"
+                        >
+                          <span>{t.emptyWorkspace.stepActions.createTokenFallback}</span>
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -437,8 +459,21 @@
                       >{t.emptyWorkspace.stepActions
                         .commandCreatedTitle}</strong
                     >
-                    <p>{t.emptyWorkspace.stepActions.commandCreatedHint}</p>
+                    <p>
+                      {currentCommand.registrationMode === "token"
+                        ? t.emptyWorkspace.stepActions.tokenCommandCreatedHint
+                        : t.emptyWorkspace.stepActions.commandCreatedHint}
+                    </p>
                   </div>
+                  {#if data.loopbackServerOrigin}
+                    <p class="loopback-warning" role="note">
+                      {t.emptyWorkspace.stepActions.loopbackWarning}
+                    </p>
+                  {:else if data.insecureRemoteServerOrigin}
+                    <p class="loopback-warning" role="note">
+                      {t.emptyWorkspace.stepActions.insecureHttpWarning}
+                    </p>
+                  {/if}
                   <div class="command-row">
                     <pre>{currentCommand.enrollCommand}</pre>
                     <div class="command-action">
@@ -468,10 +503,12 @@
                       >{commandCopyError}</small
                     >
                   {/if}
-                  <small
-                    >{t.emptyWorkspace.stepActions.expiresPrefix}
-                    {formatRelative(currentCommand.enrollmentExpiresAt)}</small
-                  >
+                  {#if currentCommand.enrollmentExpiresAt}
+                    <small
+                      >{t.emptyWorkspace.stepActions.expiresPrefix}
+                      {formatRelative(currentCommand.enrollmentExpiresAt)}</small
+                    >
+                  {/if}
                 </div>
               {:else}
                 <p class="step-note">
@@ -697,6 +734,17 @@
     margin-top: 0;
   }
 
+  .loopback-warning {
+    background: var(--color-warning-weak);
+    border: 1px solid var(--color-warning-soft);
+    border-radius: 8px;
+    color: var(--color-warning-strong);
+    font-size: 12px;
+    line-height: 1.5;
+    margin: 0;
+    padding: 10px 12px;
+  }
+
   .command-row {
     align-items: stretch;
     background: var(--color-ink);
@@ -844,6 +892,12 @@
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
+  .registration-actions {
+    align-items: stretch;
+    display: flex;
+    gap: 8px;
+  }
+
   .profile-fields {
     display: grid;
     gap: 12px;
@@ -897,6 +951,15 @@
     .profile-submit-row,
     .workspace-create-form {
       grid-template-columns: 1fr;
+    }
+
+    .registration-actions {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .registration-actions :global(.ui-button) {
+      width: 100%;
     }
 
     .command-action {

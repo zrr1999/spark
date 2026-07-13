@@ -1,18 +1,30 @@
 import {
   createId,
+  runtimeDeviceAuthorizationResponseSchema,
   runtimeRegistrationResponseSchema,
   runtimeProtocolVersion,
   serverHelloAckEnvelopeSchema,
   runtimeWorkspaceRegistrationResponseSchema,
+  type RuntimeDeviceAuthorizationResponse,
   type RuntimeRegistrationResponse,
 } from "@zendev-lab/spark-protocol";
 import type { SparkPaths } from "@zendev-lab/spark-system";
 import WebSocket from "ws";
 import { readSparkDaemonConfig, writeSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
 import { sparkDaemonSupportedFeatures, sparkDaemonVersion } from "./daemon.js";
+import { fetchRegistrationEndpoint } from "./registration-http.js";
 import { refreshSparkDaemonCredentials, shouldRefreshSparkDaemonToken } from "./token-refresh.js";
 
 export class RegistrationGrantRefusedError extends Error {}
+
+export class DeviceAuthorizationError extends Error {
+  constructor(
+    message: string,
+    readonly reasonCode: string,
+  ) {
+    super(message);
+  }
+}
 
 type RegistrationWebSocket = {
   on(event: "open", listener: () => void): RegistrationWebSocket;
@@ -30,12 +42,15 @@ type RegistrationWebSocketFactory = (
 
 export interface SparkDaemonRegistrationInput {
   serverUrl: string;
+  allowInsecureHttp?: boolean;
   registrationToken?: string;
   displayName?: string;
   installationId?: string;
   workspaceRegistration?: {
     localWorkspaceKey: string;
     displayName: string;
+    workspaceName?: string;
+    workspaceSlug?: string;
   };
 }
 
@@ -44,12 +59,20 @@ export interface SparkDaemonRegistrationResult {
   workspaceBinding?: RuntimeRegistrationResponse["workspaceBinding"];
 }
 
+export interface SparkDaemonDeviceAuthorizationOptions {
+  fetchFn?: typeof fetch;
+  sleep?: (delayMs: number) => Promise<void>;
+  now?: () => number;
+}
+
 export async function registerSparkDaemonWithToken(
   paths: SparkPaths,
   input: SparkDaemonRegistrationInput & { registrationToken: string },
 ) {
   const current = readSparkDaemonConfig(paths);
-  const serverUrl = validateRegistrationServerUrl(input.serverUrl);
+  const serverUrl = validateRegistrationServerUrl(input.serverUrl, {
+    allowInsecureHttp: input.allowInsecureHttp,
+  });
   const displayName = input.displayName ?? current.displayName;
   const installationId = input.installationId ?? current.installationId;
   const registered = await requestSparkDaemonRegistration({
@@ -59,19 +82,122 @@ export async function registerSparkDaemonWithToken(
     installationId,
     ...(input.workspaceRegistration ? { workspaceRegistration: input.workspaceRegistration } : {}),
   });
-  writeSparkDaemonConfig(paths, {
-    ...current,
-    installationId,
-    displayName,
+  persistSparkDaemonCredentials(paths, current, {
     serverUrl,
-    runtimeId: registered.runtimeId,
-    runtimeToken: registered.runtimeToken,
-    runtimeTokenExpiresAt: registered.runtimeTokenExpiresAt,
-    refreshToken: registered.refreshToken,
-    refreshTokenExpiresAt: registered.refreshTokenExpiresAt,
-    webSocketUrl: registered.webSocketUrl,
+    displayName,
+    installationId,
+    registered,
   });
   return registered;
+}
+
+export async function startSparkDaemonDeviceAuthorization(
+  paths: SparkPaths,
+  input: Pick<
+    SparkDaemonRegistrationInput,
+    "serverUrl" | "displayName" | "installationId" | "allowInsecureHttp"
+  >,
+  options: Pick<SparkDaemonDeviceAuthorizationOptions, "fetchFn"> = {},
+): Promise<RuntimeDeviceAuthorizationResponse> {
+  const current = readSparkDaemonConfig(paths);
+  const serverUrl = validateRegistrationServerUrl(input.serverUrl, {
+    allowInsecureHttp: input.allowInsecureHttp,
+  });
+  const url = new URL("/api/v1/runtime/device-authorizations", serverUrl);
+  const response = await fetchRegistrationEndpoint(
+    url,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        installationId: input.installationId ?? current.installationId,
+        displayName: input.displayName ?? current.displayName,
+        runtimeVersion: sparkDaemonVersion,
+        supportedFeatures: sparkDaemonSupportedFeatures,
+        labels: { source: "spark-monorepo", service: "spark-runtime-bridge" },
+      }),
+    },
+    options.fetchFn,
+  );
+
+  if (!response.ok) {
+    const failure = await readHttpFailure(response);
+    throw new DeviceAuthorizationError(
+      `Daemon authorization failed at ${url.toString()}: HTTP ${response.status} ${failure.message}`,
+      failure.code,
+    );
+  }
+
+  return runtimeDeviceAuthorizationResponseSchema.parse(await response.json());
+}
+
+export async function completeSparkDaemonDeviceAuthorization(
+  paths: SparkPaths,
+  input: {
+    serverUrl: string;
+    authorization: RuntimeDeviceAuthorizationResponse;
+    displayName?: string;
+    installationId?: string;
+    allowInsecureHttp?: boolean;
+  },
+  options: SparkDaemonDeviceAuthorizationOptions = {},
+): Promise<RuntimeRegistrationResponse> {
+  const current = readSparkDaemonConfig(paths);
+  const serverUrl = validateRegistrationServerUrl(input.serverUrl, {
+    allowInsecureHttp: input.allowInsecureHttp,
+  });
+  const displayName = input.displayName ?? current.displayName;
+  const installationId = input.installationId ?? current.installationId;
+  const url = new URL("/api/v1/runtime/device-authorizations/token", serverUrl);
+  const sleep =
+    options.sleep ?? ((delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)));
+  const now = options.now ?? Date.now;
+  const deadline = now() + input.authorization.expiresIn * 1_000;
+  let pollDelayMs = input.authorization.interval * 1_000;
+
+  while (now() < deadline) {
+    await sleep(pollDelayMs);
+    const response = await fetchRegistrationEndpoint(
+      url,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ deviceCode: input.authorization.deviceCode }),
+      },
+      options.fetchFn,
+    );
+
+    if (response.status === 202) {
+      await response.arrayBuffer();
+      continue;
+    }
+    if (response.status === 429) {
+      await response.arrayBuffer();
+      pollDelayMs += 5_000;
+      continue;
+    }
+    if (!response.ok) {
+      const failure = await readHttpFailure(response);
+      throw new DeviceAuthorizationError(
+        `Daemon authorization failed at ${url.toString()}: HTTP ${response.status} ${failure.message}`,
+        failure.code,
+      );
+    }
+
+    const registered = runtimeRegistrationResponseSchema.parse(await response.json());
+    persistSparkDaemonCredentials(paths, current, {
+      serverUrl,
+      displayName,
+      installationId,
+      registered,
+    });
+    return registered;
+  }
+
+  throw new DeviceAuthorizationError(
+    `Daemon authorization expired before approval at ${input.authorization.verificationUri}.`,
+    "expired_token",
+  );
 }
 
 export async function ensureSparkDaemonRegistrationForWorkspace(
@@ -79,22 +205,21 @@ export async function ensureSparkDaemonRegistrationForWorkspace(
   input: SparkDaemonRegistrationInput,
 ): Promise<SparkDaemonRegistrationResult> {
   let current = readSparkDaemonConfig(paths);
-  const serverUrl = validateRegistrationServerUrl(input.serverUrl);
+  const serverUrl = validateRegistrationServerUrl(input.serverUrl, {
+    allowInsecureHttp: input.allowInsecureHttp,
+  });
   if (hasRunnableSparkDaemonCredentialsForServer(current, serverUrl)) {
     current = shouldRefreshSparkDaemonToken(current)
       ? await refreshSparkDaemonCredentials({ paths, config: current })
       : current;
-    if (!input.registrationToken) {
-      return { config: current };
-    }
     if (!input.workspaceRegistration) {
       throw new Error("Workspace registration metadata is required.");
     }
-    const registered = await registerWorkspaceGrantWithToken({
+    const registered = await registerWorkspaceWithRuntime({
       serverUrl,
       runtimeId: current.runtimeId!,
       runtimeToken: current.runtimeToken!,
-      registrationToken: input.registrationToken,
+      ...(input.registrationToken ? { registrationToken: input.registrationToken } : {}),
       workspaceRegistration: input.workspaceRegistration,
     });
     return {
@@ -105,7 +230,7 @@ export async function ensureSparkDaemonRegistrationForWorkspace(
 
   if (!input.registrationToken) {
     throw new Error(
-      "Missing workspace registration token. Pass --token <token>, --token -, or set SPARK_WORKSPACE_REGISTRATION_TOKEN.",
+      `Spark daemon is not authorized for ${serverUrl}. Run spark daemon login --server-url ${serverUrl} or pass --token <token>.`,
     );
   }
 
@@ -129,24 +254,33 @@ export function hasRunnableSparkDaemonCredentialsForServer(
     config.runtimeToken &&
     config.refreshToken &&
     (config.webSocketUrl || config.serverUrl) &&
-    configuredServerUrl(config) === validateRegistrationServerUrl(serverUrl),
+    configuredServerUrl(config) === normalizeConfiguredServerUrl(serverUrl),
   );
 }
 
 export function configuredServerUrl(config: SparkDaemonConfig): string | undefined {
   if (config.serverUrl) {
-    return validateRegistrationServerUrl(config.serverUrl);
+    return normalizeConfiguredServerUrl(config.serverUrl);
   }
 
   if (config.webSocketUrl) {
-    return validateRegistrationServerUrl(serverUrlFromWebSocketUrl(config.webSocketUrl));
+    return normalizeConfiguredServerUrl(serverUrlFromWebSocketUrl(config.webSocketUrl));
   }
 
   return undefined;
 }
 
-export function validateRegistrationServerUrl(serverUrl: string): string {
+export function validateRegistrationServerUrl(
+  serverUrl: string,
+  options: { allowInsecureHttp?: boolean } = {},
+): string {
   const parsed = new URL(serverUrl);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Cockpit server URL must use http:// or https://.");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("Cockpit credentials must not be embedded in --server-url.");
+  }
   const forbiddenParams = ["token", "registration", "enrollment"];
   const found = new Set<string>();
   for (const key of parsed.searchParams.keys()) {
@@ -162,7 +296,30 @@ export function validateRegistrationServerUrl(serverUrl: string): string {
     );
   }
 
+  if (
+    parsed.protocol === "http:" &&
+    !isLoopbackHostname(parsed.hostname) &&
+    !options.allowInsecureHttp
+  ) {
+    throw new Error(
+      `Refusing insecure Cockpit URL ${parsed.origin}: daemon credentials would cross the network over plaintext HTTP. Use HTTPS, or pass --allow-insecure-http only on a trusted private network.`,
+    );
+  }
+
   return parsed.toString();
+}
+
+function normalizeConfiguredServerUrl(serverUrl: string): string {
+  return validateRegistrationServerUrl(serverUrl, { allowInsecureHttp: true });
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "::1" ||
+    hostname === "[::1]" ||
+    /^127(?:\.\d{1,3}){3}$/.test(hostname)
+  );
 }
 
 export async function verifySparkDaemonWorkspaceConnection(input: {
@@ -304,13 +461,10 @@ async function requestSparkDaemonRegistration(input: {
   registrationToken: string;
   displayName: string;
   installationId: string;
-  workspaceRegistration?: {
-    localWorkspaceKey: string;
-    displayName: string;
-  };
+  workspaceRegistration?: SparkDaemonRegistrationInput["workspaceRegistration"];
 }) {
   const url = new URL("/api/v1/runtime/runtimes/register", input.serverUrl);
-  const response = await fetch(url, {
+  const response = await fetchRegistrationEndpoint(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -329,7 +483,8 @@ async function requestSparkDaemonRegistration(input: {
   });
 
   if (!response.ok) {
-    const message = `Workspace registration failed: HTTP ${response.status} ${await response.text()}`;
+    const failure = await readHttpFailure(response);
+    const message = `Workspace registration failed at ${url.toString()}: HTTP ${response.status} ${failure.message}`;
     if (response.status === 401 || response.status === 403) {
       throw new RegistrationGrantRefusedError(message);
     }
@@ -339,34 +494,32 @@ async function requestSparkDaemonRegistration(input: {
   return runtimeRegistrationResponseSchema.parse(await response.json());
 }
 
-async function registerWorkspaceGrantWithToken(input: {
+async function registerWorkspaceWithRuntime(input: {
   serverUrl: string;
   runtimeId: string;
   runtimeToken: string;
-  registrationToken: string;
-  workspaceRegistration: {
-    localWorkspaceKey: string;
-    displayName: string;
-  };
+  registrationToken?: string;
+  workspaceRegistration: NonNullable<SparkDaemonRegistrationInput["workspaceRegistration"]>;
 }) {
   const url = new URL(
     `/api/v1/runtime/runtimes/${encodeURIComponent(input.runtimeId)}/workspaces/register`,
     input.serverUrl,
   );
-  const response = await fetch(url, {
+  const response = await fetchRegistrationEndpoint(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${input.runtimeToken}`,
     },
     body: JSON.stringify({
-      registrationToken: input.registrationToken,
+      ...(input.registrationToken ? { registrationToken: input.registrationToken } : {}),
       workspaceRegistration: input.workspaceRegistration,
     }),
   });
 
   if (!response.ok) {
-    const message = `Workspace registration failed: HTTP ${response.status} ${await response.text()}`;
+    const failure = await readHttpFailure(response);
+    const message = `Workspace registration failed at ${url.toString()}: HTTP ${response.status} ${failure.message}`;
     if (response.status === 401 || response.status === 403) {
       throw new RegistrationGrantRefusedError(message);
     }
@@ -374,4 +527,64 @@ async function registerWorkspaceGrantWithToken(input: {
   }
 
   return runtimeWorkspaceRegistrationResponseSchema.parse(await response.json());
+}
+
+function persistSparkDaemonCredentials(
+  paths: SparkPaths,
+  current: SparkDaemonConfig,
+  input: {
+    serverUrl: string;
+    displayName: string;
+    installationId: string;
+    registered: RuntimeRegistrationResponse;
+  },
+): void {
+  writeSparkDaemonConfig(paths, {
+    ...current,
+    installationId: input.installationId,
+    displayName: input.displayName,
+    serverUrl: input.serverUrl,
+    runtimeId: input.registered.runtimeId,
+    runtimeToken: input.registered.runtimeToken,
+    runtimeTokenExpiresAt: input.registered.runtimeTokenExpiresAt,
+    refreshToken: input.registered.refreshToken,
+    refreshTokenExpiresAt: input.registered.refreshTokenExpiresAt,
+    webSocketUrl: input.registered.webSocketUrl,
+  });
+}
+
+async function readHttpFailure(response: Response): Promise<{ code: string; message: string }> {
+  const text = await response.text();
+  let value: unknown;
+  try {
+    value = JSON.parse(text) as unknown;
+  } catch {
+    value = undefined;
+  }
+  if (isRecord(value)) {
+    const nestedError = isRecord(value.error) ? value.error : undefined;
+    const code =
+      (nestedError ? stringProperty(nestedError, "code") : undefined) ??
+      stringProperty(value, "error") ??
+      stringProperty(value, "code") ??
+      "request_failed";
+    const message =
+      (nestedError ? stringProperty(nestedError, "message") : undefined) ??
+      stringProperty(value, "message") ??
+      code;
+    return { code, message };
+  }
+  return {
+    code: "request_failed",
+    message: text.trim() || response.statusText || "request failed",
+  };
+}
+
+function stringProperty(value: Record<string, unknown>, key: string): string | undefined {
+  const candidate = value[key];
+  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

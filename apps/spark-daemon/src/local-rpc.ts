@@ -1031,9 +1031,12 @@ export async function handleLocalRpcLine(
         const planned = planWorkspaceRegistration(db, request.params);
         const serviceRegistration = await ensureRegistration(paths, {
           serverUrl: planned.serverUrl,
+          ...(request.params.allowInsecureHttp ? { allowInsecureHttp: true } : {}),
           workspaceRegistration: {
             localWorkspaceKey: planned.localWorkspaceKey,
             displayName: planned.displayName,
+            workspaceName: planned.workspaceName,
+            workspaceSlug: planned.workspaceSlug,
           },
           ...(request.params.registrationToken
             ? { registrationToken: request.params.registrationToken }
@@ -1755,10 +1758,13 @@ type LocalTurnSubmitParams = {
 
 type LocalWorkspaceRegisterParams = {
   serverUrl: string;
+  allowInsecureHttp?: boolean;
   localPath: string;
   registrationToken?: string;
   localWorkspaceKey?: string;
   displayName?: string;
+  workspaceName?: string;
+  workspaceSlug?: string;
   profile?: NonNullable<SparkDaemonWorkspace["profile"]>;
 };
 
@@ -1791,10 +1797,13 @@ function localWorkspaceRegisterParams(
 ): LocalWorkspaceRegisterParams {
   return {
     serverUrl: params.serverUrl ?? "",
+    ...(params.allowInsecureHttp ? { allowInsecureHttp: true } : {}),
     localPath: params.localPath,
     ...(params.registrationToken ? { registrationToken: params.registrationToken } : {}),
     ...(params.localWorkspaceKey ? { localWorkspaceKey: params.localWorkspaceKey } : {}),
     ...(params.displayName ? { displayName: params.displayName } : {}),
+    ...(params.workspaceName ? { workspaceName: params.workspaceName } : {}),
+    ...(params.workspaceSlug ? { workspaceSlug: params.workspaceSlug } : {}),
     ...(params.profile ? { profile: params.profile } : {}),
   };
 }
@@ -2032,6 +2041,9 @@ function parseLocalWorkspaceRegisterParams(value: unknown): LocalWorkspaceRegist
     serverUrl: value.serverUrl,
     localPath: value.localPath,
   };
+  if (value.allowInsecureHttp === true) {
+    params.allowInsecureHttp = true;
+  }
   if (typeof value.localWorkspaceKey === "string") {
     params.localWorkspaceKey = value.localWorkspaceKey;
   }
@@ -2040,6 +2052,12 @@ function parseLocalWorkspaceRegisterParams(value: unknown): LocalWorkspaceRegist
   }
   if (typeof value.displayName === "string") {
     params.displayName = value.displayName;
+  }
+  if (typeof value.workspaceName === "string") {
+    params.workspaceName = value.workspaceName;
+  }
+  if (typeof value.workspaceSlug === "string") {
+    params.workspaceSlug = value.workspaceSlug;
   }
   const profile = workspaceProfile(value.profile);
   if (profile) {

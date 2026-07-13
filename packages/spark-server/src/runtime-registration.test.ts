@@ -6,13 +6,19 @@ import {
   type RuntimeRegistrationRequest,
 } from "@zendev-lab/spark-protocol";
 import {
+  approveRuntimeDeviceAuthorization,
+  createRuntimeDeviceAuthorization,
   createRuntimeEnrollmentToken,
+  denyRuntimeDeviceAuthorization,
+  exchangeRuntimeDeviceAuthorization,
+  getRuntimeDeviceAuthorizationForApproval,
   listRuntimeEnrollmentTokens,
   registerRuntime,
   registerRuntimeWorkspace,
   refreshRuntimeToken,
   revokeRuntimeEnrollmentToken,
   RuntimeAccessTokenError,
+  RuntimeDeviceAuthorizationError,
   RuntimeEnrollmentError,
   RuntimeTokenRefreshError,
 } from "./runtime-registration";
@@ -502,6 +508,428 @@ describe("runtime registration", () => {
     expect(stored.revokedAt).toBeNull();
     db.close();
   });
+
+  it("stores daemon device and user codes as hashes only", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+
+    const authorization = createRuntimeDeviceAuthorization(db, registrationRequest, {
+      createdAt: "2026-07-13T00:00:00.000Z",
+    });
+    const stored = db
+      .prepare(
+        `SELECT device_code_hash AS deviceCodeHash,
+                user_code_hash AS userCodeHash,
+                registration_json AS registrationJson,
+                expires_at AS expiresAt,
+                interval_seconds AS intervalSeconds
+         FROM runtime_device_authorizations`,
+      )
+      .get() as {
+      deviceCodeHash: string;
+      userCodeHash: string;
+      registrationJson: string;
+      expiresAt: string;
+      intervalSeconds: number;
+    };
+
+    expect(authorization.deviceCode).toMatch(/^spark_device_/);
+    expect(authorization.userCode).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    expect(authorization.expiresIn).toBe(600);
+    expect(authorization.interval).toBe(5);
+    expect(stored).toMatchObject({
+      deviceCodeHash: hash(authorization.deviceCode),
+      userCodeHash: hash(authorization.userCode.replace("-", "")),
+      expiresAt: "2026-07-13T00:10:00.000Z",
+      intervalSeconds: 5,
+    });
+    expect(JSON.stringify(stored)).not.toContain(authorization.deviceCode);
+    expect(JSON.stringify(stored)).not.toContain(authorization.userCode);
+    expect(JSON.parse(stored.registrationJson)).toMatchObject(registrationRequest);
+    db.close();
+  });
+
+  it("bounds pending device authorizations per installation and across Cockpit", () => {
+    const installationDb = openMemoryDatabase();
+    migrate(installationDb);
+    for (let index = 0; index < 3; index += 1) {
+      createRuntimeDeviceAuthorization(installationDb, registrationRequest, {
+        createdAt: "2026-07-13T00:00:00.000Z",
+      });
+    }
+
+    expectRuntimeDeviceError(
+      () =>
+        createRuntimeDeviceAuthorization(installationDb, registrationRequest, {
+          createdAt: "2026-07-13T00:00:01.000Z",
+        }),
+      "too_many_pending_authorizations",
+    );
+    expect(
+      installationDb.prepare("SELECT COUNT(*) AS count FROM runtime_device_authorizations").get(),
+    ).toEqual({ count: 3 });
+    installationDb.close();
+
+    const globalDb = openMemoryDatabase();
+    migrate(globalDb);
+    for (const installationId of ["install-one", "install-two"]) {
+      createRuntimeDeviceAuthorization(
+        globalDb,
+        { ...registrationRequest, installationId },
+        { createdAt: "2026-07-13T00:00:00.000Z" },
+      );
+    }
+
+    expectRuntimeDeviceError(
+      () =>
+        createRuntimeDeviceAuthorization(
+          globalDb,
+          { ...registrationRequest, installationId: "install-three" },
+          {
+            createdAt: "2026-07-13T00:00:01.000Z",
+            maxPendingGlobal: 2,
+          },
+        ),
+      "authorization_capacity_exceeded",
+    );
+    expect(
+      globalDb.prepare("SELECT COUNT(*) AS count FROM runtime_device_authorizations").get(),
+    ).toEqual({ count: 2 });
+    globalDb.close();
+  });
+
+  it("deletes old expired, denied, and consumed device authorizations on creation", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    insertUser(db, "usr_owner", "owner", "active");
+
+    createRuntimeDeviceAuthorization(
+      db,
+      { ...registrationRequest, installationId: "install-expired" },
+      { createdAt: "2026-07-13T00:00:00.000Z", ttlMs: 1_000 },
+    );
+    const denied = createRuntimeDeviceAuthorization(
+      db,
+      { ...registrationRequest, installationId: "install-denied" },
+      { createdAt: "2026-07-13T00:00:00.000Z" },
+    );
+    denyRuntimeDeviceAuthorization(db, {
+      userCode: denied.userCode,
+      deniedByUserId: "usr_owner",
+      deniedAt: "2026-07-13T00:00:10.000Z",
+    });
+    const consumed = createRuntimeDeviceAuthorization(
+      db,
+      { ...registrationRequest, installationId: "install-consumed" },
+      { createdAt: "2026-07-13T00:00:00.000Z" },
+    );
+    approveRuntimeDeviceAuthorization(db, {
+      userCode: consumed.userCode,
+      approvedByUserId: "usr_owner",
+      approvedAt: "2026-07-13T00:00:10.000Z",
+    });
+    exchangeRuntimeDeviceAuthorization(db, {
+      deviceCode: consumed.deviceCode,
+      polledAt: "2026-07-13T00:00:11.000Z",
+    });
+
+    createRuntimeDeviceAuthorization(
+      db,
+      { ...registrationRequest, installationId: "install-current" },
+      {
+        createdAt: "2026-07-13T00:02:01.000Z",
+        retentionMs: 60_000,
+      },
+    );
+
+    const rows = db
+      .prepare(
+        `SELECT installation_id AS installationId
+         FROM runtime_device_authorizations
+         ORDER BY installation_id`,
+      )
+      .all() as Array<{ installationId: string }>;
+    expect(rows).toEqual([{ installationId: "install-current" }]);
+    db.close();
+  });
+
+  it("protects browser approval with an active owner and normalizes user codes", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    insertUser(db, "usr_member", "member", "active");
+    insertUser(db, "usr_owner", "owner", "active");
+    const authorization = createRuntimeDeviceAuthorization(db, registrationRequest, {
+      createdAt: "2026-07-13T00:00:00.000Z",
+    });
+
+    expectRuntimeDeviceError(
+      () =>
+        getRuntimeDeviceAuthorizationForApproval(db, {
+          userCode: authorization.userCode,
+          currentUserId: null,
+        }),
+      "approval_forbidden",
+    );
+    expectRuntimeDeviceError(
+      () =>
+        getRuntimeDeviceAuthorizationForApproval(db, {
+          userCode: authorization.userCode,
+          currentUserId: "usr_member",
+        }),
+      "approval_forbidden",
+    );
+
+    const normalizedInput = authorization.userCode.toLowerCase().replace("-", " ");
+    expect(
+      getRuntimeDeviceAuthorizationForApproval(db, {
+        userCode: normalizedInput,
+        currentUserId: "usr_owner",
+        now: "2026-07-13T00:01:00.000Z",
+      }),
+    ).toMatchObject({
+      userCode: authorization.userCode,
+      installationId: registrationRequest.installationId,
+      displayName: registrationRequest.displayName,
+      status: "pending",
+    });
+
+    expect(
+      approveRuntimeDeviceAuthorization(db, {
+        userCode: normalizedInput,
+        approvedByUserId: "usr_owner",
+        approvedAt: "2026-07-13T00:01:00.000Z",
+      }).status,
+    ).toBe("approved");
+    db.close();
+  });
+
+  it("reports pending, slow-down, denied, and expired device authorization states", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    insertUser(db, "usr_owner", "owner", "active");
+    const pending = createRuntimeDeviceAuthorization(db, registrationRequest, {
+      createdAt: "2026-07-13T00:00:00.000Z",
+    });
+
+    expectRuntimeDeviceError(
+      () =>
+        exchangeRuntimeDeviceAuthorization(db, {
+          deviceCode: pending.deviceCode,
+          polledAt: "2026-07-13T00:00:01.000Z",
+        }),
+      "authorization_pending",
+    );
+    expectRuntimeDeviceError(
+      () =>
+        exchangeRuntimeDeviceAuthorization(db, {
+          deviceCode: pending.deviceCode,
+          polledAt: "2026-07-13T00:00:02.000Z",
+        }),
+      "slow_down",
+    );
+    expectRuntimeDeviceError(
+      () =>
+        exchangeRuntimeDeviceAuthorization(db, {
+          deviceCode: pending.deviceCode,
+          polledAt: "2026-07-13T00:10:00.000Z",
+        }),
+      "expired_token",
+    );
+
+    const denied = createRuntimeDeviceAuthorization(
+      db,
+      { ...registrationRequest, installationId: "install-denied" },
+      { createdAt: "2026-07-13T00:00:00.000Z" },
+    );
+    expect(
+      denyRuntimeDeviceAuthorization(db, {
+        userCode: denied.userCode,
+        deniedByUserId: "usr_owner",
+        deniedAt: "2026-07-13T00:01:00.000Z",
+      }).status,
+    ).toBe("denied");
+    expectRuntimeDeviceError(
+      () =>
+        exchangeRuntimeDeviceAuthorization(db, {
+          deviceCode: denied.deviceCode,
+          polledAt: "2026-07-13T00:01:05.000Z",
+        }),
+      "access_denied",
+    );
+    db.close();
+  });
+
+  it("exchanges an approved device authorization exactly once", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    insertUser(db, "usr_owner", "owner", "active");
+    const authorization = createRuntimeDeviceAuthorization(db, registrationRequest, {
+      createdAt: "2026-07-13T00:00:00.000Z",
+    });
+    approveRuntimeDeviceAuthorization(db, {
+      userCode: authorization.userCode,
+      approvedByUserId: "usr_owner",
+      approvedAt: "2026-07-13T00:01:00.000Z",
+    });
+
+    const registered = exchangeRuntimeDeviceAuthorization(db, {
+      deviceCode: authorization.deviceCode,
+      polledAt: "2026-07-13T00:01:05.000Z",
+    });
+
+    expect(registered).toMatchObject({
+      runtimeId: expect.stringMatching(/^rt_/),
+      runtimeToken: expect.stringMatching(/^spark_rt_/),
+      refreshToken: expect.stringMatching(/^spark_rt_refresh_/),
+    });
+    expect(registered.workspaceBinding).toBeUndefined();
+    const scopes = db
+      .prepare(
+        `SELECT scopes_json AS scopesJson
+         FROM runtime_tokens
+         WHERE runtime_id = ?
+         ORDER BY label`,
+      )
+      .all(registered.runtimeId) as Array<{ scopesJson: string }>;
+    expect(scopes.map((row) => JSON.parse(row.scopesJson))).toEqual([
+      ["runtime:connect", "workspace:register"],
+      ["runtime:refresh", "workspace:register"],
+    ]);
+    expect(
+      getRuntimeDeviceAuthorizationForApproval(db, {
+        userCode: authorization.userCode,
+        currentUserId: "usr_owner",
+        now: "2026-07-13T00:01:06.000Z",
+      }).status,
+    ).toBe("consumed");
+    expectRuntimeDeviceError(
+      () =>
+        exchangeRuntimeDeviceAuthorization(db, {
+          deviceCode: authorization.deviceCode,
+          polledAt: "2026-07-13T00:01:06.000Z",
+        }),
+      "invalid_grant",
+    );
+    db.close();
+  });
+
+  it("lets a browser-approved daemon register another workspace without another token", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    insertUser(db, "usr_owner", "owner", "active");
+    const authorization = createRuntimeDeviceAuthorization(db, registrationRequest);
+    approveRuntimeDeviceAuthorization(db, {
+      userCode: authorization.userCode,
+      approvedByUserId: "usr_owner",
+    });
+    const registered = exchangeRuntimeDeviceAuthorization(db, {
+      deviceCode: authorization.deviceCode,
+    });
+
+    const workspace = registerRuntimeWorkspace(
+      db,
+      registered.runtimeId,
+      {
+        workspaceRegistration: {
+          localWorkspaceKey: "spore",
+          displayName: "Spore",
+          workspaceSlug: "spore",
+        },
+      },
+      registered.runtimeToken,
+    );
+
+    expect(workspace.workspaceBinding).toMatchObject({
+      workspaceId: expect.stringMatching(/^ws_/),
+      bindingId: expect.stringMatching(/^rtwb_/),
+      localWorkspaceKey: "spore",
+      displayName: "Spore",
+      status: "available",
+    });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM runtime_workspace_bindings").get()).toEqual({
+      count: 1,
+    });
+    db.close();
+  });
+
+  it("keeps workspace enrollment credentials workspace-bound", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    const enrollment = createRuntimeEnrollmentToken(db);
+    const registered = registerRuntime(db, registrationRequest, enrollment.refreshToken);
+    const request = {
+      workspaceRegistration: {
+        localWorkspaceKey: "spore",
+        displayName: "Spore",
+      },
+    };
+
+    expectRuntimeAccessError(
+      db,
+      registered.runtimeId,
+      request,
+      registered.runtimeToken,
+      "RUNTIME_TOKEN_SCOPE_INVALID",
+    );
+    expectRuntimeAccessError(
+      db,
+      registered.runtimeId,
+      request,
+      registered.refreshToken,
+      "RUNTIME_TOKEN_SCOPE_INVALID",
+    );
+    db.close();
+  });
+
+  it("preserves installation-wide workspace scope when device credentials refresh", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    insertUser(db, "usr_owner", "owner", "active");
+    const authorization = createRuntimeDeviceAuthorization(db, registrationRequest);
+    approveRuntimeDeviceAuthorization(db, {
+      userCode: authorization.userCode,
+      approvedByUserId: "usr_owner",
+    });
+    const registered = exchangeRuntimeDeviceAuthorization(db, {
+      deviceCode: authorization.deviceCode,
+    });
+    const refreshed = refreshRuntimeToken(db, {
+      runtimeId: registered.runtimeId,
+      refreshToken: registered.refreshToken,
+    });
+
+    const workspace = registerRuntimeWorkspace(
+      db,
+      registered.runtimeId,
+      {
+        workspaceRegistration: {
+          localWorkspaceKey: "spore-after-refresh",
+          displayName: "Spore after refresh",
+          workspaceSlug: "spore-after-refresh",
+        },
+      },
+      refreshed.runtimeToken,
+    );
+
+    expect(workspace.workspaceBinding).toMatchObject({
+      localWorkspaceKey: "spore-after-refresh",
+      displayName: "Spore after refresh",
+      status: "available",
+    });
+    const activeScopes = db
+      .prepare(
+        `SELECT scopes_json AS scopesJson
+         FROM runtime_tokens
+         WHERE runtime_id = ? AND revoked_at IS NULL
+         ORDER BY label`,
+      )
+      .all(registered.runtimeId) as Array<{ scopesJson: string }>;
+    expect(activeScopes.map((row) => JSON.parse(row.scopesJson))).toEqual([
+      ["runtime:connect", "workspace:register"],
+      ["runtime:refresh", "workspace:register"],
+    ]);
+    db.close();
+  });
 });
 
 function expectRuntimeEnrollmentError(
@@ -553,6 +981,31 @@ function expectRuntimeAccessError(
   }
 
   throw new Error(`Expected RuntimeAccessTokenError ${reasonCode}`);
+}
+
+function expectRuntimeDeviceError(action: () => unknown, reasonCode: string) {
+  try {
+    action();
+  } catch (caught) {
+    expect(caught).toBeInstanceOf(RuntimeDeviceAuthorizationError);
+    expect((caught as RuntimeDeviceAuthorizationError).reasonCode).toBe(reasonCode);
+    return;
+  }
+
+  throw new Error(`Expected RuntimeDeviceAuthorizationError ${reasonCode}`);
+}
+
+function insertUser(
+  db: ReturnType<typeof openMemoryDatabase>,
+  id: string,
+  role: "owner" | "member",
+  status: "active" | "disabled",
+) {
+  db.prepare(
+    `INSERT INTO users
+      (id, email, display_name, role, status, created_at, updated_at)
+     VALUES (?, NULL, ?, ?, ?, ?, ?)`,
+  ).run(id, id, role, status, "2026-07-13T00:00:00.000Z", "2026-07-13T00:00:00.000Z");
 }
 
 function hash(secret: string) {

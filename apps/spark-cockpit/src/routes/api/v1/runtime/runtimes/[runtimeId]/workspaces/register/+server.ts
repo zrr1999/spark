@@ -47,10 +47,15 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
     );
   } catch (caught) {
     if (caught instanceof RuntimeAccessTokenError || caught instanceof RuntimeEnrollmentError) {
+      const status =
+        caught.reasonCode === "RUNTIME_TOKEN_SCOPE_INVALID" ||
+        caught.reasonCode === "WORKSPACE_REGISTRATION_TOKEN_SCOPE_INVALID"
+          ? 403
+          : 401;
       return errorJson(
         caught.reasonCode.toLowerCase(),
         caught.message,
-        401,
+        status,
         undefined,
         locals.requestId,
       );

@@ -46,9 +46,12 @@ import {
   startLocalRpcServer,
 } from "./local-rpc.js";
 import {
+  completeSparkDaemonDeviceAuthorization,
   configuredServerUrl,
+  DeviceAuthorizationError,
   hasRunnableSparkDaemonCredentialsForServer,
   RegistrationGrantRefusedError,
+  startSparkDaemonDeviceAuthorization,
   validateRegistrationServerUrl,
 } from "./registration.js";
 import { openSparkDaemonDatabase } from "./store/schema.js";
@@ -76,6 +79,8 @@ export interface CliIo {
   registerWorkspaceInService?: typeof requestWorkspaceRegister;
   attachWorkspaceInService?: typeof requestWorkspaceAttach;
   stopWorkspaceInService?: typeof requestWorkspaceStop;
+  openExternal?: (url: string) => boolean;
+  deviceAuthorizationSleep?: (delayMs: number) => Promise<void>;
 }
 
 const defaultIo: CliIo = { stdout: process.stdout, stderr: process.stderr };
@@ -127,10 +132,7 @@ export async function main(argv = process.argv.slice(2), io: CliIo = defaultIo):
         io.stdout.write(`${paths.logFile}\n`);
         return 0;
       case "login":
-        io.stdout.write(
-          `Spark daemon credentials are stored under ${paths.dataDir}. Task execution uses the Spark runtime bridge; configure provider/auth state through Spark/Pi tooling before running tasks.\n`,
-        );
-        return 0;
+        return await login(paths, args.slice(1), io);
       case "start":
         return await start(paths);
       case "stop":
@@ -156,7 +158,8 @@ export async function main(argv = process.argv.slice(2), io: CliIo = defaultIo):
     if (
       error instanceof WorkspacePathConflictError ||
       error instanceof WorkspacePathValidationError ||
-      error instanceof RegistrationGrantRefusedError
+      error instanceof RegistrationGrantRefusedError ||
+      error instanceof DeviceAuthorizationError
     ) {
       return 3;
     }
@@ -165,6 +168,60 @@ export async function main(argv = process.argv.slice(2), io: CliIo = defaultIo):
     }
     return 1;
   }
+}
+
+async function login(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  args: string[],
+  io: CliIo,
+): Promise<number> {
+  if (helpRequested(args)) {
+    printLoginHelp(io);
+    return 0;
+  }
+  prepareSparkDaemonState(paths);
+  const flags = parseFlags(args);
+  const current = readSparkDaemonConfig(paths);
+  const serverUrl = await resolveRegistrationServerUrl(flags, current, io);
+  const deviceIdentity = {
+    serverUrl,
+    installationId: current.installationId,
+    displayName: current.displayName,
+    ...(flags["allow-insecure-http"] === "true" ? { allowInsecureHttp: true } : {}),
+  };
+  const authorization = await startSparkDaemonDeviceAuthorization(paths, deviceIdentity);
+
+  io.stdout.write(
+    `${STRINGS.deviceAuthorizationVerification(authorization.verificationUri, authorization.userCode)}\n`,
+  );
+  if (flags["no-open"] !== "true") {
+    const opened = (io.openExternal ?? openExternalUrl)(authorization.verificationUriComplete);
+    if (!opened) {
+      io.stdout.write(
+        `${STRINGS.deviceAuthorizationOpenFailed(authorization.verificationUriComplete)}\n`,
+      );
+    }
+  }
+  io.stdout.write(`${STRINGS.deviceAuthorizationWaiting}\n`);
+
+  const registered = await completeSparkDaemonDeviceAuthorization(
+    paths,
+    { ...deviceIdentity, authorization },
+    io.deviceAuthorizationSleep ? { sleep: io.deviceAuthorizationSleep } : {},
+  );
+  io.stdout.write(`${STRINGS.deviceAuthorizationSucceeded(registered.runtimeId, serverUrl)}\n`);
+  return 0;
+}
+
+function openExternalUrl(rawUrl: string): boolean {
+  const url = new URL(rawUrl);
+  const command =
+    process.platform === "darwin" ? "open" : process.platform === "linux" ? "xdg-open" : undefined;
+  if (!command) {
+    return false;
+  }
+  const result = spawnSync(command, [url.toString()], { stdio: "ignore" });
+  return !result.error && result.status === 0;
 }
 
 function install(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): number {
@@ -774,11 +831,12 @@ async function registerWorkspaceCommand(
 
   const config = readSparkDaemonConfig(paths);
   const serverUrl = await resolveRegistrationServerUrl(flags, config, io, { interactive });
-  const registrationToken = await resolveRegistrationToken(flags, io, { interactive });
-  if (!registrationToken) {
-    throw new Error(
-      "Missing workspace registration token. Pass --token <token>, --token -, or set SPARK_WORKSPACE_REGISTRATION_TOKEN.",
-    );
+  const hasMachineCredentials = hasRunnableSparkDaemonCredentialsForServer(config, serverUrl);
+  const registrationToken = await resolveRegistrationToken(flags, io, {
+    interactive: interactive && !hasMachineCredentials,
+  });
+  if (!registrationToken && !hasMachineCredentials) {
+    throw new Error(STRINGS.workspaceLoginRequired(serverUrl));
   }
   const displayName =
     flags.name ?? (interactive ? await promptWorkspaceName(localPath, io) : undefined);
@@ -789,11 +847,14 @@ async function registerWorkspaceCommand(
   const workspaceOptions: WorkspaceRegistrationRequest = {
     serverUrl,
     localPath,
+    ...(flags["allow-insecure-http"] === "true" ? { allowInsecureHttp: true } : {}),
     ...(registrationToken ? { registrationToken } : {}),
     ...(flags.key || flags["local-key"]
       ? { localWorkspaceKey: flags.key ?? flags["local-key"] }
       : {}),
     ...(displayName ? { displayName } : {}),
+    ...(flags["workspace-name"] ? { workspaceName: flags["workspace-name"] } : {}),
+    ...(flags["workspace-slug"] ? { workspaceSlug: flags["workspace-slug"] } : {}),
     ...(profile ? { profile } : {}),
   };
   const added = await registerWorkspaceForCli(paths, workspaceOptions, io);
@@ -822,7 +883,7 @@ async function defaultWorkspace(
   const workspaces = await loadWorkspaceList(paths, io);
   if (workspaces.length === 0) {
     io.stdout.write(
-      "no workspaces registered.\n  spark daemon workspace register . --server-url <url> --token <tok> --name <ws>\n",
+      "no workspaces registered.\n  spark daemon login --server-url <url>\n  spark daemon workspace register . --server-url <url> --name <ws>\n",
     );
     return 0;
   }
@@ -835,7 +896,7 @@ async function defaultWorkspace(
   if (!workspace) {
     io.stdout.write(
       `${cwd} is not under a registered workspace.\n` +
-        "  spark daemon workspace register . --server-url <url> --token <tok> --name <ws>\n" +
+        "  spark daemon workspace register . --server-url <url> --name <ws>\n" +
         "or cd into a registered workspace, or pass --workspace <name>.\n",
     );
     return 2;
@@ -845,7 +906,7 @@ async function defaultWorkspace(
   const config = readSparkDaemonConfig(paths);
   if (!hasRunnableSparkDaemonCredentialsForServer(config, workspace.serverUrl)) {
     throw new Error(
-      `Workspace '${workspace.displayName}' is registered locally, but service credentials are missing. Run spark daemon workspace register ${shellQuote(workspace.localPath)} --server-url <url> --token <tok>.`,
+      `Workspace '${workspace.displayName}' is registered locally, but daemon credentials for ${workspace.serverUrl} are missing. Run spark daemon login --server-url ${shellQuote(workspace.serverUrl)}, then retry.`,
     );
   }
 
@@ -883,7 +944,7 @@ async function listWorkspaceCommand(
 
   if (workspaces.length === 0) {
     io.stdout.write(
-      "no workspaces registered.\n  spark daemon workspace register . --server-url <url> --token <tok> --name <ws>\n",
+      "no workspaces registered.\n  spark daemon login --server-url <url>\n  spark daemon workspace register . --server-url <url> --name <ws>\n",
     );
     return 0;
   }
@@ -932,6 +993,9 @@ async function requestWorkspaceService<T>(
       return await request();
     } catch (error) {
       if (isWorkspaceDomainError(error)) {
+        throw error;
+      }
+      if (!(error instanceof LocalRpcUnavailableError)) {
         throw error;
       }
       lastError = error;
@@ -1133,7 +1197,7 @@ function resolveWorkspaceForShow(
 
   if (workspaces.length === 0) {
     throw new Error(
-      "No workspace found. Run spark daemon workspace register . --server-url <url> --token <tok>.",
+      "No workspace found. Run spark daemon workspace register . --server-url <url>.",
     );
   }
 
@@ -1182,7 +1246,7 @@ function resolveWorkspace(
     }
     if (workspaces.length === 0) {
       throw new Error(
-        "No workspace found. Run spark daemon workspace register . --server-url <url> --token <tok>.",
+        "No workspace found. Run spark daemon workspace register . --server-url <url>.",
       );
     }
     throw new Error("Multiple workspaces are registered. Pass a workspace name.");
@@ -1466,7 +1530,7 @@ const offlineReasonText = {
   },
   disconnected: {
     why: "Spark daemon is running but the server connection is unavailable",
-    fix: "check server reachability and workspace registration token validity",
+    fix: "check Cockpit reachability and run spark daemon login again if authorization expired",
   },
   "service-stopped": {
     why: "Spark daemon is not running",
@@ -1600,7 +1664,7 @@ function syncSparkDaemonIfConfigured(paths: ReturnType<typeof resolveSparkPaths>
   const config = readSparkDaemonConfig(paths);
   if (!config.serverUrl || !hasRunnableSparkDaemonCredentialsForServer(config, config.serverUrl)) {
     io.stdout.write(
-      "  sync     local only; run spark daemon workspace register with a registration token to sync with Spark Cockpit.\n",
+      "  sync     local only; run spark daemon login --server-url <url> to connect this machine to Spark Cockpit.\n",
     );
     return;
   }
@@ -1709,7 +1773,8 @@ function printHelp(io: CliIo): void {
 Commands:
   spark daemon
   spark daemon --workspace <name>
-  workspace register [path] --server-url <url> --token <workspace-registration-token|-> --name <name> [--profile <path-or-git-url>]
+  login --server-url <url> [--no-open] [--allow-insecure-http]
+  workspace register [path] --server-url <url> [--token <workspace-registration-token|->] --name <name> [--profile <path-or-git-url>] [--allow-insecure-http]
   workspace ls [--json] [--all] [--full]
   workspace show [name] [--workspace <name>] [--json]
   workspace stop <name> [--workspace <name>] [--yes]
@@ -1721,7 +1786,8 @@ Commands:
   logs
 
 Example:
-  spark daemon workspace register . --server-url http://127.0.0.1:5173 --token <tok> --name <ws>
+  spark daemon login --server-url http://127.0.0.1:5173
+  spark daemon workspace register . --server-url http://127.0.0.1:5173 --name <ws>
 `);
 }
 
@@ -1729,13 +1795,22 @@ function printWorkspaceHelp(io: CliIo): void {
   io.stdout.write(`Usage: spark daemon workspace <command>
 
 Commands:
-  register [path] --server-url <url> --token <workspace-registration-token|-> --name <name> [--profile <path-or-git-url>]
+  register [path] --server-url <url> [--token <workspace-registration-token|->] --name <name> [--profile <path-or-git-url>] [--allow-insecure-http]
   ls [--json] [--all] [--full]
   show [name] [--workspace <name>] [--json]
   stop <name> [--workspace <name>] [--yes]
 
 Example:
   spark daemon workspace ls --json
+`);
+}
+
+function printLoginHelp(io: CliIo): void {
+  io.stdout.write(`Usage: spark daemon login --server-url <url> [--no-open] [--allow-insecure-http]
+
+Authorize this daemon machine in Spark Cockpit. The stored machine credential is
+reused when registering additional workspaces against the same Cockpit origin.
+Non-loopback Cockpit URLs require HTTPS unless --allow-insecure-http is supplied.
 `);
 }
 
@@ -1763,17 +1838,23 @@ async function resolveRegistrationServerUrl(
   options: { interactive?: boolean } = {},
 ): Promise<string> {
   const serverUrl = flags["server-url"] ?? flags.server;
+  const validationOptions = {
+    allowInsecureHttp: flags["allow-insecure-http"] === "true",
+  };
   if (serverUrl) {
-    return validateRegistrationServerUrl(serverUrl);
+    return validateRegistrationServerUrl(serverUrl, validationOptions);
   }
 
   const configured = configuredServerUrl(current);
   if (options.interactive) {
-    return validateRegistrationServerUrl(await promptWithDefault(io, "server URL", configured));
+    return validateRegistrationServerUrl(
+      await promptWithDefault(io, "server URL", configured),
+      validationOptions,
+    );
   }
 
   if (configured) {
-    return configured;
+    return validateRegistrationServerUrl(configured, validationOptions);
   }
 
   throw new Error("Missing server URL. Pass --server-url <url> with the registration command.");

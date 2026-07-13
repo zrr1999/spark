@@ -102,12 +102,15 @@ export interface AddWorkspaceOptions {
 
 export interface RegisterWorkspaceOptions {
   serverUrl?: string;
+  allowInsecureHttp?: boolean;
   localPath: string;
   serverBindingId?: string;
   serverWorkspaceId?: string;
   serverStatus?: RuntimeWorkspaceBindingSummary["status"];
   localWorkspaceKey?: string;
   displayName?: string;
+  workspaceName?: string;
+  workspaceSlug?: string;
   profile?: WorkspaceProfileRegistration;
   consumedRegistrationToken?: string;
   serverCredential?: SparkDaemonServerCredentialRegistration;
@@ -126,6 +129,8 @@ export interface PlannedWorkspaceRegistration {
   localPath: string;
   localWorkspaceKey: string;
   displayName: string;
+  workspaceName: string;
+  workspaceSlug: string;
 }
 
 export interface SparkDaemonServerCredentialRegistration {
@@ -269,6 +274,8 @@ export function planWorkspaceRegistration(
   const localPath = normalizeLocalPath(options.localPath);
   const displayName = options.displayName ?? workspaceNameForPath(localPath);
   const localWorkspaceKey = options.localWorkspaceKey ?? workspaceKeyForName(displayName);
+  const workspaceName = options.workspaceName ?? displayName;
+  const workspaceSlug = options.workspaceSlug ?? localWorkspaceKey;
   const existingPath = findWorkspaceByPathOnServer(db, serverUrl, localPath);
   if (existingPath) {
     throw new WorkspacePathConflictError(
@@ -282,6 +289,8 @@ export function planWorkspaceRegistration(
     localPath,
     localWorkspaceKey,
     displayName,
+    workspaceName,
+    workspaceSlug,
   };
 }
 

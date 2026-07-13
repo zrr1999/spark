@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { openMemoryDatabase } from "./client.js";
-import { migrate } from "./migrate.js";
+import { loadMigrations, migrate } from "./migrate.js";
 
 function tableExists(db: ReturnType<typeof openMemoryDatabase>, table: string) {
   return db
@@ -45,6 +45,7 @@ describe("migrations", () => {
       "workspace_profile_sources",
       "workspace_profile_git_access",
       "runtime_enrollment_tokens",
+      "runtime_device_authorizations",
       "runtime_message_receipts",
     ]) {
       expect(tableExists(db, table)?.name).toBe(table);
@@ -62,6 +63,8 @@ describe("migrations", () => {
       "workspace_profile_sources_profile_idx",
       "runtime_enrollment_tokens_state_idx",
       "runtime_enrollment_tokens_workspace_idx",
+      "runtime_device_authorizations_state_idx",
+      "runtime_device_authorizations_installation_pending_idx",
       "runtime_message_receipts_runtime_seen_idx",
     ]) {
       expect(indexExists(db, index)?.name).toBe(index);
@@ -79,6 +82,7 @@ describe("migrations", () => {
       "0005",
       "0006",
       "0007",
+      "0008",
     ]);
     db.close();
   });
@@ -93,7 +97,59 @@ describe("migrations", () => {
       count: number;
     };
 
-    expect(migrationCount.count).toBe(7);
+    expect(migrationCount.count).toBe(8);
+    db.close();
+  });
+
+  it("does not broaden credentials issued before device authorization existed", () => {
+    const db = openMemoryDatabase();
+    const migrations = loadMigrations();
+    migrate(
+      db,
+      migrations.filter((migration) => migration.version <= "0007"),
+    );
+    db.prepare(
+      `INSERT INTO runtime_connections
+        (id, installation_id, name, status, capabilities_json, labels_json, created_at, updated_at)
+       VALUES ('rt_legacy', 'install-legacy', 'Legacy daemon', 'offline', '{}', '{}', ?, ?)`,
+    ).run("2026-07-13T00:00:00.000Z", "2026-07-13T00:00:00.000Z");
+    const insertToken = db.prepare(
+      `INSERT INTO runtime_tokens
+        (id, runtime_id, token_hash, label, scopes_json, created_at)
+       VALUES (?, 'rt_legacy', ?, ?, ?, ?)`,
+    );
+    insertToken.run(
+      "rttok_access",
+      "hash-access",
+      "runtime access token",
+      '["runtime:connect"]',
+      "2026-07-13T00:00:00.000Z",
+    );
+    insertToken.run(
+      "rttok_refresh",
+      "hash-refresh",
+      "runtime refresh token",
+      '["runtime:refresh"]',
+      "2026-07-13T00:00:00.000Z",
+    );
+    insertToken.run(
+      "rttok_custom",
+      "hash-custom",
+      "custom token",
+      '["runtime:connect","custom:scope"]',
+      "2026-07-13T00:00:00.000Z",
+    );
+
+    migrate(db, migrations);
+
+    const scopes = db
+      .prepare("SELECT id, scopes_json AS scopesJson FROM runtime_tokens ORDER BY id")
+      .all() as Array<{ id: string; scopesJson: string }>;
+    expect(scopes).toEqual([
+      { id: "rttok_access", scopesJson: '["runtime:connect"]' },
+      { id: "rttok_custom", scopesJson: '["runtime:connect","custom:scope"]' },
+      { id: "rttok_refresh", scopesJson: '["runtime:refresh"]' },
+    ]);
     db.close();
   });
 });

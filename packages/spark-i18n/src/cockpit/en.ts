@@ -254,11 +254,19 @@ const messages = {
       ],
       stepActions: {
         createToken: "Generate connection command",
+        createDeviceCommand: "Authorize in browser",
+        createTokenFallback: "Use one-time token",
         localWorkspaceCommand: "Workspace connection command",
         commandCreatedAria: "Created workspace connection command",
         commandCreatedTitle: "Command ready",
         commandCreatedHint:
-          "Copy and run this in your terminal. Pass a directory after register, or omit it and answer the prompt.",
+          "Copy and run this in your terminal. Approve the matching browser code when prompted.",
+        tokenCommandCreatedHint:
+          "Copy and run this one-time command in the directory you want to connect.",
+        loopbackWarning:
+          "This Cockpit URL works only on the same machine. If the daemon is elsewhere, use a LAN or private-network Cockpit URL before generating the command.",
+        insecureHttpWarning:
+          "This remote Cockpit URL uses plaintext HTTP. The generated command includes an explicit insecure-network acknowledgement; prefer HTTPS before connecting a daemon.",
         copyCommand: "Copy",
         copiedCommand: "Copied",
         copyFailed: "Copy failed",
@@ -993,7 +1001,21 @@ const messages = {
     },
     enrollment: {
       title: "Connect a local directory",
-      body: "Generate a one-time command and run it from the target directory. The command is shown only once.",
+      body: "Authorize a daemon once, then connect any directory on that machine.",
+      deviceTitle: "Connect with browser authorization",
+      deviceBody:
+        "Run the login command once on the daemon machine and approve the matching code in your browser. Then run the workspace command from the directory you want to connect.",
+      loginCommandLabel: "1 · Authorize this daemon",
+      workspaceCommandLabel: "2 · Connect this directory",
+      deviceReuseHint:
+        "Already authorized this daemon for this Cockpit? Skip the first command and connect the directory directly.",
+      loopbackWarning:
+        "This command uses a loopback Cockpit address. It works only when Cockpit and the daemon run on the same machine. For another machine, open Cockpit through a LAN or private-network address first.",
+      insecureHttpWarning:
+        "This remote Cockpit address uses plaintext HTTP. The command explicitly acknowledges that risk; use HTTPS whenever possible before authorizing a daemon.",
+      tokenFallbackTitle: "Use a one-time token instead",
+      tokenFallbackBody:
+        "Use this fallback for scripts or when browser authorization is unavailable. Each token connects one workspace and is shown only once.",
       label: "Connection name (optional)",
       labelPlaceholder: "Local workspace",
       createToken: "Generate connection command",
@@ -1080,6 +1102,48 @@ const messages = {
       tokenIdRequired: "Token id is required.",
       tokenRevoked: "Registration token revoked.",
       tokenNotActive: "That registration token was not active.",
+    },
+  },
+  daemonAuthorization: {
+    headTitle: "Authorize daemon · Spark",
+    eyebrow: "Daemon access",
+    title: "Authorize this Spark daemon",
+    lede: "Confirm the code shown in your terminal. This trusts one daemon installation for this Cockpit.",
+    codeLabel: "Device code",
+    codePlaceholder: "ABCD-EFGH",
+    findCode: "Continue",
+    requestTitle: "Access request",
+    pendingStatus: "Pending approval",
+    daemonLabel: "Daemon",
+    installationLabel: "Installation",
+    permissionLabel: "Permission",
+    permissionValue: "Connect and register workspaces on this daemon",
+    expiresLabel: "Expires",
+    safetyNote:
+      "Approve only if this code matches the terminal you started. Spark never asks for your Cockpit token here.",
+    approve: "Authorize daemon",
+    deny: "Deny",
+    approvedTitle: "Daemon authorized",
+    approvedBody:
+      "Return to the terminal. This daemon can now connect additional local workspaces without another one-time token.",
+    deniedTitle: "Authorization denied",
+    deniedBody: "No credentials were issued. You can close this page.",
+    expiredTitle: "Code expired",
+    expiredBody: "Run spark daemon login again to create a new code.",
+    consumedTitle: "Daemon connected",
+    consumedBody:
+      "This code has already been exchanged successfully. You can return to the terminal.",
+    invalidTitle: "Code not found",
+    invalidBody: "Check the code in your terminal or start a new daemon login.",
+    enterTitle: "Enter the code from your terminal",
+    enterBody: "Run spark daemon login, then enter the device code shown there.",
+    errors: {
+      authorization_pending: "This request is still waiting for approval.",
+      slow_down: "The daemon is checking too often. Wait a moment and try again.",
+      access_denied: "This request was denied.",
+      expired_token: "This device code has expired.",
+      invalid_grant: "This device code is invalid or has already been used.",
+      approval_forbidden: "Only the Cockpit owner can authorize a daemon.",
     },
   },
   login: {

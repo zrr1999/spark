@@ -127,6 +127,26 @@ export interface RuntimeEnrollmentTokensTable {
   revoked_at: string | null;
 }
 
+export interface RuntimeDeviceAuthorizationsTable {
+  id: string;
+  device_code_hash: string;
+  user_code_hash: string;
+  installation_id: string;
+  display_name: string;
+  registration_json: string;
+  scopes_json: string;
+  created_at: string;
+  expires_at: string;
+  interval_seconds: number;
+  last_polled_at: string | null;
+  approved_by_user_id: string | null;
+  approved_at: string | null;
+  denied_by_user_id: string | null;
+  denied_at: string | null;
+  consumed_at: string | null;
+  created_runtime_id: string | null;
+}
+
 export interface RuntimeSessionsTable {
   id: string;
   runtime_id: string;
@@ -454,6 +474,7 @@ export interface SparkDatabase {
   runtime_connections: RuntimeConnectionsTable;
   runtime_tokens: RuntimeTokensTable;
   runtime_enrollment_tokens: RuntimeEnrollmentTokensTable;
+  runtime_device_authorizations: RuntimeDeviceAuthorizationsTable;
   runtime_sessions: RuntimeSessionsTable;
   runtime_workspace_bindings: RuntimeWorkspaceBindingsTable;
   runtime_message_receipts: RuntimeMessageReceiptsTable;

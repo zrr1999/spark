@@ -4,10 +4,14 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   runtimeHeartbeatEnvelopeSchema,
+  runtimeDeviceAuthorizationRequestSchema,
+  runtimeDeviceAuthorizationResponseSchema,
+  runtimeDeviceTokenRequestSchema,
   runtimeHelloEnvelopeSchema,
   runtimeMessageEnvelopeSchema,
   runtimeRegistrationRequestSchema,
   runtimeRegistrationResponseSchema,
+  runtimeWorkspaceRegistrationRequestSchema,
   runtimeReconcileReportEnvelopeSchema,
   workspaceSnapshotEnvelopeSchema,
 } from "./index.ts";
@@ -41,6 +45,37 @@ describe("runtime protocol fixtures", () => {
     expect(runtimeRegistrationResponseSchema.parse(registerResponse).protocolVersion).toBe(
       "spark.runtime.v1alpha1",
     );
+  });
+
+  it("validates daemon device authorization messages", () => {
+    expect(runtimeDeviceAuthorizationRequestSchema.parse(registerRequest).installationId).toBe(
+      "dev-macbook-pro",
+    );
+    expect(
+      runtimeDeviceAuthorizationResponseSchema.parse({
+        deviceCode: `spark_device_${"a".repeat(43)}`,
+        userCode: "ABCD-EFGH",
+        verificationUri: "http://127.0.0.1:5173/daemon/authorize",
+        verificationUriComplete: "http://127.0.0.1:5173/daemon/authorize?user_code=ABCD-EFGH",
+        expiresIn: 600,
+        interval: 5,
+      }).interval,
+    ).toBe(5);
+    expect(
+      runtimeDeviceTokenRequestSchema.parse({ deviceCode: `spark_device_${"a".repeat(43)}` })
+        .deviceCode,
+    ).toMatch(/^spark_device_/);
+  });
+
+  it("allows an installation-scoped runtime token to register another workspace", () => {
+    expect(
+      runtimeWorkspaceRegistrationRequestSchema.parse({
+        workspaceRegistration: {
+          localWorkspaceKey: "spore",
+          displayName: "Spore",
+        },
+      }).registrationToken,
+    ).toBeUndefined();
   });
 
   it("validates runtime hello fixture", () => {

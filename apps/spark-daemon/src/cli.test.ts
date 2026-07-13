@@ -7,7 +7,8 @@ import { describe, expect, it, vi } from "vitest";
 import { runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import { gitCommand, resolveSparkPaths } from "@zendev-lab/spark-system";
 import { main, type CliIo } from "./cli.js";
-import { writeSparkDaemonConfig } from "./config.js";
+import { readSparkDaemonConfig, writeSparkDaemonConfig } from "./config.js";
+import { LocalRpcUnavailableError } from "./local-rpc.js";
 import { RegistrationGrantRefusedError } from "./registration.js";
 import { openSparkDaemonDatabase } from "./store/schema.js";
 import {
@@ -27,6 +28,8 @@ function createCliIo(
     registerWorkspaceInService?: CliIo["registerWorkspaceInService"];
     attachWorkspaceInService?: CliIo["attachWorkspaceInService"];
     stopWorkspaceInService?: CliIo["stopWorkspaceInService"];
+    openExternal?: CliIo["openExternal"];
+    deviceAuthorizationSleep?: CliIo["deviceAuthorizationSleep"];
   } = {},
 ) {
   let stdout = "";
@@ -45,6 +48,10 @@ function createCliIo(
       },
     },
     ...(options.stdin ? { stdin: options.stdin } : {}),
+    ...(options.openExternal ? { openExternal: options.openExternal } : {}),
+    ...(options.deviceAuthorizationSleep
+      ? { deviceAuthorizationSleep: options.deviceAuthorizationSleep }
+      : {}),
     startService:
       options.startService ??
       (() => ({
@@ -62,9 +69,6 @@ function createCliIo(
     registerWorkspaceInService:
       options.registerWorkspaceInService ??
       (async (paths, request) => {
-        if (!request.registrationToken) {
-          throw new Error("Test service expected a workspace registration token.");
-        }
         const db = openSparkDaemonDatabase(paths);
         try {
           const { registrationToken: _registrationToken, ...options } = request;
@@ -352,6 +356,141 @@ describe("Spark daemon CLI", () => {
       expect(existsSync(paths.configFile)).toBe(true);
       expect(existsSync(paths.databasePath)).toBe(false);
     });
+  });
+
+  it("authorizes the daemon once with the device flow and stores machine credentials", async () => {
+    const openExternal = vi.fn(() => true);
+    const capture = createCliIo({
+      openExternal,
+      deviceAuthorizationSleep: async () => {},
+    });
+    let submittedInstallationId: string | undefined;
+    const fetchFn = vi.fn(async (url: URL | string, init?: RequestInit) => {
+      const requestUrl = new URL(String(url));
+      if (requestUrl.pathname === "/api/v1/runtime/device-authorizations") {
+        submittedInstallationId = (JSON.parse(String(init?.body)) as { installationId?: string })
+          .installationId;
+        return new Response(
+          JSON.stringify({
+            deviceCode: "spark_device_code_000000000000000000000000",
+            userCode: "SPRK-1234",
+            verificationUri: "http://127.0.0.1:5173/daemon/authorize",
+            verificationUriComplete: "http://127.0.0.1:5173/daemon/authorize?user_code=SPRK-1234",
+            expiresIn: 600,
+            interval: 1,
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          runtimeId: "rt_11111111111141111111111111111111",
+          runtimeToken: "spark_rt_device_token_0000000000000000000000000000",
+          runtimeTokenExpiresAt: "2026-07-13T02:00:00.000Z",
+          refreshToken: "spark_rt_device_refresh_00000000000000000000000000",
+          refreshTokenExpiresAt: "2026-08-12T01:00:00.000Z",
+          protocolVersion: runtimeProtocolVersion,
+          webSocketUrl:
+            "ws://127.0.0.1:5173/api/v1/runtime/runtimes/rt_11111111111141111111111111111111/ws",
+          heartbeatIntervalMs: 15_000,
+          staleAfterMs: 45_000,
+          registeredAt: "2026-07-13T01:00:00.000Z",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchFn);
+
+    try {
+      await withTempSparkEnv(async () => {
+        await expect(
+          main(["login", "--server-url", "http://127.0.0.1:5173"], capture.io),
+        ).resolves.toBe(0);
+
+        expect(openExternal).toHaveBeenCalledWith(
+          "http://127.0.0.1:5173/daemon/authorize?user_code=SPRK-1234",
+        );
+        expect(capture.stdout()).toContain("SPRK-1234");
+        expect(capture.stdout()).toContain("Waiting for daemon authorization");
+        expect(capture.stdout()).not.toContain("spark_device_code");
+        expect(capture.stdout()).not.toContain("spark_rt_device_token");
+        const config = readSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }));
+        expect(config).toMatchObject({
+          serverUrl: "http://127.0.0.1:5173/",
+          runtimeId: "rt_11111111111141111111111111111111",
+          runtimeToken: "spark_rt_device_token_0000000000000000000000000000",
+          refreshToken: "spark_rt_device_refresh_00000000000000000000000000",
+        });
+        expect(config.installationId).toBe(submittedInstallationId);
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("supports daemon device login without opening a browser", async () => {
+    const openExternal = vi.fn(() => true);
+    const capture = createCliIo({
+      openExternal,
+      deviceAuthorizationSleep: async () => {},
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              deviceCode: "spark_device_code_000000000000000000000000",
+              userCode: "SPRK-1234",
+              verificationUri: "http://192.168.1.8:5173/daemon/authorize",
+              verificationUriComplete:
+                "http://192.168.1.8:5173/daemon/authorize?user_code=SPRK-1234",
+              expiresIn: 600,
+              interval: 1,
+            }),
+            { status: 201, headers: { "content-type": "application/json" } },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(deviceLoginRegistrationResponse()), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+    );
+
+    try {
+      await withTempSparkEnv(async () => {
+        await expect(
+          main(
+            [
+              "login",
+              "--server-url",
+              "http://192.168.1.8:5173",
+              "--allow-insecure-http",
+              "--no-open",
+            ],
+            capture.io,
+          ),
+        ).resolves.toBe(0);
+        expect(openExternal).not.toHaveBeenCalled();
+        expect(capture.stdout()).toContain("http://192.168.1.8:5173/daemon/authorize");
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("refuses plaintext remote Cockpit login without explicit acknowledgement", async () => {
+    const capture = createCliIo();
+    await withTempSparkEnv(async () => {
+      await expect(
+        main(["login", "--server-url", "http://192.168.1.8:5173", "--no-open"], capture.io),
+      ).resolves.toBe(1);
+    });
+    expect(capture.stderr()).toContain("plaintext HTTP");
+    expect(capture.stderr()).toContain("--allow-insecure-http");
   });
 
   it("prints the workspace registration hint when no default workspace exists", async () => {
@@ -775,7 +914,7 @@ describe("Spark daemon CLI", () => {
 
       const listCapture = createCliIo({
         listWorkspacesFromService: vi.fn(async () => {
-          throw new Error("socket refused");
+          throw new LocalRpcUnavailableError("socket refused");
         }),
       });
       await expect(main(["ws", "ls", "--json"], listCapture.io)).resolves.toBe(2);
@@ -797,7 +936,7 @@ describe("Spark daemon CLI", () => {
 
       const capture = createCliIo({
         registerWorkspaceInService: vi.fn(async () => {
-          throw new Error("socket refused");
+          throw new LocalRpcUnavailableError("socket refused");
         }),
       });
       await expect(
@@ -837,7 +976,9 @@ describe("Spark daemon CLI", () => {
         ) => {
           registerAttempts += 1;
           if (registerAttempts === 1) {
-            throw new Error(`connect ENOENT ${join(paths.runtimeDir, "daemon.sock")}`);
+            throw new LocalRpcUnavailableError(
+              `connect ENOENT ${join(paths.runtimeDir, "daemon.sock")}`,
+            );
           }
           const db = openSparkDaemonDatabase(requestPaths);
           try {
@@ -1300,7 +1441,7 @@ describe("Spark daemon CLI", () => {
 
   it("asks before importing a detected workspace profile in interactive registration", async () => {
     const capture = createCliIo({
-      stdin: interactiveStdin(["checkout", "", "spark_wsreg_interactive", "", "y"]),
+      stdin: interactiveStdin(["checkout", "", "", "y"]),
     });
 
     await withTempSparkEnv(async (root) => {
@@ -1466,23 +1607,105 @@ describe("Spark daemon CLI", () => {
     }
   });
 
-  it("requires a workspace registration token for every workspace registration", async () => {
+  it("directs an unauthenticated daemon to login before tokenless workspace registration", async () => {
     const capture = createCliIo();
 
     await withTempSparkEnv(async (root) => {
       const workspacePath = join(root, "checkout");
       mkdirSync(workspacePath, { recursive: true });
       process.env.INIT_CWD = root;
-      writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), testSparkDaemonConfig());
+      writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), {
+        installationId: "install-test",
+        displayName: "Test daemon",
+        serverUrl: "http://127.0.0.1:5173",
+      });
 
       await expect(
         main(["ws", "register", "checkout", "--name", "Spark Dev", "--no-service"], capture.io),
       ).resolves.toBe(1);
-      expect(capture.stderr()).toContain("Missing workspace registration token");
+      expect(capture.stderr()).toContain("spark daemon login --server-url http://127.0.0.1:5173/");
 
       const listCapture = createCliIo();
       await expect(main(["ws", "ls", "--json", "--no-service"], listCapture.io)).resolves.toBe(0);
       expect(JSON.parse(listCapture.stdout())).toEqual([]);
+    });
+  });
+
+  it("reuses machine credentials for another workspace and preserves server workspace identity", async () => {
+    const registerWorkspaceInService = vi.fn(
+      async (
+        _paths: ReturnType<typeof resolveSparkPaths>,
+        options: Parameters<NonNullable<CliIo["registerWorkspaceInService"]>>[1],
+      ) => ({
+        id: "rtwb_tokenless",
+        serverUrl: options.serverUrl ?? "",
+        localWorkspaceKey: options.localWorkspaceKey ?? "local-checkout",
+        displayName: options.displayName ?? "Local checkout",
+        localPath: options.localPath,
+        status: "available" as const,
+        capabilities: {},
+        diagnostics: {},
+        updatedAt: "2026-07-13T00:00:00.000Z",
+      }),
+    );
+    const capture = createCliIo({ registerWorkspaceInService });
+
+    await withTempSparkEnv(async (root) => {
+      mkdirSync(join(root, "checkout"), { recursive: true });
+      process.env.INIT_CWD = root;
+      writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), testSparkDaemonConfig());
+
+      await expect(
+        main(
+          [
+            "ws",
+            "register",
+            "checkout",
+            "--name",
+            "Local checkout",
+            "--workspace-name",
+            "Profile workspace",
+            "--workspace-slug",
+            "profile-workspace",
+            "--no-service",
+          ],
+          capture.io,
+        ),
+      ).resolves.toBe(0);
+
+      expect(registerWorkspaceInService).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          displayName: "Local checkout",
+          workspaceName: "Profile workspace",
+          workspaceSlug: "profile-workspace",
+        }),
+      );
+      expect(registerWorkspaceInService.mock.calls[0]?.[1]).not.toHaveProperty("registrationToken");
+    });
+  });
+
+  it("does not misclassify a daemon-reported Cockpit fetch error as local RPC downtime", async () => {
+    await withTempSparkEnv(async (root) => {
+      mkdirSync(join(root, "checkout"), { recursive: true });
+      process.env.INIT_CWD = root;
+      const paths = resolveSparkPaths({ app: "daemon" });
+      mkdirSync(paths.runtimeDir, { recursive: true });
+      writeFileSync(paths.pidFile, `${process.pid}\n`);
+      writeSparkDaemonConfig(paths, testSparkDaemonConfig());
+      const capture = createCliIo({
+        registerWorkspaceInService: vi.fn(async () => {
+          throw new Error(
+            "Request to http://127.0.0.1:5173/api/v1/runtime failed (Cockpit origin: http://127.0.0.1:5173): fetch failed",
+          );
+        }),
+      });
+
+      await expect(
+        main(["ws", "register", "checkout", "--name", "Checkout"], capture.io),
+      ).resolves.toBe(1);
+      expect(capture.stderr()).toContain("Cockpit origin: http://127.0.0.1:5173");
+      expect(capture.stderr()).not.toContain("Spark daemon is running but cannot be reached");
     });
   });
 
@@ -2179,6 +2402,22 @@ function restoreEnv(values: Record<string, string | undefined>): void {
       process.env[key] = value;
     }
   }
+}
+
+function deviceLoginRegistrationResponse() {
+  return {
+    runtimeId: "rt_11111111111141111111111111111111",
+    runtimeToken: "spark_rt_device_token_0000000000000000000000000000",
+    runtimeTokenExpiresAt: "2026-07-13T02:00:00.000Z",
+    refreshToken: "spark_rt_device_refresh_00000000000000000000000000",
+    refreshTokenExpiresAt: "2026-08-12T01:00:00.000Z",
+    protocolVersion: runtimeProtocolVersion,
+    webSocketUrl:
+      "wss://cockpit.example.test/api/v1/runtime/runtimes/rt_11111111111141111111111111111111/ws",
+    heartbeatIntervalMs: 15_000,
+    staleAfterMs: 45_000,
+    registeredAt: "2026-07-13T01:00:00.000Z",
+  };
 }
 
 function stdinFrom(value: string, isTTY = false): NodeJS.ReadStream {

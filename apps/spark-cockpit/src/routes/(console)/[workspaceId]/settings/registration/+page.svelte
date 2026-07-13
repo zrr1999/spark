@@ -70,7 +70,42 @@
     {/each}
   </div>
 
-  <section class="panel-card">
+  <section class="panel-card device-registration">
+    <div class="device-heading">
+      <div>
+        <h2>{t.enrollment.deviceTitle}</h2>
+        <p>{t.enrollment.deviceBody}</p>
+      </div>
+      <Icon name="spark" size={20} />
+    </div>
+
+    {#if data.loopbackServerOrigin}
+      <p class="loopback-warning" role="note">{t.enrollment.loopbackWarning}</p>
+    {:else if data.insecureRemoteServerOrigin}
+      <p class="loopback-warning" role="note">{t.enrollment.insecureHttpWarning}</p>
+    {/if}
+
+    <div class="device-commands">
+      <div class="token-display">
+        <span>{t.enrollment.loginCommandLabel}</span>
+        <pre>{data.deviceLoginCommand}</pre>
+      </div>
+      <div class="token-display">
+        <span>{t.enrollment.workspaceCommandLabel}</span>
+        <pre>{data.workspaceRegisterCommand}</pre>
+      </div>
+    </div>
+    <p class="reuse-hint">{t.enrollment.deviceReuseHint}</p>
+  </section>
+
+  <details class="token-fallback">
+    <summary>
+      <span>
+        <strong>{t.enrollment.tokenFallbackTitle}</strong>
+        <small>{t.enrollment.tokenFallbackBody}</small>
+      </span>
+    </summary>
+    <section class="panel-card fallback-card">
     <form class="token-form" method="POST" action="?/createEnrollmentToken">
       <Field id="enrollment-label" label={t.enrollment.label}>
         <Input id="enrollment-label" name="label" placeholder={t.enrollment.labelPlaceholder} />
@@ -143,7 +178,8 @@
         </div>
       {/if}
     </article>
-  </section>
+    </section>
+  </details>
 
   <details class="connection-diagnostics">
     <summary><span><strong>{t.runner.kicker}</strong><small>{t.runner.routesLabel}</small></span></summary>
@@ -295,6 +331,93 @@
     display: grid;
     gap: 14px;
     padding: 16px;
+  }
+
+  .device-heading {
+    align-items: start;
+    display: flex;
+    gap: 16px;
+    justify-content: space-between;
+  }
+
+  .device-heading > div {
+    display: grid;
+    gap: 5px;
+  }
+
+  .device-heading p,
+  .reuse-hint,
+  .token-fallback summary small {
+    color: var(--color-ink-subtle);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .device-heading :global(svg) {
+    color: var(--color-primary);
+    flex: 0 0 auto;
+  }
+
+  .device-commands {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .device-commands pre {
+    background: var(--color-ink);
+    border-radius: 8px;
+    color: var(--color-border);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.55;
+    margin: 0;
+    min-height: 100%;
+    overflow-x: auto;
+    padding: 12px;
+    white-space: pre-wrap;
+  }
+
+  .loopback-warning {
+    background: var(--color-warning-weak);
+    border: 1px solid var(--color-warning-soft);
+    border-radius: 8px;
+    color: var(--color-warning-strong);
+    font-size: 13px;
+    line-height: 1.5;
+    margin: 0;
+    padding: 10px 12px;
+  }
+
+  .token-fallback {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--rounded-lg);
+    overflow: hidden;
+  }
+
+  .token-fallback > summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 14px 16px;
+  }
+
+  .token-fallback > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .token-fallback > summary span {
+    display: grid;
+    gap: 3px;
+  }
+
+  .token-fallback[open] > summary {
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .fallback-card {
+    border: 0;
+    border-radius: 0;
   }
 
   .panel-heading,
@@ -568,7 +691,8 @@
 
   @media (max-width: 980px) {
     .summary-grid,
-    .connections-grid {
+    .connections-grid,
+    .device-commands {
       grid-template-columns: 1fr;
     }
 

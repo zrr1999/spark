@@ -10,6 +10,7 @@ export const idPrefixSchema = z.enum([
   "agent",
   "rt",
   "rtetok",
+  "rtda",
   "rttok",
   "rtsn",
   "rtwb",

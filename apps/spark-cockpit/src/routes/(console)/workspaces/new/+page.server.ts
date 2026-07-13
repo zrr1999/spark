@@ -7,6 +7,12 @@ import {
 import { getRequestDictionary, localeCookieName, type AppMessages } from "$lib/i18n";
 import { ensureCurrentOwnerSession } from "$lib/server/auth";
 import { getDatabase } from "$lib/server/db";
+import {
+  buildDaemonLoginCommand,
+  buildDaemonWorkspaceRegistrationCommand,
+  isInsecureRemoteServerOrigin,
+  isLoopbackServerOrigin,
+} from "$lib/server/daemon-registration-commands";
 import { createWorkspaceWithOwnerBinding } from "$lib/server/projection-services";
 import {
   bindRuntimeRefreshTokenToWorkspace,
@@ -41,16 +47,27 @@ export const load: PageServerLoad = ({ cookies, url }) => {
   });
   return {
     serverOrigin: url.origin,
+    loopbackServerOrigin: isLoopbackServerOrigin(url),
+    insecureRemoteServerOrigin: isInsecureRemoteServerOrigin(url),
     workspaces: page.workspaces,
     runnerBindings: page.runnerBindings,
     ownerBindings: page.ownerBindings,
     pendingWorkspaceSetup,
+    pendingDeviceRegistrationCommand:
+      pendingWorkspaceSetup && !pendingWorkspaceSetup.enrollmentTokenId
+        ? {
+            registrationMode: "device" as const,
+            enrollCommand: buildDeviceRegistrationCommand(url.origin, pendingWorkspaceSetup),
+            enrollmentExpiresAt: null,
+            profileSetup: pendingWorkspaceSetup,
+          }
+        : null,
     targetRunnerBinding: page.targetRunnerBinding,
   };
 };
 
 export const actions: Actions = {
-  createEnrollmentToken: async ({ cookies, locals, request, url }) => {
+  prepareRegistration: async ({ cookies, locals, request, url }) => {
     const t = getRequestDictionary({
       cookieLocale: cookies.get(localeCookieName),
       acceptLanguage: request.headers.get("accept-language"),
@@ -59,6 +76,7 @@ export const actions: Actions = {
     const userId = ensureCurrentOwnerSession(db, cookies, locals.sessionToken);
 
     const formData = await request.formData();
+    const registrationMethod = readFormString(formData, "registrationMethod") || "device";
     let workspaceSetup: PendingWorkspaceSetup;
     try {
       workspaceSetup = resolvePendingWorkspaceSetup(formData);
@@ -70,24 +88,44 @@ export const actions: Actions = {
       });
     }
 
-    const label = `${t.registrationLabelPrefix}: ${workspaceSetup.name}`;
-    const token = createRuntimeEnrollmentToken(db, {
-      label,
-      createdByUserId: userId,
-      workspaceName: workspaceSetup.name,
-      workspaceSlug: workspaceSetup.slug,
-    });
-    workspaceSetup = { ...workspaceSetup, enrollmentTokenId: token.id };
-    setPendingWorkspaceSetup(cookies, workspaceSetup);
+    if (registrationMethod === "token") {
+      const label = `${t.registrationLabelPrefix}: ${workspaceSetup.name}`;
+      const token = createRuntimeEnrollmentToken(db, {
+        label,
+        createdByUserId: userId,
+        workspaceName: workspaceSetup.name,
+        workspaceSlug: workspaceSetup.slug,
+      });
+      workspaceSetup = { ...workspaceSetup, enrollmentTokenId: token.id };
+      setPendingWorkspaceSetup(cookies, workspaceSetup);
 
+      return {
+        intent: "workspaceRegistration",
+        registrationMode: "token",
+        message: t.commandCreated,
+        profileSetup: workspaceSetup,
+        enrollmentTokenId: token.id,
+        enrollmentToken: token.refreshToken,
+        enrollmentExpiresAt: token.expiresAt,
+        enrollCommand: buildEnrollCommand(url.origin, token.refreshToken, workspaceSetup),
+      };
+    }
+
+    workspaceSetup = {
+      profileSource: workspaceSetup.profileSource,
+      profileUrl: workspaceSetup.profileUrl,
+      name: workspaceSetup.name,
+      slug: workspaceSetup.slug,
+      description: workspaceSetup.description,
+    };
+    setPendingWorkspaceSetup(cookies, workspaceSetup);
     return {
       intent: "workspaceRegistration",
+      registrationMode: "device",
       message: t.commandCreated,
       profileSetup: workspaceSetup,
-      enrollmentTokenId: token.id,
-      enrollmentToken: token.refreshToken,
-      enrollmentExpiresAt: token.expiresAt,
-      enrollCommand: buildEnrollCommand(url.origin, token.refreshToken, workspaceSetup),
+      enrollmentExpiresAt: null,
+      enrollCommand: buildDeviceRegistrationCommand(url.origin, workspaceSetup),
     };
   },
 
@@ -228,12 +266,23 @@ function buildEnrollCommand(
   refreshToken: string,
   setup: PendingWorkspaceSetup,
 ) {
+  return buildDaemonWorkspaceRegistrationCommand({
+    serverOrigin,
+    displayName: setup.name,
+    registrationToken: refreshToken,
+  });
+}
+
+function buildDeviceRegistrationCommand(serverOrigin: string, setup: PendingWorkspaceSetup) {
   return [
-    "spark daemon workspace register",
-    `--server-url ${shellQuote(serverOrigin)}`,
-    `--token ${shellQuote(refreshToken)}`,
-    `--name ${shellQuote(setup.name)}`,
-  ].join(" ");
+    buildDaemonLoginCommand(serverOrigin),
+    buildDaemonWorkspaceRegistrationCommand({
+      serverOrigin,
+      displayName: setup.name,
+      workspaceName: setup.name,
+      workspaceSlug: setup.slug,
+    }),
+  ].join("\n");
 }
 
 function resolvePendingWorkspaceSetup(formData: FormData): PendingWorkspaceSetup {
@@ -354,11 +403,4 @@ function readOptionalFormString(
 ): string | null {
   const value = readFormString(formData, key);
   return value || fallback;
-}
-
-function shellQuote(value: string): string {
-  if (/^[A-Za-z0-9_./:=@%+-]+$/.test(value)) {
-    return value;
-  }
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
