@@ -3,6 +3,7 @@
   import { invalidateAll } from "$app/navigation";
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime } from "$lib/i18n";
+  import PageHeader from "$lib/ui/PageHeader.svelte";
   import { slugifyWorkspaceIdentifier } from "$lib/slugify";
   import type { SubmitFunction } from "@sveltejs/kit";
 
@@ -284,13 +285,7 @@
 </svelte:head>
 
 <div class="workspace-create-page">
-<section class="setup-hero" aria-labelledby="home-title">
-  <div>
-    <p class="eyebrow">{t.noWorkspaceHero.eyebrow}</p>
-    <h1 id="home-title">{t.noWorkspaceHero.title}</h1>
-    <p class="lede">{t.noWorkspaceHero.lede}</p>
-  </div>
-</section>
+<PageHeader title={t.noWorkspaceHero.title} lede={t.noWorkspaceHero.lede} />
 
 <section
   class="setup-panel"
@@ -403,6 +398,7 @@
 
                       <label>
                         <span>{t.emptyWorkspace.form.slug}</span>
+                        <small>{t.emptyWorkspace.form.slugHint}</small>
                         <input
                           name="slug"
                           placeholder={t.emptyWorkspace.form.slugPlaceholder}
@@ -559,50 +555,15 @@
     width: 100%;
   }
 
-  .setup-hero {
-    align-items: center;
-    display: flex;
-    gap: 24px;
-    justify-content: space-between;
-  }
-
-  .setup-hero > div {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-
-  .eyebrow {
-    color: var(--color-primary);
-    font-size: 12px;
-    font-weight: 800;
-    letter-spacing: 0;
-    margin: 0 0 8px;
-  }
-
-  h1,
   h3,
   p {
     margin: 0;
-  }
-
-  h1 {
-    color: var(--color-ink);
-    font-size: 34px;
-    line-height: 1.08;
   }
 
   h3 {
     color: var(--color-ink);
     font-size: 15px;
     line-height: 1.35;
-  }
-
-  .lede {
-    color: var(--color-ink-subtle);
-    line-height: 1.55;
-    margin-top: 10px;
-    max-width: none;
-    width: 100%;
   }
 
   .primary-action,
@@ -942,6 +903,12 @@
     font-weight: 750;
   }
 
+  .profile-form label > small {
+    color: var(--color-ink-subtle);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
   .workspace-directory-summary strong {
     color: var(--color-ink);
     font-size: 14px;
@@ -993,11 +960,6 @@
   }
 
   @media (max-width: 900px) {
-    .setup-hero {
-      align-items: stretch;
-      display: grid;
-    }
-
     .command-row,
     .field-pair,
     .profile-choice-options,

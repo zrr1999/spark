@@ -6,9 +6,7 @@
   import type { CockpitSearchSession } from "$lib/shell/cockpit-search";
   import {
     buildWorkbenchNavItems,
-    currentWorkbenchPageLabel,
     isWorkbenchNavItemActive,
-    isWorkspaceScopedPath,
     settingsHubHref,
     workspaceSwitcherHref as buildWorkspaceSwitcherHref,
   } from "$lib/workbench-nav";
@@ -64,14 +62,6 @@
       activeWorkspacePath,
       targetWorkspaceSlug: workspace.slug,
       workspacePath,
-    });
-  }
-
-  function currentPageLabel(pathname: string) {
-    return currentWorkbenchPageLabel({
-      pathname,
-      nav: t.nav,
-      pages: t.pages,
     });
   }
 
@@ -162,16 +152,6 @@
     </aside>
 
     <div class="workspace">
-      <div class="contextbar">
-        <nav class="breadcrumb" aria-label={t.aria.breadcrumb}>
-          {#if data.activeWorkspace && isWorkspaceScopedPath(page.url.pathname, activeWorkspacePath)}
-            <a href={activeWorkspacePath}>{data.activeWorkspace.name}</a>
-            <Icon name="chevron" size={14} stroke={2.2} />
-          {/if}
-          <span>{currentPageLabel(page.url.pathname)}</span>
-        </nav>
-      </div>
-
       <main class="content">
         {@render children()}
       </main>
@@ -253,50 +233,13 @@
 
   .workspace {
     display: grid;
-    grid-template-rows: 42px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     min-height: 0;
     min-width: 0;
   }
 
-  .contextbar {
-    align-items: center;
-    background: var(--color-surface);
-    border-bottom: 1px solid var(--color-border);
-    display: flex;
-    padding: 0 28px;
-  }
-
-  .breadcrumb {
-    align-items: center;
-    color: var(--color-ink-disabled);
-    display: inline-flex;
-    font-size: 12px;
-    font-weight: 700;
-    gap: 8px;
-    min-width: 0;
-    white-space: nowrap;
-  }
-
-  .breadcrumb a {
-    color: var(--color-ink-subtle);
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    text-decoration: none;
-  }
-
-  .breadcrumb a:hover {
-    color: var(--color-primary);
-  }
-
-  .breadcrumb span {
-    color: var(--color-ink);
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
   .content {
+    container-type: inline-size;
     min-height: 0;
     overflow: auto;
     padding: 26px 36px 40px;
@@ -316,9 +259,6 @@
       grid-template-columns: 240px minmax(0, 1fr);
     }
 
-    .contextbar {
-      padding-inline: 20px;
-    }
   }
 
   @media (max-width: 900px) {

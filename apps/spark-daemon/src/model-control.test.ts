@@ -12,13 +12,14 @@ import { createDaemonSessionRegistry } from "./session-registry.js";
 
 const roots: string[] = [];
 const model = { providerName: "baidu-oneapi", modelId: "ernie-4.5" };
+const selectedModel = { providerName: "baidu-oneapi", modelId: "ernie-4.6" };
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 describe("daemon model control", () => {
-  it("projects one catalog and persists a conversation-scoped model", async () => {
+  it("projects one catalog and persists a conversation-scoped model across fresh snapshots", async () => {
     const root = await mkdtemp(join(tmpdir(), "spark-model-control-"));
     roots.push(root);
     const sessionRegistry = createDaemonSessionRegistry(root, {
@@ -45,11 +46,24 @@ describe("daemon model control", () => {
       reference: "BAIDU_ONEAPI_API_KEY",
     });
 
-    const selected = await control.setSessionModel("sess_demo", model);
-    expect(selected.model).toMatchObject(model);
-    expect(await control.effectiveModel("sess_demo")).toMatchObject(model);
-    await control.prepareModel(model);
-    expect(prepareModel).toHaveBeenCalledWith("baidu-oneapi/ernie-4.5");
+    const selected = await control.setSessionModel("sess_demo", selectedModel);
+    expect(selected.model).toMatchObject(selectedModel);
+    expect((await control.snapshot("sess_demo")).session?.model).toMatchObject(selectedModel);
+    expect(await control.effectiveModel("sess_demo")).toMatchObject(selectedModel);
+
+    const reloadedControl = createSparkDaemonModelControl({
+      providerControl: fakeProviderControl(prepareModel),
+      sessionRegistry: createDaemonSessionRegistry(root, {
+        daemonId: "install-model-control",
+        daemonCwd: root,
+      }),
+    });
+    expect((await reloadedControl.snapshot("sess_demo")).session?.model).toMatchObject(
+      selectedModel,
+    );
+
+    await control.prepareModel(selectedModel);
+    expect(prepareModel).toHaveBeenCalledWith("baidu-oneapi/ernie-4.6");
   });
 
   it("maps OAuth interaction state without credential material", async () => {
@@ -91,7 +105,7 @@ function fakeProviderControl(
           source: "environment",
           apiKeySupported: true,
         },
-        modelCount: 1,
+        modelCount: 2,
       },
     ],
     models: [
@@ -101,6 +115,18 @@ function fakeProviderControl(
         modelId: "ernie-4.5",
         name: "ERNIE 4.5",
         active: true,
+        available: true,
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 128_000,
+        maxTokens: 8_192,
+      },
+      {
+        id: "baidu-oneapi/ernie-4.6",
+        providerId: "baidu-oneapi",
+        modelId: "ernie-4.6",
+        name: "ERNIE 4.6",
+        active: false,
         available: true,
         reasoning: true,
         input: ["text"],

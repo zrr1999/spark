@@ -201,7 +201,7 @@
           workspaceConversation: "工作区对话",
           daemonConversation: "全局对话",
           scopeChoiceLabel: "对话范围",
-          workspaceStartHint: "在当前工作区中直接说要做什么。发送首条消息后，Spark 会自动建立会话和内部任务。",
+          workspaceStartHint: "在当前工作空间中开始对话。",
           daemonStartHint: "直接与当前 Spark daemon 对话，不绑定任何工作区。",
           daemonScope: "当前 Spark daemon",
           scopeLabel: "范围",
@@ -211,7 +211,7 @@
           startSubmit: "开始对话",
           sendSubmit: "发送",
           sending: "发送中…",
-          sent: "消息已发送。",
+          sent: "",
           sendFailed: "消息发送失败，请重试。",
           startFailed: "无法开始对话，请重试。",
           timelineTitle: "对话",
@@ -219,7 +219,7 @@
           you: "你",
           spark: "Spark",
           internalDetails: "内部运行详情",
-          internalHint: "Project、Task 和 Run 由 Spark 自动创建与管理。",
+          internalHint: "Spark 自动管理这段对话的执行记录。",
           noInternalRuns: "还没有内部运行。",
           conversationContext: "会话上下文",
           collapseDetails: "会话与运行详情",
@@ -228,7 +228,7 @@
           currentModelUnavailable: "当前模型不可用，请先切换模型",
           configureModels: "配置 Provider",
           providerLoginRequired: "登录后可用",
-          modelUpdated: "模型已切换；从下一条尚未入队的消息开始生效。",
+          modelUpdated: "模型已切换，将用于之后发送的消息。",
           modelFailed: "无法切换模型。",
           copyMessage: "复制消息",
           copiedMessage: "已复制",
@@ -248,8 +248,7 @@
           workspaceConversation: "Workspace chat",
           daemonConversation: "Global chat",
           scopeChoiceLabel: "Conversation scope",
-          workspaceStartHint:
-            "Say what you need in the current workspace. Spark creates the conversation and internal tasks when you send the first message.",
+          workspaceStartHint: "Start a conversation in the current workspace.",
           daemonStartHint:
             "Talk directly to this Spark daemon without binding the conversation to a workspace.",
           daemonScope: "This Spark daemon",
@@ -260,7 +259,7 @@
           startSubmit: "Start conversation",
           sendSubmit: "Send",
           sending: "Sending…",
-          sent: "Message sent.",
+          sent: "",
           sendFailed: "Could not send the message. Try again.",
           startFailed: "Could not start the conversation. Try again.",
           timelineTitle: "Conversation",
@@ -268,7 +267,7 @@
           you: "You",
           spark: "Spark",
           internalDetails: "Internal run details",
-          internalHint: "Spark creates and manages projects, tasks, and runs automatically.",
+          internalHint: "Spark manages the execution records for this conversation.",
           noInternalRuns: "No internal runs yet.",
           conversationContext: "Conversation context",
           collapseDetails: "Conversation and run details",
@@ -277,8 +276,7 @@
           currentModelUnavailable: "Current model unavailable — choose another model",
           configureModels: "Configure providers",
           providerLoginRequired: "Available after login",
-          modelUpdated:
-            "Model updated; it applies starting with the next message that has not yet been queued.",
+          modelUpdated: "Model updated. It will be used for future messages.",
           modelFailed: "Could not switch models.",
           copyMessage: "Copy message",
           copiedMessage: "Copied",
@@ -424,6 +422,16 @@
     return workbenchSessionScope(session).kind === "workspace";
   }
 
+  function sessionTitle(title: string | undefined) {
+    const fallback = title || copy.newConversation;
+    const infoflow = fallback.match(/^channel infoflow:(group|user):(.+)$/i);
+    if (!infoflow) return fallback;
+    const scope = infoflow[1] === "group"
+      ? isZh ? "如流群聊" : "Infoflow group"
+      : isZh ? "如流私聊" : "Infoflow chat";
+    return `${scope} · ${infoflow[2]}`;
+  }
+
   function workspaceHref(workspaceId: string | null) {
     if (!workspaceId) return null;
     const workspace = workspaces.find((item) => item.id === workspaceId);
@@ -432,6 +440,10 @@
 
   function statusLabel(status: string) {
     return getStatusLabel(status, common);
+  }
+
+  function showSessionStatus(status: string) {
+    return !["ready", "completed", "done"].includes(status);
   }
 
   function relative(value: string | null) {
@@ -498,7 +510,7 @@
 
       if (result.type === "success") {
         sendState = "success";
-        sendFeedback = resultMessage(result, copy.sent);
+        sendFeedback = null;
         message = "";
         await invalidateAll();
         return;
@@ -545,10 +557,12 @@
   {#if selected}
     <div class:compact-details={compact} class="details-content">
       <dl class="details-grid">
-        <div>
-          <dt>{messages.statusLabel}</dt>
-          <dd><span class="status-pill {selected.status}">{statusLabel(selected.status)}</span></dd>
-        </div>
+        {#if showSessionStatus(selected.status)}
+          <div>
+            <dt>{messages.statusLabel}</dt>
+            <dd><span class="status-pill {selected.status}">{statusLabel(selected.status)}</span></dd>
+          </div>
+        {/if}
         <div>
           <dt>{sessionIsWorkspaceScoped(selected) ? messages.workspaceLabel : copy.scopeLabel}</dt>
           <dd>
@@ -567,6 +581,7 @@
         {/if}
       </dl>
 
+      {#if activityCommands.length > 0}
       <details class="run-details">
         <summary>
           <span><Icon name="activity" size={15} />{copy.internalDetails}</span>
@@ -574,46 +589,24 @@
         </summary>
         <div class="run-details-body">
           <p>{copy.internalHint}</p>
-          {#if activityCommands.length === 0}
-            <p class="muted">{copy.noInternalRuns}</p>
-          {:else}
-            <ol class="run-list">
-              {#each activityCommands as command}
-                <li>
-                  <div>
-                    <strong>{command.goal || command.title || command.id}</strong>
-                    <small>{relative(command.updatedAt)}</small>
-                    {#if command.latestLog?.trim()}
-                      <p class="run-log">{command.latestLog.trim()}</p>
-                    {/if}
-                  </div>
-                  <span class="status-pill {commandStatus(command)}">
-                    {statusLabel(commandStatus(command))}
-                  </span>
-                </li>
-              {/each}
-            </ol>
-          {/if}
+          <ol class="run-list">
+            {#each activityCommands as command}
+              <li>
+                <div>
+                  <strong>{command.goal || command.title || command.id}</strong>
+                  <small>{relative(command.updatedAt)}</small>
+                  {#if command.latestLog?.trim()}
+                    <p class="run-log">{command.latestLog.trim()}</p>
+                  {/if}
+                </div>
+                <span class="status-pill {commandStatus(command)}">
+                  {statusLabel(commandStatus(command))}
+                </span>
+              </li>
+            {/each}
+          </ol>
         </div>
       </details>
-
-      {#if !compact && sessionIsWorkspaceScoped(selected)}
-        <section class="channel-routing">
-          <h3>{messages.channelRoutingTitle}</h3>
-          <p class="muted">{messages.channelRoutingBody}</p>
-          <a
-            class="secondary-action"
-            href={(() => {
-              const workspace =
-                workspaces.find((entry) => entry.id === activeWorkspaceId) ?? workspaces[0];
-              return workspace
-                ? workspacePath(workspace, "/settings/channels")
-                : "/settings/channels";
-            })()}
-          >
-            {messages.configureChannels}
-          </a>
-        </section>
       {/if}
 
       {#if selected.status !== "archived"}
@@ -655,17 +648,6 @@
               <p>{startScope === "daemon" ? copy.daemonStartHint : copy.workspaceStartHint}</p>
             </div>
           </div>
-
-          <nav class="start-scope-actions" aria-label={copy.scopeChoiceLabel}>
-            <a class:active={startScope === "workspace"} href="/sessions?new=workspace">
-              <Icon name="workspace" size={15} stroke={2.2} />
-              <span>{copy.workspaceConversation}</span>
-            </a>
-            <a class:active={startScope === "daemon"} href="/sessions?new=daemon">
-              <Icon name="spark" size={15} stroke={2.2} />
-              <span>{copy.daemonConversation}</span>
-            </a>
-          </nav>
 
           <form
             method="POST"
@@ -745,10 +727,12 @@
       <header class="stage-header">
         <div class="stage-title">
           <p class="kicker">{copy.timelineTitle}</p>
-          <h1>{selected.title || copy.newConversation}</h1>
+          <h1>{sessionTitle(selected.title)}</h1>
           <p>{sessionScopeLabel(selected)}</p>
         </div>
-        <span class="status-pill {selected.status}">{statusLabel(selected.status)}</span>
+        {#if showSessionStatus(selected.status)}
+          <span class="status-pill {selected.status}">{statusLabel(selected.status)}</span>
+        {/if}
       </header>
 
       <details class="mobile-details">
@@ -859,7 +843,6 @@
                 <Icon name="warning" size={13} />{copy.modelUnavailable}
               </a>
             {/if}
-            <span>{sessionScopeLabel(selected)}</span>
             {#if selected.role}<span>{selected.role}</span>{/if}
             <p
               class="form-feedback {sendState}"
@@ -989,7 +972,6 @@
   }
 
   .start-heading,
-  .start-scope-actions,
   .start-composer {
     max-width: 720px;
     width: 100%;
@@ -1001,45 +983,6 @@
     gap: 14px;
     grid-template-columns: auto minmax(0, 1fr);
     margin-bottom: 14px;
-  }
-
-  .start-scope-actions {
-    background: var(--color-surface-soft);
-    border: 1px solid var(--color-border);
-    border-radius: 10px;
-    display: grid;
-    gap: 4px;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    margin-bottom: 12px;
-    padding: 4px;
-  }
-
-  .start-scope-actions a {
-    align-items: center;
-    border-radius: 7px;
-    color: var(--color-ink-muted);
-    display: flex;
-    font-size: 13px;
-    font-weight: 600;
-    gap: 7px;
-    justify-content: center;
-    min-height: 34px;
-    padding: 0 10px;
-    text-decoration: none;
-    transition:
-      background 120ms ease,
-      box-shadow 120ms ease,
-      color 120ms ease;
-  }
-
-  .start-scope-actions a:hover {
-    color: var(--color-ink);
-  }
-
-  .start-scope-actions a.active {
-    background: var(--color-surface);
-    box-shadow: 0 1px 3px rgb(15 23 42 / 10%);
-    color: var(--color-primary);
   }
 
   .spark-mark {
@@ -1365,13 +1308,11 @@
     line-clamp: 3;
   }
 
-  .channel-routing,
   .session-management {
     display: grid;
     gap: 9px;
   }
 
-  .channel-routing h3,
   .session-management h3 {
     color: var(--color-ink);
     font-size: 12px;

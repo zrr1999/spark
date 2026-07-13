@@ -8,7 +8,6 @@ import {
 } from "./console-nav";
 
 const nav: ConsoleNavLabels = {
-  globalSettings: "General",
   modelsProviders: "Models & providers",
   channels: "Channels",
   workspaceSettings: "Basics",
@@ -36,7 +35,7 @@ describe("console nav", () => {
       ["workspace", "Workspace"],
       ["setup", "Setup"],
     ]);
-    expect(result[0]?.items.map((item) => item.href)).toEqual(["/settings", "/settings/models"]);
+    expect(result[0]?.items.map((item) => item.href)).toEqual(["/settings/models"]);
     expect(result[1]?.items.map((item) => item.href)).toEqual([
       "/local/settings",
       "/local/settings/channels",
@@ -55,10 +54,12 @@ describe("console nav", () => {
     expect(result.map((group) => group.id)).toEqual(["global", "setup"]);
   });
 
-  it("keeps global settings and workspace settings active states distinct", () => {
-    expect(isConsoleNavItemActive({ pathname: "/settings", href: "/settings" })).toBe(true);
+  it("keeps global model settings and workspace settings active states distinct", () => {
+    expect(isConsoleNavItemActive({ pathname: "/settings/models", href: "/settings/models" })).toBe(
+      true,
+    );
     expect(
-      isConsoleNavItemActive({ pathname: "/local/settings/channels", href: "/settings" }),
+      isConsoleNavItemActive({ pathname: "/local/settings/channels", href: "/settings/models" }),
     ).toBe(false);
     expect(
       isConsoleNavItemActive({

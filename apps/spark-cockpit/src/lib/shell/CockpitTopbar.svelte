@@ -80,6 +80,7 @@
   </div>
 
   <CockpitSearch
+    {activeWorkspace}
     {common}
     {sessions}
     {workspaces}

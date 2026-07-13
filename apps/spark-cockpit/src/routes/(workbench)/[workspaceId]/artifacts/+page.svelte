@@ -4,7 +4,6 @@
   import EmptyState from "$lib/ui/EmptyState.svelte";
   import PageHeader from "$lib/ui/PageHeader.svelte";
   import Panel from "$lib/ui/Panel.svelte";
-  import StatCard from "$lib/ui/StatCard.svelte";
   import { workspacePath } from "$lib/workspace-routes";
 
   let { data } = $props();
@@ -24,12 +23,8 @@
     return enumLabel(scope, common.scope);
   }
 
-  function cacheLabel(state: string | null) {
-    return state ? statusLabel(state) : t.list.notCached;
-  }
-
-  function statusLabel(status: string) {
-    return common.status[status as keyof typeof common.status] ?? status.replaceAll("_", " ");
+  function displayTitle(title: string) {
+    return title.match(/^Role run .*? for (.+)$/i)?.[1] ?? title;
   }
 </script>
 
@@ -40,13 +35,6 @@
 <section class="artifacts-page">
   <PageHeader eyebrow={t.hero.eyebrow} title={t.hero.title} lede={t.hero.lede} />
 
-  <section class="metrics" aria-label={t.metrics.aria}>
-    <StatCard label={t.metrics.total} value={data.counts.total} tone="primary" icon="artifacts" />
-    <StatCard label={t.metrics.workspaceScope} value={data.counts.workspace} tone="purple" icon="workspace" />
-    <StatCard label={t.metrics.linkedRuns} value={data.counts.project} tone="primary" icon="folder" />
-    <StatCard label={t.metrics.previewCached} value={data.counts.cached} tone="success" icon="archive" />
-  </section>
-
   {#if !data.workspace}
     <Panel>
       <EmptyState title={t.emptyWorkspace.title} body={t.emptyWorkspace.body} icon="artifacts" actions={emptyWorkspaceAction} />
@@ -56,7 +44,7 @@
       <EmptyState title={t.empty.title} body={t.empty.body} icon="artifacts" />
     </Panel>
   {:else}
-    <Panel title={t.list.title} kicker={data.workspace.name} badge="{data.artifacts.length} {t.list.projectedSuffix}" ariaLabelledby="artifact-list-title">
+    <Panel title={t.list.title} badge="{data.artifacts.length} {t.list.projectedSuffix}" ariaLabelledby="artifact-list-title">
 
       <div class="artifact-list">
         {#each data.artifacts as artifact}
@@ -64,23 +52,17 @@
             <div class="row-icon"><Icon name="artifacts" size={22} /></div>
             <div>
               <div class="row-title">
-                <h3>{artifact.title}</h3>
+                <h3>{displayTitle(artifact.title)}</h3>
                 <span class="scope-pill {artifact.scope}">{scopeLabel(artifact.scope)}</span>
               </div>
               <p>
-                {artifact.kind} · {artifact.format} · {artifact.source} · {formatSize(artifact.sizeBytes)}
+                {artifact.kind} · {artifact.format} · {formatSize(artifact.sizeBytes)}
               </p>
               <small>
-                  {common.fallback.workspaceEvidence} · {artifact.linkCount}
-                {t.list.links} · {formatRelative(artifact.createdAt)}
+                {formatRelative(artifact.createdAt)}
               </small>
             </div>
-            <div class="cache-copy">
-              <span class="cache-pill {artifact.cacheState ?? 'missing'}">
-                {cacheLabel(artifact.cacheState)}
-              </span>
-              <small>{artifact.runtimeWorkspaceName ?? common.fallback.server}</small>
-            </div>
+            <Icon name="chevron" size={18} />
           </a>
         {/each}
       </div>
@@ -96,12 +78,6 @@
   .artifacts-page {
     display: grid;
     gap: var(--spacing-xl);
-  }
-
-  .metrics {
-    display: grid;
-    gap: var(--spacing-lg);
-    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   h3,
@@ -136,8 +112,7 @@
   }
 
   .artifact-row p,
-  .artifact-row small,
-  .cache-copy {
+  .artifact-row small {
     color: var(--color-ink-subtle);
     line-height: var(--leading-body);
   }
@@ -164,13 +139,11 @@
 
   .row-title h3,
   .artifact-row p,
-  .artifact-row small,
-  .cache-copy small {
+  .artifact-row small {
     overflow-wrap: anywhere;
   }
 
-  .scope-pill,
-  .cache-pill {
+  .scope-pill {
     border-radius: var(--rounded-full);
     font-size: var(--text-caption);
     font-weight: var(--weight-caption-medium);
@@ -188,27 +161,6 @@
     color: var(--color-purple);
   }
 
-  .cache-pill {
-    background: var(--color-surface-soft);
-    color: var(--color-ink-subtle);
-  }
-
-  .cache-pill.ready {
-    background: var(--color-success-soft);
-    color: var(--color-success-strong);
-  }
-
-  .cache-pill.missing {
-    background: var(--color-warning-soft);
-    color: var(--color-warning-strong);
-  }
-
-  .cache-copy {
-    display: grid;
-    gap: 6px;
-    justify-items: end;
-  }
-
   .secondary-action {
     align-items: center;
     background: var(--color-surface);
@@ -224,14 +176,12 @@
     text-decoration: none;
   }
 
-  @media (max-width: 1100px) {
-    .metrics,
+  @media (max-width: 560px) {
     .artifact-row {
-      grid-template-columns: 1fr;
+      grid-template-columns: 40px minmax(0, 1fr) auto;
+      padding: var(--spacing-sm);
     }
 
-    .cache-copy {
-      justify-items: start;
-    }
+    .row-icon { height: 40px; width: 40px; }
   }
 </style>

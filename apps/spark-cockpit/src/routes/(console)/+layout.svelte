@@ -23,7 +23,6 @@
     data.activeWorkspace ? workspacePath(data.activeWorkspace) : "",
   );
   let navLabels = $derived({
-    globalSettings: consoleMessages.nav.general,
     modelsProviders: t.nav.models,
     channels: t.nav.channels,
     workspaceSettings: consoleMessages.nav.workspaceDetails,

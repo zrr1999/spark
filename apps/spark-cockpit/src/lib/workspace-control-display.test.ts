@@ -23,11 +23,11 @@ describe("workspace control display", () => {
         en,
       ),
     ).toEqual({
-      connectionLabel: "Daemon connected",
-      borrowedLabel: "Borrowed by 1 TUI client",
-      executorLabel: "Background executor online · 2 active invocations · 3 active agents",
+      connectionLabel: "Spark daemon connected",
+      borrowedLabel: "In use by 1 terminal session",
+      executorLabel: "Running · 2 active invocations · 3 active agents",
       controlLabel:
-        "Workspace is borrowed by an open TUI client; server actions are snapshot-only until it releases the workspace.",
+        "A terminal session is using this workspace. Close or release it before running actions from Cockpit.",
     });
   });
 
@@ -43,10 +43,10 @@ describe("workspace control display", () => {
         en,
       ),
     ).toMatchObject({
-      connectionLabel: "Daemon disconnected",
-      borrowedLabel: "Workspace not borrowed",
-      executorLabel: "No background executor",
-      controlLabel: "Snapshot-only mode",
+      connectionLabel: "Spark daemon offline",
+      borrowedLabel: "Ready for new work",
+      executorLabel: "Idle",
+      controlLabel: "Read-only for now",
     });
     expect(
       workspaceControlDisplay(
@@ -57,7 +57,7 @@ describe("workspace control display", () => {
         },
         en,
       ).executorLabel,
-    ).toBe("Background executor starting");
+    ).toBe("Starting");
     expect(
       workspaceControlDisplay(
         {
@@ -72,7 +72,7 @@ describe("workspace control display", () => {
         },
         en,
       ).executorLabel,
-    ).toBe("Background executor unhealthy: heartbeat missed");
+    ).toBe("Execution issue: heartbeat missed");
   });
 
   it("renders workspace control labels from the Chinese dictionary", () => {
@@ -87,16 +87,16 @@ describe("workspace control display", () => {
     );
 
     expect(display).toMatchObject({
-      connectionLabel: "Daemon 已连接",
-      borrowedLabel: "工作空间未被借用",
-      executorLabel: "无后台执行器",
-      controlLabel: "服务端控制已启用",
+      connectionLabel: "Spark daemon 已连接",
+      borrowedLabel: "可以开始新工作",
+      executorLabel: "当前空闲",
+      controlLabel: "可以远程执行",
     });
     expect(
       workspaceControlControlLabel(
         { mode: "snapshot_only", reason: "daemon_disconnected", serverMutationAllowed: false },
         zhCN,
       ),
-    ).toBe("工作空间 daemon 已断开；重新连接前服务端操作仅使用快照模式。");
+    ).toBe("Spark daemon 当前离线。重新连接后，才可从 Cockpit 执行操作。");
   });
 });

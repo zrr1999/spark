@@ -11,6 +11,9 @@
   let previewCache = $derived(data.cacheBlobs.find((blob) => blob.isPreview));
   let preview = $derived(data.preview);
   let workspaceUrl = $derived(workspacePath({ slug: data.artifact.workspaceSlug }));
+  let displayTitle = $derived(
+    data.artifact.title.match(/^Role run .*? for (.+)$/i)?.[1] ?? data.artifact.title,
+  );
   let sparkUiReplay = $derived(
     buildArtifactSparkUiReplay({
       kind: data.artifact.kind,
@@ -46,578 +49,226 @@
 </script>
 
 <svelte:head>
-  <title>{data.artifact.title} · {t.headTitleSuffix} · Spark</title>
+  <title>{displayTitle} · {t.headTitleSuffix} · Spark</title>
 </svelte:head>
 
 <section class="artifact-detail-page">
+  <a class="back-link" href={`${workspaceUrl}/artifacts`}>
+    <span aria-hidden="true"><Icon name="chevron" size={15} /></span>{t.back}
+  </a>
+
   <header class="hero">
     <div>
       <p class="eyebrow">{data.artifact.kind} · {data.artifact.format}</p>
-      <h1>{data.artifact.title}</h1>
-      <p class="lede">
-        {data.artifact.workspaceName} · {data.artifact.source} {t.evidenceLabel} · {formatRelative(data.artifact.createdAt)}
-      </p>
+      <h1>{displayTitle}</h1>
+      <p class="lede">{data.artifact.workspaceName} · {formatRelative(data.artifact.createdAt)} · {formatSize(data.artifact.sizeBytes)}</p>
     </div>
     <span class="scope-pill {data.artifact.scope}">{scopeLabel(data.artifact.scope)}</span>
   </header>
 
-  <section class="meta-grid" aria-label={t.meta.aria}>
-    <article>
-      <span>{t.meta.source}</span>
-      <strong>{data.artifact.source}</strong>
-    </article>
-    <article>
-      <span>{t.meta.size}</span>
-      <strong>{formatSize(data.artifact.sizeBytes)}</strong>
-    </article>
-    <article>
-      <span>{t.meta.runner}</span>
-      <strong>{data.artifact.runtimeName ?? common.fallback.server}</strong>
-    </article>
-    <article>
-      <span>{t.meta.previewCache}</span>
-      <strong>{previewStatusLabel(preview.status)}</strong>
-    </article>
+  <section class="panel preview-panel" aria-labelledby="preview-title">
+    <div class="panel-header">
+      <h2 id="preview-title">{t.preview.title}</h2>
+      <span class="preview-pill {preview.status}">{previewStatusLabel(preview.status)}</span>
+    </div>
+
+    {#if form?.message}
+      <div class="form-error" role="alert">{form.message}</div>
+    {/if}
+
+    {#if sparkUiReplay}
+      <div class="spark-ui-replay-body">
+        <SparkUiRenderer
+          document={sparkUiReplay.document}
+          source={sparkUiReplay.source}
+          showSource={false}
+        />
+      </div>
+    {:else if preview.status === "ready" && preview.body}
+      {#if preview.body.text !== null}
+        <pre class="preview-body">{preview.body.text}</pre>
+        <div class="preview-actions">
+          {#if preview.body.truncated}<span>{t.preview.truncatedPrefix} {formatSize(preview.inlineLimitBytes)}.</span>{/if}
+          <a class="secondary-action" href={`/api/v1/artifacts/${data.artifact.id}/content`}>
+            {preview.body.truncated ? t.preview.openFull : t.preview.openRaw}
+          </a>
+        </div>
+      {:else}
+        <div class="preview-empty">
+          <p>{t.preview.nonTextPrefix}</p>
+          <a class="primary-action" href={`/api/v1/artifacts/${data.artifact.id}/content`}>{t.preview.contentEndpoint}</a>
+        </div>
+      {/if}
+    {:else}
+      <div class="preview-empty">
+        <div class="preview-icon"><Icon name="artifacts" size={24} /></div>
+        <h3>{previewStatusLabel(preview.status)}</h3>
+        <p>{previewStatusHint(preview.status)}</p>
+        <form method="POST" action="?/preparePreview">
+          <button class="primary-action" type="submit">{t.cache.prepare}</button>
+          <a class="secondary-action" href={`/api/v1/artifacts/${data.artifact.id}/content`}>{t.preview.probe}</a>
+        </form>
+      </div>
+    {/if}
   </section>
 
-  <section class="grid">
-    <section class="panel" aria-labelledby="provenance-title">
-      <div class="panel-header">
-        <div>
-          <p class="panel-kicker">{t.provenance.kicker}</p>
-          <h2 id="provenance-title">{t.provenance.title}</h2>
-        </div>
-      </div>
+  <details class="technical-details">
+    <summary><span><strong>{t.technicalTitle}</strong><small>{t.technicalHint}</small></span></summary>
+    <div class="technical-body">
+      <dl class="meta-grid" aria-label={t.meta.aria}>
+        <div><dt>{t.meta.source}</dt><dd>{data.artifact.source}</dd></div>
+        <div><dt>{t.meta.size}</dt><dd>{formatSize(data.artifact.sizeBytes)}</dd></div>
+        <div><dt>{t.meta.runner}</dt><dd>{data.artifact.runtimeName ?? common.fallback.server}</dd></div>
+        <div><dt>{t.meta.previewCache}</dt><dd>{previewStatusLabel(preview.status)}</dd></div>
+      </dl>
 
-      <div class="provenance-list">
-        {#if data.artifact.sessionId}
-          <article>
-            <span>{t.provenance.conversation}</span>
-            <a href={`/sessions/${encodeURIComponent(data.artifact.sessionId)}`}>{data.artifact.sessionId}</a>
-          </article>
-        {/if}
-        {#if data.artifact.projectId}
-          <article>
-            <span>{t.provenance.context}</span>
-            <strong>{data.artifact.workspaceName}</strong>
-          </article>
-        {/if}
-        {#if data.artifact.runtimeInvocationId}
-          <article>
-            <span>{t.provenance.invocation}</span>
-            <strong>{data.artifact.runtimeInvocationId}</strong>
-            <small>{data.artifact.agentName ?? common.fallback.runner} · {data.artifact.invocationStatus}</small>
-          </article>
-        {/if}
-        {#if data.artifact.humanRequestId}
-          <article>
-            <span>{t.provenance.humanRequest}</span>
-            <strong>{data.artifact.humanRequestTitle ?? data.artifact.humanRequestId}</strong>
-          </article>
-        {/if}
-        {#if data.links.length > 0}
-          <article>
-            <span>{t.provenance.links}</span>
-            <div class="chip-list">
-              {#each data.links as link}
-                <span class="chip">{link.relation}: {link.targetKind}/{link.targetId}</span>
-              {/each}
-            </div>
-          </article>
-        {/if}
-      </div>
-
-      <details>
-        <summary>{t.provenance.json}</summary>
-        <pre>{formatJson(data.artifact.provenance)}</pre>
-      </details>
-    </section>
-
-    <aside class="panel" aria-labelledby="cache-title">
-      <div class="panel-header compact">
-        <div>
-          <p class="panel-kicker">{t.cache.kicker}</p>
-          <h2 id="cache-title">{t.cache.title}</h2>
-        </div>
-      </div>
-
-      {#if form?.message}
-        <div class="form-error" role="alert">{form.message}</div>
+      {#if preview.status === "error" && preview.error?.message}
+        <section class="technical-section" aria-labelledby="preview-error-title">
+          <h2 id="preview-error-title">{t.preview.errorDetails}</h2>
+          <pre class="technical-error">{preview.error.message}</pre>
+        </section>
       {/if}
 
-      <div class="cache-body">
-        <div class="cache-icon"><Icon name="archive" size={24} /></div>
-        <div>
-          <h3>{previewCache ? t.cache.registered : t.cache.notPrepared}</h3>
-          <p>
-            {t.cache.body}
-          </p>
+      <section class="technical-section" aria-labelledby="provenance-title">
+        <h2 id="provenance-title">{t.provenance.title}</h2>
+        <div class="provenance-list">
+          {#if data.artifact.sessionId}
+            <article><span>{t.provenance.conversation}</span><a href={`/sessions/${encodeURIComponent(data.artifact.sessionId)}`}>{data.artifact.sessionId}</a></article>
+          {/if}
+          {#if data.artifact.runtimeInvocationId}
+            <article><span>{t.provenance.invocation}</span><strong>{data.artifact.runtimeInvocationId}</strong><small>{data.artifact.agentName ?? common.fallback.runner} · {data.artifact.invocationStatus}</small></article>
+          {/if}
+          {#if data.artifact.humanRequestId}
+            <article><span>{t.provenance.humanRequest}</span><strong>{data.artifact.humanRequestTitle ?? data.artifact.humanRequestId}</strong></article>
+          {/if}
+          {#if data.links.length > 0}
+            <article><span>{t.provenance.links}</span><div class="chip-list">{#each data.links as link}<span class="chip">{link.relation}: {link.targetKind}/{link.targetId}</span>{/each}</div></article>
+          {/if}
         </div>
+      </section>
 
+      <section class="technical-section" aria-labelledby="cache-title">
+        <h2 id="cache-title">{t.cache.title}</h2>
         {#if previewCache}
-          <dl>
+          <dl class="meta-grid">
             <div><dt>{t.cache.state}</dt><dd>{previewCache.state}</dd></div>
             <div><dt>{t.cache.path}</dt><dd>{previewCache.cachePath}</dd></div>
             <div><dt>{t.cache.mime}</dt><dd>{previewCache.mime ?? common.unknown}</dd></div>
             <div><dt>{t.cache.lastAccessed}</dt><dd>{formatRelative(previewCache.lastAccessedAt)}</dd></div>
           </dl>
-        {/if}
-
-        <form method="POST" action="?/preparePreview">
-          <button class="primary-action" type="submit">{t.cache.prepare}</button>
-          <a class="secondary-action" href={`/api/v1/artifacts/${data.artifact.id}/cache`}>{t.cache.openApi}</a>
-        </form>
-      </div>
-    </aside>
-  </section>
-
-  <section class="panel" aria-labelledby="preview-title">
-    <div class="panel-header compact">
-      <div>
-        <p class="panel-kicker">{t.preview.kicker}</p>
-        <h2 id="preview-title">{t.preview.title}</h2>
-      </div>
-      <span class="preview-pill {preview.status}">
-        {previewStatusLabel(preview.status)}
-      </span>
-    </div>
-
-    <div class="preview-meta">
-      <span>{t.preview.statusHint}</span>
-      <p>{previewStatusHint(preview.status)}</p>
-      <dl>
-        <div><dt>{t.preview.state}</dt><dd>{preview.state}</dd></div>
-        <div><dt>{t.preview.mime}</dt><dd>{preview.mime ?? common.unknown}</dd></div>
-        <div><dt>{t.preview.size}</dt><dd>{formatSize(preview.sizeBytes)}</dd></div>
-        <div><dt>{t.preview.fetched}</dt><dd>{formatRelative(preview.fetchedAt)}</dd></div>
-      </dl>
-      {#if preview.error?.message}
-        <p class="preview-error">{preview.error.message}</p>
-      {/if}
-    </div>
-
-    {#if preview.status === "ready" && preview.body}
-      {#if preview.body.text !== null}
-        <pre class="preview-body">{preview.body.text}</pre>
-        {#if preview.body.truncated}
-          <p class="preview-truncation">
-            {t.preview.truncatedPrefix} {formatSize(preview.inlineLimitBytes)}.
-            <a href={`/api/v1/artifacts/${data.artifact.id}/content`}>{t.preview.openFull}</a>
-          </p>
         {:else}
-          <p class="preview-truncation">
-            <a href={`/api/v1/artifacts/${data.artifact.id}/content`}>{t.preview.openRaw}</a>
-          </p>
+          <p class="muted">{t.cache.notPrepared}</p>
         {/if}
-      {:else}
-        <p class="preview-truncation">
-          {t.preview.nonTextPrefix}
-          <a href={`/api/v1/artifacts/${data.artifact.id}/content`}>{t.preview.contentEndpoint}</a>.
-        </p>
-      {/if}
-    {:else}
-      <p class="preview-truncation">
-        <a href={`/api/v1/artifacts/${data.artifact.id}/content`}>{t.preview.probe}</a>
-      </p>
-    {/if}
-  </section>
+        <a class="secondary-action" href={`/api/v1/artifacts/${data.artifact.id}/cache`}>{t.cache.openApi}</a>
+      </section>
 
-  {#if sparkUiReplay}
-    <section class="panel" aria-labelledby="spark-ui-replay-title">
-      <div class="panel-header compact">
-        <div>
-          <p class="panel-kicker">{t.sparkUi.kicker}</p>
-          <h2 id="spark-ui-replay-title">{t.sparkUi.title}</h2>
-          <p class="panel-copy">{t.sparkUi.body}</p>
-        </div>
-        <span class="preview-pill ready">
-          {sparkUiReplay.mode === "source" ? t.sparkUi.sourceMode : t.sparkUi.astMode}
-        </span>
-      </div>
-      <div class="spark-ui-replay-body">
-        <SparkUiRenderer document={sparkUiReplay.document} source={sparkUiReplay.source} />
-      </div>
-    </section>
-  {/if}
-
-  <section class="panel" aria-labelledby="content-title">
-    <div class="panel-header compact">
-      <div>
-        <p class="panel-kicker">{t.content.kicker}</p>
-        <h2 id="content-title">{t.content.title}</h2>
-      </div>
+      <details class="raw-details">
+        <summary>{t.provenance.json}</summary>
+        <pre>{formatJson(data.artifact.provenance)}</pre>
+      </details>
+      <details class="raw-details">
+        <summary>{t.content.title}</summary>
+        <pre>{formatJson(data.artifact.contentRef)}</pre>
+      </details>
     </div>
-    <pre>{formatJson(data.artifact.contentRef)}</pre>
-  </section>
+  </details>
 </section>
 
 <style>
-  .artifact-detail-page {
-    display: grid;
-    gap: 24px;
-  }
+  .artifact-detail-page { display: grid; gap: var(--spacing-xl); }
 
-  .hero {
+  .back-link {
     align-items: center;
-    display: flex;
-    justify-content: space-between;
+    color: var(--color-ink-muted);
+    display: inline-flex;
+    font-size: var(--text-caption);
+    font-weight: var(--weight-caption-medium);
+    gap: var(--spacing-xs);
+    text-decoration: none;
+    width: fit-content;
   }
 
-  .hero > div {
-    min-width: 0;
-  }
+  .back-link > span { display: flex; transform: rotate(180deg); }
+  .back-link:hover { color: var(--color-primary); }
 
-  .eyebrow,
-  .panel-kicker {
-    color: var(--color-primary);
-    font-size: 12px;
-    font-weight: 750;
-    letter-spacing: 0.08em;
-    margin: 0 0 8px;
-    text-transform: uppercase;
-  }
+  .hero { align-items: center; display: flex; gap: var(--spacing-lg); justify-content: space-between; }
+  .hero > div { min-width: 0; }
+  h1, h2, h3, p { margin: 0; }
+  h1 { font-size: var(--text-page-title); letter-spacing: var(--tracking-page-title); line-height: var(--leading-page-title); overflow-wrap: anywhere; }
+  h2 { font-size: var(--text-section-title); }
+  h3 { font-size: var(--text-card-title); }
+  .eyebrow { color: var(--color-primary); font-size: var(--text-caption); font-weight: var(--weight-caption-medium); margin: 0 0 var(--spacing-xs); }
+  .lede, .muted { color: var(--color-ink-subtle); line-height: var(--leading-body); }
+  .lede { margin-top: var(--spacing-xs); }
 
-  h1,
-  h2,
-  h3,
-  p {
-    margin: 0;
+  .scope-pill, .preview-pill, .chip {
+    border-radius: var(--rounded-full);
+    font-size: var(--text-caption);
+    font-weight: var(--weight-caption-medium);
+    padding: 5px 9px;
   }
+  .scope-pill { background: var(--color-primary-weak); color: var(--color-primary); }
+  .scope-pill.workspace { background: var(--color-purple-soft); color: var(--color-purple); }
+  .preview-pill { background: var(--color-surface-soft); color: var(--color-ink-muted); white-space: nowrap; }
+  .preview-pill.ready { background: var(--color-success-soft); color: var(--color-success-strong); }
+  .preview-pill.missing, .preview-pill.fetching, .preview-pill.evicted { background: var(--color-warning-soft); color: var(--color-warning-strong); }
+  .preview-pill.error { background: var(--color-danger-soft); color: var(--color-danger-strong); }
 
-  h1 {
-    font-size: 34px;
-    letter-spacing: -0.03em;
-    overflow-wrap: anywhere;
-  }
-
-  .lede,
-  .cache-body p,
-  .provenance-list small {
-    color: var(--color-ink-subtle);
-    line-height: 1.55;
-  }
-
-  .lede {
-    margin-top: 10px;
-  }
-
-  .meta-grid,
-  .grid {
-    display: grid;
-    gap: 18px;
-  }
-
-  .meta-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .meta-grid article,
-  .panel {
+  .panel, .technical-details {
     background: var(--color-surface);
     border: 1px solid var(--color-border);
-    border-radius: 16px;
-    box-shadow: var(--shadow-card-raised);
-  }
-
-  .meta-grid article {
-    display: grid;
-    gap: 8px;
-    min-width: 0;
-    padding: 18px;
-  }
-
-  .meta-grid span,
-  .provenance-list span,
-  dt {
-    color: var(--color-ink-subtle);
-    font-size: 12px;
-    font-weight: 800;
-    text-transform: uppercase;
-  }
-
-  .meta-grid strong,
-  dd {
+    border-radius: var(--rounded-xl);
+    box-shadow: var(--shadow-card);
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
-  .grid {
-    align-items: start;
-    grid-template-columns: minmax(0, 1fr) 390px;
+  .panel-header { align-items: center; border-bottom: 1px solid var(--color-border); display: flex; gap: var(--spacing-md); justify-content: space-between; padding: var(--spacing-lg) var(--spacing-xl); }
+  .spark-ui-replay-body { padding: var(--spacing-xl); }
+  .preview-body { background: var(--color-ink); color: var(--color-border); font-size: var(--text-caption); margin: 0; max-height: 60vh; overflow: auto; padding: var(--spacing-xl); white-space: pre-wrap; }
+
+  .preview-empty { align-items: center; display: grid; gap: var(--spacing-sm); justify-items: center; padding: var(--spacing-xxl); text-align: center; }
+  .preview-empty p { color: var(--color-ink-subtle); line-height: var(--leading-body); max-width: 48ch; }
+  .preview-empty form { display: flex; flex-wrap: wrap; gap: var(--spacing-xs); justify-content: center; }
+  .preview-icon { align-items: center; background: var(--color-primary-weak); border-radius: var(--rounded-full); color: var(--color-primary); display: flex; height: 52px; justify-content: center; width: 52px; }
+  .preview-actions { align-items: center; color: var(--color-ink-subtle); display: flex; flex-wrap: wrap; gap: var(--spacing-md); justify-content: space-between; padding: var(--spacing-md) var(--spacing-xl); }
+
+  .primary-action, .secondary-action { align-items: center; border-radius: var(--rounded-md); display: inline-flex; font: inherit; font-size: var(--text-button); font-weight: var(--weight-button); justify-content: center; min-height: 40px; padding: 0 var(--spacing-md); text-decoration: none; }
+  .primary-action { background: var(--color-primary); border: 0; color: var(--color-on-primary); cursor: pointer; }
+  .secondary-action { background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-ink-muted); }
+  .form-error { background: var(--color-danger-weak); color: var(--color-danger-strong); padding: var(--spacing-sm) var(--spacing-xl); }
+
+  .technical-details > summary { cursor: pointer; list-style: none; padding: var(--spacing-lg) var(--spacing-xl); }
+  .technical-details > summary::-webkit-details-marker { display: none; }
+  .technical-details > summary span { display: grid; gap: var(--spacing-xxs); }
+  .technical-details > summary small { color: var(--color-ink-subtle); font-weight: 400; }
+  .technical-details[open] > summary { border-bottom: 1px solid var(--color-border); }
+  .technical-body { display: grid; gap: var(--spacing-xl); padding: var(--spacing-xl); }
+  .technical-section { display: grid; gap: var(--spacing-sm); }
+  .technical-error { background: var(--color-ink); border-radius: var(--rounded-md); color: var(--color-border); margin: 0; overflow: auto; padding: var(--spacing-md); white-space: pre-wrap; }
+
+  .meta-grid { display: grid; gap: var(--spacing-sm); grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; }
+  .meta-grid div { background: var(--color-surface-soft); border-radius: var(--rounded-md); display: grid; gap: var(--spacing-xxs); min-width: 0; padding: var(--spacing-sm); }
+  dt, .provenance-list > article > span { color: var(--color-ink-subtle); font-size: var(--text-caption); font-weight: var(--weight-caption-medium); }
+  dd { margin: 0; overflow-wrap: anywhere; }
+
+  .provenance-list { display: grid; gap: var(--spacing-sm); }
+  .provenance-list article { display: grid; gap: var(--spacing-xxs); }
+  .provenance-list a { color: var(--color-primary); font-weight: var(--weight-button); text-decoration: none; }
+  .provenance-list small { color: var(--color-ink-subtle); }
+  .chip-list { display: flex; flex-wrap: wrap; gap: var(--spacing-xs); }
+  .chip { background: var(--color-surface-soft); color: var(--color-ink-muted); }
+
+  .raw-details { border-top: 1px solid var(--color-border-soft); padding-top: var(--spacing-sm); }
+  .raw-details summary { color: var(--color-ink-muted); cursor: pointer; font-weight: var(--weight-button); }
+  .raw-details pre { background: var(--color-ink); border-radius: var(--rounded-md); color: var(--color-border); font-size: var(--text-caption); margin: var(--spacing-sm) 0 0; overflow: auto; padding: var(--spacing-md); white-space: pre-wrap; }
+
+  @media (max-width: 760px) {
+    .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
 
-  .panel-header {
-    align-items: center;
-    border-bottom: 1px solid var(--color-border);
-    display: flex;
-    justify-content: space-between;
-    padding: 24px 28px;
-  }
-
-  .panel-header.compact {
-    padding: 22px 24px;
-  }
-
-  .scope-pill,
-  .chip {
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 800;
-    padding: 6px 10px;
-    text-transform: capitalize;
-  }
-
-  .scope-pill.project {
-    background: var(--color-primary-weak);
-    color: var(--color-primary);
-  }
-
-  .scope-pill.workspace {
-    background: var(--color-purple-soft);
-    color: var(--color-purple);
-  }
-
-  .provenance-list,
-  .cache-body {
-    display: grid;
-    gap: 16px;
-    padding: 22px 24px 24px;
-  }
-
-  .provenance-list article {
-    display: grid;
-    gap: 6px;
-  }
-
-  .provenance-list a {
-    color: var(--color-primary);
-    font-weight: 800;
-    text-decoration: none;
-  }
-
-  .chip-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  .chip {
-    background: var(--color-surface-soft);
-    color: var(--color-ink-muted);
-  }
-
-  details {
-    border-top: 1px solid var(--color-border);
-    display: grid;
-    gap: 12px;
-    padding: 18px 24px 24px;
-  }
-
-  summary {
-    color: var(--color-ink-muted);
-    cursor: pointer;
-    font-weight: 800;
-  }
-
-  .cache-icon {
-    background: var(--color-primary-weak);
-    border-radius: 999px;
-    color: var(--color-primary);
-    display: grid;
-    height: 52px;
-    place-items: center;
-    width: 52px;
-  }
-
-  dl {
-    display: grid;
-    gap: 10px;
-    margin: 0;
-  }
-
-  dl div {
-    display: grid;
-    gap: 4px;
-  }
-
-  dd {
-    margin: 0;
-  }
-
-  form {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-  }
-
-  .primary-action,
-  .secondary-action {
-    align-items: center;
-    border-radius: 12px;
-    display: inline-flex;
-    font-weight: 800;
-    height: 44px;
-    justify-content: center;
-    padding: 0 16px;
-    text-decoration: none;
-  }
-
-  .primary-action {
-    background: var(--color-primary);
-    border: 0;
-    color: white;
-    cursor: pointer;
-  }
-
-  .secondary-action {
-    background: white;
-    border: 1px solid var(--color-border);
-    color: var(--color-ink-muted);
-  }
-
-  .form-error {
-    background: var(--color-danger-weak);
-    border-bottom: 1px solid var(--color-danger-soft);
-    color: var(--color-danger-strong);
-    font-weight: 700;
-    padding: 14px 24px;
-  }
-
-  pre {
-    background: var(--color-ink);
-    border-radius: 12px;
-    color: var(--color-border);
-    font-size: 12px;
-    margin: 0;
-    overflow: auto;
-    padding: 14px;
-    white-space: pre-wrap;
-  }
-
-  .panel > pre {
-    border-radius: 0 0 16px 16px;
-  }
-
-  .panel-copy {
-    color: var(--color-ink-subtle);
-    line-height: 1.55;
-    margin-top: 8px;
-    max-width: 72ch;
-  }
-
-  .spark-ui-replay-body {
-    padding: 22px 24px 24px;
-  }
-
-  .preview-pill {
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 800;
-    padding: 6px 12px;
-    text-transform: capitalize;
-    background: var(--color-surface-soft);
-    color: var(--color-ink-muted);
-  }
-
-  .preview-pill.ready {
-    background: var(--color-success-soft);
-    color: var(--color-success-strong);
-  }
-
-  .preview-pill.missing,
-  .preview-pill.fetching,
-  .preview-pill.evicted {
-    background: var(--color-warning-soft);
-    color: var(--color-warning-strong);
-  }
-
-  .preview-pill.too_large,
-  .preview-pill.unsupported_binary {
-    background: var(--color-purple-soft);
-    color: var(--color-purple);
-  }
-
-  .preview-pill.error {
-    background: var(--color-danger-soft);
-    color: var(--color-danger-strong);
-  }
-
-  .preview-meta {
-    display: grid;
-    gap: 12px;
-    padding: 22px 24px 18px;
-  }
-
-  .preview-meta span {
-    color: var(--color-ink-subtle);
-    font-size: 12px;
-    font-weight: 800;
-    text-transform: uppercase;
-  }
-
-  .preview-meta p {
-    color: var(--color-ink-muted);
-    line-height: 1.55;
-    margin: 0;
-  }
-
-  .preview-meta dl {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    display: grid;
-    gap: 12px;
-    margin: 0;
-  }
-
-  .preview-error {
-    background: var(--color-danger-weak);
-    border: 1px solid var(--color-danger-soft);
-    border-radius: 12px;
-    color: var(--color-danger-strong);
-    font-weight: 600;
-    margin: 0;
-    padding: 10px 14px;
-  }
-
-  .preview-body {
-    border-radius: 0;
-    margin: 0 24px;
-  }
-
-  .preview-truncation {
-    color: var(--color-ink-subtle);
-    line-height: 1.55;
-    margin: 0;
-    padding: 14px 24px 24px;
-  }
-
-  .preview-truncation a {
-    color: var(--color-primary);
-    font-weight: 700;
-    text-decoration: none;
-  }
-
-  @media (max-width: 1100px) {
-    .meta-grid,
-    .grid {
-      grid-template-columns: 1fr;
-    }
-  }
-
-  @media (max-width: 640px) {
-    .hero {
-      align-items: flex-start;
-      flex-direction: column;
-      gap: 12px;
-    }
-
-    h1 {
-      font-size: 28px;
-    }
-
-    .panel-header,
-    .panel-header.compact {
-      padding: 18px;
-    }
+  @media (max-width: 560px) {
+    .hero { align-items: flex-start; flex-direction: column; }
+    .meta-grid { grid-template-columns: 1fr; }
+    .technical-body, .spark-ui-replay-body { padding: var(--spacing-lg); }
   }
 </style>

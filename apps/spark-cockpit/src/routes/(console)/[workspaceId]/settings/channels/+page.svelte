@@ -2,6 +2,7 @@
   import { enhance } from "$app/forms";
   import { invalidateAll } from "$app/navigation";
   import { statusLabel } from "$lib/i18n";
+  import PageHeader from "$lib/ui/PageHeader.svelte";
   import type { SubmitFunction } from "@sveltejs/kit";
   import { untrack } from "svelte";
 
@@ -77,15 +78,15 @@
   <title>{t.headTitle}</title>
 </svelte:head>
 
-<section class="channels-settings" aria-labelledby="channels-title">
-  <a class="back-link" href={data.settingsPath}>{t.back}</a>
+<section class="channels-settings">
+  <PageHeader
+    title={t.title}
+    lede={t.lede}
+    statusLabel={status.available ? (status.configured ? t.configured : t.notConfigured) : t.runtimeUnavailable}
+    statusClass={status.available && status.configured ? "ready" : "offline"}
+  />
 
-  <header class="page-header">
-    <div>
-      <p class="eyebrow">{t.eyebrow}</p>
-      <h1 id="channels-title">{t.title}</h1>
-      <p class="lede">{t.lede}</p>
-    </div>
+  {#if saveState !== "idle"}
     <div class="save-status" data-state={saveState} aria-live="polite">
       {#if saveState === "saving"}
         {t.saving}
@@ -93,13 +94,13 @@
         {t.saved}
       {:else if saveState === "error"}
         {saveMessage ?? t.saveFailed}
-      {:else}
-        {t.saveHint}
       {/if}
     </div>
-  </header>
+  {/if}
 
-  <section class="panel" aria-labelledby="channels-status-title">
+  <details class="diagnostics">
+    <summary><span><strong>{t.diagnosticsTitle}</strong><small>{t.diagnosticsHint}</small></span></summary>
+    <section class="diagnostic-panel" aria-labelledby="channels-status-title">
     <div class="panel-heading">
       <h2 id="channels-status-title">{t.statusTitle}</h2>
       <span class="status-pill {status.available && status.configured ? 'configured' : 'missing'}">
@@ -154,7 +155,8 @@
         {/if}
       </div>
     </div>
-  </section>
+    </section>
+  </details>
 
   <form class="panel editor" method="POST" action="?/save" use:enhance={handleEnhance}>
     <input type="hidden" name="feishuAppSecretSet" value={values.feishuAppSecretSet ? "1" : "0"} />
@@ -163,13 +165,6 @@
       name="infoflowAppSecretSet"
       value={values.infoflowAppSecretSet ? "1" : "0"}
     />
-    <div class="panel-heading">
-      <div>
-        <h2 id="channels-editor-title">{t.editorTitle}</h2>
-        <p class="lede">{t.editorIntro}</p>
-      </div>
-    </div>
-
     <section class="adapter-block" aria-labelledby="feishu-title">
       <label class="toggle-row">
         <input
@@ -344,7 +339,6 @@
       <button class="primary-action" type="submit" disabled={saveState === "saving"}>
         {saveState === "saving" ? t.saving : t.saveManual}
       </button>
-      <p class="footnote">{t.restartHint}</p>
     </div>
   </form>
 </section>
@@ -358,39 +352,10 @@
     width: 100%;
   }
 
-  .back-link {
-    color: var(--color-ink-muted);
-    text-decoration: none;
-    width: fit-content;
-  }
-
-  .page-header {
-    align-items: start;
-    display: flex;
-    gap: 16px;
-    justify-content: space-between;
-  }
-
-  .eyebrow {
-    color: var(--color-primary);
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    margin: 0 0 6px;
-    text-transform: uppercase;
-  }
-
-  h1,
   h2,
   h3,
   p {
     margin: 0;
-  }
-
-  h1 {
-    font-size: 24px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
   }
 
   h2 {
@@ -403,9 +368,7 @@
     font-weight: 600;
   }
 
-  .lede,
-  .muted,
-  .footnote {
+  .muted {
     color: var(--color-ink-subtle);
     font-size: 14px;
     line-height: 1.5;
@@ -420,6 +383,7 @@
     font-weight: 600;
     padding: 6px 12px;
     white-space: nowrap;
+    width: fit-content;
   }
 
   .save-status[data-state="saving"] {
@@ -438,14 +402,41 @@
     color: var(--color-danger-strong, var(--color-danger));
   }
 
-  .panel {
+  .panel,
+  .diagnostic-panel {
     background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 16px;
     display: grid;
     gap: 14px;
     padding: 18px;
   }
+
+  .panel {
+    border: 1px solid var(--color-border);
+    border-radius: 16px;
+  }
+
+  .editor .adapter-block:first-of-type {
+    border-top: 0;
+    padding-top: 0;
+  }
+
+  .diagnostics {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .diagnostics summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 14px 18px;
+  }
+
+  .diagnostics summary::-webkit-details-marker { display: none; }
+  .diagnostics summary span { display: grid; gap: 3px; }
+  .diagnostics summary small { color: var(--color-ink-subtle); font-weight: 400; }
+  .diagnostics[open] summary { border-bottom: 1px solid var(--color-border); }
 
   .panel-heading {
     align-items: center;
@@ -671,10 +662,6 @@
   }
 
   @media (max-width: 720px) {
-    .page-header {
-      flex-direction: column;
-    }
-
     .field-grid {
       grid-template-columns: 1fr;
     }

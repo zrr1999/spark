@@ -8,22 +8,24 @@
   import EmptyState from "$lib/ui/EmptyState.svelte";
   import PageHeader from "$lib/ui/PageHeader.svelte";
   import Panel from "$lib/ui/Panel.svelte";
-  import StatCard from "$lib/ui/StatCard.svelte";
   import { workspacePath } from "$lib/workspace-routes";
 
   let { data } = $props();
   let t = $derived(data.messages.inbox);
   let common = $derived(data.messages.common);
   let workspaceUrl = $derived(data.workspace ? workspacePath(data.workspace) : "/");
-  let pendingItems = $derived(data.inboxItems.filter((item) => item.status === "pending"));
-  let otherItems = $derived(data.inboxItems.filter((item) => item.status !== "pending"));
+  type InboxFilter = "all" | "pending" | "resolved" | "archived";
+  let filter = $state<InboxFilter>("all");
+  let visibleItems = $derived(
+    filter === "all" ? data.inboxItems : data.inboxItems.filter((item) => item.status === filter),
+  );
 
   function formatRelative(value: string | null) {
     return formatRelativeTime(value, data.locale, common);
   }
 
   function statusLabel(status: string) {
-    return getStatusLabel(status, common);
+    return t.status[status as keyof typeof t.status] ?? getStatusLabel(status, common);
   }
 
   function urgencyLabel(urgency: string) {
@@ -38,18 +40,6 @@
 <section class="inbox-page">
   <PageHeader eyebrow={t.hero.eyebrow} title={t.hero.title} lede={t.hero.lede} />
 
-  <section class="metrics" aria-label={t.metrics.aria}>
-    <StatCard
-      label={t.metrics.pending}
-      value={data.counts.pending}
-      tone="warning"
-      featured={data.counts.pending > 0}
-      icon="inbox"
-    />
-    <StatCard label={t.metrics.resolved} value={data.counts.resolved} tone="success" icon="check" />
-    <StatCard label={t.metrics.archived} value={data.counts.archived} icon="archive" />
-  </section>
-
   {#if !data.workspace}
     <Panel>
       <EmptyState title={t.emptyWorkspace.title} body={t.emptyWorkspace.body} icon="inbox">
@@ -63,45 +53,25 @@
       <EmptyState title={t.empty.title} body={t.empty.body} icon="inbox" />
     </Panel>
   {:else}
-    {#if pendingItems.length > 0}
-      <Panel
-        title={t.list.awaitingAnswer}
-        kicker={t.hero.eyebrow}
-        badge="{pendingItems.length} {t.list.totalSuffix}"
-        ariaLabelledby="inbox-pending-title"
-      >
-        <div class="inbox-list">
-          {#each pendingItems as item}
-            <a class="inbox-row pending" href={`${workspaceUrl}/inbox/${item.id}`}>
-              <div class="row-icon"><Icon name="inbox" size={22} /></div>
-              <div>
-                <div class="row-title">
-                  <h3>{item.title}</h3>
-                  <span class="urgency {item.urgency}">{urgencyLabel(item.urgency)}</span>
-                </div>
-                <p>{item.summary}</p>
-                <small>
-                  {common.fallback.workspaceScope} · {formatRelative(item.createdAt)}
-                </small>
-              </div>
-              <span class="status-pill {item.status}">{statusLabel(item.status)}</span>
-            </a>
-          {/each}
-        </div>
-      </Panel>
-    {/if}
+    <div class="status-tabs" role="group" aria-label={t.metrics.aria}>
+      <button class:active={filter === "all"} type="button" onclick={() => (filter = "all")}>{t.list.all}<span>{data.inboxItems.length}</span></button>
+      <button class:active={filter === "pending"} type="button" onclick={() => (filter = "pending")}>{t.metrics.pending}<span>{data.counts.pending}</span></button>
+      <button class:active={filter === "resolved"} type="button" onclick={() => (filter = "resolved")}>{t.metrics.resolved}<span>{data.counts.resolved}</span></button>
+      <button class:active={filter === "archived"} type="button" onclick={() => (filter = "archived")}>{t.metrics.archived}<span>{data.counts.archived}</span></button>
+    </div>
 
-    {#if otherItems.length > 0}
-      <Panel
-        title={t.list.title}
-        kicker={data.workspace.name}
-        badge="{otherItems.length} {t.list.totalSuffix}"
-        ariaLabelledby="inbox-list-title"
-        compact
-      >
+    <Panel
+      title={filter === "pending" ? t.list.awaitingAnswer : t.list.history}
+      badge="{visibleItems.length} {t.list.totalSuffix}"
+      ariaLabelledby="inbox-list-title"
+      compact
+    >
+      {#if visibleItems.length === 0}
+        <EmptyState title={t.empty.title} body={t.empty.body} icon="inbox" compact />
+      {:else}
         <div class="inbox-list">
-          {#each otherItems as item}
-            <a class="inbox-row" href={`${workspaceUrl}/inbox/${item.id}`}>
+          {#each visibleItems as item}
+            <a class="inbox-row" class:pending={item.status === "pending"} href={`${workspaceUrl}/inbox/${item.id}`}>
               <div class="row-icon"><Icon name="inbox" size={22} /></div>
               <div>
                 <div class="row-title">
@@ -109,27 +79,14 @@
                   <span class="urgency {item.urgency}">{urgencyLabel(item.urgency)}</span>
                 </div>
                 <p>{item.summary}</p>
-                <small>
-                  {common.fallback.workspaceScope} · {formatRelative(item.createdAt)}
-                </small>
-              </div>
-              <div class="delivery-copy">
-                {#if item.latestResponseStatus}
-                  <span
-                    >{statusLabel(item.latestResponseStatus)}{item.latestResponseAckedAt
-                      ? ` · ${t.list.acked}`
-                      : ""}</span
-                  >
-                {:else}
-                  <span>{t.list.awaitingAnswer}</span>
-                {/if}
+                <small>{formatRelative(item.createdAt)}</small>
               </div>
               <span class="status-pill {item.status}">{statusLabel(item.status)}</span>
             </a>
           {/each}
         </div>
-      </Panel>
-    {/if}
+      {/if}
+    </Panel>
   {/if}
 </section>
 
@@ -141,10 +98,43 @@
     gap: var(--spacing-xl);
   }
 
-  .metrics {
-    display: grid;
-    gap: var(--spacing-lg);
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  .status-tabs {
+    align-items: center;
+    background: var(--color-surface-soft);
+    border-radius: var(--rounded-md);
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-xxs);
+    padding: var(--spacing-xxs);
+    width: fit-content;
+  }
+
+  .status-tabs button {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: calc(var(--rounded-md) - 2px);
+    color: var(--color-ink-subtle);
+    cursor: pointer;
+    display: inline-flex;
+    font: inherit;
+    font-size: var(--text-caption);
+    font-weight: var(--weight-caption-medium);
+    gap: var(--spacing-xs);
+    min-height: 34px;
+    padding: 0 var(--spacing-sm);
+  }
+
+  .status-tabs button.active {
+    background: var(--color-surface);
+    box-shadow: var(--shadow-card);
+    color: var(--color-ink);
+  }
+
+  .status-tabs button span {
+    background: var(--color-canvas);
+    border-radius: var(--rounded-full);
+    padding: 1px 6px;
   }
 
   .inbox-list {
@@ -204,8 +194,7 @@
   }
 
   p,
-  small,
-  .delivery-copy {
+  small {
     color: var(--color-ink-subtle);
     font-size: var(--text-caption);
     line-height: var(--leading-caption);
@@ -251,7 +240,6 @@
   }
 
   @media (max-width: 900px) {
-    .metrics,
     .inbox-row {
       grid-template-columns: 1fr;
     }

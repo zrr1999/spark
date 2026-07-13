@@ -2,6 +2,7 @@
   import Icon from "$lib/Icon.svelte";
   import { daemonDisplayStatus, type DaemonDisplayStatus } from "$lib/daemon-status";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
+  import PageHeader from "$lib/ui/PageHeader.svelte";
 
   let { data, form } = $props();
 
@@ -10,18 +11,15 @@
   let runnerSummary = $derived([
     {
       label: t.metrics.runnerConnections,
-      value: data.runnerConnections.length,
-      detail: `${data.connectedSessionCount} ${common.activeWs}`,
+      value: data.runnerConnections.filter((runner) => daemonDisplayStatus(runner) === "online").length,
     },
     {
       label: t.metrics.workspaceBindings,
       value: data.runnerBindings.length,
-      detail: common.reportedByConnectedRunners,
     },
     {
       label: t.metrics.offlineRunners,
       value: countRunners("offline"),
-      detail: t.metrics.offlineHint,
     },
   ]);
 
@@ -60,38 +58,19 @@
   <title>{t.enrollment.title} · {t.headTitle}</title>
 </svelte:head>
 
-<section class="registration-page" aria-labelledby="registration-title">
-  <header class="registration-header">
-    <div>
-      <p class="eyebrow">{t.enrollment.kicker}</p>
-      <h1 id="registration-title">{t.enrollment.title}</h1>
-      <p class="lede">{t.enrollment.body}</p>
-    </div>
-    <a class="secondary-action" href={data.backSettingsPath}>
-      <Icon name="settings" size={16} stroke={2.2} />
-      <span>{t.workspace.title}</span>
-    </a>
-  </header>
+<section class="registration-page">
+  <PageHeader title={t.enrollment.title} lede={t.enrollment.body} />
 
   <div class="summary-grid" aria-label={t.metrics.aria}>
     {#each runnerSummary as item}
       <article class="summary-card">
         <span>{item.label}</span>
         <strong>{item.value}</strong>
-        <small>{item.detail}</small>
       </article>
     {/each}
   </div>
 
-  <section class="panel-card" aria-labelledby="runner-enrollment-title">
-    <div class="panel-heading">
-      <div>
-        <p class="eyebrow">{t.enrollment.kicker}</p>
-        <h2 id="runner-enrollment-title">{t.enrollment.title}</h2>
-        <p>{t.enrollment.body}</p>
-      </div>
-    </div>
-
+  <section class="panel-card">
     <form class="token-form" method="POST" action="?/createEnrollmentToken">
       <label>
         <span>{t.enrollment.label}</span>
@@ -109,10 +88,6 @@
           <strong>{t.enrollment.tokenCreatedTitle}</strong>
           <p>{form.message}</p>
           <p>{t.enrollment.tokenCreatedHint}</p>
-        </div>
-        <div class="token-display">
-          <span>{t.enrollment.tokenLabel}</span>
-          <code>{form.enrollmentToken}</code>
         </div>
         <div class="token-display">
           <span>{t.enrollment.commandLabel}</span>
@@ -144,7 +119,6 @@
             <div class="token-row">
               <div>
                 <strong>{token.label ?? t.enrollment.defaultTokenLabel}</strong>
-                <small>{token.id}</small>
               </div>
               <span class="status-pill {status}">{statusLabel(status)}</span>
               <span>
@@ -172,11 +146,12 @@
     </article>
   </section>
 
-  <section class="connections-grid" aria-label={t.navigation.connections}>
+  <details class="connection-diagnostics">
+    <summary><span><strong>{t.runner.kicker}</strong><small>{t.runner.routesLabel}</small></span></summary>
+    <section class="connections-grid" aria-label={t.navigation.connections}>
     <article class="panel-card">
       <div class="table-heading">
         <div>
-          <p class="eyebrow">{t.runner.kicker}</p>
           <h2>{t.runner.title}</h2>
         </div>
         <span>{t.runner.badge}</span>
@@ -210,7 +185,6 @@
     <article class="panel-card">
       <div class="table-heading">
         <div>
-          <p class="eyebrow">{t.bindings.kicker}</p>
           <h2>{t.bindings.title}</h2>
         </div>
         <span>{data.runnerBindings.length}</span>
@@ -238,7 +212,8 @@
         </div>
       {/if}
     </article>
-  </section>
+    </section>
+  </details>
 </section>
 
 <style>
@@ -250,15 +225,6 @@
     width: 100%;
   }
 
-  .registration-header {
-    align-items: start;
-    border-bottom: 1px solid var(--color-border);
-    display: flex;
-    gap: 16px;
-    justify-content: space-between;
-    padding-bottom: 14px;
-  }
-
   .eyebrow {
     color: var(--color-primary);
     font-size: 12px;
@@ -267,17 +233,10 @@
     margin: 0 0 8px;
   }
 
-  h1,
   h2,
   h3,
   p {
     margin: 0;
-  }
-
-  h1 {
-    color: var(--color-ink);
-    font-size: 26px;
-    line-height: 1.16;
   }
 
   h2 {
@@ -292,22 +251,14 @@
     line-height: 1.35;
   }
 
-  .lede,
-  .panel-heading p,
   .empty-state p,
   .token-created p,
   .token-created small,
   .runner-row small,
-  .token-row small,
-  .summary-card small {
+  .token-row small {
     color: var(--color-ink-subtle);
     font-size: 13px;
     line-height: 1.5;
-  }
-
-  .registration-header .lede {
-    margin-top: 8px;
-    max-width: 760px;
   }
 
   .summary-grid {
@@ -453,20 +404,9 @@
     min-width: 0;
   }
 
-  .token-created code,
   .token-created pre,
   code {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  }
-
-  .token-created code {
-    background: var(--color-surface-soft);
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
-    color: var(--color-ink);
-    overflow-x: auto;
-    padding: 10px 12px;
-    white-space: nowrap;
   }
 
   .token-created pre {
@@ -577,6 +517,39 @@
     display: grid;
     gap: 14px;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    padding: 16px;
+  }
+
+  .connection-diagnostics {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .connection-diagnostics > summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 14px 16px;
+  }
+
+  .connection-diagnostics > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .connection-diagnostics > summary span {
+    display: grid;
+    gap: 3px;
+  }
+
+  .connection-diagnostics > summary small {
+    color: var(--color-ink-subtle);
+    font-size: 12px;
+    font-weight: 400;
+  }
+
+  .connection-diagnostics[open] > summary {
+    border-bottom: 1px solid var(--color-border);
   }
 
   .status-pill {
@@ -662,7 +635,6 @@
   }
 
   @media (max-width: 640px) {
-    .registration-header,
     .panel-heading,
     .table-heading,
     .token-form {

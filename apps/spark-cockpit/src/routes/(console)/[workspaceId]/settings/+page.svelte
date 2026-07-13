@@ -1,6 +1,8 @@
 <script lang="ts">
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
+  import PageHeader from "$lib/ui/PageHeader.svelte";
+  import Panel from "$lib/ui/Panel.svelte";
 
   let { data, form } = $props();
 
@@ -23,31 +25,15 @@
   <title>{t.headTitle}</title>
 </svelte:head>
 
-<section class="settings-page" aria-labelledby="settings-title">
-  <header class="settings-header">
-    <div>
-      <p class="eyebrow">{t.hero.eyebrow}</p>
-      <h1 id="settings-title">{t.hero.title}</h1>
-      <p class="lede">{t.hero.lede}</p>
-    </div>
-    <a class="secondary-action" href={data.registrationPath}>
-      <Icon name="play" size={16} stroke={2.2} />
-      <span>{t.hero.createToken}</span>
-    </a>
-  </header>
+<section class="settings-page">
+  <PageHeader
+    title={t.hero.title}
+    lede={t.hero.lede}
+    statusLabel={statusLabel(data.workspace.status)}
+    statusClass={data.workspace.status}
+  />
 
-  <section class="panel-card workspace-settings" aria-labelledby="workspace-settings-title">
-    <div class="panel-heading">
-      <div>
-        <p class="eyebrow">{t.workspace.kicker}</p>
-        <h2 id="workspace-settings-title">{t.workspace.title}</h2>
-        <p>{t.workspace.body}</p>
-      </div>
-      <span class="status-pill {data.workspace.status}">
-        {statusLabel(data.workspace.status)}
-      </span>
-    </div>
-
+  <Panel ariaLabel={t.workspace.title}>
     <form class="workspace-form" method="POST" action="?/updateWorkspace">
       <label>
         <span>{t.workspace.name}</span>
@@ -56,6 +42,7 @@
       <label>
         <span>{t.workspace.slug}</span>
         <input name="slug" value={data.workspace.slug} required />
+        <small>{t.workspace.slugHint}</small>
       </label>
       <label class="wide-field">
         <span>{t.workspace.description}</span>
@@ -80,7 +67,7 @@
     {#if workspaceForm?.message}
       <p class="form-message" role="status">{workspaceForm.message}</p>
     {/if}
-  </section>
+  </Panel>
 </section>
 
 <style>
@@ -90,69 +77,6 @@
     max-width: 960px;
     min-width: 0;
     width: 100%;
-  }
-
-  .settings-header {
-    align-items: start;
-    border-bottom: 1px solid var(--color-border);
-    display: flex;
-    gap: 16px;
-    justify-content: space-between;
-    padding-bottom: 14px;
-  }
-
-  .eyebrow {
-    color: var(--color-primary);
-    font-size: 12px;
-    font-weight: 800;
-    letter-spacing: 0;
-    margin: 0 0 8px;
-  }
-
-  h1,
-  h2,
-  p {
-    margin: 0;
-  }
-
-  h1 {
-    color: var(--color-ink);
-    font-size: 26px;
-    line-height: 1.16;
-  }
-
-  h2 {
-    color: var(--color-ink);
-    font-size: 18px;
-    line-height: 1.3;
-  }
-
-  .lede,
-  .panel-heading p {
-    color: var(--color-ink-subtle);
-    font-size: 13px;
-    line-height: 1.5;
-  }
-
-  .settings-header .lede {
-    margin-top: 8px;
-    max-width: 760px;
-  }
-
-  .panel-card {
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
-    display: grid;
-    gap: 14px;
-    padding: 16px;
-  }
-
-  .panel-heading {
-    align-items: center;
-    display: flex;
-    gap: 12px;
-    justify-content: space-between;
   }
 
   .workspace-form {
@@ -170,6 +94,12 @@
     color: var(--color-ink-subtle);
     font-size: 12px;
     font-weight: 750;
+  }
+
+  .workspace-form label small {
+    color: var(--color-ink-subtle);
+    font-size: var(--text-caption);
+    line-height: var(--leading-caption);
   }
 
   .wide-field,
@@ -210,8 +140,7 @@
     outline: none;
   }
 
-  .primary-action,
-  .secondary-action {
+  .primary-action {
     align-items: center;
     border-radius: 8px;
     display: inline-flex;
@@ -230,12 +159,6 @@
     color: var(--color-surface);
   }
 
-  .secondary-action {
-    background: var(--color-surface);
-    border: 1px solid var(--color-border-strong);
-    color: var(--color-ink-muted);
-  }
-
   .form-message {
     background: var(--color-warning-weak);
     border: 1px solid var(--color-warning-soft);
@@ -245,30 +168,7 @@
     padding: 12px;
   }
 
-  .status-pill {
-    background: var(--color-primary-weak);
-    border-radius: 999px;
-    color: var(--color-primary);
-    flex: 0 0 auto;
-    font-size: 11px;
-    font-weight: 800;
-    padding: 4px 8px;
-    text-transform: capitalize;
-  }
-
-  .status-pill.active {
-    background: var(--color-success-soft);
-    color: var(--color-success);
-  }
-
-  .status-pill.archived {
-    background: var(--color-surface-soft);
-    color: var(--color-ink-subtle);
-  }
-
   @media (max-width: 640px) {
-    .settings-header,
-    .panel-heading,
     .workspace-form {
       align-items: stretch;
       display: grid;

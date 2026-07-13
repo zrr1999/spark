@@ -23,7 +23,7 @@
   let {
     document,
     source = "",
-    showSource = true,
+    showSource = false,
     labels = defaultLabels,
   }: {
     document: SparkUiDocumentV1;
@@ -33,6 +33,9 @@
   } = $props();
 
   let mergedLabels = $derived({ ...defaultLabels, ...labels });
+  let visibleDiagnostics = $derived(
+    document.diagnostics.filter((diagnostic) => diagnostic.severity === "error"),
+  );
 
   function formatDiagnostic(diagnostic: SparkUiDiagnostic): string {
     const location = diagnostic.line ? `line ${diagnostic.line}: ` : "";
@@ -79,11 +82,11 @@
     </section>
   {/each}
 
-  {#if document.diagnostics.length > 0}
+  {#if visibleDiagnostics.length > 0}
     <details class="spark-ui-diagnostics">
       <summary>{mergedLabels.diagnostics}</summary>
       <ul>
-        {#each document.diagnostics as diagnostic}
+        {#each visibleDiagnostics as diagnostic}
           <li class={diagnostic.severity}>{formatDiagnostic(diagnostic)}</li>
         {/each}
       </ul>

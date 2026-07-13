@@ -22,68 +22,116 @@
   let copy = $derived(
     isZh
       ? {
-          headTitle: "模型与 Provider · Spark",
-          eyebrow: "模型控制",
-          title: "模型与 Provider",
-          lede: "Daemon 统一保存凭据、默认模型与 OAuth 状态；浏览器不会读取密钥。",
-          daemonUnavailable: "Spark daemon 不可用。启动或升级 daemon 后再配置模型。",
-          noAvailableModels: "先为下方 Provider 配置登录凭据，随后即可选择默认模型。",
-          currentModelUnavailable: "当前默认模型不可用，请选择新的默认模型",
+          headTitle: "模型设置 · Spark",
+          eyebrow: "设置",
+          title: "模型设置",
+          lede: "选择新对话使用的默认模型，并管理模型服务的连接。密钥只保存在本机。",
+          daemonUnavailable: "模型设置暂时不可用。请确认 Spark 正在运行后重试。",
+          noAvailableModels: "请先连接至少一个模型服务，然后再选择默认模型。",
+          currentModelUnavailable: "当前默认模型暂不可用",
           defaultTitle: "默认模型",
-          defaultBody: "新对话继承此模型；对话页可以单独切换当前会话模型。",
-          saveDefault: "设为默认",
-          providersTitle: "Provider 登录",
-          configured: "已配置",
-          missing: "未配置",
-          via: "来源",
-          models: "模型",
-          apiKey: "API Key",
-          apiKeyPlaceholder: "粘贴 API Key",
-          saveKey: "保存密钥",
+          defaultBody: "新对话会使用这个模型；你仍可以在对话中临时切换。",
+          saveDefault: "保存默认模型",
+          providersTitle: "模型服务",
+          providersBody: "连接模型服务后，Spark 就可以使用其中的模型。",
+          connected: "已连接",
+          notConnected: "未连接",
+          noLoginNeeded: "无需登录",
+          readyHint: "已可用于对话",
+          connectHint: "连接后即可使用",
+          apiKey: "API 密钥",
+          apiKeyPlaceholder: "粘贴 API 密钥",
+          addKey: "添加 API 密钥",
+          updateKey: "更新 API 密钥",
+          saveKey: "保存并连接",
           login: "登录",
-          logout: "移除已保存凭据",
-          ambient: "该凭据来自环境或外部配置，Spark 不会删除它。",
-          noAuth: "此 Provider 不需要登录。",
-          flowTitle: "登录进行中",
-          openAuthorization: "打开授权页面",
-          deviceCode: "设备码",
+          logout: "断开连接",
+          ambient: "此连接由系统环境提供，请在原配置位置修改。",
+          flowTitle: "连接模型服务",
+          openAuthorization: "前往登录",
+          deviceCode: "登录代码",
           response: "继续",
-          cancel: "取消登录",
-          done: "登录完成",
+          cancel: "取消",
+          done: "连接成功",
           close: "关闭",
-          diagnostics: "Provider 诊断",
+          technicalDetails: "技术详情",
+          technicalDetailsBody: "供排查连接问题时使用。",
+          providerId: "Provider ID",
+          authMethod: "登录方式",
+          authSource: "认证来源",
+          authReference: "认证引用",
+          modelCount: "模型数量",
+          availableCount: "可用",
+          diagnostics: "诊断信息",
+          noDiagnostics: "暂无诊断信息。",
+          sourceMissing: "未提供",
+          sourceEnvironment: "环境变量",
+          sourceLiteral: "Provider 配置",
+          sourceStored: "Spark 本地凭据",
+          authNone: "无需认证",
+          authApiKey: "API 密钥",
+          authOAuth: "网页登录",
+          flowPending: "正在准备",
+          flowWaiting: "等待你的操作",
+          flowSucceeded: "已连接",
+          flowFailed: "连接失败",
+          flowCancelled: "已取消",
         }
       : {
-          headTitle: "Models & providers · Spark",
-          eyebrow: "Model control",
-          title: "Models & providers",
-          lede: "The daemon owns credentials, the default model, and OAuth state. Secrets never reach the browser read model.",
-          daemonUnavailable: "The Spark daemon is unavailable. Start or upgrade it before configuring models.",
-          noAvailableModels: "Configure a provider credential below, then choose the default model.",
-          currentModelUnavailable: "Current default is unavailable — choose a new default",
+          headTitle: "Model settings · Spark",
+          eyebrow: "Settings",
+          title: "Model settings",
+          lede: "Choose the default model for new conversations and manage model provider connections. Keys stay on this device.",
+          daemonUnavailable: "Model settings are temporarily unavailable. Make sure Spark is running, then try again.",
+          noAvailableModels: "Connect at least one model provider before choosing a default model.",
+          currentModelUnavailable: "Current default model is unavailable",
           defaultTitle: "Default model",
-          defaultBody: "New conversations inherit this model; each conversation can override it from chat.",
-          saveDefault: "Set default",
-          providersTitle: "Provider login",
-          configured: "Configured",
-          missing: "Not configured",
-          via: "Source",
-          models: "Models",
+          defaultBody: "New conversations use this model. You can still switch models inside a conversation.",
+          saveDefault: "Save default model",
+          providersTitle: "Model providers",
+          providersBody: "Connect a model provider to make its models available in Spark.",
+          connected: "Connected",
+          notConnected: "Not connected",
+          noLoginNeeded: "No login needed",
+          readyHint: "Ready for conversations",
+          connectHint: "Connect to use this provider",
           apiKey: "API key",
           apiKeyPlaceholder: "Paste API key",
-          saveKey: "Save credential",
+          addKey: "Add API key",
+          updateKey: "Update API key",
+          saveKey: "Save and connect",
           login: "Log in",
-          logout: "Remove stored credential",
-          ambient: "This credential comes from the environment or external config; Spark will not delete it.",
-          noAuth: "This provider does not require login.",
-          flowTitle: "Login in progress",
-          openAuthorization: "Open authorization page",
-          deviceCode: "Device code",
+          logout: "Disconnect",
+          ambient: "This connection comes from your system environment. Update it at the original source.",
+          flowTitle: "Connect model provider",
+          openAuthorization: "Continue to login",
+          deviceCode: "Login code",
           response: "Continue",
-          cancel: "Cancel login",
-          done: "Login complete",
+          cancel: "Cancel",
+          done: "Connected",
           close: "Close",
-          diagnostics: "Provider diagnostics",
+          technicalDetails: "Technical details",
+          technicalDetailsBody: "Use these details when troubleshooting a connection.",
+          providerId: "Provider ID",
+          authMethod: "Login method",
+          authSource: "Authentication source",
+          authReference: "Authentication reference",
+          modelCount: "Models",
+          availableCount: "available",
+          diagnostics: "Diagnostics",
+          noDiagnostics: "No diagnostics reported.",
+          sourceMissing: "Not provided",
+          sourceEnvironment: "Environment variable",
+          sourceLiteral: "Provider configuration",
+          sourceStored: "Spark local credentials",
+          authNone: "No authentication",
+          authApiKey: "API key",
+          authOAuth: "Web login",
+          flowPending: "Preparing",
+          flowWaiting: "Waiting for you",
+          flowSucceeded: "Connected",
+          flowFailed: "Connection failed",
+          flowCancelled: "Cancelled",
         },
   );
 
@@ -106,10 +154,29 @@
   }
 
   function sourceLabel(source: string | undefined) {
-    if (!source) return copy.missing;
-    if (source === "environment") return "Environment";
-    if (source === "literal") return "Provider config";
-    return "Spark auth store";
+    if (!source) return copy.sourceMissing;
+    if (source === "environment") return copy.sourceEnvironment;
+    if (source === "literal") return copy.sourceLiteral;
+    return copy.sourceStored;
+  }
+
+  function authLabel(kind: SparkModelCatalogProvider["auth"]["kind"]) {
+    if (kind === "api_key") return copy.authApiKey;
+    if (kind === "oauth") return copy.authOAuth;
+    return copy.authNone;
+  }
+
+  function providerStatus(provider: SparkModelCatalogProvider) {
+    if (provider.auth.kind === "none") return copy.noLoginNeeded;
+    return provider.auth.configured ? copy.connected : copy.notConnected;
+  }
+
+  function flowStatusLabel(status: string) {
+    if (status === "waiting_for_user") return copy.flowWaiting;
+    if (status === "succeeded") return copy.flowSucceeded;
+    if (status === "failed") return copy.flowFailed;
+    if (status === "cancelled") return copy.flowCancelled;
+    return copy.flowPending;
   }
 </script>
 
@@ -126,15 +193,17 @@
     <div class="notice error" role="alert"><Icon name="warning" size={18} />{copy.daemonUnavailable}</div>
   {/if}
 
+  {#if form?.message}<p class:success={form.success} class="form-message" role="status">{form.message}</p>{/if}
+
   {#if flow || data.flowError}
     <section class="flow-card" aria-live="polite">
       <div class="card-heading">
-        <div><p class="eyebrow">OAuth</p><h2>{copy.flowTitle}</h2></div>
-        {#if flow}<span class="status {flow.status}">{flow.status}</span>{/if}
+        <div><p class="eyebrow">{copy.providersTitle}</p><h2>{copy.flowTitle}</h2></div>
+        {#if flow}<span class="status {flow.status}">{flowStatusLabel(flow.status)}</span>{/if}
       </div>
       {#if data.flowError}<p class="error-text">{data.flowError}</p>{/if}
       {#if flow}
-        <p>{flow.providerLabel ?? flow.providerName}</p>
+        <p class="flow-provider">{flow.providerLabel ?? flow.providerName}</p>
         {#if flow.authorization}
           <a class="primary-action" href={flow.authorization.url} target="_blank" rel="noreferrer">
             <Icon name="play" size={15} />{copy.openAuthorization}
@@ -173,7 +242,9 @@
   {/if}
 
   <section class="settings-card">
-    <div class="card-heading"><div><h2>{copy.defaultTitle}</h2><p>{copy.defaultBody}</p></div></div>
+    <div class="card-heading">
+      <div><h2>{copy.defaultTitle}</h2><p>{copy.defaultBody}</p></div>
+    </div>
     {#if availableModels.length > 0}
       <form method="POST" action="?/setDefaultModel" class="inline-form" use:enhance>
         <select
@@ -192,80 +263,521 @@
   </section>
 
   <section class="providers-section">
-    <div class="section-heading"><h2>{copy.providersTitle}</h2><span>{snapshot.providers.length}</span></div>
+    <div class="section-heading"><h2>{copy.providersTitle}</h2><p>{copy.providersBody}</p></div>
     <div class="provider-grid">
       {#each snapshot.providers as provider}
         <article class="provider-card">
-          <div class="card-heading">
-            <div><h3>{provider.label}</h3><p>{provider.providerName}</p></div>
-            <span class:configured={provider.auth.configured} class="status">{provider.auth.configured ? copy.configured : copy.missing}</span>
+          <div class="provider-heading">
+            <div>
+              <h3>{provider.label}</h3>
+              <p>{provider.auth.kind === "none" || provider.auth.configured ? copy.readyHint : copy.connectHint}</p>
+            </div>
+            <span
+              class:configured={provider.auth.configured}
+              class:neutral={provider.auth.kind === "none"}
+              class="status"
+            >{providerStatus(provider)}</span>
           </div>
-          <p class="meta">{copy.models}: {provider.models.length} · {copy.via}: {sourceLabel(provider.auth.source)}</p>
-          {#if provider.models.length > 0}
-            <div class="model-tags">{#each provider.models.slice(0, 6) as entry}<span class:unavailable={!entry.available}>{entry.model.modelLabel ?? entry.model.modelId}</span>{/each}</div>
-          {/if}
           {#if provider.auth.kind === "api_key"}
-            <form method="POST" action="?/saveApiKey" class="credential-form" use:enhance>
-              <input type="hidden" name="providerName" value={provider.providerName} />
-              <label><span>{copy.apiKey}</span><input name="apiKey" type="password" autocomplete="new-password" placeholder={copy.apiKeyPlaceholder} required /></label>
-              <button type="submit">{copy.saveKey}</button>
-            </form>
-            {#if provider.auth.source === "stored"}
-              <form method="POST" action="?/logout" use:enhance><input type="hidden" name="providerName" value={provider.providerName} /><button class="link-action" type="submit">{copy.logout}</button></form>
-            {:else if provider.auth.configured}<p class="muted">{copy.ambient}</p>{/if}
+            <div class="provider-actions">
+              <details class="credential-editor" open={!provider.auth.configured}>
+                <summary>{provider.auth.configured ? copy.updateKey : copy.addKey}</summary>
+                <form method="POST" action="?/saveApiKey" class="credential-form" use:enhance>
+                  <input type="hidden" name="providerName" value={provider.providerName} />
+                  <label
+                    ><span>{copy.apiKey}</span><input
+                      name="apiKey"
+                      type="password"
+                      autocomplete="new-password"
+                      placeholder={copy.apiKeyPlaceholder}
+                      required
+                    /></label
+                  >
+                  <button type="submit">{copy.saveKey}</button>
+                </form>
+              </details>
+              {#if provider.auth.source === "stored"}
+                <form method="POST" action="?/logout" use:enhance>
+                  <input type="hidden" name="providerName" value={provider.providerName} />
+                  <button class="link-action" type="submit">{copy.logout}</button>
+                </form>
+              {:else if provider.auth.configured}<p class="muted ambient-note">{copy.ambient}</p>{/if}
+            </div>
           {:else if provider.auth.kind === "oauth"}
-            {#if provider.auth.configured}
-              <form method="POST" action="?/logout" use:enhance><input type="hidden" name="providerName" value={provider.providerName} /><button class="link-action" type="submit">{copy.logout}</button></form>
-            {:else}
-              <form method="POST" action="?/startOAuth"><input type="hidden" name="providerName" value={provider.providerName} /><button type="submit">{copy.login}</button></form>
-            {/if}
-          {:else}<p class="muted">{copy.noAuth}</p>{/if}
+            <div class="provider-actions">
+              {#if provider.auth.configured}
+                <form method="POST" action="?/logout" use:enhance>
+                  <input type="hidden" name="providerName" value={provider.providerName} />
+                  <button class="link-action" type="submit">{copy.logout}</button>
+                </form>
+              {:else}
+                <form method="POST" action="?/startOAuth">
+                  <input type="hidden" name="providerName" value={provider.providerName} />
+                  <button type="submit">{copy.login}</button>
+                </form>
+              {/if}
+            </div>
+          {/if}
         </article>
       {/each}
     </div>
   </section>
 
-  {#if snapshot.diagnostics.length > 0}
-    <details class="diagnostics"><summary>{copy.diagnostics}</summary><ul>{#each snapshot.diagnostics as diagnostic}<li>{diagnostic}</li>{/each}</ul></details>
-  {/if}
-
-  {#if form?.message}<p class:success={form.success} class="form-message">{form.message}</p>{/if}
+  <details class="technical-details">
+    <summary><strong>{copy.technicalDetails}</strong><span>{copy.technicalDetailsBody}</span></summary>
+    <div class="technical-body">
+      <div class="technical-provider-grid">
+        {#each snapshot.providers as provider}
+          <section class="technical-provider">
+            <h3>{provider.label}</h3>
+            <dl>
+              <div><dt>{copy.providerId}</dt><dd><code>{provider.providerName}</code></dd></div>
+              <div><dt>{copy.authMethod}</dt><dd>{authLabel(provider.auth.kind)}</dd></div>
+              <div><dt>{copy.authSource}</dt><dd>{sourceLabel(provider.auth.source)}</dd></div>
+              {#if provider.auth.reference}
+                <div><dt>{copy.authReference}</dt><dd><code>{provider.auth.reference}</code></dd></div>
+              {/if}
+              <div>
+                <dt>{copy.modelCount}</dt>
+                <dd>{provider.models.length} · {provider.models.filter((entry) => entry.available).length} {copy.availableCount}</dd>
+              </div>
+            </dl>
+          </section>
+        {/each}
+      </div>
+      <section class="diagnostics">
+        <h3>{copy.diagnostics}</h3>
+        {#if snapshot.diagnostics.length > 0}
+          <ul>{#each snapshot.diagnostics as diagnostic}<li>{diagnostic}</li>{/each}</ul>
+        {:else}<p class="muted">{copy.noDiagnostics}</p>{/if}
+      </section>
+    </div>
+  </details>
 </section>
 
 <style>
-  .models-settings { display: grid; gap: 22px; max-width: 1120px; min-width: 0; width: 100%; }
-  h1, h2, h3, p { margin: 0; }
-  .page-heading { display: grid; gap: 7px; max-width: 760px; }
-  .page-heading h1 { font-size: 25px; letter-spacing: -.02em; }
-  .page-heading > p:last-child, .card-heading p, .muted, .meta { color: var(--color-ink-subtle); line-height: 1.5; }
-  .eyebrow { color: var(--color-primary); font-size: 11px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
-  .settings-card, .flow-card, .provider-card, .diagnostics { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 14px; padding: 18px; }
-  .settings-card, .flow-card, .provider-card { display: grid; gap: 14px; }
-  .card-heading, .section-heading, .inline-form { align-items: center; display: flex; gap: 12px; justify-content: space-between; }
-  .provider-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
-  .providers-section { display: grid; gap: 12px; }
-  .section-heading span, .status { background: var(--color-surface-soft); border: 1px solid var(--color-border); border-radius: 999px; color: var(--color-ink-subtle); font-size: 11px; font-weight: 700; padding: 4px 8px; }
-  .status.configured, .status.succeeded { background: var(--color-success-weak); border-color: var(--color-success-soft); color: var(--color-success-strong); }
-  .model-tags { display: flex; flex-wrap: wrap; gap: 6px; }
-  .model-tags span { background: var(--color-primary-weak); border-radius: 6px; color: var(--color-primary); font-size: 11px; padding: 4px 7px; }
-  .model-tags span.unavailable { background: var(--color-surface-soft); color: var(--color-ink-subtle); text-decoration: line-through; }
-  form { margin: 0; }
-  .credential-form, .prompt-form { display: grid; gap: 10px; }
-  label { display: grid; gap: 5px; }
-  label span { color: var(--color-ink-muted); font-size: 12px; font-weight: 650; }
-  input, select { background: var(--color-canvas); border: 1px solid var(--color-border); border-radius: 8px; color: var(--color-ink); font: inherit; min-height: 38px; padding: 7px 10px; }
-  button, .primary-action, .secondary-action { align-items: center; border-radius: 8px; cursor: pointer; display: inline-flex; font: inherit; font-size: 13px; font-weight: 700; gap: 6px; justify-content: center; min-height: 36px; padding: 0 12px; text-decoration: none; width: fit-content; }
-  button, .primary-action { background: var(--color-primary); border: 0; color: var(--color-on-primary); }
-  .secondary-action { background: var(--color-surface-soft); border: 1px solid var(--color-border); color: var(--color-ink-muted); }
-  .link-action { background: transparent; color: var(--color-danger); padding: 0; }
-  .notice { align-items: center; background: var(--color-danger-weak); border: 1px solid var(--color-danger-soft); border-radius: 10px; color: var(--color-danger); display: flex; gap: 8px; padding: 12px; }
-  .device-code { background: var(--color-canvas); border-radius: 10px; display: grid; gap: 5px; padding: 12px; }
-  .device-code strong { font-family: ui-monospace, monospace; font-size: 22px; letter-spacing: .12em; }
-  .error-text, .form-message { color: var(--color-danger); }
-  .form-message.success { color: var(--color-success-strong); }
+  .models-settings {
+    display: grid;
+    gap: 24px;
+    max-width: 1040px;
+    min-width: 0;
+    width: 100%;
+  }
+
+  h1,
+  h2,
+  h3,
+  p {
+    margin: 0;
+  }
+
+  .page-heading {
+    display: grid;
+    gap: 7px;
+    max-width: 720px;
+  }
+
+  .page-heading h1 {
+    font-size: 25px;
+    letter-spacing: -0.02em;
+  }
+
+  .page-heading > p:last-child,
+  .card-heading p,
+  .provider-heading p,
+  .section-heading p,
+  .muted {
+    color: var(--color-ink-subtle);
+    line-height: 1.5;
+  }
+
+  .eyebrow {
+    color: var(--color-primary);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .settings-card,
+  .flow-card,
+  .provider-card,
+  .technical-details {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
+  }
+
+  .settings-card,
+  .flow-card,
+  .provider-card {
+    display: grid;
+    gap: 16px;
+    padding: 20px;
+  }
+
+  .card-heading,
+  .inline-form,
+  .provider-heading {
+    align-items: center;
+    display: flex;
+    gap: 14px;
+    justify-content: space-between;
+  }
+
+  .inline-form select {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .providers-section,
+  .section-heading {
+    display: grid;
+    gap: 6px;
+  }
+
+  .provider-grid {
+    display: grid;
+    gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    margin-top: 8px;
+  }
+
+  .provider-heading > div {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .status {
+    background: var(--color-surface-soft);
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    color: var(--color-ink-subtle);
+    flex: 0 0 auto;
+    font-size: 11px;
+    font-weight: 750;
+    padding: 5px 9px;
+  }
+
+  .status.configured,
+  .status.succeeded {
+    background: var(--color-success-weak);
+    border-color: var(--color-success-soft);
+    color: var(--color-success-strong);
+  }
+
+  .status.neutral {
+    color: var(--color-ink-muted);
+  }
+
+  .status.failed {
+    background: var(--color-danger-weak);
+    border-color: var(--color-danger-soft);
+    color: var(--color-danger);
+  }
+
+  .status.pending,
+  .status.waiting_for_user {
+    background: var(--color-primary-weak);
+    border-color: var(--color-primary-soft);
+    color: var(--color-primary);
+  }
+
+  .flow-provider {
+    font-weight: 700;
+  }
+
+  .provider-actions {
+    align-items: flex-start;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .provider-actions > form {
+    display: flex;
+  }
+
+  .credential-editor {
+    flex: 1 1 240px;
+    min-width: 0;
+  }
+
+  .credential-editor > summary {
+    align-items: center;
+    color: var(--color-primary);
+    cursor: pointer;
+    display: flex;
+    font-size: 13px;
+    font-weight: 700;
+    min-height: 38px;
+    width: fit-content;
+  }
+
+  .credential-editor[open] > summary {
+    margin-bottom: 10px;
+  }
+
+  form {
+    margin: 0;
+  }
+
+  .credential-form,
+  .prompt-form {
+    display: grid;
+    gap: 10px;
+  }
+
+  label {
+    display: grid;
+    gap: 5px;
+  }
+
+  label span {
+    color: var(--color-ink-muted);
+    font-size: 12px;
+    font-weight: 650;
+  }
+
+  input,
+  select {
+    background: var(--color-canvas);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    color: var(--color-ink);
+    font: inherit;
+    min-height: 40px;
+    padding: 7px 10px;
+  }
+
+  button,
+  .primary-action,
+  .secondary-action {
+    align-items: center;
+    border-radius: 8px;
+    cursor: pointer;
+    display: inline-flex;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    gap: 6px;
+    justify-content: center;
+    min-height: 40px;
+    padding: 0 13px;
+    text-decoration: none;
+    width: fit-content;
+  }
+
+  button,
+  .primary-action {
+    background: var(--color-primary);
+    border: 0;
+    color: var(--color-on-primary);
+  }
+
+  .secondary-action {
+    background: var(--color-surface-soft);
+    border: 1px solid var(--color-border);
+    color: var(--color-ink-muted);
+  }
+
+  .link-action {
+    background: transparent;
+    border: 1px solid var(--color-border);
+    color: var(--color-danger);
+  }
+
+  .ambient-note {
+    flex-basis: 100%;
+    font-size: 12px;
+  }
+
+  .notice,
+  .form-message {
+    border-radius: 10px;
+    padding: 12px;
+  }
+
+  .notice {
+    align-items: center;
+    background: var(--color-danger-weak);
+    border: 1px solid var(--color-danger-soft);
+    color: var(--color-danger);
+    display: flex;
+    gap: 8px;
+  }
+
+  .form-message {
+    background: var(--color-danger-weak);
+    border: 1px solid var(--color-danger-soft);
+    color: var(--color-danger);
+  }
+
+  .form-message.success {
+    background: var(--color-success-weak);
+    border-color: var(--color-success-soft);
+    color: var(--color-success-strong);
+  }
+
+  .device-code {
+    background: var(--color-canvas);
+    border-radius: 10px;
+    display: grid;
+    gap: 5px;
+    padding: 12px;
+  }
+
+  .device-code strong {
+    font-family: ui-monospace, monospace;
+    font-size: 22px;
+    letter-spacing: 0.12em;
+  }
+
+  .device-code a {
+    overflow-wrap: anywhere;
+  }
+
+  .error-text {
+    color: var(--color-danger);
+  }
+
+  .technical-details {
+    overflow: hidden;
+  }
+
+  .technical-details > summary {
+    align-items: center;
+    cursor: pointer;
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+    min-height: 48px;
+    padding: 0 18px;
+  }
+
+  .technical-details > summary span {
+    color: var(--color-ink-subtle);
+    font-size: 12px;
+  }
+
+  .technical-body {
+    border-top: 1px solid var(--color-border);
+    display: grid;
+    gap: 20px;
+    padding: 18px;
+  }
+
+  .technical-provider-grid {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  }
+
+  .technical-provider {
+    background: var(--color-surface-soft);
+    border-radius: 10px;
+    display: grid;
+    gap: 10px;
+    padding: 14px;
+  }
+
+  dl {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+  }
+
+  dl > div {
+    display: grid;
+    gap: 2px;
+  }
+
+  dt {
+    color: var(--color-ink-subtle);
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  dd {
+    font-size: 12px;
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  code {
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+  }
+
+  .diagnostics {
+    display: grid;
+    gap: 8px;
+  }
+
+  .diagnostics ul {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding-left: 20px;
+  }
+
+  .diagnostics li {
+    color: var(--color-ink-muted);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
   @media (max-width: 640px) {
-    .provider-grid { grid-template-columns: minmax(0, 1fr); }
-    .card-heading, .inline-form { align-items: stretch; flex-direction: column; }
-    .inline-form select, .inline-form button { width: 100%; }
+    .models-settings {
+      gap: 20px;
+    }
+
+    .settings-card,
+    .flow-card,
+    .provider-card {
+      padding: 16px;
+    }
+
+    .provider-grid,
+    .technical-provider-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .card-heading,
+    .inline-form,
+    .provider-heading {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .provider-heading .status {
+      align-self: flex-start;
+    }
+
+    .inline-form select,
+    .inline-form button,
+    .provider-actions,
+    .provider-actions > form,
+    .provider-actions button,
+    .credential-editor,
+    .credential-form button,
+    .primary-action,
+    .secondary-action {
+      width: 100%;
+    }
+
+    .technical-details > summary {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 3px;
+      justify-content: center;
+      min-height: 64px;
+      padding: 10px 16px;
+    }
+
+    .technical-body {
+      padding: 16px;
+    }
   }
 </style>

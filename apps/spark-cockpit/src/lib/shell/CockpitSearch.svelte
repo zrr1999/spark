@@ -5,11 +5,13 @@
   import type { AppMessages } from "$lib/i18n";
   import {
     buildCockpitSearchResults,
+    type CockpitSearchResult,
     type CockpitSearchSession,
     type CockpitSearchWorkspace,
   } from "./cockpit-search";
 
   interface Props {
+    activeWorkspace?: CockpitSearchWorkspace | null;
     common: AppMessages["common"];
     layout: AppMessages["layout"];
     sessions?: CockpitSearchSession[];
@@ -18,6 +20,7 @@
   }
 
   let {
+    activeWorkspace = null,
     common,
     layout,
     sessions = [],
@@ -30,6 +33,24 @@
   let selectedIndex = $state(0);
   let inputElement = $state<HTMLInputElement>();
   let shortcutLabel = $state("⌘K");
+  let pageShortcuts = $derived.by(() => {
+    const pages: CockpitSearchResult[] = [
+      { id: "new-global", type: "page", title: sessionMessages.daemonConversation, description: null, href: "/sessions?new=daemon" },
+      { id: "models", type: "page", title: layout.nav.models, description: null, href: "/settings/models" },
+    ];
+    if (!activeWorkspace) return pages;
+    const base = `/${encodeURIComponent(activeWorkspace.slug)}`;
+    const workspacePages: CockpitSearchResult[] = [
+      { id: "new-workspace", type: "page", title: sessionMessages.workspaceConversation, description: activeWorkspace.name, href: "/sessions?new=workspace" },
+      { id: "overview", type: "page", title: layout.nav.overview, description: activeWorkspace.name, href: base },
+      { id: "inbox", type: "page", title: layout.nav.inbox, description: activeWorkspace.name, href: `${base}/inbox` },
+      { id: "artifacts", type: "page", title: layout.nav.artifacts, description: activeWorkspace.name, href: `${base}/artifacts` },
+      { id: "resources", type: "page", title: layout.nav.repos, description: activeWorkspace.name, href: `${base}/repos` },
+      { id: "workspace-settings", type: "page", title: layout.nav.workspaceSettings, description: activeWorkspace.name, href: `${base}/settings` },
+      ...pages,
+    ];
+    return workspacePages;
+  });
   let results = $derived(
     buildCockpitSearchResults({
       query,
@@ -38,6 +59,7 @@
       daemonGroupLabel: sessionMessages.daemonGroup,
       untitledConversationLabel: sessionMessages.untitledConversation,
       statusLabels: common.status as Record<string, string>,
+      pages: pageShortcuts,
     }),
   );
 
@@ -166,12 +188,10 @@
         aria-label={layout.search.resultsLabel}
         aria-live="polite"
       >
-        {#if !query.trim()}
-          <p class="search-state">{layout.search.hint}</p>
-        {:else if results.length === 0}
-          <p class="search-state">{layout.search.empty}</p>
+        {#if results.length === 0}
+          <p class="search-state">{query.trim() ? layout.search.empty : layout.search.hint}</p>
         {:else}
-          <p class="search-section-label">{layout.search.resultsLabel}</p>
+          <p class="search-section-label">{query.trim() ? layout.search.resultsLabel : layout.search.shortcuts}</p>
           {#each results as result, index}
             <button
               class="search-result"
@@ -185,7 +205,7 @@
             >
               <span class="search-result-icon">
                 <Icon
-                  name={result.type === "session" ? "agents" : "workspace"}
+                  name={result.type === "session" ? "agents" : result.type === "workspace" ? "workspace" : "chevron"}
                   size={18}
                   stroke={2.1}
                 />
@@ -205,6 +225,7 @@
           {/each}
         {/if}
       </div>
+      <p class="search-keyboard-hint">{layout.search.keyboardHint}</p>
     </div>
   </div>
 {/if}
@@ -372,6 +393,15 @@
     font-weight: 800;
     margin: 0;
     padding: 2px 4px 4px;
+  }
+
+  .search-keyboard-hint {
+    border-top: 1px solid var(--color-border-soft);
+    color: var(--color-ink-subtle);
+    font-size: 11px;
+    margin: 0;
+    padding: 10px 2px 0;
+    text-align: right;
   }
 
   .search-result {

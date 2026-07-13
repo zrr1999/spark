@@ -244,8 +244,7 @@ describe("session conversation actions", () => {
     expect(result).toEqual({
       intent: "selectModel",
       success: true,
-      message:
-        "Switched to baidu-oneapi/gpt-5.6-sol. This applies starting with the next message that has not yet been queued.",
+      message: "Switched to baidu-oneapi/gpt-5.6-sol. It will be used for future messages.",
       model: "baidu-oneapi/gpt-5.6-sol",
       values: { sessionId: "sess_conversation", model: "baidu-oneapi/gpt-5.6-sol" },
     });

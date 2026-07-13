@@ -1,22 +1,21 @@
 <script lang="ts">
   let { data, form } = $props();
+  let t = $derived(data.messages.login);
 </script>
 
 <svelte:head>
-  <title>Remote access · Spark Cockpit</title>
+  <title>{t.headTitle}</title>
 </svelte:head>
 
 <section class="login-shell">
   <article class="login-card">
-    <p class="eyebrow">Remote access</p>
-    <h1>Unlock Spark Cockpit</h1>
-    <p class="lede">
-      Non-localhost Cockpit sessions require the single-user token configured on the server. Localhost access remains passwordless for local development.
-    </p>
+    <p class="eyebrow">{t.eyebrow}</p>
+    <h1>{t.title}</h1>
+    <p class="lede">{t.lede}</p>
 
     {#if !data.remoteAccessConfigured}
       <div class="notice" role="alert">
-        Set <code>SPARK_COCKPIT_REMOTE_TOKEN</code> before exposing Cockpit on a Tailscale or private network address.
+        {t.unconfigured}
       </div>
     {/if}
 
@@ -27,10 +26,10 @@
     <form method="POST">
       <input type="hidden" name="next" value={data.next} />
       <label>
-        <span>Access token</span>
-        <input name="token" type="password" autocomplete="current-password" placeholder="spark remote token" required />
+        <span>{t.tokenLabel}</span>
+        <input name="token" type="password" autocomplete="current-password" placeholder={t.tokenPlaceholder} required />
       </label>
-      <button type="submit" disabled={!data.remoteAccessConfigured}>Continue</button>
+      <button type="submit" disabled={!data.remoteAccessConfigured}>{t.action}</button>
     </form>
   </article>
 </section>
@@ -138,8 +137,4 @@
     color: var(--color-danger-strong);
   }
 
-  code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.92em;
-  }
 </style>

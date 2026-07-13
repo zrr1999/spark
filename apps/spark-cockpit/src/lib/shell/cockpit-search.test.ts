@@ -28,7 +28,7 @@ describe("cockpit search", () => {
     expect(buildCockpitSearchResults({ ...baseInput, query: "effect" })).toEqual([
       expect.objectContaining({
         id: "sess_workspace",
-        description: "Spore · Running",
+        description: "Spore",
         status: "running",
       }),
     ]);
@@ -38,7 +38,7 @@ describe("cockpit search", () => {
     expect(buildCockpitSearchResults({ ...baseInput, query: "local daemon" })).toEqual([
       expect.objectContaining({
         id: "sess_daemon",
-        description: "Daemon · Local daemon · Ready",
+        description: "Daemon · Local daemon",
       }),
     ]);
   });

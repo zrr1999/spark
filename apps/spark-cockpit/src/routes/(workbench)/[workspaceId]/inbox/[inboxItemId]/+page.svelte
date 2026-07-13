@@ -13,7 +13,7 @@
   }
 
   function statusLabel(status: string) {
-    return getStatusLabel(status, common);
+    return data.messages.inbox.status[status as keyof typeof data.messages.inbox.status] ?? getStatusLabel(status, common);
   }
 
   function formatJson(value: unknown) {
@@ -38,33 +38,14 @@
   </nav>
   <header class="hero">
     <div>
-      <p class="eyebrow">{data.item.requestKind} · {data.item.runtimeName}</p>
       <h1>{data.item.title}</h1>
       <p class="lede">{data.item.prompt}</p>
+      <p class="created-at">{formatRelative(data.item.createdAt)}</p>
     </div>
     <span class="status-pill {data.item.status}">{statusLabel(data.item.status)}</span>
   </header>
 
-  <section class="meta-grid" aria-label={t.meta.aria}>
-    <article>
-      <span>{t.meta.scope}</span>
-      <strong>{common.fallback.workspaceScope}</strong>
-    </article>
-    <article>
-      <span>{t.meta.runnerWorkspace}</span>
-      <strong>{data.item.runtimeWorkspaceName ?? data.item.runtimeWorkspaceBindingId}</strong>
-    </article>
-    <article>
-      <span>{t.meta.runnerRequest}</span>
-      <strong>{data.item.runtimeRequestId}</strong>
-    </article>
-    <article>
-      <span>{t.meta.created}</span>
-      <strong>{formatRelative(data.item.createdAt)}</strong>
-    </article>
-  </section>
-
-  <section class="grid">
+  <section class="response-stack">
     <section class="panel" aria-labelledby="response-title">
       <div class="panel-header">
         <div>
@@ -122,16 +103,23 @@
             {/each}
           {/if}
 
-          <label class="question-block">
-            <span>{t.response.operatorNote}</span>
-            <textarea name="operatorNote" rows="3" placeholder={t.response.operatorNotePlaceholder}></textarea>
-          </label>
+          <details class="optional-note">
+            <summary>{t.response.operatorNote}</summary>
+            <label class="question-block">
+              <textarea name="operatorNote" rows="3" placeholder={t.response.operatorNotePlaceholder}></textarea>
+            </label>
+          </details>
 
           <div class="form-actions">
             <button class="primary-action" type="submit" name="status" value="answered">{t.response.send}</button>
             <button class="secondary-action" type="submit" name="status" value="cancelled">{t.response.cancel}</button>
-            <button class="secondary-action" type="submit" name="status" value="archived">{t.response.archive}</button>
           </div>
+
+          <details class="optional-note more-actions">
+            <summary>{t.response.moreActions}</summary>
+            <p>{t.response.archiveHint}</p>
+            <button class="secondary-action" type="submit" name="status" value="archived">{t.response.archive}</button>
+          </details>
         </form>
       {:else if latestResponse}
         <div class="answered-state">
@@ -153,14 +141,9 @@
       {/if}
     </section>
 
-    <aside class="panel" aria-labelledby="context-title">
-      <div class="panel-header compact">
-        <div>
-          <p class="panel-kicker">{t.audit.kicker}</p>
-          <h2 id="context-title">{t.audit.title}</h2>
-        </div>
-      </div>
-
+    <details class="technical-details">
+      <summary><span><strong>{t.audit.title}</strong><small>{t.audit.kicker}</small></span></summary>
+      <div class="technical-body">
       <div class="audit-list">
         <article>
           <span>{t.audit.requestStatus}</span>
@@ -186,11 +169,12 @@
         {/if}
       </div>
 
-      <details>
+      <details class="raw-context">
         <summary>{t.audit.rawContext}</summary>
         <pre>{formatJson(data.item.context)}</pre>
       </details>
-    </aside>
+      </div>
+    </details>
   </section>
 </section>
 
@@ -232,7 +216,6 @@
     min-width: 0;
   }
 
-  .eyebrow,
   .panel-kicker {
     color: var(--color-primary);
     font-size: 12px;
@@ -268,17 +251,12 @@
     max-width: 760px;
   }
 
-  .meta-grid,
-  .grid {
-    display: grid;
-    gap: 18px;
+  .created-at {
+    color: var(--color-ink-subtle);
+    font-size: var(--text-caption);
+    margin-top: var(--spacing-xs);
   }
 
-  .meta-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .meta-grid article,
   .panel {
     background: var(--color-surface);
     border: 1px solid var(--color-border);
@@ -286,14 +264,6 @@
     box-shadow: var(--shadow-card-raised);
   }
 
-  .meta-grid article {
-    display: grid;
-    gap: 8px;
-    min-width: 0;
-    padding: 18px;
-  }
-
-  .meta-grid span,
   .audit-list span {
     color: var(--color-ink-subtle);
     font-size: 12px;
@@ -301,15 +271,9 @@
     text-transform: uppercase;
   }
 
-  .meta-grid strong {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .grid {
-    align-items: start;
-    grid-template-columns: minmax(0, 1fr) 360px;
+  .response-stack {
+    display: grid;
+    gap: var(--spacing-lg);
   }
 
   .panel-header {
@@ -345,11 +309,30 @@
   }
 
   form,
-  .audit-list,
-  details {
+  .audit-list {
     display: grid;
     gap: 16px;
     padding: 22px 24px 24px;
+  }
+
+  .optional-note {
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--rounded-md);
+    padding: var(--spacing-sm);
+  }
+
+  .optional-note summary {
+    color: var(--color-ink-muted);
+    cursor: pointer;
+    font-weight: var(--weight-button);
+  }
+
+  .optional-note[open] summary { margin-bottom: var(--spacing-sm); }
+
+  .more-actions p {
+    color: var(--color-ink-subtle);
+    line-height: var(--leading-body);
+    margin: 0 0 var(--spacing-sm);
   }
 
   .question-block {
@@ -460,15 +443,32 @@
     gap: 6px;
   }
 
-  details {
-    border-top: 1px solid var(--color-border);
-  }
-
-  summary {
+  .raw-context summary {
     color: var(--color-ink-muted);
     cursor: pointer;
     font-weight: 800;
   }
+
+  .technical-details {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--rounded-xl);
+    overflow: hidden;
+  }
+
+  .technical-details > summary {
+    cursor: pointer;
+    list-style: none;
+    padding: var(--spacing-lg) var(--spacing-xl);
+  }
+
+  .technical-details > summary::-webkit-details-marker { display: none; }
+  .technical-details > summary span { display: grid; gap: var(--spacing-xxs); }
+  .technical-details > summary small { color: var(--color-ink-subtle); font-weight: 400; }
+  .technical-details[open] > summary { border-bottom: 1px solid var(--color-border); }
+  .technical-body { display: grid; gap: var(--spacing-md); padding: var(--spacing-xl); }
+  .technical-body .audit-list { padding: 0; }
+  .raw-context { border-top: 1px solid var(--color-border-soft); padding-top: var(--spacing-sm); }
 
   pre {
     background: var(--color-ink);
@@ -478,13 +478,6 @@
     overflow: auto;
     padding: 14px;
     white-space: pre-wrap;
-  }
-
-  @media (max-width: 1100px) {
-    .meta-grid,
-    .grid {
-      grid-template-columns: 1fr;
-    }
   }
 
   @media (max-width: 640px) {

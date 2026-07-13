@@ -48,7 +48,7 @@ describe("remote PWA assets", () => {
 
     expect(inboxDetail).toContain("@media (max-width: 640px)");
     expect(inboxDetail).toContain(".question-block");
-    expect(inboxDetail).toContain("grid-template-columns: 1fr");
+    expect(inboxDetail).toContain("flex-direction: column");
     expect(conversationDetail).toContain(".mobile-details");
     expect(conversationDetail).toMatch(/@media \(max-width: (640|960)px\)/);
     expect(workbenchLayout).toContain("@media (max-width: 900px)");

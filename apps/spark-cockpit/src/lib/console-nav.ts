@@ -1,7 +1,6 @@
 import type { IconName } from "./icons";
 
 export interface ConsoleNavLabels {
-  globalSettings: string;
   modelsProviders: string;
   channels: string;
   workspaceSettings: string;
@@ -40,10 +39,7 @@ export function buildConsoleNavGroups(input: {
     {
       id: "global",
       label: input.groups.global,
-      items: [
-        { href: "/settings", label: input.nav.globalSettings, icon: "settings" },
-        { href: "/settings/models", label: input.nav.modelsProviders, icon: "spark" },
-      ],
+      items: [{ href: "/settings/models", label: input.nav.modelsProviders, icon: "spark" }],
     },
   ];
 
@@ -133,7 +129,7 @@ export function currentConsolePageLabel(input: {
   if (top === "settings") {
     if (segments[1] === "channels") return input.nav.channels;
     if (segments[1] === "models") return input.nav.modelsProviders;
-    return input.nav.globalSettings;
+    return input.nav.modelsProviders;
   }
 
   if (top === "workspaces" && segments[1] === "new") {
@@ -146,5 +142,5 @@ export function currentConsolePageLabel(input: {
     return input.nav.workspaceSettings;
   }
 
-  return input.createWorkspaceFallback ?? input.nav.globalSettings;
+  return input.createWorkspaceFallback ?? input.nav.modelsProviders;
 }

@@ -1,7 +1,7 @@
 <script lang="ts">
   import Icon from "$lib/Icon.svelte";
+  import { daemonDisplayStatus } from "$lib/daemon-status";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
-  import { daemonDisplayStatus, type DaemonDisplayStatus } from "$lib/daemon-status";
   import PageHeader from "$lib/ui/PageHeader.svelte";
   import StatCard from "$lib/ui/StatCard.svelte";
   import { workspaceControlDisplay } from "$lib/workspace-control-display";
@@ -13,21 +13,12 @@
   let common = $derived(data.messages.common);
   let workspace = $derived(data.workspaces[0]!);
   let workspaceUrl = $derived(workspacePath(workspace));
-  const runnerStatusOrder: DaemonDisplayStatus[] = [
-    "online",
-    "registered",
-    "offline",
-    "draining",
-    "disabled",
-  ];
   let controlDisplay = $derived(
     workspaceControlDisplay(data.workspaceControl, t.workspaceControl),
   );
-
-  function countRunners(status: (typeof runnerStatusOrder)[number]) {
-    return data.runnerConnections.filter((runner) => daemonDisplayStatus(runner) === status)
-      .length;
-  }
+  let onlineRuntimeCount = $derived(
+    data.runnerConnections.filter((runner) => daemonDisplayStatus(runner) === "online").length,
+  );
 
   function formatRelative(value: string | null) {
     return formatRelativeTime(value, data.locale, common);
@@ -39,673 +30,297 @@
 </script>
 
 {#snippet workspaceSettingsAction()}
-  <a class="secondary-action" href={`${workspaceUrl}/settings`}>{t.hero.openSettings}</a>
+  <a class="secondary-action" href={`${workspaceUrl}/settings`}>
+    <Icon name="settings" size={16} />
+    {t.hero.openSettings}
+  </a>
 {/snippet}
 
 <svelte:head>
   <title>{workspace.name} · {t.headTitle}</title>
 </svelte:head>
 
-<section class="hero" aria-labelledby="home-title">
+<section class="workspace-overview">
   <PageHeader
-    eyebrow={t.hero.eyebrow}
     title={workspace.name}
-    lede={t.hero.lede}
+    lede={workspace.description ?? t.hero.lede}
     actions={workspaceSettingsAction}
   />
-</section>
 
-<section class="control-strip" aria-label={t.workspaceControl.aria}>
-  <div class="control-summary">
-    <span class="control-kicker">{t.workspaceControl.aria}</span>
-    <strong>{controlDisplay.controlLabel}</strong>
-  </div>
-  <div class="control-status-list">
-    <span class="control-chip {data.workspaceControl.connection.status}">
-      <span class="control-chip-dot" aria-hidden="true"></span>
-      {controlDisplay.connectionLabel}
-    </span>
-    <span
-      class="control-chip {data.workspaceControl.borrowed?.borrowed ? 'borrowed' : 'available'}"
-    >
-      <span class="control-chip-dot" aria-hidden="true"></span>
-      {controlDisplay.borrowedLabel}
-    </span>
-    <span class="control-chip executor-{data.workspaceControl.executor?.state ?? 'none'}">
-      <span class="control-chip-dot" aria-hidden="true"></span>
-      {controlDisplay.executorLabel}
-    </span>
-  </div>
-</section>
+  <section class="metrics" aria-label={t.metrics.aria}>
+    <StatCard
+      label={t.metrics.pendingInbox}
+      hint={t.metrics.pendingInboxHint}
+      value={data.pendingInboxCount}
+      tone="warning"
+      featured={data.pendingInboxCount > 0}
+      icon="inbox"
+    />
+    <StatCard
+      label={t.metrics.runnerConnections}
+      value={onlineRuntimeCount}
+      hint={controlDisplay.connectionLabel}
+      tone={onlineRuntimeCount > 0 ? "success" : "warning"}
+      icon="activity"
+    />
+    <StatCard
+      label={t.metrics.workspaceBindings}
+      value={data.runnerBindings.length}
+      hint={controlDisplay.controlLabel}
+      tone="primary"
+      icon="folder"
+    />
+  </section>
 
-<section class="metrics" aria-label={t.metrics.aria}>
-  <StatCard
-    label={t.metrics.pendingInbox}
-    hint={t.metrics.pendingInboxHint}
-    value={data.pendingInboxCount}
-    tone="warning"
-    featured={data.pendingInboxCount > 0}
-    icon="inbox"
-  />
-  <StatCard
-    label={t.metrics.workspaces}
-    value={1}
-    hint="{data.ownerBindings.length} {common.boundToRunner}"
-    tone="primary"
-    icon="folder"
-  />
-  <StatCard
-    label={t.metrics.runnerConnections}
-    value={data.runnerConnections.length}
-    hint="{countRunners('online')} {common.online} · {data.connectedSessionCount} {common.activeWs}"
-    tone="success"
-    icon="activity"
-  />
-  <StatCard
-    label={t.metrics.workspaceBindings}
-    value={data.runnerBindings.length}
-    hint={common.reportedByConnectedRunners}
-    tone="purple"
-    icon="cube"
-  />
-</section>
+  <section class="action-grid" aria-label={t.actions.aria}>
+    <a class="action-card primary" href="/sessions?new=workspace">
+      <span class="action-icon"><Icon name="spark" size={22} /></span>
+      <span><strong>{t.actions.conversationTitle}</strong><small>{t.actions.conversationBody}</small></span>
+      <Icon name="chevron" size={18} />
+    </a>
+    <a class="action-card" href={`${workspaceUrl}/inbox`}>
+      <span class="action-icon"><Icon name="inbox" size={22} /></span>
+      <span><strong>{t.actions.inboxTitle}</strong><small>{t.actions.inboxBody}</small></span>
+      <Icon name="chevron" size={18} />
+    </a>
+    <a class="action-card" href={`${workspaceUrl}/artifacts`}>
+      <span class="action-icon"><Icon name="artifacts" size={22} /></span>
+      <span><strong>{t.actions.artifactsTitle}</strong><small>{t.actions.artifactsBody}</small></span>
+      <Icon name="chevron" size={18} />
+    </a>
+    <a class="action-card" href={`${workspaceUrl}/repos`}>
+      <span class="action-icon"><Icon name="repos" size={22} /></span>
+      <span><strong>{t.actions.resourcesTitle}</strong><small>{t.actions.resourcesBody}</small></span>
+      <Icon name="chevron" size={18} />
+    </a>
+  </section>
 
-<section class="dashboard-grid">
-  <section class="panel primary-panel" aria-labelledby="workspace-title">
-    <div class="panel-header">
-      <div>
-        <p class="panel-kicker">{t.panels.projectionState}</p>
-        <h2 id="workspace-title">{t.panels.workspaces}</h2>
-      </div>
-      <span class="panel-badge">{t.panels.sqliteBacked}</span>
-    </div>
-
-    <div class="workspace-list">
-      <article class="workspace-row">
-        <div class="row-icon"><Icon name="folder" size={24} /></div>
-        <div>
-          <h3>{workspace.name}</h3>
-          <p>{workspace.description ?? `/${workspace.slug}`}</p>
+  <details class="diagnostics">
+    <summary>
+      <span><strong>{t.panels.diagnostics}</strong><small>{t.panels.diagnosticsHint}</small></span>
+      <Icon name="chevron-down" size={18} />
+    </summary>
+    <div class="diagnostic-body">
+      <section aria-labelledby="runtime-title">
+        <h2 id="runtime-title">{t.panels.runnerHealth}</h2>
+        <div class="status-list">
+          <span class="control-chip {data.workspaceControl.connection.status}">{controlDisplay.connectionLabel}</span>
+          <span class="control-chip">{controlDisplay.borrowedLabel}</span>
+          <span class="control-chip">{controlDisplay.executorLabel}</span>
         </div>
-        <span class="status-pill {workspace.status}">{statusLabel(workspace.status)}</span>
-        <time>{t.updatedPrefix} {formatRelative(workspace.updatedAt)}</time>
-      </article>
-    </div>
-  </section>
+        {#if data.runnerConnections.length > 0}
+          <div class="diagnostic-list">
+            {#each data.runnerConnections as runner}
+              {@const displayStatus = daemonDisplayStatus(runner)}
+              <article>
+                <div><strong>{runner.name}</strong><small>{runner.protocolVersion ?? t.protocolPending}</small></div>
+                <span class="status-pill {displayStatus}">{statusLabel(displayStatus)}</span>
+                <time>{formatRelative(runner.lastHeartbeatAt ?? runner.updatedAt)}</time>
+              </article>
+            {/each}
+          </div>
+        {/if}
+      </section>
 
-  <aside class="panel side-panel" aria-labelledby="connections-title">
-    <div class="panel-header compact">
-      <div>
-        <p class="panel-kicker">{t.panels.settingsConnections}</p>
-        <h2 id="connections-title">{t.panels.runnerHealth}</h2>
-      </div>
-    </div>
+      <section aria-labelledby="directories-title">
+        <h2 id="directories-title">{t.panels.workspaceBindings}</h2>
+        {#if data.runnerBindings.length === 0}
+          <p class="empty-copy">{t.bindingsEmpty}</p>
+        {:else}
+          <div class="diagnostic-list">
+            {#each data.runnerBindings as binding}
+              <article>
+                <div><strong>{binding.displayName}</strong><small>{binding.runtimeName} · {binding.localWorkspaceKey}</small></div>
+                <span class="status-pill {binding.status}">{statusLabel(binding.status)}</span>
+                <time>{formatRelative(binding.lastSnapshotAt ?? binding.updatedAt)}</time>
+              </article>
+            {/each}
+          </div>
+        {/if}
+      </section>
 
-    {#if data.runnerConnections.length === 0}
-      <div class="compact-empty">
-        <div class="empty-icon small"><Icon name="activity" size={24} /></div>
-        <h3>{t.runnerEmpty.title}</h3>
-        <p>{t.runnerEmpty.body} <code>{t.runnerEmpty.code}</code>.</p>
-      </div>
-    {:else}
-      <div class="connection-list">
-        {#each data.runnerConnections as runner}
-          {@const displayStatus = daemonDisplayStatus(runner)}
-          <article class="connection-row {displayStatus}">
-            <div class="connection-dot" aria-hidden="true"></div>
-            <div>
-              <h3>{runner.name}</h3>
-              <p>{runner.protocolVersion ?? t.protocolPending}</p>
-            </div>
-            <span
-              >{formatRelative(
-                runner.lastHeartbeatAt ?? runner.updatedAt,
-              )}</span
-            >
-          </article>
-        {/each}
-      </div>
-    {/if}
-  </aside>
-</section>
-
-<section class="lower-grid">
-  <section class="panel" aria-labelledby="bindings-title">
-    <div class="panel-header compact">
-      <div>
-        <p class="panel-kicker">{t.panels.runnerOwnedTruth}</p>
-        <h2 id="bindings-title">{t.panels.workspaceBindings}</h2>
-      </div>
-    </div>
-
-    {#if data.runnerBindings.length === 0}
-      <div class="compact-empty horizontal">
-        <div class="empty-icon small"><Icon name="cube" size={24} /></div>
-        <p>{t.bindingsEmpty}</p>
-      </div>
-    {:else}
-      <div class="binding-list">
-        {#each data.runnerBindings as binding}
-          <article class="binding-row {binding.status}">
-            <div>
-              <h3>{binding.displayName}</h3>
-              <p>{binding.runtimeName} · {binding.localWorkspaceKey}</p>
-            </div>
-            <span class="status-pill {binding.status}"
-              >{statusLabel(binding.status)}</span
-            >
-            <time
-              >{formatRelative(
-                binding.lastSnapshotAt ?? binding.updatedAt,
-              )}</time
-            >
-          </article>
-        {/each}
-      </div>
-    {/if}
-  </section>
-
-  <section class="panel" aria-labelledby="events-title">
-    <div class="panel-header compact">
-      <div>
-        <p class="panel-kicker">{t.panels.appendOnlyAudit}</p>
+      <section aria-labelledby="events-title">
         <h2 id="events-title">{t.panels.recentEvents}</h2>
-      </div>
+        {#if data.recentEvents.length === 0}
+          <p class="empty-copy">{t.eventsEmpty}</p>
+        {:else}
+          <div class="diagnostic-list">
+            {#each data.recentEvents as event}
+              <article>
+                <div><strong>{event.kind}</strong><small>{event.actorKind}{event.subjectKind ? ` · ${event.subjectKind}` : ""}</small></div>
+                <time>{formatRelative(event.createdAt)}</time>
+              </article>
+            {/each}
+          </div>
+        {/if}
+      </section>
     </div>
-
-    {#if data.recentEvents.length === 0}
-      <div class="compact-empty horizontal">
-        <div class="empty-icon small"><Icon name="archive" size={24} /></div>
-        <p>{t.eventsEmpty}</p>
-      </div>
-    {:else}
-      <div class="event-list">
-        {#each data.recentEvents as event}
-          <article class="event-row">
-            <div class="event-icon"><Icon name="archive" size={18} /></div>
-            <div>
-              <h3>{event.kind}</h3>
-              <p>
-                {event.actorKind}{event.subjectKind
-                  ? ` · ${event.subjectKind}`
-                  : ""}
-              </p>
-            </div>
-            <time>{formatRelative(event.createdAt)}</time>
-          </article>
-        {/each}
-      </div>
-    {/if}
-  </section>
+  </details>
 </section>
 
 <style>
-  .hero {
-    align-items: center;
-    display: flex;
-    gap: 24px;
-    justify-content: space-between;
-    margin-bottom: 26px;
-  }
+  @import "$lib/ui/status-pill.css";
 
-  .eyebrow,
-  .panel-kicker {
-    color: var(--color-primary);
-    font-size: 12px;
-    font-weight: 750;
-    letter-spacing: 0.08em;
-    margin: 0 0 8px;
-    text-transform: uppercase;
-  }
-
-  h2,
-  h3,
-  p {
-    margin: 0;
-  }
-
-  .lede {
-    color: var(--color-ink-subtle);
-    line-height: 1.6;
-    margin-top: 10px;
-    max-width: 760px;
-  }
-
-  .hero-actions {
-    align-items: center;
-    display: flex;
-    flex: 0 0 auto;
-    gap: 12px;
-  }
-
-  .secondary-action {
-    align-items: center;
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 12px;
-    color: var(--color-ink-muted);
-    display: inline-flex;
-    font-weight: 750;
-    height: 44px;
-    justify-content: center;
-    padding: 0 16px;
-    text-decoration: none;
-    white-space: nowrap;
+  .workspace-overview {
+    display: grid;
+    gap: var(--spacing-xl);
   }
 
   .metrics {
     display: grid;
-    gap: 18px;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    margin-bottom: 24px;
+    gap: var(--spacing-lg);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .panel {
+  .action-grid {
+    display: grid;
+    gap: var(--spacing-md);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .action-card {
+    align-items: center;
     background: var(--color-surface);
     border: 1px solid var(--color-border);
-    border-radius: 16px;
-    box-shadow: var(--shadow-card-raised);
+    border-radius: var(--rounded-xl);
+    color: inherit;
+    display: grid;
+    gap: var(--spacing-md);
+    grid-template-columns: 44px minmax(0, 1fr) auto;
+    padding: var(--spacing-lg);
+    text-decoration: none;
+    transition: border-color 120ms ease, transform 120ms ease;
   }
 
-  .empty-icon,
-  .row-icon,
-  .event-icon {
-    align-items: center;
-    border-radius: 999px;
-    display: grid;
-    flex: 0 0 auto;
-    place-items: center;
+  .action-card:hover {
+    border-color: var(--color-primary-soft);
+    transform: translateY(-1px);
   }
 
-  .control-strip {
-    align-items: center;
-    background: linear-gradient(135deg, var(--color-surface), var(--color-surface-soft));
-    border: 1px solid var(--color-border);
-    border-radius: 16px;
-    box-shadow: var(--shadow-card);
-    display: grid;
-    gap: 18px;
-    grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.6fr);
-    margin: 0 0 24px;
-    padding: 16px 18px;
+  .action-card.primary {
+    background: var(--color-primary-weak);
+    border-color: var(--color-primary-soft);
   }
 
-  .control-summary {
+  .action-card > span:nth-child(2) {
     display: grid;
-    gap: 5px;
+    gap: var(--spacing-xxs);
     min-width: 0;
   }
 
-  .control-kicker {
+  .action-card strong {
+    font-size: var(--text-card-title);
+  }
+
+  .action-card small,
+  .diagnostics small,
+  .diagnostics time,
+  .empty-copy {
     color: var(--color-ink-subtle);
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    font-size: var(--text-caption);
+    line-height: var(--leading-caption);
   }
 
-  .control-summary strong {
-    color: var(--color-ink);
-    font-size: 16px;
-    line-height: 1.35;
-  }
-
-  .control-status-list {
+  .action-icon {
     align-items: center;
+    background: var(--color-primary-weak);
+    border-radius: var(--rounded-full);
+    color: var(--color-primary);
+    display: flex;
+    height: 44px;
+    justify-content: center;
+    width: 44px;
+  }
+
+  .diagnostics {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--rounded-xl);
+    overflow: hidden;
+  }
+
+  .diagnostics > summary {
+    align-items: center;
+    cursor: pointer;
+    display: flex;
+    gap: var(--spacing-md);
+    justify-content: space-between;
+    list-style: none;
+    padding: var(--spacing-lg) var(--spacing-xl);
+  }
+
+  .diagnostics > summary::-webkit-details-marker { display: none; }
+  .diagnostics > summary > span { display: grid; gap: var(--spacing-xxs); }
+  .diagnostics[open] > summary { border-bottom: 1px solid var(--color-border); }
+  .diagnostics[open] > summary :global(svg) { transform: rotate(180deg); }
+
+  .diagnostic-body {
+    display: grid;
+    gap: var(--spacing-xl);
+    padding: var(--spacing-xl);
+  }
+
+  .diagnostic-body section { display: grid; gap: var(--spacing-sm); }
+  .diagnostic-body h2 { font-size: var(--text-card-title); margin: 0; }
+  .empty-copy { margin: 0; }
+
+  .status-list {
     display: flex;
     flex-wrap: wrap;
-    gap: 10px;
-    justify-content: flex-end;
-    min-width: 0;
+    gap: var(--spacing-xs);
   }
 
   .control-chip {
+    background: var(--color-surface-soft);
+    border-radius: var(--rounded-full);
+    color: var(--color-ink-muted);
+    font-size: var(--text-caption);
+    padding: 6px 10px;
+  }
+
+  .control-chip.connected {
+    background: var(--color-success-soft);
+    color: var(--color-success-strong);
+  }
+
+  .diagnostic-list {
+    display: grid;
+  }
+
+  .diagnostic-list article {
+    align-items: center;
+    border-top: 1px solid var(--color-border-soft);
+    display: grid;
+    gap: var(--spacing-sm);
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    padding: var(--spacing-sm) 0;
+  }
+
+  .diagnostic-list article > div { display: grid; gap: var(--spacing-xxs); min-width: 0; }
+  .diagnostic-list strong, .diagnostic-list small { overflow-wrap: anywhere; }
+
+  .secondary-action {
     align-items: center;
     background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 999px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--rounded-md);
     color: var(--color-ink-muted);
     display: inline-flex;
-    font-size: 13px;
-    font-weight: 750;
-    gap: 8px;
-    min-height: 34px;
-    padding: 0 12px;
-    white-space: nowrap;
-  }
-
-  .control-chip-dot {
-    background: var(--color-ink-disabled);
-    border-radius: 999px;
-    height: 8px;
-    width: 8px;
-  }
-
-  .control-chip.connected,
-  .control-chip.available,
-  .control-chip.executor-online {
-    background: var(--color-success-soft);
-    border-color: color-mix(in srgb, var(--color-success) 24%, transparent);
-    color: var(--color-success);
-  }
-
-  .control-chip.connected .control-chip-dot,
-  .control-chip.available .control-chip-dot,
-  .control-chip.executor-online .control-chip-dot {
-    background: var(--color-success);
-  }
-
-  .control-chip.disconnected,
-  .control-chip.executor-none {
-    background: var(--color-surface);
-    color: var(--color-ink-subtle);
-  }
-
-  .control-chip.borrowed,
-  .control-chip.executor-starting {
-    background: var(--color-warning-weak);
-    border-color: var(--color-warning-soft);
-    color: var(--color-warning);
-  }
-
-  .control-chip.borrowed .control-chip-dot,
-  .control-chip.executor-starting .control-chip-dot {
-    background: var(--color-warning);
-  }
-
-  .control-chip.executor-unhealthy {
-    background: var(--color-danger-soft);
-    border-color: color-mix(in srgb, var(--color-danger) 22%, transparent);
-    color: var(--color-danger);
-  }
-
-  .control-chip.executor-unhealthy .control-chip-dot {
-    background: var(--color-danger);
-  }
-
-  .dashboard-grid {
-    align-items: start;
-    display: grid;
-    gap: 24px;
-    grid-template-columns: minmax(0, 1fr) 400px;
-    margin-bottom: 24px;
-  }
-
-  .lower-grid {
-    display: grid;
-    gap: 24px;
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .panel-header {
-    align-items: center;
-    border-bottom: 1px solid var(--color-border);
-    display: flex;
-    gap: 16px;
-    justify-content: space-between;
-    padding: 24px 28px;
-  }
-
-  .panel-header.compact {
-    padding: 22px 24px;
-  }
-
-  h2 {
-    color: var(--color-ink);
-    font-size: 18px;
-  }
-
-  .panel-badge {
-    background: var(--color-primary-weak);
-    border-radius: 999px;
-    color: var(--color-primary);
-    font-size: 12px;
-    font-weight: 800;
-    padding: 6px 10px;
-  }
-
-  .empty-icon {
-    background: var(--color-primary-weak);
-    color: var(--color-primary);
-    height: 46px;
-    margin: 0;
-    width: 46px;
-  }
-
-  .compact-empty h3 {
-    color: var(--color-ink);
-    font-size: 18px;
-    margin-bottom: 10px;
-  }
-
-  .compact-empty p,
-  .workspace-row p,
-  .binding-row p,
-  .connection-row p,
-  .event-row p {
-    color: var(--color-ink-subtle);
-    font-size: 13px;
-    line-height: 1.55;
-  }
-
-  code {
-    background: var(--color-surface-soft);
-    border: 1px solid var(--color-border);
-    border-radius: 6px;
-    color: var(--color-ink-muted);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.92em;
-    padding: 1px 5px;
-  }
-
-  .compact-empty {
-    display: grid;
-    gap: 14px;
-    padding: 28px 24px;
-  }
-
-  .compact-empty.horizontal {
-    align-items: center;
-    display: flex;
-  }
-
-  .workspace-list,
-  .binding-list,
-  .event-list,
-  .connection-list {
-    display: grid;
-    padding: 18px;
-  }
-
-  .workspace-row,
-  .binding-row,
-  .event-row,
-  .connection-row {
-    align-items: center;
-    border: 1px solid var(--color-border);
-    border-radius: 14px;
-    display: grid;
-    gap: 16px;
-    padding: 16px;
-  }
-
-  .workspace-row {
-    grid-template-columns: 52px minmax(0, 1fr) auto auto;
-  }
-
-  .binding-row {
-    grid-template-columns: minmax(0, 1fr) auto auto;
-  }
-
-  .event-row {
-    grid-template-columns: 42px minmax(0, 1fr) auto;
-  }
-
-  .connection-row {
-    grid-template-columns: 12px minmax(0, 1fr) auto;
-  }
-
-  .workspace-row + .workspace-row,
-  .binding-row + .binding-row,
-  .event-row + .event-row,
-  .connection-row + .connection-row {
-    margin-top: 10px;
-  }
-
-  .row-icon,
-  .event-icon {
-    background: var(--color-primary-weak);
-    color: var(--color-primary);
-    height: 42px;
-    width: 42px;
-  }
-
-  .workspace-row h3,
-  .binding-row h3,
-  .connection-row h3,
-  .event-row h3 {
-    color: var(--color-ink);
-    font-size: 15px;
-    line-height: 1.4;
-  }
-
-  .status-pill {
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 800;
-    padding: 6px 10px;
-    text-transform: capitalize;
-    white-space: nowrap;
-  }
-
-  .status-pill.active,
-  .status-pill.available,
-  .status-pill.online {
-    background: var(--color-success-soft);
-    color: var(--color-success);
-  }
-
-  .status-pill.archived,
-  .status-pill.unavailable,
-  .status-pill.offline,
-  .status-pill.disabled {
-    background: var(--color-surface-soft);
-    color: var(--color-ink-subtle);
-  }
-
-  .status-pill.indexing,
-  .status-pill.registered,
-  .status-pill.draining {
-    background: var(--color-primary-weak);
-    color: var(--color-primary);
-  }
-
-  .status-pill.degraded {
-    background: var(--color-warning-soft);
-    color: var(--color-warning);
-  }
-
-  time,
-  .connection-row span {
-    color: var(--color-ink-subtle);
-    font-size: 12px;
-    white-space: nowrap;
-  }
-
-  .connection-dot {
-    background: var(--color-ink-disabled);
-    border-radius: 999px;
-    height: 10px;
-    width: 10px;
-  }
-
-  .connection-row.online .connection-dot {
-    background: var(--color-success);
-    box-shadow: 0 0 0 5px rgba(22, 163, 74, 0.12);
-  }
-
-  .connection-row.registered .connection-dot,
-  .connection-row.draining .connection-dot {
-    background: var(--color-primary);
-    box-shadow: 0 0 0 5px rgba(37, 99, 235, 0.12);
-  }
-
-  .connection-row.disabled .connection-dot {
-    background: var(--color-danger);
-    box-shadow: 0 0 0 5px rgba(239, 68, 68, 0.1);
-  }
-
-  @media (max-width: 1280px) {
-    .metrics,
-    .dashboard-grid,
-    .lower-grid {
-      grid-template-columns: 1fr 1fr;
-    }
-
-    .primary-panel {
-      grid-column: 1 / -1;
-    }
+    font-size: var(--text-button);
+    font-weight: var(--weight-button);
+    gap: var(--spacing-xs);
+    min-height: 40px;
+    padding: 0 var(--spacing-md);
+    text-decoration: none;
   }
 
   @media (max-width: 900px) {
-    .hero,
-    .hero-actions {
-      align-items: flex-start;
-      flex-direction: column;
-    }
-
     .metrics,
-    .dashboard-grid,
-    .lower-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .control-strip {
-      align-items: flex-start;
-      grid-template-columns: 1fr;
-    }
-
-    .control-status-list {
-      justify-content: flex-start;
-    }
-
-    .control-chip {
-      white-space: normal;
-    }
-
-    .workspace-row,
-    .binding-row,
-    .event-row,
-    .connection-row {
-      align-items: flex-start;
-      grid-template-columns: 1fr;
-    }
+    .action-grid { grid-template-columns: 1fr; }
   }
 
-  :global(.setup-content) .metrics,
-  :global(.setup-content) .lower-grid {
-    display: none;
-  }
-
-  :global(.setup-content) .hero {
-    align-items: flex-end;
-    margin: 0 auto 32px;
-    max-width: 1180px;
-  }
-
-  :global(.setup-content) .dashboard-grid {
-    grid-template-columns: minmax(0, 760px) minmax(320px, 420px);
-    justify-content: center;
-    margin-bottom: 0;
-  }
-
-  :global(.setup-content) .primary-panel {
-    grid-column: auto;
-  }
-
-  @media (max-width: 900px) {
-    :global(.setup-content) .dashboard-grid {
-      grid-template-columns: 1fr;
-    }
+  @media (max-width: 640px) {
+    .diagnostic-list article { align-items: start; grid-template-columns: 1fr; }
+    .diagnostic-body { padding: var(--spacing-lg); }
   }
 </style>

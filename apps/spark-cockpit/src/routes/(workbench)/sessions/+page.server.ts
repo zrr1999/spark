@@ -233,8 +233,8 @@ export const actions: Actions = {
         intent: "selectModel",
         success: true,
         message: isZh
-          ? `已切换到 ${effectiveModel}。该设置从下一条尚未入队的消息开始生效。`
-          : `Switched to ${effectiveModel}. This applies starting with the next message that has not yet been queued.`,
+          ? `已切换到 ${effectiveModel}，将用于之后发送的消息。`
+          : `Switched to ${effectiveModel}. It will be used for future messages.`,
         model: effectiveModel,
         values: { sessionId, model: effectiveModel },
       };

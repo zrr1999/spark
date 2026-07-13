@@ -136,6 +136,20 @@
   function activityStatus(session: SessionRecord) {
     return session.activityStatus ?? session.status;
   }
+
+  function showActivityStatus(session: SessionRecord) {
+    return !["ready", "completed", "done", "available"].includes(activityStatus(session));
+  }
+
+  function sessionTitle(session: SessionRecord) {
+    const title = session.title || messages.untitledConversation;
+    const infoflow = title.match(/^channel infoflow:(group|user):(.+)$/i);
+    if (!infoflow) return title;
+    const scope = infoflow[1] === "group"
+      ? locale.toLowerCase().startsWith("zh") ? "如流群聊" : "Infoflow group"
+      : locale.toLowerCase().startsWith("zh") ? "如流私聊" : "Infoflow chat";
+    return `${scope} · ${infoflow[2]}`;
+  }
 </script>
 
 <div class="session-rail">
@@ -180,7 +194,8 @@
               href={`/sessions/${session.sessionId}`}
             >
               <span class="session-title-row">
-                <strong>{session.title || messages.untitledConversation}</strong>
+                <strong>{sessionTitle(session)}</strong>
+                {#if showActivityStatus(session)}
                 <span
                   class="session-status {activityStatus(session)}"
                   title={statusLabel(activityStatus(session))}
@@ -188,6 +203,7 @@
                   <span aria-hidden="true"></span>
                   <span>{statusLabel(activityStatus(session))}</span>
                 </span>
+                {/if}
               </span>
               <small>{relative(session.activityUpdatedAt ?? session.updatedAt)}</small>
             </a>

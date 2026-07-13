@@ -19,7 +19,7 @@ export interface CockpitSearchWorkspace {
 
 export interface CockpitSearchResult {
   id: string;
-  type: "session" | "workspace";
+  type: "session" | "workspace" | "page";
   title: string;
   description: string | null;
   status?: string;
@@ -33,11 +33,11 @@ export function buildCockpitSearchResults(input: {
   daemonGroupLabel: string;
   untitledConversationLabel: string;
   statusLabels: Record<string, string>;
+  pages?: CockpitSearchResult[];
 }): CockpitSearchResult[] {
   const query = input.query.trim().toLowerCase();
-  if (!query) return [];
+  if (!query) return input.pages?.slice(0, 8) ?? [];
 
-  const statusLabel = (status: string) => input.statusLabels[status] ?? status;
   const workspaceById = new Map(input.workspaces.map((workspace) => [workspace.id, workspace]));
   const sessionResults = input.sessions
     .filter((session) => {
@@ -71,10 +71,10 @@ export function buildCockpitSearchResults(input: {
         title: session.title || input.untitledConversationLabel,
         description:
           scope.kind === "daemon"
-            ? `${input.daemonGroupLabel} · ${scope.daemonLabel ?? scope.daemonId} · ${statusLabel(activityStatus)}`
+            ? `${input.daemonGroupLabel} · ${scope.daemonLabel ?? scope.daemonId}`
             : workspace
-              ? `${workspace.name} · ${statusLabel(activityStatus)}`
-              : statusLabel(activityStatus),
+              ? workspace.name
+              : null,
         status: activityStatus,
         href: `/sessions/${session.sessionId}`,
       };
@@ -95,5 +95,9 @@ export function buildCockpitSearchResults(input: {
       }),
     );
 
-  return [...sessionResults, ...workspaceResults];
+  const pageResults = (input.pages ?? [])
+    .filter((page) => `${page.title}\n${page.description ?? ""}`.toLowerCase().includes(query))
+    .slice(0, Math.max(0, 10 - sessionResults.length - workspaceResults.length));
+
+  return [...sessionResults, ...workspaceResults, ...pageResults];
 }
