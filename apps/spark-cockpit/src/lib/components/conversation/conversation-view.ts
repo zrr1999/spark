@@ -1,6 +1,7 @@
 import type { SparkMessageView } from "@zendev-lab/spark-protocol";
 import type {
   ConversationApprovalState,
+  ConversationChainStep,
   ConversationPart,
   ConversationTaskState,
   ConversationToolState,
@@ -31,16 +32,51 @@ export function conversationPartsFromMessage(
 
   if (parts.length === 0) return fallbackParts(message, displayText);
 
-  if (
-    displayText.trim() &&
-    message.role !== "thinking" &&
-    message.role !== "tool" &&
-    !parts.some((part) => part.type === "text")
-  ) {
-    parts.unshift({ type: "text", text: displayText, streaming: message.status === "streaming" });
+  // Keep tools flat here so timeline merge can attach results. Chain grouping
+  // happens after cross-message merges in buildSessionTimeline.
+  return parts;
+}
+
+/**
+ * Fold model reasoning, provider commentary, and tool process into one execution chain.
+ * Answer text and other interaction parts stay outside the chain.
+ */
+export function groupThinkingChainParts(parts: readonly ConversationPart[]): ConversationPart[] {
+  const chainSteps: ConversationChainStep[] = [];
+  const rest: ConversationPart[] = [];
+
+  for (const part of parts) {
+    if (part.type === "reasoning" || part.type === "commentary" || part.type === "tool") {
+      chainSteps.push(part);
+      continue;
+    }
+    if (part.type === "chain") {
+      chainSteps.push(...part.steps);
+      continue;
+    }
+    rest.push(part);
   }
 
-  return parts;
+  if (chainSteps.length === 0) return [...rest];
+
+  const chain: ConversationPart = {
+    type: "chain",
+    state: chainSteps.some(
+      (step) =>
+        ((step.type === "reasoning" || step.type === "commentary") && step.state === "streaming") ||
+        (step.type === "tool" &&
+          (step.state === "pending" ||
+            step.state === "running" ||
+            step.state === "awaiting-approval")),
+    )
+      ? "streaming"
+      : "complete",
+    steps: chainSteps,
+  };
+
+  const firstTextIndex = rest.findIndex((part) => part.type === "text");
+  if (firstTextIndex < 0) return [chain, ...rest];
+  return [...rest.slice(0, firstTextIndex), chain, ...rest.slice(firstTextIndex)];
 }
 
 export function conversationPartText(parts: readonly ConversationPart[]) {
@@ -48,7 +84,14 @@ export function conversationPartText(parts: readonly ConversationPart[]) {
     .flatMap((part) => {
       if (part.type === "text") return [part.text];
       if (part.type === "reasoning") return [part.summary];
+      if (part.type === "commentary") return [part.summary];
       if (part.type === "tool") return [part.summary || part.name];
+      if (part.type === "chain") {
+        return part.steps.flatMap((step) => {
+          if (step.type === "reasoning" || step.type === "commentary") return [step.summary];
+          return [step.summary || step.name];
+        });
+      }
       if (part.type === "task" || part.type === "approval") return [part.summary || part.title];
       if (part.type === "artifact") return [part.summary || part.title];
       if (part.type === "error") return [part.message || part.title];
@@ -74,13 +117,17 @@ function normalizePart(
 
   if (type === "text") {
     const text = stringField(value, "text");
+    const streaming =
+      stringField(value, "status") === "streaming" || message.status === "streaming";
+    if (text?.trim() && stringField(value, "phase") === "commentary") {
+      return [{ type: "commentary", summary: text, state: streaming ? "streaming" : "complete" }];
+    }
     return text?.trim()
       ? [
           {
             type: "text",
             text,
-            streaming:
-              stringField(value, "status") === "streaming" || message.status === "streaming",
+            streaming,
           },
         ]
       : [];
@@ -112,13 +159,18 @@ function normalizePart(
       `${message.id}:tool:${index}`;
     const name =
       stringField(value, "name") ?? stringField(value, "toolName") ?? message.toolName ?? "tool";
+    const summary =
+      stringField(value, "summary") ??
+      stringField(value, "text") ??
+      (message.role === "tool" && message.text.trim() ? message.text.trim() : undefined) ??
+      (type === "tool-result" && message.text.trim() ? message.text.trim() : undefined);
     return [
       {
         type: "tool",
         callId,
         name,
         state: toolState(stringField(value, "status") ?? message.status, type),
-        summary: stringField(value, "summary"),
+        ...(summary ? { summary } : {}),
       },
     ];
   }
@@ -266,11 +318,35 @@ function mergeMessageToolParts(parts: ConversationPart[]) {
       ...previous,
       name: part.name || previous.name,
       state: laterToolState(previous.state, part.state),
-      summary: part.summary || previous.summary,
+      summary: preferToolSummary(previous.summary, part.summary, previous.state, part.state),
     };
   }
 
   return result;
+}
+
+/** Prefer completed/failed result text over call-argument previews. */
+export function preferToolSummary(
+  previous: string | undefined,
+  next: string | undefined,
+  previousState: ConversationToolState,
+  nextState: ConversationToolState,
+): string | undefined {
+  const nextIsResult =
+    nextState === "completed" ||
+    nextState === "failed" ||
+    nextState === "denied" ||
+    nextState === "cancelled";
+  const previousIsResult =
+    previousState === "completed" ||
+    previousState === "failed" ||
+    previousState === "denied" ||
+    previousState === "cancelled";
+  if (nextIsResult && next?.trim()) return next.trim();
+  if (previousIsResult && previous?.trim()) return previous.trim();
+  if (next?.trim()) return next.trim();
+  if (previous?.trim()) return previous.trim();
+  return undefined;
 }
 
 function laterToolState(previous: ConversationToolState, next: ConversationToolState) {

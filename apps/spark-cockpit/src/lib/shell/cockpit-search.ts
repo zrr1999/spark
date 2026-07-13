@@ -1,4 +1,5 @@
 import { workbenchSessionScope } from "../workbench-session-scope";
+import { formatChannelSessionTitle } from "../channel-session-title";
 
 export interface CockpitSearchSession {
   sessionId: string;
@@ -68,7 +69,9 @@ export function buildCockpitSearchResults(input: {
       return {
         id: session.sessionId,
         type: "session",
-        title: session.title || input.untitledConversationLabel,
+        title: formatChannelSessionTitle(session.title, {
+          fallback: input.untitledConversationLabel,
+        }),
         description:
           scope.kind === "daemon"
             ? `${input.daemonGroupLabel} · ${scope.daemonLabel ?? scope.daemonId}`

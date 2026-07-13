@@ -7863,6 +7863,8 @@ void test("Spark extension exposes canonical tools instead of removed spark_* to
   assert.ok(run.tools.has("assign"));
   assert.ok(run.tools.has("learning"));
   assert.ok(run.tools.has("ask"));
+  assert.ok(run.tools.has("role"));
+  assert.equal(run.tools.has("session"), false);
   assert.ok(run.tools.has("goal"));
   assert.ok(run.tools.has("loop"));
   assert.ok(run.tools.has("repro"));
@@ -12539,9 +12541,19 @@ async function writeRoadmap(
 function createTaskApprovingGoalUnmetReviewerRunner(): ReviewerRunner {
   return {
     async review(input: ReviewInput): Promise<ReviewerRunResult> {
-      if (input.targetKind === "task") return createApprovingReviewerRunner().review(input);
-      if (input.requestedStatus === "paused") return createApprovingReviewerRunner().review(input);
-      return createRejectingReviewerRunner("goal still has remaining work").review(input);
+      switch (input.targetKind) {
+        case "task":
+        case "tool_approval":
+          return createApprovingReviewerRunner().review(input);
+        case "goal":
+          if (input.requestedStatus === "paused")
+            return createApprovingReviewerRunner().review(input);
+          return createRejectingReviewerRunner("goal still has remaining work").review(input);
+        default: {
+          const _exhaustive: never = input;
+          return _exhaustive;
+        }
+      }
     },
   };
 }
@@ -12557,24 +12569,40 @@ function createApprovingReviewerRunner(): ReviewerRunner {
         blockers: [],
         confidence: "high" as const,
       };
+      const verdict = ((): ReviewerRunResult["verdict"] => {
+        switch (input.targetKind) {
+          case "task":
+            return {
+              ...base,
+              targetKind: "task" as const,
+              taskRef: input.task.ref,
+              approved: true,
+            };
+          case "tool_approval":
+            return {
+              ...base,
+              targetKind: "tool_approval" as const,
+              toolName: input.toolName,
+              approved: true,
+            };
+          case "goal":
+            return {
+              ...base,
+              targetKind: "goal" as const,
+              goalId: input.goalId,
+              achieved: input.requestedStatus === "complete",
+              evidenceValid: true,
+              objectiveSatisfied: input.requestedStatus === "complete",
+              remainingWork: "",
+            };
+          default: {
+            const _exhaustive: never = input;
+            return _exhaustive;
+          }
+        }
+      })();
       return {
-        verdict:
-          input.targetKind === "task"
-            ? {
-                ...base,
-                targetKind: "task" as const,
-                taskRef: input.task.ref,
-                approved: true,
-              }
-            : {
-                ...base,
-                targetKind: "goal" as const,
-                goalId: input.goalId,
-                achieved: input.requestedStatus === "complete",
-                evidenceValid: true,
-                objectiveSatisfied: input.requestedStatus === "complete",
-                remainingWork: "",
-              },
+        verdict,
         record: {
           runRef: newRef("run"),
           roleRef: "role:builtin-reviewer" as RoleRef,
@@ -12593,30 +12621,50 @@ function createRejectingReviewerRunner(
   return {
     async review(input: ReviewInput): Promise<ReviewerRunResult> {
       const timestamp = new Date().toISOString();
+      const verdict = ((): ReviewerRunResult["verdict"] => {
+        switch (input.targetKind) {
+          case "task":
+            return {
+              targetKind: "task" as const,
+              taskRef: input.task.ref,
+              approved: false,
+              outcome: "needs_changes" as const,
+              summary,
+              findings: ["missing validation evidence"],
+              blockers: ["run the focused tests"],
+              confidence: "high" as const,
+            };
+          case "tool_approval":
+            return {
+              targetKind: "tool_approval" as const,
+              toolName: input.toolName,
+              approved: false,
+              outcome: "needs_changes" as const,
+              summary,
+              findings: ["tool call rejected by test reviewer"],
+              blockers: ["choose a safer tool call"],
+              confidence: "high" as const,
+            };
+          case "goal":
+            return {
+              targetKind: "goal" as const,
+              goalId: input.goalId,
+              achieved: false,
+              remainingWork: summary,
+              outcome: "needs_changes" as const,
+              summary,
+              findings: ["goal remains incomplete"],
+              blockers: ["finish remaining work"],
+              confidence: "high" as const,
+            };
+          default: {
+            const _exhaustive: never = input;
+            return _exhaustive;
+          }
+        }
+      })();
       return {
-        verdict:
-          input.targetKind === "task"
-            ? {
-                targetKind: "task" as const,
-                taskRef: input.task.ref,
-                approved: false,
-                outcome: "needs_changes" as const,
-                summary,
-                findings: ["missing validation evidence"],
-                blockers: ["run the focused tests"],
-                confidence: "high" as const,
-              }
-            : {
-                targetKind: "goal" as const,
-                goalId: input.goalId,
-                achieved: false,
-                remainingWork: summary,
-                outcome: "needs_changes" as const,
-                summary,
-                findings: ["goal remains incomplete"],
-                blockers: ["finish remaining work"],
-                confidence: "high" as const,
-              },
+        verdict,
         record: {
           runRef: newRef("run"),
           roleRef: "role:builtin-reviewer" as RoleRef,

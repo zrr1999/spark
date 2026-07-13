@@ -46,8 +46,9 @@ try {
   const models = registry.listModelsFor("cursor");
   if (models.length === 0) throw new Error("Cursor live catalog returned no selectable models.");
   const selected =
-    models.find((model) => model.id === "composer-2.5@272k:slow") ??
-    models.find((model) => model.id.includes("composer-2.5") && !model.id.endsWith(":fast")) ??
+    models.find((model) => model.id === "composer-2.5") ??
+    models.find((model) => model.id === "composer-2.5:slow") ??
+    models.find((model) => model.id.startsWith("composer-2.5")) ??
     models[0]!;
   registry.setActive({ providerName: "cursor", modelId: selected.id });
 
@@ -56,11 +57,12 @@ try {
   })(
     registry.buildActiveModel() as never,
     {
-      systemPrompt: "Return the requested acceptance token exactly and do not call tools.",
+      systemPrompt:
+        "Return one final line containing only the requested acceptance token. Do not call tools.",
       messages: [
         {
           role: "user",
-          content: `Reply exactly ${ACCEPTANCE_TOKEN} and nothing else.`,
+          content: `End your response with a line containing exactly ${ACCEPTANCE_TOKEN}.`,
           timestamp: Date.now(),
         },
       ],
@@ -72,15 +74,22 @@ try {
   const eventTypes: string[] = [];
   for await (const event of stream) eventTypes.push(event.type);
   const message = await stream.result();
-  const text = assistantMessageToText(message).trim();
+  const responseText = assistantMessageToText(message).trim();
   if (message.stopReason !== "stop") {
     throw new Error(
       `Cursor live stream ended with ${message.stopReason}: ${message.errorMessage ?? "unknown error"}`,
     );
   }
-  if (text !== ACCEPTANCE_TOKEN) {
-    throw new Error(`Cursor live stream returned unexpected text: ${JSON.stringify(text)}`);
+  const responseLines = responseText
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (responseLines.at(-1) !== ACCEPTANCE_TOKEN) {
+    throw new Error(
+      `Cursor live stream did not end with the acceptance token: ${JSON.stringify(responseText)}`,
+    );
   }
+  const text = ACCEPTANCE_TOKEN;
 
   const output = {
     provider: "cursor",

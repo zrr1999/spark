@@ -190,19 +190,7 @@ export function createInfoflowTransport(
     stop,
     send,
     reply: {
-      openReplyStream: async (target) => {
-        if (target.senderId && /^group:/iu.test(target.recipient)) {
-          // Streaming cards cannot carry an Infoflow AT segment. Send one
-          // concise directed acknowledgement before the card so full-feed
-          // group mode still notifies the person whose turn is being handled.
-          await outbound.send({
-            recipient: target.recipient,
-            content: { type: "text", text: "正在处理…" },
-            mentionUserIds: [target.senderId],
-          });
-        }
-        return await outbound.openReplyStream(target.recipient);
-      },
+      openReplyStream: async (target) => outbound.openReplyStream(target.recipient),
       sendReply: async (target) => {
         const mentionUserIds =
           target.senderId && /^group:/iu.test(target.recipient) ? [target.senderId] : undefined;

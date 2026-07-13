@@ -11,3 +11,15 @@ export {
   type SparkSessionUnboundPolicy,
 } from "./registry.ts";
 export { loadSparkSessionSnapshot, type LoadSparkSessionSnapshotInput } from "./snapshot.ts";
+export {
+  SparkSessionMailStore,
+  defaultSparkHome,
+  sanitizeSessionMailScope,
+  sessionMailStatus,
+  type SparkSessionMailboxFile,
+  type SparkSessionMailKind,
+  type SparkSessionMailListOptions,
+  type SparkSessionMailMessage,
+  type SparkSessionMailSendInput,
+  type SparkSessionMailStoreOptions,
+} from "./mail-store.ts";

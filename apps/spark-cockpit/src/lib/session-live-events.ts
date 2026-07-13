@@ -122,7 +122,7 @@ export function createSessionLiveEventState(input: {
     sessionId: input.sessionId,
     workspaceId: input.workspaceId ?? null,
     view,
-    activeTurnId: pendingTurnId(view),
+    activeTurnId: queuedTurnId(view),
     cursor: input.cursor ?? null,
     processedEventIds: new Set(),
     commandIds: new Set(input.commandIds),
@@ -255,7 +255,7 @@ function applyDaemonEvent(
       return { changed: false, refreshActivity: false };
     }
     state.view = cloneSessionView(viewEvent.session);
-    state.activeTurnId = pendingTurnId(state.view);
+    state.activeTurnId = queuedTurnId(state.view);
     return { changed: true, refreshActivity: false };
   }
 
@@ -364,10 +364,10 @@ function stringField(value: unknown, key: string): string | null {
   return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
 }
 
-function pendingTurnId(view: SparkSessionView | null): string | null {
+function queuedTurnId(view: SparkSessionView | null): string | null {
   if (!view) return null;
   for (const message of view.messages) {
-    if (message.status !== "pending") continue;
+    if (stringField(message.metadata, "source") !== "daemon.queue") continue;
     const taskFileName = stringField(message.metadata, "taskFileName");
     if (taskFileName) return taskFileName;
   }

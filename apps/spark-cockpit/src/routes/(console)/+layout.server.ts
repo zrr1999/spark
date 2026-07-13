@@ -14,6 +14,7 @@ export const load: LayoutServerLoad = async ({ cookies, url }) => {
   });
   return {
     ...layout,
-    sessions: loadConversationSummaries(getDatabase(), managedSessions),
+    sessions: loadConversationSummaries(getDatabase(), managedSessions.sessions),
+    sessionsAvailable: managedSessions.available,
   };
 };

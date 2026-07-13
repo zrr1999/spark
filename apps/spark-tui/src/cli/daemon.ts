@@ -5,17 +5,23 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync } fr
 import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 import type { ChannelNotifySendResult } from "@zendev-lab/spark-channels";
 import {
   parseSparkDaemonEvent,
+  parseSparkSessionView,
   sparkCommandKindForLocalRpcMethod,
   sparkProtocolJsonObjectSchema,
   type SparkCommand,
   type SparkAssignment,
   type SparkDaemonEvent,
+  type SparkSessionCreateRequest,
+  type SparkSessionListRequest,
+  type SparkSessionRegistryRecord,
+  type SparkSessionView,
 } from "@zendev-lab/spark-protocol";
 import { sparkDaemonCliStrings } from "@zendev-lab/spark-i18n/cli";
 import {
@@ -92,7 +98,7 @@ export interface SparkDaemonClientOptions {
   channelStatus?: (paths: SparkDaemonClientPaths) => Promise<ChannelStatusSnapshot>;
   daemonQueue?: (
     paths: SparkDaemonClientPaths,
-    params: { state?: SparkDaemonCliQueueState; limit?: number },
+    params: { state?: SparkDaemonCliQueueState; limit?: number; fileName?: string },
   ) => Promise<LocalDaemonQueueResult>;
   turnSubmit?: (
     paths: SparkDaemonClientPaths,
@@ -1036,7 +1042,7 @@ async function waitForSubmittedTurn(
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     throwIfAborted(options.signal);
-    const queue = await clientQueue({ state: "all", limit: 100 }, client);
+    const queue = await clientQueue({ state: "all", fileName: submitted.fileName }, client);
     const entry = findQueueEntry(queue, submitted.fileName);
     if (entry?.payload.failedAt) {
       throw new Error(entry.payload.error ?? STRINGS.failedFile(submitted.fileName));
@@ -1371,8 +1377,31 @@ async function clientSessions(
 export async function clientGetManagedSession(
   sessionId: string,
   client: SparkDaemonClientOptions = {},
-) {
+): Promise<SparkSessionRegistryRecord> {
   return await clientManagedSessions(client).get(sessionId);
+}
+
+export async function clientListManagedSessions(
+  options: SparkSessionListRequest = {},
+  client: SparkDaemonClientOptions = {},
+): Promise<SparkSessionRegistryRecord[]> {
+  return await clientManagedSessions(client).list(options);
+}
+
+export async function clientCreateManagedSession(
+  input: SparkSessionCreateRequest,
+  client: SparkDaemonClientOptions = {},
+): Promise<SparkSessionRegistryRecord> {
+  return await clientManagedSessions(client).create(input);
+}
+
+export async function clientGetManagedSessionSnapshot(
+  sessionId: string,
+  client: SparkDaemonClientOptions = {},
+): Promise<SparkSessionView> {
+  return parseSparkSessionView(
+    await requestSparkDaemonControl("session.snapshot", { sessionId }, client),
+  );
 }
 
 export async function ensureSparkDaemonWorkspaceSession(
@@ -1735,7 +1764,7 @@ async function clientChannelNotify(
 }
 
 async function clientQueue(
-  params: { state?: SparkDaemonCliQueueState; limit?: number },
+  params: { state?: SparkDaemonCliQueueState; limit?: number; fileName?: string },
   client: SparkDaemonClientOptions,
 ): Promise<LocalDaemonQueueResult> {
   const paths = resolveSparkDaemonClientPaths(client);
@@ -2010,6 +2039,7 @@ async function localRpcTurnStream(
   const requestId = localRequestId();
   return await new Promise<LocalTurnSubmitResult>((resolvePromise, reject) => {
     const socket = createConnection(paths.socketPath);
+    const decoder = new StringDecoder("utf8");
     let buffer = "";
     let submitted: LocalTurnSubmitResult | undefined;
     let settled = false;
@@ -2045,7 +2075,7 @@ async function localRpcTurnStream(
       if (submitted) resolveOnce();
     });
     socket.on("data", (chunk) => {
-      buffer += chunk.toString("utf8");
+      buffer += decoder.write(chunk);
       let newline = buffer.indexOf("\n");
       while (newline !== -1) {
         const line = buffer.slice(0, newline);

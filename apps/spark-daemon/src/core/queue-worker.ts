@@ -276,11 +276,11 @@ async function cancelQueueTask(
   console.error(
     `[${options.label ?? "spark-daemon"}] cancelled ${options.fileName}: ${String(options.error)}`,
   );
+  await options.queue.markFailed(options.fileName, options.error);
   emitDaemonEvent(
     options.emitEvent,
     daemonTaskLifecycleEvent(options, "cancelled", errorMessage(options.error)),
   );
-  await options.queue.markFailed(options.fileName, options.error);
 }
 
 async function failQueueTask(
@@ -293,11 +293,11 @@ async function failQueueTask(
   console.error(
     `[${options.label ?? "spark-daemon"}] failed ${options.fileName}: ${String(options.error)}`,
   );
+  await options.queue.markFailed(options.fileName, options.error);
   emitDaemonEvent(
     options.emitEvent,
     daemonTaskLifecycleEvent(options, "failed", errorMessage(options.error)),
   );
-  await options.queue.markFailed(options.fileName, options.error);
 }
 
 function daemonTaskLifecycleEvent(

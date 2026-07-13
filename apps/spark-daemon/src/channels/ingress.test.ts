@@ -89,6 +89,58 @@ describe("channel ingress", () => {
     expect(controller.status().configured).toBe(true);
   });
 
+  it("resolves binding and emits assignment for qqbot c2c inbound", async () => {
+    const sparkHome = await mkdtemp(join(tmpdir(), "spark-channel-qqbot-"));
+    roots.push(sparkHome);
+    const assignments: ChannelIngressAssignment[] = [];
+    const qqbotTransport = new FakeChannelTransport();
+    const controller = createChannelIngressController({
+      sparkHome,
+      config: parseChannelsConfig({
+        adapters: {
+          qqbot: { type: "qqbot", app_id: "app", client_secret: "secret" },
+        },
+        routes: {},
+        ingress: { enabled: true, on_unbound: "create" },
+      }),
+      hooks: {
+        onAssignment: async (input) => {
+          assignments.push(input);
+        },
+      },
+      workspaceId: "ws_qq",
+      createTransport: () => qqbotTransport,
+    });
+
+    await controller.start();
+    qqbotTransport.emitInbound({
+      event_type: "C2C_MESSAGE_CREATE",
+      d: {
+        id: "qm1",
+        content: "hello from qq",
+        author: { user_openid: "openid_u1" },
+      },
+    });
+    await vi.waitFor(() => expect(assignments).toHaveLength(1));
+    await controller.stop();
+
+    expect(assignments[0]).toMatchObject({
+      goal: "hello from qq",
+      externalKey: "qqbot:c2c:openid_u1",
+      source: { kind: "channel", channel: "qqbot", externalRef: "qm1" },
+      channelReply: {
+        workspaceId: "ws_qq",
+        adapterId: "qqbot",
+        recipient: "c2c:openid_u1",
+      },
+      channelContext: {
+        externalKey: "qqbot:c2c:openid_u1",
+        senderId: "openid_u1",
+        messageId: "qm1",
+      },
+    });
+  });
+
   it("resolves inbound messages through the injected daemon session owner", async () => {
     const sparkHome = await mkdtemp(join(tmpdir(), "spark-channel-session-owner-"));
     roots.push(sparkHome);

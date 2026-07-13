@@ -21,7 +21,7 @@ import {
   type TaskRef,
 } from "@zendev-lab/spark-extension-api";
 
-export type ReviewTargetKind = "task" | "goal";
+export type ReviewTargetKind = "task" | "goal" | "tool_approval";
 export type ReviewVerdictOutcome = "approved" | "needs_changes" | "blocked";
 export type ReviewerThinkingLevel = RoleThinkingLevel;
 
@@ -87,7 +87,18 @@ export interface GoalReviewInput {
   forkFromSession?: string;
 }
 
-export type ReviewInput = TaskReviewInput | GoalReviewInput;
+export interface ToolApprovalReviewInput {
+  targetKind: "tool_approval";
+  cwd: string;
+  toolName: string;
+  toolCallId: string;
+  arguments: Record<string, unknown>;
+  reason?: string;
+  sessionKey?: string;
+  forkFromSession?: string;
+}
+
+export type ReviewInput = TaskReviewInput | GoalReviewInput | ToolApprovalReviewInput;
 
 export interface ReviewVerdict {
   outcome: ReviewVerdictOutcome;
@@ -114,7 +125,13 @@ export interface GoalReviewVerdict extends ReviewVerdict {
   remainingWork: string;
 }
 
-export type ReviewerVerdict = TaskReviewVerdict | GoalReviewVerdict;
+export interface ToolApprovalReviewVerdict extends ReviewVerdict {
+  targetKind: "tool_approval";
+  toolName: string;
+  approved: boolean;
+}
+
+export type ReviewerVerdict = TaskReviewVerdict | GoalReviewVerdict | ToolApprovalReviewVerdict;
 
 export interface ReviewerRunRecord {
   runRef?: RunRef;
@@ -455,6 +472,39 @@ export function buildReadOnlyReviewerSystemPrompt(basePrompt: string): string {
 }
 
 export function renderReviewerInstruction(input: ReviewInput): string {
+  switch (input.targetKind) {
+    case "task":
+      return renderTaskOrGoalReviewerInstruction(input);
+    case "goal":
+      return renderTaskOrGoalReviewerInstruction(input);
+    case "tool_approval":
+      return [
+        "Review this Spark tool-call approval request before execution.",
+        "Approve only when the tool name and arguments look safe and appropriate for the current session context.",
+        "Reject with needs_changes or blocked when the call is destructive, opaque, overly privileged, or unjustified.",
+        "Always return the required compact JSON verdict, even when rejecting.",
+        "Review packet:",
+        JSON.stringify(
+          {
+            targetKind: input.targetKind,
+            toolName: input.toolName,
+            toolCallId: input.toolCallId,
+            arguments: input.arguments,
+            reason: input.reason,
+            sessionKey: input.sessionKey,
+          },
+          null,
+          2,
+        ),
+      ].join("\n");
+    default: {
+      const _exhaustive: never = input;
+      return _exhaustive;
+    }
+  }
+}
+
+function renderTaskOrGoalReviewerInstruction(input: TaskReviewInput | GoalReviewInput): string {
   const packet =
     input.targetKind === "task"
       ? {
@@ -628,52 +678,67 @@ function isAskAutoAnswerRecord(record: Record<string, unknown>): boolean {
 export function parseReviewerVerdictForInput(input: ReviewInput, text: string): ReviewerVerdict {
   const value = parseJsonObjectFromText(text, { requireReviewerVerdict: true });
   const parsed = normalizeReviewerVerdictObject(value);
-  if (input.targetKind === "task")
-    return {
-      ...parsed,
-      targetKind: "task",
-      taskRef: input.task.ref,
-      approved: parsed.outcome === "approved",
-    };
-  const evidenceValid = parseBooleanAliasField(value, "evidence_valid", "evidenceValid");
-  const objectiveSatisfied = parseBooleanAliasField(
-    value,
-    "objective_satisfied",
-    "objectiveSatisfied",
-  );
-  const missingRequiredApprovalFields =
-    input.requestedStatus === "complete" &&
-    parsed.outcome === "approved" &&
-    (evidenceValid !== true || objectiveSatisfied !== true);
-  const outcome = missingRequiredApprovalFields ? "needs_changes" : parsed.outcome;
-  const blockers = missingRequiredApprovalFields
-    ? [
-        ...parsed.blockers,
-        "goal completion approval must explicitly set evidence_valid=true and objective_satisfied=true",
-      ]
-    : parsed.blockers;
-  const achieved =
-    input.requestedStatus === "complete" &&
-    outcome === "approved" &&
-    (parseBooleanField(value, "achieved") ?? true) &&
-    evidenceValid === true &&
-    objectiveSatisfied === true;
-  const summary = missingRequiredApprovalFields
-    ? "goal completion approval missing required evidence_valid/objective_satisfied semantic gate"
-    : parsed.summary;
-  const remainingWork = stringField(value, "remainingWork") ?? (achieved ? "" : summary);
-  return {
-    ...parsed,
-    outcome,
-    summary,
-    blockers,
-    targetKind: "goal",
-    goalId: input.goalId,
-    achieved,
-    evidenceValid,
-    objectiveSatisfied,
-    remainingWork,
-  };
+  switch (input.targetKind) {
+    case "task":
+      return {
+        ...parsed,
+        targetKind: "task",
+        taskRef: input.task.ref,
+        approved: parsed.outcome === "approved",
+      };
+    case "tool_approval":
+      return {
+        ...parsed,
+        targetKind: "tool_approval",
+        toolName: input.toolName,
+        approved: parsed.outcome === "approved",
+      };
+    case "goal": {
+      const evidenceValid = parseBooleanAliasField(value, "evidence_valid", "evidenceValid");
+      const objectiveSatisfied = parseBooleanAliasField(
+        value,
+        "objective_satisfied",
+        "objectiveSatisfied",
+      );
+      const missingRequiredApprovalFields =
+        input.requestedStatus === "complete" &&
+        parsed.outcome === "approved" &&
+        (evidenceValid !== true || objectiveSatisfied !== true);
+      const outcome = missingRequiredApprovalFields ? "needs_changes" : parsed.outcome;
+      const blockers = missingRequiredApprovalFields
+        ? [
+            ...parsed.blockers,
+            "goal completion approval must explicitly set evidence_valid=true and objective_satisfied=true",
+          ]
+        : parsed.blockers;
+      const achieved =
+        input.requestedStatus === "complete" &&
+        outcome === "approved" &&
+        (parseBooleanField(value, "achieved") ?? true) &&
+        evidenceValid === true &&
+        objectiveSatisfied === true;
+      const summary = missingRequiredApprovalFields
+        ? "goal completion approval missing required evidence_valid/objective_satisfied semantic gate"
+        : parsed.summary;
+      const remainingWork = stringField(value, "remainingWork") ?? (achieved ? "" : summary);
+      return {
+        ...parsed,
+        outcome,
+        summary,
+        blockers,
+        targetKind: "goal",
+        goalId: input.goalId,
+        achieved,
+        evidenceValid,
+        objectiveSatisfied,
+        remainingWork,
+      };
+    }
+    default: {
+      const _exhaustive: never = input;
+      return _exhaustive;
+    }
+  }
 }
 
 export function parseReviewerVerdict(text: string): ReviewVerdict {
@@ -778,15 +843,24 @@ function failedReviewerRunVerdict(input: ReviewInput, reason: string): ReviewerV
     blockers: [reason],
     confidence: "low",
   };
-  if (input.targetKind === "task")
-    return { ...base, targetKind: "task", taskRef: input.task.ref, approved: false };
-  return {
-    ...base,
-    targetKind: "goal",
-    goalId: input.goalId,
-    achieved: false,
-    remainingWork: reason,
-  };
+  switch (input.targetKind) {
+    case "task":
+      return { ...base, targetKind: "task", taskRef: input.task.ref, approved: false };
+    case "tool_approval":
+      return { ...base, targetKind: "tool_approval", toolName: input.toolName, approved: false };
+    case "goal":
+      return {
+        ...base,
+        targetKind: "goal",
+        goalId: input.goalId,
+        achieved: false,
+        remainingWork: reason,
+      };
+    default: {
+      const _exhaustive: never = input;
+      return _exhaustive;
+    }
+  }
 }
 
 function unknownErrorMessage(error: unknown): string {

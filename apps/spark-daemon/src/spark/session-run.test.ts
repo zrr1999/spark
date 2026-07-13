@@ -241,9 +241,15 @@ describe("daemon native session execution", () => {
     });
 
     const input = executeSession.mock.calls[0]?.[0] as
-      | { prompt?: string; systemPrompt?: string; messageMetadata?: Record<string, unknown> }
+      | {
+          prompt?: string;
+          systemPrompt?: string;
+          messageMetadata?: Record<string, unknown>;
+          approvalMethod?: string;
+        }
       | undefined;
     expect(input?.prompt).toBe("@神经蛙 你叫什么名字");
+    expect(input?.approvalMethod).toBe("auto");
     expect(input?.systemPrompt).toContain(
       "Current conversation surface: Infoflow (如流) group chat",
     );

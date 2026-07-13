@@ -8,6 +8,9 @@
   } from "$lib/components/conversation";
   import type { ConversationPartLabels } from "$lib/components/conversation/types";
   import { ModelPicker, type ModelPickerGroup } from "$lib/components/model-selector";
+  import ThinkingLevelSlider, {
+    THINKING_LEVELS,
+  } from "$lib/components/ThinkingLevelSlider.svelte";
   import { visibleSessionStatus } from "$lib/conversation-status";
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
@@ -28,6 +31,7 @@
   } from "$lib/session-live-events";
   import { buildSessionTimeline } from "$lib/session-timeline";
   import { buildSessionWorkbenchView, type SessionInspectorLabels } from "$lib/session-workbench";
+  import { formatChannelSessionTitle, sessionHasChannelBinding } from "$lib/channel-session-title";
   import { Button } from "$lib/ui";
   import {
     workbenchSessionScope,
@@ -38,6 +42,7 @@
     SparkModelCatalogProvider,
     SparkModelControlSnapshot,
     SparkModelRef,
+    SparkMessageView,
     SparkSessionView,
   } from "@zendev-lab/spark-protocol";
   import type { SubmitFunction } from "@sveltejs/kit";
@@ -52,6 +57,12 @@
     title?: string;
     status: string;
     role?: string;
+    bindings?: Array<{
+      kind: string;
+      adapter?: string;
+      externalKey?: string;
+      boundAt?: string;
+    }>;
     createdAt: string;
     updatedAt: string;
   };
@@ -86,6 +97,7 @@
     role: string | null;
     status: string | null;
     createdAt: string;
+    message?: SparkMessageView;
   };
 
   type SessionActivity = {
@@ -99,6 +111,7 @@
     sessionId?: string;
     message?: string;
     model?: string;
+    thinkingLevel?: string;
   };
 
   type ModelControlState = {
@@ -121,6 +134,10 @@
     channelRoutingTitle: string;
     channelRoutingBody: string;
     configureChannels: string;
+    channelSessionBadge: string;
+    channelSessionKicker: string;
+    channelBindingLabel: string;
+    openChannelSettings: string;
     managementTitle: string;
     archiveBody: string;
     archiveSubmit: string;
@@ -177,6 +194,11 @@
     selected ? workspaceIdForWorkbenchSession(selected) : null,
   );
   let selectedWorkspaceHref = $derived(workspaceHref(selectedWorkspaceId));
+  let selectedIsChannelSession = $derived(selected ? sessionHasChannelBinding(selected) : false);
+  let selectedChannelBindings = $derived(
+    (selected?.bindings ?? []).filter((binding) => binding.kind === "channel"),
+  );
+  let selectedChannelsSettingsHref = $derived(channelsSettingsHref(selectedWorkspaceId));
   let activityCommands = $derived(activity?.commands ?? []);
   let activityReports = $derived(activity?.reports ?? []);
   let sessionMessages = $derived(liveSessionView?.messages ?? []);
@@ -196,6 +218,10 @@
     modelControl.snapshot.session?.model ?? modelControl.snapshot.defaultModel ?? null,
   );
   let effectiveModelValue = $derived(effectiveModel ? modelValue(effectiveModel) : "");
+  let effectiveThinkingLevel = $derived(
+    modelControl.snapshot.session?.thinkingLevel ?? "medium",
+  );
+  let thinkingLevels = THINKING_LEVELS;
   let effectiveModelAvailable = $derived(
     Boolean(
       effectiveModelValue &&
@@ -205,19 +231,25 @@
   let modelReady = $derived(modelControl.available && effectiveModelAvailable);
   let startModel = $state("");
   let sessionModel = $state("");
+  let startThinkingLevel = $state("medium");
+  let sessionThinkingLevel = $state("medium");
   let startMessage = $state("");
   let message = $state("");
   let initialFormValuesApplied = $state(false);
   let startState = $state<SubmissionState>("idle");
   let sendState = $state<SubmissionState>("idle");
   let modelState = $state<SubmissionState>("idle");
+  let thinkingState = $state<SubmissionState>("idle");
   let startFeedback = $state<string | null>(null);
   let sendFeedback = $state<string | null>(null);
   let modelFeedback = $state<string | null>(null);
+  let thinkingFeedback = $state<string | null>(null);
   let modelFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
+  let thinkingFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
   let activityRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   const activityRefreshState = createSessionActivityRefreshState();
   let sessionModelForm = $state<HTMLFormElement | null>(null);
+  let sessionThinkingForm = $state<HTMLFormElement | null>(null);
   let startModelReady = $derived(
     modelControl.available &&
       availableModels.some((entry) => modelValue(entry.model) === startModel),
@@ -261,6 +293,7 @@
           conversationWorkbench: "编码工作台",
           collapseDetails: "会话与运行详情",
           modelLabel: "模型",
+          thinkingLabel: "推理",
           chooseModel: "选择模型",
           chooseModelHint: "搜索模型或 Provider；选择后会保留 Spark 的会话与执行状态。",
           searchModels: "搜索模型或 Provider…",
@@ -273,6 +306,8 @@
           providerLoginRequired: "登录后可用",
           modelUpdated: "模型已切换，将用于之后发送的消息。",
           modelFailed: "无法切换模型。",
+          thinkingUpdated: "推理强度已更新，将用于之后发送的消息。",
+          thinkingFailed: "无法更新推理强度。",
           stop: "停止",
           stopping: "正在停止…",
           stopped: "已请求取消当前执行。",
@@ -312,6 +347,8 @@
           multilineHint: "Enter 发送 · Shift+Enter 换行",
           reasoning: "思考过程",
           reasoningStreaming: "正在思考…",
+          chain: "执行过程",
+          chainStreaming: "执行中…",
           tool: "工具",
           task: "内部任务",
           approval: "需要确认",
@@ -348,6 +385,7 @@
           conversationWorkbench: "Coding workbench",
           collapseDetails: "Conversation and run details",
           modelLabel: "Model",
+          thinkingLabel: "Thinking",
           chooseModel: "Choose a model",
           chooseModelHint: "Search models or providers. Spark keeps the current conversation and execution state.",
           searchModels: "Search models or providers…",
@@ -360,6 +398,8 @@
           providerLoginRequired: "Available after login",
           modelUpdated: "Model updated. It will be used for future messages.",
           modelFailed: "Could not switch models.",
+          thinkingUpdated: "Thinking level updated. It will be used for future messages.",
+          thinkingFailed: "Could not update the thinking level.",
           stop: "Stop",
           stopping: "Stopping…",
           stopped: "Cancellation requested for the active turn.",
@@ -400,6 +440,8 @@
           multilineHint: "Enter to send · Shift+Enter for newline",
           reasoning: "Reasoning",
           reasoningStreaming: "Reasoning…",
+          chain: "Execution",
+          chainStreaming: "Working…",
           tool: "Tool",
           task: "Internal task",
           approval: "Approval required",
@@ -421,6 +463,8 @@
   let conversationPartLabels = $derived<ConversationPartLabels>({
     reasoning: copy.reasoning,
     reasoningStreaming: copy.reasoningStreaming,
+    chain: copy.chain,
+    chainStreaming: copy.chainStreaming,
     tool: copy.tool,
     task: copy.task,
     approval: copy.approval,
@@ -520,6 +564,7 @@
       startMessage =
         formIntent === "startConversation" ? (formValues?.message ?? "") : startMessage;
       startModel = formValues?.model ?? startModel;
+      startThinkingLevel = formValues?.thinkingLevel ?? startThinkingLevel;
       message = formIntent === "sendMessage" ? (formValues?.message ?? "") : message;
       initialFormValuesApplied = true;
     }
@@ -530,6 +575,9 @@
         ? defaultModelValue
         : modelValue(availableModels[0]?.model);
     }
+    if (!(thinkingLevels as readonly string[]).includes(startThinkingLevel)) {
+      startThinkingLevel = effectiveThinkingLevel;
+    }
   });
 
   // Follow daemon truth when the effective model changes. Keep this separate from
@@ -537,6 +585,10 @@
   // the bound value before the enhanced form can submit it.
   $effect(() => {
     sessionModel = effectiveModelValue;
+  });
+
+  $effect(() => {
+    sessionThinkingLevel = effectiveThinkingLevel;
   });
 
   $effect(() => {
@@ -638,6 +690,60 @@
     };
   });
 
+  // SSE is the immediate path. While a turn is active, also probe the daemon's
+  // lightweight registry status so a dropped terminal projection cannot leave
+  // the transcript, stop button, or composer permanently stuck in "running".
+  $effect(() => {
+    const sessionId = liveSessionId;
+    const watchTerminalState = conversationBusy;
+    if (!sessionId || !watchTerminalState) return;
+
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let refreshing = false;
+
+    const schedule = (delay = 3_000) => {
+      if (stopped || timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        void probeStatus();
+      }, delay);
+    };
+
+    const probeStatus = async () => {
+      if (stopped || refreshing) return;
+      if (document.visibilityState === "hidden") {
+        schedule();
+        return;
+      }
+      refreshing = true;
+      try {
+        const response = await fetch(
+          `/api/v1/sessions/${encodeURIComponent(sessionId)}/status`,
+          { cache: "no-store" },
+        );
+        if (!response.ok) return;
+        const result = (await response.json()) as { sessionId?: unknown; status?: unknown };
+        if (
+          result.sessionId === sessionId &&
+          typeof result.status === "string" &&
+          result.status !== "running"
+        ) {
+          await invalidateAll();
+        }
+      } finally {
+        refreshing = false;
+        schedule();
+      }
+    };
+
+    schedule(1_500);
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+  });
+
   onMount(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState !== "hidden") armActivityRefresh();
@@ -646,6 +752,7 @@
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       if (modelFeedbackTimer) clearTimeout(modelFeedbackTimer);
+      if (thinkingFeedbackTimer) clearTimeout(thinkingFeedbackTimer);
       if (activityRefreshTimer) clearTimeout(activityRefreshTimer);
     };
   });
@@ -701,19 +808,22 @@
   }
 
   function sessionTitle(title: string | undefined) {
-    const fallback = title || copy.newConversation;
-    const infoflow = fallback.match(/^channel infoflow:(group|user):(.+)$/i);
-    if (!infoflow) return fallback;
-    const scope = infoflow[1] === "group"
-      ? isZh ? "如流群聊" : "Infoflow group"
-      : isZh ? "如流私聊" : "Infoflow chat";
-    return `${scope} · ${infoflow[2]}`;
+    return formatChannelSessionTitle(title, {
+      locale,
+      fallback: copy.newConversation,
+    });
   }
 
   function workspaceHref(workspaceId: string | null) {
     if (!workspaceId) return null;
     const workspace = workspaces.find((item) => item.id === workspaceId);
     return workspace ? workspacePath(workspace) : null;
+  }
+
+  function channelsSettingsHref(workspaceId: string | null) {
+    if (!workspaceId) return null;
+    const workspace = workspaces.find((item) => item.id === workspaceId);
+    return workspace ? workspacePath(workspace, "/settings/channels") : null;
   }
 
   function statusLabel(status: string) {
@@ -882,6 +992,38 @@
     await tick();
     sessionModelForm?.requestSubmit();
   }
+
+  const enhanceSelectThinking: SubmitFunction = () => {
+    if (thinkingFeedbackTimer) clearTimeout(thinkingFeedbackTimer);
+    thinkingState = "submitting";
+    thinkingFeedback = copy.sending;
+    return async ({ result, update }) => {
+      await update({ reset: false });
+      if (result.type === "success") {
+        thinkingState = "success";
+        const next =
+          result.data && typeof result.data === "object" && "thinkingLevel" in result.data
+            ? String((result.data as { thinkingLevel?: unknown }).thinkingLevel ?? "")
+            : "";
+        sessionThinkingLevel = next || sessionThinkingLevel;
+        thinkingFeedback = copy.thinkingUpdated;
+        thinkingFeedbackTimer = setTimeout(() => {
+          thinkingFeedback = null;
+          thinkingFeedbackTimer = null;
+        }, 3_500);
+        await invalidateAll();
+        return;
+      }
+      thinkingState = "error";
+      sessionThinkingLevel = effectiveThinkingLevel;
+      thinkingFeedback = resultMessage(result, copy.thinkingFailed);
+    };
+  };
+
+  async function submitThinkingSelection() {
+    await tick();
+    sessionThinkingForm?.requestSubmit();
+  }
 </script>
 
 {#snippet sessionDetails(compact = false)}
@@ -910,6 +1052,33 @@
             <dt>{messages.roleLabel}</dt>
             <dd>{selected.role}</dd>
           </div>
+        {/if}
+        {#if selectedIsChannelSession}
+          <div>
+            <dt>{messages.channelSessionBadge}</dt>
+            <dd>
+              <span class="channel-badge">{messages.channelSessionKicker}</span>
+            </dd>
+          </div>
+          {#if selectedChannelBindings.length > 0}
+            <div>
+              <dt>{messages.channelBindingLabel}</dt>
+              <dd class="channel-bindings">
+                {#each selectedChannelBindings as binding (binding.externalKey ?? binding.adapter)}
+                  <code>{binding.externalKey ?? binding.adapter}</code>
+                {/each}
+              </dd>
+            </div>
+          {/if}
+          {#if selectedChannelsSettingsHref}
+            <div class="channel-settings-row">
+              <a class="channel-settings-link" href={selectedChannelsSettingsHref}>
+                <Icon name="settings" size={14} />
+                {messages.openChannelSettings}
+              </a>
+              <p class="muted">{messages.channelRoutingBody}</p>
+            </div>
+          {/if}
         {/if}
       </dl>
 
@@ -1007,11 +1176,15 @@
                         emptyLabel={copy.noModelsFound}
                         closeLabel={copy.closeModelPicker}
                         clearSearchLabel={copy.clearModelSearch}
+                        settingsHref="/settings/models"
+                        settingsLabel={copy.configureModels}
                       />
                     </div>
-                    <a class="model-settings-link" href="/settings/models">
-                      <Icon name="settings" size={14} />{copy.configureModels}
-                    </a>
+                    <ThinkingLevelSlider
+                      bind:value={startThinkingLevel}
+                      name="thinkingLevel"
+                      label={copy.thinkingLabel}
+                    />
                   {:else}
                     <a class="model-settings-link" href="/settings/models">
                       <Icon name="settings" size={14} />{copy.configureModels}
@@ -1038,11 +1211,25 @@
       {@const displayedSessionStatus = visibleSessionStatus(selected.status)}
       <header class="stage-header">
         <div class="stage-title">
-          <p class="kicker">{copy.timelineTitle}</p>
-          <h1>{sessionTitle(selected.title)}</h1>
+          <p class="kicker">
+            {selectedIsChannelSession ? messages.channelSessionKicker : copy.timelineTitle}
+          </p>
+          <h1>
+            <span class="session-heading-title">{sessionTitle(selected.title)}</span>
+            {#if selectedIsChannelSession}
+              <span class="channel-badge">{messages.channelSessionBadge}</span>
+            {/if}
+          </h1>
           <p>{sessionScopeLabel(selected)}</p>
         </div>
         <div class="stage-actions">
+          {#if liveSessionView?.cwd}
+            <span class="context-chip" title={liveSessionView.cwd}>
+              <Icon name="folder" size={13} />
+              {compactWorkingDirectory(liveSessionView.cwd)}
+            </span>
+          {/if}
+          {#if selected.role}<span class="context-chip">{selected.role}</span>{/if}
           <span class="connection-state {liveConnection}" title={connectionLabel()}>
             <span aria-hidden="true"></span>
             {connectionLabel()}
@@ -1111,6 +1298,19 @@
         use:enhance={enhanceSelectModel}
       ></form>
       <input form="session-model-form" type="hidden" name="sessionId" value={selected.sessionId} />
+      <form
+        id="session-thinking-form"
+        bind:this={sessionThinkingForm}
+        method="POST"
+        action="?/selectThinking"
+        use:enhance={enhanceSelectThinking}
+      ></form>
+      <input
+        form="session-thinking-form"
+        type="hidden"
+        name="sessionId"
+        value={selected.sessionId}
+      />
 
       <form
         method="POST"
@@ -1126,7 +1326,7 @@
           placeholder={conversationBusy ? copy.queuePlaceholder : copy.messagePlaceholder}
           bind:value={message}
           disabled={!canAssign || sendState === "submitting"}
-          submitDisabled={!canAssign || !modelReady || modelState === "submitting" || sendState === "submitting" || !message.trim()}
+          submitDisabled={!canAssign || !modelReady || modelState === "submitting" || thinkingState === "submitting" || sendState === "submitting" || !message.trim()}
           submitting={sendState === "submitting"}
           submitLabel={conversationBusy ? copy.queueSubmit : copy.sendSubmit}
           submittingLabel={copy.sending}
@@ -1152,28 +1352,24 @@
                 closeLabel={copy.closeModelPicker}
                 clearSearchLabel={copy.clearModelSearch}
                 compact
+                settingsHref="/settings/models"
+                settingsLabel={copy.configureModels}
                 onValueChange={submitModelSelection}
               />
-              <a
-                class="model-settings-shortcut"
-                href="/settings/models"
-                aria-label={copy.configureModels}
-                title={copy.configureModels}
-              >
-                <Icon name="settings" size={13} />
-              </a>
+              <ThinkingLevelSlider
+                bind:value={sessionThinkingLevel}
+                name="thinkingLevel"
+                form="session-thinking-form"
+                label={copy.thinkingLabel}
+                compact
+                disabled={thinkingState === "submitting"}
+                onValueCommit={() => void submitThinkingSelection()}
+              />
             {:else}
               <a class="model-settings-link compact" href="/settings/models">
                 <Icon name="warning" size={13} />{copy.modelUnavailable}
               </a>
             {/if}
-            {#if liveSessionView?.cwd}
-              <span class="context-chip" title={liveSessionView.cwd}>
-                <Icon name="folder" size={13} />
-                {compactWorkingDirectory(liveSessionView.cwd)}
-              </span>
-            {/if}
-            {#if selected.role}<span class="context-chip">{selected.role}</span>{/if}
           {/snippet}
           {#snippet feedback()}
             {#if sendFeedback}
@@ -1314,9 +1510,71 @@
   }
 
   .stage-header h1 {
+    align-items: center;
+    display: inline-flex;
+    gap: 8px;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .session-heading-title {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .channel-badge {
+    background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+    border-radius: 999px;
+    color: var(--color-primary);
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    line-height: 1;
+    padding: 5px 8px;
+    text-transform: none;
+    white-space: nowrap;
+  }
+
+  .channel-settings-link {
+    align-items: center;
+    background: var(--color-surface-soft);
+    border: 1px solid transparent;
+    border-radius: var(--rounded-md, 8px);
+    color: var(--color-ink);
+    display: inline-flex;
+    font-size: 12px;
+    font-weight: 650;
+    gap: 5px;
+    padding: 6px 10px;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .channel-settings-link:hover {
+    background: var(--color-primary-weak);
+    border-color: var(--color-primary-soft);
+    color: var(--color-primary);
+  }
+
+  .channel-bindings {
+    display: grid;
+    gap: 4px;
+  }
+
+  .channel-bindings code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    word-break: break-all;
+  }
+
+  .channel-settings-row {
+    display: grid;
+    gap: 6px;
+    grid-column: 1 / -1;
   }
 
   .stage-title > p:last-child,
@@ -1420,6 +1678,7 @@
     align-self: center;
     flex: 0 0 auto;
     max-width: 800px;
+    min-width: 0;
     width: 100%;
   }
 
@@ -1427,56 +1686,83 @@
     align-items: center;
     color: var(--color-ink-subtle);
     display: inline-flex;
+    flex: 0 1 auto;
     font-size: 11px;
     gap: 5px;
-    max-width: 180px;
+    max-width: min(220px, 100%);
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
+  .stage-actions .context-chip {
+    max-width: min(260px, 36vw);
+  }
+
+  .conversation-composer :global([data-model-picker-trigger]) {
+    flex: 1 1 10rem;
+    max-width: min(320px, 100%);
+    min-width: 0;
+  }
+
   .composer-selects {
-    align-items: end;
+    align-items: center;
     display: flex;
     flex-wrap: wrap;
-    gap: 12px;
+    gap: 10px;
+    width: 100%;
   }
 
   .model-select {
     align-items: center;
     display: flex;
+    flex: 1 1 auto;
     gap: 10px;
-    width: fit-content;
+    min-width: 0;
   }
 
   .model-select > span {
     color: var(--color-ink-subtle);
+    flex: 0 0 auto;
     font-size: 11px;
     font-weight: 650;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
   }
 
-  .model-settings-link,
-  .model-settings-shortcut {
+  .model-select :global([data-model-picker-trigger]) {
+    flex: 1 1 auto;
+    max-width: 360px;
+    min-width: min(220px, 100%);
+  }
+
+  .sr-only {
+    border: 0;
+    clip: rect(0, 0, 0, 0);
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    padding: 0;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
+  }
+
+  .model-settings-link {
     align-items: center;
     background: var(--color-surface-soft);
     border: 1px solid var(--color-border);
     border-radius: var(--rounded-md);
     color: var(--color-ink-muted);
     display: inline-flex;
+    flex: 0 0 auto;
     font-size: 11px;
     font-weight: 600;
     gap: 5px;
     min-height: 40px;
-    padding: 0 8px;
+    padding: 0 10px;
     text-decoration: none;
-  }
-
-  .model-settings-shortcut {
-    justify-content: center;
-    padding: 0;
-    width: 40px;
   }
 
   .model-settings-link.compact {
@@ -1730,6 +2016,14 @@
     .model-select {
       align-items: stretch;
       display: grid;
+      flex: 1 1 100%;
+      gap: 6px;
+      width: 100%;
+    }
+
+    .model-select :global([data-model-picker-trigger]) {
+      max-width: none;
+      min-width: 0;
       width: 100%;
     }
 

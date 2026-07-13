@@ -10,6 +10,7 @@ import {
 } from "@zendev-lab/spark-session";
 import {
   createSerializedDaemonSessionRegistry,
+  createDaemonSessionRegistry,
   type DaemonSessionRegistry,
 } from "./session-registry.ts";
 
@@ -47,6 +48,8 @@ describe("daemon session registry", () => {
       unbind: (sessionId, externalKey) => track(() => backing.unbind(sessionId, externalKey)),
       archive: (sessionId) => track(() => backing.archive(sessionId)),
       setModel: (sessionId, model) => track(() => backing.setModel(sessionId, model)),
+      setThinkingLevel: (sessionId, thinkingLevel) =>
+        track(() => backing.setThinkingLevel(sessionId, thinkingLevel)),
       recordTurnQueued: (sessionId, now) => track(() => backing.recordTurnQueued(sessionId, now)),
       recordTurnSettled: (sessionId, now) => track(() => backing.recordTurnSettled(sessionId, now)),
       recordRun: (input) => track(() => backing.recordRun(input)),
@@ -85,6 +88,46 @@ describe("daemon session registry", () => {
     expect(channelSession.bindings).toEqual([
       expect.objectContaining({ externalKey: "feishu:chat:oc_channel" }),
     ]);
+  });
+});
+
+describe("daemon session registry cwd ownership", () => {
+  it("freezes workspace sessions to the resolved workspace path and rejects filesystem root", async () => {
+    const sparkHome = await mkdtemp(join(tmpdir(), "spark-daemon-session-cwd-"));
+    roots.push(sparkHome);
+    const registry = createDaemonSessionRegistry(sparkHome, {
+      resolveWorkspaceCwd: (workspaceId) =>
+        workspaceId === "ws_demo" ? "/Users/demo/workspace/spore" : undefined,
+    });
+
+    await expect(
+      registry.create({
+        sessionId: "sess_workspace",
+        scope: { kind: "workspace", workspaceId: "ws_demo" },
+        workspaceId: "ws_demo",
+        cwd: "/tmp/wrong",
+      }),
+    ).resolves.toMatchObject({
+      sessionId: "sess_workspace",
+      cwd: "/Users/demo/workspace/spore",
+    });
+
+    await expect(
+      registry.create({
+        sessionId: "sess_root",
+        scope: { kind: "workspace", workspaceId: "ws_demo" },
+        workspaceId: "ws_demo",
+        cwd: "/",
+      }),
+    ).rejects.toMatchObject({ code: "workspace_cwd_unavailable" });
+
+    await expect(
+      registry.create({
+        sessionId: "sess_missing",
+        scope: { kind: "workspace", workspaceId: "ws_missing" },
+        workspaceId: "ws_missing",
+      }),
+    ).rejects.toMatchObject({ code: "workspace_cwd_unavailable" });
   });
 });
 

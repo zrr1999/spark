@@ -462,12 +462,12 @@
 
   .output-details pre,
   .artifact-preview {
-    background: var(--color-code-surface-soft);
-    border: 1px solid var(--color-border-soft);
+    background: var(--color-canvas);
+    border: 1px solid var(--color-border);
     border-radius: var(--rounded-md);
     color: var(--color-ink);
     font-size: var(--text-caption);
-    line-height: var(--leading-body);
+    line-height: 1.5;
     margin: var(--spacing-sm) 0 0;
     max-height: 320px;
     overflow: auto;

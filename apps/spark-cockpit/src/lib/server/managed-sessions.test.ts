@@ -1,8 +1,12 @@
 import type { SparkSessionRegistryRecord } from "@zendev-lab/spark-protocol";
-import { SparkDaemonLocalRpcUnavailableError } from "@zendev-lab/spark-system";
+import {
+  SparkDaemonLocalRpcRemoteError,
+  SparkDaemonLocalRpcUnavailableError,
+} from "@zendev-lab/spark-system";
 import { describe, expect, it, vi } from "vitest";
 import {
   archiveManagedSessionForCockpit,
+  bindManagedSessionForCockpit,
   createManagedSessionForCockpit,
   getManagedSessionForCockpit,
   getManagedSessionSnapshotForCockpit,
@@ -51,7 +55,10 @@ describe("managed sessions for cockpit", () => {
       scope: { kind: "workspace" as const, workspaceId: "ws_a" },
       workspaceId: "ws_a",
     };
-    await expect(listManagedSessionsForCockpit(workspaceScope, client)).resolves.toEqual([session]);
+    await expect(listManagedSessionsForCockpit(workspaceScope, client)).resolves.toEqual({
+      available: true,
+      sessions: [session],
+    });
     await expect(getManagedSessionForCockpit("sess_a", client)).resolves.toEqual(session);
     await expect(getManagedSessionSnapshotForCockpit("sess_a", client)).resolves.toEqual(snapshot);
 
@@ -66,7 +73,36 @@ describe("managed sessions for cockpit", () => {
       new SparkDaemonLocalRpcUnavailableError("restart or upgrade the daemon"),
     );
 
-    await expect(listManagedSessionsForCockpit({}, client)).resolves.toEqual([]);
+    await expect(listManagedSessionsForCockpit({}, client)).resolves.toEqual({
+      available: false,
+      sessions: [],
+      error: "restart or upgrade the daemon",
+    });
+  });
+
+  it("returns null for get when the daemon is unavailable or the session is missing", async () => {
+    const client = daemonClient();
+    client.get
+      .mockRejectedValueOnce(new SparkDaemonLocalRpcUnavailableError("daemon offline"))
+      .mockRejectedValueOnce(
+        new SparkDaemonLocalRpcRemoteError("unknown session: sess_missing", {
+          code: "session_not_found",
+          message: "unknown session: sess_missing",
+        }),
+      );
+
+    await expect(getManagedSessionForCockpit("sess_a", client)).resolves.toBeNull();
+    await expect(getManagedSessionForCockpit("sess_missing", client)).resolves.toBeNull();
+  });
+
+  it("returns null for snapshot when the daemon read fails", async () => {
+    const client = daemonClient();
+    client.snapshot
+      .mockRejectedValueOnce(new SparkDaemonLocalRpcUnavailableError("daemon offline"))
+      .mockRejectedValueOnce(new Error("invalid session view"));
+
+    await expect(getManagedSessionSnapshotForCockpit("sess_a", client)).resolves.toBeNull();
+    await expect(getManagedSessionSnapshotForCockpit("sess_a", client)).resolves.toBeNull();
   });
 
   it("returns mutations only after the daemon acknowledges them", async () => {
@@ -75,7 +111,19 @@ describe("managed sessions for cockpit", () => {
       status: "archived" as const,
       updatedAt: "2026-07-10T00:01:00.000Z",
     };
-    const client = daemonClient({ archiveResult: archived });
+    const bound = {
+      ...session,
+      bindings: [
+        {
+          kind: "channel" as const,
+          adapter: "infoflow" as const,
+          externalKey: "infoflow:user:u1",
+          boundAt: "2026-07-10T00:00:30.000Z",
+        },
+      ],
+      updatedAt: "2026-07-10T00:00:30.000Z",
+    };
+    const client = daemonClient({ archiveResult: archived, bindResult: bound });
 
     await expect(
       createManagedSessionForCockpit(
@@ -87,12 +135,22 @@ describe("managed sessions for cockpit", () => {
         client,
       ),
     ).resolves.toEqual(session);
+    await expect(
+      bindManagedSessionForCockpit(
+        { sessionId: "sess_a", externalKey: "infoflow:user:u1" },
+        client,
+      ),
+    ).resolves.toEqual(bound);
     await expect(archiveManagedSessionForCockpit("sess_a", client)).resolves.toEqual(archived);
 
     expect(client.create).toHaveBeenCalledWith({
       scope: { kind: "workspace", workspaceId: "ws_a" },
       workspaceId: "ws_a",
       title: "Alpha",
+    });
+    expect(client.bind).toHaveBeenCalledWith({
+      sessionId: "sess_a",
+      externalKey: "infoflow:user:u1",
     });
     expect(client.archive).toHaveBeenCalledWith("sess_a");
   });
@@ -114,12 +172,18 @@ describe("managed sessions for cockpit", () => {
   });
 });
 
-function daemonClient(options: { archiveResult?: SparkSessionRegistryRecord } = {}) {
+function daemonClient(
+  options: {
+    archiveResult?: SparkSessionRegistryRecord;
+    bindResult?: SparkSessionRegistryRecord;
+  } = {},
+) {
   return {
     list: vi.fn(async () => [session]),
     get: vi.fn(async () => session),
     snapshot: vi.fn(async () => snapshot),
     create: vi.fn(async () => session),
+    bind: vi.fn(async () => options.bindResult ?? session),
     archive: vi.fn(async () => options.archiveResult ?? session),
   } satisfies CockpitManagedSessionsClient;
 }

@@ -7,13 +7,18 @@ import {
   createProviderRegistryLeafRunner,
   createProviderRegistryStreamFunction,
 } from "@zendev-lab/spark-ai";
-import { DEFAULT_SPARK_IDENTITY_PROMPT } from "@zendev-lab/spark-host/system-prompt";
+import {
+  DEFAULT_SPARK_IDENTITY_PROMPT,
+  renderAgentRuntimeContextPrompt,
+} from "@zendev-lab/spark-host/system-prompt";
 import { composeAgentSystemPrompt } from "@zendev-lab/spark-modes";
 
 import { renderSparkActiveSystemPrompt } from "../../../../packages/pi-extension/src/extension/spark-active-injection.ts";
 import { renderBaseSystemPromptsPrompt } from "../../../../packages/pi-extension/src/extension/spark-builtin-skills.ts";
 import { loadSparkMode } from "../../../../packages/pi-extension/src/extension/session-state.ts";
 import type { SparkSessionContext } from "../../../../packages/pi-extension/src/extension/session-identity.ts";
+import { createSparkRoleRegistry } from "../../../../packages/pi-extension/src/extension/spark-role-registry.ts";
+import { PiRolesReviewerRunner } from "../../../../packages/pi-extension/src/extension/reviewer-runner.ts";
 import { SparkAgentLoop } from "./agent-loop.ts";
 import { SparkAuthStore, SparkProviderAuthResolver, defaultSparkAuthPath } from "./auth.ts";
 import {
@@ -94,6 +99,13 @@ export interface SparkCliHostServicesOptions {
   modelPicker?: SparkModelPicker;
   systemPrompt?: string;
   noPromptTemplates?: boolean;
+  /**
+   * Session tool-approval method for `requiresApproval` tools.
+   * Local TUI defaults to `skip`; channel headless sessions should pass `auto`.
+   */
+  approvalMethod?: "skip" | "human" | "auto";
+  /** When auto-review rejects: escalate to ask (default) or deny. */
+  approvalRejectAction?: "ask" | "deny";
 }
 
 export async function createSparkCliHostServices(
@@ -179,6 +191,20 @@ export async function createSparkCliHostServices(
   registerSparkModelSelectorKeybindings(keybindings, modelSelector, {
     notify: (message, level) => runtime.makeContext().ui?.notify?.(message, level),
   });
+  keybindings.register({
+    id: "app.thinking.cycle",
+    defaultKey: "shift+tab",
+    description: "Cycle the assistant thinking level (off/minimal/low/medium/high/xhigh)",
+    handler: async () => {
+      const levels = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+      const current = config.activeThinkingLevel;
+      const index = current ? levels.indexOf(current) : -1;
+      const next = levels[(index + 1) % levels.length]!;
+      config.activeThinkingLevel = next;
+      await saveLoadedConfig(config);
+      runtime.makeContext().ui?.notify?.(`thinking ${next}`, "info");
+    },
+  });
 
   const sessionStore = new SparkSessionStore({ cwd, sparkHome: options.sparkHome });
   runtime.setSessionManager(
@@ -240,6 +266,7 @@ export async function createSparkCliHostServices(
       if (!model) throw new Error("No active Spark model selected");
       return model as Model<string>;
     },
+    getReasoning: () => config.activeThinkingLevel,
     systemPrompt: await renderSparkCliAgentSystemPrompt(
       cwd,
       runtime.makeContext(),
@@ -247,6 +274,34 @@ export async function createSparkCliHostServices(
       builtinSkillsPrompt,
       skillsPrompt,
     ),
+    // Local interactive TUI skips approval gates; channel/headless pass `auto`.
+    approvalMethod: options.approvalMethod ?? "skip",
+    ...(options.approvalRejectAction ? { approvalRejectAction: options.approvalRejectAction } : {}),
+    reviewToolApproval: async (request, signal) => {
+      const ctx = runtime.makeContext();
+      const reviewer = new PiRolesReviewerRunner({
+        registry: await createSparkRoleRegistry(cwd),
+        cwd,
+        nativeExecutor: ctx.runRole,
+      });
+      const result = await reviewer.review(
+        {
+          targetKind: "tool_approval",
+          cwd,
+          toolName: request.toolName,
+          toolCallId: request.toolCallId,
+          arguments: request.arguments,
+          reason: request.reason,
+          sessionKey: ctx.sessionId,
+          forkFromSession: ctx.sessionManager?.getSessionFile?.(),
+        },
+        signal,
+      );
+      return {
+        outcome: result.verdict.outcome,
+        summary: result.verdict.summary,
+      };
+    },
   });
   runtime.on("before_agent_start", async (_event, ctx) => {
     agentLoop.setSystemPrompt(
@@ -295,6 +350,7 @@ async function renderSparkCliAgentSystemPrompt(
     renderSparkActiveSystemPrompt(baseSystemPrompt, mode),
     builtinSkillsPrompt,
     skillsPrompt,
+    renderAgentRuntimeContextPrompt({ cwd }),
   ]);
 }
 

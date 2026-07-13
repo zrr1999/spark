@@ -6,6 +6,38 @@ export {
 export { FeishuAdapter, type FeishuAdapterOptions } from "./feishu-adapter.ts";
 export { InfoflowAdapter, type InfoflowAdapterOptions } from "./infoflow-adapter.ts";
 export {
+  QqbotAdapter,
+  type QqbotAdapterOptions,
+  normalizeQqbotInboundEvent,
+} from "./qqbot-adapter.ts";
+export {
+  createQqbotApiClient,
+  QQBOT_API_BASE,
+  QQBOT_API_PRODUCTION_BASE,
+  QQBOT_API_SANDBOX_BASE,
+  QQBOT_TOKEN_URL,
+  resolveQqbotApiBase,
+  type QqbotApiClient,
+  type QqbotMessageResponse,
+  type QqbotStreamMessageRequest,
+} from "./qqbot-api.ts";
+export {
+  isQqbotGroupAllowed,
+  isQqbotGroupTriggered,
+  isQqbotInboundAllowed,
+  isQqbotPrivateAllowed,
+  resolveQqbotGroupPolicy,
+  resolveQqbotGroupTrigger,
+} from "./qqbot-policy.ts";
+export { createQqbotTransport } from "./qqbot-transport.ts";
+export {
+  formatQqbotRecipient,
+  parseQqbotRecipient,
+  type QqbotChatType,
+  type QqbotNormalizedInbound,
+  type QqbotRecipient,
+} from "./qqbot-types.ts";
+export {
   normalizeInfoflowContent,
   type InfoflowAttachment,
   type InfoflowAttachmentKind,
@@ -74,5 +106,8 @@ export type {
   InfoflowGroupPolicy,
   InfoflowGroupTrigger,
   InfoflowInboundRaw,
+  QqbotAdapterConfig,
+  QqbotGroupPolicy,
+  QqbotGroupTrigger,
   ResolvedChannelRoute,
 } from "./types.ts";

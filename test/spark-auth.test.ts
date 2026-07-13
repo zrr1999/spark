@@ -76,6 +76,7 @@ function daemonAuthClient(
   return {
     snapshot: async () => snapshot,
     setSessionModel: unsupported,
+    setSessionThinkingLevel: unsupported,
     setDefaultModel: async () => snapshot,
     setApiKey: async () => snapshot,
     logout: async () => false,

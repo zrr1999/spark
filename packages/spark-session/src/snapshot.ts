@@ -3,6 +3,9 @@ import { join } from "node:path";
 import {
   SPARK_PROTOCOL_VERSION,
   parseSparkSessionView,
+  sparkTextPhaseFromSignature,
+  summarizeToolCallArguments,
+  summarizeToolResultContent,
   type SparkConversationPart,
   type SparkJsonObject,
   type SparkMessageView,
@@ -222,13 +225,20 @@ function messageView(
   if (!role) return undefined;
   const parts = conversationParts(entry, toolOutcomes);
   if (parts.length === 0) return undefined;
-  const text = parts
-    .filter((part): part is Extract<SparkConversationPart, { type: "text" }> => {
-      return part.type === "text";
-    })
-    .map((part) => part.text)
-    .filter(Boolean)
-    .join("\n");
+  const text =
+    parts
+      .filter((part): part is Extract<SparkConversationPart, { type: "text" }> => {
+        return part.type === "text" && part.phase !== "commentary";
+      })
+      .map((part) => part.text)
+      .filter(Boolean)
+      .join("\n") ||
+    parts
+      .flatMap((part) => {
+        if (part.type !== "tool-call" && part.type !== "tool-result") return [];
+        return part.summary?.trim() ? [part.summary.trim()] : [];
+      })
+      .join("\n");
   const createdAt = entryTimestamp(entry);
   return {
     version: SPARK_PROTOCOL_VERSION,
@@ -301,6 +311,7 @@ function conversationParts(
     const toolCallId = stringField(message, "toolCallId");
     const toolName = stringField(message, "toolName");
     if (!toolCallId || !toolName) return [];
+    const summary = summarizeToolResultContent(message.content);
     return [
       {
         id: conversationPartId(entry.id, 0),
@@ -308,6 +319,7 @@ function conversationParts(
         toolCallId,
         toolName,
         status: message.isError === true ? "failed" : "complete",
+        ...(summary ? { summary } : {}),
         metadata: {},
       },
     ];
@@ -332,12 +344,14 @@ function conversationParts(
   return content.flatMap((value, index): SparkConversationPart[] => {
     if (!isRecord(value)) return [];
     if (value.type === "text" && typeof value.text === "string" && value.text) {
+      const phase = sparkTextPhaseFromSignature(value.textSignature);
       return [
         {
           id: conversationPartId(entry.id, index),
           type: "text",
           text: value.text,
           status: "complete",
+          ...(phase ? { phase } : {}),
           metadata: {},
         },
       ];
@@ -360,6 +374,7 @@ function conversationParts(
     const toolName = stringField(value, "name");
     if (!toolCallId || !toolName) return [];
     const outcome = toolOutcomes.get(toolCallId);
+    const summary = summarizeToolCallArguments(value.arguments);
     return [
       {
         id: conversationPartId(entry.id, index),
@@ -367,6 +382,7 @@ function conversationParts(
         toolCallId,
         toolName,
         status: outcome ? (outcome.status === "failed" ? "failed" : "complete") : "pending",
+        ...(summary ? { summary } : {}),
         metadata: {},
       },
     ];

@@ -23,6 +23,8 @@ export function sparkChannelAdapterLabel(adapter: string): string {
       return "Infoflow (如流)";
     case "feishu":
       return "Feishu";
+    case "qqbot":
+      return "QQ Bot";
     default:
       return adapter;
   }
@@ -44,4 +46,18 @@ export function renderSparkChannelSurfacePrompt(surface: SparkChannelSurface): s
   ]
     .filter((line): line is string => Boolean(line))
     .join(" ");
+}
+
+/**
+ * Per-turn runtime context. Kept as its own prompt section so prompt-cache
+ * logic can treat date/cwd as dynamic while identity/skills stay stable.
+ */
+export function renderAgentRuntimeContextPrompt(input: { cwd: string; now?: Date }): string {
+  const cwd = input.cwd.trim();
+  const date = (input.now ?? new Date()).toISOString().slice(0, 10);
+  return [
+    `Current date: ${date}`,
+    `Current working directory: ${cwd}`,
+    "Default relative file/tool paths and bare directory listings to this working directory. Do not use the filesystem root (/) unless the user explicitly asks for it.",
+  ].join("\n");
 }

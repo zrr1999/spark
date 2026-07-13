@@ -1,7 +1,7 @@
 {
   "name": "@zendev-lab/spark-roles",
   "version": "0.1.0",
-  "description": "Reusable Spark role specs, role registry/storage, and single RoleRun launch helpers.",
+  "description": "Canonical role/session tool, reusable role specs, anonymous role runs, and persistent session adapters.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [
@@ -22,6 +22,9 @@
   "dependencies": {
     "@zendev-lab/spark-extension-api": "workspace:^",
     "@zendev-lab/spark-host": "workspace:^",
+    "@zendev-lab/spark-protocol": "workspace:^",
+    "@zendev-lab/spark-session": "workspace:^",
+    "@zendev-lab/spark-system": "workspace:^",
     "@zendev-lab/spark-tui": "workspace:^",
     "typebox": "^1.2.13"
   },

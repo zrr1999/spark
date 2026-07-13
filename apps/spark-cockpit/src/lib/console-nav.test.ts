@@ -9,7 +9,7 @@ import {
 
 const nav: ConsoleNavLabels = {
   modelsProviders: "Models & providers",
-  channels: "Channels",
+  channels: "Message platforms",
   workspaceSettings: "Basics",
   registration: "Runtime registration",
   createWorkspace: "Create workspace",
@@ -79,7 +79,9 @@ describe("console nav", () => {
   });
 
   it("labels console pages by their settings scope", () => {
-    expect(currentConsolePageLabel({ pathname: "/local/settings/channels", nav })).toBe("Channels");
+    expect(currentConsolePageLabel({ pathname: "/local/settings/channels", nav })).toBe(
+      "Message platforms",
+    );
     expect(currentConsolePageLabel({ pathname: "/settings/models", nav })).toBe(
       "Models & providers",
     );

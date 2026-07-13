@@ -76,24 +76,27 @@ function convertCursorModelItem(
   const contexts: Array<string | undefined> =
     contextValues.length > 0 ? contextValues : [undefined];
   const supportsFast = getParameter(item, "fast") !== undefined;
-  const fastOverrides: Array<boolean | undefined> = supportsFast
-    ? [undefined, true, false]
-    : [undefined];
+  const defaultFast = defaultParams
+    .find((parameter) => parameter.id === "fast")
+    ?.value.toLowerCase();
   const definitions: ProviderModelDefinition[] = [];
 
   for (const selectionModelId of getSelectionModelIds(item, reservedBaseIds, ambiguousAliases)) {
+    // Aliases stay resolvable via metadata, but only the canonical id is listed
+    // in the picker so Composer/Grok/etc. are not triplicated by alias strings.
+    const exposeCanonical = selectionModelId === item.id;
     for (const context of contexts) {
       const contextParams = context
         ? replaceParam(defaultParams, "context", context)
         : cloneParams(defaultParams);
-      for (const fastOverride of fastOverrides) {
+      for (const fastOverride of fastOverrideChoices(supportsFast)) {
         const params =
           fastOverride === undefined
             ? cloneParams(contextParams)
             : replaceParam(contextParams, "fast", fastOverride ? "true" : "false");
         const modelId = encodeCursorModelId(selectionModelId, context, fastOverride);
-        if (usedModelIds.has(modelId)) continue;
-        usedModelIds.add(modelId);
+        if (metadataByModelId.has(modelId)) continue;
+        if (exposeCanonical && usedModelIds.has(modelId)) continue;
 
         const thinkingLevelMap = buildThinkingLevelMap(item);
         const metadata: CursorModelMetadata = {
@@ -113,6 +116,13 @@ function convertCursorModelItem(
           },
         };
         metadataByModelId.set(modelId, metadata);
+
+        // Omit :fast/:slow when it matches the catalog default — still keep
+        // metadata so previously saved selection ids remain resolvable.
+        const exposeInCatalog =
+          exposeCanonical && !isRedundantFastOverride(fastOverride, defaultFast);
+        if (!exposeInCatalog) continue;
+        usedModelIds.add(modelId);
         definitions.push({
           id: modelId,
           name: displayName(item, selectionModelId, context, fastOverride),
@@ -128,6 +138,20 @@ function convertCursorModelItem(
   }
 
   return definitions;
+}
+
+function fastOverrideChoices(supportsFast: boolean): Array<boolean | undefined> {
+  return supportsFast ? [undefined, true, false] : [undefined];
+}
+
+function isRedundantFastOverride(
+  fastOverride: boolean | undefined,
+  defaultFast: string | undefined,
+): boolean {
+  if (fastOverride === undefined) return false;
+  if (fastOverride && defaultFast === "true") return true;
+  if (!fastOverride && defaultFast === "false") return true;
+  return false;
 }
 
 function getSelectionModelIds(

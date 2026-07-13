@@ -263,6 +263,35 @@ void test("SparkAgentLoop passes prompt_cache_key and reports cache usage summar
   );
 });
 
+void test("SparkAgentLoop forwards getReasoning into stream options.reasoning", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-reasoning-test" });
+  const calls: Array<{ options: any }> = [];
+  const streamFunction: SparkAgentStreamFunction = (_model, _context, options) => {
+    calls.push({ options });
+    return makeFakeStream({
+      rounds: [
+        [
+          {
+            type: "done",
+            reason: "stop",
+            message: buildAssistant([{ type: "text", text: "ok" }]),
+          },
+        ],
+      ],
+    })(_model, _context, options);
+  };
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction,
+    getModel: () => TEST_MODEL,
+    getReasoning: () => "high",
+  });
+
+  await loop.submit("think carefully");
+
+  assert.equal(calls[0]?.options?.reasoning, "high");
+});
+
 void test("SparkAgentLoop runs a single-turn stop with one streamed text chunk", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-test" });
   const events: SparkAgentLoopEvent[] = [];
@@ -415,7 +444,7 @@ void test("SparkAgentLoop appends multi-roundtrip assistant messages in order wi
   const doneTexts = assistantMessages
     .filter((event) => event.message.status === "done")
     .map((event) => event.message.text);
-  assert.deepEqual(doneTexts, ["before tool\n[tool call: noop]", "after tool"]);
+  assert.deepEqual(doneTexts, ["before tool", "after tool"]);
 });
 
 void test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", async () => {
@@ -632,7 +661,7 @@ void test("SparkAgentLoop publishes ordered display-safe conversation parts with
     parameters: { type: "object" },
     async execute() {
       return {
-        content: [{ type: "text", text: "secret-tool-output" }],
+        content: [{ type: "text", text: "public-tool-output" }],
         details: { token: "secret-tool-details" },
       };
     },
@@ -685,7 +714,7 @@ void test("SparkAgentLoop publishes ordered display-safe conversation parts with
       event.type === "session.message" &&
       event.message.role === "assistant" &&
       event.message.status === "done" &&
-      event.message.text === "Inspecting now.\n[tool call: inspect_secret]",
+      event.message.text === "Inspecting now.",
   )?.message;
   assert.ok(assistantMessage);
   assert.deepEqual(
@@ -698,6 +727,13 @@ void test("SparkAgentLoop publishes ordered display-safe conversation parts with
     text: "",
     status: "complete",
     redacted: true,
+    metadata: {},
+  });
+  assert.deepEqual(assistantMessage.parts[2], {
+    id: `${assistantMessage.id}:part:2`,
+    type: "text",
+    text: "Inspecting now.",
+    status: "complete",
     metadata: {},
   });
   assert.deepEqual(assistantMessage.parts[3], {
@@ -728,7 +764,7 @@ void test("SparkAgentLoop publishes ordered display-safe conversation parts with
     (event) =>
       event.type === "session.message" && event.message.id === "tool-result:tc-display-safe",
   )?.message;
-  assert.equal(toolResultMessage.text, "inspect_secret completed");
+  assert.equal(toolResultMessage.text, "public-tool-output");
   assert.deepEqual(toolResultMessage.parts, [
     {
       id: "tool-result:tc-display-safe:part:0",
@@ -736,6 +772,7 @@ void test("SparkAgentLoop publishes ordered display-safe conversation parts with
       toolCallId: "tc-display-safe",
       toolName: "inspect_secret",
       status: "complete",
+      summary: "public-tool-output",
       metadata: {},
     },
   ]);
@@ -743,7 +780,75 @@ void test("SparkAgentLoop publishes ordered display-safe conversation parts with
 
   assert.doesNotMatch(
     JSON.stringify(viewEvents),
-    /secret-tool-argument|secret-tool-output|secret-tool-details|secret-redacted-thinking|secret-thinking-signature/u,
+    /secret-tool-argument|secret-tool-details|secret-redacted-thinking|secret-thinking-signature/u,
+  );
+});
+
+void test("SparkAgentLoop keeps text phases without projecting commentary as assistant prose", async () => {
+  const viewEvents: any[] = [];
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-agent-loop-text-phase-test",
+    ui: { publishView: (event) => viewEvents.push(event) },
+  });
+  const assistant = buildAssistant([
+    {
+      type: "text",
+      text: "Checking the repository.",
+      textSignature: JSON.stringify({
+        v: 1,
+        phase: "commentary",
+        providerSecret: "commentary-text-signature-secret",
+      }),
+    },
+    {
+      type: "text",
+      text: "The check passed.",
+      textSignature: JSON.stringify({
+        phase: "final_answer",
+        providerSecret: "final-text-signature-secret",
+      }),
+    },
+    { type: "text", text: "Legacy detail." },
+    {
+      type: "text",
+      text: "Unknown phase stays visible.",
+      textSignature: JSON.stringify({ phase: "future_phase" }),
+    },
+    {
+      type: "text",
+      text: "Malformed signature stays visible.",
+      textSignature: "not-json-signature-secret",
+    },
+  ]);
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: makeFakeStream({
+      rounds: [[{ type: "done", reason: "stop", message: assistant }]],
+    }),
+    getModel: () => TEST_MODEL,
+  });
+  loop.setViewSessionId("session-text-phase-view");
+
+  await loop.submit("check phases");
+
+  const message = viewEvents.find(
+    (event) =>
+      event.type === "session.message" &&
+      event.message.role === "assistant" &&
+      event.message.status === "done",
+  )?.message;
+  assert.ok(message);
+  assert.equal(
+    message.text,
+    "The check passed.\nLegacy detail.\nUnknown phase stays visible.\nMalformed signature stays visible.",
+  );
+  assert.deepEqual(
+    message.parts.map((part: { phase?: string }) => part.phase),
+    ["commentary", "final_answer", undefined, undefined, undefined],
+  );
+  assert.doesNotMatch(
+    JSON.stringify(viewEvents),
+    /commentary-text-signature-secret|final-text-signature-secret|not-json-signature-secret/u,
   );
 });
 
@@ -1119,6 +1224,265 @@ void test("SparkAgentLoop blocks approval-required tools without explicit approv
   assert.equal(toolResult !== undefined, true);
   assert.equal((toolResult as { isError: boolean }).isError, true);
   assert.match(JSON.stringify(toolResult), /approval unavailable/);
+});
+
+void test("SparkAgentLoop skip approvalMethod executes requiresApproval tools without interaction", async () => {
+  const interactionRequests: unknown[] = [];
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-agent-loop-approval-skip-test",
+    ui: {
+      interaction: async (request) => {
+        interactionRequests.push(request);
+        return {
+          version: 1,
+          kind: "toolApproval",
+          requestId: request.requestId,
+          status: "blocked",
+          approved: false,
+          message: "should not be asked",
+          metadata: {},
+        };
+      },
+    },
+  });
+  let toolCalls = 0;
+  host.registerTool({
+    name: "dangerous_skip",
+    description: "requires approval but session skips",
+    parameters: { type: "object" },
+    requiresApproval: true,
+    async execute() {
+      toolCalls += 1;
+      return { content: [{ type: "text", text: "ran" }] };
+    },
+  } as never);
+  const toolCallEnvelope: ToolCall = {
+    type: "toolCall",
+    id: "tc-approval-skip",
+    name: "dangerous_skip",
+    arguments: {},
+  };
+  const fake = makeFakeStream({
+    rounds: [
+      [{ type: "done", reason: "toolUse", message: buildAssistant([toolCallEnvelope], "toolUse") }],
+      [
+        {
+          type: "done",
+          reason: "stop",
+          message: buildAssistant([{ type: "text", text: "done" }]),
+        },
+      ],
+    ],
+  });
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: fake,
+    getModel: () => TEST_MODEL,
+    approvalMethod: "skip",
+  });
+
+  await loop.submit("try skip approval");
+
+  assert.equal(toolCalls, 1);
+  assert.equal(interactionRequests.length, 0);
+});
+
+void test("SparkAgentLoop auto approvalMethod executes when reviewer approves", async () => {
+  const interactionRequests: unknown[] = [];
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-agent-loop-approval-auto-ok-test",
+    ui: {
+      interaction: async (request) => {
+        interactionRequests.push(request);
+        return {
+          version: 1,
+          kind: "toolApproval",
+          requestId: request.requestId,
+          status: "blocked",
+          approved: false,
+          message: "should not be asked",
+          metadata: {},
+        };
+      },
+    },
+  });
+  let toolCalls = 0;
+  const reviewCalls: unknown[] = [];
+  host.registerTool({
+    name: "dangerous_auto_ok",
+    description: "requires approval",
+    parameters: { type: "object" },
+    requiresApproval: true,
+    async execute() {
+      toolCalls += 1;
+      return { content: [{ type: "text", text: "ran" }] };
+    },
+  } as never);
+  const toolCallEnvelope: ToolCall = {
+    type: "toolCall",
+    id: "tc-approval-auto-ok",
+    name: "dangerous_auto_ok",
+    arguments: { cmd: "echo hi" },
+  };
+  const fake = makeFakeStream({
+    rounds: [
+      [{ type: "done", reason: "toolUse", message: buildAssistant([toolCallEnvelope], "toolUse") }],
+      [
+        {
+          type: "done",
+          reason: "stop",
+          message: buildAssistant([{ type: "text", text: "done" }]),
+        },
+      ],
+    ],
+  });
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: fake,
+    getModel: () => TEST_MODEL,
+    approvalMethod: "auto",
+    reviewToolApproval: async (request) => {
+      reviewCalls.push(request);
+      return { outcome: "approved", summary: "safe" };
+    },
+  });
+
+  await loop.submit("try auto approve");
+
+  assert.equal(toolCalls, 1);
+  assert.equal(reviewCalls.length, 1);
+  assert.equal((reviewCalls[0] as { toolName?: string }).toolName, "dangerous_auto_ok");
+  assert.equal(interactionRequests.length, 0);
+});
+
+void test("SparkAgentLoop auto approvalMethod escalates to ask when reviewer rejects", async () => {
+  const interactionRequests: unknown[] = [];
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-agent-loop-approval-auto-ask-test",
+    ui: {
+      interaction: async (request) => {
+        interactionRequests.push(request);
+        return {
+          version: 1,
+          kind: "toolApproval",
+          requestId: request.requestId,
+          status: "answered",
+          approved: true,
+          metadata: {},
+        };
+      },
+    },
+  });
+  let toolCalls = 0;
+  host.registerTool({
+    name: "dangerous_auto_ask",
+    description: "requires approval",
+    parameters: { type: "object" },
+    requiresApproval: true,
+    async execute() {
+      toolCalls += 1;
+      return { content: [{ type: "text", text: "ran after ask" }] };
+    },
+  } as never);
+  const toolCallEnvelope: ToolCall = {
+    type: "toolCall",
+    id: "tc-approval-auto-ask",
+    name: "dangerous_auto_ask",
+    arguments: {},
+  };
+  const fake = makeFakeStream({
+    rounds: [
+      [{ type: "done", reason: "toolUse", message: buildAssistant([toolCallEnvelope], "toolUse") }],
+      [
+        {
+          type: "done",
+          reason: "stop",
+          message: buildAssistant([{ type: "text", text: "done" }]),
+        },
+      ],
+    ],
+  });
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: fake,
+    getModel: () => TEST_MODEL,
+    approvalMethod: "auto",
+    approvalRejectAction: "ask",
+    reviewToolApproval: async () => ({ outcome: "blocked", summary: "too risky" }),
+  });
+
+  await loop.submit("try auto then ask");
+
+  assert.equal(toolCalls, 1);
+  assert.equal((interactionRequests[0] as { kind?: string }).kind, "toolApproval");
+});
+
+void test("SparkAgentLoop auto approvalMethod can deny without ask", async () => {
+  const interactionRequests: unknown[] = [];
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-agent-loop-approval-auto-deny-test",
+    ui: {
+      interaction: async (request) => {
+        interactionRequests.push(request);
+        return {
+          version: 1,
+          kind: "toolApproval",
+          requestId: request.requestId,
+          status: "answered",
+          approved: true,
+          metadata: {},
+        };
+      },
+    },
+  });
+  let toolCalls = 0;
+  host.registerTool({
+    name: "dangerous_auto_deny",
+    description: "requires approval",
+    parameters: { type: "object" },
+    requiresApproval: true,
+    async execute() {
+      toolCalls += 1;
+      return { content: [{ type: "text", text: "should not run" }] };
+    },
+  } as never);
+  const toolCallEnvelope: ToolCall = {
+    type: "toolCall",
+    id: "tc-approval-auto-deny",
+    name: "dangerous_auto_deny",
+    arguments: {},
+  };
+  const fake = makeFakeStream({
+    rounds: [
+      [{ type: "done", reason: "toolUse", message: buildAssistant([toolCallEnvelope], "toolUse") }],
+      [
+        {
+          type: "done",
+          reason: "stop",
+          message: buildAssistant([{ type: "text", text: "done" }]),
+        },
+      ],
+    ],
+  });
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: fake,
+    getModel: () => TEST_MODEL,
+    approvalMethod: "auto",
+    approvalRejectAction: "deny",
+    reviewToolApproval: async () => ({
+      outcome: "needs_changes",
+      summary: "needs a safer command",
+    }),
+  });
+
+  await loop.submit("try auto deny");
+
+  assert.equal(toolCalls, 0);
+  assert.equal(interactionRequests.length, 0);
+  const toolResult = loop.getMessages().find((message) => message.role === "toolResult");
+  assert.equal((toolResult as { isError: boolean }).isError, true);
+  assert.match(JSON.stringify(toolResult), /needs a safer command/);
 });
 
 void test("SparkAgentLoop preserves tool-returned isError results", async () => {

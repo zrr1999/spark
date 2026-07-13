@@ -45,7 +45,6 @@ export type CockpitChatTranscriptTurn = {
 
 export type CockpitChatTranscriptLabels = {
   waitingAnswer: string;
-  runningAnswer: string;
   completedAnswer: string;
   errorAnswer: string;
   cancelledAnswer: string;
@@ -54,7 +53,6 @@ export type CockpitChatTranscriptLabels = {
 
 export const defaultCockpitChatTranscriptLabels: CockpitChatTranscriptLabels = {
   waitingAnswer: "Waiting for Spark to start.",
-  runningAnswer: "Spark is working.",
   completedAnswer: "Spark finished this run.",
   errorAnswer: "Spark reported a problem.",
   cancelledAnswer: "This run was cancelled.",
@@ -209,7 +207,7 @@ function assistantAnswer(
   const output = orderedAssistantOutput(logs) ?? latestReadableOutput(logs);
   if (output) return `${labels.latestOutputPrefix}\n${output}`;
   if (status === "completed") return labels.completedAnswer;
-  if (status === "running") return labels.runningAnswer;
+  if (status === "running") return "";
   return labels.waitingAnswer;
 }
 

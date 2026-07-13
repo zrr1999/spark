@@ -1,3 +1,24 @@
+export type ConversationChainStep =
+  | {
+      type: "reasoning";
+      summary: string;
+      state: "streaming" | "complete";
+      redacted?: boolean;
+    }
+  | {
+      /** Provider-authored tool preamble/progress, distinct from private reasoning. */
+      type: "commentary";
+      summary: string;
+      state: "streaming" | "complete";
+    }
+  | {
+      type: "tool";
+      callId: string;
+      name: string;
+      state: ConversationToolState;
+      summary?: string;
+    };
+
 export type ConversationPart =
   | {
       type: "text";
@@ -11,11 +32,22 @@ export type ConversationPart =
       redacted?: boolean;
     }
   | {
+      type: "commentary";
+      summary: string;
+      state: "streaming" | "complete";
+    }
+  | {
       type: "tool";
       callId: string;
       name: string;
       state: ConversationToolState;
       summary?: string;
+    }
+  | {
+      /** Collapsible execution chain: reasoning, commentary, and tool process together. */
+      type: "chain";
+      state: "streaming" | "complete";
+      steps: ConversationChainStep[];
     }
   | {
       type: "task";
@@ -91,6 +123,8 @@ export type ConversationMessageView = {
 export type ConversationPartLabels = {
   reasoning: string;
   reasoningStreaming: string;
+  chain: string;
+  chainStreaming: string;
   tool: string;
   task: string;
   approval: string;

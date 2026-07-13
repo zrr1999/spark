@@ -1,7 +1,10 @@
 import type { SparkMessageView } from "@zendev-lab/spark-protocol";
+import { shortenOpaqueChannelId } from "./channel-session-title";
 import {
   conversationPartsFromMessage,
   conversationPartText,
+  groupThinkingChainParts,
+  preferToolSummary,
   textConversationPart,
 } from "./components/conversation/conversation-view";
 import type {
@@ -30,6 +33,7 @@ export type SessionTimelineReport = {
   role: string | null;
   status: string | null;
   createdAt: string;
+  message?: SparkMessageView;
   interaction?: {
     requestId: string | null;
     kind: string | null;
@@ -106,7 +110,12 @@ export function buildSessionTimeline(input: {
     ) {
       continue;
     }
-    const parts = conversationPartsFromReport(report);
+    const parts = report.message
+      ? conversationPartsFromMessage(
+          report.message,
+          actor === "user" ? displayUserMessage(report.message.text) : report.message.text,
+        )
+      : conversationPartsFromReport(report);
     const hasStructuredReportPart = parts.some(
       (part) =>
         part.type === "task" ||
@@ -134,7 +143,11 @@ export function buildSessionTimeline(input: {
     const lexical = left.timestamp.localeCompare(right.timestamp);
     return lexical || left.order - right.order || left.id.localeCompare(right.id);
   });
-  return mergeTimelineInteractionParts(mergeTimelineToolParts(sortedItems));
+  return mergeTimelineThinkingChains(
+    mergeConsecutiveSparkMessages(
+      mergeTimelineInteractionParts(mergeTimelineToolParts(sortedItems)),
+    ),
+  );
 }
 
 function channelSenderLabel(metadata: SparkMessageView["metadata"]): string | null {
@@ -142,7 +155,8 @@ function channelSenderLabel(metadata: SparkMessageView["metadata"]): string | nu
   if (!channel) return null;
   const senderName = nonEmptyString(channel.senderName);
   if (senderName) return senderName;
-  return nonEmptyString(channel.senderId);
+  const senderId = nonEmptyString(channel.senderId);
+  return senderId ? shortenOpaqueChannelId(senderId) : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -178,7 +192,7 @@ function mergeTimelineToolParts(items: SessionTimelineItem[]) {
         ...previous,
         name: part.name || previous.name,
         state: laterToolState(previous.state, part.state),
-        summary: part.summary || previous.summary,
+        summary: preferToolSummary(previous.summary, part.summary, previous.state, part.state),
       };
       owner.item.body = conversationPartText(owner.item.parts) || owner.item.body;
     }
@@ -186,6 +200,97 @@ function mergeTimelineToolParts(items: SessionTimelineItem[]) {
   }
 
   return result.filter((item) => item.parts.length > 0);
+}
+
+/**
+ * Fold consecutive daemon transcript messages into one assistant turn, like Pi/Codex.
+ * Only merge when the turn involves tool/thinking process — keep plain text replies
+ * separate so report projections with new IDs are not collapsed by equal text.
+ */
+function mergeConsecutiveSparkMessages(items: SessionTimelineItem[]) {
+  const result: SessionTimelineItem[] = [];
+  for (const item of items) {
+    const previous = result.at(-1);
+    if (previous && shouldMergeSparkTurn(previous, item)) {
+      const mergedParts = mergeToolsInParts([...previous.parts, ...item.parts]);
+      previous.parts = mergedParts;
+      previous.body = conversationPartText(mergedParts) || previous.body;
+      previous.status = laterMessageStatus(previous.status, item.status);
+      previous.timestamp = item.timestamp || previous.timestamp;
+      // Drop tool/thinking-only meta once folded into the turn.
+      if (previous.meta && !item.meta) previous.meta = null;
+      continue;
+    }
+    result.push({ ...item, parts: [...item.parts] });
+  }
+  return result;
+}
+
+function shouldMergeSparkTurn(previous: SessionTimelineItem, next: SessionTimelineItem): boolean {
+  if (previous.actor !== "spark" || next.actor !== "spark") return false;
+  if (!previous.id.startsWith("message:") || !next.id.startsWith("message:")) return false;
+  if (hasProcessParts(previous.parts) || hasProcessParts(next.parts)) return true;
+  return next.meta === "tool" || next.meta === "thinking";
+}
+
+function hasProcessParts(parts: readonly ConversationPart[]): boolean {
+  return parts.some(
+    (part) =>
+      part.type === "tool" ||
+      part.type === "reasoning" ||
+      part.type === "commentary" ||
+      part.type === "chain",
+  );
+}
+
+function mergeTimelineThinkingChains(items: SessionTimelineItem[]) {
+  return items.map((item) => {
+    const parts = groupThinkingChainParts(item.parts);
+    return {
+      ...item,
+      parts,
+      body: conversationPartText(parts) || item.body,
+    };
+  });
+}
+
+function mergeToolsInParts(parts: ConversationPart[]) {
+  const result: ConversationPart[] = [];
+  const toolIndexes = new Map<string, number>();
+  for (const part of parts) {
+    if (part.type !== "tool") {
+      result.push(part);
+      continue;
+    }
+    const previousIndex = toolIndexes.get(part.callId);
+    const previous = previousIndex === undefined ? undefined : result[previousIndex];
+    if (previousIndex === undefined || previous?.type !== "tool") {
+      toolIndexes.set(part.callId, result.length);
+      result.push(part);
+      continue;
+    }
+    result[previousIndex] = {
+      ...previous,
+      name: part.name || previous.name,
+      state: laterToolState(previous.state, part.state),
+      summary: preferToolSummary(previous.summary, part.summary, previous.state, part.state),
+    };
+  }
+  return result;
+}
+
+function laterMessageStatus(previous: string | null, next: string | null): string | null {
+  if (!previous) return next;
+  if (!next) return previous;
+  const rank = (value: string) => {
+    const normalized = value.toLocaleLowerCase();
+    if (["failed", "error", "errored"].includes(normalized)) return 4;
+    if (["cancelled", "canceled"].includes(normalized)) return 3;
+    if (["done", "completed", "complete", "succeeded", "success"].includes(normalized)) return 2;
+    if (["running", "streaming", "pending", "queued"].includes(normalized)) return 1;
+    return 0;
+  };
+  return rank(next) >= rank(previous) ? next : previous;
 }
 
 function laterToolState(
@@ -259,6 +364,7 @@ function displayUserMessage(text: string) {
 }
 
 function sessionMessageId(report: SessionTimelineReport) {
+  if (report.kind === "session.message" && report.message?.id) return report.message.id;
   if (report.kind !== "session.message" || !report.id.startsWith("message:")) return null;
   const id = report.id.slice("message:".length).trim();
   return id || null;

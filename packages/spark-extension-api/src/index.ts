@@ -91,6 +91,11 @@ export interface ToolConfig {
   description: string;
   promptGuidelines?: string[];
   parameters: unknown;
+  /**
+   * When true, the host turn loop must satisfy the session `approvalMethod`
+   * (`skip` | `human` | `auto`) before executing this tool.
+   */
+  requiresApproval?: boolean;
   renderCall?: (
     args: Record<string, unknown>,
     theme: ToolRenderTheme,

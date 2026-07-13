@@ -31,6 +31,8 @@ export interface SparkDaemonSessionRunTask {
   prompt: string;
   /** Canonical provider/model frozen when this turn is enqueued. */
   model?: string;
+  /** Thinking/reasoning intensity frozen when this turn is enqueued. */
+  thinkingLevel?: string;
   reset?: boolean;
   actor?: string;
   note?: string;

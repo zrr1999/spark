@@ -120,6 +120,22 @@ importers:
       vitest:
         specifier: 4.1.9
         version: 4.1.9(@opentelemetry/api@1.9.0)(@types/node@26.0.1)(@vitest/browser-preview@4.1.9)(@voidzero-dev/vite-plus-core@0.2.1(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(jsdom@27.4.0)
+    optionalDependencies:
+      '@cursor/sdk-darwin-arm64':
+        specifier: 1.0.23
+        version: 1.0.23
+      '@cursor/sdk-darwin-x64':
+        specifier: 1.0.23
+        version: 1.0.23
+      '@cursor/sdk-linux-arm64':
+        specifier: 1.0.23
+        version: 1.0.23
+      '@cursor/sdk-linux-x64':
+        specifier: 1.0.23
+        version: 1.0.23
+      '@cursor/sdk-win32-x64':
+        specifier: 1.0.23
+        version: 1.0.23
 
   apps/spark-cli:
     dependencies:
@@ -302,6 +318,9 @@ importers:
       '@zendev-lab/spark-protocol':
         specifier: workspace:^
         version: link:../../packages/spark-protocol
+      '@zendev-lab/spark-session':
+        specifier: workspace:^
+        version: link:../../packages/spark-session
       '@zendev-lab/spark-system':
         specifier: workspace:^
         version: link:../../packages/spark-system
@@ -426,7 +445,13 @@ importers:
       '@zendev-lab/spark-protocol':
         specifier: workspace:^
         version: link:../spark-protocol
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.0
     devDependencies:
+      '@types/ws':
+        specifier: ^8.5.0
+        version: 8.18.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -483,7 +508,7 @@ importers:
         version: 8.0.4
       ignore:
         specifier: ^7.0.5
-        version: 7.0.5
+        version: 7.0.6
       minimatch:
         specifier: ^10.2.5
         version: 10.2.5
@@ -599,6 +624,15 @@ importers:
       '@zendev-lab/spark-host':
         specifier: workspace:^
         version: link:../spark-host
+      '@zendev-lab/spark-protocol':
+        specifier: workspace:^
+        version: link:../spark-protocol
+      '@zendev-lab/spark-session':
+        specifier: workspace:^
+        version: link:../spark-session
+      '@zendev-lab/spark-system':
+        specifier: workspace:^
+        version: link:../spark-system
       '@zendev-lab/spark-tui':
         specifier: workspace:^
         version: link:../spark-tui
@@ -1940,9 +1974,6 @@ packages:
   '@types/istanbul-reports@3.0.4':
     resolution: {integrity: sha512-pk2B1NWalF9toCRu6gjBzR69syFjP4Od8WRAX+0mmf9lAjCRicLOWc+ZrxZHx/0XRjotgkF9t6iaMJ+aXcOdZQ==}
 
-  '@types/node@25.9.3':
-    resolution: {integrity: sha512-603BddQMv3pUcr4U2dhujk83N2tTDVr/34wII2B6bJy6g+8WD6yUb11jszNs0gdi4PesVWl7ABt8nYMVpnLUcg==}
-
   '@types/node@26.0.1':
     resolution: {integrity: sha512-fc3KiUoBt6kie0N9bIW3E47vZsuaMf0PM2AaUpLCLT0s/LvX1nxAim6Fc049cNxODPpGm6qRAuUOB86SkRuPQw==}
 
@@ -2532,6 +2563,10 @@ packages:
     resolution: {integrity: sha512-Hs59xBNfUIunMFgWAbGX5cq6893IbWg4KnrjbYwX3tx0ztorVgTDA6B2sxf8ejHJ4wz8BqGUMYlnzNBer5NvGg==}
     engines: {node: '>= 4'}
 
+  ignore@7.0.6:
+    resolution: {integrity: sha512-BAg6QkE8W+TuQLrrw0Ugr7HegXduRuuj8/ti2kSOc+jz1dmx8/WNcjr6XGnq5YpDWxFwwaavqD0+jIUOKelTsw==}
+    engines: {node: '>= 4'}
+
   inherits@2.0.4:
     resolution: {integrity: sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==}
 
@@ -3050,9 +3085,6 @@ packages:
     resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
     engines: {node: '>=14.17'}
     hasBin: true
-
-  undici-types@7.24.6:
-    resolution: {integrity: sha512-WRNW+sJgj5OBN4/0JpHFqtqzhpbnV0GuB+OozA9gCL7a993SmU+1JBZCzLNxYsbMfIeDL+lTsphD5jN5N+n0zg==}
 
   undici-types@8.3.0:
     resolution: {integrity: sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ==}
@@ -4318,10 +4350,6 @@ snapshots:
     dependencies:
       '@types/istanbul-lib-report': 3.0.3
 
-  '@types/node@25.9.3':
-    dependencies:
-      undici-types: 7.24.6
-
   '@types/node@26.0.1':
     dependencies:
       undici-types: 8.3.0
@@ -4342,7 +4370,7 @@ snapshots:
 
   '@types/ws@8.18.1':
     dependencies:
-      '@types/node': 25.9.3
+      '@types/node': 26.1.1
 
   '@types/yargs-parser@21.0.3': {}
 
@@ -4920,6 +4948,8 @@ snapshots:
 
   ignore@7.0.5: {}
 
+  ignore@7.0.6: {}
+
   inherits@2.0.4: {}
 
   inline-style-parser@0.2.4: {}
@@ -5449,8 +5479,6 @@ snapshots:
   typebox@1.2.13: {}
 
   typescript@6.0.3: {}
-
-  undici-types@7.24.6: {}
 
   undici-types@8.3.0: {}
 

@@ -92,6 +92,13 @@ describe("Spark daemon executor queue fan-out", () => {
     const queue = new SparkDaemonQueue({ daemonRoot: root });
     const active = createSparkDaemonActiveTasks();
     const emitted: SparkDaemonEvent[] = [];
+    const failedTransitionOrder: string[] = [];
+    const markFailed = queue.markFailed.bind(queue);
+    vi.spyOn(queue, "markFailed").mockImplementation(async (fileName, error) => {
+      const result = await markFailed(fileName, error);
+      failedTransitionOrder.push("stored");
+      return result;
+    });
     const launched: string[] = [];
     const lateSettlement = deferred<void>();
     let firstSignal: AbortSignal | undefined;
@@ -127,6 +134,9 @@ describe("Spark daemon executor queue fan-out", () => {
           executeTask,
           emitEvent: (event) => {
             emitted.push(event);
+            if (event.type === "daemon.task.lifecycle" && event.status === "failed") {
+              failedTransitionOrder.push("emitted");
+            }
           },
           taskTimeoutMs: 10,
           taskAbortDrainMs: 5,
@@ -150,6 +160,7 @@ describe("Spark daemon executor queue fan-out", () => {
           summary: "Spark daemon queue task timed out after 10ms",
         }),
       );
+      expect(failedTransitionOrder).toEqual(["stored", "emitted"]);
 
       // The same-session entry is skipped while the later, unrelated entry is
       // free to consume the released worker slot.
@@ -198,6 +209,13 @@ describe("Spark daemon executor queue fan-out", () => {
     const queue = new SparkDaemonQueue({ daemonRoot: root });
     const active = createSparkDaemonActiveTasks();
     const emitted: SparkDaemonEvent[] = [];
+    const cancelledTransitionOrder: string[] = [];
+    const markFailed = queue.markFailed.bind(queue);
+    vi.spyOn(queue, "markFailed").mockImplementation(async (fileName, error) => {
+      const result = await markFailed(fileName, error);
+      cancelledTransitionOrder.push("stored");
+      return result;
+    });
     let firstSignal: AbortSignal | undefined;
     const sawAbort = deferred<void>();
     const cleanupGate = deferred<void>();
@@ -219,6 +237,9 @@ describe("Spark daemon executor queue fan-out", () => {
           executeTask,
           emitEvent: (event) => {
             emitted.push(event);
+            if (event.type === "daemon.task.lifecycle" && event.status === "cancelled") {
+              cancelledTransitionOrder.push("emitted");
+            }
           },
           taskTimeoutMs: 10_000,
           taskAbortDrainMs: 5,
@@ -244,6 +265,7 @@ describe("Spark daemon executor queue fan-out", () => {
           summary: "Spark daemon queue task cancelled: test cancellation",
         }),
       );
+      expect(cancelledTransitionOrder).toEqual(["stored", "emitted"]);
 
       cleanupGate.resolve();
       await eventually(

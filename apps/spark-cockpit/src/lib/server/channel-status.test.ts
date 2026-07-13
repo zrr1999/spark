@@ -7,8 +7,10 @@ import {
   channelEditorValuesFromConfig,
   channelsConfigPath,
   DEFAULT_INFOFLOW_ENDPOINT,
+  emptyChannelEditorValues,
   loadChannelsConfigForCockpit,
   loadChannelStatusForCockpit,
+  mergeAdapterCredentialsForCreate,
   saveChannelsConfigForCockpit,
   type CockpitChannelDaemonClient,
   type CockpitChannelStatusSnapshot,
@@ -155,6 +157,16 @@ describe("cockpit channel status", () => {
         infoflowGroupTrigger: "mention",
         infoflowAllowedGroupIds: "",
         infoflowSystemPrompt: "",
+        qqbotEnabled: false,
+        qqbotAppId: "",
+        qqbotClientSecret: "",
+        qqbotClientSecretSet: false,
+        qqbotSandbox: true,
+        qqbotAllowedUserIds: "",
+        qqbotGroupPolicy: "disabled",
+        qqbotGroupTrigger: "mention",
+        qqbotAllowedGroupIds: "",
+        qqbotSystemPrompt: "",
         routeName: "ops",
         routeAdapter: "infoflow",
         routeRecipient: "",
@@ -232,6 +244,32 @@ describe("cockpit channel status", () => {
         },
       }),
     );
+  });
+
+  it("merges create-channel credentials onto one adapter without dropping others", () => {
+    const previous = {
+      ...emptyChannelEditorValues(),
+      feishuEnabled: true,
+      feishuAppId: "cli_keep",
+      feishuAppSecretSet: true,
+      infoflowEnabled: false,
+    };
+
+    const merged = mergeAdapterCredentialsForCreate(previous, {
+      adapter: "infoflow",
+      infoflowAppKey: "key_new",
+      infoflowAppAgentId: "43163",
+      infoflowAppSecret: "secret_new",
+    });
+
+    expect(merged.feishuEnabled).toBe(true);
+    expect(merged.feishuAppId).toBe("cli_keep");
+    expect(merged.infoflowEnabled).toBe(true);
+    expect(merged.infoflowAppKey).toBe("key_new");
+    expect(merged.infoflowAppAgentId).toBe("43163");
+    expect(merged.infoflowAppSecret).toBe("secret_new");
+    expect(merged.onUnbound).toBe("create");
+    expect(merged.ingressEnabled).toBe(true);
   });
 });
 

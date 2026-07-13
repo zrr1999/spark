@@ -99,32 +99,46 @@ class ManualPiApi {
     return {
       async review(input: ReviewInput) {
         const now = new Date().toISOString();
-        const verdict =
-          input.targetKind === "task"
-            ? {
-                targetKind: "task" as const,
-                taskRef: input.task.ref,
-                approved: true,
-                outcome: "approved" as const,
-                summary: "manual matrix reviewer stub approved task evidence",
-                findings: [],
-                blockers: [],
-                confidence: "high" as const,
-              }
-            : {
-                targetKind: "goal" as const,
-                goalId: input.goalId,
-                achieved: input.requestedStatus === "complete",
-                remainingWork:
-                  input.requestedStatus === "complete"
-                    ? ""
-                    : "manual matrix did not request completion",
-                outcome: "approved" as const,
-                summary: "manual matrix reviewer stub approved goal transition",
-                findings: [],
-                blockers: [],
-                confidence: "high" as const,
-              };
+        const verdict = (() => {
+          if (input.targetKind === "task") {
+            return {
+              targetKind: "task" as const,
+              taskRef: input.task.ref,
+              approved: true,
+              outcome: "approved" as const,
+              summary: "manual matrix reviewer stub approved task evidence",
+              findings: [],
+              blockers: [],
+              confidence: "high" as const,
+            };
+          }
+          if (input.targetKind === "goal") {
+            return {
+              targetKind: "goal" as const,
+              goalId: input.goalId,
+              achieved: input.requestedStatus === "complete",
+              remainingWork:
+                input.requestedStatus === "complete"
+                  ? ""
+                  : "manual matrix did not request completion",
+              outcome: "approved" as const,
+              summary: "manual matrix reviewer stub approved goal transition",
+              findings: [],
+              blockers: [],
+              confidence: "high" as const,
+            };
+          }
+          return {
+            targetKind: "tool_approval" as const,
+            toolName: input.toolName,
+            approved: true,
+            outcome: "approved" as const,
+            summary: "manual matrix reviewer stub approved tool use",
+            findings: [],
+            blockers: [],
+            confidence: "high" as const,
+          };
+        })();
         return {
           verdict,
           record: {

@@ -22,7 +22,7 @@ import {
   type ChannelReplyStream,
   type ChannelReplyTarget,
 } from "@zendev-lab/spark-channels";
-import type { InfoflowAdapterConfig } from "@zendev-lab/spark-channels";
+import type { InfoflowAdapterConfig, QqbotAdapterConfig } from "@zendev-lab/spark-channels";
 import { loadDaemonChannelsConfig, type DaemonChannelIngressRuntime } from "../channels/ingress.ts";
 import type {
   SparkDaemonSessionRunTask,
@@ -211,11 +211,14 @@ export async function executeSparkDaemonSessionRunTask(
     sessionId: task.sessionId,
     prompt: task.prompt,
     ...(task.model ? { model: task.model } : {}),
+    ...(task.thinkingLevel ? { thinkingLevel: task.thinkingLevel } : {}),
     reset: task.reset,
     signal: context.signal,
     timeoutMs: context.timeoutMs,
     ...(systemPrompt ? { systemPrompt } : {}),
     ...(messageMetadata ? { messageMetadata } : {}),
+    // Channel-created session runs default to auto tool approval for cue/etc.
+    ...(task.channelReply ? { approvalMethod: "auto" as const } : {}),
     onEvent: (event) => emitHeadlessEvent(event, task, context),
   });
 }
@@ -248,7 +251,11 @@ async function systemPromptForChannelSession(
   if (!reply) return undefined;
   const externalKey = task.channelContext?.externalKey;
   const scope =
-    externalKey?.startsWith("infoflow:group:") || reply.recipient.startsWith("group:")
+    externalKey?.startsWith("infoflow:group:") ||
+    externalKey?.startsWith("qqbot:group:") ||
+    externalKey?.startsWith("qqbot:channel:") ||
+    reply.recipient.startsWith("group:") ||
+    reply.recipient.startsWith("channel:")
       ? "group"
       : "user";
 
@@ -266,6 +273,20 @@ async function systemPromptForChannelSession(
       }),
       infoflow ? resolveInfoflowCustomSystemPrompt(infoflow) : undefined,
       task.channelContext ? renderInfoflowMessageContextPrompt(task.channelContext) : undefined,
+    ]);
+  }
+
+  if (reply.adapterId === "qqbot") {
+    const qqbot = await loadQqbotAdapterConfig(options, reply.workspaceId);
+    const custom = qqbot?.system_prompt?.trim();
+    return composeAgentSystemPrompt([
+      DEFAULT_SPARK_IDENTITY_PROMPT,
+      renderSparkChannelSurfacePrompt({
+        adapter: "qqbot",
+        scope,
+        ...(externalKey ? { externalKey } : {}),
+      }),
+      custom || undefined,
     ]);
   }
 
@@ -292,6 +313,24 @@ async function loadInfoflowAdapterConfig(
     return adapter?.type === "infoflow" ? adapter : undefined;
   } catch (error) {
     console.error("[spark-daemon] failed to load infoflow channel config for prompts", error);
+    return undefined;
+  }
+}
+
+async function loadQqbotAdapterConfig(
+  options: SparkDaemonQueueTaskExecutorOptions,
+  workspaceId: string,
+): Promise<QqbotAdapterConfig | undefined> {
+  const sparkHome = options.channelsSparkHome ?? options.controlSparkHome;
+  if (!sparkHome) return undefined;
+  try {
+    const loaded = await loadDaemonChannelsConfig(sparkHome, workspaceId);
+    const adapter = Object.values(loaded.config?.adapters ?? {}).find(
+      (entry) => entry.type === "qqbot",
+    );
+    return adapter?.type === "qqbot" ? adapter : undefined;
+  } catch (error) {
+    console.error("[spark-daemon] failed to load qqbot channel config for prompts", error);
     return undefined;
   }
 }

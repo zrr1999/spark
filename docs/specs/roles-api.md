@@ -202,10 +202,11 @@ Spark attribution rules, see
 
 | Surface                      | `spark-roles` / runtime concept                                                                 |
 | ---------------------------- | -------------------------------------------------------------------------------------------- |
-| `role({ action: "list" })`   | Pi role-spec management over `RoleRegistry.list()`                                           |
-| `role({ action: "get" })`    | Pi role-spec management over `RoleRegistry.select()`                                         |
-| `role({ action: "create" })` | Pi role-spec management creating project/user `RoleSpec`s                                    |
-| `role({ action: "call" })`   | One-off direct role invocation; not attached to managed task graphs or workflow runs          |
+| `role({ action: "list|get|create" })` | Role-spec management by default; persistent sessions when `resource="session"` |
+| `role({ action: "call", role, instruction })` | Anonymous one-off role invocation; no persistent session continuity |
+| `role({ action: "call", sessionId, instruction })` | Daemon-backed turn submission to existing persistent continuity |
+| `role({ action: "bind|unbind|archive" })` | Persistent session lifecycle and channel binding management |
+| `role({ action: "send|mailto|inbox|read|ack" })` | Explicit durable session messages; send does not execute the target |
 | Task executor binding        | `Task.roleRef` string resolved by `RoleRegistry` at the host/runtime boundary                 |
 | Task execution               | `spark-runtime` calls `runRole()` behind explicit `assign` scheduling                         |
 | Runtime claim                | `TaskClaim.kind = "role-run"`, `roleRef`, `runName`, `runRef` attribution                    |

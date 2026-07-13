@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSparkSessionView } from "./index.ts";
+import { parseSparkSessionView, sparkTextPhaseFromSignature } from "./index.ts";
 
 describe("Spark conversation view protocol", () => {
   it("keeps legacy text-only snapshots compatible", () => {
@@ -44,6 +44,14 @@ describe("Spark conversation view protocol", () => {
               type: "text",
               status: "complete",
               text: "Done",
+              phase: "final_answer",
+            },
+            {
+              id: "assistant-1:part:3",
+              type: "text",
+              status: "complete",
+              text: "Checking one more thing.",
+              phase: "commentary",
             },
           ],
         },
@@ -71,8 +79,31 @@ describe("Spark conversation view protocol", () => {
         type: "text",
         status: "complete",
         text: "Done",
+        phase: "final_answer",
+        metadata: {},
+      },
+      {
+        id: "assistant-1:part:3",
+        type: "text",
+        status: "complete",
+        text: "Checking one more thing.",
+        phase: "commentary",
         metadata: {},
       },
     ]);
+  });
+
+  it("extracts only known display phases from opaque text signatures", () => {
+    expect(
+      sparkTextPhaseFromSignature(
+        JSON.stringify({ v: 1, phase: "commentary", secret: "must-not-project" }),
+      ),
+    ).toBe("commentary");
+    expect(sparkTextPhaseFromSignature(JSON.stringify({ phase: "final_answer" }))).toBe(
+      "final_answer",
+    );
+    expect(sparkTextPhaseFromSignature(JSON.stringify({ phase: "unknown" }))).toBeUndefined();
+    expect(sparkTextPhaseFromSignature("not-json")).toBeUndefined();
+    expect(sparkTextPhaseFromSignature({ phase: "commentary" })).toBeUndefined();
   });
 });

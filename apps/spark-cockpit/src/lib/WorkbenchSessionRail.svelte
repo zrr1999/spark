@@ -8,6 +8,7 @@
     isSessionVisibleInWorkbenchRail,
     workbenchSessionScope,
   } from "$lib/workbench-session-scope";
+  import { formatChannelSessionTitle, sessionHasChannelBinding } from "$lib/channel-session-title";
 
   type SessionRecord = {
     sessionId: string;
@@ -19,6 +20,7 @@
     status: string;
     activityStatus?: string;
     activityUpdatedAt?: string;
+    bindings?: Array<{ kind: string; adapter?: string; externalKey?: string }>;
     createdAt: string;
     updatedAt: string;
   };
@@ -34,6 +36,7 @@
     workspaces,
     activeWorkspaceId = null,
     selectedSessionId = null,
+    sessionsAvailable = true,
     locale,
     common,
     messages,
@@ -42,6 +45,7 @@
     workspaces: WorkspaceOption[];
     activeWorkspaceId?: string | null;
     selectedSessionId?: string | null;
+    sessionsAvailable?: boolean;
     locale: string;
     common: Parameters<typeof getStatusLabel>[1];
     messages: {
@@ -49,10 +53,13 @@
       daemonConversation: string;
       searchPlaceholder: string;
       emptyTitle: string;
+      daemonUnavailableTitle: string;
+      daemonUnavailableBody: string;
       listLabel: string;
       untitledConversation: string;
       unknownWorkspace: string;
       daemonGroup: string;
+      channelSessionBadge: string;
     };
   } = $props();
 
@@ -140,28 +147,39 @@
   }
 
   function sessionTitle(session: SessionRecord) {
-    const title = session.title || messages.untitledConversation;
-    const infoflow = title.match(/^channel infoflow:(group|user):(.+)$/i);
-    if (!infoflow) return title;
-    const scope = infoflow[1] === "group"
-      ? locale.toLowerCase().startsWith("zh") ? "如流群聊" : "Infoflow group"
-      : locale.toLowerCase().startsWith("zh") ? "如流私聊" : "Infoflow chat";
-    return `${scope} · ${infoflow[2]}`;
+    return formatChannelSessionTitle(session.title, {
+      locale,
+      fallback: messages.untitledConversation,
+    });
   }
 </script>
 
 <div class="session-rail">
   <div class="new-session-actions">
     {#if activeWorkspaceId}
-      <a class="new-session" href="/sessions?new=workspace">
-        <Icon name="workspace" size={15} stroke={2.2} />
-        <span>{messages.workspaceConversation}</span>
-      </a>
+      {#if sessionsAvailable}
+        <a class="new-session" href="/sessions?new=workspace">
+          <Icon name="workspace" size={15} stroke={2.2} />
+          <span>{messages.workspaceConversation}</span>
+        </a>
+      {:else}
+        <span class="new-session disabled" aria-disabled="true">
+          <Icon name="workspace" size={15} stroke={2.2} />
+          <span>{messages.workspaceConversation}</span>
+        </span>
+      {/if}
     {/if}
-    <a class="new-session" href="/sessions?new=daemon">
-      <Icon name="spark" size={15} stroke={2.2} />
-      <span>{messages.daemonConversation}</span>
-    </a>
+    {#if sessionsAvailable}
+      <a class="new-session" href="/sessions?new=daemon">
+        <Icon name="spark" size={15} stroke={2.2} />
+        <span>{messages.daemonConversation}</span>
+      </a>
+    {:else}
+      <span class="new-session disabled" aria-disabled="true">
+        <Icon name="spark" size={15} stroke={2.2} />
+        <span>{messages.daemonConversation}</span>
+      </span>
+    {/if}
   </div>
 
   <label class="session-filter">
@@ -171,10 +189,19 @@
       type="search"
       aria-label={messages.searchPlaceholder}
       placeholder={messages.searchPlaceholder}
+      disabled={!sessionsAvailable}
     />
   </label>
 
-  {#if filteredSessions.length === 0}
+  {#if !sessionsAvailable}
+    <div class="session-unavailable" role="status">
+      <Icon name="warning" size={15} stroke={2.1} />
+      <div>
+        <strong>{messages.daemonUnavailableTitle}</strong>
+        <p>{messages.daemonUnavailableBody}</p>
+      </div>
+    </div>
+  {:else if filteredSessions.length === 0}
     <p class="session-empty">{messages.emptyTitle}</p>
   {:else}
     <div class="session-groups" aria-label={messages.listLabel}>
@@ -194,6 +221,9 @@
             >
               <span class="session-title-row">
                 <strong>{sessionTitle(session)}</strong>
+                {#if sessionHasChannelBinding(session)}
+                  <span class="channel-badge">{messages.channelSessionBadge}</span>
+                {/if}
                 {#if displayedStatus}
                 <span
                   class="session-status {displayedStatus}"
@@ -259,6 +289,18 @@
     color: var(--color-primary);
   }
 
+  .new-session.disabled {
+    color: var(--color-ink-disabled);
+    cursor: not-allowed;
+    opacity: 0.72;
+  }
+
+  .new-session.disabled:hover {
+    background: var(--color-surface-soft);
+    border-color: transparent;
+    color: var(--color-ink-disabled);
+  }
+
   .session-filter {
     align-items: center;
     background: var(--color-surface-soft);
@@ -273,6 +315,10 @@
       background 120ms ease,
       border-color 120ms ease,
       box-shadow 120ms ease;
+  }
+
+  .session-filter:has(input:disabled) {
+    opacity: 0.72;
   }
 
   .session-filter:focus-within {
@@ -298,6 +344,38 @@
     font-size: 13px;
     line-height: 1.45;
     margin: 8px 4px 0;
+  }
+
+  .session-unavailable {
+    align-items: flex-start;
+    background: color-mix(in srgb, var(--color-warning) 12%, var(--color-surface-soft));
+    border: 1px solid color-mix(in srgb, var(--color-warning) 28%, transparent);
+    border-radius: var(--rounded-md);
+    color: var(--color-ink-muted);
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+    padding: 10px;
+  }
+
+  .session-unavailable :global(svg) {
+    color: var(--color-warning);
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  .session-unavailable strong {
+    color: var(--color-ink);
+    display: block;
+    font-size: 13px;
+    font-weight: 650;
+    line-height: 1.35;
+  }
+
+  .session-unavailable p {
+    font-size: 12px;
+    line-height: 1.45;
+    margin: 4px 0 0;
   }
 
   .session-groups {
@@ -370,10 +448,30 @@
 
   .session-title-row {
     align-items: center;
-    display: grid;
-    gap: 8px;
-    grid-template-columns: minmax(0, 1fr) auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
     min-width: 0;
+  }
+
+  .session-title-row strong {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .channel-badge {
+    background: color-mix(in srgb, var(--color-primary, #2563eb) 12%, transparent);
+    border-radius: 999px;
+    color: var(--color-primary, #2563eb);
+    flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    line-height: 1;
+    padding: 4px 6px;
   }
 
   .session-status {

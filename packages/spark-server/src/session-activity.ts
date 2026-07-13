@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { sparkMessageViewSchema, type SparkMessageView } from "@zendev-lab/spark-protocol";
 
 export interface SessionActivityCommand {
   id: string;
@@ -30,6 +31,8 @@ export interface SessionActivityReport {
   role: string | null;
   status: string | null;
   createdAt: string;
+  /** Canonical structured message when the report originated from a view event. */
+  message?: SparkMessageView;
   interaction?: {
     requestId: string | null;
     kind: string | null;
@@ -329,6 +332,7 @@ function reportFromDaemonPayload(
     const viewType = stringValue(view, "type");
     if (viewType === "session.message") {
       const message = recordValue(view, "message");
+      const parsedMessage = sparkMessageViewSchema.safeParse(message);
       const messageId = stringValue(message, "id");
       const role = stringValue(message, "role");
       const status = stringValue(message, "status");
@@ -341,6 +345,7 @@ function reportFromDaemonPayload(
         role,
         status,
         createdAt: row.createdAt,
+        ...(parsedMessage.success ? { message: parsedMessage.data } : {}),
       };
     }
     if (viewType === "run.update") {

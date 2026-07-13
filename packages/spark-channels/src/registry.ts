@@ -1,5 +1,6 @@
 import { FeishuAdapter } from "./feishu-adapter.ts";
 import { InfoflowAdapter } from "./infoflow-adapter.ts";
+import { QqbotAdapter } from "./qqbot-adapter.ts";
 import type {
   ChannelAdapter,
   ChannelAdapterConfig,
@@ -165,6 +166,13 @@ export class ChannelRegistry {
           ...(transport ? { transport } : {}),
           ...(onMessage ? { onMessage } : {}),
         });
+      case "qqbot":
+        return new QqbotAdapter({
+          id: adapterId,
+          config,
+          ...(transport ? { transport } : {}),
+          ...(onMessage ? { onMessage } : {}),
+        });
       default: {
         const unexpected: never = config;
         throw new ChannelRegistryError(
@@ -298,16 +306,66 @@ function parseAdapterConfig(value: unknown): ChannelAdapterConfig {
       ...(typeof record.ws_gateway === "string" ? { ws_gateway: record.ws_gateway } : {}),
       ...(record.connection_mode === "websocket" ? { connection_mode: "websocket" } : {}),
       ...(record.allowed_user_ids !== undefined
-        ? { allowed_user_ids: parseStringList(record.allowed_user_ids, "allowed_user_ids") }
+        ? {
+            allowed_user_ids: parseStringList(record.allowed_user_ids, "infoflow.allowed_user_ids"),
+          }
         : {}),
       ...(record.group_policy !== undefined
-        ? { group_policy: parseInfoflowGroupPolicy(record.group_policy) }
+        ? { group_policy: parseGroupPolicy(record.group_policy, "infoflow") }
         : {}),
       ...(record.group_trigger !== undefined
-        ? { group_trigger: parseInfoflowGroupTrigger(record.group_trigger) }
+        ? { group_trigger: parseGroupTrigger(record.group_trigger, "infoflow") }
         : {}),
       ...(record.allowed_group_ids !== undefined
-        ? { allowed_group_ids: parseStringList(record.allowed_group_ids, "allowed_group_ids") }
+        ? {
+            allowed_group_ids: parseStringList(
+              record.allowed_group_ids,
+              "infoflow.allowed_group_ids",
+            ),
+          }
+        : {}),
+      ...(typeof record.system_prompt === "string" && record.system_prompt.trim()
+        ? { system_prompt: record.system_prompt.trim() }
+        : {}),
+    };
+  }
+  if (type === "qqbot") {
+    if (record.connection_mode !== undefined && record.connection_mode !== "websocket") {
+      throw new ChannelRegistryError("invalid_config", "qqbot.connection_mode must be websocket");
+    }
+    if (
+      record.api_environment !== undefined &&
+      record.api_environment !== "production" &&
+      record.api_environment !== "sandbox"
+    ) {
+      throw new ChannelRegistryError(
+        "invalid_config",
+        "qqbot.api_environment must be production or sandbox",
+      );
+    }
+    return {
+      type: "qqbot",
+      ...(typeof record.app_id === "string" ? { app_id: record.app_id } : {}),
+      ...(typeof record.client_secret === "string" ? { client_secret: record.client_secret } : {}),
+      ...(record.connection_mode === "websocket" ? { connection_mode: "websocket" } : {}),
+      ...(record.api_environment === "production" || record.api_environment === "sandbox"
+        ? { api_environment: record.api_environment }
+        : {}),
+      ...(record.allowed_user_ids !== undefined
+        ? {
+            allowed_user_ids: parseStringList(record.allowed_user_ids, "qqbot.allowed_user_ids"),
+          }
+        : {}),
+      ...(record.group_policy !== undefined
+        ? { group_policy: parseGroupPolicy(record.group_policy, "qqbot") }
+        : {}),
+      ...(record.group_trigger !== undefined
+        ? { group_trigger: parseGroupTrigger(record.group_trigger, "qqbot") }
+        : {}),
+      ...(record.allowed_group_ids !== undefined
+        ? {
+            allowed_group_ids: parseStringList(record.allowed_group_ids, "qqbot.allowed_group_ids"),
+          }
         : {}),
       ...(typeof record.system_prompt === "string" && record.system_prompt.trim()
         ? { system_prompt: record.system_prompt.trim() }
@@ -345,37 +403,40 @@ function parseIngressConfig(record: Record<string, unknown>): ChannelsConfig["in
   };
 }
 
-function parseInfoflowGroupPolicy(value: unknown): "disabled" | "allowlist" | "open" {
+function parseGroupPolicy(
+  value: unknown,
+  adapter: "infoflow" | "qqbot",
+): "disabled" | "allowlist" | "open" {
   if (value === "disabled" || value === "allowlist" || value === "open") {
     return value;
   }
   throw new ChannelRegistryError(
     "invalid_config",
-    "infoflow.group_policy must be disabled, allowlist, or open",
+    `${adapter}.group_policy must be disabled, allowlist, or open`,
   );
 }
 
-function parseInfoflowGroupTrigger(value: unknown): "mention" | "command" | "all" {
+function parseGroupTrigger(
+  value: unknown,
+  adapter: "infoflow" | "qqbot",
+): "mention" | "command" | "all" {
   if (value === "mention" || value === "command" || value === "all") return value;
   throw new ChannelRegistryError(
     "invalid_config",
-    "infoflow.group_trigger must be mention, command, or all",
+    `${adapter}.group_trigger must be mention, command, or all`,
   );
 }
 
 function parseStringList(value: unknown, field: string): string[] {
   if (!Array.isArray(value)) {
-    throw new ChannelRegistryError(
-      "invalid_config",
-      `infoflow.${field} must be an array of strings`,
-    );
+    throw new ChannelRegistryError("invalid_config", `${field} must be an array of strings`);
   }
   const items: string[] = [];
   for (const entry of value) {
     if (typeof entry !== "string" || !entry.trim()) {
       throw new ChannelRegistryError(
         "invalid_config",
-        `infoflow.${field} must be an array of non-empty strings`,
+        `${field} must be an array of non-empty strings`,
       );
     }
     items.push(entry.trim());

@@ -102,7 +102,47 @@ export interface InfoflowAdapterConfig {
   system_prompt?: string;
 }
 
-export type ChannelAdapterConfig = FeishuAdapterConfig | InfoflowAdapterConfig;
+export type QqbotGroupPolicy = "disabled" | "allowlist" | "open";
+
+export type QqbotGroupTrigger = "mention" | "command" | "all";
+
+export interface QqbotAdapterConfig {
+  type: "qqbot";
+  /** QQ Open Platform AppID. */
+  app_id?: string;
+  /** QQ Open Platform AppSecret (client secret). */
+  client_secret?: string;
+  /** Prefer websocket inbound; webhook is out of scope for v1. */
+  connection_mode?: "websocket";
+  /**
+   * OpenAPI + gateway host. Default: `production` (`api.sgroup.qq.com`).
+   * `sandbox` uses `sandbox.api.sgroup.qq.com` (no IP whitelist; sandbox peers only).
+   */
+  api_environment?: "production" | "sandbox";
+  /**
+   * Private-chat allowlist (sender openid). Empty / omitted = allow all
+   * private senders.
+   */
+  allowed_user_ids?: string[];
+  /**
+   * Group ingress policy. Default when omitted: `disabled`.
+   * - disabled: drop all group messages
+   * - allowlist: only `allowed_group_ids`
+   * - open: accept every group
+   */
+  group_policy?: QqbotGroupPolicy;
+  /** Which allowed group messages become Spark turns. Default: mention. */
+  group_trigger?: QqbotGroupTrigger;
+  /** Used when `group_policy` is `allowlist`. */
+  allowed_group_ids?: string[];
+  /**
+   * Custom system-prompt overlay for QQ Bot channel sessions.
+   * Policy/surface facts are generated in code; this field is operator copy only.
+   */
+  system_prompt?: string;
+}
+
+export type ChannelAdapterConfig = FeishuAdapterConfig | InfoflowAdapterConfig | QqbotAdapterConfig;
 
 export interface ChannelRouteConfig {
   adapter: string;

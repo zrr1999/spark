@@ -145,6 +145,21 @@ describe("session timeline", () => {
     expect(timeline.map((item) => item.senderLabel)).toEqual(["徐晓健", "zhanrongrui", null]);
   });
 
+  it("shortens opaque QQ openids when senderName is missing", () => {
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [
+        message("u-qq", "user", "hello", "2026-07-10T00:00:01.000Z", {
+          channel: { senderId: "398418FB5E7F1C597DFFD117597D6500" },
+        }),
+      ],
+      commands: [],
+      reports: [],
+    });
+
+    expect(timeline.map((item) => item.senderLabel)).toEqual(["398418FB…"]);
+  });
+
   it("projects legacy Infoflow envelopes as the human message body", () => {
     const legacyEnvelope = [
       "You are handling an Infoflow (如流) channel conversation.",
@@ -209,6 +224,85 @@ describe("session timeline", () => {
     expect(timeline.map((item) => [item.id, item.body])).toEqual([
       ["message:a1", "Same result"],
       ["message:a2", "Same result"],
+    ]);
+  });
+
+  it("preserves commentary and tool structure in the activity-report fallback", () => {
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [],
+      commands: [],
+      reports: [
+        {
+          id: "message:a-fallback",
+          kind: "session.message",
+          title: "assistant message",
+          text: "The check passed.",
+          role: "assistant",
+          status: "done",
+          createdAt: "2026-07-10T00:00:03.000Z",
+          message: {
+            version: 1,
+            id: "a-fallback",
+            role: "assistant",
+            text: "The check passed.",
+            status: "done",
+            createdAt: "2026-07-10T00:00:03.000Z",
+            parts: [
+              {
+                id: "a-fallback:commentary",
+                type: "text",
+                text: "Checking the repository.",
+                phase: "commentary",
+                status: "complete",
+                metadata: {},
+              },
+              {
+                id: "a-fallback:tool",
+                type: "tool-call",
+                toolCallId: "call-fallback",
+                toolName: "cue_exec",
+                status: "complete",
+                summary: "command=pwd",
+                metadata: {},
+              },
+              {
+                id: "a-fallback:answer",
+                type: "text",
+                text: "The check passed.",
+                phase: "final_answer",
+                status: "complete",
+                metadata: {},
+              },
+            ],
+            metadata: {},
+          },
+        },
+      ],
+    });
+
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0]?.id).toBe("message:a-fallback");
+    expect(timeline[0]?.parts).toEqual([
+      {
+        type: "chain",
+        state: "complete",
+        steps: [
+          {
+            type: "commentary",
+            summary: "Checking the repository.",
+            state: "complete",
+          },
+          {
+            type: "tool",
+            callId: "call-fallback",
+            name: "cue_exec",
+            state: "completed",
+            summary: "command=pwd",
+          },
+        ],
+      },
+      { type: "text", text: "The check passed.", streaming: false },
     ]);
   });
 
@@ -281,11 +375,17 @@ describe("session timeline", () => {
     expect(timeline[0]?.id).toBe("message:call-message");
     expect(timeline[0]?.parts).toEqual([
       {
-        type: "tool",
-        callId: "call-1",
-        name: "shell",
-        state: "completed",
-        summary: "Tests passed",
+        type: "chain",
+        state: "complete",
+        steps: [
+          {
+            type: "tool",
+            callId: "call-1",
+            name: "shell",
+            state: "completed",
+            summary: "Tests passed",
+          },
+        ],
       },
     ]);
     expect(JSON.stringify(timeline)).not.toContain("rawOutput");
@@ -316,11 +416,17 @@ describe("session timeline", () => {
 
     expect(timeline[0]?.parts).toEqual([
       {
-        type: "tool",
-        callId: "call-secret",
-        name: "shell",
-        state: "running",
-        summary: "Run checks",
+        type: "chain",
+        state: "streaming",
+        steps: [
+          {
+            type: "tool",
+            callId: "call-secret",
+            name: "shell",
+            state: "running",
+            summary: "Run checks",
+          },
+        ],
       },
     ]);
     expect(JSON.stringify(timeline)).not.toContain("super-secret");
@@ -481,6 +587,112 @@ describe("session timeline", () => {
         },
       ],
     });
+  });
+
+  it("merges consecutive spark tool turns into one thinking chain with result text", () => {
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [
+        {
+          version: 1 as const,
+          id: "a1",
+          role: "assistant",
+          text: "我来列一下目录。",
+          status: "done",
+          createdAt: "2026-07-10T00:00:01.000Z",
+          parts: [
+            {
+              id: "a1:thinking",
+              type: "thinking",
+              status: "complete",
+              text: "用 cue_exec 列目录",
+              metadata: {},
+            },
+            {
+              id: "a1:text",
+              type: "text",
+              status: "complete",
+              text: "我来列一下目录。",
+              metadata: {},
+            },
+            {
+              id: "a1:call",
+              type: "tool-call",
+              status: "pending",
+              toolCallId: "call-1",
+              toolName: "cue_exec",
+              summary: "command=ls",
+              metadata: {},
+            },
+          ],
+          metadata: {},
+        },
+        {
+          version: 1 as const,
+          id: "tool-result:call-1",
+          role: "tool",
+          text: ".cursor/\n.github/\nREADME.md",
+          status: "done",
+          toolCallId: "call-1",
+          toolName: "cue_exec",
+          createdAt: "2026-07-10T00:00:02.000Z",
+          parts: [
+            {
+              id: "tool-result:call-1:part",
+              type: "tool-result",
+              status: "complete",
+              toolCallId: "call-1",
+              toolName: "cue_exec",
+              summary: ".cursor/\n.github/\nREADME.md",
+              metadata: {},
+            },
+          ],
+          metadata: {},
+        },
+        {
+          version: 1 as const,
+          id: "a2",
+          role: "assistant",
+          text: "当前目录内容如上。",
+          status: "done",
+          createdAt: "2026-07-10T00:00:03.000Z",
+          parts: [
+            {
+              id: "a2:text",
+              type: "text",
+              status: "complete",
+              text: "当前目录内容如上。",
+              metadata: {},
+            },
+          ],
+          metadata: {},
+        },
+      ],
+      commands: [],
+      reports: [],
+    });
+
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0]?.parts.map((part) => part.type)).toEqual(["chain", "text", "text"]);
+    const chain = timeline[0]?.parts[0];
+    expect(chain).toMatchObject({ type: "chain", state: "complete" });
+    if (chain?.type !== "chain") throw new Error("expected chain part");
+    expect(chain.steps).toEqual([
+      {
+        type: "reasoning",
+        summary: "用 cue_exec 列目录",
+        state: "complete",
+        redacted: false,
+      },
+      {
+        type: "tool",
+        callId: "call-1",
+        name: "cue_exec",
+        state: "completed",
+        summary: ".cursor/\n.github/\nREADME.md",
+      },
+    ]);
+    expect(JSON.stringify(timeline[0]?.parts)).not.toMatch(/call-1\|/);
   });
 });
 

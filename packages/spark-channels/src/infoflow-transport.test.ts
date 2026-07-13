@@ -39,13 +39,6 @@ describe("infoflow transport", () => {
       [
         {
           recipient: "group:10838226",
-          content: { type: "text", text: "正在处理…" },
-          mentionUserIds: ["zhanrongrui"],
-        },
-      ],
-      [
-        {
-          recipient: "group:10838226",
           content: { type: "markdown", text: "**处理完成**" },
           mentionUserIds: ["zhanrongrui"],
         },

@@ -6,6 +6,7 @@ import {
 const defaultScopes: Record<SparkChannelAdapter, string> = {
   feishu: "chat",
   infoflow: "user",
+  qqbot: "c2c",
 };
 
 /** Build a protocol-normalized external key: `feishu:chat:<id>`, `infoflow:user:<id>`, … */

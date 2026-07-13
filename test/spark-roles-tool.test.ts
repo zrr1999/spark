@@ -320,6 +320,10 @@ void test("call_role launches fresh role runs", async () => {
     assert.ok(capturedNativeInput?.role.allowedTools?.includes("edit"));
     assert.equal(capturedNativeInput?.instruction.instruction, "Run the fake worker.");
     assert.equal(capturedNativeInput?.launch, "fresh");
+    assert.equal(capturedNativeInput?.noSession, true);
+    assert.equal(capturedNativeInput?.sessionPersistence, "anonymous");
+    assert.equal(capturedNativeInput?.record.noSession, true);
+    assert.equal(capturedNativeInput?.record.sessionPersistence, "anonymous");
     assert.equal(capturedNativeInput?.model, "test/model");
     assert.equal(capturedNativeInput?.timeoutMs, 5_000);
     assert.equal(capturedNativeInput?.cwd, dir);
@@ -442,7 +446,7 @@ void test("call_role exposes empty delivery when JSON events have no final assis
   }
 });
 
-void test("call_role forked launch requires explicit parent session", async () => {
+void test("call_role directs continuity requests to persistent sessionId calls", async () => {
   const tools = registerRoleToolsForTest();
   await assert.rejects(
     executeCallRole(tools, {
@@ -450,7 +454,7 @@ void test("call_role forked launch requires explicit parent session", async () =
       instruction: "Review with context.",
       launch: "forked",
     }),
-    /forked launch requires forkFromSession/,
+    /forked launch was replaced by persistent session calls; pass sessionId instead/,
   );
 });
 
@@ -662,7 +666,15 @@ void test("spark-roles tools reject invalid explicit parameters instead of using
       instruction: "Run with an invalid session directory.",
       sessionDir: 42,
     }),
-    /call_role sessionDir must be a string/,
+    /call_role sessionDir is not supported for anonymous role calls/,
+  );
+  await assert.rejects(
+    executeCallRole(tools, {
+      role: "worker",
+      instruction: "Run with a persistent-only reset option.",
+      reset: true,
+    }),
+    /call_role reset is only supported for persistent sessionId calls/,
   );
   await assert.rejects(
     executeCallRole(tools, {
@@ -671,7 +683,7 @@ void test("spark-roles tools reject invalid explicit parameters instead of using
       launch: "forked",
       forkFromSession: 42,
     }),
-    /call_role forkFromSession must be a string/,
+    /call_role forked launch was replaced by persistent session calls|call_role forkFromSession was replaced by persistent session calls/,
   );
 });
 

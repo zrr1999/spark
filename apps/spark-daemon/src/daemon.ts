@@ -277,6 +277,9 @@ async function maybeStartChannelIngress(
             ? await options.modelControl.effectiveModel(assignment.sessionId)
             : undefined;
           if (model) await options.modelControl?.prepareModel(model);
+          const thinkingLevel = options.modelControl
+            ? await options.modelControl.effectiveThinkingLevel(assignment.sessionId)
+            : undefined;
           const session = await options.sessionRegistry?.get(assignment.sessionId);
           if (session && session.scope.kind !== "workspace") {
             throw new Error(`channel session ${assignment.sessionId} has no workspace owner`);
@@ -285,8 +288,12 @@ async function maybeStartChannelIngress(
             session?.scope.kind === "workspace"
               ? session.scope.workspaceId
               : assignment.channelReply.workspaceId;
-          const cwd = session?.cwd?.trim() ?? resolveWorkspaceLocalPath(options.db, workspaceId);
-          if (!cwd) {
+          const cwdCandidate =
+            session?.cwd?.trim() && session.cwd.trim() !== "/"
+              ? session.cwd.trim()
+              : resolveWorkspaceLocalPath(options.db, workspaceId);
+          const cwd = cwdCandidate?.trim();
+          if (!cwd || cwd === "/") {
             throw new Error(
               `channel session ${assignment.sessionId} has no daemon-local execution directory`,
             );
@@ -296,6 +303,7 @@ async function maybeStartChannelIngress(
             sessionId: assignment.sessionId,
             prompt: assignment.goal,
             ...(model ? { model: `${model.providerName}/${model.modelId}` } : {}),
+            ...(thinkingLevel ? { thinkingLevel } : {}),
             assignment: assignment.assignment,
             workspaceId,
             cwd,

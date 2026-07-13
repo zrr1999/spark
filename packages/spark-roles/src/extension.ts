@@ -2,6 +2,12 @@ import { randomUUID } from "node:crypto";
 import { truncateToWidth } from "@zendev-lab/spark-tui/text";
 import type { ExtensionRoleRunner } from "@zendev-lab/spark-extension-api";
 import { Type } from "typebox";
+import {
+  executePersistentSessionCall,
+  executeRoleSessionAction,
+  type RoleSessionAction,
+  type RoleSessionActionDeps,
+} from "./session-actions.ts";
 
 import {
   createDefaultRoleRegistry,
@@ -34,6 +40,7 @@ interface PiRolesToolConfig {
   name: string;
   label?: string;
   description: string;
+  promptGuidelines?: string[];
   parameters: unknown;
   renderCall?: (
     args: Record<string, unknown>,
@@ -47,6 +54,11 @@ interface PiRolesToolConfig {
     onUpdate: (update: { content: Array<{ type: "text"; text: string }> }) => void,
     ctx: {
       cwd?: string;
+      sessionId?: string;
+      sparkStateRoot?: string;
+      sessionManager?: {
+        getSessionFile?: () => string | undefined;
+      };
       model?: PiRolesSessionModel;
       runRole?: ExtensionRoleRunner;
       ui?: {
@@ -89,16 +101,21 @@ class ToolCallText implements ToolCallComponent {
 export interface CallRoleToolParams {
   role: string;
   instruction: string;
-  launch?: RoleLaunchMode;
+  launch?: "fresh";
   cwd?: string;
-  sessionDir?: string;
-  forkFromSession?: string;
   timeoutMs?: number;
   includeUser?: boolean;
   model?: string;
 }
 
-export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
+export interface PiRolesToolOptions {
+  session?: RoleSessionActionDeps;
+}
+
+export function registerPiRolesTools(
+  pi: PiRolesExtensionApi,
+  options: PiRolesToolOptions = {},
+): void {
   const roleActionTools = new Map<string, PiRolesToolConfig>();
   const registerRoleActionTool = (config: PiRolesToolConfig): void => {
     roleActionTools.set(config.name, config);
@@ -270,24 +287,30 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     name: "call_role",
     label: "Call Role",
     description:
-      "Call one reusable Spark role directly with an explicit instruction. This is a one-off daemon-native role invocation and is not attached to managed task graphs or workflow runs. Launches a fresh headless run by default, or an explicitly forked run when launch=forked.",
+      "Call either one reusable role in an anonymous session or one existing persistent Spark session. Pass role for an anonymous role call, or sessionId for persistent continuity; the two targets are mutually exclusive.",
     parameters: Type.Object({
-      role: Type.String({
-        description: "Role id or full role ref, e.g. worker or role:builtin-worker.",
-      }),
+      role: Type.Optional(
+        Type.String({
+          description:
+            "Anonymous call target: role id or full role ref, e.g. worker or role:builtin-worker.",
+        }),
+      ),
+      sessionId: Type.Optional(
+        Type.String({ description: "Persistent call target: existing managed Spark session id." }),
+      ),
       instruction: Type.String({ description: "Concrete instruction for this one role call." }),
       launch: Type.Optional(
-        Type.Union([Type.Literal("fresh"), Type.Literal("forked")], {
-          description: "fresh | forked. Defaults to fresh; forked requires forkFromSession.",
+        Type.Literal("fresh", {
+          description:
+            "Anonymous role calls use fresh. Forked direct calls were replaced by persistent sessionId calls.",
+        }),
+      ),
+      reset: Type.Optional(
+        Type.Boolean({
+          description: "Persistent session call only; reset before the submitted turn.",
         }),
       ),
       cwd: Type.Optional(Type.String({ description: "Working directory for the child run." })),
-      sessionDir: Type.Optional(Type.String({ description: "Explicit role session directory." })),
-      forkFromSession: Type.Optional(
-        Type.String({
-          description: "Parent session/context for forked launch. Required when launch=forked.",
-        }),
-      ),
       timeoutMs: Type.Optional(Type.Number({ description: "Child run timeout in milliseconds." })),
       model: Type.Optional(
         Type.String({
@@ -315,6 +338,12 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       );
     },
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const resource = normalizeRoleResource(params.resource);
+      if (resource === "session" || params.sessionId !== undefined) {
+        if (resource === "role")
+          throw new Error("role call with resource=role cannot target sessionId");
+        return await executePersistentSessionCall({ params, signal, ctx }, options.session);
+      }
       const p = normalizeCallRoleToolParams(params);
       const cwd = p.cwd ?? requiredPiRolesCwd(ctx, "call_role");
       const registry = createDefaultRoleRegistry();
@@ -337,13 +366,12 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
         systemPrompt: role.systemPrompt,
         model,
         instruction: p.instruction,
-        sessionDir: p.sessionDir,
-        forkFromSession: p.forkFromSession,
         piCommand: "pi",
         cwd,
         timeoutMs: p.timeoutMs,
         signal,
         stdinMode: "ignore" as const,
+        noSession: true,
         roleId: role.id,
         allowedTools: role.allowedTools,
         nativeExecutor: ctx.runRole,
@@ -365,8 +393,6 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
           runRef: result.record.ref,
           launch: result.record.launch,
           model: result.record.model,
-          sessionDir: result.record.sessionDir,
-          forkFromSession: result.record.forkFromSession,
         }),
         result.record.errorMessage ? `error: ${result.record.errorMessage}` : undefined,
         renderRoleCallDelivery(delivery),
@@ -530,13 +556,37 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     name: "role",
     label: "Role",
     description:
-      "Canonical role capability. Use action=list, get, create, call, model_list, model_get, model_set, or model_delete instead of fragmented role tool names.",
+      "Canonical role and session capability. Reusable roles are definitions; role calls run in anonymous sessions. Managed sessions provide persistent continuity, lifecycle management, explicit calls, and durable peer messaging through the same tool.",
+    promptGuidelines: [
+      "Use role + instruction for a fresh anonymous role call; use sessionId + instruction only when persistent conversation continuity is intentional.",
+      "Role and sessionId are mutually exclusive call targets. Persistent session calls are submitted through the daemon and return a queue receipt.",
+      "send/mailto append durable mail but never execute or wake the target session; use call with sessionId for explicit execution and do not poll for replies.",
+      "Agent inbox/read/ack actions are current-session-only. Use resource=session for session list/get/create.",
+      "Use assign instead of direct role calls when work belongs to a Spark task and needs claims, run records, or evidence attribution.",
+    ],
     parameters: Type.Object({
       action: Type.String({
         description:
-          "list | get | create | call | model_list | model_get | model_set | model_delete",
+          "list | get | create | call | bind | unbind | archive | send | mailto | inbox | read | ack | model_list | model_get | model_set | model_delete",
       }),
-      role: Type.Optional(Type.String({ description: "Role id or ref for get/call." })),
+      resource: Type.Optional(
+        Type.String({
+          description:
+            "role | session for list/get/create. Defaults to role. Other actions infer their resource.",
+        }),
+      ),
+      role: Type.Optional(
+        Type.String({
+          description:
+            "Role id/ref for role get/call, or optional role metadata when creating a persistent session.",
+        }),
+      ),
+      sessionId: Type.Optional(
+        Type.String({
+          description:
+            "Persistent session target for call/get/bind/unbind/archive/inbox/read/ack, or requested id for session create.",
+        }),
+      ),
       source: Type.Optional(Type.String({ description: "builtin | project | user." })),
       includeUser: Type.Optional(Type.Boolean({ description: "Also load user roles." })),
       limit: Type.Optional(Type.Number({ description: "Maximum role rows for list." })),
@@ -546,14 +596,38 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       rationale: Type.Optional(Type.String({ description: "Role creation rationale." })),
       expectedUses: Type.Optional(Type.Array(Type.String())),
       allowedTools: Type.Optional(Type.Array(Type.String())),
-      instruction: Type.Optional(Type.String({ description: "Instruction for call." })),
-      launch: Type.Optional(Type.String({ description: "fresh | forked for call." })),
+      instruction: Type.Optional(
+        Type.String({ description: "Instruction for anonymous role or persistent session call." }),
+      ),
+      launch: Type.Optional(
+        Type.String({
+          description: "Anonymous role call only; fresh. Prefer sessionId for continuity.",
+        }),
+      ),
+      scope: Type.Optional(
+        Type.String({ description: "workspace | daemon for session create/list." }),
+      ),
+      workspaceId: Type.Optional(Type.String()),
+      includeArchived: Type.Optional(Type.Boolean()),
+      title: Type.Optional(Type.String()),
+      externalKey: Type.Optional(Type.String()),
+      toSessionId: Type.Optional(Type.String()),
+      kind: Type.Optional(
+        Type.String({ description: "request | inform | reply for send/mailto." }),
+      ),
+      intent: Type.Optional(Type.String()),
+      payload: Type.Optional(Type.Any()),
+      correlationId: Type.Optional(Type.String()),
+      replyToMessageId: Type.Optional(Type.String()),
+      subject: Type.Optional(Type.String()),
+      message: Type.Optional(Type.String()),
+      messageId: Type.Optional(Type.String()),
+      includeAcked: Type.Optional(Type.Boolean()),
+      reset: Type.Optional(Type.Boolean()),
       piCommand: Type.Optional(
         Type.String({ description: "Pi executable for model_set validation only." }),
       ),
       cwd: Type.Optional(Type.String()),
-      sessionDir: Type.Optional(Type.String()),
-      forkFromSession: Type.Optional(Type.String()),
       timeoutMs: Type.Optional(Type.Number()),
       model: Type.Optional(Type.String()),
     }),
@@ -570,6 +644,12 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     },
     execute(toolCallId, params, signal, onUpdate, ctx) {
       const action = normalizeRoleAction(params.action);
+      if (isRoleSessionAction(action, params)) {
+        return executeRoleSessionAction(
+          { action, toolCallId, params: stripRoleAction(params), signal, ctx },
+          options.session,
+        );
+      }
       const target = roleToolNameForAction(action);
       const tool = roleActionTools.get(target);
       if (!tool) throw new Error(`role action adapter could not find ${target}`);
@@ -578,7 +658,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
   });
 }
 
-type RoleAction =
+type RoleDefinitionAction =
   | "list"
   | "get"
   | "create"
@@ -587,6 +667,7 @@ type RoleAction =
   | "model_get"
   | "model_set"
   | "model_delete";
+type RoleAction = RoleDefinitionAction | RoleSessionAction;
 
 function normalizeRoleAction(value: unknown): RoleAction {
   if (
@@ -594,6 +675,14 @@ function normalizeRoleAction(value: unknown): RoleAction {
     value === "get" ||
     value === "create" ||
     value === "call" ||
+    value === "bind" ||
+    value === "unbind" ||
+    value === "archive" ||
+    value === "send" ||
+    value === "mailto" ||
+    value === "inbox" ||
+    value === "read" ||
+    value === "ack" ||
     value === "model_list" ||
     value === "model_get" ||
     value === "model_set" ||
@@ -601,12 +690,42 @@ function normalizeRoleAction(value: unknown): RoleAction {
   )
     return value;
   throw new Error(
-    "role.action must be list, get, create, call, model_list, model_get, model_set, or model_delete",
+    "role.action must be list, get, create, call, bind, unbind, archive, send, mailto, inbox, read, ack, model_list, model_get, model_set, or model_delete",
   );
 }
 
-function roleToolNameForAction(
+function isRoleSessionAction(
   action: RoleAction,
+  params: Record<string, unknown>,
+): action is RoleSessionAction {
+  const resource = normalizeRoleResource(params.resource);
+  if (action === "list" || action === "get" || action === "create") return resource === "session";
+  const sessionAction =
+    action === "bind" ||
+    action === "unbind" ||
+    action === "archive" ||
+    action === "send" ||
+    action === "mailto" ||
+    action === "inbox" ||
+    action === "read" ||
+    action === "ack";
+  if (sessionAction) {
+    if (resource === "role") throw new Error(`role action ${action} cannot use resource=role`);
+    return true;
+  }
+  if (resource === "session")
+    throw new Error(`role action ${action} is not available for resource=session`);
+  return false;
+}
+
+function normalizeRoleResource(value: unknown): "role" | "session" | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (value === "role" || value === "session") return value;
+  throw new Error("role.resource must be role or session");
+}
+
+function roleToolNameForAction(
+  action: RoleDefinitionAction,
 ):
   | "list_roles"
   | "get_role"
@@ -744,8 +863,12 @@ function normalizeCallRoleToolParams(params: Record<string, unknown>): CallRoleT
   const role = normalizeRequiredString(params.role, "call_role role");
   const instruction = normalizeRequiredString(params.instruction, "call_role instruction");
   if (Object.hasOwn(params, "mode"))
-    throw new Error("call_role mode was renamed to launch; use launch=fresh or launch=forked");
+    throw new Error("call_role mode was removed; direct role calls are anonymous fresh sessions");
   const launch = normalizeRoleLaunchMode(params.launch);
+  if (launch !== "fresh")
+    throw new Error(
+      "call_role forked launch was replaced by persistent session calls; pass sessionId instead",
+    );
   if (Object.hasOwn(params, "dryRun"))
     throw new Error(
       "call_role dryRun is no longer supported; call_role always launches a daemon-native run",
@@ -754,19 +877,19 @@ function normalizeCallRoleToolParams(params: Record<string, unknown>): CallRoleT
     throw new Error(
       "call_role piCommand is no longer supported; use role model_set piCommand for model validation",
     );
-  const forkFromSession = normalizeOptionalString(
-    params.forkFromSession,
-    "call_role forkFromSession",
-  );
-  if (launch === "forked" && !forkFromSession)
-    throw new Error("call_role forked launch requires forkFromSession");
+  if (Object.hasOwn(params, "forkFromSession"))
+    throw new Error(
+      "call_role forkFromSession was replaced by persistent session calls; pass sessionId instead",
+    );
+  if (Object.hasOwn(params, "sessionDir"))
+    throw new Error("call_role sessionDir is not supported for anonymous role calls");
+  if (Object.hasOwn(params, "reset"))
+    throw new Error("call_role reset is only supported for persistent sessionId calls");
   return {
     role,
     instruction,
     launch,
     cwd: normalizeOptionalString(params.cwd, "call_role cwd"),
-    sessionDir: normalizeOptionalString(params.sessionDir, "call_role sessionDir"),
-    forkFromSession,
     timeoutMs: normalizeOptionalPositiveInteger(params.timeoutMs, "call_role timeoutMs"),
     includeUser: normalizeOptionalBoolean(params.includeUser, false, "call_role includeUser"),
     model: normalizeOptionalString(params.model, "call_role model"),

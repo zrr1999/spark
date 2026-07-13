@@ -1,23 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  createInfoflowSdkOutbound,
-  type InfoflowSdkClientLike,
-  type InfoflowReplyStream,
-} from "./infoflow-sdk-outbound.ts";
+import { createInfoflowSdkOutbound, type InfoflowSdkClientLike } from "./infoflow-sdk-outbound.ts";
 
 function fakeClient() {
   const sendToUser = vi.fn(async () => ({}));
   const sendToGroup = vi.fn(async () => ({}));
   const sendToGroupWithOptions = vi.fn(async () => ({}));
   const start = vi.fn<() => Promise<boolean>>(async () => true);
-  const stream: InfoflowReplyStream & { start: typeof start } = {
+  const stream = {
     start,
     appendText: vi.fn(),
+    appendReasoning: vi.fn(),
     notifyToolStart: vi.fn(),
     notifyToolResult: vi.fn(),
     complete: vi.fn(async () => undefined),
     fail: vi.fn(async () => undefined),
-  };
+  } satisfies ReturnType<InfoflowSdkClientLike["im"]["streamingCard"]["createSession"]>;
   const createSession = vi.fn(() => stream);
   const client: InfoflowSdkClientLike = {
     im: {
@@ -113,15 +110,71 @@ describe("Infoflow SDK outbound", () => {
     const fake = fakeClient();
     const outbound = createInfoflowSdkOutbound(config, { createClient: () => fake.client });
 
-    await expect(outbound.openReplyStream("group:10838226")).resolves.toBe(fake.stream);
+    const stream = await outbound.openReplyStream("group:10838226");
+    expect(stream).toBeTruthy();
     expect(fake.createSession).toHaveBeenCalledWith({
       to: "group:10838226",
       answerFormat: "markdown",
     });
+    await stream!.complete("已完成");
+    expect(fake.stream.complete).toHaveBeenCalledWith("已完成");
 
     fake.stream.start.mockResolvedValueOnce(false);
     await expect(outbound.openReplyStream("alice", { answerFormat: "text" })).resolves.toBe(
       undefined,
     );
+  });
+
+  it("keeps outer done label distinct from expandable details status_info", async () => {
+    const buildContents = vi.fn((opts: { final?: boolean; doneLabel?: string; error?: string }) => {
+      const label = opts.doneLabel ?? "思考完成";
+      return {
+        status_info: { type: "text", content: label },
+        think_status_text: { type: "text", content: label },
+      };
+    });
+    const start = vi.fn(async () => true);
+    const session = {
+      start,
+      appendText: vi.fn(),
+      appendReasoning: vi.fn(),
+      notifyToolStart: vi.fn(),
+      notifyToolResult: vi.fn(),
+      complete: vi.fn(async function (
+        this: { buildContents: typeof buildContents },
+        label?: string,
+      ) {
+        this.buildContents({ final: true, doneLabel: label ?? "思考完成" });
+      }),
+      fail: vi.fn(async () => undefined),
+      buildContents,
+    };
+    const outbound = createInfoflowSdkOutbound(config, {
+      createClient: () =>
+        ({
+          im: {
+            message: {
+              sendToUser: vi.fn(),
+              sendToGroup: vi.fn(),
+              sendToGroupWithOptions: vi.fn(),
+            },
+            streamingCard: { createSession: () => session },
+          },
+        }) as InfoflowSdkClientLike,
+    });
+
+    const stream = await outbound.openReplyStream("alice");
+    expect(stream).toBeTruthy();
+    await stream!.complete("已完成");
+
+    expect(session.complete).toHaveBeenCalledWith("已完成");
+    expect(buildContents).toHaveBeenCalled();
+    const contents = buildContents.mock.results.at(-1)?.value as {
+      status_info: { content: string };
+      think_status_text: { content: string };
+    };
+    expect(contents.think_status_text.content).toBe("已完成");
+    expect(contents.status_info.content).toBe("处理过程");
+    expect(contents.status_info.content).not.toBe(contents.think_status_text.content);
   });
 });

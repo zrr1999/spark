@@ -1,6 +1,17 @@
 import { z } from "zod";
 import { isoDateTimeSchema } from "./refs.ts";
 
+/** Spark thinking / reasoning intensity passed to model streams as `reasoning`. */
+export const sparkThinkingLevelOptions = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
+export const sparkThinkingLevelSchema = z.enum(sparkThinkingLevelOptions);
+
 /** Stable model identity shared by session views and model-control APIs. */
 export const sparkModelRefSchema = z.object({
   providerName: z.string().min(1),
@@ -48,6 +59,8 @@ export const sparkSessionModelSelectionSchema = z.object({
   sessionId: z.string().min(1),
   /** Absent means this session inherits the default model selection. */
   model: sparkModelRefSchema.optional(),
+  /** Absent means this session inherits the host/default thinking level. */
+  thinkingLevel: sparkThinkingLevelSchema.optional(),
 });
 
 export const sparkModelControlSnapshotSchema = z.object({
@@ -120,6 +133,7 @@ export const sparkAuthFlowSchema = z.object({
   error: z.string().min(1).optional(),
 });
 
+export type SparkThinkingLevel = z.infer<typeof sparkThinkingLevelSchema>;
 export type SparkModelRef = z.infer<typeof sparkModelRefSchema>;
 export type SparkProviderAuthStatus = z.infer<typeof sparkProviderAuthStatusSchema>;
 export type SparkModelCost = z.infer<typeof sparkModelCostSchema>;

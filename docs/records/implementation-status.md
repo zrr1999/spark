@@ -11,16 +11,16 @@ Package naming now follows [`capabilities-ui.md`](../architecture/capabilities-u
   - refs, errors, task/run/review types, daemon-native role-run input-control registration, copy-language detection, and light JSON/fs/time helpers used by both Pi extension host and the Spark native host family
 - `spark-session`
   - daemon-owned session registry (`create` / `list` / `bind` / `unbind` / `archive` / `resolveBinding`)
-  - channel binding table shared by Cockpit Assign and Feishu/Infoflow ingress
+  - channel binding table shared by Cockpit Assign and Feishu/Infoflow/QQ Bot ingress
 - `spark-channels`
-  - Feishu (WebSocket) and Infoflow adapters with injectable transports
+  - Feishu (WebSocket), Infoflow, and QQ Bot adapters with injectable transports
   - `ChannelRegistry` routes / notify / ingress config (I/O only; no private session table)
 - `spark-protocol` assignment/session kinds
   - `assignment.create.request`, session create/bind/unbind/archive command kinds
   - `SparkAssignment` + session registry record schemas
 - Cockpit dual-track IA: **Workbench** (session rail + flat Overview/Inbox/Artifacts + settings buttons) vs **Console** (`/settings*`, `/{ws}/settings*`, `/workspaces/new`)
 - Cockpit Sessions-first Workbench: `/sessions` three-column shell (list / assign / details), Projects removed from primary nav
-- Console global settings `/settings` + `/settings/channels` Feishu/Infoflow editor with daemon-acknowledged autosave; daemon privately writes `$SPARK_HOME/channels/config.json` and owns listener status
+- Console global settings `/settings` + workspace Channels Feishu/Infoflow/QQ Bot editor with daemon-acknowledged autosave; daemon privately writes workspace `channels/config.json` and owns listener status
 - Cockpit Assign on Sessions (same assignment path as channels); project page keeps a Sessions deep-link only
 - `spark daemon session create|bind|unbind|archive|list --registry` and `spark daemon channel status`
 - `spark server assign --session … --goal …`
@@ -67,7 +67,7 @@ Package naming now follows [`capabilities-ui.md`](../architecture/capabilities-u
 - `spark-roles`
   - reusable `RoleSpec` definitions with `builtin | extension | project | user` sources
   - builtin roles (`scout`, `reviewer`, `worker`) as generic role specs with audited capability profiles: scout=`read+net`, reviewer=`read+net+exec`, worker=`read+net+exec+write`; no builtin role receives `interact`, `spawn`, `ask`, `task`, `task_read`, `task_write`, `goal`, `role`, `assign`, `workflow`, or `graft_patch`
-  - extension role registration, project/user Markdown role stores, canonical public/default `role` action tool, task-agnostic direct `role({ action: "call" })`, fresh/forked run modes, explicit fork source requirements, JSONL parsing, active-run listing/cancellation/input delivery, timeout signalling
+  - extension role registration, project/user Markdown role stores, canonical public/default `role` action tool merged with persistent session management, anonymous direct role calls, daemon-backed persistent session calls, NNP-inspired durable session mail, internal fresh/forked run mechanics, JSONL parsing, active-run listing/cancellation/input delivery, and timeout signalling
 - `spark-runtime`
   - Spark single-task adapter over `spark-roles`
   - dry-run and real task execution, runtime-created role-run claims, heartbeat loop, artifact persistence, timeout/reconciliation tracking, Spark projection of `spark-roles` active-run controls, failed-delivery reporting, and role-run transcript compaction support

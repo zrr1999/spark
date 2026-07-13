@@ -252,6 +252,33 @@ export class SparkSessionRegistry {
     return updated;
   }
 
+  async setThinkingLevel(
+    sessionId: string,
+    thinkingLevel: NonNullable<SparkSessionRegistryRecord["thinkingLevel"]>,
+    now = new Date(),
+  ): Promise<SparkSessionRegistryRecord> {
+    const file = await this.loadFile();
+    const index = file.sessions.findIndex((session) => session.sessionId === sessionId);
+    if (index < 0) {
+      throw new SparkSessionRegistryError("session_not_found", `unknown session: ${sessionId}`);
+    }
+    const current = file.sessions[index]!;
+    if (current.status === "archived") {
+      throw new SparkSessionRegistryError(
+        "session_archived",
+        `cannot change thinking level for archived session: ${sessionId}`,
+      );
+    }
+    const updated: SparkSessionRegistryRecord = {
+      ...current,
+      thinkingLevel,
+      updatedAt: now.toISOString(),
+    };
+    file.sessions[index] = updated;
+    await this.saveFile(file);
+    return updated;
+  }
+
   /**
    * Record the durable native transcript produced by a completed turn.
    * Re-applying the same path is safe; the supplied observation time is kept

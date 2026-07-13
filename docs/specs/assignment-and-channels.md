@@ -1,7 +1,7 @@
 # Assignment and channels
 
 The user-facing unit is a **conversation turn**. Cockpit and IM channels
-(Feishu, Infoflow, ...) are entry surfaces for the same daemon-owned session;
+(Feishu, Infoflow, QQ Bot, ...) are entry surfaces for the same daemon-owned session;
 projects, tasks, and assignments are internal execution projections created by
 Spark rather than separate objects the user must create first.
 
@@ -13,7 +13,7 @@ to it, and Spark derives any internal work records it needs.*
 | Entry | Shape | User |
 | --- | --- | --- |
 | Cockpit Sessions (`/sessions`) | Current-workspace + daemon-global conversations | Browser operator |
-| Channels (Feishu / Infoflow) | Inbound chat -> bind/reuse workspace session -> turn | Chat operator |
+| Channels (Feishu / Infoflow / QQ Bot) | Inbound chat -> bind/reuse workspace session -> turn | Chat operator |
 | Legacy project chat `task.start.request` | Compatibility only | Must converge onto Assign |
 
 Cockpit primary Assign surface is **Sessions** (not the project page). Cockpit
@@ -24,15 +24,17 @@ uses a dual-track shell:
   registration, and create workspace (`/workspaces/new`).
 
 Channel setup lives under **Console → Workspace settings → Channels**
-(`/{workspace}/settings/channels`): fill Feishu/Infoflow credentials in Cockpit
-and autosave submits `channel.configure` over daemon local RPC with
-`workspaceId`. The daemon validates the configuration, writes
-`$SPARK_HOME/workspaces/<workspaceId>/channels/config.json` as a private file,
-restarts that workspace's ingress, and only then acknowledges the save. Cockpit
-and TUI read listener liveness through `channel.status`; they never reconstruct
-it from the config file. Message I/O is daemon↔IM only (no server/cockpit relay).
-Legacy `$SPARK_HOME/channels/config.json` is migrated into a workspace on first
-load/configure.
+(`/{workspace}/settings/channels`): list existing channel-bound sessions, or create
+a new one by picking Feishu/Infoflow/QQ Bot, entering credentials when that
+adapter is not yet configured, and providing a chat/user/group id. Cockpit merges
+adapter credentials into
+`$SPARK_HOME/workspaces/<workspaceId>/channels/config.json` via `channel.configure`,
+creates a workspace session (`session.create`), binds
+`externalKey` (`session.bind`), and redirects to `/sessions/{sessionId}`.
+Cockpit and TUI read listener liveness through `channel.status`; they never
+reconstruct it from the config file. Message I/O is daemon↔IM only (no
+server/cockpit relay). Legacy `$SPARK_HOME/channels/config.json` is migrated into
+a workspace on first load/configure.
 
 Do **not** maintain a second state machine for channels. Channel ingress and
 Cockpit both submit through the daemon session/turn control plane. The
@@ -67,15 +69,17 @@ the `spore` workspace is active, while its registry data remains intact.
 | archive | `spark daemon session archive` | stop ingress; keep transcript |
 
 Binding keys (v1): `feishu:chat:<id>`, `infoflow:user:<id>`,
-`infoflow:group:<id>`, or `conv:<adapter>:<id>` → Spark `sessionId`.
+`infoflow:group:<id>`, `qqbot:c2c:<openid>`, `qqbot:group:<group_openid>`,
+`qqbot:channel:<channel_id>`, or `conv:<adapter>:<id>` → Spark `sessionId`.
 Cross-platform identity merge and `bridge_*` peers are out of scope for v1.
 
-Infoflow ingress policy (nyakore-aligned, on the adapter config):
+Infoflow and QQ Bot ingress policy (on the adapter config):
 
 | Field | Meaning |
 | --- | --- |
-| `allowed_user_ids` | Private allowlist (sender id or name). Empty = allow all private. |
+| `allowed_user_ids` | Private allowlist (sender id / openid). Empty = allow all private. |
 | `group_policy` | `disabled` (default) \| `allowlist` \| `open` |
+| `group_trigger` | `mention` (default) \| `command` \| `all` |
 | `allowed_group_ids` | Used when `group_policy` is `allowlist` |
 | `system_prompt` | Optional custom system-prompt overlay (operator copy only) |
 
@@ -88,13 +92,18 @@ transcript.
 Private chats bind as `infoflow:user:<senderId>`; group chats bind as
 `infoflow:group:<groupId>` (one session per group, not per sender).
 
+QQ Bot private chats bind as `qqbot:c2c:<openid>`; groups as
+`qqbot:group:<group_openid>`; guild channels as `qqbot:channel:<channel_id>`.
+Outbound reply recipients use `c2c:…` / `group:…` / `channel:…`. C2C replies
+may stream via the platform stream API; group/channel replies are one-shot text.
+
 Rules:
 
 1. Assign must target an existing `sessionId`, or explicitly create then assign.
 2. Channel inbound only uses session resolve/bind; adapters never keep a private
    session table.
 3. TUI attach/resume consumes the same `sessionId`.
-4. Session mail remains session↔session operator mail; it does not replace bind.
+4. Session mail remains explicit session↔session peer mail behind `role({ action: "send" })`; it does not replace bind and does not execute the target session.
 
 ## Assignment intent
 
@@ -106,7 +115,7 @@ type SparkAssignment = {
   evidence?: string[];
   source: {
     kind: "cockpit" | "channel";
-    channel?: "feishu" | "infoflow";
+    channel?: "feishu" | "infoflow" | "qqbot";
     externalRef?: string;
   };
 };
@@ -126,7 +135,10 @@ Infoflow inbound uses the official `@core-workspace/infoflow-sdk-nodejs` WSClien
 (same as nyakore; prefer a build with `autoRegister` so first connect switches the
 app to WebSocket callback mode via `/imRobot/updateReCallUrl`), while Spark keeps
 daemon-owned session bindings (`infoflow:user:<id>` / `infoflow:group:<id>`).
-outbound replies are explicit (no transcript scraping).
+QQ Bot inbound uses the Open Platform WebSocket gateway plus HTTP message APIs
+(no OpenClaw dependency), with bindings `qqbot:c2c:<openid>` /
+`qqbot:group:<group_openid>` / `qqbot:channel:<channel_id>`.
+Outbound replies are explicit (no transcript scraping).
 
 Ownership:
 
@@ -134,7 +146,7 @@ Ownership:
 | --- | --- |
 | Protocol (session / assignment / channel events) | `spark-protocol` |
 | Session registry + bind + queue delivery | `spark-daemon` |
-| Platform adapters (Feishu WS, Infoflow, …) | `spark-channels` |
+| Platform adapters (Feishu WS, Infoflow, QQ Bot, …) | `spark-channels` |
 | Assign UI + read-only projections | Cockpit / `spark-server` |
 | Interactive attach | `spark tui` |
 
@@ -150,6 +162,13 @@ type = "infoflow"
 # allowed_user_ids = ["zhanrongrui"]
 # group_policy = "disabled" # disabled (default) | allowlist | open
 # allowed_group_ids = ["10838226"]
+
+[channels.adapters.qqbot]
+type = "qqbot"
+# app_id = "111111111"
+# client_secret = "..."
+# group_policy = "disabled"
+# group_trigger = "mention"
 
 [channels.routes.ops]
 adapter = "feishu"
@@ -174,9 +193,10 @@ on_unbound = "create"
 ## Non-goals (v1)
 
 - A public `spark gateway` name or second long-lived gateway service
-- TUI or Cockpit holding Feishu/Infoflow long-lived connections
+- TUI or Cockpit holding Feishu/Infoflow/QQ Bot long-lived connections
 - Full NNP, `bridge_*` sessions, cross-platform identity bindings
 - WeCom / DingTalk / Telegram / generic webhook adapters
+- QQ Bot HTTP webhook transport, rich media, STT/TTS, slash commands
 - Feishu HTTP callback mode, progress cards, typing reactions
 - Separate channel inbox state machine competing with Assign
 

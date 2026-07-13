@@ -84,13 +84,13 @@ describe("loadSparkSessionSnapshot", () => {
               type: "toolCall",
               id: "call-success",
               name: "read",
-              arguments: { path: "secret-input.txt", token: "secret-token" },
+              arguments: { path: "README.md", token: "secret-token" },
             },
             {
               type: "toolCall",
               id: "call-failure",
               name: "exec",
-              arguments: { command: "print-secret-input" },
+              arguments: { command: "pnpm test" },
             },
           ],
           timestamp: 1783904402000,
@@ -105,7 +105,7 @@ describe("loadSparkSessionSnapshot", () => {
           role: "toolResult",
           toolCallId: "call-success",
           toolName: "read",
-          content: [{ type: "text", text: "secret-output" }],
+          content: [{ type: "text", text: "safe-output" }],
           details: { token: "secret-details" },
           isError: false,
           timestamp: 1783904403000,
@@ -120,7 +120,7 @@ describe("loadSparkSessionSnapshot", () => {
           role: "toolResult",
           toolCallId: "call-failure",
           toolName: "exec",
-          content: [{ type: "text", text: "secret-error-output" }],
+          content: [{ type: "text", text: "safe-error-output" }],
           details: { stderr: "secret-error-details" },
           isError: true,
           timestamp: 1783904404000,
@@ -144,7 +144,7 @@ describe("loadSparkSessionSnapshot", () => {
               type: "toolCall",
               id: "call-pending",
               name: "search",
-              arguments: { pattern: "secret-pattern" },
+              arguments: { pattern: "TODO" },
             },
             { type: "text", text: "The next check is pending." },
           ],
@@ -226,7 +226,7 @@ describe("loadSparkSessionSnapshot", () => {
       {
         id: "result-success",
         role: "tool",
-        text: "",
+        text: "safe-output",
         status: "done",
         parts: [
           {
@@ -234,13 +234,14 @@ describe("loadSparkSessionSnapshot", () => {
             type: "tool-result",
             toolCallId: "call-success",
             status: "complete",
+            summary: "safe-output",
           },
         ],
       },
       {
         id: "result-failure",
         role: "tool",
-        text: "",
+        text: "safe-error-output",
         status: "error",
         parts: [
           {
@@ -248,6 +249,7 @@ describe("loadSparkSessionSnapshot", () => {
             type: "tool-result",
             toolCallId: "call-failure",
             status: "failed",
+            summary: "safe-error-output",
           },
         ],
       },
@@ -283,7 +285,100 @@ describe("loadSparkSessionSnapshot", () => {
       "call-pending",
     ]);
     expect(JSON.stringify(snapshot)).not.toMatch(
-      /secret-input|secret-token|secret-output|secret-details|secret-pattern|secret-signature|secret-redacted-thinking|secret-inactive|must-not-project/u,
+      /secret-token|secret-details|secret-signature|secret-redacted-thinking|secret-inactive|must-not-project/u,
+    );
+  });
+
+  it("keeps text phases without projecting commentary as assistant prose", async () => {
+    const root = await mkdtemp(join(tmpdir(), "spark-session-text-phase-"));
+    roots.push(root);
+    const transcriptPath = join(root, "session.jsonl");
+    const entries = [
+      {
+        type: "session",
+        version: 3,
+        id: "sess_text_phase",
+        timestamp: "2026-07-13T02:00:00.000Z",
+        cwd: "/workspace/demo",
+      },
+      {
+        type: "message",
+        id: "user-phase",
+        parentId: null,
+        timestamp: "2026-07-13T02:00:01.000Z",
+        message: { role: "user", content: "Run the check", timestamp: 1783908001000 },
+      },
+      {
+        type: "message",
+        id: "assistant-phase",
+        parentId: "user-phase",
+        timestamp: "2026-07-13T02:00:02.000Z",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Checking the repository.",
+              textSignature: JSON.stringify({
+                v: 1,
+                phase: "commentary",
+                providerSecret: "commentary-signature-secret",
+              }),
+            },
+            {
+              type: "text",
+              text: "The check passed.",
+              textSignature: JSON.stringify({
+                phase: "final_answer",
+                providerSecret: "final-signature-secret",
+              }),
+            },
+            { type: "text", text: "Legacy detail." },
+            {
+              type: "text",
+              text: "Unknown phase stays visible.",
+              textSignature: JSON.stringify({ phase: "future_phase" }),
+            },
+            {
+              type: "text",
+              text: "Malformed signature stays visible.",
+              textSignature: "not-json-signature-secret",
+            },
+          ],
+          timestamp: 1783908002000,
+        },
+      },
+    ];
+    await writeFile(
+      transcriptPath,
+      `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      "utf8",
+    );
+    const session = parseSparkSessionRegistryRecord({
+      sessionId: "sess_text_phase",
+      scope: { kind: "workspace", workspaceId: "ws_demo" },
+      status: "ready",
+      sessionPath: transcriptPath,
+      bindings: [],
+      createdAt: "2026-07-13T02:00:00.000Z",
+      updatedAt: "2026-07-13T02:00:02.000Z",
+    });
+
+    const snapshot = await loadSparkSessionSnapshot({ sessionsRoot: root, session });
+    const assistant = snapshot.messages.find((message) => message.id === "assistant-phase");
+
+    expect(assistant?.text).toBe(
+      "The check passed.\nLegacy detail.\nUnknown phase stays visible.\nMalformed signature stays visible.",
+    );
+    expect(assistant?.parts).toMatchObject([
+      { type: "text", text: "Checking the repository.", phase: "commentary" },
+      { type: "text", text: "The check passed.", phase: "final_answer" },
+      { type: "text", text: "Legacy detail." },
+      { type: "text", text: "Unknown phase stays visible." },
+      { type: "text", text: "Malformed signature stays visible." },
+    ]);
+    expect(JSON.stringify(snapshot)).not.toMatch(
+      /commentary-signature-secret|final-signature-secret|not-json-signature-secret/u,
     );
   });
 });

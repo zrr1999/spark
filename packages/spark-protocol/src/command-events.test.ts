@@ -61,6 +61,7 @@ describe("SparkCommand vocabulary", () => {
       "session.unbind",
       "session.archive",
       "session.model.set",
+      "session.thinking.set",
       "model.catalog",
       "model.default.set",
       "provider.auth.api-key.set",
@@ -83,6 +84,9 @@ describe("SparkCommand vocabulary", () => {
     expect(sparkCommandKindForLocalRpcMethod("session.snapshot")).toBe("session.snapshot.request");
     expect(sparkCommandKindForLocalRpcMethod("session.model.set")).toBe(
       "session.model.set.request",
+    );
+    expect(sparkCommandKindForLocalRpcMethod("session.thinking.set")).toBe(
+      "session.thinking.set.request",
     );
     expect(sparkCommandKindForLocalRpcMethod("model.catalog")).toBe("model.catalog.request");
     expect(sparkCommandKindForLocalRpcMethod("unknown.method")).toBeNull();

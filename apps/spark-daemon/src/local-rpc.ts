@@ -3,11 +3,13 @@ import { mkdirSync, rmSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
 import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { StringDecoder } from "node:string_decoder";
 import {
   parseSparkAssignment,
   parseSparkDefaultModelSetRequest,
   parseSparkSessionView,
   parseSparkSessionSetModelRequest,
+  parseSparkSessionSetThinkingRequest,
   sparkSessionArchiveRequestSchema,
   sparkSessionBindRequestSchema,
   sparkSessionCreateRequestSchema,
@@ -339,6 +341,12 @@ type LocalRpcRequest =
       id: string;
       method: "session.model.set";
       params: ReturnType<typeof parseSparkSessionSetModelRequest>;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "session.thinking.set";
+      params: ReturnType<typeof parseSparkSessionSetThinkingRequest>;
       sparkCommand: SparkCommand;
     }
   | {
@@ -729,6 +737,7 @@ function handleLocalRpcSocket(
   handlerOptions: LocalRpcHandlerOptions,
   invocationRegistry: SparkDaemonInvocationRegistry | undefined,
 ): void {
+  const decoder = new StringDecoder("utf8");
   let buffer = "";
   socket.on("error", () => {
     // Clients may time out or disconnect before a long-running request writes
@@ -736,7 +745,7 @@ function handleLocalRpcSocket(
     // than daemon-fatal uncaught Socket errors.
   });
   socket.on("data", (chunk) => {
-    buffer += chunk.toString("utf8");
+    buffer += decoder.write(chunk);
     let newline = buffer.indexOf("\n");
     while (newline !== -1) {
       const line = buffer.slice(0, newline);
@@ -799,6 +808,7 @@ function handleLocalRpcStreamLine(
       const params = parseLocalTurnSubmitParams(request.params);
       const queue = new SparkDaemonQueue({ paths });
       const model = await effectiveTurnModel(handlerOptions, params.sessionId);
+      const thinkingLevel = await effectiveTurnThinkingLevel(handlerOptions, params.sessionId);
       const route = await sessionTurnRoute(handlerOptions, db, params.sessionId, params.assignment);
       const entry = await enqueueManagedSessionTurn(handlerOptions, params.sessionId, () =>
         queue.enqueue({
@@ -806,6 +816,7 @@ function handleLocalRpcStreamLine(
           sessionId: params.sessionId,
           prompt: params.prompt,
           ...(model ? { model } : {}),
+          ...(thinkingLevel ? { thinkingLevel } : {}),
           ...(params.reset !== undefined ? { reset: params.reset } : {}),
           ...(route.cwd ? { cwd: route.cwd } : {}),
           ...(route.workspaceId ? { workspaceId: route.workspaceId } : {}),
@@ -879,6 +890,18 @@ export async function handleLocalRpcLine(
   const verifyWorkspaceConnection =
     options.verifySparkDaemonWorkspaceConnection ?? verifySparkDaemonWorkspaceConnection;
   try {
+    // Capture the caller id before full request parsing so validation failures
+    // (e.g. channel.configure schema errors) still round-trip the same id.
+    // Otherwise the client sees id "unknown" and reports a generic
+    // "Invalid local RPC response" instead of the real parse error.
+    try {
+      const raw = JSON.parse(line) as unknown;
+      if (isRecord(raw) && typeof raw.id === "string" && raw.id.trim()) {
+        requestId = raw.id;
+      }
+    } catch {
+      // parseLocalRpcRequest below owns the JSON/shape error message.
+    }
     const request = parseLocalRpcRequest(line);
     requestId = request.id;
     switch (request.method) {
@@ -941,6 +964,7 @@ export async function handleLocalRpcLine(
       case "turn.submit": {
         const queue = new SparkDaemonQueue({ paths });
         const model = await effectiveTurnModel(options, request.params.sessionId);
+        const thinkingLevel = await effectiveTurnThinkingLevel(options, request.params.sessionId);
         const route = await sessionTurnRoute(
           options,
           db,
@@ -953,6 +977,7 @@ export async function handleLocalRpcLine(
             sessionId: request.params.sessionId,
             prompt: request.params.prompt,
             ...(model ? { model } : {}),
+            ...(thinkingLevel ? { thinkingLevel } : {}),
             ...(request.params.reset !== undefined ? { reset: request.params.reset } : {}),
             ...(route.cwd ? { cwd: route.cwd } : {}),
             ...(route.workspaceId ? { workspaceId: route.workspaceId } : {}),
@@ -1136,6 +1161,13 @@ export async function handleLocalRpcLine(
         );
         return { id: request.id, ok: true, result: session };
       }
+      case "session.thinking.set": {
+        const session = await requireModelControl(options).setSessionThinkingLevel(
+          request.params.sessionId,
+          request.params.thinkingLevel,
+        );
+        return { id: request.id, ok: true, result: session };
+      }
       case "model.catalog": {
         const snapshot = await requireModelControl(options).snapshot(request.params.sessionId);
         return { id: request.id, ok: true, result: snapshot };
@@ -1240,6 +1272,14 @@ async function effectiveTurnModel(
   return `${model.providerName}/${model.modelId}`;
 }
 
+async function effectiveTurnThinkingLevel(
+  options: LocalRpcHandlerOptions,
+  sessionId: string,
+): Promise<string | undefined> {
+  if (!options.modelControl) return undefined;
+  return await options.modelControl.effectiveThinkingLevel(sessionId);
+}
+
 async function sessionTurnRoute(
   options: LocalRpcHandlerOptions,
   db: DatabaseSync,
@@ -1278,8 +1318,10 @@ async function sessionTurnRoute(
       `session ${sessionId} belongs to workspace ${workspaceId}, not ${assignment.target.workspaceId}`,
     );
   }
-  const cwd = session.cwd ?? resolveWorkspaceLocalPath(db, workspaceId);
-  if (!cwd?.trim()) {
+  const sessionCwd = session.cwd?.trim();
+  const cwd =
+    sessionCwd && sessionCwd !== "/" ? sessionCwd : resolveWorkspaceLocalPath(db, workspaceId);
+  if (!cwd?.trim() || cwd.trim() === "/") {
     throw new SparkSessionRegistryError(
       "session_cwd_unavailable",
       `workspace session ${sessionId} has no daemon-local execution directory`,
@@ -1302,7 +1344,10 @@ async function projectPendingSessionTurns(
     id: `queue:${entry.fileName}`,
     role: "user" as const,
     text: entry.payload.task.prompt,
-    status: "pending" as const,
+    // The prompt has already been durably accepted by the daemon queue. Keep
+    // turn activity on the session/queue metadata instead of presenting the
+    // persisted user message as if it had not been sent yet.
+    status: "done" as const,
     createdAt: entry.payload.enqueuedAt,
     metadata: {
       source: "daemon.queue",
@@ -1628,6 +1673,13 @@ function parseLocalRpcRequest(line: string): LocalRpcRequest {
       params: parseSparkSessionSetModelRequest(value.params),
     });
   }
+  if (value.method === "session.thinking.set") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: parseSparkSessionSetThinkingRequest(value.params),
+    });
+  }
   if (value.method === "model.catalog") {
     return withSparkCommand({
       id: value.id,
@@ -1691,6 +1743,7 @@ function withSparkCommand<T extends { id: string; method: string; params?: unkno
 type LocalDaemonQueueParams = {
   state: SparkDaemonQueueState | "all";
   limit?: number;
+  fileName?: string;
 };
 
 type LocalTurnSubmitParams = {
@@ -1720,6 +1773,7 @@ function localDaemonQueueParams(
   return {
     state: params.state ?? "inbox",
     ...(params.limit !== undefined ? { limit: params.limit } : {}),
+    ...(params.fileName !== undefined ? { fileName: params.fileName } : {}),
   };
 }
 
@@ -1816,6 +1870,17 @@ function parseLocalDaemonQueueParams(value: unknown): LocalDaemonQueueParams {
   const params: LocalDaemonQueueParams = { state: rawState };
   if (typeof value.limit === "number" && Number.isFinite(value.limit)) {
     params.limit = Math.max(0, Math.floor(value.limit));
+  }
+  if (value.fileName !== undefined) {
+    if (
+      typeof value.fileName !== "string" ||
+      !value.fileName.trim() ||
+      value.fileName.includes("/") ||
+      value.fileName.includes("\\")
+    ) {
+      throw new Error("Invalid daemon queue file name.");
+    }
+    params.fileName = value.fileName.trim();
   }
   return params;
 }
@@ -2267,21 +2332,75 @@ async function queueList(
   params: LocalDaemonQueueParams,
 ): Promise<LocalDaemonQueueResult> {
   const observedAt = new Date().toISOString();
+  if (params.fileName) {
+    if (params.state === "all") {
+      return {
+        state: "all",
+        byState: {
+          inbox: await readQueueEntryIfPresent(queue, params.fileName, "inbox"),
+          processed: await readQueueEntryIfPresent(queue, params.fileName, "processed"),
+          failed: await readQueueEntryIfPresent(queue, params.fileName, "failed"),
+        },
+        observedAt,
+      };
+    }
+    return {
+      state: params.state,
+      entries: await readQueueEntryIfPresent(queue, params.fileName, params.state),
+      observedAt,
+    };
+  }
   if (params.state === "all") {
     return {
       state: "all",
       byState: {
-        inbox: limitEntries(await queue.listEntries("inbox"), params.limit),
-        processed: limitEntries(await queue.listEntries("processed"), params.limit),
-        failed: limitEntries(await queue.listEntries("failed"), params.limit),
+        inbox: summarizeQueueEntries(limitEntries(await queue.listEntries("inbox"), params.limit)),
+        processed: summarizeQueueEntries(
+          limitEntries(await queue.listEntries("processed"), params.limit),
+        ),
+        failed: summarizeQueueEntries(
+          limitEntries(await queue.listEntries("failed"), params.limit),
+        ),
       },
       observedAt,
     };
   }
   return {
     state: params.state,
-    entries: limitEntries(await queue.listEntries(params.state), params.limit),
+    entries: summarizeQueueEntries(
+      limitEntries(await queue.listEntries(params.state), params.limit),
+    ),
     observedAt,
+  };
+}
+
+async function readQueueEntryIfPresent(
+  queue: SparkDaemonQueue,
+  fileName: string,
+  state: SparkDaemonQueueState,
+): Promise<SparkDaemonQueueEntry[]> {
+  try {
+    return [summarizeQueueEntry(await queue.readEntry(fileName, state))];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+function summarizeQueueEntries(entries: SparkDaemonQueueEntry[]): SparkDaemonQueueEntry[] {
+  return entries.map(summarizeQueueEntry);
+}
+
+function summarizeQueueEntry(entry: SparkDaemonQueueEntry): SparkDaemonQueueEntry {
+  const result = entry.payload.result;
+  if (!isRecord(result) || !Array.isArray(result.jsonEvents)) return entry;
+  const { jsonEvents, ...summary } = result;
+  return {
+    ...entry,
+    payload: {
+      ...entry.payload,
+      result: { ...summary, jsonEventCount: jsonEvents.length },
+    },
   };
 }
 

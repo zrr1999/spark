@@ -12,7 +12,7 @@ export const load: LayoutServerLoad = async ({ cookies, url }) => {
   const managedSessions = await listManagedSessionsForCockpit();
   const selectedSessionId = sessionIdFromPath(url.pathname);
   const selectedSession = selectedSessionId
-    ? (managedSessions.find((session) => session.sessionId === selectedSessionId) ??
+    ? (managedSessions.sessions.find((session) => session.sessionId === selectedSessionId) ??
       (await getManagedSessionForCockpit(selectedSessionId)))
     : null;
   const layout = loadShellWorkspaceLayout({
@@ -22,10 +22,11 @@ export const load: LayoutServerLoad = async ({ cookies, url }) => {
     preferredWorkspaceId: selectedSession ? workspaceIdForWorkbenchSession(selectedSession) : null,
     preferredWorkspaceSlug: url.searchParams.get("workspace"),
   });
-  const sessions = loadConversationSummaries(getDatabase(), managedSessions);
+  const sessions = loadConversationSummaries(getDatabase(), managedSessions.sessions);
   return {
     ...layout,
     sessions,
+    sessionsAvailable: managedSessions.available,
   };
 };
 

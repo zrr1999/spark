@@ -41,7 +41,6 @@
     elapsedLabel: string;
     currentActivityLabel: string;
     waitingAnswer: string;
-    runningAnswer: string;
     completedAnswer: string;
     errorAnswer: string;
     cancelledAnswer: string;
@@ -86,7 +85,6 @@
   let transcriptTurns = $derived(
     buildCockpitChatTranscriptTurns(commands, invocations, logChunks, {
       waitingAnswer: t.waitingAnswer,
-      runningAnswer: t.runningAnswer,
       completedAnswer: t.completedAnswer,
       errorAnswer: t.errorAnswer,
       cancelledAnswer: t.cancelledAnswer,
@@ -172,7 +170,7 @@
           <div class="answer-body">
             <AgentMdxStream source={turn.renderSource} streaming={turn.status === "running"} />
           </div>
-        {:else}
+        {:else if turn.answer}
           <p class="message-text" class:streaming-text={turn.status === "running"}>
             {turn.answer}{#if turn.status === "running"}<span class="streaming-caret" aria-hidden="true"></span>{/if}
           </p>
@@ -187,12 +185,21 @@
     {/each}
 
     {#if detachedInvocations.length > 0}
-      <article class="turn assistant-turn running">
+      <article class="turn assistant-turn {hasActiveRun ? 'running' : 'completed'}">
         <div class="turn-meta">
           <span class="role">{t.assistantLabel}</span>
-          <span class="status-pill running">{statusLabel("running")}</span>
+          <span class="status-pill {hasActiveRun ? 'running' : 'completed'}">
+            {statusLabel(hasActiveRun ? "running" : "completed")}
+          </span>
         </div>
-        <p class="message-text">{hasActiveRun ? t.runningAnswer : t.completedAnswer}</p>
+        {#if hasActiveRun}
+          <div class="working-line">
+            <span class="pulse" aria-hidden="true"></span>
+            <span>{t.workingLabel}</span>
+          </div>
+        {:else}
+          <p class="message-text">{t.completedAnswer}</p>
+        {/if}
         {@render RunDetails({
           id: "detached-run-details",
           invocations: detachedInvocations,

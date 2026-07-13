@@ -89,18 +89,24 @@ List discovered or fallback Cursor models:
 spark --list-models cursor
 ```
 
-Select a tested context/fast variant and Spark thinking level:
+Select a Composer, Grok, or context/fast variant and Spark thinking level:
 
 ```console
-spark --model cursor/composer-2.5@1m:fast --thinking high
-spark --model cursor/composer-2.5@272k:slow --thinking xhigh
+spark --model cursor/composer-2.5 --thinking high
+spark --model cursor/composer-2.5:slow --thinking xhigh
+spark --model cursor/grok-4.5 --thinking high
 ```
 
-Context qualifiers such as `@1m` and `@272k` are model identities because they
-change Spark's context-window accounting. `:fast` and `:slow` are selection-only
-Cursor parameter variants. Spark thinking remains the separate `--thinking`
-control; the provider maps it to Cursor `reasoning`, `effort`, or boolean
-`thinking` parameters only when the live/fallback catalog exposes them.
+The picker lists each canonical model id once (aliases like `composer` /
+`composer-2-5` resolve but are not shown as separate rows). When the catalog
+default is already fast, `:fast` is omitted from the list (and likewise for
+`:slow` when the default is slow); previously saved ids still resolve.
+Context qualifiers such as `@1m` appear only when the live/fallback catalog
+exposes a `context` parameter — they change Spark's context-window accounting.
+`:fast` and `:slow` are selection-only Cursor parameter variants. Spark thinking
+remains the separate `--thinking` control; the provider maps it to Cursor
+`reasoning`, `effort`, or boolean `thinking` parameters only when the catalog
+exposes them.
 
 Model discovery uses `Cursor.models.list({ apiKey })`. Public model metadata is
 cached for 24 hours at `$SPARK_HOME/cursor-sdk-model-list.json` (normally
@@ -145,9 +151,12 @@ Spark model discovery and streaming are TypeScript in
 `packages/spark-ai/src/cursor-stream.ts`. Spark depends on exact
 `@cursor/sdk@1.0.23`; that upstream SDK declares five platform-specific runtime
 packages for Darwin, Linux, and Windows, and its use is governed by Cursor
-Terms of Service. There is **no Spark Rust or native implementation** for
-Cursor discovery or streaming, and Spark source does not load `.node`, FFI, or
-native-addon modules directly.
+Terms of Service. The Spark root repeats those exact packages as optional
+dependencies so the SDK's executable ancestry lookup can find `cursorsandbox`
+under pnpm's non-hoisted layout; each installation links only its matching OS
+and architecture package. There is **no Spark Rust or native implementation**
+for Cursor discovery or streaming, and Spark source does not load `.node`, FFI,
+or native-addon modules directly.
 
 ### Maintainer rollout checklist
 

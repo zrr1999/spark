@@ -4,12 +4,21 @@ import { join, resolve } from "node:path";
 import { stdin as processStdin, stdout as processStdout } from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { sparkTuiCliStrings } from "@zendev-lab/spark-i18n/cli";
-import { SPARK_PROTOCOL_VERSION, type SparkTaskView } from "@zendev-lab/spark-protocol";
+import { sparkTuiCliStrings, sparkTuiPiParityStrings } from "@zendev-lab/spark-i18n/cli";
+import {
+  SPARK_PROTOCOL_VERSION,
+  type SparkSessionRegistryRecord,
+  type SparkSessionView,
+  type SparkTaskView,
+  type SparkThinkingLevel,
+} from "@zendev-lab/spark-protocol";
 
 import {
   attachSparkWorkspaceClient,
   clientCancelTurn,
+  clientCreateManagedSession,
+  clientGetManagedSessionSnapshot,
+  clientListManagedSessions,
   createSparkDaemonNativeCommands,
   createSparkDaemonNativeResponder,
   ensureSparkDaemonWorkspaceSession,
@@ -69,6 +78,11 @@ import {
   createSparkModelPickerFromCustomUi,
   type SparkModelSelectorCustomUi,
 } from "./tui/model-selector.ts";
+import {
+  CREATE_SPARK_SESSION_SELECTION,
+  runNativeSparkSessionSelector,
+  type SparkSessionSelectorOptions,
+} from "./tui/session-selector.ts";
 import { renderSparkFirstRunOnboarding } from "./cli/onboarding.ts";
 
 const tuiCliStrings = sparkTuiCliStrings();
@@ -132,6 +146,7 @@ export interface RunSparkCliOptions {
   daemonClient?: SparkDaemonClientOptions;
   serverClient?: SparkServerCliOptions;
   runTui?: typeof runNativeSparkTui;
+  selectSession?: (options: SparkSessionSelectorOptions) => Promise<string | null>;
   createHostServices?: (options?: SparkCliHostServicesOptions) => Promise<SparkCliHostServices>;
   terminal?: SparkCliTerminalState;
 }
@@ -389,6 +404,12 @@ interface SparkCliSessionAttachResolution {
   shouldEmitSessionStart: boolean;
 }
 
+interface SparkCliSelectedSession {
+  resolution: SparkCliSessionAttachResolution;
+  snapshot?: SparkSessionView;
+  cancelled?: boolean;
+}
+
 async function resolveSparkCliWorkspaceSessionState(
   services: SparkCliHostServices,
   lease: Awaited<ReturnType<typeof attachSparkWorkspaceClient>>,
@@ -429,6 +450,88 @@ async function resolveSparkCliWorkspaceSessionState(
     attachMatchesControlPlane: true,
     shouldEmitSessionStart: true,
   };
+}
+
+async function selectSparkCliWorkspaceSession(
+  services: SparkCliHostServices,
+  lease: Awaited<ReturnType<typeof attachSparkWorkspaceClient>>,
+  runtimeOptions: SparkCliRuntimeOptions | undefined,
+  daemonClient: SparkDaemonClientOptions,
+  selectSession: (options: SparkSessionSelectorOptions) => Promise<string | null>,
+): Promise<SparkCliSelectedSession> {
+  const initial = await resolveSparkCliWorkspaceSessionState(services, lease, runtimeOptions);
+  if (initial.state.mode !== "select") {
+    if (initial.state.mode !== "attached" || !initial.target) return { resolution: initial };
+    return {
+      resolution: initial,
+      snapshot: await managedSessionSnapshotIfAvailable(initial.target, daemonClient),
+    };
+  }
+
+  const sessions = (
+    await clientListManagedSessions(
+      {
+        scope: { kind: "workspace", workspaceId: lease.workspace.id },
+        workspaceId: lease.workspace.id,
+      },
+      daemonClient,
+    )
+  ).filter((session) => session.status !== "archived");
+  const selection = await selectSession({
+    sessions,
+    workspaceLabel: `${lease.workspace.displayName} • ${services.cwd}`,
+  });
+  if (!selection) return { resolution: initial, cancelled: true };
+
+  const selected =
+    selection === CREATE_SPARK_SESSION_SELECTION
+      ? await clientCreateManagedSession(
+          {
+            scope: { kind: "workspace", workspaceId: lease.workspace.id },
+            workspaceId: lease.workspace.id,
+            cwd: services.cwd,
+          },
+          daemonClient,
+        )
+      : requireSelectedManagedSession(sessions, selection);
+  const resolution: SparkCliSessionAttachResolution = {
+    target: selected.sessionId,
+    state: {
+      mode: "attached",
+      workspaceDir: services.cwd,
+      workspaceHash: services.sessionStore.workspaceHash,
+      controlPlaneSessionId: lease.client.id,
+      attachTarget: selected.sessionId,
+    },
+    attachMatchesControlPlane: true,
+    shouldEmitSessionStart: true,
+  };
+  return {
+    resolution,
+    ...(selection === CREATE_SPARK_SESSION_SELECTION
+      ? {}
+      : { snapshot: await managedSessionSnapshotIfAvailable(selected.sessionId, daemonClient) }),
+  };
+}
+
+function requireSelectedManagedSession(
+  sessions: SparkSessionRegistryRecord[],
+  sessionId: string,
+): SparkSessionRegistryRecord {
+  const session = sessions.find((candidate) => candidate.sessionId === sessionId);
+  if (!session) throw new Error(`Selected Spark session is no longer available: ${sessionId}`);
+  return session;
+}
+
+async function managedSessionSnapshotIfAvailable(
+  sessionId: string,
+  daemonClient: SparkDaemonClientOptions,
+): Promise<SparkSessionView | undefined> {
+  try {
+    return await clientGetManagedSessionSnapshot(sessionId, daemonClient);
+  } catch {
+    return undefined;
+  }
 }
 
 function requestedSparkCliSessionTarget(
@@ -777,15 +880,19 @@ export async function runSparkCli(
                 )(state, ctx)
               : undefined,
         });
-        const workspaceSession = await resolveSparkCliWorkspaceSessionState(
+        const selectedSession = await selectSparkCliWorkspaceSession(
           services,
           lease,
           command.options,
+          daemonClient,
+          options.selectSession ?? runNativeSparkSessionSelector,
         );
-        const currentSessionId =
-          workspaceSession.state.mode === "attached"
-            ? workspaceSession.state.attachTarget!
-            : `spark-cli-${Date.now().toString(36)}`;
+        if (selectedSession.cancelled) return 0;
+        const workspaceSession = selectedSession.resolution;
+        const currentSessionId = workspaceSession.state.attachTarget;
+        if (!currentSessionId) {
+          throw new Error("Spark TUI requires a selected daemon-managed session.");
+        }
         let currentSessionReady: Promise<void> | undefined;
         const ensureCurrentSession = () => {
           currentSessionReady ??= ensureSparkDaemonWorkspaceSession(
@@ -801,9 +908,10 @@ export async function runSparkCli(
           });
           return currentSessionReady;
         };
-        const firstRunOnboarding = command.initialMessage
-          ? undefined
-          : renderSparkFirstRunOnboarding(services);
+        const firstRunOnboarding =
+          command.initialMessage || selectedSession.snapshot
+            ? undefined
+            : renderSparkFirstRunOnboarding(services);
         registerSparkSessionsCommand(services.runtime, {
           store: services.sessionStore,
           getNavigationState: () => undefined,
@@ -851,6 +959,13 @@ export async function runSparkCli(
             pendingNativeUiTransport = createSparkNativeUiTransport(app, session);
             services.runtime.setUiTransport(pendingNativeUiTransport);
             app.setWorkspaceSession(workspaceSession.state);
+            if (selectedSession.snapshot) {
+              app.applyViewModelEvent({
+                version: SPARK_PROTOCOL_VERSION,
+                type: "session.snapshot",
+                session: selectedSession.snapshot,
+              });
+            }
             await hydrateNativeCockpitFromTaskRead(services, app, workspaceSession.state);
             if (workspaceSession.shouldEmitSessionStart) {
               await services.runtime.emit("session_start", {
@@ -1002,6 +1117,20 @@ function registerSparkDaemonModelKeybindings(
     "prev",
     notify,
   );
+  services.keybindings.register({
+    id: "app.thinking.cycle",
+    defaultKey: "shift+tab",
+    description: "Cycle the assistant thinking level (off/minimal/low/medium/high/xhigh)",
+    handler: async () => {
+      const next = cycleThinkingLevel(services.config.activeThinkingLevel);
+      services.config.activeThinkingLevel = next;
+      await services.saveConfig?.(services.config);
+      await modelControl.setSessionThinkingLevel(next);
+      services.runtime
+        .makeContext()
+        .ui?.notify?.(sparkTuiPiParityStrings().thinkingLevelSet(next), "info");
+    },
+  });
 }
 
 function registerDaemonModelCycleKeybinding(
@@ -1050,6 +1179,13 @@ function synchronizeLocalModelSelection(
   } catch {
     // The daemon catalog is authoritative; a presentation adapter may have a narrower catalog.
   }
+}
+
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+
+function cycleThinkingLevel(current: SparkThinkingLevel | undefined): SparkThinkingLevel {
+  const index = current ? THINKING_LEVELS.indexOf(current) : -1;
+  return THINKING_LEVELS[(index + 1) % THINKING_LEVELS.length]!;
 }
 
 function modelRefToSelection(

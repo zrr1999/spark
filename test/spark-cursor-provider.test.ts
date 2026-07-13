@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { FALLBACK_CURSOR_MODEL_ITEMS } from "../packages/spark-ai/src/cursor-fallback-models.ts";
 import {
   SparkProviderRegistry,
   buildCursorPrompt,
@@ -184,8 +185,9 @@ void test("Cursor local stream maps slow/xhigh selection and scrubs runtime cred
         },
       }),
   });
+  // Fixture default is fast=false, so the bare @272k id is the slow variant.
   const stream = streamFunction(
-    cursorModel("composer-2.5@272k:slow"),
+    cursorModel("composer-2.5@272k"),
     { messages: [{ role: "user", content: "test", timestamp: 1 }], tools: [] },
     { apiKey: "runtime-secret", reasoning: "xhigh" },
   );
@@ -301,26 +303,24 @@ void test("Cursor prompt forwards only latest-user images and marks historical i
   assert.deepEqual(prompt.images, [{ data: "new-data", mimeType: "image/jpeg" }]);
 });
 
-void test("Cursor catalog expands context, alias, and fast variants deterministically", () => {
+void test("Cursor catalog expands context and non-default fast variants without alias duplicates", () => {
   const models = convertCursorModelItems(CATALOG_FIXTURE);
   const ids = models.map((model) => model.id);
-  for (const id of [
+  assert.deepEqual(ids, [
     "composer-2.5@272k",
     "composer-2.5@272k:fast",
-    "composer-2.5@272k:slow",
     "composer-2.5@1m",
     "composer-2.5@1m:fast",
-    "composer-2.5@1m:slow",
-    "composer-2-5@272k",
-    "composer-2-5@272k:fast",
-    "composer-2-5@272k:slow",
-    "composer-2-5@1m",
-    "composer-2-5@1m:fast",
-    "composer-2-5@1m:slow",
-  ]) {
-    assert.ok(ids.includes(id), `expected catalog id ${id}`);
-  }
-  assert.equal(models.length, 12);
+  ]);
+  assert.equal(models.length, 4);
+
+  // Alias ids stay resolvable for selection, but are not listed as separate picker models.
+  assert.equal(getCursorModelMetadata("composer-2-5@1m:fast")?.selectionModelId, "composer-2-5");
+  assert.equal(getCursorModelMetadata("composer-2-5@1m:fast")?.baseModelId, "composer-2.5");
+  assert.equal(
+    models.some((model) => model.id.startsWith("composer-2-5")),
+    false,
+  );
 
   const short = models.find((model) => model.id === "composer-2.5@272k")!;
   const long = models.find((model) => model.id === "composer-2.5@1m:fast")!;
@@ -341,6 +341,48 @@ void test("Cursor catalog expands context, alias, and fast variants deterministi
     { id: "context", value: "1m" },
     { id: "fast", value: "true" },
   ]);
+});
+
+void test("Cursor catalog skips the fast qualifier that matches the default variant", () => {
+  const models = convertCursorModelItems([
+    {
+      id: "composer-2.5",
+      displayName: "Composer 2.5",
+      aliases: ["composer", "composer-2-5"],
+      parameters: [{ id: "fast", values: [{ value: "false" }, { value: "true" }] }],
+      variants: [
+        {
+          displayName: "Composer 2.5",
+          isDefault: true,
+          params: [{ id: "fast", value: "true" }],
+        },
+      ],
+    },
+  ]);
+  assert.deepEqual(
+    models.map((model) => model.id),
+    ["composer-2.5", "composer-2.5:slow"],
+  );
+  // Redundant :fast stays resolvable for previously saved selections.
+  assert.equal(getCursorModelMetadata("composer-2.5:fast")?.fastOverride, true);
+  assert.equal(getCursorModelMetadata("composer")?.selectionModelId, "composer");
+  assert.equal(getCursorModelMetadata("composer")?.baseModelId, "composer-2.5");
+});
+
+void test("Cursor fallback catalog includes Grok and only one Composer family", () => {
+  const models = convertCursorModelItems(FALLBACK_CURSOR_MODEL_ITEMS);
+  const ids = models.map((model) => model.id);
+  assert.ok(ids.includes("composer-2.5"));
+  assert.ok(ids.includes("composer-2.5:slow"));
+  assert.ok(ids.includes("grok-4.5"));
+  assert.ok(ids.includes("grok-4.5:slow"));
+  assert.equal(ids.filter((id) => id.startsWith("composer")).length, 2);
+  assert.equal(
+    ids.some((id) => id.startsWith("composer-2-5") || id.startsWith("composer-latest")),
+    false,
+  );
+  assert.equal(getCursorModelMetadata("composer-2-5:slow")?.selectionModelId, "composer-2-5");
+  assert.equal(getCursorModelMetadata("composer-latest")?.baseModelId, "composer-2.5");
 });
 
 void test("Cursor catalog maps boolean thinking parameters", () => {
@@ -419,7 +461,9 @@ void test("Cursor provider README documents opt-in setup, limitations, and teste
     "@zendev-lab/spark-ai/cursor-provider",
     "CURSOR_API_KEY",
     "spark --list-models cursor",
-    "spark --model cursor/composer-2.5@1m:fast --thinking high",
+    "spark --model cursor/composer-2.5 --thinking high",
+    "spark --model cursor/composer-2.5:slow --thinking xhigh",
+    "spark --model cursor/grok-4.5 --thinking high",
     "local-only runtime",
     "unknown/zero cost accounting",
     "Cursor-native settings/MCP/tool",
@@ -496,13 +540,18 @@ void test("Cursor live acceptance and dependency boundary are secret-safe and re
     ),
   ) as { license: string; optionalDependencies: Record<string, string> };
   assert.equal(sdkPackage.license, "SEE LICENSE IN LICENSE.md");
-  assert.deepEqual(sdkPackage.optionalDependencies, {
+  const platformPackages = {
     "@cursor/sdk-darwin-arm64": "1.0.23",
     "@cursor/sdk-darwin-x64": "1.0.23",
     "@cursor/sdk-linux-arm64": "1.0.23",
     "@cursor/sdk-linux-x64": "1.0.23",
     "@cursor/sdk-win32-x64": "1.0.23",
-  });
+  };
+  assert.deepEqual(sdkPackage.optionalDependencies, platformPackages);
+  const rootPackage = JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8")) as {
+    optionalDependencies: Record<string, string>;
+  };
+  assert.deepEqual(rootPackage.optionalDependencies, platformPackages);
 
   const cursorSources = ["cursor-model-discovery.ts", "cursor-stream.ts"];
   for (const path of cursorSources) {

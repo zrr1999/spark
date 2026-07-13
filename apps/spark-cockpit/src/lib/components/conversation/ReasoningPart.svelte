@@ -8,25 +8,35 @@
     state: "streaming" | "complete";
     redacted?: boolean;
     labels: ConversationPartLabels;
+    /** When true, render body only (already inside ThinkingChainPart). */
+    nested?: boolean;
   };
 
-  let { summary, state, redacted = false, labels }: Props = $props();
+  let { summary, state, redacted = false, labels, nested = false }: Props = $props();
 </script>
 
-<details class="reasoning-part" open={state === "streaming"}>
-  <summary>
-    <span class:streaming={state === "streaming"} class="reasoning-icon">
-      <Icon name="spark" size={14} stroke={2.1} />
-    </span>
-    <span>{state === "streaming" ? labels.reasoningStreaming : labels.reasoning}</span>
-    <span class="disclosure"><Icon name="chevron-down" size={14} /></span>
-  </summary>
+{#if nested}
   {#if summary.trim() && !redacted}
-    <div class="reasoning-content">
+    <div class="reasoning-content nested">
       <AgentMdxStream source={summary} streaming={state === "streaming"} />
     </div>
   {/if}
-</details>
+{:else}
+  <details class="reasoning-part" open={state === "streaming"}>
+    <summary>
+      <span class:streaming={state === "streaming"} class="reasoning-icon">
+        <Icon name="spark" size={14} stroke={2.1} />
+      </span>
+      <span>{state === "streaming" ? labels.reasoningStreaming : labels.reasoning}</span>
+      <span class="disclosure"><Icon name="chevron-down" size={14} /></span>
+    </summary>
+    {#if summary.trim() && !redacted}
+      <div class="reasoning-content">
+        <AgentMdxStream source={summary} streaming={state === "streaming"} />
+      </div>
+    {/if}
+  </details>
+{/if}
 
 <style>
   .reasoning-part {
@@ -79,6 +89,10 @@
     font-size: 13px;
     line-height: 1.55;
     padding: 4px 4px 8px 21px;
+  }
+
+  .reasoning-content.nested {
+    padding: 0;
   }
 
   @media (prefers-reduced-motion: reduce) {

@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { sparkModelRefSchema } from "./model-control.ts";
+import { sparkModelRefSchema, sparkThinkingLevelSchema } from "./model-control.ts";
 import { isoDateTimeSchema } from "./refs.ts";
 
 export const sparkSessionStatusOptions = ["ready", "running", "archived"] as const;
 export const sparkSessionStatusSchema = z.enum(sparkSessionStatusOptions);
 
-export const sparkChannelAdapterOptions = ["feishu", "infoflow"] as const;
+export const sparkChannelAdapterOptions = ["feishu", "infoflow", "qqbot"] as const;
 export const sparkChannelAdapterSchema = z.enum(sparkChannelAdapterOptions);
 
 export const sparkSessionChannelBindingSchema = z.object({
@@ -39,6 +39,7 @@ const sparkSessionRegistryRecordBaseSchema = z.object({
   cwd: z.string().min(1).optional(),
   sessionPath: z.string().min(1).optional(),
   model: sparkModelRefSchema.optional(),
+  thinkingLevel: sparkThinkingLevelSchema.optional(),
   bindings: z.array(sparkSessionChannelBindingSchema).default([]),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
@@ -159,6 +160,10 @@ export const sparkSessionSetModelRequestSchema = sparkSessionGetRequestSchema.ex
   model: sparkModelRefSchema,
 });
 
+export const sparkSessionSetThinkingRequestSchema = sparkSessionGetRequestSchema.extend({
+  thinkingLevel: sparkThinkingLevelSchema,
+});
+
 export const sparkAssignmentSourceSchema = z.object({
   kind: z.enum(["cockpit", "channel", "cli", "internal"]),
   channel: sparkChannelAdapterSchema.optional(),
@@ -207,6 +212,7 @@ export type SparkSessionBindRequest = z.infer<typeof sparkSessionBindRequestSche
 export type SparkSessionUnbindRequest = z.infer<typeof sparkSessionUnbindRequestSchema>;
 export type SparkSessionArchiveRequest = z.infer<typeof sparkSessionArchiveRequestSchema>;
 export type SparkSessionSetModelRequest = z.infer<typeof sparkSessionSetModelRequestSchema>;
+export type SparkSessionSetThinkingRequest = z.infer<typeof sparkSessionSetThinkingRequestSchema>;
 export type SparkAssignmentSource = z.infer<typeof sparkAssignmentSourceSchema>;
 export type SparkAssignmentTarget = z.infer<typeof sparkAssignmentTargetSchema>;
 export type SparkAssignment = z.infer<typeof sparkAssignmentSchema>;
@@ -223,6 +229,12 @@ export function parseSparkSessionSetModelRequest(value: unknown): SparkSessionSe
   return sparkSessionSetModelRequestSchema.parse(value);
 }
 
+export function parseSparkSessionSetThinkingRequest(
+  value: unknown,
+): SparkSessionSetThinkingRequest {
+  return sparkSessionSetThinkingRequestSchema.parse(value);
+}
+
 export function parseSparkAssignment(value: unknown): SparkAssignment {
   return sparkAssignmentSchema.parse(value);
 }
@@ -237,14 +249,18 @@ function normalizeLegacyWorkspaceScope(value: unknown): unknown {
   };
 }
 
-/** Normalize external keys: `feishu:chat:oc_x`, `infoflow:user:u`, or `conv:feishu:oc_x`. */
+function isSparkChannelAdapterName(value: string): value is SparkChannelAdapter {
+  return value === "feishu" || value === "infoflow" || value === "qqbot";
+}
+
+/** Normalize external keys: `feishu:chat:oc_x`, `infoflow:user:u`, `qqbot:c2c:…`, or `conv:feishu:oc_x`. */
 export function normalizeChannelExternalKey(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) throw new Error("externalKey must be non-empty");
   const parts = trimmed.split(":").filter(Boolean);
   if (parts.length < 2) {
     throw new Error(
-      `externalKey must look like feishu:chat:<id>, infoflow:user:<id>, or conv:<adapter>:<id>; got ${trimmed}`,
+      `externalKey must look like feishu:chat:<id>, infoflow:user:<id>, qqbot:c2c:<id>, or conv:<adapter>:<id>; got ${trimmed}`,
     );
   }
   if (parts[0] === "conv") {
@@ -252,12 +268,12 @@ export function normalizeChannelExternalKey(raw: string): string {
       throw new Error(`conv externalKey requires conv:<adapter>:<id>; got ${trimmed}`);
     }
     const adapter = parts[1];
-    if (adapter !== "feishu" && adapter !== "infoflow") {
+    if (!adapter || !isSparkChannelAdapterName(adapter)) {
       throw new Error(`unsupported conv adapter: ${adapter}`);
     }
     return `conv:${adapter}:${parts.slice(2).join(":")}`;
   }
-  if (parts[0] !== "feishu" && parts[0] !== "infoflow") {
+  if (!isSparkChannelAdapterName(parts[0] ?? "")) {
     throw new Error(`unsupported channel adapter in externalKey: ${parts[0]}`);
   }
   if (parts.length < 3) {
@@ -269,7 +285,7 @@ export function normalizeChannelExternalKey(raw: string): string {
 export function channelAdapterFromExternalKey(externalKey: string): SparkChannelAdapter {
   const normalized = normalizeChannelExternalKey(externalKey);
   const head = normalized.startsWith("conv:") ? normalized.split(":")[1] : normalized.split(":")[0];
-  if (head !== "feishu" && head !== "infoflow") {
+  if (!head || !isSparkChannelAdapterName(head)) {
     throw new Error(`unsupported channel adapter: ${head}`);
   }
   return head;

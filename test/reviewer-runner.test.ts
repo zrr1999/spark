@@ -88,6 +88,31 @@ void test("reviewer verdict parser maps task approval verdicts", () => {
   assert.equal(verdict.confidence, "high");
 });
 
+void test("reviewer instruction and verdict parser support tool_approval subject", () => {
+  const input = {
+    targetKind: "tool_approval" as const,
+    cwd: process.cwd(),
+    toolName: "cue_exec",
+    toolCallId: "tc-1",
+    arguments: { command: "echo hi" },
+    reason: "requires approval",
+  };
+  const instruction = renderReviewerInstruction(input);
+  assert.match(instruction, /tool-call approval/);
+  assert.match(instruction, /cue_exec/);
+  assert.match(instruction, /echo hi/);
+
+  const verdict = parseReviewerVerdictForInput(
+    input,
+    '{"outcome":"blocked","summary":"risky","findings":[],"blockers":["rm -rf"],"confidence":"high"}',
+  );
+  assert.equal(verdict.targetKind, "tool_approval");
+  assert.equal(verdict.toolName, "cue_exec");
+  assert.equal(verdict.approved, false);
+  assert.equal(verdict.outcome, "blocked");
+  assert.equal(verdict.summary, "risky");
+});
+
 void test("reviewer verdict parser tolerates trailing JSON event wrappers", () => {
   const input = reviewTaskInput();
   const verdict = parseReviewerVerdictForInput(

@@ -1,6 +1,6 @@
 import type { SparkMessageView } from "@zendev-lab/spark-protocol";
 import { describe, expect, it } from "vitest";
-import { conversationPartsFromMessage } from "./conversation-view";
+import { conversationPartsFromMessage, groupThinkingChainParts } from "./conversation-view";
 
 describe("Cockpit conversation view adapter", () => {
   it("keeps the legacy text field as a compatible presentation fallback", () => {
@@ -12,7 +12,9 @@ describe("Cockpit conversation view adapter", () => {
   it("maps structured Spark parts without exposing raw tool payload fields", () => {
     const parts = conversationPartsFromMessage(
       message({
-        text: "",
+        // Snapshot text may contain a display-safe tool summary. Structured
+        // activity still owns it; it must not be reintroduced as answer prose.
+        text: "command=pwd",
         parts: [
           {
             id: "part-thinking",
@@ -59,6 +61,105 @@ describe("Cockpit conversation view adapter", () => {
       },
     ]);
     expect(JSON.stringify(parts)).not.toContain("must-not-render");
+  });
+
+  it("groups reasoning and tools into one thinking chain for presentation", () => {
+    const parts = groupThinkingChainParts([
+      {
+        type: "reasoning",
+        summary: "Plan the listing",
+        state: "complete",
+      },
+      {
+        type: "text",
+        text: "Listing now.",
+        streaming: false,
+      },
+      {
+        type: "tool",
+        callId: "call-1",
+        name: "cue_exec",
+        state: "completed",
+        summary: ".cursor/\nREADME.md",
+      },
+    ]);
+
+    expect(parts.map((part) => part.type)).toEqual(["chain", "text"]);
+    expect(parts[0]).toMatchObject({
+      type: "chain",
+      state: "complete",
+      steps: [
+        { type: "reasoning", summary: "Plan the listing" },
+        { type: "tool", name: "cue_exec", summary: ".cursor/\nREADME.md" },
+      ],
+    });
+  });
+
+  it("keeps provider commentary inside the execution chain instead of answer prose", () => {
+    const parts = conversationPartsFromMessage(
+      message({
+        text: "",
+        parts: [
+          {
+            id: "commentary",
+            type: "text",
+            phase: "commentary",
+            status: "complete",
+            text: "确认当前目录。",
+            metadata: {},
+          },
+          {
+            id: "call",
+            type: "tool-call",
+            status: "complete",
+            toolCallId: "call-pwd",
+            toolName: "cue_exec",
+            metadata: {},
+          },
+        ],
+      }),
+    );
+
+    expect(parts).toEqual([
+      { type: "commentary", summary: "确认当前目录。", state: "complete" },
+      {
+        type: "tool",
+        callId: "call-pwd",
+        name: "cue_exec",
+        state: "completed",
+      },
+    ]);
+    expect(groupThinkingChainParts(parts)).toMatchObject([
+      {
+        type: "chain",
+        steps: [
+          { type: "commentary", summary: "确认当前目录。" },
+          { type: "tool", name: "cue_exec" },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps final-answer text as normal assistant prose", () => {
+    const parts = conversationPartsFromMessage(
+      message({
+        text: "当前工作目录是 /workspace/spark。",
+        parts: [
+          {
+            id: "answer",
+            type: "text",
+            phase: "final_answer",
+            status: "complete",
+            text: "当前工作目录是 /workspace/spark。",
+            metadata: {},
+          },
+        ],
+      }),
+    );
+
+    expect(parts).toEqual([
+      { type: "text", text: "当前工作目录是 /workspace/spark。", streaming: false },
+    ]);
   });
 
   it("preserves the daemon order of thinking, text, and tool parts", () => {

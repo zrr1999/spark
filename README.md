@@ -105,7 +105,7 @@ Spark package names are type-first:
 - `@zendev-lab/spark-recall` — controlled explicit-scope recall candidate store/tool, separate from `.learnings/` and automatic memory.
 - `@zendev-lab/spark-cue` — reusable Pi/cue-shell execution substrate.
 - `@zendev-lab/spark-ask` — canonical public/default `ask` action tool with shared focused/flow protocol, state, renderer, and direct custom input handling behind that surface.
-- `@zendev-lab/spark-roles` — canonical `role` action tool plus reusable `RoleSpec` definitions, builtin/extension/project/user role discovery, project/user Markdown stores, role model settings, and task-agnostic direct role calls. It owns fresh/forked CLI launch, timeout/cancel, stdout/stderr capture, model-setting resolution, and tolerant JSONL parsing; it does not own Spark task DAGs, asks, artifacts, review gates, or package-specific role semantics.
+- `@zendev-lab/spark-roles` — canonical merged `role`/session action tool plus reusable `RoleSpec` definitions, builtin/extension/project/user role discovery, project/user Markdown stores, role model settings, anonymous direct role calls, and adapters for daemon-owned persistent session lifecycle/calls/mail. Roles remain definitions and sessions remain execution continuity; `@zendev-lab/spark-session` owns the registry/mailbox mechanisms. Internal role-run primitives retain fresh/forked launch, timeout/cancel, stdout/stderr capture, model-setting resolution, and tolerant JSONL parsing; Spark task DAGs, asks, artifacts, and review gates remain outside this package.
 
 Spark Cockpit is the local web cockpit/projection product line while retaining separate implementation package boundaries:
 

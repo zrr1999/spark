@@ -123,6 +123,7 @@
         workspaces={workspaceOptions}
         activeWorkspaceId={data.activeWorkspace?.id ?? null}
         selectedSessionId={selectedSessionId}
+        sessionsAvailable={data.sessionsAvailable}
         locale={data.locale}
         {common}
         messages={{
@@ -130,10 +131,13 @@
           daemonConversation: data.messages.sessions.daemonConversation,
           searchPlaceholder: data.messages.sessions.searchPlaceholder,
           emptyTitle: data.messages.sessions.emptyTitle,
+          daemonUnavailableTitle: data.messages.sessions.daemonUnavailableTitle,
+          daemonUnavailableBody: data.messages.sessions.daemonUnavailableBody,
           listLabel: data.messages.sessions.listLabel,
           untitledConversation: data.messages.sessions.untitledConversation,
           unknownWorkspace: data.messages.sessions.unknownWorkspace,
           daemonGroup: data.messages.sessions.daemonGroup,
+          channelSessionBadge: data.messages.sessions.channelSessionBadge,
         }}
       />
 

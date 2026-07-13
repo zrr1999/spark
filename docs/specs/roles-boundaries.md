@@ -1,9 +1,10 @@
-# Role package boundaries
+# Role and session package boundaries
 
-Spark separates two concerns:
+Spark separates three data concepts behind one public capability:
 
 1. **Role specs** — durable definitions of coding personas/instructions.
-2. **Role runs** — concrete role executions using one role spec.
+2. **Role runs** — concrete anonymous or internal role executions using one role spec.
+3. **Sessions** — persistent conversation continuity, daemon lifecycle, and explicit peer messages.
 
 Reusable, Spark-independent pieces live in `spark-roles`; Spark keeps task/workflow adaptation and facade policy.
 
@@ -14,7 +15,8 @@ Reusable, Spark-independent pieces live in `spark-roles`; Spark keeps task/workf
 - `packages/spark-tasks/src/*` owns project/task graphs, TODOs, dependencies, readiness, claim leases, and run history. It stores `roleRef` strings but does not import or resolve `RoleSpec` objects.
 - `packages/spark-runtime/src/index.ts` owns single-task Spark adaptation: resolving an assigned/task/default `roleRef` through a `RoleRegistry`, creating `role-run` claims, calling `runRole()`, writing artifacts through `spark-artifacts`, updating task/run state, and adapting active role-run control results for Spark UI/reconciliation surfaces.
 - `packages/spark-workflows/src/orchestrator/index.ts` owns graph-level ready-task scheduling: dispatch-time executor role assignment, workflow-run state, and stale run reconciliation.
-- `packages/spark-roles/src/extension.ts` exposes the canonical public/default `role({ action })` tool for role-spec management and one-off direct role calls; historical fragmented implementations are internal dispatch targets only.
+- `packages/spark-session/src/*` owns persistent session registry and mailbox mechanisms.
+- `packages/spark-roles/src/extension.ts` exposes the canonical public/default `role({ action })` tool for role definitions, anonymous calls, and persistent session lifecycle/calls/messages; historical fragmented implementations are internal dispatch targets only.
 - `packages/pi-extension/src/extension/index.ts` exposes Spark commands, canonical tool handlers, and Spark-owned function/workflow presets; Spark task execution uses role refs through `assign({ dryRun: true })`, not direct role wrapper tools.
 
 ## Spec/run separation invariant
@@ -43,7 +45,7 @@ Old agent-shaped inputs are not part of the package boundary. A stale local snap
 
 ## `spark-roles` ownership
 
-`spark-roles` owns reusable role definition data and simple single-run execution, with no `spark-*` dependency:
+`spark-roles` owns reusable role definition data, anonymous single-run execution, and the merged public adapter over daemon-owned persistent sessions:
 
 - `RoleSource = "builtin" | "extension" | "project" | "user"`.
 - `RoleOriginKind = "manual" | "generated" | "builtin" | "extension"`.
@@ -51,8 +53,9 @@ Old agent-shaped inputs are not part of the package boundary. A stale local snap
 - `RoleSpec`, `RoleSpecProposal`, `RoleInstruction`, `RoleRunRequest`, `RoleRunRecord`, and `RoleRunResult`.
 - `RoleRegistry`, runtime extension-role registration, and Markdown role stores for project/user roles.
 - Builtin Spark-oriented roles (`scout`, `reviewer`, `worker`), the audited six-token capability vocabulary (`read | write | exec | net | interact | spawn`), and declarative `allowedTools` profiles derived from it.
-- Canonical Pi role tool `role({ action })`, including task-agnostic one-off `role({ action: "call" })`.
-- Pi CLI argument construction, fresh/forked launch, stdout/stderr capture, tolerant JSONL parsing, timeout/cancel, active-run listing, and input-delivery capability reporting.
+- Canonical Pi role/session tool `role({ action })`: role-definition management, anonymous role calls, persistent session lifecycle/calls, and durable session mail.
+- Pi CLI argument construction, internal fresh/forked launch, stdout/stderr capture, tolerant JSONL parsing, timeout/cancel, active-run listing, and input-delivery capability reporting.
+- Session registry/mailbox data remains owned by `spark-session`; daemon execution remains behind local RPC.
 
 Storage policy:
 

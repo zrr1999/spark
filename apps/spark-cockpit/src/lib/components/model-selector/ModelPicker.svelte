@@ -21,6 +21,8 @@
     clearSearchLabel,
     selectedLabel,
     compact = false,
+    settingsHref,
+    settingsLabel,
     onValueChange,
   }: {
     id: string;
@@ -40,6 +42,8 @@
     clearSearchLabel: string;
     selectedLabel?: string;
     compact?: boolean;
+    settingsHref?: string;
+    settingsLabel?: string;
     onValueChange?: (value: string) => void;
   } = $props();
 
@@ -151,6 +155,15 @@
           {/each}
         </Command.List>
       </Command.Root>
+
+      {#if settingsHref && settingsLabel}
+        <footer class="model-picker-footer">
+          <a class="model-picker-settings" href={settingsHref}>
+            <Icon name="settings" size={14} />
+            {settingsLabel}
+          </a>
+        </footer>
+      {/if}
     </Dialog.Content>
   </Dialog.Portal>
 </Dialog.Root>
@@ -168,7 +181,7 @@
     gap: var(--spacing-xs);
     grid-template-columns: auto minmax(0, 1fr) auto;
     min-height: 40px;
-    min-width: min(260px, 100%);
+    min-width: 220px;
     padding: 5px 10px;
     text-align: left;
     transition:
@@ -195,8 +208,10 @@
   }
 
   :global(.model-picker-trigger.compact) {
-    min-width: 220px;
-    width: min(320px, 44vw);
+    flex: 1 1 10rem;
+    max-width: min(320px, 100%);
+    min-width: 0;
+    width: auto;
   }
 
   .trigger-icon {
@@ -455,6 +470,29 @@
     text-align: center;
   }
 
+  .model-picker-footer {
+    border-top: 1px solid var(--color-border);
+    padding: var(--spacing-sm) var(--spacing-md);
+  }
+
+  .model-picker-settings {
+    align-items: center;
+    border-radius: var(--rounded-md);
+    color: var(--color-ink-muted);
+    display: inline-flex;
+    font-size: 12px;
+    font-weight: 600;
+    gap: 6px;
+    min-height: 34px;
+    padding: 0 8px;
+    text-decoration: none;
+  }
+
+  .model-picker-settings:hover {
+    background: var(--color-surface-soft);
+    color: var(--color-ink);
+  }
+
   @media (max-width: 640px) {
     :global(.model-picker-trigger),
     :global(.model-picker-trigger.compact) {
@@ -474,7 +512,8 @@
     }
 
     .dialog-heading,
-    .command-search {
+    .command-search,
+    .model-picker-footer {
       padding-left: var(--spacing-md);
       padding-right: var(--spacing-md);
     }

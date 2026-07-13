@@ -56,6 +56,8 @@ export interface PiCueToolConfig {
   name: string;
   label?: string;
   description: string;
+  /** Cue exec family tools require host approval gated by session approvalMethod. */
+  requiresApproval?: boolean;
   parameters: unknown;
   renderCall?: (
     args: Record<string, unknown>,
@@ -1422,6 +1424,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
   pi.registerTool({
     name: "cue_exec",
     label: "Run Command",
+    requiresApproval: true,
     description:
       "Execute a command in cue-shell using the active cue-client transport profile (Unix socket or SSH gateway). " +
       "SSH profiles connect through the configured remote `cued gateway --stdio`; spark-cue does not auto-start remote daemons. " +
@@ -1739,6 +1742,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
   pi.registerTool({
     name: "cue_run",
     label: "Run Cue File",
+    requiresApproval: true,
     description:
       "Run a .cue file in cue-shell, mirroring `cue run <file.cue>`. " +
       "Top-level items execute sequentially with fail-fast semantics inside a fresh isolated scope forked from HEAD. " +
@@ -1821,6 +1825,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
   pi.registerTool({
     name: "cue_script",
     label: "Run Cue Script",
+    requiresApproval: true,
     description:
       "Run an inline .cue script body in cue-shell. " +
       "Top-level items execute sequentially with fail-fast semantics inside a fresh isolated scope forked from HEAD. " +
@@ -1910,6 +1915,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
   pi.registerTool({
     name: "script_run",
     label: "Run Script File",
+    requiresApproval: true,
     description:
       "Run a script file with an explicit language runner. " +
       "Supported languages in this version: cue-shell and python. " +
@@ -2027,6 +2033,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
   pi.registerTool({
     name: "script_eval",
     label: "Evaluate Script",
+    requiresApproval: true,
     description:
       "Run an inline script body with an explicit language runner. " +
       "Supported languages in this version: cue-shell and python. " +
@@ -2145,6 +2152,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
   pi.registerTool({
     name: "cue_jobs",
     label: "Cue Jobs",
+    requiresApproval: true,
     description:
       "Manage cue-shell jobs. action='list' lists jobs, action='status' inspects a job, chain, or cron, action='wait' waits for a job or chain, and action='stop' stops a job or removes a cron.",
     parameters: Type.Object({
@@ -2492,6 +2500,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
   pi.registerTool({
     name: "cue_schedule",
     label: "Cue Schedule",
+    requiresApproval: true,
     description:
       "Manage scheduled cue-shell jobs. " +
       "action='add': schedule a recurring or one-shot job (requires schedule + command). " +

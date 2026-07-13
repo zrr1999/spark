@@ -11,13 +11,17 @@ export { default as ToolCallPart } from "./ToolCallPart.svelte";
 export {
   conversationPartsFromMessage,
   conversationPartText,
+  groupThinkingChainParts,
+  preferToolSummary,
   textConversationPart,
 } from "./conversation-view";
 export type {
   ConversationApprovalState,
+  ConversationChainStep,
   ConversationMessageView,
   ConversationPart,
   ConversationPartLabels,
   ConversationTaskState,
   ConversationToolState,
 } from "./types";
+export { default as ThinkingChainPart } from "./ThinkingChainPart.svelte";

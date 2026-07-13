@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -21,6 +22,7 @@ import {
   type SparkDaemonClientOptions,
 } from "../apps/spark-tui/src/cli/daemon.ts";
 import { loadSparkHeadlessSessionModule } from "../apps/spark-daemon/src/spark/session-run.ts";
+import { CREATE_SPARK_SESSION_SELECTION } from "../apps/spark-tui/src/tui/session-selector.ts";
 
 void test("Spark daemon loads headless session executor from workspace package source", async () => {
   const module = await loadSparkHeadlessSessionModule();
@@ -1433,6 +1435,11 @@ void test("Spark TUI and headless print attach and release workspace clients", a
             keybindings: { snapshot: () => ({ bindings: [] }) },
             diagnostics: [],
           }) as never,
+        selectSession: async (options) => {
+          assert.equal(options.workspaceLabel, `Workspace • ${dir}`);
+          assert.equal(options.sessions.length, 2);
+          return CREATE_SPARK_SESSION_SELECTION;
+        },
         runTui: async (input) => {
           capturedTuiOptions = input;
         },
@@ -1509,10 +1516,152 @@ void test("Spark TUI and headless print attach and release workspace clients", a
       [
         { sessionId: submitted[0]?.sessionId, workspaceId: workspace.id },
         { sessionId: "json-s1", workspaceId: workspace.id },
+        { sessionId: "generated-3", workspaceId: workspace.id },
       ],
     );
     assert.equal(submitted[0]?.prompt, "headless prompt");
     assert.match(logs.join("\n"), /turn\.json/u);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("native TUI session gate exits without creating an implicit session", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-session-cancel-"));
+  try {
+    const base = createWorkspaceAttachTestDeps(dir, { existingSessionIds: new Set() });
+    let ranTui = false;
+    let created = 0;
+    const daemonClient: SparkDaemonClientOptions = {
+      ...base.daemonClient,
+      managedSessions: {
+        list: async () => [],
+        create: async () => {
+          created += 1;
+          throw new Error("cancelled selection must not create a session");
+        },
+        get: async () => {
+          throw new Error("not used");
+        },
+        bind: async () => {
+          throw new Error("not used");
+        },
+        unbind: async () => {
+          throw new Error("not used");
+        },
+        archive: async () => {
+          throw new Error("not used");
+        },
+      },
+    };
+
+    assert.equal(
+      await runSparkCli([], {
+        daemonClient,
+        createHostServices: base.createHostServices,
+        terminal: { stdinIsTTY: true, stdoutIsTTY: true },
+        selectSession: async () => null,
+        runTui: async () => {
+          ranTui = true;
+        },
+      }),
+      0,
+    );
+    assert.equal(ranTui, false);
+    assert.equal(created, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("native TUI selects an existing daemon session and restores its snapshot", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-session-select-"));
+  try {
+    const base = createWorkspaceAttachTestDeps(dir, { existingSessionIds: new Set() });
+    const now = "2026-07-13T00:00:00.000Z";
+    const existing = {
+      sessionId: "daemon-session-1",
+      title: "Existing conversation",
+      scope: { kind: "workspace" as const, workspaceId: "workspace-current" },
+      workspaceId: "workspace-current",
+      status: "ready" as const,
+      bindings: [],
+      createdAt: now,
+      updatedAt: now,
+      cwd: dir,
+    };
+    const daemonClient: SparkDaemonClientOptions = {
+      ...base.daemonClient,
+      managedSessions: {
+        list: async () => [existing],
+        create: async () => {
+          throw new Error("existing selection must not create a session");
+        },
+        get: async () => existing,
+        bind: async () => existing,
+        unbind: async () => existing,
+        archive: async () => ({ ...existing, status: "archived" as const }),
+      },
+      controlRequest: async (method, params) => {
+        assert.equal(method, "session.snapshot");
+        assert.deepEqual(params, { sessionId: existing.sessionId });
+        return {
+          version: 1,
+          sessionId: existing.sessionId,
+          title: existing.title,
+          status: "idle",
+          messages: [
+            {
+              version: 1,
+              id: "message-1",
+              role: "assistant",
+              text: "Restored from daemon",
+              status: "done",
+              createdAt: now,
+              metadata: {},
+            },
+          ],
+          tools: [],
+          runs: [],
+          tasks: [],
+          artifacts: [],
+          metadata: {},
+        };
+      },
+    };
+    let selectedOptions: { sessions: Array<{ sessionId: string }> } | undefined;
+    let rendered = "";
+
+    assert.equal(
+      await runSparkCli([], {
+        daemonClient,
+        createHostServices: base.createHostServices,
+        terminal: { stdinIsTTY: true, stdoutIsTTY: true },
+        selectSession: async (options) => {
+          selectedOptions = options;
+          return existing.sessionId;
+        },
+        runTui: async (input) => {
+          assert.equal(typeof input, "object");
+          assert.notEqual(input, null);
+          const options = input as Exclude<typeof input, string | undefined>;
+          assert.equal(options.workspaceSession?.attachTarget, existing.sessionId);
+          const harness = createSparkNativeTuiHarness({
+            workspaceSession: options.workspaceSession,
+          });
+          await options.configureApp?.(harness.app, harness.session);
+          rendered = harness.render(140);
+        },
+      }),
+      0,
+    );
+
+    assert.deepEqual(
+      selectedOptions?.sessions.map((session) => session.sessionId),
+      [existing.sessionId],
+    );
+    assert.match(rendered, /Restored from daemon/u);
+    assert.match(rendered, /Existing conversation/u);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -2120,6 +2269,7 @@ void test("native TUI model selection and following turn share one managed sessi
       modelId: "model-b",
     });
     assert.deepEqual(controlCalls, [
+      { method: "session.snapshot", params: { sessionId: "same-session" } },
       { method: "model.catalog", params: { sessionId: "same-session" } },
       {
         method: "session.model.set",
@@ -2134,6 +2284,128 @@ void test("native TUI model selection and following turn share one managed sessi
       [{ sessionId: "same-session", prompt: "after model switch" }],
     );
   } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("Spark native responder preserves split UTF-8 daemon stream chunks", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-stream-utf8-"));
+  const paths = testDaemonPaths(dir);
+  await mkdir(paths.runtimeDir, { recursive: true });
+  const server = createServer((socket) => {
+    socket.once("data", (requestChunk) => {
+      const request = JSON.parse(requestChunk.toString("utf8").trim()) as { id: string };
+      const result = `${JSON.stringify({
+        id: request.id,
+        ok: true,
+        result: {
+          observedAt: "2026-06-19T00:00:00.000Z",
+          fileName: "turn.json",
+          filePath: "/tmp/turn.json",
+          task: { type: "session.run", sessionId: "native-session", prompt: "hello" },
+        },
+      })}\n`;
+      const viewEvent = Buffer.from(
+        `${JSON.stringify({
+          id: request.id,
+          ok: true,
+          event: {
+            version: 1,
+            type: "daemon.view_event",
+            source: "daemon",
+            emittedAt: "2026-06-19T00:00:00.000Z",
+            sessionId: "native-session",
+            invocationId: "turn.json",
+            view: {
+              version: 1,
+              type: "session.message",
+              sessionId: "native-session",
+              message: {
+                version: 1,
+                id: "assistant",
+                role: "assistant",
+                text: "你好",
+                status: "streaming",
+                createdAt: "2026-06-19T00:00:00.000Z",
+                metadata: {},
+              },
+            },
+          },
+        })}\n`,
+        "utf8",
+      );
+      const characterStart = viewEvent.indexOf(Buffer.from("你", "utf8"));
+      const terminal = `${JSON.stringify({
+        id: request.id,
+        ok: true,
+        event: {
+          version: 1,
+          type: "daemon.task.lifecycle",
+          source: "daemon",
+          emittedAt: "2026-06-19T00:00:01.000Z",
+          sessionId: "native-session",
+          invocationId: "turn.json",
+          taskFileName: "turn.json",
+          taskType: "session.run",
+          status: "succeeded",
+        },
+      })}\n`;
+      socket.write(result);
+      socket.write(viewEvent.subarray(0, characterStart + 1));
+      setTimeout(() => {
+        socket.write(viewEvent.subarray(characterStart + 1));
+        socket.end(terminal);
+      }, 5);
+    });
+  });
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(paths.socketPath, resolve);
+    });
+    const chunks: string[] = [];
+    const responder = createSparkDaemonNativeResponder(
+      {
+        paths,
+        daemonStatus: async () => ({
+          observedAt: "2026-06-19T00:00:00.000Z",
+          servers: [],
+          queue: { inbox: 0, processed: 0, failed: 0 },
+        }),
+        daemonQueue: async () => ({
+          state: "all" as const,
+          observedAt: "2026-06-19T00:00:01.000Z",
+          byState: {
+            processed: [
+              {
+                fileName: "turn.json",
+                filePath: "/tmp/turn.json",
+                payload: {
+                  enqueuedAt: "2026-06-19T00:00:00.000Z",
+                  processedAt: "2026-06-19T00:00:01.000Z",
+                  task: {
+                    type: "session.run" as const,
+                    sessionId: "native-session",
+                    prompt: "hello",
+                  },
+                  result: { assistantText: "你好", stderr: "" },
+                },
+              },
+            ],
+          },
+        }),
+      },
+      { sessionId: "native-session" },
+    );
+
+    assert.equal(
+      await responder("hello", { appendAssistantChunk: (chunk) => chunks.push(chunk) }),
+      "",
+    );
+    assert.deepEqual(chunks, ["你好"]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -2173,28 +2445,31 @@ void test("Spark native responder streams daemon view events as assistant chunks
           task: { type: "session.run" as const, sessionId: input.sessionId, prompt: input.prompt },
         };
       },
-      daemonQueue: async () => ({
-        state: "all" as const,
-        observedAt: "2026-06-19T00:00:00.000Z",
-        byState: {
-          processed: [
-            {
-              fileName: "turn.json",
-              filePath: "/tmp/turn.json",
-              payload: {
-                enqueuedAt: "2026-06-19T00:00:00.000Z",
-                processedAt: "2026-06-19T00:00:01.000Z",
-                task: {
-                  type: "session.run" as const,
-                  sessionId: "native-session",
-                  prompt: "hello",
+      daemonQueue: async (_paths, params) => {
+        assert.deepEqual(params, { state: "all", fileName: "turn.json" });
+        return {
+          state: "all" as const,
+          observedAt: "2026-06-19T00:00:00.000Z",
+          byState: {
+            processed: [
+              {
+                fileName: "turn.json",
+                filePath: "/tmp/turn.json",
+                payload: {
+                  enqueuedAt: "2026-06-19T00:00:00.000Z",
+                  processedAt: "2026-06-19T00:00:01.000Z",
+                  task: {
+                    type: "session.run" as const,
+                    sessionId: "native-session",
+                    prompt: "hello",
+                  },
+                  result: { assistantText: "hello", stderr: "" },
                 },
-                result: { assistantText: "hello", stderr: "" },
               },
-            },
-          ],
-        },
-      }),
+            ],
+          },
+        };
+      },
     },
     { sessionId: "native-session" },
   );

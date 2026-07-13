@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createConnection } from "node:net";
 import { join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { resolveSparkPaths, type SparkPaths } from "./paths.ts";
 
 export interface SparkDaemonLocalRpcClientOptions {
@@ -78,6 +79,7 @@ export async function requestSparkDaemonLocalRpcWire<T>(
 
   return await new Promise<T>((resolve, reject) => {
     const socket = createConnection(socketPath);
+    const decoder = new StringDecoder("utf8");
     let buffer = "";
     let responseBytes = 0;
     let settled = false;
@@ -135,7 +137,7 @@ export async function requestSparkDaemonLocalRpcWire<T>(
         });
         return;
       }
-      buffer += chunk.toString("utf8");
+      buffer += decoder.write(chunk);
       const newline = buffer.indexOf("\n");
       if (newline === -1) return;
       try {
@@ -148,14 +150,20 @@ export async function requestSparkDaemonLocalRpcWire<T>(
             ? response.error.message
             : undefined;
         if (response.id !== request.id) {
-          if (
-            response.id === "unknown" &&
-            response.ok === false &&
-            remoteMessage?.startsWith("Unknown local RPC method:")
-          ) {
-            throw new SparkDaemonLocalRpcUnavailableError(
-              `The running Spark daemon does not support ${request.method}; restart or upgrade it. ${remoteMessage}`,
-            );
+          if (response.ok === false && remoteMessage) {
+            // Daemon parse failures historically replied with id "unknown".
+            // Prefer the remote message over a generic id-mismatch error so
+            // Cockpit can show the real channel configure / schema failure.
+            if (remoteMessage.startsWith("Unknown local RPC method:")) {
+              throw new SparkDaemonLocalRpcUnavailableError(
+                `The running Spark daemon does not support ${request.method}; restart or upgrade it. ${remoteMessage}`,
+              );
+            }
+            finish({
+              ok: false,
+              error: new SparkDaemonLocalRpcRemoteError(remoteMessage, response.error),
+            });
+            return;
           }
           throw new SparkDaemonLocalRpcError("Invalid local RPC response.");
         }

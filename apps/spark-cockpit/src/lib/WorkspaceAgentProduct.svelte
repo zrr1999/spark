@@ -130,7 +130,6 @@
   let transcriptTurns = $derived(
     buildCockpitChatTranscriptTurns(liveState.commands, liveState.invocations, liveState.logChunks, {
       waitingAnswer: t.chat.waitingAnswer,
-      runningAnswer: t.chat.runningAnswer,
       completedAnswer: t.chat.completedAnswer,
       errorAnswer: t.chat.errorAnswer,
       cancelledAnswer: t.chat.cancelledAnswer,
@@ -258,7 +257,6 @@
   function isGenericAnswer(answer: string) {
     return [
       t.chat.waitingAnswer,
-      t.chat.runningAnswer,
       t.chat.completedAnswer,
       t.chat.errorAnswer,
       t.chat.cancelledAnswer,

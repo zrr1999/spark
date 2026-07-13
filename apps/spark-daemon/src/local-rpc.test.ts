@@ -298,6 +298,67 @@ describe("Spark daemon local RPC", () => {
           ],
         },
       });
+
+      const submittedFileName = (submitted as { result: { fileName: string } }).result.fileName;
+      const queue = new SparkDaemonQueue({ paths });
+      await queue.markProcessed(submittedFileName, {
+        assistantText: "finished",
+        stderr: "",
+        jsonEvents: Array.from({ length: 500 }, (_, index) => ({
+          type: "stream_event",
+          text: `event-${index}`,
+        })),
+      });
+      const exact = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "queue_exact",
+          method: "daemon.queue",
+          params: { state: "all", fileName: submittedFileName },
+        }),
+        paths,
+        db,
+        undefined,
+      );
+      expect(exact).toMatchObject({
+        id: "queue_exact",
+        ok: true,
+        result: {
+          state: "all",
+          byState: {
+            inbox: [],
+            failed: [],
+            processed: [
+              {
+                fileName: submittedFileName,
+                payload: {
+                  result: {
+                    assistantText: "finished",
+                    stderr: "",
+                    jsonEventCount: 500,
+                  },
+                },
+              },
+            ],
+          },
+        },
+      });
+      expect(JSON.stringify(exact)).not.toContain("jsonEvents");
+
+      const invalid = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "queue_invalid",
+          method: "daemon.queue",
+          params: { state: "all", fileName: "../secret.json" },
+        }),
+        paths,
+        db,
+        undefined,
+      );
+      expect(invalid).toMatchObject({
+        id: "queue_invalid",
+        ok: false,
+        error: { message: "Invalid daemon queue file name." },
+      });
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });
@@ -832,6 +893,31 @@ describe("Spark daemon local RPC", () => {
       );
       expect(reloaded).toEqual({ id: "channel_reload", ok: true, result: runningStatus });
       expect(channelIngress.reload).toHaveBeenCalledWith("ws_demo");
+
+      const invalidConfigure = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "channel_configure_bad",
+          method: "channel.configure",
+          params: {
+            workspaceId: "ws_demo",
+            config: {
+              adapters: {},
+              routes: {},
+              ingress: { enabled: true, on_unbound: "create_session" },
+            },
+          },
+        }),
+        paths,
+        db,
+        undefined,
+        { channelIngress },
+      );
+      expect(invalidConfigure).toMatchObject({
+        id: "channel_configure_bad",
+        ok: false,
+        error: { message: "ingress.on_unbound must be reject or create" },
+      });
+      expect(channelIngress.configure).toHaveBeenCalledTimes(1);
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });
@@ -1108,7 +1194,7 @@ describe("Spark daemon local RPC", () => {
               id: `queue:${queued.fileName}`,
               role: "user",
               text: "Queued follow-up",
-              status: "pending",
+              status: "done",
               metadata: { source: "daemon.queue", taskFileName: queued.fileName },
             },
           ],
@@ -1291,6 +1377,17 @@ describe("Spark daemon local RPC", () => {
         createdAt: "2026-07-10T00:00:00.000Z",
         updatedAt: "2026-07-10T00:01:00.000Z",
       })),
+      setSessionThinkingLevel: vi.fn(async () => ({
+        sessionId: "sess_model",
+        scope: { kind: "workspace" as const, workspaceId: "ws_model" },
+        workspaceId: "ws_model",
+        model,
+        thinkingLevel: "high" as const,
+        bindings: [],
+        status: "ready" as const,
+        createdAt: "2026-07-10T00:00:00.000Z",
+        updatedAt: "2026-07-10T00:01:00.000Z",
+      })),
       setApiKey,
       logout: vi.fn(async () => ({ removed: true, snapshot })),
       startOAuth: vi.fn(),
@@ -1298,6 +1395,7 @@ describe("Spark daemon local RPC", () => {
       respondOAuth: vi.fn(),
       cancelOAuth: vi.fn(),
       effectiveModel: vi.fn(async () => model),
+      effectiveThinkingLevel: vi.fn(async () => undefined),
       prepareModel,
     } satisfies SparkDaemonModelControl;
 

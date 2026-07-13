@@ -1,7 +1,7 @@
 {
   "name": "@zendev-lab/spark-session",
   "version": "0.1.0",
-  "description": "Daemon-owned Spark session registry: create, bind, archive, and resolve channel bindings.",
+  "description": "Daemon-owned persistent session registry, channel bindings, and durable local mailbox mechanism.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [

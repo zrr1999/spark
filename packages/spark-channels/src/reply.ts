@@ -12,6 +12,8 @@ export interface ChannelReplyTarget {
 /** Streaming reply lifecycle shared by daemon and channel adapters. */
 export interface ChannelReplyStream {
   appendText(delta: string): void;
+  /** Optional reasoning / thinking stream (Infoflow thinking_aio). */
+  appendReasoning?(delta: string): void;
   notifyToolStart(input: { name?: string; phase?: string }): void;
   notifyToolResult(text: string): void;
   complete(label?: string): Promise<void>;

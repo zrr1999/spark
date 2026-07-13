@@ -447,16 +447,16 @@ function validateHighlightSpan(value: unknown, path: string): void {
 }
 
 function validatePong(value: unknown, path: string): void {
-  const record = exactRecord(value, path, [
-    "version",
-    "protocol_version",
-    "capabilities",
-    "instance_id",
-  ]);
+  const record = exactRecord(
+    value,
+    path,
+    ["version", "protocol_version", "capabilities"],
+    ["instance_id"],
+  );
   stringField(record, "version", path);
   u32Field(record, "protocol_version", path);
   stringArrayField(record, "capabilities", path);
-  stringField(record, "instance_id", path);
+  if (record.instance_id !== undefined) stringField(record, "instance_id", path);
 }
 
 function validateJobStateChanged(value: unknown, path: string): void {

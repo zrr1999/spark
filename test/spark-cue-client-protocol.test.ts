@@ -299,6 +299,24 @@ function toolParameterProperties(tool: RegisteredPiCueTool | undefined): Record<
   return parameters.properties;
 }
 
+void test("cue exec family tools declare requiresApproval for host approvalMethod gates", () => {
+  const tools = registerCueToolsForProtocolTest();
+  for (const name of [
+    "cue_exec",
+    "cue_run",
+    "cue_script",
+    "script_run",
+    "script_eval",
+    "cue_jobs",
+    "cue_schedule",
+  ]) {
+    assert.equal(tools.get(name)?.requiresApproval, true, `${name} should require approval`);
+  }
+  assert.equal(tools.get("cue_resources")?.requiresApproval, undefined);
+  assert.equal(tools.get("cue_history")?.requiresApproval, undefined);
+  assert.equal(tools.get("cue_scope")?.requiresApproval, undefined);
+});
+
 void test("CueClient registers pending responses before a synchronous stream write", async () => {
   const client = new CueClient(new SynchronousCueStream());
   try {

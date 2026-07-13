@@ -16,18 +16,21 @@ import {
   loadModelControlForCockpit,
   modelValue,
   parseModelValue,
+  parseThinkingLevelValue,
   setSessionModelForCockpit,
+  setSessionThinkingLevelForCockpit,
 } from "$lib/server/model-control";
 import { workspaceIdForWorkbenchSession } from "../../../lib/workbench-session-scope";
 import type { Actions, PageServerLoad } from "./$types";
 
 export const load: PageServerLoad = async () => {
-  const [sessions, modelControl] = await Promise.all([
+  const [managedSessions, modelControl] = await Promise.all([
     listManagedSessionsForCockpit(),
     loadModelControlForCockpit(),
   ]);
   return {
-    sessions,
+    sessions: managedSessions.sessions,
+    sessionsAvailable: managedSessions.available,
     selectedSessionId: null as string | null,
     sessionActivity: null,
     modelControl,
@@ -45,7 +48,8 @@ export const actions: Actions = {
     const scopeKind = formText(formData, "scopeKind").trim() === "daemon" ? "daemon" : "workspace";
     const message = formText(formData, "message").trim();
     const model = formText(formData, "model").trim();
-    const values = { scopeKind, workspaceId, message, model };
+    const thinkingLevel = formText(formData, "thinkingLevel").trim();
+    const values = { scopeKind, workspaceId, message, model, thinkingLevel };
 
     if (scopeKind === "workspace" && !workspaceId) {
       return fail(400, {
@@ -93,6 +97,12 @@ export const actions: Actions = {
 
     try {
       if (model) await setSessionModelForCockpit(session.sessionId, parseModelValue(model));
+      if (thinkingLevel) {
+        await setSessionThinkingLevelForCockpit(
+          session.sessionId,
+          parseThinkingLevelValue(thinkingLevel),
+        );
+      }
       await submitConversationMessage({
         workspaceId: workspaceIdForWorkbenchSession(session) ?? undefined,
         sessionId: session.sessionId,
@@ -348,6 +358,53 @@ export const actions: Actions = {
               ? "无法更新模型。"
               : "Could not update the model.",
         values: { sessionId, model },
+      });
+    }
+  },
+
+  selectThinking: async ({ cookies, request }) => {
+    const formData = await request.formData();
+    const isZh = resolveRequestLocale({
+      cookieLocale: cookies.get(localeCookieName),
+      acceptLanguage: request.headers.get("accept-language"),
+    })
+      .toLowerCase()
+      .startsWith("zh");
+    const sessionId = formText(formData, "sessionId").trim();
+    const thinkingLevel = formText(formData, "thinkingLevel").trim();
+    if (!sessionId || !thinkingLevel) {
+      return fail(400, {
+        intent: "selectThinking",
+        success: false,
+        message: isZh ? "请选择对话和推理强度。" : "Select a conversation and thinking level.",
+      });
+    }
+    try {
+      const updatedSession = await setSessionThinkingLevelForCockpit(
+        sessionId,
+        parseThinkingLevelValue(thinkingLevel),
+      );
+      const level = updatedSession.thinkingLevel ?? thinkingLevel;
+      return {
+        intent: "selectThinking",
+        success: true,
+        message: isZh
+          ? `推理强度已设为 ${level}，将用于之后发送的消息。`
+          : `Thinking level set to ${level}. It will be used for future messages.`,
+        thinkingLevel: level,
+        values: { sessionId, thinkingLevel: level },
+      };
+    } catch (caught) {
+      return fail(400, {
+        intent: "selectThinking",
+        success: false,
+        message:
+          caught instanceof Error
+            ? caught.message
+            : isZh
+              ? "无法更新推理强度。"
+              : "Could not update the thinking level.",
+        values: { sessionId, thinkingLevel },
       });
     }
   },

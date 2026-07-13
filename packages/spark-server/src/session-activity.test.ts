@@ -149,6 +149,29 @@ describe("session activity projection", () => {
             role: "assistant",
             text: "UI improvement completed and verified.",
             status: "done",
+            parts: [
+              {
+                id: "msg_done:part:0",
+                type: "text",
+                text: "Checking the UI.",
+                phase: "commentary",
+                status: "complete",
+              },
+              {
+                id: "msg_done:part:1",
+                type: "tool-call",
+                toolCallId: "call-ui",
+                toolName: "browser_check",
+                status: "complete",
+              },
+              {
+                id: "msg_done:part:2",
+                type: "text",
+                text: "UI improvement completed and verified.",
+                phase: "final_answer",
+                status: "complete",
+              },
+            ],
           },
         },
       },
@@ -172,6 +195,14 @@ describe("session activity projection", () => {
         kind: "session.message",
         role: "assistant",
         text: "UI improvement completed and verified.",
+        message: expect.objectContaining({
+          id: "msg_done",
+          parts: [
+            expect.objectContaining({ type: "text", phase: "commentary" }),
+            expect.objectContaining({ type: "tool-call", toolName: "browser_check" }),
+            expect.objectContaining({ type: "text", phase: "final_answer" }),
+          ],
+        }),
       }),
       expect.objectContaining({
         id: "art_ui",

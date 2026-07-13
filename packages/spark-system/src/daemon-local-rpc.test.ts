@@ -90,6 +90,55 @@ describe("Spark daemon local RPC transport", () => {
     }
   });
 
+  it("surfaces remote parse errors even when the daemon replies with id unknown", async () => {
+    const fixture = await rpcFixture((_request, socket) => {
+      socket.end(
+        `${JSON.stringify({
+          id: "unknown",
+          ok: false,
+          error: { message: "ingress.on_unbound must be reject or create" },
+        })}\n`,
+      );
+    });
+
+    try {
+      const error = await requestSparkDaemonLocalRpcWire(
+        { id: "configure", method: "channel.configure", params: {} },
+        { socketPath: fixture.socketPath },
+      ).catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(SparkDaemonLocalRpcRemoteError);
+      expect(error).toMatchObject({
+        message: "ingress.on_unbound must be reject or create",
+        payload: { message: "ingress.on_unbound must be reject or create" },
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("decodes a response when a UTF-8 character is split across socket chunks", async () => {
+    const fixture = await rpcFixture((request, socket) => {
+      const response = Buffer.from(
+        `${JSON.stringify({ id: request.id, ok: true, result: "你好" })}\n`,
+        "utf8",
+      );
+      const characterStart = response.indexOf(Buffer.from("你", "utf8"));
+      socket.write(response.subarray(0, characterStart + 1));
+      setTimeout(() => socket.end(response.subarray(characterStart + 1)), 5);
+    });
+
+    try {
+      await expect(
+        requestSparkDaemonLocalRpcWire<string>(
+          { id: "split-utf8", method: "daemon.status" },
+          { socketPath: fixture.socketPath },
+        ),
+      ).resolves.toBe("你好");
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it("bounds a response before accumulating an unbounded line", async () => {
     const fixture = await rpcFixture((_request, socket) => {
       socket.end("x".repeat(128));

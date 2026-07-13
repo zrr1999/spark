@@ -90,8 +90,11 @@
     box-shadow:
       0 1px 2px rgb(15 23 42 / 5%),
       0 12px 30px rgb(15 23 42 / 7%);
+    container-name: conversation-composer;
+    container-type: inline-size;
     display: grid;
     gap: 10px;
+    min-width: 0;
     padding: 12px;
   }
 
@@ -134,9 +137,11 @@
     align-items: center;
     border-top: 1px solid var(--color-border-soft);
     display: flex;
-    gap: 12px;
+    flex-wrap: wrap;
+    gap: 10px 12px;
     justify-content: space-between;
     min-height: 40px;
+    min-width: 0;
     padding-top: 10px;
   }
 
@@ -144,7 +149,7 @@
     align-items: center;
     color: var(--color-ink-subtle);
     display: flex;
-    flex: 1;
+    flex: 1 1 12rem;
     flex-wrap: wrap;
     font-size: 11px;
     gap: 8px;
@@ -152,7 +157,11 @@
   }
 
   .keyboard-hint {
-    margin-left: auto;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-align: right;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
@@ -170,6 +179,7 @@
     font-weight: 600;
     gap: 6px;
     justify-content: center;
+    margin-left: auto;
     min-height: 40px;
     padding: 0 13px;
   }
@@ -201,6 +211,27 @@
     width: 1px;
   }
 
+  @container conversation-composer (max-width: 640px) {
+    .keyboard-hint {
+      display: none;
+    }
+  }
+
+  @container conversation-composer (max-width: 480px) {
+    .composer-toolbar {
+      align-items: stretch;
+    }
+
+    .composer-context {
+      flex: 1 1 100%;
+    }
+
+    .composer-submit {
+      margin-left: 0;
+      width: 100%;
+    }
+  }
+
   @media (max-width: 640px) {
     .conversation-composer-shell {
       border-radius: 12px;
@@ -209,10 +240,6 @@
 
     textarea {
       min-height: 60px;
-    }
-
-    .composer-toolbar {
-      align-items: flex-end;
     }
 
     .keyboard-hint {

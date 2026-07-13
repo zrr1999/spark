@@ -63,6 +63,9 @@ import {
 } from "./tool-result-compaction.ts";
 import {
   SPARK_PROTOCOL_VERSION,
+  sparkTextPhaseFromSignature,
+  summarizeToolCallArguments,
+  summarizeToolResultContent,
   type SparkArtifactView,
   type SparkConversationPart,
   type SparkInteractionRequest,
@@ -120,6 +123,26 @@ export const DEFAULT_SPARK_AGENT_LOOP_STREAM_TIMEOUT_MS = 600_000;
 export const DEFAULT_SPARK_AGENT_LOOP_TOOL_TIMEOUT_MS = 300_000;
 export const DEFAULT_SPARK_AGENT_LOOP_INTERACTION_TIMEOUT_MS = 60_000;
 
+/** How a session satisfies `requiresApproval` tool gates. Default: `auto`. */
+export type SparkToolApprovalMethod = "skip" | "human" | "auto";
+
+/** When `auto` review does not approve: escalate to ask, or deny the tool call. */
+export type SparkToolApprovalRejectAction = "ask" | "deny";
+
+export type SparkToolApprovalReviewOutcome = "approved" | "needs_changes" | "blocked";
+
+export interface SparkToolApprovalReviewRequest {
+  toolName: string;
+  toolCallId: string;
+  arguments: Record<string, unknown>;
+  reason: string;
+}
+
+export interface SparkToolApprovalReviewResult {
+  outcome: SparkToolApprovalReviewOutcome;
+  summary: string;
+}
+
 export interface SparkPromptCacheOptions {
   enabled?: boolean;
   checkpoint?: string;
@@ -152,6 +175,30 @@ export interface SparkAgentLoopOptions {
   toolTimeoutMs?: number;
   /** Wall-clock timeout for one host interaction/approval wait. Defaults to 60s; <=0 disables. */
   interactionTimeoutMs?: number;
+  /**
+   * Session/host method for tools with `requiresApproval`.
+   * Defaults to `auto`. Local TUI should pass `skip`; channel sessions keep `auto`.
+   */
+  approvalMethod?: SparkToolApprovalMethod;
+  /**
+   * When `approvalMethod` is `auto` and the reviewer does not approve.
+   * Defaults to `ask` (escalate to human / toolApproval).
+   */
+  approvalRejectAction?: SparkToolApprovalRejectAction;
+  /**
+   * Auto-review hook (same conceptual channel as goal completion reviewer).
+   * When omitted under `auto`, the call is treated as blocked and follows
+   * `approvalRejectAction`.
+   */
+  reviewToolApproval?: (
+    request: SparkToolApprovalReviewRequest,
+    signal: AbortSignal,
+  ) => Promise<SparkToolApprovalReviewResult>;
+  /**
+   * Optional thinking/reasoning intensity for model streams.
+   * When set, forwarded as `options.reasoning` (including `"off"`).
+   */
+  getReasoning?: () => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined;
 }
 
 export type SparkAgentLoopEvent =
@@ -171,6 +218,17 @@ export class SparkAgentLoop {
   private readonly streamTimeoutMs: number;
   private readonly toolTimeoutMs: number;
   private readonly interactionTimeoutMs: number;
+  private approvalMethod: SparkToolApprovalMethod;
+  private approvalRejectAction: SparkToolApprovalRejectAction;
+  private readonly reviewToolApproval:
+    | ((
+        request: SparkToolApprovalReviewRequest,
+        signal: AbortSignal,
+      ) => Promise<SparkToolApprovalReviewResult>)
+    | undefined;
+  private readonly getReasoning:
+    | (() => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined)
+    | undefined;
   private systemPrompt: string;
   private readonly promptCacheOptions: SparkPromptCacheOptions;
   private readonly messages: Message[] = [];
@@ -202,8 +260,20 @@ export class SparkAgentLoop {
       options.interactionTimeoutMs,
       DEFAULT_SPARK_AGENT_LOOP_INTERACTION_TIMEOUT_MS,
     );
+    this.approvalMethod = normalizeApprovalMethod(options.approvalMethod);
+    this.approvalRejectAction = normalizeApprovalRejectAction(options.approvalRejectAction);
+    this.reviewToolApproval = options.reviewToolApproval;
+    this.getReasoning = options.getReasoning;
     this.host.setSessionId?.(this.viewSessionId);
     this.host.setTriggerTurnHandler(() => this.triggerNextTurn());
+  }
+
+  setApprovalMethod(method: SparkToolApprovalMethod): void {
+    this.approvalMethod = normalizeApprovalMethod(method);
+  }
+
+  setApprovalRejectAction(action: SparkToolApprovalRejectAction): void {
+    this.approvalRejectAction = normalizeApprovalRejectAction(action);
   }
 
   // ── Public API ─────────────────────────────────────────────────────────
@@ -343,10 +413,12 @@ export class SparkAgentLoop {
 
         let assistant: AssistantMessage;
         try {
+          const reasoning = this.getReasoning?.();
           const stream = this.streamFunction(this.getModel(), context, {
             signal: abortController.signal,
             promptCacheKey: promptCache.promptCacheKey,
             prompt_cache_key: promptCache.promptCacheKey,
+            ...(reasoning !== undefined ? { reasoning } : {}),
           } as StreamOptions);
           assistant = await runWithTimeout(
             this.consumeAssistantStream(stream),
@@ -562,9 +634,71 @@ export class SparkAgentLoop {
   private async requestToolApprovalIfNeeded(
     toolCall: ToolCall,
     config: ToolConfig,
-    _signal: AbortSignal,
+    signal: AbortSignal,
   ): Promise<{ approved: true } | { approved: false; message: string }> {
     if (!toolRequiresApproval(config)) return { approved: true };
+
+    const reason = `Tool "${toolCall.name}" requires approval before execution.`;
+    switch (this.approvalMethod) {
+      case "skip":
+        return { approved: true };
+      case "human":
+        return await this.requestHumanToolApproval(toolCall, reason);
+      case "auto": {
+        const review = await this.runAutoToolApproval(toolCall, reason, signal);
+        if (review.outcome === "approved") return { approved: true };
+        const rejectMessage =
+          review.summary.trim() || `tool "${toolCall.name}" was not auto-approved`;
+        if (this.approvalRejectAction === "deny") {
+          return { approved: false, message: rejectMessage };
+        }
+        return await this.requestHumanToolApproval(toolCall, rejectMessage);
+      }
+      default: {
+        const _exhaustive: never = this.approvalMethod;
+        return _exhaustive;
+      }
+    }
+  }
+
+  private async runAutoToolApproval(
+    toolCall: ToolCall,
+    reason: string,
+    signal: AbortSignal,
+  ): Promise<SparkToolApprovalReviewResult> {
+    if (!this.reviewToolApproval) {
+      return {
+        outcome: "blocked",
+        summary: `tool "${toolCall.name}" auto-review unavailable; escalate to ask`,
+      };
+    }
+    try {
+      const result = await this.reviewToolApproval(
+        {
+          toolName: toolCall.name,
+          toolCallId: toolCall.id,
+          arguments: (toolCall.arguments ?? {}) as Record<string, unknown>,
+          reason,
+        },
+        signal,
+      );
+      if (result.outcome === "approved") return result;
+      if (result.outcome === "needs_changes" || result.outcome === "blocked") return result;
+      const _exhaustive: never = result.outcome;
+      return _exhaustive;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        outcome: "blocked",
+        summary: `tool "${toolCall.name}" auto-review failed: ${message}`,
+      };
+    }
+  }
+
+  private async requestHumanToolApproval(
+    toolCall: ToolCall,
+    reason: string,
+  ): Promise<{ approved: true } | { approved: false; message: string }> {
     const response = await runWithTimeout(
       this.host.requestInteraction({
         version: SPARK_PROTOCOL_VERSION,
@@ -574,7 +708,7 @@ export class SparkAgentLoop {
         toolName: toolCall.name,
         toolCallId: toolCall.id,
         arguments: toolCall.arguments as never,
-        reason: `Tool "${toolCall.name}" requires approval before execution.`,
+        reason,
         approveLabel: "Approve",
         rejectLabel: "Reject",
         metadata: { source: "SparkAgentLoop" },
@@ -1139,6 +1273,20 @@ function toolRequiresApproval(config: ToolConfig): boolean {
   );
 }
 
+function normalizeApprovalMethod(
+  value: SparkToolApprovalMethod | undefined,
+): SparkToolApprovalMethod {
+  if (value === "skip" || value === "human" || value === "auto") return value;
+  return "auto";
+}
+
+function normalizeApprovalRejectAction(
+  value: SparkToolApprovalRejectAction | undefined,
+): SparkToolApprovalRejectAction {
+  if (value === "ask" || value === "deny") return value;
+  return "ask";
+}
+
 function toToolDefinition(config: ToolConfig): Tool {
   return {
     name: config.name,
@@ -1203,11 +1351,12 @@ function assistantToMessageView(
 
 function toolCallToMessageView(toolCall: ToolCall): SparkMessageView {
   const id = `tool-call:${toolCall.id}`;
+  const summary = summarizeToolCallArguments(toolCall.arguments);
   return {
     version: SPARK_PROTOCOL_VERSION,
     id,
     role: "tool",
-    text: `calling ${toolCall.name}`,
+    text: summary ?? `calling ${toolCall.name}`,
     status: "pending",
     toolCallId: toolCall.id,
     toolName: toolCall.name,
@@ -1218,6 +1367,7 @@ function toolCallToMessageView(toolCall: ToolCall): SparkMessageView {
         toolCallId: toolCall.id,
         toolName: toolCall.name,
         status: "pending",
+        ...(summary ? { summary } : {}),
         metadata: {},
       },
     ],
@@ -1227,11 +1377,14 @@ function toolCallToMessageView(toolCall: ToolCall): SparkMessageView {
 
 function toolResultToMessageView(message: ToolResultMessage): SparkMessageView {
   const id = `tool-result:${message.toolCallId}`;
+  const summary =
+    summarizeToolResultContent(message.content) ??
+    `${message.toolName} ${message.isError ? "failed" : "completed"}`;
   return {
     version: SPARK_PROTOCOL_VERSION,
     id,
     role: "tool",
-    text: `${message.toolName} ${message.isError ? "failed" : "completed"}`,
+    text: summary,
     status: message.isError ? "error" : "done",
     toolCallId: message.toolCallId,
     toolName: message.toolName,
@@ -1243,6 +1396,7 @@ function toolResultToMessageView(message: ToolResultMessage): SparkMessageView {
         toolCallId: message.toolCallId,
         toolName: message.toolName,
         status: message.isError ? "failed" : "complete",
+        summary,
         metadata: {},
       },
     ],
@@ -1274,7 +1428,17 @@ function assistantConversationParts(
     const part = value as Record<string, unknown>;
     const id = `${messageId}:part:${index}`;
     if (part.type === "text" && typeof part.text === "string") {
-      return [{ id, type: "text", text: part.text, status: partStatus, metadata: {} }];
+      const phase = sparkTextPhaseFromSignature(part.textSignature);
+      return [
+        {
+          id,
+          type: "text",
+          text: part.text,
+          status: partStatus,
+          ...(phase ? { phase } : {}),
+          metadata: {},
+        },
+      ];
     }
     if (part.type === "thinking") {
       const redacted = part.redacted === true;
@@ -1297,6 +1461,7 @@ function assistantConversationParts(
       typeof part.name === "string" &&
       part.name
     ) {
+      const summary = summarizeToolCallArguments(part.arguments);
       return [
         {
           id,
@@ -1304,6 +1469,7 @@ function assistantConversationParts(
           toolCallId: part.id,
           toolName: part.name,
           status: "pending",
+          ...(summary ? { summary } : {}),
           metadata: {},
         },
       ];
@@ -1334,9 +1500,15 @@ function displaySafeAssistantText(content: unknown): string {
     .flatMap((value): string[] => {
       if (!value || typeof value !== "object") return [];
       const part = value as Record<string, unknown>;
-      if (part.type === "text" && typeof part.text === "string") return [part.text];
-      if (part.type === "toolCall" && typeof part.name === "string" && part.name) {
-        return [`[tool call: ${part.name}]`];
+      // Tool calls and thinking belong in structured `parts`, not the prose `text`
+      // field. Embedding `[tool call: …]` here leaks into Infoflow answer bodies and
+      // Cockpit markdown fallbacks.
+      if (
+        part.type === "text" &&
+        typeof part.text === "string" &&
+        sparkTextPhaseFromSignature(part.textSignature) !== "commentary"
+      ) {
+        return [part.text];
       }
       return [];
     })

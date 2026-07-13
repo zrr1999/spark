@@ -6,11 +6,9 @@ import {
   type SparkModelControlSnapshot,
   type SparkModelRef,
   type SparkSessionRegistryRecord,
+  type SparkThinkingLevel,
 } from "@zendev-lab/spark-protocol";
-import {
-  requestSparkDaemonLocalRpc,
-  SparkDaemonLocalRpcUnavailableError,
-} from "@zendev-lab/spark-system";
+import { requestSparkDaemonLocalRpc } from "@zendev-lab/spark-system";
 
 export interface CockpitModelControlClient {
   request(method: string, params?: unknown): Promise<unknown>;
@@ -41,10 +39,13 @@ export async function loadModelControlForCockpit(
     );
     return { available: true, snapshot };
   } catch (error) {
-    if (error instanceof SparkDaemonLocalRpcUnavailableError) {
-      return { available: false, snapshot: emptySnapshot, error: error.message };
-    }
-    throw error;
+    // Model picker is optional chrome on the session page; never 500 the route
+    // because catalog RPC / parse failed (daemon restart, stale schema, etc.).
+    return {
+      available: false,
+      snapshot: emptySnapshot,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -62,6 +63,16 @@ export async function setSessionModelForCockpit(
 ): Promise<SparkSessionRegistryRecord> {
   return parseSparkSessionRegistryRecord(
     await client.request("session.model.set", { sessionId, model }),
+  );
+}
+
+export async function setSessionThinkingLevelForCockpit(
+  sessionId: string,
+  thinkingLevel: SparkThinkingLevel,
+  client: CockpitModelControlClient = daemonModelControlClient,
+): Promise<SparkSessionRegistryRecord> {
+  return parseSparkSessionRegistryRecord(
+    await client.request("session.thinking.set", { sessionId, thinkingLevel }),
   );
 }
 
@@ -128,6 +139,16 @@ export function parseModelValue(value: string): SparkModelRef {
     throw new Error("Select a valid provider/model.");
   }
   return { providerName: trimmed.slice(0, slash), modelId: trimmed.slice(slash + 1) };
+}
+
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+
+export function parseThinkingLevelValue(value: string): SparkThinkingLevel {
+  const trimmed = value.trim().toLowerCase();
+  if (!(THINKING_LEVELS as readonly string[]).includes(trimmed)) {
+    throw new Error("Select a valid thinking level.");
+  }
+  return trimmed as SparkThinkingLevel;
 }
 
 export function modelValue(model: SparkModelRef): string {

@@ -29,23 +29,38 @@
 
 <div class="ui-field" class:compact class:error={Boolean(error)}>
   <label for={id}>{label}{#if required}<span aria-hidden="true"> *</span>{/if}</label>
-  {@render children()}
-  {#if error}
-    <p id={`${id}-error`} role="alert">{error}</p>
-  {:else if hint}
-    <p id={`${id}-hint`}>{hint}</p>
-  {/if}
+  <div class="ui-field-control">
+    {@render children()}
+  </div>
+  <div class="ui-field-meta">
+    {#if error}
+      <p id={`${id}-error`} role="alert">{error}</p>
+    {:else if hint}
+      <p id={`${id}-hint`}>{hint}</p>
+    {/if}
+  </div>
 </div>
 
 <style>
   .ui-field {
     display: grid;
+    grid-template-rows: auto auto auto;
     gap: 7px;
     min-width: 0;
   }
 
   .ui-field.compact {
     gap: var(--spacing-xxs);
+  }
+
+  .ui-field-control,
+  .ui-field-meta {
+    min-width: 0;
+  }
+
+  /* Reserve one caption line so sibling fields in a grid stay aligned when only some have hints. */
+  .ui-field-meta {
+    min-height: calc(var(--leading-caption, 1.35) * 1em);
   }
 
   label {

@@ -82,7 +82,7 @@ export function createSparkPiParitySlashCommands(
       description: STRINGS.descriptions.settings,
       argumentHint: "[set thinking <off|minimal|low|medium|high|xhigh>|set theme <id>]",
       getArgumentCompletions: (prefix) => settingsCompletions(prefix),
-      handler: async (args) => handleSettingsCommand(services, args),
+      handler: async (args) => handleSettingsCommand(services, args, modelAuthClient),
     },
     "scoped-models": {
       description: STRINGS.descriptions.scopedModels,
@@ -297,6 +297,7 @@ function filterValues(values: readonly string[], prefix: string): string[] {
 async function handleSettingsCommand(
   services: SparkCliHostServices,
   args: string,
+  modelAuthClient?: SparkDaemonModelAuthClient,
 ): Promise<string> {
   const tokens = args.trim().split(/\s+/u).filter(Boolean);
   if (tokens[0] === "set" && tokens[1] === "thinking") {
@@ -306,6 +307,9 @@ async function handleSettingsCommand(
     }
     services.config.activeThinkingLevel = level;
     await services.saveConfig?.(services.config);
+    if (modelAuthClient?.sessionId) {
+      await modelAuthClient.setSessionThinkingLevel(level);
+    }
     return STRINGS.thinkingLevelSet(level);
   }
   if (tokens[0] === "set" && tokens[1] === "theme") {

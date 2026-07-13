@@ -1,14 +1,25 @@
 import type { ChannelReplyStream } from "@zendev-lab/spark-channels";
-import type { SparkDaemonEvent } from "@zendev-lab/spark-protocol";
+import type {
+  SparkConversationPart,
+  SparkDaemonEvent,
+  SparkMessageView,
+} from "@zendev-lab/spark-protocol";
+
+const TOOL_CALL_MARKER = /\[tool call:\s*[^\]]+\]/giu;
 
 /**
  * Projects display-safe daemon events onto a channel reply stream.
- * Thinking parts and tool payloads are deliberately ignored.
+ *
+ * Answer prose goes to `appendText`. Thinking parts go to `appendReasoning`
+ * (Infoflow thinking_aio). Tool lifecycle stays on notifyTool* — never as
+ * `[tool call: …]` markers inside the answer body.
  */
 export class ChannelReplyEventProjector {
   private readonly stream: ChannelReplyStream;
-  private readonly texts = new Map<string, string>();
-  private renderedText = "";
+  private readonly answerTexts = new Map<string, string>();
+  private readonly reasoningTexts = new Map<string, string>();
+  private renderedAnswer = "";
+  private renderedReasoning = "";
 
   constructor(stream: ChannelReplyStream) {
     this.stream = stream;
@@ -18,7 +29,11 @@ export class ChannelReplyEventProjector {
     if (event.type !== "daemon.view_event" || event.view.type !== "session.message") return;
     const message = event.view.message;
     if (message.role === "assistant") {
-      this.observeAssistant(message.id, message.text);
+      this.observeAssistant(message);
+      return;
+    }
+    if (message.role === "thinking") {
+      this.appendReasoningDelta(message.id, stripToolCallMarkers(message.text));
       return;
     }
     if (message.role !== "tool") return;
@@ -31,27 +46,73 @@ export class ChannelReplyEventProjector {
   }
 
   appendFinalText(text: string | undefined): void {
-    const finalText = text?.trim();
+    const finalText = stripToolCallMarkers(text ?? "").trim();
     if (!finalText) return;
-    if (!this.renderedText) {
+    if (!this.renderedAnswer) {
       this.stream.appendText(finalText);
-      this.renderedText = finalText;
+      this.renderedAnswer = finalText;
       return;
     }
-    if (finalText.startsWith(this.renderedText)) {
-      const delta = finalText.slice(this.renderedText.length);
+    if (finalText.startsWith(this.renderedAnswer)) {
+      const delta = finalText.slice(this.renderedAnswer.length);
       if (delta) this.stream.appendText(delta);
-      this.renderedText = finalText;
+      this.renderedAnswer = finalText;
     }
   }
 
-  private observeAssistant(id: string, text: string): void {
-    const previous = this.texts.get(id) ?? "";
-    this.texts.set(id, text);
+  private observeAssistant(message: SparkMessageView): void {
+    this.appendAnswerDelta(message.id, answerTextFromMessage(message));
+    this.appendReasoningDelta(message.id, reasoningTextFromMessage(message));
+  }
+
+  private appendAnswerDelta(id: string, text: string): void {
+    const previous = this.answerTexts.get(id) ?? "";
+    this.answerTexts.set(id, text);
     if (!text.startsWith(previous)) return;
     const delta = text.slice(previous.length);
     if (!delta) return;
     this.stream.appendText(delta);
-    this.renderedText += delta;
+    this.renderedAnswer += delta;
   }
+
+  private appendReasoningDelta(id: string, text: string): void {
+    const previous = this.reasoningTexts.get(id) ?? "";
+    this.reasoningTexts.set(id, text);
+    if (!text.startsWith(previous)) return;
+    const delta = text.slice(previous.length);
+    if (!delta) return;
+    this.stream.appendReasoning?.(delta);
+    this.renderedReasoning += delta;
+  }
+}
+
+function answerTextFromMessage(message: SparkMessageView): string {
+  const parts = message.parts;
+  if (Array.isArray(parts) && parts.length > 0) {
+    return parts
+      .flatMap((part) =>
+        part.type === "text" && part.phase !== "commentary" && part.text ? [part.text] : [],
+      )
+      .join("\n");
+  }
+  return stripToolCallMarkers(message.text);
+}
+
+function reasoningTextFromMessage(message: SparkMessageView): string {
+  const parts = message.parts;
+  if (!Array.isArray(parts) || parts.length === 0) return "";
+  return parts
+    .flatMap((part: SparkConversationPart) => {
+      if (part.type !== "thinking" || part.redacted) return [];
+      const text = part.text?.trim();
+      return text ? [text] : [];
+    })
+    .join("\n");
+}
+
+function stripToolCallMarkers(text: string): string {
+  return text
+    .replace(TOOL_CALL_MARKER, "")
+    .replace(/\n{3,}/gu, "\n\n")
+    .trimStart();
 }

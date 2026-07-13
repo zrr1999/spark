@@ -8,6 +8,7 @@ import {
   SparkDaemonLocalRpcUnavailableError,
   touchPrivateFile,
 } from "@zendev-lab/spark-system";
+import type { CreateChannelAdapter } from "../create-channel";
 
 export interface CockpitChannelStatusSnapshot {
   workspaceId: string;
@@ -56,8 +57,20 @@ export interface CockpitChannelEditorValues {
   infoflowAllowedGroupIds: string;
   /** Custom Infoflow system-prompt overlay (operator copy). */
   infoflowSystemPrompt: string;
+  qqbotEnabled: boolean;
+  qqbotAppId: string;
+  /** Empty in the editor when a secret is already stored; leave blank to keep it. */
+  qqbotClientSecret: string;
+  qqbotClientSecretSet: boolean;
+  /** Prefer QQ Bot sandbox OpenAPI (no IP whitelist). */
+  qqbotSandbox: boolean;
+  qqbotAllowedUserIds: string;
+  qqbotGroupPolicy: "disabled" | "allowlist" | "open";
+  qqbotGroupTrigger: "mention" | "command" | "all";
+  qqbotAllowedGroupIds: string;
+  qqbotSystemPrompt: string;
   routeName: string;
-  routeAdapter: "feishu" | "infoflow";
+  routeAdapter: "feishu" | "infoflow" | "qqbot";
   routeRecipient: string;
   ingressEnabled: boolean;
   onUnbound: "reject" | "create";
@@ -133,6 +146,16 @@ export function emptyChannelEditorValues(): CockpitChannelEditorValues {
     infoflowGroupTrigger: "mention",
     infoflowAllowedGroupIds: "",
     infoflowSystemPrompt: "",
+    qqbotEnabled: false,
+    qqbotAppId: "",
+    qqbotClientSecret: "",
+    qqbotClientSecretSet: false,
+    qqbotSandbox: true,
+    qqbotAllowedUserIds: "",
+    qqbotGroupPolicy: "disabled",
+    qqbotGroupTrigger: "mention",
+    qqbotAllowedGroupIds: "",
+    qqbotSystemPrompt: "",
     routeName: "ops",
     routeAdapter: "infoflow",
     routeRecipient: "",
@@ -142,23 +165,101 @@ export function emptyChannelEditorValues(): CockpitChannelEditorValues {
   };
 }
 
+export type CreateChannelCredentialPatch = {
+  adapter: CreateChannelAdapter;
+  feishuAppId?: string;
+  feishuAppSecret?: string;
+  infoflowEndpoint?: string;
+  infoflowAppKey?: string;
+  infoflowAppAgentId?: string;
+  infoflowAppSecret?: string;
+  qqbotAppId?: string;
+  qqbotClientSecret?: string;
+  qqbotSandbox?: boolean;
+};
+
+/** Merge create-form credentials onto existing editor values without dropping other adapters. */
+export function mergeAdapterCredentialsForCreate(
+  previous: CockpitChannelEditorValues,
+  patch: CreateChannelCredentialPatch,
+): CockpitChannelEditorValues {
+  const next: CockpitChannelEditorValues = {
+    ...previous,
+    ingressEnabled: true,
+    onUnbound: "create",
+  };
+
+  switch (patch.adapter) {
+    case "feishu":
+      next.feishuEnabled = true;
+      if (patch.feishuAppId?.trim()) next.feishuAppId = patch.feishuAppId.trim();
+      if (patch.feishuAppSecret?.trim()) next.feishuAppSecret = patch.feishuAppSecret.trim();
+      break;
+    case "infoflow":
+      next.infoflowEnabled = true;
+      if (patch.infoflowEndpoint?.trim()) {
+        next.infoflowEndpoint = patch.infoflowEndpoint.trim();
+      }
+      if (patch.infoflowAppKey?.trim()) next.infoflowAppKey = patch.infoflowAppKey.trim();
+      if (patch.infoflowAppAgentId?.trim()) {
+        next.infoflowAppAgentId = patch.infoflowAppAgentId.trim();
+      }
+      if (patch.infoflowAppSecret?.trim()) {
+        next.infoflowAppSecret = patch.infoflowAppSecret.trim();
+      }
+      break;
+    case "qqbot":
+      next.qqbotEnabled = true;
+      if (patch.qqbotAppId?.trim()) next.qqbotAppId = patch.qqbotAppId.trim();
+      if (patch.qqbotClientSecret?.trim()) {
+        next.qqbotClientSecret = patch.qqbotClientSecret.trim();
+      }
+      if (patch.qqbotSandbox !== undefined) next.qqbotSandbox = patch.qqbotSandbox;
+      break;
+    default: {
+      const _exhaustive: never = patch.adapter;
+      throw new Error(`unsupported create-channel adapter: ${String(_exhaustive)}`);
+    }
+  }
+
+  return next;
+}
+
+export function channelAdapterCredentialsComplete(
+  values: CockpitChannelEditorValues,
+  adapter: CreateChannelAdapter,
+): boolean {
+  switch (adapter) {
+    case "feishu":
+      return Boolean(
+        values.feishuAppId.trim() && (values.feishuAppSecret.trim() || values.feishuAppSecretSet),
+      );
+    case "infoflow":
+      return Boolean(
+        (values.infoflowEndpoint.trim() || DEFAULT_INFOFLOW_ENDPOINT) &&
+        values.infoflowAppKey.trim() &&
+        values.infoflowAppAgentId.trim() &&
+        (values.infoflowAppSecret.trim() || values.infoflowAppSecretSet),
+      );
+    case "qqbot":
+      return Boolean(
+        values.qqbotAppId.trim() &&
+        (values.qqbotClientSecret.trim() || values.qqbotClientSecretSet),
+      );
+    default: {
+      const _exhaustive: never = adapter;
+      throw new Error(`unsupported create-channel adapter: ${String(_exhaustive)}`);
+    }
+  }
+}
+
 export function channelEditorCredentialsComplete(values: CockpitChannelEditorValues): boolean {
-  if (!values.feishuEnabled && !values.infoflowEnabled) return false;
-  if (
-    values.feishuEnabled &&
-    (!values.feishuAppId.trim() || !(values.feishuAppSecret.trim() || values.feishuAppSecretSet))
-  ) {
+  if (!values.feishuEnabled && !values.infoflowEnabled && !values.qqbotEnabled) return false;
+  if (values.feishuEnabled && !channelAdapterCredentialsComplete(values, "feishu")) return false;
+  if (values.infoflowEnabled && !channelAdapterCredentialsComplete(values, "infoflow")) {
     return false;
   }
-  if (
-    values.infoflowEnabled &&
-    (!(values.infoflowEndpoint.trim() || DEFAULT_INFOFLOW_ENDPOINT) ||
-      !values.infoflowAppKey.trim() ||
-      !values.infoflowAppAgentId.trim() ||
-      !(values.infoflowAppSecret.trim() || values.infoflowAppSecretSet))
-  ) {
-    return false;
-  }
+  if (values.qqbotEnabled && !channelAdapterCredentialsComplete(values, "qqbot")) return false;
   return true;
 }
 
@@ -180,11 +281,16 @@ export function isInfoflowAdapterReady(config: {
   );
 }
 
+export function isQqbotAdapterReady(config: { app_id?: string; client_secret?: string }): boolean {
+  return Boolean(config.app_id?.trim() && config.client_secret?.trim());
+}
+
 export function channelsConfigIsReady(config: ChannelsConfig | null): boolean {
   if (!config) return false;
   return Object.values(config.adapters).some((adapter) => {
     if (adapter.type === "feishu") return isFeishuAdapterReady(adapter);
     if (adapter.type === "infoflow") return isInfoflowAdapterReady(adapter);
+    if (adapter.type === "qqbot") return isQqbotAdapterReady(adapter);
     return false;
   });
 }
@@ -201,16 +307,26 @@ export function channelEditorValuesFromConfig(
   const infoflowEntry = Object.entries(config.adapters).find(
     ([, adapter]) => adapter.type === "infoflow",
   );
+  const qqbotEntry = Object.entries(config.adapters).find(
+    ([, adapter]) => adapter.type === "qqbot",
+  );
   const feishuAdapter = feishuEntry?.[1];
   const infoflowAdapter = infoflowEntry?.[1];
+  const qqbotAdapter = qqbotEntry?.[1];
   const routeEntry = Object.entries(config.routes)[0];
   const routeAdapterId = routeEntry?.[1]?.adapter;
-  const routeAdapterType =
-    routeAdapterId && config.adapters[routeAdapterId]?.type === "infoflow" ? "infoflow" : "feishu";
+  const routeAdapterConfigured = routeAdapterId ? config.adapters[routeAdapterId]?.type : undefined;
+  const routeAdapterType: CockpitChannelEditorValues["routeAdapter"] =
+    routeAdapterConfigured === "infoflow" ||
+    routeAdapterConfigured === "qqbot" ||
+    routeAdapterConfigured === "feishu"
+      ? routeAdapterConfigured
+      : "feishu";
 
   const feishuReady = feishuAdapter?.type === "feishu" && isFeishuAdapterReady(feishuAdapter);
   const infoflowReady =
     infoflowAdapter?.type === "infoflow" && isInfoflowAdapterReady(infoflowAdapter);
+  const qqbotReady = qqbotAdapter?.type === "qqbot" && isQqbotAdapterReady(qqbotAdapter);
 
   const feishuSecret =
     feishuEntry && feishuEntry[1].type === "feishu" ? (feishuEntry[1].app_secret ?? "") : "";
@@ -218,6 +334,8 @@ export function channelEditorValuesFromConfig(
     infoflowEntry && infoflowEntry[1].type === "infoflow"
       ? (infoflowEntry[1].app_secret ?? "")
       : "";
+  const qqbotSecret =
+    qqbotEntry && qqbotEntry[1].type === "qqbot" ? (qqbotEntry[1].client_secret ?? "") : "";
 
   return {
     // Incomplete stubs must not force toggles on — that made autosave fail forever.
@@ -260,16 +378,42 @@ export function channelEditorValuesFromConfig(
       infoflowEntry && infoflowEntry[1].type === "infoflow"
         ? (infoflowEntry[1].system_prompt ?? "")
         : "",
+    qqbotEnabled: qqbotReady,
+    qqbotAppId: qqbotEntry && qqbotEntry[1].type === "qqbot" ? (qqbotEntry[1].app_id ?? "") : "",
+    qqbotClientSecret: "",
+    qqbotClientSecretSet: Boolean(qqbotSecret.trim()),
+    qqbotSandbox:
+      qqbotEntry && qqbotEntry[1].type === "qqbot"
+        ? qqbotEntry[1].api_environment === "sandbox"
+        : true,
+    qqbotAllowedUserIds:
+      qqbotEntry && qqbotEntry[1].type === "qqbot"
+        ? (qqbotEntry[1].allowed_user_ids ?? []).join(", ")
+        : "",
+    qqbotGroupPolicy:
+      qqbotEntry && qqbotEntry[1].type === "qqbot"
+        ? (qqbotEntry[1].group_policy ?? "disabled")
+        : "disabled",
+    qqbotGroupTrigger:
+      qqbotEntry && qqbotEntry[1].type === "qqbot"
+        ? (qqbotEntry[1].group_trigger ?? "mention")
+        : "mention",
+    qqbotAllowedGroupIds:
+      qqbotEntry && qqbotEntry[1].type === "qqbot"
+        ? (qqbotEntry[1].allowed_group_ids ?? []).join(", ")
+        : "",
+    qqbotSystemPrompt:
+      qqbotEntry && qqbotEntry[1].type === "qqbot" ? (qqbotEntry[1].system_prompt ?? "") : "",
     routeName: routeEntry?.[0] ?? defaults.routeName,
     routeAdapter: infoflowReady
       ? "infoflow"
-      : feishuReady
-        ? "feishu"
-        : routeAdapterType === "infoflow"
-          ? "infoflow"
-          : defaults.routeAdapter,
+      : qqbotReady
+        ? "qqbot"
+        : feishuReady
+          ? "feishu"
+          : routeAdapterType,
     routeRecipient: routeEntry?.[1]?.recipient ?? "",
-    ingressEnabled: feishuReady || infoflowReady,
+    ingressEnabled: feishuReady || infoflowReady || qqbotReady,
     onUnbound: config.ingress?.on_unbound === "reject" ? "reject" : "create",
   };
 }
@@ -284,6 +428,9 @@ export function channelsConfigFromEditorValues(
     : undefined;
   const previousInfoflow = previous
     ? Object.values(previous.adapters).find((adapter) => adapter.type === "infoflow")
+    : undefined;
+  const previousQqbot = previous
+    ? Object.values(previous.adapters).find((adapter) => adapter.type === "qqbot")
     : undefined;
 
   if (values.feishuEnabled) {
@@ -338,6 +485,35 @@ export function channelsConfigFromEditorValues(
         : {}),
     };
   }
+  if (values.qqbotEnabled) {
+    const clientSecret =
+      values.qqbotClientSecret.trim() ||
+      (values.qqbotClientSecretSet && previousQqbot?.type === "qqbot"
+        ? (previousQqbot.client_secret?.trim() ?? "")
+        : "") ||
+      "";
+    adapters.qqbot = {
+      type: "qqbot",
+      connection_mode: "websocket",
+      api_environment: values.qqbotSandbox ? "sandbox" : "production",
+      ...(values.qqbotAppId.trim() ? { app_id: values.qqbotAppId.trim() } : {}),
+      ...(clientSecret ? { client_secret: clientSecret } : {}),
+      ...(parseIdList(values.qqbotAllowedUserIds).length > 0
+        ? { allowed_user_ids: parseIdList(values.qqbotAllowedUserIds) }
+        : {}),
+      group_policy: values.qqbotGroupPolicy,
+      group_trigger: values.qqbotGroupTrigger,
+      ...(values.qqbotGroupPolicy === "allowlist" &&
+      parseIdList(values.qqbotAllowedGroupIds).length > 0
+        ? { allowed_group_ids: parseIdList(values.qqbotAllowedGroupIds) }
+        : values.qqbotGroupPolicy === "allowlist"
+          ? { allowed_group_ids: [] }
+          : {}),
+      ...(values.qqbotSystemPrompt.trim()
+        ? { system_prompt: values.qqbotSystemPrompt.trim() }
+        : {}),
+    };
+  }
 
   const routes: ChannelsConfig["routes"] = {};
   const routeName = values.routeName.trim() || "ops";
@@ -345,11 +521,15 @@ export function channelsConfigFromEditorValues(
   const routeAdapter =
     values.routeAdapter === "infoflow" && adapters.infoflow
       ? "infoflow"
-      : adapters.feishu
-        ? "feishu"
-        : values.routeAdapter === "infoflow"
-          ? "infoflow"
-          : "feishu";
+      : values.routeAdapter === "qqbot" && adapters.qqbot
+        ? "qqbot"
+        : adapters.feishu
+          ? "feishu"
+          : adapters.infoflow
+            ? "infoflow"
+            : adapters.qqbot
+              ? "qqbot"
+              : values.routeAdapter;
 
   if (routeRecipient) {
     routes[routeName] = {
@@ -363,7 +543,7 @@ export function channelsConfigFromEditorValues(
     routes,
     ingress: {
       // Channel enable/disable is the adapter toggle; inbound follows automatically.
-      enabled: Boolean(adapters.feishu || adapters.infoflow),
+      enabled: Boolean(adapters.feishu || adapters.infoflow || adapters.qqbot),
       on_unbound: values.onUnbound,
     },
   };

@@ -31,7 +31,7 @@ export interface ChannelIngressAssignment {
   sessionId: string;
   goal: string;
   assignment: SparkAssignment;
-  source: { kind: "channel"; channel: "feishu" | "infoflow"; externalRef?: string };
+  source: { kind: "channel"; channel: "feishu" | "infoflow" | "qqbot"; externalRef?: string };
   externalKey: string;
   channelReply: {
     workspaceId: string;
@@ -229,7 +229,7 @@ export function createChannelIngressController(input: {
       onUnbound: input.config.ingress?.on_unbound ?? "create",
       create: {
         workspaceId: input.workspaceId,
-        title: `channel ${message.externalKey}`,
+        title: channelSessionTitle(message),
       },
     });
     const channel = message.adapter;
@@ -265,7 +265,9 @@ export function createChannelIngressController(input: {
           adapterId: channel,
           recipient: replyRecipient,
         },
-        ...(channel === "infoflow" ? { channelContext: channelContextFromIncoming(message) } : {}),
+        ...(channel === "infoflow" || channel === "qqbot"
+          ? { channelContext: channelContextFromIncoming(message) }
+          : {}),
       });
     } catch (error) {
       try {
@@ -329,11 +331,30 @@ function channelReplyRecipient(message: IncomingMessage): string | undefined {
     }
     case "feishu":
       return message.chatId?.trim() || undefined;
+    case "qqbot": {
+      if (message.externalKey.startsWith("qqbot:group:") && message.chatId?.trim()) {
+        return `group:${message.chatId.trim()}`;
+      }
+      if (message.externalKey.startsWith("qqbot:channel:") && message.chatId?.trim()) {
+        return `channel:${message.chatId.trim()}`;
+      }
+      const openid = message.senderId?.trim();
+      return openid ? `c2c:${openid}` : undefined;
+    }
     default: {
       const unexpected: never = message.adapter;
       throw new Error(`unsupported channel adapter: ${String(unexpected)}`);
     }
   }
+}
+
+/** Prefer a human label in the stored title while keeping the channel key shape. */
+function channelSessionTitle(message: IncomingMessage): string {
+  if (message.adapter === "qqbot" && message.externalKey.startsWith("qqbot:c2c:")) {
+    const label = message.senderName?.trim();
+    if (label) return `channel qqbot:c2c:${label}`;
+  }
+  return `channel ${message.externalKey}`;
 }
 
 type WorkspaceSlot = {

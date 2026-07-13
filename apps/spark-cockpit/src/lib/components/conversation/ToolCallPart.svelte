@@ -9,20 +9,49 @@
     summary?: string;
     labels: ConversationPartLabels;
     statusLabel: (status: string) => string;
+    /** When true, render without an outer chrome already provided by ThinkingChainPart. */
+    nested?: boolean;
   };
 
-  let { callId, name, state, summary, labels, statusLabel }: Props = $props();
+  let {
+    callId: _callId,
+    name,
+    state,
+    summary,
+    labels,
+    statusLabel,
+    nested = false,
+  }: Props = $props();
+
+  let preview = $derived(summary?.trim() ?? "");
+  let headline = $derived(preview ? firstLine(preview) : "");
+
+  function firstLine(value: string) {
+    const line = value.split(/\r?\n/u).find((entry) => entry.trim());
+    if (!line) return "";
+    return line.length <= 120 ? line : `${line.slice(0, 117)}…`;
+  }
 </script>
 
-<details class="tool-part {state}">
+<details
+  class="tool-part {state}"
+  class:nested
+  open={state === "running" || state === "awaiting-approval" || (nested && Boolean(preview))}
+>
   <summary>
     <span class="tool-name"><Icon name="activity" size={14} />{name}</span>
+    {#if headline}
+      <span class="tool-preview">{headline}</span>
+    {/if}
     <span class="tool-state">{statusLabel(state)}</span>
     <span class="disclosure"><Icon name="chevron-down" size={14} /></span>
   </summary>
   <div class="tool-content">
-    {#if summary?.trim()}<p>{summary}</p>{/if}
-    <code>{labels.tool} · {callId}</code>
+    {#if preview}
+      <pre>{preview}</pre>
+    {:else}
+      <p class="empty">{labels.tool} · {statusLabel(state)}</p>
+    {/if}
   </div>
 </details>
 
@@ -32,6 +61,11 @@
     border: 1px solid var(--color-border-soft);
     border-radius: 9px;
     overflow: hidden;
+  }
+
+  .tool-part.nested {
+    background: transparent;
+    border-color: var(--color-border-soft);
   }
 
   .tool-part.running,
@@ -56,6 +90,10 @@
     padding: 0 10px;
   }
 
+  summary:has(.tool-preview) {
+    grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto auto;
+  }
+
   summary::-webkit-details-marker {
     display: none;
   }
@@ -70,6 +108,16 @@
     display: inline-flex;
     font-weight: 650;
     gap: 7px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tool-preview {
+    color: var(--color-ink-subtle);
+    font-family: var(--font-mono, monospace);
+    font-size: 11px;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -98,7 +146,8 @@
     padding: 10px;
   }
 
-  .tool-content p {
+  .tool-content pre,
+  .tool-content .empty {
     color: var(--color-ink-muted);
     font-size: 12px;
     line-height: 1.5;
@@ -107,11 +156,10 @@
     white-space: pre-wrap;
   }
 
-  .tool-content code {
-    color: var(--color-ink-subtle);
+  .tool-content pre {
     font-family: var(--font-mono, monospace);
-    font-size: 10px;
-    overflow-wrap: anywhere;
+    max-height: 320px;
+    overflow: auto;
   }
 
   @media (prefers-reduced-motion: reduce) {

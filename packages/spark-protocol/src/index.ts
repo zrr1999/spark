@@ -12,6 +12,7 @@ export * from "./runtime-v1/messages.ts";
 export * from "./runtime-v1/registration.ts";
 export * from "./session-assignment.ts";
 export * from "./state-ownership.ts";
+export * from "./tool-display.ts";
 export { SPARK_PROTOCOL_VERSION } from "./version.ts";
 export type {
   SparkProtocolVersion,
@@ -88,6 +89,7 @@ export const sparkConversationPartStatusSchema = z.enum([
   "failed",
   "cancelled",
 ]);
+export const sparkTextConversationPartPhaseSchema = z.enum(["commentary", "final_answer"]);
 export const sparkRunStatusSchema = z.enum([
   "queued",
   "running",
@@ -106,7 +108,31 @@ const sparkConversationPartBaseSchema = z.object({
 export const sparkTextConversationPartSchema = sparkConversationPartBaseSchema.extend({
   type: z.literal("text"),
   text: z.string(),
+  phase: sparkTextConversationPartPhaseSchema.optional(),
 });
+
+export type SparkTextConversationPartPhase = z.infer<typeof sparkTextConversationPartPhaseSchema>;
+
+/**
+ * Extract the display-safe phase marker embedded by Pi/native providers.
+ *
+ * The signature itself is opaque provider data and must never be projected to
+ * session views. Unknown or malformed signatures intentionally fall back to
+ * legacy text semantics.
+ */
+export function sparkTextPhaseFromSignature(
+  signature: unknown,
+): SparkTextConversationPartPhase | undefined {
+  if (typeof signature !== "string" || !signature) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(signature);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+    const phase = (parsed as { phase?: unknown }).phase;
+    return phase === "commentary" || phase === "final_answer" ? phase : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export const sparkThinkingConversationPartSchema = sparkConversationPartBaseSchema.extend({
   type: z.literal("thinking"),

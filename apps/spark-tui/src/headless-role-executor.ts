@@ -10,6 +10,7 @@ import {
   assistantMessageToText,
   createSparkCliHostServices,
   type SparkCliHostDiagnostic,
+  type SparkCliHostServices,
   type SparkCliHostServicesOptions,
 } from "./host/bootstrap.ts";
 import type { SparkAgentLoopEvent } from "./host/agent-loop.ts";
@@ -77,6 +78,7 @@ export interface SparkHeadlessSessionRunInput {
   sessionId: string;
   prompt: string;
   model?: string;
+  thinkingLevel?: string;
   reset?: boolean;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -85,6 +87,12 @@ export interface SparkHeadlessSessionRunInput {
   systemPrompt?: string;
   /** Display-safe metadata persisted on the submitted user message only. */
   messageMetadata?: Record<string, unknown>;
+  /**
+   * Tool approval method for `requiresApproval` tools.
+   * Channel sessions should pass `auto`; defaults to host bootstrap (`skip`).
+   */
+  approvalMethod?: "skip" | "human" | "auto";
+  approvalRejectAction?: "ask" | "deny";
   onEvent?: (event: unknown) => void | Promise<void>;
 }
 
@@ -128,8 +136,14 @@ export async function runSparkHeadlessSession(
     ...controlPlaneServicePaths(options.controlSparkHome),
     hasUI: false,
     ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
+    ...(input.approvalMethod ? { approvalMethod: input.approvalMethod } : {}),
+    ...(input.approvalRejectAction ? { approvalRejectAction: input.approvalRejectAction } : {}),
   } satisfies SparkCliHostServicesOptions);
   if (input.model?.trim()) selectHeadlessModel(services, input.model.trim());
+  if (input.thinkingLevel?.trim()) {
+    const level = input.thinkingLevel.trim();
+    if (isThinkingLevel(level)) services.config.activeThinkingLevel = level;
+  }
 
   const recordEvent = (event: unknown) => {
     jsonEvents.push(event);
@@ -461,6 +475,19 @@ function renderDiagnostics(diagnostics: SparkCliHostDiagnostic[]): string {
 function abortReason(signal: AbortSignal | undefined): string {
   const reason = signal?.reason;
   return reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "abort";
+}
+
+function isThinkingLevel(
+  value: string,
+): value is NonNullable<SparkCliHostServices["config"]["activeThinkingLevel"]> {
+  return (
+    value === "off" ||
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh"
+  );
 }
 
 function errorMessage(error: unknown): string {

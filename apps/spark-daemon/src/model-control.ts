@@ -13,6 +13,7 @@ import {
   type SparkModelRef,
   type SparkProviderAuthStatus,
   type SparkSessionRegistryRecord,
+  type SparkThinkingLevel,
 } from "@zendev-lab/spark-protocol";
 import type { SparkOAuthFlowSnapshot } from "@zendev-lab/spark-ai/control";
 import type { DaemonSessionRegistry } from "./session-registry.ts";
@@ -21,6 +22,10 @@ export interface SparkDaemonModelControl {
   snapshot(sessionId?: string): Promise<SparkModelControlSnapshot>;
   setDefaultModel(model: SparkModelRef): Promise<SparkModelControlSnapshot>;
   setSessionModel(sessionId: string, model: SparkModelRef): Promise<SparkSessionRegistryRecord>;
+  setSessionThinkingLevel(
+    sessionId: string,
+    thinkingLevel: SparkThinkingLevel,
+  ): Promise<SparkSessionRegistryRecord>;
   setApiKey(providerName: string, apiKey: string): Promise<SparkModelControlSnapshot>;
   logout(providerName: string): Promise<{ removed: boolean; snapshot: SparkModelControlSnapshot }>;
   startOAuth(providerName: string): Promise<SparkAuthFlow>;
@@ -28,6 +33,7 @@ export interface SparkDaemonModelControl {
   respondOAuth(flowId: string, promptId: string, value: string): Promise<SparkAuthFlow>;
   cancelOAuth(flowId: string): Promise<SparkAuthFlow>;
   effectiveModel(sessionId?: string): Promise<SparkModelRef>;
+  effectiveThinkingLevel(sessionId?: string): Promise<SparkThinkingLevel | undefined>;
   prepareModel(model: SparkModelRef): Promise<void>;
 }
 
@@ -69,6 +75,13 @@ class DaemonModelControl implements SparkDaemonModelControl {
     return await this.#sessionRegistry.setModel(sessionId, canonical);
   }
 
+  async setSessionThinkingLevel(
+    sessionId: string,
+    thinkingLevel: SparkThinkingLevel,
+  ): Promise<SparkSessionRegistryRecord> {
+    return await this.#sessionRegistry.setThinkingLevel(sessionId, thinkingLevel);
+  }
+
   async setApiKey(providerName: string, apiKey: string): Promise<SparkModelControlSnapshot> {
     await this.#providerControl.setApiKey(providerName, apiKey);
     return await this.snapshot();
@@ -104,6 +117,12 @@ class DaemonModelControl implements SparkDaemonModelControl {
     const selected = snapshot.session?.model ?? snapshot.defaultModel;
     if (!selected) throw new Error("No Spark provider/model is registered yet.");
     return requireAvailableModel(snapshot, selected).model;
+  }
+
+  async effectiveThinkingLevel(sessionId?: string): Promise<SparkThinkingLevel | undefined> {
+    if (!sessionId) return undefined;
+    const snapshot = await this.snapshot(sessionId);
+    return snapshot.session?.thinkingLevel;
   }
 
   async prepareModel(model: SparkModelRef): Promise<void> {
@@ -164,7 +183,13 @@ function modelControlSnapshot(
     providers,
     ...(defaultModel ? { defaultModel } : {}),
     ...(sessionId
-      ? { session: { sessionId, ...(session?.model ? { model: session.model } : {}) } }
+      ? {
+          session: {
+            sessionId,
+            ...(session?.model ? { model: session.model } : {}),
+            ...(session?.thinkingLevel ? { thinkingLevel: session.thinkingLevel } : {}),
+          },
+        }
       : {}),
     diagnostics: control.loadOutcomes
       .filter((outcome) => !outcome.ok)

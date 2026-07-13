@@ -66,4 +66,18 @@ describe("Cockpit model control adapter", () => {
     expect(modelValue(model)).toBe("baidu-oneapi/ernie-4.5");
     expect(() => parseModelValue("ernie-4.5")).toThrow(/provider\/model/u);
   });
+
+  it("soft-fails catalog loads instead of throwing through the session page", async () => {
+    const state = await loadModelControlForCockpit("sess_demo", {
+      request: async () => {
+        throw new Error("catalog unavailable");
+      },
+    });
+
+    expect(state).toEqual({
+      available: false,
+      snapshot: { providers: [], diagnostics: [] },
+      error: "catalog unavailable",
+    });
+  });
 });

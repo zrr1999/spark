@@ -6,6 +6,7 @@ import type {
   SparkModelRef,
   SparkSessionRegistryRecord,
   SparkSessionScope,
+  SparkThinkingLevel,
 } from "@zendev-lab/spark-protocol";
 import {
   defaultSparkSessionRegistryRoot,
@@ -28,6 +29,10 @@ export interface DaemonSessionRegistry {
   unbind(sessionId: string, externalKey: string): Promise<SparkSessionRegistryRecord>;
   archive(sessionId: SparkSessionArchiveRequest["sessionId"]): Promise<SparkSessionRegistryRecord>;
   setModel(sessionId: string, model: SparkModelRef): Promise<SparkSessionRegistryRecord>;
+  setThinkingLevel(
+    sessionId: string,
+    thinkingLevel: SparkThinkingLevel,
+  ): Promise<SparkSessionRegistryRecord>;
   recordTurnQueued(sessionId: string, now?: Date): Promise<SparkSessionRegistryRecord>;
   recordTurnSettled(sessionId: string, now?: Date): Promise<SparkSessionRegistryRecord>;
   recordRun(input: {
@@ -76,6 +81,8 @@ export function createSerializedDaemonSessionRegistry(
     unbind: (sessionId, externalKey) => mutate(() => registry.unbind(sessionId, externalKey)),
     archive: (sessionId) => mutate(() => registry.archive(sessionId)),
     setModel: (sessionId, model) => mutate(() => registry.setModel(sessionId, model)),
+    setThinkingLevel: (sessionId, thinkingLevel) =>
+      mutate(() => registry.setThinkingLevel(sessionId, thinkingLevel)),
     recordTurnQueued: (sessionId, now) => mutate(() => registry.recordTurnQueued(sessionId, now)),
     recordTurnSettled: (sessionId, now) => mutate(() => registry.recordTurnSettled(sessionId, now)),
     recordRun: (input) => mutate(() => registry.recordRun(input)),
@@ -98,6 +105,8 @@ export function createDaemonSessionRegistry(
     unbind: async (sessionId, externalKey) => await registry.unbind(sessionId, externalKey),
     archive: async (sessionId) => await registry.archive(sessionId),
     setModel: async (sessionId, model) => await registry.setModel(sessionId, model),
+    setThinkingLevel: async (sessionId, thinkingLevel) =>
+      await registry.setThinkingLevel(sessionId, thinkingLevel),
     recordTurnQueued: async (sessionId, now) => await registry.recordTurnQueued(sessionId, now),
     recordTurnSettled: async (sessionId, now) => await registry.recordTurnSettled(sessionId, now),
     recordRun: async (input) => await registry.recordRun(input),
@@ -180,11 +189,21 @@ function resolveRegistryCreateInput(
       `workspace ${scope.workspaceId} has no daemon-local execution directory`,
     );
   }
+  const requestedCwd = input.cwd?.trim();
+  if (requestedCwd === "/") {
+    throw new SparkSessionRegistryError(
+      "workspace_cwd_unavailable",
+      `workspace ${scope.workspaceId} cannot use filesystem root as execution directory`,
+    );
+  }
+  // Workspace sessions freeze to the daemon-local workspace path whenever known.
+  // Client-supplied cwd is only a fallback when the resolver is not configured.
+  const cwd = resolvedWorkspaceCwd || requestedCwd;
   return {
     ...input,
     scope,
     workspaceId: scope.workspaceId,
-    ...(resolvedWorkspaceCwd || input.cwd ? { cwd: resolvedWorkspaceCwd ?? input.cwd } : {}),
+    ...(cwd ? { cwd } : {}),
   };
 }
 

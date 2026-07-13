@@ -6,6 +6,7 @@ import {
   type SparkModelControlSnapshot,
   type SparkModelRef,
   type SparkSessionRegistryRecord,
+  type SparkThinkingLevel,
 } from "@zendev-lab/spark-protocol";
 import type { SparkModelPickerState } from "../host/model-selector.ts";
 import type { SparkActiveSelection } from "../host/provider-registry.ts";
@@ -15,6 +16,7 @@ export interface SparkDaemonModelAuthClient {
   readonly sessionId?: string;
   snapshot(): Promise<SparkModelControlSnapshot>;
   setSessionModel(model: SparkModelRef): Promise<SparkSessionRegistryRecord>;
+  setSessionThinkingLevel(thinkingLevel: SparkThinkingLevel): Promise<SparkSessionRegistryRecord>;
   setDefaultModel(model: SparkModelRef): Promise<SparkModelControlSnapshot>;
   setApiKey(providerName: string, apiKey: string): Promise<SparkModelControlSnapshot>;
   logout(providerName: string): Promise<boolean>;
@@ -56,6 +58,17 @@ export function createSparkDaemonModelAuthClient(
       await ensureSession();
       return parseSparkSessionRegistryRecord(
         await requestSparkDaemonControl("session.model.set", { sessionId, model }, daemon),
+      );
+    },
+    setSessionThinkingLevel: async (thinkingLevel) => {
+      if (!sessionId) throw new Error("Session-scoped thinking control requires a session id.");
+      await ensureSession();
+      return parseSparkSessionRegistryRecord(
+        await requestSparkDaemonControl(
+          "session.thinking.set",
+          { sessionId, thinkingLevel },
+          daemon,
+        ),
       );
     },
     setDefaultModel: async (model) =>

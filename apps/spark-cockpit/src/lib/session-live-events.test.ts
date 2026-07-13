@@ -254,8 +254,8 @@ describe("session live events", () => {
             id: "queue:turn-1.json",
             role: "user",
             text: "Inspect the UI",
-            status: "pending",
-            metadata: { taskFileName: "turn-1.json" },
+            status: "done",
+            metadata: { source: "daemon.queue", taskFileName: "turn-1.json" },
           },
         ],
       }),
@@ -292,6 +292,27 @@ describe("session live events", () => {
         },
       }),
     );
+    expect(state.activeTurnId).toBeNull();
+  });
+
+  it("does not treat arbitrary message metadata as a cancellable daemon turn", () => {
+    const state = createSessionLiveEventState({
+      sessionId: "sess_current",
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        status: "running",
+        messages: [
+          {
+            id: "msg_pending",
+            role: "user",
+            text: "Not a daemon queue projection",
+            status: "pending",
+            metadata: { taskFileName: "turn-spoofed.json" },
+          },
+        ],
+      }),
+    });
+
     expect(state.activeTurnId).toBeNull();
   });
 

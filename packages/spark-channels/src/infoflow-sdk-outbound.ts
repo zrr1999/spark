@@ -71,7 +71,13 @@ export interface InfoflowSdkClientLike {
         answerFormat?: "text" | "markdown";
       }): Pick<
         StreamingCardSession,
-        "start" | "appendText" | "notifyToolStart" | "notifyToolResult" | "complete" | "fail"
+        | "start"
+        | "appendText"
+        | "appendReasoning"
+        | "notifyToolStart"
+        | "notifyToolResult"
+        | "complete"
+        | "fail"
       >;
     };
   };
@@ -88,6 +94,11 @@ export interface InfoflowSdkOutbound {
 export interface InfoflowSdkOutboundOptions {
   createClient?: (config: InfoflowAdapterConfig) => InfoflowSdkClientLike;
 }
+
+/** Outer card status (star row). Inner details row uses a different label. */
+export const INFOFLOW_STREAM_DONE_LABEL = "已完成";
+/** Details / expandable row label — must not duplicate the outer done label. */
+export const INFOFLOW_STREAM_DETAILS_LABEL = "处理过程";
 
 /**
  * SDK-owned Infoflow outbound. `Client` owns TokenManager/cache/retry and emits
@@ -111,9 +122,71 @@ export function createInfoflowSdkOutbound(
         answerFormat: streamOptions.answerFormat ?? "markdown",
       });
       if (!(await session.start())) return undefined;
-      return session;
+      return wrapInfoflowReplyStream(session);
     },
   };
+}
+
+/**
+ * Infoflow's StreamingCardSession.complete(label) writes the same label to both
+ * `think_status_text` (outer star row) and `status_info` (details / 收起详情 row).
+ * Patch the final contents so the details row is not a second "已完成".
+ */
+export function wrapInfoflowReplyStream(
+  session: Pick<
+    StreamingCardSession,
+    "appendText" | "appendReasoning" | "notifyToolStart" | "notifyToolResult" | "complete" | "fail"
+  >,
+): InfoflowReplyStream {
+  patchStreamingCardFinalLabels(session);
+  return {
+    appendText: (delta) => session.appendText(delta),
+    appendReasoning: (delta) => session.appendReasoning(delta),
+    notifyToolStart: (input) => session.notifyToolStart(input),
+    notifyToolResult: (text) => session.notifyToolResult(text),
+    complete: async (label) => {
+      await session.complete(label?.trim() || INFOFLOW_STREAM_DONE_LABEL);
+    },
+    fail: async (message) => {
+      await session.fail(message);
+    },
+  };
+}
+
+type StreamingCardContentsNode = { type: string; content: string };
+type StreamingCardBuildContents = (opts: {
+  final?: boolean;
+  doneLabel?: string;
+  error?: string;
+}) => Record<string, StreamingCardContentsNode>;
+
+function patchStreamingCardFinalLabels(
+  session: Pick<
+    StreamingCardSession,
+    "appendText" | "appendReasoning" | "notifyToolStart" | "notifyToolResult" | "complete" | "fail"
+  >,
+): void {
+  const mutable = session as typeof session & {
+    buildContents?: StreamingCardBuildContents;
+    __sparkPatchedFinalLabels?: boolean;
+  };
+  if (mutable.__sparkPatchedFinalLabels) return;
+  const original = mutable.buildContents;
+  if (typeof original !== "function") {
+    // Fake/test sessions may omit private SDK helpers; complete() still works.
+    mutable.__sparkPatchedFinalLabels = true;
+    return;
+  }
+  mutable.buildContents = (opts) => {
+    const contents = original.call(mutable, opts);
+    if (opts.final && !opts.error) {
+      const doneLabel = opts.doneLabel?.trim() || INFOFLOW_STREAM_DONE_LABEL;
+      contents.think_status_text = { type: "text", content: doneLabel };
+      contents.status_info = { type: "text", content: INFOFLOW_STREAM_DETAILS_LABEL };
+    }
+    return contents;
+  };
+  mutable.__sparkPatchedFinalLabels = true;
 }
 
 function createOfficialClient(config: InfoflowAdapterConfig): InfoflowSdkClientLike {

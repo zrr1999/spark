@@ -332,8 +332,8 @@ export type OkPayload =
 /**
  * Daemon Pong payload.
  *
- * All fields are required by IPC v2. Older daemons are rejected during
- * connection initialization rather than being treated as a partial protocol.
+ * Core IPC v2 fields are required. Daemons may omit the newer process-lifetime
+ * identity, in which case reconnect replay remains disabled for safety.
  */
 export interface PongPayload {
   version: string;

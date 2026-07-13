@@ -12,7 +12,7 @@ import type { PageServerLoad } from "./$types";
 import { actions as sessionsActions } from "../+page.server";
 
 export const load: PageServerLoad = async ({ params }) => {
-  const [sessions, selected, sessionSnapshot, modelControl] = await Promise.all([
+  const [managedSessions, selected, sessionSnapshot, modelControl] = await Promise.all([
     listManagedSessionsForCockpit(),
     getManagedSessionForCockpit(params.sessionId),
     getManagedSessionSnapshotForCockpit(params.sessionId),
@@ -21,12 +21,14 @@ export const load: PageServerLoad = async ({ params }) => {
   if (!selected) {
     throw error(404, "Session not found");
   }
+  const sessions = managedSessions.sessions;
   const visibleSessions = sessions.some((session) => session.sessionId === selected.sessionId)
     ? sessions
     : [selected, ...sessions];
   const workspaceId = workspaceIdForWorkbenchSession(selected);
   return {
     sessions: visibleSessions,
+    sessionsAvailable: managedSessions.available,
     selectedSessionId: selected.sessionId,
     selectedSession: selected,
     sessionSnapshot,

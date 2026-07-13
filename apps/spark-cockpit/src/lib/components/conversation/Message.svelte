@@ -7,6 +7,7 @@
   import MessageActions from "./MessageActions.svelte";
   import ReasoningPart from "./ReasoningPart.svelte";
   import TaskRunPart from "./TaskRunPart.svelte";
+  import ThinkingChainPart from "./ThinkingChainPart.svelte";
   import ToolCallPart from "./ToolCallPart.svelte";
   import type { ConversationMessageView, ConversationPartLabels } from "./types";
 
@@ -35,6 +36,7 @@
   let actorLabel = $derived(
     item.actor === "user" ? (item.senderLabel ?? userLabel) : assistantLabel,
   );
+  let hasCopyableText = $derived(item.parts.some((part) => part.type === "text"));
 </script>
 
 <article class="conversation-message {item.actor}" data-message-id={item.id}>
@@ -71,6 +73,15 @@
             state={part.state}
             redacted={part.redacted}
             labels={partLabels}
+          />
+        {:else if part.type === "commentary"}
+          <ReasoningPart summary={part.summary} state={part.state} labels={partLabels} />
+        {:else if part.type === "chain"}
+          <ThinkingChainPart
+            state={part.state}
+            steps={part.steps}
+            labels={partLabels}
+            {statusLabel}
           />
         {:else if part.type === "tool"}
           <ToolCallPart
@@ -118,7 +129,9 @@
       {#if item.meta}<small>{item.meta}</small>{/if}
     </div>
 
-    <MessageActions text={item.body} {copyLabel} {copiedLabel} />
+    {#if hasCopyableText}
+      <MessageActions text={item.body} {copyLabel} {copiedLabel} />
+    {/if}
   </div>
 </article>
 

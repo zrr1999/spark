@@ -346,8 +346,12 @@ async function start(paths: ReturnType<typeof resolveSparkPaths>): Promise<numbe
           throw new Error(`channel session ${assignment.sessionId} has no workspace owner`);
         }
         const workspaceId = session.scope.workspaceId;
-        const cwd = session.cwd?.trim() ?? resolveWorkspaceLocalPath(db, workspaceId);
-        if (!cwd) {
+        const cwdCandidate =
+          session.cwd?.trim() && session.cwd.trim() !== "/"
+            ? session.cwd.trim()
+            : resolveWorkspaceLocalPath(db, workspaceId);
+        const cwd = cwdCandidate?.trim();
+        if (!cwd || cwd === "/") {
           throw new Error(
             `channel session ${assignment.sessionId} has no daemon-local execution directory`,
           );
