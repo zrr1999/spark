@@ -1,5 +1,5 @@
 import { fail, redirect } from "@sveltejs/kit";
-import { localeCookieName, resolveRequestLocale } from "$lib/i18n";
+import { getDictionary, localeCookieName, resolveRequestLocale } from "$lib/i18n";
 import { formText } from "$lib/server/form-data";
 import {
   cancelProviderOAuthForCockpit,
@@ -118,18 +118,6 @@ function flowUrl(url: URL, flowId: string): string {
 }
 
 function actionCopy(cookieLocale: string | undefined, acceptLanguage: string | null) {
-  const isZh = resolveRequestLocale({ cookieLocale, acceptLanguage })
-    .toLowerCase()
-    .startsWith("zh");
-  return isZh
-    ? {
-        defaultUpdated: "默认模型已更新。",
-        credentialSaved: "Provider 凭据已保存。",
-        credentialRemoved: "已移除 Spark 保存的凭据。",
-      }
-    : {
-        defaultUpdated: "Default model updated.",
-        credentialSaved: "Provider credential saved.",
-        credentialRemoved: "Stored credential removed.",
-      };
+  const locale = resolveRequestLocale({ cookieLocale, acceptLanguage });
+  return getDictionary(locale).modelSettings.actions;
 }

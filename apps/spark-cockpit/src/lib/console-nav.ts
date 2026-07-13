@@ -9,9 +9,9 @@ export interface ConsoleNavLabels {
 }
 
 export interface ConsoleNavGroupLabels {
-  global: string;
+  cockpit: string;
+  daemon: string;
   workspace: string;
-  setup: string;
 }
 
 export interface ConsoleNavItem {
@@ -37,8 +37,19 @@ export function buildConsoleNavGroups(input: {
 
   const groups: ConsoleNavGroup[] = [
     {
-      id: "global",
-      label: input.groups.global,
+      id: "cockpit",
+      label: input.groups.cockpit,
+      items: [
+        {
+          href: "/workspaces/new",
+          label: input.nav.createWorkspace,
+          icon: "plus",
+        },
+      ],
+    },
+    {
+      id: "daemon",
+      label: input.groups.daemon,
       items: [{ href: "/settings/models", label: input.nav.modelsProviders, icon: "spark" }],
     },
   ];
@@ -66,18 +77,6 @@ export function buildConsoleNavGroups(input: {
       ],
     });
   }
-
-  groups.push({
-    id: "setup",
-    label: input.groups.setup,
-    items: [
-      {
-        href: "/workspaces/new",
-        label: input.nav.createWorkspace,
-        icon: "plus",
-      },
-    ],
-  });
 
   return groups;
 }

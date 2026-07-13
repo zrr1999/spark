@@ -16,9 +16,9 @@ const nav: ConsoleNavLabels = {
 };
 
 const groups: ConsoleNavGroupLabels = {
-  global: "Global",
-  workspace: "Workspace",
-  setup: "Setup",
+  cockpit: "Cockpit",
+  daemon: "Daemon",
+  workspace: "Workspace · Local",
 };
 
 describe("console nav", () => {
@@ -31,17 +31,17 @@ describe("console nav", () => {
     });
 
     expect(result.map((group) => [group.id, group.label])).toEqual([
-      ["global", "Global"],
-      ["workspace", "Workspace"],
-      ["setup", "Setup"],
+      ["cockpit", "Cockpit"],
+      ["daemon", "Daemon"],
+      ["workspace", "Workspace · Local"],
     ]);
-    expect(result[0]?.items.map((item) => item.href)).toEqual(["/settings/models"]);
-    expect(result[1]?.items.map((item) => item.href)).toEqual([
+    expect(result[0]?.items.map((item) => item.href)).toEqual(["/workspaces/new"]);
+    expect(result[1]?.items.map((item) => item.href)).toEqual(["/settings/models"]);
+    expect(result[2]?.items.map((item) => item.href)).toEqual([
       "/local/settings",
       "/local/settings/channels",
       "/local/settings/registration",
     ]);
-    expect(result[2]?.items[0]).toMatchObject({ href: "/workspaces/new" });
   });
 
   it("omits workspace group when no workspace is active", () => {
@@ -51,10 +51,16 @@ describe("console nav", () => {
       nav,
       groups,
     });
-    expect(result.map((group) => group.id)).toEqual(["global", "setup"]);
+    expect(result.map((group) => group.id)).toEqual(["cockpit", "daemon"]);
   });
 
-  it("keeps global model settings and workspace settings active states distinct", () => {
+  it("keeps Cockpit, daemon, and workspace active states distinct", () => {
+    expect(isConsoleNavItemActive({ pathname: "/workspaces/new", href: "/workspaces/new" })).toBe(
+      true,
+    );
+    expect(isConsoleNavItemActive({ pathname: "/settings/models", href: "/workspaces/new" })).toBe(
+      false,
+    );
     expect(isConsoleNavItemActive({ pathname: "/settings/models", href: "/settings/models" })).toBe(
       true,
     );

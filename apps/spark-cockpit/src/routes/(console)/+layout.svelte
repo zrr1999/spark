@@ -35,9 +35,11 @@
       hasActiveWorkspace: Boolean(data.activeWorkspace),
       nav: navLabels,
       groups: {
-        global: consoleMessages.navGroups.global,
-        workspace: data.activeWorkspace?.name ?? consoleMessages.navGroups.workspace,
-        setup: t.user.workspaceSection,
+        cockpit: consoleMessages.navGroups.cockpit,
+        daemon: consoleMessages.navGroups.daemon,
+        workspace: data.activeWorkspace
+          ? `${consoleMessages.navGroups.workspace} · ${data.activeWorkspace.name}`
+          : consoleMessages.navGroups.workspace,
       },
     }),
   );

@@ -141,8 +141,15 @@ describe("CLI/TUI strings", () => {
 
 describe("Cockpit dictionaries", () => {
   it("loads Cockpit dictionaries from spark-i18n", () => {
-    expect(getCockpitDictionary("en").common.justNow).toBe("just now");
-    expect(getCockpitDictionary("zh-CN").common.justNow).toBe("刚刚");
+    const en = getCockpitDictionary("en");
+    const zh = getCockpitDictionary("zh-CN");
+
+    expect(en.common.justNow).toBe("just now");
+    expect(zh.common.justNow).toBe("刚刚");
+    expect(en.layout.nav.channels).toBe("Message platforms");
+    expect(zh.layout.nav.channels).toBe("消息平台");
+    expect(en.modelSettings.actions.defaultUpdated).toBe("Default model updated.");
+    expect(zh.modelSettings.actions.defaultUpdated).toBe("默认模型已更新。");
   });
 
   it("keeps English and Chinese Cockpit dictionary key parity", () => {
