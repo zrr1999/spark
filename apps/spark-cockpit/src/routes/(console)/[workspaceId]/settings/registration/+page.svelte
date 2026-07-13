@@ -245,6 +245,9 @@
   .registration-page {
     display: grid;
     gap: 18px;
+    max-width: 1120px;
+    min-width: 0;
+    width: 100%;
   }
 
   .registration-header {
@@ -447,6 +450,7 @@
     border: 1px solid var(--color-border-strong);
     display: grid;
     gap: 10px;
+    min-width: 0;
   }
 
   .token-created code,

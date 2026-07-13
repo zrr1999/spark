@@ -233,7 +233,7 @@
 </section>
 
 <style>
-  .models-settings { display: grid; gap: 22px; max-width: 1120px; padding: 28px 32px 48px; }
+  .models-settings { display: grid; gap: 22px; max-width: 1120px; min-width: 0; width: 100%; }
   h1, h2, h3, p { margin: 0; }
   .page-heading { display: grid; gap: 7px; max-width: 760px; }
   .page-heading h1 { font-size: 25px; letter-spacing: -.02em; }
@@ -264,7 +264,6 @@
   .error-text, .form-message { color: var(--color-danger); }
   .form-message.success { color: var(--color-success-strong); }
   @media (max-width: 640px) {
-    .models-settings { padding: 20px 14px 36px; }
     .provider-grid { grid-template-columns: minmax(0, 1fr); }
     .card-heading, .inline-form { align-items: stretch; flex-direction: column; }
     .inline-form select, .inline-form button { width: 100%; }

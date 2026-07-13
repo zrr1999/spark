@@ -27,8 +27,6 @@ export interface ConsoleNavGroup {
   items: ConsoleNavItem[];
 }
 
-export const lastWorkbenchPathStorageKey = "spark_cockpit_last_work_path";
-
 export function buildConsoleNavGroups(input: {
   activeWorkspacePath: string;
   hasActiveWorkspace: boolean;
@@ -149,39 +147,4 @@ export function currentConsolePageLabel(input: {
   }
 
   return input.createWorkspaceFallback ?? input.nav.globalSettings;
-}
-
-export function resolveConsoleReturnPath(input: {
-  fromQuery?: string | null;
-  storedPath?: string | null;
-  fallback?: string;
-}): string {
-  const fallback = input.fallback ?? "/sessions";
-  const candidates = [input.fromQuery, input.storedPath];
-  for (const candidate of candidates) {
-    const path = candidate?.trim();
-    if (!path || !path.startsWith("/")) continue;
-    if (path.startsWith("//")) continue;
-    if (isConsolePath(path)) continue;
-    return path;
-  }
-  return fallback;
-}
-
-export function isConsolePath(pathname: string): boolean {
-  if (pathname === "/settings" || pathname.startsWith("/settings/")) return true;
-  if (pathname === "/workspaces/new" || pathname.startsWith("/workspaces/new/")) return true;
-  const segments = pathname.split("/").filter(Boolean);
-  return segments[1] === "settings";
-}
-
-export function rememberWorkbenchPath(pathname: string): void {
-  if (typeof sessionStorage === "undefined") return;
-  if (isConsolePath(pathname)) return;
-  sessionStorage.setItem(lastWorkbenchPathStorageKey, pathname);
-}
-
-export function readRememberedWorkbenchPath(): string | null {
-  if (typeof sessionStorage === "undefined") return null;
-  return sessionStorage.getItem(lastWorkbenchPathStorageKey);
 }

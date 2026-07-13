@@ -894,7 +894,7 @@
   .sessions-stage {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-    height: calc(100dvh - 48px);
+    height: 100%;
     min-height: 520px;
     overflow: hidden;
   }
@@ -1454,7 +1454,7 @@
     .sessions-stage,
     .sessions-stage.has-selection {
       grid-template-columns: minmax(0, 1fr);
-      height: calc(100dvh - 48px);
+      height: 100%;
       min-height: 0;
     }
 

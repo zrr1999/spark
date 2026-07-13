@@ -134,10 +134,11 @@ const messages = {
   },
   console: {
     badge: "控制台",
-    backToWorkbench: "返回作业台",
     ariaNavigation: "控制台导航",
     nav: {
-      registration: "注册",
+      general: "通用",
+      workspaceDetails: "基本信息",
+      registration: "运行时注册",
     },
     navGroups: {
       global: "全局",

@@ -283,6 +283,7 @@
   <title>{t.emptyHeadTitle}</title>
 </svelte:head>
 
+<div class="workspace-create-page">
 <section class="setup-hero" aria-labelledby="home-title">
   <div>
     <p class="eyebrow">{t.noWorkspaceHero.eyebrow}</p>
@@ -547,8 +548,17 @@
     {/each}
   </div>
 </section>
+</div>
 
 <style>
+  .workspace-create-page {
+    display: grid;
+    gap: 28px;
+    max-width: 1040px;
+    min-width: 0;
+    width: 100%;
+  }
+
   .setup-hero {
     align-items: center;
     display: flex;
@@ -623,7 +633,6 @@
 
   .setup-panel {
     display: grid;
-    margin-top: 28px;
   }
 
   .steps p {

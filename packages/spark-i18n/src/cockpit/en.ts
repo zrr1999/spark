@@ -134,10 +134,11 @@ const messages = {
   },
   console: {
     badge: "Console",
-    backToWorkbench: "Back to workbench",
     ariaNavigation: "Console navigation",
     nav: {
-      registration: "Registration",
+      general: "General",
+      workspaceDetails: "Basics",
+      registration: "Runtime registration",
     },
     navGroups: {
       global: "Global",

@@ -180,7 +180,9 @@ JSON-serializable and renderer-agnostic.
 ## Cockpit dual-track navigation
 
 Spark Cockpit splits **Workbench** (daily assignment/ops) from **Console**
-(setup/admin). Existing routes remain; shells differ.
+(setup/admin). Existing routes remain. Both surfaces share the persistent
+application top bar (Spark home, global search, workspace switcher); their body
+navigation stays purpose-specific.
 
 ### Workbench sidebar
 
@@ -191,23 +193,23 @@ Spark Cockpit splits **Workbench** (daily assignment/ops) from **Console**
 | Secondary nav | Inbox | `/<workspace>/inbox` |
 | Secondary nav | Artifacts | `/<workspace>/artifacts` |
 | Settings entry | Settings hub (global + active workspace) | `/settings?workspace=<workspace>` |
-| Account control | Switch / create workspace | popover only |
+| Application top bar | Search and switch / create workspace | shared popovers |
 
 ### Console navigation
 
 | Group | Entries | Route |
 | --- | --- | --- |
-| Global | Global settings | `/settings` |
+| Global | General | `/settings` |
 | Global | Models and providers | `/settings/models` |
-| Workspace | Workspace settings | `/<workspace>/settings` |
-| Workspace | Channels | `/<workspace>/settings/channels` |
-| Workspace | Registration | `/<workspace>/settings/registration` |
-| Setup | Create workspace | `/workspaces/new` |
+| Active workspace | Basics | `/<workspace>/settings` |
+| Active workspace | Channels | `/<workspace>/settings/channels` |
+| Active workspace | Runtime registration | `/<workspace>/settings/registration` |
+| Workspaces | Create workspace | `/workspaces/new` |
 
-Workbench settings buttons and Console nav are the entry points into Console.
-The Workbench account control only switches or creates workspaces. Workspace
-search, breadcrumbs, and nested detail routes stay on the Workbench shell;
-Console uses its own top bar with **Back to workbench**.
+Workbench settings links and Console navigation are the entry points into
+Console. The Spark logo returns to conversations from either surface. Global
+search and workspace switching stay in the shared top bar; breadcrumbs and
+surface-specific navigation remain owned by each shell body.
 
 ## Implementation sequence
 

@@ -87,6 +87,9 @@
   .settings-page {
     display: grid;
     gap: 18px;
+    max-width: 960px;
+    min-width: 0;
+    width: 100%;
   }
 
   .settings-header {

@@ -354,7 +354,8 @@
     display: grid;
     gap: 20px;
     max-width: 960px;
-    padding: 28px 32px;
+    min-width: 0;
+    width: 100%;
   }
 
   .back-link {
@@ -620,6 +621,7 @@
   .mono {
     font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 12px;
+    overflow-wrap: anywhere;
   }
 
   .form-flash.error {
@@ -669,10 +671,6 @@
   }
 
   @media (max-width: 720px) {
-    .channels-settings {
-      padding: 22px 18px;
-    }
-
     .page-header {
       flex-direction: column;
     }

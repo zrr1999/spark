@@ -44,12 +44,14 @@ describe("remote PWA assets", () => {
     );
     const conversationDetail = readAppFile("src/lib/SessionsWorkspace.svelte");
     const workbenchLayout = readAppFile("src/routes/(workbench)/+layout.svelte");
+    const cockpitTopbar = readAppFile("src/lib/shell/CockpitTopbar.svelte");
 
     expect(inboxDetail).toContain("@media (max-width: 640px)");
     expect(inboxDetail).toContain(".question-block");
     expect(inboxDetail).toContain("grid-template-columns: 1fr");
     expect(conversationDetail).toContain(".mobile-details");
     expect(conversationDetail).toMatch(/@media \(max-width: (640|960)px\)/);
-    expect(workbenchLayout).toMatch(/@media \(max-width: (700|1023)px\)/);
+    expect(workbenchLayout).toContain("@media (max-width: 900px)");
+    expect(cockpitTopbar).toContain("@media (max-width: 560px)");
   });
 });

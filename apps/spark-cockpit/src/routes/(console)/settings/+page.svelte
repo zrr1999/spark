@@ -50,7 +50,8 @@
     display: grid;
     gap: 24px;
     max-width: 920px;
-    padding: 28px 32px;
+    min-width: 0;
+    width: 100%;
   }
 
   .eyebrow {
@@ -114,10 +115,6 @@
   }
 
   @media (max-width: 480px) {
-    .global-settings {
-      padding: 20px 14px;
-    }
-
     .cards {
       grid-template-columns: minmax(0, 1fr);
     }
