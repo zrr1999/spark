@@ -107,7 +107,7 @@
     </summary>
     <section class="panel-card fallback-card">
     <form class="token-form" method="POST" action="?/createEnrollmentToken">
-      <Field id="enrollment-label" label={t.enrollment.label}>
+      <Field id="enrollment-label" label={t.enrollment.label} reserveMeta={false}>
         <Input id="enrollment-label" name="label" placeholder={t.enrollment.labelPlaceholder} />
       </Field>
       <Button type="submit">

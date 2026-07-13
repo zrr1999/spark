@@ -10,6 +10,7 @@
     error,
     required = false,
     compact = false,
+    reserveMeta = true,
     children,
   }: {
     id: string;
@@ -18,6 +19,7 @@
     error?: string;
     required?: boolean;
     compact?: boolean;
+    reserveMeta?: boolean;
     children: Snippet;
   } = $props();
 
@@ -32,19 +34,20 @@
   <div class="ui-field-control">
     {@render children()}
   </div>
-  <div class="ui-field-meta">
-    {#if error}
-      <p id={`${id}-error`} role="alert">{error}</p>
-    {:else if hint}
-      <p id={`${id}-hint`}>{hint}</p>
-    {/if}
-  </div>
+  {#if error || hint || reserveMeta}
+    <div class="ui-field-meta">
+      {#if error}
+        <p id={`${id}-error`} role="alert">{error}</p>
+      {:else if hint}
+        <p id={`${id}-hint`}>{hint}</p>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>
   .ui-field {
     display: grid;
-    grid-template-rows: auto auto auto;
     gap: 7px;
     min-width: 0;
   }

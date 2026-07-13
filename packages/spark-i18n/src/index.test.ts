@@ -148,6 +148,10 @@ describe("Cockpit dictionaries", () => {
     expect(zh.common.justNow).toBe("刚刚");
     expect(en.layout.nav.channels).toBe("Message platforms");
     expect(zh.layout.nav.channels).toBe("消息平台");
+    expect(zh.layout.nav.models).toBe("模型服务商");
+    expect(zh.console.nav.registration).toBe("目录连接");
+    expect(zh.modelSettings.title).toBe("模型服务商");
+    expect(zh.settings.enrollment.title).toBe("目录连接");
     expect(en.modelSettings.actions.defaultUpdated).toBe("Default model updated.");
     expect(zh.modelSettings.actions.defaultUpdated).toBe("默认模型已更新。");
   });
