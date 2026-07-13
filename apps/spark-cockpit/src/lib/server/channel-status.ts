@@ -16,7 +16,13 @@ export interface CockpitChannelStatusSnapshot {
   configured: boolean;
   ingressEnabled: boolean;
   state: "unavailable" | "unconfigured" | "running" | "stopped" | "degraded";
-  adapters: Array<{ id: string; type: string; running: boolean }>;
+  adapters: Array<{
+    id: string;
+    type: string;
+    running: boolean;
+    state: "stopped" | "connecting" | "connected" | "reconnecting" | "degraded";
+    error?: string;
+  }>;
   routes: Array<{ name: string; adapter: string; recipient: string }>;
   observedAt: string;
   error?: string;
@@ -44,6 +50,8 @@ export interface CockpitChannelEditorValues {
   /** Comma/space-separated private sender allowlist; empty = allow all private. */
   infoflowAllowedUserIds: string;
   infoflowGroupPolicy: "disabled" | "allowlist" | "open";
+  /** Which messages in an allowed group become Spark turns. */
+  infoflowGroupTrigger: "mention" | "command" | "all";
   /** Comma/space-separated group ids when policy is allowlist. */
   infoflowAllowedGroupIds: string;
   /** Custom Infoflow system-prompt overlay (operator copy). */
@@ -122,6 +130,7 @@ export function emptyChannelEditorValues(): CockpitChannelEditorValues {
     infoflowAppSecretSet: false,
     infoflowAllowedUserIds: "",
     infoflowGroupPolicy: "disabled",
+    infoflowGroupTrigger: "mention",
     infoflowAllowedGroupIds: "",
     infoflowSystemPrompt: "",
     routeName: "ops",
@@ -145,6 +154,7 @@ export function channelEditorCredentialsComplete(values: CockpitChannelEditorVal
     values.infoflowEnabled &&
     (!(values.infoflowEndpoint.trim() || DEFAULT_INFOFLOW_ENDPOINT) ||
       !values.infoflowAppKey.trim() ||
+      !values.infoflowAppAgentId.trim() ||
       !(values.infoflowAppSecret.trim() || values.infoflowAppSecretSet))
   ) {
     return false;
@@ -159,9 +169,15 @@ export function isFeishuAdapterReady(config: { app_id?: string; app_secret?: str
 export function isInfoflowAdapterReady(config: {
   endpoint?: string;
   app_key?: string;
+  app_agent_id?: string;
   app_secret?: string;
 }): boolean {
-  return Boolean(config.endpoint?.trim() && config.app_key?.trim() && config.app_secret?.trim());
+  return Boolean(
+    config.endpoint?.trim() &&
+    config.app_key?.trim() &&
+    config.app_agent_id?.trim() &&
+    config.app_secret?.trim(),
+  );
 }
 
 export function channelsConfigIsReady(config: ChannelsConfig | null): boolean {
@@ -232,6 +248,10 @@ export function channelEditorValuesFromConfig(
       infoflowEntry && infoflowEntry[1].type === "infoflow"
         ? (infoflowEntry[1].group_policy ?? "disabled")
         : "disabled",
+    infoflowGroupTrigger:
+      infoflowEntry && infoflowEntry[1].type === "infoflow"
+        ? (infoflowEntry[1].group_trigger ?? "mention")
+        : "mention",
     infoflowAllowedGroupIds:
       infoflowEntry && infoflowEntry[1].type === "infoflow"
         ? (infoflowEntry[1].allowed_group_ids ?? []).join(", ")
@@ -306,6 +326,7 @@ export function channelsConfigFromEditorValues(
         ? { allowed_user_ids: parseIdList(values.infoflowAllowedUserIds) }
         : {}),
       group_policy: values.infoflowGroupPolicy,
+      group_trigger: values.infoflowGroupTrigger,
       ...(values.infoflowGroupPolicy === "allowlist" &&
       parseIdList(values.infoflowAllowedGroupIds).length > 0
         ? { allowed_group_ids: parseIdList(values.infoflowAllowedGroupIds) }
@@ -435,7 +456,30 @@ function channelAdapterStatus(value: unknown): CockpitChannelStatusSnapshot["ada
   ) {
     throw new Error("Invalid Spark daemon channel adapter status.");
   }
-  return { id: value.id, type: value.type, running: value.running };
+  const state = isConnectionState(value.state)
+    ? value.state
+    : value.running
+      ? "connected"
+      : "stopped";
+  return {
+    id: value.id,
+    type: value.type,
+    running: value.running,
+    state,
+    ...(typeof value.error === "string" && value.error.trim() ? { error: value.error } : {}),
+  };
+}
+
+function isConnectionState(
+  value: unknown,
+): value is CockpitChannelStatusSnapshot["adapters"][number]["state"] {
+  return (
+    value === "stopped" ||
+    value === "connecting" ||
+    value === "connected" ||
+    value === "reconnecting" ||
+    value === "degraded"
+  );
 }
 
 function channelRouteStatus(value: unknown): CockpitChannelStatusSnapshot["routes"][number] {

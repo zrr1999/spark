@@ -1,4 +1,3 @@
-import { createHash, randomUUID } from "node:crypto";
 import {
   LogLevel,
   Logger,
@@ -6,19 +5,13 @@ import {
   type EventMessage,
   type NormalizedEventData,
 } from "@core-workspace/infoflow-sdk-nodejs";
-import type { ChannelTransport, InfoflowAdapterConfig } from "./types.ts";
+import { normalizeInfoflowContent, type InfoflowAttachment } from "./infoflow-content.ts";
+import { createInfoflowSdkOutbound, type InfoflowSdkOutbound } from "./infoflow-sdk-outbound.ts";
+import type { ChannelConnectionState, ChannelTransport, InfoflowAdapterConfig } from "./types.ts";
 
 export const DEFAULT_INFOFLOW_API_HOST = "https://api.im.baidu.com";
 /** Nykore/OpenClaw-aligned default gateway host for WS endpoint allocation. */
 export const DEFAULT_INFOFLOW_WS_GATEWAY = "infoflow-open-gateway.baidu.com";
-
-const TOKEN_PATH = "/api/v1/auth/app_access_token";
-const PRIVATE_SEND_PATH = "/api/v1/app/message/send";
-const GROUP_SEND_PATH = "/api/v1/robot/msg/groupmsgsend";
-
-export function signInfoflowAppSecret(appSecret: string): string {
-  return createHash("md5").update(appSecret).digest("hex").toLowerCase();
-}
 
 export function ensureHttpsHost(endpoint: string): string {
   const trimmed = endpoint.trim().replace(/\/+$/, "");
@@ -33,6 +26,9 @@ export type InfoflowNormalizedInbound = {
   chat_type: "private" | "group";
   chat_id?: string;
   message_id?: string;
+  event_type?: string;
+  content_type?: string;
+  attachments?: InfoflowAttachment[];
   sender_name?: string;
   mentions?: string[];
   mentioned_self?: boolean;
@@ -41,160 +37,30 @@ export type InfoflowNormalizedInbound = {
 /**
  * Infoflow transport aligned with nyakore:
  * - inbound via official `@core-workspace/infoflow-sdk-nodejs` WSClient
- * - outbound via direct HTTP (same token/send paths as nyakore's infoflow-direct)
+ * - outbound via official SDK Client/TokenManager/InfoFlowError
  */
 export function createInfoflowTransport(
   config: InfoflowAdapterConfig,
-  options: { fetchImpl?: typeof fetch } = {},
+  options: { outbound?: InfoflowSdkOutbound; wsClientFactory?: () => WSClient } = {},
 ): ChannelTransport {
-  const fetchImpl = options.fetchImpl ?? fetch;
   const apiHost = ensureHttpsHost(config.endpoint ?? DEFAULT_INFOFLOW_API_HOST);
   const appKey = config.app_key?.trim() ?? "";
   const appSecret = config.app_secret?.trim() ?? "";
   const wsGateway = config.ws_gateway?.trim() || DEFAULT_INFOFLOW_WS_GATEWAY;
   const appAgentId = config.app_agent_id?.trim();
+  const outbound = options.outbound ?? createInfoflowSdkOutbound(config);
 
-  let tokenCache: { token: string; expireAt: number } | null = null;
-  let refreshPromise: Promise<string> | null = null;
   let wsClient: WSClient | null = null;
   let onMessage: ((raw: unknown) => void) | null = null;
   let running = false;
+  let connectionState: ChannelConnectionState = "stopped";
+  let connectionError: string | undefined;
   let privateHandler: ((event: EventMessage<NormalizedEventData>) => void) | null = null;
   let groupHandler: ((event: EventMessage<NormalizedEventData>) => void) | null = null;
   let anyHandler: ((event: EventMessage<NormalizedEventData>) => void) | null = null;
 
-  async function getToken(): Promise<string> {
-    if (!appKey || !appSecret) {
-      throw new Error("Infoflow transport requires app_key and app_secret");
-    }
-    if (tokenCache && Date.now() < tokenCache.expireAt - 5 * 60_000) {
-      return tokenCache.token;
-    }
-    if (refreshPromise) return await refreshPromise;
-    refreshPromise = fetchToken();
-    try {
-      return await refreshPromise;
-    } finally {
-      refreshPromise = null;
-    }
-  }
-
-  async function fetchToken(): Promise<string> {
-    const response = await fetchImpl(`${apiHost}${TOKEN_PATH}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        app_key: appKey,
-        app_secret: signInfoflowAppSecret(appSecret),
-      }),
-    });
-    const text = await response.text();
-    let data: {
-      code?: string;
-      message?: string;
-      errmsg?: string;
-      data?: { app_access_token?: string; expire?: number };
-    };
-    try {
-      data = JSON.parse(text) as typeof data;
-    } catch {
-      throw new Error(`Infoflow token response was not JSON (HTTP ${response.status})`);
-    }
-    const token = data.data?.app_access_token;
-    if (data.code !== "ok" || !token) {
-      throw new Error(
-        `Infoflow token failed: ${String(data.message ?? data.errmsg ?? data.code ?? "unknown")}`,
-      );
-    }
-    const expireSeconds = typeof data.data?.expire === "number" ? data.data.expire : 7200;
-    tokenCache = { token, expireAt: Date.now() + expireSeconds * 1000 };
-    return token;
-  }
-
   async function send(recipient: string, text: string): Promise<void> {
-    const target = recipient.replace(/^infoflow:/i, "").trim();
-    if (!target) throw new Error("Infoflow recipient is required");
-    const token = await getToken();
-    const groupMatch = target.match(/^group:(\d+)$/i);
-    if (groupMatch) {
-      await sendGroup(Number(groupMatch[1]), text, token);
-      return;
-    }
-    await sendPrivate(target, text, token);
-  }
-
-  async function sendPrivate(toUser: string, content: string, token: string): Promise<void> {
-    const payload: Record<string, unknown> = {
-      touser: toUser,
-      msgtype: "text",
-      text: { content },
-    };
-    if (appAgentId) payload.agentid = appAgentId;
-    await postAuthorized(`${apiHost}${PRIVATE_SEND_PATH}`, payload, token);
-  }
-
-  async function sendGroup(groupId: number, content: string, token: string): Promise<void> {
-    // Nykore/official shape: header.toid + totype + TEXT body (not top-level groupid).
-    const payload: Record<string, unknown> = {
-      message: {
-        header: {
-          toid: groupId,
-          totype: "GROUP",
-          msgtype: "TEXT",
-          clientmsgid: Date.now(),
-          role: "robot",
-        },
-        body: [{ type: "TEXT", content }],
-      },
-    };
-    await postAuthorized(`${apiHost}${GROUP_SEND_PATH}`, payload, token);
-  }
-
-  async function postAuthorized(
-    url: string,
-    payload: Record<string, unknown>,
-    token: string,
-  ): Promise<void> {
-    const response = await fetchImpl(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer-${token}`,
-        "Content-Type": "application/json; charset=utf-8",
-        LOGID: randomUUID(),
-      },
-      body: JSON.stringify(payload),
-    });
-    const text = await response.text();
-    let data: {
-      code?: string;
-      message?: string;
-      errmsg?: string;
-      errcode?: number;
-      data?: { errcode?: number; errmsg?: string; message?: string };
-    };
-    try {
-      data = JSON.parse(text) as typeof data;
-    } catch {
-      throw new Error(`Infoflow send response was not JSON (HTTP ${response.status})`);
-    }
-    if (typeof data.code === "string" && data.code !== "ok") {
-      throw new Error(`Infoflow send failed: ${String(data.message ?? data.errmsg ?? data.code)}`);
-    }
-    const nested = data.data && typeof data.data === "object" ? data.data : undefined;
-    const errcode =
-      typeof data.errcode === "number"
-        ? data.errcode
-        : typeof nested?.errcode === "number"
-          ? nested.errcode
-          : undefined;
-    if (typeof errcode === "number" && errcode !== 0) {
-      throw new Error(
-        `Infoflow send failed: ${String(nested?.errmsg ?? nested?.message ?? data.errmsg ?? errcode)}`,
-      );
-    }
-    if (!response.ok) {
-      throw new Error(`Infoflow send HTTP ${response.status}`);
-    }
+    await outbound.send({ recipient, content: { type: "text", text } });
   }
 
   function handleSdkEvent(event: EventMessage<NormalizedEventData>): void {
@@ -214,7 +80,6 @@ export function createInfoflowTransport(
     console.error(
       `[spark-channels] infoflow inbound ${normalized.chat_type}` +
         ` textChars=${normalized.text.length}` +
-        ` preview=${JSON.stringify(normalized.text.slice(0, 120))}` +
         (normalized.mentions?.length ? ` mentions=${JSON.stringify(normalized.mentions)}` : ""),
     );
     onMessage?.(normalized);
@@ -222,24 +87,28 @@ export function createInfoflowTransport(
 
   async function start(handler: (raw: unknown) => void): Promise<void> {
     if (running) return;
-    if (!appKey || !appSecret) {
-      throw new Error("Infoflow ingress requires app_key and app_secret");
+    if (!appKey || !appSecret || !appAgentId) {
+      throw new Error("Infoflow ingress requires app_key, app_secret, and app_agent_id");
     }
     onMessage = handler;
     running = true;
+    connectionState = "connecting";
+    connectionError = undefined;
     const logger = new Logger(LogLevel.info, "spark-infoflow");
     // Official SDK docs use appKey + autoRegister (default true). Older 0.1.7
     // connected for heartbeat but never called /imRobot/updateReCallUrl, so
     // private/group DATA frames were never pushed to this connection.
-    wsClient = new WSClient({
-      appKey,
-      appSecret,
-      baseUrl: apiHost,
-      wsGateway,
-      logger,
-      loggerLevel: LogLevel.info,
-      autoRegister: true,
-    });
+    wsClient =
+      options.wsClientFactory?.() ??
+      new WSClient({
+        appKey,
+        appSecret,
+        baseUrl: apiHost,
+        wsGateway,
+        logger,
+        loggerLevel: LogLevel.info,
+        autoRegister: true,
+      });
     privateHandler = (event) => {
       try {
         handleSdkEvent(event);
@@ -270,20 +139,35 @@ export function createInfoflowTransport(
     wsClient.on("group.*", groupHandler);
     wsClient.on("*", anyHandler);
     wsClient.on("connected", () => {
+      connectionState = "connected";
+      connectionError = undefined;
       console.error("[spark-channels] infoflow websocket connected");
     });
     wsClient.on("disconnected", () => {
+      connectionState = running ? "reconnecting" : "stopped";
       console.error("[spark-channels] infoflow websocket disconnected");
     });
     wsClient.on("error", (event) => {
+      connectionState = "degraded";
+      connectionError = infoflowEventError(event);
       console.error("[spark-channels] infoflow websocket error", event);
     });
-    await wsClient.connect();
-    console.error("[spark-channels] infoflow websocket connect() resolved");
+    try {
+      await wsClient.connect();
+      connectionState = infoflowConnectionState(wsClient.getState(), running);
+      console.error("[spark-channels] infoflow websocket connect() resolved");
+    } catch (error) {
+      running = false;
+      connectionState = "degraded";
+      connectionError = error instanceof Error ? error.message : String(error);
+      throw error;
+    }
   }
 
   async function stop(): Promise<void> {
     running = false;
+    connectionState = "stopped";
+    connectionError = undefined;
     onMessage = null;
     if (wsClient) {
       if (privateHandler) wsClient.off("private.*", privateHandler);
@@ -301,7 +185,59 @@ export function createInfoflowTransport(
     }
   }
 
-  return { start, stop, send };
+  return {
+    start,
+    stop,
+    send,
+    reply: {
+      openReplyStream: async (target) => {
+        if (target.senderId && /^group:/iu.test(target.recipient)) {
+          // Streaming cards cannot carry an Infoflow AT segment. Send one
+          // concise directed acknowledgement before the card so full-feed
+          // group mode still notifies the person whose turn is being handled.
+          await outbound.send({
+            recipient: target.recipient,
+            content: { type: "text", text: "正在处理…" },
+            mentionUserIds: [target.senderId],
+          });
+        }
+        return await outbound.openReplyStream(target.recipient);
+      },
+      sendReply: async (target) => {
+        const mentionUserIds =
+          target.senderId && /^group:/iu.test(target.recipient) ? [target.senderId] : undefined;
+        await outbound.send({
+          recipient: target.recipient,
+          content: { type: "markdown", text: target.text },
+          ...(mentionUserIds ? { mentionUserIds } : {}),
+        });
+      },
+    },
+    status: () => {
+      const liveState = wsClient
+        ? infoflowConnectionState(wsClient.getState(), running)
+        : connectionState;
+      return {
+        state: connectionError ? "degraded" : liveState,
+        ...(connectionError ? { error: connectionError } : {}),
+      };
+    },
+  };
+}
+
+function infoflowConnectionState(state: string, running: boolean): ChannelConnectionState {
+  if (state === "connected" || state === "connecting" || state === "reconnecting") return state;
+  return running ? "reconnecting" : "stopped";
+}
+
+function infoflowEventError(event: unknown): string {
+  if (event instanceof Error) return event.message;
+  if (event && typeof event === "object" && !Array.isArray(event)) {
+    const record = event as Record<string, unknown>;
+    if (typeof record.message === "string" && record.message.trim()) return record.message.trim();
+    if (record.data instanceof Error) return record.data.message;
+  }
+  return "Infoflow websocket error";
 }
 
 function scalarString(value: unknown): string {
@@ -331,15 +267,25 @@ export function normalizeInfoflowSdkEvent(
           : undefined;
   if (chatType === "private") {
     const userId = scalarString(raw.FromUserId ?? raw.fromUserId ?? raw.fromuserid).trim();
-    const text = scalarString(raw.Content ?? raw.content ?? data.content).trim();
+    const content = normalizeInfoflowContent({
+      messageType: scalarString(
+        data.msgType ?? raw.MsgType ?? raw.msgType ?? raw.msgtype ?? event.type ?? "text",
+      ),
+      content: raw.Content ?? raw.content ?? data.content,
+    });
+    const text = content.text;
     if (!userId || !text) return null;
     const messageId = raw.MsgId ?? raw.msgId ?? raw.MsgId2 ?? raw.msgid2;
     const senderName = raw.FromUserName ?? raw.fromUserName ?? raw.fromusername;
+    const eventType = raw.eventtype ?? raw.eventType;
     return {
       user_id: userId,
       text,
       chat_type: "private",
       ...(messageId != null ? { message_id: scalarString(messageId) } : {}),
+      ...(eventType != null ? { event_type: scalarString(eventType) } : {}),
+      ...(content.contentType ? { content_type: content.contentType } : {}),
+      ...(content.attachments.length > 0 ? { attachments: content.attachments } : {}),
       ...(typeof senderName === "string" && senderName.trim()
         ? { sender_name: senderName.trim() }
         : {}),
@@ -352,7 +298,14 @@ export function normalizeInfoflowSdkEvent(
         : {};
     const groupId = scalarString(raw.groupid ?? raw.groupId ?? header.toid).trim();
     const userId = scalarString(
-      header.fromuserid ?? header.fromUserId ?? raw.fromUserId ?? raw.fromuserid,
+      header.fromuserid ??
+        header.fromUserId ??
+        message?.FromUserId ??
+        message?.fromUserId ??
+        message?.fromuserid ??
+        raw.fromUserId ??
+        raw.fromuserid ??
+        raw.fromid,
     ).trim();
     const body = Array.isArray(message?.body)
       ? message.body
@@ -361,23 +314,37 @@ export function normalizeInfoflowSdkEvent(
         : Array.isArray(data.body)
           ? data.body
           : [];
-    const extracted = extractInfoflowBodyContent(body);
+    const content = normalizeInfoflowContent({
+      messageType: scalarString(header.msgtype ?? data.msgType ?? event.type ?? "mixed"),
+      body,
+      content: data.content,
+    });
     const mentionedSelf = detectInfoflowMentionedSelf(raw, header, body, options.agentId);
-    const text = extracted.text || scalarString(data.content).trim();
+    const text = content.text;
     if (!groupId || !userId || !text) return null;
     const messageId = header.messageid ?? header.msgid ?? header.clientmsgid ?? raw.msgid2;
     const senderName =
-      header.fromusername ?? header.fromUserName ?? raw.fromUserName ?? raw.fromusername;
+      header.fromusername ??
+      header.fromUserName ??
+      message?.FromUserName ??
+      message?.fromUserName ??
+      message?.fromusername ??
+      raw.fromUserName ??
+      raw.fromusername;
+    const eventType = raw.eventtype ?? raw.eventType;
     return {
       user_id: userId,
       text,
       chat_type: "group",
       chat_id: groupId,
       ...(messageId != null ? { message_id: scalarString(messageId) } : {}),
+      ...(eventType != null ? { event_type: scalarString(eventType) } : {}),
+      ...(content.contentType ? { content_type: content.contentType } : {}),
+      ...(content.attachments.length > 0 ? { attachments: content.attachments } : {}),
       ...(typeof senderName === "string" && senderName.trim()
         ? { sender_name: senderName.trim() }
         : {}),
-      ...(extracted.mentions.length > 0 ? { mentions: extracted.mentions } : {}),
+      ...(content.mentions.length > 0 ? { mentions: content.mentions } : {}),
       ...(typeof mentionedSelf === "boolean" ? { mentioned_self: mentionedSelf } : {}),
     };
   }
@@ -393,47 +360,8 @@ export function extractInfoflowBodyContent(body: unknown): {
   mentions: string[];
 } {
   if (!Array.isArray(body)) return { text: "", mentions: [] };
-  const parts: string[] = [];
-  const mentions: string[] = [];
-  for (const item of body) {
-    if (!item || typeof item !== "object") continue;
-    const entry = item as Record<string, unknown>;
-    const type = scalarString(entry.type).toUpperCase();
-    if (type === "AT" || type === "@") {
-      const label = scalarString(
-        entry.name ?? entry.display ?? entry.displayname ?? entry.userid ?? entry.robotid,
-      )
-        .trim()
-        .replace(/^@+/u, "");
-      if (!label) continue;
-      const display = `@${label}`;
-      mentions.push(label);
-      const previous = parts.at(-1);
-      if (previous && !/[ \t\n]$/u.test(previous)) parts.push(" ");
-      parts.push(display);
-      parts.push(" ");
-      continue;
-    }
-    if (type === "TEXT" || type === "MD" || type === "MARKDOWN" || type === "") {
-      const rawContent =
-        typeof entry.content === "string"
-          ? entry.content
-          : typeof entry.text === "string"
-            ? entry.text
-            : "";
-      if (!rawContent) continue;
-      const previous = parts.at(-1);
-      if (previous === " " && /^[ \t]+/u.test(rawContent)) parts.pop();
-      parts.push(rawContent);
-    }
-  }
-  const text = parts
-    .join("")
-    .replace(/[ \t]+\n/gu, "\n")
-    .replace(/\n{3,}/gu, "\n\n")
-    .replace(/[ \t]{2,}/gu, " ")
-    .trim();
-  return { text, mentions };
+  const content = normalizeInfoflowContent({ messageType: "mixed", body });
+  return { text: content.text, mentions: content.mentions };
 }
 
 /** Fixture/helper normalizer for flat or group payloads (unit tests + FakeChannelTransport). */
@@ -464,16 +392,14 @@ export function normalizeInfoflowInbound(
       payload.from ??
       payload.user_id,
   ).trim();
-  const textValue =
-    payload.Content ?? payload.content ?? payload.Text ?? payload.text ?? payload.mes;
-  const text =
-    typeof textValue === "string"
-      ? textValue.trim()
-      : textValue && typeof textValue === "object" && !Array.isArray(textValue)
-        ? scalarString((textValue as { content?: unknown }).content).trim()
-        : "";
+  const content = normalizeInfoflowContent({
+    messageType: scalarString(payload.MsgType ?? payload.msgType ?? payload.msgtype ?? "text"),
+    content: payload.Content ?? payload.content ?? payload.Text ?? payload.text ?? payload.mes,
+  });
+  const text = content.text;
   if (!userId || !text) return null;
   const messageId = payload.MsgId ?? payload.msgid ?? payload.messageid;
+  const eventType = payload.eventtype ?? payload.eventType;
   const senderName =
     payload.FromUserName ?? payload.fromUserName ?? payload.fromusername ?? payload.sender_name;
   return {
@@ -481,6 +407,9 @@ export function normalizeInfoflowInbound(
     text,
     chat_type: "private",
     ...(messageId != null ? { message_id: scalarString(messageId) } : {}),
+    ...(eventType != null ? { event_type: scalarString(eventType) } : {}),
+    ...(content.contentType ? { content_type: content.contentType } : {}),
+    ...(content.attachments.length > 0 ? { attachments: content.attachments } : {}),
     ...(typeof senderName === "string" && senderName.trim()
       ? { sender_name: senderName.trim() }
       : {}),

@@ -68,14 +68,30 @@ describe("cockpit channel status", () => {
       configured: true,
       ingressEnabled: true,
       state: "running",
-      adapters: [{ id: "feishu", type: "feishu", running: true }],
+      adapters: [
+        {
+          id: "feishu",
+          type: "feishu",
+          running: true,
+          state: "reconnecting",
+          error: "network lost",
+        },
+      ],
       routes: [{ name: "ops", adapter: "feishu", recipient: "oc_demo" }],
       text: "channels running adapters=1/1 routes=1 ingress=on\n",
     });
 
     const status = await loadChannelStatusForCockpit(workspaceId, client);
 
-    expect(status.adapters).toEqual([{ id: "feishu", type: "feishu", running: true }]);
+    expect(status.adapters).toEqual([
+      {
+        id: "feishu",
+        type: "feishu",
+        running: true,
+        state: "reconnecting",
+        error: "network lost",
+      },
+    ]);
     expect(JSON.stringify(status)).not.toContain("do-not-leak");
     const editor = channelEditorValuesFromConfig(
       (await loadChannelsConfigForCockpit(workspaceId)).config,
@@ -113,6 +129,7 @@ describe("cockpit channel status", () => {
     expect(editor.feishuEnabled).toBe(false);
     expect(editor.infoflowEnabled).toBe(false);
     expect(editor.infoflowEndpoint).toBe(DEFAULT_INFOFLOW_ENDPOINT);
+    expect(editor.infoflowGroupTrigger).toBe("mention");
   });
 
   it("sends validated editor config to daemon and waits for its acknowledgement", async () => {
@@ -130,11 +147,12 @@ describe("cockpit channel status", () => {
         infoflowEnabled: true,
         infoflowEndpoint: "",
         infoflowAppKey: "key_demo",
-        infoflowAppAgentId: "",
+        infoflowAppAgentId: "43163",
         infoflowAppSecret: "secret_demo",
         infoflowAppSecretSet: false,
         infoflowAllowedUserIds: "",
         infoflowGroupPolicy: "disabled",
+        infoflowGroupTrigger: "mention",
         infoflowAllowedGroupIds: "",
         infoflowSystemPrompt: "",
         routeName: "ops",
@@ -155,7 +173,9 @@ describe("cockpit channel status", () => {
             endpoint: DEFAULT_INFOFLOW_ENDPOINT,
             app_key: "key_demo",
             app_secret: "secret_demo",
+            app_agent_id: "43163",
             group_policy: "disabled",
+            group_trigger: "mention",
           }),
         },
         ingress: expect.objectContaining({
@@ -180,7 +200,9 @@ describe("cockpit channel status", () => {
             type: "infoflow",
             endpoint: DEFAULT_INFOFLOW_ENDPOINT,
             app_key: "key_demo",
+            app_agent_id: "43163",
             app_secret: "secret_keep",
+            group_trigger: "all",
           },
         },
         routes: {},
@@ -190,6 +212,7 @@ describe("cockpit channel status", () => {
     const editor = channelEditorValuesFromConfig(
       (await loadChannelsConfigForCockpit(workspaceId)).config,
     );
+    expect(editor.infoflowGroupTrigger).toBe("all");
     const client = daemonClient({ configured: true, state: "stopped" });
 
     await saveChannelsConfigForCockpit(

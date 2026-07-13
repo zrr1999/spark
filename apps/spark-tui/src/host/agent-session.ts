@@ -17,6 +17,8 @@ export interface SparkAgentSessionRunOptions {
   prompt: string;
   reset?: boolean;
   forkFromSession?: string;
+  /** Display-safe metadata persisted on this turn's submitted user message only. */
+  messageMetadata?: Record<string, unknown>;
 }
 
 export interface SparkAgentSessionRunResult {
@@ -45,8 +47,17 @@ export class SparkAgentSession {
     if (!assistant) throw new Error("Spark agent produced no assistant response");
 
     const newMessages = this.services.agentLoop.getMessages().slice(beforeCount);
+    let pendingMessageMetadata = options.messageMetadata;
     for (const message of newMessages) {
-      this.services.sessionStore.appendMessage(record, agentMessageToSessionMessage(message));
+      const persisted = agentMessageToSessionMessage(message);
+      if (message.role === "user" && pendingMessageMetadata) {
+        persisted.metadata = {
+          ...recordMetadata(persisted.metadata),
+          ...pendingMessageMetadata,
+        };
+        pendingMessageMetadata = undefined;
+      }
+      this.services.sessionStore.appendMessage(record, persisted);
     }
     await this.services.sessionStore.save(record);
 
@@ -211,4 +222,10 @@ function isKnownContent(content: unknown): boolean {
 
 function normalizeTimestamp(timestamp: unknown): number {
   return typeof timestamp === "number" ? timestamp : Date.now();
+}
+
+function recordMetadata(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }

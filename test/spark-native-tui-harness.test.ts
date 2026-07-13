@@ -842,6 +842,59 @@ void test("Spark native TUI harness captures resize-safe golden render sections"
   assert.match(wideText, /thinking> hidden chain of implementation notes/);
 });
 
+void test("Spark native TUI labels channel users from platform sender metadata", () => {
+  const harness = createSparkNativeTuiHarness({ cols: 88 });
+  harness.app.applyViewModelEvent({
+    version: SPARK_PROTOCOL_VERSION,
+    type: "session.snapshot",
+    session: {
+      version: SPARK_PROTOCOL_VERSION,
+      sessionId: "session:channel-senders",
+      status: "idle",
+      messages: [
+        {
+          version: SPARK_PROTOCOL_VERSION,
+          id: "channel-user",
+          role: "user",
+          text: "群消息",
+          status: "done",
+          metadata: {
+            channel: { senderName: "徐晓健", senderId: "xuxiaojian" },
+          },
+          parts: [
+            {
+              id: "channel-user:part:0",
+              type: "text",
+              text: "群消息",
+              status: "complete",
+              metadata: {},
+            },
+          ],
+        },
+        {
+          version: SPARK_PROTOCOL_VERSION,
+          id: "local-user",
+          role: "user",
+          text: "网页消息",
+          status: "done",
+          metadata: {},
+        },
+      ],
+      tools: [],
+      runs: [],
+      tasks: [],
+      artifacts: [],
+      createdAt: "2026-07-13T00:00:00.000Z",
+      updatedAt: "2026-07-13T00:00:01.000Z",
+      metadata: {},
+    },
+  });
+
+  const rendered = stripAnsi(harness.render());
+  assert.match(rendered, /徐晓健> 群消息/);
+  assert.match(rendered, /you> 网页消息/);
+});
+
 void test("Spark cockpit renders shared workflow, run, task, artifact, review, and Graft view models", async () => {
   const harness = createSparkNativeTuiHarness({
     cols: 120,

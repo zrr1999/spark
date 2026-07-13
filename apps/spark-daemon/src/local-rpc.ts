@@ -2013,7 +2013,30 @@ function channelAdapterStatus(value: unknown): DaemonChannelIngressStatus["adapt
   ) {
     throw new Error("Invalid local RPC channel adapter status.");
   }
-  return { id: value.id, type: value.type, running: value.running };
+  const state = isChannelConnectionState(value.state)
+    ? value.state
+    : value.running
+      ? "connected"
+      : "stopped";
+  return {
+    id: value.id,
+    type: value.type,
+    running: value.running,
+    state,
+    ...(typeof value.error === "string" && value.error.trim() ? { error: value.error } : {}),
+  };
+}
+
+function isChannelConnectionState(
+  value: unknown,
+): value is DaemonChannelIngressStatus["adapters"][number]["state"] {
+  return (
+    value === "stopped" ||
+    value === "connecting" ||
+    value === "connected" ||
+    value === "reconnecting" ||
+    value === "degraded"
+  );
 }
 
 function channelRouteStatus(value: unknown): DaemonChannelIngressStatus["routes"][number] {

@@ -56,10 +56,40 @@ export function migrateSparkDaemonDatabase(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS outbox_status_idx ON outbox(status, created_at);
     CREATE INDEX IF NOT EXISTS daemon_human_waits_status_idx ON daemon_human_waits(status, created_at);
   `);
+  retireLegacyDaemonErrorOutbox(db);
   migrateWorkspacesTable(db);
   db.exec("CREATE INDEX IF NOT EXISTS workspaces_status_idx ON workspaces(status)");
   migrateSparkDaemonRegistrationTables(db);
   backfillSparkDaemonRegistrationTables(db);
+}
+
+/**
+ * `daemon.error` rows were historically written to the business outbox even
+ * though no transport consumed them. A disconnected Cockpit could therefore
+ * create one permanent pending row per reconnect attempt. Scrub those rows on
+ * every open as well as recording the migration: this remains safe if an old
+ * daemon briefly writes again while a newer CLI is stopping/replacing it.
+ * Daemon errors now go to process logs while projection connectivity is
+ * represented by daemon_servers.
+ */
+function retireLegacyDaemonErrorOutbox(db: DatabaseSync): void {
+  const migrationKey = "migration.retire-daemon-error-outbox-v1";
+  const now = new Date().toISOString();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("DELETE FROM outbox WHERE kind = 'daemon.error'").run();
+    db.prepare(
+      `INSERT INTO daemon_meta (key, value, updated_at)
+       VALUES (?, 'complete', ?)
+       ON CONFLICT(key) DO UPDATE SET
+         value = excluded.value,
+         updated_at = excluded.updated_at`,
+    ).run(migrationKey, now);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function renameLegacySparkDaemonTables(db: DatabaseSync): void {

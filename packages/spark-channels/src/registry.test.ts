@@ -146,12 +146,22 @@ describe("ChannelRegistry", () => {
     await registry.startAll();
     transport.emitInbound({
       user_id: "u_ops",
-      text: "status?",
+      text: "[文件: status.pdf]",
       message_id: "msg_if_1",
+      content_type: "file",
+      attachments: [
+        { kind: "file", name: "status.pdf", mediaType: "application/pdf", reference: "fid-1" },
+      ],
     });
 
     expect(inbound[0]?.externalKey).toBe("infoflow:user:u_ops");
     expect(inbound[0]?.senderId).toBe("u_ops");
+    expect(inbound[0]).toMatchObject({
+      contentType: "file",
+      attachments: [
+        { kind: "file", name: "status.pdf", mediaType: "application/pdf", reference: "fid-1" },
+      ],
+    });
   });
 
   it("keys group messages by group id under open policy", async () => {
@@ -163,6 +173,7 @@ describe("ChannelRegistry", () => {
           infoflow: {
             type: "infoflow",
             group_policy: "open",
+            group_trigger: "all",
           },
         },
         routes: {},
@@ -179,6 +190,16 @@ describe("ChannelRegistry", () => {
       chat_type: "group",
       chat_id: "10838226",
       message_id: "g1",
+      event_type: "MESSAGE_RECEIVE",
+      mentioned_self: true,
+    });
+    transport.emitInbound({
+      user_id: "bob",
+      text: "group hi",
+      chat_type: "group",
+      chat_id: "10838226",
+      message_id: "g1",
+      event_type: "ALL_MESSAGE_FORWARD",
     });
 
     expect(inbound).toHaveLength(1);
@@ -187,6 +208,7 @@ describe("ChannelRegistry", () => {
       senderId: "bob",
       chatId: "10838226",
       text: "group hi",
+      eventType: "MESSAGE_RECEIVE",
     });
   });
 
@@ -197,6 +219,7 @@ describe("ChannelRegistry", () => {
           type: "infoflow",
           allowed_user_ids: ["zhanrongrui"],
           group_policy: "allowlist",
+          group_trigger: "command",
           allowed_group_ids: ["10838226"],
         },
       },
@@ -206,6 +229,7 @@ describe("ChannelRegistry", () => {
       type: "infoflow",
       allowed_user_ids: ["zhanrongrui"],
       group_policy: "allowlist",
+      group_trigger: "command",
       allowed_group_ids: ["10838226"],
     });
   });

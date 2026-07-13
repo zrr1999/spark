@@ -3,6 +3,7 @@ import { SPARK_PROTOCOL_VERSION, type SparkDaemonEvent } from "@zendev-lab/spark
 import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import type { SparkDaemonSessionRunTask, SparkDaemonTaskExecutionContext } from "../core/types.ts";
 import {
+  createChannelAwareQueueTaskExecutor,
   createSparkDaemonQueueTaskExecutor,
   executeSparkDaemonSessionRunTask,
 } from "./session-run.ts";
@@ -32,6 +33,183 @@ function context(
 }
 
 describe("daemon native session execution", () => {
+  it("streams display-safe assistant text and tool lifecycle to a channel reply card", async () => {
+    const appendText = vi.fn();
+    const notifyToolStart = vi.fn();
+    const notifyToolResult = vi.fn();
+    const complete = vi.fn(async () => undefined);
+    const sendReply = vi.fn(async () => undefined);
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_channel_stream",
+      prompt: "请执行",
+      channelReply: {
+        workspaceId: "workspace-infoflow",
+        adapterId: "infoflow",
+        recipient: "group:10838226",
+      },
+      channelContext: {
+        externalKey: "infoflow:group:10838226",
+        senderId: "zhanrongrui",
+        messageId: "message-1",
+      },
+    };
+    const executeSession = vi.fn(async (input: { onEvent?: (event: unknown) => unknown }) => {
+      await input.onEvent?.({
+        type: "view_event",
+        event: {
+          version: SPARK_PROTOCOL_VERSION,
+          type: "session.message",
+          sessionId: task.sessionId,
+          message: {
+            version: SPARK_PROTOCOL_VERSION,
+            id: "assistant-1",
+            role: "assistant",
+            text: "你",
+            status: "streaming",
+            metadata: {},
+          },
+        },
+      });
+      await input.onEvent?.({
+        type: "view_event",
+        event: {
+          version: SPARK_PROTOCOL_VERSION,
+          type: "session.message",
+          sessionId: task.sessionId,
+          message: {
+            version: SPARK_PROTOCOL_VERSION,
+            id: "tool-call:1",
+            role: "tool",
+            text: "private tool input",
+            status: "pending",
+            toolName: "cue_exec",
+            metadata: {},
+          },
+        },
+      });
+      await input.onEvent?.({
+        type: "view_event",
+        event: {
+          version: SPARK_PROTOCOL_VERSION,
+          type: "session.message",
+          sessionId: task.sessionId,
+          message: {
+            version: SPARK_PROTOCOL_VERSION,
+            id: "assistant-1",
+            role: "assistant",
+            text: "你好",
+            status: "done",
+            metadata: {},
+          },
+        },
+      });
+      return { assistantText: "你好" };
+    });
+    const executor = createChannelAwareQueueTaskExecutor({
+      paths,
+      createSparkHeadlessSessionExecutor: () => executeSession,
+      channelIngress: {
+        openReplyStream: vi.fn(async () => ({
+          appendText,
+          notifyToolStart,
+          notifyToolResult,
+          complete,
+          fail: vi.fn(async () => undefined),
+        })),
+        sendReply,
+      },
+    });
+
+    await executor(task, context(task));
+
+    expect(appendText.mock.calls).toEqual([["你"], ["好"]]);
+    expect(notifyToolStart).toHaveBeenCalledWith({ name: "cue_exec", phase: "执行中" });
+    expect(notifyToolResult).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledWith("已完成");
+    expect(sendReply).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a rich channel reply when a stream is unavailable", async () => {
+    const sendReply = vi.fn(async () => undefined);
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_channel_fallback",
+      prompt: "原始消息",
+      channelReply: {
+        workspaceId: "workspace-infoflow",
+        adapterId: "infoflow",
+        recipient: "group:10838226",
+      },
+      channelContext: {
+        externalKey: "infoflow:group:10838226",
+        senderId: "zhanrongrui",
+        messageId: "message-1",
+      },
+    };
+    const executor = createChannelAwareQueueTaskExecutor({
+      paths,
+      createSparkHeadlessSessionExecutor: () => async () => ({ assistantText: "**完成**" }),
+      channelIngress: {
+        openReplyStream: vi.fn(async () => undefined),
+        sendReply,
+      },
+    });
+
+    await executor(task, context(task));
+
+    expect(sendReply).toHaveBeenCalledWith("workspace-infoflow", "infoflow", {
+      recipient: "group:10838226",
+      senderId: "zhanrongrui",
+      messageId: "message-1",
+      preview: "原始消息",
+      text: "**完成**",
+    });
+  });
+
+  it("uses the final fallback when streaming card completion fails", async () => {
+    const sendReply = vi.fn(async () => undefined);
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_channel_complete_fallback",
+      prompt: "go",
+      channelReply: {
+        workspaceId: "workspace-infoflow",
+        adapterId: "infoflow",
+        recipient: "alice",
+      },
+      channelContext: { externalKey: "infoflow:user:alice", senderId: "alice" },
+    };
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const executor = createChannelAwareQueueTaskExecutor({
+      paths,
+      createSparkHeadlessSessionExecutor: () => async () => ({ assistantText: "done" }),
+      channelIngress: {
+        openReplyStream: vi.fn(async () => ({
+          appendText: vi.fn(),
+          notifyToolStart: vi.fn(),
+          notifyToolResult: vi.fn(),
+          complete: vi.fn(async () => {
+            throw new Error("card update failed");
+          }),
+          fail: vi.fn(async () => undefined),
+        })),
+        sendReply,
+      },
+    });
+
+    try {
+      await executor(task, context(task));
+      expect(sendReply).toHaveBeenCalledWith(
+        "workspace-infoflow",
+        "infoflow",
+        expect.objectContaining({ recipient: "alice", text: "done" }),
+      );
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it("keeps the Infoflow user message clean and supplies channel facts through prompt layers", async () => {
     const task: SparkDaemonSessionRunTask = {
       type: "session.run",
@@ -48,6 +226,9 @@ describe("daemon native session execution", () => {
         senderName: "詹荣瑞",
         chatId: "10838226",
         messageId: "1870319775739153405",
+        eventType: "MESSAGE_RECEIVE",
+        contentType: "mixed",
+        attachments: [{ kind: "image", reference: "image-fid-1" }],
         mentions: ["神经蛙"],
         mentionedSelf: true,
       },
@@ -60,7 +241,7 @@ describe("daemon native session execution", () => {
     });
 
     const input = executeSession.mock.calls[0]?.[0] as
-      | { prompt?: string; systemPrompt?: string }
+      | { prompt?: string; systemPrompt?: string; messageMetadata?: Record<string, unknown> }
       | undefined;
     expect(input?.prompt).toBe("@神经蛙 你叫什么名字");
     expect(input?.systemPrompt).toContain(
@@ -71,6 +252,22 @@ describe("daemon native session execution", () => {
     expect(input?.systemPrompt).toContain('senderId: "zhanrongrui"');
     expect(input?.systemPrompt).toContain('groupId: "10838226"');
     expect(input?.systemPrompt).toContain('messageId: "1870319775739153405"');
+    expect(input?.systemPrompt).toContain('eventType: "MESSAGE_RECEIVE"');
+    expect(input?.systemPrompt).toContain('contentType: "mixed"');
+    expect(input?.systemPrompt).toContain('"reference":"image-fid-1"');
+    expect(input?.messageMetadata).toEqual({
+      channel: {
+        adapter: "infoflow",
+        externalKey: "infoflow:group:10838226",
+        senderId: "zhanrongrui",
+        senderName: "詹荣瑞",
+        chatId: "10838226",
+        messageId: "1870319775739153405",
+        eventType: "MESSAGE_RECEIVE",
+        contentType: "mixed",
+        attachments: [{ kind: "image", reference: "image-fid-1" }],
+      },
+    });
     expect(input?.systemPrompt).not.toContain("@神经蛙 你叫什么名字");
     expect(input?.systemPrompt).not.toContain("You are handling an Infoflow");
   });

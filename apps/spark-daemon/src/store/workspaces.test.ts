@@ -15,7 +15,7 @@ import {
   listWorkspaceClients,
   listWorkspaces,
   markSparkDaemonServerConnected,
-  markServerWorkspacesDisconnected,
+  markSparkDaemonServerDisconnected,
   planWorkspaceRegistration,
   reconcileWorkspaces,
   registerWorkspace,
@@ -761,7 +761,7 @@ describe("Spark daemon workspace store", () => {
     });
   });
 
-  it("marks connected and disconnected server state without overriding paused workspaces", () => {
+  it("keeps server projection connectivity separate from local workspace availability", () => {
     withSparkDaemonWorkspaceStore(({ db, root }) => {
       const firstPath = join(root, "first");
       const otherPath = join(root, "other");
@@ -791,22 +791,14 @@ describe("Spark daemon workspace store", () => {
         ]),
       );
 
-      markServerWorkspacesDisconnected(
-        db,
-        "http://127.0.0.1:5173/",
-        "server.unreachable",
-        "2026-05-26T00:02:00.000Z",
-      );
+      markSparkDaemonServerDisconnected(db, "http://127.0.0.1:5173/", "server.unreachable");
 
       expect(listWorkspaces(db)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             id: first.id,
-            status: "unavailable",
-            diagnostics: expect.objectContaining({
-              serverDisconnected: true,
-              reason: "server.unreachable",
-            }),
+            status: "available",
+            diagnostics: {},
           }),
           expect.objectContaining({
             id: second.id,
@@ -825,6 +817,19 @@ describe("Spark daemon workspace store", () => {
           }),
         ]),
       );
+      expect(
+        db
+          .prepare(
+            `SELECT last_known_status AS lastKnownStatus,
+                    last_known_offline_reason AS lastKnownOfflineReason
+             FROM daemon_workspaces
+             WHERE id = ?`,
+          )
+          .get(first.id),
+      ).toEqual({
+        lastKnownStatus: "available",
+        lastKnownOfflineReason: null,
+      });
     });
   });
 

@@ -1,4 +1,6 @@
 import type { SparkChannelAdapter } from "@zendev-lab/spark-protocol/session-assignment";
+import type { InfoflowAttachment } from "./infoflow-content.ts";
+import type { ChannelReplyCapability } from "./reply.ts";
 
 export type ChannelAdapterType = SparkChannelAdapter;
 
@@ -10,6 +12,12 @@ export interface IncomingMessage {
   chatId?: string;
   text: string;
   messageId?: string;
+  /** Infoflow platform event source (for example MESSAGE_RECEIVE / ALL_MESSAGE_FORWARD). */
+  eventType?: string;
+  /** Normalized Infoflow payload kind (text, markdown, richtext, mixed, image, file, voice). */
+  contentType?: string;
+  /** Display-safe attachment facts; never raw bytes or signed download URLs. */
+  attachments?: InfoflowAttachment[];
   /** Display names / ids extracted from AT body parts (Infoflow). */
   mentions?: string[];
   /** True when an AT targeted this bot (when detectable). */
@@ -23,6 +31,28 @@ export interface ChannelAdapter {
   start(): Promise<void>;
   stop(): Promise<void>;
   send(input: { recipient: string; text: string }): Promise<void>;
+  /** Optional richer reply lifecycle used by daemon-owned channel conversations. */
+  readonly reply?: ChannelReplyCapability;
+  /** Runtime connection health; process lifecycle alone is not transport liveness. */
+  status(): ChannelAdapterStatus;
+}
+
+export type ChannelConnectionState =
+  | "stopped"
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "degraded";
+
+export interface ChannelTransportStatus {
+  state: ChannelConnectionState;
+  error?: string;
+}
+
+export interface ChannelAdapterStatus extends ChannelTransportStatus {
+  id: string;
+  type: ChannelAdapterType;
+  running: boolean;
 }
 
 export interface FeishuAdapterConfig {
@@ -35,6 +65,8 @@ export interface FeishuAdapterConfig {
 export type InfoflowChatType = "private" | "group";
 
 export type InfoflowGroupPolicy = "disabled" | "allowlist" | "open";
+
+export type InfoflowGroupTrigger = "mention" | "command" | "all";
 
 export interface InfoflowAdapterConfig {
   type: "infoflow";
@@ -59,6 +91,8 @@ export interface InfoflowAdapterConfig {
    * - open: accept every group
    */
   group_policy?: InfoflowGroupPolicy;
+  /** Which allowed group messages become Spark turns. Default: mention. */
+  group_trigger?: InfoflowGroupTrigger;
   /** Used when `group_policy` is `allowlist`. */
   allowed_group_ids?: string[];
   /**
@@ -111,7 +145,7 @@ export interface ChannelNotifyInput {
 
 export interface ChannelNotifyListResult {
   action: "list";
-  adapters: Array<{ id: string; type: ChannelAdapterType; running: boolean }>;
+  adapters: ChannelAdapterStatus[];
   routes: ResolvedChannelRoute[];
 }
 
@@ -138,6 +172,9 @@ export interface ChannelTransport {
   start(onMessage: (raw: unknown) => void): Promise<void>;
   stop(): Promise<void>;
   send(recipient: string, text: string): Promise<void>;
+  /** Optional richer reply lifecycle; platform SDK objects remain behind this boundary. */
+  readonly reply?: ChannelReplyCapability;
+  status?(): ChannelTransportStatus;
 }
 
 export interface FeishuInboundRaw {
@@ -153,6 +190,9 @@ export interface InfoflowInboundRaw {
   chat_type: InfoflowChatType;
   chat_id?: string;
   message_id?: string;
+  event_type?: string;
+  content_type?: string;
+  attachments?: InfoflowAttachment[];
   sender_name?: string;
   mentions?: string[];
   /** Transport-detected self mention after platform ids are still available. */

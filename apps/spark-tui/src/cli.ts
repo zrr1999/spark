@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { stdin as processStdin, stdout as processStdout } from "node:process";
 import { fileURLToPath } from "node:url";
 
@@ -12,6 +12,7 @@ import {
   clientCancelTurn,
   createSparkDaemonNativeCommands,
   createSparkDaemonNativeResponder,
+  ensureSparkDaemonWorkspaceSession,
   handleSparkDaemonCliCommand,
   parseSparkDaemonCliArgs,
   runSparkDaemonCliCommand,
@@ -407,18 +408,24 @@ async function resolveSparkCliWorkspaceSessionState(
     };
   }
 
-  const mismatchDiagnostic = await workspaceSessionMismatchDiagnostic(services, target);
-  if (mismatchDiagnostic) {
+  const targetResolution = await resolveSparkCliSessionTarget(services, target);
+  if (targetResolution.mismatchDiagnostic) {
     return {
       target,
-      state: { ...baseState, mode: "mismatch", attachTarget: target, mismatchDiagnostic },
+      state: {
+        ...baseState,
+        mode: "mismatch",
+        attachTarget: target,
+        mismatchDiagnostic: targetResolution.mismatchDiagnostic,
+      },
       attachMatchesControlPlane: false,
       shouldEmitSessionStart: false,
     };
   }
+  const canonicalTarget = targetResolution.sessionId!;
   return {
-    target,
-    state: { ...baseState, mode: "attached", attachTarget: target },
+    target: canonicalTarget,
+    state: { ...baseState, mode: "attached", attachTarget: canonicalTarget },
     attachMatchesControlPlane: true,
     shouldEmitSessionStart: true,
   };
@@ -430,32 +437,44 @@ function requestedSparkCliSessionTarget(
   return (
     options?.sessionId?.trim() ||
     options?.session?.trim() ||
-    options?.sessionDir?.trim() ||
     options?.sparkSessionKey?.trim() ||
     undefined
   );
 }
 
-async function workspaceSessionMismatchDiagnostic(
+async function resolveSparkCliSessionTarget(
   services: SparkCliHostServices,
   target: string,
-): Promise<string | undefined> {
+): Promise<{ sessionId?: string; mismatchDiagnostic?: string }> {
   if (looksLikeSparkSessionPath(target)) {
     const normalizedTarget = target.startsWith("file://") ? fileURLToPath(target) : target;
-    const resolvedTarget = safeRealpath(normalizedTarget) ?? normalizedTarget;
+    const absoluteTarget = resolve(normalizedTarget);
+    const resolvedTarget = safeRealpath(absoluteTarget) ?? absoluteTarget;
     const resolvedWorkspaceSessionDir =
       safeRealpath(services.sessionStore.sessionDir) ?? services.sessionStore.sessionDir;
     if (!isSameOrChildPath(resolvedTarget, resolvedWorkspaceSessionDir)) {
-      return `session path is outside workspace session directory ${services.sessionStore.sessionDir}`;
+      return {
+        mismatchDiagnostic: `session path is outside workspace session directory ${services.sessionStore.sessionDir}`,
+      };
     }
-    return undefined;
+    try {
+      const record = await services.sessionStore.loadByRef(absoluteTarget);
+      return { sessionId: record.header.id };
+    } catch {
+      return {
+        mismatchDiagnostic: `session path could not be loaded from workspace ${services.sessionStore.workspaceHash}`,
+      };
+    }
   }
 
   const existing = await services.sessionStore.findById(target);
+  if (existing) return { sessionId: existing.header.id };
   if (!existing && !sparkDurableSessionExists(services, target)) {
-    return `session ${target} was not found in workspace ${services.sessionStore.workspaceHash}`;
+    return {
+      mismatchDiagnostic: `session ${target} was not found in workspace ${services.sessionStore.workspaceHash}`,
+    };
   }
-  return undefined;
+  return { sessionId: target };
 }
 
 function looksLikeSparkSessionPath(value: string): boolean {
@@ -711,6 +730,14 @@ export async function runSparkCli(
         heartbeatIntervalMs: false,
       });
       try {
+        await ensureSparkDaemonWorkspaceSession(
+          {
+            sessionId,
+            workspaceId: lease.workspace.id,
+            cwd: lease.workspace.localPath,
+          },
+          daemonClient,
+        );
         const result = await handleSparkDaemonCliCommand(
           {
             action: "submit",
@@ -755,6 +782,25 @@ export async function runSparkCli(
           lease,
           command.options,
         );
+        const currentSessionId =
+          workspaceSession.state.mode === "attached"
+            ? workspaceSession.state.attachTarget!
+            : `spark-cli-${Date.now().toString(36)}`;
+        let currentSessionReady: Promise<void> | undefined;
+        const ensureCurrentSession = () => {
+          currentSessionReady ??= ensureSparkDaemonWorkspaceSession(
+            {
+              sessionId: currentSessionId,
+              workspaceId: lease.workspace.id,
+              cwd: services.cwd,
+            },
+            daemonClient,
+          ).catch((error) => {
+            currentSessionReady = undefined;
+            throw error;
+          });
+          return currentSessionReady;
+        };
         const firstRunOnboarding = command.initialMessage
           ? undefined
           : renderSparkFirstRunOnboarding(services);
@@ -763,15 +809,29 @@ export async function runSparkCli(
           getNavigationState: () => undefined,
           listTextProvider: () => durableSparkSessionListText(services),
         });
-        const modelControl = createSparkDaemonModelAuthClient(daemonClient);
+        const modelControl = createSparkDaemonModelAuthClient(daemonClient, {
+          sessionId: currentSessionId,
+          ensureSession: ensureCurrentSession,
+        });
         registerSparkNativeModelCommand(services, modelControl);
         registerSparkDaemonModelKeybindings(services, modelControl);
         const runTui = options.runTui ?? runNativeSparkTui;
         await runTui({
           initialMessage: command.initialMessage,
-          responder: createSparkDaemonNativeResponder(daemonClient),
+          responder: createSparkDaemonNativeResponder(daemonClient, {
+            sessionId: currentSessionId,
+            workspaceId: lease.workspace.id,
+            cwd: services.cwd,
+            ensureSession: ensureCurrentSession,
+          }),
           workspaceSession: workspaceSession.state,
-          slashCommands: createSparkNativeSlashCommands(services, daemonClient, modelControl),
+          slashCommands: createSparkNativeSlashCommands(
+            services,
+            daemonClient,
+            modelControl,
+            currentSessionId,
+            ensureCurrentSession,
+          ),
           autocompleteBasePath: services.cwd,
           keybindings: services.keybindings,
           statusContext: {
@@ -882,9 +942,10 @@ async function handleSparkNativeModelCommand(
     const selection = query
       ? resolveDaemonModelSelection(snapshot, query)
       : await services.modelSelector.pick(daemonSnapshotToPickerState(snapshot), { hasUI: true });
-    const active = selection ?? modelRefToSelection(snapshot.defaultModel);
+    const active =
+      selection ?? modelRefToSelection(snapshot.session?.model ?? snapshot.defaultModel);
     if (!active) throw new Error(tuiCliStrings.noActiveModel);
-    await modelControl.setDefaultModel(active);
+    await modelControl.setSessionModel(active);
     synchronizeLocalModelSelection(services, active);
     return active;
   }
@@ -920,7 +981,7 @@ function registerSparkDaemonModelKeybindings(
         ctx,
       );
       if (!selection) return;
-      await modelControl.setDefaultModel(selection);
+      await modelControl.setSessionModel(selection);
       synchronizeLocalModelSelection(services, selection);
       notify(selection);
     },
@@ -959,8 +1020,9 @@ function registerDaemonModelCycleKeybinding(
       const snapshot = await modelControl.snapshot();
       const items = daemonSnapshotToPickerState(snapshot).items;
       if (items.length === 0) return;
-      const activeValue = snapshot.defaultModel
-        ? `${snapshot.defaultModel.providerName}/${snapshot.defaultModel.modelId}`
+      const effectiveModel = snapshot.session?.model ?? snapshot.defaultModel;
+      const activeValue = effectiveModel
+        ? `${effectiveModel.providerName}/${effectiveModel.modelId}`
         : undefined;
       const activeIndex = activeValue ? items.findIndex((item) => item.value === activeValue) : -1;
       const step = direction === "next" ? 1 : -1;
@@ -972,7 +1034,7 @@ function registerDaemonModelCycleKeybinding(
           : (activeIndex + step + items.length) % items.length;
       const item = items[index]!;
       const selection = { providerName: item.providerName, modelId: item.modelId };
-      await modelControl.setDefaultModel(selection);
+      await modelControl.setSessionModel(selection);
       synchronizeLocalModelSelection(services, selection);
       notify(selection);
     },
@@ -1030,13 +1092,14 @@ function modelCompletionItems(
 function createSparkNativeSlashCommands(
   services: SparkCliHostServices,
   daemonClient: SparkDaemonClientOptions,
-  modelControl: SparkDaemonModelAuthClient = createSparkDaemonModelAuthClient(daemonClient),
+  modelControl: SparkDaemonModelAuthClient,
+  currentSessionId: string,
+  ensureCurrentSession: () => Promise<void>,
 ): SparkNativeSlashCommandMap {
   registerSparkNativeModelCommand(services, modelControl);
   const daemonCommands = createSparkDaemonNativeCommands(daemonClient);
   const localControlCommands = createSparkNativeLocalControlSlashCommands();
   const piParityCommands = createSparkPiParitySlashCommands(services, modelControl);
-  const commandSessionId = `spark-native-command-${Date.now().toString(36)}`;
   const runtimeCommands = createSparkNativeRuntimeSlashCommands(services.runtime, {
     exclude: [
       ...NATIVE_SLASH_COMMAND_EXCLUSIONS,
@@ -1047,11 +1110,12 @@ function createSparkNativeSlashCommands(
     sendUserMessage: async (content) => {
       const prompt = content.trim();
       if (!prompt) return;
+      await ensureCurrentSession();
       await handleSparkDaemonCliCommand(
         {
           action: "submit",
           json: true,
-          sessionId: commandSessionId,
+          sessionId: currentSessionId,
           prompt,
         },
         daemonClient,

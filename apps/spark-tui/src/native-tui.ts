@@ -738,7 +738,7 @@ function messageViewToNativeMessages(message: SparkMessageView): SparkNativeMess
         display: message.display,
         createdAt: message.createdAt,
         updatedAt: message.updatedAt,
-        details: { partStatus: part.status, partType: part.type },
+        details: { ...message.metadata, partStatus: part.status, partType: part.type },
       });
       continue;
     }
@@ -2925,7 +2925,10 @@ export class SparkNativeTuiApp implements Component, Focusable {
 
   private messagePrefix(message: SparkNativeMessage): string {
     if (message.role === "user") {
-      if (!message.queued) return "you> ";
+      if (!message.queued) {
+        const senderLabel = channelSenderLabelFromDetails(message.details);
+        return senderLabel ? `${senderLabel}> ` : "you> ";
+      }
       const mode = stringFromRecord(message.details ?? {}, "queueMode");
       return nativeTuiStrings.queuedUserPrefix(mode === "followUp" ? "followUp" : "steer");
     }
@@ -2935,6 +2938,17 @@ export class SparkNativeTuiApp implements Component, Focusable {
     if (message.role === "thinking") return "thinking> ";
     return "system> ";
   }
+}
+
+function channelSenderLabelFromDetails(
+  details: Record<string, unknown> | undefined,
+): string | undefined {
+  const channel = details?.channel;
+  if (!channel || typeof channel !== "object" || Array.isArray(channel)) return undefined;
+  const record = channel as Record<string, unknown>;
+  const value = stringFromRecord(record, "senderName") ?? stringFromRecord(record, "senderId");
+  if (!value) return undefined;
+  return value.replace(/\s+/gu, " ").replaceAll(">", "›").slice(0, 48);
 }
 
 export function createSparkNativeUiTransport(

@@ -5,6 +5,7 @@ import {
   type SparkAssignment,
   type SparkDaemonEvent,
 } from "@zendev-lab/spark-protocol";
+import type { InfoflowAttachment } from "@zendev-lab/spark-channels";
 import { SparkDaemonInvocationRegistry } from "./invocations.ts";
 
 export type SparkDaemonTask = SparkDaemonSessionRunTask;
@@ -17,6 +18,9 @@ export interface SparkDaemonChannelContext {
   senderName?: string;
   chatId?: string;
   messageId?: string;
+  eventType?: string;
+  contentType?: string;
+  attachments?: InfoflowAttachment[];
   mentions?: string[];
   mentionedSelf?: boolean;
 }
@@ -170,15 +174,47 @@ function parseChannelContext(value: unknown): SparkDaemonChannelContext | undefi
         .map((entry) => nonEmptyString(entry)?.trim())
         .filter((entry): entry is string => Boolean(entry))
     : undefined;
+  const attachments = parseInfoflowAttachments(record.attachments);
   return {
     externalKey,
     senderId: nonEmptyString(record.senderId)?.trim(),
     senderName: nonEmptyString(record.senderName)?.trim(),
     chatId: nonEmptyString(record.chatId)?.trim(),
     messageId: nonEmptyString(record.messageId)?.trim(),
+    eventType: nonEmptyString(record.eventType)?.trim(),
+    contentType: nonEmptyString(record.contentType)?.trim(),
+    ...(attachments.length ? { attachments } : {}),
     ...(mentions?.length ? { mentions } : {}),
     ...(typeof record.mentionedSelf === "boolean" ? { mentionedSelf: record.mentionedSelf } : {}),
   };
+}
+
+function parseInfoflowAttachments(value: unknown): InfoflowAttachment[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 32).flatMap((entry): InfoflowAttachment[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const record = entry as Record<string, unknown>;
+    if (record.kind !== "image" && record.kind !== "file" && record.kind !== "voice") return [];
+    const size =
+      typeof record.size === "number" && Number.isFinite(record.size) && record.size >= 0
+        ? record.size
+        : undefined;
+    return [
+      {
+        kind: record.kind,
+        ...(nonEmptyString(record.name)?.trim()
+          ? { name: nonEmptyString(record.name)!.trim() }
+          : {}),
+        ...(nonEmptyString(record.mediaType)?.trim()
+          ? { mediaType: nonEmptyString(record.mediaType)!.trim() }
+          : {}),
+        ...(size !== undefined ? { size } : {}),
+        ...(nonEmptyString(record.reference)?.trim()
+          ? { reference: nonEmptyString(record.reference)!.trim() }
+          : {}),
+      },
+    ];
+  });
 }
 
 function nonEmptyString(value: unknown): string | undefined {

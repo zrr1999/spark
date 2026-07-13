@@ -666,7 +666,7 @@ describe("Spark daemon local RPC", () => {
       configured: true,
       ingressEnabled: true,
       state: "running" as const,
-      adapters: [{ id: "feishu", type: "feishu", running: true }],
+      adapters: [{ id: "feishu", type: "feishu", running: true, state: "connected" as const }],
       routes: [{ name: "ops", adapter: "feishu", recipient: "oc_ops" }],
       observedAt: "2026-07-10T00:00:00.000Z",
       text: "channels workspace=ws_demo running adapters=1/1 routes=1 ingress=on\n",

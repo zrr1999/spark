@@ -100,6 +100,7 @@ function readEditorValues(formData: FormData): CockpitChannelEditorValues {
     infoflowAppSecretSet: formData.get("infoflowAppSecretSet") === "1",
     infoflowAllowedUserIds: formText(formData, "infoflowAllowedUserIds"),
     infoflowGroupPolicy: parseGroupPolicy(formText(formData, "infoflowGroupPolicy")),
+    infoflowGroupTrigger: parseGroupTrigger(formText(formData, "infoflowGroupTrigger")),
     infoflowAllowedGroupIds: formText(formData, "infoflowAllowedGroupIds"),
     infoflowSystemPrompt: formText(formData, "infoflowSystemPrompt"),
     routeName: formText(formData, "routeName") || "ops",
@@ -113,4 +114,9 @@ function readEditorValues(formData: FormData): CockpitChannelEditorValues {
 function parseGroupPolicy(raw: string): CockpitChannelEditorValues["infoflowGroupPolicy"] {
   if (raw === "allowlist" || raw === "open" || raw === "disabled") return raw;
   return "disabled";
+}
+
+function parseGroupTrigger(raw: string): CockpitChannelEditorValues["infoflowGroupTrigger"] {
+  if (raw === "command" || raw === "all" || raw === "mention") return raw;
+  return "mention";
 }

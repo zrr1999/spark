@@ -54,6 +54,9 @@ const messages = {
       available: "available",
       indexing: "indexing",
       degraded: "degraded",
+      connecting: "connecting",
+      connected: "connected",
+      reconnecting: "reconnecting",
       unavailable: "unavailable",
       archived: "archived",
       active: "active",
@@ -473,6 +476,12 @@ const messages = {
     infoflowGroupPolicyDisabled: "Disabled (drop groups)",
     infoflowGroupPolicyAllowlist: "Allowlist",
     infoflowGroupPolicyOpen: "Open (all groups)",
+    infoflowGroupTrigger: "Group trigger",
+    infoflowGroupTriggerHint:
+      "Mention and command use the explicit bot event. All subscribes to the full group feed.",
+    infoflowGroupTriggerMention: "Mention the bot",
+    infoflowGroupTriggerCommand: "Command (! or /)",
+    infoflowGroupTriggerAll: "Every group message",
     infoflowAllowedGroupIds: "Allowed group ids",
     infoflowAllowedGroupIdsHint:
       "List of group ids when policy is allowlist. Comma/space-separated; multiple ids are supported.",

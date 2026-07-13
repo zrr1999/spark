@@ -19,6 +19,7 @@
     infoflowAppSecretSet: boolean;
     infoflowAllowedUserIds: string;
     infoflowGroupPolicy: "disabled" | "allowlist" | "open";
+    infoflowGroupTrigger: "mention" | "command" | "all";
     infoflowAllowedGroupIds: string;
     infoflowSystemPrompt: string;
     routeName: string;
@@ -133,7 +134,8 @@
               <li>
                 <strong>{adapter.id}</strong>
                 <span>{adapter.type}</span>
-                <small>{statusLabel(adapter.running ? "running" : "stopped", common)}</small>
+                <small>{statusLabel(adapter.state, common)}</small>
+                {#if adapter.error}<small class="adapter-error">{adapter.error}</small>{/if}
               </li>
             {/each}
           </ul>
@@ -307,6 +309,15 @@
                 placeholder={t.infoflowAllowedGroupIdsPlaceholder}
                 disabled={values.infoflowGroupPolicy !== "allowlist"}
               />
+            </label>
+            <label>
+              <span>{t.infoflowGroupTrigger}</span>
+              <small class="field-hint">{t.infoflowGroupTriggerHint}</small>
+              <select name="infoflowGroupTrigger" bind:value={values.infoflowGroupTrigger}>
+                <option value="mention">{t.infoflowGroupTriggerMention}</option>
+                <option value="command">{t.infoflowGroupTriggerCommand}</option>
+                <option value="all">{t.infoflowGroupTriggerAll}</option>
+              </select>
             </label>
             <label class="span-2">
               <span>{t.infoflowSystemPrompt}</span>
@@ -489,6 +500,11 @@
     display: grid;
     gap: 4px;
     padding: 10px 12px;
+  }
+
+  .adapter-error {
+    color: var(--color-danger-strong, var(--color-danger));
+    overflow-wrap: anywhere;
   }
 
   .editor {

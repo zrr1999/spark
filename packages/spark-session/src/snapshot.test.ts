@@ -29,7 +29,27 @@ describe("loadSparkSessionSnapshot", () => {
         id: "user-1",
         parentId: null,
         timestamp: "2026-07-13T01:00:01.000Z",
-        message: { role: "user", content: "Inspect the repository", timestamp: 1783904401000 },
+        message: {
+          role: "user",
+          content: "Inspect the repository",
+          timestamp: 1783904401000,
+          metadata: {
+            channel: {
+              adapter: "infoflow",
+              externalKey: "infoflow:group:10838226",
+              senderId: "xuxiaojian",
+              senderName: "徐晓健",
+              messageId: "1870315656716618699",
+              contentType: "mixed",
+              attachments: [
+                { kind: "file", name: "plan.pdf", reference: "fid-plan" },
+                { kind: "unknown", url: "https://signed.invalid" },
+              ],
+              secret: "must-not-project",
+            },
+            raw: { token: "must-not-project" },
+          },
+        },
       },
       {
         type: "message",
@@ -161,6 +181,17 @@ describe("loadSparkSessionSnapshot", () => {
         id: "user-1",
         role: "user",
         text: "Inspect the repository",
+        metadata: {
+          channel: {
+            adapter: "infoflow",
+            externalKey: "infoflow:group:10838226",
+            senderId: "xuxiaojian",
+            senderName: "徐晓健",
+            messageId: "1870315656716618699",
+            contentType: "mixed",
+            attachments: [{ kind: "file", name: "plan.pdf", reference: "fid-plan" }],
+          },
+        },
         parts: [{ id: "user-1:part:0", type: "text", status: "complete" }],
       },
       {
@@ -252,7 +283,7 @@ describe("loadSparkSessionSnapshot", () => {
       "call-pending",
     ]);
     expect(JSON.stringify(snapshot)).not.toMatch(
-      /secret-input|secret-token|secret-output|secret-details|secret-pattern|secret-signature|secret-redacted-thinking|secret-inactive/u,
+      /secret-input|secret-token|secret-output|secret-details|secret-pattern|secret-signature|secret-redacted-thinking|secret-inactive|must-not-project/u,
     );
   });
 });

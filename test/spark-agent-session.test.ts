@@ -84,7 +84,13 @@ void test("SparkAgentSession persists and resumes JSONL sessions", async () => {
     });
     const session = new SparkAgentSession(services);
 
-    const first = await session.run({ sessionId: "session-a", prompt: "first" });
+    const first = await session.run({
+      sessionId: "session-a",
+      prompt: "first",
+      messageMetadata: {
+        channel: { adapter: "infoflow", senderId: "platform-user" },
+      },
+    });
     assert.equal(first.sessionId, "session-a");
     assert.equal(first.newMessageCount, 2);
     assert.equal(first.assistantText, "count:1");
@@ -101,6 +107,12 @@ void test("SparkAgentSession persists and resumes JSONL sessions", async () => {
       messages.map((entry) => entry.message.role),
       ["user", "assistant", "user", "assistant"],
     );
+    assert.deepEqual(messages[0]?.message.metadata, {
+      channel: { adapter: "infoflow", senderId: "platform-user" },
+    });
+    assert.equal(messages[1]?.message.metadata, undefined);
+    assert.equal(messages[2]?.message.metadata, undefined);
+    assert.equal(messages[3]?.message.metadata, undefined);
     assert.equal(
       viewEvents.some(
         (event: any) =>

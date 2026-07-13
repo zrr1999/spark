@@ -1,11 +1,11 @@
 import { Buffer } from "node:buffer";
 import { once } from "node:events";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import type { AddressInfo } from "node:net";
+import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocketServer } from "ws";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   SPARK_PROTOCOL_VERSION,
   createId,
@@ -28,7 +28,9 @@ import { openSparkDaemonDatabase } from "./store/schema.js";
 import {
   addWorkspace,
   attachWorkspaceClient,
+  getWorkspaceById,
   registerWorkspace,
+  sparkDaemonServerStatusSummaries,
   stopWorkspace,
 } from "./store/workspaces.js";
 import { writeSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
@@ -342,6 +344,84 @@ describe("Spark daemon handleCommand task.start.request", () => {
 
       expect(existsSync(harness.paths.pidFile)).toBe(false);
     } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("retries an unavailable Cockpit without filling the outbox or disabling local workspaces", async () => {
+    const harness = makeHarness();
+    const shutdown = new AbortController();
+    let connectionAttempts = 0;
+    let running: Promise<void> | undefined;
+    const unavailableServer = createServer((socket) => {
+      connectionAttempts += 1;
+      socket.destroy();
+    });
+
+    try {
+      unavailableServer.listen(0, "127.0.0.1");
+      await once(unavailableServer, "listening");
+      const address = unavailableServer.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected unavailable test server to listen on a TCP port");
+      }
+      const port = (address as AddressInfo).port;
+      const serverUrl = `http://127.0.0.1:${port}/`;
+      const config: SparkDaemonConfig = {
+        installationId: "install-test",
+        displayName: "Test daemon",
+        runtimeId: "rt_11111111111111111111111111111111",
+        runtimeToken: "runtime-token",
+        webSocketUrl: `ws://127.0.0.1:${port}/runtime`,
+      };
+      const workspace = registerWorkspace(harness.db, {
+        serverUrl,
+        localPath: harness.workspace.localPath,
+        localWorkspaceKey: "local-default",
+        displayName: "Local default",
+      });
+      writeSparkDaemonConfig(harness.paths, config);
+
+      running = startSparkDaemon({
+        paths: harness.paths,
+        db: harness.db,
+        config,
+        signal: shutdown.signal,
+        runQueue: false,
+        serverReconnectDelayMs: 5,
+      });
+
+      await vi.waitFor(() => expect(connectionAttempts).toBeGreaterThanOrEqual(3), {
+        timeout: 1_000,
+        interval: 5,
+      });
+      shutdown.abort();
+      await running;
+
+      expect(
+        harness.db
+          .prepare("SELECT COUNT(*) AS count FROM outbox WHERE kind = 'daemon.error'")
+          .get(),
+      ).toMatchObject({ count: 0 });
+      expect(getWorkspaceById(harness.db, workspace.id)).toMatchObject({
+        status: "available",
+        diagnostics: {},
+      });
+      expect(sparkDaemonServerStatusSummaries(harness.db)).toContainEqual(
+        expect.objectContaining({
+          url: serverUrl,
+          wsConnected: false,
+          lastDisconnectReason: "server.unreachable",
+        }),
+      );
+    } finally {
+      shutdown.abort();
+      await running?.catch(() => undefined);
+      if (unavailableServer.listening) {
+        await new Promise<void>((resolve, reject) => {
+          unavailableServer.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
       harness.cleanup();
     }
   });

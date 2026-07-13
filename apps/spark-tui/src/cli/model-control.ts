@@ -1,16 +1,20 @@
 import {
   parseSparkAuthFlow,
   parseSparkModelControlSnapshot,
+  parseSparkSessionRegistryRecord,
   type SparkAuthFlow,
   type SparkModelControlSnapshot,
   type SparkModelRef,
+  type SparkSessionRegistryRecord,
 } from "@zendev-lab/spark-protocol";
 import type { SparkModelPickerState } from "../host/model-selector.ts";
 import type { SparkActiveSelection } from "../host/provider-registry.ts";
 import { requestSparkDaemonControl, type SparkDaemonClientOptions } from "./daemon.ts";
 
 export interface SparkDaemonModelAuthClient {
+  readonly sessionId?: string;
   snapshot(): Promise<SparkModelControlSnapshot>;
+  setSessionModel(model: SparkModelRef): Promise<SparkSessionRegistryRecord>;
   setDefaultModel(model: SparkModelRef): Promise<SparkModelControlSnapshot>;
   setApiKey(providerName: string, apiKey: string): Promise<SparkModelControlSnapshot>;
   logout(providerName: string): Promise<boolean>;
@@ -20,12 +24,40 @@ export interface SparkDaemonModelAuthClient {
   cancelOAuth(flowId: string): Promise<SparkAuthFlow>;
 }
 
+export interface SparkDaemonModelAuthClientOptions {
+  sessionId?: string;
+  ensureSession?: () => Promise<void>;
+}
+
 export function createSparkDaemonModelAuthClient(
   daemon: SparkDaemonClientOptions = {},
+  options: SparkDaemonModelAuthClientOptions = {},
 ): SparkDaemonModelAuthClient {
+  const sessionId = options.sessionId?.trim() || undefined;
+  let sessionReady: Promise<void> | undefined;
+  const ensureSession = async () => {
+    if (!options.ensureSession) return;
+    sessionReady ??= options.ensureSession().catch((error) => {
+      sessionReady = undefined;
+      throw error;
+    });
+    await sessionReady;
+  };
   return {
-    snapshot: async () =>
-      parseSparkModelControlSnapshot(await requestSparkDaemonControl("model.catalog", {}, daemon)),
+    ...(sessionId ? { sessionId } : {}),
+    snapshot: async () => {
+      if (sessionId) await ensureSession();
+      return parseSparkModelControlSnapshot(
+        await requestSparkDaemonControl("model.catalog", sessionId ? { sessionId } : {}, daemon),
+      );
+    },
+    setSessionModel: async (model) => {
+      if (!sessionId) throw new Error("Session-scoped model control requires a session id.");
+      await ensureSession();
+      return parseSparkSessionRegistryRecord(
+        await requestSparkDaemonControl("session.model.set", { sessionId, model }, daemon),
+      );
+    },
     setDefaultModel: async (model) =>
       parseSparkModelControlSnapshot(
         await requestSparkDaemonControl("model.default.set", { model }, daemon),
@@ -72,7 +104,8 @@ export function createSparkDaemonModelAuthClient(
 export function daemonSnapshotToPickerState(
   snapshot: SparkModelControlSnapshot,
 ): SparkModelPickerState {
-  const active = snapshot.defaultModel ? selection(snapshot.defaultModel) : undefined;
+  const effectiveModel = snapshot.session?.model ?? snapshot.defaultModel;
+  const active = effectiveModel ? selection(effectiveModel) : undefined;
   const providers = snapshot.providers
     .map((provider) => ({
       providerName: provider.providerName,
@@ -89,7 +122,7 @@ export function daemonSnapshotToPickerState(
           description:
             entry.description ??
             `${entry.reasoning ? "reasoning" : "standard"} · ${entry.contextWindow ?? "?"} ctx`,
-          active: modelEquals(entry.model, snapshot.defaultModel),
+          active: modelEquals(entry.model, effectiveModel),
           reasoning: entry.reasoning,
         })),
     }))
@@ -97,7 +130,7 @@ export function daemonSnapshotToPickerState(
   return {
     providers,
     items: providers.flatMap((provider) => provider.models),
-    ...(active ? { active, activeModelId: modelValue(snapshot.defaultModel!) } : {}),
+    ...(active && effectiveModel ? { active, activeModelId: modelValue(effectiveModel) } : {}),
   };
 }
 

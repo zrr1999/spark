@@ -8,6 +8,8 @@ Reusable Spark extension package that exposes cue-shell as a durable, observable
 
 `@zendev-lab/spark-cue` uses cue-shell's client transport resolver (`cue-client target resolve --json`, falling back to `cue client target resolve --json`). It supports both local Unix socket profiles and SSH profiles.
 
+Spark preserves the host `PATH` and also searches the standard user install locations used by cue-shell's supported installers: `UV_TOOL_BIN_DIR`, `~/.local/bin`, and `${CARGO_HOME:-~/.cargo}/bin`. This keeps native TUI and daemon sessions independent of the narrower `PATH` commonly inherited from GUI launchers and service managers.
+
 For SSH profiles, `@zendev-lab/spark-cue` spawns the system OpenSSH client as:
 
 ```text

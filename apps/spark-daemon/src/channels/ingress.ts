@@ -15,6 +15,8 @@ import {
   type ChannelsConfig,
   type ChannelNotifyInput,
   type ChannelNotifyResult,
+  type ChannelReplyStream,
+  type ChannelReplyTarget,
   type ChannelRegistryOptions,
   type IncomingMessage,
 } from "@zendev-lab/spark-channels";
@@ -49,10 +51,21 @@ export interface ChannelIngressController {
   start(): Promise<void>;
   stop(): Promise<void>;
   notify(input: ChannelNotifyInput): Promise<ChannelNotifyResult>;
+  openReplyStream(
+    adapterId: string,
+    target: ChannelReplyTarget,
+  ): Promise<ChannelReplyStream | undefined>;
+  sendReply(adapterId: string, input: ChannelReplyTarget & { text: string }): Promise<void>;
   status(): {
     configured: boolean;
     ingressEnabled: boolean;
-    adapters: Array<{ id: string; type: string; running: boolean }>;
+    adapters: Array<{
+      id: string;
+      type: string;
+      running: boolean;
+      state: "stopped" | "connecting" | "connected" | "reconnecting" | "degraded";
+      error?: string;
+    }>;
     routes: Array<{ name: string; adapter: string; recipient: string }>;
   };
 }
@@ -66,7 +79,13 @@ export interface DaemonChannelIngressStatus {
   configured: boolean;
   ingressEnabled: boolean;
   state: "unconfigured" | "running" | "stopped" | "degraded";
-  adapters: Array<{ id: string; type: string; running: boolean }>;
+  adapters: Array<{
+    id: string;
+    type: string;
+    running: boolean;
+    state: "stopped" | "connecting" | "connected" | "reconnecting" | "degraded";
+    error?: string;
+  }>;
   routes: Array<{ name: string; adapter: string; recipient: string }>;
   lastReloadedAt?: string;
   error?: string;
@@ -85,6 +104,16 @@ export interface DaemonChannelIngressRuntime {
   configure(workspaceId: string, config: unknown): Promise<DaemonChannelIngressStatus>;
   reload(workspaceId: string): Promise<DaemonChannelIngressStatus>;
   notify(workspaceId: string, input: ChannelNotifyInput): Promise<ChannelNotifyResult>;
+  openReplyStream(
+    workspaceId: string,
+    adapterId: string,
+    target: ChannelReplyTarget,
+  ): Promise<ChannelReplyStream | undefined>;
+  sendReply(
+    workspaceId: string,
+    adapterId: string,
+    input: ChannelReplyTarget & { text: string },
+  ): Promise<void>;
   listWorkspaceIds(): Promise<string[]>;
 }
 
@@ -256,6 +285,10 @@ export function createChannelIngressController(input: {
       await channelRegistry.stopAll();
     },
     notify: async (notifyInput) => await channelRegistry.notify(notifyInput),
+    openReplyStream: async (adapterId, target) =>
+      await channelRegistry.openReplyStream(adapterId, target),
+    sendReply: async (adapterId, replyInput) =>
+      await channelRegistry.sendReply(adapterId, replyInput),
     status: () => ({
       configured: true,
       ingressEnabled: channelRegistry.ingressEnabled,
@@ -276,6 +309,9 @@ function channelContextFromIncoming(message: IncomingMessage): SparkDaemonChanne
     ...(message.senderName?.trim() ? { senderName: message.senderName.trim() } : {}),
     ...(message.chatId?.trim() ? { chatId: message.chatId.trim() } : {}),
     ...(message.messageId?.trim() ? { messageId: message.messageId.trim() } : {}),
+    ...(message.eventType?.trim() ? { eventType: message.eventType.trim() } : {}),
+    ...(message.contentType?.trim() ? { contentType: message.contentType.trim() } : {}),
+    ...(message.attachments?.length ? { attachments: message.attachments } : {}),
     ...(message.mentions?.length
       ? { mentions: message.mentions.map((entry) => entry.trim()).filter(Boolean) }
       : {}),
@@ -395,21 +431,28 @@ export function createDaemonChannelIngressRuntime(input: {
     const ingressEnabled =
       runtime?.ingressEnabled ?? Object.keys(slot.config?.adapters ?? {}).length > 0;
     const runningCount = adapters.filter((adapter) => adapter.running).length;
-    const state = slot.lastError
+    const connectedCount = adapters.filter(
+      (adapter) => adapter.running && adapter.state === "connected",
+    ).length;
+    const adapterError = adapters.find((adapter) => adapter.error)?.error;
+    const statusError = slot.lastError ?? adapterError;
+    const state = statusError
       ? "degraded"
       : !slot.config
         ? "unconfigured"
-        : ingressEnabled && runningCount === adapters.length && adapters.length > 0
+        : ingressEnabled && connectedCount === adapters.length && adapters.length > 0
           ? "running"
-          : "stopped";
+          : runningCount > 0
+            ? "degraded"
+            : "stopped";
     const observedAt = now().toISOString();
-    const text = slot.lastError
-      ? `channels workspace=${slot.workspaceId} degraded adapters=${runningCount}/${adapters.length} routes=${routes.length} ingress=${
+    const text = statusError
+      ? `channels workspace=${slot.workspaceId} degraded connected=${connectedCount}/${adapters.length} routes=${routes.length} ingress=${
           ingressEnabled ? "on" : "off"
-        } error=${slot.lastError}\n`
+        } error=${statusError}\n`
       : !slot.config
         ? `channels workspace=${slot.workspaceId} not configured (${slot.configPath})\n`
-        : `channels workspace=${slot.workspaceId} ${state} adapters=${runningCount}/${adapters.length} routes=${routes.length} ingress=${
+        : `channels workspace=${slot.workspaceId} ${state} connected=${connectedCount}/${adapters.length} routes=${routes.length} ingress=${
             ingressEnabled ? "on" : "off"
           }\n`;
     return {
@@ -424,7 +467,7 @@ export function createDaemonChannelIngressRuntime(input: {
       adapters,
       routes,
       ...(slot.lastReloadedAt ? { lastReloadedAt: slot.lastReloadedAt } : {}),
-      ...(slot.lastError ? { error: slot.lastError } : {}),
+      ...(statusError ? { error: statusError } : {}),
       observedAt,
       text,
     };
@@ -511,6 +554,20 @@ export function createDaemonChannelIngressRuntime(input: {
         throw new Error(`channels not configured for workspace ${workspaceId}`);
       }
       return await slot.controller.notify(notifyInput);
+    },
+    openReplyStream: async (workspaceId, adapterId, target) => {
+      const slot = getSlot(workspaceId);
+      if (!slot.controller) {
+        throw new Error(`channels not configured for workspace ${workspaceId}`);
+      }
+      return await slot.controller.openReplyStream(adapterId, target);
+    },
+    sendReply: async (workspaceId, adapterId, replyInput) => {
+      const slot = getSlot(workspaceId);
+      if (!slot.controller) {
+        throw new Error(`channels not configured for workspace ${workspaceId}`);
+      }
+      await slot.controller.sendReply(adapterId, replyInput);
     },
     listWorkspaceIds: async () => await listWorkspaceChannelIds(input.sparkHome),
   };

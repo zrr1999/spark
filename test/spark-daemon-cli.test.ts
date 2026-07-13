@@ -1253,6 +1253,21 @@ void test("Spark TUI and headless print attach and release workspace clients", a
     const attaches: Array<{ kind: string; workspaceId: string; displayName?: string }> = [];
     const releases: string[] = [];
     const submitted: Array<{ sessionId: string; prompt: string }> = [];
+    const registeredSessions: Array<{
+      sessionId: string;
+      workspaceId: string;
+      cwd?: string;
+    }> = [];
+    const managedSessionRecords: Array<{
+      sessionId: string;
+      scope: { kind: "workspace"; workspaceId: string };
+      workspaceId: string;
+      status: "ready";
+      bindings: [];
+      createdAt: string;
+      updatedAt: string;
+      cwd?: string;
+    }> = [];
     const daemonClient: SparkDaemonClientOptions = {
       paths,
       startService: () => ({ kind: "detached" as const, alreadyRunning: false, detail: "started" }),
@@ -1295,6 +1310,46 @@ void test("Spark TUI and headless print attach and release workspace clients", a
           workspace,
           observedAt: "2026-06-19T00:00:01.000Z",
         };
+      },
+      managedSessions: {
+        list: async () => managedSessionRecords,
+        create: async (input) => {
+          assert.equal(input.scope?.kind, "workspace");
+          if (input.scope?.kind !== "workspace") throw new Error("expected workspace session");
+          const scope = input.scope;
+          const sessionId = input.sessionId ?? `generated-${managedSessionRecords.length + 1}`;
+          registeredSessions.push({
+            sessionId,
+            workspaceId: scope.workspaceId,
+            cwd: input.cwd,
+          });
+          const record = {
+            sessionId,
+            scope,
+            workspaceId: scope.workspaceId,
+            status: "ready" as const,
+            bindings: [] as [],
+            createdAt: "2026-06-19T00:00:00.000Z",
+            updatedAt: "2026-06-19T00:00:00.000Z",
+            ...(input.cwd ? { cwd: input.cwd } : {}),
+          };
+          managedSessionRecords.push(record);
+          return record;
+        },
+        get: async (sessionId) => {
+          const record = managedSessionRecords.find((session) => session.sessionId === sessionId);
+          if (!record) throw new Error(`unknown session: ${sessionId}`);
+          return record;
+        },
+        bind: async () => {
+          throw new Error("not used");
+        },
+        unbind: async () => {
+          throw new Error("not used");
+        },
+        archive: async () => {
+          throw new Error("not used");
+        },
       },
       turnSubmit: async (_paths, input) => {
         submitted.push(input);
@@ -1446,6 +1501,16 @@ void test("Spark TUI and headless print attach and release workspace clients", a
     );
     assert.deepEqual(releases, ["wcl-headless-1", "wcl-headless-2", "wcl-interactive-3"]);
     assert.equal(ensures.length, 3);
+    assert.deepEqual(
+      registeredSessions.map((session) => ({
+        sessionId: session.sessionId,
+        workspaceId: session.workspaceId,
+      })),
+      [
+        { sessionId: submitted[0]?.sessionId, workspaceId: workspace.id },
+        { sessionId: "json-s1", workspaceId: workspace.id },
+      ],
+    );
     assert.equal(submitted[0]?.prompt, "headless prompt");
     assert.match(logs.join("\n"), /turn\.json/u);
   } finally {
@@ -1766,7 +1831,11 @@ function createDurableSessionAttachTestDeps(dir: string, stateRoot: string) {
 
 function createWorkspaceAttachTestDeps(
   dir: string,
-  options: { existingSessionIds: Set<string>; clientId?: string },
+  options: {
+    existingSessionIds: Set<string>;
+    clientId?: string;
+    pathSession?: { path: string; id: string };
+  },
 ) {
   const now = "2026-06-19T00:00:00.000Z";
   const workspace = {
@@ -1846,8 +1915,21 @@ function createWorkspaceAttachTestDeps(
                 entries: [],
               }
             : undefined,
-        loadByRef: async () => {
-          throw new Error("not implemented in test stub");
+        loadByRef: async (sessionRef: string) => {
+          if (options.pathSession?.path === sessionRef) {
+            return {
+              path: options.pathSession.path,
+              header: {
+                type: "session" as const,
+                version: 3,
+                id: options.pathSession.id,
+                timestamp: now,
+                cwd: dir,
+              },
+              entries: [],
+            };
+          }
+          throw new Error(`session not found: ${sessionRef}`);
         },
         load: async () => {
           throw new Error("not implemented in test stub");
@@ -1872,6 +1954,189 @@ function createWorkspaceAttachTestDeps(
   };
   return { daemonClient, createHostServices, emitted };
 }
+
+void test("native TUI model selection and following turn share one managed session", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-session-model-"));
+  try {
+    const sessionPath = join(
+      dir,
+      "sessions",
+      "workspace-hash-current",
+      "2026-07-13T00-00-00-000Z_same-session.jsonl",
+    );
+    await mkdir(join(dir, "sessions", "workspace-hash-current"), { recursive: true });
+    await writeFile(sessionPath, "{}\n", "utf8");
+    const base = createWorkspaceAttachTestDeps(dir, {
+      existingSessionIds: new Set(),
+      pathSession: { path: sessionPath, id: "same-session" },
+    });
+    const managedSessions: Array<{
+      sessionId: string;
+      scope: { kind: "workspace"; workspaceId: string };
+      workspaceId: string;
+      status: "ready";
+      bindings: [];
+      createdAt: string;
+      updatedAt: string;
+      cwd?: string;
+      model?: { providerName: string; modelId: string };
+    }> = [];
+    const controlCalls: Array<{ method: string; params: unknown }> = [];
+    const submitted: Array<{
+      fileName: string;
+      input: { sessionId: string; prompt: string };
+    }> = [];
+    const daemonClient: SparkDaemonClientOptions = {
+      ...base.daemonClient,
+      managedSessions: {
+        list: async () => managedSessions,
+        create: async (input) => {
+          assert.deepEqual(input.scope, {
+            kind: "workspace",
+            workspaceId: "workspace-current",
+          });
+          const record = {
+            sessionId: input.sessionId!,
+            scope: input.scope as { kind: "workspace"; workspaceId: string },
+            workspaceId: "workspace-current",
+            status: "ready" as const,
+            bindings: [] as [],
+            createdAt: "2026-07-13T00:00:00.000Z",
+            updatedAt: "2026-07-13T00:00:00.000Z",
+            ...(input.cwd ? { cwd: input.cwd } : {}),
+          };
+          managedSessions.push(record);
+          return record;
+        },
+        get: async (sessionId) => managedSessions.find((entry) => entry.sessionId === sessionId)!,
+        bind: async () => managedSessions[0]!,
+        unbind: async () => managedSessions[0]!,
+        archive: async () => ({ ...managedSessions[0]!, status: "archived" as const }),
+      },
+      controlRequest: async (method, params) => {
+        controlCalls.push({ method, params });
+        if (method === "model.catalog") {
+          const session = managedSessions[0];
+          return {
+            providers: [
+              {
+                providerName: "provider-a",
+                label: "Provider A",
+                auth: { providerName: "provider-a", kind: "none", configured: true },
+                models: [
+                  {
+                    model: { providerName: "provider-a", modelId: "model-a" },
+                    reasoning: true,
+                    input: ["text"],
+                    available: true,
+                  },
+                  {
+                    model: { providerName: "provider-a", modelId: "model-b" },
+                    reasoning: true,
+                    input: ["text"],
+                    available: true,
+                  },
+                ],
+              },
+            ],
+            defaultModel: { providerName: "provider-a", modelId: "model-a" },
+            session: {
+              sessionId: "same-session",
+              ...(session?.model ? { model: session.model } : {}),
+            },
+            diagnostics: [],
+          };
+        }
+        if (method === "session.model.set") {
+          const request = params as {
+            sessionId: string;
+            model: { providerName: string; modelId: string };
+          };
+          assert.equal(request.sessionId, "same-session");
+          managedSessions[0] = {
+            ...managedSessions[0]!,
+            model: request.model,
+            updatedAt: "2026-07-13T00:01:00.000Z",
+          };
+          return managedSessions[0]!;
+        }
+        throw new Error(`unexpected model control method: ${method}`);
+      },
+      turnSubmit: async (_paths, input) => {
+        const fileName = `turn-${submitted.length + 1}.json`;
+        submitted.push({ fileName, input });
+        return {
+          observedAt: "2026-07-13T00:02:00.000Z",
+          fileName,
+          filePath: join(dir, fileName),
+          task: { type: "session.run" as const, ...input },
+        };
+      },
+      daemonQueue: async () => ({
+        state: "all" as const,
+        observedAt: "2026-07-13T00:02:01.000Z",
+        byState: {
+          processed: submitted.map(({ fileName, input }) => ({
+            fileName,
+            filePath: join(dir, fileName),
+            payload: {
+              enqueuedAt: "2026-07-13T00:02:00.000Z",
+              processedAt: "2026-07-13T00:02:01.000Z",
+              task: { type: "session.run" as const, ...input },
+              result: { assistantText: `answer:${input.prompt}`, stderr: "" },
+            },
+          })),
+        },
+      }),
+    };
+
+    assert.equal(
+      await runSparkCli(["--session", sessionPath], {
+        daemonClient,
+        createHostServices: base.createHostServices,
+        terminal: { stdinIsTTY: true, stdoutIsTTY: true },
+        runTui: async (input) => {
+          assert.equal(typeof input, "object");
+          assert.notEqual(input, null);
+          const options = input as Exclude<typeof input, string | undefined>;
+          assert.equal(options.workspaceSession?.attachTarget, "same-session");
+          const modelCommand = options.slashCommands?.model as {
+            handler: (args: string, context: never) => Promise<unknown>;
+          };
+          await modelCommand.handler("provider-a/model-b", {} as never);
+          assert.equal(
+            await options.responder?.("after model switch", { messages: [] }),
+            "answer:after model switch",
+          );
+        },
+      }),
+      0,
+    );
+
+    assert.equal(managedSessions.length, 1);
+    assert.equal(managedSessions[0]?.sessionId, "same-session");
+    assert.deepEqual(managedSessions[0]?.model, {
+      providerName: "provider-a",
+      modelId: "model-b",
+    });
+    assert.deepEqual(controlCalls, [
+      { method: "model.catalog", params: { sessionId: "same-session" } },
+      {
+        method: "session.model.set",
+        params: {
+          sessionId: "same-session",
+          model: { providerName: "provider-a", modelId: "model-b" },
+        },
+      },
+    ]);
+    assert.deepEqual(
+      submitted.map(({ input }) => input),
+      [{ sessionId: "same-session", prompt: "after model switch" }],
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 void test("Spark native responder streams daemon view events as assistant chunks", async () => {
   const chunks: string[] = [];
@@ -1940,6 +2205,101 @@ void test("Spark native responder streams daemon view events as assistant chunks
 
   assert.equal(output, "");
   assert.deepEqual(chunks, ["hel", "lo"]);
+});
+
+void test("Spark native responder ensures its workspace session once before submission", async () => {
+  const calls: string[] = [];
+  const sessions: Array<{
+    sessionId: string;
+    scope: { kind: "workspace"; workspaceId: string };
+    workspaceId: string;
+    status: "ready";
+    bindings: [];
+    createdAt: string;
+    updatedAt: string;
+    cwd?: string;
+  }> = [];
+  const responder = createSparkDaemonNativeResponder(
+    {
+      startService: () => ({ kind: "detached" as const, alreadyRunning: false, detail: "started" }),
+      daemonStatus: async () => ({
+        observedAt: "2026-06-19T00:00:00.000Z",
+        servers: [],
+        queue: { inbox: 0, processed: 0, failed: 0 },
+      }),
+      managedSessions: {
+        list: async () => {
+          calls.push("list");
+          return sessions;
+        },
+        create: async (input) => {
+          assert.deepEqual(input.scope, { kind: "workspace", workspaceId: "ws-native" });
+          assert.equal(input.cwd, "/workspace/native");
+          calls.push(`create:${input.sessionId}`);
+          const record = {
+            sessionId: input.sessionId!,
+            scope: input.scope as { kind: "workspace"; workspaceId: string },
+            workspaceId: "ws-native",
+            status: "ready" as const,
+            bindings: [] as [],
+            createdAt: "2026-06-19T00:00:00.000Z",
+            updatedAt: "2026-06-19T00:00:00.000Z",
+            cwd: input.cwd,
+          };
+          sessions.push(record);
+          return record;
+        },
+        get: async () => sessions[0]!,
+        bind: async () => sessions[0]!,
+        unbind: async () => sessions[0]!,
+        archive: async () => ({ ...sessions[0]!, status: "archived" as const }),
+      },
+      turnSubmit: async (_paths, input) => {
+        calls.push(`submit:${input.sessionId}:${input.prompt}`);
+        return {
+          observedAt: "2026-06-19T00:00:00.000Z",
+          fileName: `${input.prompt}.json`,
+          filePath: `/tmp/${input.prompt}.json`,
+          task: { type: "session.run" as const, sessionId: input.sessionId, prompt: input.prompt },
+        };
+      },
+      daemonQueue: async () => ({
+        state: "all" as const,
+        observedAt: "2026-06-19T00:00:00.000Z",
+        byState: {
+          processed: calls
+            .filter((call) => call.startsWith("submit:"))
+            .map((call) => {
+              const [, sessionId, prompt] = call.split(":");
+              return {
+                fileName: `${prompt}.json`,
+                filePath: `/tmp/${prompt}.json`,
+                payload: {
+                  enqueuedAt: "2026-06-19T00:00:00.000Z",
+                  processedAt: "2026-06-19T00:00:01.000Z",
+                  task: { type: "session.run" as const, sessionId: sessionId!, prompt: prompt! },
+                  result: { assistantText: `answer:${prompt}`, stderr: "" },
+                },
+              };
+            }),
+        },
+      }),
+    },
+    {
+      sessionId: "native-session",
+      workspaceId: "ws-native",
+      cwd: "/workspace/native",
+    },
+  );
+
+  assert.equal(await responder("one"), "answer:one");
+  assert.equal(await responder("two"), "answer:two");
+  assert.deepEqual(calls, [
+    "list",
+    "create:native-session",
+    "submit:native-session:one",
+    "submit:native-session:two",
+  ]);
 });
 
 void test("Spark native responder submits prompts through daemon IPC", async () => {

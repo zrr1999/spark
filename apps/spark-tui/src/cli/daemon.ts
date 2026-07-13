@@ -107,6 +107,7 @@ export interface SparkDaemonClientOptions {
     input: SparkDaemonTurnSubmitInput,
     handlers: { onEvent?: (event: SparkDaemonEvent) => void; signal?: AbortSignal },
   ) => Promise<LocalTurnSubmitResult>;
+  controlRequest?: (method: string, params: unknown) => Promise<unknown>;
   workspaceEnsureLocal?: (
     paths: SparkDaemonClientPaths,
     input: LocalWorkspaceEnsureLocalInput,
@@ -921,6 +922,9 @@ export function sparkDaemonHelpText(): string {
 
 export interface SparkDaemonNativeResponderOptions {
   sessionId?: string;
+  workspaceId?: string;
+  cwd?: string;
+  ensureSession?: () => Promise<void>;
   waitForCompletion?: boolean;
   pollIntervalMs?: number;
   timeoutMs?: number;
@@ -937,9 +941,28 @@ export function createSparkDaemonNativeResponder(
   options: SparkDaemonNativeResponderOptions = {},
 ): (input: string, context?: SparkDaemonNativeResponderContext) => Promise<string> {
   const sessionId = options.sessionId ?? `spark-cli-${Date.now().toString(36)}`;
+  let sessionReady: Promise<void> | undefined;
   return async (input: string, context?: SparkDaemonNativeResponderContext) => {
     const prompt = input.trim();
     if (!prompt) return STRINGS.ignoredEmptyPrompt;
+    if (options.ensureSession || options.workspaceId) {
+      sessionReady ??= (
+        options.ensureSession
+          ? options.ensureSession()
+          : ensureSparkDaemonWorkspaceSession(
+              {
+                sessionId,
+                workspaceId: options.workspaceId!,
+                cwd: options.cwd ?? process.cwd(),
+              },
+              client,
+            )
+      ).catch((error) => {
+        sessionReady = undefined;
+        throw error;
+      });
+      await sessionReady;
+    }
     const live = createDaemonLiveAssistantRenderer(context);
     const result = await clientSubmitStreaming({ sessionId, prompt }, client, {
       signal: context?.signal,
@@ -1352,6 +1375,37 @@ export async function clientGetManagedSession(
   return await clientManagedSessions(client).get(sessionId);
 }
 
+export async function ensureSparkDaemonWorkspaceSession(
+  input: { sessionId: string; workspaceId: string; cwd: string },
+  client: SparkDaemonClientOptions = {},
+): Promise<void> {
+  const managedSessions = clientManagedSessions(client);
+  const sessions = await managedSessions.list({ includeArchived: true });
+  const existing = sessions.find((session) => session.sessionId === input.sessionId);
+  if (existing?.status === "archived") {
+    throw new Error(`cannot submit to archived session: ${input.sessionId}`);
+  }
+  if (
+    existing &&
+    (existing.scope.kind === "daemon" || existing.scope.workspaceId !== input.workspaceId)
+  ) {
+    throw new Error(
+      `session ${input.sessionId} belongs to ${
+        existing?.scope.kind === "daemon"
+          ? "the daemon scope"
+          : `workspace ${existing?.scope.workspaceId}`
+      }, not workspace ${input.workspaceId}`,
+    );
+  }
+  if (existing) return;
+  await managedSessions.create({
+    sessionId: input.sessionId,
+    scope: { kind: "workspace", workspaceId: input.workspaceId },
+    workspaceId: input.workspaceId,
+    cwd: input.cwd,
+  });
+}
+
 function clientManagedSessions(client: SparkDaemonClientOptions): SparkDaemonManagedSessionsClient {
   if (client.managedSessions) return client.managedSessions;
   const paths = resolveSparkDaemonClientPaths(client);
@@ -1713,6 +1767,7 @@ export async function requestSparkDaemonControl<T>(
 ): Promise<T> {
   const paths = resolveSparkDaemonClientPaths(client);
   await clientEnsureRunning(client);
+  if (client.controlRequest) return (await client.controlRequest(method, params)) as T;
   return await localRpcRequest<T>(paths, localRpcWireRequest(method, params));
 }
 

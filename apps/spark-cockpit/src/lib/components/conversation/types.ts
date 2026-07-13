@@ -63,6 +63,8 @@ export type ConversationMessageView = {
   status: string | null;
   timestamp: string;
   meta: string | null;
+  /** Platform-provided sender label for channel messages; null for local user turns. */
+  senderLabel: string | null;
   parts: ConversationPart[];
 };
 

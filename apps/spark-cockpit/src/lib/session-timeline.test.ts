@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { SparkJsonObject } from "@zendev-lab/spark-protocol";
 import { buildSessionTimeline } from "./session-timeline";
 
 describe("session timeline", () => {
@@ -72,6 +73,25 @@ describe("session timeline", () => {
       ["message:u2", "Try again"],
       ["message:a2", "Same result"],
     ]);
+  });
+
+  it("labels channel users from platform metadata and leaves local turns unlabeled", () => {
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [
+        message("u-name", "user", "from group", "2026-07-10T00:00:01.000Z", {
+          channel: { senderName: "徐晓健", senderId: "xuxiaojian" },
+        }),
+        message("u-id", "user", "from direct", "2026-07-10T00:00:02.000Z", {
+          channel: { senderId: "zhanrongrui" },
+        }),
+        message("u-local", "user", "from web", "2026-07-10T00:00:03.000Z"),
+      ],
+      commands: [],
+      reports: [],
+    });
+
+    expect(timeline.map((item) => item.senderLabel)).toEqual(["徐晓健", "zhanrongrui", null]);
   });
 
   it("projects legacy Infoflow envelopes as the human message body", () => {
@@ -256,7 +276,13 @@ describe("session timeline", () => {
   });
 });
 
-function message(id: string, role: "user" | "assistant", text: string, createdAt: string) {
+function message(
+  id: string,
+  role: "user" | "assistant",
+  text: string,
+  createdAt: string,
+  metadata: SparkJsonObject = {},
+) {
   return {
     version: 1 as const,
     id,
@@ -264,6 +290,6 @@ function message(id: string, role: "user" | "assistant", text: string, createdAt
     text,
     status: "done" as const,
     createdAt,
-    metadata: {},
+    metadata,
   };
 }

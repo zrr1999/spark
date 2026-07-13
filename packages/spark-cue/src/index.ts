@@ -29,6 +29,7 @@ import { createHash } from "node:crypto";
 import * as nodePath from "node:path";
 import { truncateToWidth } from "@zendev-lab/spark-tui/text";
 import { Type } from "typebox";
+import { cueShellProcessEnvironment } from "./executable-environment.ts";
 
 export interface PiCueExtensionApi {
   registerTool(config: PiCueToolConfig): void;
@@ -442,6 +443,7 @@ async function autoStartDaemon(socketPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       detached: true,
+      env: cueShellProcessEnvironment(),
       stdio: ["ignore", "pipe", "pipe"],
     });
     const timeoutMs = timeoutMsFromEnv(

@@ -243,8 +243,47 @@ function messageView(
     ...(createdAt ? { createdAt } : {}),
     ...(entry.parentId ? { parentId: entry.parentId } : {}),
     parts,
-    metadata: {},
+    metadata: role === "user" ? displayMessageMetadata(entry.message.metadata) : {},
   };
+}
+
+function displayMessageMetadata(value: unknown): SparkJsonObject {
+  if (!isRecord(value) || !isRecord(value.channel)) return {};
+  const channel = value.channel;
+  const safeChannel: SparkJsonObject = {};
+  for (const key of [
+    "adapter",
+    "externalKey",
+    "senderId",
+    "senderName",
+    "chatId",
+    "messageId",
+    "eventType",
+    "contentType",
+  ] as const) {
+    const field = channel[key];
+    if (typeof field === "string" && field.trim()) safeChannel[key] = field.trim();
+  }
+  const attachments = displayChannelAttachments(channel.attachments);
+  if (attachments.length > 0) safeChannel.attachments = attachments;
+  return Object.keys(safeChannel).length > 0 ? { channel: safeChannel } : {};
+}
+
+function displayChannelAttachments(value: unknown): SparkJsonObject[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 32).flatMap((entry): SparkJsonObject[] => {
+    if (!isRecord(entry)) return [];
+    if (entry.kind !== "image" && entry.kind !== "file" && entry.kind !== "voice") return [];
+    const attachment: SparkJsonObject = { kind: entry.kind };
+    for (const key of ["name", "mediaType", "reference"] as const) {
+      const field = entry[key];
+      if (typeof field === "string" && field.trim()) attachment[key] = field.trim();
+    }
+    if (typeof entry.size === "number" && Number.isFinite(entry.size) && entry.size >= 0) {
+      attachment.size = entry.size;
+    }
+    return [attachment];
+  });
 }
 
 function displayRole(role: unknown): "user" | "assistant" | "tool" | "custom" | undefined {

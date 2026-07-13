@@ -28,6 +28,45 @@ describe("migrateSparkDaemonDatabase", () => {
     }
   });
 
+  it("retires permanent daemon error rows without deleting other outbox work", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec(`
+        CREATE TABLE outbox (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          status TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO outbox (id, kind, payload_json, status, created_at, updated_at)
+        VALUES
+          ('evt_error_1', 'daemon.error', '{}', 'pending', '2026-06-20T00:00:00.000Z', '2026-06-20T00:00:00.000Z'),
+          ('evt_error_2', 'daemon.error', '{}', 'pending', '2026-06-20T00:00:01.000Z', '2026-06-20T00:00:01.000Z'),
+          ('evt_projection', 'projection.example', '{}', 'pending', '2026-06-20T00:00:02.000Z', '2026-06-20T00:00:02.000Z');
+      `);
+
+      migrateSparkDaemonDatabase(db);
+      db.prepare(
+        `INSERT INTO outbox (id, kind, payload_json, status, created_at, updated_at)
+         VALUES ('evt_error_late', 'daemon.error', '{}', 'pending', '2026-06-20T00:00:03.000Z', '2026-06-20T00:00:03.000Z')`,
+      ).run();
+      migrateSparkDaemonDatabase(db);
+
+      expect(db.prepare("SELECT id, kind FROM outbox ORDER BY id").all()).toEqual([
+        { id: "evt_projection", kind: "projection.example" },
+      ]);
+      expect(
+        db
+          .prepare("SELECT value FROM daemon_meta WHERE key = ?")
+          .get("migration.retire-daemon-error-outbox-v1"),
+      ).toEqual({ value: "complete" });
+    } finally {
+      db.close();
+    }
+  });
+
   it("migrates pre-registration workspace rows into daemon-owned workspace projections", () => {
     const db = new DatabaseSync(":memory:");
     try {

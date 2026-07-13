@@ -1,44 +1,17 @@
 import assert from "node:assert/strict";
-import { describe, it } from "vitest";
-import {
-  createInfoflowTransport,
-  normalizeInfoflowInbound,
-  signInfoflowAppSecret,
-} from "./infoflow-transport.ts";
+import type { WSClient } from "@core-workspace/infoflow-sdk-nodejs";
+import { describe, it, vi } from "vitest";
+import type { InfoflowSdkOutbound } from "./infoflow-sdk-outbound.ts";
+import { createInfoflowTransport, normalizeInfoflowInbound } from "./infoflow-transport.ts";
 
 describe("infoflow transport", () => {
-  it("signs app secrets as lowercase md5 hex", () => {
-    assert.equal(signInfoflowAppSecret("secret"), "5ebe2294ecd0e0f08eab7690d2a6ee69");
-  });
-
-  it("fetches a token and sends a private text message", async () => {
-    const calls: Array<{ url: string; body: unknown; authorization?: string }> = [];
-    const fetchImpl: typeof fetch = async (input, init) => {
-      const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
-      const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
-      const headers = new Headers(init?.headers);
-      calls.push({
-        url,
-        body,
-        ...(headers.get("Authorization")
-          ? { authorization: headers.get("Authorization") ?? undefined }
-          : {}),
-      });
-      if (url.endsWith("/api/v1/auth/app_access_token")) {
-        return new Response(
-          JSON.stringify({
-            code: "ok",
-            data: { app_access_token: "tok_demo", expire: 7200 },
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      return new Response(JSON.stringify({ code: "ok", data: { msgkey: "mk_1" } }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+  it("delegates ordinary and reply delivery to the SDK outbound boundary", async () => {
+    const send = vi.fn(async () => undefined);
+    const openReplyStream = vi.fn(async () => undefined);
+    const outbound: InfoflowSdkOutbound = {
+      send,
+      openReplyStream,
     };
-
     const transport = createInfoflowTransport(
       {
         type: "infoflow",
@@ -47,105 +20,80 @@ describe("infoflow transport", () => {
         app_secret: "secret",
         app_agent_id: "19690",
       },
-      { fetchImpl },
+      { outbound },
     );
 
     await transport.send("alice", "hello from spark");
-    assert.equal(calls.length, 2);
-    assert.match(calls[0]?.url ?? "", /\/api\/v1\/auth\/app_access_token$/);
-    assert.deepEqual(calls[0]?.body, {
-      app_key: "key",
-      app_secret: signInfoflowAppSecret("secret"),
+    await transport.reply?.openReplyStream({
+      recipient: "group:10838226",
+      senderId: "zhanrongrui",
     });
-    assert.match(calls[1]?.url ?? "", /\/api\/v1\/app\/message\/send$/);
-    assert.equal(calls[1]?.authorization, "Bearer-tok_demo");
-    assert.deepEqual(calls[1]?.body, {
-      touser: "alice",
-      msgtype: "text",
-      text: { content: "hello from spark" },
-      agentid: "19690",
+    await transport.reply?.sendReply({
+      recipient: "group:10838226",
+      senderId: "zhanrongrui",
+      text: "**处理完成**",
     });
+
+    assert.deepEqual(send.mock.calls, [
+      [{ recipient: "alice", content: { type: "text", text: "hello from spark" } }],
+      [
+        {
+          recipient: "group:10838226",
+          content: { type: "text", text: "正在处理…" },
+          mentionUserIds: ["zhanrongrui"],
+        },
+      ],
+      [
+        {
+          recipient: "group:10838226",
+          content: { type: "markdown", text: "**处理完成**" },
+          mentionUserIds: ["zhanrongrui"],
+        },
+      ],
+    ]);
+    assert.deepEqual(openReplyStream.mock.calls, [["group:10838226"]]);
   });
 
-  it("sends group messages with nyakore payload shape", async () => {
-    const calls: Array<{ url: string; body: unknown }> = [];
-    const fetchImpl: typeof fetch = async (input, init) => {
-      const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
-      const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
-      calls.push({ url, body });
-      if (url.endsWith("/api/v1/auth/app_access_token")) {
-        return new Response(
-          JSON.stringify({
-            code: "ok",
-            data: { app_access_token: "tok_demo", expire: 7200 },
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      return new Response(JSON.stringify({ code: "ok", data: { errcode: 0 } }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    };
-
-    const transport = createInfoflowTransport(
-      {
-        type: "infoflow",
-        endpoint: "https://api.im.baidu.com",
-        app_key: "key",
-        app_secret: "secret",
-        app_agent_id: "19690",
+  it("reports live SDK websocket state and connection errors", async () => {
+    let state = "connecting";
+    const handlers = new Map<string, (event: unknown) => void>();
+    const client = {
+      on(pattern: string, handler: (event: unknown) => void) {
+        handlers.set(pattern, handler);
       },
-      { fetchImpl },
-    );
-
-    await transport.send("group:10838226", "group reply");
-    assert.equal(calls.length, 2);
-    assert.match(calls[1]?.url ?? "", /\/api\/v1\/robot\/msg\/groupmsgsend$/);
-    const body = calls[1]?.body as {
-      message?: { header?: Record<string, unknown>; body?: unknown };
-    };
-    assert.equal(body.message?.header?.toid, 10838226);
-    assert.equal(body.message?.header?.totype, "GROUP");
-    assert.equal(body.message?.header?.msgtype, "TEXT");
-    assert.deepEqual(body.message?.body, [{ type: "TEXT", content: "group reply" }]);
-  });
-
-  it("fails when nested data.errcode is non-zero", async () => {
-    const fetchImpl: typeof fetch = async (input) => {
-      const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
-      if (url.endsWith("/api/v1/auth/app_access_token")) {
-        return new Response(
-          JSON.stringify({
-            code: "ok",
-            data: { app_access_token: "tok_demo", expire: 7200 },
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      return new Response(
-        JSON.stringify({
-          code: "ok",
-          data: { errcode: 40000, errmsg: "lack param. header or body is null" },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
-    };
-
-    const transport = createInfoflowTransport(
-      {
-        type: "infoflow",
-        endpoint: "https://api.im.baidu.com",
-        app_key: "key",
-        app_secret: "secret",
+      off(pattern: string) {
+        handlers.delete(pattern);
       },
-      { fetchImpl },
+      async connect() {
+        state = "connected";
+        handlers.get("connected")?.({ type: "connected" });
+      },
+      disconnect() {
+        state = "disconnected";
+      },
+      getState() {
+        return state;
+      },
+    } as unknown as WSClient;
+    const transport = createInfoflowTransport(
+      { type: "infoflow", app_key: "key", app_secret: "secret", app_agent_id: "19690" },
+      { wsClientFactory: () => client },
     );
 
-    await assert.rejects(
-      () => transport.send("group:1", "x"),
-      /lack param\. header or body is null/,
-    );
+    await transport.start(() => undefined);
+    assert.deepEqual(transport.status?.(), { state: "connected" });
+    state = "reconnecting";
+    assert.deepEqual(transport.status?.(), { state: "reconnecting" });
+    handlers.get("error")?.(new Error("gateway unavailable"));
+    assert.deepEqual(transport.status?.(), {
+      state: "degraded",
+      error: "gateway unavailable",
+    });
+    state = "connected";
+    handlers.get("connected")?.({ type: "connected" });
+    assert.deepEqual(transport.status?.(), { state: "connected" });
+    await transport.stop();
+    assert.deepEqual(transport.status?.(), { state: "stopped" });
   });
 
   it("normalizes private and group inbound payloads", () => {
@@ -155,7 +103,13 @@ describe("infoflow transport", () => {
         Content: "hi",
         MsgId: "1",
       }),
-      { user_id: "alice", text: "hi", chat_type: "private", message_id: "1" },
+      {
+        user_id: "alice",
+        text: "hi",
+        chat_type: "private",
+        message_id: "1",
+        content_type: "text",
+      },
     );
     assert.deepEqual(
       normalizeInfoflowInbound({
@@ -171,6 +125,7 @@ describe("infoflow transport", () => {
         chat_type: "group",
         chat_id: "42",
         message_id: "9",
+        content_type: "text",
       },
     );
     assert.deepEqual(
@@ -190,6 +145,7 @@ describe("infoflow transport", () => {
         chat_type: "group",
         chat_id: "42",
         message_id: "10",
+        content_type: "mixed",
         mentions: ["spark-bot"],
       },
     );
@@ -223,8 +179,56 @@ describe("infoflow transport", () => {
       { agentId: "43163" },
     );
     assert.equal(normalized?.text, "@神经蛙 你和 @詹荣瑞 什么关系？");
+    assert.equal(normalized?.user_id, "xuxiaojian");
+    assert.equal(normalized?.event_type, "MESSAGE_RECEIVE");
+    assert.equal(normalized?.content_type, "mixed");
     assert.deepEqual(normalized?.mentions, ["神经蛙", "詹荣瑞"]);
     assert.equal(normalized?.mentioned_self, true);
     assert.match(normalized?.text ?? "", /@詹荣瑞/);
+  });
+
+  it("normalizes private media without copying binary or signed URLs", () => {
+    const normalized = normalizeInfoflowInbound({
+      FromUserId: "alice",
+      MsgType: "IMAGE",
+      Content: JSON.stringify({
+        content: "A".repeat(2_000),
+        downloadurl: "https://signed.invalid/image",
+        fid: "image-fid-1",
+      }),
+    });
+
+    assert.deepEqual(normalized, {
+      user_id: "alice",
+      text: "[图片]",
+      chat_type: "private",
+      content_type: "image",
+      attachments: [{ kind: "image", reference: "image-fid-1" }],
+    });
+    assert.doesNotMatch(JSON.stringify(normalized), /signed\.invalid|A{100}/u);
+  });
+
+  it("uses platform message sender metadata when the group header omits it", () => {
+    const normalized = normalizeInfoflowInbound({
+      eventtype: "ALL_MESSAGE_FORWARD",
+      groupid: 42,
+      message: {
+        FromUserId: "platform-user-7",
+        FromUserName: "平台用户七",
+        header: { messageid: "m-sender", msgtype: "TEXT" },
+        body: [{ type: "TEXT", content: "hello" }],
+      },
+    });
+
+    assert.deepEqual(normalized, {
+      user_id: "platform-user-7",
+      sender_name: "平台用户七",
+      text: "hello",
+      chat_type: "group",
+      chat_id: "42",
+      message_id: "m-sender",
+      event_type: "ALL_MESSAGE_FORWARD",
+      content_type: "text",
+    });
   });
 });

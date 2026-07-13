@@ -1,4 +1,4 @@
-import type { InfoflowAdapterConfig, InfoflowChatType } from "./types.ts";
+import type { InfoflowAdapterConfig, InfoflowChatType, InfoflowGroupTrigger } from "./types.ts";
 
 export type InfoflowGroupPolicy = NonNullable<InfoflowAdapterConfig["group_policy"]>;
 
@@ -45,6 +45,35 @@ export function resolveInfoflowGroupPolicy(config: InfoflowAdapterConfig): Infof
   return config.group_policy ?? "disabled";
 }
 
+/** Default to explicit bot mentions so ALL_MESSAGE_FORWARD cannot silently create turns. */
+export function resolveInfoflowGroupTrigger(config: InfoflowAdapterConfig): InfoflowGroupTrigger {
+  return config.group_trigger ?? "mention";
+}
+
+export function isInfoflowGroupTriggered(
+  config: InfoflowAdapterConfig,
+  input: { text: string; eventType?: string; mentionedSelf?: boolean },
+): boolean {
+  const trigger = resolveInfoflowGroupTrigger(config);
+  const eventType = input.eventType?.trim().toUpperCase();
+  if (eventType === "ALL_MESSAGE_FORWARD" && trigger !== "all") return false;
+  if (eventType && eventType !== "MESSAGE_RECEIVE" && eventType !== "ALL_MESSAGE_FORWARD") {
+    return false;
+  }
+  switch (trigger) {
+    case "mention":
+      return input.mentionedSelf === true;
+    case "command":
+      return /^\s*[!/][^\s]*/u.test(input.text);
+    case "all":
+      return true;
+    default: {
+      const unexpected: never = trigger;
+      throw new Error(`unsupported infoflow group_trigger: ${String(unexpected)}`);
+    }
+  }
+}
+
 export function isInfoflowInboundAllowed(
   config: InfoflowAdapterConfig,
   input: {
@@ -52,6 +81,9 @@ export function isInfoflowInboundAllowed(
     senderId: string;
     senderName?: string;
     groupId?: string;
+    text?: string;
+    eventType?: string;
+    mentionedSelf?: boolean;
   },
 ): boolean {
   switch (input.chatType) {
@@ -60,7 +92,16 @@ export function isInfoflowInboundAllowed(
     case "group": {
       const groupId = input.groupId?.trim();
       if (!groupId) return false;
-      return isInfoflowGroupAllowed(config, groupId);
+      return (
+        isInfoflowGroupAllowed(config, groupId) &&
+        isInfoflowGroupTriggered(config, {
+          text: input.text ?? "",
+          ...(input.eventType ? { eventType: input.eventType } : {}),
+          ...(typeof input.mentionedSelf === "boolean"
+            ? { mentionedSelf: input.mentionedSelf }
+            : {}),
+        })
+      );
     }
     default: {
       const unexpected: never = input.chatType;

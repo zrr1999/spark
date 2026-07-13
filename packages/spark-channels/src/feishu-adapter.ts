@@ -49,6 +49,18 @@ export class FeishuAdapter implements ChannelAdapter {
     await this.transport.send(input.recipient, input.text);
   }
 
+  status() {
+    const transportStatus = this.transport.status?.() ?? {
+      state: this.running ? ("connected" as const) : ("stopped" as const),
+    };
+    return {
+      id: this.id,
+      type: this.type,
+      running: this.running,
+      ...transportStatus,
+    };
+  }
+
   parseInbound(raw: unknown): IncomingMessage {
     const payload = parseFeishuInbound(raw);
     const chatId = payload.chat_id.trim();
@@ -99,6 +111,9 @@ function createDefaultFeishuTransport(config: FeishuAdapterConfig): ChannelTrans
     async stop() {},
     async send() {
       throw new Error("FeishuAdapter requires an injected transport or production SDK wiring");
+    },
+    status() {
+      return { state: "stopped" };
     },
   };
 }

@@ -8,6 +8,7 @@ import type {
   InfoflowAdapterConfig,
   InfoflowInboundRaw,
 } from "./types.ts";
+import type { ChannelReplyCapability } from "./reply.ts";
 
 export interface InfoflowAdapterOptions {
   id: string;
@@ -22,7 +23,12 @@ export class InfoflowAdapter implements ChannelAdapter {
   readonly config: InfoflowAdapterConfig;
   private readonly transport: ChannelTransport;
   private readonly onMessage?: (message: IncomingMessage) => void;
+  private readonly seenMessages = new Map<string, number>();
   private running = false;
+
+  get reply(): ChannelReplyCapability | undefined {
+    return this.transport.reply;
+  }
 
   constructor(options: InfoflowAdapterOptions) {
     this.id = options.id;
@@ -51,6 +57,18 @@ export class InfoflowAdapter implements ChannelAdapter {
     await this.transport.send(input.recipient, input.text);
   }
 
+  status() {
+    const transportStatus = this.transport.status?.() ?? {
+      state: this.running ? ("connected" as const) : ("stopped" as const),
+    };
+    return {
+      id: this.id,
+      type: this.type,
+      running: this.running,
+      ...transportStatus,
+    };
+  }
+
   parseInbound(raw: unknown): IncomingMessage {
     const payload = parseInfoflowInbound(raw);
     const userId = payload.user_id.trim();
@@ -74,6 +92,9 @@ export class InfoflowAdapter implements ChannelAdapter {
       ...(groupId ? { chatId: groupId } : {}),
       text: payload.text,
       messageId: payload.message_id,
+      ...(payload.event_type ? { eventType: payload.event_type } : {}),
+      ...(payload.content_type ? { contentType: payload.content_type } : {}),
+      ...(payload.attachments?.length ? { attachments: payload.attachments } : {}),
       ...(mentions.length > 0 ? { mentions } : {}),
       ...(typeof mentionedSelf === "boolean" ? { mentionedSelf } : {}),
       raw,
@@ -89,6 +110,11 @@ export class InfoflowAdapter implements ChannelAdapter {
         senderId: payload.user_id,
         ...(payload.sender_name ? { senderName: payload.sender_name } : {}),
         ...(payload.chat_id ? { groupId: payload.chat_id } : {}),
+        text: payload.text,
+        ...(payload.event_type ? { eventType: payload.event_type } : {}),
+        ...(typeof message.mentionedSelf === "boolean"
+          ? { mentionedSelf: message.mentionedSelf }
+          : {}),
       })
     ) {
       console.log(
@@ -98,9 +124,37 @@ export class InfoflowAdapter implements ChannelAdapter {
       );
       return;
     }
+    const messageId = message.messageId?.trim();
+    const dedupeKey = messageId ? `${message.externalKey}\u0000${messageId}` : undefined;
+    const now = Date.now();
+    this.pruneSeenMessages(now);
+    const seenAt = dedupeKey ? this.seenMessages.get(dedupeKey) : undefined;
+    if (dedupeKey && seenAt !== undefined && now - seenAt < INFOFLOW_DEDUPE_TTL_MS) {
+      this.seenMessages.delete(dedupeKey);
+      this.seenMessages.set(dedupeKey, now);
+      console.log(`[spark-channels] infoflow dropped duplicate message=${messageId}`);
+      return;
+    }
+    if (dedupeKey) {
+      this.seenMessages.set(dedupeKey, now);
+      if (this.seenMessages.size > INFOFLOW_DEDUPE_CAPACITY) {
+        const oldest = this.seenMessages.keys().next().value;
+        if (oldest) this.seenMessages.delete(oldest);
+      }
+    }
     this.onMessage?.(message);
   }
+
+  private pruneSeenMessages(now: number): void {
+    for (const [key, seenAt] of this.seenMessages) {
+      if (now - seenAt < INFOFLOW_DEDUPE_TTL_MS) break;
+      this.seenMessages.delete(key);
+    }
+  }
 }
+
+const INFOFLOW_DEDUPE_CAPACITY = 2_048;
+const INFOFLOW_DEDUPE_TTL_MS = 10 * 60_000;
 
 function parseInfoflowInbound(raw: unknown): InfoflowInboundRaw {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -128,6 +182,36 @@ function parseInfoflowInbound(raw: unknown): InfoflowInboundRaw {
     chat_type: resolvedType,
     ...(typeof record.chat_id === "string" ? { chat_id: record.chat_id } : {}),
     ...(typeof record.message_id === "string" ? { message_id: record.message_id } : {}),
+    ...(typeof record.event_type === "string" ? { event_type: record.event_type } : {}),
+    ...(typeof record.content_type === "string" ? { content_type: record.content_type } : {}),
+    ...(Array.isArray(record.attachments)
+      ? {
+          attachments: record.attachments.flatMap((entry) => {
+            if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+            const attachment = entry as Record<string, unknown>;
+            if (
+              attachment.kind !== "image" &&
+              attachment.kind !== "file" &&
+              attachment.kind !== "voice"
+            ) {
+              return [];
+            }
+            return [
+              {
+                kind: attachment.kind,
+                ...(typeof attachment.name === "string" ? { name: attachment.name } : {}),
+                ...(typeof attachment.mediaType === "string"
+                  ? { mediaType: attachment.mediaType }
+                  : {}),
+                ...(typeof attachment.size === "number" ? { size: attachment.size } : {}),
+                ...(typeof attachment.reference === "string"
+                  ? { reference: attachment.reference }
+                  : {}),
+              },
+            ];
+          }),
+        }
+      : {}),
     ...(typeof record.sender_name === "string" ? { sender_name: record.sender_name } : {}),
     ...(Array.isArray(record.mentions)
       ? {
@@ -143,16 +227,20 @@ function parseInfoflowInbound(raw: unknown): InfoflowInboundRaw {
 }
 
 function createDefaultInfoflowTransport(config: InfoflowAdapterConfig): ChannelTransport {
-  if (config.app_key?.trim() && config.app_secret?.trim()) {
+  if (config.app_key?.trim() && config.app_secret?.trim() && config.app_agent_id?.trim()) {
     return createInfoflowTransport(config);
   }
+  const error = "InfoflowAdapter requires app_key, app_secret, and app_agent_id";
   return {
     async start() {
-      // Credentials missing — keep start as a no-op so status can report stopped/degraded.
+      throw new Error(error);
     },
     async stop() {},
     async send() {
-      throw new Error("InfoflowAdapter requires app_key and app_secret");
+      throw new Error(error);
+    },
+    status() {
+      return { state: "degraded", error };
     },
   };
 }

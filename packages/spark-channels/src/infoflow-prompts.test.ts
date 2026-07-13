@@ -19,8 +19,12 @@ describe("infoflow prompts", () => {
         ...base,
         allowed_user_ids: ["alice", "bob"],
         group_policy: "open",
+        group_trigger: "all",
       }),
     ).toMatch(/Private chat allowlist: alice, bob/);
+    expect(
+      renderInfoflowPolicySummary({ ...base, group_policy: "open", group_trigger: "all" }),
+    ).toMatch(/Group trigger: all \(full group feed\)/);
     expect(
       renderInfoflowPolicySummary({
         ...base,
@@ -59,11 +63,13 @@ describe("infoflow prompts", () => {
       senderName: "Bob",
       chatId: "10838226",
       messageId: "m1",
+      eventType: "MESSAGE_RECEIVE",
       mentions: ["spark-bot"],
       mentionedSelf: true,
     });
     expect(prompt ?? "").toMatch(/^Dynamic context checkpoint: infoflow-message\./);
     expect(prompt ?? "").toMatch(/senderId: "bob"/);
+    expect(prompt ?? "").toMatch(/eventType: "MESSAGE_RECEIVE"/);
     expect(prompt ?? "").toMatch(/groupId: "10838226"/);
     expect(prompt ?? "").toMatch(/mentionedSelf: true/);
     expect(prompt ?? "").not.toMatch(/You are handling an Infoflow/);

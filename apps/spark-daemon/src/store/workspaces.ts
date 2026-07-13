@@ -413,38 +413,23 @@ export function markSparkDaemonServerConnected(
   ).run(now, serverUrl);
 }
 
-export function markServerWorkspacesDisconnected(
+/**
+ * Record loss of the optional Cockpit projection connection.
+ *
+ * Workspace availability is daemon-local execution state (path, detach, and
+ * capability health). A disconnected projection server must not make an
+ * otherwise executable local workspace unavailable.
+ */
+export function markSparkDaemonServerDisconnected(
   db: DatabaseSync,
   serverUrl: string,
   reason = "server.unreachable",
-  now = new Date().toISOString(),
 ): void {
   db.prepare(
     `UPDATE daemon_servers
      SET last_disconnect_reason = ?
      WHERE server_url = ?`,
   ).run(reason, serverUrl);
-
-  for (const workspace of listWorkspaces(db)) {
-    if (workspace.serverUrl !== serverUrl || isUserDetachedWorkspace(workspace)) {
-      continue;
-    }
-
-    const diagnostics = {
-      ...workspace.diagnostics,
-      serverDisconnected: true,
-      reason,
-      checkedAt: now,
-    };
-    db.prepare(
-      `UPDATE workspaces
-       SET status = 'unavailable',
-           diagnostics_json = ?,
-           updated_at = ?
-       WHERE id = ?`,
-    ).run(JSON.stringify(diagnostics), now, workspace.id);
-    updateSparkDaemonWorkspaceStatus(db, workspace.id, "unavailable", diagnostics, now);
-  }
 }
 
 export function sparkDaemonServerStatusSummaries(

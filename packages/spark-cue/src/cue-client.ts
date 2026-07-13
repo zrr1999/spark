@@ -18,6 +18,7 @@ import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { env } from "node:process";
+import { cueShellProcessEnvironment } from "./executable-environment.ts";
 import {
   validateCueErrorPayload,
   validateCueEventPayload,
@@ -83,7 +84,7 @@ export async function resolveCueTransport(): Promise<CueResolvedTransport> {
 function runResolverAttempt(attempt: ResolverAttempt): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(attempt.command, attempt.args, {
-      env: process.env,
+      env: cueShellProcessEnvironment(),
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stdout: Buffer[] = [];
@@ -338,8 +339,8 @@ export interface PongPayload {
   version: string;
   protocol_version: number;
   capabilities: string[];
-  /** Unique to one daemon process lifetime; ledger replay is valid only within it. */
-  instance_id: string;
+  /** Unique to one daemon process lifetime when supported by the daemon. */
+  instance_id?: string;
 }
 
 export interface ScopeCreatedPayload {
@@ -1642,15 +1643,19 @@ export class CueClient {
       }
     }
     const instanceId = pong.instance_id;
-    if (typeof instanceId !== "string" || instanceId.length === 0) {
+    if (instanceId !== undefined && (typeof instanceId !== "string" || instanceId.length === 0)) {
       throw unsupportedProtocolError(
-        "cue-shell daemon Pong is missing instance_id; upgrade/restart cued",
+        "cue-shell daemon Pong has an invalid instance_id; upgrade/restart cued",
       );
     }
-    if (this.#daemonInstanceId !== null && this.#daemonInstanceId !== instanceId) {
+    if (
+      instanceId !== undefined &&
+      this.#daemonInstanceId !== null &&
+      this.#daemonInstanceId !== instanceId
+    ) {
       throw unsupportedProtocolError("cue-shell daemon changed instance_id on one connection");
     }
-    this.#daemonInstanceId = instanceId;
+    this.#daemonInstanceId = instanceId ?? null;
     return version;
   }
 

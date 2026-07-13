@@ -57,6 +57,7 @@ export function buildSessionTimeline(input: {
       status: message.status === "done" ? null : message.status,
       timestamp: message.createdAt ?? input.fallbackTimestamp,
       meta: message.role === "assistant" || message.role === "user" ? null : message.role,
+      senderLabel: actor === "user" ? channelSenderLabel(message.metadata) : null,
       order: messageIndex,
       parts,
     });
@@ -79,6 +80,7 @@ export function buildSessionTimeline(input: {
         status: command.invocationStatus ?? command.deliveryStatus ?? command.status,
         timestamp: command.createdAt,
         meta: null,
+        senderLabel: null,
         order: input.messages.length + commandIndex,
         parts: [textConversationPart(body)],
       });
@@ -105,6 +107,7 @@ export function buildSessionTimeline(input: {
       status: report.status,
       timestamp: report.createdAt,
       meta: report.role && !["assistant", "user"].includes(report.role) ? report.role : null,
+      senderLabel: null,
       order: input.messages.length + input.commands.length + reportIndex,
       parts: [textConversationPart(report.text, report.status === "running")],
     });
@@ -117,6 +120,22 @@ export function buildSessionTimeline(input: {
     return lexical || left.order - right.order || left.id.localeCompare(right.id);
   });
   return mergeTimelineToolParts(sortedItems);
+}
+
+function channelSenderLabel(metadata: SparkMessageView["metadata"]): string | null {
+  const channel = isRecord(metadata.channel) ? metadata.channel : undefined;
+  if (!channel) return null;
+  const senderName = nonEmptyString(channel.senderName);
+  if (senderName) return senderName;
+  return nonEmptyString(channel.senderId);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function mergeTimelineToolParts(items: SessionTimelineItem[]) {

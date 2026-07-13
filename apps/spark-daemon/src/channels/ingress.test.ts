@@ -124,8 +124,10 @@ describe("channel ingress", () => {
     transport.emitInbound({
       user_id: "u_owned",
       sender_name: "Owned User",
-      text: "owned mutation",
+      text: "owned mutation\n[文件: plan.pdf]",
       message_id: "infoflow-message-1",
+      content_type: "mixed",
+      attachments: [{ kind: "file", name: "plan.pdf", reference: "fid-plan" }],
     });
     await vi.waitFor(() => expect(assignments).toHaveLength(1));
     await controller.stop();
@@ -139,13 +141,15 @@ describe("channel ingress", () => {
       readFile(join(defaultSparkSessionRegistryRoot(sparkHome), "registry.json"), "utf8"),
     ).rejects.toMatchObject({ code: "ENOENT" });
     expect(assignments[0]).toMatchObject({
-      goal: "owned mutation",
-      assignment: { goal: "owned mutation" },
+      goal: "owned mutation\n[文件: plan.pdf]",
+      assignment: { goal: "owned mutation\n[文件: plan.pdf]" },
       channelContext: {
         externalKey: "infoflow:user:u_owned",
         senderId: "u_owned",
         senderName: "Owned User",
         messageId: "infoflow-message-1",
+        contentType: "mixed",
+        attachments: [{ kind: "file", name: "plan.pdf", reference: "fid-plan" }],
       },
     });
     expect(assignments[0]?.goal).not.toContain("You are handling an Infoflow");
@@ -214,10 +218,15 @@ describe("channel ingress", () => {
       workspaceId: "ws_demo",
       configured: true,
       state: "running",
-      adapters: [{ id: "feishu", running: true }],
+      adapters: [{ id: "feishu", running: true, state: "connected" }],
       routes: [{ name: "ops", adapter: "feishu", recipient: "oc_ops" }],
     });
     expect(stableTransport.isRunning).toBe(true);
+    stableTransport.status = () => ({ state: "reconnecting" });
+    expect(runtime.status("ws_demo")).toMatchObject({
+      state: "degraded",
+      adapters: [{ id: "feishu", running: true, state: "reconnecting" }],
+    });
     const configPath = workspaceChannelsConfigPath(sparkHome, "ws_demo");
     expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(config);
     if (process.platform !== "win32") {

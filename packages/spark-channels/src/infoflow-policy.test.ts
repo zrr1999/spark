@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isInfoflowGroupAllowed,
+  isInfoflowGroupTriggered,
   isInfoflowInboundAllowed,
   isInfoflowPrivateAllowed,
 } from "./infoflow-policy.ts";
@@ -38,11 +39,67 @@ describe("infoflow policy", () => {
         chatType: "group",
         senderId: "anyone",
         groupId: "10838226",
+        text: "@Spark status",
+        mentionedSelf: true,
       }),
     ).toBe(true);
   });
 
   it("opens all groups when policy is open", () => {
     expect(isInfoflowGroupAllowed({ ...base, group_policy: "open" }, "1")).toBe(true);
+  });
+
+  it("defaults group turns to platform-detected bot mentions", () => {
+    const config = { ...base, group_policy: "open" as const };
+    expect(
+      isInfoflowGroupTriggered(config, { text: "ambient", eventType: "ALL_MESSAGE_FORWARD" }),
+    ).toBe(false);
+    expect(
+      isInfoflowGroupTriggered(config, {
+        text: "@Spark status",
+        eventType: "MESSAGE_RECEIVE",
+        mentionedSelf: true,
+      }),
+    ).toBe(true);
+    expect(
+      isInfoflowGroupTriggered(config, {
+        text: "@someone-else status",
+        eventType: "MESSAGE_RECEIVE",
+        mentionedSelf: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("supports command and all-message group triggers", () => {
+    expect(
+      isInfoflowGroupTriggered(
+        { ...base, group_trigger: "command" },
+        { text: "/status", eventType: "MESSAGE_RECEIVE" },
+      ),
+    ).toBe(true);
+    expect(
+      isInfoflowGroupTriggered(
+        { ...base, group_trigger: "command" },
+        { text: "ambient", eventType: "ALL_MESSAGE_FORWARD" },
+      ),
+    ).toBe(false);
+    expect(
+      isInfoflowGroupTriggered(
+        { ...base, group_trigger: "all" },
+        { text: "ambient", eventType: "ALL_MESSAGE_FORWARD" },
+      ),
+    ).toBe(true);
+    expect(
+      isInfoflowGroupTriggered(
+        { ...base, group_trigger: "all" },
+        { text: "@Spark status", eventType: "MESSAGE_RECEIVE", mentionedSelf: true },
+      ),
+    ).toBe(true);
+    expect(
+      isInfoflowGroupTriggered(
+        { ...base, group_trigger: "all" },
+        { text: "unknown", eventType: "OTHER_EVENT" },
+      ),
+    ).toBe(false);
   });
 });

@@ -59,7 +59,7 @@ import {
   isUserDetachedWorkspace,
   listWorkspaces,
   markSparkDaemonServerConnected,
-  markServerWorkspacesDisconnected,
+  markSparkDaemonServerDisconnected,
   reconcileWorkspaces,
   resolveWorkspaceLocalPath,
   workspaceSummaries,
@@ -126,6 +126,8 @@ export interface StartSparkDaemonOptions {
   queuePollIntervalMs?: number;
   queueConcurrency?: number;
   queueTaskTimeoutMs?: number;
+  /** Retry delay for the optional Cockpit projection connection. */
+  serverReconnectDelayMs?: number;
   invocationRegistry?: SparkDaemonInvocationRegistry;
   humanWaits?: SparkDaemonHumanWaitRegistry;
   localEventSink?: SparkDaemonEventSink;
@@ -134,6 +136,10 @@ export interface StartSparkDaemonOptions {
 
 export async function startSparkDaemon(options: StartSparkDaemonOptions): Promise<void> {
   writePrivateFile(options.paths.pidFile, `${process.pid}\n`);
+  // Local execution truth is established independently of the optional
+  // Cockpit projection. This also repairs status left by older daemons that
+  // conflated a server disconnect with an unavailable workspace.
+  reconcileWorkspaces(options.db);
   const invocationRegistry = options.invocationRegistry ?? new SparkDaemonInvocationRegistry();
   const humanWaits = options.humanWaits ?? new SparkDaemonHumanWaitRegistry(options.db);
   let emitQueueEventToServer: SparkDaemonEventSink | null = null;
@@ -177,7 +183,7 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
     : null;
   const stopQueueLoop = () => {
     void queueLoop?.stop().catch((error: unknown) => {
-      sendErrorLog(options.db, options.config.runtimeId ?? "unknown", error);
+      logDaemonError(options.config.runtimeId ?? "unknown", error);
     });
   };
   if (queueLoop && !options.once) {
@@ -188,7 +194,7 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
   const channelIngress = await maybeStartChannelIngress(options);
   const stopChannelIngress = () => {
     void channelIngress?.stop().catch((error: unknown) => {
-      sendErrorLog(options.db, options.config.runtimeId ?? "unknown", error);
+      logDaemonError(options.config.runtimeId ?? "unknown", error);
     });
   };
   options.signal?.addEventListener("abort", stopChannelIngress, { once: true });
@@ -229,9 +235,11 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
           humanWaits,
           setQueueEventTarget,
         });
-      } catch (error) {
-        sendErrorLog(options.db, config.runtimeId ?? "unknown", error);
-        await delayUnlessAborted(1_000, options.signal);
+      } catch {
+        // Cockpit is an optional projection surface. Connection failures are
+        // represented by daemon_servers.last_disconnect_reason and must not
+        // become permanent business-outbox entries or stop local execution.
+        await delayUnlessAborted(options.serverReconnectDelayMs ?? 1_000, options.signal);
       }
     }
   } finally {
@@ -240,7 +248,7 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
     try {
       await channelIngress?.stop();
     } catch (error) {
-      sendErrorLog(options.db, options.config.runtimeId ?? "unknown", error);
+      logDaemonError(options.config.runtimeId ?? "unknown", error);
     }
     await queueLoop?.stop();
     if (queueContext) {
@@ -300,7 +308,7 @@ async function maybeStartChannelIngress(
   try {
     await runtime.start();
   } catch (error) {
-    sendErrorLog(options.db, options.config.runtimeId ?? "unknown", error);
+    logDaemonError(options.config.runtimeId ?? "unknown", error);
   }
   // Keep the runtime reachable through local RPC even when startup config is
   // absent or invalid so an operator can repair it without restarting daemon.
@@ -345,7 +353,7 @@ async function runSparkDaemonServerConnection(
         config = await refreshSparkDaemonCredentials({ paths: options.paths, config });
         scheduleTokenRefresh();
       } catch (error) {
-        sendErrorLog(options.db, runtimeId, error);
+        logDaemonError(runtimeId, error);
         scheduleTokenRefresh(tokenRefreshRetryDelayMs());
       }
     };
@@ -375,7 +383,7 @@ async function runSparkDaemonServerConnection(
 
     const markDisconnected = (reason: string) => {
       if (serverUrl) {
-        markServerWorkspacesDisconnected(options.db, serverUrl, reason);
+        markSparkDaemonServerDisconnected(options.db, serverUrl, reason);
       }
     };
 
@@ -394,7 +402,7 @@ async function runSparkDaemonServerConnection(
       clearRuntimeTimers();
       void drainActiveHandlers()
         .catch((error: unknown) => {
-          sendErrorLog(options.db, runtimeId, error);
+          logDaemonError(runtimeId, error);
         })
         .finally(() => {
           ws.close(1000, "daemon stop");
@@ -491,7 +499,7 @@ async function runSparkDaemonServerConnection(
           sendHeartbeat(ws, options.db, runtimeId, runtimeSessionId);
         },
       }).catch((error: unknown) => {
-        sendErrorLog(options.db, runtimeId, error);
+        logDaemonError(runtimeId, error);
       });
       activeHandlers.add(handler);
       void handler.finally(() => {
@@ -1119,14 +1127,7 @@ function sendJson(ws: ServerSocket, value: unknown): void {
   ws.send(JSON.stringify(value));
 }
 
-function sendErrorLog(db: DatabaseSync, runtimeId: string, error: unknown): void {
-  db.prepare(
-    `INSERT INTO outbox (id, kind, payload_json, status, created_at, updated_at)
-     VALUES (?, 'daemon.error', ?, 'pending', ?, ?)`,
-  ).run(
-    createId("evt"),
-    JSON.stringify({ runtimeId, error: error instanceof Error ? error.message : String(error) }),
-    new Date().toISOString(),
-    new Date().toISOString(),
-  );
+function logDaemonError(runtimeId: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`[spark-daemon:${runtimeId}] ${message}`);
 }

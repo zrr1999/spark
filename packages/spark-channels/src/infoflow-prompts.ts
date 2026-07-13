@@ -9,7 +9,7 @@
  * plumbing as if the user had typed it.
  */
 
-import { resolveInfoflowGroupPolicy } from "./infoflow-policy.ts";
+import { resolveInfoflowGroupPolicy, resolveInfoflowGroupTrigger } from "./infoflow-policy.ts";
 import type { IncomingMessage, InfoflowAdapterConfig } from "./types.ts";
 
 const ALLOWLIST_PROMPT_CAP = 24;
@@ -48,7 +48,13 @@ export function renderInfoflowPolicySummary(config: InfoflowAdapterConfig): stri
     }
   }
 
-  return [privateLine, groupLine].join(" ");
+  const groupTrigger = resolveInfoflowGroupTrigger(config);
+  const triggerLine =
+    groupPolicy === "disabled"
+      ? undefined
+      : `Group trigger: ${groupTrigger} (${groupTrigger === "all" ? "full group feed" : "explicit bot interaction only"}).`;
+
+  return [privateLine, groupLine, triggerLine].filter(Boolean).join(" ");
 }
 
 /**
@@ -83,7 +89,16 @@ export function resolveInfoflowCustomSystemPrompt(
 
 export type InfoflowMessageContext = Pick<
   IncomingMessage,
-  "externalKey" | "senderId" | "senderName" | "chatId" | "messageId" | "mentions" | "mentionedSelf"
+  | "externalKey"
+  | "senderId"
+  | "senderName"
+  | "chatId"
+  | "messageId"
+  | "eventType"
+  | "contentType"
+  | "attachments"
+  | "mentions"
+  | "mentionedSelf"
 >;
 
 /**
@@ -100,6 +115,14 @@ export function renderInfoflowMessageContextPrompt(
   let factCount = 0;
   if (message.messageId?.trim()) {
     lines.push(`messageId: ${encodePromptFact(message.messageId.trim())}`);
+    factCount += 1;
+  }
+  if (message.eventType?.trim()) {
+    lines.push(`eventType: ${encodePromptFact(message.eventType.trim())}`);
+    factCount += 1;
+  }
+  if (message.contentType?.trim()) {
+    lines.push(`contentType: ${encodePromptFact(message.contentType.trim())}`);
     factCount += 1;
   }
   if (message.senderId?.trim()) {
@@ -123,12 +146,18 @@ export function renderInfoflowMessageContextPrompt(
     lines.push(`mentionedSelf: ${message.mentionedSelf}`);
     factCount += 1;
   }
+  if (message.attachments?.length) {
+    lines.push(`attachments: ${encodePromptFact(message.attachments)}`);
+    factCount += 1;
+  }
   if (factCount === 0) return undefined;
   lines.push("</infoflow_message_context>");
   return lines.join("\n");
 }
 
-function encodePromptFact(value: string | string[]): string {
+function encodePromptFact(
+  value: string | string[] | NonNullable<IncomingMessage["attachments"]>,
+): string {
   // Keep platform-controlled display values inside the tagged data block even
   // when they contain tag-shaped text. JSON alone does not escape `<` or `>`.
   return JSON.stringify(value)

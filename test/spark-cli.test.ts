@@ -54,6 +54,16 @@ function fakeHeadlessDaemonClient(
   submissions: Array<{ sessionId: string; prompt: string; reset?: boolean }> = [],
 ): SparkDaemonClientOptions {
   const now = new Date(0).toISOString();
+  const sessions: Array<{
+    sessionId: string;
+    scope: { kind: "workspace"; workspaceId: string };
+    workspaceId: string;
+    status: "ready" | "archived";
+    bindings: [];
+    createdAt: string;
+    updatedAt: string;
+    cwd?: string;
+  }> = [];
   const workspace = {
     id: "ws_test",
     serverUrl: "http://127.0.0.1:0",
@@ -79,6 +89,31 @@ function fakeHeadlessDaemonClient(
     workspaceEnsureLocal: async () => workspace,
     workspaceClientAttach: async () => ({ client: clientLease, workspace, observedAt: now }),
     workspaceClientRelease: async () => ({ client: clientLease, workspace, observedAt: now }),
+    managedSessions: {
+      list: async () => sessions,
+      create: async (input) => {
+        const record = {
+          sessionId: input.sessionId!,
+          scope: input.scope as { kind: "workspace"; workspaceId: string },
+          workspaceId: input.workspaceId!,
+          status: "ready" as const,
+          bindings: [] as [],
+          createdAt: now,
+          updatedAt: now,
+          ...(input.cwd ? { cwd: input.cwd } : {}),
+        };
+        sessions.push(record);
+        return record;
+      },
+      get: async (sessionId) => sessions.find((session) => session.sessionId === sessionId)!,
+      bind: async (sessionId) => sessions.find((session) => session.sessionId === sessionId)!,
+      unbind: async (sessionId) => sessions.find((session) => session.sessionId === sessionId)!,
+      archive: async (sessionId) => {
+        const index = sessions.findIndex((session) => session.sessionId === sessionId);
+        sessions[index] = { ...sessions[index]!, status: "archived", updatedAt: now };
+        return sessions[index]!;
+      },
+    },
     turnSubmit: async (_paths, input) => {
       submissions.push(input);
       return {

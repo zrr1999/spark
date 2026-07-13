@@ -12,6 +12,7 @@ import type {
   IncomingMessage,
   ResolvedChannelRoute,
 } from "./types.ts";
+import type { ChannelReplyStream, ChannelReplyTarget } from "./reply.ts";
 
 export class ChannelRegistryError extends Error {
   readonly code: string;
@@ -42,10 +43,9 @@ export class ChannelRegistry {
     return this.options.config.ingress?.on_unbound ?? "create";
   }
 
-  listAdapters(): Array<{ id: string; type: ChannelAdapter["type"]; running: boolean }> {
+  listAdapters() {
     return [...this.adapters.values()].map((adapter) => ({
-      id: adapter.id,
-      type: adapter.type,
+      ...adapter.status(),
       running: this.running.has(adapter.id),
     }));
   }
@@ -122,6 +122,22 @@ export class ChannelRegistry {
         );
       }
     }
+  }
+
+  async openReplyStream(
+    adapterId: string,
+    target: ChannelReplyTarget,
+  ): Promise<ChannelReplyStream | undefined> {
+    return await this.requireAdapter(adapterId).reply?.openReplyStream(target);
+  }
+
+  async sendReply(adapterId: string, input: ChannelReplyTarget & { text: string }): Promise<void> {
+    const adapter = this.requireAdapter(adapterId);
+    if (adapter.reply) {
+      await adapter.reply.sendReply(input);
+      return;
+    }
+    await adapter.send({ recipient: input.recipient, text: input.text });
   }
 
   private loadConfig(config: ChannelsConfig): void {
@@ -287,6 +303,9 @@ function parseAdapterConfig(value: unknown): ChannelAdapterConfig {
       ...(record.group_policy !== undefined
         ? { group_policy: parseInfoflowGroupPolicy(record.group_policy) }
         : {}),
+      ...(record.group_trigger !== undefined
+        ? { group_trigger: parseInfoflowGroupTrigger(record.group_trigger) }
+        : {}),
       ...(record.allowed_group_ids !== undefined
         ? { allowed_group_ids: parseStringList(record.allowed_group_ids, "allowed_group_ids") }
         : {}),
@@ -333,6 +352,14 @@ function parseInfoflowGroupPolicy(value: unknown): "disabled" | "allowlist" | "o
   throw new ChannelRegistryError(
     "invalid_config",
     "infoflow.group_policy must be disabled, allowlist, or open",
+  );
+}
+
+function parseInfoflowGroupTrigger(value: unknown): "mention" | "command" | "all" {
+  if (value === "mention" || value === "command" || value === "all") return value;
+  throw new ChannelRegistryError(
+    "invalid_config",
+    "infoflow.group_trigger must be mention, command, or all",
   );
 }
 

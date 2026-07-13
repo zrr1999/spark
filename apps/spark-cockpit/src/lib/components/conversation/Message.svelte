@@ -29,6 +29,10 @@
     relativeTime,
     statusLabel,
   }: Props = $props();
+
+  let actorLabel = $derived(
+    item.actor === "user" ? (item.senderLabel ?? userLabel) : assistantLabel,
+  );
 </script>
 
 <article class="conversation-message {item.actor}" data-message-id={item.id}>
@@ -36,12 +40,12 @@
     {#if item.actor === "spark"}
       <Icon name="spark" size={16} />
     {:else}
-      {userLabel.slice(0, 1)}
+      {actorLabel.slice(0, 1)}
     {/if}
   </span>
   <div class="message-column">
     <header class="message-meta">
-      <strong>{item.actor === "user" ? userLabel : assistantLabel}</strong>
+      <strong>{actorLabel}</strong>
       <time datetime={item.timestamp}>{relativeTime(item.timestamp)}</time>
       {#if item.status}
         <span class="message-status {item.status}">{statusLabel(item.status)}</span>

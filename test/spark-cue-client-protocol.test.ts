@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import net, { type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1423,6 +1423,40 @@ void test("resolveCueTransport falls back to cue client namespace", async () => 
   );
 });
 
+void test("resolveCueTransport finds uv-installed cue-client outside a service PATH", async () => {
+  const home = await mkdtemp(join(tmpdir(), "spark-cue-user-bin-"));
+  const restrictedBin = join(home, "system-bin");
+  const userBin = join(home, ".local", "bin");
+  const originalHome = process.env.HOME;
+  const originalPath = process.env.PATH;
+  const originalUvToolBinDir = process.env.UV_TOOL_BIN_DIR;
+  try {
+    await mkdir(restrictedBin, { recursive: true });
+    await mkdir(userBin, { recursive: true });
+    await writeExecutable(
+      join(userBin, "cue-client"),
+      `#!/bin/sh\nprintf '%s\\n' '{"schema_version":1,"profile_name":"user-bin","transport":"unix","socket_path":"/tmp/user-bin.sock"}'\n`,
+    );
+    process.env.HOME = home;
+    process.env.PATH = restrictedBin;
+    delete process.env.UV_TOOL_BIN_DIR;
+
+    const resolved = await resolveCueTransport();
+
+    assert.equal(resolved.profile_name, "user-bin");
+    assert.equal(resolved.transport, "unix");
+    assert.equal(resolved.socket_path, "/tmp/user-bin.sock");
+  } finally {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    if (originalUvToolBinDir === undefined) delete process.env.UV_TOOL_BIN_DIR;
+    else process.env.UV_TOOL_BIN_DIR = originalUvToolBinDir;
+    await rm(home, { force: true, recursive: true });
+  }
+});
+
 void test("spark-cue tools reconnect when the resolved transport profile changes", async () => {
   const first = await startCueServer(singleJobCueServer("first"));
   const second = await startCueServer(singleJobCueServer("second"));
@@ -1813,6 +1847,36 @@ void test("cue RunScript request matches the current strict daemon schema", asyn
         });
         return;
       }
+      if ("ScriptInfo" in payload) {
+        sendFrame(socket, {
+          type: "response",
+          id,
+          payload: {
+            Ok: {
+              ScriptInfo: {
+                script_id: "R1",
+                status: "done",
+                items: [
+                  {
+                    index: 0,
+                    source: "echo ok",
+                    result: {
+                      kind: "job",
+                      job_id: "J1",
+                      start_scope: null,
+                      open_hint: "stream",
+                    },
+                  },
+                ],
+                exit_code: 0,
+                failed_item_index: null,
+                submit_error: null,
+              },
+            },
+          },
+        });
+        return;
+      }
       if ("ListJobs" in payload) {
         sendFrame(socket, {
           type: "response",
@@ -1956,6 +2020,46 @@ void test("cue RunScript trusts script item events and excludes other clients' j
         });
         return;
       }
+      if ("ScriptInfo" in payload) {
+        sendFrame(socket, {
+          type: "response",
+          id,
+          payload: {
+            Ok: {
+              ScriptInfo: {
+                script_id: "R1",
+                status: "done",
+                items: [
+                  {
+                    index: 0,
+                    source: "echo first",
+                    result: {
+                      kind: "job",
+                      job_id: "J1",
+                      start_scope: null,
+                      open_hint: "stream",
+                    },
+                  },
+                  {
+                    index: 1,
+                    source: "echo second",
+                    result: {
+                      kind: "job",
+                      job_id: "J3",
+                      start_scope: null,
+                      open_hint: "stream",
+                    },
+                  },
+                ],
+                exit_code: 0,
+                failed_item_index: null,
+                submit_error: null,
+              },
+            },
+          },
+        });
+        return;
+      }
       if ("ListJobs" in payload) {
         sendFrame(socket, {
           type: "response",
@@ -2060,6 +2164,36 @@ void test("cue RunScript propagates job status store failures", async () => {
               status: "done",
               exit_code: 0,
               failed_item_index: null,
+            },
+          },
+        });
+        return;
+      }
+      if ("ScriptInfo" in payload) {
+        sendFrame(socket, {
+          type: "response",
+          id,
+          payload: {
+            Ok: {
+              ScriptInfo: {
+                script_id: "R-status-error",
+                status: "done",
+                items: [
+                  {
+                    index: 0,
+                    source: "true",
+                    result: {
+                      kind: "job",
+                      job_id: "J1",
+                      start_scope: null,
+                      open_hint: "stream",
+                    },
+                  },
+                ],
+                exit_code: 0,
+                failed_item_index: null,
+                submit_error: null,
+              },
             },
           },
         });

@@ -1,4 +1,4 @@
-import type { ChannelTransport } from "./types.ts";
+import type { ChannelTransport, ChannelTransportStatus } from "./types.ts";
 
 export class FakeChannelTransport implements ChannelTransport {
   readonly sent: Array<{ recipient: string; text: string }> = [];
@@ -8,6 +8,10 @@ export class FakeChannelTransport implements ChannelTransport {
 
   get isRunning(): boolean {
     return this.running;
+  }
+
+  status(): ChannelTransportStatus {
+    return { state: this.running ? ("connected" as const) : ("stopped" as const) };
   }
 
   async start(onMessage: (raw: unknown) => void): Promise<void> {

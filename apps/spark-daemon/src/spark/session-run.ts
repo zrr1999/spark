@@ -19,6 +19,8 @@ import {
   renderInfoflowInternalSystemPrompt,
   renderInfoflowMessageContextPrompt,
   resolveInfoflowCustomSystemPrompt,
+  type ChannelReplyStream,
+  type ChannelReplyTarget,
 } from "@zendev-lab/spark-channels";
 import type { InfoflowAdapterConfig } from "@zendev-lab/spark-channels";
 import { loadDaemonChannelsConfig, type DaemonChannelIngressRuntime } from "../channels/ingress.ts";
@@ -31,6 +33,7 @@ import type {
 import type { SparkDaemonModelControl } from "../model-control.ts";
 import type { DaemonSessionRegistry } from "../session-registry.ts";
 import { daemonTaskRouteMetadata } from "../core/queue-worker.ts";
+import { ChannelReplyEventProjector } from "../channels/reply-stream.ts";
 
 export interface SparkDaemonQueueTaskExecutorOptions {
   paths: SparkPaths;
@@ -107,28 +110,85 @@ function modelRefFromValue(value: string): { providerName: string; modelId: stri
 
 export function createChannelAwareQueueTaskExecutor(
   options: SparkDaemonQueueTaskExecutorOptions & {
-    channelIngress?: Pick<DaemonChannelIngressRuntime, "notify">;
+    channelIngress?: Pick<DaemonChannelIngressRuntime, "openReplyStream" | "sendReply">;
   },
 ): SparkDaemonTaskExecutor {
   const base = createSparkDaemonQueueTaskExecutor(options);
   return async (task, context) => {
-    const result = await base(task, context);
     if (task.type !== "session.run" || !task.channelReply || !options.channelIngress) {
-      return result;
+      return await base(task, context);
     }
+
+    const target = channelReplyTarget(task);
+    let stream: ChannelReplyStream | undefined;
+    try {
+      stream = await options.channelIngress.openReplyStream(
+        task.channelReply.workspaceId,
+        task.channelReply.adapterId,
+        target,
+      );
+    } catch (error) {
+      console.error("[spark-daemon] channel reply stream start failed; using fallback", error);
+    }
+
+    const projector = stream ? new ChannelReplyEventProjector(stream) : undefined;
+    const executionContext = projector
+      ? {
+          ...context,
+          emitEvent: (event: SparkDaemonEvent) => {
+            projector.observe(event);
+            return context.emitEvent?.(event);
+          },
+        }
+      : context;
+
+    let result: unknown;
+    try {
+      result = await base(task, executionContext);
+    } catch (error) {
+      if (stream) {
+        try {
+          await stream.fail("处理失败，请稍后重试");
+        } catch (streamError) {
+          console.error("[spark-daemon] channel reply stream failure update failed", streamError);
+        }
+      }
+      throw error;
+    }
+
     const text = assistantTextFromResult(result);
+    if (stream && projector) {
+      if (text) projector.appendFinalText(text);
+      try {
+        await stream.complete("已完成");
+        return result;
+      } catch (error) {
+        console.error(
+          "[spark-daemon] channel reply stream completion failed; using fallback",
+          error,
+        );
+      }
+    }
     if (!text) return result;
     try {
-      await options.channelIngress.notify(task.channelReply.workspaceId, {
-        action: "send",
-        adapter: task.channelReply.adapterId,
-        recipient: task.channelReply.recipient,
-        text,
-      });
+      await options.channelIngress.sendReply(
+        task.channelReply.workspaceId,
+        task.channelReply.adapterId,
+        { ...target, text },
+      );
     } catch (error) {
       console.error("[spark-daemon] channel reply failed", error);
     }
     return result;
+  };
+}
+
+function channelReplyTarget(task: SparkDaemonSessionRunTask): ChannelReplyTarget {
+  return {
+    recipient: task.channelReply?.recipient ?? "",
+    ...(task.channelContext?.senderId ? { senderId: task.channelContext.senderId } : {}),
+    ...(task.channelContext?.messageId ? { messageId: task.channelContext.messageId } : {}),
+    ...(task.prompt.trim() ? { preview: task.prompt.trim().slice(0, 240) } : {}),
   };
 }
 
@@ -144,6 +204,7 @@ export async function executeSparkDaemonSessionRunTask(
   options: SparkDaemonQueueTaskExecutorOptions & { executeSession: SparkHeadlessSessionExecutor },
 ): Promise<unknown> {
   const systemPrompt = await systemPromptForChannelSession(task, options);
+  const messageMetadata = channelMessageMetadata(task);
   return await options.executeSession({
     cwd: task.cwd ?? options.cwd ?? process.cwd(),
     sparkHome: options.paths.piAgentDir,
@@ -154,8 +215,29 @@ export async function executeSparkDaemonSessionRunTask(
     signal: context.signal,
     timeoutMs: context.timeoutMs,
     ...(systemPrompt ? { systemPrompt } : {}),
+    ...(messageMetadata ? { messageMetadata } : {}),
     onEvent: (event) => emitHeadlessEvent(event, task, context),
   });
+}
+
+function channelMessageMetadata(
+  task: SparkDaemonSessionRunTask,
+): Record<string, unknown> | undefined {
+  const channel = task.channelContext;
+  if (!channel) return undefined;
+  return {
+    channel: {
+      adapter: task.channelReply?.adapterId ?? "infoflow",
+      externalKey: channel.externalKey,
+      ...(channel.senderId ? { senderId: channel.senderId } : {}),
+      ...(channel.senderName ? { senderName: channel.senderName } : {}),
+      ...(channel.chatId ? { chatId: channel.chatId } : {}),
+      ...(channel.messageId ? { messageId: channel.messageId } : {}),
+      ...(channel.eventType ? { eventType: channel.eventType } : {}),
+      ...(channel.contentType ? { contentType: channel.contentType } : {}),
+      ...(channel.attachments?.length ? { attachments: channel.attachments } : {}),
+    },
+  };
 }
 
 async function systemPromptForChannelSession(

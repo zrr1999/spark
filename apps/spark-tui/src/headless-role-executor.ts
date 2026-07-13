@@ -83,6 +83,8 @@ export interface SparkHeadlessSessionRunInput {
   sparkHome?: string;
   /** Optional base identity/surface prompt; defaults to Spark host identity. */
   systemPrompt?: string;
+  /** Display-safe metadata persisted on the submitted user message only. */
+  messageMetadata?: Record<string, unknown>;
   onEvent?: (event: unknown) => void | Promise<void>;
 }
 
@@ -151,6 +153,7 @@ export async function runSparkHeadlessSession(
         sessionId: input.sessionId,
         prompt: input.prompt,
         reset: input.reset,
+        ...(input.messageMetadata ? { messageMetadata: input.messageMetadata } : {}),
       }),
       input.timeoutMs,
       abort,
