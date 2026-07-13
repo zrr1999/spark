@@ -1,8 +1,8 @@
 # Spark Cockpit agent conversation UI
 
-Status: feasible; Phase 0 transcript/model/scope slice implemented, component extraction pending
+Status: active; Phase 1 source-derived conversation shell implemented, structured parts in progress
 
-Last reviewed: 2026-07-10
+Last reviewed: 2026-07-13
 
 ## Decision
 
@@ -171,7 +171,7 @@ artifact/detail routes may expose the source for diagnostics. A future
 `source` part means user-facing provenance or a citation, not the assistant's
 raw Markdown repeated underneath its rendered output.
 
-The current Phase 0 adapter is intentionally smaller: `session-timeline.ts` maps the text messages in `SparkSessionView` to `SessionTimelineItem`. Canonical native message IDs are already the row keys. `session.message` activity events reconcile only through their source message IDs; equal display text with a different ID remains a distinct turn. Legacy assignment commands are a fallback only when the native snapshot has no displayable messages, because those command records do not carry a canonical message ID.
+The Cockpit adapter now maps optional `SparkMessageView.parts` into local `ConversationPart` values while retaining `message.text` as the legacy fallback. It consumes only display-safe text, thinking summaries, tool names, tool states, tool summaries, and stable references. Tool call/result parts merge by `toolCallId` before rendering so reload shows one evolving card rather than duplicate call and result rows. Canonical native message IDs remain the row keys. `session.message` activity events reconcile only through their source message IDs; equal display text with a different ID remains a distinct turn. Legacy assignment commands are a fallback only when the native snapshot has no displayable messages, because those command records do not carry a canonical message ID.
 
 ## Event mapping
 
@@ -213,8 +213,8 @@ The live Sessions UI is already one workbench composition and should be split al
 | --- | --- | --- |
 | Workbench navigation and conversation rail | `(workbench)/+layout.svelte` + `WorkbenchSessionRail.svelte` | Keep route/session selection and global search in the outer shell |
 | Session header and effective status/model context | `SessionsWorkspace.svelte` | Extract a presentational header after model read-back is canonical |
-| Conversation viewport | `SessionsWorkspace.svelte` + `session-timeline.ts` | Keep projection in TypeScript; extract viewport/message rendering without moving state ownership |
-| Prompt composer and model selector | Sessions form inside `SessionsWorkspace.svelte` | Extract presentational pieces while retaining SvelteKit form actions and daemon turn submission |
+| Conversation viewport | `components/conversation/ConversationViewport.svelte` + `session-timeline.ts` | Projection remains in TypeScript; the component owns scroll position and bounded announcements only |
+| Prompt composer and model selector | `components/conversation/Composer.svelte` inside the Sessions form | Presentation is extracted while SvelteKit form actions and daemon turn submission remain authoritative |
 | Run/session details | Desktop aside and mobile disclosure in `SessionsWorkspace.svelte` | Share one details component between responsive placements |
 
 The intended desktop shell remains conversation rail, central conversation, and right-side details. On narrow screens the rail is owned by the existing workbench drawer and details remain a disclosure. The viewport library and vendored message primitives fit inside the central surface; they do not introduce another router, sidebar, or chat store.
@@ -229,14 +229,16 @@ Recommended location:
 apps/spark-cockpit/src/lib/components/conversation/
   ConversationViewport.svelte
   Message.svelte
-  MessageContent.svelte
-  Reasoning.svelte
-  ToolCall.svelte
-  Sources.svelte
-  TaskRun.svelte
-  Approval.svelte
+  MessageActions.svelte
+  ReasoningPart.svelte
+  ToolCallPart.svelte
+  TaskRunPart.svelte
+  ApprovalPart.svelte
   Composer.svelte
+  conversation-view.ts
   types.ts
+  VENDOR.md
+  UPSTREAM-LICENSE.txt
 ```
 
 Names should describe Spark semantics rather than retain upstream `UIMessage` or `ToolUIPart` terminology.
@@ -456,20 +458,21 @@ These are not presentation-only changes. Controls must remain absent or explicit
 
 Exit criteria: the text transcript reloads from `session.snapshot`, repeated equal messages remain distinct, activity replay does not duplicate canonical IDs, and no AI SDK types enter the path.
 
-### Phase 1: viewport and message shell
+### Phase 1: viewport and message shell — implemented
 
-- Extract the current session header, message shell, composer presentation, and shared desktop/mobile details content.
-- Add local message layout/actions derived from selected Svelte AI Elements source.
+- Extract the message shell and composer presentation while retaining the existing session header and shared desktop/mobile details content in `SessionsWorkspace.svelte`.
+- Add local message layout/actions derived from selected Svelte AI Elements source, with pinned provenance and the complete upstream MIT notice.
 - Preserve the existing empty state, status labels, and run details.
+- Add bottom-following that does not pull a user who scrolled away, a jump-to-latest action, bounded terminal announcements, message copy, and IME-safe Enter submission.
 - Add `@humanspeak/svelte-virtual-chat` only after cursor pagination/replay and stable structured message identity are available.
 - Replace hand-rolled transcript scrolling with a generic virtual viewport at that point.
 
 Exit criteria: the shell is componentized without moving state ownership; once virtualization is enabled, long history, streamed growth, scroll-away, jump-to-latest, and history prepend work on desktop and mobile.
 
-### Phase 2: structured agent parts
+### Phase 2: structured agent parts — first projection slice implemented
 
-- Add Reasoning, ToolCall, Sources, TaskRun, Approval, ArtifactPreview, and RawEvent components.
-- Extend the projection builder to emit structured parts.
+- Add Reasoning, ToolCall, TaskRun, and Approval shells. Sources, ArtifactPreview, and richer unknown-event diagnostics remain pending.
+- Extend the projection builder to emit ordered text, thinking, and tool call/result parts, with legacy text fallback and tool call/result merging by stable call ID.
 - Keep invocation/log detail available during the transition.
 - Connect approvals and task/artifact links to canonical Spark actions/routes.
 

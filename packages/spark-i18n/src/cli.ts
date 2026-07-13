@@ -146,6 +146,18 @@ export interface SparkNativeTuiStrings {
   };
   appTitle: string;
   footer: string;
+  busyFooter: (hasQueuedInput: boolean) => string;
+  statusLine: (input: {
+    session: string;
+    model?: string;
+    thinkingLevel?: string;
+    state: string;
+    queue?: { steer: number; followUp: number };
+  }) => string;
+  queuedInput: (mode: "steer" | "followUp", position: number) => string;
+  queuedUserPrefix: (mode: "steer" | "followUp") => string;
+  thinkingFolded: (streaming: boolean) => string;
+  thinkingPrefix: string;
   toolFolded: (header: string) => string;
   emptyCommand: string;
   unknownCommand: (name: string) => string;
@@ -155,6 +167,21 @@ export interface SparkNativeTuiStrings {
   cockpitPanelClosed: string;
   cockpitPanelOpen: (panel: string, countsLine: string) => string;
   commandHelp: (registeredCount: number, registeredCommands: string[]) => string;
+}
+
+function zhNativeSessionState(state: string): string {
+  const labels: Record<string, string> = {
+    idle: "空闲",
+    running: "运行中",
+    queued: "已排队",
+    waiting: "等待中",
+    complete: "已完成",
+    failed: "失败",
+    cancelled: "已取消",
+    "timed-out": "已超时",
+    unknown: "未知",
+  };
+  return labels[state] ?? state;
 }
 
 const NATIVE_TUI: Record<SparkLanguage, SparkNativeTuiStrings> = {
@@ -223,6 +250,23 @@ const NATIVE_TUI: Record<SparkLanguage, SparkNativeTuiStrings> = {
     },
     appTitle: "Spark",
     footer: "Enter submit • /help commands • Ctrl+C/Ctrl+D exit",
+    busyFooter: (hasQueuedInput) =>
+      `Enter steer • Alt+Enter follow-up • Esc stop${hasQueuedInput ? " • Alt+Up restore queue" : ""}`,
+    statusLine: ({ session, model, thinkingLevel, state, queue }) =>
+      [
+        `session ${session}`,
+        ...(model ? [`model ${model}`] : []),
+        ...(thinkingLevel ? [`thinking ${thinkingLevel}`] : []),
+        `state ${state}`,
+        ...(queue ? [`queue steer=${queue.steer} follow-up=${queue.followUp}`] : []),
+      ].join(" • "),
+    queuedInput: (mode, position) =>
+      `Queued ${mode === "followUp" ? "follow-up" : "steering message"} #${position}. Use /stop to clear queued work or stop the current turn; Alt+Up restores queued input.`,
+    queuedUserPrefix: (mode) =>
+      mode === "followUp" ? "you follow-up queued> " : "you steer queued> ",
+    thinkingFolded: (streaming) =>
+      `thinking${streaming ? " [streaming]" : ""} • hidden (Ctrl+T to show)`,
+    thinkingPrefix: "thinking> ",
     toolFolded: (header) => `${header} • folded (Ctrl+O to expand)`,
     emptyCommand: "Empty command. Type /help for available commands.",
     unknownCommand: (name) => `Unknown command: /${name}. Type /help for available commands.`,
@@ -305,6 +349,23 @@ const NATIVE_TUI: Record<SparkLanguage, SparkNativeTuiStrings> = {
     },
     appTitle: "Spark",
     footer: "Enter 提交 • /help 命令 • Ctrl+C/Ctrl+D 退出",
+    busyFooter: (hasQueuedInput) =>
+      `Enter 引导当前运行 • Alt+Enter 排队下一轮 • Esc 停止${hasQueuedInput ? " • Alt+Up 恢复队列" : ""}`,
+    statusLine: ({ session, model, thinkingLevel, state, queue }) =>
+      [
+        `会话 ${session}`,
+        ...(model ? [`模型 ${model}`] : []),
+        ...(thinkingLevel ? [`思考级别 ${thinkingLevel}`] : []),
+        `状态 ${zhNativeSessionState(state)}`,
+        ...(queue ? [`队列 引导=${queue.steer} 下一轮=${queue.followUp}`] : []),
+      ].join(" • "),
+    queuedInput: (mode, position) =>
+      `已排队第 ${position} 条${mode === "followUp" ? "下一轮消息" : "引导消息"}。使用 /stop 清空队列或停止当前运行；Alt+Up 可恢复队列输入。`,
+    queuedUserPrefix: (mode) =>
+      mode === "followUp" ? "你（下一轮已排队）> " : "你（引导已排队）> ",
+    thinkingFolded: (streaming) =>
+      `思考${streaming ? " [流式生成中]" : ""} • 已隐藏（Ctrl+T 显示）`,
+    thinkingPrefix: "思考> ",
     toolFolded: (header) => `${header} • 已折叠（Ctrl+O 展开）`,
     emptyCommand: "空命令。输入 /help 查看可用命令。",
     unknownCommand: (name) => `未知命令：/${name}。输入 /help 查看可用命令。`,

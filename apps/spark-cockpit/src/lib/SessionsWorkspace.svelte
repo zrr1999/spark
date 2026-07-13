@@ -1,7 +1,12 @@
 <script lang="ts">
   import { enhance } from "$app/forms";
   import { invalidateAll } from "$app/navigation";
-  import AgentMdxStream from "$lib/AgentMdxStream.svelte";
+  import {
+    Composer,
+    ConversationViewport,
+    Message as ConversationMessage,
+  } from "$lib/components/conversation";
+  import type { ConversationPartLabels } from "$lib/components/conversation/types";
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
   import { buildSessionTimeline } from "$lib/session-timeline";
@@ -225,6 +230,18 @@
           providerLoginRequired: "登录后可用",
           modelUpdated: "模型已切换；从下一条尚未入队的消息开始生效。",
           modelFailed: "无法切换模型。",
+          copyMessage: "复制消息",
+          copiedMessage: "已复制",
+          jumpToLatest: "回到最新消息",
+          multilineHint: "Enter 发送 · Shift+Enter 换行",
+          reasoning: "思考过程",
+          reasoningStreaming: "正在思考…",
+          tool: "工具",
+          task: "内部任务",
+          approval: "需要确认",
+          unknownPart: "暂不支持的会话事件",
+          collapse: "收起",
+          expand: "展开",
         }
       : {
           newConversation: "New conversation",
@@ -263,6 +280,18 @@
           modelUpdated:
             "Model updated; it applies starting with the next message that has not yet been queued.",
           modelFailed: "Could not switch models.",
+          copyMessage: "Copy message",
+          copiedMessage: "Copied",
+          jumpToLatest: "Jump to latest",
+          multilineHint: "Enter to send · Shift+Enter for newline",
+          reasoning: "Reasoning",
+          reasoningStreaming: "Reasoning…",
+          tool: "Tool",
+          task: "Internal task",
+          approval: "Approval required",
+          unknownPart: "Unsupported conversation event",
+          collapse: "Collapse",
+          expand: "Expand",
         },
   );
 
@@ -275,6 +304,26 @@
         sessionView?.updatedAt ?? selected?.updatedAt ?? new Date(0).toISOString(),
     }),
   );
+  let conversationPartLabels = $derived<ConversationPartLabels>({
+    reasoning: copy.reasoning,
+    reasoningStreaming: copy.reasoningStreaming,
+    tool: copy.tool,
+    task: copy.task,
+    approval: copy.approval,
+    unknown: copy.unknownPart,
+    collapse: copy.collapse,
+    expand: copy.expand,
+  });
+  let timelineFollowKey = $derived.by(() => {
+    const latest = timelineItems.at(-1);
+    return latest ? `${latest.id}:${latest.status ?? "done"}:${latest.body.length}` : "empty";
+  });
+  let latestAnnouncement = $derived.by(() => {
+    const latest = timelineItems.findLast((item) => item.actor === "spark");
+    if (!latest || latest.status === "running" || latest.status === "streaming") return "";
+    const compact = latest.body.trim().replace(/\s+/g, " ");
+    return compact.length <= 200 ? compact : `${compact.slice(0, 199)}…`;
+  });
 
   $effect(() => {
     if (!initialFormValuesApplied) {
@@ -621,7 +670,7 @@
           <form
             method="POST"
             action="?/startConversation"
-            class="composer start-composer"
+            class="start-composer"
             aria-busy={startState === "submitting"}
             use:enhance={enhanceStartConversation}
           >
@@ -629,67 +678,66 @@
             {#if startScope === "workspace" && activeWorkspace}
               <input type="hidden" name="workspaceId" value={activeWorkspace.id} />
             {/if}
-            <div class="composer-selects">
-              {#if modelProviders.length > 0}
-                <label class="model-select">
-                  <span>{copy.modelLabel}</span>
-                  <select
-                    name="model"
-                    required
-                    bind:value={startModel}
-                    disabled={availableModels.length === 0}
-                  >
-                    {#each modelProviders as provider}
-                      <optgroup
-                        label={providerGroupLabel(provider)}
-                        disabled={!provider.models.some((entry) => entry.available)}
-                      >
-                        {#each provider.models.filter((entry) => entry.available) as entry}
-                          <option value={modelValue(entry.model)}>{entry.model.modelLabel ?? entry.model.modelId}</option>
-                        {/each}
-                        {#if !provider.models.some((entry) => entry.available)}
-                          <option disabled>{copy.providerLoginRequired} · {provider.models.length}</option>
-                        {/if}
-                      </optgroup>
-                    {/each}
-                  </select>
-                </label>
-                <a class="model-settings-link" href="/settings/models">
-                  <Icon name="settings" size={14} />{copy.configureModels}
-                </a>
-              {:else}
-                <a class="model-settings-link" href="/settings/models">
-                  <Icon name="settings" size={14} />{copy.configureModels}
-                </a>
-              {/if}
-            </div>
-            <label class="sr-only" for="start-conversation-message">{copy.messageLabel}</label>
-            <textarea
+            <Composer
               id="start-conversation-message"
-              name="message"
-              rows="5"
-              required
+              rows={5}
               placeholder={copy.startPlaceholder}
               bind:value={startMessage}
               disabled={startState === "submitting"}
-            ></textarea>
-            <div class="composer-toolbar">
-              <p
-                class="form-feedback {startState}"
-                role={startState === "error" ? "alert" : "status"}
-                aria-live="polite"
-              >
-                {startFeedback ?? ""}
-              </p>
-              <button
-                class="composer-submit"
-                type="submit"
-                disabled={startState === "submitting" || !startModelReady || !startMessage.trim()}
-              >
-                <Icon name="play" size={15} />
-                {startState === "submitting" ? copy.sending : copy.startSubmit}
-              </button>
-            </div>
+              submitDisabled={startState === "submitting" || !startModelReady || !startMessage.trim()}
+              submitting={startState === "submitting"}
+              submitLabel={copy.startSubmit}
+              submittingLabel={copy.sending}
+              ariaLabel={copy.messageLabel}
+              multilineHint={copy.multilineHint}
+              roomy
+            >
+              {#snippet header()}
+                <div class="composer-selects">
+                  {#if modelProviders.length > 0}
+                    <label class="model-select">
+                      <span>{copy.modelLabel}</span>
+                      <select
+                        name="model"
+                        required
+                        bind:value={startModel}
+                        disabled={availableModels.length === 0}
+                      >
+                        {#each modelProviders as provider}
+                          <optgroup
+                            label={providerGroupLabel(provider)}
+                            disabled={!provider.models.some((entry) => entry.available)}
+                          >
+                            {#each provider.models.filter((entry) => entry.available) as entry}
+                              <option value={modelValue(entry.model)}>{entry.model.modelLabel ?? entry.model.modelId}</option>
+                            {/each}
+                            {#if !provider.models.some((entry) => entry.available)}
+                              <option disabled>{copy.providerLoginRequired} · {provider.models.length}</option>
+                            {/if}
+                          </optgroup>
+                        {/each}
+                      </select>
+                    </label>
+                    <a class="model-settings-link" href="/settings/models">
+                      <Icon name="settings" size={14} />{copy.configureModels}
+                    </a>
+                  {:else}
+                    <a class="model-settings-link" href="/settings/models">
+                      <Icon name="settings" size={14} />{copy.configureModels}
+                    </a>
+                  {/if}
+                </div>
+              {/snippet}
+              {#snippet context()}
+                <p
+                  class="form-feedback {startState}"
+                  role={startState === "error" ? "alert" : "status"}
+                  aria-live="polite"
+                >
+                  {startFeedback ?? ""}
+                </p>
+              {/snippet}
+            </Composer>
           </form>
         {/if}
       </div>
@@ -711,48 +759,32 @@
         {@render sessionDetails(true)}
       </details>
 
-      <div class="timeline-scroll" aria-live="polite">
+      <ConversationViewport
+        label={copy.timelineTitle}
+        followKey={timelineFollowKey}
+        announcement={latestAnnouncement}
+        jumpToLatestLabel={copy.jumpToLatest}
+      >
         {#if timelineItems.length === 0}
           <div class="conversation-empty">
             <span class="spark-mark"><Icon name="spark" size={20} /></span>
             <p>{copy.timelineEmpty}</p>
           </div>
         {:else}
-          <div class="timeline">
-            {#each timelineItems as item (item.id)}
-              <article class="timeline-entry {item.actor}">
-                <span class="actor-mark" aria-hidden="true">
-                  {#if item.actor === "spark"}
-                    <Icon name="spark" size={16} />
-                  {:else}
-                    {copy.you.slice(0, 1)}
-                  {/if}
-                </span>
-                <div class="message-block">
-                  <header>
-                    <strong>{item.actor === "user" ? copy.you : copy.spark}</strong>
-                    <time datetime={item.timestamp}>{relative(item.timestamp)}</time>
-                    {#if item.status}
-                      <span class="status-pill {item.status}">{statusLabel(item.status)}</span>
-                    {/if}
-                  </header>
-                  {#if item.title && item.title !== item.body}
-                    <h2>{item.title}</h2>
-                  {/if}
-                  {#if item.actor === "spark"}
-                    <div class="assistant-content">
-                      <AgentMdxStream source={item.body} streaming={item.status === "running"} />
-                    </div>
-                  {:else}
-                    <p>{item.body}</p>
-                  {/if}
-                  {#if item.meta}<small>{item.meta}</small>{/if}
-                </div>
-              </article>
-            {/each}
-          </div>
+          {#each timelineItems as item (item.id)}
+            <ConversationMessage
+              {item}
+              userLabel={copy.you}
+              assistantLabel={copy.spark}
+              copyLabel={copy.copyMessage}
+              copiedLabel={copy.copiedMessage}
+              partLabels={conversationPartLabels}
+              relativeTime={relative}
+              {statusLabel}
+            />
+          {/each}
         {/if}
-      </div>
+      </ConversationViewport>
 
       <form
         id="session-model-form"
@@ -765,23 +797,25 @@
       <form
         method="POST"
         action="?/sendMessage"
-        class="composer conversation-composer"
+        class="conversation-composer"
         aria-busy={sendState === "submitting"}
         use:enhance={enhanceSendMessage}
       >
         <input type="hidden" name="sessionId" value={selected.sessionId} />
-        <label class="sr-only" for="conversation-message">{copy.messageLabel}</label>
-        <textarea
+        <Composer
           id="conversation-message"
-          name="message"
-          rows="3"
-          required
+          rows={3}
           placeholder={copy.messagePlaceholder}
           bind:value={message}
           disabled={!canAssign || sendState === "submitting"}
-        ></textarea>
-        <div class="composer-toolbar">
-          <div class="composer-context">
+          submitDisabled={!canAssign || !modelReady || modelState === "submitting" || sendState === "submitting" || !message.trim()}
+          submitting={sendState === "submitting"}
+          submitLabel={copy.sendSubmit}
+          submittingLabel={copy.sending}
+          ariaLabel={copy.messageLabel}
+          multilineHint={copy.multilineHint}
+        >
+          {#snippet context()}
             {#if modelProviders.length > 0}
               <label class="conversation-model-select">
                 <Icon name="spark" size={13} />
@@ -839,16 +873,8 @@
                 {modelFeedback}
               </p>
             {/if}
-          </div>
-          <button
-            class="composer-submit"
-            type="submit"
-            disabled={!canAssign || !modelReady || modelState === "submitting" || sendState === "submitting" || !message.trim()}
-          >
-            <Icon name="play" size={15} />
-            {sendState === "submitting" ? copy.sending : copy.sendSubmit}
-          </button>
-        </div>
+          {/snippet}
+        </Composer>
       </form>
     {/if}
   </main>
@@ -1046,103 +1072,6 @@
     justify-items: center;
   }
 
-  .timeline-scroll {
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    padding: 8px max(0px, calc((100% - 800px) / 2)) 20px;
-    scrollbar-gutter: stable;
-  }
-
-  .timeline {
-    display: grid;
-    gap: 20px;
-  }
-
-  .timeline-entry {
-    align-items: start;
-    display: grid;
-    gap: 11px;
-    grid-template-columns: 30px minmax(0, 1fr);
-  }
-
-  .actor-mark {
-    align-items: center;
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
-    color: var(--color-ink-muted);
-    display: inline-flex;
-    font-size: 11px;
-    font-weight: 700;
-    height: 30px;
-    justify-content: center;
-    width: 30px;
-  }
-
-  .timeline-entry.spark .actor-mark {
-    background: var(--color-primary-weak);
-    border-color: var(--color-primary-soft);
-    color: var(--color-primary);
-  }
-
-  .message-block {
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 12px;
-    box-shadow: var(--shadow-card, 0 1px 2px rgb(15 23 42 / 4%));
-    display: grid;
-    gap: 8px;
-    min-width: 0;
-    padding: 13px 14px;
-  }
-
-  .timeline-entry.user .message-block {
-    background: var(--color-surface-soft);
-  }
-
-  .message-block header {
-    align-items: center;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 7px;
-  }
-
-  .message-block header strong {
-    color: var(--color-ink);
-    font-size: 12px;
-    font-weight: 700;
-  }
-
-  .message-block time,
-  .message-block small {
-    color: var(--color-ink-subtle);
-    font-size: 11px;
-  }
-
-  .message-block h2 {
-    color: var(--color-ink);
-    font-size: 13px;
-    font-weight: 650;
-  }
-
-  .message-block > p {
-    color: var(--color-ink-muted);
-    font-size: 14px;
-    line-height: 1.6;
-    overflow-wrap: anywhere;
-    white-space: pre-wrap;
-  }
-
-  .assistant-content {
-    color: var(--color-ink-muted);
-    font-size: 14px;
-    line-height: 1.6;
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
   .conversation-empty {
     align-items: center;
     color: var(--color-ink-subtle);
@@ -1161,18 +1090,6 @@
     max-width: 380px;
   }
 
-  .composer {
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 14px;
-    box-shadow:
-      0 1px 2px rgb(15 23 42 / 5%),
-      0 12px 30px rgb(15 23 42 / 7%);
-    display: grid;
-    gap: 10px;
-    padding: 12px;
-  }
-
   .conversation-composer {
     align-self: center;
     flex: 0 0 auto;
@@ -1180,58 +1097,11 @@
     width: 100%;
   }
 
-  .composer textarea {
-    background: transparent;
-    border: 0;
-    color: var(--color-ink);
-    font: inherit;
-    line-height: 1.5;
-    min-height: 70px;
-    outline: none;
-    padding: 3px;
-    resize: vertical;
-    width: 100%;
-  }
-
-  .start-composer textarea {
-    min-height: 118px;
-  }
-
-  .composer textarea::placeholder {
-    color: var(--color-ink-subtle);
-  }
-
-  .composer-toolbar {
-    align-items: center;
-    border-top: 1px solid var(--color-border-soft);
-    display: flex;
-    gap: 12px;
-    justify-content: space-between;
-    min-height: 38px;
-    padding-top: 10px;
-  }
-
-  .composer-context {
-    align-items: center;
-    color: var(--color-ink-subtle);
-    display: flex;
-    flex: 1;
-    flex-wrap: wrap;
-    font-size: 11px;
-    gap: 8px;
-    min-width: 0;
-  }
-
   .composer-selects {
     align-items: end;
     display: flex;
     flex-wrap: wrap;
     gap: 12px;
-  }
-
-  .composer-context > span + span::before {
-    content: "·";
-    margin-right: 8px;
   }
 
   .model-select {
@@ -1305,7 +1175,6 @@
     color: var(--color-danger);
   }
 
-  .composer-submit,
   .primary-action,
   .secondary-action {
     align-items: center;
@@ -1321,7 +1190,6 @@
     width: fit-content;
   }
 
-  .composer-submit,
   .primary-action {
     background: var(--color-primary);
     border: 0;
@@ -1329,14 +1197,8 @@
     cursor: pointer;
   }
 
-  .composer-submit:hover:not(:disabled),
   .primary-action:hover {
     background: var(--color-primary-hover, #1d4ed8);
-  }
-
-  .composer-submit:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
   }
 
   .secondary-action {
@@ -1625,9 +1487,6 @@
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
-    .timeline-scroll {
-      padding-inline: 0;
-    }
   }
 
   @media (max-width: 640px) {
@@ -1646,36 +1505,8 @@
       margin-bottom: 14px;
     }
 
-    .composer {
-      border-radius: 12px;
-      padding: 10px;
-    }
-
-    .composer-toolbar {
-      align-items: flex-end;
-    }
-
-    .conversation-composer textarea {
-      min-height: 60px;
-    }
-
     .mobile-details .details-grid {
       grid-template-columns: 1fr 1fr;
-    }
-
-    .timeline-entry {
-      gap: 8px;
-      grid-template-columns: 26px minmax(0, 1fr);
-    }
-
-    .actor-mark {
-      border-radius: 7px;
-      height: 26px;
-      width: 26px;
-    }
-
-    .message-block {
-      padding: 11px 12px;
     }
 
     .model-select {

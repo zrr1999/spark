@@ -1,4 +1,13 @@
 import type { SparkMessageView } from "@zendev-lab/spark-protocol";
+import {
+  conversationPartsFromMessage,
+  conversationPartText,
+  textConversationPart,
+} from "./components/conversation/conversation-view";
+import type {
+  ConversationMessageView,
+  ConversationToolState,
+} from "./components/conversation/types";
 
 export type SessionTimelineCommand = {
   id: string;
@@ -20,14 +29,7 @@ export type SessionTimelineReport = {
   createdAt: string;
 };
 
-export type SessionTimelineItem = {
-  id: string;
-  actor: "user" | "spark";
-  body: string;
-  title: string | null;
-  status: string | null;
-  timestamp: string;
-  meta: string | null;
+export type SessionTimelineItem = ConversationMessageView & {
   order: number;
 };
 
@@ -41,24 +43,22 @@ export function buildSessionTimeline(input: {
   const canonicalMessageIds = new Set<string>();
 
   for (const [messageIndex, message] of input.messages.entries()) {
-    if (
-      message.display === false ||
-      !message.text.trim() ||
-      ["system", "tool", "thinking"].includes(message.role)
-    ) {
-      continue;
-    }
+    if (message.display === false || message.role === "system") continue;
     const actor = message.role === "user" ? "user" : "spark";
+    const displayText = actor === "user" ? displayUserMessage(message.text) : message.text;
+    const parts = conversationPartsFromMessage(message, displayText);
+    if (parts.length === 0) continue;
     canonicalMessageIds.add(message.id);
     items.push({
       id: `message:${message.id}`,
       actor,
-      body: actor === "user" ? displayUserMessage(message.text) : message.text,
+      body: conversationPartText(parts) || displayText,
       title: null,
       status: message.status === "done" ? null : message.status,
       timestamp: message.createdAt ?? input.fallbackTimestamp,
       meta: message.role === "assistant" || message.role === "user" ? null : message.role,
       order: messageIndex,
+      parts,
     });
   }
 
@@ -80,6 +80,7 @@ export function buildSessionTimeline(input: {
         timestamp: command.createdAt,
         meta: null,
         order: input.messages.length + commandIndex,
+        parts: [textConversationPart(body)],
       });
     }
   }
@@ -105,15 +106,68 @@ export function buildSessionTimeline(input: {
       timestamp: report.createdAt,
       meta: report.role && !["assistant", "user"].includes(report.role) ? report.role : null,
       order: input.messages.length + input.commands.length + reportIndex,
+      parts: [textConversationPart(report.text, report.status === "running")],
     });
   }
 
-  return items.sort((left, right) => {
+  const sortedItems = items.sort((left, right) => {
     const time = Date.parse(left.timestamp) - Date.parse(right.timestamp);
     if (Number.isFinite(time) && time !== 0) return time;
     const lexical = left.timestamp.localeCompare(right.timestamp);
     return lexical || left.order - right.order || left.id.localeCompare(right.id);
   });
+  return mergeTimelineToolParts(sortedItems);
+}
+
+function mergeTimelineToolParts(items: SessionTimelineItem[]) {
+  const result = items.map((item) => ({ ...item, parts: [...item.parts] }));
+  const toolOwners = new Map<string, { item: SessionTimelineItem; partIndex: number }>();
+
+  for (const item of result) {
+    const retainedParts: ConversationMessageView["parts"] = [];
+    for (const part of item.parts) {
+      if (part.type !== "tool") {
+        retainedParts.push(part);
+        continue;
+      }
+
+      const owner = toolOwners.get(part.callId);
+      if (!owner) {
+        toolOwners.set(part.callId, { item, partIndex: retainedParts.length });
+        retainedParts.push(part);
+        continue;
+      }
+
+      const previous = owner.item.parts[owner.partIndex];
+      if (previous?.type !== "tool") continue;
+      owner.item.parts[owner.partIndex] = {
+        ...previous,
+        name: part.name || previous.name,
+        state: laterToolState(previous.state, part.state),
+        summary: part.summary || previous.summary,
+      };
+      owner.item.body = conversationPartText(owner.item.parts) || owner.item.body;
+    }
+    item.parts = retainedParts;
+  }
+
+  return result.filter((item) => item.parts.length > 0);
+}
+
+function laterToolState(
+  previous: ConversationToolState,
+  next: ConversationToolState,
+): ConversationToolState {
+  const rank: Record<ConversationToolState, number> = {
+    pending: 0,
+    "awaiting-approval": 1,
+    running: 2,
+    completed: 3,
+    denied: 3,
+    cancelled: 3,
+    failed: 4,
+  };
+  return rank[next] >= rank[previous] ? next : previous;
 }
 
 const LEGACY_INFOFLOW_TURN_PREFIX = "You are handling an Infoflow (如流) channel conversation.";

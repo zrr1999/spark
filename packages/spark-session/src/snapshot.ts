@@ -3,10 +3,12 @@ import { join } from "node:path";
 import {
   SPARK_PROTOCOL_VERSION,
   parseSparkSessionView,
+  type SparkConversationPart,
   type SparkJsonObject,
   type SparkMessageView,
   type SparkSessionRegistryRecord,
   type SparkSessionView,
+  type SparkToolCallView,
 } from "@zendev-lab/spark-protocol";
 import { SparkSessionRegistryError } from "./registry.ts";
 
@@ -32,6 +34,13 @@ interface NativeSessionRecord {
   modifiedAt: string;
 }
 
+interface NativeToolOutcome {
+  toolCallId: string;
+  toolName: string;
+  status: "succeeded" | "failed";
+  completedAt?: string;
+}
+
 export interface LoadSparkSessionSnapshotInput {
   sessionsRoot: string;
   session: SparkSessionRegistryRecord;
@@ -49,10 +58,12 @@ export async function loadSparkSessionSnapshot(
   }
   const record = await loadNativeSessionRecord(path, input.session.sessionId);
   const activeEntries = activeBranchEntries(record.entries);
+  const toolOutcomes = collectToolOutcomes(activeEntries);
   const messages = activeEntries.flatMap((entry) => {
-    const message = messageView(entry);
+    const message = messageView(entry, toolOutcomes);
     return message ? [message] : [];
   });
+  const tools = toolCallViews(activeEntries, toolOutcomes);
   const metadata: SparkJsonObject = {
     sessionScope: input.session.scope,
     ...(input.session.scope.kind === "workspace"
@@ -70,6 +81,7 @@ export async function loadSparkSessionSnapshot(
     status: input.session.status === "running" ? "running" : "idle",
     ...(input.session.model ? { model: input.session.model } : {}),
     messages,
+    tools,
     createdAt: record.header.timestamp,
     updatedAt:
       input.session.updatedAt > record.modifiedAt ? input.session.updatedAt : record.modifiedAt,
@@ -201,44 +213,199 @@ function activeBranchEntries(entries: NativeSessionEntry[]): NativeSessionEntry[
   return branch;
 }
 
-function messageView(entry: NativeSessionEntry): SparkMessageView | undefined {
+function messageView(
+  entry: NativeSessionEntry,
+  toolOutcomes: ReadonlyMap<string, NativeToolOutcome>,
+): SparkMessageView | undefined {
   if (entry.type !== "message" || !entry.message) return undefined;
   const role = displayRole(entry.message.role);
   if (!role) return undefined;
-  const text = displayText(entry.message.content);
-  if (!text) return undefined;
-  const messageTimestamp = entry.message.timestamp;
-  const createdAt =
-    entry.timestamp ??
-    (typeof messageTimestamp === "number" && Number.isFinite(messageTimestamp)
-      ? new Date(messageTimestamp).toISOString()
-      : undefined);
+  const parts = conversationParts(entry, toolOutcomes);
+  if (parts.length === 0) return undefined;
+  const text = parts
+    .filter((part): part is Extract<SparkConversationPart, { type: "text" }> => {
+      return part.type === "text";
+    })
+    .map((part) => part.text)
+    .filter(Boolean)
+    .join("\n");
+  const createdAt = entryTimestamp(entry);
   return {
     version: SPARK_PROTOCOL_VERSION,
     id: entry.id,
     role,
     text,
-    status: "done",
+    status:
+      entry.message.stopReason === "error" ||
+      (role === "tool" && parts.some((part) => part.status === "failed"))
+        ? "error"
+        : "done",
     ...(createdAt ? { createdAt } : {}),
     ...(entry.parentId ? { parentId: entry.parentId } : {}),
+    parts,
     metadata: {},
   };
 }
 
-function displayRole(role: unknown): "user" | "assistant" | "custom" | undefined {
+function displayRole(role: unknown): "user" | "assistant" | "tool" | "custom" | undefined {
+  if (role === "toolResult") return "tool";
   return role === "user" || role === "assistant" || role === "custom" ? role : undefined;
 }
 
-function displayText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((part) => {
-      if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string") return "";
-      return part.text;
-    })
-    .filter(Boolean)
-    .join("\n");
+function conversationParts(
+  entry: NativeSessionEntry,
+  toolOutcomes: ReadonlyMap<string, NativeToolOutcome>,
+): SparkConversationPart[] {
+  const message = entry.message;
+  if (!message) return [];
+  if (message.role === "toolResult") {
+    const toolCallId = stringField(message, "toolCallId");
+    const toolName = stringField(message, "toolName");
+    if (!toolCallId || !toolName) return [];
+    return [
+      {
+        id: conversationPartId(entry.id, 0),
+        type: "tool-result",
+        toolCallId,
+        toolName,
+        status: message.isError === true ? "failed" : "complete",
+        metadata: {},
+      },
+    ];
+  }
+
+  const content = message.content;
+  if (typeof content === "string") {
+    return content
+      ? [
+          {
+            id: conversationPartId(entry.id, 0),
+            type: "text",
+            text: content,
+            status: "complete",
+            metadata: {},
+          },
+        ]
+      : [];
+  }
+  if (!Array.isArray(content)) return [];
+
+  return content.flatMap((value, index): SparkConversationPart[] => {
+    if (!isRecord(value)) return [];
+    if (value.type === "text" && typeof value.text === "string" && value.text) {
+      return [
+        {
+          id: conversationPartId(entry.id, index),
+          type: "text",
+          text: value.text,
+          status: "complete",
+          metadata: {},
+        },
+      ];
+    }
+    if (value.type === "thinking" && typeof value.thinking === "string") {
+      if (!value.thinking && value.redacted !== true) return [];
+      return [
+        {
+          id: conversationPartId(entry.id, index),
+          type: "thinking",
+          text: value.redacted === true ? "" : value.thinking,
+          status: "complete",
+          ...(value.redacted === true ? { redacted: true } : {}),
+          metadata: {},
+        },
+      ];
+    }
+    if (value.type !== "toolCall") return [];
+    const toolCallId = stringField(value, "id");
+    const toolName = stringField(value, "name");
+    if (!toolCallId || !toolName) return [];
+    const outcome = toolOutcomes.get(toolCallId);
+    return [
+      {
+        id: conversationPartId(entry.id, index),
+        type: "tool-call",
+        toolCallId,
+        toolName,
+        status: outcome ? (outcome.status === "failed" ? "failed" : "complete") : "pending",
+        metadata: {},
+      },
+    ];
+  });
+}
+
+function collectToolOutcomes(entries: NativeSessionEntry[]): Map<string, NativeToolOutcome> {
+  const outcomes = new Map<string, NativeToolOutcome>();
+  for (const entry of entries) {
+    if (entry.type !== "message" || entry.message?.role !== "toolResult") continue;
+    const toolCallId = stringField(entry.message, "toolCallId");
+    const toolName = stringField(entry.message, "toolName");
+    if (!toolCallId || !toolName) continue;
+    outcomes.set(toolCallId, {
+      toolCallId,
+      toolName,
+      status: entry.message.isError === true ? "failed" : "succeeded",
+      ...(entryTimestamp(entry) ? { completedAt: entryTimestamp(entry) } : {}),
+    });
+  }
+  return outcomes;
+}
+
+function toolCallViews(
+  entries: NativeSessionEntry[],
+  outcomes: ReadonlyMap<string, NativeToolOutcome>,
+): SparkToolCallView[] {
+  const tools = new Map<string, SparkToolCallView>();
+  for (const entry of entries) {
+    if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
+    const content = entry.message.content;
+    if (!Array.isArray(content)) continue;
+    for (const value of content) {
+      if (!isRecord(value) || value.type !== "toolCall") continue;
+      const toolCallId = stringField(value, "id");
+      const toolName = stringField(value, "name");
+      if (!toolCallId || !toolName) continue;
+      const outcome = outcomes.get(toolCallId);
+      tools.set(toolCallId, {
+        version: SPARK_PROTOCOL_VERSION,
+        id: toolCallId,
+        name: toolName,
+        status: outcome?.status ?? "pending",
+        ...(entryTimestamp(entry) ? { startedAt: entryTimestamp(entry) } : {}),
+        ...(outcome?.completedAt ? { completedAt: outcome.completedAt } : {}),
+        metadata: { source: "native-transcript" },
+      });
+    }
+  }
+  for (const outcome of outcomes.values()) {
+    if (tools.has(outcome.toolCallId)) continue;
+    tools.set(outcome.toolCallId, {
+      version: SPARK_PROTOCOL_VERSION,
+      id: outcome.toolCallId,
+      name: outcome.toolName,
+      status: outcome.status,
+      ...(outcome.completedAt ? { completedAt: outcome.completedAt } : {}),
+      metadata: { source: "native-transcript" },
+    });
+  }
+  return Array.from(tools.values());
+}
+
+function conversationPartId(entryId: string, index: number): string {
+  return `${entryId}:part:${index}`;
+}
+
+function entryTimestamp(entry: NativeSessionEntry): string | undefined {
+  if (entry.timestamp) return entry.timestamp;
+  const messageTimestamp = entry.message?.timestamp;
+  return typeof messageTimestamp === "number" && Number.isFinite(messageTimestamp)
+    ? new Date(messageTimestamp).toISOString()
+    : undefined;
+}
+
+function stringField(value: Record<string, unknown>, field: string): string | undefined {
+  const candidate = value[field];
+  return typeof candidate === "string" && candidate ? candidate : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

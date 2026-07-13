@@ -90,14 +90,14 @@ void test("SparkNativeTuiApp folds tool output and toggles thinking/tool visibil
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
 
   let rendered = stripAnsi(app.render(80).join("\n"));
-  assert.match(rendered, /✓ tool:impl_status \[success\] — long tool output • folded/);
+  assert.match(rendered, /✓ tool:impl_status \[succeeded\] — long tool output • folded/);
   assert.match(rendered, /thinking • hidden/);
   assert.doesNotMatch(rendered, /hidden reasoning trace/);
 
   assert.equal(app.toggleTools(), true);
   assert.equal(app.toggleThinking(), true);
   rendered = stripAnsi(app.render(80).join("\n"));
-  assert.match(rendered, /┌─ ✓ tool:impl_status \[success\]/);
+  assert.match(rendered, /┌─ ✓ tool:impl_status \[succeeded\]/);
   assert.match(rendered, /│ long tool output/);
   assert.match(rendered, /└─ Ctrl\+O collapse/);
   assert.match(rendered, /thinking> hidden reasoning trace/);
@@ -105,6 +105,7 @@ void test("SparkNativeTuiApp folds tool output and toggles thinking/tool visibil
 
 void test("SparkNativeSession merges pending and completed tool previews by toolCallId", () => {
   const session = new SparkNativeSession();
+  const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
   session.addMessageView({
     version: SPARK_PROTOCOL_VERSION,
     id: "tool-call:read-1",
@@ -116,6 +117,7 @@ void test("SparkNativeSession merges pending and completed tool previews by tool
     createdAt: "2026-07-07T00:00:01.000Z",
     metadata: {},
   });
+  assert.match(stripAnsi(app.render(80).join("\n")), /◌ tool:read \[pending\]/);
   session.addMessageView({
     version: SPARK_PROTOCOL_VERSION,
     id: "tool-result:read-1",
@@ -132,6 +134,37 @@ void test("SparkNativeSession merges pending and completed tool previews by tool
   assert.equal(toolMessages.length, 1);
   assert.equal(toolMessages[0]?.text, "read ok");
   assert.equal(toolMessages[0]?.viewId, "tool-result:read-1");
+  assert.match(stripAnsi(app.render(80).join("\n")), /✓ tool:read \[succeeded\] — read ok/);
+});
+
+void test("SparkNativeTuiApp renders session, model, thinking, run, and queue state clearly", async () => {
+  const session = new SparkNativeSession(async () => await new Promise<string>(() => undefined));
+  const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined, {
+    statusContext: {
+      activeModel: () => "openai-codex/gpt-5.4",
+      thinkingLevel: () => "high",
+    },
+  });
+  app.hydrateCockpit({
+    sessionId: "sess-native-status",
+    sessionTitle: "Fix renderer",
+    sessionStatus: "idle",
+  });
+
+  assert.equal(await session.submit("start"), "started");
+  assert.equal(await session.submit("steer now", { mode: "steer" }), "queued");
+  assert.equal(await session.submit("then summarize", { mode: "followUp" }), "queued");
+
+  const rendered = stripAnsi(app.render(140).join("\n"));
+  assert.match(
+    rendered,
+    /session Fix renderer • model openai-codex\/gpt-5\.4 • thinking high • state running • queue steer=1 follow-up=1/,
+  );
+  assert.match(rendered, /Enter steer • Alt\+Enter follow-up • Esc stop • Alt\+Up restore queue/);
+  assert.match(rendered, /you steer queued> steer now/);
+  assert.match(rendered, /you follow-up queued> then summarize/);
+
+  session.abort("test cleanup");
 });
 
 void test("SparkNativeTuiApp uses custom message renderers and skips display=false custom messages", () => {
@@ -171,7 +204,7 @@ void test("SparkNativeTuiApp renders native setStatus and setWidget surfaces", (
   });
 
   let rendered = app.render(100).join("\n");
-  assert.match(rendered, /native pi-tui host • idle • roles: running=1 waiting=1/);
+  assert.match(rendered, /session local • state idle • roles: running=1 waiting=1/);
   assert.match(rendered, /◆ Role runs \(running=1\)/);
   assert.match(rendered, /worker @role-tui/);
 
@@ -593,6 +626,157 @@ void test("SparkNativeSession maps transcript to and from Spark session view mod
   assert.equal(restored.messages[0]?.text, "from view");
 });
 
+void test("SparkNativeSession projects structured tool states without exposing raw input", () => {
+  const session = new SparkNativeSession();
+  const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
+
+  session.applySessionView({
+    version: SPARK_PROTOCOL_VERSION,
+    sessionId: "tool-states",
+    status: "running",
+    messages: [],
+    tools: [
+      {
+        version: SPARK_PROTOCOL_VERSION,
+        id: "tool-running",
+        name: "shell",
+        status: "running",
+        input: { command: "secret --token hidden" },
+        output: "raw output must stay hidden",
+        metadata: { displaySummary: "Executing shell" },
+      },
+      {
+        version: SPARK_PROTOCOL_VERSION,
+        id: "tool-cancelled",
+        name: "edit",
+        status: "cancelled",
+        metadata: {},
+      },
+    ],
+    runs: [],
+    tasks: [],
+    artifacts: [],
+    metadata: {},
+  });
+
+  const rendered = stripAnsi(app.render(100).join("\n"));
+  assert.match(rendered, /▶ tool:shell \[running\]/);
+  assert.match(rendered, /Executing shell/);
+  assert.match(rendered, /■ tool:edit \[cancelled\]/);
+  assert.doesNotMatch(rendered, /secret --token hidden/);
+  assert.doesNotMatch(rendered, /raw output must stay hidden/);
+});
+
+void test("SparkNativeSession flattens display-safe conversation parts and merges tool lineage", () => {
+  const session = new SparkNativeSession();
+  const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
+
+  session.applySessionView({
+    version: SPARK_PROTOCOL_VERSION,
+    sessionId: "part-projection",
+    status: "streaming",
+    messages: [
+      {
+        version: SPARK_PROTOCOL_VERSION,
+        id: "assistant-parts",
+        role: "assistant",
+        text: "Legacy text must not duplicate.",
+        status: "streaming",
+        parts: [
+          {
+            id: "part-thinking",
+            type: "thinking",
+            text: "Checking the repository",
+            status: "streaming",
+            metadata: {},
+          },
+          {
+            id: "part-text",
+            type: "text",
+            text: "Ready.",
+            status: "complete",
+            metadata: {},
+          },
+          {
+            id: "part-tool-call",
+            type: "tool-call",
+            toolCallId: "read-structured",
+            toolName: "read",
+            summary: "Reading README",
+            status: "running",
+            metadata: {},
+          },
+          {
+            id: "part-tool-result",
+            type: "tool-result",
+            toolCallId: "read-structured",
+            toolName: "read",
+            summary: "README loaded",
+            status: "complete",
+            metadata: {},
+          },
+          {
+            id: "part-text-final",
+            type: "text",
+            text: "Done.",
+            status: "complete",
+            metadata: {},
+          },
+        ],
+        metadata: {},
+      },
+    ],
+    tools: [
+      {
+        version: SPARK_PROTOCOL_VERSION,
+        id: "read-structured",
+        name: "read",
+        status: "succeeded",
+        input: { path: "README.md", token: "hidden" },
+        output: "raw README output",
+        metadata: {},
+      },
+    ],
+    runs: [],
+    tasks: [],
+    artifacts: [],
+    metadata: {},
+  });
+
+  const rendered = stripAnsi(app.render(100).join("\n"));
+  assert.match(rendered, /spark> Ready\./);
+  assert.match(rendered, /spark> Done\./);
+  assert.match(rendered, /thinking \[streaming\] • hidden/);
+  assert.match(rendered, /✓ tool:read \[succeeded\] — README loaded/);
+  assert.ok(rendered.indexOf("thinking [streaming]") < rendered.indexOf("spark> Ready."));
+  assert.ok(rendered.indexOf("spark> Ready.") < rendered.indexOf("tool:read"));
+  assert.ok(rendered.indexOf("tool:read") < rendered.indexOf("spark> Done."));
+  assert.equal(session.messages.filter((message) => message.role === "tool").length, 1);
+  assert.doesNotMatch(rendered, /Legacy text must not duplicate/);
+  assert.doesNotMatch(rendered, /raw README output|"token":"hidden"/);
+});
+
+void test("SparkNativeTuiApp keeps streaming thinking state visible while folded", () => {
+  const session = new SparkNativeSession();
+  const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
+  session.addMessageView({
+    version: SPARK_PROTOCOL_VERSION,
+    id: "thinking-stream",
+    role: "thinking",
+    text: "private reasoning",
+    status: "streaming",
+    metadata: {},
+  });
+
+  let rendered = stripAnsi(app.render(80).join("\n"));
+  assert.match(rendered, /thinking \[streaming\] • hidden/);
+  assert.doesNotMatch(rendered, /private reasoning/);
+
+  app.toggleThinking();
+  rendered = stripAnsi(app.render(80).join("\n"));
+  assert.match(rendered, /thinking> private reasoning ▋/);
+});
+
 void test("SparkNativeSession orders view messages chronologically", () => {
   const session = new SparkNativeSession();
   session.applySessionView({
@@ -774,8 +958,8 @@ void test("native UI transport consumes view model events without concrete TUI p
   const rendered = stripAnsi(app.render(100).join("\n"));
   assert.match(rendered, /spark> hello from event/);
   assert.doesNotMatch(rendered, /custom:run-view>/);
-  assert.match(rendered, /native pi-tui host .*daemon running: cache read=64 write=16/);
-  assert.match(rendered, /native pi-tui host .*cache read=64 write=16/);
+  assert.match(rendered, /session local .*daemon running: cache read=64 write=16/);
+  assert.match(rendered, /session local .*cache read=64 write=16/);
   assert.match(rendered, /Enter submit .* cache 80% · \$0\.42 · ctx 41%/);
 });
 

@@ -31,6 +31,7 @@ import {
   parseSparkInteractionResponse,
   parseSparkViewModelEvent,
   type SparkArtifactView,
+  type SparkConversationPartStatus,
   type SparkInteractionRequest,
   type SparkInteractionResponse,
   type SparkJsonObject,
@@ -38,6 +39,7 @@ import {
   type SparkRunView,
   type SparkSessionView,
   type SparkTaskView,
+  type SparkToolCallView,
   type SparkViewModelEvent,
 } from "@zendev-lab/spark-protocol";
 import type { CommandMetadata, ExtensionCommandContext } from "@zendev-lab/spark-extension-api";
@@ -70,7 +72,9 @@ export type SparkNativeMessageRole =
   | "tool"
   | "thinking";
 
-export type SparkNativeToolStatus = "pending" | "success" | "error";
+/** Canonical Spark tool states. Legacy local callers may still submit success/error. */
+export type SparkNativeToolStatus = SparkToolCallView["status"];
+export type SparkNativeToolStatusInput = SparkNativeToolStatus | "success" | "error";
 export type SparkNativeQueueMode = "steer" | "followUp";
 
 export interface SparkNativeMessage {
@@ -79,12 +83,13 @@ export interface SparkNativeMessage {
   viewId?: string;
   queued?: boolean;
   streaming?: boolean;
+  viewStatus?: SparkMessageView["status"];
   customType?: string;
   display?: boolean;
   details?: Record<string, unknown>;
   toolName?: string;
   toolCallId?: string;
-  toolStatus?: SparkNativeToolStatus;
+  toolStatus?: SparkNativeToolStatusInput;
   createdAt?: string;
   updatedAt?: string;
   nativeOrder?: number;
@@ -94,7 +99,7 @@ export interface SparkNativeToolMessageInput {
   toolName: string;
   text: string;
   toolCallId?: string;
-  status?: SparkNativeToolStatus;
+  status?: SparkNativeToolStatusInput;
   details?: Record<string, unknown>;
 }
 
@@ -120,6 +125,12 @@ export type SparkNativeResponder = (
 interface SparkNativeQueuedInput {
   text: string;
   mode: SparkNativeQueueMode;
+}
+
+export interface SparkNativeQueueSummary {
+  total: number;
+  steer: number;
+  followUp: number;
 }
 
 export interface SparkNativeAbortResult {
@@ -316,6 +327,16 @@ export class SparkNativeSession {
     return this.queuedFollowUps.length;
   }
 
+  get queueSummary(): SparkNativeQueueSummary {
+    let steer = 0;
+    let followUp = 0;
+    for (const input of this.queuedFollowUps) {
+      if (input.mode === "steer") steer += 1;
+      else followUp += 1;
+    }
+    return { total: steer + followUp, steer, followUp };
+  }
+
   async submit(
     input: string,
     options: { mode?: SparkNativeQueueMode } = {},
@@ -335,10 +356,7 @@ export class SparkNativeSession {
       });
       this.pushMessage({
         role: "system",
-        text:
-          mode === "followUp"
-            ? `Queued follow-up #${this.queuedFollowUps.length}. Use /stop to clear queued work or stop the current turn; Alt+Up restores queued input.`
-            : `Queued steering message #${this.queuedFollowUps.length}. Use /stop to clear queued work or stop the current turn; Alt+Up restores queued input.`,
+        text: nativeTuiStrings.queuedInput(mode, this.queuedFollowUps.length),
       });
       return "queued";
     }
@@ -358,24 +376,41 @@ export class SparkNativeSession {
   }
 
   addMessageView(message: SparkMessageView): void {
-    const native = messageViewToNativeMessage(message);
+    const natives = messageViewToNativeMessages(message);
+    for (const native of natives) this.upsertMessage(native);
+    if (natives.length === 0) return;
+    this.sortMessagesChronologically();
+    this.trimTranscript();
+    this.emitChange();
+  }
+
+  addToolView(tool: SparkToolCallView): void {
+    const native = toolViewToNativeMessage(tool);
+    this.upsertMessage(native);
+    this.sortMessagesChronologically();
+    this.trimTranscript();
+    this.emitChange();
+  }
+
+  private upsertMessage(native: SparkNativeMessage): void {
     const index = this.findMessageViewIndex(native);
     if (index >= 0) {
       this.messages[index] = this.normalizeMessage(native, this.messages[index]);
-      this.sortMessagesChronologically();
-      this.emitChange();
       return;
     }
-    this.pushMessage(native);
+    this.messages.push(this.normalizeMessage(native));
   }
 
-  private findMessageViewIndex(native: SparkNativeMessage): number {
+  private findMessageViewIndex(
+    native: SparkNativeMessage,
+    messages: readonly SparkNativeMessage[] = this.messages,
+  ): number {
     if (native.viewId) {
-      const byViewId = this.messages.findIndex((existing) => existing.viewId === native.viewId);
+      const byViewId = messages.findIndex((existing) => existing.viewId === native.viewId);
       if (byViewId >= 0) return byViewId;
     }
     if (native.role === "tool" && native.toolCallId) {
-      return this.messages.findIndex(
+      return messages.findIndex(
         (existing) => existing.role === "tool" && existing.toolCallId === native.toolCallId,
       );
     }
@@ -402,11 +437,20 @@ export class SparkNativeSession {
   }
 
   applySessionView(view: SparkSessionView): void {
-    this.messages.splice(
-      0,
-      this.messages.length,
-      ...view.messages.map((message) => this.normalizeMessage(messageViewToNativeMessage(message))),
-    );
+    const messages: SparkNativeMessage[] = [];
+    for (const projected of view.messages.flatMap(messageViewToNativeMessages)) {
+      const native = this.normalizeMessage(projected);
+      const index = this.findMessageViewIndex(native, messages);
+      if (index >= 0) messages[index] = this.normalizeMessage(native, messages[index]);
+      else messages.push(native);
+    }
+    for (const tool of view.tools) {
+      const native = this.normalizeMessage(toolViewToNativeMessage(tool));
+      const index = this.findMessageViewIndex(native, messages);
+      if (index >= 0) messages[index] = this.normalizeMessage(native, messages[index]);
+      else messages.push(native);
+    }
+    this.messages.splice(0, this.messages.length, ...messages);
     this.sortMessagesChronologically();
     this.trimTranscript();
     this.emitChange();
@@ -466,7 +510,7 @@ export class SparkNativeSession {
       text: input.text,
       toolName: input.toolName,
       toolCallId: input.toolCallId,
-      toolStatus: input.status ?? "success",
+      toolStatus: canonicalToolStatus(input.status ?? "succeeded"),
       details: input.details,
     });
   }
@@ -506,6 +550,10 @@ export class SparkNativeSession {
   ): SparkNativeMessage {
     return {
       ...message,
+      text:
+        message.role === "tool" && !message.text && existing?.role === "tool"
+          ? existing.text
+          : message.text,
       createdAt: message.createdAt ?? existing?.createdAt ?? new Date().toISOString(),
       updatedAt: message.updatedAt ?? existing?.updatedAt,
       nativeOrder: existing?.nativeOrder ?? message.nativeOrder ?? ++this.nextNativeMessageOrder,
@@ -645,41 +693,167 @@ function isOverlayRequest(value: unknown): value is {
 }
 
 function nativeMessageToView(message: SparkNativeMessage, index: number): SparkMessageView {
+  const toolStatus =
+    message.role === "tool" ? canonicalToolStatus(message.toolStatus ?? "succeeded") : undefined;
+  const metadata = nativeDetailsToMetadata(message.details);
+  if (toolStatus) metadata.toolStatus = toolStatus;
   return {
     version: SPARK_PROTOCOL_VERSION,
     id: message.viewId ?? `native-message-${index}`,
     role: message.role,
     text: message.text,
-    status: message.streaming
-      ? "streaming"
-      : message.role === "tool" && message.toolStatus === "error"
-        ? "error"
-        : "done",
+    status:
+      message.viewStatus ??
+      (message.streaming
+        ? "streaming"
+        : toolStatus === "pending"
+          ? "pending"
+          : toolStatus === "failed"
+            ? "error"
+            : "done"),
     toolCallId: message.toolCallId,
     toolName: message.toolName,
     customType: message.customType,
     display: message.display,
     createdAt: message.createdAt,
     updatedAt: message.updatedAt,
-    metadata: nativeDetailsToMetadata(message.details),
+    metadata,
   };
 }
 
-function messageViewToNativeMessage(message: SparkMessageView): SparkNativeMessage {
+function messageViewToNativeMessages(message: SparkMessageView): SparkNativeMessage[] {
+  const parts = message.parts;
+  if (!parts || parts.length === 0) return [legacyMessageViewToNativeMessage(message)];
+
+  const messages: SparkNativeMessage[] = [];
+  for (const part of parts) {
+    if (part.type === "text") {
+      messages.push({
+        role: message.role,
+        text: part.text,
+        viewId: part.id,
+        streaming: part.status === "running" || part.status === "streaming",
+        viewStatus: partStatusToMessageStatus(part.status),
+        customType: message.customType,
+        display: message.display,
+        createdAt: message.createdAt,
+        updatedAt: message.updatedAt,
+        details: { partStatus: part.status, partType: part.type },
+      });
+      continue;
+    }
+    if (part.type === "thinking") {
+      messages.push({
+        role: "thinking",
+        text: part.redacted ? "[…]" : part.text,
+        viewId: part.id,
+        streaming: part.status === "running" || part.status === "streaming",
+        createdAt: message.createdAt,
+        updatedAt: message.updatedAt,
+        details: { partStatus: part.status, redacted: part.redacted ?? false },
+      });
+      continue;
+    }
+    messages.push({
+      role: "tool",
+      text: part.summary?.trim() ?? "",
+      viewId: part.id,
+      toolName: part.toolName,
+      toolCallId: part.toolCallId,
+      toolStatus: partStatusToToolStatus(part.status),
+      createdAt: message.createdAt,
+      updatedAt: message.updatedAt,
+      details: { partStatus: part.status, partType: part.type },
+    });
+  }
+  return messages;
+}
+
+function partStatusToMessageStatus(
+  status: SparkConversationPartStatus,
+): SparkMessageView["status"] {
+  switch (status) {
+    case "pending":
+      return "pending";
+    case "running":
+    case "streaming":
+      return "streaming";
+    case "failed":
+      return "error";
+    case "cancelled":
+    case "complete":
+      return "done";
+  }
+}
+
+function legacyMessageViewToNativeMessage(message: SparkMessageView): SparkNativeMessage {
+  const metadataStatus = stringFromRecord(message.metadata, "toolStatus");
   return {
     role: message.role,
     text: message.text,
     viewId: message.id,
     streaming: message.status === "streaming",
+    viewStatus: message.status,
     customType: message.customType,
     display: message.display,
     toolName: message.toolName,
     toolCallId: message.toolCallId,
-    toolStatus: message.status === "error" ? "error" : undefined,
+    toolStatus:
+      message.role === "tool"
+        ? canonicalToolStatus(
+            metadataStatus ??
+              (message.status === "pending"
+                ? "pending"
+                : message.status === "streaming"
+                  ? "running"
+                  : message.status === "error"
+                    ? "failed"
+                    : "succeeded"),
+          )
+        : undefined,
     createdAt: message.createdAt,
     updatedAt: message.updatedAt,
     details: message.metadata,
   };
+}
+
+function partStatusToToolStatus(status: SparkConversationPartStatus): SparkNativeToolStatus {
+  switch (status) {
+    case "pending":
+      return "pending";
+    case "running":
+    case "streaming":
+      return "running";
+    case "failed":
+      return "failed";
+    case "cancelled":
+      return "cancelled";
+    case "complete":
+      return "succeeded";
+  }
+}
+
+function toolViewToNativeMessage(tool: SparkToolCallView): SparkNativeMessage {
+  return {
+    role: "tool",
+    text: toolViewDisplayText(tool),
+    viewId: `tool:${tool.id}`,
+    toolName: tool.name,
+    toolCallId: tool.id,
+    toolStatus: tool.status,
+    createdAt: tool.startedAt,
+    updatedAt: tool.completedAt,
+    details: { source: "session.tools" },
+  };
+}
+
+function toolViewDisplayText(tool: SparkToolCallView): string {
+  if (tool.error?.trim()) return tool.error.trim();
+  return (
+    stringFromRecord(tool.metadata, "displaySummary") ??
+    stringFromRecord(tool.metadata, "preview") ??
+    ""
+  );
 }
 
 function nativeMessageTime(message: SparkNativeMessage): number {
@@ -687,13 +861,32 @@ function nativeMessageTime(message: SparkNativeMessage): number {
   return Number.isFinite(createdAt) ? createdAt : 0;
 }
 
+function canonicalToolStatus(status: string): SparkNativeToolStatus {
+  if (status === "success") return "succeeded";
+  if (status === "error") return "failed";
+  if (
+    status === "pending" ||
+    status === "running" ||
+    status === "succeeded" ||
+    status === "failed" ||
+    status === "cancelled"
+  ) {
+    return status;
+  }
+  return "succeeded";
+}
+
 function toolStatusIcon(status: SparkNativeToolStatus): string {
   switch (status) {
     case "pending":
       return "◌";
-    case "error":
+    case "running":
+      return "▶";
+    case "failed":
       return "✗";
-    case "success":
+    case "cancelled":
+      return "■";
+    case "succeeded":
       return "✓";
   }
 }
@@ -702,9 +895,13 @@ function toolStatusColor(status: SparkNativeToolStatus): string {
   switch (status) {
     case "pending":
       return "warning";
-    case "error":
+    case "running":
+      return "accent";
+    case "failed":
       return "error";
-    case "success":
+    case "cancelled":
+      return "muted";
+    case "succeeded":
       return "success";
   }
 }
@@ -1388,6 +1585,11 @@ export interface SparkNativeWorkspaceSessionState {
   mismatchDiagnostic?: string;
 }
 
+export interface SparkNativeStatusContext {
+  activeModel?: () => string | undefined;
+  thinkingLevel?: () => string | undefined;
+}
+
 export interface SparkNativeTuiAppOptions {
   keybindings?: SparkKeybindings;
   keybindingContext?: SparkKeybindingContext;
@@ -1398,6 +1600,7 @@ export interface SparkNativeTuiAppOptions {
   autocompleteFdPath?: string | null;
   interactionHandler?: SparkNativeInteractionHandler;
   workspaceSession?: SparkNativeWorkspaceSessionState;
+  statusContext?: SparkNativeStatusContext;
 }
 
 export class SparkNativeTuiApp implements Component, Focusable {
@@ -1410,6 +1613,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
   private readonly keybindingContext: SparkKeybindingContext;
   private readonly slashCommands: SparkNativeSlashCommandMap;
   private readonly interactionHandler?: SparkNativeInteractionHandler;
+  private readonly statusContext?: SparkNativeStatusContext;
   private readonly inputBasePath: string;
   private readonly theme: SparkTheme;
   private readonly renderTheme: SparkHostRenderTheme;
@@ -1443,6 +1647,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
       ...(options.slashCommands ?? {}),
     };
     this.interactionHandler = options.interactionHandler;
+    this.statusContext = options.statusContext;
     this.inputBasePath = options.autocompleteBasePath ?? process.cwd();
     this.theme = options.theme ?? DEFAULT_NATIVE_THEME;
     this.renderTheme = createSparkHostRenderTheme(this.theme);
@@ -2125,7 +2330,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
 
   private renderToolMessage(message: SparkNativeMessage, width: number): string[] {
     const toolName = message.toolName ?? "tool";
-    const status = message.toolStatus ?? "success";
+    const status = canonicalToolStatus(message.toolStatus ?? "succeeded");
     const header = `tool:${toolName} [${status}]`;
     const icon = toolStatusIcon(status);
     const preview = compactToolPreview(message.text);
@@ -2164,12 +2369,17 @@ export class SparkNativeTuiApp implements Component, Focusable {
   private renderThinkingMessage(message: SparkNativeMessage, width: number): string[] {
     if (!this.thinkingExpanded) {
       return this.styleRoleLines("thinking", [
-        truncateToWidth("thinking • hidden (Ctrl+T to show)", width),
+        truncateToWidth(nativeTuiStrings.thinkingFolded(Boolean(message.streaming)), width),
       ]);
     }
+    const suffix = message.streaming ? " ▋" : "";
     return this.styleRoleLines(
       "thinking",
-      this.renderPrefixedBlock("thinking> ", message.text || " ", width),
+      this.renderPrefixedBlock(
+        nativeTuiStrings.thinkingPrefix,
+        `${message.text || " "}${suffix}`,
+        width,
+      ),
     );
   }
 
@@ -2499,17 +2709,48 @@ export class SparkNativeTuiApp implements Component, Focusable {
   private statusLine(): string {
     const statusSuffix = this.extensionStatusSuffix();
     const commandSuffix = this.commandAvailabilitySuffix();
-    if (this.session.isProcessing) {
-      const queued =
-        this.session.queuedCount > 0 ? ` • ${this.session.queuedCount} follow-up queued` : "";
-      return `native pi-tui host • busy${queued}${commandSuffix}${statusSuffix}`;
-    }
-    return `native pi-tui host • idle${commandSuffix}${statusSuffix}`;
+    const sessionLabel =
+      this.cockpit.sessionTitle?.trim() ||
+      this.cockpit.sessionId?.trim() ||
+      this.workspaceSession?.controlPlaneSessionId?.trim() ||
+      "local";
+    const activeModel = this.statusContext?.activeModel?.()?.trim();
+    const thinkingLevel = this.statusContext?.thinkingLevel?.()?.trim();
+    const queue = this.session.queueSummary;
+    return (
+      nativeTuiStrings.statusLine({
+        session: sessionLabel,
+        ...(activeModel ? { model: activeModel } : {}),
+        ...(thinkingLevel ? { thinkingLevel } : {}),
+        state: this.sessionStateLabel(),
+        ...(queue.total > 0 ? { queue: { steer: queue.steer, followUp: queue.followUp } } : {}),
+      }) +
+      commandSuffix +
+      statusSuffix
+    );
   }
 
   private footerLine(): string {
     const metrics = formatFooterMetrics(this.footerMetrics);
-    return metrics ? `${nativeTuiStrings.footer} • ${metrics}` : nativeTuiStrings.footer;
+    const controls = this.session.isProcessing
+      ? nativeTuiStrings.busyFooter(this.session.queuedCount > 0)
+      : nativeTuiStrings.footer;
+    return metrics ? `${controls} • ${metrics}` : controls;
+  }
+
+  private sessionStateLabel(): string {
+    if (this.session.isProcessing) return "running";
+    if (this.session.queuedCount > 0) return "queued";
+    switch (this.cockpit.sessionStatus) {
+      case "streaming":
+        return "running";
+      case "succeeded":
+        return "complete";
+      case "timed_out":
+        return "timed-out";
+      default:
+        return this.cockpit.sessionStatus ?? "idle";
+    }
   }
 
   private async runSlashCommand(input: string): Promise<void> {
@@ -2683,7 +2924,11 @@ export class SparkNativeTuiApp implements Component, Focusable {
   }
 
   private messagePrefix(message: SparkNativeMessage): string {
-    if (message.role === "user") return message.queued ? "you queued> " : "you> ";
+    if (message.role === "user") {
+      if (!message.queued) return "you> ";
+      const mode = stringFromRecord(message.details ?? {}, "queueMode");
+      return nativeTuiStrings.queuedUserPrefix(mode === "followUp" ? "followUp" : "steer");
+    }
     if (message.role === "assistant") return "spark> ";
     if (message.role === "custom") return `custom:${message.customType ?? "custom"}> `;
     if (message.role === "tool") return `tool:${message.toolName ?? "tool"}> `;
@@ -2733,6 +2978,7 @@ export interface RunNativeSparkTuiOptions {
   messageRenderers?: ReadonlyMap<string, SparkHostMessageRenderer>;
   theme?: SparkTheme;
   workspaceSession?: SparkNativeWorkspaceSessionState;
+  statusContext?: SparkNativeStatusContext;
   configureApp?: (app: SparkNativeTuiApp, session: SparkNativeSession) => void | Promise<void>;
 }
 
@@ -2756,6 +3002,7 @@ export async function runNativeSparkTui(input?: string | RunNativeSparkTuiOption
     keybindings: options.keybindings,
     keybindingContext: options.keybindingContext,
     messageRenderers: options.messageRenderers,
+    statusContext: options.statusContext,
     theme: options.theme,
     workspaceSession: options.workspaceSession,
   });

@@ -78,6 +78,8 @@ The native Spark TUI uses the real `pi-tui` editor path. Important Pi-compatible
 - `!command` runs the command through the user's shell and submits captured stdout/stderr as context. `!!command` runs the command but records only a folded shell tool result in the transcript, so command output is not submitted to the model.
 - `Shift+Enter` inserts a multiline newline through `pi-tui`. When a turn is busy, plain `Enter` queues a steering update for the previous turn, while `Alt+Enter` queues the text as a follow-up turn. Windows Terminal users who cannot send `Alt+Enter` should bind an alternate key in `~/.spark/agent/keybindings.json` or use the platform-specific terminal remapping for that chord.
 - `Escape` aborts the active turn and restores queued input to the editor. `Alt+Up` restores queued input without aborting. `/stop` also restores queued input instead of discarding it.
+- The status line reports the effective session, provider/model, thinking level, run state, and separate steer/follow-up queue counts. While a turn runs, the footer changes to the active Enter/Alt+Enter/Escape/Alt+Up controls.
+- Reconnectable `SparkMessageView.parts` are rendered in source order. Thinking stays folded by default, and tool calls/results merge by stable call id with canonical `pending/running/succeeded/failed/cancelled` states. Raw tool input/output is not printed unless the shared projection provides an explicit display-safe summary.
 
 ## Local daemon
 

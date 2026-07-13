@@ -64,6 +64,7 @@ import {
 import {
   SPARK_PROTOCOL_VERSION,
   type SparkArtifactView,
+  type SparkConversationPart,
   type SparkInteractionRequest,
   type SparkInteractionResponse,
   type SparkMessageView,
@@ -1186,9 +1187,10 @@ function assistantToMessageView(
     version: SPARK_PROTOCOL_VERSION,
     id,
     role: "assistant",
-    text: contentToText(assistant.content),
+    text: displaySafeAssistantText(assistant.content),
     status,
     createdAt: timestampToIso((assistant as { timestamp?: unknown }).timestamp),
+    parts: assistantConversationParts(assistant.content, id, status),
     metadata: jsonMetadata({
       api: (assistant as { api?: unknown }).api,
       provider: (assistant as { provider?: unknown }).provider,
@@ -1200,30 +1202,146 @@ function assistantToMessageView(
 }
 
 function toolCallToMessageView(toolCall: ToolCall): SparkMessageView {
+  const id = `tool-call:${toolCall.id}`;
   return {
     version: SPARK_PROTOCOL_VERSION,
-    id: `tool-call:${toolCall.id}`,
+    id,
     role: "tool",
     text: `calling ${toolCall.name}`,
     status: "pending",
     toolCallId: toolCall.id,
     toolName: toolCall.name,
-    metadata: jsonMetadata({ kind: "tool_call", arguments: toolCall.arguments }),
+    parts: [
+      {
+        id: `${id}:part:0`,
+        type: "tool-call",
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        status: "pending",
+        metadata: {},
+      },
+    ],
+    metadata: { kind: "tool_call" },
   };
 }
 
 function toolResultToMessageView(message: ToolResultMessage): SparkMessageView {
+  const id = `tool-result:${message.toolCallId}`;
   return {
     version: SPARK_PROTOCOL_VERSION,
-    id: `tool-result:${message.toolCallId}`,
+    id,
     role: "tool",
-    text: contentToText(message.content),
+    text: `${message.toolName} ${message.isError ? "failed" : "completed"}`,
     status: message.isError ? "error" : "done",
     toolCallId: message.toolCallId,
     toolName: message.toolName,
     createdAt: timestampToIso((message as { timestamp?: unknown }).timestamp),
-    metadata: jsonMetadata({ kind: "tool_result", details: message.details }),
+    parts: [
+      {
+        id: `${id}:part:0`,
+        type: "tool-result",
+        toolCallId: message.toolCallId,
+        toolName: message.toolName,
+        status: message.isError ? "failed" : "complete",
+        metadata: {},
+      },
+    ],
+    metadata: { kind: "tool_result" },
   };
+}
+
+function assistantConversationParts(
+  content: unknown,
+  messageId: string,
+  messageStatus: SparkMessageView["status"],
+): SparkConversationPart[] {
+  const partStatus = messageStatusToPartStatus(messageStatus);
+  if (typeof content === "string") {
+    return [
+      {
+        id: `${messageId}:part:0`,
+        type: "text",
+        text: content,
+        status: partStatus,
+        metadata: {},
+      },
+    ];
+  }
+  if (!Array.isArray(content)) return [];
+
+  return content.flatMap((value, index): SparkConversationPart[] => {
+    if (!value || typeof value !== "object") return [];
+    const part = value as Record<string, unknown>;
+    const id = `${messageId}:part:${index}`;
+    if (part.type === "text" && typeof part.text === "string") {
+      return [{ id, type: "text", text: part.text, status: partStatus, metadata: {} }];
+    }
+    if (part.type === "thinking") {
+      const redacted = part.redacted === true;
+      if (!redacted && typeof part.thinking !== "string") return [];
+      return [
+        {
+          id,
+          type: "thinking",
+          text: redacted ? "" : String(part.thinking),
+          status: partStatus,
+          ...(redacted ? { redacted: true } : {}),
+          metadata: {},
+        },
+      ];
+    }
+    if (
+      part.type === "toolCall" &&
+      typeof part.id === "string" &&
+      part.id &&
+      typeof part.name === "string" &&
+      part.name
+    ) {
+      return [
+        {
+          id,
+          type: "tool-call",
+          toolCallId: part.id,
+          toolName: part.name,
+          status: "pending",
+          metadata: {},
+        },
+      ];
+    }
+    return [];
+  });
+}
+
+function messageStatusToPartStatus(
+  status: SparkMessageView["status"],
+): SparkConversationPart["status"] {
+  switch (status) {
+    case "pending":
+      return "pending";
+    case "streaming":
+      return "streaming";
+    case "error":
+      return "failed";
+    case "done":
+      return "complete";
+  }
+}
+
+function displaySafeAssistantText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .flatMap((value): string[] => {
+      if (!value || typeof value !== "object") return [];
+      const part = value as Record<string, unknown>;
+      if (part.type === "text" && typeof part.text === "string") return [part.text];
+      if (part.type === "toolCall" && typeof part.name === "string" && part.name) {
+        return [`[tool call: ${part.name}]`];
+      }
+      return [];
+    })
+    .filter(Boolean)
+    .join("\n");
 }
 
 function runStatusForStopReason(reason: AssistantMessage["stopReason"]): SparkRunView["status"] {

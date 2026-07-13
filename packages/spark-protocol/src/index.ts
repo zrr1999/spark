@@ -80,6 +80,14 @@ export const sparkToolCallStatusSchema = z.enum([
   "failed",
   "cancelled",
 ]);
+export const sparkConversationPartStatusSchema = z.enum([
+  "pending",
+  "running",
+  "streaming",
+  "complete",
+  "failed",
+  "cancelled",
+]);
 export const sparkRunStatusSchema = z.enum([
   "queued",
   "running",
@@ -87,6 +95,45 @@ export const sparkRunStatusSchema = z.enum([
   "failed",
   "cancelled",
   "timed_out",
+]);
+
+const sparkConversationPartBaseSchema = z.object({
+  id: z.string().min(1),
+  status: sparkConversationPartStatusSchema,
+  metadata: sparkJsonObjectSchema.default({}),
+});
+
+export const sparkTextConversationPartSchema = sparkConversationPartBaseSchema.extend({
+  type: z.literal("text"),
+  text: z.string(),
+});
+
+export const sparkThinkingConversationPartSchema = sparkConversationPartBaseSchema.extend({
+  type: z.literal("thinking"),
+  text: z.string(),
+  redacted: z.boolean().optional(),
+});
+
+export const sparkToolCallConversationPartSchema = sparkConversationPartBaseSchema.extend({
+  type: z.literal("tool-call"),
+  toolCallId: z.string().min(1),
+  toolName: z.string().min(1),
+  summary: z.string().optional(),
+});
+
+export const sparkToolResultConversationPartSchema = sparkConversationPartBaseSchema.extend({
+  type: z.literal("tool-result"),
+  toolCallId: z.string().min(1),
+  toolName: z.string().min(1),
+  summary: z.string().optional(),
+});
+
+/** Ordered, display-safe conversation data shared by terminal and graphical hosts. */
+export const sparkConversationPartSchema = z.discriminatedUnion("type", [
+  sparkTextConversationPartSchema,
+  sparkThinkingConversationPartSchema,
+  sparkToolCallConversationPartSchema,
+  sparkToolResultConversationPartSchema,
 ]);
 
 export const sparkMessageViewSchema = z.object({
@@ -102,6 +149,7 @@ export const sparkMessageViewSchema = z.object({
   toolName: z.string().min(1).optional(),
   customType: z.string().min(1).optional(),
   display: z.boolean().optional(),
+  parts: z.array(sparkConversationPartSchema).optional(),
   metadata: sparkJsonObjectSchema.default({}),
 });
 
@@ -398,6 +446,12 @@ export const sparkDaemonEventSchema = z.discriminatedUnion("type", [
 export type SparkViewModelStatus = z.infer<typeof sparkViewModelStatusSchema>;
 export type SparkMessageRole = z.infer<typeof sparkMessageRoleSchema>;
 export type SparkMessageStatus = z.infer<typeof sparkMessageStatusSchema>;
+export type SparkConversationPartStatus = z.infer<typeof sparkConversationPartStatusSchema>;
+export type SparkTextConversationPart = z.infer<typeof sparkTextConversationPartSchema>;
+export type SparkThinkingConversationPart = z.infer<typeof sparkThinkingConversationPartSchema>;
+export type SparkToolCallConversationPart = z.infer<typeof sparkToolCallConversationPartSchema>;
+export type SparkToolResultConversationPart = z.infer<typeof sparkToolResultConversationPartSchema>;
+export type SparkConversationPart = z.infer<typeof sparkConversationPartSchema>;
 export type SparkMessageView = z.infer<typeof sparkMessageViewSchema>;
 export type SparkToolCallView = z.infer<typeof sparkToolCallViewSchema>;
 export type SparkRunView = z.infer<typeof sparkRunViewSchema>;

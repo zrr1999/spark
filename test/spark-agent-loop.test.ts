@@ -620,6 +620,133 @@ void test("SparkAgentLoop dispatches tool calls and feeds tool results back into
   );
 });
 
+void test("SparkAgentLoop publishes ordered display-safe conversation parts without tool payloads", async () => {
+  const viewEvents: any[] = [];
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-agent-loop-display-safe-view-test",
+    ui: { publishView: (event) => viewEvents.push(event) },
+  });
+  host.registerTool({
+    name: "inspect_secret",
+    description: "exercise display-safe tool projection",
+    parameters: { type: "object" },
+    async execute() {
+      return {
+        content: [{ type: "text", text: "secret-tool-output" }],
+        details: { token: "secret-tool-details" },
+      };
+    },
+  });
+
+  const toolCall: ToolCall = {
+    type: "toolCall",
+    id: "tc-display-safe",
+    name: "inspect_secret",
+    arguments: { token: "secret-tool-argument" },
+  };
+  const firstAssistant = buildAssistant(
+    [
+      { type: "thinking", thinking: "Check the safe public state." },
+      {
+        type: "thinking",
+        thinking: "secret-redacted-thinking",
+        thinkingSignature: "secret-thinking-signature",
+        redacted: true,
+      },
+      { type: "text", text: "Inspecting now." },
+      toolCall,
+    ],
+    "toolUse",
+  );
+  const finalAssistant = buildAssistant([{ type: "text", text: "Inspection complete." }]);
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: makeFakeStream({
+      rounds: [
+        [
+          { type: "start", partial: firstAssistant },
+          { type: "toolcall_end", contentIndex: 3, toolCall, partial: firstAssistant },
+          { type: "done", reason: "toolUse", message: firstAssistant },
+        ],
+        [
+          { type: "start", partial: finalAssistant },
+          { type: "done", reason: "stop", message: finalAssistant },
+        ],
+      ],
+    }),
+    getModel: () => TEST_MODEL,
+  });
+  loop.setViewSessionId("session-display-safe-view");
+
+  await loop.submit("inspect safely");
+
+  const assistantMessage = viewEvents.find(
+    (event) =>
+      event.type === "session.message" &&
+      event.message.role === "assistant" &&
+      event.message.status === "done" &&
+      event.message.text === "Inspecting now.\n[tool call: inspect_secret]",
+  )?.message;
+  assert.ok(assistantMessage);
+  assert.deepEqual(
+    assistantMessage.parts.map((part: { type: string }) => part.type),
+    ["thinking", "thinking", "text", "tool-call"],
+  );
+  assert.deepEqual(assistantMessage.parts[1], {
+    id: `${assistantMessage.id}:part:1`,
+    type: "thinking",
+    text: "",
+    status: "complete",
+    redacted: true,
+    metadata: {},
+  });
+  assert.deepEqual(assistantMessage.parts[3], {
+    id: `${assistantMessage.id}:part:3`,
+    type: "tool-call",
+    toolCallId: "tc-display-safe",
+    toolName: "inspect_secret",
+    status: "pending",
+    metadata: {},
+  });
+
+  const toolCallMessage = viewEvents.find(
+    (event) => event.type === "session.message" && event.message.id === "tool-call:tc-display-safe",
+  )?.message;
+  assert.deepEqual(toolCallMessage.parts, [
+    {
+      id: "tool-call:tc-display-safe:part:0",
+      type: "tool-call",
+      toolCallId: "tc-display-safe",
+      toolName: "inspect_secret",
+      status: "pending",
+      metadata: {},
+    },
+  ]);
+  assert.deepEqual(toolCallMessage.metadata, { kind: "tool_call" });
+
+  const toolResultMessage = viewEvents.find(
+    (event) =>
+      event.type === "session.message" && event.message.id === "tool-result:tc-display-safe",
+  )?.message;
+  assert.equal(toolResultMessage.text, "inspect_secret completed");
+  assert.deepEqual(toolResultMessage.parts, [
+    {
+      id: "tool-result:tc-display-safe:part:0",
+      type: "tool-result",
+      toolCallId: "tc-display-safe",
+      toolName: "inspect_secret",
+      status: "complete",
+      metadata: {},
+    },
+  ]);
+  assert.deepEqual(toolResultMessage.metadata, { kind: "tool_result" });
+
+  assert.doesNotMatch(
+    JSON.stringify(viewEvents),
+    /secret-tool-argument|secret-tool-output|secret-tool-details|secret-redacted-thinking|secret-thinking-signature/u,
+  );
+});
+
 void test("SparkAgentLoop compacts blank runs for log-like tool results", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-compaction-test" });
   const noisyOutput = `alpha${"\n".repeat(61)}omega`;

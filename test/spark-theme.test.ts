@@ -106,7 +106,7 @@ void test("Spark native renderer applies theme colors to markdown and diff/tool 
   const rendered = harness.render();
   assert.match(rendered, /spark> .*Heading/);
   assert.match(rendered, /Here is .*code/);
-  assert.match(rendered, /tool:edit \[success\]/);
+  assert.match(rendered, /tool:edit \[succeeded\]/);
   assert.equal(rendered.includes(`${ESC}[38;2;1;2;3m+added line${ESC}[0m`), true);
   assert.equal(rendered.includes(`${ESC}[38;2;4;5;6m-removed line${ESC}[0m`), true);
   assert.equal(rendered.includes(`${ESC}[38;2;7;8;9m@@ file.ts @@${ESC}[0m`), true);

@@ -617,7 +617,7 @@ void test("Spark native TUI surfaces command availability, queued work, stop, an
     },
   });
 
-  assert.match(stripAnsi(harness.render()), /native pi-tui host • idle • 2 registered commands/);
+  assert.match(stripAnsi(harness.render()), /session local • state idle • 2 registered commands/);
   assert.equal(await harness.submit("/help"), "command");
   assert.match(
     stripAnsi(harness.render()),
@@ -628,7 +628,10 @@ void test("Spark native TUI surfaces command availability, queued work, stop, an
   await harness.flush();
   assert.equal(await harness.submit("second"), "queued");
   await harness.flush();
-  assert.match(stripAnsi(harness.render()), /native pi-tui host • busy • 1 follow-up queued/);
+  assert.match(
+    stripAnsi(harness.render()),
+    /session local • state running • queue steer=1 follow-up=0/,
+  );
   assert.match(
     stripAnsi(harness.render()),
     /Queued steering message #1\. Use \/stop to clear queued work/,
@@ -710,7 +713,7 @@ void test("Spark native editor expands @file/image refs and bang commands throug
     await submitEditorText(harness, "!!printf hidden-bang");
     await harness.flush();
     assert.equal(submitted.length, beforeHidden);
-    assert.match(stripAnsi(harness.render()), /tool:shell \[success\]/);
+    assert.match(stripAnsi(harness.render()), /tool:shell \[succeeded\]/);
     harness.app.toggleTools();
     assert.match(stripAnsi(harness.render()), /\[hidden shell command completed\]/);
   } finally {
@@ -821,7 +824,7 @@ void test("Spark native TUI harness captures resize-safe golden render sections"
     "narrow render should respect the requested width",
   );
   assert.match(stripAnsi(narrowLines.join("\n")), /spark> streaming response/);
-  assert.match(stripAnsi(narrowLines.join("\n")), /✓ tool:read \[success\] — first l\.\.\./);
+  assert.match(stripAnsi(narrowLines.join("\n")), /✓ tool:read \[succeeded\] — first\.\.\./);
   assert.match(stripAnsi(narrowLines.join("\n")), /thinking • hidden/);
 
   harness.app.toggleTools();
@@ -833,7 +836,7 @@ void test("Spark native TUI harness captures resize-safe golden render sections"
     true,
     "wide render should respect the requested width",
   );
-  assert.match(wideText, /┌─ ✓ tool:read \[success\] · tc-1/);
+  assert.match(wideText, /┌─ ✓ tool:read \[succeeded\] · tc-1/);
   assert.match(wideText, /│ first line/);
   assert.match(wideText, /│ second line with wider details/);
   assert.match(wideText, /thinking> hidden chain of implementation notes/);

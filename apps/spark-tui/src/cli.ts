@@ -774,6 +774,13 @@ export async function runSparkCli(
           slashCommands: createSparkNativeSlashCommands(services, daemonClient, modelControl),
           autocompleteBasePath: services.cwd,
           keybindings: services.keybindings,
+          statusContext: {
+            activeModel: () => {
+              const active = services.modelSelector.getActive();
+              return active ? `${active.providerName}/${active.modelId}` : undefined;
+            },
+            thinkingLevel: () => services.config.activeThinkingLevel ?? "default",
+          },
           theme: services.theme,
           messageRenderers: new Map(
             services.runtime

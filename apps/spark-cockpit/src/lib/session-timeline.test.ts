@@ -75,24 +75,31 @@ describe("session timeline", () => {
   });
 
   it("projects legacy Infoflow envelopes as the human message body", () => {
+    const legacyEnvelope = [
+      "You are handling an Infoflow (如流) channel conversation.",
+      "Use platform sender metadata for identity; do not infer identity from writing style.",
+      "",
+      "Channel:",
+      '- externalKey: "infoflow:group:10838226"',
+      "",
+      "Message:",
+      "@神经蛙 你叫什么名字",
+    ].join("\n");
     const timeline = buildSessionTimeline({
       fallbackTimestamp: "2026-07-10T00:00:00.000Z",
       messages: [
-        message(
-          "u1",
-          "user",
-          [
-            "You are handling an Infoflow (如流) channel conversation.",
-            "Use platform sender metadata for identity; do not infer identity from writing style.",
-            "",
-            "Channel:",
-            '- externalKey: "infoflow:group:10838226"',
-            "",
-            "Message:",
-            "@神经蛙 你叫什么名字",
-          ].join("\n"),
-          "2026-07-10T00:00:01.000Z",
-        ),
+        {
+          ...message("u1", "user", legacyEnvelope, "2026-07-10T00:00:01.000Z"),
+          parts: [
+            {
+              id: "legacy-text",
+              type: "text" as const,
+              status: "complete" as const,
+              text: legacyEnvelope,
+              metadata: {},
+            },
+          ],
+        },
       ],
       commands: [],
       reports: [],
@@ -160,6 +167,92 @@ describe("session timeline", () => {
 
     expect(fallback.map((item) => item.id)).toEqual(["command:cmd_legacy"]);
     expect(canonical.map((item) => item.id)).toEqual(["message:u1"]);
+  });
+
+  it("merges tool call and result messages into one evolving tool card", () => {
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [
+        {
+          ...message("call-message", "assistant", "", "2026-07-10T00:00:01.000Z"),
+          parts: [
+            {
+              id: "call-part",
+              type: "tool-call" as const,
+              status: "running" as const,
+              toolCallId: "call-1",
+              toolName: "shell",
+              summary: "Run tests",
+              metadata: {},
+            },
+          ],
+        },
+        {
+          ...message("result-message", "assistant", "", "2026-07-10T00:00:02.000Z"),
+          parts: [
+            {
+              id: "result-part",
+              type: "tool-result" as const,
+              status: "complete" as const,
+              toolCallId: "call-1",
+              toolName: "shell",
+              summary: "Tests passed",
+              metadata: {},
+            },
+          ],
+        },
+      ],
+      commands: [],
+      reports: [],
+    });
+
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0]?.id).toBe("message:call-message");
+    expect(timeline[0]?.parts).toEqual([
+      {
+        type: "tool",
+        callId: "call-1",
+        name: "shell",
+        state: "completed",
+        summary: "Tests passed",
+      },
+    ]);
+    expect(JSON.stringify(timeline)).not.toContain("rawOutput");
+  });
+
+  it("never projects secret tool metadata into the timeline", () => {
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [
+        {
+          ...message("tool-message", "assistant", "", "2026-07-10T00:00:01.000Z"),
+          parts: [
+            {
+              id: "tool-part",
+              type: "tool-call" as const,
+              status: "running" as const,
+              toolCallId: "call-secret",
+              toolName: "shell",
+              summary: "Run checks",
+              metadata: { arguments: "token=super-secret" },
+            },
+          ],
+        },
+      ],
+      commands: [],
+      reports: [],
+    });
+
+    expect(timeline[0]?.parts).toEqual([
+      {
+        type: "tool",
+        callId: "call-secret",
+        name: "shell",
+        state: "running",
+        summary: "Run checks",
+      },
+    ]);
+    expect(JSON.stringify(timeline)).not.toContain("super-secret");
   });
 });
 

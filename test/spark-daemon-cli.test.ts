@@ -1344,7 +1344,7 @@ void test("Spark TUI and headless print attach and release workspace clients", a
             config: { extensions: [], providers: [], activeThinkingLevel: "medium" },
             providerRegistry: { listProviders: () => [] },
             modelSelector: {
-              getActive: () => undefined,
+              getActive: () => ({ providerName: "openai-codex", modelId: "gpt-5.4" }),
               openPicker: async () => undefined,
               select: async () => ({ providerName: "fake", modelId: "model" }),
               getPickerState: () => ({ providers: [], items: [], active: undefined }),
@@ -1420,6 +1420,16 @@ void test("Spark TUI and headless print attach and release workspace clients", a
       assert.equal(Boolean(slashCommands?.[command]), true, `Pi parity /${command} is wired`);
     }
     assert.equal(Boolean(slashCommands?.reload), false, "system /reload is not extension-owned");
+    const statusContext = (
+      capturedTuiOptions as {
+        statusContext?: {
+          activeModel?: () => string | undefined;
+          thinkingLevel?: () => string | undefined;
+        };
+      }
+    ).statusContext;
+    assert.equal(statusContext?.activeModel?.(), "openai-codex/gpt-5.4");
+    assert.equal(statusContext?.thinkingLevel?.(), "medium");
     assert.equal(
       (capturedTuiOptions as { autocompleteBasePath?: string }).autocompleteBasePath,
       dir,
