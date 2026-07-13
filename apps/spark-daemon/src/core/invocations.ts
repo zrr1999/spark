@@ -18,6 +18,11 @@ interface TrackedInvocation extends SparkDaemonInvocationRecord {
   controller: AbortController;
 }
 
+export type SparkDaemonSessionCancellationResult =
+  | "cancel-requested"
+  | "not-found"
+  | "session-mismatch";
+
 export class SparkDaemonInvocationRegistry {
   private readonly active = new Map<string, TrackedInvocation>();
   private readonly activeSessions = new Map<string, Set<string>>();
@@ -52,6 +57,19 @@ export class SparkDaemonInvocationRegistry {
     record.reason = reason;
     record.controller.abort(reason);
     return true;
+  }
+
+  cancelForSession(
+    invocationId: string,
+    sessionId: string,
+    reason?: string,
+  ): SparkDaemonSessionCancellationResult {
+    const record = this.active.get(invocationId);
+    if (!record) return "not-found";
+    if (record.sessionId !== sessionId) return "session-mismatch";
+    record.reason = reason;
+    record.controller.abort(reason);
+    return "cancel-requested";
   }
 
   has(invocationId: string): boolean {

@@ -1,6 +1,6 @@
 # Spark Cockpit agent conversation UI
 
-Status: active; Phase 1 shell and source-derived model selector implemented, structured parts in progress
+Status: active; P0 conversation shell and first coding-workbench P1 slice implemented
 
 Last reviewed: 2026-07-13
 
@@ -104,7 +104,7 @@ The ownership rules in [`../architecture/cockpit-projection.md`](../architecture
 | Tool policy and execution | Spark host/capability packages | Render state and submit approval decisions |
 | Session history | Spark session registry/daemon | Render a reconnectable projection |
 | Tasks, plans, runs, TODOs | Spark task/runtime stores | Render linked projections and commands |
-| Artifacts and evidence | Spark artifact store | Render previews and links |
+| Artifacts and evidence | Spark artifact store | Render previews; link only when a canonical Cockpit route is present |
 | Human asks/reviews | Spark ask/review flows | Render inbox/inline decisions and submit answers |
 | Draft text and local file previews | Cockpit component state | Ephemeral until submitted/uploaded |
 | Scroll position and expanded panels | Cockpit component state | Ephemeral presentation preference |
@@ -197,7 +197,7 @@ session.snapshot
 | Ask/review request | approval | Inline action surface backed by canonical Spark command/tool |
 | Task/run projection | task | Status, progress, owner, timestamps, and task/run links |
 | Web/fetch provenance | source | Safe external link with title and origin |
-| Artifact event/ref | artifact | Preview metadata and link to artifact detail |
+| Artifact event/ref | artifact | Preview metadata; link only from an explicit resolvable content ref |
 | Terminal failure/cancel | error | Explicit terminal state; no infinite streaming indicator |
 | Unrecognized event | raw | Collapsed diagnostic fallback |
 
@@ -215,7 +215,7 @@ The live Sessions UI is already one workbench composition and should be split al
 | Session header and effective status/model context | `SessionsWorkspace.svelte` | Extract a presentational header after model read-back is canonical |
 | Conversation viewport | `components/conversation/ConversationViewport.svelte` + `session-timeline.ts` | Projection remains in TypeScript; the component owns scroll position and bounded announcements only |
 | Prompt composer and model selector | `components/conversation/Composer.svelte` + `components/model-selector/ModelPicker.svelte` inside the Sessions form | Presentation is extracted while SvelteKit form actions and daemon turn submission remain authoritative |
-| Run/session details | Desktop aside and mobile disclosure in `SessionsWorkspace.svelte` | Share one details component between responsive placements |
+| Runs, internal tasks, changes, evidence, and context | `SessionInspector.svelte` + `session-workbench.ts` | Keep a read-only projection in the desktop aside and mobile disclosure; do not infer Git or terminal state |
 
 The intended desktop shell remains conversation rail, central conversation, and right-side details. On narrow screens the rail is owned by the existing workbench drawer and details remain a disclosure. The viewport library and vendored message primitives fit inside the central surface; they do not introduce another router, sidebar, or chat store.
 
@@ -427,13 +427,16 @@ Rejected. Use a focused virtualization library and reviewed accessible primitive
 
 ## Implementation boundary
 
-### P0: implement on current contracts
+### P0: implemented on current contracts
 
 - Treat `session.snapshot -> SparkSessionView` as the authoritative Sessions transcript.
 - Reconcile canonical and live `session.message` projections by source ID, never by normalized text.
 - Keep assignment/activity rows as internal detail or empty-snapshot compatibility, not a second transcript.
 - Extract the existing header, text-message viewport, composer presentation, and responsive details shell without changing ownership.
 - Display and read back the effective session model from the daemon after a switch.
+- Consume the daemon event stream with a per-session cursor, replay de-duplication, bounded reconnect backoff, and targeted projection refresh instead of polling the whole route.
+- Treat the composer message as the assignment: follow-ups queue through the same daemon-owned conversation rather than exposing user-created Project or Task objects.
+- Render task, run, artifact, interaction, and terminal-error activity as structured cards with stable source refs.
 - Add deterministic tests for repeated equal messages, snapshot/event reconciliation, form submission, reload, and responsive shell behavior.
 
 P0 deliberately keeps the existing text timeline and scoped token CSS. The model selector uses the
@@ -446,13 +449,22 @@ the active workspace context while its Console navigation keeps global and
 workspace settings as separate ownership scopes. This is shell composition only;
 it does not move settings or workspace ownership into the conversation component.
 
-### P1: requires daemon/protocol support
+### P1: first coding-agent workbench slice implemented
 
-- Populate stable structured reasoning, tool, approval, source, task, artifact, and error parts in a reconnectable projection.
-- Add per-session event cursors, replay semantics, history pagination, and prepend anchors before virtualizing the transcript.
-- Add durable queue, steer, cancel, retry, and edit semantics to the Sessions control plane.
+- Show daemon-owned Runs and Internal Tasks beside the conversation, with Changes, Evidence, and Context tabs derived from canonical session/activity projections.
+- Order the conversation rail as an attention queue: running, queued, blocked, and failed sessions before ordinary recency within the current workspace or daemon scope.
+- Keep Changes read-only and empty unless an explicit canonical diff marker exists. Do not infer Git state from text, filenames, or log output.
+- Keep terminal output and artifacts read-only. Do not expose invented PTY controls or artifact links that the Cockpit server cannot resolve.
+- Queue follow-ups on the existing daemon turn queue and request cancellation through the owning daemon for both queued and active turns.
+- Preserve pending activity refreshes while the page is hidden or a refresh is already in flight, and isolate replay cursors by session during navigation.
+
+### Remaining protocol work
+
+- Add history pagination and prepend anchors before virtualizing the transcript.
+- Add durable steer, retry, and edit semantics to the Sessions control plane.
 - Add attachment upload/content refs, validation, and lifecycle cleanup.
 - Return stable optimistic-turn/message reconciliation IDs in the submit receipt when optimistic rows are introduced.
+- Add canonical response commands for interactive approval/ask cards before exposing decision buttons.
 
 These are not presentation-only changes. Controls must remain absent or explicitly unavailable until the owning daemon contract exists.
 
@@ -478,21 +490,21 @@ Exit criteria: the text transcript reloads from `session.snapshot`, repeated equ
 
 Exit criteria: the shell is componentized without moving state ownership; once virtualization is enabled, long history, streamed growth, scroll-away, jump-to-latest, and history prepend work on desktop and mobile.
 
-### Phase 2: structured agent parts — first projection slice implemented
+### Phase 2: structured agent parts and coding workbench — first projection slice implemented
 
-- Add Reasoning, ToolCall, TaskRun, and Approval shells. Sources, ArtifactPreview, and richer unknown-event diagnostics remain pending.
+- Add Reasoning, ToolCall, TaskRun, Approval, ArtifactPreview, and Error shells. User-facing provenance sources and richer unknown-event diagnostics remain pending.
 - Extend the projection builder to emit ordered text, thinking, and tool call/result parts, with legacy text fallback and tool call/result merging by stable call ID.
-- Keep invocation/log detail available during the transition.
-- Connect approvals and task/artifact links to canonical Spark actions/routes.
+- Project stable daemon run/task/artifact updates without duplicate keyed rows, and keep invocation/log detail available in the read-only inspector.
+- Connect approvals or artifact links only after a canonical Spark action/route exists.
 
 Exit criteria: no supported structured event is flattened into opaque prose unless its raw fallback is intentionally selected.
 
-### Phase 3: composer
+### Phase 3: composer — queue/cancel slice implemented
 
 - Refactor the Sessions composer in `SessionsWorkspace.svelte` into presentational subcomponents while preserving its SvelteKit action and daemon `turn.submit` path.
-- Add queue/steer/cancel/retry controls only after the Sessions control-plane contracts are durable and tested.
+- Keep queue and cancel controls on the tested Sessions/daemon control plane. Add steer/retry only after their contracts are durable.
 - Add local attachment drafts and server-backed content refs.
-- Add stop, retry, editing, IME, paste, and mobile interaction tests.
+- Add retry, editing, paste, and attachment interaction tests; retain the existing IME, queue/cancel, and mobile coverage.
 
 Exit criteria: submitting, queueing, steering, stopping, and attachment handling survive reload/reconnect without a second chat store.
 

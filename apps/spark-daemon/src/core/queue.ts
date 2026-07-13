@@ -1,8 +1,8 @@
 /** Local JSON file queue for the Spark daemon core. */
 
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { defaultSparkDaemonRoot, type SparkDaemonPathOptions } from "./paths.ts";
@@ -78,21 +78,21 @@ export class SparkDaemonQueue {
     fileName: string,
     state: SparkDaemonQueueState = "inbox",
   ): Promise<SparkDaemonQueueEntry> {
-    const filePath = join(this.dirForState(state), normalizeQueueFileName(fileName));
+    const normalized = normalizeQueueFileName(fileName);
+    const filePath = join(this.dirForState(state), normalized);
     const raw = await readFile(filePath, "utf8");
-    const parsed = JSON.parse(raw) as Partial<SparkDaemonQueuePayload>;
-    if (typeof parsed.enqueuedAt !== "string") throw new Error("queue entry missing enqueuedAt");
-    const task = validateSparkDaemonTask(parsed.task);
-    const payload: SparkDaemonQueuePayload = { enqueuedAt: parsed.enqueuedAt, task };
-    if (typeof parsed.processedAt === "string") payload.processedAt = parsed.processedAt;
-    if (Object.hasOwn(parsed, "result")) payload.result = parsed.result;
-    if (typeof parsed.failedAt === "string") payload.failedAt = parsed.failedAt;
-    if (typeof parsed.error === "string") payload.error = parsed.error;
-    return {
-      fileName: normalizeQueueFileName(fileName),
-      filePath,
-      payload,
-    };
+    return parseQueueEntry(normalized, filePath, raw);
+  }
+
+  /**
+   * Read an inbox entry without yielding so the worker can register the active
+   * invocation in the same event-loop turn. This closes the local cancellation
+   * race where an async read could finish after the inbox file was unlinked.
+   */
+  readPendingEntryForLaunch(fileName: string): SparkDaemonQueueEntry {
+    const normalized = normalizeQueueFileName(fileName);
+    const filePath = join(this.inboxDir, normalized);
+    return parseQueueEntry(normalized, filePath, readFileSync(filePath, "utf8"));
   }
 
   async markProcessed(fileName: string, result?: unknown): Promise<string> {
@@ -138,6 +138,19 @@ export class SparkDaemonQueue {
     return failedPath;
   }
 
+  /** Remove a task that has not been claimed by a worker yet. */
+  async removePending(fileName: string): Promise<boolean> {
+    await this.init();
+    const inboxPath = join(this.inboxDir, normalizeQueueFileName(fileName));
+    try {
+      await unlink(inboxPath);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  }
+
   dirForState(state: SparkDaemonQueueState): string {
     switch (state) {
       case "inbox":
@@ -152,6 +165,18 @@ export class SparkDaemonQueue {
 
 function compareStrings(left: string, right: string): number {
   return left.localeCompare(right);
+}
+
+function parseQueueEntry(fileName: string, filePath: string, raw: string): SparkDaemonQueueEntry {
+  const parsed = JSON.parse(raw) as Partial<SparkDaemonQueuePayload>;
+  if (typeof parsed.enqueuedAt !== "string") throw new Error("queue entry missing enqueuedAt");
+  const task = validateSparkDaemonTask(parsed.task);
+  const payload: SparkDaemonQueuePayload = { enqueuedAt: parsed.enqueuedAt, task };
+  if (typeof parsed.processedAt === "string") payload.processedAt = parsed.processedAt;
+  if (Object.hasOwn(parsed, "result")) payload.result = parsed.result;
+  if (typeof parsed.failedAt === "string") payload.failedAt = parsed.failedAt;
+  if (typeof parsed.error === "string") payload.error = parsed.error;
+  return { fileName, filePath, payload };
 }
 
 function serializeQueueResult(value: unknown): unknown {

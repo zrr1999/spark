@@ -50,6 +50,8 @@ export function conversationPartText(parts: readonly ConversationPart[]) {
       if (part.type === "reasoning") return [part.summary];
       if (part.type === "tool") return [part.summary || part.name];
       if (part.type === "task" || part.type === "approval") return [part.summary || part.title];
+      if (part.type === "artifact") return [part.summary || part.title];
+      if (part.type === "error") return [part.message || part.title];
       return [];
     })
     .filter(Boolean)
@@ -142,7 +144,42 @@ function normalizePart(
         requestId,
         title: stringField(value, "title") ?? requestId,
         state: approvalState(stringField(value, "status")),
+        kind: stringField(value, "kind"),
         summary: stringField(value, "summary"),
+      },
+    ];
+  }
+
+  if (type === "artifact") {
+    const artifactRef =
+      stringField(value, "artifactRef") ??
+      stringField(value, "artifactId") ??
+      stringField(value, "ref") ??
+      `${message.id}:artifact:${index}`;
+    return [
+      {
+        type: "artifact",
+        artifactRef,
+        title: stringField(value, "title") ?? artifactRef,
+        kind: stringField(value, "kind"),
+        state: stringField(value, "state") ?? stringField(value, "status"),
+        summary: stringField(value, "summary"),
+      },
+    ];
+  }
+
+  if (type === "error") {
+    const title = stringField(value, "title") ?? "Error";
+    return [
+      {
+        type: "error",
+        title,
+        message:
+          stringField(value, "message") ??
+          stringField(value, "summary") ??
+          stringField(value, "text") ??
+          title,
+        code: stringField(value, "code"),
       },
     ];
   }
@@ -200,7 +237,10 @@ function taskState(value: string | undefined): ConversationTaskState {
 }
 
 function approvalState(value: string | undefined): ConversationApprovalState {
-  if (["approved", "accepted", "answered"].includes(value ?? "")) return "approved";
+  if (["approved", "accepted"].includes(value ?? "")) return "approved";
+  if (["answered", "resolved", "completed", "complete", "done"].includes(value ?? "")) {
+    return "resolved";
+  }
   if (["rejected", "denied"].includes(value ?? "")) return "rejected";
   if (["cancelled", "canceled"].includes(value ?? "")) return "cancelled";
   return "requested";

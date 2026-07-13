@@ -2,6 +2,8 @@
   import AgentMdxStream from "$lib/AgentMdxStream.svelte";
   import Icon from "$lib/Icon.svelte";
   import ApprovalPart from "./ApprovalPart.svelte";
+  import ArtifactPart from "./ArtifactPart.svelte";
+  import ErrorPart from "./ErrorPart.svelte";
   import MessageActions from "./MessageActions.svelte";
   import ReasoningPart from "./ReasoningPart.svelte";
   import TaskRunPart from "./TaskRunPart.svelte";
@@ -93,10 +95,22 @@
             requestId={part.requestId}
             title={part.title}
             state={part.state}
+            kind={part.kind}
             summary={part.summary}
             labels={partLabels}
             {statusLabel}
           />
+        {:else if part.type === "artifact"}
+          <ArtifactPart
+            artifactRef={part.artifactRef}
+            title={part.title}
+            kind={part.kind}
+            state={part.state}
+            summary={part.summary}
+            {statusLabel}
+          />
+        {:else if part.type === "error"}
+          <ErrorPart title={part.title} message={part.message} code={part.code} />
         {:else}
           <p class="unknown-part">{partLabels.unknown}: {part.label}</p>
         {/if}

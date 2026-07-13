@@ -5,7 +5,10 @@ import {
   textConversationPart,
 } from "./components/conversation/conversation-view";
 import type {
+  ConversationApprovalState,
   ConversationMessageView,
+  ConversationPart,
+  ConversationTaskState,
   ConversationToolState,
 } from "./components/conversation/types";
 
@@ -27,6 +30,10 @@ export type SessionTimelineReport = {
   role: string | null;
   status: string | null;
   createdAt: string;
+  interaction?: {
+    requestId: string | null;
+    kind: string | null;
+  };
 };
 
 export type SessionTimelineItem = ConversationMessageView & {
@@ -87,7 +94,7 @@ export function buildSessionTimeline(input: {
     }
   }
 
-  for (const [reportIndex, report] of input.reports.entries()) {
+  for (const [reportIndex, report] of latestStableReports(input.reports).entries()) {
     if (report.kind === "daemon.task.lifecycle" || report.role === "tool") continue;
     const sourceMessageId = sessionMessageId(report);
     if (sourceMessageId && canonicalMessageIds.has(sourceMessageId)) continue;
@@ -99,17 +106,25 @@ export function buildSessionTimeline(input: {
     ) {
       continue;
     }
+    const parts = conversationPartsFromReport(report);
+    const hasStructuredReportPart = parts.some(
+      (part) =>
+        part.type === "task" ||
+        part.type === "approval" ||
+        part.type === "artifact" ||
+        part.type === "error",
+    );
     items.push({
       id: sourceMessageId ? `message:${sourceMessageId}` : `report:${report.id}`,
       actor,
-      body: report.text,
-      title: actor === "user" ? null : report.title,
+      body: conversationPartText(parts) || report.text,
+      title: actor === "user" || hasStructuredReportPart ? null : report.title,
       status: report.status,
       timestamp: report.createdAt,
       meta: report.role && !["assistant", "user"].includes(report.role) ? report.role : null,
       senderLabel: null,
       order: input.messages.length + input.commands.length + reportIndex,
-      parts: [textConversationPart(report.text, report.status === "running")],
+      parts,
     });
   }
 
@@ -119,7 +134,7 @@ export function buildSessionTimeline(input: {
     const lexical = left.timestamp.localeCompare(right.timestamp);
     return lexical || left.order - right.order || left.id.localeCompare(right.id);
   });
-  return mergeTimelineToolParts(sortedItems);
+  return mergeTimelineInteractionParts(mergeTimelineToolParts(sortedItems));
 }
 
 function channelSenderLabel(metadata: SparkMessageView["metadata"]): string | null {
@@ -189,6 +204,50 @@ function laterToolState(
   return rank[next] >= rank[previous] ? next : previous;
 }
 
+function mergeTimelineInteractionParts(items: SessionTimelineItem[]) {
+  const result = items.map((item) => ({ ...item, parts: [...item.parts] }));
+  const interactionOwners = new Map<string, { item: SessionTimelineItem; partIndex: number }>();
+
+  for (const item of result) {
+    const retainedParts: ConversationMessageView["parts"] = [];
+    for (const part of item.parts) {
+      if (part.type !== "approval") {
+        retainedParts.push(part);
+        continue;
+      }
+
+      const owner = interactionOwners.get(part.requestId);
+      if (!owner) {
+        interactionOwners.set(part.requestId, { item, partIndex: retainedParts.length });
+        retainedParts.push(part);
+        continue;
+      }
+
+      const previous = owner.item.parts[owner.partIndex];
+      if (previous?.type !== "approval") continue;
+      owner.item.parts[owner.partIndex] = {
+        ...previous,
+        title: previous.title || part.title,
+        state: laterApprovalState(previous.state, part.state),
+        kind: previous.kind || part.kind,
+        summary: previous.summary || part.summary,
+      };
+      owner.item.body = conversationPartText(owner.item.parts) || owner.item.body;
+    }
+    item.parts = retainedParts;
+  }
+
+  return result.filter((item) => item.parts.length > 0);
+}
+
+function laterApprovalState(
+  previous: ConversationApprovalState,
+  next: ConversationApprovalState,
+): ConversationApprovalState {
+  if (previous === "requested") return next;
+  return previous;
+}
+
 const LEGACY_INFOFLOW_TURN_PREFIX = "You are handling an Infoflow (如流) channel conversation.";
 const LEGACY_INFOFLOW_MESSAGE_MARKER = "\nMessage:\n";
 
@@ -211,4 +270,158 @@ function normalizeMessage(value: string) {
 
 function isUserRole(role: string | null) {
   return role === "user" || role === "human" || role === "operator";
+}
+
+function conversationPartsFromReport(report: SessionTimelineReport): ConversationPart[] {
+  if (report.kind === "run.update" && isFailedTerminalStatus(report.status)) {
+    return [
+      {
+        type: "error",
+        title: report.title,
+        message: report.text.trim() || report.title,
+      },
+    ];
+  }
+
+  if (report.kind === "run.update") {
+    return [
+      {
+        type: "task",
+        taskRef: report.id,
+        title: report.title,
+        state: taskReportState(report.status),
+        summary: report.text.trim() ? report.text : undefined,
+      },
+    ];
+  }
+
+  if (report.kind === "task.update") {
+    return [
+      {
+        type: "task",
+        taskRef: report.id,
+        title: report.title,
+        state: taskReportState(report.status),
+        summary: report.text.trim() ? report.text : undefined,
+      },
+    ];
+  }
+
+  if (report.kind === "daemon.interaction.request") {
+    return [
+      {
+        type: "approval",
+        requestId: report.interaction?.requestId ?? report.id,
+        title: report.title,
+        state: "requested",
+        kind: report.interaction?.kind ?? undefined,
+        summary: report.text.trim() ? report.text : undefined,
+      },
+    ];
+  }
+
+  if (report.kind === "daemon.interaction.response") {
+    return [
+      {
+        type: "approval",
+        requestId: report.interaction?.requestId ?? report.id,
+        title: report.title,
+        state: interactionResponseState(report.status),
+        kind: report.interaction?.kind ?? undefined,
+        summary: report.text.trim() ? report.text : undefined,
+      },
+    ];
+  }
+
+  if (report.kind.startsWith("artifact.") || report.kind === "artifact.update") {
+    const kind =
+      report.kind === "artifact.update" ? "artifact" : report.kind.slice("artifact.".length).trim();
+    return [
+      {
+        type: "artifact",
+        artifactRef: report.id.startsWith("artifact:") ? report.id : `artifact:${report.id}`,
+        title: report.title,
+        kind: kind || undefined,
+        state: report.status ?? undefined,
+        summary: report.text.trim() ? report.text : undefined,
+      },
+    ];
+  }
+
+  if (isFailedTerminalStatus(report.status)) {
+    return [
+      {
+        type: "error",
+        title: report.title,
+        message: report.text.trim() || report.title,
+      },
+    ];
+  }
+
+  return [textConversationPart(report.text, report.status === "running")];
+}
+
+function latestStableReports(reports: SessionTimelineReport[]) {
+  const latest = new Map<string, SessionTimelineReport>();
+  for (const report of reports) {
+    const key = stableReportKey(report);
+    if (!key) continue;
+    const previous = latest.get(key);
+    if (!previous || report.createdAt > previous.createdAt) latest.set(key, report);
+  }
+
+  return reports.filter((report) => {
+    const key = stableReportKey(report);
+    return !key || latest.get(key) === report;
+  });
+}
+
+function stableReportKey(report: SessionTimelineReport) {
+  if (
+    report.kind !== "run.update" &&
+    report.kind !== "task.update" &&
+    report.kind !== "artifact.update"
+  ) {
+    return null;
+  }
+  return `${report.kind}:${report.id}`;
+}
+
+function taskReportState(status: string | null): ConversationTaskState {
+  const normalized = normalizedStatus(status);
+  if (["completed", "complete", "done", "succeeded", "success"].includes(normalized)) {
+    return "completed";
+  }
+  if (["failed", "error", "errored", "rejected"].includes(normalized)) return "failed";
+  if (normalized === "blocked") return "blocked";
+  if (["cancelled", "canceled"].includes(normalized)) return "cancelled";
+  if (["running", "in_progress", "claimed"].includes(normalized)) return "running";
+  return "pending";
+}
+
+function interactionResponseState(status: string | null): ConversationApprovalState {
+  const normalized = normalizedStatus(status);
+  if (["cancelled", "canceled"].includes(normalized)) return "cancelled";
+  if (["blocked", "error", "failed", "rejected", "denied"].includes(normalized)) {
+    return "rejected";
+  }
+  return "resolved";
+}
+
+function normalizedStatus(status: string | null) {
+  return status?.trim().toLocaleLowerCase().replaceAll("-", "_") ?? "";
+}
+
+function isFailedTerminalStatus(status: string | null) {
+  const normalized = normalizedStatus(status);
+  return [
+    "failed",
+    "error",
+    "errored",
+    "rejected",
+    "denied",
+    "lost",
+    "timeout",
+    "timed_out",
+  ].includes(normalized);
 }

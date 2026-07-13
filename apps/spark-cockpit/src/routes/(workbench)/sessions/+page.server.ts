@@ -1,7 +1,10 @@
 import { fail, redirect } from "@sveltejs/kit";
 import { getRequestDictionary, localeCookieName, resolveRequestLocale } from "$lib/i18n";
 import { titleFromPrompt } from "$lib/server/agents-product";
-import { submitConversationTurnForCockpit } from "$lib/server/conversation-control";
+import {
+  cancelConversationTurnForCockpit,
+  submitConversationTurnForCockpit,
+} from "$lib/server/conversation-control";
 import { formText } from "$lib/server/form-data";
 import {
   archiveManagedSessionForCockpit,
@@ -195,6 +198,102 @@ export const actions: Actions = {
       return fail(400, {
         intent: "sendMessage",
         success: false,
+        error,
+        message: error,
+        values,
+      });
+    }
+  },
+
+  cancelTurn: async ({ cookies, request }) => {
+    const t = getRequestDictionary({
+      cookieLocale: cookies.get(localeCookieName),
+      acceptLanguage: request.headers.get("accept-language"),
+    }).sessions;
+    const formData = await request.formData();
+    const sessionId = formText(formData, "sessionId").trim();
+    const turnId = formText(formData, "turnId").trim();
+    const values = { sessionId, turnId };
+
+    if (!sessionId) {
+      return fail(400, {
+        intent: "cancelTurn",
+        success: false,
+        error: t.cancelSessionRequired,
+        message: t.cancelSessionRequired,
+        values,
+      });
+    }
+    if (!turnId) {
+      return fail(400, {
+        intent: "cancelTurn",
+        success: false,
+        error: t.cancelTurnRequired,
+        message: t.cancelTurnRequired,
+        values,
+      });
+    }
+
+    let session;
+    try {
+      session = await getManagedSessionForCockpit(sessionId);
+    } catch (caught) {
+      const error = caught instanceof Error ? caught.message : t.cancelTurnFailed;
+      return fail(400, {
+        intent: "cancelTurn",
+        success: false,
+        error,
+        message: error,
+        values,
+      });
+    }
+    if (!session) {
+      return fail(400, {
+        intent: "cancelTurn",
+        success: false,
+        error: t.cancelSessionRequired,
+        message: t.cancelSessionRequired,
+        values,
+      });
+    }
+    if (session.status === "archived") {
+      return fail(400, {
+        intent: "cancelTurn",
+        success: false,
+        error: t.cancelTurnArchived,
+        message: t.cancelTurnArchived,
+        values,
+      });
+    }
+
+    try {
+      const result = await cancelConversationTurnForCockpit({ sessionId, turnId });
+      if (!result.cancelled) {
+        return fail(409, {
+          intent: "cancelTurn",
+          success: false,
+          cancelled: false,
+          error: t.cancelTurnUnavailable,
+          message: t.cancelTurnUnavailable,
+          daemonMessage: result.message,
+          values,
+        });
+      }
+      return {
+        intent: "cancelTurn",
+        success: true,
+        cancelled: true,
+        message: result.outcome === "dequeued" ? t.cancelTurnDequeued : t.cancelTurnSucceeded,
+        daemonMessage: result.message,
+        cancelledTurnId: result.turnId,
+        values: { sessionId, turnId: result.turnId },
+      };
+    } catch (caught) {
+      const error = caught instanceof Error ? caught.message : t.cancelTurnFailed;
+      return fail(400, {
+        intent: "cancelTurn",
+        success: false,
+        cancelled: false,
         error,
         message: error,
         values,

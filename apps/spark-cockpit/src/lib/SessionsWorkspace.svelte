@@ -11,7 +11,23 @@
   import { visibleSessionStatus } from "$lib/conversation-status";
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
+  import SessionInspector from "$lib/SessionInspector.svelte";
+  import { cancelledTurnIdFromActionResult } from "$lib/session-action-result";
+  import {
+    applySessionLiveEvent,
+    beginSessionActivityRefresh,
+    canStartSessionActivityRefresh,
+    createSessionActivityRefreshState,
+    createSessionLiveEventState,
+    finishSessionActivityRefresh,
+    parseSessionSerializedEvent,
+    requestSessionActivityRefresh,
+    sessionEventCursorStorageKey,
+    sessionViewRevisionKey,
+    type SessionLiveEventState,
+  } from "$lib/session-live-events";
   import { buildSessionTimeline } from "$lib/session-timeline";
+  import { buildSessionWorkbenchView, type SessionInspectorLabels } from "$lib/session-workbench";
   import { Button } from "$lib/ui";
   import {
     workbenchSessionScope,
@@ -25,7 +41,7 @@
     SparkSessionView,
   } from "@zendev-lab/spark-protocol";
   import type { SubmitFunction } from "@sveltejs/kit";
-  import { onMount, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
 
   type SessionRecord = {
     sessionId: string;
@@ -150,13 +166,20 @@
   let selected = $derived(
     sessions.find((session) => session.sessionId === selectedSessionId) ?? null,
   );
+  let liveSessionView = $state<SparkSessionView | null>(untrack(() => sessionView));
+  let liveEventState = $state<SessionLiveEventState | null>(null);
+  let liveSessionId = $state("");
+  let lastServerViewKey = $state("");
+  let liveConnection = $state<"connecting" | "live" | "reconnecting" | "offline">(
+    "connecting",
+  );
   let selectedWorkspaceId = $derived(
     selected ? workspaceIdForWorkbenchSession(selected) : null,
   );
   let selectedWorkspaceHref = $derived(workspaceHref(selectedWorkspaceId));
   let activityCommands = $derived(activity?.commands ?? []);
   let activityReports = $derived(activity?.reports ?? []);
-  let sessionMessages = $derived(sessionView?.messages ?? []);
+  let sessionMessages = $derived(liveSessionView?.messages ?? []);
   let modelProviders = $derived(
     modelControl.snapshot.providers.filter((provider) => provider.models.length > 0),
   );
@@ -192,12 +215,20 @@
   let sendFeedback = $state<string | null>(null);
   let modelFeedback = $state<string | null>(null);
   let modelFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
-  let refreshingActivity = $state(false);
+  let activityRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  const activityRefreshState = createSessionActivityRefreshState();
   let sessionModelForm = $state<HTMLFormElement | null>(null);
   let startModelReady = $derived(
     modelControl.available &&
       availableModels.some((entry) => modelValue(entry.model) === startModel),
   );
+  let conversationBusy = $derived(
+    selected?.status === "running" || liveSessionView?.status === "running",
+  );
+  let activeTurnId = $derived(liveEventState?.activeTurnId ?? null);
+  let cancelState = $state<SubmissionState>("idle");
+  let cancelFeedback = $state<string | null>(null);
+  let cancelledTurnId = $state<string | null>(null);
 
   let isZh = $derived(locale.toLowerCase().startsWith("zh"));
   let copy = $derived(
@@ -214,8 +245,10 @@
           messageLabel: "消息",
           startPlaceholder: "告诉 Spark 你想完成什么……",
           messagePlaceholder: "继续说明、补充约束或调整方向……",
+          queuePlaceholder: "补充说明将排在当前执行之后……",
           startSubmit: "开始对话",
           sendSubmit: "发送",
+          queueSubmit: "排队",
           sending: "发送中…",
           sent: "",
           sendFailed: "消息发送失败，请重试。",
@@ -224,10 +257,8 @@
           timelineEmpty: "发送第一条消息后，Spark 的回复和执行进度会出现在这里。",
           you: "你",
           spark: "Spark",
-          internalDetails: "内部运行详情",
-          internalHint: "Spark 自动管理这段对话的执行记录。",
-          noInternalRuns: "还没有内部运行。",
           conversationContext: "会话上下文",
+          conversationWorkbench: "编码工作台",
           collapseDetails: "会话与运行详情",
           modelLabel: "模型",
           chooseModel: "选择模型",
@@ -242,6 +273,39 @@
           providerLoginRequired: "登录后可用",
           modelUpdated: "模型已切换，将用于之后发送的消息。",
           modelFailed: "无法切换模型。",
+          stop: "停止",
+          stopping: "正在停止…",
+          stopped: "已请求取消当前执行。",
+          stopFailed: "无法停止当前执行，请重试。",
+          live: "实时",
+          connecting: "连接中",
+          reconnecting: "正在重连",
+          offline: "离线",
+          inspectorAria: "Coding agent 工作台",
+          runsTab: "运行",
+          changesTab: "变更",
+          evidenceTab: "证据",
+          contextTab: "上下文",
+          runsHeading: "运行",
+          tasksHeading: "内部任务",
+          changesHeading: "结构化变更",
+          evidenceHeading: "证据与产物",
+          contextHeading: "执行上下文",
+          noRunsTitle: "尚无运行",
+          noRunsBody: "发送消息后，Spark 自动创建的运行和内部任务会出现在这里。",
+          noChangesTitle: "尚无结构化变更",
+          noChangesBody: "当前 runtime 没有提供 canonical diff；这里不会从回复文本推断 Git 变更。",
+          noEvidenceTitle: "尚无证据",
+          noEvidenceBody: "运行生成报告、产物或验证结果后，会自动归集到这里。",
+          latestOutput: "最近输出",
+          progress: "进度",
+          sessionId: "会话 ID",
+          sessionStatus: "会话状态",
+          workingDirectory: "工作目录",
+          contextModel: "模型",
+          createdAt: "创建时间",
+          updatedAt: "更新时间",
+          unavailable: "不可用",
           copyMessage: "复制消息",
           copiedMessage: "已复制",
           jumpToLatest: "回到最新消息",
@@ -268,8 +332,10 @@
           messageLabel: "Message",
           startPlaceholder: "Tell Spark what you want to accomplish…",
           messagePlaceholder: "Add context, constraints, or steer the work…",
+          queuePlaceholder: "This follow-up will run after the current turn…",
           startSubmit: "Start conversation",
           sendSubmit: "Send",
+          queueSubmit: "Queue",
           sending: "Sending…",
           sent: "",
           sendFailed: "Could not send the message. Try again.",
@@ -278,10 +344,8 @@
           timelineEmpty: "Spark replies and execution progress will appear here after you send a message.",
           you: "You",
           spark: "Spark",
-          internalDetails: "Internal run details",
-          internalHint: "Spark manages the execution records for this conversation.",
-          noInternalRuns: "No internal runs yet.",
           conversationContext: "Conversation context",
+          conversationWorkbench: "Coding workbench",
           collapseDetails: "Conversation and run details",
           modelLabel: "Model",
           chooseModel: "Choose a model",
@@ -296,6 +360,40 @@
           providerLoginRequired: "Available after login",
           modelUpdated: "Model updated. It will be used for future messages.",
           modelFailed: "Could not switch models.",
+          stop: "Stop",
+          stopping: "Stopping…",
+          stopped: "Cancellation requested for the active turn.",
+          stopFailed: "Could not stop the active turn. Try again.",
+          live: "Live",
+          connecting: "Connecting",
+          reconnecting: "Reconnecting",
+          offline: "Offline",
+          inspectorAria: "Coding agent workbench",
+          runsTab: "Runs",
+          changesTab: "Changes",
+          evidenceTab: "Evidence",
+          contextTab: "Context",
+          runsHeading: "Runs",
+          tasksHeading: "Internal tasks",
+          changesHeading: "Structured changes",
+          evidenceHeading: "Evidence and artifacts",
+          contextHeading: "Execution context",
+          noRunsTitle: "No runs yet",
+          noRunsBody: "Runs and internal tasks created by Spark appear here after you send a message.",
+          noChangesTitle: "No structured changes yet",
+          noChangesBody:
+            "The runtime has not provided a canonical diff. This view never infers Git changes from prose.",
+          noEvidenceTitle: "No evidence yet",
+          noEvidenceBody: "Reports, artifacts, and verification results are collected here as runs produce them.",
+          latestOutput: "Latest output",
+          progress: "Progress",
+          sessionId: "Session ID",
+          sessionStatus: "Session status",
+          workingDirectory: "Working directory",
+          contextModel: "Model",
+          createdAt: "Created",
+          updatedAt: "Updated",
+          unavailable: "Unavailable",
           copyMessage: "Copy message",
           copiedMessage: "Copied",
           jumpToLatest: "Jump to latest",
@@ -330,6 +428,40 @@
     collapse: copy.collapse,
     expand: copy.expand,
   });
+  let inspectorLabels = $derived<SessionInspectorLabels>({
+    ariaLabel: copy.inspectorAria,
+    tabs: {
+      runs: copy.runsTab,
+      changes: copy.changesTab,
+      evidence: copy.evidenceTab,
+      context: copy.contextTab,
+    },
+    runsHeading: copy.runsHeading,
+    tasksHeading: copy.tasksHeading,
+    changesHeading: copy.changesHeading,
+    evidenceHeading: copy.evidenceHeading,
+    contextHeading: copy.contextHeading,
+    noRunsTitle: copy.noRunsTitle,
+    noRunsBody: copy.noRunsBody,
+    noChangesTitle: copy.noChangesTitle,
+    noChangesBody: copy.noChangesBody,
+    noEvidenceTitle: copy.noEvidenceTitle,
+    noEvidenceBody: copy.noEvidenceBody,
+    latestOutput: copy.latestOutput,
+    progress: copy.progress,
+    sessionId: copy.sessionId,
+    sessionStatus: copy.sessionStatus,
+    workingDirectory: copy.workingDirectory,
+    model: copy.contextModel,
+    createdAt: copy.createdAt,
+    updatedAt: copy.updatedAt,
+    unavailable: copy.unavailable,
+  });
+  let workbenchView = $derived(
+    liveSessionView
+      ? buildSessionWorkbenchView({ session: liveSessionView, activity })
+      : null,
+  );
   let timelineFollowKey = $derived.by(() => {
     const latest = timelineItems.at(-1);
     return latest ? `${latest.id}:${latest.status ?? "done"}:${latest.body.length}` : "empty";
@@ -339,6 +471,48 @@
     if (!latest || latest.status === "running" || latest.status === "streaming") return "";
     const compact = latest.body.trim().replace(/\s+/g, " ");
     return compact.length <= 200 ? compact : `${compact.slice(0, 199)}…`;
+  });
+
+  $effect(() => {
+    const sessionId = selected?.sessionId ?? "";
+    if (!sessionId) {
+      liveSessionId = "";
+      liveEventState = null;
+      liveSessionView = null;
+      lastServerViewKey = "";
+      return;
+    }
+
+    const nextServerViewKey = sessionViewRevisionKey(sessionView);
+    if (sessionId !== liveSessionId || nextServerViewKey !== lastServerViewKey) {
+      const cursor = sessionId === liveSessionId ? liveEventState?.cursor : null;
+      liveSessionId = sessionId;
+      lastServerViewKey = nextServerViewKey;
+      liveEventState = createSessionLiveEventState({
+        sessionId,
+        workspaceId: selectedWorkspaceId,
+        view: sessionView,
+        commandIds: activityCommands.map((command) => command.id),
+        invocationIds: activityCommands.flatMap((command) =>
+          command.invocationId ? [command.invocationId] : [],
+        ),
+        cursor,
+      });
+      liveSessionView = liveEventState.view;
+      return;
+    }
+
+    for (const command of activityCommands) {
+      liveEventState?.commandIds.add(command.id);
+      if (command.invocationId) liveEventState?.invocationIds.add(command.invocationId);
+    }
+  });
+
+  $effect(() => {
+    if (activeTurnId && activeTurnId !== cancelledTurnId && cancelState !== "submitting") {
+      cancelState = "idle";
+      cancelFeedback = null;
+    }
   });
 
   $effect(() => {
@@ -372,52 +546,137 @@
     if (formIntent === "sendMessage" && formMessage && sendState === "idle") {
       sendFeedback = formMessage;
     }
+    if (formIntent === "cancelTurn" && formMessage && cancelState === "idle") {
+      cancelFeedback = formMessage;
+    }
   });
 
-  onMount(() => {
+  $effect(() => {
+    const streamSessionId = liveSessionId;
+    const streamState = liveEventState;
+    if (!streamSessionId || !streamState || streamState.sessionId !== streamSessionId) {
+      liveConnection = "offline";
+      return;
+    }
+
     let closed = false;
     let eventSource: EventSource | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    const fallbackInterval = setInterval(() => {
-      void refreshActivity();
-    }, 5_000);
+    let reconnectAttempt = 0;
+    const storageKey = sessionEventCursorStorageKey(streamSessionId);
+
+    if (storageKey && !untrack(() => streamState.cursor)) {
+      streamState.cursor = window.sessionStorage.getItem(storageKey);
+    }
 
     const connect = () => {
       if (closed) return;
-      eventSource = new EventSource("/api/v1/events");
-      eventSource.addEventListener("spark-cockpit.event", () => {
-        void refreshActivity();
+      if (!navigator.onLine) {
+        liveConnection = "offline";
+        return;
+      }
+      const state = untrack(() => liveEventState);
+      if (!state || state.sessionId !== streamSessionId) return;
+      liveConnection = "connecting";
+      const url = new URL("/api/v1/events", window.location.origin);
+      if (state.cursor) url.searchParams.set("cursor", state.cursor);
+      eventSource = new EventSource(url);
+      eventSource.onopen = () => {
+        reconnectAttempt = 0;
+        liveConnection = "live";
+      };
+      eventSource.addEventListener("spark-cockpit.event", (message) => {
+        const event = parseSessionSerializedEvent(message.data);
+        const state = untrack(() => liveEventState);
+        if (!event || !state || state.sessionId !== streamSessionId) return;
+        const result = applySessionLiveEvent(state, event);
+        if (storageKey && state.cursor) {
+          window.sessionStorage.setItem(storageKey, state.cursor);
+        }
+        if (result.changed) liveSessionView = state.view;
+        if (result.refreshActivity) scheduleActivityRefresh();
       });
       eventSource.onerror = () => {
         eventSource?.close();
         eventSource = null;
-        if (!closed && !reconnectTimer) {
+        liveConnection = navigator.onLine ? "reconnecting" : "offline";
+        if (!closed && navigator.onLine && !reconnectTimer) {
+          const delay = Math.min(1_000 * 2 ** reconnectAttempt, 10_000);
+          reconnectAttempt += 1;
           reconnectTimer = setTimeout(() => {
             reconnectTimer = null;
             connect();
-          }, 1_000);
+          }, delay);
         }
       };
     };
 
+    const handleOnline = () => {
+      if (closed || eventSource) return;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      connect();
+    };
+    const handleOffline = () => {
+      liveConnection = "offline";
+      eventSource?.close();
+      eventSource = null;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    };
+
     connect();
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
 
     return () => {
       closed = true;
-      clearInterval(fallbackInterval);
       eventSource?.close();
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (modelFeedbackTimer) clearTimeout(modelFeedbackTimer);
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
     };
   });
 
+  onMount(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "hidden") armActivityRefresh();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      if (modelFeedbackTimer) clearTimeout(modelFeedbackTimer);
+      if (activityRefreshTimer) clearTimeout(activityRefreshTimer);
+    };
+  });
+
+  function scheduleActivityRefresh() {
+    requestSessionActivityRefresh(activityRefreshState);
+    armActivityRefresh();
+  }
+
+  function armActivityRefresh() {
+    const canRefresh = Boolean(selected && document.visibilityState !== "hidden");
+    if (
+      activityRefreshTimer ||
+      !canStartSessionActivityRefresh(activityRefreshState, canRefresh)
+    ) {
+      return;
+    }
+    activityRefreshTimer = setTimeout(() => {
+      activityRefreshTimer = null;
+      void refreshActivity();
+    }, 180);
+  }
+
   async function refreshActivity() {
-    if (!selected || refreshingActivity || document.visibilityState === "hidden") return;
-    refreshingActivity = true;
+    const canRefresh = Boolean(selected && document.visibilityState !== "hidden");
+    if (!beginSessionActivityRefresh(activityRefreshState, canRefresh)) return;
     try {
       await invalidateAll();
     } finally {
-      refreshingActivity = false;
+      finishSessionActivityRefresh(activityRefreshState);
+      armActivityRefresh();
     }
   }
 
@@ -465,8 +724,17 @@
     return formatRelativeTime(value, locale as "en" | "zh-CN", common);
   }
 
-  function commandStatus(command: SessionActivityCommand) {
-    return command.invocationStatus ?? command.deliveryStatus ?? command.status;
+  function connectionLabel() {
+    if (liveConnection === "live") return copy.live;
+    if (liveConnection === "connecting") return copy.connecting;
+    if (liveConnection === "reconnecting") return copy.reconnecting;
+    return copy.offline;
+  }
+
+  function compactWorkingDirectory(value: string | undefined) {
+    const parts = value?.split("/").filter(Boolean) ?? [];
+    if (parts.length === 0) return value ?? "";
+    return parts.slice(-2).join("/");
   }
 
   function resultMessage(result: unknown, fallback: string) {
@@ -560,6 +828,28 @@
     };
   };
 
+  const enhanceCancelTurn: SubmitFunction = () => {
+    cancelState = "submitting";
+    cancelFeedback = copy.stopping;
+
+    return async ({ result, update }) => {
+      const confirmedCancelledTurnId = cancelledTurnIdFromActionResult(result);
+      await update({ reset: false });
+
+      if (result.type === "success") {
+        cancelState = "success";
+        cancelledTurnId = confirmedCancelledTurnId;
+        cancelFeedback = resultMessage(result, copy.stopped);
+        await invalidateAll();
+        return;
+      }
+
+      if (result.type === "redirect") return;
+      cancelState = "error";
+      cancelFeedback = resultMessage(result, copy.stopFailed);
+    };
+  };
+
   const enhanceSelectModel: SubmitFunction = () => {
     if (modelFeedbackTimer) clearTimeout(modelFeedbackTimer);
     modelState = "submitting";
@@ -623,32 +913,13 @@
         {/if}
       </dl>
 
-      {#if activityCommands.length > 0}
-      <details class="run-details">
-        <summary>
-          <span><Icon name="activity" size={15} />{copy.internalDetails}</span>
-          <small>{activityCommands.length}</small>
-        </summary>
-        <div class="run-details-body">
-          <p>{copy.internalHint}</p>
-          <ol class="run-list">
-            {#each activityCommands as command}
-              <li>
-                <div>
-                  <strong>{command.goal || command.title || command.id}</strong>
-                  <small>{relative(command.updatedAt)}</small>
-                  {#if command.latestLog?.trim()}
-                    <p class="run-log">{command.latestLog.trim()}</p>
-                  {/if}
-                </div>
-                <span class="status-pill {commandStatus(command)}">
-                  {statusLabel(commandStatus(command))}
-                </span>
-              </li>
-            {/each}
-          </ol>
-        </div>
-      </details>
+      {#if workbenchView}
+        <SessionInspector
+          view={workbenchView}
+          labels={inspectorLabels}
+          instanceId={compact ? "session-inspector-mobile" : "session-inspector-desktop"}
+          {statusLabel}
+        />
       {/if}
 
       {#if selected.status !== "archived"}
@@ -771,9 +1042,30 @@
           <h1>{sessionTitle(selected.title)}</h1>
           <p>{sessionScopeLabel(selected)}</p>
         </div>
-        {#if displayedSessionStatus}
-          <span class="status-pill {displayedSessionStatus}">{statusLabel(displayedSessionStatus)}</span>
-        {/if}
+        <div class="stage-actions">
+          <span class="connection-state {liveConnection}" title={connectionLabel()}>
+            <span aria-hidden="true"></span>
+            {connectionLabel()}
+          </span>
+          {#if conversationBusy && activeTurnId}
+            <form method="POST" action="?/cancelTurn" use:enhance={enhanceCancelTurn}>
+              <input type="hidden" name="sessionId" value={selected.sessionId} />
+              <input type="hidden" name="turnId" value={activeTurnId} />
+              <Button
+                variant="danger"
+                size="compact"
+                type="submit"
+                disabled={cancelState === "submitting" || cancelState === "success"}
+              >
+                <Icon name="close" size={14} stroke={2.2} />
+                <span>{cancelState === "submitting" ? copy.stopping : copy.stop}</span>
+              </Button>
+            </form>
+          {/if}
+          {#if displayedSessionStatus}
+            <span class="status-pill {displayedSessionStatus}">{statusLabel(displayedSessionStatus)}</span>
+          {/if}
+        </div>
       </header>
 
       <details class="mobile-details">
@@ -831,12 +1123,12 @@
         <Composer
           id="conversation-message"
           rows={3}
-          placeholder={copy.messagePlaceholder}
+          placeholder={conversationBusy ? copy.queuePlaceholder : copy.messagePlaceholder}
           bind:value={message}
           disabled={!canAssign || sendState === "submitting"}
           submitDisabled={!canAssign || !modelReady || modelState === "submitting" || sendState === "submitting" || !message.trim()}
           submitting={sendState === "submitting"}
-          submitLabel={copy.sendSubmit}
+          submitLabel={conversationBusy ? copy.queueSubmit : copy.sendSubmit}
           submittingLabel={copy.sending}
           ariaLabel={copy.messageLabel}
           multilineHint={copy.multilineHint}
@@ -875,7 +1167,13 @@
                 <Icon name="warning" size={13} />{copy.modelUnavailable}
               </a>
             {/if}
-            {#if selected.role}<span>{selected.role}</span>{/if}
+            {#if liveSessionView?.cwd}
+              <span class="context-chip" title={liveSessionView.cwd}>
+                <Icon name="folder" size={13} />
+                {compactWorkingDirectory(liveSessionView.cwd)}
+              </span>
+            {/if}
+            {#if selected.role}<span class="context-chip">{selected.role}</span>{/if}
           {/snippet}
           {#snippet feedback()}
             {#if sendFeedback}
@@ -892,6 +1190,15 @@
                 {modelFeedback}
               </p>
             {/if}
+            {#if cancelFeedback}
+              <p
+                class="form-feedback {cancelState}"
+                role={cancelState === "error" ? "alert" : "status"}
+                aria-live="polite"
+              >
+                {cancelFeedback}
+              </p>
+            {/if}
           {/snippet}
         </Composer>
       </form>
@@ -902,7 +1209,7 @@
     <aside class="details-pane" aria-label={messages.detailsTitle}>
       <div class="details-heading">
         <p class="kicker">{copy.conversationContext}</p>
-        <h2>{messages.detailsTitle}</h2>
+        <h2>{copy.conversationWorkbench}</h2>
       </div>
       {@render sessionDetails()}
     </aside>
@@ -919,7 +1226,7 @@
   }
 
   .sessions-stage.has-selection {
-    grid-template-columns: minmax(0, 1fr) minmax(250px, 290px);
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
   }
 
   .stage-pane {
@@ -953,6 +1260,46 @@
 
   .stage-title {
     min-width: 0;
+  }
+
+  .stage-actions {
+    align-items: center;
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .connection-state {
+    align-items: center;
+    color: var(--color-ink-subtle);
+    display: inline-flex;
+    font-size: 10px;
+    font-weight: 650;
+    gap: 6px;
+    min-height: 32px;
+    white-space: nowrap;
+  }
+
+  .connection-state > span {
+    background: var(--color-ink-disabled);
+    border-radius: 999px;
+    height: 7px;
+    width: 7px;
+  }
+
+  .connection-state.live > span {
+    background: var(--color-success);
+  }
+
+  .connection-state.connecting > span,
+  .connection-state.reconnecting > span {
+    background: var(--color-warning);
+  }
+
+  .connection-state.offline > span {
+    background: var(--color-danger);
   }
 
   .stage-header h1,
@@ -1074,6 +1421,19 @@
     flex: 0 0 auto;
     max-width: 800px;
     width: 100%;
+  }
+
+  .context-chip {
+    align-items: center;
+    color: var(--color-ink-subtle);
+    display: inline-flex;
+    font-size: 11px;
+    gap: 5px;
+    max-width: 180px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .composer-selects {
@@ -1213,13 +1573,6 @@
     text-decoration: none;
   }
 
-  .run-details {
-    border-bottom: 1px solid var(--color-border-soft);
-    border-top: 1px solid var(--color-border-soft);
-    padding: 12px 0;
-  }
-
-  .run-details summary,
   .mobile-details summary {
     align-items: center;
     color: var(--color-ink-muted);
@@ -1232,87 +1585,20 @@
     min-height: 40px;
   }
 
-  .run-details summary::-webkit-details-marker,
   .mobile-details summary::-webkit-details-marker {
     display: none;
   }
 
-  .run-details summary > span,
   .mobile-details summary > span {
     align-items: center;
     display: inline-flex;
     gap: 7px;
   }
 
-  .run-details summary small {
-    background: var(--color-surface-soft);
-    border-radius: 999px;
-    color: var(--color-ink-subtle);
-    min-width: 22px;
-    padding: 3px 7px;
-    text-align: center;
-  }
-
-  .run-details-body {
-    display: grid;
-    gap: 10px;
-    padding-top: 12px;
-  }
-
-  .run-details-body > p {
-    color: var(--color-ink-subtle);
-    font-size: 12px;
-    line-height: 1.45;
-  }
-
-  .run-list {
-    display: grid;
-    gap: 8px;
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-
-  .run-list li {
-    align-items: start;
-    display: grid;
-    gap: 8px;
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .run-list li > div {
-    display: grid;
-    gap: 2px;
-    min-width: 0;
-  }
-
-  .run-list strong {
-    color: var(--color-ink-muted);
-    font-size: 12px;
-    font-weight: 600;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .run-list small,
   .muted {
     color: var(--color-ink-subtle);
     font-size: 12px;
     line-height: 1.5;
-  }
-
-  .run-log {
-    color: var(--color-ink-subtle);
-    display: -webkit-box;
-    font-size: 11px;
-    line-height: 1.45;
-    margin-top: 4px;
-    overflow: hidden;
-    overflow-wrap: anywhere;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
-    line-clamp: 3;
   }
 
   .session-management {

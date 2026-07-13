@@ -7,13 +7,14 @@
     requestId: string;
     title: string;
     state: ConversationApprovalState;
+    kind?: string;
     summary?: string;
     labels: ConversationPartLabels;
     statusLabel: (status: string) => string;
     actions?: Snippet;
   };
 
-  let { requestId, title, state, summary, labels, statusLabel, actions }: Props = $props();
+  let { requestId, title, state, kind, summary, labels, statusLabel, actions }: Props = $props();
 </script>
 
 <section class="approval-part {state}" aria-labelledby={`approval-${requestId}`}>
@@ -26,7 +27,7 @@
   {#if actions && state === "requested"}
     <div class="approval-actions">{@render actions()}</div>
   {/if}
-  <code>{labels.approval} · {requestId}</code>
+  <code>{kind ?? labels.approval} · {requestId}</code>
 </section>
 
 <style>
@@ -39,7 +40,8 @@
     padding: 10px;
   }
 
-  .approval-part.approved {
+  .approval-part.approved,
+  .approval-part.resolved {
     background: var(--color-success-weak, var(--color-surface-soft));
     border-color: var(--color-success, var(--color-border));
   }

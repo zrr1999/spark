@@ -29,7 +29,22 @@ export type ConversationPart =
       requestId: string;
       title: string;
       state: ConversationApprovalState;
+      kind?: string;
       summary?: string;
+    }
+  | {
+      type: "artifact";
+      artifactRef: string;
+      title: string;
+      kind?: string;
+      state?: string;
+      summary?: string;
+    }
+  | {
+      type: "error";
+      title: string;
+      message: string;
+      code?: string;
     }
   | {
       type: "unknown";
@@ -53,7 +68,12 @@ export type ConversationTaskState =
   | "failed"
   | "cancelled";
 
-export type ConversationApprovalState = "requested" | "approved" | "rejected" | "cancelled";
+export type ConversationApprovalState =
+  | "requested"
+  | "resolved"
+  | "approved"
+  | "rejected"
+  | "cancelled";
 
 export type ConversationMessageView = {
   id: string;

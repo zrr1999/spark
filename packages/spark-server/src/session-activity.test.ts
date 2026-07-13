@@ -247,4 +247,223 @@ describe("session activity projection", () => {
     ).toBe(true);
     db.close();
   });
+
+  it("reloads task, artifact, and interaction view state from daemon events", () => {
+    const { db, workspace, runtimeWorkspaceBindingId } = setupWorkspace();
+    const sessionId = "sess_reload";
+
+    appendEvent(db, {
+      workspaceId: workspace.id,
+      actorKind: "runtime",
+      actorId: runtimeWorkspaceBindingId,
+      kind: "daemon.view_event",
+      subjectKind: "view_model",
+      subjectId: sessionId,
+      payload: {
+        type: "daemon.view_event",
+        sessionId,
+        view: {
+          type: "run.update",
+          run: {
+            id: "run:reload",
+            title: "Reload-safe run",
+            summary: "The older run projection.",
+            status: "running",
+          },
+        },
+      },
+      createdAt: "2026-07-09T00:05:00.000Z",
+    });
+    appendEvent(db, {
+      workspaceId: workspace.id,
+      actorKind: "runtime",
+      actorId: runtimeWorkspaceBindingId,
+      kind: "daemon.view_event",
+      subjectKind: "view_model",
+      subjectId: sessionId,
+      payload: {
+        type: "daemon.view_event",
+        sessionId,
+        view: {
+          type: "run.update",
+          run: {
+            id: "run:reload",
+            title: "Reload-safe run",
+            summary: "The latest run projection wins.",
+            status: "succeeded",
+          },
+        },
+      },
+      createdAt: "2026-07-09T00:05:30.000Z",
+    });
+    appendEvent(db, {
+      workspaceId: workspace.id,
+      actorKind: "runtime",
+      actorId: runtimeWorkspaceBindingId,
+      kind: "daemon.view_event",
+      subjectKind: "view_model",
+      subjectId: sessionId,
+      payload: {
+        type: "daemon.view_event",
+        sessionId,
+        view: {
+          type: "task.update",
+          task: {
+            ref: "task:reload",
+            title: "Verify the reload path",
+            description: "Keep daemon-owned task state visible after a browser reload.",
+            status: "in_progress",
+          },
+        },
+      },
+      createdAt: "2026-07-09T00:06:00.000Z",
+    });
+    appendEvent(db, {
+      workspaceId: workspace.id,
+      actorKind: "runtime",
+      actorId: runtimeWorkspaceBindingId,
+      kind: "daemon.view_event",
+      subjectKind: "view_model",
+      subjectId: sessionId,
+      payload: {
+        type: "daemon.view_event",
+        sessionId,
+        view: {
+          type: "task.update",
+          task: {
+            ref: "task:reload",
+            title: "Verify the reload path",
+            description: "The latest task projection wins.",
+            status: "done",
+          },
+        },
+      },
+      createdAt: "2026-07-09T00:06:30.000Z",
+    });
+    appendEvent(db, {
+      workspaceId: workspace.id,
+      actorKind: "runtime",
+      actorId: runtimeWorkspaceBindingId,
+      kind: "daemon.view_event",
+      subjectKind: "view_model",
+      subjectId: sessionId,
+      payload: {
+        type: "daemon.view_event",
+        sessionId,
+        view: {
+          type: "artifact.update",
+          artifact: {
+            ref: "artifact:reload-report",
+            title: "Reload report",
+            kind: "document",
+            format: "markdown",
+            status: "ready",
+            producer: "spark-runtime",
+            preview: "The persisted activity projection is available.",
+          },
+        },
+      },
+      createdAt: "2026-07-09T00:07:00.000Z",
+    });
+    appendEvent(db, {
+      workspaceId: workspace.id,
+      actorKind: "runtime",
+      actorId: runtimeWorkspaceBindingId,
+      kind: "daemon.interaction.request",
+      subjectKind: "daemon_event",
+      subjectId: sessionId,
+      payload: {
+        type: "daemon.interaction.request",
+        sessionId,
+        request: {
+          requestId: "interaction:reload",
+          kind: "confirmation",
+          title: "Confirm the next step",
+          prompt: "Review the generated report.",
+        },
+      },
+      createdAt: "2026-07-09T00:08:00.000Z",
+    });
+    appendEvent(db, {
+      workspaceId: workspace.id,
+      actorKind: "runtime",
+      actorId: runtimeWorkspaceBindingId,
+      kind: "daemon.interaction.response",
+      subjectKind: "daemon_event",
+      subjectId: sessionId,
+      payload: {
+        type: "daemon.interaction.response",
+        sessionId,
+        response: {
+          requestId: "interaction:reload",
+          kind: "confirmation",
+          status: "answered",
+          approved: true,
+        },
+      },
+      createdAt: "2026-07-09T00:09:00.000Z",
+    });
+    appendEvent(db, {
+      workspaceId: workspace.id,
+      actorKind: "runtime",
+      actorId: runtimeWorkspaceBindingId,
+      kind: "daemon.view_event",
+      subjectKind: "view_model",
+      subjectId: "sess_other",
+      payload: {
+        type: "daemon.view_event",
+        sessionId: "sess_other",
+        view: {
+          type: "task.update",
+          task: { ref: "task:other", title: "Other task", status: "done" },
+        },
+      },
+      createdAt: "2026-07-09T00:10:00.000Z",
+    });
+
+    const activity = loadSessionActivity(db, { workspaceId: workspace.id, sessionId });
+
+    expect(activity.reports).toEqual([
+      expect.objectContaining({
+        kind: "daemon.interaction.response",
+        status: "answered",
+        interaction: { requestId: "interaction:reload", kind: "confirmation" },
+      }),
+      expect.objectContaining({
+        kind: "daemon.interaction.request",
+        title: "Confirm the next step",
+        text: "Review the generated report.",
+        interaction: { requestId: "interaction:reload", kind: "confirmation" },
+      }),
+      {
+        id: "artifact:reload-report",
+        kind: "artifact.update",
+        title: "Reload report",
+        text: "The persisted activity projection is available.",
+        role: "spark-runtime",
+        status: "ready",
+        createdAt: "2026-07-09T00:07:00.000Z",
+      },
+      {
+        id: "task:reload",
+        kind: "task.update",
+        title: "Verify the reload path",
+        text: "The latest task projection wins.",
+        role: null,
+        status: "done",
+        createdAt: "2026-07-09T00:06:30.000Z",
+      },
+      {
+        id: "run:reload",
+        kind: "run.update",
+        title: "Reload-safe run",
+        text: "The latest run projection wins.",
+        role: null,
+        status: "succeeded",
+        createdAt: "2026-07-09T00:05:30.000Z",
+      },
+    ]);
+    expect(activity.reports.some((report) => report.id === "task:other")).toBe(false);
+    db.close();
+  });
 });

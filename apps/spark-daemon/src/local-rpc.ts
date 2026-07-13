@@ -139,12 +139,17 @@ export interface LocalTurnSubmitResult {
 
 export interface LocalTurnCancelRequest {
   invocationId: string;
+  /** Optional ownership guard. Cockpit always supplies this. */
+  sessionId?: string;
   reason?: string;
 }
+
+export type LocalTurnCancelOutcome = "cancel-requested" | "dequeued" | "not-found";
 
 export interface LocalTurnCancelResult {
   invocationId: string;
   cancelled: boolean;
+  outcome: LocalTurnCancelOutcome;
   message: string;
   observedAt: string;
 }
@@ -968,18 +973,18 @@ export async function handleLocalRpcLine(
       }
       case "turn.cancel": {
         const reason = request.params.reason ?? "Spark local RPC turn cancellation requested.";
-        const cancelled = invocationRegistry?.cancel(request.params.invocationId, reason) ?? false;
+        const result = await cancelManagedTurn({
+          paths,
+          options,
+          invocationRegistry,
+          invocationId: request.params.invocationId,
+          sessionId: request.params.sessionId,
+          reason,
+        });
         return {
           id: request.id,
           ok: true,
-          result: {
-            invocationId: request.params.invocationId,
-            cancelled,
-            message: cancelled
-              ? `Cancellation signalled for Spark daemon invocation ${request.params.invocationId}.`
-              : `No active Spark daemon invocation matched ${request.params.invocationId}.`,
-            observedAt: new Date().toISOString(),
-          },
+          result,
         };
       }
       case "workspace.list":
@@ -1334,6 +1339,119 @@ async function enqueueManagedSessionTurn<T>(
   }
 }
 
+async function cancelManagedTurn(input: {
+  paths: SparkPaths;
+  options: LocalRpcHandlerOptions;
+  invocationRegistry?: SparkDaemonInvocationRegistry;
+  invocationId: string;
+  sessionId?: string;
+  reason: string;
+}): Promise<LocalTurnCancelResult> {
+  const activeOutcome = requestActiveTurnCancellation(input);
+  if (activeOutcome === "session-mismatch") throw turnSessionMismatch(input);
+  if (activeOutcome === "cancel-requested") {
+    return turnCancellationReceipt(input.invocationId, "cancel-requested");
+  }
+
+  const queue = new SparkDaemonQueue({ paths: input.paths });
+  const queued = await readPendingTurn(queue, input.invocationId);
+  if (queued) {
+    if (input.sessionId && queued.payload.task.sessionId !== input.sessionId) {
+      throw turnSessionMismatch(input);
+    }
+    if (await queue.removePending(input.invocationId)) {
+      // The worker may have read the file immediately before it was removed.
+      // Re-check the registry so that race becomes an active cancellation
+      // request instead of an untracked execution.
+      const racedActiveOutcome = requestActiveTurnCancellation(input);
+      if (racedActiveOutcome === "session-mismatch") throw turnSessionMismatch(input);
+      if (racedActiveOutcome === "cancel-requested") {
+        return turnCancellationReceipt(input.invocationId, "cancel-requested");
+      }
+      await settleDequeuedSessionIfIdle(
+        input.options,
+        queue,
+        input.invocationRegistry,
+        queued.payload.task.sessionId,
+      );
+      return turnCancellationReceipt(input.invocationId, "dequeued");
+    }
+  }
+
+  const retriedActiveOutcome = requestActiveTurnCancellation(input);
+  if (retriedActiveOutcome === "session-mismatch") throw turnSessionMismatch(input);
+  return turnCancellationReceipt(
+    input.invocationId,
+    retriedActiveOutcome === "cancel-requested" ? "cancel-requested" : "not-found",
+  );
+}
+
+function requestActiveTurnCancellation(input: {
+  invocationRegistry?: SparkDaemonInvocationRegistry;
+  invocationId: string;
+  sessionId?: string;
+  reason: string;
+}): "cancel-requested" | "not-found" | "session-mismatch" {
+  if (!input.invocationRegistry) return "not-found";
+  if (input.sessionId) {
+    return input.invocationRegistry.cancelForSession(
+      input.invocationId,
+      input.sessionId,
+      input.reason,
+    );
+  }
+  return input.invocationRegistry.cancel(input.invocationId, input.reason)
+    ? "cancel-requested"
+    : "not-found";
+}
+
+async function readPendingTurn(queue: SparkDaemonQueue, invocationId: string) {
+  try {
+    return await queue.readEntry(invocationId, "inbox");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function settleDequeuedSessionIfIdle(
+  options: LocalRpcHandlerOptions,
+  queue: SparkDaemonQueue,
+  invocationRegistry: SparkDaemonInvocationRegistry | undefined,
+  sessionId: string,
+) {
+  if (!options.sessionRegistry || invocationRegistry?.hasActiveSession(sessionId)) return;
+  const stillQueued = (await queue.listEntries("inbox")).some(
+    (entry) => entry.payload.task.sessionId === sessionId,
+  );
+  if (!stillQueued) await options.sessionRegistry.recordTurnSettled(sessionId);
+}
+
+function turnSessionMismatch(input: { invocationId: string; sessionId?: string }) {
+  return new SparkSessionRegistryError(
+    "turn_session_mismatch",
+    `turn ${input.invocationId} does not belong to session ${input.sessionId ?? "unknown"}`,
+  );
+}
+
+function turnCancellationReceipt(
+  invocationId: string,
+  outcome: LocalTurnCancelOutcome,
+): LocalTurnCancelResult {
+  return {
+    invocationId,
+    cancelled: outcome !== "not-found",
+    outcome,
+    message:
+      outcome === "cancel-requested"
+        ? `Cancellation requested for Spark daemon invocation ${invocationId}.`
+        : outcome === "dequeued"
+          ? `Removed queued Spark daemon invocation ${invocationId} from the queue.`
+          : `No queued or active Spark daemon invocation matched ${invocationId}.`,
+    observedAt: new Date().toISOString(),
+  };
+}
+
 function requireChannelIngress(
   options: LocalRpcHandlerOptions,
 ): NonNullable<LocalRpcHandlerOptions["channelIngress"]> {
@@ -1630,6 +1748,7 @@ function localWorkspaceRegisterParams(
 function localTurnCancelParams(params: LocalTurnCancelRequest): LocalTurnCancelParams {
   return {
     invocationId: params.invocationId,
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     ...(params.reason ? { reason: params.reason } : {}),
   };
 }
@@ -1771,8 +1890,16 @@ function parseLocalTurnCancelParams(value: unknown): LocalTurnCancelParams {
   }
   const invocationId = value.invocationId.trim();
   if (!invocationId) throw new Error("turn.cancel requires invocationId.");
+  let sessionId: string | undefined;
+  if (Object.hasOwn(value, "sessionId")) {
+    if (typeof value.sessionId !== "string" || !value.sessionId.trim()) {
+      throw new Error("turn.cancel sessionId must be a non-empty string.");
+    }
+    sessionId = value.sessionId.trim();
+  }
   return {
     invocationId,
+    ...(sessionId ? { sessionId } : {}),
     ...(typeof value.reason === "string" && value.reason.trim()
       ? { reason: value.reason.trim() }
       : {}),
@@ -2086,6 +2213,7 @@ function turnCancel(value: unknown): LocalTurnCancelResult {
     !isRecord(value) ||
     typeof value.invocationId !== "string" ||
     typeof value.cancelled !== "boolean" ||
+    !isTurnCancelOutcome(value.outcome) ||
     typeof value.message !== "string"
   ) {
     throw new Error("Invalid local RPC turn cancel result.");
@@ -2093,9 +2221,14 @@ function turnCancel(value: unknown): LocalTurnCancelResult {
   return {
     invocationId: value.invocationId,
     cancelled: value.cancelled,
+    outcome: value.outcome,
     message: value.message,
     observedAt: typeof value.observedAt === "string" ? value.observedAt : new Date().toISOString(),
   };
+}
+
+function isTurnCancelOutcome(value: unknown): value is LocalTurnCancelOutcome {
+  return value === "cancel-requested" || value === "dequeued" || value === "not-found";
 }
 
 function daemonStop(value: unknown): LocalDaemonStopResult {

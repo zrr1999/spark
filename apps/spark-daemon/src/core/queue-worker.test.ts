@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SPARK_PROTOCOL_VERSION, type SparkDaemonEvent } from "@zendev-lab/spark-protocol";
 import { SparkDaemonQueue } from "./queue.js";
 import {
@@ -17,6 +17,32 @@ import { createSparkDaemonWorkerContext, runSparkDaemonWorkerIteration } from ".
 import type { SparkDaemonTaskExecutor } from "./types.js";
 
 describe("Spark daemon executor queue fan-out", () => {
+  it("treats an inbox file removed before claim as a dequeue, not a failure", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-queue-dequeued-"));
+    const queue = new SparkDaemonQueue({ daemonRoot: root });
+    const active = createSparkDaemonActiveTasks();
+    const queued = await queue.enqueue({
+      type: "session.run",
+      sessionId: "session-dequeued",
+      prompt: "do not run",
+    });
+    const executeTask = vi.fn<SparkDaemonTaskExecutor>();
+    vi.spyOn(queue, "list").mockImplementationOnce(async () => {
+      await queue.removePending(queued.fileName);
+      return [queued.fileName];
+    });
+
+    try {
+      await expect(processSparkDaemonQueueBatch({ queue, active, executeTask })).resolves.toBe(
+        false,
+      );
+      expect(executeTask).not.toHaveBeenCalled();
+      await expect(queue.list("failed")).resolves.toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("defaults queue batches to bounded launch and concurrency", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-queue-fanout-"));
     const queue = new SparkDaemonQueue({ daemonRoot: root });

@@ -75,12 +75,16 @@ async function tryLaunchQueueFile(
 
   let entry: SparkDaemonQueueEntry | null = null;
   try {
-    entry = await options.queue.readEntry(options.fileName, "inbox");
+    entry = options.queue.readPendingEntryForLaunch(options.fileName);
     const sessionId = getSparkDaemonTaskSessionId(entry.payload.task);
     if (sessionId && options.active.invocations.hasActiveSession(sessionId)) return false;
     launchQueueTask({ ...options, entry });
     return true;
   } catch (error) {
+    // A local cancellation may remove an inbox file after this batch listed it
+    // but before the worker claimed it. That is a successful dequeue, not a
+    // failed task that should be recreated under failed/.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     await failQueueTask({ ...options, entry, error });
     return true;
   }

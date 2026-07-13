@@ -30,6 +30,10 @@ export interface SessionActivityReport {
   role: string | null;
   status: string | null;
   createdAt: string;
+  interaction?: {
+    requestId: string | null;
+    kind: string | null;
+  };
 }
 
 export interface SessionActivityProjection {
@@ -239,6 +243,7 @@ function loadSessionReports(
     ) as unknown as EventRow[];
 
   const seenMessageIds = new Set<string>();
+  const seenStableReports = new Set<string>();
   return rows.flatMap((row) => {
     const payload = parseJson(row.payloadJson);
     if (sessionIdFromDaemonPayload(payload) !== input.sessionId) return [];
@@ -246,8 +251,22 @@ function loadSessionReports(
     if (messageId && seenMessageIds.has(messageId)) return [];
     if (messageId) seenMessageIds.add(messageId);
     const report = reportFromDaemonPayload(row, payload);
+    const stableKey = report ? stableReportKey(report) : null;
+    if (stableKey && seenStableReports.has(stableKey)) return [];
+    if (stableKey) seenStableReports.add(stableKey);
     return report ? [report] : [];
   });
+}
+
+function stableReportKey(report: SessionActivityReport) {
+  if (
+    report.kind !== "run.update" &&
+    report.kind !== "task.update" &&
+    report.kind !== "artifact.update"
+  ) {
+    return null;
+  }
+  return `${report.kind}:${report.id}`;
 }
 
 function loadArtifactReportsByCommand(
@@ -326,15 +345,49 @@ function reportFromDaemonPayload(
     }
     if (viewType === "run.update") {
       const run = recordValue(view, "run");
-      const title = stringValue(run, "title") || stringValue(run, "id") || "Run update";
+      const runId = stringValue(run, "id");
+      const title = stringValue(run, "title") || runId || "Run update";
       const status = stringValue(run, "status");
       const summary = stringValue(run, "summary");
       return {
-        id: row.id,
+        id: runId || row.id,
         kind: viewType,
         title,
         text: summary || (status ? `Run ${status}.` : "Run updated."),
         role: null,
+        status,
+        createdAt: row.createdAt,
+      };
+    }
+    if (viewType === "task.update") {
+      const task = recordValue(view, "task");
+      const taskRef = stringValue(task, "ref");
+      const title =
+        stringValue(task, "title") || stringValue(task, "name") || taskRef || "Task update";
+      const status = stringValue(task, "status");
+      const description = stringValue(task, "description");
+      return {
+        id: taskRef || row.id,
+        kind: viewType,
+        title,
+        text: description || (status ? `Task ${status}.` : "Task updated."),
+        role: null,
+        status,
+        createdAt: row.createdAt,
+      };
+    }
+    if (viewType === "artifact.update") {
+      const artifact = recordValue(view, "artifact");
+      const artifactRef = stringValue(artifact, "ref");
+      const title = stringValue(artifact, "title") || artifactRef || "Artifact update";
+      const status = stringValue(artifact, "status");
+      const preview = stringValue(artifact, "preview");
+      return {
+        id: artifactRef || row.id,
+        kind: viewType,
+        title,
+        text: preview || (status ? `Artifact ${status}.` : "Artifact updated."),
+        role: stringValue(artifact, "producer"),
         status,
         createdAt: row.createdAt,
       };
@@ -378,6 +431,10 @@ function reportFromDaemonPayload(
       role: null,
       status: stringValue(request, "status"),
       createdAt: row.createdAt,
+      interaction: {
+        requestId: stringValue(request, "requestId"),
+        kind: stringValue(request, "kind"),
+      },
     };
   }
   if (payload.type === "daemon.interaction.response") {
@@ -390,6 +447,10 @@ function reportFromDaemonPayload(
       role: null,
       status: stringValue(response, "status"),
       createdAt: row.createdAt,
+      interaction: {
+        requestId: stringValue(response, "requestId"),
+        kind: stringValue(response, "kind"),
+      },
     };
   }
   return null;

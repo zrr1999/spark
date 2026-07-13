@@ -1,6 +1,8 @@
 export { default as ApprovalPart } from "./ApprovalPart.svelte";
+export { default as ArtifactPart } from "./ArtifactPart.svelte";
 export { default as Composer } from "./Composer.svelte";
 export { default as ConversationViewport } from "./ConversationViewport.svelte";
+export { default as ErrorPart } from "./ErrorPart.svelte";
 export { default as Message } from "./Message.svelte";
 export { default as MessageActions } from "./MessageActions.svelte";
 export { default as ReasoningPart } from "./ReasoningPart.svelte";

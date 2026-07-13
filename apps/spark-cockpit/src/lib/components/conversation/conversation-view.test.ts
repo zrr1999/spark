@@ -118,6 +118,48 @@ describe("Cockpit conversation view adapter", () => {
 
     expect(parts).toEqual([{ type: "reasoning", summary: "", state: "complete", redacted: true }]);
   });
+
+  it("maps host-neutral artifact and error parts without exposing unrelated fields", () => {
+    const parts = conversationPartsFromMessage({
+      ...message({ text: "" }),
+      parts: [
+        {
+          type: "artifact",
+          artifactRef: "artifact:art-1",
+          title: "Focused check report",
+          kind: "report",
+          status: "completed",
+          summary: "All focused checks passed.",
+          rawPayload: "must-not-render",
+        },
+        {
+          type: "error",
+          title: "Run failed",
+          message: "The daemon returned a terminal failure.",
+          code: "DAEMON_RUN_FAILED",
+          stack: "must-not-render",
+        },
+      ],
+    } as unknown as SparkMessageView);
+
+    expect(parts).toEqual([
+      {
+        type: "artifact",
+        artifactRef: "artifact:art-1",
+        title: "Focused check report",
+        kind: "report",
+        state: "completed",
+        summary: "All focused checks passed.",
+      },
+      {
+        type: "error",
+        title: "Run failed",
+        message: "The daemon returned a terminal failure.",
+        code: "DAEMON_RUN_FAILED",
+      },
+    ]);
+    expect(JSON.stringify(parts)).not.toContain("must-not-render");
+  });
 });
 
 function message(

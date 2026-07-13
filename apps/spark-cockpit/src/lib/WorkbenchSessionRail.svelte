@@ -2,6 +2,7 @@
   import Icon from "$lib/Icon.svelte";
   import { visibleConversationActivityStatus } from "$lib/conversation-status";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
+  import { orderWorkbenchSessionsByAttention } from "$lib/workbench-session-order";
   import {
     daemonIdentityForWorkbenchSession,
     isSessionVisibleInWorkbenchRail,
@@ -114,11 +115,7 @@
       .map(([key, group]) => ({
         key,
         ...group,
-        sessions: group.sessions.sort(
-          (left, right) =>
-            new Date(right.activityUpdatedAt ?? right.updatedAt).getTime() -
-            new Date(left.activityUpdatedAt ?? left.updatedAt).getTime(),
-        ),
+        sessions: orderWorkbenchSessionsByAttention(group.sessions),
       }))
       .sort((left, right) => {
         if (left.kind !== right.kind) return left.kind === "workspace" ? -1 : 1;

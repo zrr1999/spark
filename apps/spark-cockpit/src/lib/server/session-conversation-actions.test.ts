@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   archiveManagedSessionForCockpit: vi.fn(),
+  cancelConversationTurnForCockpit: vi.fn(),
   createManagedSessionForCockpit: vi.fn(),
   getManagedSessionForCockpit: vi.fn(),
   listManagedSessionsForCockpit: vi.fn(),
@@ -29,6 +30,13 @@ vi.mock("$lib/i18n", () => ({
       assignGoalRequired: "Enter a goal for the assignment.",
       assignQueued: "Assignment queued for the owning Spark daemon.",
       assignSessionRequired: "Select a session before assigning.",
+      cancelSessionRequired: "Select a conversation before stopping a turn.",
+      cancelTurnArchived: "This conversation is archived and has no active turn to stop.",
+      cancelTurnFailed: "Could not stop the active turn.",
+      cancelTurnRequired: "Select an active turn to stop.",
+      cancelTurnSucceeded: "Cancellation requested for the active turn.",
+      cancelTurnDequeued: "Queued turn removed from the queue.",
+      cancelTurnUnavailable: "This turn is no longer active and could not be stopped.",
       createFailed: "Could not create the session.",
       createWorkspaceRequired: "Choose a workspace.",
     },
@@ -55,6 +63,7 @@ vi.mock("$lib/server/agents-product", () => ({
 }));
 
 vi.mock("$lib/server/conversation-control", () => ({
+  cancelConversationTurnForCockpit: mocks.cancelConversationTurnForCockpit,
   submitConversationTurnForCockpit: mocks.submitConversationTurnForCockpit,
 }));
 
@@ -91,6 +100,12 @@ beforeEach(() => {
     snapshot: { providers: [], diagnostics: [] },
   });
   mocks.setSessionModelForCockpit.mockResolvedValue(session);
+  mocks.cancelConversationTurnForCockpit.mockResolvedValue({
+    turnId: "turn_conversation",
+    cancelled: true,
+    outcome: "cancel-requested",
+    message: "Cancellation requested.",
+  });
   mocks.submitConversationTurnForCockpit.mockResolvedValue({ turnId: "turn_conversation" });
 });
 
@@ -286,6 +301,122 @@ describe("session conversation actions", () => {
         values: { sessionId: "sess_conversation", message: "Please retry this" },
       },
     });
+  });
+
+  it("cancels an active turn only after validating its session", async () => {
+    const result = await requireAction("cancelTurn")(
+      actionEvent({ sessionId: "sess_conversation", turnId: "turn_conversation" }),
+    );
+
+    expect(result).toEqual({
+      intent: "cancelTurn",
+      success: true,
+      cancelled: true,
+      message: "Cancellation requested for the active turn.",
+      daemonMessage: "Cancellation requested.",
+      cancelledTurnId: "turn_conversation",
+      values: { sessionId: "sess_conversation", turnId: "turn_conversation" },
+    });
+    expect(mocks.getManagedSessionForCockpit).toHaveBeenCalledWith("sess_conversation");
+    expect(mocks.cancelConversationTurnForCockpit).toHaveBeenCalledWith({
+      sessionId: "sess_conversation",
+      turnId: "turn_conversation",
+    });
+  });
+
+  it("reports a queued turn as removed from the queue", async () => {
+    mocks.cancelConversationTurnForCockpit.mockResolvedValueOnce({
+      turnId: "turn_queued",
+      cancelled: true,
+      outcome: "dequeued",
+      message: "Removed queued invocation from the queue.",
+    });
+
+    const result = await requireAction("cancelTurn")(
+      actionEvent({ sessionId: "sess_conversation", turnId: "turn_queued" }),
+    );
+
+    expect(result).toMatchObject({
+      intent: "cancelTurn",
+      success: true,
+      message: "Queued turn removed from the queue.",
+      daemonMessage: "Removed queued invocation from the queue.",
+    });
+  });
+
+  it("returns a conflict when the daemon reports that the turn is no longer active", async () => {
+    mocks.cancelConversationTurnForCockpit.mockResolvedValueOnce({
+      turnId: "turn_stale",
+      cancelled: false,
+      outcome: "not-found",
+      message: "No queued or active invocation matched.",
+    });
+
+    const result = await requireAction("cancelTurn")(
+      actionEvent({ sessionId: "sess_conversation", turnId: "turn_stale" }),
+    );
+
+    expect(result).toMatchObject({
+      status: 409,
+      data: {
+        intent: "cancelTurn",
+        success: false,
+        cancelled: false,
+        error: "This turn is no longer active and could not be stopped.",
+        message: "This turn is no longer active and could not be stopped.",
+        daemonMessage: "No queued or active invocation matched.",
+        values: { sessionId: "sess_conversation", turnId: "turn_stale" },
+      },
+    });
+  });
+
+  it("rejects a missing or archived session before requesting cancellation", async () => {
+    mocks.getManagedSessionForCockpit
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ ...session, status: "archived" });
+
+    await expect(
+      requireAction("cancelTurn")(
+        actionEvent({ sessionId: "sess_missing", turnId: "turn_conversation" }),
+      ),
+    ).resolves.toMatchObject({
+      status: 400,
+      data: {
+        intent: "cancelTurn",
+        error: "Select a conversation before stopping a turn.",
+      },
+    });
+    await expect(
+      requireAction("cancelTurn")(
+        actionEvent({ sessionId: "sess_conversation", turnId: "turn_conversation" }),
+      ),
+    ).resolves.toMatchObject({
+      status: 400,
+      data: {
+        intent: "cancelTurn",
+        error: "This conversation is archived and has no active turn to stop.",
+      },
+    });
+
+    expect(mocks.cancelConversationTurnForCockpit).not.toHaveBeenCalled();
+  });
+
+  it("requires both a session and active turn id", async () => {
+    await expect(
+      requireAction("cancelTurn")(actionEvent({ sessionId: "", turnId: "turn_conversation" })),
+    ).resolves.toMatchObject({
+      status: 400,
+      data: { error: "Select a conversation before stopping a turn." },
+    });
+    await expect(
+      requireAction("cancelTurn")(actionEvent({ sessionId: "sess_conversation", turnId: "" })),
+    ).resolves.toMatchObject({
+      status: 400,
+      data: { error: "Select an active turn to stop." },
+    });
+
+    expect(mocks.getManagedSessionForCockpit).not.toHaveBeenCalled();
+    expect(mocks.cancelConversationTurnForCockpit).not.toHaveBeenCalled();
   });
 });
 

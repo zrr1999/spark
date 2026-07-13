@@ -329,11 +329,34 @@ describe("Spark daemon local RPC", () => {
     });
 
     try {
+      const mismatched = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "turn_cancel_wrong_session",
+          method: "turn.cancel",
+          params: { invocationId: "turn-file.json", sessionId: "session-b" },
+        }),
+        paths,
+        db,
+        undefined,
+        {},
+        invocations,
+      );
+      expect(mismatched).toMatchObject({
+        id: "turn_cancel_wrong_session",
+        ok: false,
+        error: { code: "turn_session_mismatch" },
+      });
+      expect(aborted).toBe(false);
+
       const cancelled = await handleLocalRpcLine(
         JSON.stringify({
           id: "turn_cancel",
           method: "turn.cancel",
-          params: { invocationId: "turn-file.json", reason: "test cancel" },
+          params: {
+            invocationId: "turn-file.json",
+            sessionId: "session-a",
+            reason: "test cancel",
+          },
         }),
         paths,
         db,
@@ -347,7 +370,8 @@ describe("Spark daemon local RPC", () => {
         result: {
           invocationId: "turn-file.json",
           cancelled: true,
-          message: "Cancellation signalled for Spark daemon invocation turn-file.json.",
+          outcome: "cancel-requested",
+          message: "Cancellation requested for Spark daemon invocation turn-file.json.",
         },
       });
       expect(aborted).toBe(true);
@@ -370,11 +394,87 @@ describe("Spark daemon local RPC", () => {
         result: {
           invocationId: "missing.json",
           cancelled: false,
-          message: "No active Spark daemon invocation matched missing.json.",
+          outcome: "not-found",
+          message: "No queued or active Spark daemon invocation matched missing.json.",
         },
       });
     } finally {
       handle.finish();
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("dequeues pending turns and enforces their session ownership", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-dequeue-"));
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const sessionRegistry = createDaemonSessionRegistry(join(root, ".spark"), {
+      daemonId: "install-rpc-dequeue",
+      daemonCwd: root,
+    });
+    await sessionRegistry.create({ sessionId: "session-b", scope: { kind: "daemon" } });
+    await sessionRegistry.recordTurnQueued("session-b");
+    const queue = new SparkDaemonQueue({ paths });
+    const queued = await queue.enqueue({
+      type: "session.run",
+      sessionId: "session-b",
+      prompt: "queued prompt",
+    });
+
+    try {
+      const mismatched = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "turn_dequeue_wrong_session",
+          method: "turn.cancel",
+          params: { invocationId: queued.fileName, sessionId: "session-a" },
+        }),
+        paths,
+        db,
+        undefined,
+        { sessionRegistry },
+      );
+      expect(mismatched).toMatchObject({
+        id: "turn_dequeue_wrong_session",
+        ok: false,
+        error: { code: "turn_session_mismatch" },
+      });
+      await expect(queue.list("inbox")).resolves.toEqual([queued.fileName]);
+      await expect(sessionRegistry.get("session-b")).resolves.toMatchObject({ status: "running" });
+
+      const dequeued = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "turn_dequeue",
+          method: "turn.cancel",
+          params: { invocationId: queued.fileName, sessionId: "session-b" },
+        }),
+        paths,
+        db,
+        undefined,
+        { sessionRegistry },
+      );
+      expect(dequeued).toMatchObject({
+        id: "turn_dequeue",
+        ok: true,
+        result: {
+          invocationId: queued.fileName,
+          cancelled: true,
+          outcome: "dequeued",
+          message: `Removed queued Spark daemon invocation ${queued.fileName} from the queue.`,
+        },
+      });
+      await expect(queue.list("inbox")).resolves.toEqual([]);
+      await expect(sessionRegistry.get("session-b")).resolves.toMatchObject({ status: "ready" });
+    } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });
     }

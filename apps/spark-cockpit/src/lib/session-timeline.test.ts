@@ -52,6 +52,57 @@ describe("session timeline", () => {
       ["message:a2", "Second answer"],
       ["report:run_update", "Run succeeded."],
     ]);
+    expect(timeline.at(-1)?.parts).toEqual([
+      {
+        type: "task",
+        taskRef: "run_update",
+        title: "Internal run",
+        state: "completed",
+        summary: "Run succeeded.",
+      },
+    ]);
+  });
+
+  it("keeps only the latest stable run, task, and artifact projections", () => {
+    const reports = [
+      ["run.update", "run:one"],
+      ["task.update", "task:one"],
+      ["artifact.update", "artifact:one"],
+    ].flatMap(([kind, id]) => [
+      {
+        id,
+        kind,
+        title: `Latest ${kind}`,
+        text: "Latest projection.",
+        role: null,
+        status: "completed",
+        createdAt: "2026-07-10T00:00:02.000Z",
+      },
+      {
+        id,
+        kind,
+        title: `Older ${kind}`,
+        text: "Older projection.",
+        role: null,
+        status: "running",
+        createdAt: "2026-07-10T00:00:01.000Z",
+      },
+    ]) as Parameters<typeof buildSessionTimeline>[0]["reports"];
+
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [],
+      commands: [],
+      reports,
+    });
+
+    expect(timeline).toHaveLength(3);
+    expect(timeline.map((item) => item.body)).toEqual([
+      "Latest projection.",
+      "Latest projection.",
+      "Latest projection.",
+    ]);
+    expect(new Set(timeline.map((item) => item.id)).size).toBe(3);
   });
 
   it("preserves repeated canonical messages by source ID instead of display text", () => {
@@ -273,6 +324,163 @@ describe("session timeline", () => {
       },
     ]);
     expect(JSON.stringify(timeline)).not.toContain("super-secret");
+  });
+
+  it("projects artifact reports as navigable artifact parts", () => {
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [],
+      commands: [],
+      reports: [
+        {
+          id: "art-focused-report",
+          kind: "artifact.report",
+          title: "Focused check report",
+          text: "All focused checks passed.",
+          role: "assistant",
+          status: "completed",
+          createdAt: "2026-07-10T00:00:01.000Z",
+        },
+      ],
+    });
+
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0]).toMatchObject({
+      id: "report:art-focused-report",
+      body: "All focused checks passed.",
+      title: null,
+      parts: [
+        {
+          type: "artifact",
+          artifactRef: "artifact:art-focused-report",
+          title: "Focused check report",
+          kind: "report",
+          state: "completed",
+          summary: "All focused checks passed.",
+        },
+      ],
+    });
+  });
+
+  it("projects reload-safe task and artifact updates as structured cards", () => {
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [],
+      commands: [],
+      reports: [
+        {
+          id: "task:review",
+          kind: "task.update",
+          title: "Review implementation",
+          text: "Check focused tests.",
+          role: null,
+          status: "claimed",
+          createdAt: "2026-07-10T00:00:01.000Z",
+        },
+        {
+          id: "artifact:check-report",
+          kind: "artifact.update",
+          title: "Focused check report",
+          text: "All checks passed.",
+          role: "assistant",
+          status: "completed",
+          createdAt: "2026-07-10T00:00:02.000Z",
+        },
+      ],
+    });
+
+    expect(timeline.map((item) => item.parts[0])).toEqual([
+      {
+        type: "task",
+        taskRef: "task:review",
+        title: "Review implementation",
+        state: "running",
+        summary: "Check focused tests.",
+      },
+      {
+        type: "artifact",
+        artifactRef: "artifact:check-report",
+        title: "Focused check report",
+        kind: "artifact",
+        state: "completed",
+        summary: "All checks passed.",
+      },
+    ]);
+  });
+
+  it("merges an interaction request and response without calling an answer approved", () => {
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [],
+      commands: [],
+      reports: [
+        {
+          id: "interaction-request-event",
+          kind: "daemon.interaction.request",
+          title: "Choose the next step",
+          text: "Continue with the focused fix?",
+          role: null,
+          status: null,
+          createdAt: "2026-07-10T00:00:01.000Z",
+          interaction: { requestId: "ask-1", kind: "askFlow" },
+        },
+        {
+          id: "interaction-response-event",
+          kind: "daemon.interaction.response",
+          title: "Interaction response",
+          text: "Operator response recorded.",
+          role: null,
+          status: "answered",
+          createdAt: "2026-07-10T00:00:02.000Z",
+          interaction: { requestId: "ask-1", kind: "askFlow" },
+        },
+      ],
+    });
+
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0]?.parts).toEqual([
+      {
+        type: "approval",
+        requestId: "ask-1",
+        title: "Choose the next step",
+        state: "resolved",
+        kind: "askFlow",
+        summary: "Continue with the focused fix?",
+      },
+    ]);
+  });
+
+  it("projects failed terminal reports as error parts", () => {
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [],
+      commands: [],
+      reports: [
+        {
+          id: "run-failed",
+          kind: "run.update",
+          title: "Coding run failed",
+          text: "The daemon lost the worker process.",
+          role: null,
+          status: "failed",
+          createdAt: "2026-07-10T00:00:01.000Z",
+        },
+      ],
+    });
+
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0]).toMatchObject({
+      id: "report:run-failed",
+      body: "The daemon lost the worker process.",
+      title: null,
+      parts: [
+        {
+          type: "error",
+          title: "Coding run failed",
+          message: "The daemon lost the worker process.",
+        },
+      ],
+    });
   });
 });
 

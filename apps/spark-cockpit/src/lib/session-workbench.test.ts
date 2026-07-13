@@ -1,0 +1,411 @@
+import { describe, expect, it } from "vitest";
+import { parseSparkSessionView } from "@zendev-lab/spark-protocol";
+import { buildSessionWorkbenchView } from "./session-workbench";
+
+function session(overrides: Record<string, unknown> = {}) {
+  return parseSparkSessionView({
+    sessionId: "sess-workbench",
+    title: "Implement inspector",
+    status: "running",
+    cwd: "/workspace/spark",
+    model: {
+      providerName: "openai-codex",
+      providerLabel: "OpenAI Codex",
+      modelId: "gpt-5.5-codex",
+      modelLabel: "GPT-5.5 Codex",
+    },
+    messages: [],
+    runs: [],
+    tasks: [],
+    artifacts: [],
+    ...overrides,
+  });
+}
+
+describe("session workbench projection", () => {
+  it("maps daemon-owned runs, internal tasks, evidence, and context", () => {
+    const view = buildSessionWorkbenchView({
+      session: session({
+        runs: [
+          {
+            id: "inv-1",
+            kind: "session",
+            title: "Implement inspector",
+            status: "running",
+            progress: 0.5,
+            artifactRefs: ["artifact:report-1"],
+            startedAt: "2026-07-13T08:00:00.000Z",
+          },
+        ],
+        tasks: [
+          {
+            ref: "task:build",
+            title: "Build the inspector",
+            status: "claimed",
+            owner: "worker",
+            todos: [
+              { id: "todo-1", content: "Project state", status: "done", notes: [] },
+              { id: "todo-2", content: "Render tabs", status: "in_progress", notes: [] },
+            ],
+            runRefs: ["run:inv-1"],
+            artifactRefs: ["artifact:report-1"],
+          },
+        ],
+        artifacts: [
+          {
+            ref: "artifact:report-1",
+            title: "Inspector report",
+            kind: "document",
+            format: "markdown",
+            preview: "Verified output",
+          },
+        ],
+      }),
+      activity: {
+        commands: [
+          {
+            id: "cmd-1",
+            title: "Implement inspector",
+            goal: "Implement inspector",
+            status: "acked",
+            deliveryStatus: "acked",
+            runtimeName: "spark-daemon",
+            runtimeStatus: "online",
+            invocationId: "inv-1",
+            invocationStatus: "running",
+            latestLog: "Running focused tests",
+            latestLogAt: "2026-07-13T08:01:00.000Z",
+            createdAt: "2026-07-13T08:00:00.000Z",
+            updatedAt: "2026-07-13T08:01:00.000Z",
+          },
+        ],
+        reports: [
+          {
+            id: "task-event-1",
+            kind: "daemon.task.lifecycle",
+            title: "session.run",
+            text: "Task is running.",
+            role: null,
+            status: "running",
+            createdAt: "2026-07-13T08:00:30.000Z",
+          },
+        ],
+      },
+    });
+
+    expect(view.runs).toHaveLength(1);
+    expect(view.runs[0]).toMatchObject({
+      id: "run:inv-1",
+      commandId: "cmd-1",
+      latestOutput: "Running focused tests",
+      runtimeName: "spark-daemon",
+    });
+    expect(view.tasks).toMatchObject([
+      { id: "task:build", source: "session", todoDone: 1, todoTotal: 2 },
+    ]);
+    expect(view.evidence).toMatchObject([
+      { id: "report-1", title: "Inspector report", canonicalChange: false },
+    ]);
+    expect(view.context).toMatchObject({
+      sessionId: "sess-workbench",
+      cwd: "/workspace/spark",
+      model: { displayLabel: "GPT-5.5 Codex · OpenAI Codex" },
+    });
+  });
+
+  it("shows changes only for explicit canonical diff markers", () => {
+    const view = buildSessionWorkbenchView({
+      session: session({
+        artifacts: [
+          {
+            ref: "artifact:looks-like-diff",
+            title: "Changes.diff",
+            kind: "document",
+            format: "text",
+            preview: "diff --git a/a.ts b/a.ts",
+          },
+          {
+            ref: "artifact:canonical-diff",
+            title: "Working tree patch",
+            kind: "trace",
+            format: "text",
+            preview: "diff --git a/a.ts b/a.ts",
+            metadata: { presentation: "diff" },
+          },
+        ],
+      }),
+    });
+
+    expect(view.changes.map((artifact) => artifact.id)).toEqual(["canonical-diff"]);
+    expect(view.evidence.map((artifact) => artifact.id)).toEqual(["looks-like-diff"]);
+  });
+
+  it("maps canonical activity artifact kinds without inferring Git state from prose", () => {
+    const view = buildSessionWorkbenchView({
+      session: session(),
+      activity: {
+        reports: [
+          {
+            id: "patch-1",
+            kind: "artifact.patch",
+            title: "Patch",
+            text: "+const ready = true;",
+            role: "assistant",
+            status: "succeeded",
+            createdAt: "2026-07-13T08:02:00.000Z",
+          },
+          {
+            id: "report-2",
+            kind: "artifact.document",
+            title: "Report mentioning diff",
+            text: "A diff was produced.",
+            role: "assistant",
+            status: "succeeded",
+            createdAt: "2026-07-13T08:01:00.000Z",
+          },
+        ],
+      },
+    });
+
+    expect(view.changes).toMatchObject([{ id: "patch-1", format: "diff" }]);
+    expect(view.evidence).toMatchObject([{ id: "report-2", kind: "document" }]);
+  });
+
+  it("uses task and artifact updates as reload-safe fallbacks without lifecycle ghosts", () => {
+    const view = buildSessionWorkbenchView({
+      session: session(),
+      activity: {
+        reports: [
+          {
+            id: "task:reload-safe",
+            kind: "task.update",
+            title: "Reload-safe task",
+            text: "Projected from the daemon view event.",
+            role: null,
+            status: "claimed",
+            createdAt: "2026-07-13T08:02:00.000Z",
+          },
+          {
+            id: "task:reload-safe",
+            kind: "task.update",
+            title: "Older reload-safe task",
+            text: "An older duplicate projection.",
+            role: null,
+            status: "queued",
+            createdAt: "2026-07-13T08:01:30.000Z",
+          },
+          {
+            id: "stale-lifecycle-event",
+            kind: "daemon.task.lifecycle",
+            title: "session.run",
+            text: "Task is running.",
+            role: null,
+            status: "running",
+            createdAt: "2026-07-13T08:01:00.000Z",
+          },
+          {
+            id: "artifact:reload-safe",
+            kind: "artifact.update",
+            title: "Reload-safe artifact",
+            text: "Projected evidence.",
+            role: "assistant",
+            status: "completed",
+            createdAt: "2026-07-13T08:03:00.000Z",
+          },
+        ],
+      },
+    });
+
+    expect(view.tasks).toMatchObject([
+      {
+        id: "task:reload-safe",
+        source: "activity",
+        title: "Reload-safe task",
+        status: "claimed",
+      },
+    ]);
+    expect(view.evidence).toMatchObject([
+      {
+        id: "reload-safe",
+        source: "activity",
+        kind: "artifact",
+        title: "Reload-safe artifact",
+      },
+    ]);
+  });
+
+  it("merges the latest run update into its canonical run without duplicate cards", () => {
+    const view = buildSessionWorkbenchView({
+      session: session({
+        runs: [
+          {
+            id: "run:merge",
+            kind: "session",
+            title: "Initial run title",
+            status: "running",
+            artifactRefs: [],
+            startedAt: "2026-07-13T08:00:00.000Z",
+          },
+        ],
+      }),
+      activity: {
+        reports: [
+          {
+            id: "run:merge",
+            kind: "run.update",
+            title: "Completed coding run",
+            text: "The latest projection wins.",
+            role: null,
+            status: "succeeded",
+            createdAt: "2026-07-13T08:02:00.000Z",
+          },
+          {
+            id: "run:merge",
+            kind: "run.update",
+            title: "Older coding run",
+            text: "Still running.",
+            role: null,
+            status: "running",
+            createdAt: "2026-07-13T08:01:00.000Z",
+          },
+        ],
+      },
+    });
+
+    expect(view.runs).toHaveLength(1);
+    expect(view.runs[0]).toMatchObject({
+      id: "run:run:merge",
+      canonicalId: "run:merge",
+      source: "session",
+      title: "Completed coding run",
+      status: "succeeded",
+      summary: "The latest projection wins.",
+      updatedAt: "2026-07-13T08:02:00.000Z",
+    });
+  });
+
+  it("deduplicates fallback run updates when no canonical run has arrived", () => {
+    const view = buildSessionWorkbenchView({
+      session: session(),
+      activity: {
+        reports: [
+          {
+            id: "run:fallback",
+            kind: "run.update",
+            title: "Fallback run",
+            text: "Latest state.",
+            role: null,
+            status: "running",
+            createdAt: "2026-07-13T08:02:00.000Z",
+          },
+          {
+            id: "run:fallback",
+            kind: "run.update",
+            title: "Fallback run",
+            text: "Older state.",
+            role: null,
+            status: "queued",
+            createdAt: "2026-07-13T08:01:00.000Z",
+          },
+        ],
+      },
+    });
+
+    expect(view.runs).toMatchObject([
+      {
+        id: "report:run:fallback",
+        canonicalId: "run:fallback",
+        source: "report",
+        status: "running",
+        summary: "Latest state.",
+      },
+    ]);
+  });
+
+  it("prefers a canonical task over a task update fallback with the same ref", () => {
+    const view = buildSessionWorkbenchView({
+      session: session({
+        tasks: [
+          {
+            ref: "task:same",
+            title: "Canonical task",
+            status: "done",
+            todos: [],
+            runRefs: [],
+            artifactRefs: [],
+          },
+        ],
+      }),
+      activity: {
+        reports: [
+          {
+            id: "task:same",
+            kind: "task.update",
+            title: "Fallback task",
+            text: "Stale task projection.",
+            role: null,
+            status: "running",
+            createdAt: "2026-07-13T08:02:00.000Z",
+          },
+        ],
+      },
+    });
+
+    expect(view.tasks).toMatchObject([
+      { id: "task:same", source: "session", title: "Canonical task", status: "done" },
+    ]);
+  });
+
+  it("bounds output and prefers daemon snapshot artifacts over activity fallbacks", () => {
+    const longOutput = "x".repeat(5_000);
+    const view = buildSessionWorkbenchView({
+      session: session({
+        artifacts: [
+          {
+            ref: "artifact:same",
+            title: "Canonical evidence",
+            kind: "document",
+            format: "markdown",
+            preview: "canonical",
+          },
+        ],
+      }),
+      activity: {
+        commands: [
+          {
+            id: "cmd-long",
+            title: "Long command",
+            goal: null,
+            status: "running",
+            deliveryStatus: "acked",
+            runtimeName: null,
+            runtimeStatus: null,
+            invocationId: null,
+            invocationStatus: "running",
+            latestLog: longOutput,
+            latestLogAt: null,
+            createdAt: "2026-07-13T08:00:00.000Z",
+            updatedAt: "2026-07-13T08:00:00.000Z",
+          },
+        ],
+        reports: [
+          {
+            id: "same",
+            kind: "artifact.document",
+            title: "Fallback evidence",
+            text: "fallback",
+            role: "assistant",
+            status: "succeeded",
+            createdAt: "2026-07-13T08:01:00.000Z",
+          },
+        ],
+      },
+    });
+
+    expect(view.runs[0]?.latestOutput).toHaveLength(4_000);
+    expect(view.runs[0]?.latestOutput?.endsWith("…")).toBe(true);
+    expect(view.evidence).toMatchObject([
+      { id: "same", title: "Canonical evidence", source: "session" },
+    ]);
+  });
+});
