@@ -443,6 +443,8 @@ const messages = {
     cancelTurnUnavailable: "This turn is no longer active and could not be stopped.",
     cancelTurnFailed: "Could not stop the active turn.",
     archiveSessionRequired: "Select a conversation to archive.",
+    archiveChannelBound:
+      "Message-platform conversations remain managed by their channel and cannot be archived here.",
     archiveFailed: "Could not archive the conversation.",
     unknownWorkspace: "Unknown workspace",
   },

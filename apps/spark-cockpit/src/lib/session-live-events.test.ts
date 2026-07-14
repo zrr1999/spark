@@ -151,6 +151,48 @@ describe("session live events", () => {
     expect(ignored).toEqual({ changed: false, refreshActivity: false });
   });
 
+  it("keeps the daemon-projected mailbox across native session snapshots", () => {
+    const mailbox = [
+      {
+        id: "mail:1",
+        fromSessionId: "sess_sender",
+        kind: "request" as const,
+        intent: "review.request",
+        subject: null,
+        body: "Review the patch",
+        createdAt: "2026-07-13T08:00:00.000Z",
+        readAt: null,
+        ackedAt: null,
+      },
+    ];
+    const state = createSessionLiveEventState({
+      sessionId: "sess_current",
+      view: parseSparkSessionView({ sessionId: "sess_current", mailbox }),
+    });
+
+    applySessionLiveEvent(
+      state,
+      event({
+        id: "evt_snapshot",
+        kind: "daemon.view_event",
+        payload: {
+          type: "daemon.view_event",
+          sessionId: "sess_current",
+          view: {
+            type: "session.snapshot",
+            session: parseSparkSessionView({
+              sessionId: "sess_current",
+              messages: [{ id: "msg_1", role: "assistant", text: "Done" }],
+            }),
+          },
+        },
+      }),
+    );
+
+    expect(state.view?.mailbox).toEqual(mailbox);
+    expect(state.view?.messages).toMatchObject([{ id: "msg_1", text: "Done" }]);
+  });
+
   it("tracks only command and invocation activity belonging to the conversation", () => {
     const state = createSessionLiveEventState({
       sessionId: "sess_current",

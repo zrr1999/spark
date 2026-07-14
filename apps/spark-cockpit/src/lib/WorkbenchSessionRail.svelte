@@ -60,6 +60,7 @@
       unknownWorkspace: string;
       daemonGroup: string;
       channelSessionBadge: string;
+      archiveSubmit: string;
     };
   } = $props();
 
@@ -213,29 +214,46 @@
           </h2>
           {#each group.sessions as session}
             {@const displayedStatus = displayedActivityStatus(session)}
-            <a
-              class="session-item"
-              class:active={session.sessionId === selectedSessionId}
-              aria-current={session.sessionId === selectedSessionId ? "page" : undefined}
-              href={`/sessions/${session.sessionId}`}
-            >
-              <span class="session-title-row">
-                <strong>{sessionTitle(session)}</strong>
-                {#if sessionHasChannelBinding(session)}
-                  <span class="channel-badge">{messages.channelSessionBadge}</span>
-                {/if}
-                {#if displayedStatus}
-                <span
-                  class="session-status {displayedStatus}"
-                  title={statusLabel(displayedStatus)}
-                >
-                  <span aria-hidden="true"></span>
-                  <span>{statusLabel(displayedStatus)}</span>
+            {@const isSelected = session.sessionId === selectedSessionId}
+            {@const canArchive = isSelected && session.status !== "archived" && !sessionHasChannelBinding(session)}
+            <div class="session-item-row">
+              <a
+                class="session-item"
+                class:active={isSelected}
+                class:has-action={canArchive}
+                aria-current={isSelected ? "page" : undefined}
+                href={`/sessions/${session.sessionId}`}
+              >
+                <span class="session-title-row">
+                  <strong>{sessionTitle(session)}</strong>
+                  {#if sessionHasChannelBinding(session)}
+                    <span class="channel-badge">{messages.channelSessionBadge}</span>
+                  {/if}
+                  {#if displayedStatus}
+                    <span
+                      class="session-status {displayedStatus}"
+                      title={statusLabel(displayedStatus)}
+                    >
+                      <span aria-hidden="true"></span>
+                      <span>{statusLabel(displayedStatus)}</span>
+                    </span>
+                  {/if}
                 </span>
-                {/if}
-              </span>
-              <small>{relative(session.activityUpdatedAt ?? session.updatedAt)}</small>
-            </a>
+                <small>{relative(session.activityUpdatedAt ?? session.updatedAt)}</small>
+              </a>
+              {#if canArchive}
+                <form class="session-archive-form" method="POST" action="/sessions?/archiveSession">
+                  <input type="hidden" name="sessionId" value={session.sessionId} />
+                  <button
+                    type="submit"
+                    aria-label={`${messages.archiveSubmit}: ${sessionTitle(session)}`}
+                    title={messages.archiveSubmit}
+                  >
+                    <Icon name="archive" size={15} stroke={2.1} />
+                  </button>
+                </form>
+              {/if}
+            </div>
           {/each}
         </section>
       {/each}
@@ -426,6 +444,50 @@
     transition:
       background 120ms ease,
       color 120ms ease;
+  }
+
+  .session-item-row {
+    min-width: 0;
+    position: relative;
+  }
+
+  .session-item.has-action {
+    padding-right: 42px;
+  }
+
+  .session-archive-form {
+    position: absolute;
+    right: 7px;
+    top: 7px;
+  }
+
+  .session-archive-form button {
+    align-items: center;
+    background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--rounded-md);
+    color: var(--color-ink-subtle);
+    cursor: pointer;
+    display: inline-flex;
+    height: 28px;
+    justify-content: center;
+    padding: 0;
+    transition:
+      background 120ms ease,
+      border-color 120ms ease,
+      color 120ms ease;
+    width: 28px;
+  }
+
+  .session-archive-form button:hover {
+    background: color-mix(in srgb, var(--color-danger) 10%, var(--color-surface));
+    border-color: color-mix(in srgb, var(--color-danger) 28%, var(--color-border));
+    color: var(--color-danger);
+  }
+
+  .session-archive-form button:focus-visible {
+    box-shadow: var(--shadow-focus);
+    outline: none;
   }
 
   .session-item:hover {

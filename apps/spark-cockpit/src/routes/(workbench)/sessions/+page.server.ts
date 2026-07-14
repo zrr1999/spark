@@ -21,6 +21,7 @@ import {
   setSessionThinkingLevelForCockpit,
 } from "$lib/server/model-control";
 import { workspaceIdForWorkbenchSession } from "../../../lib/workbench-session-scope";
+import { sessionHasChannelBinding } from "../../../lib/channel-session-title";
 import type { Actions, PageServerLoad } from "./$types";
 
 export const load: PageServerLoad = async () => {
@@ -421,6 +422,14 @@ export const actions: Actions = {
       return fail(400, {
         intent: "archiveSession",
         message: t.archiveSessionRequired,
+      });
+    }
+
+    const session = await getManagedSessionForCockpit(sessionId);
+    if (session && sessionHasChannelBinding(session)) {
+      return fail(409, {
+        intent: "archiveSession",
+        message: t.archiveChannelBound,
       });
     }
 

@@ -138,9 +138,6 @@
     channelSessionKicker: string;
     channelBindingLabel: string;
     openChannelSettings: string;
-    managementTitle: string;
-    archiveBody: string;
-    archiveSubmit: string;
     unknownWorkspace: string;
   };
 
@@ -320,11 +317,13 @@
           runsTab: "运行",
           changesTab: "变更",
           evidenceTab: "证据",
+          mailboxTab: "邮箱",
           contextTab: "上下文",
           runsHeading: "运行",
           tasksHeading: "内部任务",
           changesHeading: "结构化变更",
           evidenceHeading: "证据与产物",
+          mailboxHeading: "会话邮箱",
           contextHeading: "执行上下文",
           noRunsTitle: "尚无运行",
           noRunsBody: "发送消息后，Spark 自动创建的运行和内部任务会出现在这里。",
@@ -332,8 +331,16 @@
           noChangesBody: "当前 runtime 没有提供 canonical diff；这里不会从回复文本推断 Git 变更。",
           noEvidenceTitle: "尚无证据",
           noEvidenceBody: "运行生成报告、产物或验证结果后，会自动归集到这里。",
+          noMailboxTitle: "邮箱为空",
+          noMailboxBody: "其他会话发送给当前会话的请求和通知会出现在这里。",
           latestOutput: "最近输出",
           progress: "进度",
+          mailFrom: "来自",
+          mailRequest: "请求",
+          mailNotification: "通知",
+          mailUnread: "未读",
+          mailRead: "已读",
+          mailAcknowledged: "已确认",
           sessionId: "会话 ID",
           sessionStatus: "会话状态",
           workingDirectory: "工作目录",
@@ -412,11 +419,13 @@
           runsTab: "Runs",
           changesTab: "Changes",
           evidenceTab: "Evidence",
+          mailboxTab: "Mailbox",
           contextTab: "Context",
           runsHeading: "Runs",
           tasksHeading: "Internal tasks",
           changesHeading: "Structured changes",
           evidenceHeading: "Evidence and artifacts",
+          mailboxHeading: "Session mailbox",
           contextHeading: "Execution context",
           noRunsTitle: "No runs yet",
           noRunsBody: "Runs and internal tasks created by Spark appear here after you send a message.",
@@ -425,8 +434,16 @@
             "The runtime has not provided a canonical diff. This view never infers Git changes from prose.",
           noEvidenceTitle: "No evidence yet",
           noEvidenceBody: "Reports, artifacts, and verification results are collected here as runs produce them.",
+          noMailboxTitle: "Mailbox is empty",
+          noMailboxBody: "Requests and notifications sent to this conversation by other sessions appear here.",
           latestOutput: "Latest output",
           progress: "Progress",
+          mailFrom: "From",
+          mailRequest: "Request",
+          mailNotification: "Notification",
+          mailUnread: "Unread",
+          mailRead: "Read",
+          mailAcknowledged: "Acknowledged",
           sessionId: "Session ID",
           sessionStatus: "Session status",
           workingDirectory: "Working directory",
@@ -478,12 +495,14 @@
       runs: copy.runsTab,
       changes: copy.changesTab,
       evidence: copy.evidenceTab,
+      mailbox: copy.mailboxTab,
       context: copy.contextTab,
     },
     runsHeading: copy.runsHeading,
     tasksHeading: copy.tasksHeading,
     changesHeading: copy.changesHeading,
     evidenceHeading: copy.evidenceHeading,
+    mailboxHeading: copy.mailboxHeading,
     contextHeading: copy.contextHeading,
     noRunsTitle: copy.noRunsTitle,
     noRunsBody: copy.noRunsBody,
@@ -491,8 +510,16 @@
     noChangesBody: copy.noChangesBody,
     noEvidenceTitle: copy.noEvidenceTitle,
     noEvidenceBody: copy.noEvidenceBody,
+    noMailboxTitle: copy.noMailboxTitle,
+    noMailboxBody: copy.noMailboxBody,
     latestOutput: copy.latestOutput,
     progress: copy.progress,
+    mailFrom: copy.mailFrom,
+    mailRequest: copy.mailRequest,
+    mailNotification: copy.mailNotification,
+    mailUnread: copy.mailUnread,
+    mailRead: copy.mailRead,
+    mailAcknowledged: copy.mailAcknowledged,
     sessionId: copy.sessionId,
     sessionStatus: copy.sessionStatus,
     workingDirectory: copy.workingDirectory,
@@ -1091,19 +1118,6 @@
         />
       {/if}
 
-      {#if selected.status !== "archived"}
-        <section class="session-management">
-          <h3>{messages.managementTitle}</h3>
-          {#if !compact}<p class="muted">{messages.archiveBody}</p>{/if}
-          <form method="POST" action="?/archiveSession">
-            <input type="hidden" name="sessionId" value={selected.sessionId} />
-            <Button variant="danger" type="submit">
-              <Icon name="archive" size={15} stroke={2.1} />
-              <span>{messages.archiveSubmit}</span>
-            </Button>
-          </form>
-        </section>
-      {/if}
     </div>
   {/if}
 {/snippet}
@@ -1596,7 +1610,6 @@
   }
 
   h2,
-  h3,
   p {
     margin: 0;
   }
@@ -1885,17 +1898,6 @@
     color: var(--color-ink-subtle);
     font-size: 12px;
     line-height: 1.5;
-  }
-
-  .session-management {
-    display: grid;
-    gap: 9px;
-  }
-
-  .session-management h3 {
-    color: var(--color-ink);
-    font-size: 12px;
-    font-weight: 650;
   }
 
   .status-pill {

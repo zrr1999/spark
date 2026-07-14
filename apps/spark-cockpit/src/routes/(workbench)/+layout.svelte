@@ -138,6 +138,7 @@
           unknownWorkspace: data.messages.sessions.unknownWorkspace,
           daemonGroup: data.messages.sessions.daemonGroup,
           channelSessionBadge: data.messages.sessions.channelSessionBadge,
+          archiveSubmit: data.messages.sessions.archiveSubmit,
         }}
       />
 

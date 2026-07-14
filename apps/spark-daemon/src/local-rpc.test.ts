@@ -1160,7 +1160,32 @@ describe("Spark daemon local RPC", () => {
         paths,
         db,
         undefined,
-        { sessionRegistry },
+        {
+          sessionRegistry,
+          mailStore: {
+            list: async (_sessionId, options) => {
+              expect(_sessionId).toBe("sess_view");
+              expect(options).toEqual({ includeAcked: true });
+              return Array.from({ length: 51 }, (_, index) => ({
+                id: `mail:${index}`,
+                toSessionId: "sess_view",
+                fromSessionId: `sess_sender_${index}`,
+                kind: index % 2 === 0 ? ("request" as const) : ("notification" as const),
+                intent: "review.pull-request",
+                payload: { secret: `not-for-cockpit-${index}` },
+                correlationId: `corr:${index}`,
+                replyToMessageId: null,
+                idempotencyKey: `secret-idempotency-${index}`,
+                subject: index === 50 ? "Newest request" : null,
+                body: `Message ${index}`,
+                createdAt: `2026-07-14T03:${String(index).padStart(2, "0")}:00.000Z`,
+                readAt: index === 50 ? null : "2026-07-14T04:00:00.000Z",
+                ackedAt: index === 0 ? "2026-07-14T05:00:00.000Z" : null,
+                source: "tool" as const,
+              }));
+            },
+          },
+        },
       );
 
     try {
@@ -1181,6 +1206,25 @@ describe("Spark daemon local RPC", () => {
         },
       });
       expect(JSON.stringify(empty)).not.toContain("sessionPath");
+      const emptyResult = (empty as { result: { mailbox: Array<Record<string, unknown>> } }).result;
+      expect(emptyResult.mailbox).toHaveLength(50);
+      expect(emptyResult.mailbox[0]).toEqual({
+        id: "mail:1",
+        fromSessionId: "sess_sender_1",
+        kind: "notification",
+        intent: "review.pull-request",
+        subject: null,
+        body: "Message 1",
+        createdAt: "2026-07-14T03:01:00.000Z",
+        readAt: "2026-07-14T04:00:00.000Z",
+        ackedAt: null,
+      });
+      expect(emptyResult.mailbox.at(-1)).toMatchObject({
+        id: "mail:50",
+        subject: "Newest request",
+      });
+      expect(JSON.stringify(emptyResult.mailbox)).not.toContain("not-for-cockpit");
+      expect(JSON.stringify(emptyResult.mailbox)).not.toContain("secret-idempotency");
 
       const queue = new SparkDaemonQueue({ paths });
       const queued = await queue.enqueue({

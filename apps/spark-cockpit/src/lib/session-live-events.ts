@@ -106,6 +106,10 @@ export function sessionViewRevisionKey(view: SparkSessionView | null): string {
     view.runs.length,
     view.tasks.length,
     view.artifacts.length,
+    view.mailbox?.length ?? 0,
+    view.mailbox?.at(-1)?.id ?? "",
+    view.mailbox?.at(-1)?.readAt ?? "",
+    view.mailbox?.at(-1)?.ackedAt ?? "",
   ].join(":");
 }
 
@@ -254,7 +258,11 @@ function applyDaemonEvent(
     if (viewEvent.session.sessionId !== state.sessionId) {
       return { changed: false, refreshActivity: false };
     }
-    state.view = cloneSessionView(viewEvent.session);
+    const mailbox = viewEvent.session.mailbox ?? state.view?.mailbox;
+    state.view = cloneSessionView({
+      ...viewEvent.session,
+      ...(mailbox ? { mailbox } : {}),
+    });
     state.activeTurnId = queuedTurnId(state.view);
     return { changed: true, refreshActivity: false };
   }
@@ -315,6 +323,7 @@ function cloneSessionView(view: SparkSessionView): SparkSessionView {
     runs: [...view.runs],
     tasks: [...view.tasks],
     artifacts: [...view.artifacts],
+    ...(view.mailbox ? { mailbox: [...view.mailbox] } : {}),
     metadata: { ...view.metadata },
   };
 }

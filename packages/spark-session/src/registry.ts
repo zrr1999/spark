@@ -215,6 +215,12 @@ export class SparkSessionRegistry {
       throw new SparkSessionRegistryError("session_not_found", `unknown session: ${sessionId}`);
     }
     const current = file.sessions[index]!;
+    if (current.bindings.some((binding) => binding.kind === "channel")) {
+      throw new SparkSessionRegistryError(
+        "session_channel_bound",
+        `cannot archive channel-bound session: ${sessionId}`,
+      );
+    }
     const updated: SparkSessionRegistryRecord = {
       ...current,
       status: "archived",

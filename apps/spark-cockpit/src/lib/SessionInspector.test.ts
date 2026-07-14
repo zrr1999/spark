@@ -14,7 +14,7 @@ describe("SessionInspector component contract", () => {
     expect(() => compile(source, { filename: componentPath, generate: "server" })).not.toThrow();
   });
 
-  it("renders the four read-only coding-session views with explicit empty states", () => {
+  it("renders the five read-only coding-session views with explicit empty states", () => {
     const source = readFileSync(componentPath, "utf8");
 
     expect(source).toContain('role="tablist"');
@@ -22,14 +22,18 @@ describe("SessionInspector component contract", () => {
     expect(source).toContain('id: "runs"');
     expect(source).toContain('id: "changes"');
     expect(source).toContain('id: "evidence"');
+    expect(source).toContain('id: "mailbox"');
     expect(source).toContain('id: "context"');
     expect(source).toContain("view.runs");
     expect(source).toContain("view.tasks");
     expect(source).toContain("view.changes");
     expect(source).toContain("view.evidence");
+    expect(source).toContain("view.mailbox");
     expect(source).toContain("view.context");
     expect(source).toContain("labels.noChangesTitle");
     expect(source).toContain("labels.noChangesBody");
+    expect(source).toContain("labels.noMailboxTitle");
+    expect(source).toContain("labels.noMailboxBody");
   });
 
   it("does not expose invented Git or terminal controls", () => {

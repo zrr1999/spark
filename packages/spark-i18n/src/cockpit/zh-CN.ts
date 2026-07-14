@@ -432,6 +432,7 @@ const messages = {
     cancelTurnUnavailable: "该运行已不再活动，无法停止。",
     cancelTurnFailed: "无法停止活动运行。",
     archiveSessionRequired: "请选择要归档的对话。",
+    archiveChannelBound: "消息平台对话由对应 Channel 持续管理，不能在这里归档。",
     archiveFailed: "无法归档对话。",
     unknownWorkspace: "未知工作空间",
   },

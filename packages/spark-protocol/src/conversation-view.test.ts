@@ -15,6 +15,40 @@ describe("Spark conversation view protocol", () => {
       status: "done",
     });
     expect(parsed.messages[0]).not.toHaveProperty("parts");
+    expect(parsed.mailbox).toBeUndefined();
+  });
+
+  it("parses the display-safe session mailbox projection", () => {
+    const parsed = parseSparkSessionView({
+      sessionId: "sess_mailbox",
+      mailbox: [
+        {
+          id: "mail:1",
+          fromSessionId: "sess_sender",
+          kind: "request",
+          intent: "review.pull-request",
+          subject: "Review PR #42",
+          body: "Please review the pending change.",
+          createdAt: "2026-07-14T03:00:00.000Z",
+          readAt: null,
+          ackedAt: null,
+        },
+      ],
+    });
+
+    expect(parsed.mailbox).toEqual([
+      {
+        id: "mail:1",
+        fromSessionId: "sess_sender",
+        kind: "request",
+        intent: "review.pull-request",
+        subject: "Review PR #42",
+        body: "Please review the pending change.",
+        createdAt: "2026-07-14T03:00:00.000Z",
+        readAt: null,
+        ackedAt: null,
+      },
+    ]);
   });
 
   it("parses ordered host-neutral conversation parts", () => {

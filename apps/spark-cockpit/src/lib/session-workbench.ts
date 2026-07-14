@@ -3,7 +3,7 @@ import type { SparkJsonObject, SparkSessionView } from "@zendev-lab/spark-protoc
 const MAX_OUTPUT_CHARS = 4_000;
 const MAX_PREVIEW_CHARS = 8_000;
 
-export type SessionInspectorTab = "runs" | "changes" | "evidence" | "context";
+export type SessionInspectorTab = "runs" | "changes" | "evidence" | "mailbox" | "context";
 
 export interface SessionWorkbenchActivityCommand {
   id: string;
@@ -105,11 +105,23 @@ export interface SessionWorkbenchContext {
   updatedAt: string | null;
 }
 
+export interface SessionWorkbenchMailMessage {
+  id: string;
+  fromSessionId: string;
+  kind: "request" | "notification";
+  intent: string;
+  subject: string | null;
+  body: string;
+  createdAt: string;
+  status: "unread" | "read" | "acknowledged";
+}
+
 export interface SessionWorkbenchView {
   runs: SessionWorkbenchRun[];
   tasks: SessionWorkbenchTask[];
   changes: SessionWorkbenchArtifact[];
   evidence: SessionWorkbenchArtifact[];
+  mailbox: SessionWorkbenchMailMessage[];
   context: SessionWorkbenchContext;
 }
 
@@ -120,6 +132,7 @@ export interface SessionInspectorLabels {
   tasksHeading: string;
   changesHeading: string;
   evidenceHeading: string;
+  mailboxHeading: string;
   contextHeading: string;
   noRunsTitle: string;
   noRunsBody: string;
@@ -127,8 +140,16 @@ export interface SessionInspectorLabels {
   noChangesBody: string;
   noEvidenceTitle: string;
   noEvidenceBody: string;
+  noMailboxTitle: string;
+  noMailboxBody: string;
   latestOutput: string;
   progress: string;
+  mailFrom: string;
+  mailRequest: string;
+  mailNotification: string;
+  mailUnread: string;
+  mailRead: string;
+  mailAcknowledged: string;
   sessionId: string;
   sessionStatus: string;
   workingDirectory: string;
@@ -177,6 +198,18 @@ export function buildSessionWorkbenchView(input: {
     tasks,
     changes: artifacts.filter((artifact) => artifact.canonicalChange),
     evidence: artifacts.filter((artifact) => !artifact.canonicalChange),
+    mailbox: [...(input.session.mailbox ?? [])]
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .map((message) => ({
+        id: message.id,
+        fromSessionId: message.fromSessionId,
+        kind: message.kind,
+        intent: message.intent,
+        subject: message.subject ?? null,
+        body: message.body,
+        createdAt: message.createdAt,
+        status: message.ackedAt ? "acknowledged" : message.readAt ? "read" : "unread",
+      })),
     context: sessionContext(input.session),
   };
 }

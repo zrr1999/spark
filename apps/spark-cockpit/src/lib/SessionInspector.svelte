@@ -29,8 +29,12 @@
     { id: "runs", label: labels.tabs.runs, icon: "activity" },
     { id: "changes", label: labels.tabs.changes, icon: "repos" },
     { id: "evidence", label: labels.tabs.evidence, icon: "artifacts" },
+    { id: "mailbox", label: labels.tabs.mailbox, icon: "inbox" },
     { id: "context", label: labels.tabs.context, icon: "folder" },
   ]);
+  let unreadMailCount = $derived(
+    view.mailbox.filter((message) => message.status === "unread").length,
+  );
 
   function statusClass(status: string) {
     return status.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
@@ -38,6 +42,20 @@
 
   function progressValue(progress: number) {
     return Math.min(1, Math.max(0, progress));
+  }
+
+  function mailKindLabel(kind: "request" | "notification") {
+    return kind === "request" ? labels.mailRequest : labels.mailNotification;
+  }
+
+  function mailStatusLabel(status: "unread" | "read" | "acknowledged") {
+    if (status === "unread") return labels.mailUnread;
+    if (status === "read") return labels.mailRead;
+    return labels.mailAcknowledged;
+  }
+
+  function compactTimestamp(value: string) {
+    return value.slice(0, 16).replace("T", " ");
   }
 
   function tabId(tab: SessionInspectorTab) {
@@ -83,6 +101,11 @@
       >
         <Icon name={tab.icon} size={16} />
         <span>{tab.label}</span>
+        {#if tab.id === "mailbox" && unreadMailCount > 0}
+          <span class="tab-count" aria-label={`${unreadMailCount} ${labels.mailUnread}`}>
+            {unreadMailCount > 99 ? "99+" : unreadMailCount}
+          </span>
+        {/if}
       </button>
     {/each}
   </div>
@@ -243,13 +266,47 @@
           </div>
         </section>
       {/if}
+    {:else if activeTab === "mailbox"}
+      {#if view.mailbox.length === 0}
+        <EmptyState title={labels.noMailboxTitle} body={labels.noMailboxBody} icon="inbox" compact />
+      {:else}
+        <section class="inspector-section" aria-labelledby={headingId("mailbox")}>
+          <h2 id={headingId("mailbox")}>{labels.mailboxHeading}</h2>
+          <div class="card-list">
+            {#each view.mailbox as message (message.id)}
+              <article class="inspector-card mailbox-card">
+                <header class="card-header">
+                  <div class="card-title">
+                    <Icon name={message.kind === "request" ? "inbox" : "spark"} size={16} />
+                    <div>
+                      <h3>{message.subject ?? message.intent}</h3>
+                      <p>
+                        {mailKindLabel(message.kind)} · {labels.mailFrom} {message.fromSessionId}
+                      </p>
+                    </div>
+                  </div>
+                  <span class={`status-pill ${statusClass(message.status)}`}>
+                    {mailStatusLabel(message.status)}
+                  </span>
+                </header>
+                {#if message.body}
+                  <p class="card-summary mail-body">{message.body}</p>
+                {/if}
+                <time datetime={message.createdAt} title={message.createdAt}>
+                  {compactTimestamp(message.createdAt)}
+                </time>
+              </article>
+            {/each}
+          </div>
+        </section>
+      {/if}
     {:else}
       <section class="inspector-section" aria-labelledby={headingId("context")}>
         <h2 id={headingId("context")}>{labels.contextHeading}</h2>
         <dl class="context-list">
           <div>
             <dt>{labels.sessionId}</dt>
-            <dd><code>{view.context.sessionId}</code></dd>
+            <dd title={view.context.sessionId}><code>{view.context.sessionId}</code></dd>
           </div>
           <div>
             <dt>{labels.sessionStatus}</dt>
@@ -261,19 +318,19 @@
           </div>
           <div>
             <dt>{labels.workingDirectory}</dt>
-            <dd><code>{view.context.cwd ?? labels.unavailable}</code></dd>
+            <dd title={view.context.cwd ?? labels.unavailable}><code>{view.context.cwd ?? labels.unavailable}</code></dd>
           </div>
           <div>
             <dt>{labels.model}</dt>
-            <dd>{view.context.model?.displayLabel ?? labels.unavailable}</dd>
+            <dd title={view.context.model?.displayLabel ?? labels.unavailable}>{view.context.model?.displayLabel ?? labels.unavailable}</dd>
           </div>
           <div>
             <dt>{labels.createdAt}</dt>
-            <dd>{view.context.createdAt ?? labels.unavailable}</dd>
+            <dd title={view.context.createdAt ?? labels.unavailable}>{view.context.createdAt ? compactTimestamp(view.context.createdAt) : labels.unavailable}</dd>
           </div>
           <div>
             <dt>{labels.updatedAt}</dt>
-            <dd>{view.context.updatedAt ?? labels.unavailable}</dd>
+            <dd title={view.context.updatedAt ?? labels.unavailable}>{view.context.updatedAt ? compactTimestamp(view.context.updatedAt) : labels.unavailable}</dd>
           </div>
         </dl>
       </section>
@@ -288,6 +345,7 @@
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: var(--rounded-xl);
+    container-type: inline-size;
     min-width: 0;
     overflow: hidden;
   }
@@ -298,7 +356,7 @@
     display: flex;
     min-width: 0;
     overflow: hidden;
-    padding: 0 var(--spacing-sm);
+    padding: 0 4px;
   }
 
   .inspector-tabs button {
@@ -315,7 +373,7 @@
     gap: var(--spacing-xs);
     min-height: 42px;
     min-width: 0;
-    padding: 0 6px;
+    padding: 0 3px;
   }
 
   .inspector-tabs button span {
@@ -341,6 +399,7 @@
 
   .inspector-panel {
     min-width: 0;
+    min-height: 300px;
   }
 
   .inspector-section {
@@ -411,6 +470,35 @@
     line-height: var(--leading-body);
     margin: var(--spacing-xxs) 0 0;
     overflow-wrap: anywhere;
+  }
+
+  .mailbox-card time {
+    color: var(--color-ink-subtle);
+    font-size: var(--text-caption);
+  }
+
+  .mail-body {
+    display: -webkit-box;
+    line-clamp: 4;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 4;
+  }
+
+  .tab-count {
+    align-items: center;
+    background: var(--color-primary);
+    border-radius: 999px;
+    color: white;
+    display: inline-flex;
+    flex: 0 0 auto;
+    font-size: 9px;
+    font-weight: 700;
+    justify-content: center;
+    line-height: 1;
+    min-height: 16px;
+    min-width: 16px;
+    padding: 0 4px;
   }
 
   .card-summary {
@@ -491,8 +579,8 @@
     align-items: start;
     border-bottom: 1px solid var(--color-border-soft);
     display: grid;
-    gap: var(--spacing-md);
-    grid-template-columns: minmax(130px, 0.35fr) minmax(0, 1fr);
+    gap: var(--spacing-sm);
+    grid-template-columns: 92px minmax(0, 1fr);
     padding: var(--spacing-md) 0;
   }
 
@@ -511,11 +599,19 @@
     font-size: var(--text-body);
     margin: 0;
     min-width: 0;
-    overflow-wrap: anywhere;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .context-list code {
     font-size: var(--text-caption);
+  }
+
+  @container (max-width: 360px) {
+    .inspector-tabs button :global(svg) {
+      display: none;
+    }
   }
 
   @media (max-width: 640px) {

@@ -24,6 +24,8 @@ vi.mock("$lib/i18n", () => ({
   getRequestDictionary: () => ({
     sessions: {
       archiveFailed: "Could not archive the session.",
+      archiveChannelBound:
+        "Message-platform conversations remain managed by their channel and cannot be archived here.",
       archiveSessionRequired: "Select a session to archive.",
       assignArchived: "This session is archived and cannot accept more work.",
       assignFailed: "Could not queue the assignment.",
@@ -417,6 +419,33 @@ describe("session conversation actions", () => {
 
     expect(mocks.getManagedSessionForCockpit).not.toHaveBeenCalled();
     expect(mocks.cancelConversationTurnForCockpit).not.toHaveBeenCalled();
+  });
+
+  it("refuses to archive a message-platform conversation", async () => {
+    mocks.getManagedSessionForCockpit.mockResolvedValueOnce({
+      ...session,
+      bindings: [
+        {
+          kind: "channel",
+          adapter: "infoflow",
+          externalKey: "infoflow:group:10838226",
+        },
+      ],
+    });
+
+    const result = await requireAction("archiveSession")(
+      actionEvent({ sessionId: "sess_conversation" }),
+    );
+
+    expect(result).toMatchObject({
+      status: 409,
+      data: {
+        intent: "archiveSession",
+        message:
+          "Message-platform conversations remain managed by their channel and cannot be archived here.",
+      },
+    });
+    expect(mocks.archiveManagedSessionForCockpit).not.toHaveBeenCalled();
   });
 });
 

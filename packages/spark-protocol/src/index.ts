@@ -243,6 +243,18 @@ export const sparkArtifactViewSchema = z.object({
   metadata: sparkJsonObjectSchema.default({}),
 });
 
+export const sparkSessionMailMessageViewSchema = z.object({
+  id: z.string().min(1),
+  fromSessionId: z.string().min(1),
+  kind: z.enum(["request", "notification"]),
+  intent: z.string().min(1),
+  subject: z.string().nullable(),
+  body: z.string(),
+  createdAt: sparkIsoDateTimeSchema,
+  readAt: sparkIsoDateTimeSchema.nullable(),
+  ackedAt: sparkIsoDateTimeSchema.nullable(),
+});
+
 export const sparkSessionViewSchema = z.object({
   version: sparkProtocolVersionSchema.default(SPARK_PROTOCOL_VERSION),
   sessionId: z.string().min(1),
@@ -256,6 +268,7 @@ export const sparkSessionViewSchema = z.object({
   runs: z.array(sparkRunViewSchema).default([]),
   tasks: z.array(sparkTaskViewSchema).default([]),
   artifacts: z.array(sparkArtifactViewSchema).default([]),
+  mailbox: z.array(sparkSessionMailMessageViewSchema).optional(),
   createdAt: sparkIsoDateTimeSchema.optional(),
   updatedAt: sparkIsoDateTimeSchema.optional(),
   metadata: sparkJsonObjectSchema.default({}),
@@ -484,6 +497,7 @@ export type SparkRunView = z.infer<typeof sparkRunViewSchema>;
 export type SparkTaskTodoView = z.infer<typeof sparkTaskTodoViewSchema>;
 export type SparkTaskView = z.infer<typeof sparkTaskViewSchema>;
 export type SparkArtifactView = z.infer<typeof sparkArtifactViewSchema>;
+export type SparkSessionMailMessageView = z.infer<typeof sparkSessionMailMessageViewSchema>;
 export type SparkSessionView = z.infer<typeof sparkSessionViewSchema>;
 export type SparkAskQuestionView = z.infer<typeof sparkAskQuestionViewSchema>;
 export type SparkInteractionRequest = z.infer<typeof sparkInteractionRequestSchema>;

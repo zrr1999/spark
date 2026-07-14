@@ -113,6 +113,42 @@ describe("session workbench projection", () => {
     });
   });
 
+  it("projects session mail newest-first with durable read state", () => {
+    const view = buildSessionWorkbenchView({
+      session: session({
+        mailbox: [
+          {
+            id: "mail:older",
+            fromSessionId: "sess_worker",
+            kind: "request",
+            intent: "review.request",
+            subject: "Review the patch",
+            body: "Please review the current diff.",
+            createdAt: "2026-07-13T08:01:00.000Z",
+            readAt: "2026-07-13T08:02:00.000Z",
+            ackedAt: null,
+          },
+          {
+            id: "mail:newer",
+            fromSessionId: "sess_scout",
+            kind: "notification",
+            intent: "research.complete",
+            subject: null,
+            body: "Research is complete.",
+            createdAt: "2026-07-13T08:03:00.000Z",
+            readAt: null,
+            ackedAt: null,
+          },
+        ],
+      }),
+    });
+
+    expect(view.mailbox).toMatchObject([
+      { id: "mail:newer", status: "unread" },
+      { id: "mail:older", status: "read" },
+    ]);
+  });
+
   it("shows changes only for explicit canonical diff markers", () => {
     const view = buildSessionWorkbenchView({
       session: session({

@@ -71,7 +71,7 @@ describe("SparkSessionRegistry", () => {
     ).resolves.toEqual([global]);
   });
 
-  it("creates, binds, lists, and archives sessions", async () => {
+  it("creates, binds, lists, and archives sessions after channel unbind", async () => {
     const registry = await tempRegistry();
     const created = await registry.create({
       workspaceId: "ws_demo",
@@ -96,6 +96,17 @@ describe("SparkSessionRegistry", () => {
       externalKey: "feishu:chat:oc_demo",
     });
     expect(resolved.sessionId).toBe(created.sessionId);
+
+    await expect(registry.archive(created.sessionId)).rejects.toMatchObject({
+      code: "session_channel_bound",
+    } satisfies Partial<SparkSessionRegistryError>);
+    await expect(registry.get(created.sessionId)).resolves.toMatchObject({
+      status: "ready",
+      bindings: [{ kind: "channel", externalKey: "feishu:chat:oc_demo" }],
+    });
+
+    const unbound = await registry.unbind(created.sessionId, "feishu:chat:oc_demo");
+    expect(unbound.bindings).toEqual([]);
 
     const archived = await registry.archive(created.sessionId);
     expect(archived.status).toBe("archived");

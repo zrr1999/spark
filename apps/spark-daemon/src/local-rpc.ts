@@ -32,7 +32,11 @@ import {
   type ChannelNotifyInput,
   type ChannelsConfig,
 } from "@zendev-lab/spark-channels";
-import { loadSparkSessionSnapshot, SparkSessionRegistryError } from "@zendev-lab/spark-session";
+import {
+  loadSparkSessionSnapshot,
+  SparkSessionMailStore,
+  SparkSessionRegistryError,
+} from "@zendev-lab/spark-session";
 import type { SparkPaths } from "@zendev-lab/spark-system";
 import {
   requestSparkDaemonLocalRpcWire,
@@ -205,6 +209,7 @@ interface LocalRpcHandlerOptions {
   channelIngress?: Pick<DaemonChannelIngressRuntime, "status" | "configure" | "reload" | "notify">;
   sessionRegistry?: DaemonSessionRegistry;
   modelControl?: SparkDaemonModelControl;
+  mailStore?: Pick<SparkSessionMailStore, "list">;
 }
 
 type LocalRpcRequest =
@@ -421,6 +426,7 @@ export async function startLocalRpcServer(options: {
   channelIngress?: DaemonChannelIngressRuntime;
   sessionRegistry?: DaemonSessionRegistry;
   modelControl?: SparkDaemonModelControl;
+  mailStore?: Pick<SparkSessionMailStore, "list">;
 }): Promise<LocalRpcServer> {
   const socketPath = localRpcSocketPath(options.paths);
   mkdirSync(dirname(socketPath), { recursive: true, mode: 0o700 });
@@ -434,6 +440,8 @@ export async function startLocalRpcServer(options: {
       daemonCwd: process.cwd(),
       resolveWorkspaceCwd: (workspaceId) => resolveWorkspaceLocalPath(options.db, workspaceId),
     });
+  const mailStore =
+    options.mailStore ?? new SparkSessionMailStore({ sparkHome: options.sparkHome });
   const server = createServer((socket) => {
     handleLocalRpcSocket(
       socket,
@@ -443,6 +451,7 @@ export async function startLocalRpcServer(options: {
       options.eventBus,
       {
         sessionRegistry,
+        mailStore,
         ...(options.channelIngress ? { channelIngress: options.channelIngress } : {}),
         ...(options.modelControl ? { modelControl: options.modelControl } : {}),
       },
@@ -1132,10 +1141,11 @@ export async function handleLocalRpcLine(
           sessionsRoot: join(paths.piAgentDir, "sessions"),
           session,
         });
+        const projected = await projectPendingSessionTurns(paths, snapshot);
         return {
           id: request.id,
           ok: true,
-          result: await projectPendingSessionTurns(paths, snapshot),
+          result: await projectSessionMailbox(options, projected),
         };
       }
       case "session.create": {
@@ -1367,6 +1377,26 @@ async function projectPendingSessionTurns(
         ? snapshot.updatedAt
         : pendingUpdatedAt,
   });
+}
+
+async function projectSessionMailbox(
+  options: LocalRpcHandlerOptions,
+  snapshot: SparkSessionView,
+): Promise<SparkSessionView> {
+  if (!options.mailStore) return snapshot;
+  const messages = await options.mailStore.list(snapshot.sessionId, { includeAcked: true });
+  const mailbox = messages.slice(-50).map((message) => ({
+    id: message.id,
+    fromSessionId: message.fromSessionId,
+    kind: message.kind,
+    intent: message.intent,
+    subject: message.subject,
+    body: message.body,
+    createdAt: message.createdAt,
+    readAt: message.readAt,
+    ackedAt: message.ackedAt,
+  }));
+  return parseSparkSessionView({ ...snapshot, mailbox });
 }
 
 async function enqueueManagedSessionTurn<T>(
