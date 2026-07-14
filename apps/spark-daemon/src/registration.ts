@@ -296,6 +296,10 @@ export function validateRegistrationServerUrl(
     );
   }
 
+  if (parsed.pathname !== "/" || parsed.search || parsed.hash) {
+    throw new Error("Cockpit server URL must be an origin without a path, query, or fragment.");
+  }
+
   if (
     parsed.protocol === "http:" &&
     !isLoopbackHostname(parsed.hostname) &&
@@ -306,7 +310,7 @@ export function validateRegistrationServerUrl(
     );
   }
 
-  return parsed.toString();
+  return `${parsed.origin}/`;
 }
 
 function normalizeConfiguredServerUrl(serverUrl: string): string {
@@ -428,6 +432,26 @@ function serverUrlFromWebSocketUrl(webSocketUrl: string): string {
   return parsed.toString();
 }
 
+function validateRuntimeWebSocketUrl(serverUrl: string, webSocketUrl: string): string {
+  const parsed = new URL(webSocketUrl, serverUrl);
+  if (parsed.protocol === "http:") {
+    parsed.protocol = "ws:";
+  } else if (parsed.protocol === "https:") {
+    parsed.protocol = "wss:";
+  } else if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+    throw new Error("Cockpit runtime WebSocket URL must use ws:// or wss://.");
+  }
+
+  const expectedOrigin = new URL(serverUrl).origin;
+  const actualOrigin = new URL(serverUrlFromWebSocketUrl(parsed.toString())).origin;
+  if (actualOrigin !== expectedOrigin) {
+    throw new Error(
+      `Cockpit returned a cross-origin runtime WebSocket URL (${actualOrigin}); expected ${expectedOrigin}.`,
+    );
+  }
+  return parsed.toString();
+}
+
 function resolveWebSocketUrl(config: SparkDaemonConfig): string {
   if (config.webSocketUrl) {
     return toWebSocketUrl(config.webSocketUrl);
@@ -539,6 +563,7 @@ function persistSparkDaemonCredentials(
     registered: RuntimeRegistrationResponse;
   },
 ): void {
+  const webSocketUrl = validateRuntimeWebSocketUrl(input.serverUrl, input.registered.webSocketUrl);
   writeSparkDaemonConfig(paths, {
     ...current,
     installationId: input.installationId,
@@ -549,7 +574,7 @@ function persistSparkDaemonCredentials(
     runtimeTokenExpiresAt: input.registered.runtimeTokenExpiresAt,
     refreshToken: input.registered.refreshToken,
     refreshTokenExpiresAt: input.registered.refreshTokenExpiresAt,
-    webSocketUrl: input.registered.webSocketUrl,
+    webSocketUrl,
   });
 }
 

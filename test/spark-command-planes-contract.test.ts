@@ -84,6 +84,8 @@ void test("dispatcher, daemon, server, and TUI help snapshots expose the three-p
   assert.match(cockpitHelp, /spark cockpit - Cockpit web UI host/u);
   assert.match(cockpitHelp, /Cockpit is the web UI host, not a fourth command plane/u);
   assert.match(cockpitHelp, /Coordination commands belong under spark server/u);
+  assert.match(cockpitHelp, /SPARK_COCKPIT_PUBLIC_URL=https:\/\//u);
+  assert.match(cockpitHelp, /SPARK_COCKPIT_TRUST_PROXY=loopback/u);
 
   const tuiHelp = sparkTuiCliStrings().helpText;
   assert.match(tuiHelp, /spark daemon\s+daemon execution plane/u);

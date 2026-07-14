@@ -38,7 +38,7 @@ Use this directory as the map of current Spark contracts. Prefer one concise sou
 - [`specs/store-inventory.md`](./specs/store-inventory.md) — local `.spark/` store ownership and cleanup policy.
 - [`specs/turn.md`](./specs/turn.md) — turn/finish packet contract.
 - [`specs/spark-runtime-integration.md`](./specs/spark-runtime-integration.md) — `spark run --json` event schema and third-party scheduler/runtime integration guide.
-- [`specs/spark-cockpit-remote-access.md`](./specs/spark-cockpit-remote-access.md) — single-user token auth, 0.0.0.0 binding, and PWA install guide for remote Cockpit use.
+- [`specs/spark-cockpit-remote-access.md`](./specs/spark-cockpit-remote-access.md) — token auth, custom domains, trusted-proxy URL discovery, and PWA install guide for remote Cockpit use.
 - [`specs/spark-cockpit-notifications.md`](./specs/spark-cockpit-notifications.md) — opt-in browser/PWA notifications for long-task terminal states and blockers.
 - [`specs/tools.md`](./specs/tools.md) — public command/tool vocabulary and runtime behavior.
 - [`specs/roles-api.md`](./specs/roles-api.md), [`specs/roles-boundaries.md`](./specs/roles-boundaries.md), [`specs/roles-run-modes.md`](./specs/roles-run-modes.md) — role contracts and launch modes.

@@ -122,6 +122,7 @@ pnpm run build                                    # daemon + cockpit production 
 pnpm run preview                                  # start the local cockpit dev server
 spark cockpit                                     # start the built cockpit production server through the CLI
 HOST=0.0.0.0 SPARK_COCKPIT_REMOTE_TOKEN=... spark cockpit  # opt-in single-user remote/PWA access; see docs/specs/spark-cockpit-remote-access.md
+HOST=127.0.0.1 SPARK_COCKPIT_PUBLIC_URL=https://spark.example.com SPARK_COCKPIT_TRUST_PROXY=loopback SPARK_COCKPIT_REMOTE_TOKEN=... spark cockpit  # custom domain behind a local reverse proxy
 pnpm install -g .                                 # link the unified spark CLI
 pnpm run publish                                  # validate, build, publish public packages
 ```

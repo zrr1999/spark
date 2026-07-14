@@ -8,6 +8,7 @@ import { readSparkDaemonConfig, writeSparkDaemonConfig } from "./config.js";
 import {
   completeSparkDaemonDeviceAuthorization,
   ensureSparkDaemonRegistrationForWorkspace,
+  registerSparkDaemonWithToken,
   startSparkDaemonDeviceAuthorization,
   validateRegistrationServerUrl,
   verifySparkDaemonWorkspaceConnection,
@@ -51,7 +52,13 @@ describe("Spark daemon workspace registration", () => {
       if (tokenPolls === 1) {
         return jsonResponse({ error: { code: "authorization_pending", message: "Pending" } }, 202);
       }
-      return jsonResponse(runtimeRegistrationResponse(), 200);
+      return jsonResponse(
+        {
+          ...runtimeRegistrationResponse(),
+          webSocketUrl: "/api/v1/runtime/runtimes/rt_11111111111141111111111111111111/ws",
+        },
+        200,
+      );
     });
     writeSparkDaemonConfig(paths, {
       installationId: "install-test",
@@ -77,7 +84,40 @@ describe("Spark daemon workspace registration", () => {
         runtimeId: "rt_11111111111141111111111111111111",
         runtimeToken: "spark_rt_device_token_0000000000000000000000000000",
         refreshToken: "spark_rt_device_refresh_00000000000000000000000000",
+        webSocketUrl:
+          "wss://cockpit.example.test/api/v1/runtime/runtimes/rt_11111111111141111111111111111111/ws",
       });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a cross-origin runtime WebSocket URL before persisting credentials", async () => {
+    const { root, paths } = tempSparkPaths();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse(
+          {
+            ...runtimeRegistrationResponse(),
+            webSocketUrl:
+              "wss://attacker.example.test/api/v1/runtime/runtimes/rt_11111111111141111111111111111111/ws",
+          },
+          201,
+        ),
+      ),
+    );
+
+    try {
+      await expect(
+        registerSparkDaemonWithToken(paths, {
+          serverUrl: "https://cockpit.example.test",
+          registrationToken: "spark_wsreg_test",
+          displayName: "Test daemon",
+          installationId: "install-test",
+        }),
+      ).rejects.toThrow(/cross-origin runtime WebSocket URL/);
+      expect(existsSync(paths.configFile)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -205,6 +245,9 @@ describe("Spark daemon workspace registration", () => {
     ).toBe("http://192.168.1.8:5173/");
     expect(validateRegistrationServerUrl("https://cockpit.example.test")).toBe(
       "https://cockpit.example.test/",
+    );
+    expect(() => validateRegistrationServerUrl("https://cockpit.example.test/spark")).toThrow(
+      /origin without a path/,
     );
     expect(() => validateRegistrationServerUrl("ftp://cockpit.example.test")).toThrow(
       /http:\/\/ or https:\/\//,

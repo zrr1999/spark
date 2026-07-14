@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { configureCockpitPublicUrl } from "../src/lib/server/public-url.js";
 import { getDatabase } from "../src/lib/server/db.js";
 import { isRemoteAccessConfigured } from "../src/lib/server/remote-access.js";
 import { attachRuntimeWebSocket, authenticateRuntimeToken } from "../src/lib/server/runtime-ws.js";
@@ -7,7 +8,7 @@ import { WebSocketServer } from "ws";
 
 const host = process.env.HOST ?? "127.0.0.1";
 const port = Number(process.env.PORT ?? "5173");
-process.env.ORIGIN ??= `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}`;
+const publicUrl = configureCockpitPublicUrl(process.env, { host, port });
 
 type SvelteKitHandler = (request: IncomingMessage, response: ServerResponse) => void;
 const buildHandlerUrl = new URL("../build/handler.js", import.meta.url);
@@ -47,12 +48,17 @@ server.on("close", () => stopWebPushDispatcher());
 
 server.listen(port, host, () => {
   console.log(`Spark Cockpit server listening on http://${host}:${port}`);
-  if (host === "0.0.0.0") {
+  if (publicUrl.mode === "fixed") {
+    console.log(`Spark Cockpit public URL: ${publicUrl.publicUrl}`);
+  } else if (publicUrl.mode === "proxy") {
+    console.log("Spark Cockpit public URL is derived from its trusted loopback proxy.");
+  }
+  if (host === "0.0.0.0" || publicUrl.mode !== "local") {
     if (isRemoteAccessConfigured()) {
       console.log("Spark Cockpit remote access is protected by SPARK_COCKPIT_REMOTE_TOKEN.");
     } else {
       console.warn(
-        "Spark Cockpit is listening on all interfaces; non-localhost access is blocked until SPARK_COCKPIT_REMOTE_TOKEN is set.",
+        "Spark Cockpit has a remote access path; protected UI/API requests are blocked until SPARK_COCKPIT_REMOTE_TOKEN is set.",
       );
     }
   }

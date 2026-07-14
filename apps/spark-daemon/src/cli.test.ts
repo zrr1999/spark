@@ -2412,8 +2412,7 @@ function deviceLoginRegistrationResponse() {
     refreshToken: "spark_rt_device_refresh_00000000000000000000000000",
     refreshTokenExpiresAt: "2026-08-12T01:00:00.000Z",
     protocolVersion: runtimeProtocolVersion,
-    webSocketUrl:
-      "wss://cockpit.example.test/api/v1/runtime/runtimes/rt_11111111111141111111111111111111/ws",
+    webSocketUrl: "/api/v1/runtime/runtimes/rt_11111111111141111111111111111111/ws",
     heartbeatIntervalMs: 15_000,
     staleAfterMs: 45_000,
     registeredAt: "2026-07-13T01:00:00.000Z",
