@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -13,6 +13,7 @@ void test("SparkDaemonQueue enqueues, reads, and marks processed session.run tas
     const entry = await queue.enqueue({ type: "session.run", sessionId: "s1", prompt: "hello" });
 
     assert.deepEqual(await queue.list("inbox"), [entry.fileName]);
+    assert.deepEqual(await readdir(queue.inboxDir), [entry.fileName]);
     const loaded = await queue.readEntry(entry.fileName);
     assert.equal(loaded.payload.task.type, "session.run");
     assert.equal(loaded.payload.task.sessionId, "s1");

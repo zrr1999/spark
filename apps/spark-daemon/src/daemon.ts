@@ -264,7 +264,8 @@ async function maybeStartChannelIngress(
   options: StartSparkDaemonOptions,
 ): Promise<DaemonChannelIngressRuntime | null> {
   if (options.once || options.runQueue === false) return null;
-  const sparkHome = process.env.SPARK_HOME?.trim() || join(homedir(), ".spark");
+  const sparkHome =
+    (options.sparkHome ?? process.env.SPARK_HOME?.trim()) || join(homedir(), ".spark");
   const queue = options.queue ?? new SparkDaemonQueue({ paths: options.paths });
   const runtime =
     options.channelIngress ??

@@ -47,6 +47,7 @@ function webSocketDataToString(data: unknown): string {
 
 interface TestHarness {
   paths: ReturnType<typeof resolveSparkPaths>;
+  sparkHome: string;
   db: ReturnType<typeof openSparkDaemonDatabase>;
   workspace: ReturnType<typeof addWorkspace>;
   cleanup(): void;
@@ -65,6 +66,7 @@ function makeHarness(): TestHarness {
     },
   });
   const db = openSparkDaemonDatabase(paths);
+  const sparkHome = join(root, "spark-home");
   const workspace = addWorkspace(db, {
     localWorkspaceKey: "local-default",
     displayName: "Local default",
@@ -72,6 +74,7 @@ function makeHarness(): TestHarness {
   });
   return {
     paths,
+    sparkHome,
     db,
     workspace,
     cleanup() {
@@ -311,6 +314,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
     try {
       await startSparkDaemon({
         paths: harness.paths,
+        sparkHome: harness.sparkHome,
         db: harness.db,
         config: {
           installationId: "install-test",
@@ -331,6 +335,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
       const shutdown = new AbortController();
       const running = startSparkDaemon({
         paths: harness.paths,
+        sparkHome: harness.sparkHome,
         db: harness.db,
         config: {
           installationId: "install-test",
@@ -384,6 +389,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
 
       running = startSparkDaemon({
         paths: harness.paths,
+        sparkHome: harness.sparkHome,
         db: harness.db,
         config,
         signal: shutdown.signal,
@@ -435,6 +441,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
       const executed: string[] = [];
       const running = startSparkDaemon({
         paths: harness.paths,
+        sparkHome: harness.sparkHome,
         db: harness.db,
         config: {
           installationId: "install-test",
@@ -560,6 +567,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
       const queue = new SparkDaemonQueue({ paths: harness.paths });
       const running = startSparkDaemon({
         paths: harness.paths,
+        sparkHome: harness.sparkHome,
         db: harness.db,
         config: {
           installationId: "install-test",

@@ -50,7 +50,7 @@ export class SparkDaemonQueue {
     const sequence = queueFileSequence.toString().padStart(6, "0");
     const fileName = `${Date.now()}_${sequence}_${payload.task.type.replace(/\./g, "_")}_${randomUUID().slice(0, 8)}.json`;
     const filePath = join(this.inboxDir, fileName);
-    await writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    await writeFileAtomically(filePath, `${JSON.stringify(payload, null, 2)}\n`);
     return { fileName, filePath, payload };
   }
 
@@ -107,7 +107,7 @@ export class SparkDaemonQueue {
     };
     const serializedResult = serializeQueueResult(result);
     if (serializedResult !== undefined) payload.result = serializedResult;
-    await writeFile(inboxPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    await writeFileAtomically(inboxPath, `${JSON.stringify(payload, null, 2)}\n`);
     await rename(inboxPath, target);
     return target;
   }
@@ -133,7 +133,7 @@ export class SparkDaemonQueue {
         error: errorText,
       };
     }
-    await writeFile(inboxPath, `${JSON.stringify(failedPayload, null, 2)}\n`, "utf8");
+    await writeFileAtomically(inboxPath, `${JSON.stringify(failedPayload, null, 2)}\n`);
     await rename(inboxPath, failedPath);
     return failedPath;
   }
@@ -165,6 +165,17 @@ export class SparkDaemonQueue {
 
 function compareStrings(left: string, right: string): number {
   return left.localeCompare(right);
+}
+
+async function writeFileAtomically(filePath: string, contents: string): Promise<void> {
+  const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporaryPath, contents, "utf8");
+    await rename(temporaryPath, filePath);
+  } catch (error) {
+    await unlink(temporaryPath).catch(() => undefined);
+    throw error;
+  }
 }
 
 function parseQueueEntry(fileName: string, filePath: string, raw: string): SparkDaemonQueueEntry {
