@@ -125,72 +125,8 @@ graft_delete { from: "scratch:...", path: "obsolete.txt" }
 graft_candidate_from_scratch { scratch: "scratch:...", expected: ["tests_pass"], message: "ready" }
 ```
 
-## Replacement readiness
+## Runtime constraints
 
-As of the 2026-06-18 validation pass, spark-graft is ready to cover the normal UTF-8 text file workflow that agents previously handled with direct `read`/`write`/`edit` tools, provided the agent explicitly uses `graft_*` tools and keeps the lifecycle explicit:
+The extension invokes `${GRAFT_BIN:-graft} --cwd <cwd>`, uses JSON mode for non-help commands, and sends large scratch content/edits over stdin. `GRAFT_BASE_REF` is only an implicit first-operation base when neither `base` nor `from` is supplied.
 
-```text
-graft_init -> graft_write/read/edit/delete -> graft_candidate_from_scratch
-           -> graft_validate -> graft_admit -> graft_show/graft_evidence
-           -> graft_materialize --dry-run
-```
-
-Validated coverage:
-
-- create/overwrite UTF-8 text files with `graft_write`;
-- inspect full files or bounded slices with `graft_read` hashline anchors;
-- replace, prepend, and append lines with strict `graft_edit` anchors;
-- delete files with `graft_delete`;
-- continue scratches by passing returned `scratch:*` ids through `from`;
-- create candidates, validate, admit patches, inspect evidence/change, and materialize dry-run output;
-- run the above from `pi -p` with built-in file tools disabled and no direct file-tool fallback.
-
-Not covered as replacement-ready: binary/image/directory editing, automatic candidate/admit side effects, automatic cwd materialization, external promote/sync flows, and hiding or removing Pi built-in tools globally. Unsupported file kinds should fail loudly instead of falling back to disk access.
-
-Validation evidence used:
-
-```bash
-pnpm --filter @zendev-lab/spark-graft run check
-node --experimental-strip-types --test test/spark-graft-extension.test.ts
-PI_GRAFT_E2E=1 node --experimental-strip-types --test test/spark-graft-extension.test.ts
-```
-
-Final `pi -p` validation used an explicit graft-only tool allowlist and produced `patch:e0548b83a15a` from a workflow covering read slices, replace, prepend, append, delete, candidate, validate/admit, show/evidence, and materialize dry-run.
-
-## Runtime assumptions
-
-The extension shells `GRAFT_BIN` when set, otherwise `graft`, always passing `--cwd <cwd>`. Non-help paths use `graft --json ...`; help/explain paths keep plain text output. `GRAFT_BASE_REF` is process-scoped environment, inherited by the `graft` subprocess, and is only an implicit first-operation base for scratch/open/read/write/edit/delete when explicit `base`/`--base` and `from`/`--from` are absent. Large scratch payloads go over stdin with `--content-stdin` and `--edits-stdin` so argv stays small and literal `"-"` file content remains possible.
-
-spark-graft never passes `--socket`, never resolves `$GRAFT_HOME/run/daemon.sock`, and never starts `graftd` itself. If the CLI needs a daemon, Rust `graft`/`crates/graft-client` owns socket discovery, stale-socket handling, auto-start, and the server↔client wire contract. Set `GRAFT_BIN` if `graft` is not on `PATH`; daemon binary discovery remains a graft CLI concern.
-
-The current implementation is UTF-8-text first. Binary, image, and directory behavior follows the current graft scratch wire errors and should fail loudly rather than falling back to disk reads or writes.
-
-## Risk review
-
-Verdict: **ready as the explicit UTF-8 text replacement path, with known caveats**.
-
-- P1 — future default tool replacement would change core Pi semantics. Current mitigation: scratch operations are explicit `graft_*` tools, while Pi built-ins remain available.
-- P1 — scratch state is not durable across daemon restart. Mitigation: scratch ids are returned from each tool and spark-graft's convenience state is optional; lost scratch ids fail through graftd wire errors instead of hidden recovery. Multi-workspace scratch isolation is verified through graftd's normalized workspace-route engine map and `tests/workspace_daemon_isolation_smoke.sh`.
-- P1 — current graft constraint/admission behavior can still require project-specific policy tuning. Mitigation: `graft_candidate_from_scratch`, `graft_validate`, and `graft_admit` are explicit separate steps; graft_read/graft_write/graft_edit/graft_delete never auto-create candidates or auto-admit.
-- P2 — file kind support is text-first. Mitigation: no passthrough fallback is implemented, so unsupported file kinds fail loudly.
-- P2 — integration depends on Pi's tool registration surface staying stable. Mitigation: `@zendev-lab/spark-graft` exports a narrow boundary type and the registration test asserts that it installs no slash commands and the expected tools.
-
-## Validation
-
-Focused static check:
-
-```bash
-pnpm --filter @zendev-lab/spark-graft run check
-```
-
-Default test (real graftd E2E skipped unless opted in):
-
-```bash
-node --experimental-strip-types --test test/spark-graft-extension.test.ts
-```
-
-Real graftd E2E:
-
-```bash
-PI_GRAFT_E2E=1 node --experimental-strip-types --test test/spark-graft-extension.test.ts
-```
+Rust `graft` owns socket discovery, daemon startup, and wire translation; this extension never passes a socket or starts `graftd`. Scratch operations are UTF-8 text only. Binary, image, directory, or unknown scratch operations fail explicitly and never fall back to direct disk access. Scratch state is daemon-instance scoped unless pinned.

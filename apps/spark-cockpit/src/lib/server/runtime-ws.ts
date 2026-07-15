@@ -1,1 +1,1 @@
-export * from "@zendev-lab/spark-server/runtime-ws";
+export * from "@zendev-lab/spark-coordination/runtime-ws";

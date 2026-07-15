@@ -1,6 +1,10 @@
 import { realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
+import type {
+  ExtensionInteractionRequest,
+  ExtensionInteractionResponse,
+} from "@zendev-lab/spark-extension-api";
 
 export type SparkHeadlessRoleRunStatus =
   | "queued"
@@ -15,16 +19,25 @@ export interface SparkHeadlessSessionRunInput {
   sessionId: string;
   prompt: string;
   model?: string;
+  thinkingLevel?: string;
   reset?: boolean;
   signal?: AbortSignal;
   timeoutMs?: number;
   sparkHome?: string;
   sessionSurface?: "local" | "channel";
+  sessionSource?: "tui" | "web" | "channel" | "daemon" | "session";
+  invocationId?: string;
+  sessionQuestionChain?: readonly string[];
   allowedTools?: readonly string[];
   /** Optional base identity/surface prompt; defaults to Spark host identity. */
   systemPrompt?: string;
   /** Display-safe metadata persisted on the submitted user message only. */
   messageMetadata?: Record<string, unknown>;
+  /** Tool approval method inherited by the headless host. */
+  approvalMethod?: "skip" | "human" | "auto";
+  approvalRejectAction?: "ask" | "deny";
+  /** Daemon-owned UI bridge used by blocking and async structured asks. */
+  interaction?: (request: ExtensionInteractionRequest) => Promise<ExtensionInteractionResponse>;
   onEvent?: (event: unknown) => void | Promise<void>;
 }
 

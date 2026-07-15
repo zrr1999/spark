@@ -50,7 +50,7 @@
       var(--color-canvas);
     color: var(--color-ink);
     display: grid;
-    min-height: 100vh;
+    min-height: 100dvh;
     padding: clamp(18px, 5vw, 64px);
   }
 
@@ -62,7 +62,7 @@
 
   .eyebrow {
     color: var(--color-primary);
-    font-size: 12px;
+    font-size: var(--text-caption);
     font-weight: 850;
     letter-spacing: 0.08em;
     margin: 0;
@@ -78,23 +78,23 @@
 
   .lede {
     color: var(--color-ink-subtle);
-    line-height: 1.6;
+    line-height: var(--leading-body);
     margin: 0;
   }
 
   form {
     display: grid;
-    gap: 10px;
+    gap: var(--spacing-sm);
   }
 
   :global(.login-submit) { width: 100%; }
 
   .notice,
   .error {
-    border-radius: 12px;
-    font-size: 14px;
-    line-height: 1.5;
-    padding: 12px 14px;
+    border-radius: var(--rounded-lg);
+    font-size: var(--text-body);
+    line-height: var(--leading-body);
+    padding: var(--spacing-sm) var(--spacing-md);
   }
 
   .notice {

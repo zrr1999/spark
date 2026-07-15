@@ -5,7 +5,11 @@ import {
   saveCurrentProjectRef,
   saveSessionPhase,
 } from "./current-project-state.ts";
-import type { SparkAgentPhase, SparkPlanningModeSource } from "./current-project-state-schema.ts";
+import {
+  normalizeSparkAgentPhase,
+  type SparkAgentPhase,
+  type SparkPlanningModeSource,
+} from "./current-project-state-schema.ts";
 import type { SparkActiveLensDriveState } from "./spark-drive-state.ts";
 import type { SparkSessionContext } from "./session-identity.ts";
 
@@ -51,7 +55,7 @@ export async function loadSparkPhase(
   ctx?: SparkActiveLensContext,
 ): Promise<SparkSessionPhaseState> {
   const state = await loadCurrentProjectState(cwd, ctx);
-  const phase = ctx?.sparkActiveLens?.phase ?? state?.phase ?? "research";
+  const phase = normalizeSparkAgentPhase(ctx?.sparkActiveLens?.phase) ?? state?.phase ?? "plan";
   return state?.projectRef ? { phase, projectRef: state.projectRef } : { phase };
 }
 
@@ -100,7 +104,6 @@ export async function clearSparkMode(
 }
 
 export const SPARK_SESSION_PHASE_CYCLE: readonly SparkSessionPhase[] = [
-  "research",
   "plan",
   "implement",
 ] as const;
@@ -109,8 +112,8 @@ export const SPARK_SESSION_MODE_CYCLE = SPARK_SESSION_PHASE_CYCLE;
 
 export function nextSparkSessionPhase(current: SparkSessionPhase): SparkSessionPhase {
   const index = SPARK_SESSION_PHASE_CYCLE.indexOf(current);
-  if (index < 0) return "research";
-  return SPARK_SESSION_PHASE_CYCLE[(index + 1) % SPARK_SESSION_PHASE_CYCLE.length] ?? "research";
+  if (index < 0) return "plan";
+  return SPARK_SESSION_PHASE_CYCLE[(index + 1) % SPARK_SESSION_PHASE_CYCLE.length] ?? "plan";
 }
 
 /** @deprecated Use nextSparkSessionPhase. */

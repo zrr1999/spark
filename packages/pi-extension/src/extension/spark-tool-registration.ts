@@ -38,7 +38,7 @@ export interface SparkToolContext {
   model?: SparkSessionModelRef;
   runRole?: ExtensionRoleRunner;
   sparkActiveLens?: {
-    phase: "research" | "plan" | "implement";
+    phase: "plan" | "implement";
     drive?: SparkDriveModeInput;
   };
   isIdle?: () => boolean;

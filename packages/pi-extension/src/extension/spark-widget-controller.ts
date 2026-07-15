@@ -20,10 +20,12 @@ import {
 } from "./session-state.ts";
 import {
   assignTodoDisplayNumber,
+  loadIndependentTodos,
   loadTodoDisplayNumberState,
   saveTodoDisplayNumberState,
   taskTodoDisplayKey,
 } from "./session-todos.ts";
+import { independentTodoDisplayKey } from "@zendev-lab/spark-tasks";
 import { renderSparkProjectKindDisplay } from "./project-kind-registry.ts";
 import { deriveSparkDriveMode, sparkActiveLens } from "./spark-drive-state.ts";
 import { ensureSparkGraphInvariants, isPlaceholderProjectTitle } from "./spark-graph-invariants.ts";
@@ -53,6 +55,7 @@ const piExtensionWidgetControllerDeps: SparkWidgetControllerDeps = {
     }),
   loadTodoDisplayNumberState: (cwd, ctx) => loadTodoDisplayNumberState(cwd, ctx),
   saveTodoDisplayNumberState: (cwd, ctx, state) => saveTodoDisplayNumberState(cwd, ctx, state),
+  loadIndependentTodos: (cwd, ctx) => loadIndependentTodos(cwd, ctx),
   currentSparkProject: (cwd, ctx, graph) => currentSparkProject(cwd, ctx, graph),
   loadSessionGoal: (cwd, ctx) => loadSessionGoal(cwd, ctx),
   loadSessionLoop: (cwd, ctx) => loadSessionLoop(cwd, ctx),
@@ -70,6 +73,7 @@ const piExtensionWidgetControllerDeps: SparkWidgetControllerDeps = {
   taskClaimedBy,
   assignTodoDisplayNumber,
   taskTodoDisplayKey,
+  independentTodoDisplayKey,
 };
 
 /** Compatibility shim: widget rendering/controller logic lives in spark-host. */

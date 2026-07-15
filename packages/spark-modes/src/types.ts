@@ -3,7 +3,7 @@
  *
  * A **mode** is a host-defined per-turn operating value. Spark uses mode for
  * the derived drive family (`assist | loop | goal | workflow`) and keeps
- * `research | plan | implement` as the separate session phase/lens axis.
+ * `plan | implement` as the separate session phase/lens axis.
  *
  * A **driver** is what propels the current turn. It owns any durable state in
  * its own domain package (goal objective lives in a goal package, workflow run
@@ -18,7 +18,7 @@
 export type Mode = string;
 
 /** The built-in operating-lens subset that auto-classification may target. */
-export const BUILTIN_MODES = ["research", "plan", "implement"] as const;
+export const BUILTIN_MODES = ["plan", "implement"] as const;
 export type BuiltinMode = (typeof BUILTIN_MODES)[number];
 
 /** What propels the current turn. `assist` is the first-class default. */

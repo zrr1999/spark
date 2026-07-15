@@ -1,24 +1,7 @@
-# spark
+# @zendev-lab/pi-extension
 
-High-level Spark command and policy facade for Spark hosts. User-facing entry points are intent-specific commands plus canonical tools.
+Pi-compatible Spark command and policy facade. It registers lightweight default behavior plus `/plan`, `/implement`, `/goal`, `/loop`, `/workflow`, Spark widgets, and canonical owner-package tools.
 
-Naming note: current workspace packages still use several `pi-*` import specifiers until the staged rename lands. The selected target concept is documented in [`../../docs/architecture/capabilities-ui.md`](../../docs/architecture/capabilities-ui.md): Spark-owned capabilities move to `spark-*`, public tool names stay stable, and `pi-btw` remains out of scope.
+The facade does not own task, artifact, workflow, role, session, or execution stores. It composes those package APIs through the host-neutral extension contract and must not import Spark app runtimes.
 
-It wires together Spark mode/policy code and capability packages, while package-specific ownership stays below:
-
-- `spark-tasks` (currently `@zendev-lab/spark-tasks`) owns project/task/TODO graph state, readiness, optional role hints, claims, and the canonical `task_read`, `task_write`, and `assign` tools.
-- `spark-workflows` (currently `@zendev-lab/spark-workflows`) owns saved workflow discovery/runtime primitives and `.spark/workflow-runs.json` workflow-run state.
-- `spark-loop` (currently `@zendev-lab/spark-loop`) owns reusable loop and goal state/continuation prompt primitives; Spark owns the project-bound `/loop` and `/goal` command facades.
-- `spark-artifacts` (currently `@zendev-lab/spark-artifacts`) owns artifact metadata/blobs and provenance.
-- `spark-learnings` (currently `@zendev-lab/spark-learnings`) owns evidence-backed `.learnings/` records and the canonical `learning` tool.
-- `spark-ask`, `spark-context`, `spark-recall`, `spark-cue`, `spark-graft`, and `spark-roles` are the selected target names for the remaining non-`btw` capability packages.
-- `@zendev-lab/spark-runtime` adapts one Spark task to one concrete role run and records task/run outcomes.
-
-Patch/candidate workflows belong to the Graft capability package: use explicit Graft scratch/candidate tools, or an explicit extension role for patcher-style child runs so the child receives only relevant domain tools and must escalate unclear instructions upward instead of editing directly.
-
-Thin-shim migration notes:
-
-- The Spark widget renderer now lives in `@zendev-lab/spark-host/spark-widget`; `packages/pi-extension/src/ui/spark-widget.ts` is a compatibility re-export for historical imports.
-- The command registration and foreground-driver aggregation implementation now lives in `@zendev-lab/spark-host/spark-command-registration`; pi-extension keeps compatibility shims that bind the stable Pi command names and inject Spark package services without taking a dependency on `@zendev-lab/spark-tui`.
-
-The Spark widget renders tasks as `@name: title` and keeps longer task instructions in `description`.
+Public task execution uses `task_read`, `task_write`, and `assign`. Anonymous role calls use `role`; persistent continuity and mail use `session`. Patch/candidate work uses explicit Graft tools.

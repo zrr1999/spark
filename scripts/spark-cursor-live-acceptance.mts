@@ -12,7 +12,7 @@ import {
 } from "../packages/spark-ai/src/index.ts";
 
 const ACCEPTANCE_TOKEN = "SPARK_CURSOR_LIVE_OK";
-const FORBIDDEN_OUTPUT_FIELD = /authorization|bearer|cookie|apiKey|sessionCredential/iu;
+const FORBIDDEN_OUTPUT_FIELD = /authorization|bearer|cookie|token|apiKey|sessionCredential/iu;
 
 if (process.env.SPARK_CURSOR_LIVE_TEST !== "1") {
   throw new Error(

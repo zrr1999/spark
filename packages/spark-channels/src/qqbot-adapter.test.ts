@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { QqbotAdapter } from "./qqbot-adapter.ts";
 import {
   isQqbotGroupAllowed,
@@ -176,5 +176,37 @@ describe("QqbotAdapter", () => {
     expect(adapter.reply).toBeUndefined();
     await adapter.send({ recipient: "c2c:u1", text: "hi" });
     expect(transport.sent).toEqual([{ recipient: "c2c:u1", text: "hi" }]);
+  });
+
+  it("delivers native interactions separately from text ingress", async () => {
+    const transport = new FakeChannelTransport();
+    const onMessage = vi.fn();
+    const onInteraction = vi.fn();
+    const adapter = new QqbotAdapter({
+      id: "qq-main",
+      config: baseConfig,
+      transport,
+      onMessage,
+      onInteraction,
+    });
+    await adapter.start();
+
+    const event = {
+      adapter: "qqbot" as const,
+      interactionId: "interaction-1",
+      actorId: "u1",
+      scene: "c2c" as const,
+      recipient: "c2c:u1",
+      buttonData: "opaque-token",
+    };
+    await transport.emitInteraction(event);
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onInteraction).toHaveBeenCalledWith({ ...event, adapterId: "qq-main" });
+    expect(
+      adapter.parseInbound({ event_type: "INTERACTION_CREATE", d: { id: "interaction-1" } }),
+    ).toBeUndefined();
+
+    await adapter.stop();
   });
 });

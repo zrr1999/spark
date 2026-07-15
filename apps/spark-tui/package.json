@@ -25,18 +25,25 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.80.6",
+    "@zendev-lab/pi-extension": "workspace:^",
     "@zendev-lab/spark-ai": "workspace:^",
+    "@zendev-lab/spark-ask": "workspace:^",
     "@zendev-lab/spark-channels": "workspace:^",
+    "@zendev-lab/spark-cue": "workspace:^",
     "@zendev-lab/spark-extension-api": "workspace:^",
     "@zendev-lab/spark-files": "workspace:^",
+    "@zendev-lab/spark-graft": "workspace:^",
     "@zendev-lab/spark-host": "workspace:^",
     "@zendev-lab/spark-i18n": "workspace:^",
+    "@zendev-lab/spark-memory": "workspace:^",
     "@zendev-lab/spark-modes": "workspace:^",
     "@zendev-lab/spark-protocol": "workspace:^",
+    "@zendev-lab/spark-roles": "workspace:^",
     "@zendev-lab/spark-session": "workspace:^",
     "@zendev-lab/spark-system": "workspace:^",
     "@zendev-lab/spark-tasks": "workspace:^",
     "@zendev-lab/spark-tui": "workspace:^",
-    "@zendev-lab/spark-turn": "workspace:^"
+    "@zendev-lab/spark-turn": "workspace:^",
+    "@zendev-lab/spark-web": "workspace:^"
   }
 }

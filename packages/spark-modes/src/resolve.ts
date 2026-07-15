@@ -9,7 +9,7 @@ import type { Mode, TurnDriver } from "./types.ts";
  * 2. `suggest` — the drive/host's per-turn classification (e.g. a regex +
  *    project-state heuristic for the assist drive, or a goal/loop/workflow
  *    drive's own per-tick choice).
- * 3. `fallback` — the standing default lens (defaults to `"research"`).
+ * 3. `fallback` — the standing default lens (defaults to `"plan"`).
  *
  * A selection or suggestion is only honored when it names a registered mode;
  * unknown ids fall through to the next source so a stale persisted/typo'd value
@@ -32,7 +32,7 @@ export interface ResolvedActiveMode {
 
 export function resolveActiveMode(input: ResolveActiveModeInput): ResolvedActiveMode {
   const { registry, driver } = input;
-  const fallback = input.fallback ?? "research";
+  const fallback = input.fallback ?? "plan";
 
   if (input.explicitSelection && registry.has(input.explicitSelection)) {
     return { mode: input.explicitSelection, driver, source: "explicit" };

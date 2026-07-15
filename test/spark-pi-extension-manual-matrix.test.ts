@@ -22,6 +22,7 @@ void test("Pi extension manual matrix report covers current extension surfaces",
     "task_read",
     "task_write",
     "assign",
+    "todo",
     "goal",
     "loop",
     "repro",
@@ -61,7 +62,7 @@ void test("Pi extension manual matrix report covers current extension surfaces",
   assert.match(drive.loopClear, /cleared|No Spark loop/i);
   assert.match(drive.reproStatus, /Stage:|manual repro focus|Acceptance/u);
   assert.match(drive.reproStop, /stopped|cleared|No Spark repro/i);
-  assert.match(drive.phaseResearch, /research/i);
+  assert.match(drive.removedPhaseRejected, /plan, implement, status/i);
   assert.match(drive.phasePlan, /plan/i);
   assert.match(drive.phaseImplement, /implement/i);
 
@@ -120,6 +121,7 @@ async function loadReportOrFixture(): Promise<any> {
             "task_read",
             "task_write",
             "assign",
+            "todo",
             "goal",
             "loop",
             "repro",
@@ -158,7 +160,7 @@ async function loadReportOrFixture(): Promise<any> {
           loopClear: "cleared",
           reproStatus: "Stage:",
           reproStop: "stopped",
-          phaseResearch: "research",
+          removedPhaseRejected: "phase action must be one of: plan, implement, status",
           phasePlan: "plan",
           phaseImplement: "implement",
         },

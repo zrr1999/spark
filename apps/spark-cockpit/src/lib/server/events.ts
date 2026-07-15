@@ -1,1 +1,1 @@
-export * from "@zendev-lab/spark-server/events";
+export * from "@zendev-lab/spark-coordination/events";

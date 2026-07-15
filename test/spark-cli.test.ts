@@ -84,7 +84,7 @@ function fakeHeadlessDaemonClient(
     daemonStatus: async () => ({
       observedAt: now,
       servers: [],
-      queue: { inbox: 0, processed: 0, failed: 0 },
+      invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
     }),
     workspaceEnsureLocal: async () => workspace,
     workspaceClientAttach: async () => ({ client: clientLease, workspace, observedAt: now }),
@@ -116,17 +116,7 @@ function fakeHeadlessDaemonClient(
     },
     turnSubmit: async (_paths, input) => {
       submissions.push(input);
-      return {
-        fileName: "turn.json",
-        filePath: "/tmp/turn.json",
-        task: {
-          type: "session.run" as const,
-          sessionId: input.sessionId,
-          prompt: input.prompt,
-          ...(input.reset === undefined ? {} : { reset: input.reset }),
-        },
-        observedAt: now,
-      };
+      return { invocationId: "inv_turn", status: "queued" as const, acceptedAt: now };
     },
   } satisfies SparkDaemonClientOptions;
 }
@@ -150,7 +140,7 @@ void test("runSparkCli keeps explicit print mode usable without an interactive t
     assert.equal(code, 0);
     assert.equal(submissions.length, 1);
     assert.equal(submissions[0]?.prompt, "hello spark");
-    assert.match(logs.join("\n"), /turn\.json/u);
+    assert.match(logs.join("\n"), /inv_turn/u);
   } finally {
     console.log = previousLog;
   }
@@ -180,8 +170,8 @@ void test("runSparkCli JSON print emits documented JSONL event order", async () 
     );
     assert.deepEqual((events[3] as { followUp?: string[] }).followUp, ["hello spark"]);
     assert.equal(
-      (events[4]?.result as { result?: { fileName?: string } })?.result?.fileName,
-      "turn.json",
+      (events[4]?.result as { result?: { invocationId?: string } })?.result?.invocationId,
+      "inv_turn",
     );
   } finally {
     console.log = previousLog;
@@ -197,24 +187,18 @@ void test("handleSparkRpcLine abort cancels the last submitted daemon turn", asy
     daemonStatus: async () => ({
       observedAt: now,
       servers: [],
-      queue: { inbox: 0, processed: 0, failed: 0 },
+      invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
     }),
     turnSubmit: async (_paths, input) => {
       submissions.push(input);
-      return {
-        fileName: "turn-file.json",
-        filePath: "/tmp/turn-file.json",
-        task: { type: "session.run" as const, ...input },
-        observedAt: now,
-      };
+      return { invocationId: "inv_turn_file", status: "queued" as const, acceptedAt: now };
     },
     turnCancel: async (_paths, input) => {
       cancellations.push(input);
       return {
         invocationId: input.invocationId,
-        cancelled: true,
-        message: `Cancellation signalled for ${input.invocationId}`,
-        observedAt: now,
+        status: "running" as const,
+        cancelRequested: true,
       };
     },
   } satisfies SparkDaemonClientOptions;
@@ -239,14 +223,13 @@ void test("handleSparkRpcLine abort cancels the last submitted daemon turn", asy
     { sessionId: "rpc-session", prompt: "do work", reset: undefined },
   ]);
   assert.deepEqual(cancellations, [
-    { invocationId: "turn-file.json", reason: "Spark RPC abort requested by client." },
+    { invocationId: "inv_turn_file", reason: "Spark RPC abort requested by client." },
   ]);
   assert.equal(writes.at(-1)?.success, true);
   assert.deepEqual(writes.at(-1)?.data, {
-    invocationId: "turn-file.json",
-    cancelled: true,
-    message: "Cancellation signalled for turn-file.json",
-    observedAt: now,
+    invocationId: "inv_turn_file",
+    status: "running",
+    cancelRequested: true,
   });
 });
 

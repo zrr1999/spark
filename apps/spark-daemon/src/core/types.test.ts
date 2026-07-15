@@ -9,6 +9,11 @@ describe("daemon task validation", () => {
         sessionId: " sess_infoflow ",
         prompt: "  human body stays exact  ",
         cwd: "/workspace/frozen",
+        thinkingLevel: "high",
+        messageMetadata: {
+          origin: { kind: "session", sessionId: "session:sender", host: "web" },
+          sessionMail: { messageId: "mail:1" },
+        },
         channelContext: {
           externalKey: " infoflow:group:10838226 ",
           senderId: " zhanrongrui ",
@@ -27,6 +32,11 @@ describe("daemon task validation", () => {
       sessionId: "sess_infoflow",
       prompt: "  human body stays exact  ",
       cwd: "/workspace/frozen",
+      thinkingLevel: "high",
+      messageMetadata: {
+        origin: { kind: "session", sessionId: "session:sender", host: "web" },
+        sessionMail: { messageId: "mail:1" },
+      },
       channelContext: {
         externalKey: "infoflow:group:10838226",
         senderId: "zhanrongrui",
@@ -38,5 +48,16 @@ describe("daemon task validation", () => {
         mentionedSelf: true,
       },
     });
+  });
+
+  it("rejects malformed message metadata instead of silently dropping it", () => {
+    expect(() =>
+      validateSparkDaemonTask({
+        type: "session.run",
+        sessionId: "session-a",
+        prompt: "hello",
+        messageMetadata: "not-an-object",
+      }),
+    ).toThrow("daemon task messageMetadata must be an object");
   });
 });

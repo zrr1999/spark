@@ -23,14 +23,9 @@ export function createSparkPhaseRegistry(): ModeRegistry {
   return createModeRegistry({
     definitions: [
       sparkPhaseDefinition(
-        "research",
-        "Default research",
-        "default lightweight investigation and answering without changing durable project state unless explicitly asked",
-      ),
-      sparkPhaseDefinition(
         "plan",
         "Plan",
-        "clarify scope and create or revise concrete task plans when planning is requested",
+        "investigate, answer, clarify scope, and create or revise durable task plans only when needed",
       ),
       sparkPhaseDefinition(
         "implement",
@@ -55,7 +50,7 @@ export function renderSparkPhaseSystemPrompt(input: {
 }): string {
   const registry = defaultSparkPhaseRegistry();
   const driver = input.driver ?? "assist";
-  const resolved = registry.has(input.phase ?? "") ? input.phase! : "research";
+  const resolved = registry.has(input.phase ?? "") ? input.phase! : "plan";
   const languageDirective = input.language
     ? sparkSystemPromptLanguageDirective(input.language)
     : undefined;
@@ -94,11 +89,19 @@ export function registerSparkPhaseTool(registerSparkTool: SparkToolRegistrar): v
     ...descriptor,
     description: [
       "Switch the current session operating phase.",
-      "action=status reports the current phase without changing it; research, plan, or implement sets the persisted session phase and returns its requirements.",
-      "Registered phases: research, plan, implement.",
+      "action=status reports the current phase without changing it; plan or implement sets the persisted session phase and returns its requirements.",
+      "Registered phases: plan, implement.",
     ].join(" "),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const action = normalizeModeToolAction(params.action, registry);
+      let action: ReturnType<typeof normalizeModeToolAction>;
+      try {
+        action = normalizeModeToolAction(params.action, registry);
+      } catch (error) {
+        if (error instanceof Error) {
+          throw new Error(error.message.replace(/^mode action/u, "phase action"));
+        }
+        throw error;
+      }
       const current = await loadSparkPhase(ctx.cwd, ctx);
       const result = runModeToolAction({
         action,
@@ -107,7 +110,7 @@ export function registerSparkPhaseTool(registerSparkTool: SparkToolRegistrar): v
         context: { driver: "assist", focus: normalizeFocus(params.focus) },
       });
       if (!result.statusOnly) {
-        const phase = result.mode as "research" | "plan" | "implement";
+        const phase = result.mode as "plan" | "implement";
         await saveSparkPhase(ctx.cwd, ctx, { phase, projectRef: current.projectRef });
         ctx.sparkActiveLens = sparkActiveLens(phase, "assist");
       }
@@ -132,10 +135,7 @@ function sparkPhaseDefinition(id: Mode, title: string, summary: string) {
     title,
     summary,
     builtin: true,
-    renderRequirements: () =>
-      id === "research"
-        ? `Spark default research phase. ${SPARK_PHASE_TOOLS_HINT}`
-        : `Spark phase: ${id}. ${SPARK_PHASE_TOOLS_HINT}`,
+    renderRequirements: () => `Spark phase: ${id}. ${SPARK_PHASE_TOOLS_HINT}`,
   };
 }
 

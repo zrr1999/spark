@@ -17,6 +17,7 @@ import {
 } from "./shared-semantics.ts";
 
 export type PiAskMode = "clarification" | "decision" | "approval" | "unblock";
+export type PiAskDelivery = "blocking" | "async";
 export type PiAskQuestionType = "single" | "multi" | "freeform";
 
 export interface PiAskOption {
@@ -39,6 +40,8 @@ export interface PiAskQuestion {
 export interface PiAskRequest {
   title?: string;
   mode?: PiAskMode;
+  /** Defaults to blocking. Async asks return after the daemon durably accepts them. */
+  delivery?: PiAskDelivery;
   context?: string;
   questions: PiAskQuestion[];
 }
@@ -52,10 +55,11 @@ export interface PiAskAnswerEntry {
   preview?: string;
 }
 
-export type PiAskResultStatus = "answered" | "cancelled" | "no_selection";
+export type PiAskResultStatus = "answered" | "pending" | "cancelled" | "no_selection";
 
 export interface PiAskResult {
   status: PiAskResultStatus;
+  humanRequestId?: string;
   cancelled: boolean;
   answers: Record<string, PiAskAnswerEntry>;
   nextAction: "resume" | "block";
@@ -140,10 +144,15 @@ export function createAskUserRequest(input: PiAskRequest): PiAskRequest {
 
 export async function askUser(request: PiAskRequest, ui?: PiAskUi): Promise<PiAskResult> {
   const normalized = createAskUserRequest(request);
-  if (!ui) return defaultAskUserResult(normalized);
+  if (!ui) {
+    return normalized.delivery === "async"
+      ? unavailableAskUserResult(normalized)
+      : defaultAskUserResult(normalized);
+  }
 
   const interactionResult = await askUserViaInteraction(normalized, ui);
   if (interactionResult) return interactionResult;
+  if (normalized.delivery === "async") return unavailableAskUserResult(normalized);
 
   const answers: Record<string, PiAskAnswerEntry> = {};
   for (const question of normalized.questions) {
@@ -165,6 +174,7 @@ export async function askUser(request: PiAskRequest, ui?: PiAskUi): Promise<PiAs
 }
 
 export function defaultAskUserResult(request: PiAskRequest): PiAskResult {
+  if (request.delivery === "async") return unavailableAskUserResult(request);
   if (requestRequiresExplicitAskUserSelection(request)) {
     return createAskUserResult({ cancelled: false, answers: {}, status: "no_selection" });
   }
@@ -185,7 +195,8 @@ export function createAskUserResult(
   return {
     ...input,
     status,
-    nextAction: input.nextAction ?? (status === "answered" ? "resume" : "block"),
+    nextAction:
+      input.nextAction ?? (status === "answered" || status === "pending" ? "resume" : "block"),
   };
 }
 
@@ -201,6 +212,9 @@ export function registerPiAskTools(pi: PiAskExtensionApi): void {
         Type.String({
           description: "clarification | decision | approval | unblock",
         }),
+      ),
+      delivery: Type.Optional(
+        Type.String({ description: "blocking | async. Defaults to blocking." }),
       ),
       context: Type.Optional(Type.String()),
       questions: Type.Array(
@@ -277,6 +291,7 @@ function decodeAskRequest(params: Record<string, unknown>): PiAskRequest {
   return createAskUserRequest({
     title: params.title as string | undefined,
     mode: params.mode as PiAskMode | undefined,
+    delivery: normalizeAskDelivery(params.delivery),
     context: params.context as string | undefined,
     questions,
   });
@@ -337,6 +352,7 @@ function createAskUserInteractionRequest(request: PiAskRequest): ExtensionIntera
     prompt: request.context,
     source: "extension",
     metadata: { tool: "ask_user" },
+    delivery: request.delivery ?? "blocking",
     mode: request.mode ?? "clarification",
     questions: request.questions.map((question) => ({
       id: question.id,
@@ -358,6 +374,17 @@ function askUserResultFromInteractionResponse(
   if (response.status === "blocked" || response.status === "error") return undefined;
   if (response.status === "cancelled") {
     return createAskUserResult({ cancelled: true, answers: {}, status: "cancelled" });
+  }
+  if (response.status === "pending") {
+    const humanRequestId = optionalNonEmptyString(response.humanRequestId);
+    if (!humanRequestId) return undefined;
+    return createAskUserResult({
+      cancelled: false,
+      answers: {},
+      status: "pending",
+      humanRequestId,
+      nextAction: "resume",
+    });
   }
   if (response.status !== "answered") return undefined;
   return createAskUserResult({
@@ -525,6 +552,20 @@ function inferAskUserResultStatus(
 ): PiAskResultStatus {
   if (result.cancelled) return "cancelled";
   return Object.keys(result.answers).length > 0 ? "answered" : "no_selection";
+}
+
+function unavailableAskUserResult(_request: PiAskRequest): PiAskResult {
+  return createAskUserResult({ cancelled: false, answers: {}, status: "no_selection" });
+}
+
+function normalizeAskDelivery(value: unknown): PiAskDelivery | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (value === "blocking" || value === "async") return value;
+  throw new Error("ask_user.delivery must be blocking or async");
+}
+
+function optionalNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function summarizeResult(request: PiAskRequest, result: PiAskResult): string {

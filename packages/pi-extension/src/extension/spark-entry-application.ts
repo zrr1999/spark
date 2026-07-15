@@ -12,7 +12,6 @@ import {
 import {
   enterSparkImplementationMode,
   enterSparkPlanningMode,
-  enterSparkResearchMode,
   type SparkModeEntryDeps,
   type SparkModeMessageApi,
 } from "./spark-mode-entry.ts";
@@ -47,9 +46,7 @@ export async function applySparkEntryResolution(
         ctx.ui?.notify?.("Spark phase needs initialized Spark state.", "warning");
         return;
       }
-      if (resolution.phase === "research")
-        await enterSparkResearchMode(piApi, deps, ctx, graph, resolution.focus);
-      else if (resolution.phase === "plan")
+      if (resolution.phase === "plan")
         await enterSparkPlanningMode(
           piApi,
           deps,
@@ -66,9 +63,7 @@ export async function applySparkEntryResolution(
         ctx.ui?.notify?.("Spark phase needs initialized Spark state.", "warning");
         return;
       }
-      if (resolution.mode === "research")
-        await enterSparkResearchMode(piApi, deps, ctx, graph, resolution.focus);
-      else if (resolution.mode === "plan")
+      if (resolution.mode === "plan")
         await enterSparkPlanningMode(
           piApi,
           deps,

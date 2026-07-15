@@ -6,7 +6,7 @@ Host-neutral operating-lens primitives for Spark-style agents.
 
 `@zendev-lab/spark-modes` owns the per-turn **mode** vocabulary and rendering mechanics:
 
-- `research`, `plan`, and `implement` built-in lenses.
+- `plan` and `implement` built-in lenses. Investigation and research are activities within `plan`, not separate lenses.
 - `interactive`, `goal`, and `workflow` turn drivers.
 - Open mode registry for host-defined custom lenses.
 - Pure `mode` action-tool descriptor and action evaluation helpers.

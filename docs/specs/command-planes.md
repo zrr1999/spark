@@ -1,86 +1,59 @@
 # Spark command planes
 
-Spark's public control model is daemon-native and split by plane role rather than by Pi-compatible surface area.
-
-The canonical command grammar is:
+Canonical CLI grammar:
 
 ```text
 spark <plane> <resource> <verb> [args...]
 ```
 
-## Canonical namespaces
+## Namespaces
 
 | Namespace | Role | Owns | Does not own |
 | --- | --- | --- | --- |
-| `spark daemon` | daemon execution plane | runtime sessions (create/list/show/bind/archive/fork), channel listeners, local queue, runs, events, logs, process state | project/task/goal/review policy decisions |
-| `spark server` | server coordination plane | project, task, goal, review, artifact/evidence, workflow, workspace coordination state, **assign** intent | local queue workers, process logs, TUI rendering, Cockpit UI hosting, session registry writes, channel sockets |
-| `spark cockpit` | Cockpit web UI host (not a fourth plane) | start/preview the SvelteKit Cockpit UI that mounts `spark-server` | coordination commands (`spark server ...`), daemon execution, TUI rendering |
-| `spark tui` | tui local control plane | local interactive terminal UI, attach/resume/new visible transcript, theme/keymap/export/share | canonical business state mutations |
-| slash `system` | TUI kernel command source | `/help`, `/exit`, `/quit`, `/clear`, `/reload` | project/task/goal/session/workflow business commands |
-| slash `extension` | extension command source | `/goal`, `/task`, `/workflow`, `/session`, `/review`, `/artifact`, `/run` resource aliases | TUI kernel lifecycle |
+| `spark daemon` | daemon execution plane | persistent sessions, channel listeners, SQLite invocations, events, logs, process state | project/task/goal/review policy |
+| `spark cockpit` | coordination plane and web UI host | project, task, goal, review, evidence, workflow, workspace coordination, assign, and Cockpit UI | daemon execution, local process logs, TUI rendering |
+| `spark tui` | tui local control plane | interactive terminal UI, attach/resume, visible transcript, theme, export | canonical business-state ownership |
+| slash `system` | TUI kernel command source | `/help`, `/exit`, `/quit`, `/clear`, `/reload` | project/task/goal/session/workflow commands |
+| slash `extension` | extension command source | extension-owned resource commands | TUI kernel lifecycle |
 
-`spark server` is the coordination plane, not a network service in this phase. `spark cockpit` only launches the Cockpit web UI host.
+`spark cockpit` is both the coordination CLI and the web UI host; it is not a second daemon execution plane.
 
 ## Canonical examples
 
 ```bash
 spark daemon session list --json
-spark daemon session show <session-id> --json
-spark daemon session create --workspace <id> --title "..." --json
-spark daemon session bind <session-id> --external-key feishu:chat:oc_xxx --json
-spark daemon session archive <session-id> --json
-spark daemon channel list --json
+spark daemon session create --workspace <id> --json
+spark daemon submit --session <session-id> --prompt <text> --json
+spark daemon invocation status <invocation-id> --json
+spark daemon invocation stream <invocation-id> --after <cursor> --limit 500 --json
+spark daemon invocation cancel <invocation-id> --reason <text> --json
 spark daemon channel status --json
-spark daemon run list --json
 spark daemon events watch --json
 
-spark server status --json
-spark server project list --json
-spark server task list --project <project-ref> --json
-spark server goal status --json
-spark server assign --session <session-id> --goal "..." --json
+spark cockpit status --json
+spark cockpit task list --project <project-ref> --json
+spark cockpit assign --session <session-id> --goal "..." --json
 
 spark tui attach <session-id>
 spark tui --help
 ```
 
-Session lifecycle, channel bindings, and assignment equivalence are specified in
-[`assignment-and-channels.md`](./assignment-and-channels.md). Cockpit Assign and
-IM channels are entry surfaces for the same assignment intent; they must not
-create private session namespaces.
+Session identity and channel policy are specified in [`sessions-and-channels.md`](./sessions-and-channels.md).
 
-## Disallowed canonical placements
+## Invalid placements
 
-These command shapes are not canonical and must either fail with actionable guidance or be compatibility aliases documented in the deprecation map:
+These shapes are not canonical and must fail:
 
 ```bash
+spark server status
 spark daemon sessions list --all-workspaces
 spark daemon task claim <task-ref>
 spark daemon goal complete
-spark server queue clear
-spark server events watch
-spark server session create
+spark cockpit invocation status <invocation-id>
+spark cockpit events watch
+spark cockpit session create
 spark tui task list
 spark gateway ...
 ```
 
-## Slash command ownership
-
-System slash commands are intentionally small. Business commands are extension-owned resource commands and should map to canonical CLI targets:
-
-| Legacy slash | Canonical slash | Canonical CLI target | Status |
-| --- | --- | --- | --- |
-| `/tasks` | `/task list` | `spark server task list` | deprecated alias |
-| `/sessions` | `/session list` | `spark daemon session list` | deprecated alias |
-| `/workflow-runs` | `/workflow list` | `spark server workflow list` | deprecated alias |
-| `/workflow-pause` | `/workflow pause <run>` | `spark server workflow pause <run>` | deprecated alias |
-| `/workflow-resume` | `/workflow resume <run>` | `spark server workflow resume <run>` | deprecated alias |
-| `/workflow-stop` | `/workflow stop <run>` | `spark server workflow stop <run>` | deprecated alias |
-| `/fork` | `/session fork --current` | `spark daemon session fork --current` | deprecated alias |
-
-## Output policy
-
-- Commands that expose state must support `--json` with stable fields.
-- Text output is for humans and must not be the only source of machine-readable state.
-- CLI is canonical; slash commands are interactive aliases.
-- Zellij may be used for operator validation and visible TUI capture, but Spark must not depend on zellij at runtime.
+State commands must provide stable `--json` output. Human-readable output is not an automation contract. CLI owns canonical placement; slash commands are interactive aliases. Zellij is an operator validation tool, never a runtime dependency.

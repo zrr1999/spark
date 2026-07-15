@@ -10,22 +10,14 @@ import {
   type SparkCliHostServicesOptions,
   type SparkConfig,
 } from "../apps/spark-tui/src/host/index.ts";
-import {
-  createSparkHeadlessRoleExecutor,
-  createSparkHeadlessSessionExecutor,
-} from "../apps/spark-tui/src/headless-role-executor.ts";
+import { assistantMessageToFinalAnswerText } from "../apps/spark-tui/src/host/agent-session.ts";
+import { createSparkHeadlessRoleExecutor } from "../apps/spark-tui/src/headless-role-executor.ts";
 import {
   SparkNativeSession,
   SparkNativeTuiApp,
   createSparkNativeUiTransport,
 } from "../apps/spark-tui/src/native-tui.ts";
 import type { TUI } from "../apps/spark-tui/src/tui/pi-tui-adapter.ts";
-import {
-  SparkDaemonQueue,
-  createSparkDaemonWorkerContext,
-  processSparkDaemonQueueBatch,
-  waitForSparkDaemonActiveTasks,
-} from "../apps/spark-daemon/src/core/index.ts";
 
 type FakeStreamSimple = (context: {
   messages?: unknown[];
@@ -69,6 +61,41 @@ function fakeTui(): TUI {
     setFocus: () => undefined,
   } as unknown as TUI;
 }
+
+void test("channel-facing assistant text excludes thinking, tool arguments, and commentary", () => {
+  assert.equal(
+    assistantMessageToFinalAnswerText({
+      content: [
+        { type: "thinking", thinking: "private reasoning" },
+        {
+          type: "text",
+          text: "先检查目录",
+          textSignature: JSON.stringify({ phase: "commentary" }),
+        },
+        { type: "toolCall", name: "cue_exec", arguments: { command: "private" } },
+        {
+          type: "text",
+          text: "检查完成",
+          textSignature: JSON.stringify({ phase: "final_answer" }),
+        },
+      ],
+    }),
+    "检查完成",
+  );
+});
+
+void test("channel-facing assistant text does not turn a tool-use preamble into a reply", () => {
+  assert.equal(
+    assistantMessageToFinalAnswerText({
+      stopReason: "toolUse",
+      content: [
+        { type: "text", text: "我先检查目录" },
+        { type: "toolCall", name: "cue_exec", arguments: { command: "private" } },
+      ],
+    }),
+    "",
+  );
+});
 
 void test("SparkAgentSession persists and resumes JSONL sessions", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-"));
@@ -496,58 +523,6 @@ void test("anonymous role run artifact records sessionPersistence", async () => 
     assert.equal(result.record.noSession, true);
     assert.equal("sessionPath" in result.record, false);
     assert.equal(result.record.sessionDir, undefined);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-void test("daemon session.run executor drains queue item into persisted Spark session", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-daemon-session-exec-"));
-  try {
-    const cwd = join(dir, "repo");
-    const sparkHome = join(dir, ".spark");
-    await mkdir(cwd, { recursive: true });
-    const queue = new SparkDaemonQueue({ sparkHome });
-    await queue.enqueue({
-      type: "session.run",
-      sessionId: "queued-session",
-      prompt: "queued prompt",
-    });
-
-    const executeSession = createSparkHeadlessSessionExecutor({
-      sparkHome,
-      createServices: async (options = {}) => await makeFakeServices(options),
-    });
-    const executeTask = async (
-      task: { sessionId: string; prompt: string; reset?: boolean },
-      context: { signal: AbortSignal },
-    ) =>
-      await executeSession({
-        cwd,
-        sparkHome,
-        sessionId: task.sessionId,
-        prompt: task.prompt,
-        reset: task.reset,
-        signal: context.signal,
-      });
-    const context = createSparkDaemonWorkerContext({ queue, executeTask });
-
-    const didWork = await processSparkDaemonQueueBatch({
-      queue,
-      active: context.active,
-      executeTask,
-    });
-    assert.equal(didWork, true);
-    await waitForSparkDaemonActiveTasks(context.active);
-    const processed = await queue.listEntries("processed");
-    assert.equal(processed.length, 1);
-    assert.equal((await queue.list("failed")).length, 0);
-    assert.match(JSON.stringify(processed[0]?.payload.result), /"type":"view_event"/);
-
-    const services = await makeFakeServices({ cwd, sparkHome });
-    const latest = await services.sessionStore.findMostRecent();
-    assert.equal(latest?.id, "queued-session");
-    assert.equal(latest?.messageCount, 2);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -11,4 +11,4 @@ Product surface follows pi-channels (`adapters` / `routes` / `notify` / ingress)
 Production hosts wire real SDK / Open Platform transports; unit tests use
 injectable fake transports so no live credentials are required.
 
-See `docs/specs/assignment-and-channels.md`.
+See `docs/specs/sessions-and-channels.md`.

@@ -3,13 +3,30 @@ import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/p
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-export type SparkSessionMailKind = "request" | "inform" | "reply";
+export type SparkSessionMailKind = "request" | "question" | "notification";
+export type SparkSessionMailVisibility = "internal" | "user";
+export type SparkSessionMailDelivery = "mailbox" | "channel";
+export type SparkSessionMailDeliveryStatus = "pending" | "delivered" | "failed";
+
+export interface SparkSessionMailDeliveryReceipt {
+  adapter: string;
+  externalKey: string;
+  status: SparkSessionMailDeliveryStatus;
+  attemptCount: number;
+  lastAttemptAt: string | null;
+  deliveredAt: string | null;
+  lastError: string | null;
+  receipt: unknown;
+}
 
 export interface SparkSessionMailMessage {
   id: string;
   toSessionId: string;
   fromSessionId: string;
   kind: SparkSessionMailKind;
+  visibility: SparkSessionMailVisibility;
+  delivery: SparkSessionMailDelivery;
+  deliveries: SparkSessionMailDeliveryReceipt[];
   intent: string;
   payload: Record<string, unknown>;
   correlationId: string;
@@ -38,6 +55,9 @@ export interface SparkSessionMailSendInput {
   toSessionId: string;
   fromSessionId?: string;
   kind?: SparkSessionMailKind;
+  visibility?: SparkSessionMailVisibility;
+  delivery?: SparkSessionMailDelivery;
+  deliveryTargets?: Array<{ adapter: string; externalKey: string }>;
   intent?: string;
   payload?: Record<string, unknown>;
   correlationId?: string;
@@ -50,6 +70,11 @@ export interface SparkSessionMailSendInput {
 
 export interface SparkSessionMailListOptions {
   includeAcked?: boolean;
+}
+
+export interface SparkSessionPendingChannelDelivery {
+  message: SparkSessionMailMessage;
+  target: SparkSessionMailDeliveryReceipt;
 }
 
 export class SparkSessionMailStore {
@@ -74,14 +99,20 @@ export class SparkSessionMailStore {
     const kind = normalizeMailKind(input.kind);
     const intent = input.intent?.trim() || "session.mail";
     const payload = normalizePayload(input.payload);
-    const body = input.body?.trim() || renderPayloadText(payload);
+    const body = input.body?.trim() ? input.body : renderPayloadText(payload);
     const correlationId = input.correlationId?.trim() || `corr:${randomUUID()}`;
     const replyToMessageId = input.replyToMessageId?.trim() || null;
     const idempotencyKey = input.idempotencyKey?.trim() || null;
+    const deliveries = normalizeDeliveryTargets(input.deliveryTargets);
+    const delivery = normalizeDelivery(input.delivery, deliveries);
+    const visibility = normalizeVisibility(input.visibility);
     const candidate = {
       toSessionId,
       fromSessionId,
       kind,
+      visibility,
+      delivery,
+      deliveries,
       intent,
       payload,
       correlationId: input.correlationId?.trim(),
@@ -104,6 +135,9 @@ export class SparkSessionMailStore {
           toSessionId,
           fromSessionId,
           kind,
+          visibility,
+          delivery,
+          deliveries,
           intent,
           payload,
           correlationId,
@@ -133,6 +167,25 @@ export class SparkSessionMailStore {
       .sort(compareMailMessages);
   }
 
+  async pendingChannelDeliveries(limit = 100): Promise<SparkSessionPendingChannelDelivery[]> {
+    const normalizedLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+    const messages = await this.allStoredMessages();
+    const pending: SparkSessionPendingChannelDelivery[] = [];
+    for (const message of messages) {
+      for (const target of message.deliveries) {
+        if (
+          target.status === "delivered" ||
+          !deliveryRetryDue(target, this.options.now?.() ?? Date.now())
+        ) {
+          continue;
+        }
+        pending.push({ message, target });
+        if (pending.length >= normalizedLimit) return pending;
+      }
+    }
+    return pending;
+  }
+
   async get(toSessionId: string, messageId: string): Promise<SparkSessionMailMessage> {
     const normalized = normalizeRequiredSessionId(toSessionId, "session");
     const id = messageId.trim();
@@ -155,6 +208,49 @@ export class SparkSessionMailStore {
       readAt: message.readAt ?? this.nowIso(),
       ackedAt: message.ackedAt ?? this.nowIso(),
     }));
+  }
+
+  async recordChannelDelivery(
+    toSessionId: string,
+    messageId: string,
+    target: { adapter: string; externalKey: string },
+    outcome: { ok: true; receipt: unknown } | { ok: false; error: string },
+  ): Promise<SparkSessionMailMessage> {
+    const normalizedTarget = normalizeDeliveryTarget(target);
+    return await this.updateMessage(toSessionId, messageId, (message) => {
+      const now = this.nowIso();
+      const index = message.deliveries.findIndex(
+        (delivery) =>
+          delivery.adapter === normalizedTarget.adapter &&
+          delivery.externalKey === normalizedTarget.externalKey,
+      );
+      const previous = index >= 0 ? message.deliveries[index]! : pendingDelivery(normalizedTarget);
+      if (previous.status === "delivered") return message;
+      const updated: SparkSessionMailDeliveryReceipt = outcome.ok
+        ? {
+            ...previous,
+            status: "delivered",
+            attemptCount: previous.attemptCount + 1,
+            lastAttemptAt: now,
+            deliveredAt: now,
+            lastError: null,
+            receipt: jsonValue(outcome.receipt),
+          }
+        : {
+            ...previous,
+            status: "failed",
+            attemptCount: previous.attemptCount + 1,
+            lastAttemptAt: now,
+            deliveredAt: null,
+            lastError: outcome.error.slice(0, 1_000),
+            receipt: null,
+          };
+      const deliveries = [...message.deliveries];
+      if (index >= 0) deliveries[index] = updated;
+      else deliveries.push(updated);
+      deliveries.sort(compareDeliveryTargets);
+      return { ...message, delivery: "channel", deliveries };
+    });
   }
 
   async load(toSessionId: string): Promise<SparkSessionMailboxFile> {
@@ -258,6 +354,35 @@ export class SparkSessionMailStore {
     } finally {
       await rm(lockPath, { recursive: true, force: true });
     }
+  }
+
+  private async allStoredMessages(): Promise<SparkSessionMailMessage[]> {
+    const root = this.mailRoot();
+    let entries;
+    try {
+      entries = await readdir(root, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    const messages = new Map<string, SparkSessionMailMessage>();
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      if (!entry.isDirectory() || entry.name === ".send.lock") continue;
+      try {
+        const path = join(root, entry.name, "mailbox.json");
+        const raw = JSON.parse(await readFile(path, "utf8")) as Partial<SparkSessionMailboxFile>;
+        const fallback = typeof raw.toSessionId === "string" ? raw.toSessionId : entry.name;
+        for (const message of normalizeMailbox(raw, fallback).messages) {
+          const existing = messages.get(message.id);
+          if (!existing || mailStatusRank(message) >= mailStatusRank(existing)) {
+            messages.set(message.id, message);
+          }
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    return [...messages.values()].sort(compareMailMessages);
   }
 
   private async findByIdempotencyKey(
@@ -426,6 +551,9 @@ function normalizeMailMessage(value: unknown): SparkSessionMailMessage | undefin
     toSessionId: record.toSessionId,
     fromSessionId: record.fromSessionId,
     kind: normalizeMailKind(record.kind),
+    visibility: record.visibility === "user" ? "user" : "internal",
+    delivery: record.delivery === "channel" ? "channel" : "mailbox",
+    deliveries: normalizeStoredDeliveries(record.deliveries),
     intent:
       typeof record.intent === "string" && record.intent.trim() ? record.intent : "session.mail",
     payload: normalizePayload(record.payload),
@@ -451,7 +579,16 @@ function normalizeMailMessage(value: unknown): SparkSessionMailMessage | undefin
 }
 
 function normalizeMailKind(value: unknown): SparkSessionMailKind {
-  return value === "request" || value === "reply" || value === "inform" ? value : "inform";
+  if (value === "request" || value === "question") return value;
+  // `inform` and `reply` are legacy NNP values. Causality now lives in
+  // replyToMessageId/correlationId; delivery policy is simply notification.
+  return "notification";
+}
+
+function normalizeVisibility(value: unknown): SparkSessionMailVisibility {
+  if (value === undefined || value === "internal") return "internal";
+  if (value === "user") return "user";
+  throw new Error("Spark session mail visibility must be internal or user");
 }
 
 function normalizePayload(value: unknown): Record<string, unknown> {
@@ -471,6 +608,118 @@ function normalizePayload(value: unknown): Record<string, unknown> {
         error instanceof Error ? error.message : String(error)
       }`,
     );
+  }
+}
+
+function normalizeDeliveryTargets(
+  value: SparkSessionMailSendInput["deliveryTargets"],
+): SparkSessionMailDeliveryReceipt[] {
+  if (!value) return [];
+  const unique = new Map<string, SparkSessionMailDeliveryReceipt>();
+  for (const target of value) {
+    const { adapter, externalKey } = normalizeDeliveryTarget(target);
+    unique.set(`${adapter}\u0000${externalKey}`, pendingDelivery({ adapter, externalKey }));
+  }
+  return [...unique.values()].sort(compareDeliveryTargets);
+}
+
+function normalizeDelivery(
+  value: SparkSessionMailSendInput["delivery"],
+  deliveries: SparkSessionMailDeliveryReceipt[],
+): SparkSessionMailDelivery {
+  const delivery = value ?? (deliveries.length > 0 ? "channel" : "mailbox");
+  if (delivery !== "mailbox" && delivery !== "channel") {
+    throw new Error("Spark session mail delivery must be mailbox or channel");
+  }
+  if (delivery === "mailbox" && deliveries.length > 0) {
+    throw new Error("mailbox delivery cannot declare channel delivery targets");
+  }
+  if (delivery === "channel" && deliveries.length === 0) {
+    throw new Error("channel delivery requires at least one delivery target");
+  }
+  return delivery;
+}
+
+function normalizeDeliveryTarget(value: unknown): { adapter: string; externalKey: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("channel delivery target is incomplete");
+  }
+  const record = value as Record<string, unknown>;
+  const adapter = typeof record.adapter === "string" ? record.adapter.trim() : "";
+  const externalKey = typeof record.externalKey === "string" ? record.externalKey.trim() : "";
+  if (!adapter || !externalKey) throw new Error("channel delivery target is incomplete");
+  return { adapter, externalKey };
+}
+
+function deliveryRetryDue(target: SparkSessionMailDeliveryReceipt, now: number): boolean {
+  if (target.status === "delivered") return false;
+  if (!target.lastAttemptAt) return true;
+  const lastAttempt = Date.parse(target.lastAttemptAt);
+  if (!Number.isFinite(lastAttempt)) return true;
+  const backoff = Math.min(60_000, 1_000 * 2 ** Math.min(target.attemptCount, 6));
+  return now - lastAttempt >= backoff;
+}
+
+function pendingDelivery(target: {
+  adapter: string;
+  externalKey: string;
+}): SparkSessionMailDeliveryReceipt {
+  return {
+    adapter: target.adapter,
+    externalKey: target.externalKey,
+    status: "pending",
+    attemptCount: 0,
+    lastAttemptAt: null,
+    deliveredAt: null,
+    lastError: null,
+    receipt: null,
+  };
+}
+
+function normalizeStoredDeliveries(value: unknown): SparkSessionMailDeliveryReceipt[] {
+  if (!Array.isArray(value)) return [];
+  const deliveries = value.flatMap((entry): SparkSessionMailDeliveryReceipt[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const record = entry as Record<string, unknown>;
+    const adapter = typeof record.adapter === "string" ? record.adapter.trim() : "";
+    const externalKey = typeof record.externalKey === "string" ? record.externalKey.trim() : "";
+    if (!adapter || !externalKey) return [];
+    const status =
+      record.status === "delivered" || record.status === "failed" ? record.status : "pending";
+    return [
+      {
+        adapter,
+        externalKey,
+        status,
+        attemptCount:
+          typeof record.attemptCount === "number" && Number.isFinite(record.attemptCount)
+            ? Math.max(0, Math.floor(record.attemptCount))
+            : 0,
+        lastAttemptAt: typeof record.lastAttemptAt === "string" ? record.lastAttemptAt : null,
+        deliveredAt: typeof record.deliveredAt === "string" ? record.deliveredAt : null,
+        lastError: typeof record.lastError === "string" ? record.lastError : null,
+        receipt: jsonValue(record.receipt),
+      },
+    ];
+  });
+  return deliveries.sort(compareDeliveryTargets);
+}
+
+function compareDeliveryTargets(
+  left: Pick<SparkSessionMailDeliveryReceipt, "adapter" | "externalKey">,
+  right: Pick<SparkSessionMailDeliveryReceipt, "adapter" | "externalKey">,
+): number {
+  return (
+    left.adapter.localeCompare(right.adapter) || left.externalKey.localeCompare(right.externalKey)
+  );
+}
+
+function jsonValue(value: unknown): unknown {
+  if (value === undefined) return null;
+  try {
+    return JSON.parse(JSON.stringify(value)) as unknown;
+  } catch {
+    return null;
   }
 }
 
@@ -508,6 +757,9 @@ function assertSameLogicalMessage(
     toSessionId: string;
     fromSessionId: string;
     kind: SparkSessionMailKind;
+    visibility: SparkSessionMailVisibility;
+    delivery: SparkSessionMailDelivery;
+    deliveries: SparkSessionMailDeliveryReceipt[];
     intent: string;
     payload: Record<string, unknown>;
     correlationId?: string;
@@ -520,6 +772,12 @@ function assertSameLogicalMessage(
     toSessionId: existing.toSessionId,
     fromSessionId: existing.fromSessionId,
     kind: existing.kind,
+    visibility: existing.visibility,
+    delivery: existing.delivery,
+    deliveryTargets: existing.deliveries.map(({ adapter, externalKey }) => ({
+      adapter,
+      externalKey,
+    })),
     intent: existing.intent,
     payload: existing.payload,
     ...(candidate.correlationId ? { correlationId: existing.correlationId } : {}),
@@ -531,6 +789,12 @@ function assertSameLogicalMessage(
     toSessionId: candidate.toSessionId,
     fromSessionId: candidate.fromSessionId,
     kind: candidate.kind,
+    visibility: candidate.visibility,
+    delivery: candidate.delivery,
+    deliveryTargets: candidate.deliveries.map(({ adapter, externalKey }) => ({
+      adapter,
+      externalKey,
+    })),
     intent: candidate.intent,
     payload: candidate.payload,
     ...(candidate.correlationId ? { correlationId: candidate.correlationId } : {}),

@@ -15,10 +15,14 @@ import {
   type ChannelsConfig,
   type ChannelNotifyInput,
   type ChannelNotifyResult,
+  type ChannelAskRequest,
+  type ChannelAskSendResult,
+  type ChannelInteractionAckStatus,
   type ChannelReplyStream,
   type ChannelReplyTarget,
   type ChannelRegistryOptions,
   type IncomingMessage,
+  type RoutedChannelInteractionEvent,
 } from "@zendev-lab/spark-channels";
 import { parseSparkAssignment, type SparkAssignment } from "@zendev-lab/spark-protocol";
 import { writePrivateFile } from "@zendev-lab/spark-system";
@@ -45,6 +49,10 @@ export interface ChannelIngressAssignment {
 export interface ChannelIngressHooks {
   onAssignment: (input: ChannelIngressAssignment) => Promise<void>;
   onReply?: (input: { externalKey: string; text: string; adapterId: string }) => Promise<void>;
+  onInteraction?: (input: {
+    workspaceId: string;
+    event: RoutedChannelInteractionEvent;
+  }) => Promise<void>;
 }
 
 export interface ChannelIngressController {
@@ -56,6 +64,16 @@ export interface ChannelIngressController {
     target: ChannelReplyTarget,
   ): Promise<ChannelReplyStream | undefined>;
   sendReply(adapterId: string, input: ChannelReplyTarget & { text: string }): Promise<void>;
+  sendAsk(
+    adapterId: string,
+    recipient: string,
+    request: ChannelAskRequest,
+  ): Promise<ChannelAskSendResult>;
+  ackInteraction(
+    adapterId: string,
+    interactionId: string,
+    status?: ChannelInteractionAckStatus,
+  ): Promise<void>;
   status(): {
     configured: boolean;
     ingressEnabled: boolean;
@@ -114,6 +132,20 @@ export interface DaemonChannelIngressRuntime {
     adapterId: string,
     input: ChannelReplyTarget & { text: string },
   ): Promise<void>;
+  sendAsk(
+    workspaceId: string,
+    adapterId: string,
+    recipient: string,
+    request: ChannelAskRequest,
+  ): Promise<ChannelAskSendResult>;
+  ackInteraction(
+    workspaceId: string,
+    adapterId: string,
+    interactionId: string,
+    status?: ChannelInteractionAckStatus,
+  ): Promise<void>;
+  /** Install the daemon-owned native interaction router after construction. */
+  setInteractionHandler?(handler?: ChannelIngressHooks["onInteraction"]): void;
   listWorkspaceIds(): Promise<string[]>;
 }
 
@@ -211,13 +243,30 @@ export function createChannelIngressController(input: {
   createTransport?: ChannelRegistryOptions["createTransport"];
 }): ChannelIngressController {
   const sessionRegistry = input.sessionRegistry ?? createDaemonSessionRegistry(input.sparkHome);
+  const activeHandlers = new Set<Promise<void>>();
+  const trackHandler = (operation: Promise<void>, label: "inbound" | "interaction") => {
+    const tracked = operation.catch((error) => {
+      console.error(`[spark-channels] ${label} failed`, error);
+    });
+    activeHandlers.add(tracked);
+    void tracked.finally(() => activeHandlers.delete(tracked));
+  };
+  const waitForHandlers = async () => {
+    while (activeHandlers.size > 0) {
+      await Promise.all([...activeHandlers]);
+    }
+  };
   const channelRegistry = new ChannelRegistry({
     config: input.config,
     ...(input.createTransport ? { createTransport: input.createTransport } : {}),
     onMessage: (message) => {
-      void handleInbound(message).catch((error) => {
-        console.error("[spark-channels] inbound failed", error);
-      });
+      trackHandler(handleInbound(message), "inbound");
+    },
+    onInteraction: (event) => {
+      trackHandler(
+        input.hooks.onInteraction?.({ workspaceId: input.workspaceId, event }) ?? Promise.resolve(),
+        "interaction",
+      );
     },
   });
 
@@ -284,13 +333,24 @@ export function createChannelIngressController(input: {
       await channelRegistry.startAll();
     },
     stop: async () => {
-      await channelRegistry.stopAll();
+      let stopError: unknown;
+      try {
+        await channelRegistry.stopAll();
+      } catch (error) {
+        stopError = error;
+      }
+      await waitForHandlers();
+      if (stopError) throw stopError;
     },
     notify: async (notifyInput) => await channelRegistry.notify(notifyInput),
     openReplyStream: async (adapterId, target) =>
       await channelRegistry.openReplyStream(adapterId, target),
     sendReply: async (adapterId, replyInput) =>
       await channelRegistry.sendReply(adapterId, replyInput),
+    sendAsk: async (adapterId, recipient, request) =>
+      await channelRegistry.sendAsk(adapterId, recipient, request),
+    ackInteraction: async (adapterId, interactionId, status) =>
+      await channelRegistry.ackInteraction(adapterId, interactionId, status),
     status: () => ({
       configured: true,
       ingressEnabled: channelRegistry.ingressEnabled,
@@ -589,6 +649,23 @@ export function createDaemonChannelIngressRuntime(input: {
         throw new Error(`channels not configured for workspace ${workspaceId}`);
       }
       await slot.controller.sendReply(adapterId, replyInput);
+    },
+    sendAsk: async (workspaceId, adapterId, recipient, request) => {
+      const slot = getSlot(workspaceId);
+      if (!slot.controller) {
+        throw new Error(`channels not configured for workspace ${workspaceId}`);
+      }
+      return await slot.controller.sendAsk(adapterId, recipient, request);
+    },
+    ackInteraction: async (workspaceId, adapterId, interactionId, status) => {
+      const slot = getSlot(workspaceId);
+      if (!slot.controller) {
+        throw new Error(`channels not configured for workspace ${workspaceId}`);
+      }
+      await slot.controller.ackInteraction(adapterId, interactionId, status);
+    },
+    setInteractionHandler: (handler) => {
+      input.hooks.onInteraction = handler;
     },
     listWorkspaceIds: async () => await listWorkspaceChannelIds(input.sparkHome),
   };

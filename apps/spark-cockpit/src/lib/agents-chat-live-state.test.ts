@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import type { AgentsProductProjection } from "@zendev-lab/spark-server/agents-product";
+import type { AgentsProductProjection } from "@zendev-lab/spark-coordination/agents-product";
 import {
   addOptimisticAgentsChatCommand,
   applyAgentsChatEvent,

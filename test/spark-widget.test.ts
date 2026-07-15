@@ -132,16 +132,20 @@ void test("SparkWidget registers, invalidates renders, clears hidden state, and 
 
   state = widgetState({
     projectTitle: undefined,
-    independentTodos: [{ content: "Legacy hidden item", status: "pending" }],
+    independentTodos: [{ content: "Active session TODO", status: "pending" }],
   });
   widget.update();
-  assert.equal(registrations.length, 2);
+  assert.equal(registrations.length, 3);
+  const todoComponent = registrations[2]?.cb?.(widgetTui, theme);
+  assert.ok(todoComponent);
+  assert.match(todoComponent.render().join("\n"), /Active session TODO/);
 
   widget.dispose();
-  assert.equal(registrations.length, 2);
+  assert.equal(registrations.length, 4);
+  assert.deepEqual(registrations[3], { key: "spark-status", cb: undefined });
 
   widget.dispose();
-  assert.equal(registrations.length, 2);
+  assert.equal(registrations.length, 4);
 });
 
 void test("spark widget hides deleted task plan items but keeps done task plan items visible", () => {
@@ -187,7 +191,7 @@ void test("spark widget shows compact workflow-run progress above project detail
     theme,
   );
 
-  assertLineIncludes(lines[0], ["Spark UX redesign", "Phase: research"]);
+  assertLineIncludes(lines[0], ["Spark UX redesign", "Phase: plan"]);
   assert.ok(!lines[0]?.includes("Tasks("), lines[0]);
   assert.ok(!lines[0]?.includes("total="), lines[0]);
   assert.ok(!lines[0]?.includes("claimed="), lines[0]);
@@ -246,7 +250,7 @@ void test("spark widget shows active dynamic workflow snapshot progress", () => 
     theme,
   );
 
-  assertLineIncludes(lines[0], ["Spark UX redesign", "Phase: research"]);
+  assertLineIncludes(lines[0], ["Spark UX redesign", "Phase: plan"]);
   assert.ok(!lines[0]?.includes("Tasks("), lines[0]);
   assert.ok(!lines[0]?.includes("total="), lines[0]);
   assertLineIncludes(lines[1], [
@@ -312,7 +316,7 @@ void test("spark widget suppresses duplicate background row when session agent i
     theme,
   );
 
-  assert.match(lines.join("\n"), /◆ Spark UX redesign · Phase: research/);
+  assert.match(lines.join("\n"), /◆ Spark UX redesign · Phase: plan/);
   assert.doesNotMatch(lines.join("\n"), /Tasks\(/);
   assert.doesNotMatch(lines.join("\n"), /Background work/);
 });
@@ -372,7 +376,7 @@ void test("spark widget shows session goal before project task state", () => {
   );
 
   assert.match(lines[0] ?? "", /◆ Goal\(●\): Advance Spark mode-as-state UX rework/);
-  assert.match(lines[1] ?? "", /◆ Spark UX redesign · Phase: research/);
+  assert.match(lines[1] ?? "", /◆ Spark UX redesign · Phase: plan/);
   assert.doesNotMatch(lines[1] ?? "", /Tasks\(/);
   assert.doesNotMatch(lines[1] ?? "", /Goal\(●\):/);
 });
@@ -928,7 +932,7 @@ void test("spark widget shows role/title task rows with nested task plan items",
   assert.doesNotMatch(text, /Implementation details are hidden in the widget/);
   assert.match(text, /#7 Update widget layout/);
   assert.match(text, /#12 Update docs/);
-  assert.doesNotMatch(text, /Decide project symbol/);
+  assert.match(text, /#3 Decide project symbol/);
 });
 
 void test("spark widget does not expand plan items for finished tasks", () => {
@@ -990,7 +994,7 @@ void test("spark widget uses stable TODO display numbers instead of sorted row o
         },
       ],
       independentTodos: [
-        { displayNumber: 2, content: "Legacy independent item", status: "pending" },
+        { displayNumber: 2, content: "Standalone session item", status: "pending" },
       ],
       taskCountTotal: 1,
       taskCountClaimed: 1,
@@ -1003,7 +1007,7 @@ void test("spark widget uses stable TODO display numbers instead of sorted row o
 
   assert.match(lines, /#9 Active item created later/);
   assert.match(lines, /#4 Pending item created first/);
-  assert.doesNotMatch(lines, /Legacy independent item/);
+  assert.match(lines, /#2 Standalone session item/);
   assert.ok(lines.indexOf("#9 Active") < lines.indexOf("#4 Pending"));
 });
 
@@ -1208,7 +1212,7 @@ void test("spark widget summarizes tasks and current-session in-memory running r
   ).join("\n");
 
   const header = lines.split("\n")[0] ?? "";
-  assert.match(header, /◆ Spark UX redesign · Phase: research/);
+  assert.match(header, /◆ Spark UX redesign · Phase: plan/);
   assert.doesNotMatch(header, /Tasks\(|a1b2c3d4|0c5a1efe|2dd9591d|stale-worker/);
 });
 
@@ -1223,16 +1227,16 @@ void test("spark widget renders phase on the project header", () => {
   );
   assert.match(planLines[0] ?? "", /^◆ Spark UX redesign · Phase: plan/);
 
-  const researchLines = renderSparkWidgetLines(
+  const implementLines = renderSparkWidgetLines(
     widgetState({
-      activeLens: { phase: "research", drive: "assist" },
-      tasks: [{ title: "Research task", status: "pending", todos: [] }],
+      activeLens: { phase: "implement", drive: "assist" },
+      tasks: [{ title: "Implementation task", status: "pending", todos: [] }],
     }),
     { terminal: { columns: 120 }, requestRender() {} },
     theme,
   );
-  assert.match(researchLines[0] ?? "", /^◆ Spark UX redesign · Phase: research/);
-  assert.doesNotMatch(researchLines[0] ?? "", /Lens:/);
+  assert.match(implementLines[0] ?? "", /^◆ Spark UX redesign · Phase: implement/);
+  assert.doesNotMatch(implementLines[0] ?? "", /Lens:/);
 });
 
 void test("spark widget renders declarative project kind panels", () => {
@@ -1252,7 +1256,7 @@ void test("spark widget renders declarative project kind panels", () => {
     theme,
   );
 
-  assert.match(lines[0] ?? "", /^◆ Spark UX redesign · Phase: research/);
+  assert.match(lines[0] ?? "", /^◆ Spark UX redesign · Phase: plan/);
   assert.match(lines[1] ?? "", /^◇ \[demo\] Target: CLI smoke/);
   assert.match(lines[2] ?? "", /^◇ \[demo\] Metrics: 1\/2/);
 });
@@ -1288,7 +1292,7 @@ void test("spark widget keeps task summary out of the project header", () => {
     theme,
   );
 
-  assert.match(lines[0] ?? "", /^◆ Spark UX redesign · Phase: research/);
+  assert.match(lines[0] ?? "", /^◆ Spark UX redesign · Phase: plan/);
   assert.doesNotMatch(lines[0] ?? "", /Tasks\(/);
   assert.doesNotMatch(lines[0] ?? "", /a1b2c3d4|^├─/);
   assert.ok(
@@ -1315,7 +1319,7 @@ void test("spark widget hides placeholder-only done plan item state", () => {
   assert.deepEqual(lines, []);
 });
 
-void test("spark widget hides legacy independent items and renders project tasks", () => {
+void test("spark widget renders active session TODOs after project tasks", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: "Spark UX redesign",
@@ -1325,7 +1329,10 @@ void test("spark widget hides legacy independent items and renders project tasks
         { title: "Pending task", status: "pending", agentLabel: "unassigned", todos: [] },
         { title: "Running task", status: "running", agentLabel: "unassigned", todos: [] },
       ],
-      independentTodos: [{ displayNumber: 2, content: "Legacy follow-up", status: "pending" }],
+      independentTodos: [
+        { displayNumber: 2, content: "Standalone follow-up", status: "pending" },
+        { displayNumber: 5, content: "Finished follow-up", status: "done" },
+      ],
       taskCountTotal: 4,
       taskCountClaimed: 0,
       taskCountClaimedBySession: 0,
@@ -1336,11 +1343,13 @@ void test("spark widget hides legacy independent items and renders project tasks
   );
 
   const text = lines.join("\n");
-  assert.doesNotMatch(text, /Legacy follow-up/);
+  assert.match(text, /#2 Standalone follow-up/);
+  assert.doesNotMatch(text, /Finished follow-up/);
   assert.ok(text.indexOf("Spark UX redesign") < text.indexOf("Running task"));
   assert.ok(text.indexOf("Running task") < text.indexOf("Pending task"));
   assert.ok(text.indexOf("Pending task") < text.indexOf("Done task"));
   assert.ok(text.indexOf("Done task") < text.indexOf("Cancelled task"));
+  assert.ok(text.indexOf("Cancelled task") < text.indexOf("Standalone follow-up"));
 });
 
 void test("spark widget truncates wide rendered rows", () => {

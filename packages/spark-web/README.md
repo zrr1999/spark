@@ -35,17 +35,4 @@ Search provider support starts with Brave Search via `BRAVE_API_KEY`; tests and 
 
 `code_search` is implemented through the configured Spark web search providers with a code/docs-oriented query rewrite and cached responseId output.
 
-## Replacement-mode validation
-
-Safe replacement flow for this environment:
-
-1. Keep `npm:pi-web-access` installed while validating Spark coexistence.
-2. Run focused validation:
-   - `pnpm exec node --experimental-strip-types --test test/spark-web.test.ts`
-   - `pnpm --filter @zendev-lab/spark-web run check`
-3. Run strict Spark-only replacement smoke from the repository root:
-   - `pnpm run check:daemon-readiness`
-4. Confirm the smoke reports `replacementReady: true` and `missingTools: []`.
-5. Only then remove `npm:pi-web-access` from `~/.pi/agent/settings.json` if desired.
-
-Rollback is simply re-adding `npm:pi-web-access` to the Pi package list. Spark skips duplicate web tool aliases when pi-web-access owns them.
+If another host already owns one of these tool names, registration skips it by default. Spark also retries registration at `session_start` when host inspection is unavailable, preserving coexistence without replacing the existing tool.

@@ -11,6 +11,7 @@ import {
   injectSparkHints,
   type SparkInputModeRouter,
 } from "../packages/pi-extension/src/extension/spark-active-injection.ts";
+import { renderSparkPlanningModePrompt } from "../packages/pi-extension/src/extension/mode/spark-mode-renderers.ts";
 import { analyzeSparkEntryMode } from "../packages/pi-extension/src/extension/spark-entry.ts";
 import {
   loadSparkMode,
@@ -50,7 +51,7 @@ async function withActiveSparkInputProject<T>(
   }
 }
 
-void test("injectSparkHints injects default research lens without initialized Spark graph", async () => {
+void test("injectSparkHints injects default plan lens without initialized Spark graph", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-active-input-no-graph-"));
   try {
     const ctx = testSparkInputContext(dir);
@@ -62,13 +63,13 @@ void test("injectSparkHints injects default research lens without initialized Sp
     assert.doesNotMatch(prompt, /# Spark/);
     assert.match(prompt, /# spark-cue/);
     assert.match(prompt, /# spark-graft/);
-    assert.equal((await loadSparkMode(dir, ctx)).mode, "research");
+    assert.equal((await loadSparkMode(dir, ctx)).mode, "plan");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-void test("handleSparkInput lets ordinary research-like input continue without canned route ask", async () => {
+void test("handleSparkInput lets an ordinary investigation request continue in plan", async () => {
   await withActiveSparkInputProject(
     async ({ dir, ctx, router, customMessages, queuedInstructions }) => {
       const result = await handleSparkInput(
@@ -82,7 +83,7 @@ void test("handleSparkInput lets ordinary research-like input continue without c
       assert.equal(customMessages.length, 0);
       assert.equal(queuedInstructions.length, 0);
       assert.equal((await defaultArtifactStore(dir).list({ producer: "ask" })).length, 0);
-      assert.equal((await loadSparkMode(dir, ctx)).mode, "research");
+      assert.equal((await loadSparkMode(dir, ctx)).mode, "plan");
     },
   );
 });
@@ -101,12 +102,12 @@ void test("handleSparkInput does not turn until-done input into a template ask",
       assert.equal(customMessages.length, 0);
       assert.equal(queuedInstructions.length, 0);
       assert.equal((await defaultArtifactStore(dir).list({ producer: "ask" })).length, 0);
-      assert.equal((await loadSparkMode(dir, ctx)).mode, "research");
+      assert.equal((await loadSparkMode(dir, ctx)).mode, "plan");
     },
   );
 });
 
-void test("handleSparkInput lets active goal input bypass research route ask", async () => {
+void test("handleSparkInput lets active goal input bypass phase route ask", async () => {
   await withActiveSparkInputProject(
     async ({ dir, ctx, router, customMessages, queuedInstructions }) => {
       await setSessionGoal(dir, ctx, {
@@ -126,7 +127,7 @@ void test("handleSparkInput lets active goal input bypass research route ask", a
       assert.equal(customMessages.length, 0);
       assert.equal(queuedInstructions.length, 0);
       assert.equal((await defaultArtifactStore(dir).list({ producer: "ask" })).length, 0);
-      assert.equal((await loadSparkMode(dir, ctx)).mode, "research");
+      assert.equal((await loadSparkMode(dir, ctx)).mode, "plan");
     },
   );
 });
@@ -156,7 +157,51 @@ void test("analyzeSparkEntryMode treats stack-trace bugfix with no tasks as plan
   assert.match(analysis.reasons.join("\n"), /no pending\/ready project task exists/);
 });
 
-void test("handleSparkInput lets slash commands bypass default research routing", async () => {
+void test("research, inspect, review, and audit signals resolve directly to plan", () => {
+  const graph = new TaskGraph();
+  const project = graph.createProject({
+    title: "Merged plan project",
+    description: "Project for merged plan analysis.",
+  });
+
+  for (const prompt of [
+    "research the scheduler",
+    "inspect this code",
+    "review the API",
+    "audit it",
+  ]) {
+    const analysis = analyzeSparkEntryMode(
+      graph,
+      { kind: "initialized", hasCurrentProject: true, unfinishedTaskCount: 0 },
+      prompt,
+      project,
+    );
+    assert.equal(analysis.recommendation, "plan", prompt);
+  }
+});
+
+void test("automatic plan policy keeps ordinary investigation free of durable writes", () => {
+  const graph = new TaskGraph();
+  const project = graph.createProject({
+    title: "Read-only plan project",
+    description: "Project for merged plan prompt policy.",
+  });
+  const prompt = renderSparkPlanningModePrompt(
+    graph,
+    project.ref,
+    "Explain the current architecture",
+    "auto",
+  );
+
+  assert.match(prompt, /Investigate and answer directly by default/u);
+  assert.match(
+    prompt,
+    /Ordinary investigation, explanation, review, and commentary do not require/u,
+  );
+  assert.match(prompt, /create or revise durable project state only when/u);
+});
+
+void test("handleSparkInput lets slash commands bypass default plan routing", async () => {
   await withActiveSparkInputProject(
     async ({ dir, ctx, router, customMessages, queuedInstructions }) => {
       ctx.selectedPrefix = "Research";
@@ -172,7 +217,7 @@ void test("handleSparkInput lets slash commands bypass default research routing"
       assert.equal(customMessages.length, 0);
       assert.equal(queuedInstructions.length, 0);
       assert.equal((await defaultArtifactStore(dir).list({ producer: "ask" })).length, 0);
-      assert.equal((await loadSparkMode(dir, ctx)).mode, "research");
+      assert.equal((await loadSparkMode(dir, ctx)).mode, "plan");
     },
   );
 });

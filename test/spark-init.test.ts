@@ -123,7 +123,7 @@ void test("initializeSparkIdea does not overwrite an existing initialized projec
 
 void test("Spark prompt preserves base prompt and stays a single-line phase marker", () => {
   const prompt = renderSparkActiveSystemPrompt("Base prompt");
-  assert.match(prompt, /^Base prompt\n\nSpark default research phase\./);
+  assert.match(prompt, /^Base prompt\n\nSpark phase: plan\./);
   assert.match(prompt, /Tools:/);
   assert.match(
     prompt,

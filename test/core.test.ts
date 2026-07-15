@@ -385,11 +385,11 @@ void test("Spark prompt stays short and tool-scoped", () => {
   assert.ok(prompt.length < 260, `expected short standing prompt, got ${prompt.length}`);
 });
 
-void test("Spark prompt changes when the current session mode changes", () => {
+void test("Spark prompt defaults to plan and changes for implementation mode", () => {
   const defaultPrompt = renderSparkActiveSystemPrompt("");
   const planPrompt = renderSparkActiveSystemPrompt("", "plan");
   const implementPrompt = renderSparkActiveSystemPrompt("", "implement");
-  assert.notEqual(planPrompt, defaultPrompt);
+  assert.equal(planPrompt, defaultPrompt);
   assert.notEqual(implementPrompt, planPrompt);
   assert.match(planPrompt, /\bplan\b/);
   assert.match(implementPrompt, /\bimplement\b/);

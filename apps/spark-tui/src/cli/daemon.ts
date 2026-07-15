@@ -2,10 +2,8 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync } from "node:fs";
-import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { StringDecoder } from "node:string_decoder";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
@@ -18,10 +16,19 @@ import {
   type SparkCommand,
   type SparkAssignment,
   type SparkDaemonEvent,
+  type SparkInvocationListResult,
+  type SparkInvocationRetentionPreviewResult,
+  type SparkInvocationRetryResult,
+  type SparkInvocationStatus,
   type SparkSessionCreateRequest,
   type SparkSessionListRequest,
   type SparkSessionRegistryRecord,
   type SparkSessionView,
+  type SparkTurnCancelResult,
+  type SparkTurnResult,
+  type SparkTurnStatusResult,
+  type SparkTurnStreamPage,
+  type SparkTurnSubmitResult,
 } from "@zendev-lab/spark-protocol";
 import { sparkDaemonCliStrings } from "@zendev-lab/spark-i18n/cli";
 import {
@@ -73,14 +80,20 @@ export type SparkDaemonCliAction =
   | "help"
   | "status"
   | "submit"
-  | "queue"
+  | "invocation"
   | "start"
   | "sessions"
   | "channel"
   | "runs"
   | "events"
   | "service";
-export type SparkDaemonCliQueueState = "inbox" | "processed" | "failed" | "all";
+export type SparkDaemonRunState =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "all";
 
 const STRINGS = sparkDaemonCliStrings();
 
@@ -96,23 +109,22 @@ export interface SparkDaemonClientOptions {
   startService?: (paths: SparkDaemonClientPaths) => unknown;
   daemonStatus?: (paths: SparkDaemonClientPaths) => Promise<SparkDaemonLocalStatus>;
   channelStatus?: (paths: SparkDaemonClientPaths) => Promise<ChannelStatusSnapshot>;
-  daemonQueue?: (
-    paths: SparkDaemonClientPaths,
-    params: { state?: SparkDaemonCliQueueState; limit?: number; fileName?: string },
-  ) => Promise<LocalDaemonQueueResult>;
   turnSubmit?: (
     paths: SparkDaemonClientPaths,
     input: SparkDaemonTurnSubmitInput,
   ) => Promise<LocalTurnSubmitResult>;
+  turnStatus?: (
+    paths: SparkDaemonClientPaths,
+    input: { invocationId: string },
+  ) => Promise<LocalTurnStatusResult>;
   turnCancel?: (
     paths: SparkDaemonClientPaths,
     input: { invocationId: string; reason?: string },
   ) => Promise<LocalTurnCancelResult>;
   turnStream?: (
     paths: SparkDaemonClientPaths,
-    input: SparkDaemonTurnSubmitInput,
-    handlers: { onEvent?: (event: SparkDaemonEvent) => void; signal?: AbortSignal },
-  ) => Promise<LocalTurnSubmitResult>;
+    input: { invocationId: string; after?: number; limit?: number },
+  ) => Promise<LocalTurnStreamResult>;
   controlRequest?: (method: string, params: unknown) => Promise<unknown>;
   workspaceEnsureLocal?: (
     paths: SparkDaemonClientPaths,
@@ -145,7 +157,7 @@ export interface SparkDaemonClientOptions {
   ) => Promise<LocalDaemonSessionTextResult>;
   runList?: (
     paths: SparkDaemonClientPaths,
-    params?: { state?: SparkDaemonCliQueueState; limit?: number },
+    params?: { state?: SparkDaemonRunState; limit?: number },
   ) => Promise<LocalDaemonRunListResult>;
   runShow?: (
     paths: SparkDaemonClientPaths,
@@ -171,7 +183,12 @@ export interface SparkDaemonLocalStatus {
     lastHeartbeatAt?: string;
     lastDisconnectReason?: string;
   }>;
-  queue: Record<"inbox" | "processed" | "failed", number>;
+  invocations: Record<"queued" | "running" | "succeeded" | "failed" | "cancelled", number>;
+  invocationHealth?: { oldestQueuedAt?: string; oldestRunningAt?: string };
+  lifecycle?: {
+    state: "running" | "draining";
+    restartRequestedAt?: string;
+  };
 }
 
 export interface SparkDaemonTurnSubmitInput {
@@ -180,6 +197,7 @@ export interface SparkDaemonTurnSubmitInput {
   model?: string;
   reset?: boolean;
   assignment?: SparkAssignment;
+  messageMetadata?: Record<string, unknown>;
 }
 
 export interface SparkDaemonTurnSubmitTask extends SparkDaemonTurnSubmitInput {
@@ -197,19 +215,14 @@ export interface SparkDaemonClientStatus {
   [key: string]: unknown;
 }
 
-export interface LocalTurnSubmitResult {
-  fileName: string;
-  filePath: string;
-  task: SparkDaemonTurnSubmitTask;
-  observedAt: string;
-}
-
-export interface LocalTurnCancelResult {
-  invocationId: string;
-  cancelled: boolean;
-  message: string;
-  observedAt: string;
-}
+export type LocalTurnSubmitResult = SparkTurnSubmitResult;
+export type LocalTurnStatusResult = SparkTurnStatusResult;
+export type LocalTurnStreamResult = SparkTurnStreamPage;
+export type LocalTurnCancelResult = SparkTurnCancelResult;
+export type LocalTurnResult = SparkTurnResult;
+export type LocalInvocationListResult = SparkInvocationListResult;
+export type LocalInvocationRetryResult = SparkInvocationRetryResult;
+export type LocalInvocationRetentionPreviewResult = SparkInvocationRetentionPreviewResult;
 
 export interface LocalDaemonSessionListResult {
   sessions: SparkSessionInfo[];
@@ -230,37 +243,15 @@ export interface LocalDaemonSessionTextResult {
   observedAt: string;
 }
 
-export interface LocalDaemonQueueResult {
-  state: SparkDaemonCliQueueState;
-  entries?: Array<{
-    fileName: string;
-    filePath: string;
-    payload: {
-      enqueuedAt: string;
-      task: SparkDaemonTurnSubmitTask;
-      processedAt?: string;
-      result?: unknown;
-      failedAt?: string;
-      error?: string;
-    };
-  }>;
-  byState?: Partial<
-    Record<"inbox" | "processed" | "failed", NonNullable<LocalDaemonQueueResult["entries"]>>
-  >;
-  observedAt: string;
-}
-
 export interface LocalDaemonRunSummary {
   runKey: string;
   id: string;
-  state: SparkDaemonCliQueueState;
+  state: SparkDaemonRunState;
   sessionKey?: string;
   prompt?: string;
   enqueuedAt?: string;
-  processedAt?: string;
-  failedAt?: string;
-  fileName?: string;
-  filePath?: string;
+  startedAt?: string;
+  finishedAt?: string;
 }
 
 export interface LocalDaemonRunListResult {
@@ -387,10 +378,18 @@ export interface SparkDaemonSubmitCommand extends SparkDaemonCliCommandBase {
   assignment?: SparkAssignment;
 }
 
-export interface SparkDaemonQueueCommand extends SparkDaemonCliCommandBase {
-  action: "queue";
-  state: SparkDaemonCliQueueState;
+export interface SparkDaemonInvocationCommand extends SparkDaemonCliCommandBase {
+  action: "invocation";
+  subcommand: "list" | "status" | "result" | "stream" | "cancel" | "retry" | "retention";
+  invocationId?: string;
+  status?: SparkInvocationStatus;
+  sessionId?: string;
+  since?: string;
+  before?: string;
+  offset?: number;
+  after?: number;
   limit?: number;
+  reason?: string;
 }
 
 export interface SparkDaemonSessionsCommand extends SparkDaemonCliCommandBase {
@@ -445,7 +444,7 @@ export interface SparkDaemonRunsCommand extends SparkDaemonCliCommandBase {
   action: "runs";
   subcommand: "list" | "show" | "cancel";
   runId?: string;
-  state?: SparkDaemonCliQueueState;
+  state?: SparkDaemonRunState;
   limit?: number;
 }
 
@@ -468,7 +467,7 @@ export type SparkDaemonCliCommand =
   | SparkDaemonHelpCommand
   | SparkDaemonStatusCommand
   | SparkDaemonSubmitCommand
-  | SparkDaemonQueueCommand
+  | SparkDaemonInvocationCommand
   | SparkDaemonSessionsCommand
   | SparkDaemonChannelCommand
   | SparkDaemonRunsCommand
@@ -480,7 +479,7 @@ export type SparkDaemonCliResult =
   | { action: "help"; text: string }
   | SparkDaemonStatusResult
   | SparkDaemonSubmitResult
-  | SparkDaemonQueueResult
+  | SparkDaemonInvocationResult
   | SparkDaemonSessionsResult
   | SparkDaemonChannelResult
   | SparkDaemonRunsResult
@@ -497,9 +496,16 @@ export interface SparkDaemonSubmitResult {
   result: LocalTurnSubmitResult;
 }
 
-export interface SparkDaemonQueueResult {
-  action: "queue";
-  result: LocalDaemonQueueResult;
+export interface SparkDaemonInvocationResult {
+  action: "invocation";
+  result:
+    | LocalInvocationListResult
+    | LocalTurnStatusResult
+    | LocalTurnResult
+    | LocalTurnStreamResult
+    | LocalTurnCancelResult
+    | LocalInvocationRetryResult
+    | LocalInvocationRetentionPreviewResult;
 }
 
 export interface SparkDaemonSessionsResult {
@@ -603,11 +609,63 @@ export function parseSparkDaemonCliArgs(argv: string[]): SparkDaemonCliCommand {
         reset: readBooleanOption(parsed.options, "reset"),
       };
     }
-    case "queue": {
-      const state = readQueueState(readStringOption(parsed.options, "state") ?? "inbox");
-      const limit = readNumberOption(parsed.options, "limit");
-      return { action: "queue", json, state, limit };
+    case "invocation": {
+      const [subcommand = "list", positionalInvocationId] = parsed.positionals;
+      if (subcommand === "list") {
+        return {
+          action: "invocation",
+          subcommand,
+          json,
+          status: readInvocationStatus(readStringOption(parsed.options, "status")),
+          sessionId: readStringOption(parsed.options, "session")?.trim(),
+          since: readIsoDateTimeOption(parsed.options, "since"),
+          limit: readNumberOption(parsed.options, "limit"),
+          offset: readNumberOption(parsed.options, "offset"),
+        };
+      }
+      if (subcommand === "retention") {
+        const before = readIsoDateTimeOption(parsed.options, "before");
+        if (!before) throw new Error("spark daemon invocation retention requires --before <iso>");
+        return {
+          action: "invocation",
+          subcommand,
+          before,
+          limit: readNumberOption(parsed.options, "limit"),
+          json,
+        };
+      }
+      if (
+        subcommand !== "status" &&
+        subcommand !== "result" &&
+        subcommand !== "stream" &&
+        subcommand !== "cancel" &&
+        subcommand !== "retry"
+      ) {
+        throw new Error(`unknown spark daemon invocation command: ${subcommand}`);
+      }
+      const invocationId =
+        readStringOption(parsed.options, "invocation")?.trim() || positionalInvocationId?.trim();
+      if (!invocationId) {
+        throw new Error(`spark daemon invocation ${subcommand} requires <invocation-id>`);
+      }
+      return {
+        action: "invocation",
+        subcommand,
+        invocationId,
+        json,
+        ...(subcommand === "stream"
+          ? {
+              after: readNumberOption(parsed.options, "after"),
+              limit: readNumberOption(parsed.options, "limit"),
+            }
+          : {}),
+        ...(subcommand === "cancel"
+          ? { reason: readStringOption(parsed.options, "reason")?.trim() }
+          : {}),
+      };
     }
+    case "queue":
+      throw new Error(STRINGS.unknownCommand("queue"));
     case "session":
     case "sessions":
       return parseSparkDaemonSessionsCommand(parsed, json);
@@ -672,6 +730,35 @@ export function parseSparkDaemonCliArgs(argv: string[]): SparkDaemonCliCommand {
     default:
       throw new Error(STRINGS.unknownCommand(String(action)));
   }
+}
+
+function readInvocationStatus(value: string | undefined): SparkInvocationStatus | undefined {
+  if (!value?.trim()) return undefined;
+  const normalized = value.trim();
+  if (
+    normalized === "queued" ||
+    normalized === "running" ||
+    normalized === "succeeded" ||
+    normalized === "failed" ||
+    normalized === "cancelled"
+  ) {
+    return normalized;
+  }
+  throw new Error(
+    "spark daemon invocation --status must be queued, running, succeeded, failed, or cancelled",
+  );
+}
+
+function readIsoDateTimeOption(
+  options: ReturnType<typeof parseSparkCliOptions>["options"],
+  name: string,
+): string | undefined {
+  const value = readStringOption(options, name)?.trim();
+  if (!value) return undefined;
+  if (!Number.isFinite(Date.parse(value))) {
+    throw new Error(`spark daemon invocation --${name} must be an ISO date-time`);
+  }
+  return new Date(value).toISOString();
 }
 
 function parseSparkDaemonSessionsCommand(
@@ -819,7 +906,7 @@ function parseSparkDaemonRunsCommand(
 ): SparkDaemonRunsCommand {
   const [subcommand = "list", maybeRunId] = parsed.positionals;
   if (subcommand === "list") {
-    const state = readQueueState(readStringOption(parsed.options, "state") ?? "all");
+    const state = readRunState(readStringOption(parsed.options, "state") ?? "all");
     const limit = readNumberOption(parsed.options, "limit");
     return { action: "runs", subcommand, json, state, limit };
   }
@@ -862,11 +949,8 @@ export async function handleSparkDaemonCliCommand(
           client,
         ),
       };
-    case "queue":
-      return {
-        action: "queue",
-        result: await clientQueue({ state: command.state, limit: command.limit }, client),
-      };
+    case "invocation":
+      return { action: "invocation", result: await clientInvocation(command, client) };
     case "sessions":
       return { action: "sessions", result: await clientSessions(command, client) };
     case "channel":
@@ -918,8 +1002,32 @@ export async function runSparkDaemonCliCommand(
     output.write(result.result.text);
     return 0;
   }
+  if (result.action === "invocation" && !command.json) {
+    output.write(renderInvocationResult(result.result));
+    return 0;
+  }
   printSparkCliResult(output, result, { json: command.json });
   return 0;
+}
+
+function renderInvocationResult(result: SparkDaemonInvocationResult["result"]): string {
+  if ("invocations" in result) {
+    if (result.invocations.length === 0) return "No matching invocations.\n";
+    return `${result.invocations
+      .map(
+        (invocation) =>
+          `${invocation.invocationId} ${invocation.status} session=${invocation.sessionId ?? "-"} attempts=${invocation.attemptCount}${invocation.errorCode ? ` error=${invocation.errorCode}` : ""}`,
+      )
+      .join("\n")}\n`;
+  }
+  if ("retryOfInvocationId" in result) {
+    return `${result.invocationId} queued retry-of=${result.retryOfInvocationId}\n`;
+  }
+  if ("dryRun" in result) {
+    return `retention dry-run before=${result.before} invocations=${result.invocationIds.length} events=${result.eventCount} blocked=${result.blockedByDeliveryCount}\n`;
+  }
+  if ("assistantText" in result && result.assistantText) return `${result.assistantText}\n`;
+  return `${JSON.stringify(result, null, 2)}\n`;
 }
 
 export function sparkDaemonHelpText(): string {
@@ -970,14 +1078,25 @@ export function createSparkDaemonNativeResponder(
       await sessionReady;
     }
     const live = createDaemonLiveAssistantRenderer(context);
-    const result = await clientSubmitStreaming({ sessionId, prompt }, client, {
-      signal: context?.signal,
-      onEvent: live.onEvent,
-    });
+    const result = await clientSubmitStreaming(
+      {
+        sessionId,
+        prompt,
+        messageMetadata: {
+          origin: { kind: "user", host: "tui", surface: "local" },
+        },
+      },
+      client,
+      {
+        signal: context?.signal,
+        timeoutMs: options.timeoutMs,
+        onEvent: live.onEvent,
+      },
+    );
     if (options.waitForCompletion === false) {
-      return STRINGS.queuedSession(sessionId, result.fileName);
+      return STRINGS.queuedSession(sessionId, result.invocationId);
     }
-    const finalText = await waitForSubmittedTurn(result, client, {
+    const finalText = await waitForSubmittedTurn(sessionId, result, client, {
       signal: context?.signal,
       pollIntervalMs: options.pollIntervalMs,
       timeoutMs: options.timeoutMs,
@@ -1033,6 +1152,7 @@ interface SubmittedTurnWaitOptions {
 }
 
 async function waitForSubmittedTurn(
+  sessionId: string,
   submitted: LocalTurnSubmitResult,
   client: SparkDaemonClientOptions,
   options: SubmittedTurnWaitOptions = {},
@@ -1042,38 +1162,24 @@ async function waitForSubmittedTurn(
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     throwIfAborted(options.signal);
-    const queue = await clientQueue({ state: "all", fileName: submitted.fileName }, client);
-    const entry = findQueueEntry(queue, submitted.fileName);
-    if (entry?.payload.failedAt) {
-      throw new Error(entry.payload.error ?? STRINGS.failedFile(submitted.fileName));
+    const status = await clientTurnStatus({ invocationId: submitted.invocationId }, client);
+    if (status.status === "failed") {
+      throw new Error(status.error?.message ?? `Invocation ${submitted.invocationId} failed`);
     }
-    if (entry?.payload.processedAt) {
-      return renderProcessedTurnResponse(entry.payload.result, submitted);
+    if (status.status === "cancelled") {
+      throw new Error(status.cancelReason ?? `Invocation ${submitted.invocationId} was cancelled`);
+    }
+    if (status.status === "succeeded") {
+      return STRINGS.completedSession(sessionId, submitted.invocationId);
     }
     await delay(pollIntervalMs, undefined, { signal: options.signal });
   }
-  return STRINGS.queuedSession(submitted.task.sessionId, submitted.fileName);
+  return STRINGS.queuedSession(sessionId, submitted.invocationId);
 }
 
-function findQueueEntry(
-  queue: LocalDaemonQueueResult,
-  fileName: string,
-): NonNullable<LocalDaemonQueueResult["entries"]>[number] | undefined {
-  const entries = [
-    ...(queue.entries ?? []),
-    ...Object.values(queue.byState ?? {}).flatMap((items) => items ?? []),
-  ];
-  return entries.find((entry) => entry.fileName === fileName);
-}
-
-function renderProcessedTurnResponse(result: unknown, submitted: LocalTurnSubmitResult): string {
-  if (isRecord(result)) {
-    const assistantText = result.assistantText;
-    if (typeof assistantText === "string" && assistantText.trim()) return assistantText;
-    const stderr = result.stderr;
-    if (typeof stderr === "string" && stderr.trim()) return stderr;
-  }
-  return STRINGS.completedSession(submitted.task.sessionId, submitted.fileName);
+function isInvocationStreamSemanticError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /Unknown Spark invocation|INVOCATION_CURSOR_GAP|Invalid local RPC/u.test(message);
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
@@ -1099,21 +1205,6 @@ export function createSparkDaemonNativeCommands(
         canonicalCliTarget: "spark daemon status",
       },
       handler: async () => formatNativeDaemonStatus(await clientStatus(client)),
-    },
-    queue: {
-      description: STRINGS.nativeCommandDescriptions.queue,
-      metadata: {
-        source: "extension",
-        extensionId: "spark-daemon-native",
-        plane: "daemon",
-        resource: "queue",
-        verbs: ["list"],
-        canonicalCliTarget: "spark daemon queue",
-      },
-      handler: async (args) => {
-        const state = readNativeQueueState(args);
-        return formatNativeDaemonQueue(await clientQueue({ state, limit: 10 }, client));
-      },
     },
     start: {
       description: STRINGS.nativeCommandDescriptions.start,
@@ -1474,13 +1565,11 @@ async function clientRuns(
   if (client.runList) {
     return await client.runList(paths, { state: command.state, limit: command.limit });
   }
-  const queue = await clientQueue({ state: command.state ?? "all", limit: command.limit }, client);
-  const runs = runsFromQueue(queue);
   return {
     plane: "daemon",
     resource: "run",
-    runs,
-    text: runs.length ? runs.map(renderRunSummary).join("") : "No Spark daemon runs found.\n",
+    runs: [],
+    text: "No Spark daemon run list provider is configured.\n",
     observedAt: observedAt(client),
   };
 }
@@ -1500,50 +1589,8 @@ async function clientEvents(
   };
 }
 
-function runsFromQueue(queue: LocalDaemonQueueResult): LocalDaemonRunSummary[] {
-  const entries: Array<{
-    state: SparkDaemonCliQueueState;
-    entry: NonNullable<LocalDaemonQueueResult["entries"]>[number];
-  }> = [];
-  if (queue.state !== "all") {
-    for (const entry of queue.entries ?? []) entries.push({ state: queue.state, entry });
-  }
-  for (const [state, items] of Object.entries(queue.byState ?? {})) {
-    for (const entry of items ?? []) {
-      entries.push({ state: state as SparkDaemonCliQueueState, entry });
-    }
-  }
-  if (queue.state === "all" && queue.entries) {
-    for (const entry of queue.entries) entries.push({ state: inferRunState(entry), entry });
-  }
-  return entries.map(({ state, entry }) => ({
-    runKey: runKey(entry.fileName),
-    id: entry.fileName,
-    state,
-    sessionKey: sessionKeyFromRun(entry.payload.task.sessionId),
-    prompt: entry.payload.task.prompt,
-    enqueuedAt: entry.payload.enqueuedAt,
-    ...(entry.payload.processedAt ? { processedAt: entry.payload.processedAt } : {}),
-    ...(entry.payload.failedAt ? { failedAt: entry.payload.failedAt } : {}),
-    fileName: entry.fileName,
-    filePath: entry.filePath,
-  }));
-}
-
-function inferRunState(
-  entry: NonNullable<LocalDaemonQueueResult["entries"]>[number],
-): SparkDaemonCliQueueState {
-  if (entry.payload.failedAt) return "failed";
-  if (entry.payload.processedAt) return "processed";
-  return "inbox";
-}
-
 function runKey(id: string): string {
   return id.startsWith("run:") ? id : `run:${id}`;
-}
-
-function sessionKeyFromRun(id: string): string {
-  return id.startsWith("session:") ? id : `session:${id}`;
 }
 
 function renderRunSummary(run: LocalDaemonRunSummary): string {
@@ -1763,16 +1810,62 @@ async function clientChannelNotify(
   );
 }
 
-async function clientQueue(
-  params: { state?: SparkDaemonCliQueueState; limit?: number; fileName?: string },
+async function clientInvocation(
+  command: SparkDaemonInvocationCommand,
   client: SparkDaemonClientOptions,
-): Promise<LocalDaemonQueueResult> {
-  const paths = resolveSparkDaemonClientPaths(client);
-  if (client.daemonQueue) return await client.daemonQueue(paths, params);
-  return await localRpcRequest<LocalDaemonQueueResult>(
-    paths,
-    localRpcWireRequest("daemon.queue", params),
-  );
+): Promise<SparkDaemonInvocationResult["result"]> {
+  if (command.subcommand === "list") {
+    return await requestSparkDaemonControl<LocalInvocationListResult>(
+      "invocation.list",
+      {
+        ...(command.status ? { status: command.status } : {}),
+        ...(command.sessionId ? { sessionId: command.sessionId } : {}),
+        ...(command.since ? { since: command.since } : {}),
+        ...(command.limit !== undefined ? { limit: command.limit } : {}),
+        ...(command.offset !== undefined ? { offset: command.offset } : {}),
+      },
+      client,
+    );
+  }
+  if (command.subcommand === "retention") {
+    return await requestSparkDaemonControl<LocalInvocationRetentionPreviewResult>(
+      "invocation.retention.preview",
+      {
+        before: command.before,
+        ...(command.limit !== undefined ? { limit: command.limit } : {}),
+      },
+      client,
+    );
+  }
+  const invocationId = command.invocationId!;
+  if (command.subcommand === "status") {
+    return await clientTurnStatus({ invocationId }, client);
+  }
+  if (command.subcommand === "result") {
+    return await requestSparkDaemonControl<LocalTurnResult>(
+      "turn.result",
+      { invocationId },
+      client,
+    );
+  }
+  if (command.subcommand === "retry") {
+    return await requestSparkDaemonControl<LocalInvocationRetryResult>(
+      "invocation.retry",
+      { invocationId },
+      client,
+    );
+  }
+  if (command.subcommand === "stream") {
+    return await clientTurnStreamPage(
+      {
+        invocationId,
+        after: command.after,
+        limit: command.limit,
+      },
+      client,
+    );
+  }
+  return await clientCancelTurn({ invocationId, reason: command.reason }, client);
 }
 
 async function clientSubmit(
@@ -1800,6 +1893,32 @@ export async function requestSparkDaemonControl<T>(
   return await localRpcRequest<T>(paths, localRpcWireRequest(method, params));
 }
 
+export async function clientTurnStatus(
+  input: { invocationId: string },
+  client: SparkDaemonClientOptions,
+): Promise<LocalTurnStatusResult> {
+  const paths = resolveSparkDaemonClientPaths(client);
+  await clientEnsureRunning(client);
+  if (client.turnStatus) return await client.turnStatus(paths, input);
+  return await localRpcRequest<LocalTurnStatusResult>(
+    paths,
+    localRpcWireRequest("turn.status", input),
+  );
+}
+
+export async function clientTurnStreamPage(
+  input: { invocationId: string; after?: number; limit?: number },
+  client: SparkDaemonClientOptions,
+): Promise<LocalTurnStreamResult> {
+  const paths = resolveSparkDaemonClientPaths(client);
+  await clientEnsureRunning(client);
+  if (client.turnStream) return await client.turnStream(paths, input);
+  return await localRpcRequest<LocalTurnStreamResult>(
+    paths,
+    localRpcWireRequest("turn.stream", input),
+  );
+}
+
 export async function clientCancelTurn(
   input: { invocationId: string; reason?: string },
   client: SparkDaemonClientOptions,
@@ -1816,13 +1935,63 @@ export async function clientCancelTurn(
 async function clientSubmitStreaming(
   input: SparkDaemonTurnSubmitInput,
   client: SparkDaemonClientOptions,
-  handlers: { onEvent?: (event: SparkDaemonEvent) => void; signal?: AbortSignal } = {},
+  handlers: {
+    onEvent?: (event: SparkDaemonEvent) => void;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+  } = {},
 ): Promise<LocalTurnSubmitResult> {
-  const paths = resolveSparkDaemonClientPaths(client);
   await clientEnsureRunning(client);
-  if (client.turnStream) return await client.turnStream(paths, input, handlers);
-  if (handlers.onEvent) return await localRpcTurnStream(paths, input, handlers);
-  return await clientSubmit(input, client);
+  const submitted = await clientSubmit(input, client);
+  if (handlers.onEvent) await pollInvocationEvents(submitted.invocationId, client, handlers);
+  return submitted;
+}
+
+async function pollInvocationEvents(
+  invocationId: string,
+  client: SparkDaemonClientOptions,
+  handlers: {
+    onEvent?: (event: SparkDaemonEvent) => void;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+  },
+): Promise<void> {
+  let cursor = 0;
+  const deadline = Date.now() + (handlers.timeoutMs ?? 5 * 60_000);
+  while (true) {
+    throwIfAborted(handlers.signal);
+    let page: LocalTurnStreamResult;
+    try {
+      page = await clientTurnStreamPage({ invocationId, after: cursor, limit: 100 }, client);
+    } catch (error) {
+      if (handlers.signal?.aborted) throwIfAborted(handlers.signal);
+      if (isInvocationStreamSemanticError(error) || Date.now() >= deadline) throw error;
+      await delay(25, undefined, { signal: handlers.signal });
+      continue;
+    }
+    for (const event of page.events) {
+      try {
+        handlers.onEvent?.(parseSparkDaemonEvent(event.payload));
+      } catch {
+        // Invocation event storage can also contain non-daemon diagnostic payloads.
+      }
+    }
+    cursor = page.nextCursor;
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out while streaming invocation ${invocationId}`);
+    }
+    const status = await clientTurnStatus({ invocationId }, client);
+    if (
+      (status.status === "succeeded" ||
+        status.status === "failed" ||
+        status.status === "cancelled") &&
+      !page.hasMore &&
+      cursor >= status.eventCursor
+    ) {
+      return;
+    }
+    if (!page.hasMore) await delay(25, undefined, { signal: handlers.signal });
+  }
 }
 
 async function clientWorkspaceList(
@@ -2031,93 +2200,6 @@ async function localRpcRequest<T>(
   }
 }
 
-async function localRpcTurnStream(
-  paths: SparkDaemonClientPaths,
-  input: SparkDaemonTurnSubmitInput,
-  handlers: { onEvent?: (event: SparkDaemonEvent) => void; signal?: AbortSignal } = {},
-): Promise<LocalTurnSubmitResult> {
-  const requestId = localRequestId();
-  return await new Promise<LocalTurnSubmitResult>((resolvePromise, reject) => {
-    const socket = createConnection(paths.socketPath);
-    const decoder = new StringDecoder("utf8");
-    let buffer = "";
-    let submitted: LocalTurnSubmitResult | undefined;
-    let settled = false;
-    const cleanup = () => {
-      handlers.signal?.removeEventListener("abort", abort);
-      socket.removeListener("error", fail);
-    };
-    const resolveOnce = () => {
-      if (settled || !submitted) return;
-      settled = true;
-      cleanup();
-      socket.end();
-      resolvePromise(submitted);
-    };
-    const fail = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      socket.destroy();
-      reject(error);
-    };
-    const abort = () => fail(new Error("aborted"));
-    handlers.signal?.addEventListener("abort", abort, { once: true });
-    socket.setTimeout(1_000, () => fail(new Error(`Timed out connecting to ${paths.socketPath}`)));
-    socket.once("error", fail);
-    socket.on("connect", () => {
-      socket.setTimeout(5 * 60_000, () =>
-        fail(new Error(`Timed out waiting for daemon stream from ${paths.socketPath}`)),
-      );
-      socket.write(`${JSON.stringify(localRpcWireRequest("turn.stream", input, requestId))}\n`);
-    });
-    socket.on("close", () => {
-      if (submitted) resolveOnce();
-    });
-    socket.on("data", (chunk) => {
-      buffer += decoder.write(chunk);
-      let newline = buffer.indexOf("\n");
-      while (newline !== -1) {
-        const line = buffer.slice(0, newline);
-        buffer = buffer.slice(newline + 1);
-        try {
-          const message = parseLocalRpcStreamMessage(line, requestId);
-          if (message.result) submitted = message.result;
-          if (message.event) {
-            handlers.onEvent?.(message.event);
-            if (isTerminalStreamEvent(message.event)) resolveOnce();
-          }
-        } catch (error) {
-          fail(error instanceof Error ? error : new Error(String(error)));
-        }
-        newline = buffer.indexOf("\n");
-      }
-    });
-  });
-}
-
-function parseLocalRpcStreamMessage(
-  line: string,
-  requestId: string,
-): { result?: LocalTurnSubmitResult; event?: SparkDaemonEvent } {
-  const value = JSON.parse(line) as unknown;
-  if (!isRecord(value) || value.id !== requestId || value.ok !== true) {
-    const error = isRecord(value) && isRecord(value.error) ? value.error.message : undefined;
-    throw new Error(typeof error === "string" ? error : STRINGS.invalidStreamResponse);
-  }
-  return {
-    ...(isRecord(value.result) ? { result: value.result as unknown as LocalTurnSubmitResult } : {}),
-    ...(isRecord(value.event) ? { event: parseSparkDaemonEvent(value.event) } : {}),
-  };
-}
-
-function isTerminalStreamEvent(event: SparkDaemonEvent): boolean {
-  return (
-    event.type === "daemon.task.lifecycle" &&
-    (event.status === "succeeded" || event.status === "failed" || event.status === "cancelled")
-  );
-}
-
 function resolveSparkDaemonClientPaths(
   client: SparkDaemonClientOptions = {},
 ): SparkDaemonClientPaths {
@@ -2155,24 +2237,40 @@ function readDaemonLeafArg(raw: string | undefined): string | null | undefined {
   return raw === "root" ? null : raw;
 }
 
-function readQueueState(raw: string): SparkDaemonCliQueueState {
-  if (raw === "inbox" || raw === "processed" || raw === "failed" || raw === "all") return raw;
-  throw new Error(STRINGS.invalidQueueState(raw));
-}
-
-function readNativeQueueState(args: string): SparkDaemonCliQueueState {
-  const [raw = "inbox"] = args.trim().split(/\s+/u).filter(Boolean);
-  return readQueueState(raw);
+function readRunState(raw: string): SparkDaemonRunState {
+  if (
+    raw === "queued" ||
+    raw === "running" ||
+    raw === "succeeded" ||
+    raw === "failed" ||
+    raw === "cancelled" ||
+    raw === "all"
+  ) {
+    return raw;
+  }
+  throw new Error(`invalid daemon run state: ${raw}`);
 }
 
 function formatNativeDaemonStatus(status: SparkDaemonClientStatus): string {
-  const lines = [`daemon: ${status.running ? "running" : "stopped"}`];
+  const lifecycle = status.lifecycle;
+  const daemonState =
+    status.running &&
+    typeof lifecycle === "object" &&
+    lifecycle !== null &&
+    (lifecycle as { state?: unknown }).state === "draining"
+      ? "draining"
+      : status.running
+        ? "running"
+        : "stopped";
+  const lines = [`daemon: ${daemonState}`];
   if (typeof status.pid === "number") lines.push(`pid: ${status.pid}`);
   if (typeof status.socketPath === "string") lines.push(`socket: ${status.socketPath}`);
   if (typeof status.error === "string") lines.push(`error: ${status.error}`);
-  const queue = status.queue;
-  if (isQueueCounts(queue)) {
-    lines.push(`queue: inbox=${queue.inbox} processed=${queue.processed} failed=${queue.failed}`);
+  const invocations = status.invocations;
+  if (isInvocationCounts(invocations)) {
+    lines.push(
+      `invocations: queued=${invocations.queued} running=${invocations.running} succeeded=${invocations.succeeded} failed=${invocations.failed} cancelled=${invocations.cancelled}`,
+    );
   }
   const servers = Array.isArray(status.servers) ? status.servers : [];
   for (const server of servers) {
@@ -2183,52 +2281,15 @@ function formatNativeDaemonStatus(status: SparkDaemonClientStatus): string {
   return lines.join("\n");
 }
 
-function formatNativeDaemonQueue(result: LocalDaemonQueueResult): string {
-  const entries = flattenDaemonQueueEntries(result);
-  const lines = [`queue:${result.state} entries=${entries.length}`];
-  for (const entry of entries.slice(0, 10)) {
-    const suffix = queueEntryResultSuffix(entry.payload);
-    lines.push(
-      `${entry.fileName} • ${entry.payload.task.sessionId} • ${entry.payload.task.prompt}${suffix}`,
-    );
-  }
-  if (entries.length === 0) lines.push("queue is empty");
-  return lines.join("\n");
-}
-
-function queueEntryResultSuffix(
-  payload: NonNullable<LocalDaemonQueueResult["entries"]>[number]["payload"],
-): string {
-  if (typeof payload.error === "string" && payload.error.trim()) {
-    return ` • error=${truncateNativeQueueValue(payload.error)}`;
-  }
-  if (Object.hasOwn(payload, "result")) {
-    return ` • result=${truncateNativeQueueValue(payload.result)}`;
-  }
-  if (typeof payload.processedAt === "string") return " • processed";
-  return "";
-}
-
-function truncateNativeQueueValue(value: unknown): string {
-  const text = typeof value === "string" ? value : JSON.stringify(value) || String(value);
-  return text.length > 120 ? `${text.slice(0, 117)}...` : text;
-}
-
-function flattenDaemonQueueEntries(
-  result: LocalDaemonQueueResult,
-): NonNullable<LocalDaemonQueueResult["entries"]> {
-  if (result.entries) return result.entries;
-  if (!result.byState) return [];
-  return Object.values(result.byState).flatMap((entries) => entries ?? []);
-}
-
-function isQueueCounts(value: unknown): value is Record<"inbox" | "processed" | "failed", number> {
+function isInvocationCounts(value: unknown): value is SparkDaemonLocalStatus["invocations"] {
   return (
     typeof value === "object" &&
     value !== null &&
-    typeof (value as { inbox?: unknown }).inbox === "number" &&
-    typeof (value as { processed?: unknown }).processed === "number" &&
-    typeof (value as { failed?: unknown }).failed === "number"
+    typeof (value as { queued?: unknown }).queued === "number" &&
+    typeof (value as { running?: unknown }).running === "number" &&
+    typeof (value as { succeeded?: unknown }).succeeded === "number" &&
+    typeof (value as { failed?: unknown }).failed === "number" &&
+    typeof (value as { cancelled?: unknown }).cancelled === "number"
   );
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
-import { appendEvent } from "@zendev-lab/spark-server/projection-services";
+import { appendEvent } from "@zendev-lab/spark-coordination/projection-services";
 import {
   deleteWebPushSubscription,
   dispatchNotificationsForEventBatch,

@@ -18,5 +18,4 @@ export {
   renderSparkModeVisibleMessage,
   renderSparkPhaseVisibleMessage,
   renderSparkPlanningModePrompt,
-  renderSparkResearchModePrompt,
 } from "./spark-mode-renderers.ts";

@@ -98,6 +98,7 @@ void test("SparkSkillResolver discovers builtin, workspace, and user skills with
       cwd: join(dir, "repo"),
       builtinDirs: [builtin],
       userDir: user,
+      userAgentsDir: join(dir, "none-user-agents"),
     });
     const result = await resolver.resolve();
 
@@ -138,6 +139,7 @@ void test("SparkSkillResolver skips disabled skills and hides disable-model-invo
       cwd: dir,
       builtinDirs: [builtin],
       userDir: join(dir, "none"),
+      userAgentsDir: join(dir, "none-user-agents"),
     });
     const result = await resolver.resolve();
     assert.deepEqual(result.skills.map((skill) => skill.name).sort(), ["command-only", "visible"]);
@@ -167,10 +169,92 @@ void test("SparkSkillResolver follows Pi-style discovery roots and does not recu
       cwd: dir,
       builtinDirs: [skillsDir],
       userDir: join(dir, "none"),
+      userAgentsDir: join(dir, "none-user-agents"),
     });
     const result = await resolver.resolve();
 
     assert.deepEqual(result.skills.map((skill) => skill.name).sort(), ["nested", "root-md"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("SparkSkillResolver discovers cross-harness .agents/skills and ignores their root .md files", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-skills-agents-"));
+  try {
+    const repo = join(dir, "repo");
+    // Mark the repo root so project .agents/skills discovery stops here.
+    await mkdir(join(repo, ".git"), { recursive: true });
+    const cwd = join(repo, "nested", "pkg");
+    await mkdir(cwd, { recursive: true });
+
+    // Project .agents/skills: SKILL.md dir is a skill, root .md is ignored.
+    await writeSkill(
+      join(repo, ".agents", "skills"),
+      "project-agent/SKILL.md",
+      "name: project-agent\ndescription: Project agents skill\n",
+    );
+    await writeSkill(
+      join(repo, ".agents", "skills"),
+      "loose.md",
+      "name: loose\ndescription: Root markdown skill that must be ignored\n",
+    );
+
+    // User ~/.agents/skills equivalent.
+    const userAgents = join(dir, "home", ".agents", "skills");
+    await writeSkill(
+      userAgents,
+      "user-agent/SKILL.md",
+      "name: user-agent\ndescription: User agents skill\n",
+    );
+
+    const resolver = new SparkSkillResolver({
+      cwd,
+      builtinDirs: [join(dir, "none-builtin")],
+      userDir: join(dir, "none-user"),
+      userAgentsDir: userAgents,
+    });
+    const result = await resolver.resolve();
+
+    assert.deepEqual(result.skills.map((skill) => skill.name).sort(), [
+      "project-agent",
+      "user-agent",
+    ]);
+    assert.doesNotMatch(formatSparkSkillsForPrompt(result.skills), /loose/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("SparkSkillResolver lets the .agents/skills dir closest to cwd win a name collision", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-skills-agents-precedence-"));
+  try {
+    const repo = join(dir, "repo");
+    await mkdir(join(repo, ".git"), { recursive: true });
+    const cwd = join(repo, "nested");
+    await mkdir(cwd, { recursive: true });
+
+    await writeSkill(
+      join(repo, ".agents", "skills"),
+      "shared/SKILL.md",
+      "name: shared\ndescription: Repo-root agents skill\n",
+    );
+    await writeSkill(
+      join(cwd, ".agents", "skills"),
+      "shared/SKILL.md",
+      "name: shared\ndescription: Nearest agents skill\n",
+    );
+
+    const resolver = new SparkSkillResolver({
+      cwd,
+      builtinDirs: [join(dir, "none-builtin")],
+      userDir: join(dir, "none-user"),
+      userAgentsDir: join(dir, "none-user-agents"),
+    });
+    const result = await resolver.resolve();
+
+    const shared = result.skills.find((skill) => skill.name === "shared");
+    assert.equal(shared?.description, "Nearest agents skill");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -197,6 +281,7 @@ void test("loadMatchingSparkSkillsForPrompt loads full SKILL.md content by descr
       cwd: dir,
       builtinDirs: [builtin],
       userDir: join(dir, "none"),
+      userAgentsDir: join(dir, "none-user-agents"),
     });
     const { skills } = await resolver.resolve();
     const matches = await loadMatchingSparkSkillsForPrompt(skills, "please design an svg logo", 1);

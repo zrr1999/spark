@@ -17,7 +17,7 @@ export function suggestForegroundGoalPhase(
 
   if (foregroundPlanIntent(normalized)) return "plan";
   if (foregroundImplementIntent(normalized)) return "implement";
-  if (foregroundResearchIntent(normalized)) return "research";
+  if (foregroundResearchIntent(normalized)) return "plan";
   return "implement";
 }
 
@@ -51,7 +51,7 @@ export function foregroundUnfinishedTaskPhase(
   if (tasks.some((task) => task.kind !== "research" && task.kind !== "review")) {
     return "implement";
   }
-  return "research";
+  return "plan";
 }
 
 function emptyFrontierNeedsPlanning(objective: string): boolean {

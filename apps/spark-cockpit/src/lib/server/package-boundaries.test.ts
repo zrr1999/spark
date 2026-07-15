@@ -7,7 +7,7 @@ const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 const repoRoot = resolve(webRoot, "../..");
 
-const sparkServerAdapters = [
+const sparkCoordinationAdapters = [
   "agents-product.ts",
   "artifact-cache.ts",
   "command-submission.ts",
@@ -21,14 +21,14 @@ const sparkServerAdapters = [
 ];
 
 describe("package boundaries", () => {
-  it("keeps migrated server coordination modules as spark-server adapters", () => {
-    for (const adapter of sparkServerAdapters) {
+  it("keeps server coordination modules as spark-coordination adapters", () => {
+    for (const adapter of sparkCoordinationAdapters) {
       const source = readFileSync(join(webRoot, "src/lib/server", adapter), "utf8").trim();
-      expect(source).toMatch(/^export \* from "@zendev-lab\/spark-server\//u);
+      expect(source).toMatch(/^export \* from "@zendev-lab\/spark-coordination\//u);
     }
   });
 
-  it("keeps SvelteKit page loads behind spark-server query APIs", () => {
+  it("keeps SvelteKit page loads behind spark-coordination query APIs", () => {
     const pageServers = collectSourceFiles(join(webRoot, "src/routes")).filter((file) =>
       file.endsWith("+page.server.ts"),
     );
@@ -66,7 +66,7 @@ describe("package boundaries", () => {
 
   it("keeps artifact fallback out of daemon/local workspace files", () => {
     const agentsProduct = readFileSync(
-      join(repoRoot, "packages/spark-server/src/agents-product.ts"),
+      join(repoRoot, "packages/spark-coordination/src/agents-product.ts"),
       "utf8",
     );
     expect(agentsProduct).not.toContain('resolveSparkPaths({ app: "daemon" })');
@@ -96,7 +96,7 @@ describe("package boundaries", () => {
   });
 
   it("keeps client session mutations behind daemon local RPC", () => {
-    const clientRoots = [join(webRoot, "src"), join(repoRoot, "apps/spark-tui/src/cli")];
+    const clientRoots = [join(webRoot, "src"), join(repoRoot, "packages/spark-coordination/src")];
     const violations = clientRoots.flatMap((root) =>
       collectSourceFiles(root)
         .filter((file) => !file.endsWith(".test.ts"))

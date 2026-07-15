@@ -10,6 +10,7 @@ agentic = "agentic"
 earendil = "earendil"
 spark-md = "spark-md"
 sixbones = "sixbones"
+unsupport = "unsupport"
 typebox = "typebox"
 
 [files]

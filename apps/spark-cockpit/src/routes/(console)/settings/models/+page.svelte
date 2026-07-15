@@ -326,7 +326,7 @@
 <style>
   .models-settings {
     display: grid;
-    gap: 24px;
+    gap: var(--spacing-xl);
     max-width: 1040px;
     min-width: 0;
     width: 100%;
@@ -343,13 +343,13 @@
   .section-heading p,
   .muted {
     color: var(--color-ink-subtle);
-    line-height: 1.5;
+    line-height: var(--leading-body);
   }
 
   .eyebrow {
     color: var(--color-primary);
-    font-size: 11px;
-    font-weight: 800;
+    font-size: var(--text-caption);
+    font-weight: var(--weight-caption-medium);
     letter-spacing: 0.07em;
     text-transform: uppercase;
   }
@@ -367,8 +367,8 @@
   .flow-card,
   .provider-card {
     display: grid;
-    gap: 16px;
-    padding: 20px;
+    gap: var(--spacing-md);
+    padding: var(--spacing-lg);
   }
 
   .card-heading,
@@ -376,7 +376,7 @@
   .provider-heading {
     align-items: center;
     display: flex;
-    gap: 14px;
+    gap: var(--spacing-sm);
     justify-content: space-between;
   }
 
@@ -389,30 +389,30 @@
   .providers-section,
   .section-heading {
     display: grid;
-    gap: 6px;
+    gap: var(--spacing-xs);
   }
 
   .provider-grid {
     display: grid;
-    gap: 14px;
+    gap: var(--spacing-sm);
     grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-    margin-top: 8px;
+    margin-top: var(--spacing-xs);
   }
 
   .provider-heading > div {
     display: grid;
-    gap: 4px;
+    gap: var(--spacing-xxs);
     min-width: 0;
   }
 
   .status {
     background: var(--color-surface-soft);
     border: 1px solid var(--color-border);
-    border-radius: 999px;
+    border-radius: var(--rounded-full);
     color: var(--color-ink-subtle);
     flex: 0 0 auto;
-    font-size: 11px;
-    font-weight: 750;
+    font-size: var(--text-caption);
+    font-weight: var(--weight-caption-medium);
     padding: 5px 9px;
   }
 
@@ -448,7 +448,7 @@
     align-items: flex-start;
     display: flex;
     flex-wrap: wrap;
-    gap: 10px;
+    gap: var(--spacing-sm);
   }
 
   .provider-actions > form {
@@ -465,14 +465,14 @@
     color: var(--color-primary);
     cursor: pointer;
     display: flex;
-    font-size: 13px;
+    font-size: var(--text-body);
     font-weight: 700;
     min-height: 40px;
     width: fit-content;
   }
 
   .credential-editor[open] > summary {
-    margin-bottom: 10px;
+    margin-bottom: var(--spacing-sm);
   }
 
   form {
@@ -482,18 +482,18 @@
   .credential-form,
   .prompt-form {
     display: grid;
-    gap: 10px;
+    gap: var(--spacing-sm);
   }
 
   .ambient-note {
     flex-basis: 100%;
-    font-size: 12px;
+    font-size: var(--text-caption);
   }
 
   .notice,
   .form-message {
-    border-radius: 10px;
-    padding: 12px;
+    border-radius: var(--rounded-md);
+    padding: var(--spacing-sm);
   }
 
   .notice {
@@ -502,7 +502,7 @@
     border: 1px solid var(--color-danger-soft);
     color: var(--color-danger);
     display: flex;
-    gap: 8px;
+    gap: var(--spacing-xs);
   }
 
   .form-message {
@@ -519,14 +519,14 @@
 
   .device-code {
     background: var(--color-canvas);
-    border-radius: 10px;
+    border-radius: var(--rounded-md);
     display: grid;
-    gap: 5px;
-    padding: 12px;
+    gap: var(--spacing-xxs);
+    padding: var(--spacing-sm);
   }
 
   .device-code strong {
-    font-family: ui-monospace, monospace;
+    font-family: var(--font-mono);
     font-size: 22px;
     letter-spacing: 0.12em;
   }
@@ -547,93 +547,93 @@
     align-items: center;
     cursor: pointer;
     display: flex;
-    gap: 12px;
+    gap: var(--spacing-sm);
     justify-content: space-between;
     min-height: 48px;
-    padding: 0 18px;
+    padding: 0 var(--spacing-lg);
   }
 
   .technical-details > summary span {
     color: var(--color-ink-subtle);
-    font-size: 12px;
+    font-size: var(--text-caption);
   }
 
   .technical-body {
     border-top: 1px solid var(--color-border);
     display: grid;
-    gap: 20px;
-    padding: 18px;
+    gap: var(--spacing-lg);
+    padding: var(--spacing-lg);
   }
 
   .technical-provider-grid {
     display: grid;
-    gap: 12px;
+    gap: var(--spacing-sm);
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   }
 
   .technical-provider {
     background: var(--color-surface-soft);
-    border-radius: 10px;
+    border-radius: var(--rounded-md);
     display: grid;
-    gap: 10px;
-    padding: 14px;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm);
   }
 
   dl {
     display: grid;
-    gap: 8px;
+    gap: var(--spacing-xs);
     margin: 0;
   }
 
   dl > div {
     display: grid;
-    gap: 2px;
+    gap: var(--spacing-xxs);
   }
 
   dt {
     color: var(--color-ink-subtle);
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-weight: 700;
   }
 
   dd {
-    font-size: 12px;
+    font-size: var(--text-caption);
     margin: 0;
     overflow-wrap: anywhere;
   }
 
   code {
-    font-family: ui-monospace, monospace;
-    font-size: 11px;
+    font-family: var(--font-mono);
+    font-size: var(--text-caption);
   }
 
   .diagnostics {
     display: grid;
-    gap: 8px;
+    gap: var(--spacing-xs);
   }
 
   .diagnostics ul {
     display: grid;
-    gap: 6px;
+    gap: var(--spacing-xs);
     margin: 0;
-    padding-left: 20px;
+    padding-left: var(--spacing-lg);
   }
 
   .diagnostics li {
     color: var(--color-ink-muted);
-    font-size: 12px;
+    font-size: var(--text-caption);
     overflow-wrap: anywhere;
   }
 
   @media (max-width: 640px) {
     .models-settings {
-      gap: 20px;
+      gap: var(--spacing-lg);
     }
 
     .settings-card,
     .flow-card,
     .provider-card {
-      padding: 16px;
+      padding: var(--spacing-md);
     }
 
     .provider-grid,
@@ -666,14 +666,14 @@
     .technical-details > summary {
       align-items: flex-start;
       flex-direction: column;
-      gap: 3px;
+      gap: var(--spacing-xxs);
       justify-content: center;
       min-height: 64px;
-      padding: 10px 16px;
+      padding: var(--spacing-sm) var(--spacing-md);
     }
 
     .technical-body {
-      padding: 16px;
+      padding: var(--spacing-md);
     }
   }
 </style>

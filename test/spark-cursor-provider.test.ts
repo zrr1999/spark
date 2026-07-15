@@ -516,6 +516,16 @@ void test("Cursor live acceptance and dependency boundary are secret-safe and re
   );
   assert.match(liveScript, /serialized\.includes\(apiKey\)/u);
   assert.match(liveScript, /FORBIDDEN_OUTPUT_FIELD\.test\(serialized\)/u);
+  for (const forbiddenField of [
+    "authorization",
+    "bearer",
+    "cookie",
+    "token",
+    "apiKey",
+    "sessionCredential",
+  ]) {
+    assert.match(liveScript, new RegExp(`FORBIDDEN_OUTPUT_FIELD[\\s\\S]*${forbiddenField}`, "u"));
+  }
   assert.doesNotMatch(liveScript, /console\.(?:log|error)\([^\n]*apiKey/u);
   for (const outputField of [
     "provider",
@@ -554,9 +564,10 @@ void test("Cursor live acceptance and dependency boundary are secret-safe and re
   assert.deepEqual(rootPackage.optionalDependencies, platformPackages);
 
   const cursorSources = ["cursor-model-discovery.ts", "cursor-stream.ts"];
+  assert.ok(cursorSources.every((path) => path.endsWith(".ts")));
   for (const path of cursorSources) {
     const source = await readFile(join(process.cwd(), "packages/spark-ai/src", path), "utf8");
-    assert.doesNotMatch(source, /\.node["']|\bffi\b|native-addon/iu);
+    assert.doesNotMatch(source, /\.rs["']|\.node["']|\bffi\b|native-addon/iu);
   }
 });
 

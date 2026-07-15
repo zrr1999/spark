@@ -12,6 +12,8 @@ import {
 export { redactSecrets } from "../test/support/spark-plane-contracts.mts";
 
 const execFileAsync = promisify(execFile);
+const QUEUED_STUCK_MS = 5 * 60_000;
+const RUNNING_STUCK_MS = 15 * 60_000;
 
 export type ReadinessLevel = "pass" | "warn" | "fail";
 
@@ -57,8 +59,8 @@ export function evaluateDaemonReadiness(
   const daemon = extractDaemonStatusContract(status);
   const baselineDaemon =
     baselineStatus === undefined ? undefined : extractDaemonStatusContract(baselineStatus);
-  const queue = daemon.queue;
-  const baselineQueue = baselineDaemon?.queue;
+  const invocations = daemon.invocations;
+  const baselineInvocations = baselineDaemon?.invocations;
   const checks: ReadinessCheck[] = [];
 
   const daemonRunning = daemon.running === true;
@@ -118,68 +120,62 @@ export function evaluateDaemonReadiness(
     value: serverUrl,
   });
 
-  const inbox = queue?.inbox;
-  const processed = queue?.processed;
-  const failed = queue?.failed;
+  const queued = invocations?.queued;
+  const running = invocations?.running;
+  const failed = invocations?.failed;
   checks.push({
-    id: "queue.inbox",
-    level: inbox === undefined ? "warn" : inbox === 0 ? "pass" : "warn",
+    id: "invocations.queued",
+    level: queued === undefined ? "warn" : queued === 0 ? "pass" : "warn",
     message:
-      inbox === undefined
-        ? "queue.inbox is missing."
-        : inbox === 0
-          ? "Queue inbox is empty."
-          : `Queue inbox has ${inbox} pending item(s).`,
-    value: inbox,
+      queued === undefined
+        ? "invocations.queued is missing."
+        : queued === 0
+          ? "No queued invocations."
+          : `Queued invocation backlog has ${queued} pending item(s).`,
+    value: queued,
   });
   checks.push({
-    id: "queue.processed",
-    level: processed === undefined ? "warn" : "pass",
+    id: "invocations.running",
+    level: running === undefined ? "warn" : "pass",
     message:
-      processed === undefined
-        ? "queue.processed is missing."
-        : `Queue processed counter is ${processed}.`,
-    value: processed,
+      running === undefined
+        ? "invocations.running is missing."
+        : `${running} invocation(s) are running.`,
+    value: running,
   });
   checks.push({
-    id: "queue.failed",
-    level: failed === undefined ? "warn" : failed === 0 ? "pass" : "warn",
+    id: "invocations.failed",
+    level: failed === undefined ? "warn" : "pass",
     message:
       failed === undefined
-        ? "queue.failed is missing."
+        ? "invocations.failed is missing."
         : failed === 0
-          ? "Queue failed counter is zero."
-          : `Queue failed counter is ${failed}; inspect failed daemon work before claiming replacement readiness.`,
+          ? "Invocation failed counter is zero."
+          : `Invocation history contains ${failed} failed item(s); readiness is based on new failures after the supplied baseline.`,
     value: failed,
   });
 
-  const baselineInbox = baselineQueue?.inbox;
-  const baselineProcessed = baselineQueue?.processed;
-  const baselineFailed = baselineQueue?.failed;
-  appendQueueDeltaCheck(checks, "queue.delta.inbox", inbox, baselineInbox, {
+  appendStuckInvocationCheck(checks, "queued", daemon, QUEUED_STUCK_MS);
+  appendStuckInvocationCheck(checks, "running", daemon, RUNNING_STUCK_MS);
+
+  const baselineQueued = baselineInvocations?.queued;
+  const baselineFailed = baselineInvocations?.failed;
+  appendInvocationDeltaCheck(checks, "invocations.delta.queued", queued, baselineQueued, {
     pass: (delta) => delta <= 0,
     missing:
-      "queue.delta.inbox cannot be computed because current or baseline queue.inbox is missing.",
-    passMessage: (delta) => `Queue inbox delta is ${delta}; no backlog growth detected.`,
+      "invocations.delta.queued cannot be computed because current or baseline invocations.queued is missing.",
+    passMessage: (delta) => `Queued invocation delta is ${delta}; no backlog growth detected.`,
     warnMessage: (delta) =>
-      `Queue inbox delta is +${delta}; pending work increased during readiness window.`,
+      `Queued invocation delta is +${delta}; pending work increased during readiness window.`,
   });
-  appendQueueDeltaCheck(checks, "queue.delta.processed", processed, baselineProcessed, {
-    pass: (delta) => delta >= 0,
-    missing:
-      "queue.delta.processed cannot be computed because current or baseline queue.processed is missing.",
-    passMessage: (delta) => `Queue processed delta is +${delta}; processed counter is monotonic.`,
-    warnMessage: (delta) =>
-      `Queue processed delta is ${delta}; processed counter decreased or is inconsistent.`,
-  });
-  appendQueueDeltaCheck(checks, "queue.delta.failed", failed, baselineFailed, {
+  appendInvocationDeltaCheck(checks, "invocations.delta.failed", failed, baselineFailed, {
     pass: (delta) => delta === 0,
     missing:
-      "queue.delta.failed cannot be computed because current or baseline queue.failed is missing.",
+      "invocations.delta.failed cannot be computed because current or baseline invocations.failed is missing.",
     passMessage: (delta) =>
-      `Queue failed delta is ${delta}; no new failures detected during readiness window.`,
+      `Failed invocation delta is ${delta}; no new failures detected during readiness window.`,
     warnMessage: (delta) =>
-      `Queue failed delta is +${delta}; new daemon failures appeared during readiness window.`,
+      `Failed invocation delta is +${delta}; new daemon failures appeared during readiness window.`,
   });
 
   const websocketState = daemon.websocketState;
@@ -210,7 +206,35 @@ export function evaluateDaemonReadiness(
   };
 }
 
-function appendQueueDeltaCheck(
+function appendStuckInvocationCheck(
+  checks: ReadinessCheck[],
+  status: "queued" | "running",
+  daemon: ReturnType<typeof extractDaemonStatusContract>,
+  thresholdMs: number,
+): void {
+  const oldestAt =
+    status === "queued"
+      ? daemon.invocationHealth?.oldestQueuedAt
+      : daemon.invocationHealth?.oldestRunningAt;
+  const count = daemon.invocations?.[status];
+  const observedAt = daemon.observedAt ? Date.parse(daemon.observedAt) : Date.now();
+  const ageMs = oldestAt ? observedAt - Date.parse(oldestAt) : undefined;
+  const stuck = count !== undefined && count > 0 && ageMs !== undefined && ageMs >= thresholdMs;
+  checks.push({
+    id: `invocations.stuck.${status}`,
+    level: stuck ? "warn" : "pass",
+    message: stuck
+      ? `Oldest ${status} invocation is ${Math.floor(ageMs / 1_000)}s old; inspect it with spark daemon invocation list --status ${status} --limit 20.`
+      : count === 0
+        ? `No ${status} invocations require age checks.`
+        : oldestAt
+          ? `Oldest ${status} invocation is below the ${Math.floor(thresholdMs / 1_000)}s threshold.`
+          : `No ${status} invocation age is available.`,
+    value: { count, oldestAt: oldestAt ?? null, ageMs: ageMs ?? null },
+  });
+}
+
+function appendInvocationDeltaCheck(
   checks: ReadinessCheck[],
   id: string,
   current: number | undefined,

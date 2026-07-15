@@ -15,7 +15,7 @@ export function defaultSparkHome(sparkHome?: string): string {
   return resolve(sparkHome ?? process.env.SPARK_HOME ?? join(homedir(), ".spark"));
 }
 
-export function defaultSparkDaemonRoot(options: SparkDaemonPathOptions = {}): string {
+export function legacySparkDaemonQueueRoot(options: SparkDaemonPathOptions = {}): string {
   return resolve(
     options.daemonRoot ??
       (options.paths

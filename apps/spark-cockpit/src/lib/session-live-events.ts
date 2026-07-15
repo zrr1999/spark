@@ -1,4 +1,8 @@
-import type { SparkDaemonEvent, SparkSessionView } from "@zendev-lab/spark-protocol";
+import {
+  parseSparkDaemonEvent,
+  type SparkDaemonEvent,
+  type SparkSessionView,
+} from "@zendev-lab/spark-protocol";
 
 export interface SessionSerializedEvent {
   id: string;
@@ -14,7 +18,7 @@ export interface SessionLiveEventState {
   sessionId: string;
   workspaceId: string | null;
   view: SparkSessionView | null;
-  /** Queue file name used by the daemon cancellation contract for the active turn. */
+  /** Durable invocation id used by the daemon cancellation contract for the active turn. */
   activeTurnId: string | null;
   cursor: string | null;
   processedEventIds: Set<string>;
@@ -244,7 +248,7 @@ function applyDaemonEvent(
 
   if (daemonEvent.type !== "daemon.view_event") {
     if (daemonEvent.type === "daemon.task.lifecycle") {
-      const turnId = daemonEvent.taskFileName ?? daemonEvent.invocationId ?? null;
+      const turnId = daemonEvent.invocationId ?? null;
       if (daemonEvent.status === "queued" || daemonEvent.status === "running") {
         state.activeTurnId = turnId ?? state.activeTurnId;
       } else if (!turnId || turnId === state.activeTurnId) {
@@ -387,9 +391,9 @@ function stringField(value: unknown, key: string): string | null {
 function queuedTurnId(view: SparkSessionView | null): string | null {
   if (!view) return null;
   for (const message of view.messages) {
-    if (stringField(message.metadata, "source") !== "daemon.queue") continue;
-    const taskFileName = stringField(message.metadata, "taskFileName");
-    if (taskFileName) return taskFileName;
+    if (stringField(message.metadata, "source") !== "daemon.invocation") continue;
+    const invocationId = stringField(message.metadata, "invocationId");
+    if (invocationId) return invocationId;
   }
   return null;
 }
@@ -399,18 +403,11 @@ function nullableString(value: unknown): string | null {
 }
 
 function daemonEventFromPayload(value: unknown): SparkDaemonEvent | null {
-  if (!isRecord(value) || typeof value.type !== "string") return null;
-  if (
-    value.type !== "daemon.task.lifecycle" &&
-    value.type !== "daemon.view_event" &&
-    value.type !== "daemon.interaction.request" &&
-    value.type !== "daemon.interaction.response" &&
-    value.type !== "daemon.session.updated"
-  ) {
+  try {
+    return parseSparkDaemonEvent(value);
+  } catch {
     return null;
   }
-  if (value.type === "daemon.view_event" && !isRecord(value.view)) return null;
-  return value as unknown as SparkDaemonEvent;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

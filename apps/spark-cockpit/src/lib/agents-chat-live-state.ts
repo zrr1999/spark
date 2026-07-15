@@ -1,5 +1,5 @@
 import { sparkAgentsCockpitSource } from "@zendev-lab/spark-protocol/command-sources";
-import type { AgentsProductProjection } from "@zendev-lab/spark-server/agents-product";
+import type { AgentsProductProjection } from "@zendev-lab/spark-coordination/agents-product";
 
 export const agentsCockpitSource = sparkAgentsCockpitSource;
 

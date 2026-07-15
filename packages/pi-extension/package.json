@@ -11,7 +11,8 @@
   ],
   "type": "module",
   "exports": {
-    "./extension": "./src/extension/index.ts"
+    "./extension": "./src/extension/index.ts",
+    "./host-support": "./src/host-support.ts"
   },
   "publishConfig": {
     "access": "public"

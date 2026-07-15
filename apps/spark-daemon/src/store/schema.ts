@@ -22,10 +22,42 @@ export function migrateSparkDaemonDatabase(db: DatabaseSync): void {
       id TEXT PRIMARY KEY,
       command_id TEXT,
       workspace_binding_id TEXT,
-      status TEXT NOT NULL,
+      session_id TEXT,
+      idempotency_key TEXT,
+      status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
       prompt TEXT,
+      task_json TEXT,
+      result_json TEXT,
+      source_kind TEXT,
+      source_ref TEXT,
+      retry_of_invocation_id TEXT REFERENCES invocations(id),
+      worker_id TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      cancel_reason TEXT,
+      error_code TEXT,
+      error_message TEXT,
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      claimed_at TEXT,
+      started_at TEXT,
+      finished_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS invocation_events (
+      invocation_id TEXT NOT NULL REFERENCES invocations(id) ON DELETE CASCADE,
+      sequence INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (invocation_id, sequence)
+    );
+
+    CREATE TABLE IF NOT EXISTS invocation_event_deliveries (
+      destination TEXT NOT NULL,
+      invocation_id TEXT NOT NULL REFERENCES invocations(id) ON DELETE CASCADE,
+      sequence INTEGER NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (destination, invocation_id)
     );
 
     CREATE TABLE IF NOT EXISTS outbox (
@@ -33,6 +65,28 @@ export function migrateSparkDaemonDatabase(db: DatabaseSync): void {
       kind TEXT NOT NULL,
       payload_json TEXT NOT NULL,
       status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS runtime_command_receipts (
+      command_id TEXT PRIMARY KEY,
+      runtime_id TEXT NOT NULL,
+      scope TEXT NOT NULL CHECK (scope IN ('daemon', 'workspace')),
+      workspace_binding_id TEXT,
+      workspace_id TEXT,
+      project_id TEXT,
+      kind TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('processing', 'accepted', 'succeeded', 'failed', 'rejected')),
+      delivery_count INTEGER NOT NULL DEFAULT 1,
+      ack_json TEXT,
+      terminal_message_id TEXT,
+      terminal_json TEXT,
+      terminal_acked_at TEXT,
+      first_seen_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      completed_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -48,14 +102,27 @@ export function migrateSparkDaemonDatabase(db: DatabaseSync): void {
       status TEXT NOT NULL,
       request_json TEXT NOT NULL,
       response_json TEXT,
+      accepted_response_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS invocations_status_idx ON invocations(status);
+    CREATE INDEX IF NOT EXISTS invocations_status_idx ON invocations(status, created_at);
+    CREATE INDEX IF NOT EXISTS invocation_events_cursor_idx
+      ON invocation_events(invocation_id, sequence);
+    CREATE INDEX IF NOT EXISTS invocation_event_deliveries_cursor_idx
+      ON invocation_event_deliveries(destination, invocation_id, sequence);
     CREATE INDEX IF NOT EXISTS outbox_status_idx ON outbox(status, created_at);
+    CREATE INDEX IF NOT EXISTS runtime_command_receipts_terminal_idx
+      ON runtime_command_receipts(terminal_acked_at, completed_at)
+      WHERE terminal_json IS NOT NULL;
     CREATE INDEX IF NOT EXISTS daemon_human_waits_status_idx ON daemon_human_waits(status, created_at);
   `);
+  addMissingInvocationColumns(db);
+  const humanWaitColumns = workspaceColumns(db, "daemon_human_waits");
+  if (!humanWaitColumns.has("accepted_response_id")) {
+    db.exec("ALTER TABLE daemon_human_waits ADD COLUMN accepted_response_id TEXT");
+  }
   retireLegacyDaemonErrorOutbox(db);
   migrateWorkspacesTable(db);
   db.exec("CREATE INDEX IF NOT EXISTS workspaces_status_idx ON workspaces(status)");
@@ -111,6 +178,46 @@ function tableExists(db: DatabaseSync, table: string): boolean {
   return Boolean(
     db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1").get(table),
   );
+}
+
+function addMissingInvocationColumns(db: DatabaseSync): void {
+  const columns = workspaceColumns(db, "invocations");
+  const additions = [
+    ["session_id", "TEXT"],
+    ["idempotency_key", "TEXT"],
+    ["task_json", "TEXT"],
+    ["result_json", "TEXT"],
+    ["source_kind", "TEXT"],
+    ["source_ref", "TEXT"],
+    ["retry_of_invocation_id", "TEXT REFERENCES invocations(id)"],
+    ["worker_id", "TEXT"],
+    ["attempt_count", "INTEGER NOT NULL DEFAULT 0"],
+    ["cancel_reason", "TEXT"],
+    ["error_code", "TEXT"],
+    ["error_message", "TEXT"],
+    ["claimed_at", "TEXT"],
+    ["started_at", "TEXT"],
+    ["finished_at", "TEXT"],
+  ] as const;
+  for (const [name, type] of additions) {
+    if (!columns.has(name)) db.exec(`ALTER TABLE invocations ADD COLUMN ${name} ${type}`);
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS invocation_events (
+      invocation_id TEXT NOT NULL REFERENCES invocations(id) ON DELETE CASCADE,
+      sequence INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (invocation_id, sequence)
+    );
+    CREATE INDEX IF NOT EXISTS invocations_session_status_idx ON invocations(session_id, status);
+    CREATE UNIQUE INDEX IF NOT EXISTS invocations_idempotency_idx
+      ON invocations(idempotency_key)
+      WHERE idempotency_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS invocation_events_cursor_idx
+      ON invocation_events(invocation_id, sequence);
+  `);
 }
 
 function migrateWorkspacesTable(db: DatabaseSync): void {

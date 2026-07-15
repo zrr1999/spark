@@ -3,7 +3,7 @@ import { JsonStoreFormatError } from "./json-store.ts";
 
 export type SparkRunStrategy = "sequential" | "parallel";
 export type SparkPlanningModeSource = "auto" | "direct";
-export type SparkAgentPhase = "research" | "plan" | "implement";
+export type SparkAgentPhase = "plan" | "implement";
 /** @deprecated Use SparkAgentPhase. */
 export type SparkAgentMode = SparkAgentPhase;
 
@@ -46,8 +46,9 @@ export function normalizeSparkAgentPhase(
   filePath = "<input>",
 ): SparkAgentPhase | undefined {
   if (value === undefined) return undefined;
-  if (value === "research" || value === "plan" || value === "implement") return value;
-  throw new JsonStoreFormatError(filePath, "phase must be research, plan, or implement");
+  if (value === "research") return "plan";
+  if (value === "plan" || value === "implement") return value;
+  throw new JsonStoreFormatError(filePath, "phase must be plan or implement");
 }
 
 function optionalString(value: unknown, filePath: string, path: string): string | undefined {

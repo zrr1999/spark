@@ -15,7 +15,7 @@ import type { SparkSessionContext } from "./session-identity.ts";
 // Types
 // ---------------------------------------------------------------------------
 
-export type SparkSessionPhase = "research" | "plan" | "implement";
+export type SparkSessionPhase = "plan" | "implement";
 
 export type SparkReproStageName = "setup" | "scaffold" | "reproduce" | "scale" | "deliver";
 
@@ -63,7 +63,7 @@ export interface SparkSessionReproRetryState {
 }
 
 export interface SparkSessionRepro {
-  version: 1;
+  version: 2;
   reproId: string;
   sessionKey: string;
   status: SparkReproStatus;
@@ -86,8 +86,32 @@ export interface SparkSessionRepro {
 }
 
 interface SparkSessionReproSnapshot {
-  version: 1;
+  version: 2;
   repro?: SparkSessionRepro;
+  [key: string]: unknown;
+}
+
+interface StoredSparkSessionRepro extends Omit<
+  SparkSessionRepro,
+  "version" | "currentPhase" | "stages"
+> {
+  version: 1 | 2;
+  currentPhase: SparkSessionPhase | "research";
+  stages: Array<
+    Omit<SparkReproStage, "phases" | "acceptance"> & {
+      phases: Array<SparkSessionPhase | "research">;
+      acceptance: Array<
+        Omit<SparkReproAcceptanceCondition, "phase"> & {
+          phase: SparkSessionPhase | "research";
+        }
+      >;
+    }
+  >;
+}
+
+interface StoredSparkSessionReproSnapshot {
+  version: 1 | 2;
+  repro?: StoredSparkSessionRepro;
   [key: string]: unknown;
 }
 
@@ -99,9 +123,9 @@ export const DEFAULT_REPRO_STAGES: SparkReproStage[] = [
   {
     name: "setup",
     title: "Setup",
-    phases: ["research", "plan"],
+    phases: ["plan"],
     acceptance: [
-      { description: "Problem statement documented", phase: "research", satisfied: false },
+      { description: "Problem statement documented", phase: "plan", satisfied: false },
       { description: "Reproduction strategy planned", phase: "plan", satisfied: false },
     ],
   },
@@ -320,7 +344,7 @@ export function createSparkSessionRepro(
   const reproId = crypto.randomUUID?.() ?? `repro-${Date.now()}`;
   const objective = options.objective?.trim();
   return {
-    version: 1,
+    version: 2,
     reproId,
     sessionKey,
     status: "active",
@@ -346,9 +370,14 @@ export async function readSessionRepro(
   ctx?: SparkSessionContext,
 ): Promise<SparkSessionRepro | undefined> {
   const path = sessionReproStorePath(cwd, ctx);
-  const snapshot = await readJsonFileOptional<SparkSessionReproSnapshot>(path);
-  if (!snapshot || snapshot.version !== 1) return undefined;
-  return snapshot.repro;
+  const snapshot = await readJsonFileOptional<StoredSparkSessionReproSnapshot>(path);
+  if (!snapshot || (snapshot.version !== 1 && snapshot.version !== 2)) return undefined;
+  const repro = snapshot.repro ? normalizeReproPhases(snapshot.repro) : undefined;
+  if (snapshot.version === 1 || snapshot.repro?.version === 1) {
+    await writeJsonFileAtomic(path, { version: 2, repro } satisfies SparkSessionReproSnapshot);
+    await rebuildSessionIndex(cwd);
+  }
+  return repro;
 }
 
 export async function writeSessionRepro(
@@ -357,9 +386,27 @@ export async function writeSessionRepro(
   ctx?: SparkSessionContext,
 ): Promise<void> {
   const path = sessionReproStorePath(cwd, ctx);
-  const snapshot: SparkSessionReproSnapshot = { version: 1, repro };
+  const snapshot: SparkSessionReproSnapshot = { version: 2, repro };
   await writeJsonFileAtomic(path, snapshot);
   await rebuildSessionIndex(cwd);
+}
+
+function normalizeReproPhases(repro: StoredSparkSessionRepro): SparkSessionRepro {
+  const normalizePhase = (phase: SparkSessionPhase | "research"): SparkSessionPhase =>
+    phase === "research" ? "plan" : phase;
+  return {
+    ...repro,
+    version: 2,
+    currentPhase: normalizePhase(repro.currentPhase),
+    stages: repro.stages.map((stage) => ({
+      ...stage,
+      phases: [...new Set(stage.phases.map(normalizePhase))],
+      acceptance: stage.acceptance.map((condition) => ({
+        ...condition,
+        phase: normalizePhase(condition.phase),
+      })),
+    })),
+  };
 }
 
 export async function clearSessionRepro(cwd: string, ctx?: SparkSessionContext): Promise<void> {

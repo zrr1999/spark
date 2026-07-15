@@ -7,7 +7,11 @@ import { bearerTokenFromAuthorization } from "@zendev-lab/spark-system";
 import { json, type RequestHandler } from "@sveltejs/kit";
 import { getDatabase } from "$lib/server/db";
 import { errorJson } from "$lib/server/json";
-import { registerRuntime, RuntimeEnrollmentError } from "$lib/server/runtime-registration";
+import {
+  registerRuntime,
+  RuntimeEnrollmentError,
+  RuntimeWorkspaceOwnerConflictError,
+} from "$lib/server/runtime-registration";
 
 export const POST: RequestHandler = async ({ request, locals, url }) => {
   const parsed = runtimeRegistrationRequestSchema.safeParse(
@@ -28,6 +32,15 @@ export const POST: RequestHandler = async ({ request, locals, url }) => {
   try {
     registered = registerRuntime(getDatabase(), parsed.data, bearerToken(request));
   } catch (caught) {
+    if (caught instanceof RuntimeWorkspaceOwnerConflictError) {
+      return errorJson(
+        caught.reasonCode.toLowerCase(),
+        caught.message,
+        409,
+        undefined,
+        locals.requestId,
+      );
+    }
     if (caught instanceof RuntimeEnrollmentError) {
       return errorJson(
         caught.reasonCode.toLowerCase(),

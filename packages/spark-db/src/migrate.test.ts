@@ -66,6 +66,7 @@ describe("migrations", () => {
       "runtime_device_authorizations_state_idx",
       "runtime_device_authorizations_installation_pending_idx",
       "runtime_message_receipts_runtime_seen_idx",
+      "events_created_id_idx",
     ]) {
       expect(indexExists(db, index)?.name).toBe(index);
     }
@@ -84,6 +85,8 @@ describe("migrations", () => {
       "0007",
       "0008",
       "0009",
+      "0010",
+      "0011",
     ]);
 
     const bindingColumns = db
@@ -105,7 +108,7 @@ describe("migrations", () => {
       count: number;
     };
 
-    expect(migrationCount.count).toBe(9);
+    expect(migrationCount.count).toBe(11);
     db.close();
   });
 

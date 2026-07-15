@@ -18,9 +18,17 @@ export {
   QQBOT_TOKEN_URL,
   resolveQqbotApiBase,
   type QqbotApiClient,
+  type QqbotInteractionAckCode,
   type QqbotMessageResponse,
   type QqbotStreamMessageRequest,
 } from "./qqbot-api.ts";
+export {
+  normalizeQqbotInteractionEvent,
+  type QqbotInteractionChatType,
+  type QqbotInteractionScene,
+  type QqbotInteractionType,
+  type QqbotNormalizedInteraction,
+} from "./qqbot-interaction.ts";
 export {
   isQqbotGroupAllowed,
   isQqbotGroupTriggered,
@@ -33,10 +41,30 @@ export { createQqbotTransport } from "./qqbot-transport.ts";
 export {
   formatQqbotRecipient,
   parseQqbotRecipient,
+  type QqbotCallbackKeyboardAction,
+  type QqbotCallbackToken,
   type QqbotChatType,
+  type QqbotCustomKeyboard,
+  type QqbotKeyboardButton,
+  type QqbotKeyboardPermission,
+  type QqbotKeyboardRenderData,
+  type QqbotKeyboardRow,
+  type QqbotMarkdownKeyboardMessageRequest,
+  type QqbotMessageKeyboard,
   type QqbotNormalizedInbound,
   type QqbotRecipient,
 } from "./qqbot-types.ts";
+export type {
+  ChannelAskAudience,
+  ChannelAskOption,
+  ChannelAskRequest,
+  ChannelAskSendResult,
+  ChannelInteractionAckStatus,
+  ChannelInteractionCapability,
+  ChannelInteractionEvent,
+  ChannelInteractionScene,
+  RoutedChannelInteractionEvent,
+} from "./interaction.ts";
 export {
   normalizeInfoflowContent,
   type InfoflowAttachment,

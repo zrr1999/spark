@@ -35,7 +35,6 @@
   let shortcutLabel = $state("⌘K");
   let pageShortcuts = $derived.by(() => {
     const pages: CockpitSearchResult[] = [
-      { id: "new-global", type: "page", title: sessionMessages.daemonConversation, description: null, href: "/sessions?new=daemon" },
       { id: "models", type: "page", title: layout.nav.models, description: null, href: "/settings/models" },
     ];
     if (!activeWorkspace) return pages;
@@ -56,8 +55,8 @@
       query,
       sessions,
       workspaces,
-      daemonGroupLabel: sessionMessages.daemonGroup,
       untitledConversationLabel: sessionMessages.untitledConversation,
+      channelLabels: sessionMessages.channelLabels,
       statusLabels: common.status as Record<string, string>,
       pages: pageShortcuts,
     }),

@@ -1,5 +1,10 @@
 import { FeishuAdapter } from "./feishu-adapter.ts";
 import { InfoflowAdapter } from "./infoflow-adapter.ts";
+import type {
+  ChannelAskRequest,
+  ChannelAskSendResult,
+  ChannelInteractionAckStatus,
+} from "./interaction.ts";
 import { QqbotAdapter } from "./qqbot-adapter.ts";
 import type {
   ChannelAdapter,
@@ -141,6 +146,36 @@ export class ChannelRegistry {
     await adapter.send({ recipient: input.recipient, text: input.text });
   }
 
+  async sendAsk(
+    adapterId: string,
+    recipient: string,
+    request: ChannelAskRequest,
+  ): Promise<ChannelAskSendResult> {
+    const interaction = this.requireAdapter(adapterId).interaction;
+    if (!interaction) {
+      throw new ChannelRegistryError(
+        "interaction_not_supported",
+        `adapter does not support native interactions: ${adapterId}`,
+      );
+    }
+    return await interaction.sendAsk(recipient, request);
+  }
+
+  async ackInteraction(
+    adapterId: string,
+    interactionId: string,
+    status: ChannelInteractionAckStatus = "success",
+  ): Promise<void> {
+    const interaction = this.requireAdapter(adapterId).interaction;
+    if (!interaction) {
+      throw new ChannelRegistryError(
+        "interaction_not_supported",
+        `adapter does not support native interactions: ${adapterId}`,
+      );
+    }
+    await interaction.ackInteraction(interactionId, status);
+  }
+
   private loadConfig(config: ChannelsConfig): void {
     for (const [adapterId, adapterConfig] of Object.entries(config.adapters)) {
       const adapter = this.createAdapter(adapterId, adapterConfig);
@@ -151,6 +186,7 @@ export class ChannelRegistry {
   private createAdapter(adapterId: string, config: ChannelAdapterConfig): ChannelAdapter {
     const transport = this.options.createTransport?.(adapterId, config);
     const onMessage = this.options.onMessage;
+    const onInteraction = this.options.onInteraction;
     switch (config.type) {
       case "feishu":
         return new FeishuAdapter({
@@ -172,6 +208,7 @@ export class ChannelRegistry {
           config,
           ...(transport ? { transport } : {}),
           ...(onMessage ? { onMessage } : {}),
+          ...(onInteraction ? { onInteraction } : {}),
         });
       default: {
         const unexpected: never = config;

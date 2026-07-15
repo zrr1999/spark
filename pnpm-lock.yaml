@@ -35,6 +35,9 @@ importers:
       '@zendev-lab/spark-context':
         specifier: workspace:^
         version: link:packages/spark-context
+      '@zendev-lab/spark-coordination':
+        specifier: workspace:^
+        version: link:packages/spark-coordination
       '@zendev-lab/spark-cue':
         specifier: workspace:^
         version: link:packages/spark-cue
@@ -71,9 +74,6 @@ importers:
       '@zendev-lab/spark-runtime':
         specifier: workspace:^
         version: link:packages/spark-runtime
-      '@zendev-lab/spark-server':
-        specifier: workspace:^
-        version: link:packages/spark-server
       '@zendev-lab/spark-session':
         specifier: workspace:^
         version: link:packages/spark-session
@@ -166,18 +166,21 @@ importers:
       '@zendev-lab/spark-channels':
         specifier: workspace:*
         version: link:../../packages/spark-channels
+      '@zendev-lab/spark-coordination':
+        specifier: workspace:*
+        version: link:../../packages/spark-coordination
       '@zendev-lab/spark-db':
         specifier: workspace:*
         version: link:../../packages/spark-db
+      '@zendev-lab/spark-extension-api':
+        specifier: workspace:*
+        version: link:../../packages/spark-extension-api
       '@zendev-lab/spark-i18n':
         specifier: workspace:*
         version: link:../../packages/spark-i18n
       '@zendev-lab/spark-protocol':
         specifier: workspace:*
         version: link:../../packages/spark-protocol
-      '@zendev-lab/spark-server':
-        specifier: workspace:*
-        version: link:../../packages/spark-server
       '@zendev-lab/spark-system':
         specifier: workspace:*
         version: link:../../packages/spark-system
@@ -294,30 +297,48 @@ importers:
       '@earendil-works/pi-ai':
         specifier: ^0.80.6
         version: 0.80.6(ws@8.21.0)(zod@4.4.3)
+      '@zendev-lab/pi-extension':
+        specifier: workspace:^
+        version: link:../../packages/pi-extension
       '@zendev-lab/spark-ai':
         specifier: workspace:^
         version: link:../../packages/spark-ai
+      '@zendev-lab/spark-ask':
+        specifier: workspace:^
+        version: link:../../packages/spark-ask
       '@zendev-lab/spark-channels':
         specifier: workspace:^
         version: link:../../packages/spark-channels
+      '@zendev-lab/spark-cue':
+        specifier: workspace:^
+        version: link:../../packages/spark-cue
       '@zendev-lab/spark-extension-api':
         specifier: workspace:^
         version: link:../../packages/spark-extension-api
       '@zendev-lab/spark-files':
         specifier: workspace:^
         version: link:../../packages/spark-files
+      '@zendev-lab/spark-graft':
+        specifier: workspace:^
+        version: link:../../packages/spark-graft
       '@zendev-lab/spark-host':
         specifier: workspace:^
         version: link:../../packages/spark-host
       '@zendev-lab/spark-i18n':
         specifier: workspace:^
         version: link:../../packages/spark-i18n
+      '@zendev-lab/spark-memory':
+        specifier: workspace:^
+        version: link:../../packages/spark-memory
       '@zendev-lab/spark-modes':
         specifier: workspace:^
         version: link:../../packages/spark-modes
       '@zendev-lab/spark-protocol':
         specifier: workspace:^
         version: link:../../packages/spark-protocol
+      '@zendev-lab/spark-roles':
+        specifier: workspace:^
+        version: link:../../packages/spark-roles
       '@zendev-lab/spark-session':
         specifier: workspace:^
         version: link:../../packages/spark-session
@@ -333,6 +354,9 @@ importers:
       '@zendev-lab/spark-turn':
         specifier: workspace:^
         version: link:../../packages/spark-turn
+      '@zendev-lab/spark-web':
+        specifier: workspace:^
+        version: link:../../packages/spark-web
 
   packages/pi-btw:
     dependencies:
@@ -468,6 +492,34 @@ importers:
         specifier: ^1.2.13
         version: 1.2.13
 
+  packages/spark-coordination:
+    dependencies:
+      '@zendev-lab/spark-protocol':
+        specifier: workspace:*
+        version: link:../spark-protocol
+      '@zendev-lab/spark-system':
+        specifier: workspace:*
+        version: link:../spark-system
+      '@zendev-lab/spark-tasks':
+        specifier: workspace:*
+        version: link:../spark-tasks
+      ws:
+        specifier: ^8.18.3
+        version: 8.21.0
+    devDependencies:
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
+      '@zendev-lab/spark-db':
+        specifier: workspace:*
+        version: link:../spark-db
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: 4.1.9
+        version: 4.1.9(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-preview@4.1.9)(@voidzero-dev/vite-plus-core@0.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(jsdom@27.4.0)
+
   packages/spark-cue:
     dependencies:
       '@zendev-lab/spark-extension-api':
@@ -530,9 +582,6 @@ importers:
       '@zendev-lab/spark-extension-api':
         specifier: workspace:^
         version: link:../spark-extension-api
-      '@zendev-lab/spark-loop':
-        specifier: workspace:^
-        version: link:../spark-loop
       '@zendev-lab/spark-protocol':
         specifier: workspace:^
         version: link:../spark-protocol
@@ -648,34 +697,6 @@ importers:
       '@zendev-lab/spark-workflows':
         specifier: workspace:^
         version: link:../spark-workflows
-
-  packages/spark-server:
-    dependencies:
-      '@zendev-lab/spark-protocol':
-        specifier: workspace:*
-        version: link:../spark-protocol
-      '@zendev-lab/spark-system':
-        specifier: workspace:*
-        version: link:../spark-system
-      '@zendev-lab/spark-tasks':
-        specifier: workspace:*
-        version: link:../spark-tasks
-      ws:
-        specifier: ^8.18.3
-        version: 8.21.0
-    devDependencies:
-      '@types/ws':
-        specifier: ^8.18.1
-        version: 8.18.1
-      '@zendev-lab/spark-db':
-        specifier: workspace:*
-        version: link:../spark-db
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: 4.1.9
-        version: 4.1.9(@opentelemetry/api@1.9.0)(@types/node@26.0.1)(@vitest/browser-preview@4.1.9)(@voidzero-dev/vite-plus-core@0.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(jsdom@27.4.0)
 
   packages/spark-session:
     dependencies:
@@ -5614,6 +5635,36 @@ snapshots:
     optionalDependencies:
       '@opentelemetry/api': 1.9.0
       '@types/node': 26.0.1
+      '@vitest/browser-preview': 4.1.9(@voidzero-dev/vite-plus-core@0.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(vitest@4.1.9)
+      jsdom: 27.4.0
+    transitivePeerDependencies:
+      - msw
+
+  vitest@4.1.9(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-preview@4.1.9)(@voidzero-dev/vite-plus-core@0.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(jsdom@27.4.0):
+    dependencies:
+      '@vitest/expect': 4.1.9
+      '@vitest/mocker': 4.1.9(@voidzero-dev/vite-plus-core@0.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))
+      '@vitest/pretty-format': 4.1.9
+      '@vitest/runner': 4.1.9
+      '@vitest/snapshot': 4.1.9
+      '@vitest/spy': 4.1.9
+      '@vitest/utils': 4.1.9
+      es-module-lexer: 2.1.0
+      expect-type: 1.4.0
+      magic-string: 0.30.21
+      obug: 2.1.3
+      pathe: 2.0.3
+      picomatch: 4.0.4
+      std-env: 4.1.0
+      tinybench: 2.9.0
+      tinyexec: 1.2.4
+      tinyglobby: 0.2.17
+      tinyrainbow: 3.1.0
+      vite: '@voidzero-dev/vite-plus-core@0.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0)'
+      why-is-node-running: 2.3.0
+    optionalDependencies:
+      '@opentelemetry/api': 1.9.0
+      '@types/node': 26.1.1
       '@vitest/browser-preview': 4.1.9(@voidzero-dev/vite-plus-core@0.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(vitest@4.1.9)
       jsdom: 27.4.0
     transitivePeerDependencies:

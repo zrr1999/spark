@@ -19,6 +19,8 @@
   locale={data.locale}
   activity={data.sessionActivity}
   sessionView={data.sessionSnapshot}
+  sessionHistory={data.sessionHistory}
+  initialEventCursor={data.sessionEventCursor}
   formMessage={form?.message ?? null}
   formIntent={form?.intent ?? null}
   formValues={form?.values ?? null}

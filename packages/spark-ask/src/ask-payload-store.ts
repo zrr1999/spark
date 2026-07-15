@@ -174,7 +174,9 @@ function assertPiAskFlowAnswerEntry(
 }
 
 function isPiAskFlowResultStatus(value: unknown): value is PiAskFlowResult["status"] {
-  return value === "answered" || value === "cancelled" || value === "no_selection";
+  return (
+    value === "answered" || value === "pending" || value === "cancelled" || value === "no_selection"
+  );
 }
 
 function isPiAskFlowResultMode(value: unknown): value is PiAskFlowResult["mode"] {

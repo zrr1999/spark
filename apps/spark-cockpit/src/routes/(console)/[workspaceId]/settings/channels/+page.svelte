@@ -506,34 +506,34 @@
 <style>
   .create-channel {
     display: grid;
-    gap: 1rem;
-    max-width: 52rem;
+    gap: var(--spacing-md);
+    max-width: 832px;
   }
 
   .form-status {
-    padding: 0.65rem 0.85rem;
-    border-radius: 0.55rem;
-    border: 1px solid color-mix(in srgb, var(--danger, #b42318) 35%, transparent);
-    background: color-mix(in srgb, var(--danger, #b42318) 8%, transparent);
-    color: var(--danger, #b42318);
-    font-size: 0.9rem;
+    padding: var(--spacing-sm) var(--spacing-md);
+    border-radius: var(--rounded-md);
+    border: 1px solid var(--color-danger-soft);
+    background: var(--color-danger-weak);
+    color: var(--color-danger-strong);
+    font-size: var(--text-body);
   }
 
   .form-status[data-state="ok"] {
-    border-color: color-mix(in srgb, var(--success, #067647) 35%, transparent);
-    background: color-mix(in srgb, var(--success, #067647) 8%, transparent);
-    color: var(--success, #067647);
+    border-color: var(--color-success-soft);
+    background: var(--color-success-weak);
+    color: var(--color-success-strong);
   }
 
   .panel.editor,
   .panel.channel-list,
   .diagnostic-panel {
     display: grid;
-    gap: 1rem;
-    padding: 1rem 1.1rem;
-    border: 1px solid color-mix(in srgb, var(--border, #d0d5dd) 90%, transparent);
-    border-radius: 0.75rem;
-    background: color-mix(in srgb, var(--surface, #fff) 92%, transparent);
+    gap: var(--spacing-md);
+    padding: var(--spacing-md);
+    border: 1px solid var(--color-border);
+    border-radius: var(--rounded-lg);
+    background: var(--color-surface);
   }
 
   .channel-rows {
@@ -541,16 +541,16 @@
     padding: 0;
     list-style: none;
     display: grid;
-    gap: 0.65rem;
+    gap: var(--spacing-xs);
   }
 
   .channel-rows li {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
-    gap: 0.75rem;
-    padding: 0.65rem 0;
-    border-top: 1px solid color-mix(in srgb, var(--border, #d0d5dd) 70%, transparent);
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm) 0;
+    border-top: 1px solid var(--color-border-soft);
   }
 
   .channel-rows li:first-child {
@@ -560,32 +560,34 @@
 
   .channel-row-main {
     display: grid;
-    gap: 0.2rem;
+    gap: var(--spacing-xxs);
     min-width: 0;
   }
 
   .channel-row-main strong {
-    font-size: 0.95rem;
+    font-size: var(--text-card-title);
+    font-weight: var(--weight-card-title);
   }
 
   .meta-line {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.35rem;
+    gap: var(--spacing-xs);
     align-items: baseline;
-    color: var(--muted, #667085);
-    font-size: 0.8rem;
+    color: var(--color-ink-subtle);
+    font-size: var(--text-caption);
   }
 
   .channel-row-main small {
-    color: var(--muted, #667085);
+    color: var(--color-ink-subtle);
+    font-size: var(--text-caption);
   }
 
   .channel-row-actions {
     display: flex;
     flex-shrink: 0;
     align-items: center;
-    gap: 0.65rem;
+    gap: var(--spacing-sm);
   }
 
   .row-action {
@@ -594,20 +596,24 @@
     background: transparent;
     padding: 0;
     font: inherit;
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: inherit;
+    font-size: var(--text-body);
+    font-weight: var(--weight-body-medium);
+    color: var(--color-ink-muted);
     text-decoration: none;
     cursor: pointer;
   }
 
+  .row-action:hover {
+    color: var(--color-primary);
+  }
+
   .row-action.active {
-    color: var(--accent, #175cd3);
+    color: var(--color-primary);
   }
 
   .field-grid {
     display: grid;
-    gap: 0.85rem 1rem;
+    gap: var(--spacing-sm) var(--spacing-md);
     grid-template-columns: repeat(2, minmax(0, 1fr));
     align-items: start;
   }
@@ -618,19 +624,19 @@
 
   .binding-summary {
     display: grid;
-    gap: 0.65rem;
+    gap: var(--spacing-sm);
     margin: 0;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .binding-summary div {
     display: grid;
-    gap: 0.2rem;
+    gap: var(--spacing-xxs);
   }
 
   .binding-summary dt {
-    font-size: 0.75rem;
-    color: var(--muted, #667085);
+    font-size: var(--text-caption);
+    color: var(--color-ink-subtle);
   }
 
   .binding-summary dd {
@@ -639,27 +645,27 @@
 
   .credentials {
     display: grid;
-    gap: 0.85rem;
+    gap: var(--spacing-sm);
   }
 
   .credentials-heading h2 {
     margin: 0;
-    font-size: 1rem;
+    font-size: var(--text-card-title);
   }
 
   .credentials-heading p {
-    margin: 0.25rem 0 0;
-    color: var(--muted, #667085);
-    font-size: 0.875rem;
+    margin: var(--spacing-xxs) 0 0;
+    color: var(--color-ink-subtle);
+    font-size: var(--text-caption);
   }
 
   .toggle-row {
     display: flex;
-    gap: 0.65rem;
+    gap: var(--spacing-sm);
     align-items: flex-start;
-    padding: 0.65rem 0.75rem;
-    border: 1px solid color-mix(in srgb, var(--border, #d0d5dd) 80%, transparent);
-    border-radius: 0.6rem;
+    padding: var(--spacing-sm);
+    border: 1px solid var(--color-border);
+    border-radius: var(--rounded-md);
   }
 
   .toggle-row strong {
@@ -668,17 +674,17 @@
 
   .toggle-row small {
     display: block;
-    margin-top: 0.15rem;
-    color: var(--muted, #667085);
+    margin-top: var(--spacing-xxs);
+    color: var(--color-ink-subtle);
   }
 
   .actions {
     display: flex;
     justify-content: flex-end;
-    gap: 0.65rem;
+    gap: var(--spacing-sm);
   }
 
-  @media (max-width: 40rem) {
+  @media (max-width: 640px) {
     .field-grid,
     .binding-summary {
       grid-template-columns: 1fr;
@@ -693,58 +699,58 @@
   .diagnostics summary span {
     display: flex;
     flex-direction: column;
-    gap: 0.15rem;
+    gap: var(--spacing-xxs);
   }
 
   .diagnostics summary small {
-    color: var(--muted, #667085);
+    color: var(--color-ink-subtle);
   }
 
   .panel-heading {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.75rem;
+    gap: var(--spacing-sm);
   }
 
   .panel-heading h2 {
     margin: 0;
-    font-size: 1rem;
+    font-size: var(--text-card-title);
   }
 
   .status-pill {
     display: inline-flex;
     align-items: center;
-    padding: 0.2rem 0.55rem;
-    border-radius: 999px;
-    font-size: 0.75rem;
-    font-weight: 600;
+    padding: var(--spacing-xxs) var(--spacing-xs);
+    border-radius: var(--rounded-full);
+    font-size: var(--text-caption);
+    font-weight: var(--weight-caption-medium);
   }
 
   .status-pill.configured {
-    background: color-mix(in srgb, var(--success, #067647) 12%, transparent);
-    color: var(--success, #067647);
+    background: var(--color-success-soft);
+    color: var(--color-success-strong);
   }
 
   .status-pill.missing {
-    background: color-mix(in srgb, var(--warning, #b54708) 12%, transparent);
-    color: var(--warning, #b54708);
+    background: var(--color-warning-soft);
+    color: var(--color-warning-strong);
   }
 
   .meta {
     display: grid;
-    gap: 0.65rem;
+    gap: var(--spacing-sm);
     margin: 0;
   }
 
   .meta div {
     display: grid;
-    gap: 0.2rem;
+    gap: var(--spacing-xxs);
   }
 
   .meta dt {
-    font-size: 0.75rem;
-    color: var(--muted, #667085);
+    font-size: var(--text-caption);
+    color: var(--color-ink-subtle);
   }
 
   .meta dd {
@@ -752,20 +758,21 @@
   }
 
   .mono {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.8rem;
+    font-family: var(--font-mono);
+    font-size: var(--text-mono);
     word-break: break-all;
   }
 
   .columns {
     display: grid;
-    gap: 1rem;
-    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+    gap: var(--spacing-md);
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   }
 
   .columns h3 {
-    margin: 0 0 0.4rem;
-    font-size: 0.875rem;
+    margin: 0 0 var(--spacing-xs);
+    font-size: var(--text-body);
+    font-weight: 600;
   }
 
   .columns ul {
@@ -773,20 +780,20 @@
     padding: 0;
     list-style: none;
     display: grid;
-    gap: 0.45rem;
+    gap: var(--spacing-xs);
   }
 
   .columns li {
     display: grid;
-    gap: 0.1rem;
+    gap: var(--spacing-xxs);
   }
 
   .muted {
-    color: var(--muted, #667085);
-    font-size: 0.875rem;
+    color: var(--color-ink-subtle);
+    font-size: var(--text-body);
   }
 
   .adapter-error {
-    color: var(--danger, #b42318);
+    color: var(--color-danger-strong);
   }
 </style>

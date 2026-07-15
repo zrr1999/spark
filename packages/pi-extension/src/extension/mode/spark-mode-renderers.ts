@@ -17,7 +17,7 @@ const NO_CANNED_ASKS =
   "Keep asks dynamic and grounded in inspected context; do not use canned intake templates or ask questions whose answers would not change the task plan.";
 
 export const WORKFLOW_AND_SUBAGENT_ARE_TOOLS =
-  "Workflow and subagent role runs are execution tools, not session phases. First select the governing phase (research, plan, or implement), then use role/workflow only within that phase's responsibility and evidence boundaries.";
+  "Workflow and subagent role runs are execution tools, not session phases. First select the governing phase (plan or implement), then use role/workflow only within that phase's responsibility and evidence boundaries.";
 
 export const DURABLE_STATE_AUTHORITY =
   'Compact summaries, restored conversation history, and hidden phase text are historical hints only. Before planning, claiming, finishing, or deciding a goal/project transition, verify durable state with scoped tools: task_read({ action: "project_status" }) for the selected project, task_read({ action: "workspace_status" }) or task_read({ action: "project_list" }) before selecting a project, and goal({ action: "status" }) before relying on a goal.';
@@ -27,35 +27,6 @@ const RESEARCH_SUBAGENT_STRATEGY =
 
 export const PARALLEL_EXECUTION_WORKFLOW_STRATEGY =
   'For ordinary single-task implementation, work directly with focused tools. Use the workflow runtime only when the user asks for workflow/fan-out/multi-agent orchestration, or when the execution work is clearly parallelizable, repetitive, or suited to scripted orchestration. In those cases, discover saved workflows with workflow({ action: "list" }) and read candidates with workflow({ action: "read" }) before choosing workflow_run or a new trusted workflow script.';
-
-export function renderSparkResearchModePrompt(
-  graph: TaskGraph,
-  selectedProjectRef: ProjectRef | undefined,
-  focus: string | undefined,
-): string {
-  return renderModePrompt(
-    graph,
-    selectedProjectRef,
-    focus,
-    "Default research",
-    selectedProjectRef
-      ? [
-          "Investigate the repository, current project, task graph, artifacts, context providers, and external references needed to answer the focus.",
-          WORKFLOW_AND_SUBAGENT_ARE_TOOLS,
-          RESEARCH_SUBAGENT_STRATEGY,
-          "Report findings directly; do not change files or durable Spark task state during default research unless the user explicitly asks for that change.",
-          'Do not call task_write({ action: "plan" | "claim" | "finish" }) during default research.',
-          "When research changes task scope, suggests new work, or exposes multiple implementation directions, summarize findings and ask whether the user wants design options, durable task planning, or execution toward completing the project.",
-          ASK_BEFORE_GUESSING,
-        ]
-      : [
-          WORKFLOW_AND_SUBAGENT_ARE_TOOLS,
-          RESEARCH_SUBAGENT_STRATEGY,
-          'Select a current project with task_write({ action: "project_use" }) before project-scoped research; use task_read({ action: "workspace_status" }) or context preview to inspect available projects first if needed.',
-          ASK_BEFORE_GUESSING,
-        ],
-  );
-}
 
 export function renderSparkPlanningModePrompt(
   graph: TaskGraph,
@@ -67,28 +38,29 @@ export function renderSparkPlanningModePrompt(
   const roadmapLine = renderRoadmapPlanningContext(roadmapContext);
   const openingRequirement =
     source === "direct"
-      ? "Treat this /plan request as a high-priority planning prompt, not as a permission gate and not as an answer-only research turn."
-      : "Research and clarify the project context first, then choose the lightest appropriate action from the actual request.";
+      ? "Treat this explicit /plan request as planning intent: investigate first as needed, then produce or revise a durable plan when the request concerns executable project work."
+      : "Investigate and answer directly by default; create or revise durable project state only when the user asks for planning or a concrete project progression need makes durable work necessary.";
   const sharedRequirements = [
     openingRequirement,
+    "Inspect the repository, project state, artifacts, context providers, and external references needed to answer or plan the request.",
+    WORKFLOW_AND_SUBAGENT_ARE_TOOLS,
+    RESEARCH_SUBAGENT_STRATEGY,
+    'Ordinary investigation, explanation, review, and commentary do not require task_write({ action: "project_use" | "plan" }); report the answer directly without creating durable state.',
     "Before generating or changing a durable plan, outline the plan shape and keep clarifying until every material planning-affecting choice is either clear from inspected context or answered through context-specific ask questions.",
-    "Ask when the user may want design options only, durable task planning, or execution toward completing all project tasks.",
     DURABLE_PLANNING_RULES,
-    'Once concrete executable/review/validation/research tasks have high-bar objectives, dependencies, objectively verifiable success criteria, concrete evidence requirements, and executable/checkable plan items, call task_write({ action: "plan" }) directly; refine by calling task_write({ action: "plan" }) again with concrete updates rather than using a separate dry-run/apply phase.',
+    'When durable planning is warranted and concrete executable/review/validation/research tasks meet the planning bar, call task_write({ action: "plan" }) directly; refine it with concrete updates rather than a separate dry-run/apply phase.',
     NO_CANNED_ASKS,
     ASK_BEFORE_GUESSING,
-    "Do not execute tasks yet unless the user explicitly asks to switch to execution.",
+    "Do not execute tasks yet unless the user explicitly asks to switch to implementation.",
   ];
   const requirements = selectedProjectRef
     ? [
         ...sharedRequirements,
-        'Answer directly only when the user explicitly asks for read-only research or commentary instead of durable planning; otherwise keep planning toward task_write({ action: "plan" }).',
         'Call task_write({ action: "project_rename" }) only when inspected context clearly supports a more specific label than a stale or generic bootstrap title; use project_metadata_update for description/purpose/output language changes.',
       ]
     : [
         ...sharedRequirements,
-        'No current project is selected. If the focus and inspected context identify the intended project, first call task_write({ action: "project_use", title, description }) to create or select that stable project, then call task_write({ action: "plan" }) to add concrete tasks under it.',
-        "A missing current project is not an answer-only escape hatch. Ask only when the project identity, scope, or material planning-affecting choices remain ambiguous after inspection; otherwise bootstrap the project and plan durable work directly.",
+        'No current project is selected. Continue read-only investigation and answer directly when no durable plan is needed. If durable planning is warranted and the intended project is clear, call task_write({ action: "project_use", title, description }) before task_write({ action: "plan" }); ask only when project identity or material scope remains ambiguous.',
       ];
   return renderModePrompt(graph, selectedProjectRef, focus, "Planning", requirements, roadmapLine);
 }
@@ -119,7 +91,7 @@ export function renderModePrompt(
   graph: TaskGraph,
   selectedProjectRef: ProjectRef | undefined,
   focus: string | undefined,
-  phase: "Default research" | "Planning" | "Implementation" | "Goal driver" | "Workflow driver",
+  phase: "Planning" | "Implementation" | "Goal driver" | "Workflow driver",
   requirements: string[],
   extraContext?: string,
 ): string {
@@ -129,11 +101,7 @@ export function renderModePrompt(
     renderPhaseFocus(phase, focus),
     extraContext?.trim() || undefined,
     [
-      phase === "Default research"
-        ? "## Default research requirements"
-        : phase.endsWith("driver")
-          ? `## ${phase} requirements`
-          : `## ${phase} phase requirements`,
+      phase.endsWith("driver") ? `## ${phase} requirements` : `## ${phase} phase requirements`,
       ...scopedRequirements.map((item) => `- ${item}`),
     ].join("\n"),
   ].filter((section): section is string => Boolean(section));
@@ -182,12 +150,7 @@ export function renderSparkPhaseVisibleMessage(
   projectTitle: string | undefined,
   focus: string | undefined,
 ): string {
-  const title =
-    phase === "research"
-      ? "Spark default research phase requested"
-      : phase === "plan"
-        ? "Spark plan phase requested"
-        : "Spark implement phase requested";
+  const title = phase === "plan" ? "Spark plan phase requested" : "Spark implement phase requested";
   const parts = [title];
   if (projectTitle?.trim()) parts.push(`project: ${projectTitle.trim()}`);
   if (focus?.trim()) parts.push(`focus: ${focus.trim()}`);

@@ -1046,7 +1046,7 @@ void test("SparkNativeTuiApp /retry resubmits the previous user prompt", async (
   assert.match(app.render(100).join("\n"), /Retrying: first prompt/);
 });
 
-void test("Spark daemon native slash commands render status, start, and queue summaries", async () => {
+void test("Spark daemon native slash commands render invocation status and start summaries", async () => {
   let started = false;
   const session = new SparkNativeSession();
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined, {
@@ -1057,38 +1057,20 @@ void test("Spark daemon native slash commands render status, start, and queue su
       daemonStatus: async () => ({
         observedAt: "2026-06-22T00:00:00.000Z",
         servers: [{ url: "ws://local", workspaceCount: 2, wsConnected: true }],
-        queue: { inbox: 1, processed: 2, failed: 3 },
-      }),
-      daemonQueue: async (_paths, params) => ({
-        state: params.state ?? "inbox",
-        entries: [
-          {
-            fileName: "task.json",
-            filePath: "/tmp/task.json",
-            payload: {
-              enqueuedAt: "2026-06-22T00:00:00.000Z",
-              task: { type: "session.run", sessionId: "session-1", prompt: "hello" },
-              processedAt: "2026-06-22T00:00:01.000Z",
-              result: { text: "done" },
-            },
-          },
-        ],
-        observedAt: "2026-06-22T00:00:00.000Z",
+        invocations: { queued: 1, running: 2, succeeded: 3, failed: 4, cancelled: 5 },
       }),
     }),
   });
 
   assert.equal(await app.submitInput("/start"), "command");
   assert.equal(await app.submitInput("/status"), "command");
-  assert.equal(await app.submitInput("/queue failed"), "command");
 
   const rendered = app.render(100).join("\n");
   assert.equal(started, true);
   assert.match(rendered, /daemon: running/);
-  assert.match(rendered, /queue: inbox=1 processed=2 failed=3/);
+  assert.match(rendered, /invocations: queued=1 running=2 succeeded=3 failed=4 cancelled=5/);
   assert.match(rendered, /server: ws:\/\/local workspaces=2 ws=connected/);
-  assert.match(rendered, /queue:failed entries=1/);
-  assert.match(rendered, /task\.json • session-1 • hello • result=\{"text":"done"\}/);
+  assert.doesNotMatch(rendered, /queue:/u);
 });
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {

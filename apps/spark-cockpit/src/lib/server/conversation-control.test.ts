@@ -9,7 +9,11 @@ import {
 describe("Cockpit conversation control", () => {
   it("submits Web messages through the daemon-owned turn surface", async () => {
     const client = {
-      submit: vi.fn(async () => ({ fileName: "turn_001" })),
+      submit: vi.fn(async () => ({
+        invocationId: "inv_001",
+        status: "queued",
+        acceptedAt: "2026-07-14T00:00:00.000Z",
+      })),
     } satisfies CockpitConversationControlClient;
 
     await expect(
@@ -22,7 +26,7 @@ describe("Cockpit conversation control", () => {
         },
         client,
       ),
-    ).resolves.toEqual({ turnId: "turn_001" });
+    ).resolves.toEqual({ turnId: "inv_001" });
 
     expect(client.submit).toHaveBeenCalledWith({
       sessionId: "sess_demo",
@@ -35,11 +39,18 @@ describe("Cockpit conversation control", () => {
         evidence: [],
         source: { kind: "cockpit" },
       },
+      messageMetadata: {
+        origin: { kind: "user", host: "web", surface: "local" },
+      },
     });
   });
 
   it("submits daemon-global messages without inventing a workspace target", async () => {
-    const submit = vi.fn().mockResolvedValue({ fileName: "turn-global.json" });
+    const submit = vi.fn().mockResolvedValue({
+      invocationId: "inv_global",
+      status: "queued",
+      acceptedAt: "2026-07-14T00:00:00.000Z",
+    });
 
     await expect(
       submitConversationTurnForCockpit(
@@ -50,7 +61,7 @@ describe("Cockpit conversation control", () => {
         },
         { submit },
       ),
-    ).resolves.toEqual({ turnId: "turn-global.json" });
+    ).resolves.toEqual({ turnId: "inv_global" });
 
     expect(submit).toHaveBeenCalledWith({
       sessionId: "sess_global",
@@ -58,6 +69,9 @@ describe("Cockpit conversation control", () => {
       assignment: expect.objectContaining({
         target: { sessionId: "sess_global" },
       }),
+      messageMetadata: {
+        origin: { kind: "user", host: "web", surface: "local" },
+      },
     });
   });
 
@@ -82,10 +96,9 @@ describe("Cockpit conversation control", () => {
   it("cancels a queued or active daemon turn within its submitted session", async () => {
     const client = {
       cancel: vi.fn(async () => ({
-        invocationId: "turn_001.json",
-        cancelled: true,
-        outcome: "cancel-requested",
-        message: "Cancellation requested.",
+        invocationId: "inv_001",
+        status: "running",
+        cancelRequested: true,
       })),
     } satisfies CockpitConversationCancelClient;
 
@@ -93,62 +106,56 @@ describe("Cockpit conversation control", () => {
       cancelConversationTurnForCockpit(
         {
           sessionId: "  sess_001  ",
-          turnId: "  turn_001.json  ",
+          turnId: "  inv_001  ",
           reason: "  Stopped from Cockpit.  ",
         },
         client,
       ),
     ).resolves.toEqual({
-      turnId: "turn_001.json",
-      cancelled: true,
-      outcome: "cancel-requested",
-      message: "Cancellation requested.",
+      turnId: "inv_001",
+      status: "running",
+      cancelRequested: true,
     });
 
     expect(client.cancel).toHaveBeenCalledWith({
-      invocationId: "turn_001.json",
-      sessionId: "sess_001",
+      invocationId: "inv_001",
       reason: "Stopped from Cockpit.",
     });
   });
 
   it("omits an empty cancellation reason", async () => {
     const cancel = vi.fn(async () => ({
-      cancelled: false,
-      outcome: "not-found",
-      message: "No queued or active invocation matched.",
+      invocationId: "inv_missing",
+      status: "cancelled",
+      cancelRequested: false,
     }));
 
     await expect(
       cancelConversationTurnForCockpit(
-        { sessionId: "sess_001", turnId: "turn_missing", reason: "   " },
+        { sessionId: "sess_001", turnId: "inv_missing", reason: "   " },
         { cancel },
       ),
     ).resolves.toEqual({
-      turnId: "turn_missing",
-      cancelled: false,
-      outcome: "not-found",
-      message: "No queued or active invocation matched.",
+      turnId: "inv_missing",
+      status: "cancelled",
+      cancelRequested: false,
     });
 
     expect(cancel).toHaveBeenCalledWith({
-      invocationId: "turn_missing",
-      sessionId: "sess_001",
+      invocationId: "inv_missing",
     });
   });
 
   it.each([
     null,
     {},
-    { cancelled: "yes", outcome: "cancel-requested", message: "Cancellation requested." },
-    { cancelled: true, outcome: "cancel-requested" },
-    { cancelled: true, outcome: "cancel-requested", message: "   " },
-    { cancelled: true, outcome: "unknown", message: "Cancellation requested." },
-    { cancelled: true, outcome: "not-found", message: "No invocation matched." },
+    { invocationId: "inv_001", status: "running", cancelRequested: "yes" },
+    { invocationId: "not-an-invocation", status: "running", cancelRequested: true },
+    { invocationId: "inv_001", status: "unknown", cancelRequested: true },
   ])("rejects malformed daemon cancellation receipts: %j", async (receipt) => {
     await expect(
       cancelConversationTurnForCockpit(
-        { sessionId: "sess_001", turnId: "turn_001" },
+        { sessionId: "sess_001", turnId: "inv_001" },
         { cancel: async () => receipt },
       ),
     ).rejects.toThrow("invalid conversation turn cancellation receipt");
@@ -158,7 +165,7 @@ describe("Cockpit conversation control", () => {
     const cancel = vi.fn();
 
     await expect(
-      cancelConversationTurnForCockpit({ sessionId: "   ", turnId: "turn_001" }, { cancel }),
+      cancelConversationTurnForCockpit({ sessionId: "   ", turnId: "inv_001" }, { cancel }),
     ).rejects.toThrow("Select a conversation");
     await expect(
       cancelConversationTurnForCockpit({ sessionId: "sess_001", turnId: "   " }, { cancel }),

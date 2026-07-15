@@ -53,7 +53,7 @@ void test("renderSparkProjectKindDisplay returns generic for undefined kind", ()
 
 void test("sparkProjectKindRoleForPhase always returns undefined (deprecated)", () => {
   assert.equal(sparkProjectKindRoleForPhase({ kind: "reproduction" }, "implement"), undefined);
-  assert.equal(sparkProjectKindRoleForPhase({ kind: "generic" }, "research"), undefined);
+  assert.equal(sparkProjectKindRoleForPhase({ kind: "generic" }, "plan"), undefined);
 });
 
 void test("evaluateSparkProjectKindCompletionGate always returns ok=true (deprecated)", () => {

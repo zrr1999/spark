@@ -29,13 +29,14 @@ export interface SparkWidgetControllerDeps {
   listDynamicWorkflowRuns: (cwd: string) => Promise<SparkDynamicWorkflowRunProjection[]>;
   loadTodoDisplayNumberState: (cwd: string, ctx?: any) => Promise<any>;
   saveTodoDisplayNumberState: (cwd: string, ctx: any, state: any) => Promise<void>;
+  loadIndependentTodos: (cwd: string, ctx?: any) => Promise<SessionTodoEntry[]>;
   currentSparkProject: (cwd: string, ctx: any, graph: any) => Promise<any>;
   loadSessionGoal: (cwd: string, ctx?: any) => Promise<any>;
   loadSessionLoop: (cwd: string, ctx?: any) => Promise<any>;
   clearSessionLoop: (cwd: string, ctx?: any) => Promise<void>;
   readSessionRepro: (cwd: string, ctx?: any) => Promise<any>;
-  loadSparkPhase: (cwd: string, ctx?: any) => Promise<{ phase: "research" | "plan" | "implement" }>;
-  sparkActiveLens: (phase: "research" | "plan" | "implement", drive?: any) => SparkWidgetActiveLens;
+  loadSparkPhase: (cwd: string, ctx?: any) => Promise<{ phase: "plan" | "implement" }>;
+  sparkActiveLens: (phase: "plan" | "implement", drive?: any) => SparkWidgetActiveLens;
   deriveSparkDriveMode: (input: {
     activeLens?: SparkWidgetActiveLens;
     repro?: any;
@@ -55,6 +56,7 @@ export interface SparkWidgetControllerDeps {
   taskClaimedBy: (task: Task) => unknown;
   assignTodoDisplayNumber: (state: any, key: string) => number;
   taskTodoDisplayKey: (taskRef: string, todoId: string) => string;
+  independentTodoDisplayKey: (todo: SessionTodoEntry) => string;
 }
 
 export interface SparkDynamicWorkflowRunProjection {
@@ -116,6 +118,7 @@ export class SparkWidgetController {
       .catch(() => [] as SparkDynamicWorkflowRunProjection[]);
     const dynamicWorkflowRun = sparkDynamicWorkflowRunWidgetEntry(dynamicWorkflowRuns);
     const todoDisplayNumbers = await this.deps.loadTodoDisplayNumberState(cwd, ctx);
+    const independentTodos = await this.deps.loadIndependentTodos(cwd, ctx);
     const project = graph ? await this.deps.currentSparkProject(cwd, ctx, graph) : undefined;
     const projectOverview = graph ? sparkProjectWidgetEntries(graph, project) : undefined;
     const sessionGoal = await this.deps.loadSessionGoal(cwd, ctx);
@@ -140,6 +143,13 @@ export class SparkWidgetController {
         loop: sessionLoop,
       }),
     );
+    const independentTodoEntries = independentTodos.map((todo) => ({
+      ...todo,
+      displayNumber: this.deps.assignTodoDisplayNumber(
+        todoDisplayNumbers,
+        this.deps.independentTodoDisplayKey(todo),
+      ),
+    }));
     if (!graph || !project) {
       this.state = {
         workflowRun: sparkWorkflowRunWidgetEntry(workflowRunStatus),
@@ -148,7 +158,7 @@ export class SparkWidgetController {
         projects: projectOverview,
         activeLens,
         tasks: [],
-        independentTodos: [],
+        independentTodos: independentTodoEntries,
         taskCountTotal: 0,
         taskCountClaimed: 0,
         taskCountClaimedBySession: 0,
@@ -214,7 +224,7 @@ export class SparkWidgetController {
             : [],
         };
       }),
-      independentTodos: [],
+      independentTodos: independentTodoEntries,
       taskCountTotal: allTasks.length,
       taskCountClaimed: claimedTasks.length,
       taskCountClaimedBySession: sessionTasks.length,

@@ -5,13 +5,23 @@ import {
   listManagedSessionsForCockpit,
 } from "$lib/server/managed-sessions";
 import { getDatabase } from "$lib/server/db";
+import { latestEventCursor } from "$lib/server/events";
 import { loadSessionActivity } from "$lib/server/session-activity";
 import { loadModelControlForCockpit } from "$lib/server/model-control";
-import { workspaceIdForWorkbenchSession } from "$lib/workbench-session-scope";
+import { sessionSnapshotWindow } from "$lib/session-snapshot-window";
 import type { PageServerLoad } from "./$types";
+import {
+  workspaceIdForWorkbenchSession,
+  workspaceSessionsForWorkbench,
+} from "../../../../lib/workbench-session-scope";
 import { actions as sessionsActions } from "../+page.server";
 
 export const load: PageServerLoad = async ({ params }) => {
+  const db = getDatabase();
+  // Capture the event watermark before loading daemon truth. Events committed
+  // during the load are replayed after this cursor; older history must not
+  // invalidate and rebuild the freshly hydrated page.
+  const eventCursor = latestEventCursor(db);
   const [managedSessions, selected, sessionSnapshot, modelControl] = await Promise.all([
     listManagedSessionsForCockpit(),
     getManagedSessionForCockpit(params.sessionId),
@@ -21,25 +31,31 @@ export const load: PageServerLoad = async ({ params }) => {
   if (!selected) {
     throw error(404, "Session not found");
   }
-  const sessions = managedSessions.sessions;
+  const workspaceId = workspaceIdForWorkbenchSession(selected);
+  if (!workspaceId) {
+    // Daemon-global sessions belong to the daemon/TUI control plane. Do not
+    // make them reachable through a stale Cockpit URL.
+    throw error(404, "Session not found");
+  }
+  const sessions = workspaceSessionsForWorkbench(managedSessions.sessions);
   const visibleSessions = sessions.some((session) => session.sessionId === selected.sessionId)
     ? sessions
     : [selected, ...sessions];
-  const workspaceId = workspaceIdForWorkbenchSession(selected);
+  const snapshotWindow = sessionSnapshot ? sessionSnapshotWindow(sessionSnapshot) : null;
   return {
     sessions: visibleSessions,
     sessionsAvailable: managedSessions.available,
     selectedSessionId: selected.sessionId,
     selectedSession: selected,
-    sessionSnapshot,
+    sessionSnapshot: snapshotWindow?.snapshot ?? null,
+    sessionHistory: snapshotWindow?.history ?? null,
+    sessionEventCursor: eventCursor ? `${eventCursor.createdAt}|${eventCursor.id}` : null,
     canAssign: selected.status !== "archived",
     modelControl,
-    sessionActivity: workspaceId
-      ? loadSessionActivity(getDatabase(), {
-          workspaceId,
-          sessionId: selected.sessionId,
-        })
-      : { commands: [], reports: [] },
+    sessionActivity: loadSessionActivity(db, {
+      workspaceId,
+      sessionId: selected.sessionId,
+    }),
   };
 };
 

@@ -128,6 +128,7 @@ const TOOL_OUTPUT_PROFILE_RULES: readonly ToolOutputProfileRule[] = [
       "role",
       "task_read",
       "task_write",
+      "todo",
       "workflow",
       "workflow_run",
       "write",

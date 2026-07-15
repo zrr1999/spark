@@ -41,6 +41,15 @@ vi.mock("$lib/i18n", () => ({
       cancelTurnUnavailable: "This turn is no longer active and could not be stopped.",
       createFailed: "Could not create the session.",
       createWorkspaceRequired: "Choose a workspace.",
+      effectiveModelMissing: "The Spark daemon did not return an effective conversation model.",
+      selectModelRequired: "Select a conversation and model.",
+      selectThinkingRequired: "Select a conversation and thinking level.",
+      workbench: {
+        modelFailed: "Could not switch models.",
+        modelUpdated: "Model updated. It will be used for future messages.",
+        thinkingFailed: "Could not update the thinking level.",
+        thinkingUpdated: "Thinking level updated. It will be used for future messages.",
+      },
     },
   }),
 }));
@@ -103,10 +112,9 @@ beforeEach(() => {
   });
   mocks.setSessionModelForCockpit.mockResolvedValue(session);
   mocks.cancelConversationTurnForCockpit.mockResolvedValue({
-    turnId: "turn_conversation",
-    cancelled: true,
-    outcome: "cancel-requested",
-    message: "Cancellation requested.",
+    turnId: "inv_conversation",
+    status: "running",
+    cancelRequested: true,
   });
   mocks.submitConversationTurnForCockpit.mockResolvedValue({ turnId: "turn_conversation" });
 });
@@ -135,31 +143,20 @@ describe("session conversation actions", () => {
     expect(mocks.archiveManagedSessionForCockpit).not.toHaveBeenCalled();
   });
 
-  it("creates and submits a daemon-global conversation without a workspace target", async () => {
-    mocks.createManagedSessionForCockpit.mockResolvedValueOnce({
-      ...session,
-      sessionId: "sess_global",
-      scope: { kind: "daemon", daemonId: "daemon-local" },
-      workspaceId: undefined,
-    });
+  it("requires a workspace target and ignores any legacy daemon scope hint", async () => {
+    const result = await requireAction("startConversation")(
+      actionEvent({ scopeKind: "daemon", message: "Inspect daemon health." }),
+    );
 
-    await expect(
-      requireAction("startConversation")(
-        actionEvent({ scopeKind: "daemon", message: "Inspect daemon health." }),
-      ),
-    ).rejects.toMatchObject({
-      status: 303,
-      location: "/sessions/sess_global",
+    expect(result).toMatchObject({
+      status: 400,
+      data: {
+        intent: "startConversation",
+        success: false,
+      },
     });
-
-    expect(mocks.createManagedSessionForCockpit).toHaveBeenCalledWith({
-      scope: { kind: "daemon" },
-    });
-    expect(mocks.submitConversationTurnForCockpit).toHaveBeenCalledWith({
-      sessionId: "sess_global",
-      prompt: "Inspect daemon health.",
-      title: "Inspect daemon health.",
-    });
+    expect(mocks.createManagedSessionForCockpit).not.toHaveBeenCalled();
+    expect(mocks.submitConversationTurnForCockpit).not.toHaveBeenCalled();
   });
 
   it("preserves the first message and archives the new session when queueing fails", async () => {
@@ -220,7 +217,7 @@ describe("session conversation actions", () => {
     });
   });
 
-  it("continues a daemon-global conversation without fabricating workspace ownership", async () => {
+  it("rejects stale form submissions for daemon-global conversations", async () => {
     mocks.getManagedSessionForCockpit.mockResolvedValueOnce({
       ...session,
       sessionId: "sess_global",
@@ -232,13 +229,14 @@ describe("session conversation actions", () => {
       requireAction("sendMessage")(
         actionEvent({ sessionId: "sess_global", message: "Continue globally." }),
       ),
-    ).resolves.toMatchObject({ success: true, queuedTurnId: "turn_conversation" });
-
-    expect(mocks.submitConversationTurnForCockpit).toHaveBeenCalledWith({
-      sessionId: "sess_global",
-      prompt: "Continue globally.",
-      title: "Continue globally.",
+    ).resolves.toMatchObject({
+      status: 400,
+      data: {
+        intent: "sendMessage",
+        success: false,
+      },
     });
+    expect(mocks.submitConversationTurnForCockpit).not.toHaveBeenCalled();
   });
 
   it("persists a conversation model through the daemon control plane", async () => {
@@ -259,7 +257,7 @@ describe("session conversation actions", () => {
     expect(result).toEqual({
       intent: "selectModel",
       success: true,
-      message: "Switched to baidu-oneapi/gpt-5.6-sol. It will be used for future messages.",
+      message: "Model updated. It will be used for future messages.",
       model: "baidu-oneapi/gpt-5.6-sol",
       values: { sessionId: "sess_conversation", model: "baidu-oneapi/gpt-5.6-sol" },
     });
@@ -305,7 +303,7 @@ describe("session conversation actions", () => {
 
   it("cancels an active turn only after validating its session", async () => {
     const result = await requireAction("cancelTurn")(
-      actionEvent({ sessionId: "sess_conversation", turnId: "turn_conversation" }),
+      actionEvent({ sessionId: "sess_conversation", turnId: "inv_conversation" }),
     );
 
     expect(result).toEqual({
@@ -313,47 +311,45 @@ describe("session conversation actions", () => {
       success: true,
       cancelled: true,
       message: "Cancellation requested for the active turn.",
-      daemonMessage: "Cancellation requested.",
-      cancelledTurnId: "turn_conversation",
-      values: { sessionId: "sess_conversation", turnId: "turn_conversation" },
+      invocationStatus: "running",
+      cancelledTurnId: "inv_conversation",
+      values: { sessionId: "sess_conversation", turnId: "inv_conversation" },
     });
     expect(mocks.getManagedSessionForCockpit).toHaveBeenCalledWith("sess_conversation");
     expect(mocks.cancelConversationTurnForCockpit).toHaveBeenCalledWith({
       sessionId: "sess_conversation",
-      turnId: "turn_conversation",
+      turnId: "inv_conversation",
     });
   });
 
-  it("reports a queued turn as removed from the queue", async () => {
+  it("accepts an invocation that has already converged to cancelled", async () => {
     mocks.cancelConversationTurnForCockpit.mockResolvedValueOnce({
-      turnId: "turn_queued",
-      cancelled: true,
-      outcome: "dequeued",
-      message: "Removed queued invocation from the queue.",
+      turnId: "inv_cancelled",
+      status: "cancelled",
+      cancelRequested: false,
     });
 
     const result = await requireAction("cancelTurn")(
-      actionEvent({ sessionId: "sess_conversation", turnId: "turn_queued" }),
+      actionEvent({ sessionId: "sess_conversation", turnId: "inv_cancelled" }),
     );
 
     expect(result).toMatchObject({
       intent: "cancelTurn",
       success: true,
-      message: "Queued turn removed from the queue.",
-      daemonMessage: "Removed queued invocation from the queue.",
+      message: "Cancellation requested for the active turn.",
+      invocationStatus: "cancelled",
     });
   });
 
-  it("returns a conflict when the daemon reports that the turn is no longer active", async () => {
+  it("returns a conflict when the invocation is already terminal", async () => {
     mocks.cancelConversationTurnForCockpit.mockResolvedValueOnce({
-      turnId: "turn_stale",
-      cancelled: false,
-      outcome: "not-found",
-      message: "No queued or active invocation matched.",
+      turnId: "inv_stale",
+      status: "succeeded",
+      cancelRequested: false,
     });
 
     const result = await requireAction("cancelTurn")(
-      actionEvent({ sessionId: "sess_conversation", turnId: "turn_stale" }),
+      actionEvent({ sessionId: "sess_conversation", turnId: "inv_stale" }),
     );
 
     expect(result).toMatchObject({
@@ -364,8 +360,8 @@ describe("session conversation actions", () => {
         cancelled: false,
         error: "This turn is no longer active and could not be stopped.",
         message: "This turn is no longer active and could not be stopped.",
-        daemonMessage: "No queued or active invocation matched.",
-        values: { sessionId: "sess_conversation", turnId: "turn_stale" },
+        invocationStatus: "succeeded",
+        values: { sessionId: "sess_conversation", turnId: "inv_stale" },
       },
     });
   });

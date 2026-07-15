@@ -89,6 +89,52 @@ describe("channel ingress", () => {
     expect(controller.status().configured).toBe(true);
   });
 
+  it("waits for already-received inbound admission before stopping", async () => {
+    const sparkHome = await mkdtemp(join(tmpdir(), "spark-channel-drain-"));
+    roots.push(sparkHome);
+    const registry = new SparkSessionRegistry({
+      rootDir: defaultSparkSessionRegistryRoot(sparkHome),
+    });
+    const session = await registry.create({ workspaceId: "ws_drain", title: "Drain" });
+    await registry.bind({
+      sessionId: session.sessionId,
+      externalKey: "feishu:chat:oc_drain",
+    });
+    const assignmentStarted = deferred<void>();
+    const finishAssignment = deferred<void>();
+    const transport = new FakeChannelTransport();
+    const controller = createChannelIngressController({
+      sparkHome,
+      config: parseChannelsConfig({
+        adapters: { feishu: { type: "feishu" } },
+        routes: {},
+        ingress: { enabled: true, on_unbound: "reject" },
+      }),
+      hooks: {
+        onAssignment: async () => {
+          assignmentStarted.resolve(undefined);
+          await finishAssignment.promise;
+        },
+      },
+      workspaceId: "ws_drain",
+      createTransport: () => transport,
+    });
+
+    await controller.start();
+    transport.emitInbound({ chat_id: "oc_drain", text: "queue before restart" });
+    await assignmentStarted.promise;
+    let stopped = false;
+    const stopping = controller.stop().then(() => {
+      stopped = true;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(stopped).toBe(false);
+    finishAssignment.resolve(undefined);
+    await stopping;
+    expect(stopped).toBe(true);
+  });
+
   it("resolves binding and emits assignment for qqbot c2c inbound", async () => {
     const sparkHome = await mkdtemp(join(tmpdir(), "spark-channel-qqbot-"));
     roots.push(sparkHome);
@@ -303,4 +349,61 @@ describe("channel ingress", () => {
     expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(config);
     await runtime.stop();
   });
+
+  it("routes native interactions through a daemon handler installed after runtime creation", async () => {
+    const sparkHome = await mkdtemp(join(tmpdir(), "spark-channel-interaction-runtime-"));
+    roots.push(sparkHome);
+    const transport = new FakeChannelTransport();
+    const runtime = createDaemonChannelIngressRuntime({
+      sparkHome,
+      hooks: { onAssignment: async () => undefined },
+      createTransport: () => transport,
+    });
+    await runtime.configure(
+      "ws_qq",
+      parseChannelsConfig({
+        adapters: { qq: { type: "qqbot", app_id: "app", client_secret: "secret" } },
+        routes: {},
+        ingress: { enabled: true },
+      }),
+    );
+    const interactions: unknown[] = [];
+    runtime.setInteractionHandler?.(async (input) => {
+      interactions.push(input);
+    });
+
+    await transport.emitInteraction({
+      adapter: "qqbot",
+      interactionId: "interaction_1",
+      actorId: "user_1",
+      scene: "c2c",
+      recipient: "c2c:user_1",
+      buttonData: "opaque_token",
+    });
+
+    await vi.waitFor(() => expect(interactions).toHaveLength(1));
+    expect(interactions).toEqual([
+      {
+        workspaceId: "ws_qq",
+        event: {
+          adapter: "qqbot",
+          adapterId: "qq",
+          interactionId: "interaction_1",
+          actorId: "user_1",
+          scene: "c2c",
+          recipient: "c2c:user_1",
+          buttonData: "opaque_token",
+        },
+      },
+    ]);
+    await runtime.stop();
+  });
 });
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
+}

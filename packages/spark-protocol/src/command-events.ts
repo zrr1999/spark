@@ -28,10 +28,15 @@ export const sparkProtocolJsonObjectSchema = z.record(z.string(), sparkProtocolJ
 export const sparkCommandKindOptions = [
   "daemon.status.request",
   "daemon.stop.request",
+  "daemon.restart.request",
   "turn.submit.request",
   "turn.cancel.request",
   "turn.status.request",
+  "turn.result.request",
   "turn.stream.subscribe",
+  "invocation.list.request",
+  "invocation.retry.request",
+  "invocation.retention.preview.request",
   "channel.status.request",
   "channel.configure.request",
   "channel.reload.request",
@@ -56,6 +61,7 @@ export const sparkCommandKindOptions = [
   "session.bind.request",
   "session.unbind.request",
   "session.archive.request",
+  "session.notification.deliver.request",
   "session.model.set.request",
   "session.thinking.set.request",
   "model.catalog.request",
@@ -98,7 +104,6 @@ export const sparkCommandRouteSchema = z.object({
 export const sparkCommandTransportKindSchema = z.enum([
   "local-rpc",
   "runtime-ws",
-  "daemon-queue",
   "internal",
   "unknown",
 ]);
@@ -129,12 +134,14 @@ export const sparkEventKindOptions = [
   "command.accepted",
   "command.rejected",
   "command.status",
+  "command.result",
   "projection.workspace.snapshot",
   "projection.task_graph.snapshot",
   "projection.artifact.projected",
   "projection.invocation.updated",
   "projection.invocation.log_chunk",
   "projection.human_request.created",
+  "projection.human_response.recorded",
   "projection.human_response.ack",
   "projection.session.updated",
   "projection.assignment.updated",
@@ -232,10 +239,15 @@ export type SparkEvent = z.infer<typeof sparkEventSchema>;
 export const localRpcMethodToSparkCommandKind = {
   "daemon.status": "daemon.status.request",
   "daemon.stop": "daemon.stop.request",
-  "daemon.queue": "turn.status.request",
+  "daemon.restart": "daemon.restart.request",
+  "turn.status": "turn.status.request",
+  "turn.result": "turn.result.request",
   "turn.submit": "turn.submit.request",
   "turn.cancel": "turn.cancel.request",
   "turn.stream": "turn.stream.subscribe",
+  "invocation.list": "invocation.list.request",
+  "invocation.retry": "invocation.retry.request",
+  "invocation.retention.preview": "invocation.retention.preview.request",
   "channel.status": "channel.status.request",
   "channel.configure": "channel.configure.request",
   "channel.reload": "channel.reload.request",
@@ -256,6 +268,7 @@ export const localRpcMethodToSparkCommandKind = {
   "session.bind": "session.bind.request",
   "session.unbind": "session.unbind.request",
   "session.archive": "session.archive.request",
+  "session.notification.deliver": "session.notification.deliver.request",
   "session.model.set": "session.model.set.request",
   "session.thinking.set": "session.thinking.set.request",
   "model.catalog": "model.catalog.request",
@@ -269,6 +282,7 @@ export const localRpcMethodToSparkCommandKind = {
 } as const satisfies Record<string, SparkCommandKind>;
 
 export const runtimeServerCommandKindOptions = [
+  "daemon.status.request",
   "workspace.snapshot.request",
   "project.create.request",
   "task.start.request",
@@ -283,19 +297,79 @@ export const runtimeServerCommandKindOptions = [
   "diagnostics.request",
 ] as const satisfies readonly SparkCommandKind[];
 export type RuntimeServerCommandKind = (typeof runtimeServerCommandKindOptions)[number];
+export type RuntimeServerCommandScope = "daemon" | "workspace";
+export type RuntimeServerCommandOperation = "read" | "mutation";
+export interface RuntimeServerCommandSpecification {
+  scope: RuntimeServerCommandScope;
+  operation: RuntimeServerCommandOperation;
+  allowBorrowed: boolean;
+  allowDetached: boolean;
+}
+
+export const runtimeServerCommandSpecifications = {
+  "daemon.status.request": daemonReadCommand(),
+  "workspace.snapshot.request": workspaceReadCommand(),
+  "project.create.request": workspaceMutationCommand(),
+  "task.start.request": workspaceMutationCommand(),
+  "assignment.create.request": workspaceMutationCommand(),
+  "session.create.request": workspaceMutationCommand(),
+  "session.bind.request": workspaceMutationCommand(),
+  "session.unbind.request": workspaceMutationCommand(),
+  "session.archive.request": workspaceMutationCommand(),
+  "invocation.cancel.request": workspaceMutationCommand({
+    allowBorrowed: true,
+    allowDetached: true,
+  }),
+  "artifact.content.request": workspaceReadCommand(),
+  "human.response.deliver.request": workspaceMutationCommand({
+    allowBorrowed: true,
+    allowDetached: true,
+  }),
+  "diagnostics.request": workspaceReadCommand(),
+} as const satisfies Record<RuntimeServerCommandKind, RuntimeServerCommandSpecification>;
+
 export const runtimeServerCommandKindToSparkCommandKind = Object.fromEntries(
   runtimeServerCommandKindOptions.map((kind) => [kind, kind]),
 ) as Record<RuntimeServerCommandKind, SparkCommandKind>;
 
+export function runtimeServerCommandSpecification(
+  kind: string,
+): RuntimeServerCommandSpecification | null {
+  return runtimeServerCommandSpecifications[kind as RuntimeServerCommandKind] ?? null;
+}
+
+function daemonReadCommand(): RuntimeServerCommandSpecification {
+  return { scope: "daemon", operation: "read", allowBorrowed: true, allowDetached: true };
+}
+
+function workspaceReadCommand(): RuntimeServerCommandSpecification {
+  return { scope: "workspace", operation: "read", allowBorrowed: true, allowDetached: true };
+}
+
+function workspaceMutationCommand(
+  overrides: Partial<
+    Pick<RuntimeServerCommandSpecification, "allowBorrowed" | "allowDetached">
+  > = {},
+): RuntimeServerCommandSpecification {
+  return {
+    scope: "workspace",
+    operation: "mutation",
+    allowBorrowed: overrides.allowBorrowed ?? false,
+    allowDetached: overrides.allowDetached ?? false,
+  };
+}
+
 export const runtimeEnvelopeTypeToSparkEventKind = {
   "runtime.command.ack": "command.accepted",
   "runtime.command.reject": "command.rejected",
+  "runtime.command.result": "command.result",
   "workspace.snapshot": "projection.workspace.snapshot",
   "task_graph.snapshot": "projection.task_graph.snapshot",
   "artifact.projected": "projection.artifact.projected",
   "invocation.updated": "projection.invocation.updated",
   "invocation.log_chunk": "projection.invocation.log_chunk",
   "human.request.created": "projection.human_request.created",
+  "human.response.recorded": "projection.human_response.recorded",
   "human.response.ack": "projection.human_response.ack",
   "runtime.reconcile.report": "runtime.reconcile.report",
   "daemon.event": "daemon.event",

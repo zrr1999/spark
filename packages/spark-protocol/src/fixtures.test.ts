@@ -18,6 +18,7 @@ import {
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "runtime-v1");
 const mvpMessages = readFixture("mvp-messages.ws.json") as unknown[];
+const typedControlMessages = readFixture("typed-control.ws.json") as unknown[];
 const workspaceControlStates = readFixture("workspace-control-states.ws.json") as unknown[];
 const registerRequest = readFixture("register-runtime.request.json");
 const registerResponse = readFixture("register-runtime.response.json");
@@ -129,6 +130,28 @@ describe("runtime protocol fixtures", () => {
       true,
       false,
     ]);
+  });
+
+  it("validates daemon/workspace typed control fixtures", () => {
+    const parsed = typedControlMessages.map((message) =>
+      runtimeMessageEnvelopeSchema.parse(message),
+    );
+    expect(parsed.map((message) => message.type)).toEqual([
+      "server.command",
+      "server.command",
+      "runtime.command.ack",
+      "runtime.command.reject",
+      "runtime.command.result",
+    ]);
+    expect(parsed[0]).toMatchObject({ payload: { scope: "daemon" } });
+    expect(parsed[0]).not.toHaveProperty("workspaceBindingId");
+    expect(parsed[1]).toMatchObject({
+      workspaceBindingId: "rtwb_20000000000000000000000000000000",
+      payload: { scope: "workspace" },
+    });
+    expect(parsed[4]).toMatchObject({
+      payload: { status: "succeeded", projection: { kind: "daemon.status" } },
+    });
   });
 
   it("validates MVP protocol message fixtures", () => {

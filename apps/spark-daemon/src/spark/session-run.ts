@@ -1,8 +1,12 @@
 import {
   SPARK_PROTOCOL_VERSION,
   parseSparkDaemonEvent,
+  parseSparkInteractionRequest,
   parseSparkViewModelEvent,
   type SparkDaemonEvent,
+  type SparkJsonObject,
+  type SparkInteractionRequest,
+  type SparkInteractionResponse,
 } from "@zendev-lab/spark-protocol";
 import type { SparkPaths } from "@zendev-lab/spark-system";
 import {
@@ -34,11 +38,10 @@ import type {
 } from "../core/types.ts";
 import type { SparkDaemonModelControl } from "../model-control.ts";
 import type { DaemonSessionRegistry } from "../session-registry.ts";
-import { daemonTaskRouteMetadata } from "../core/queue-worker.ts";
 import { ChannelReplyEventProjector } from "../channels/reply-stream.ts";
 import { assignCompletedSessionTitle } from "./session-title.ts";
 
-export interface SparkDaemonQueueTaskExecutorOptions {
+export interface SparkDaemonTaskExecutorOptions {
   paths: SparkPaths;
   cwd?: string;
   /** Global provider/auth control root; daemon session files remain isolated. */
@@ -53,12 +56,17 @@ export interface SparkDaemonQueueTaskExecutorOptions {
   > &
     Partial<Pick<DaemonSessionRegistry, "get" | "setTitleIfMissing">>;
   createSparkHeadlessSessionExecutor?: CreateSparkHeadlessSessionExecutorFn;
+  interact?: (
+    request: SparkInteractionRequest,
+    task: SparkDaemonSessionRunTask,
+    context: SparkDaemonTaskExecutionContext,
+  ) => Promise<SparkInteractionResponse>;
 }
 
 export { loadSparkHeadlessSessionModule };
 
-export function createSparkDaemonQueueTaskExecutor(
-  options: SparkDaemonQueueTaskExecutorOptions,
+export function createSparkDaemonTaskExecutor(
+  options: SparkDaemonTaskExecutorOptions,
 ): SparkDaemonTaskExecutor {
   let sessionExecutor: SparkHeadlessSessionExecutor | undefined;
 
@@ -90,7 +98,7 @@ export function createSparkDaemonQueueTaskExecutor(
         );
         if (completed.indexed) {
           // Naming is a post-commit projection. It must not keep the successful
-          // queue task open or inherit its cancel/timeout lifecycle.
+          // invocation open or inherit its cancel/timeout lifecycle.
           void assignTitleAfterCompletedSessionRun(effectiveTask, context, options);
         }
         return completed.result;
@@ -99,7 +107,9 @@ export function createSparkDaemonQueueTaskExecutor(
         throw error;
       }
     }
-    throw new Error(`Unsupported Spark daemon queue task type: ${(task as SparkDaemonTask).type}`);
+    throw new Error(
+      `Unsupported Spark daemon invocation task type: ${(task as SparkDaemonTask).type}`,
+    );
   };
 }
 
@@ -123,12 +133,12 @@ function modelRefFromValue(value: string): { providerName: string; modelId: stri
   return { providerName: value.slice(0, slash), modelId: value.slice(slash + 1) };
 }
 
-export function createChannelAwareQueueTaskExecutor(
-  options: SparkDaemonQueueTaskExecutorOptions & {
+export function createChannelAwareTaskExecutor(
+  options: SparkDaemonTaskExecutorOptions & {
     channelIngress?: Pick<DaemonChannelIngressRuntime, "openReplyStream" | "sendReply">;
   },
 ): SparkDaemonTaskExecutor {
-  const base = createSparkDaemonQueueTaskExecutor(options);
+  const base = createSparkDaemonTaskExecutor(options);
   return async (task, context) => {
     if (task.type !== "session.run" || !task.channelReply || !options.channelIngress) {
       return await base(task, context);
@@ -176,7 +186,7 @@ export function createChannelAwareQueueTaskExecutor(
       if (text) projector.appendFinalText(text);
       try {
         await stream.complete("已完成");
-        return result;
+        if (stream.answerMode !== "separate") return result;
       } catch (error) {
         console.error(
           "[spark-daemon] channel reply stream completion failed; using fallback",
@@ -216,11 +226,11 @@ function assistantTextFromResult(result: unknown): string | undefined {
 export async function executeSparkDaemonSessionRunTask(
   task: SparkDaemonSessionRunTask,
   context: SparkDaemonTaskExecutionContext,
-  options: SparkDaemonQueueTaskExecutorOptions & { executeSession: SparkHeadlessSessionExecutor },
+  options: SparkDaemonTaskExecutorOptions & { executeSession: SparkHeadlessSessionExecutor },
 ): Promise<unknown> {
   const sessionSurface = await sessionSurfaceForTask(task, options.sessionRegistry);
   const systemPrompt = await systemPromptForChannelSession(task, options, sessionSurface);
-  const messageMetadata = channelMessageMetadata(task);
+  const messageMetadata = sessionRunMessageMetadata(task);
   return await options.executeSession({
     cwd: task.cwd ?? options.cwd ?? process.cwd(),
     sparkHome: options.paths.piAgentDir,
@@ -234,39 +244,108 @@ export async function executeSparkDaemonSessionRunTask(
     ...(systemPrompt ? { systemPrompt } : {}),
     ...(messageMetadata ? { messageMetadata } : {}),
     ...(sessionSurface ? { sessionSurface } : {}),
+    sessionSource: sessionSourceForTask(task),
+    invocationId: context.invocationId,
+    ...(sessionQuestionChainForTask(task)
+      ? { sessionQuestionChain: sessionQuestionChainForTask(task) }
+      : {}),
     ...(sessionSurface === "channel"
       ? {
           allowedTools: SPARK_CHANNEL_ALLOWED_TOOLS,
           approvalMethod: "auto" as const,
         }
       : {}),
+    ...(options.interact
+      ? {
+          interaction: (request) => {
+            const operation = () =>
+              options.interact!(parseSparkInteractionRequest(request), task, context);
+            return context.withPausedTimeout ? context.withPausedTimeout(operation) : operation();
+          },
+        }
+      : {}),
     onEvent: (event) => emitHeadlessEvent(event, task, context),
   });
 }
 
-function channelMessageMetadata(
-  task: SparkDaemonSessionRunTask,
-): Record<string, unknown> | undefined {
-  const channel = task.channelContext;
-  if (!channel) return undefined;
-  return {
-    channel: {
-      adapter: task.channelReply?.adapterId ?? "infoflow",
-      externalKey: channel.externalKey,
-      ...(channel.senderId ? { senderId: channel.senderId } : {}),
-      ...(channel.senderName ? { senderName: channel.senderName } : {}),
-      ...(channel.chatId ? { chatId: channel.chatId } : {}),
-      ...(channel.messageId ? { messageId: channel.messageId } : {}),
-      ...(channel.eventType ? { eventType: channel.eventType } : {}),
-      ...(channel.contentType ? { contentType: channel.contentType } : {}),
-      ...(channel.attachments?.length ? { attachments: channel.attachments } : {}),
+function sessionRunMessageMetadata(task: SparkDaemonSessionRunTask): Record<string, unknown> {
+  const source = sessionSourceForTask(task);
+  const baseMetadata = {
+    origin: {
+      kind: "user",
+      host: source,
+      surface: source === "channel" ? "channel" : "local",
     },
   };
+  const channel = task.channelContext;
+  const channelMetadata = channel
+    ? {
+        origin: {
+          kind: "user",
+          host: "channel",
+          surface: "channel",
+          adapter: task.channelReply?.adapterId ?? "infoflow",
+          externalKey: channel.externalKey,
+          ...(channel.senderId ? { senderId: channel.senderId } : {}),
+          ...(channel.senderName ? { senderName: channel.senderName } : {}),
+        },
+        channel: {
+          adapter: task.channelReply?.adapterId ?? "infoflow",
+          externalKey: channel.externalKey,
+          ...(channel.senderId ? { senderId: channel.senderId } : {}),
+          ...(channel.senderName ? { senderName: channel.senderName } : {}),
+          ...(channel.chatId ? { chatId: channel.chatId } : {}),
+          ...(channel.messageId ? { messageId: channel.messageId } : {}),
+          ...(channel.eventType ? { eventType: channel.eventType } : {}),
+          ...(channel.contentType ? { contentType: channel.contentType } : {}),
+          ...(channel.attachments?.length ? { attachments: channel.attachments } : {}),
+        },
+      }
+    : undefined;
+  return {
+    ...baseMetadata,
+    ...(task.messageMetadata ?? {}),
+    ...(channelMetadata ?? {}),
+  };
+}
+
+function sessionQuestionChainForTask(task: SparkDaemonSessionRunTask): string[] | undefined {
+  const mail = task.messageMetadata?.sessionMail;
+  if (!mail || typeof mail !== "object" || Array.isArray(mail)) return undefined;
+  const chain = (mail as { questionChain?: unknown }).questionChain;
+  if (!Array.isArray(chain)) return undefined;
+  const normalized = chain
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function sessionSourceForTask(
+  task: SparkDaemonSessionRunTask,
+): "tui" | "web" | "channel" | "daemon" | "session" {
+  if (task.channelReply || task.channelContext) return "channel";
+  const origin = task.messageMetadata?.origin;
+  if (origin && typeof origin === "object" && !Array.isArray(origin)) {
+    const originRecord = origin as { kind?: unknown; host?: unknown };
+    if (originRecord.kind === "session") return "session";
+    const host = originRecord.host;
+    if (
+      host === "tui" ||
+      host === "web" ||
+      host === "channel" ||
+      host === "daemon" ||
+      host === "session"
+    ) {
+      return host;
+    }
+  }
+  if (task.assignment?.source.kind === "cockpit") return "web";
+  return "daemon";
 }
 
 async function sessionSurfaceForTask(
   task: SparkDaemonSessionRunTask,
-  registry: SparkDaemonQueueTaskExecutorOptions["sessionRegistry"],
+  registry: SparkDaemonTaskExecutorOptions["sessionRegistry"],
 ): Promise<"local" | "channel" | undefined> {
   if (task.channelReply) return "channel";
   const session = await registry?.get?.(task.sessionId);
@@ -276,7 +355,7 @@ async function sessionSurfaceForTask(
 
 async function systemPromptForChannelSession(
   task: SparkDaemonSessionRunTask,
-  options: SparkDaemonQueueTaskExecutorOptions,
+  options: SparkDaemonTaskExecutorOptions,
   sessionSurface: "local" | "channel" | undefined,
 ): Promise<string | undefined> {
   if (sessionSurface !== "channel") return undefined;
@@ -341,7 +420,7 @@ async function systemPromptForChannelSession(
 }
 
 async function loadInfoflowAdapterConfig(
-  options: SparkDaemonQueueTaskExecutorOptions,
+  options: SparkDaemonTaskExecutorOptions,
   workspaceId: string,
 ): Promise<InfoflowAdapterConfig | undefined> {
   const sparkHome = options.channelsSparkHome ?? options.controlSparkHome;
@@ -359,7 +438,7 @@ async function loadInfoflowAdapterConfig(
 }
 
 async function loadQqbotAdapterConfig(
-  options: SparkDaemonQueueTaskExecutorOptions,
+  options: SparkDaemonTaskExecutorOptions,
   workspaceId: string,
 ): Promise<QqbotAdapterConfig | undefined> {
   const sparkHome = options.channelsSparkHome ?? options.controlSparkHome;
@@ -383,6 +462,12 @@ function emitHeadlessEvent(
 ): void {
   const event = daemonEventFromHeadlessEvent(raw, task, context.invocationId);
   if (event) void context.emitEvent?.(event);
+}
+
+function daemonTaskRouteMetadata(task: SparkDaemonTask | undefined): SparkJsonObject {
+  return {
+    ...(task?.workspaceBindingId ? { workspaceBindingId: task.workspaceBindingId } : {}),
+  };
 }
 
 function daemonEventFromHeadlessEvent(
@@ -458,8 +543,8 @@ async function recordCompletedSessionRun(
   } catch (error) {
     const message = `failed to index completed session ${task.sessionId}: ${errorMessage(error)}`;
     console.error(`[spark-daemon] ${message}`);
-    // The transcript and model turn have already committed. Keep the queue item
-    // processed and surface the indexing failure in its durable result so a
+    // The transcript and model turn have already committed. Keep the invocation
+    // terminal and surface the indexing failure in its durable result so a
     // retry cannot duplicate the completed user turn.
     await settleSessionRun(task.sessionId, registry, "registry persistence failure");
     return { result: registryWarning(result, message), indexed: false };
@@ -469,7 +554,7 @@ async function recordCompletedSessionRun(
 async function assignTitleAfterCompletedSessionRun(
   task: SparkDaemonSessionRunTask,
   context: SparkDaemonTaskExecutionContext,
-  options: SparkDaemonQueueTaskExecutorOptions,
+  options: SparkDaemonTaskExecutorOptions,
 ): Promise<void> {
   const generateSessionTitle = options.modelControl?.generateSessionTitle;
   const get = options.sessionRegistry?.get;

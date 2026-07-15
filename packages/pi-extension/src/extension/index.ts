@@ -4,7 +4,12 @@ import {
   registerPiLearningTool,
   type PiLearningToolHandlers,
 } from "@zendev-lab/spark-learnings/extension";
-import { registerPiTaskTool, type PiTaskToolHandlers } from "@zendev-lab/spark-tasks/extension";
+import {
+  registerPiTaskTool,
+  registerPiTodoTool,
+  type PiTaskActionHandler,
+  type PiTaskToolHandlers,
+} from "@zendev-lab/spark-tasks/extension";
 import { renderSparkToolCall } from "./tool-rendering.ts";
 import { registerSparkAskTools } from "./spark-ask-tool-registration.ts";
 import { registerSparkWorkflowRunsTool } from "./spark-workflow-runs-tool-registration.ts";
@@ -229,6 +234,9 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     registerPiTaskTool(genericToolRegistrar, {
       handlers: createSparkTaskHandlers((name) => registeredSparkTools.get(name)),
     });
+    registerPiTodoTool(genericToolRegistrar, {
+      handler: createSparkTodoHandler((name) => registeredSparkTools.get(name)),
+    });
     registerPiLearningTool(genericToolRegistrar, {
       handlers: createSparkLearningHandlers((name) => registeredSparkTools.get(name)),
     });
@@ -297,8 +305,8 @@ function createSparkTaskHandlers(resolveTool: SparkImplementationResolver): PiTa
     plan: direct("impl_plan_tasks"),
     finish: direct("impl_finish_task"),
     recover: direct("impl_recover_task_claim"),
-    todo_update: ({ toolCallId, params, signal, onUpdate, ctx }) => {
-      normalizeTaskTodoScope(params.scope);
+    plan_update: ({ toolCallId, params, signal, onUpdate, ctx }) => {
+      normalizeTaskPlanUpdateScope(params.scope);
       return executeSparkImplementationTool(resolveTool, "impl_update_task_plan_items", {
         toolCallId,
         params: stripTaskActionAndScope(params),
@@ -329,6 +337,17 @@ function createSparkTaskHandlers(resolveTool: SparkImplementationResolver): PiTa
         ctx,
       }),
   };
+}
+
+function createSparkTodoHandler(resolveTool: SparkImplementationResolver): PiTaskActionHandler {
+  return ({ toolCallId, params, signal, onUpdate, ctx }) =>
+    executeSparkImplementationTool(resolveTool, "impl_todo", {
+      toolCallId,
+      params: removeUndefined(params),
+      signal,
+      onUpdate,
+      ctx,
+    });
 }
 
 function createSparkLearningHandlers(
@@ -379,13 +398,13 @@ function executeSparkImplementationTool(
   );
 }
 
-function normalizeTaskTodoScope(value: unknown): "task" {
+function normalizeTaskPlanUpdateScope(value: unknown): "task" {
   if (value === undefined || value === null || value === "task") return "task";
   if (value === "session")
     throw new Error(
-      'scope: "session" has been removed; task_write({ action: "todo_update" }) updates task plan items only. Use durable project tasks for standalone work.',
+      'scope: "session" is not valid for task_write({ action: "plan_update" }); it updates task plan items only. Use the session-bound todo tool for standalone session TODOs.',
     );
-  throw new Error('task.scope must be "task" for todo_update');
+  throw new Error('task.scope must be "task" for plan_update');
 }
 
 function normalizeTaskRunStatusAction(

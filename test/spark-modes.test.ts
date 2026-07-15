@@ -33,24 +33,24 @@ void test("createModeRegistry preserves order, supports custom modes, and report
     title: "Audit",
     renderRequirements: () => "## audit requirements",
   });
-  assert.deepEqual(registry.ids(), ["research", "plan", "implement", "audit"]);
-  assert.deepEqual(registry.builtinIds(), ["research", "plan", "implement"]);
+  assert.deepEqual(registry.ids(), ["plan", "implement", "audit"]);
+  assert.deepEqual(registry.builtinIds(), ["plan", "implement"]);
   assert.equal(registry.has("audit"), true);
   assert.equal(registry.get("audit")?.title, "Audit");
-  assert.equal(registry.require("research").id, "research");
+  assert.equal(registry.require("plan").id, "plan");
   assert.throws(() => registry.require("nope"), /unknown mode: nope/u);
 });
 
 void test("createModeRegistry re-registration overwrites without duplicating order", () => {
   const registry = createModeRegistry({ definitions: builtinDefinitions() });
   registry.register({
-    id: "research",
-    title: "Research v2",
+    id: "plan",
+    title: "Plan v2",
     builtin: true,
     renderRequirements: () => "v2",
   });
-  assert.deepEqual(registry.ids(), ["research", "plan", "implement"]);
-  assert.equal(registry.require("research").title, "Research v2");
+  assert.deepEqual(registry.ids(), ["plan", "implement"]);
+  assert.equal(registry.require("plan").title, "Plan v2");
 });
 
 void test("resolveActiveMode honors explicit > suggested > fallback precedence", () => {
@@ -70,7 +70,7 @@ void test("resolveActiveMode honors explicit > suggested > fallback precedence",
     source: "suggested",
   });
   assert.deepEqual(resolveActiveMode({ registry, driver: "assist" }), {
-    mode: "research",
+    mode: "plan",
     driver: "assist",
     source: "fallback",
   });
@@ -88,7 +88,7 @@ void test("resolveActiveMode ignores unknown explicit/suggested ids and falls th
     { mode: "plan", driver: "assist", source: "suggested" },
   );
   assert.deepEqual(resolveActiveMode({ registry, driver: "assist", suggest: "bogus" }), {
-    mode: "research",
+    mode: "plan",
     driver: "assist",
     source: "fallback",
   });
@@ -121,7 +121,7 @@ void test("createModeTool exposes registry ids plus status as actions", () => {
   const registry = createModeRegistry({ definitions: builtinDefinitions() });
   const tool = createModeTool({ registry });
   assert.equal(tool.name, "mode");
-  assert.match(tool.description, /research \| plan \| implement \| status/u);
+  assert.match(tool.description, /plan \| implement \| status/u);
 });
 
 void test("normalizeModeToolAction validates against registry and status", () => {
@@ -158,12 +158,12 @@ void test("runModeToolAction reports status without switching and switches other
 });
 
 void test("renderModeMarker shows phase only for assist and drive for autonomous drivers", () => {
-  assert.equal(renderModeMarker({ mode: "research", driver: "assist" }), undefined);
+  assert.equal(renderModeMarker({ mode: "plan", driver: "assist" }), undefined);
   assert.equal(
-    renderModeMarker({ mode: "research", driver: "assist", toolsHint: "Tools: x" }),
+    renderModeMarker({ mode: "plan", driver: "assist", toolsHint: "Tools: x" }),
     "Tools: x",
   );
-  assert.equal(renderModeMarker({ mode: "plan", driver: "assist" }), "Phase: plan.");
+  assert.equal(renderModeMarker({ mode: "implement", driver: "assist" }), "Phase: implement.");
   assert.equal(renderModeMarker({ mode: "implement", driver: "goal" }), "Drive: goal.");
   assert.equal(
     renderModeMarker({ mode: "plan", driver: "loop", toolsHint: "Tools: x" }),
@@ -195,8 +195,8 @@ void test("assembleModeSystemPrompt joins non-empty sections in order", () => {
 
   const minimal = assembleModeSystemPrompt({
     registry,
-    mode: "research",
+    mode: "plan",
     context: { driver: "assist" },
   });
-  assert.equal(minimal, "## research requirements\n- driver=assist");
+  assert.equal(minimal, "## plan requirements\n- driver=assist");
 });

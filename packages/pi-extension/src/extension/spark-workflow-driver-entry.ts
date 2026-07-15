@@ -86,8 +86,8 @@ export async function enterSparkWorkflowDriver(
   if (workflow === false) return;
   const workflowSelector = workflow.selector;
   await deps.refreshSparkWidget(ctx.cwd, ctx);
-  if (workflow.descriptor?.mode === "research") {
-    ctx.sparkActiveLens = sparkActiveLens("research", "workflow");
+  if (workflow.descriptor?.mode === "plan") {
+    ctx.sparkActiveLens = sparkActiveLens("plan", "workflow");
     ctx.ui?.notify?.("Builtin workflow selected.", "info");
     dispatchSparkAgentInstruction(
       piApi,

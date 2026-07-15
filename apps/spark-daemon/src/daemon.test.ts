@@ -21,9 +21,11 @@ import {
   type MessageContext,
   type ServerSocket,
 } from "./daemon.js";
-import { SparkDaemonInvocationRegistry, SparkDaemonQueue } from "./core/index.ts";
+import { SparkDaemonInvocationRegistry, SparkDaemonLifecycle } from "./core/index.ts";
 import { SparkDaemonHumanWaitRegistry } from "./core/human-waits.ts";
+import type { SparkDaemonModelControl } from "./model-control.ts";
 import type { CancelSparkInvocationFn, RunSparkCommandFn } from "./spark/bridge.js";
+import { SparkInvocationStore } from "./store/invocations.ts";
 import { openSparkDaemonDatabase } from "./store/schema.js";
 import {
   addWorkspace,
@@ -393,7 +395,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
         db: harness.db,
         config,
         signal: shutdown.signal,
-        runQueue: false,
+        runScheduler: false,
         serverReconnectDelayMs: 5,
       });
 
@@ -432,11 +434,15 @@ describe("Spark daemon handleCommand task.start.request", () => {
     }
   });
 
-  it("runs the daemon-owned queue loop inside the service process", async () => {
+  it("runs the daemon-owned invocation scheduler inside the service process", async () => {
     const harness = makeHarness();
     try {
-      const queue = new SparkDaemonQueue({ paths: harness.paths });
-      await queue.enqueue({ type: "session.run", sessionId: "queued-session", prompt: "hello" });
+      const store = new SparkInvocationStore(harness.db);
+      const submitted = store.submit({
+        sessionId: "queued-session",
+        prompt: "hello",
+        task: { type: "session.run", sessionId: "queued-session", prompt: "hello" },
+      });
       const shutdown = new AbortController();
       const executed: string[] = [];
       const running = startSparkDaemon({
@@ -448,37 +454,142 @@ describe("Spark daemon handleCommand task.start.request", () => {
           displayName: "Test daemon",
         },
         signal: shutdown.signal,
-        queue,
-        executeQueueTask: async (task) => {
+        executeInvocation: async (task) => {
           executed.push(`${task.sessionId}:${task.prompt}`);
           shutdown.abort();
           return { text: "done" };
         },
-        queuePollIntervalMs: 5,
+        schedulerPollIntervalMs: 5,
       });
 
       await running;
 
       expect(executed).toEqual(["queued-session:hello"]);
-      const processed = await queue.list("processed");
-      expect(processed).toHaveLength(1);
-      const processedEntry = await queue.readEntry(processed[0]!, "processed");
-      expect(processedEntry.payload.processedAt).toEqual(expect.any(String));
-      expect(processedEntry.payload.result).toEqual({ text: "done" });
+      expect(store.require(submitted.invocationId)).toMatchObject({
+        status: "succeeded",
+        result: { text: "done" },
+      });
       expect(existsSync(harness.paths.pidFile)).toBe(false);
     } finally {
       harness.cleanup();
     }
   });
 
-  it("publishes daemon queue events over the runtime WebSocket stream", async () => {
+  it("drains active scheduler work and leaves queued work for the restart successor", async () => {
+    const harness = makeHarness();
+    const shutdown = new AbortController();
+    const lifecycle = new SparkDaemonLifecycle();
+    const activeStarted = deferred<void>();
+    const releaseActive = deferred<void>();
+    let running: Promise<void> | undefined;
+    try {
+      const store = new SparkInvocationStore(harness.db);
+      const active = store.submit({
+        sessionId: "restart-active",
+        prompt: "finish before restart",
+        task: {
+          type: "session.run",
+          sessionId: "restart-active",
+          prompt: "finish before restart",
+        },
+      });
+      const executed: string[] = [];
+      running = startSparkDaemon({
+        paths: harness.paths,
+        sparkHome: harness.sparkHome,
+        db: harness.db,
+        config: {
+          installationId: "install-test",
+          displayName: "Test daemon",
+        },
+        signal: shutdown.signal,
+        drainSignal: lifecycle.drainSignal,
+        restartSignal: lifecycle.restartSignal,
+        schedulerConcurrency: 1,
+        schedulerPollIntervalMs: 5,
+        executeInvocation: async (task) => {
+          executed.push(task.sessionId);
+          activeStarted.resolve(undefined);
+          await releaseActive.promise;
+          return { text: "finished by old daemon" };
+        },
+      });
+
+      await activeStarted.promise;
+      const queued = store.submit({
+        sessionId: "restart-queued",
+        prompt: "run after restart",
+        task: {
+          type: "session.run",
+          sessionId: "restart-queued",
+          prompt: "run after restart",
+        },
+      });
+      lifecycle.requestRestart("2026-07-15T00:00:00.000Z");
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(store.require(queued.invocationId).status).toBe("queued");
+      expect(executed).toEqual(["restart-active"]);
+
+      releaseActive.resolve(undefined);
+      await running;
+
+      expect(store.require(active.invocationId)).toMatchObject({
+        status: "succeeded",
+        result: { text: "finished by old daemon" },
+      });
+      expect(store.require(queued.invocationId).status).toBe("queued");
+      expect(existsSync(harness.paths.pidFile)).toBe(false);
+
+      const successorShutdown = new AbortController();
+      const successorExecuted: string[] = [];
+      await startSparkDaemon({
+        paths: harness.paths,
+        sparkHome: harness.sparkHome,
+        db: harness.db,
+        config: {
+          installationId: "install-test",
+          displayName: "Test daemon successor",
+        },
+        signal: successorShutdown.signal,
+        schedulerConcurrency: 1,
+        schedulerPollIntervalMs: 5,
+        executeInvocation: async (task) => {
+          successorExecuted.push(task.sessionId);
+          successorShutdown.abort();
+          return { text: "finished by successor" };
+        },
+      });
+
+      expect(successorExecuted).toEqual(["restart-queued"]);
+      expect(store.require(active.invocationId)).toMatchObject({
+        status: "succeeded",
+        attemptCount: 1,
+        result: { text: "finished by old daemon" },
+      });
+      expect(store.require(queued.invocationId)).toMatchObject({
+        status: "succeeded",
+        attemptCount: 1,
+        result: { text: "finished by successor" },
+      });
+    } finally {
+      releaseActive.resolve(undefined);
+      shutdown.abort();
+      await running?.catch(() => undefined);
+      harness.cleanup();
+    }
+  });
+
+  it("publishes sequenced invocation events over the runtime WebSocket stream", async () => {
     const harness = makeHarness();
     const server = new WebSocketServer({ port: 0 });
     const shutdown = new AbortController();
     const helloReceived = deferred<void>();
     const viewEventReceived = deferred<void>();
     const interactionEventReceived = deferred<void>();
-    const daemonEventTypes: string[] = [];
+    const terminalEventReceived = deferred<void>();
+    const runtimeEventTypes: string[] = [];
+    const invocationSequences: number[] = [];
 
     try {
       await once(server, "listening");
@@ -509,12 +620,16 @@ describe("Spark daemon handleCommand task.start.request", () => {
       server.on("connection", (socket) => {
         socket.on("message", (data) => {
           const message = JSON.parse(webSocketDataToString(data)) as {
+            messageId: string;
             type: string;
+            invocationId?: string;
             workspaceBindingId?: string;
             workspaceId?: string;
             payload?: {
               type?: string;
-              view?: { type?: string; sessionId?: string };
+              sequence?: number;
+              runtimeInvocationId?: string;
+              content?: string;
               request?: { kind?: string; requestId?: string };
             };
           };
@@ -523,7 +638,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
               JSON.stringify({
                 protocolVersion: runtimeProtocolVersion,
                 messageId: createId("msg"),
-                type: "server.hello.ack",
+                type: "server.hello_ack",
                 sentAt: new Date().toISOString(),
                 payload: {
                   runtimeSessionId: createId("rtsn"),
@@ -536,24 +651,37 @@ describe("Spark daemon handleCommand task.start.request", () => {
             helloReceived.resolve(undefined);
             return;
           }
-          if (message.type !== "daemon.event") {
+          if (
+            message.type !== "invocation.updated" &&
+            message.type !== "invocation.log_chunk" &&
+            message.type !== "daemon.event"
+          ) {
             return;
           }
-          const eventType = message.payload?.type;
-          if (eventType) {
-            daemonEventTypes.push(eventType);
+          expect(JSON.stringify(message)).not.toMatch(
+            /daemon\.queue|taskFileName|fileName|filePath/u,
+          );
+          runtimeEventTypes.push(message.type);
+          if (typeof message.payload?.sequence === "number") {
+            invocationSequences.push(message.payload.sequence);
           }
+          socket.send(JSON.stringify({ type: "server.ingest_ack", ackOf: message.messageId }));
           if (
-            eventType === "daemon.view_event" &&
+            message.type === "invocation.log_chunk" &&
+            message.invocationId === message.payload?.runtimeInvocationId &&
             message.workspaceBindingId === routedWorkspace.id &&
             message.workspaceId === serverWorkspaceId &&
-            message.payload?.view?.type === "session.message" &&
-            message.payload.view.sessionId === "queued-ws-session"
+            message.payload?.sequence === 2 &&
+            message.payload?.content === "done from live daemon"
           ) {
             viewEventReceived.resolve(undefined);
           }
+          if (message.type === "invocation.updated" && message.payload?.sequence === 4) {
+            terminalEventReceived.resolve(undefined);
+          }
           if (
-            eventType === "daemon.interaction.request" &&
+            message.type === "daemon.event" &&
+            message.payload?.type === "daemon.interaction.request" &&
             message.workspaceBindingId === routedWorkspace.id &&
             message.workspaceId === serverWorkspaceId &&
             message.payload?.request?.kind === "confirmation" &&
@@ -564,7 +692,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
         });
       });
 
-      const queue = new SparkDaemonQueue({ paths: harness.paths });
+      const store = new SparkInvocationStore(harness.db);
       const running = startSparkDaemon({
         paths: harness.paths,
         sparkHome: harness.sparkHome,
@@ -574,9 +702,8 @@ describe("Spark daemon handleCommand task.start.request", () => {
           displayName: "Test daemon",
         },
         signal: shutdown.signal,
-        queue,
-        queuePollIntervalMs: 5,
-        executeQueueTask: async (task) => ({
+        schedulerPollIntervalMs: 5,
+        executeInvocation: async (task) => ({
           ok: true,
           jsonEvents: [
             {
@@ -620,24 +747,197 @@ describe("Spark daemon handleCommand task.start.request", () => {
       });
 
       await helloReceived.promise;
-      await queue.enqueue({
-        type: "session.run",
+      store.submit({
         sessionId: "queued-ws-session",
-        prompt: "hello over ws",
         workspaceBindingId: routedWorkspace.id,
-        workspaceId: serverWorkspaceId,
+        prompt: "hello over ws",
+        task: {
+          type: "session.run",
+          sessionId: "queued-ws-session",
+          prompt: "hello over ws",
+          workspaceBindingId: routedWorkspace.id,
+          workspaceId: serverWorkspaceId,
+        },
       });
       await viewEventReceived.promise;
       await interactionEventReceived.promise;
+      await terminalEventReceived.promise;
       shutdown.abort();
       await running;
 
-      expect(daemonEventTypes).toEqual([
-        "daemon.task.lifecycle",
-        "daemon.task.lifecycle",
-        "daemon.view_event",
-        "daemon.interaction.request",
+      expect(runtimeEventTypes).toEqual([
+        "invocation.updated",
+        "invocation.log_chunk",
+        "daemon.event",
+        "invocation.updated",
       ]);
+      expect(invocationSequences).toEqual([1, 2, 4]);
+    } finally {
+      shutdown.abort();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      harness.cleanup();
+    }
+  });
+
+  it("reconnects the invocation uplink from the last acknowledged sequence", async () => {
+    const harness = makeHarness();
+    const server = new WebSocketServer({ port: 0 });
+    const shutdown = new AbortController();
+    const replayed = deferred<void>();
+    const sequencesByConnection: number[][] = [];
+    const messageIdsForSequenceThree: string[] = [];
+    let maxPayloadBytes = 0;
+
+    try {
+      await once(server, "listening");
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected WebSocket server to listen on a TCP port");
+      }
+      const port = (address as AddressInfo).port;
+      const serverUrl = `http://127.0.0.1:${port}/`;
+      const webSocketUrl = `ws://127.0.0.1:${port}/runtime`;
+      const runtimeId = "rt_11111111111111111111111111111111";
+      const serverWorkspaceId = "ws_22222222222241112222222222222222";
+      const routedWorkspace = registerWorkspace(harness.db, {
+        serverUrl,
+        serverWorkspaceId,
+        serverBindingId: "rtwb_33333333333341113333333333333333",
+        localPath: harness.workspace.localPath,
+        localWorkspaceKey: "local-default",
+        displayName: "Local default",
+      });
+      writeSparkDaemonConfig(harness.paths, {
+        installationId: "install-test",
+        displayName: "Test daemon",
+        runtimeId,
+        runtimeToken: "runtime-token",
+        webSocketUrl,
+      });
+
+      const store = new SparkInvocationStore(harness.db);
+      const invocation = store.submit({
+        sessionId: "uplink-reconnect",
+        workspaceBindingId: routedWorkspace.id,
+        prompt: "reconnect",
+        task: {
+          type: "session.run",
+          sessionId: "uplink-reconnect",
+          prompt: "reconnect",
+          workspaceBindingId: routedWorkspace.id,
+          workspaceId: serverWorkspaceId,
+        },
+      });
+      const baseEvent = {
+        version: SPARK_PROTOCOL_VERSION,
+        source: "daemon" as const,
+        emittedAt: "2026-07-14T00:00:00.000Z",
+        workspaceId: serverWorkspaceId,
+        sessionId: "uplink-reconnect",
+        invocationId: invocation.invocationId,
+        metadata: { workspaceBindingId: routedWorkspace.id },
+      };
+      store.appendEvent(invocation.invocationId, "daemon.task.lifecycle", {
+        ...baseEvent,
+        type: "daemon.task.lifecycle",
+        taskType: "session.run",
+        status: "running",
+      });
+      store.appendEvent(invocation.invocationId, "daemon.view_event", {
+        ...baseEvent,
+        type: "daemon.view_event",
+        view: {
+          version: SPARK_PROTOCOL_VERSION,
+          type: "session.message",
+          sessionId: "uplink-reconnect",
+          message: { id: "assistant", role: "assistant", text: "hello", status: "streaming" },
+        },
+      });
+      store.appendEvent(invocation.invocationId, "daemon.task.lifecycle", {
+        ...baseEvent,
+        type: "daemon.task.lifecycle",
+        taskType: "session.run",
+        status: "succeeded",
+      });
+
+      let connectionIndex = 0;
+      server.on("connection", (socket) => {
+        const current = connectionIndex++;
+        sequencesByConnection[current] = [];
+        socket.on("message", (data) => {
+          const message = JSON.parse(webSocketDataToString(data)) as {
+            messageId: string;
+            type: string;
+            payload?: { sequence?: number };
+          };
+          if (message.type === "runtime.hello") {
+            socket.send(
+              JSON.stringify({
+                protocolVersion: runtimeProtocolVersion,
+                messageId: createId("msg"),
+                type: "server.hello_ack",
+                sentAt: new Date().toISOString(),
+                payload: {
+                  runtimeSessionId: createId("rtsn"),
+                  acceptedFeatures: ["ws-control-v1"],
+                  heartbeatIntervalMs: 15_000,
+                  serverTime: new Date().toISOString(),
+                },
+              }),
+            );
+            return;
+          }
+          if (message.type !== "invocation.updated" && message.type !== "invocation.log_chunk") {
+            return;
+          }
+          const sequence = message.payload?.sequence;
+          if (sequence === undefined) return;
+          maxPayloadBytes = Math.max(
+            maxPayloadBytes,
+            Buffer.byteLength(webSocketDataToString(data)),
+          );
+          sequencesByConnection[current]!.push(sequence);
+          if (sequence === 3) messageIdsForSequenceThree.push(message.messageId);
+          if (current === 0 && sequence === 3) {
+            socket.close();
+            return;
+          }
+          socket.send(JSON.stringify({ type: "server.ingest_ack", ackOf: message.messageId }));
+          if (current === 1 && sequence === 3) replayed.resolve(undefined);
+        });
+      });
+
+      const running = startSparkDaemon({
+        paths: harness.paths,
+        sparkHome: harness.sparkHome,
+        db: harness.db,
+        config: {
+          installationId: "install-test",
+          displayName: "Test daemon",
+        },
+        signal: shutdown.signal,
+        runScheduler: false,
+        serverReconnectDelayMs: 5,
+      });
+      await replayed.promise;
+      await vi.waitFor(() => {
+        expect(store.pendingDeliveries(`cockpit:${runtimeId}`)).toHaveLength(0);
+      });
+      shutdown.abort();
+      await running;
+
+      expect(sequencesByConnection).toEqual([[1, 2, 3], [3]]);
+      expect(new Set(messageIdsForSequenceThree).size).toBe(1);
+      expect(maxPayloadBytes).toBeLessThan(1024 * 1024);
+      console.info(
+        "SPARK_INVOCATION_UPLINK_RECONNECT_TRANSCRIPT",
+        JSON.stringify({
+          sequencesByConnection,
+          duplicateSequenceCount: messageIdsForSequenceThree.length - 1,
+          stableMessageIdCount: new Set(messageIdsForSequenceThree).size,
+          maxPayloadBytes,
+        }),
+      );
     } finally {
       shutdown.abort();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -674,6 +974,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
         "artifact.projected",
         "task_graph.snapshot",
         "invocation.updated",
+        "runtime.command.result",
       ]);
 
       const ack = ws.sent[0] as { payload: { accepted: true; invocationId?: string } };
@@ -883,6 +1184,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
         "artifact.projected",
         "task_graph.snapshot",
         "invocation.updated",
+        "runtime.command.result",
       ]);
 
       const errorChunk = ws.sent[3] as {
@@ -964,6 +1266,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
       expect(ws.sent.map((value) => (value as { type: string }).type)).toEqual([
         "runtime.command.ack",
         "invocation.updated",
+        "runtime.command.result",
       ]);
       expect(ws.sent[1]).toMatchObject({
         payload: {
@@ -973,6 +1276,82 @@ describe("Spark daemon handleCommand task.start.request", () => {
         },
       });
     } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("rejects new routed execution after restart draining begins", async () => {
+    const harness = makeHarness();
+    try {
+      const ws = new CapturingSocket();
+      const invocationRegistry = new SparkDaemonInvocationRegistry();
+      invocationRegistry.beginDrain();
+      const runSparkCommand = vi.fn<RunSparkCommandFn>();
+      const context: MessageContext = {
+        ...makeContext(harness, runSparkCommand),
+        invocationRegistry,
+      };
+
+      await handleCommand(ws, buildTaskStartEnvelope(harness.workspace.id), context);
+
+      expect(runSparkCommand).not.toHaveBeenCalled();
+      expect(ws.sent).toContainEqual(
+        expect.objectContaining({
+          type: "runtime.command.reject",
+          payload: expect.objectContaining({
+            reasonCode: "DAEMON_DRAINING",
+            retryable: true,
+          }),
+        }),
+      );
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("rejects routed execution when draining begins during model preparation", async () => {
+    const harness = makeHarness();
+    const finishPreparing = deferred<void>();
+    try {
+      const ws = new CapturingSocket();
+      const invocationRegistry = new SparkDaemonInvocationRegistry();
+      const preparing = deferred<void>();
+      const runSparkCommand = vi.fn<RunSparkCommandFn>();
+      const modelControl = {
+        effectiveModel: vi.fn(async () => ({
+          providerName: "test-provider",
+          modelId: "test-model",
+        })),
+        prepareModel: vi.fn(async () => {
+          preparing.resolve(undefined);
+          await finishPreparing.promise;
+        }),
+      } as unknown as SparkDaemonModelControl;
+      const context: MessageContext = {
+        ...makeContext(harness, runSparkCommand),
+        invocationRegistry,
+        modelControl,
+      };
+
+      const handling = handleCommand(ws, buildTaskStartEnvelope(harness.workspace.id), context);
+      await preparing.promise;
+      invocationRegistry.beginDrain();
+      finishPreparing.resolve(undefined);
+      await handling;
+
+      expect(runSparkCommand).not.toHaveBeenCalled();
+      expect(invocationRegistry.snapshot()).toEqual([]);
+      expect(ws.sent).toContainEqual(
+        expect.objectContaining({
+          type: "runtime.command.reject",
+          payload: expect.objectContaining({
+            reasonCode: "DAEMON_DRAINING",
+            retryable: true,
+          }),
+        }),
+      );
+    } finally {
+      finishPreparing.resolve(undefined);
       harness.cleanup();
     }
   });
@@ -1162,6 +1541,37 @@ describe("Spark daemon handleCommand task.start.request", () => {
     }
   });
 
+  it("rejects a command for another runtime before receipt or execution", async () => {
+    const harness = makeHarness();
+    try {
+      const ws = new CapturingSocket();
+      const original = buildTaskStartEnvelope(harness.workspace.id);
+      const command = serverCommandEnvelopeSchema.parse({
+        ...original,
+        runtimeId: "rt_99999999999999999999999999999999",
+      });
+      let executionCount = 0;
+      const context = makeContext(harness, async () => {
+        executionCount += 1;
+        throw new Error("must not execute");
+      });
+
+      await handleCommand(ws, command, context);
+
+      expect(executionCount).toBe(0);
+      expect(ws.sent).toHaveLength(1);
+      expect(ws.sent[0]).toMatchObject({
+        type: "runtime.command.reject",
+        payload: { reasonCode: "RUNTIME_ID_MISMATCH", retryable: false },
+      });
+      expect(
+        harness.db.prepare("SELECT COUNT(*) AS count FROM runtime_command_receipts").get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("rejects task.start.request for an unknown workspace binding", async () => {
     const harness = makeHarness();
     try {
@@ -1244,7 +1654,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
 
       await handleCommand(ws, command, context);
 
-      expect(ws.sent).toHaveLength(2);
+      expect(ws.sent).toHaveLength(3);
       expect(ws.sent[0]).toMatchObject({ type: "runtime.command.ack" });
       expect(ws.sent[1]).toMatchObject({
         type: "workspace.snapshot",
@@ -1252,6 +1662,10 @@ describe("Spark daemon handleCommand task.start.request", () => {
           borrowed: { borrowed: true, interactiveClientCount: 1 },
           control: { mode: "snapshot_only", reason: "borrowed", serverMutationAllowed: false },
         },
+      });
+      expect(ws.sent[2]).toMatchObject({
+        type: "runtime.command.result",
+        payload: { status: "succeeded" },
       });
     } finally {
       harness.cleanup();

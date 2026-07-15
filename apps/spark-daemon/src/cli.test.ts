@@ -21,9 +21,11 @@ import {
 function createCliIo(
   options: {
     startService?: CliIo["startService"];
+    stopService?: CliIo["stopService"];
     stdin?: CliIo["stdin"];
     daemonStatusFromService?: CliIo["daemonStatusFromService"];
     daemonStopFromService?: CliIo["daemonStopFromService"];
+    daemonRestartFromService?: CliIo["daemonRestartFromService"];
     listWorkspacesFromService?: CliIo["listWorkspacesFromService"];
     registerWorkspaceInService?: CliIo["registerWorkspaceInService"];
     attachWorkspaceInService?: CliIo["attachWorkspaceInService"];
@@ -59,11 +61,21 @@ function createCliIo(
         alreadyRunning: false,
         detail: "Started test Spark daemon.",
       })),
+    stopService:
+      options.stopService ??
+      (() => ({
+        kind: "launchd",
+        alreadyRunning: false,
+        detail: "Stopped test Spark daemon supervisor.",
+      })),
     ...(options.daemonStatusFromService
       ? { daemonStatusFromService: options.daemonStatusFromService }
       : {}),
     ...(options.daemonStopFromService
       ? { daemonStopFromService: options.daemonStopFromService }
+      : {}),
+    ...(options.daemonRestartFromService
+      ? { daemonRestartFromService: options.daemonRestartFromService }
       : {}),
     listWorkspacesFromService: options.listWorkspacesFromService ?? workspaceListResultFromDb,
     registerWorkspaceInService:
@@ -2175,7 +2187,9 @@ describe("Spark daemon CLI", () => {
             wsConnected: false,
           },
         ],
-        queue: { inbox: 0, processed: 0, failed: 0 },
+        invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
+        invocationHealth: {},
+        lifecycle: { state: "running" as const },
       }));
 
       const jsonCapture = createCliIo({ daemonStatusFromService });
@@ -2240,7 +2254,9 @@ describe("Spark daemon CLI", () => {
             wsConnected: true,
           },
         ],
-        queue: { inbox: 0, processed: 0, failed: 0 },
+        invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
+        invocationHealth: {},
+        lifecycle: { state: "running" as const },
       }));
 
       const capture = createCliIo({ daemonStatusFromService });
@@ -2277,7 +2293,9 @@ describe("Spark daemon CLI", () => {
           { url: "https://spark.example.com/", workspaceCount: 2, wsConnected: true },
           { url: "http://127.0.0.1:5173/", workspaceCount: 1, wsConnected: false },
         ],
-        queue: { inbox: 0, processed: 0, failed: 0 },
+        invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
+        invocationHealth: {},
+        lifecycle: { state: "running" as const },
       }));
 
       const capture = createCliIo({ daemonStatusFromService });
@@ -2351,8 +2369,149 @@ describe("Spark daemon CLI", () => {
       await expect(main(["daemon", "stop", "--yes"], capture.io)).resolves.toBe(0);
 
       expect(daemonStopFromService).toHaveBeenCalledOnce();
-      expect(capture.stdout()).toContain(`Stopped Spark daemon process ${process.pid}.`);
+      expect(capture.stdout()).toContain(
+        process.platform === "darwin"
+          ? "Stopped test Spark daemon supervisor."
+          : `Stopped Spark daemon process ${process.pid}.`,
+      );
       expect(capture.stderr()).toBe("");
+    });
+  });
+
+  it("schedules a drain restart without waiting by default", async () => {
+    await withTempSparkEnv(async () => {
+      const paths = resolveSparkPaths({ app: "daemon" });
+      mkdirSync(paths.runtimeDir, { recursive: true });
+      writeFileSync(paths.pidFile, `${process.pid}\n`);
+      const daemonRestartFromService = vi.fn(async () => ({
+        accepted: true as const,
+        state: "draining" as const,
+        restartId: "restart-1",
+        processInstanceId: "old-instance",
+        processGeneration: "old-generation",
+        targetInstanceId: "new-instance",
+        targetGeneration: "new-generation",
+        requestedAt: "2026-07-15T00:00:00.000Z",
+      }));
+      const daemonStopFromService = vi.fn(async () => ({
+        stopping: true as const,
+        observedAt: "2026-07-15T00:00:00.000Z",
+      }));
+      const daemonStatusFromService = vi.fn(async () => ({
+        servers: [],
+        invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
+        invocationHealth: {},
+        lifecycle: { state: "running" as const },
+        observedAt: "2026-07-15T00:00:00.000Z",
+      }));
+      const capture = createCliIo({
+        daemonRestartFromService,
+        daemonStopFromService,
+        daemonStatusFromService,
+      });
+
+      await expect(main(["daemon", "restart", "--yes"], capture.io)).resolves.toBe(0);
+
+      expect(daemonRestartFromService).toHaveBeenCalledOnce();
+      expect(daemonStopFromService).not.toHaveBeenCalled();
+      expect(daemonStatusFromService).not.toHaveBeenCalled();
+      expect(capture.stdout()).toContain("draining active invocations");
+      expect(capture.stdout()).toContain("Replacement will start after active work finishes");
+      expect(capture.stderr()).toBe("");
+    });
+  });
+
+  it("waits for readiness when restart starts a previously stopped daemon", async () => {
+    await withTempSparkEnv(async () => {
+      const paths = resolveSparkPaths({ app: "daemon" });
+      const startService = vi.fn(() => {
+        mkdirSync(paths.runtimeDir, { recursive: true });
+        writeFileSync(paths.pidFile, `${process.ppid}\n`);
+        return {
+          kind: "detached" as const,
+          alreadyRunning: false,
+          detail: "Started test Spark daemon.",
+        };
+      });
+      const daemonStatusFromService = vi.fn(async () => ({
+        servers: [],
+        invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
+        invocationHealth: {},
+        lifecycle: { state: "running" as const },
+        observedAt: "2026-07-15T00:00:01.000Z",
+      }));
+      const capture = createCliIo({ startService, daemonStatusFromService });
+
+      await expect(main(["daemon", "restart", "--yes", "--wait"], capture.io)).resolves.toBe(0);
+
+      expect(startService).toHaveBeenCalledOnce();
+      expect(daemonStatusFromService).toHaveBeenCalledOnce();
+      expect(capture.stdout()).toContain(`Spark daemon is ready as process ${process.ppid}.`);
+      expect(capture.stderr()).toBe("");
+    });
+  });
+
+  it("waits for replacement readiness only when explicitly requested", async () => {
+    await withTempSparkEnv(async () => {
+      const paths = resolveSparkPaths({ app: "daemon" });
+      mkdirSync(paths.runtimeDir, { recursive: true });
+      writeFileSync(paths.pidFile, `${process.pid}\n`);
+      const daemonRestartFromService = vi.fn(async () => {
+        writeFileSync(paths.pidFile, `${process.ppid}\n`);
+        return {
+          accepted: true as const,
+          state: "draining" as const,
+          restartId: "restart-1",
+          processInstanceId: "old-instance",
+          processGeneration: "old-generation",
+          targetInstanceId: "new-instance",
+          targetGeneration: "new-generation",
+          requestedAt: "2026-07-15T00:00:00.000Z",
+        };
+      });
+      const daemonStatusFromService = vi.fn(async () => ({
+        servers: [],
+        invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
+        invocationHealth: {},
+        lifecycle: {
+          state: "running" as const,
+          process: {
+            pid: process.ppid,
+            instanceId: "new-instance",
+            generation: "new-generation",
+            protocolVersion: 1 as const,
+            startedAt: "2026-07-15T00:00:01.000Z",
+            acceptedRestartId: "restart-1",
+          },
+        },
+        observedAt: "2026-07-15T00:00:01.000Z",
+      }));
+      const capture = createCliIo({ daemonRestartFromService, daemonStatusFromService });
+
+      await expect(main(["daemon", "restart", "--yes", "--wait"], capture.io)).resolves.toBe(0);
+
+      expect(daemonRestartFromService).toHaveBeenCalledOnce();
+      expect(daemonStatusFromService).toHaveBeenCalledOnce();
+      expect(capture.stdout()).toContain(`Spark daemon restarted as process ${process.ppid}.`);
+      expect(capture.stderr()).toBe("");
+    });
+  });
+
+  it("does not force-stop active work when restart acknowledgement is ambiguous", async () => {
+    await withTempSparkEnv(async () => {
+      const paths = resolveSparkPaths({ app: "daemon" });
+      mkdirSync(paths.runtimeDir, { recursive: true });
+      writeFileSync(paths.pidFile, `${process.pid}\n`);
+      const daemonRestartFromService = vi.fn(async () => {
+        throw new LocalRpcUnavailableError("restart response connection closed");
+      });
+      const daemonStopFromService = vi.fn();
+      const capture = createCliIo({ daemonRestartFromService, daemonStopFromService });
+
+      await expect(main(["daemon", "restart", "--yes"], capture.io)).resolves.toBe(1);
+
+      expect(daemonStopFromService).not.toHaveBeenCalled();
+      expect(capture.stderr()).toContain("active work was not force-stopped");
     });
   });
 });

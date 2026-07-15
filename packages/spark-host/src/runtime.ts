@@ -76,6 +76,9 @@ export interface SparkHostRuntimeOptions {
   cwd: string;
   sparkStateRoot?: string;
   sessionSurface?: "local" | "channel";
+  sessionSource?: "tui" | "web" | "channel" | "daemon" | "session";
+  invocationId?: string;
+  sessionQuestionChain?: readonly string[];
   /** When present, this host instance must never activate tools outside this allowlist. */
   allowedTools?: readonly string[];
   hasUI?: boolean;
@@ -99,6 +102,9 @@ export class SparkHostRuntime implements ExtensionAPI {
   readonly cwd: string;
   readonly sparkStateRoot: string | undefined;
   readonly sessionSurface: "local" | "channel" | undefined;
+  readonly sessionSource: "tui" | "web" | "channel" | "daemon" | "session" | undefined;
+  readonly invocationId: string | undefined;
+  readonly sessionQuestionChain: readonly string[] | undefined;
   readonly hasUI: boolean;
   private readonly tools: RegisteredToolMap = new Map();
   private readonly allowedTools: ReadonlySet<string> | undefined;
@@ -122,6 +128,11 @@ export class SparkHostRuntime implements ExtensionAPI {
     this.cwd = options.cwd;
     this.sparkStateRoot = options.sparkStateRoot;
     this.sessionSurface = options.sessionSurface;
+    this.sessionSource = options.sessionSource;
+    this.invocationId = options.invocationId?.trim() || undefined;
+    this.sessionQuestionChain = options.sessionQuestionChain
+      ?.map((entry) => entry.trim())
+      .filter(Boolean);
     this.allowedTools = options.allowedTools ? new Set(options.allowedTools) : undefined;
     this.hasUI = options.hasUI ?? false;
     this.uiTransport = options.ui ?? {};
@@ -398,6 +409,11 @@ export class SparkHostRuntime implements ExtensionAPI {
       ...(this.sessionId ? { sessionId: this.sessionId } : {}),
       ...(this.sparkStateRoot ? { sparkStateRoot: this.sparkStateRoot } : {}),
       ...(this.sessionSurface ? { sessionSurface: this.sessionSurface } : {}),
+      ...(this.sessionSource ? { sessionSource: this.sessionSource } : {}),
+      ...(this.invocationId ? { invocationId: this.invocationId } : {}),
+      ...(this.sessionQuestionChain
+        ? { sessionQuestionChain: [...this.sessionQuestionChain] }
+        : {}),
       hasUI: this.hasUI,
       ui: this.uiTransport as ExtensionUi,
       isIdle: () => this.isIdle(),

@@ -326,6 +326,7 @@ try {
         "task_read",
         "task_write",
         "assign",
+        "todo",
         "learning",
         "context",
       ];
@@ -396,7 +397,7 @@ try {
                 steps: [
                   "Inspect task_read project_status output for the Manual Pi Extension Matrix project before claiming.",
                   "Run task_write claim for @manual-extension-task and verify the claimed-by-current-session status.",
-                  "Run task_write todo_update and task_write finish, then verify task_read reports one done task.",
+                  "Run task_write plan_update and task_write finish, then verify task_read reports one done task.",
                 ],
                 riskLevel: "normal",
                 openQuestions: [],
@@ -421,7 +422,7 @@ try {
         api,
         "task_write",
         {
-          action: "todo_update",
+          action: "plan_update",
           scope: "task",
           ops: [
             {
@@ -439,7 +440,7 @@ try {
         api,
         "task_write",
         {
-          action: "todo_update",
+          action: "plan_update",
           scope: "task",
           ops: [
             { op: "done", item: "Inspect task_read project_status before finish" },
@@ -635,11 +636,15 @@ try {
       assert(/stopped|cleared|No Spark repro/i.test(textOf(reproStop)), textOf(reproStop));
 
       const driveStatus = await execTool(api, "drive", { action: "status" }, ctx);
-      const phaseResearch = await execTool(
-        api,
-        "phase",
-        { action: "research", focus: "manual phase" },
-        ctx,
+      let removedPhaseRejected = "";
+      try {
+        await execTool(api, "phase", { action: "research", focus: "manual phase" }, ctx);
+      } catch (error) {
+        removedPhaseRejected = error instanceof Error ? error.message : String(error);
+      }
+      assert(
+        /phase action must be one of: plan, implement, status/i.test(removedPhaseRejected),
+        removedPhaseRejected,
       );
       const phasePlan = await execTool(
         api,
@@ -654,7 +659,6 @@ try {
         ctx,
       );
       const phaseStatus = await execTool(api, "phase", { action: "status" }, ctx);
-      assert(/research/i.test(textOf(phaseResearch)), textOf(phaseResearch));
       assert(/plan/i.test(textOf(phasePlan)), textOf(phasePlan));
       assert(/implement/i.test(textOf(phaseImplement)), textOf(phaseImplement));
       assert(/implement/i.test(textOf(phaseStatus)), textOf(phaseStatus));
@@ -671,7 +675,7 @@ try {
         reproStatus: tail(textOf(reproStatus)),
         reproStop: tail(textOf(reproStop)),
         driveStatus: tail(textOf(driveStatus)),
-        phaseResearch: tail(textOf(phaseResearch)),
+        removedPhaseRejected: tail(removedPhaseRejected),
         phasePlan: tail(textOf(phasePlan)),
         phaseImplement: tail(textOf(phaseImplement)),
         phaseStatus: tail(textOf(phaseStatus)),

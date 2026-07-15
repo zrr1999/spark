@@ -225,7 +225,7 @@ async function saveSessionLoopSnapshot(
   snapshot: SparkSessionLoopSnapshot,
 ): Promise<void> {
   await writeJsonFileAtomic(sessionLoopStorePath(cwd, ctx), snapshot);
-  await rebuildSessionIndex(cwd);
+  await rebuildSessionIndex(cwd, ctx);
 }
 
 function normalizeSessionLoop(

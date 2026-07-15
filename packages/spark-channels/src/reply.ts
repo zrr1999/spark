@@ -11,6 +11,16 @@ export interface ChannelReplyTarget {
 
 /** Streaming reply lifecycle shared by daemon and channel adapters. */
 export interface ChannelReplyStream {
+  /**
+   * Where the final assistant answer is delivered. Defaults to `inline`.
+   *
+   * `separate` streams are execution/progress surfaces only; the daemon sends
+   * the final answer through `sendReply` after the stream reaches a terminal
+   * state. This keeps platform presentation policy inside the adapter contract.
+   */
+  answerMode?: "inline" | "separate";
+  /** Display-safe execution commentary for progress-only platform surfaces. */
+  appendProgress?(delta: string): void;
   appendText(delta: string): void;
   /** Optional reasoning / thinking stream (Infoflow thinking_aio). */
   appendReasoning?(delta: string): void;

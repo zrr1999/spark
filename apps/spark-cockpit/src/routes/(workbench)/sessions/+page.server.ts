@@ -1,5 +1,5 @@
 import { fail, redirect } from "@sveltejs/kit";
-import { getRequestDictionary, localeCookieName, resolveRequestLocale } from "$lib/i18n";
+import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import { titleFromPrompt } from "$lib/server/agents-product";
 import {
   cancelConversationTurnForCockpit,
@@ -20,7 +20,10 @@ import {
   setSessionModelForCockpit,
   setSessionThinkingLevelForCockpit,
 } from "$lib/server/model-control";
-import { workspaceIdForWorkbenchSession } from "../../../lib/workbench-session-scope";
+import {
+  workspaceIdForWorkbenchSession,
+  workspaceSessionsForWorkbench,
+} from "../../../lib/workbench-session-scope";
 import { sessionHasChannelBinding } from "../../../lib/channel-session-title";
 import type { Actions, PageServerLoad } from "./$types";
 
@@ -30,7 +33,7 @@ export const load: PageServerLoad = async () => {
     loadModelControlForCockpit(),
   ]);
   return {
-    sessions: managedSessions.sessions,
+    sessions: workspaceSessionsForWorkbench(managedSessions.sessions),
     sessionsAvailable: managedSessions.available,
     selectedSessionId: null as string | null,
     sessionActivity: null,
@@ -46,13 +49,12 @@ export const actions: Actions = {
     }).sessions;
     const formData = await request.formData();
     const workspaceId = formText(formData, "workspaceId").trim();
-    const scopeKind = formText(formData, "scopeKind").trim() === "daemon" ? "daemon" : "workspace";
     const message = formText(formData, "message").trim();
     const model = formText(formData, "model").trim();
     const thinkingLevel = formText(formData, "thinkingLevel").trim();
-    const values = { scopeKind, workspaceId, message, model, thinkingLevel };
+    const values = { workspaceId, message, model, thinkingLevel };
 
-    if (scopeKind === "workspace" && !workspaceId) {
+    if (!workspaceId) {
       return fail(400, {
         intent: "startConversation",
         success: false,
@@ -73,16 +75,10 @@ export const actions: Actions = {
 
     let session;
     try {
-      session = await createManagedSessionForCockpit(
-        scopeKind === "daemon"
-          ? {
-              scope: { kind: "daemon" },
-            }
-          : {
-              scope: { kind: "workspace", workspaceId },
-              workspaceId,
-            },
-      );
+      session = await createManagedSessionForCockpit({
+        scope: { kind: "workspace", workspaceId },
+        workspaceId,
+      });
     } catch (caught) {
       const error = caught instanceof Error ? caught.message : t.createFailed;
       return fail(400, {
@@ -178,6 +174,16 @@ export const actions: Actions = {
         values,
       });
     }
+    const workspaceId = workspaceIdForWorkbenchSession(session);
+    if (!workspaceId) {
+      return fail(400, {
+        intent: "sendMessage",
+        success: false,
+        error: t.assignSessionRequired,
+        message: t.assignSessionRequired,
+        values,
+      });
+    }
     if (session.status === "archived") {
       return fail(400, {
         intent: "sendMessage",
@@ -190,7 +196,7 @@ export const actions: Actions = {
 
     try {
       const turn = await submitConversationMessage({
-        workspaceId: workspaceIdForWorkbenchSession(session) ?? undefined,
+        workspaceId,
         sessionId,
         message,
       });
@@ -277,14 +283,14 @@ export const actions: Actions = {
 
     try {
       const result = await cancelConversationTurnForCockpit({ sessionId, turnId });
-      if (!result.cancelled) {
+      if (!result.cancelRequested && result.status !== "cancelled") {
         return fail(409, {
           intent: "cancelTurn",
           success: false,
           cancelled: false,
           error: t.cancelTurnUnavailable,
           message: t.cancelTurnUnavailable,
-          daemonMessage: result.message,
+          invocationStatus: result.status,
           values,
         });
       }
@@ -292,8 +298,8 @@ export const actions: Actions = {
         intent: "cancelTurn",
         success: true,
         cancelled: true,
-        message: result.outcome === "dequeued" ? t.cancelTurnDequeued : t.cancelTurnSucceeded,
-        daemonMessage: result.message,
+        message: t.cancelTurnSucceeded,
+        invocationStatus: result.status,
         cancelledTurnId: result.turnId,
         values: { sessionId, turnId: result.turnId },
       };
@@ -311,71 +317,61 @@ export const actions: Actions = {
   },
 
   selectModel: async ({ cookies, request }) => {
-    const formData = await request.formData();
-    const isZh = resolveRequestLocale({
+    const t = getRequestDictionary({
       cookieLocale: cookies.get(localeCookieName),
       acceptLanguage: request.headers.get("accept-language"),
-    })
-      .toLowerCase()
-      .startsWith("zh");
+    }).sessions;
+    const formData = await request.formData();
     const sessionId = formText(formData, "sessionId").trim();
     const model = formText(formData, "model").trim();
     if (!sessionId || !model) {
       return fail(400, {
         intent: "selectModel",
         success: false,
-        message: isZh ? "请选择对话和模型。" : "Select a conversation and model.",
+        message: t.selectModelRequired,
       });
     }
     try {
       const updatedSession = await setSessionModelForCockpit(sessionId, parseModelValue(model));
       if (!updatedSession.model) {
-        throw new Error(
-          isZh
-            ? "Spark daemon 未返回会话的有效模型。"
-            : "The Spark daemon did not return an effective conversation model.",
-        );
+        return fail(400, {
+          intent: "selectModel",
+          success: false,
+          message: t.effectiveModelMissing,
+          values: { sessionId, model },
+        });
       }
       const effectiveModel = modelValue(updatedSession.model);
       return {
         intent: "selectModel",
         success: true,
-        message: isZh
-          ? `已切换到 ${effectiveModel}，将用于之后发送的消息。`
-          : `Switched to ${effectiveModel}. It will be used for future messages.`,
+        message: t.workbench.modelUpdated,
         model: effectiveModel,
         values: { sessionId, model: effectiveModel },
       };
-    } catch (caught) {
+    } catch {
       return fail(400, {
         intent: "selectModel",
         success: false,
-        message:
-          caught instanceof Error
-            ? caught.message
-            : isZh
-              ? "无法更新模型。"
-              : "Could not update the model.",
+        message: t.workbench.modelFailed,
         values: { sessionId, model },
       });
     }
   },
 
   selectThinking: async ({ cookies, request }) => {
-    const formData = await request.formData();
-    const isZh = resolveRequestLocale({
+    const t = getRequestDictionary({
       cookieLocale: cookies.get(localeCookieName),
       acceptLanguage: request.headers.get("accept-language"),
-    })
-      .toLowerCase()
-      .startsWith("zh");
+    }).sessions;
+    const formData = await request.formData();
     const sessionId = formText(formData, "sessionId").trim();
     const thinkingLevel = formText(formData, "thinkingLevel").trim();
     if (!sessionId || !thinkingLevel) {
       return fail(400, {
         intent: "selectThinking",
         success: false,
-        message: isZh ? "请选择对话和推理强度。" : "Select a conversation and thinking level.",
+        message: t.selectThinkingRequired,
       });
     }
     try {
@@ -387,22 +383,15 @@ export const actions: Actions = {
       return {
         intent: "selectThinking",
         success: true,
-        message: isZh
-          ? `推理强度已设为 ${level}，将用于之后发送的消息。`
-          : `Thinking level set to ${level}. It will be used for future messages.`,
+        message: t.workbench.thinkingUpdated,
         thinkingLevel: level,
         values: { sessionId, thinkingLevel: level },
       };
-    } catch (caught) {
+    } catch {
       return fail(400, {
         intent: "selectThinking",
         success: false,
-        message:
-          caught instanceof Error
-            ? caught.message
-            : isZh
-              ? "无法更新推理强度。"
-              : "Could not update the thinking level.",
+        message: t.workbench.thinkingFailed,
         values: { sessionId, thinkingLevel },
       });
     }

@@ -1,16 +1,22 @@
+import { once } from "node:events";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import type { ChannelNotifyInput, ChannelNotifyResult } from "@zendev-lab/spark-channels";
+import { SparkSessionMailStore } from "@zendev-lab/spark-session";
 import { resolveSparkPaths } from "@zendev-lab/spark-system";
-import { SparkDaemonInvocationRegistry, SparkDaemonQueue } from "./core/index.js";
+import { requestSparkDaemonLocalRpcWire } from "@zendev-lab/spark-system/daemon-local-rpc";
 import {
   createDaemonSessionRegistry,
   handleLocalRpcLine,
+  requestDaemonRestart,
   requestWorkspaceEnsureLocal,
   startLocalRpcServer,
 } from "./local-rpc.js";
+import { SparkInvocationStore } from "./store/invocations.ts";
 import { openSparkDaemonDatabase } from "./store/schema.js";
 import {
   ensureLocalWorkspace,
@@ -19,6 +25,11 @@ import {
   WorkspacePathConflictError,
 } from "./store/workspaces.js";
 import type { SparkDaemonModelControl } from "./model-control.ts";
+import { SparkDaemonLifecycle } from "./core/lifecycle.ts";
+import type {
+  DaemonChannelIngressRuntime,
+  DaemonChannelIngressStatus,
+} from "./channels/ingress.ts";
 
 describe("Spark daemon local RPC", () => {
   it("commits workspace registration only after server grant and websocket verification", async () => {
@@ -212,7 +223,7 @@ describe("Spark daemon local RPC", () => {
     }
   });
 
-  it("handles daemon-local turn queue submit/list/status over local RPC", async () => {
+  it("hard-cuts local turn submit/status/stream to invocation ids and bounded cursors", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-"));
     const paths = resolveSparkPaths({
       app: "daemon",
@@ -225,146 +236,97 @@ describe("Spark daemon local RPC", () => {
       },
     });
     const db = openSparkDaemonDatabase(paths);
-
     try {
-      const assignment = {
-        goal: "continue work",
-        target: {
+      const request = {
+        id: "turn_submit",
+        method: "turn.submit",
+        params: {
           sessionId: "session-a",
-          role: "role:implementer",
-          workspaceId: "ws-a",
+          prompt: "continue work",
+          idempotencyKey: "local-turn-1",
         },
-        constraints: ["keep the diff small"],
-        evidence: ["queue contract"],
-        source: { kind: "cli" },
-        title: "Continue work",
       };
-      const submitted = await handleLocalRpcLine(
-        JSON.stringify({
-          id: "turn_submit",
-          method: "turn.submit",
-          params: { sessionId: "session-a", prompt: "continue work", assignment },
-        }),
+      const submitted = await handleLocalRpcLine(JSON.stringify(request), paths, db, undefined);
+      expect(submitted).toMatchObject({
+        id: "turn_submit",
+        ok: true,
+        result: { status: "queued", acceptedAt: expect.any(String) },
+      });
+      const result = (submitted as { result: { invocationId: string } }).result;
+      expect(result.invocationId).toMatch(/^inv_/u);
+      expect(JSON.stringify(submitted)).not.toMatch(/fileName|filePath|inbox|processed/u);
+
+      const duplicate = await handleLocalRpcLine(
+        JSON.stringify({ ...request, id: "turn_submit_duplicate" }),
         paths,
         db,
         undefined,
       );
-      expect(submitted).toMatchObject({
-        id: "turn_submit",
-        ok: true,
-        result: {
-          task: {
-            type: "session.run",
-            sessionId: "session-a",
-            prompt: "continue work",
-            workspaceId: "ws-a",
-            actor: "spark-daemon-local-rpc",
-            assignment,
-          },
-        },
-      });
+      expect(duplicate).toMatchObject({ result: { invocationId: result.invocationId } });
 
+      const store = new SparkInvocationStore(db);
+      store.appendEvent(result.invocationId, "delta", { index: 1 });
+      store.appendEvent(result.invocationId, "delta", { index: 2 });
       const status = await handleLocalRpcLine(
-        JSON.stringify({ id: "daemon_status", method: "daemon.status" }),
+        JSON.stringify({
+          id: "turn_status",
+          method: "turn.status",
+          params: { invocationId: result.invocationId },
+        }),
         paths,
         db,
         undefined,
       );
       expect(status).toMatchObject({
-        id: "daemon_status",
         ok: true,
-        result: { queue: { inbox: 1, processed: 0, failed: 0 } },
+        result: { invocationId: result.invocationId, status: "queued", eventCursor: 2 },
       });
+      expect(JSON.stringify(status)).not.toMatch(/fileName|filePath|inbox|processed/u);
 
-      const listed = await handleLocalRpcLine(
+      const page = await handleLocalRpcLine(
         JSON.stringify({
-          id: "queue_list",
-          method: "daemon.queue",
-          params: { state: "inbox" },
+          id: "turn_stream",
+          method: "turn.stream",
+          params: { invocationId: result.invocationId, after: 0, limit: 1 },
         }),
         paths,
         db,
         undefined,
       );
-      expect(listed).toMatchObject({
-        id: "queue_list",
+      expect(page).toMatchObject({
         ok: true,
         result: {
-          state: "inbox",
-          entries: [
-            {
-              payload: {
-                task: {
-                  type: "session.run",
-                  sessionId: "session-a",
-                  prompt: "continue work",
-                  assignment,
-                },
-              },
-            },
-          ],
+          invocationId: result.invocationId,
+          events: [{ sequence: 1 }],
+          nextCursor: 1,
+          hasMore: true,
         },
       });
 
-      const submittedFileName = (submitted as { result: { fileName: string } }).result.fileName;
-      const queue = new SparkDaemonQueue({ paths });
-      await queue.markProcessed(submittedFileName, {
-        assistantText: "finished",
-        stderr: "",
-        jsonEvents: Array.from({ length: 500 }, (_, index) => ({
-          type: "stream_event",
-          text: `event-${index}`,
-        })),
-      });
-      const exact = await handleLocalRpcLine(
+      const gap = await handleLocalRpcLine(
         JSON.stringify({
-          id: "queue_exact",
-          method: "daemon.queue",
-          params: { state: "all", fileName: submittedFileName },
+          id: "turn_stream_gap",
+          method: "turn.stream",
+          params: { invocationId: result.invocationId, after: 3 },
         }),
         paths,
         db,
         undefined,
       );
-      expect(exact).toMatchObject({
-        id: "queue_exact",
-        ok: true,
-        result: {
-          state: "all",
-          byState: {
-            inbox: [],
-            failed: [],
-            processed: [
-              {
-                fileName: submittedFileName,
-                payload: {
-                  result: {
-                    assistantText: "finished",
-                    stderr: "",
-                    jsonEventCount: 500,
-                  },
-                },
-              },
-            ],
-          },
-        },
-      });
-      expect(JSON.stringify(exact)).not.toContain("jsonEvents");
-
-      const invalid = await handleLocalRpcLine(
-        JSON.stringify({
-          id: "queue_invalid",
-          method: "daemon.queue",
-          params: { state: "all", fileName: "../secret.json" },
-        }),
-        paths,
-        db,
-        undefined,
-      );
-      expect(invalid).toMatchObject({
-        id: "queue_invalid",
+      expect(gap).toMatchObject({
         ok: false,
-        error: { message: "Invalid daemon queue file name." },
+        error: { message: expect.stringContaining("CURSOR_GAP") },
+      });
+
+      const removed = await handleLocalRpcLine(
+        JSON.stringify({ id: "removed_queue", method: "daemon.queue" }),
+        paths,
+        db,
+        undefined,
+      );
+      expect(removed).toMatchObject({
+        ok: false,
+        error: { message: "Unknown local RPC method: daemon.queue" },
       });
     } finally {
       db.close();
@@ -372,7 +334,7 @@ describe("Spark daemon local RPC", () => {
     }
   });
 
-  it("cancels active turn invocations over local RPC and reports misses", async () => {
+  it("makes cancellation races converge on one canonical terminal status", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-cancel-"));
     const paths = resolveSparkPaths({
       app: "daemon",
@@ -385,163 +347,121 @@ describe("Spark daemon local RPC", () => {
       },
     });
     const db = openSparkDaemonDatabase(paths);
-    const invocations = new SparkDaemonInvocationRegistry();
-    const handle = invocations.start({
-      invocationId: "turn-file.json",
-      kind: "session.run",
-      sessionId: "session-a",
+    const sessionRegistry = createDaemonSessionRegistry(join(root, ".spark"), {
+      daemonId: "cancel-test",
+      daemonCwd: root,
     });
-    let aborted = false;
-    handle.signal.addEventListener("abort", () => {
-      aborted = true;
-    });
+    await sessionRegistry.create({ sessionId: "session-a", scope: { kind: "daemon" } });
 
     try {
-      const mismatched = await handleLocalRpcLine(
+      const submitted = await handleLocalRpcLine(
         JSON.stringify({
-          id: "turn_cancel_wrong_session",
-          method: "turn.cancel",
-          params: { invocationId: "turn-file.json", sessionId: "session-b" },
+          id: "turn_submit",
+          method: "turn.submit",
+          params: {
+            sessionId: "session-a",
+            prompt: "cancel me",
+            idempotencyKey: "cancel-session-a",
+          },
         }),
         paths,
         db,
         undefined,
-        {},
-        invocations,
+        { sessionRegistry },
       );
-      expect(mismatched).toMatchObject({
-        id: "turn_cancel_wrong_session",
-        ok: false,
-        error: { code: "turn_session_mismatch" },
-      });
-      expect(aborted).toBe(false);
+      const invocation = (submitted as { result: { invocationId: string } }).result;
+      expect(await sessionRegistry.get("session-a")).toMatchObject({ status: "running" });
 
       const cancelled = await handleLocalRpcLine(
         JSON.stringify({
           id: "turn_cancel",
           method: "turn.cancel",
           params: {
-            invocationId: "turn-file.json",
-            sessionId: "session-a",
+            invocationId: invocation.invocationId,
             reason: "test cancel",
           },
         }),
         paths,
         db,
         undefined,
-        {},
-        invocations,
+        { sessionRegistry },
       );
       expect(cancelled).toMatchObject({
         id: "turn_cancel",
         ok: true,
         result: {
-          invocationId: "turn-file.json",
-          cancelled: true,
-          outcome: "cancel-requested",
-          message: "Cancellation requested for Spark daemon invocation turn-file.json.",
+          invocationId: invocation.invocationId,
+          status: "cancelled",
+          cancelRequested: true,
         },
       });
-      expect(aborted).toBe(true);
+      expect(await sessionRegistry.get("session-a")).toMatchObject({ status: "ready" });
+
+      const duplicate = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "turn_submit_duplicate",
+          method: "turn.submit",
+          params: {
+            sessionId: "session-a",
+            prompt: "cancel me",
+            idempotencyKey: "cancel-session-a",
+          },
+        }),
+        paths,
+        db,
+        undefined,
+        { sessionRegistry },
+      );
+      expect(duplicate).toMatchObject({
+        ok: true,
+        result: { invocationId: invocation.invocationId, status: "queued" },
+      });
+      expect(await sessionRegistry.get("session-a")).toMatchObject({ status: "ready" });
+      const duplicateStatus = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "turn_status_duplicate",
+          method: "turn.status",
+          params: { invocationId: invocation.invocationId },
+        }),
+        paths,
+        db,
+        undefined,
+      );
+      expect(duplicateStatus).toMatchObject({
+        ok: true,
+        result: { invocationId: invocation.invocationId, status: "cancelled" },
+      });
+
+      const repeated = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "turn_cancel_again",
+          method: "turn.cancel",
+          params: { invocationId: invocation.invocationId, reason: "again" },
+        }),
+        paths,
+        db,
+        undefined,
+      );
+      expect(repeated).toMatchObject({
+        ok: true,
+        result: { status: "cancelled", cancelRequested: false },
+      });
 
       const missing = await handleLocalRpcLine(
         JSON.stringify({
           id: "turn_cancel_missing",
           method: "turn.cancel",
-          params: { invocationId: "missing.json" },
+          params: { invocationId: "inv_01234567890123456789012345678901" },
         }),
         paths,
         db,
         undefined,
-        {},
-        invocations,
       );
       expect(missing).toMatchObject({
         id: "turn_cancel_missing",
-        ok: true,
-        result: {
-          invocationId: "missing.json",
-          cancelled: false,
-          outcome: "not-found",
-          message: "No queued or active Spark daemon invocation matched missing.json.",
-        },
-      });
-    } finally {
-      handle.finish();
-      db.close();
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("dequeues pending turns and enforces their session ownership", async () => {
-    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-dequeue-"));
-    const paths = resolveSparkPaths({
-      app: "daemon",
-      env: { HOME: root },
-      overrides: {
-        dataDir: join(root, "data"),
-        cacheDir: join(root, "cache"),
-        stateDir: join(root, "state"),
-        runtimeDir: join(root, "run"),
-      },
-    });
-    const db = openSparkDaemonDatabase(paths);
-    const sessionRegistry = createDaemonSessionRegistry(join(root, ".spark"), {
-      daemonId: "install-rpc-dequeue",
-      daemonCwd: root,
-    });
-    await sessionRegistry.create({ sessionId: "session-b", scope: { kind: "daemon" } });
-    await sessionRegistry.recordTurnQueued("session-b");
-    const queue = new SparkDaemonQueue({ paths });
-    const queued = await queue.enqueue({
-      type: "session.run",
-      sessionId: "session-b",
-      prompt: "queued prompt",
-    });
-
-    try {
-      const mismatched = await handleLocalRpcLine(
-        JSON.stringify({
-          id: "turn_dequeue_wrong_session",
-          method: "turn.cancel",
-          params: { invocationId: queued.fileName, sessionId: "session-a" },
-        }),
-        paths,
-        db,
-        undefined,
-        { sessionRegistry },
-      );
-      expect(mismatched).toMatchObject({
-        id: "turn_dequeue_wrong_session",
         ok: false,
-        error: { code: "turn_session_mismatch" },
+        error: { message: expect.stringContaining("Unknown Spark invocation") },
       });
-      await expect(queue.list("inbox")).resolves.toEqual([queued.fileName]);
-      await expect(sessionRegistry.get("session-b")).resolves.toMatchObject({ status: "running" });
-
-      const dequeued = await handleLocalRpcLine(
-        JSON.stringify({
-          id: "turn_dequeue",
-          method: "turn.cancel",
-          params: { invocationId: queued.fileName, sessionId: "session-b" },
-        }),
-        paths,
-        db,
-        undefined,
-        { sessionRegistry },
-      );
-      expect(dequeued).toMatchObject({
-        id: "turn_dequeue",
-        ok: true,
-        result: {
-          invocationId: queued.fileName,
-          cancelled: true,
-          outcome: "dequeued",
-          message: `Removed queued Spark daemon invocation ${queued.fileName} from the queue.`,
-        },
-      });
-      await expect(queue.list("inbox")).resolves.toEqual([]);
-      await expect(sessionRegistry.get("session-b")).resolves.toMatchObject({ status: "ready" });
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });
@@ -651,6 +571,299 @@ describe("Spark daemon local RPC", () => {
       await expect(
         requestWorkspaceEnsureLocal(paths, { localPath: nestedPath }),
       ).rejects.toBeInstanceOf(WorkspacePathConflictError);
+    } finally {
+      await server.close();
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps 10,000-event status and cursor pages bounded over a real daemon socket", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-events-"));
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const sessionRegistry = createDaemonSessionRegistry(join(root, ".spark"), {
+      daemonId: "socket-test",
+      daemonCwd: root,
+    });
+    await sessionRegistry.create({ sessionId: "event-session", scope: { kind: "daemon" } });
+    const server = await startLocalRpcServer({
+      paths,
+      sparkHome: join(root, ".spark"),
+      db,
+      sessionRegistry,
+    });
+    const request = async <T>(id: string, method: string, params?: unknown) => {
+      const wireResult = await requestSparkDaemonLocalRpcWire<T | { result: T }>(
+        { id, method, ...(params === undefined ? {} : { params }) },
+        { paths },
+      );
+      const result =
+        wireResult && typeof wireResult === "object" && "result" in wireResult
+          ? wireResult.result
+          : wireResult;
+      const bytes = Buffer.byteLength(JSON.stringify(wireResult));
+      expect(bytes).toBeLessThan(1024 * 1024);
+      return { result, bytes };
+    };
+
+    try {
+      const submitted = await request<{ invocationId: string; status: string }>(
+        "submit",
+        "turn.submit",
+        { sessionId: "event-session", prompt: "emit many", idempotencyKey: "events-10000" },
+      );
+      const invocationId = submitted.result.invocationId;
+      const store = new SparkInvocationStore(db);
+      for (let index = 0; index < 10_000; index += 1) {
+        store.appendEvent(invocationId, "delta", { index, text: `event-${index}` });
+      }
+
+      const before = await request<{ eventCursor: number; events?: unknown[] }>(
+        "status_before",
+        "turn.status",
+        { invocationId },
+      );
+      expect(before.result.eventCursor).toBe(10_000);
+      expect(before.result.events).toBeUndefined();
+
+      let cursor = 0;
+      let eventCount = 0;
+      let maxPageBytes = 0;
+      let hasMore = true;
+      while (hasMore) {
+        const page = await request<{
+          events: Array<{ sequence: number }>;
+          nextCursor: number;
+          hasMore: boolean;
+        }>("stream", "turn.stream", { invocationId, after: cursor, limit: 500 });
+        expect(page.result.events.length).toBeLessThanOrEqual(500);
+        expect(page.result.nextCursor).toBeGreaterThan(cursor);
+        eventCount += page.result.events.length;
+        cursor = page.result.nextCursor;
+        maxPageBytes = Math.max(maxPageBytes, page.bytes);
+        hasMore = page.result.hasMore;
+      }
+      expect({ eventCount, cursor, maxPageBytes }).toMatchObject({
+        eventCount: 10_000,
+        cursor: 10_000,
+      });
+
+      store.claimNext("socket-test");
+      store.complete(invocationId, { status: "succeeded" });
+      const terminal = await request<{ status: string; eventCursor: number }>(
+        "status_terminal",
+        "turn.status",
+        { invocationId },
+      );
+      expect(terminal.result).toMatchObject({ status: "succeeded", eventCursor: 10_000 });
+
+      const cancelSubmitted = await request<{ invocationId: string }>(
+        "submit_cancel",
+        "turn.submit",
+        {
+          sessionId: "event-session",
+          prompt: "cancel over socket",
+          idempotencyKey: "socket-cancel",
+        },
+      );
+      const cancelled = await request<{ status: string; cancelRequested: boolean }>(
+        "cancel",
+        "turn.cancel",
+        { invocationId: cancelSubmitted.result.invocationId, reason: "socket acceptance" },
+      );
+      expect(cancelled.result).toMatchObject({ status: "cancelled", cancelRequested: true });
+      const cancelledStatus = await request<{ status: string }>("status_cancelled", "turn.status", {
+        invocationId: cancelSubmitted.result.invocationId,
+      });
+      expect(cancelledStatus.result.status).toBe("cancelled");
+
+      console.info(
+        "SPARK_INVOCATION_SOCKET_TRANSCRIPT",
+        JSON.stringify({
+          invocationId,
+          eventCount,
+          statusBytes: before.bytes,
+          maxPageBytes,
+          cursor,
+          terminalStatus: terminal.result.status,
+          terminalStatusBytes: terminal.bytes,
+          cancelledInvocationId: cancelSubmitted.result.invocationId,
+          cancellationStatus: cancelledStatus.result.status,
+          cancellationResponseBytes: cancelled.bytes,
+        }),
+      );
+    } finally {
+      await server.close();
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps 10,000-invocation diagnostics bounded and exposes result retry and retention", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-invocation-list-"));
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const store = new SparkInvocationStore(db);
+    const sessionRegistry = createDaemonSessionRegistry(join(root, ".spark"), {
+      daemonId: "invocation-list-test",
+      daemonCwd: root,
+    });
+    await sessionRegistry.create({ sessionId: "session:selected", scope: { kind: "daemon" } });
+    await sessionRegistry.create({ sessionId: "session:other", scope: { kind: "daemon" } });
+    const insert = db.prepare(
+      `INSERT INTO invocations
+        (id, session_id, status, prompt, task_json, attempt_count, error_code, error_message,
+         created_at, updated_at, started_at, finished_at)
+       VALUES (?, ?, 'failed', ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+    );
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      for (let index = 0; index < 10_000; index += 1) {
+        const timestamp = new Date(
+          Date.parse("2026-07-01T00:00:00.000Z") + index * 1_000,
+        ).toISOString();
+        const retryable = index % 2 === 0;
+        insert.run(
+          `inv_history${String(index).padStart(8, "0")}`,
+          index % 4 === 0 ? "session:selected" : "session:other",
+          `history-${index}`,
+          JSON.stringify({
+            type: "session.run",
+            sessionId: index % 4 === 0 ? "session:selected" : "session:other",
+            prompt: `history-${index}`,
+          }),
+          retryable ? "EXECUTOR_TIMEOUT" : "EXECUTION_FAILED",
+          `failure-${index}`,
+          timestamp,
+          timestamp,
+          timestamp,
+          timestamp,
+        );
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+    const server = await startLocalRpcServer({
+      paths,
+      sparkHome: join(root, ".spark"),
+      db,
+      sessionRegistry,
+    });
+
+    try {
+      const listedWire = await requestSparkDaemonLocalRpcWire<{
+        invocations: Array<Record<string, unknown>>;
+        total: number;
+        limit: number;
+      }>(
+        {
+          id: "invocation_list",
+          method: "invocation.list",
+          params: {
+            status: "failed",
+            sessionId: "session:selected",
+            since: "2026-07-01T00:30:00.000Z",
+            limit: 50,
+          },
+        },
+        { paths },
+      );
+      expect(listedWire).toMatchObject({ total: 2_050, limit: 50 });
+      expect(listedWire.invocations).toHaveLength(50);
+      expect(listedWire.invocations.every((entry) => entry.status === "failed")).toBe(true);
+      expect(listedWire.invocations.every((entry) => entry.sessionId === "session:selected")).toBe(
+        true,
+      );
+      expect(listedWire.invocations[0]).toEqual(
+        expect.objectContaining({
+          invocationId: expect.stringMatching(/^inv_history/u),
+          errorCode: expect.any(String),
+          retryable: expect.any(Boolean),
+          eventCursor: 0,
+        }),
+      );
+      expect(JSON.stringify(listedWire)).not.toContain("task_json");
+      expect(JSON.stringify(listedWire)).not.toContain("history-9999");
+      expect(Buffer.byteLength(JSON.stringify(listedWire))).toBeLessThan(64 * 1024);
+
+      const original = store.require("inv_history00009998");
+      const result = await requestSparkDaemonLocalRpcWire<{
+        status: string;
+        error: { code: string; message: string; retryable: boolean };
+      }>(
+        {
+          id: "turn_result",
+          method: "turn.result",
+          params: { invocationId: original.invocationId },
+        },
+        { paths },
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        error: { code: "EXECUTOR_TIMEOUT", retryable: true },
+      });
+
+      const retry = await requestSparkDaemonLocalRpcWire<{
+        invocationId: string;
+        retryOfInvocationId: string;
+        status: string;
+      }>(
+        {
+          id: "invocation_retry",
+          method: "invocation.retry",
+          params: { invocationId: original.invocationId },
+        },
+        { paths },
+      );
+      expect(retry).toMatchObject({
+        status: "queued",
+        retryOfInvocationId: original.invocationId,
+      });
+      expect(store.require(retry.invocationId)).toMatchObject({
+        retryOfInvocationId: original.invocationId,
+        sourceKind: "invocation.retry",
+        sourceRef: original.invocationId,
+      });
+      expect(store.require(original.invocationId).status).toBe("failed");
+
+      const retention = await requestSparkDaemonLocalRpcWire<{
+        before: string;
+        invocationIds: string[];
+        dryRun: boolean;
+      }>(
+        {
+          id: "retention_preview",
+          method: "invocation.retention.preview",
+          params: { before: "2026-07-01T00:01:00.000Z", limit: 10 },
+        },
+        { paths },
+      );
+      expect(retention).toMatchObject({
+        before: "2026-07-01T00:01:00.000Z",
+        dryRun: true,
+      });
+      expect(retention.invocationIds).toHaveLength(10);
     } finally {
       await server.close();
       db.close();
@@ -1100,11 +1313,13 @@ describe("Spark daemon local RPC", () => {
       });
       expect(globalTurn).toMatchObject({
         ok: true,
-        result: { task: { sessionId: "sess_global", cwd: daemonCwd } },
+        result: { invocationId: expect.stringMatching(/^inv_/u), status: "queued" },
       });
-      expect(
-        (globalTurn as { result?: { task?: { workspaceId?: string } } }).result?.task?.workspaceId,
-      ).toBeUndefined();
+      const globalInvocation = new SparkInvocationStore(db).require(
+        (globalTurn as { result: { invocationId: string } }).result.invocationId,
+      );
+      expect(globalInvocation.task).toMatchObject({ sessionId: "sess_global", cwd: daemonCwd });
+      expect(globalInvocation.task).not.toHaveProperty("workspaceId");
 
       const workspaceTurn = await request("turn_workspace", "turn.submit", {
         sessionId: "sess_workspace",
@@ -1112,13 +1327,16 @@ describe("Spark daemon local RPC", () => {
       });
       expect(workspaceTurn).toMatchObject({
         ok: true,
-        result: {
-          task: {
-            sessionId: "sess_workspace",
-            cwd: workspace.localPath,
-            workspaceId: workspace.id,
-          },
-        },
+        result: { invocationId: expect.stringMatching(/^inv_/u), status: "queued" },
+      });
+      expect(
+        new SparkInvocationStore(db).require(
+          (workspaceTurn as { result: { invocationId: string } }).result.invocationId,
+        ).task,
+      ).toMatchObject({
+        sessionId: "sess_workspace",
+        cwd: workspace.localPath,
+        workspaceId: workspace.id,
       });
 
       const spoofed = await request("turn_spoofed", "turn.submit", {
@@ -1133,6 +1351,302 @@ describe("Spark daemon local RPC", () => {
       expect(spoofed).toMatchObject({
         ok: false,
         error: { code: "session_scope_mismatch" },
+      });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("delivers durable user notifications and skips already delivered targets", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-notification-"));
+    const workspacePath = join(root, "workspace");
+    mkdirSync(workspacePath);
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const sparkHome = join(root, ".spark");
+    const sessionRegistry = createDaemonSessionRegistry(sparkHome, {
+      daemonId: "notification-test",
+      daemonCwd: root,
+      resolveWorkspaceCwd: (workspaceId) =>
+        workspaceId === "ws_delivery" ? workspacePath : undefined,
+    });
+    const mailStore = new SparkSessionMailStore({ sparkHome });
+    const status = notificationChannelStatus("ws_delivery", [
+      { id: "info-main", type: "infoflow" },
+      { id: "qq-main", type: "qqbot" },
+    ]);
+    const notify = vi.fn(
+      async (workspaceId: string, input: ChannelNotifyInput): Promise<ChannelNotifyResult> => {
+        if (!input.adapter || !input.recipient) throw new Error("missing delivery target");
+        return {
+          action: "send",
+          adapter: input.adapter,
+          recipient: input.recipient,
+          text: input.text ?? "",
+        };
+      },
+    );
+    const channelIngress = {
+      status: vi.fn(() => status),
+      configure: vi.fn(async () => status),
+      reload: vi.fn(async () => status),
+      notify,
+    } satisfies Pick<DaemonChannelIngressRuntime, "status" | "configure" | "reload" | "notify">;
+
+    try {
+      await sessionRegistry.create({
+        sessionId: "sess_delivery",
+        scope: { kind: "workspace", workspaceId: "ws_delivery" },
+        workspaceId: "ws_delivery",
+      });
+      await sessionRegistry.bind({
+        sessionId: "sess_delivery",
+        externalKey: "infoflow:group:group-1",
+      });
+      await sessionRegistry.bind({
+        sessionId: "sess_delivery",
+        externalKey: "qqbot:c2c:user-1",
+      });
+      const sent = await mailStore.send({
+        toSessionId: "sess_delivery",
+        fromSessionId: "sess_sender",
+        kind: "notification",
+        visibility: "user",
+        delivery: "channel",
+        deliveryTargets: [
+          { adapter: "infoflow", externalKey: "infoflow:group:group-1" },
+          { adapter: "qqbot", externalKey: "qqbot:c2c:user-1" },
+        ],
+        body: "Deployment complete",
+        source: "tool",
+      });
+      const request = async (id: string) =>
+        await handleLocalRpcLine(
+          JSON.stringify({
+            id,
+            method: "session.notification.deliver",
+            params: { sessionId: "sess_delivery", messageId: sent.message.id },
+          }),
+          paths,
+          db,
+          undefined,
+          { sessionRegistry, mailStore, channelIngress },
+        );
+
+      const delivered = await request("deliver_notification");
+      expect(delivered).toMatchObject({
+        id: "deliver_notification",
+        ok: true,
+        result: {
+          deliveries: [
+            {
+              adapter: "infoflow",
+              externalKey: "infoflow:group:group-1",
+              status: "delivered",
+              attemptCount: 1,
+              receipt: { adapter: "info-main", recipient: "group:group-1" },
+            },
+            {
+              adapter: "qqbot",
+              externalKey: "qqbot:c2c:user-1",
+              status: "delivered",
+              attemptCount: 1,
+              receipt: { adapter: "qq-main", recipient: "c2c:user-1" },
+            },
+          ],
+        },
+      });
+      expect(notify.mock.calls).toEqual([
+        [
+          "ws_delivery",
+          {
+            action: "send",
+            adapter: "info-main",
+            recipient: "group:group-1",
+            text: "Deployment complete",
+          },
+        ],
+        [
+          "ws_delivery",
+          {
+            action: "send",
+            adapter: "qq-main",
+            recipient: "c2c:user-1",
+            text: "Deployment complete",
+          },
+        ],
+      ]);
+
+      const repeated = await request("deliver_notification_again");
+      expect(repeated).toMatchObject({
+        ok: true,
+        result: {
+          deliveries: [
+            { status: "delivered", attemptCount: 1 },
+            { status: "delivered", attemptCount: 1 },
+          ],
+        },
+      });
+      expect(notify).toHaveBeenCalledTimes(2);
+      expect(await mailStore.get("sess_delivery", sent.message.id)).toMatchObject({
+        deliveries: [
+          { status: "delivered", attemptCount: 1, lastError: null },
+          { status: "delivered", attemptCount: 1, lastError: null },
+        ],
+      });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps failed notification receipts retryable and rejects internal mail before notify", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-notification-retry-"));
+    const workspacePath = join(root, "workspace");
+    mkdirSync(workspacePath);
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const sparkHome = join(root, ".spark");
+    const sessionRegistry = createDaemonSessionRegistry(sparkHome, {
+      daemonId: "notification-retry-test",
+      daemonCwd: root,
+      resolveWorkspaceCwd: (workspaceId) =>
+        workspaceId === "ws_retry" ? workspacePath : undefined,
+    });
+    const mailStore = new SparkSessionMailStore({ sparkHome });
+    const status = notificationChannelStatus("ws_retry", [{ id: "info-main", type: "infoflow" }]);
+    let attempt = 0;
+    const notify = vi.fn(
+      async (_workspaceId: string, input: ChannelNotifyInput): Promise<ChannelNotifyResult> => {
+        attempt += 1;
+        if (attempt === 1) throw new Error("channel temporarily unavailable");
+        if (!input.adapter || !input.recipient) throw new Error("missing delivery target");
+        return {
+          action: "send",
+          adapter: input.adapter,
+          recipient: input.recipient,
+          text: input.text ?? "",
+        };
+      },
+    );
+    const channelIngress = {
+      status: vi.fn(() => status),
+      configure: vi.fn(async () => status),
+      reload: vi.fn(async () => status),
+      notify,
+    } satisfies Pick<DaemonChannelIngressRuntime, "status" | "configure" | "reload" | "notify">;
+
+    try {
+      await sessionRegistry.create({
+        sessionId: "sess_retry",
+        scope: { kind: "workspace", workspaceId: "ws_retry" },
+        workspaceId: "ws_retry",
+      });
+      await sessionRegistry.bind({
+        sessionId: "sess_retry",
+        externalKey: "infoflow:user:user-1",
+      });
+      const sent = await mailStore.send({
+        toSessionId: "sess_retry",
+        fromSessionId: "sess_sender",
+        kind: "notification",
+        visibility: "user",
+        delivery: "channel",
+        deliveryTargets: [{ adapter: "infoflow", externalKey: "infoflow:user:user-1" }],
+        body: "Please review",
+        source: "tool",
+      });
+      const request = async (id: string, messageId: string) =>
+        await handleLocalRpcLine(
+          JSON.stringify({
+            id,
+            method: "session.notification.deliver",
+            params: { sessionId: "sess_retry", messageId },
+          }),
+          paths,
+          db,
+          undefined,
+          { sessionRegistry, mailStore, channelIngress },
+        );
+
+      const failed = await request("deliver_failed", sent.message.id);
+      expect(failed).toMatchObject({
+        ok: true,
+        result: {
+          deliveries: [
+            {
+              adapter: "infoflow",
+              externalKey: "infoflow:user:user-1",
+              status: "failed",
+              attemptCount: 1,
+              error: "channel temporarily unavailable",
+            },
+          ],
+        },
+      });
+      expect(await mailStore.get("sess_retry", sent.message.id)).toMatchObject({
+        deliveries: [
+          {
+            status: "failed",
+            attemptCount: 1,
+            lastError: "channel temporarily unavailable",
+          },
+        ],
+      });
+
+      const retried = await request("deliver_retried", sent.message.id);
+      expect(retried).toMatchObject({
+        ok: true,
+        result: {
+          deliveries: [
+            {
+              status: "delivered",
+              attemptCount: 2,
+              receipt: { adapter: "info-main", recipient: "user-1" },
+            },
+          ],
+        },
+      });
+      expect(JSON.stringify(retried)).not.toContain("channel temporarily unavailable");
+      expect(notify).toHaveBeenCalledTimes(2);
+
+      const internal = await mailStore.send({
+        toSessionId: "sess_retry",
+        fromSessionId: "sess_sender",
+        kind: "notification",
+        visibility: "internal",
+        delivery: "channel",
+        deliveryTargets: [{ adapter: "infoflow", externalKey: "infoflow:user:user-1" }],
+        body: "Internal only",
+        source: "tool",
+      });
+      const rejected = await request("deliver_internal", internal.message.id);
+      expect(rejected).toMatchObject({
+        ok: false,
+        error: { message: expect.stringContaining("not user-visible") },
+      });
+      expect(notify).toHaveBeenCalledTimes(2);
+      expect(await mailStore.get("sess_retry", internal.message.id)).toMatchObject({
+        deliveries: [{ status: "pending", attemptCount: 0 }],
       });
     } finally {
       db.close();
@@ -1174,6 +1688,9 @@ describe("Spark daemon local RPC", () => {
                 toSessionId: "sess_view",
                 fromSessionId: `sess_sender_${index}`,
                 kind: index % 2 === 0 ? ("request" as const) : ("notification" as const),
+                visibility: "user" as const,
+                delivery: "mailbox" as const,
+                deliveries: [],
                 intent: "review.pull-request",
                 payload: { secret: `not-for-cockpit-${index}` },
                 correlationId: `corr:${index}`,
@@ -1229,11 +1746,11 @@ describe("Spark daemon local RPC", () => {
       expect(JSON.stringify(emptyResult.mailbox)).not.toContain("not-for-cockpit");
       expect(JSON.stringify(emptyResult.mailbox)).not.toContain("secret-idempotency");
 
-      const queue = new SparkDaemonQueue({ paths });
-      const queued = await queue.enqueue({
-        type: "session.run",
+      const store = new SparkInvocationStore(db);
+      const queued = store.submit({
         sessionId: "sess_view",
         prompt: "Queued follow-up",
+        task: { type: "session.run", sessionId: "sess_view", prompt: "Queued follow-up" },
       });
       const pending = await request("snapshot_pending");
       expect(pending).toMatchObject({
@@ -1242,16 +1759,17 @@ describe("Spark daemon local RPC", () => {
           status: "running",
           messages: [
             {
-              id: `queue:${queued.fileName}`,
+              id: `invocation:${queued.invocationId}`,
               role: "user",
               text: "Queued follow-up",
               status: "done",
-              metadata: { source: "daemon.queue", taskFileName: queued.fileName },
+              metadata: { source: "daemon.invocation", invocationId: queued.invocationId },
             },
           ],
         },
       });
-      await queue.markProcessed(queued.fileName);
+      store.claimNext("test-worker");
+      store.complete(queued.invocationId, { status: "succeeded" });
       const settled = await request("snapshot_pending_settled");
       expect(settled).toMatchObject({ ok: true, result: { messages: [] } });
 
@@ -1491,8 +2009,13 @@ describe("Spark daemon local RPC", () => {
       );
       expect(submitted).toMatchObject({
         ok: true,
-        result: { task: { model: "baidu-oneapi/ernie-4.5" } },
+        result: { invocationId: expect.stringMatching(/^inv_/u), status: "queued" },
       });
+      expect(
+        new SparkInvocationStore(db).require(
+          (submitted as { result: { invocationId: string } }).result.invocationId,
+        ).task,
+      ).toMatchObject({ model: "baidu-oneapi/ernie-4.5" });
       expect(prepareModel).toHaveBeenCalledWith(model);
     } finally {
       db.close();
@@ -1514,6 +2037,7 @@ describe("Spark daemon local RPC", () => {
     });
     const db = openSparkDaemonDatabase(paths);
     const onStop = vi.fn();
+    const onStopRequested = vi.fn();
 
     try {
       const response = await handleLocalRpcLine(
@@ -1521,6 +2045,7 @@ describe("Spark daemon local RPC", () => {
         paths,
         db,
         onStop,
+        { onStopRequested },
       );
       expect(response).toMatchObject({
         id: "local_test",
@@ -1530,6 +2055,8 @@ describe("Spark daemon local RPC", () => {
           observedAt: expect.any(String),
         },
       });
+      expect(onStopRequested).toHaveBeenCalledOnce();
+      expect(onStop).not.toHaveBeenCalled();
       await delay(10);
 
       expect(onStop).toHaveBeenCalledOnce();
@@ -1538,4 +2065,266 @@ describe("Spark daemon local RPC", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("acknowledges an idempotent drain restart and exposes lifecycle status", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-"));
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const lifecycle = new SparkDaemonLifecycle({
+      instanceId: "instance-1",
+      generation: "generation-1",
+    });
+
+    try {
+      const restart = await handleLocalRpcLine(
+        JSON.stringify({ id: "restart_test", method: "daemon.restart" }),
+        paths,
+        db,
+        undefined,
+        {
+          onRestart: () =>
+            lifecycle.requestRestart("2026-07-15T00:00:00.000Z", "restart-1", {
+              instanceId: "target-instance-1",
+              generation: "target-generation-1",
+            }),
+          getLifecycle: () => lifecycle.snapshot(),
+        },
+      );
+      expect(restart).toEqual({
+        id: "restart_test",
+        ok: true,
+        result: {
+          accepted: true,
+          state: "draining",
+          restartId: "restart-1",
+          processInstanceId: "instance-1",
+          processGeneration: "generation-1",
+          targetInstanceId: "target-instance-1",
+          targetGeneration: "target-generation-1",
+          requestedAt: "2026-07-15T00:00:00.000Z",
+        },
+      });
+
+      const status = await handleLocalRpcLine(
+        JSON.stringify({ id: "restart_status", method: "daemon.status" }),
+        paths,
+        db,
+        undefined,
+        { getLifecycle: () => lifecycle.snapshot() },
+      );
+      expect(status).toMatchObject({
+        id: "restart_status",
+        ok: true,
+        result: {
+          lifecycle: {
+            state: "draining",
+            phase: "draining-active-work",
+            restartId: "restart-1",
+            targetInstanceId: "target-instance-1",
+            targetGeneration: "target-generation-1",
+            restartRequestedAt: "2026-07-15T00:00:00.000Z",
+          },
+        },
+      });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("writes the restart acknowledgement before the zero-active socket closes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-restart-"));
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const lifecycle = new SparkDaemonLifecycle({
+      instanceId: "instance-1",
+      generation: "generation-1",
+    });
+    const server = await startLocalRpcServer({
+      paths,
+      sparkHome: join(root, ".spark"),
+      db,
+      onRestart: () =>
+        lifecycle.requestRestart("2026-07-15T00:00:00.000Z", "restart-1", {
+          instanceId: "target-instance-1",
+          generation: "target-generation-1",
+        }),
+      getLifecycle: () => lifecycle.snapshot(),
+    });
+    let resolveClosed!: () => void;
+    let rejectClosed!: (error: unknown) => void;
+    const closed = new Promise<void>((resolve, reject) => {
+      resolveClosed = resolve;
+      rejectClosed = reject;
+    });
+    lifecycle.restartSignal.addEventListener(
+      "abort",
+      () => {
+        void server.close().then(resolveClosed, rejectClosed);
+      },
+      { once: true },
+    );
+
+    try {
+      await expect(requestDaemonRestart(paths)).resolves.toEqual({
+        accepted: true,
+        state: "draining",
+        restartId: "restart-1",
+        processInstanceId: "instance-1",
+        processGeneration: "generation-1",
+        targetInstanceId: "target-instance-1",
+        targetGeneration: "target-generation-1",
+        requestedAt: "2026-07-15T00:00:00.000Z",
+      });
+      await closed;
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("waits for an in-flight handler after forcing its socket closed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-in-flight-"));
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const lifecycle = new SparkDaemonLifecycle({
+      instanceId: "instance-in-flight",
+      generation: "generation-in-flight",
+    });
+    let markHandlerStarted!: () => void;
+    const handlerStarted = new Promise<void>((resolve) => {
+      markHandlerStarted = resolve;
+    });
+    let releaseHandler!: () => void;
+    const handlerBlocked = new Promise<void>((resolve) => {
+      releaseHandler = resolve;
+    });
+    const server = await startLocalRpcServer({
+      paths,
+      sparkHome: join(root, ".spark"),
+      db,
+      forceCloseTimeoutMs: 10,
+      onRestart: async () => {
+        markHandlerStarted();
+        await handlerBlocked;
+        return lifecycle.requestRestart("2026-07-15T00:00:00.000Z", "restart-in-flight", {
+          instanceId: "target-instance-in-flight",
+          generation: "target-generation-in-flight",
+        });
+      },
+    });
+    const socket = createConnection(server.socketPath);
+    socket.on("error", () => {
+      // Forced transport close is expected while the handler remains blocked.
+    });
+    let handlerReleased = false;
+
+    try {
+      await once(socket, "connect");
+      const socketClosed = new Promise<void>((resolve) => {
+        socket.once("close", () => resolve());
+      });
+      socket.write(`${JSON.stringify({ id: "restart_slow", method: "daemon.restart" })}\n`);
+      await handlerStarted;
+
+      let closeResolved = false;
+      const closePromise = server.close().then(() => {
+        closeResolved = true;
+      });
+      await socketClosed;
+      await delay(0);
+      expect(closeResolved).toBe(false);
+
+      handlerReleased = true;
+      releaseHandler();
+      await closePromise;
+      expect(closeResolved).toBe(true);
+    } finally {
+      if (!handlerReleased) releaseHandler();
+      socket.destroy();
+      await server.close();
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("closes idle accepted sockets instead of wedging daemon handoff", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-idle-"));
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const server = await startLocalRpcServer({ paths, sparkHome: join(root, ".spark"), db });
+    const socket = createConnection(server.socketPath);
+
+    try {
+      await once(socket, "connect");
+      const socketClosed = once(socket, "close");
+      await server.close();
+      await socketClosed;
+      expect(socket.destroyed).toBe(true);
+    } finally {
+      socket.destroy();
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
+
+function notificationChannelStatus(
+  workspaceId: string,
+  adapters: Array<{ id: string; type: "feishu" | "infoflow" | "qqbot" }>,
+): DaemonChannelIngressStatus {
+  return {
+    plane: "daemon",
+    resource: "channel",
+    workspaceId,
+    configPath: `/tmp/${workspaceId}/channels/config.json`,
+    available: true,
+    configured: true,
+    ingressEnabled: true,
+    state: "running",
+    adapters: adapters.map((adapter) => ({
+      ...adapter,
+      running: true,
+      state: "connected" as const,
+    })),
+    routes: [],
+    observedAt: "2026-07-15T00:00:00.000Z",
+    text: `channels workspace=${workspaceId} running`,
+  };
+}

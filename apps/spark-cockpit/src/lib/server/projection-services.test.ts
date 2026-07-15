@@ -509,7 +509,7 @@ describe("projection services", () => {
       .prepare("SELECT status FROM human_responses WHERE id = ?")
       .get(response.humanResponseId) as { status: string };
 
-    expect(requestRow.status).toBe("answered");
+    expect(requestRow.status).toBe("pending");
     expect(responseRow.status).toBe("delivering");
     db.close();
   });

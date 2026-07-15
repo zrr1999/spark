@@ -1,8 +1,22 @@
 import WebSocket, { type RawData } from "ws";
 import { createQqbotApiClient, resolveQqbotApiBase, type QqbotApiClient } from "./qqbot-api.ts";
-import type { ChannelReplyCapability, ChannelReplyStream } from "./reply.ts";
+import type {
+  ChannelAskRequest,
+  ChannelInteractionAckStatus,
+  ChannelInteractionCapability,
+  ChannelInteractionEvent,
+} from "./interaction.ts";
+import {
+  normalizeQqbotInteractionEvent,
+  type QqbotNormalizedInteraction,
+} from "./qqbot-interaction.ts";
+import type { ChannelReplyCapability } from "./reply.ts";
 import type { ChannelConnectionState, ChannelTransport, QqbotAdapterConfig } from "./types.ts";
-import { parseQqbotRecipient } from "./qqbot-types.ts";
+import {
+  parseQqbotRecipient,
+  type QqbotKeyboardPermission,
+  type QqbotMessageKeyboard,
+} from "./qqbot-types.ts";
 
 const INTENTS = {
   PUBLIC_GUILD_MESSAGES: 1 << 30,
@@ -18,6 +32,12 @@ const FULL_INTENTS =
   INTENTS.INTERACTION;
 
 const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10_000, 30_000, 60_000];
+// Passive reply slots are deliberately stable across daemon restarts. Even if
+// the in-memory budget is lost, one idempotent native ask=2 and final=4 cannot
+// collide. Group uses ask=1 and final=5. Later asks remain in Cockpit rather
+// than risking the final reply slot.
+const QQBOT_C2C_PASSIVE_REPLY_LIMIT = 4;
+const QQBOT_GROUP_PASSIVE_REPLY_LIMIT = 5;
 
 export interface QqbotTransportOptions {
   api?: QqbotApiClient;
@@ -28,7 +48,7 @@ export interface QqbotTransportOptions {
  * QQ Bot transport:
  * - inbound via official WebSocket gateway (Identify + heartbeat + dispatch)
  * - outbound via Open Platform HTTP message APIs
- * - C2C streaming replies via stream_messages (group/channel stay one-shot)
+ * - final replies only; execution lifecycle stays out of QQ chat
  */
 export function createQqbotTransport(
   config: QqbotAdapterConfig,
@@ -42,6 +62,7 @@ export function createQqbotTransport(
   const webSocketFactory = options.webSocketFactory ?? ((url: string) => new WebSocket(url));
 
   let onMessage: ((raw: unknown) => void) | null = null;
+  let onInteraction: ((event: ChannelInteractionEvent) => void | Promise<void>) | null = null;
   let running = false;
   let connectionState: ChannelConnectionState = "stopped";
   let connectionError: string | undefined;
@@ -52,6 +73,7 @@ export function createQqbotTransport(
   let sessionId: string | null = null;
   let lastSeq: number | null = null;
   let stopping = false;
+  const passiveReplyBudget = createQqbotPassiveReplyBudget();
 
   async function resolveToken(): Promise<string> {
     const appId = config.app_id?.trim();
@@ -82,25 +104,83 @@ export function createQqbotTransport(
     }
   }
 
+  async function sendFinalReply(recipient: string, text: string, msgId?: string): Promise<void> {
+    const target = parseQqbotRecipient(recipient);
+    const content = text.trim();
+    const token = await resolveToken();
+    const reservation = reservePassiveReplyForTarget(passiveReplyBudget, target, msgId, "final");
+    if (!reservation) throw new Error("qqbot passive reply budget exhausted before final reply");
+    switch (target.kind) {
+      case "c2c":
+        await api.sendC2CMarkdownMessage(token, target.openid, content, msgId, reservation.msgSeq);
+        return;
+      case "group":
+        await api.sendGroupMarkdownMessage(
+          token,
+          target.groupOpenid,
+          content,
+          msgId,
+          reservation.msgSeq,
+        );
+        return;
+      case "channel":
+        // Channel custom Markdown remains invitation-gated. Preserve the
+        // assistant's original reply body through the supported text API.
+        await api.sendChannelMessage(token, target.channelId, content, msgId);
+        return;
+      default: {
+        const unexpected: never = target;
+        throw new Error(`unsupported qqbot recipient: ${String(unexpected)}`);
+      }
+    }
+  }
+
   const reply: ChannelReplyCapability = {
-    async openReplyStream(target) {
-      const parsed = (() => {
-        try {
-          return parseQqbotRecipient(target.recipient);
-        } catch {
-          return undefined;
-        }
-      })();
-      if (!parsed || parsed.kind !== "c2c") return undefined;
-      return createC2CReplyStream({
-        api,
-        resolveToken,
-        openid: parsed.openid,
-        msgId: target.messageId,
-      });
+    async openReplyStream() {
+      // QQ exposes no native collapsible execution surface. Returning no
+      // stream keeps commentary, reasoning, and tool lifecycle off the chat
+      // while the daemon still delivers the final assistant reply below.
+      return undefined;
     },
     async sendReply(input) {
-      await sendText(input.recipient, input.text, input.messageId);
+      await sendFinalReply(input.recipient, input.text, input.messageId);
+    },
+  };
+
+  const interaction: ChannelInteractionCapability = {
+    async sendAsk(recipient, request) {
+      const target = parseQqbotRecipient(recipient);
+      if (target.kind === "channel") {
+        throw new Error(
+          "qqbot native asks currently support c2c and group recipients only; channel buttons require platform invitation",
+        );
+      }
+      const keyboard = buildAskKeyboard(request, target.kind);
+      const token = await resolveToken();
+      const reservation = reservePassiveReplyForTarget(
+        passiveReplyBudget,
+        target,
+        request.messageId,
+        "ask",
+      );
+      if (!reservation) {
+        throw new Error("qqbot passive reply budget reserved for the final answer");
+      }
+      const messageRequest = {
+        markdown: { content: request.prompt },
+        keyboard,
+        ...(request.messageId ? { msg_id: request.messageId } : {}),
+        ...(reservation.msgSeq ? { msg_seq: reservation.msgSeq } : {}),
+      };
+      const response =
+        target.kind === "c2c"
+          ? await api.sendC2CMarkdownKeyboardMessage(token, target.openid, messageRequest)
+          : await api.sendGroupMarkdownKeyboardMessage(token, target.groupOpenid, messageRequest);
+      return response.id ? { messageId: response.id } : {};
+    },
+    async ackInteraction(interactionId, status = "success") {
+      const token = await resolveToken();
+      await api.acknowledgeInteraction(token, interactionId, qqbotAckCode(status));
     },
   };
 
@@ -239,6 +319,27 @@ export function createQqbotTransport(
               reconnectAttempt = 0;
               return;
             }
+            if (eventType === "INTERACTION_CREATE") {
+              const rawEvent = {
+                event_type: eventType,
+                d: payload.d,
+              };
+              const normalized = normalizeQqbotInteractionEvent(rawEvent);
+              const event = normalized ? toChannelInteractionEvent(normalized) : undefined;
+              if (event) {
+                try {
+                  const handled = onInteraction?.(event);
+                  if (handled) {
+                    void handled.catch((error: unknown) => {
+                      console.error("[spark-channels] qqbot interaction callback failed", error);
+                    });
+                  }
+                } catch (error) {
+                  console.error("[spark-channels] qqbot interaction callback failed", error);
+                }
+              }
+              return;
+            }
             if (
               eventType === "C2C_MESSAGE_CREATE" ||
               eventType === "GROUP_AT_MESSAGE_CREATE" ||
@@ -291,16 +392,19 @@ export function createQqbotTransport(
 
   return {
     reply,
-    async start(handler) {
+    interaction,
+    async start(handler, interactionHandler) {
       if (running) return;
       running = true;
       stopping = false;
       onMessage = handler;
+      onInteraction = interactionHandler ?? null;
       try {
         await connect();
       } catch (error) {
         running = false;
         onMessage = null;
+        onInteraction = null;
         connectionState = "stopped";
         connectionError = error instanceof Error ? error.message : String(error);
         cleanupSocket();
@@ -311,6 +415,7 @@ export function createQqbotTransport(
       stopping = true;
       running = false;
       onMessage = null;
+      onInteraction = null;
       clearReconnect();
       cleanupSocket();
       connectionState = "stopped";
@@ -327,6 +432,134 @@ export function createQqbotTransport(
   };
 }
 
+const DEFAULT_UNSUPPORTED_BUTTON_TEXT = "当前 QQ 版本不支持此操作，请升级后重试";
+
+function buildAskKeyboard(
+  request: ChannelAskRequest,
+  targetKind: "c2c" | "group",
+): QqbotMessageKeyboard {
+  if (!request.prompt.trim()) {
+    throw new Error("qqbot native ask prompt must not be empty");
+  }
+  if (request.options.length === 0 || request.options.length > 25) {
+    throw new Error("qqbot native ask requires between 1 and 25 options");
+  }
+
+  // A C2C keyboard is already scoped to one peer. QQ rejects openids in
+  // specify_user_ids for C2C buttons before emitting INTERACTION_CREATE.
+  // Keep sender-scoped native permissions for groups; daemon callback routing
+  // still verifies the persisted actorId and recipient for every scene.
+  const permission = targetKind === "c2c" ? ({ type: 2 } as const) : qqbotPermission(request);
+  const seenIds = new Set<string>();
+  const buttons = request.options.map((option, index) => {
+    if (!option.label.trim()) throw new Error(`qqbot ask option ${index + 1} has an empty label`);
+    if (!option.data.trim())
+      throw new Error(`qqbot ask option ${index + 1} has empty callback data`);
+    const id = option.id?.trim() || String(index + 1);
+    if (seenIds.has(id)) throw new Error(`qqbot ask has duplicate option id: ${id}`);
+    seenIds.add(id);
+    return {
+      id,
+      render_data: {
+        label: option.label,
+        visited_label: option.label,
+        style: 0 as const,
+      },
+      action: {
+        type: 1 as const,
+        permission,
+        data: option.data,
+        unsupport_tips: request.unsupportedText?.trim() || DEFAULT_UNSUPPORTED_BUTTON_TEXT,
+      },
+    };
+  });
+
+  const rows = [];
+  for (let index = 0; index < buttons.length; index += 5) {
+    rows.push({ buttons: buttons.slice(index, index + 5) });
+  }
+  return { content: { rows } };
+}
+
+function qqbotPermission(request: ChannelAskRequest): QqbotKeyboardPermission {
+  const audience = request.audience ?? ({ kind: "everyone" } as const);
+  switch (audience.kind) {
+    case "everyone":
+      return { type: 2 };
+    case "admins":
+      return { type: 1 };
+    case "users": {
+      const userIds = audience.userIds;
+      const normalized = userIds.map((entry) => entry.trim()).filter(Boolean);
+      if (normalized.length === 0) {
+        throw new Error("qqbot native ask users audience requires at least one user id");
+      }
+      return { type: 0, specify_user_ids: [...new Set(normalized)] };
+    }
+    default: {
+      const unexpected: never = audience;
+      throw new Error(`unsupported qqbot ask audience: ${String(unexpected)}`);
+    }
+  }
+}
+
+function qqbotAckCode(status: ChannelInteractionAckStatus): 0 | 1 | 2 | 3 | 4 | 5 {
+  switch (status) {
+    case "success":
+      return 0;
+    case "failed":
+      return 1;
+    case "rate_limited":
+      return 2;
+    case "duplicate":
+      return 3;
+    case "forbidden":
+      return 4;
+    case "admins_only":
+      return 5;
+    default: {
+      const unexpected: never = status;
+      throw new Error(`unsupported channel interaction acknowledgement: ${String(unexpected)}`);
+    }
+  }
+}
+
+function toChannelInteractionEvent(
+  interaction: QqbotNormalizedInteraction,
+): ChannelInteractionEvent | undefined {
+  if (
+    interaction.interactionType !== 11 ||
+    !interaction.scene ||
+    !interaction.actorId ||
+    interaction.callbackToken === undefined
+  ) {
+    return undefined;
+  }
+
+  const scene =
+    interaction.scene === "guild" ? "channel" : interaction.scene === "group" ? "group" : "c2c";
+  const recipient =
+    interaction.scene === "c2c" && interaction.userOpenid
+      ? `c2c:${interaction.userOpenid}`
+      : interaction.scene === "group" && interaction.groupOpenid
+        ? `group:${interaction.groupOpenid}`
+        : interaction.scene === "guild" && interaction.channelId
+          ? `channel:${interaction.channelId}`
+          : undefined;
+
+  return {
+    adapter: "qqbot",
+    interactionId: interaction.interactionId,
+    actorId: interaction.actorId,
+    scene,
+    ...(recipient ? { recipient } : {}),
+    buttonData: interaction.callbackToken,
+    ...(interaction.buttonId ? { buttonId: interaction.buttonId } : {}),
+    ...(interaction.messageId ? { messageId: interaction.messageId } : {}),
+    raw: interaction.raw,
+  };
+}
+
 function rawDataToText(data: RawData): string {
   if (typeof data === "string") return data;
   if (Buffer.isBuffer(data)) return data.toString("utf8");
@@ -334,86 +567,68 @@ function rawDataToText(data: RawData): string {
   return Buffer.from(data).toString("utf8");
 }
 
-function createC2CReplyStream(input: {
-  api: QqbotApiClient;
-  resolveToken: () => Promise<string>;
-  openid: string;
-  msgId?: string;
-}): ChannelReplyStream {
-  let buffer = "";
-  let streamMsgId: string | undefined;
-  let index = 0;
-  let msgSeq = 1;
-  let closed = false;
-  let flushTimer: ReturnType<typeof setTimeout> | null = null;
-  let pendingFlush: Promise<void> = Promise.resolve();
+type QqbotPassiveReplyKind = "ask" | "final";
 
-  const flush = async (done: boolean): Promise<void> => {
-    if (closed && !done) return;
-    const token = await input.resolveToken();
-    const response = await input.api.sendC2CStreamMessage(token, input.openid, {
-      input_mode: "replace",
-      input_state: done ? 10 : 1,
-      content_type: "markdown",
-      content_raw: buffer,
-      msg_seq: msgSeq,
-      index,
-      ...(input.msgId ? { msg_id: input.msgId } : {}),
-      ...(streamMsgId ? { stream_msg_id: streamMsgId } : {}),
-    });
-    msgSeq += 1;
-    index += 1;
-    if (!streamMsgId && response.id) streamMsgId = response.id;
-  };
+interface QqbotPassiveReplyReservation {
+  msgSeq?: number;
+}
 
-  const scheduleFlush = (): void => {
-    if (flushTimer) return;
-    flushTimer = setTimeout(() => {
-      flushTimer = null;
-      pendingFlush = pendingFlush
-        .then(() => flush(false))
-        .catch((error) => {
-          console.error("[spark-channels] qqbot c2c stream flush failed", error);
-        });
-    }, 400);
-  };
+interface QqbotPassiveReplyBudget {
+  reserve(
+    scope: "c2c" | "group",
+    recipient: string,
+    messageId: string | undefined,
+    kind: QqbotPassiveReplyKind,
+  ): QqbotPassiveReplyReservation | undefined;
+}
 
+function createQqbotPassiveReplyBudget(): QqbotPassiveReplyBudget {
+  const entries = new Map<
+    string,
+    { askCount: number; finalReserved: boolean; touchedAt: number }
+  >();
   return {
-    appendText(delta) {
-      if (closed || !delta) return;
-      buffer += delta;
-      scheduleFlush();
-    },
-    notifyToolStart() {
-      // QQ C2C stream has no dedicated tool card; keep text-only.
-    },
-    notifyToolResult() {},
-    async complete() {
-      if (closed) return;
-      closed = true;
-      if (flushTimer) {
-        clearTimeout(flushTimer);
-        flushTimer = null;
+    reserve(scope, recipient, messageId, kind) {
+      if (!messageId) return {};
+      const now = Date.now();
+      for (const [key, entry] of entries) {
+        if (now - entry.touchedAt >= 60 * 60 * 1000) entries.delete(key);
       }
-      await pendingFlush;
-      await flush(true);
-    },
-    async fail(message) {
-      if (closed) return;
-      closed = true;
-      if (flushTimer) {
-        clearTimeout(flushTimer);
-        flushTimer = null;
+      const key = `${scope}\0${recipient}\0${messageId}`;
+      const entry = entries.get(key) ?? {
+        askCount: 0,
+        finalReserved: false,
+        touchedAt: now,
+      };
+      const limit =
+        scope === "c2c" ? QQBOT_C2C_PASSIVE_REPLY_LIMIT : QQBOT_GROUP_PASSIVE_REPLY_LIMIT;
+      if (kind !== "final" && entry.finalReserved) return undefined;
+      let msgSeq: number;
+      if (kind === "ask") {
+        const askLimit = 1;
+        if (entry.askCount >= askLimit) return undefined;
+        entry.askCount += 1;
+        msgSeq = scope === "c2c" ? 2 : 1;
+      } else {
+        entry.finalReserved = true;
+        msgSeq = limit;
       }
-      await pendingFlush;
-      if (message.trim()) {
-        buffer = buffer.trim() ? `${buffer}\n\n${message}` : message;
-      }
-      try {
-        await flush(true);
-      } catch (error) {
-        console.error("[spark-channels] qqbot c2c stream fail flush failed", error);
-      }
+      entry.touchedAt = now;
+      entries.set(key, entry);
+      return { msgSeq };
     },
   };
+}
+
+function reservePassiveReplyForTarget(
+  budget: QqbotPassiveReplyBudget,
+  target: ReturnType<typeof parseQqbotRecipient>,
+  messageId: string | undefined,
+  kind: QqbotPassiveReplyKind,
+): QqbotPassiveReplyReservation | undefined {
+  if (target.kind === "c2c") return budget.reserve("c2c", target.openid, messageId, kind);
+  if (target.kind === "group") {
+    return budget.reserve("group", target.groupOpenid, messageId, kind);
+  }
+  return {};
 }

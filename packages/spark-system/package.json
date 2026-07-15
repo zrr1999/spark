@@ -19,7 +19,7 @@
     "access": "public"
   },
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit && vp test run",
     "test": "vp test run"
   },
   "devDependencies": {

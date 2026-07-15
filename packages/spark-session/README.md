@@ -1,22 +1,11 @@
 # @zendev-lab/spark-session
 
-Daemon-owned persistent session registry and durable mailbox mechanism for Spark.
+Owns daemon-backed persistent session registry records, channel bindings/classification, the canonical `session({ action })` tool, persistent calls, and durable mailbox storage.
 
-Owns the canonical `session({ action })` tool, create/list/get/bind/unbind/archive,
-local-vs-channel classification, channel binding resolution, daemon-backed
-persistent calls, and local mailbox persistence. Transcript JSONL remains in the
-shared host session store.
+`session list|get` expose lifecycle, `surface: local | channel`, `activity: idle | running`, adapter bindings, and external keys. `send kind=notification` persists without triggering; `kind=request` persists and asynchronously submits the exact body; `kind=question` submits to an idle local target and waits for a bounded terminal answer without cancelling execution on wait timeout. Mailbox and invocation acceptance are at least once.
 
-`session list` projects `surface: local | channel`, `channelAdapters`, and
-`externalKeys`, and supports surface/adapter/workspace/archive filters. Mailbox
-send does not execute or wake a target session; persistent execution is an explicit
-daemon turn. Anonymous `role call` and persistent `session call` expose different
-continuity semantics while reusing the same headless host and `SparkAgentSession`.
+Channel hosts expose only same-workspace coordination actions. Requests require a local target; notifications may target local or channel sessions. Lifecycle and call actions are rejected from channel callers.
 
-Message-platform sessions are coordination-only: the host activates only the
-canonical `session` tool, which permits read/mail coordination actions only.
-Listing and targets are restricted to the current workspace, lifecycle and call
-actions are rejected, and execution requests must be forwarded with `session send`
-to a `surface=local` persistent session.
+Anonymous calls belong to `role`; persistent continuity belongs to `session`. Both reuse the same headless host and `SparkAgentSession`.
 
-See `docs/specs/assignment-and-channels.md`.
+See [`../../docs/specs/sessions-and-channels.md`](../../docs/specs/sessions-and-channels.md).

@@ -30,11 +30,17 @@ describe("Spark daemon command dispatcher", () => {
     });
 
     const status = sparkCommandFromLocalRpcRequest({
-      id: "queue_list",
-      method: "daemon.queue",
-      params: { state: "inbox" },
+      id: "turn_status",
+      method: "turn.status",
+      params: { invocationId: "inv_01234567890123456789012345678901" },
     });
-    expect(status.kind).toBe("turn.status.request");
+    expect(status).toMatchObject({
+      kind: "turn.status.request",
+      route: { invocationId: "inv_01234567890123456789012345678901" },
+    });
+    expect(() =>
+      sparkCommandFromLocalRpcRequest({ id: "removed_queue", method: "daemon.queue" }),
+    ).toThrow(/Unknown local RPC command method/u);
 
     const credential = sparkCommandFromLocalRpcRequest({
       id: "auth_key",
@@ -73,6 +79,86 @@ describe("Spark daemon command dispatcher", () => {
         sourceKind: "task.start.request",
       },
     });
+  });
+
+  it("applies the typed runtime control scope and mutation policy matrix", () => {
+    const knownWorkspaceBindingIds = new Set([route.workspaceBindingId]);
+    const task = sparkCommandFromServerCommandEnvelope(
+      createServerCommandEnvelope({
+        ...route,
+        payload: { kind: "task.start.request", payload: { prompt: "mutate" } },
+      }),
+    );
+    const snapshot = sparkCommandFromServerCommandEnvelope(
+      createServerCommandEnvelope({
+        ...route,
+        commandId: "cmd_11111111111111111111111111111111",
+        payload: { kind: "workspace.snapshot.request" },
+      }),
+    );
+    const daemonStatus = sparkCommandFromServerCommandEnvelope(
+      createServerCommandEnvelope({
+        runtimeId: route.runtimeId,
+        commandId: "cmd_22222222222222222222222222222222",
+        payload: { kind: "daemon.status.request" },
+      }),
+    );
+
+    expect(
+      decideSparkDaemonCommandPolicy({
+        command: daemonStatus,
+        runtimeId: route.runtimeId,
+        expectedRuntimeId: route.runtimeId,
+        knownWorkspaceBindingIds,
+      }),
+    ).toEqual({ accepted: true });
+    expect(
+      decideSparkDaemonCommandPolicy({
+        command: daemonStatus,
+        runtimeId: "rt_99999999999999999999999999999999",
+        expectedRuntimeId: route.runtimeId,
+        knownWorkspaceBindingIds,
+      }),
+    ).toMatchObject({ accepted: false, reasonCode: "RUNTIME_ID_MISMATCH" });
+    expect(
+      decideSparkDaemonCommandPolicy({
+        command: task,
+        workspaceBindingId: "rtwb_missing",
+        knownWorkspaceBindingIds,
+      }),
+    ).toMatchObject({ accepted: false, reasonCode: "UNKNOWN_WORKSPACE_BINDING" });
+    expect(
+      decideSparkDaemonCommandPolicy({
+        command: task,
+        workspaceBindingId: route.workspaceBindingId,
+        knownWorkspaceBindingIds,
+        workspaceAccess: { borrowed: true },
+      }),
+    ).toMatchObject({ accepted: false, reasonCode: "WORKSPACE_BORROWED" });
+    expect(
+      decideSparkDaemonCommandPolicy({
+        command: task,
+        workspaceBindingId: route.workspaceBindingId,
+        knownWorkspaceBindingIds,
+        workspaceAccess: { detached: true },
+      }),
+    ).toMatchObject({ accepted: false, reasonCode: "WORKSPACE_DETACHED" });
+    expect(
+      decideSparkDaemonCommandPolicy({
+        command: task,
+        workspaceBindingId: route.workspaceBindingId,
+        knownWorkspaceBindingIds,
+        allowMutation: false,
+      }),
+    ).toMatchObject({ accepted: false, reasonCode: "MUTATION_NOT_ALLOWED" });
+    expect(
+      decideSparkDaemonCommandPolicy({
+        command: snapshot,
+        workspaceBindingId: route.workspaceBindingId,
+        knownWorkspaceBindingIds,
+        workspaceAccess: { borrowed: true, detached: true },
+      }),
+    ).toEqual({ accepted: true });
   });
 
   it("centralizes workspace ownership and borrowed-workspace decisions", () => {

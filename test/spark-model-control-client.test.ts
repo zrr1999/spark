@@ -100,7 +100,7 @@ void test("bound daemon model control keeps session and global model RPCs distin
       daemonStatus: async () => ({
         observedAt: "2026-07-13T00:00:00.000Z",
         servers: [],
-        queue: { inbox: 0, processed: 0, failed: 0 },
+        invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
       }),
       controlRequest: async (method, params) => {
         lifecycle.push(method);

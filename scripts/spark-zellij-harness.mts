@@ -40,7 +40,7 @@ interface HarnessReport {
     daemonRunningAfter: boolean;
     runtimeStable: boolean;
     workspaceCountStable: boolean;
-    queueCountersMonotonic: boolean;
+    invocationTerminalCountsMonotonic: boolean;
     mismatches: string[];
   };
   selectedStrategy: "external-action" | "in-session-control-pane-required";
@@ -688,13 +688,13 @@ async function runZellijSubscribeControlScenario(): Promise<void> {
 function daemonControlInvariants(before: unknown, after: unknown) {
   const beforeStatus = extractDaemonStatusContract(before);
   const afterStatus = extractDaemonStatusContract(after);
-  const beforeFailed = beforeStatus.queue?.failed;
-  const afterFailed = afterStatus.queue?.failed;
+  const beforeFailed = beforeStatus.invocations?.failed;
+  const afterFailed = afterStatus.invocations?.failed;
   return {
     daemonRunningBefore: beforeStatus.running === true,
     daemonRunningAfter: afterStatus.running === true,
     daemonRuntimeStable: beforeStatus.identity === afterStatus.identity,
-    daemonFailedQueueMonotonic:
+    daemonFailedInvocationsMonotonic:
       beforeFailed !== undefined && afterFailed !== undefined && afterFailed >= beforeFailed,
   };
 }

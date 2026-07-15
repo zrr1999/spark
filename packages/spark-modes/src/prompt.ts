@@ -5,8 +5,8 @@ import type { Mode, ModeRenderContext, TurnDriver } from "./types.ts";
  * Render the compact standing marker line. Manual assist turns expose the
  * selected phase; autonomous drivers expose the driver instead, because their
  * concrete next-step policy is owned by driver state rather than a global phase.
- * The trivial `research`/`assist` combination renders nothing so plain turns
- * stay noise-free.
+ * The default `plan`/`assist` combination renders nothing so plain turns stay
+ * noise-free.
  */
 export function renderModeMarker(input: {
   mode: Mode;
@@ -16,7 +16,7 @@ export function renderModeMarker(input: {
 }): string | undefined {
   const marker =
     input.driver === "assist"
-      ? input.mode === "research"
+      ? input.mode === "plan"
         ? ""
         : `Phase: ${input.mode}.`
       : `Drive: ${input.driver}.`;

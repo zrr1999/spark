@@ -150,29 +150,6 @@ export interface ReviewerRunResult {
   record: ReviewerRunRecord;
 }
 
-const REVIEWER_FORBIDDEN_TOOLS = new Set([
-  "ask",
-  "ask_user",
-  "ask_flow",
-  "task",
-  "task_write",
-  "goal",
-  "assign",
-  "role",
-  "workflow",
-  "graft_patch",
-  "patch",
-]);
-
-const REVIEWER_EXECUTION_TOOLS = new Set([
-  "cue_exec",
-  "cue_run",
-  "cue_script",
-  "script_run",
-  "script_eval",
-  "cue_jobs",
-]);
-
 const REVIEWER_LOW_COST_READ_TOOLS = new Set(["read", "grep", "find", "task_read", "artifact"]);
 
 export interface AskAutoAnswerInput {
@@ -758,12 +735,7 @@ function normalizeReviewerVerdictObject(value: Record<string, unknown>): ReviewV
 
 function reviewerGateAllowedTools(allowedTools: string[] | undefined): string[] {
   const candidates = allowedTools?.length ? allowedTools : Array.from(REVIEWER_LOW_COST_READ_TOOLS);
-  return candidates.filter(
-    (tool) =>
-      REVIEWER_LOW_COST_READ_TOOLS.has(tool) &&
-      !REVIEWER_FORBIDDEN_TOOLS.has(tool) &&
-      !REVIEWER_EXECUTION_TOOLS.has(tool),
-  );
+  return candidates.filter((tool) => REVIEWER_LOW_COST_READ_TOOLS.has(tool));
 }
 
 function reviewerTimeoutMsFromEnv(env: NodeJS.ProcessEnv): number {

@@ -10,7 +10,7 @@ export interface SparkCommandProjectState {
   unfinishedTaskCount: number;
 }
 
-export type SparkEntryPhase = "research" | "plan" | "implement";
+export type SparkEntryPhase = "plan" | "implement";
 /** @deprecated Use SparkEntryPhase. */
 export type SparkEntryMode = SparkEntryPhase;
 export type SparkEntryPhaseChoice = SparkEntryPhase | "new_project";
@@ -89,12 +89,8 @@ export function analyzeSparkEntryPhase(
     /(执行|运行|完成|继续做|认领|修复|修一下|claim|execute|run ready|dispatch|work through|finish|fix\b)/i.test(
       signalPrompt,
     );
-  const hasResearchSignal =
-    /(调研|研究|查一下|查看|了解|审阅|\b(?:inspect|investigate|research|read|review|audit)\b)/i.test(
-      signalPrompt,
-    );
   const hasPlanningSignal =
-    /(计划|规划|梳理|拆分|增加.*task|新增.*task|project|plan|clarify|break down)/i.test(
+    /(调研|研究|查一下|查看|了解|审阅|计划|规划|梳理|拆分|增加.*task|新增.*task|project|plan|clarify|break down|\b(?:inspect|investigate|research|read|review|audit)\b)/i.test(
       signalPrompt,
     );
   const hasErrorReportSignal =
@@ -138,11 +134,11 @@ export function analyzeSparkEntryPhase(
     };
   if (hasErrorReportSignal && !hasExecutionSignal && !hasPlanningSignal)
     return {
-      recommendation: "research",
+      recommendation: "plan",
       confidence: "high",
       reasons: [
         ...reasons,
-        "The prompt looks like an error report or stack trace, so Spark should inspect before changing tasks.",
+        "The prompt looks like an error report or stack trace, so Spark should inspect and answer in the plan phase before execution.",
       ],
       prompt: normalizedPrompt,
       currentProjectTitle,
@@ -166,21 +162,6 @@ export function analyzeSparkEntryPhase(
       readyTaskCount,
       pendingTaskCount,
     };
-  if (hasResearchSignal && hasExecutionSignal)
-    return {
-      recommendation: readyTaskCount > 0 ? "implement" : "research",
-      confidence: "conflicting",
-      reasons: [
-        ...reasons,
-        "The prompt contains both research and implementation signals; Spark should choose the safest route from current task readiness.",
-      ],
-      prompt: normalizedPrompt,
-      currentProjectTitle,
-      projectCount: graph.projects().length,
-      unfinishedTaskCount: projectState.unfinishedTaskCount,
-      readyTaskCount,
-      pendingTaskCount,
-    };
   if (hasPlanningSignal && hasExecutionSignal)
     return {
       recommendation: readyTaskCount > 0 ? "implement" : "plan",
@@ -188,21 +169,6 @@ export function analyzeSparkEntryPhase(
       reasons: [
         ...reasons,
         "The prompt contains both planning and implementation signals; Spark should choose the safest route from current task readiness.",
-      ],
-      prompt: normalizedPrompt,
-      currentProjectTitle,
-      projectCount: graph.projects().length,
-      unfinishedTaskCount: projectState.unfinishedTaskCount,
-      readyTaskCount,
-      pendingTaskCount,
-    };
-  if (hasResearchSignal && hasPlanningSignal)
-    return {
-      recommendation: "plan",
-      confidence: "conflicting",
-      reasons: [
-        ...reasons,
-        "The prompt contains both research and planning signals; the planning phase can inspect first and update tasks only when needed.",
       ],
       prompt: normalizedPrompt,
       currentProjectTitle,
@@ -228,21 +194,6 @@ export function analyzeSparkEntryPhase(
       recommendation: "plan",
       confidence: "high",
       reasons: [...reasons, "The prompt asks to plan, clarify, split, or organize tasks."],
-      prompt: normalizedPrompt,
-      currentProjectTitle,
-      projectCount: graph.projects().length,
-      unfinishedTaskCount: projectState.unfinishedTaskCount,
-      readyTaskCount,
-      pendingTaskCount,
-    };
-  if (hasResearchSignal)
-    return {
-      recommendation: "research",
-      confidence: "high",
-      reasons: [
-        ...reasons,
-        "The prompt asks to research, inspect, review, or audit without an explicit task-planning or execution request.",
-      ],
       prompt: normalizedPrompt,
       currentProjectTitle,
       projectCount: graph.projects().length,

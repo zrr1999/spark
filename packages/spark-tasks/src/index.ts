@@ -26,5 +26,7 @@ export type {
   PiTaskActionHandler,
   PiTaskToolHandlers,
   PiTaskToolResult,
+  PiTodoAction,
+  PiTodoToolOptions,
 } from "./extension.ts";
-export { registerPiTaskTool } from "./extension.ts";
+export { registerPiTaskTool, registerPiTodoTool, normalizePiTodoAction } from "./extension.ts";

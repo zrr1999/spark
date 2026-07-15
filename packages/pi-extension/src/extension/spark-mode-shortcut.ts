@@ -23,7 +23,7 @@ export function registerSparkModeCycleShortcut(
     isActive: (ctx) => Boolean(ctx.cwd && existsSync(join(ctx.cwd, ".spark"))),
     handler(ctx) {
       const hint =
-        "research is the default for ordinary input; use /plan for durable planning or /implement for human-blocking execution.";
+        "plan is the default for ordinary investigation and planning; use /implement for human-blocking execution.";
       ctx.ui?.setEditorText?.("/plan ");
       ctx.ui?.notify?.(`Spark commands are per-turn. ${hint}`, "info");
     },

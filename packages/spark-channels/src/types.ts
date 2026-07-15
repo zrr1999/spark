@@ -1,5 +1,10 @@
 import type { SparkChannelAdapter } from "@zendev-lab/spark-protocol/session-assignment";
 import type { InfoflowAttachment } from "./infoflow-content.ts";
+import type {
+  ChannelInteractionCapability,
+  ChannelInteractionEvent,
+  RoutedChannelInteractionEvent,
+} from "./interaction.ts";
 import type { ChannelReplyCapability } from "./reply.ts";
 
 export type ChannelAdapterType = SparkChannelAdapter;
@@ -33,6 +38,8 @@ export interface ChannelAdapter {
   send(input: { recipient: string; text: string }): Promise<void>;
   /** Optional richer reply lifecycle used by daemon-owned channel conversations. */
   readonly reply?: ChannelReplyCapability;
+  /** Optional native ask/button capability. */
+  readonly interaction?: ChannelInteractionCapability;
   /** Runtime connection health; process lifecycle alone is not transport liveness. */
   status(): ChannelAdapterStatus;
 }
@@ -201,6 +208,8 @@ export type ChannelNotifyResult = ChannelNotifyListResult | ChannelNotifySendRes
 export interface ChannelRegistryOptions {
   config: ChannelsConfig;
   onMessage?: (message: IncomingMessage) => void;
+  /** Native controls are delivered separately from ordinary text ingress. */
+  onInteraction?: (event: RoutedChannelInteractionEvent) => void | Promise<void>;
   /** Override transport factory per adapter id (used by tests and production SDK wiring). */
   createTransport?: (
     adapterId: string,
@@ -209,11 +218,16 @@ export interface ChannelRegistryOptions {
 }
 
 export interface ChannelTransport {
-  start(onMessage: (raw: unknown) => void): Promise<void>;
+  start(
+    onMessage: (raw: unknown) => void,
+    onInteraction?: (event: ChannelInteractionEvent) => void | Promise<void>,
+  ): Promise<void>;
   stop(): Promise<void>;
   send(recipient: string, text: string): Promise<void>;
   /** Optional richer reply lifecycle; platform SDK objects remain behind this boundary. */
   readonly reply?: ChannelReplyCapability;
+  /** Optional native ask/button lifecycle. */
+  readonly interaction?: ChannelInteractionCapability;
   status?(): ChannelTransportStatus;
 }
 

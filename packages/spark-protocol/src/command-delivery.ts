@@ -5,6 +5,7 @@
  * All wire envelopes must be built through these helpers so clients do not drift.
  */
 
+import { runtimeServerCommandSpecification } from "./command-events.ts";
 import { createId } from "./refs.ts";
 import {
   serverCommandEnvelopeSchema,
@@ -20,8 +21,8 @@ export type ServerCommandEnvelope = ReturnType<typeof serverCommandEnvelopeSchem
 
 export interface ServerCommandRouting {
   runtimeId: string;
-  workspaceBindingId: string;
-  workspaceId: string;
+  workspaceBindingId?: string;
+  workspaceId?: string;
   projectId?: string;
   commandId: string;
   idempotencyKey?: string;
@@ -36,6 +37,10 @@ export interface CreateServerCommandEnvelopeInput extends ServerCommandRouting {
 
 export function createServerCommandEnvelope(input: CreateServerCommandEnvelopeInput) {
   const sentAt = input.sentAt ?? new Date().toISOString();
+  const specification = runtimeServerCommandSpecification(input.payload.kind);
+  if (!specification) {
+    throw new Error(`Unknown runtime server command kind: ${input.payload.kind}`);
+  }
   const envelope = {
     protocolVersion: input.protocolVersion ?? runtimeProtocolVersion,
     messageId: input.messageId ?? createId("msg"),
@@ -47,7 +52,10 @@ export function createServerCommandEnvelope(input: CreateServerCommandEnvelopeIn
     projectId: input.projectId,
     commandId: input.commandId,
     idempotencyKey: input.idempotencyKey,
-    payload: serverCommandPayloadSchema.parse(input.payload),
+    payload: serverCommandPayloadSchema.parse({
+      ...input.payload,
+      scope: input.payload.scope ?? specification.scope,
+    }),
   };
   assertSparkRuntimeProtocolVersion(envelope.protocolVersion, { label: "server.command" });
   return serverCommandEnvelopeSchema.parse(envelope);

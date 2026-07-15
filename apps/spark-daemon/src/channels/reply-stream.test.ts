@@ -7,15 +7,18 @@ import type { ChannelReplyStream } from "@zendev-lab/spark-channels";
 import { describe, expect, it, vi } from "vitest";
 import { ChannelReplyEventProjector } from "./reply-stream.ts";
 
-function stream() {
+function stream(answerMode?: ChannelReplyStream["answerMode"]) {
   const appendText = vi.fn();
+  const appendProgress = vi.fn();
   const appendReasoning = vi.fn();
   const notifyToolStart = vi.fn();
   const notifyToolResult = vi.fn();
   const complete = vi.fn(async () => undefined);
   const fail = vi.fn(async () => undefined);
   const target: ChannelReplyStream = {
+    ...(answerMode ? { answerMode } : {}),
     appendText,
+    appendProgress,
     appendReasoning,
     notifyToolStart,
     notifyToolResult,
@@ -25,6 +28,7 @@ function stream() {
   return {
     target,
     appendText,
+    appendProgress,
     appendReasoning,
     notifyToolStart,
     notifyToolResult,
@@ -33,7 +37,11 @@ function stream() {
   };
 }
 
-function messageEvent(message: Omit<SparkMessageView, "version" | "metadata">): SparkDaemonEvent {
+function messageEvent(
+  message: Omit<SparkMessageView, "version" | "metadata"> & {
+    metadata?: SparkMessageView["metadata"];
+  },
+): SparkDaemonEvent {
   return {
     version: SPARK_PROTOCOL_VERSION,
     type: "daemon.view_event",
@@ -46,32 +54,142 @@ function messageEvent(message: Omit<SparkMessageView, "version" | "metadata">): 
       version: SPARK_PROTOCOL_VERSION,
       type: "session.message",
       sessionId: "sess",
-      message: { version: SPARK_PROTOCOL_VERSION, metadata: {}, ...message },
+      message: { version: SPARK_PROTOCOL_VERSION, ...message, metadata: message.metadata ?? {} },
     },
   };
 }
 
 describe("ChannelReplyEventProjector", () => {
-  it("turns accumulated assistant views into text deltas", () => {
+  it("preserves unclassified streaming for inline reply surfaces", () => {
     const { target, appendText } = stream();
     const projector = new ChannelReplyEventProjector(target);
 
     projector.observe(
-      messageEvent({ id: "assistant-1", role: "assistant", text: "你", status: "streaming" }),
+      messageEvent({
+        id: "assistant-1",
+        role: "assistant",
+        text: "你",
+        status: "streaming",
+        parts: [
+          {
+            id: "assistant-1:part:0",
+            type: "text",
+            text: "你",
+            status: "streaming",
+            metadata: {},
+          },
+        ],
+      }),
     );
     projector.observe(
-      messageEvent({ id: "assistant-1", role: "assistant", text: "你好", status: "streaming" }),
-    );
-    projector.observe(
-      messageEvent({ id: "assistant-1", role: "assistant", text: "你好", status: "done" }),
+      messageEvent({
+        id: "assistant-1",
+        role: "assistant",
+        text: "你好",
+        status: "done",
+        parts: [
+          {
+            id: "assistant-1:part:0",
+            type: "text",
+            text: "你好",
+            phase: "final_answer",
+            status: "complete",
+            metadata: {},
+          },
+        ],
+        metadata: { stopReason: "stop" },
+      }),
     );
 
-    expect(appendText).toHaveBeenNthCalledWith(1, "你");
-    expect(appendText).toHaveBeenNthCalledWith(2, "好");
+    expect(appendText.mock.calls).toEqual([["你"], ["好"]]);
+  });
+
+  it("separates execution commentary from final answer prose", () => {
+    const { target, appendText, appendProgress } = stream();
+    const projector = new ChannelReplyEventProjector(target);
+
+    projector.observe(
+      messageEvent({
+        id: "assistant-progress",
+        role: "assistant",
+        text: "先检查目录",
+        status: "done",
+        parts: [
+          {
+            id: "assistant-progress:part:0",
+            type: "text",
+            text: "先检查目录",
+            phase: "commentary",
+            status: "complete",
+            metadata: {},
+          },
+        ],
+        metadata: { stopReason: "toolUse" },
+      }),
+    );
+    projector.observe(
+      messageEvent({
+        id: "assistant-final",
+        role: "assistant",
+        text: "检查完成",
+        status: "done",
+        parts: [
+          {
+            id: "assistant-final:part:0",
+            type: "text",
+            text: "检查完成",
+            phase: "final_answer",
+            status: "complete",
+            metadata: {},
+          },
+        ],
+        metadata: { stopReason: "stop" },
+      }),
+    );
+
+    expect(appendProgress).toHaveBeenCalledWith("先检查目录");
+    expect(appendText).toHaveBeenCalledWith("检查完成");
+  });
+
+  it("keeps final answer text out of a separate execution stream", () => {
+    const { target, appendText, appendProgress, notifyToolStart } = stream("separate");
+    const projector = new ChannelReplyEventProjector(target);
+    projector.observe(
+      messageEvent({
+        id: "assistant-progress",
+        role: "assistant",
+        text: "开始检查",
+        status: "done",
+        parts: [
+          {
+            id: "assistant-progress:part:0",
+            type: "text",
+            text: "开始检查",
+            phase: "commentary",
+            status: "complete",
+            metadata: {},
+          },
+        ],
+      }),
+    );
+    projector.observe(
+      messageEvent({
+        id: "tool-call:1",
+        role: "tool",
+        text: "private input",
+        status: "pending",
+        toolName: "cue_exec",
+      }),
+    );
+    projector.appendFinalText("最终答案");
+
+    expect(appendProgress).toHaveBeenCalledWith("开始检查");
+    expect(notifyToolStart).toHaveBeenCalledWith({ name: "cue_exec", phase: "执行中" });
+    expect(appendText).not.toHaveBeenCalled();
   });
 
   it("keeps tool-call markers and thinking parts out of the answer body", () => {
-    const { target, appendText, appendReasoning, notifyToolStart } = stream();
+    const { target, appendText, appendProgress, appendReasoning, notifyToolStart } = stream();
     const projector = new ChannelReplyEventProjector(target);
 
     projector.observe(
@@ -116,7 +234,8 @@ describe("ChannelReplyEventProjector", () => {
       }),
     );
 
-    expect(appendText.mock.calls).toEqual([["我来列一下当前目录内容。"]]);
+    expect(appendText).not.toHaveBeenCalled();
+    expect(appendProgress).toHaveBeenCalledWith("我来列一下当前目录内容。");
     expect(appendReasoning.mock.calls).toEqual([["先用 cue_exec 列目录"]]);
     expect(notifyToolStart).toHaveBeenCalledWith({ name: "cue_exec", phase: "执行中" });
     expect(JSON.stringify(appendText.mock.calls)).not.toMatch(/tool call/);

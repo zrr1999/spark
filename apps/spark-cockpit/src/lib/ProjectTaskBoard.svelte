@@ -1,19 +1,37 @@
 <script lang="ts">
   import Icon from "$lib/Icon.svelte";
+  import type { AppMessages } from "$lib/i18n";
   import type { ProjectTaskBoardColumn } from "$lib/project-task-board";
 
-  let { columns, workspaceUrl }: { columns: ProjectTaskBoardColumn[]; workspaceUrl: string } = $props();
+  let {
+    columns,
+    workspaceUrl,
+    messages,
+  }: {
+    columns: ProjectTaskBoardColumn[];
+    workspaceUrl: string;
+    messages: AppMessages["taskBoard"];
+  } = $props();
+
+  function columnLabel(column: ProjectTaskBoardColumn): string {
+    return (
+      messages.columns[column.id as keyof AppMessages["taskBoard"]["columns"]] ?? column.label
+    );
+  }
 </script>
 
-<div class="task-board" aria-label="Task board">
+<div class="task-board" aria-label={messages.aria}>
   {#each columns as column}
-    <section class="task-board-column" aria-label={`${column.label} tasks`}>
+    <section
+      class="task-board-column"
+      aria-label={messages.columnTasksAria.replace("{column}", columnLabel(column))}
+    >
       <header>
-        <span>{column.label}</span>
+        <span>{columnLabel(column)}</span>
         <strong>{column.cards.length}</strong>
       </header>
       {#if column.cards.length === 0}
-        <p class="muted board-empty">No tasks</p>
+        <p class="muted board-empty">{messages.empty}</p>
       {:else}
         {#each column.cards as card}
           {@const task = card.task}
@@ -23,11 +41,14 @@
               <p class="task-runtime-line">{task.runtimeTaskId}</p>
             </div>
             {#if task.readyFrontier}
-              <span class="frontier-badge">Ready frontier</span>
+              <span class="frontier-badge">{messages.readyFrontier}</span>
             {/if}
             {#if card.evidenceArtifacts.length > 0}
-              <div class="evidence-links" aria-label={`Evidence for ${task.title}`}>
-                <span class="meta-label">Evidence</span>
+              <div
+                class="evidence-links"
+                aria-label={messages.evidenceForAria.replace("{task}", task.title)}
+              >
+                <span class="meta-label">{messages.evidence}</span>
                 {#each card.evidenceArtifacts as artifact}
                   <a href={`${workspaceUrl}/artifacts/${artifact.id}`}>{artifact.title}</a>
                 {/each}
@@ -37,7 +58,7 @@
               <input type="hidden" name="runtimeTaskId" value={task.runtimeTaskId} />
               <button type="submit" disabled={!card.assignable}>
                 <Icon name="play" size={14} stroke={2.3} />
-                <span>{card.assignable ? "Assign" : "Not assignable"}</span>
+                <span>{card.assignable ? messages.assign : messages.notAssignable}</span>
               </button>
             </form>
           </article>

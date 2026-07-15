@@ -1,6 +1,8 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { join } from "node:path";
 import type {
+  ExtensionInteractionRequest,
+  ExtensionInteractionResponse,
   ExtensionRoleRunInputControl,
   RoleRef,
   RunRef,
@@ -84,6 +86,9 @@ export interface SparkHeadlessSessionRunInput {
   timeoutMs?: number;
   sparkHome?: string;
   sessionSurface?: "local" | "channel";
+  sessionSource?: "tui" | "web" | "channel" | "daemon" | "session";
+  invocationId?: string;
+  sessionQuestionChain?: readonly string[];
   allowedTools?: readonly string[];
   /** Optional base identity/surface prompt; defaults to Spark host identity. */
   systemPrompt?: string;
@@ -95,6 +100,8 @@ export interface SparkHeadlessSessionRunInput {
    */
   approvalMethod?: "skip" | "human" | "auto";
   approvalRejectAction?: "ask" | "deny";
+  /** Daemon-owned UI bridge; hasUI stays false because no local terminal is attached. */
+  interaction?: (request: ExtensionInteractionRequest) => Promise<ExtensionInteractionResponse>;
   onEvent?: (event: unknown) => void | Promise<void>;
 }
 
@@ -138,8 +145,12 @@ export async function runSparkHeadlessSession(
     ...controlPlaneServicePaths(options.controlSparkHome),
     ...(options.controlSparkHome ? { sparkStateRoot: options.controlSparkHome } : {}),
     sessionSurface: input.sessionSurface,
+    sessionSource: input.sessionSource,
+    invocationId: input.invocationId,
+    sessionQuestionChain: input.sessionQuestionChain,
     allowedTools: input.allowedTools,
     hasUI: false,
+    ...(input.interaction ? { ui: { interaction: input.interaction } } : {}),
     ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
     ...(input.approvalMethod ? { approvalMethod: input.approvalMethod } : {}),
     ...(input.approvalRejectAction ? { approvalRejectAction: input.approvalRejectAction } : {}),

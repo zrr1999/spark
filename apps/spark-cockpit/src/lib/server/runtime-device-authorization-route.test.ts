@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { RuntimeDeviceAuthorizationError } from "@zendev-lab/spark-server/runtime-registration";
+import { RuntimeDeviceAuthorizationError } from "@zendev-lab/spark-coordination/runtime-registration";
 
 const mocks = vi.hoisted(() => ({
   createRuntimeDeviceAuthorization: vi.fn(),
@@ -20,7 +20,7 @@ vi.mock("$lib/server/json", () => ({
 }));
 
 vi.mock("$lib/server/runtime-registration", async () => ({
-  ...(await vi.importActual("@zendev-lab/spark-server/runtime-registration")),
+  ...(await vi.importActual("@zendev-lab/spark-coordination/runtime-registration")),
   createRuntimeDeviceAuthorization: mocks.createRuntimeDeviceAuthorization,
 }));
 

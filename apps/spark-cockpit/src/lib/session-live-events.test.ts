@@ -318,7 +318,7 @@ describe("session live events", () => {
     expect(state.processedEventIds.has("evt_unrelated_699")).toBe(true);
   });
 
-  it("tracks the daemon queue turn id across lifecycle events", () => {
+  it("tracks the durable invocation id across lifecycle events", () => {
     const state = createSessionLiveEventState({
       sessionId: "sess_current",
       view: parseSparkSessionView({
@@ -326,16 +326,16 @@ describe("session live events", () => {
         status: "running",
         messages: [
           {
-            id: "queue:turn-1.json",
+            id: "invocation:inv_1",
             role: "user",
             text: "Inspect the UI",
             status: "done",
-            metadata: { source: "daemon.queue", taskFileName: "turn-1.json" },
+            metadata: { source: "daemon.invocation", invocationId: "inv_1" },
           },
         ],
       }),
     });
-    expect(state.activeTurnId).toBe("turn-1.json");
+    expect(state.activeTurnId).toBe("inv_1");
 
     applySessionLiveEvent(
       state,
@@ -346,12 +346,12 @@ describe("session live events", () => {
           type: "daemon.task.lifecycle",
           sessionId: "sess_current",
           taskType: "session.run",
-          taskFileName: "turn-1.json",
+          invocationId: "inv_1",
           status: "running",
         },
       }),
     );
-    expect(state.activeTurnId).toBe("turn-1.json");
+    expect(state.activeTurnId).toBe("inv_1");
 
     applySessionLiveEvent(
       state,
@@ -362,7 +362,7 @@ describe("session live events", () => {
           type: "daemon.task.lifecycle",
           sessionId: "sess_current",
           taskType: "session.run",
-          taskFileName: "turn-1.json",
+          invocationId: "inv_1",
           status: "succeeded",
         },
       }),
@@ -380,9 +380,9 @@ describe("session live events", () => {
           {
             id: "msg_pending",
             role: "user",
-            text: "Not a daemon queue projection",
+            text: "Not a daemon invocation projection",
             status: "pending",
-            metadata: { taskFileName: "turn-spoofed.json" },
+            metadata: { invocationId: "inv_spoofed" },
           },
         ],
       }),

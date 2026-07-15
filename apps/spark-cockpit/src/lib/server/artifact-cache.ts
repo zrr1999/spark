@@ -1,1 +1,1 @@
-export * from "@zendev-lab/spark-server/artifact-cache";
+export * from "@zendev-lab/spark-coordination/artifact-cache";

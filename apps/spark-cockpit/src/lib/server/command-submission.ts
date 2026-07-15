@@ -1,1 +1,1 @@
-export * from "@zendev-lab/spark-server/command-submission";
+export * from "@zendev-lab/spark-coordination/command-submission";

@@ -125,7 +125,7 @@ describe("Infoflow SDK outbound", () => {
     );
   });
 
-  it("keeps outer done label distinct from expandable details status_info", async () => {
+  it("opens process details with the outer disclosure and keeps final labels distinct", async () => {
     const buildContents = vi.fn((opts: { final?: boolean; doneLabel?: string; error?: string }) => {
       const label = opts.doneLabel ?? "思考完成";
       return {
@@ -165,16 +165,26 @@ describe("Infoflow SDK outbound", () => {
 
     const stream = await outbound.openReplyStream("alice");
     expect(stream).toBeTruthy();
+
+    const streamingContents = session.buildContents({}) as Record<
+      string,
+      { type: string; content: string }
+    >;
+    expect(streamingContents.status_info_1_install?.content).toBe("1");
+    expect(streamingContents.flex_item_status_info_1_install?.content).toBe("1");
+
     await stream!.complete("已完成");
 
     expect(session.complete).toHaveBeenCalledWith("已完成");
     expect(buildContents).toHaveBeenCalled();
-    const contents = buildContents.mock.results.at(-1)?.value as {
-      status_info: { content: string };
-      think_status_text: { content: string };
-    };
-    expect(contents.think_status_text.content).toBe("已完成");
-    expect(contents.status_info.content).toBe("处理过程");
-    expect(contents.status_info.content).not.toBe(contents.think_status_text.content);
+    const contents = buildContents.mock.results.at(-1)?.value as Record<
+      string,
+      { type: string; content: string }
+    >;
+    expect(contents.think_status_text?.content).toBe("已完成");
+    expect(contents.status_info?.content).toBe("处理过程");
+    expect(contents.status_info?.content).not.toBe(contents.think_status_text?.content);
+    expect(contents.status_info_1_install?.content).toBe("1");
+    expect(contents.flex_item_status_info_1_install?.content).toBe("1");
   });
 });

@@ -111,6 +111,7 @@ export async function runPiAskFlow(
   const request = createPiAskFlowRequest(input);
   const interactionRun = await runPiAskFlowInteraction(request, ui as PiAskFlowToolContext["ui"]);
   if (interactionRun) return interactionRun.result;
+  if (request.delivery === "async") return createNoSelectionPiAskFlowResult(request, {});
   if (!ui?.select && !ui?.selectWithCustom && !ui?.input) return defaultPiAskFlowResult(request);
 
   const answers: Record<string, PiAskFlowAnswerEntry> = {};
@@ -258,6 +259,7 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
       "Ask the user a structured multi-question clarification, decision, approval, or unblock flow.",
     promptGuidelines: [
       "Use ask_flow when a decision needs multiple related questions.",
+      "Use delivery=blocking to wait for the answer, or delivery=async to create a durable Inbox request and continue.",
       "Ask questions grounded in the actual situation; avoid generic intake templates.",
       "After a decision is confirmed, continue with the chosen action when clear.",
     ],
@@ -265,6 +267,9 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
       title: Type.Optional(Type.String()),
       mode: Type.Optional(
         Type.String({ description: "clarification | decision | approval | unblock" }),
+      ),
+      delivery: Type.Optional(
+        Type.String({ description: "blocking | async. Defaults to blocking." }),
       ),
       context: Type.Optional(Type.String()),
       questions: Type.Array(
@@ -334,6 +339,14 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
         };
       }
 
+      if (request.delivery === "async") {
+        const result = createNoSelectionPiAskFlowResult(request, {});
+        return {
+          content: [{ type: "text" as const, text: summarizeFlowResult(result, request) }],
+          details: { result, status: result.status, cancelled: false, mode: result.mode },
+        };
+      }
+
       if (typeof ui?.custom !== "function") {
         const result = createCancelledPiAskFlowResult(request);
         return {
@@ -385,6 +398,21 @@ async function runPiAskFlowInteraction(
     if (!response || response.kind !== "askFlow") return undefined;
     if (response.status === "blocked" || response.status === "error") return undefined;
     if (response.status === "cancelled") return { result: createCancelledPiAskFlowResult(request) };
+    if (response.status === "pending") {
+      const humanRequestId = optionalNonEmptyString(response.humanRequestId);
+      if (!humanRequestId) return undefined;
+      return {
+        result: createPiAskFlowResult({
+          answers: {},
+          flow: request.flow,
+          mode: "submit",
+          cancelled: false,
+          status: "pending",
+          humanRequestId,
+          nextAction: "resume",
+        }),
+      };
+    }
     if (response.status !== "answered") return undefined;
     return { result: piAskFlowResultFromInteractionResponse(request, response) };
   } catch (error) {
@@ -404,6 +432,7 @@ function createPiAskFlowInteractionRequest(request: PiAskFlowRequest): Extension
     prompt: request.context,
     source: "extension",
     metadata: { tool: "ask_flow" },
+    delivery: request.delivery ?? "blocking",
     mode: request.mode ?? "clarification",
     ...(request.flow ? { flow: request.flow } : {}),
     questions: (request.questions ?? []).map((question) => ({
@@ -635,6 +664,7 @@ export function normalizePiAskFlowResult(
   request?: PiAskFlowRequest,
 ): PiAskFlowResult {
   const normalized = createPiAskFlowResult(result);
+  if (normalized.status === "pending") return normalized;
   if (!request || !isGateMode(request.mode)) return normalized;
 
   const status =
@@ -656,6 +686,7 @@ export function isPiAskFlowGateBlocked(
 ): boolean {
   return (
     isGateMode(request.mode) &&
+    result.status !== "pending" &&
     (result.status === "no_selection" ||
       result.status === "cancelled" ||
       !hasRequiredGateSelections(request, result.answers))
@@ -727,7 +758,11 @@ function nextActionForPiAskFlowStatus(
   mode: PiAskFlowResult["mode"],
 ): PiAskFlowResult["nextAction"] {
   if (mode === "elaborate") return "clarify_then_reask";
-  return status === "answered" ? "resume" : "block";
+  return status === "answered" || status === "pending" ? "resume" : "block";
+}
+
+function optionalNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function summarizeFlowResult(result: PiAskFlowResult, request?: PiAskFlowRequest): string {

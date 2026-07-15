@@ -4,12 +4,15 @@
   import {
     channelSessionPresentation,
     sessionHasChannelBinding,
+    type ChannelSessionLabels,
   } from "$lib/channel-session-title";
   import { visibleConversationActivityStatus } from "$lib/conversation-status";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
-  import { orderWorkbenchSessionsByAttention } from "$lib/workbench-session-order";
   import {
-    daemonIdentityForWorkbenchSession,
+    groupWorkbenchSessionsByType,
+    type WorkbenchSessionType,
+  } from "$lib/workbench-session-groups";
+  import {
     isSessionVisibleInWorkbenchRail,
     workbenchSessionScope,
   } from "$lib/workbench-session-scope";
@@ -54,7 +57,6 @@
     common: Parameters<typeof getStatusLabel>[1];
     messages: {
       workspaceConversation: string;
-      daemonConversation: string;
       searchPlaceholder: string;
       emptyTitle: string;
       daemonUnavailableTitle: string;
@@ -62,8 +64,9 @@
       listLabel: string;
       untitledConversation: string;
       unknownWorkspace: string;
-      daemonGroup: string;
       channelSessionBadge: string;
+      channelLabels: ChannelSessionLabels;
+      sessionTypes: Record<WorkbenchSessionType, string>;
       archiveSubmit: string;
     };
   } = $props();
@@ -87,7 +90,13 @@
     }),
   );
 
-  let grouped = $derived(groupByWorkspace(filteredSessions));
+  let grouped = $derived(
+    groupWorkbenchSessionsByType(filteredSessions, {
+      channelLabels: messages.channelLabels,
+      fallback: messages.untitledConversation,
+      labels: messages.sessionTypes,
+    }),
+  );
 
   function workspaceLabel(workspaceId: string) {
     return (
@@ -99,43 +108,7 @@
   function sessionScopeLabel(session: SessionRecord) {
     const scope = workbenchSessionScope(session);
     if (scope.kind === "workspace") return workspaceLabel(scope.workspaceId);
-    if (scope.kind === "daemon") {
-      const identity = daemonIdentityForWorkbenchSession(session);
-      return `${messages.daemonGroup} · ${identity?.label ?? scope.daemonId}`;
-    }
     return messages.unknownWorkspace;
-  }
-
-  function groupByWorkspace(items: SessionRecord[]) {
-    const map = new Map<
-      string,
-      { kind: "workspace" | "daemon"; label: string; sessions: SessionRecord[] }
-    >();
-    for (const session of items) {
-      const scope = workbenchSessionScope(session);
-      if (scope.kind === "unknown") continue;
-      const key =
-        scope.kind === "workspace"
-          ? `workspace:${scope.workspaceId}`
-          : `daemon:${scope.daemonId}`;
-      const current = map.get(key) ?? {
-        kind: scope.kind,
-        label: sessionScopeLabel(session),
-        sessions: [],
-      };
-      current.sessions.push(session);
-      map.set(key, current);
-    }
-    return [...map.entries()]
-      .map(([key, group]) => ({
-        key,
-        ...group,
-        sessions: orderWorkbenchSessionsByAttention(group.sessions),
-      }))
-      .sort((left, right) => {
-        if (left.kind !== right.kind) return left.kind === "workspace" ? -1 : 1;
-        return left.label.localeCompare(right.label);
-      });
   }
 
   function relative(value: string) {
@@ -156,7 +129,7 @@
 
   function sessionPresentation(session: SessionRecord) {
     return channelSessionPresentation(session, {
-      locale,
+      labels: messages.channelLabels,
       fallback: messages.untitledConversation,
     });
   }
@@ -167,43 +140,45 @@
 </script>
 
 <div class="session-rail">
-  <div class="new-session-actions">
-    {#if activeWorkspaceId}
-      {#if sessionsAvailable}
-        <a class="new-session" href="/sessions?new=workspace">
-          <Icon name="workspace" size={15} stroke={2.2} />
-          <span>{messages.workspaceConversation}</span>
-        </a>
-      {:else}
-        <span class="new-session disabled" aria-disabled="true">
-          <Icon name="workspace" size={15} stroke={2.2} />
-          <span>{messages.workspaceConversation}</span>
-        </span>
+  <div class="session-toolbar">
+    <div class="new-session-actions">
+      {#if activeWorkspaceId}
+        {#if sessionsAvailable}
+          <a
+            class="new-session"
+            href="/sessions?new=workspace"
+            aria-label={messages.workspaceConversation}
+            title={messages.workspaceConversation}
+          >
+            <Icon name="workspace" size={16} stroke={2.2} />
+            <span class="sr-only">{messages.workspaceConversation}</span>
+          </a>
+        {:else}
+          <span
+            class="new-session disabled"
+            role="link"
+            aria-disabled="true"
+            aria-label={messages.workspaceConversation}
+            title={messages.workspaceConversation}
+          >
+            <Icon name="workspace" size={16} stroke={2.2} />
+            <span class="sr-only">{messages.workspaceConversation}</span>
+          </span>
+        {/if}
       {/if}
-    {/if}
-    {#if sessionsAvailable}
-      <a class="new-session" href="/sessions?new=daemon">
-        <Icon name="spark" size={15} stroke={2.2} />
-        <span>{messages.daemonConversation}</span>
-      </a>
-    {:else}
-      <span class="new-session disabled" aria-disabled="true">
-        <Icon name="spark" size={15} stroke={2.2} />
-        <span>{messages.daemonConversation}</span>
-      </span>
-    {/if}
-  </div>
+    </div>
 
-  <label class="session-filter">
-    <Icon name="search" size={15} stroke={2.1} />
-    <input
-      bind:value={filter}
-      type="search"
-      aria-label={messages.searchPlaceholder}
-      placeholder={messages.searchPlaceholder}
-      disabled={!sessionsAvailable}
-    />
-  </label>
+    <label class="session-filter">
+      <Icon name="search" size={15} stroke={2.1} />
+      <input
+        bind:value={filter}
+        type="search"
+        aria-label={messages.searchPlaceholder}
+        placeholder={messages.searchPlaceholder}
+        disabled={!sessionsAvailable}
+      />
+    </label>
+  </div>
 
   {#if !sessionsAvailable}
     <div class="session-unavailable" role="status">
@@ -218,60 +193,67 @@
   {:else}
     <div class="session-groups" aria-label={messages.listLabel}>
       {#each grouped as group (group.key)}
-        <section class="session-group">
-          <h2>
+        <details class="session-group" open>
+          <summary>
             <span>{group.label}</span>
-            <span>{group.sessions.length}</span>
-          </h2>
-          {#each group.sessions as session}
-            {@const displayedStatus = displayedActivityStatus(session)}
-            {@const isSelected = session.sessionId === selectedSessionId}
-            {@const presentation = sessionPresentation(session)}
-            {@const canArchive = isSelected && session.status !== "archived" && !sessionHasChannelBinding(session)}
-            <div class="session-item-row">
-              <a
-                class="session-item"
-                class:active={isSelected}
-                class:has-action={canArchive}
-                aria-current={isSelected ? "page" : undefined}
-                href={`/sessions/${session.sessionId}`}
-              >
-                <span class="session-title-row">
-                  {#if presentation.channel}
-                    <ChannelSessionIcon
-                      adapter={presentation.channel.adapter}
-                      scope={presentation.channel.scope}
-                      label={presentation.channel.label}
-                    />
-                  {/if}
-                  <strong>{presentation.title}</strong>
-                  {#if displayedStatus}
-                    <span
-                      class="session-status {displayedStatus}"
-                      title={statusLabel(displayedStatus)}
+            <span class="group-meta">
+              <span class="group-count">{group.sessions.length}</span>
+              <span class="group-disclosure" aria-hidden="true">
+                <Icon name="chevron-down" size={13} stroke={2.3} />
+              </span>
+            </span>
+          </summary>
+          <div class="session-group-items">
+            {#each group.sessions as session}
+              {@const displayedStatus = displayedActivityStatus(session)}
+              {@const isSelected = session.sessionId === selectedSessionId}
+              {@const presentation = sessionPresentation(session)}
+              {@const canArchive = isSelected && session.status !== "archived" && !sessionHasChannelBinding(session)}
+              <div class="session-item-row">
+                <a
+                  class="session-item"
+                  class:active={isSelected}
+                  class:has-action={canArchive}
+                  aria-current={isSelected ? "page" : undefined}
+                  href={`/sessions/${session.sessionId}`}
+                >
+                  <span class="session-title-row">
+                    {#if presentation.channel}
+                      <ChannelSessionIcon
+                        adapter={presentation.channel.adapter}
+                        scope={presentation.channel.scope}
+                        label={presentation.channel.label}
+                      />
+                    {/if}
+                    <strong>{presentation.title}</strong>
+                    {#if displayedStatus}
+                      <span
+                        class="session-status {displayedStatus}"
+                        title={statusLabel(displayedStatus)}
+                      >
+                        <span aria-hidden="true"></span>
+                        <span>{statusLabel(displayedStatus)}</span>
+                      </span>
+                    {/if}
+                  </span>
+                  <small>{relative(session.activityUpdatedAt ?? session.updatedAt)}</small>
+                </a>
+                {#if canArchive}
+                  <form class="session-archive-form" method="POST" action="/sessions?/archiveSession">
+                    <input type="hidden" name="sessionId" value={session.sessionId} />
+                    <button
+                      type="submit"
+                      aria-label={`${messages.archiveSubmit}: ${sessionTitle(session)}`}
+                      title={messages.archiveSubmit}
                     >
-                      <span aria-hidden="true"></span>
-                      <span>{statusLabel(displayedStatus)}</span>
-                    </span>
-                  {/if}
-                </span>
-                <small>{relative(session.activityUpdatedAt ?? session.updatedAt)}</small>
-              </a>
-              {#if canArchive}
-                <form class="session-archive-form" method="POST" action="/sessions?/archiveSession">
-                  <input type="hidden" name="sessionId" value={session.sessionId} />
-                  <button
-                    type="submit"
-                    aria-label={`${messages.archiveSubmit}: ${sessionTitle(session)}`}
-                    title={messages.archiveSubmit}
-                  >
-                    <Icon name="archive" size={15} stroke={2.1} />
-                  </button>
-                </form>
-              {/if}
-            </div>
-          {/each}
-        </section>
+                      <Icon name="archive" size={15} stroke={2.1} />
+                    </button>
+                  </form>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </details>
       {/each}
     </div>
   {/if}
@@ -286,14 +268,17 @@
     min-height: 0;
   }
 
-  .new-session-actions {
-    display: grid;
-    gap: 4px;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .session-toolbar {
+    align-items: stretch;
+    display: flex;
+    gap: 6px;
+    min-width: 0;
   }
 
-  .new-session-actions > :only-child {
-    grid-column: 1 / -1;
+  .new-session-actions {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 4px;
   }
 
   .new-session {
@@ -305,16 +290,16 @@
     display: inline-flex;
     font-size: 13px;
     font-weight: 600;
-    gap: 6px;
     justify-content: center;
-    min-height: 40px;
-    padding: 0 8px;
+    height: 36px;
+    padding: 0;
     text-align: center;
     text-decoration: none;
     transition:
       background 120ms ease,
       border-color 120ms ease,
       color 120ms ease;
+    width: 36px;
   }
 
   .new-session:hover {
@@ -342,8 +327,10 @@
     border-radius: var(--rounded-md);
     color: var(--color-ink-subtle);
     display: flex;
+    flex: 1 1 auto;
     gap: 8px;
-    min-height: 40px;
+    min-height: 36px;
+    min-width: 0;
     padding: 0 10px;
     transition:
       background 120ms ease,
@@ -368,7 +355,8 @@
     color: inherit;
     font: inherit;
     font-size: 13px;
-    min-height: 38px;
+    min-height: 34px;
+    min-width: 0;
     outline: none;
     width: 100%;
   }
@@ -421,24 +409,50 @@
   }
 
   .session-group {
-    display: grid;
-    gap: 2px;
+    min-width: 0;
   }
 
-  .session-group h2 {
+  .session-group > summary {
     align-items: center;
+    border-radius: var(--rounded-sm);
     color: var(--color-ink-disabled);
+    cursor: pointer;
     display: flex;
     font-size: 11px;
     font-weight: 600;
     justify-content: space-between;
     letter-spacing: 0.06em;
-    margin: 0 0 4px 10px;
-    padding-right: 6px;
+    list-style: none;
+    margin: 0 4px 4px;
+    min-height: 28px;
+    padding: 0 4px 0 6px;
     text-transform: uppercase;
+    transition:
+      background 120ms ease,
+      color 120ms ease;
   }
 
-  .session-group h2 span:last-child {
+  .session-group > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .session-group > summary:hover {
+    background: var(--color-surface-soft);
+    color: var(--color-ink-subtle);
+  }
+
+  .session-group > summary:focus-visible {
+    box-shadow: var(--shadow-focus);
+    outline: none;
+  }
+
+  .group-meta {
+    align-items: center;
+    display: inline-flex;
+    gap: 3px;
+  }
+
+  .group-count {
     background: var(--color-surface-soft);
     border-radius: 999px;
     color: var(--color-ink-subtle);
@@ -448,6 +462,20 @@
     min-width: 18px;
     padding: 4px 6px;
     text-align: center;
+  }
+
+  .group-disclosure {
+    display: inline-flex;
+    transition: transform 120ms ease;
+  }
+
+  .session-group:not([open]) .group-disclosure {
+    transform: rotate(-90deg);
+  }
+
+  .session-group-items {
+    display: grid;
+    gap: 2px;
   }
 
   .session-item {
@@ -601,5 +629,15 @@
 
   .session-item.active small {
     color: color-mix(in srgb, var(--color-primary) 72%, var(--color-ink-subtle));
+  }
+
+  .sr-only {
+    clip: rect(0, 0, 0, 0);
+    clip-path: inset(50%);
+    height: 1px;
+    overflow: hidden;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
   }
 </style>

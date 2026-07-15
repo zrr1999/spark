@@ -1,4 +1,9 @@
 import { createChannelExternalKey, createDefaultChannelExternalKey } from "./external-key.ts";
+import type {
+  ChannelInteractionCapability,
+  ChannelInteractionEvent,
+  RoutedChannelInteractionEvent,
+} from "./interaction.ts";
 import { isQqbotInboundAllowed } from "./qqbot-policy.ts";
 import { createQqbotTransport } from "./qqbot-transport.ts";
 import type { QqbotNormalizedInbound } from "./qqbot-types.ts";
@@ -15,6 +20,7 @@ export interface QqbotAdapterOptions {
   config: QqbotAdapterConfig;
   transport?: ChannelTransport;
   onMessage?: (message: IncomingMessage) => void;
+  onInteraction?: (event: RoutedChannelInteractionEvent) => void | Promise<void>;
 }
 
 export class QqbotAdapter implements ChannelAdapter {
@@ -23,6 +29,7 @@ export class QqbotAdapter implements ChannelAdapter {
   readonly config: QqbotAdapterConfig;
   private readonly transport: ChannelTransport;
   private readonly onMessage?: (message: IncomingMessage) => void;
+  private readonly onInteraction?: (event: RoutedChannelInteractionEvent) => void | Promise<void>;
   private readonly seenMessages = new Map<string, number>();
   private running = false;
 
@@ -30,10 +37,15 @@ export class QqbotAdapter implements ChannelAdapter {
     return this.transport.reply;
   }
 
+  get interaction(): ChannelInteractionCapability | undefined {
+    return this.transport.interaction;
+  }
+
   constructor(options: QqbotAdapterOptions) {
     this.id = options.id;
     this.config = options.config;
     this.onMessage = options.onMessage;
+    this.onInteraction = options.onInteraction;
     this.transport = options.transport ?? createDefaultQqbotTransport(options.config);
   }
 
@@ -43,7 +55,10 @@ export class QqbotAdapter implements ChannelAdapter {
 
   async start(): Promise<void> {
     if (this.running) return;
-    await this.transport.start((raw) => this.handleInbound(raw));
+    await this.transport.start(
+      (raw) => this.handleInbound(raw),
+      (event) => this.handleInteraction(event),
+    );
     this.running = true;
   }
 
@@ -122,6 +137,19 @@ export class QqbotAdapter implements ChannelAdapter {
       this.onMessage?.(message);
     } catch (error) {
       console.error("[spark-channels] qqbot inbound parse failed", error);
+    }
+  }
+
+  private handleInteraction(event: ChannelInteractionEvent): void {
+    try {
+      const handled = this.onInteraction?.({ ...event, adapterId: this.id });
+      if (handled) {
+        void handled.catch((error: unknown) => {
+          console.error("[spark-channels] qqbot interaction handler failed", error);
+        });
+      }
+    } catch (error) {
+      console.error("[spark-channels] qqbot interaction handler failed", error);
     }
   }
 }

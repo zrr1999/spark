@@ -672,7 +672,7 @@ type TestSparkContext = {
   askAutoAnswer?: "reviewer";
   askAutoAnswerResolver?: (request: unknown, ctx: SparkToolContext) => Promise<unknown>;
   sparkActiveLens?: {
-    phase: "research" | "plan" | "implement";
+    phase: "plan" | "implement";
     mode?: "assist" | "loop" | "goal" | "workflow";
     drive?: "assist" | "loop" | "goal" | "workflow" | "interactive";
     driver?: "assist" | "loop" | "goal" | "workflow" | "interactive";
@@ -845,7 +845,7 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
     await workflowCommand.handler("builtin:research Compare design options", initializedCtx);
     assert.equal(initializedRun.customMessages.at(-1)?.customType, "spark-mode-request");
     assert.deepEqual(initializedCtx.sparkActiveLens, {
-      phase: "research",
+      phase: "plan",
       drive: "workflow",
     });
 
@@ -855,7 +855,7 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
     );
     assert.equal(initializedRun.customMessages.at(-1)?.customType, "spark-mode-request");
     assert.deepEqual(initializedCtx.sparkActiveLens, {
-      phase: "research",
+      phase: "plan",
       drive: "workflow",
     });
 
@@ -3893,10 +3893,10 @@ void test("Shift+Tab shortcut shows per-turn Spark mode hints without persisting
     assert.equal(shortcut.isActive?.(ctx), true);
 
     await executeSparkTool(run.tools, "impl_use_project", ctx, { project: "Tool persistence" });
-    assert.equal((await loadSparkMode(dir, ctx)).mode, "research");
+    assert.equal((await loadSparkMode(dir, ctx)).mode, "plan");
 
     await shortcut.handler(ctx);
-    assert.equal((await loadSparkMode(dir, ctx)).mode, "research");
+    assert.equal((await loadSparkMode(dir, ctx)).mode, "plan");
     assert.equal(ctx.editorText, "/plan ");
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
@@ -6120,7 +6120,7 @@ void test("split task tools dispatch read, write, and assign actions", async () 
     assert.match(toolText(claimed), /Claimed Spark task/);
 
     const todos = await executeSparkTool(tools, "task_write", ctx, {
-      action: "todo_update",
+      action: "plan_update",
       scope: "task",
       ops: [
         { op: "init", items: ["Validate canonical task action routing"] },
@@ -7903,6 +7903,11 @@ void test("phase tool returns requirements and persists session phase", async ()
     const status = await executeSparkTool(tools, "phase", ctx, { action: "status" });
     assert.deepEqual(status.details, { phase: "plan", statusOnly: true });
     assert.match(toolText(status), /Current phase: plan/);
+
+    await assert.rejects(
+      () => executeSparkTool(tools, "phase", ctx, { action: "research" }),
+      /phase action must be one of: plan, implement, status/u,
+    );
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -7926,7 +7931,7 @@ void test("drive tool derives mode and switches explicit foreground drives", asy
     });
     assert.match(toolText(reproStarted), /Drive started: repro/);
     assert.equal((await readSessionRepro(dir, ctx))?.status, "active");
-    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", drive: "repro" });
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "plan", drive: "repro" });
 
     const loopStarted = await executeSparkTool(tools, "drive", ctx, {
       action: "start",
@@ -7937,7 +7942,7 @@ void test("drive tool derives mode and switches explicit foreground drives", asy
     assert.equal((await loadSessionLoop(dir, ctx))?.status, "active");
     assert.equal(await loadSessionGoal(dir, ctx), undefined);
     assert.equal(await readSessionRepro(dir, ctx), undefined);
-    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", drive: "loop" });
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "plan", drive: "loop" });
 
     const goalSwitched = await executeSparkTool(tools, "drive", ctx, {
       action: "switch",
@@ -7947,13 +7952,13 @@ void test("drive tool derives mode and switches explicit foreground drives", asy
     assert.match(toolText(goalSwitched), /Drive switched: goal/);
     assert.equal((await loadSessionGoal(dir, ctx))?.status, "active");
     assert.equal(await loadSessionLoop(dir, ctx), undefined);
-    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", drive: "goal" });
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "plan", drive: "goal" });
 
     const stopped = await executeSparkTool(tools, "drive", ctx, { action: "stop", drive: "goal" });
     assert.match(toolText(stopped), /Drive stopped: goal/);
     assert.equal((stopped.details as { mode?: string }).mode, "assist");
     assert.equal(await loadSessionGoal(dir, ctx), undefined);
-    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", drive: "assist" });
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "plan", drive: "assist" });
 
     const workflow = await executeSparkTool(tools, "drive", ctx, {
       action: "start",
@@ -7978,7 +7983,7 @@ void test("/repro command starts, reports, and stops the repro drive", async () 
     await reproCommand.handler("start", ctx);
     const repro = await readSessionRepro(dir, ctx);
     assert.equal(repro?.status, "active");
-    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", drive: "repro" });
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "plan", drive: "repro" });
     assert.equal(run.customMessages.at(-1)?.customType, "spark-repro-request");
     assert.equal(run.customMessages.at(-1)?.details?.purpose, "foreground-repro-tick");
     assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
@@ -7990,7 +7995,7 @@ void test("/repro command starts, reports, and stops the repro drive", async () 
 
     await reproCommand.handler("stop", ctx);
     assert.equal(await readSessionRepro(dir, ctx), undefined);
-    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", drive: "assist" });
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "plan", drive: "assist" });
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -8011,7 +8016,7 @@ void test("/repro command treats non-action text as the repro objective", async 
     const repro = await readSessionRepro(dir, ctx);
     assert.equal(repro?.status, "active");
     assert.equal(repro?.objective, objective);
-    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", drive: "repro" });
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "plan", drive: "repro" });
     const message = run.customMessages.at(-1);
     assert.equal(message?.customType, "spark-repro-request");
     assert.equal(message?.details?.purpose, "foreground-repro-tick");
@@ -8048,7 +8053,7 @@ void test("foreground driver slash commands share status, stop, and restart gram
     assert.equal((await loadSessionGoal(dir, ctx))?.objective, "Replace foreground goal grammar");
     await goalCommand.handler("stop", ctx);
     assert.equal(await loadSessionGoal(dir, ctx), undefined);
-    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", drive: "assist" });
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "plan", drive: "assist" });
 
     await loopCommand.handler("Unify foreground loop grammar", ctx);
     assert.equal((await loadSessionLoop(dir, ctx))?.objective, "Unify foreground loop grammar");
@@ -8123,7 +8128,7 @@ void test("repro foreground driver ticks on session_start, reschedules on agent_
     timers[0]?.callback();
     await flushAsyncWork(() => isReproTick(run.customMessages.at(-1)));
     assert.equal(isReproTick(run.customMessages.at(-1)), true);
-    assert.deepEqual(ctx.sparkActiveLens, { phase: "research", drive: "repro" });
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "plan", drive: "repro" });
 
     const messagesAfterTick = run.customMessages.length;
     for (const handler of run.eventHandlers.get("agent_end") ?? []) {
@@ -12271,9 +12276,58 @@ void test("impl_plan_tasks keeps large plan output bounded", async () => {
   }
 });
 
-void test("session-scoped todo implementation is not registered", () => {
+void test("session-bound todo implementation is registered as impl_todo", () => {
   const { tools } = registerSparkToolsForTest();
   assert.equal(tools.has("impl_update_todos"), false);
+  assert.ok(tools.has("impl_todo"), "missing session-bound impl_todo tool");
+  assert.ok(tools.has("todo"), "missing public todo tool");
+});
+
+void test("todo tool tracks session-bound checklist independent of claimed tasks", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-session-todo-"));
+  try {
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+
+    const initial = await executeSparkTool(tools, "todo", ctx, { action: "list" });
+    assert.match(toolText(initial), /Session TODOs: 0 active/);
+
+    await executeSparkTool(tools, "todo", ctx, {
+      action: "init",
+      items: ["Draft the RFC", "Collect review feedback"],
+    });
+    const afterInit = await executeSparkTool(tools, "todo", ctx, { action: "list" });
+    const afterInitText = toolText(afterInit);
+    assert.match(afterInitText, /Session TODOs: 2 active/);
+    assert.match(afterInitText, /\[in_progress\].*Draft the RFC/);
+    assert.match(afterInitText, /\[pending\].*Collect review feedback/);
+
+    await executeSparkTool(tools, "todo", ctx, { action: "done", item: "Draft the RFC" });
+    const reloaded = await loadIndependentTodos(dir, ctx);
+    assert.deepEqual(
+      reloaded.map((todo) => [todo.content, todo.status]),
+      [
+        ["Draft the RFC", "done"],
+        ["Collect review feedback", "in_progress"],
+      ],
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("todo tool rejects unknown actions", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-session-todo-invalid-"));
+  try {
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+    await assert.rejects(
+      () => executeSparkTool(tools, "todo", ctx, { action: "finish" }),
+      /todo\.action must be one of/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 void test("spark todo tools reject invalid explicit ops without saving", async () => {

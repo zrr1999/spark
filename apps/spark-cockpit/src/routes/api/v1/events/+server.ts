@@ -5,12 +5,13 @@ import {
   loadEventBatch,
   serializeEventRow,
 } from "$lib/server/events";
-import { sweepStaleInvocations, sweepStaleRuntimeConnections } from "$lib/server/liveness";
+import { createLivenessSweepScheduler } from "$lib/server/liveness";
 import type { EventCursor } from "$lib/server/events";
 import type { RequestHandler } from "@sveltejs/kit";
 
 const encoder = new TextEncoder();
 const pollIntervalMs = 2_000;
+const sweepLivenessIfDue = createLivenessSweepScheduler();
 
 export const GET: RequestHandler = ({ request, url }) => {
   const db = getDatabase();
@@ -24,8 +25,7 @@ export const GET: RequestHandler = ({ request, url }) => {
         controller.enqueue(encoder.encode(encodeSseMessage(event, data, id)));
       };
       const flushEvents = () => {
-        sweepStaleRuntimeConnections(db);
-        sweepStaleInvocations(db);
+        sweepLivenessIfDue(db);
         const rows = loadEventBatch(db, cursor);
         for (const row of rows) {
           const serialized = serializeEventRow(row);

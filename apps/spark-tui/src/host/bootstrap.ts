@@ -12,13 +12,14 @@ import {
   renderAgentRuntimeContextPrompt,
 } from "@zendev-lab/spark-host/system-prompt";
 import { composeAgentSystemPrompt } from "@zendev-lab/spark-modes";
-
-import { renderSparkActiveSystemPrompt } from "../../../../packages/pi-extension/src/extension/spark-active-injection.ts";
-import { renderBaseSystemPromptsPrompt } from "../../../../packages/pi-extension/src/extension/spark-builtin-skills.ts";
-import { loadSparkMode } from "../../../../packages/pi-extension/src/extension/session-state.ts";
-import type { SparkSessionContext } from "../../../../packages/pi-extension/src/extension/session-identity.ts";
-import { createSparkRoleRegistry } from "../../../../packages/pi-extension/src/extension/spark-role-registry.ts";
-import { PiRolesReviewerRunner } from "../../../../packages/pi-extension/src/extension/reviewer-runner.ts";
+import {
+  PiRolesReviewerRunner,
+  createSparkRoleRegistry,
+  loadSparkMode,
+  renderBaseSystemPromptsPrompt,
+  renderSparkActiveSystemPrompt,
+  type SparkSessionContext,
+} from "@zendev-lab/pi-extension/host-support";
 import { SparkAgentLoop } from "./agent-loop.ts";
 import { SparkAuthStore, SparkProviderAuthResolver, defaultSparkAuthPath } from "./auth.ts";
 import {
@@ -84,6 +85,9 @@ export interface SparkCliHostServicesOptions {
   sparkHome?: string;
   sparkStateRoot?: string;
   sessionSurface?: "local" | "channel";
+  sessionSource?: "tui" | "web" | "channel" | "daemon" | "session";
+  invocationId?: string;
+  sessionQuestionChain?: readonly string[];
   allowedTools?: readonly string[];
   config?: SparkConfig;
   configPath?: string;
@@ -137,6 +141,9 @@ export async function createSparkCliHostServices(
     cwd,
     sparkStateRoot: options.sparkStateRoot,
     sessionSurface: options.sessionSurface,
+    sessionSource: options.sessionSource,
+    invocationId: options.invocationId,
+    sessionQuestionChain: options.sessionQuestionChain,
     allowedTools: options.allowedTools,
     hasUI: options.hasUI ?? false,
     ui: options.ui,

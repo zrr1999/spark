@@ -23,13 +23,16 @@ export function registerPiSessionTool(
     name: "session",
     label: "Session",
     description:
-      "Canonical persistent session capability. List and classify local/message-platform sessions, manage lifecycle and bindings, submit explicit persistent calls, or exchange durable session mail.",
+      "Canonical persistent session capability. List and classify local/message-platform sessions, manage lifecycle and bindings, submit persistent calls, or send durable requests and notifications.",
     promptGuidelines: [
       "Use role for reusable role definitions and anonymous calls; use session for persistent conversation continuity.",
-      "session list is paginated and labels each surface as local or channel; use surface and adapter filters, then continue with offset when total exceeds the returned page.",
-      "send/mailto append durable mail but never execute or wake the target session. Do not poll after sending.",
-      "Message-platform sessions may use only list/get/send/mailto/inbox/read/ack. Their list/get/send targets are restricted to local sessions in the current workspace; forward execution requests with session send.",
-      "inbox/read/ack are current-session-only.",
+      "session list is paginated and labels each surface as local or channel plus activity as idle or running; use surface, activity, and adapter filters, then continue with offset when total exceeds the returned page.",
+      "session send kind=notification persists and optionally delivers through channel bindings without triggering the target session.",
+      "session send kind=request persists and immediately submits one asynchronous turn to an idle or running local target.",
+      "session send kind=question persists, immediately submits to an idle local target, and waits up to timeoutMs for its terminal answer; timeout stops waiting but does not cancel the target invocation.",
+      "mailto is a compatibility alias for a notification. Replies use kind=notification with replyToMessageId.",
+      "Message-platform sessions may use only list/get/send/mailto/inbox/read/ack. Their list/get/send targets are restricted to the current workspace; requests require local targets, while notifications may target local or channel sessions.",
+      "inbox/read/ack are current-session-only; inbox supports offset/limit pagination.",
     ],
     parameters: Type.Object({
       action: Type.String({
@@ -54,6 +57,9 @@ export function registerPiSessionTool(
       surface: Type.Optional(
         Type.String({ description: "all | local | channel for list. Defaults to all." }),
       ),
+      activity: Type.Optional(
+        Type.String({ description: "all | idle | running for list. Defaults to all." }),
+      ),
       adapter: Type.Optional(
         Type.String({
           description: "all | feishu | infoflow | qqbot for list. Defaults to all.",
@@ -65,16 +71,26 @@ export function registerPiSessionTool(
       role: Type.Optional(Type.String({ description: "Optional role metadata for create." })),
       cwd: Type.Optional(Type.String({ description: "Optional working directory for create." })),
       externalKey: Type.Optional(Type.String()),
-      toSessionId: Type.Optional(Type.String()),
+      toSessionId: Type.Optional(
+        Type.String({ description: "Target session for send or mailto." }),
+      ),
       kind: Type.Optional(
-        Type.String({ description: "request | inform | reply for send/mailto." }),
+        Type.String({
+          description:
+            "request | question | notification. Request triggers asynchronously, question waits for a terminal answer, notification does not trigger. Defaults to notification.",
+        }),
+      ),
+      timeoutMs: Type.Optional(
+        Type.Number({ description: "Question wait timeout in milliseconds (1000-300000)." }),
       ),
       intent: Type.Optional(Type.String()),
       payload: Type.Optional(Type.Any()),
       correlationId: Type.Optional(Type.String()),
       replyToMessageId: Type.Optional(Type.String()),
       subject: Type.Optional(Type.String()),
-      message: Type.Optional(Type.String()),
+      message: Type.Optional(
+        Type.String({ description: "Durable message body for send or mailto." }),
+      ),
       messageId: Type.Optional(Type.String()),
       includeAcked: Type.Optional(Type.Boolean()),
     }),
@@ -83,8 +99,14 @@ export function registerPiSessionTool(
         [
           "session",
           typeof args.action === "string" ? `action=${args.action}` : "action=?",
-          typeof args.sessionId === "string" ? args.sessionId : undefined,
+          typeof args.toSessionId === "string"
+            ? `to=${args.toSessionId}`
+            : typeof args.sessionId === "string"
+              ? args.sessionId
+              : undefined,
+          typeof args.kind === "string" ? `kind=${args.kind}` : undefined,
           typeof args.surface === "string" ? `surface=${args.surface}` : undefined,
+          typeof args.activity === "string" ? `activity=${args.activity}` : undefined,
         ]
           .filter((value): value is string => Boolean(value))
           .join(" "),

@@ -1,4 +1,4 @@
-/** Active invocation registry shared by daemon queue and command routing. */
+/** Process-local abort handles for active remote command routing. */
 
 export interface SparkDaemonInvocationRecord {
   invocationId: string;
@@ -26,12 +26,17 @@ export type SparkDaemonSessionCancellationResult =
 export class SparkDaemonInvocationRegistry {
   private readonly active = new Map<string, TrackedInvocation>();
   private readonly activeSessions = new Map<string, Set<string>>();
+  private readonly idleWaiters = new Set<() => void>();
+  private accepting = true;
 
   start(input: {
     invocationId: string;
     kind: string;
     sessionId?: string | null;
   }): SparkDaemonInvocationHandle {
+    if (!this.accepting) {
+      throw new Error("Spark daemon is draining and cannot start a new direct invocation");
+    }
     if (this.active.has(input.invocationId)) {
       throw new Error(`Spark daemon invocation already active: ${input.invocationId}`);
     }
@@ -90,15 +95,45 @@ export class SparkDaemonInvocationRegistry {
     }));
   }
 
+  beginDrain(): number {
+    this.accepting = false;
+    return this.active.size;
+  }
+
+  get draining(): boolean {
+    return !this.accepting;
+  }
+
+  stop(reason = "Spark daemon stopped"): number {
+    this.accepting = false;
+    const active = [...this.active.values()];
+    for (const record of active) {
+      record.reason = reason;
+      record.controller.abort(reason);
+    }
+    return active.length;
+  }
+
+  waitForIdle(): Promise<void> {
+    if (this.active.size === 0) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this.idleWaiters.add(resolve);
+    });
+  }
+
   private finish(invocationId: string): void {
     const record = this.active.get(invocationId);
     if (!record) return;
     this.active.delete(invocationId);
-    if (!record.sessionId) return;
-    const sessions = this.activeSessions.get(record.sessionId);
-    if (!sessions) return;
-    sessions.delete(invocationId);
-    if (sessions.size === 0) this.activeSessions.delete(record.sessionId);
+    if (record.sessionId) {
+      const sessions = this.activeSessions.get(record.sessionId);
+      sessions?.delete(invocationId);
+      if (sessions?.size === 0) this.activeSessions.delete(record.sessionId);
+    }
+    if (this.active.size === 0) {
+      for (const resolve of this.idleWaiters) resolve();
+      this.idleWaiters.clear();
+    }
   }
 
   private handleFor(record: TrackedInvocation): SparkDaemonInvocationHandle {

@@ -18,7 +18,7 @@ void test("zellij subscribe control report records subscript fallback, capture, 
   assert.equal(daemonChecks.daemonRunningBefore, true);
   assert.equal(daemonChecks.daemonRunningAfter, true);
   assert.equal(daemonChecks.runtimeStable, true);
-  assert.equal(daemonChecks.queueCountersMonotonic, true);
+  assert.equal(daemonChecks.invocationTerminalCountsMonotonic, true);
   assert.equal(report.invariants.subscriptUnsupported, true);
   assert.equal(report.invariants.subscribeHelpWorks, true);
   assert.equal(report.invariants.subscribeCaptureNonEmpty, true);
@@ -27,7 +27,7 @@ void test("zellij subscribe control report records subscript fallback, capture, 
   assert.equal(report.invariants.daemonRunningBefore, true);
   assert.equal(report.invariants.daemonRunningAfter, true);
   assert.equal(report.invariants.daemonRuntimeStable, true);
-  assert.equal(report.invariants.daemonFailedQueueMonotonic, true);
+  assert.equal(report.invariants.daemonFailedInvocationsMonotonic, true);
 });
 
 async function loadReportOrFixture(): Promise<any> {
@@ -61,7 +61,7 @@ function fixtureReport(): any {
       daemonRunningBefore: true,
       daemonRunningAfter: true,
       daemonRuntimeStable: true,
-      daemonFailedQueueMonotonic: true,
+      daemonFailedInvocationsMonotonic: true,
     },
   };
 }
@@ -74,7 +74,7 @@ function fixtureDaemonStatus(failed: number): any {
       pid: 123,
       socketPath: "/tmp/spark-test.sock",
       startedAt: "2030-01-01T00:00:00.000Z",
-      queue: { inbox: 0, processed: 1, failed },
+      invocations: { queued: 0, running: 0, succeeded: 1, failed, cancelled: 0 },
       servers: [{ workspaceCount: 1, wsConnected: true }],
     },
   };

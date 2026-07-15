@@ -114,6 +114,7 @@ export function registerPiAskActionTool(
       "Canonical ask capability. Use action=ask for a structured user ask; action=flow forces the fullscreen multi-question ask_flow renderer. autoAnswer=reviewer is an explicit host-provided mode for reviewer-backed decisions; ordinary asks do not auto-answer.",
     promptGuidelines: [
       "Use ask as the canonical user-question tool instead of choosing between ask_user and ask_flow directly.",
+      "Use delivery=blocking when this turn cannot continue without the answer; use delivery=async to create an Inbox request and continue immediately.",
       "Ask only context-specific questions whose answers change the next action, plan, dependency, priority, or success criteria.",
       "Use freeform questions for notes/context; do not create business options named Other or Type your own.",
       "Do not set autoAnswer unless the active host policy explicitly asks for reviewer-backed decisions.",
@@ -129,6 +130,9 @@ export function registerPiAskActionTool(
       title: Type.Optional(Type.String()),
       mode: Type.Optional(
         Type.String({ description: "clarification | decision | approval | unblock" }),
+      ),
+      delivery: Type.Optional(
+        Type.String({ description: "blocking | async. Defaults to blocking." }),
       ),
       context: Type.Optional(Type.String()),
       flow: Type.Optional(Type.String({ description: "Stable flow identifier for ask_flow." })),
@@ -168,6 +172,9 @@ export function registerPiAskActionTool(
       const autoAnswer = normalizeAskAutoAnswerMode(
         params.autoAnswer ?? contextAutoAnswerMode(ctx),
       );
+      if (autoAnswer && params.delivery === "async") {
+        throw new Error("ask.autoAnswer cannot be combined with delivery=async");
+      }
       const target = selectAskTarget(action, params);
       const tool = options.resolveTool(target);
       if (!tool) throw new Error(`ask action adapter could not find ${target}`);

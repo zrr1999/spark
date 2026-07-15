@@ -6,19 +6,23 @@ export interface ContractDiagnostic {
   message: string;
 }
 
-export interface DaemonQueueCounters {
-  inbox: number;
-  processed: number;
+export interface DaemonInvocationCounts {
+  queued: number;
+  running: number;
+  succeeded: number;
   failed: number;
+  cancelled: number;
 }
 
 export interface DaemonStatusContract {
   running?: boolean;
   identity?: string;
+  observedAt?: string;
   workspaceCount?: number;
   serverUrl?: string;
   websocketState?: "connected" | "disconnected" | "missing";
-  queue?: DaemonQueueCounters;
+  invocations?: DaemonInvocationCounts;
+  invocationHealth?: { oldestQueuedAt?: string; oldestRunningAt?: string };
   diagnostics: ContractDiagnostic[];
 }
 
@@ -27,11 +31,11 @@ export interface DaemonStabilityChecks {
   daemonRunningAfter: boolean;
   runtimeStable: boolean;
   workspaceCountStable: boolean;
-  queueCountersMonotonic: boolean;
+  invocationTerminalCountsMonotonic: boolean;
   mismatches: string[];
 }
 
-export interface ServerStatusContract {
+export interface CockpitStatusContract {
   plane?: string;
   resource?: string;
   currentProjectRef?: string;
@@ -91,7 +95,13 @@ export function extractDaemonStatusContract(statusInput: unknown): DaemonStatusC
     });
   }
 
-  const queue = extractQueueCounters(daemon.queue, diagnostics, "daemon.queue");
+  const invocations = extractInvocationCounts(
+    daemon.invocations,
+    diagnostics,
+    "daemon.invocations",
+  );
+  const invocationHealth = extractInvocationHealth(daemon.invocationHealth);
+  const observedAt = readString(daemon, "observedAt");
   const servers = Array.isArray(daemon.servers) ? daemon.servers.filter(isRecord) : [];
   const workspaceCounts = servers
     .map((server) => readNumber(server, "workspaceCount"))
@@ -105,7 +115,9 @@ export function extractDaemonStatusContract(statusInput: unknown): DaemonStatusC
   const identity = daemonIdentity(daemon);
   return {
     ...(running === undefined ? {} : { running }),
-    ...(queue === undefined ? {} : { queue }),
+    ...(observedAt === undefined ? {} : { observedAt }),
+    ...(invocations === undefined ? {} : { invocations }),
+    ...(invocationHealth === undefined ? {} : { invocationHealth }),
     ...(workspaceCount === undefined ? {} : { workspaceCount }),
     ...(serverUrl === undefined ? {} : { serverUrl }),
     ...(websocketState === undefined ? {} : { websocketState }),
@@ -114,7 +126,7 @@ export function extractDaemonStatusContract(statusInput: unknown): DaemonStatusC
   };
 }
 
-export function extractServerStatusContract(statusInput: unknown): ServerStatusContract {
+export function extractCockpitStatusContract(statusInput: unknown): CockpitStatusContract {
   const diagnostics: ContractDiagnostic[] = [];
   const envelope = isRecord(statusInput) ? statusInput : undefined;
   const result = isRecord(envelope?.result) ? envelope.result : undefined;
@@ -122,16 +134,16 @@ export function extractServerStatusContract(statusInput: unknown): ServerStatusC
     diagnostics.push({
       path: "result",
       level: "fail",
-      message: "spark server status JSON must contain object field `result`.",
+      message: "spark cockpit status JSON must contain object field `result`.",
     });
     return { diagnostics };
   }
   const plane = readString(result, "plane");
-  if (plane !== "server") {
+  if (plane !== "cockpit") {
     diagnostics.push({
       path: "result.plane",
       level: "fail",
-      message: "spark server status JSON must report `result.plane` as `server`.",
+      message: "spark cockpit status JSON must report `result.plane` as `cockpit`.",
     });
   }
   const resource = readString(result, "resource");
@@ -139,7 +151,7 @@ export function extractServerStatusContract(statusInput: unknown): ServerStatusC
     diagnostics.push({
       path: "result.resource",
       level: "fail",
-      message: "spark server status JSON must report `result.resource` as `status`.",
+      message: "spark cockpit status JSON must report `result.resource` as `status`.",
     });
   }
   const taskCounts = isRecord(result.taskCounts) ? result.taskCounts : undefined;
@@ -147,7 +159,7 @@ export function extractServerStatusContract(statusInput: unknown): ServerStatusC
     diagnostics.push({
       path: "result.taskCounts",
       level: "fail",
-      message: "spark server status JSON must contain object field `result.taskCounts`.",
+      message: "spark cockpit status JSON must contain object field `result.taskCounts`.",
     });
   }
   const scope = isRecord(result.scope) ? result.scope : undefined;
@@ -155,7 +167,7 @@ export function extractServerStatusContract(statusInput: unknown): ServerStatusC
     diagnostics.push({
       path: "result.scope",
       level: "fail",
-      message: "spark server status JSON must contain object field `result.scope`.",
+      message: "spark cockpit status JSON must contain object field `result.scope`.",
     });
   } else {
     for (const key of [
@@ -168,7 +180,7 @@ export function extractServerStatusContract(statusInput: unknown): ServerStatusC
         diagnostics.push({
           path: `result.scope.${key}`,
           level: "fail",
-          message: `spark server status JSON must contain field \`result.scope.${key}\`.`,
+          message: `spark cockpit status JSON must contain field \`result.scope.${key}\`.`,
         });
       }
     }
@@ -199,9 +211,9 @@ export function evaluateDaemonStabilityChecks(
     before.identity && after.identity && before.identity === after.identity,
   );
   const workspaceCountStable = before.workspaceCount === after.workspaceCount;
-  const queueCountersMonotonic = ["inbox", "processed", "failed"].every((key) => {
-    const beforeValue = before.queue?.[key as keyof DaemonQueueCounters];
-    const afterValue = after.queue?.[key as keyof DaemonQueueCounters];
+  const invocationTerminalCountsMonotonic = ["succeeded", "failed", "cancelled"].every((key) => {
+    const beforeValue = before.invocations?.[key as keyof DaemonInvocationCounts];
+    const afterValue = after.invocations?.[key as keyof DaemonInvocationCounts];
     return beforeValue !== undefined && afterValue !== undefined && afterValue >= beforeValue;
   });
   for (const diagnostic of before.diagnostics) {
@@ -216,9 +228,9 @@ export function evaluateDaemonStabilityChecks(
   if (!runtimeStable) mismatches.push("Spark daemon identity changed across the harness run.");
   if (!workspaceCountStable)
     mismatches.push("Spark daemon workspaceCount changed across the harness run.");
-  if (!queueCountersMonotonic) {
+  if (!invocationTerminalCountsMonotonic) {
     mismatches.push(
-      "Spark daemon queue counters were missing or decreased across the harness run.",
+      "Spark daemon terminal invocation counters were missing or decreased across the harness run.",
     );
   }
   return {
@@ -226,7 +238,7 @@ export function evaluateDaemonStabilityChecks(
     daemonRunningAfter,
     runtimeStable,
     workspaceCountStable,
-    queueCountersMonotonic,
+    invocationTerminalCountsMonotonic,
     mismatches,
   };
 }
@@ -236,24 +248,27 @@ function readBoolean(record: Record<string, unknown>, key: string): boolean | un
   return typeof value === "boolean" ? value : undefined;
 }
 
-function extractQueueCounters(
+function extractInvocationCounts(
   value: unknown,
   diagnostics: ContractDiagnostic[],
   path: string,
-): DaemonQueueCounters | undefined {
+): DaemonInvocationCounts | undefined {
   if (!isRecord(value)) {
     diagnostics.push({
       path,
       level: "fail",
-      message: "spark daemon status JSON must contain object field `daemon.queue`.",
+      message: "spark daemon status JSON must contain object field `daemon.invocations`.",
     });
     return undefined;
   }
-  const inbox = readNumber(value, "inbox");
-  const processed = readNumber(value, "processed");
+  const queued = readNumber(value, "queued");
+  const running = readNumber(value, "running");
+  const succeeded = readNumber(value, "succeeded");
   const failed = readNumber(value, "failed");
-  for (const [key, counter] of Object.entries({ inbox, processed, failed })) {
-    if (counter === undefined) {
+  const cancelled = readNumber(value, "cancelled");
+  const counts = { queued, running, succeeded, failed, cancelled };
+  for (const [key, count] of Object.entries(counts)) {
+    if (count === undefined) {
       diagnostics.push({
         path: `${path}.${key}`,
         level: "fail",
@@ -261,8 +276,20 @@ function extractQueueCounters(
       });
     }
   }
-  if (inbox === undefined || processed === undefined || failed === undefined) return undefined;
-  return { inbox, processed, failed };
+  if (Object.values(counts).some((count) => count === undefined)) return undefined;
+  return counts as DaemonInvocationCounts;
+}
+
+function extractInvocationHealth(
+  value: unknown,
+): DaemonStatusContract["invocationHealth"] | undefined {
+  if (!isRecord(value)) return undefined;
+  const oldestQueuedAt = readString(value, "oldestQueuedAt");
+  const oldestRunningAt = readString(value, "oldestRunningAt");
+  return {
+    ...(oldestQueuedAt ? { oldestQueuedAt } : {}),
+    ...(oldestRunningAt ? { oldestRunningAt } : {}),
+  };
 }
 
 function deriveWebsocketState(

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 
 import {
   RoleRegistry,
@@ -73,6 +73,11 @@ import {
   saveCurrentProjectRef,
   sparkSessionOwnerKey,
 } from "../packages/pi-extension/src/extension/session-state.ts";
+
+after(async () => {
+  for (const run of listActiveRoleRuns()) cancelRoleRun(run.ref, "tasks-store suite cleanup");
+  await killActiveSparkRoleRunProcesses({ forceAfterMs: 0, waitMs: 1_000 });
+});
 
 function executionReadyPlan(objective: string): TaskPlan {
   return {
@@ -163,6 +168,24 @@ function testRoleRunResult(
     stderr: options.stderr ?? "",
     jsonEvents: options.jsonEvents ?? [],
   };
+}
+
+function waitForRoleAbort(input: SparkRoleInstructionExecutorInput): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    const rejectAbort = () => {
+      const reason = input.signal?.reason;
+      reject(reason instanceof Error ? reason : new Error(String(reason ?? "role run aborted")));
+    };
+    if (input.signal?.aborted) {
+      rejectAbort();
+      return;
+    }
+    input.signal?.addEventListener("abort", rejectAbort, { once: true });
+  });
+}
+
+function neverCompletingRoleExecutor(): Promise<never> {
+  return new Promise(() => undefined);
 }
 
 async function withWorkflowRunStore<T>(
@@ -2344,7 +2367,7 @@ void test("runSparkTask includes plan and a bounded active plan item preview in 
   }
 });
 
-void test("runSparkTask marks child timeout failed and clears the task claim", async () => {
+void test("runSparkTask marks native role timeout failed and clears the task claim", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-timeout-pi-"));
   try {
     const graph = new TaskGraph();
@@ -2363,6 +2386,7 @@ void test("runSparkTask marks child timeout failed and clears the task claim", a
       registry,
       cwd: dir,
       dryRun: false,
+      roleExecutor: neverCompletingRoleExecutor,
       timeoutMs: 1,
       claim: { sessionId: "session:parent" },
     });
@@ -2437,7 +2461,7 @@ void test("runSparkTask fails loudly when claim heartbeat persistence fails", as
   }
 });
 
-void test("timed-out Spark role-run process is cleaned up after task failure", async () => {
+void test("timed-out native Spark role run is cleaned up after task failure", async () => {
   const graph = new TaskGraph();
   const project = graph.createProject({ title: "Demo", description: "demo" });
   const task = graph.createTask({
@@ -2455,6 +2479,7 @@ void test("timed-out Spark role-run process is cleaned up after task failure", a
       registry: new RoleRegistry(),
       cwd: dir,
       dryRun: false,
+      roleExecutor: neverCompletingRoleExecutor,
       timeoutMs: 1,
       claim: { sessionId: "session:parent" },
     });
@@ -3752,6 +3777,7 @@ void test("runReadyTasks aborts launched child work when schedule hook fails", a
           ...createSparkRuntimeReadyTaskRunner({
             registry: new RoleRegistry(),
             cwd: dir,
+            roleExecutor: waitForRoleAbort,
           }),
           dryRun: false,
           timeoutMs: 5_000,
@@ -4459,7 +4485,7 @@ void test("runSparkTask attributes real project role spec run claims and complet
   }
 });
 
-void test("task timeout fails the task while cleaning up the stuck child process", async () => {
+void test("task timeout fails the task while clearing the stuck native role run", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-timeout-cleanup-"));
   try {
     const graph = new TaskGraph();
@@ -4476,6 +4502,7 @@ void test("task timeout fails the task while cleaning up the stuck child process
       ...createSparkRuntimeReadyTaskRunner({
         registry: new RoleRegistry(),
         cwd: dir,
+        roleExecutor: neverCompletingRoleExecutor,
       }),
       dryRun: false,
       maxConcurrency: 2,

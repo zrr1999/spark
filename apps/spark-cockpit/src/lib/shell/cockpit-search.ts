@@ -1,5 +1,5 @@
 import { workbenchSessionScope } from "../workbench-session-scope";
-import { formatChannelSessionTitle } from "../channel-session-title";
+import { formatChannelSessionTitle, type ChannelSessionLabels } from "../channel-session-title";
 
 export interface CockpitSearchSession {
   sessionId: string;
@@ -31,8 +31,8 @@ export function buildCockpitSearchResults(input: {
   query: string;
   sessions: CockpitSearchSession[];
   workspaces: CockpitSearchWorkspace[];
-  daemonGroupLabel: string;
   untitledConversationLabel: string;
+  channelLabels: ChannelSessionLabels;
   statusLabels: Record<string, string>;
   pages?: CockpitSearchResult[];
 }): CockpitSearchResult[] {
@@ -43,19 +43,11 @@ export function buildCockpitSearchResults(input: {
   const sessionResults = input.sessions
     .filter((session) => {
       const scope = workbenchSessionScope(session);
-      const workspace =
-        scope.kind === "workspace" ? workspaceById.get(scope.workspaceId) : undefined;
-      const scopeSearchText =
-        scope.kind === "daemon"
-          ? `${input.daemonGroupLabel} ${scope.daemonLabel ?? scope.daemonId}`
-          : "";
-      return [
-        session.sessionId,
-        session.title ?? "",
-        workspace?.name ?? "",
-        workspace?.slug ?? "",
-        scopeSearchText,
-      ]
+      // Cockpit search is workspace-scoped. Daemon-scoped conversations are
+      // owned by the session tool / TUI and are not surfaced here.
+      if (scope.kind !== "workspace") return false;
+      const workspace = workspaceById.get(scope.workspaceId);
+      return [session.sessionId, session.title ?? "", workspace?.name ?? "", workspace?.slug ?? ""]
         .join("\n")
         .toLowerCase()
         .includes(query);
@@ -70,14 +62,10 @@ export function buildCockpitSearchResults(input: {
         id: session.sessionId,
         type: "session",
         title: formatChannelSessionTitle(session.title, {
+          labels: input.channelLabels,
           fallback: input.untitledConversationLabel,
         }),
-        description:
-          scope.kind === "daemon"
-            ? `${input.daemonGroupLabel} · ${scope.daemonLabel ?? scope.daemonId}`
-            : workspace
-              ? workspace.name
-              : null,
+        description: workspace ? workspace.name : null,
         status: activityStatus,
         href: `/sessions/${session.sessionId}`,
       };

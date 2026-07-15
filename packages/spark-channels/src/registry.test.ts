@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createChannelExternalKey } from "./external-key.ts";
 import { FeishuAdapter } from "./feishu-adapter.ts";
 import { InfoflowAdapter } from "./infoflow-adapter.ts";
+import type { RoutedChannelInteractionEvent } from "./interaction.ts";
 import { ChannelRegistry, parseChannelsConfig } from "./registry.ts";
 import { FakeChannelTransport } from "./transport.ts";
 import type { ChannelAdapterConfig, ChannelsConfig, IncomingMessage } from "./types.ts";
@@ -250,6 +251,59 @@ describe("ChannelRegistry", () => {
       type: "infoflow",
       system_prompt: "如流自定义",
     });
+  });
+
+  it("routes native asks, callbacks, and acknowledgements through a separate capability", async () => {
+    const sendAsk = vi.fn(async () => ({ messageId: "ask-1" }));
+    const ackInteraction = vi.fn(async () => undefined);
+    const transport = new FakeChannelTransport({
+      interaction: { sendAsk, ackInteraction },
+    });
+    const interactions: RoutedChannelInteractionEvent[] = [];
+    const registry = new ChannelRegistry({
+      config: {
+        adapters: {
+          qq: { type: "qqbot", app_id: "app", client_secret: "secret" },
+        },
+        routes: {},
+        ingress: { enabled: true },
+      },
+      onInteraction: (event) => {
+        interactions.push(event);
+      },
+      createTransport: () => transport,
+    });
+    await registry.startAll();
+
+    const request = {
+      prompt: "继续吗？",
+      options: [{ label: "继续", data: "opaque-1" }],
+    };
+    await expect(registry.sendAsk("qq", "c2c:u1", request)).resolves.toEqual({
+      messageId: "ask-1",
+    });
+    expect(sendAsk).toHaveBeenCalledWith("c2c:u1", request);
+
+    await transport.emitInteraction({
+      adapter: "qqbot",
+      interactionId: "interaction-1",
+      actorId: "u1",
+      scene: "c2c",
+      recipient: "c2c:u1",
+      buttonData: "opaque-1",
+    });
+    expect(interactions).toMatchObject([
+      {
+        adapter: "qqbot",
+        adapterId: "qq",
+        interactionId: "interaction-1",
+        buttonData: "opaque-1",
+      },
+    ]);
+
+    await registry.ackInteraction("qq", "interaction-1", "duplicate");
+    expect(ackInteraction).toHaveBeenCalledWith("interaction-1", "duplicate");
+    await registry.stopAll();
   });
 });
 

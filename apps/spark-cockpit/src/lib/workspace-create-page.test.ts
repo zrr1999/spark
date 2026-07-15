@@ -58,6 +58,15 @@ describe("workspace creation page contract", () => {
     expect(source).toContain('form.registrationMode !== "token"');
   });
 
+  it("surfaces a registered-but-offline runtime instead of silently polling", () => {
+    const source = readFileSync(pagePath, "utf8");
+
+    expect(source).toContain("pendingRuntimeConnection = $derived(data.pendingRuntimeConnection)");
+    expect(source).toContain("{:else if pendingRuntimeConnection}");
+    expect(source).toContain("t.emptyWorkspace.stepActions.runtimeRegisteredOfflineTitle");
+    expect(source).toContain("pending.runtimeStatus");
+  });
+
   it("defaults form submissions to token while retaining the explicit device backend", () => {
     const source = readFileSync(pageServerPath, "utf8");
 

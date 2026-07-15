@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { getCockpitDictionary } from "@zendev-lab/spark-i18n";
 import { buildCockpitSearchResults } from "./cockpit-search";
 
 const baseInput = {
@@ -18,8 +19,8 @@ const baseInput = {
     },
   ],
   workspaces: [{ id: "ws_spore", slug: "spore", name: "Spore" }],
-  daemonGroupLabel: "Daemon",
   untitledConversationLabel: "Untitled",
+  channelLabels: getCockpitDictionary("en").sessions.channelLabels,
   statusLabels: { ready: "Ready", running: "Running" },
 };
 
@@ -34,13 +35,9 @@ describe("cockpit search", () => {
     ]);
   });
 
-  it("finds daemon conversations by daemon identity", () => {
-    expect(buildCockpitSearchResults({ ...baseInput, query: "local daemon" })).toEqual([
-      expect.objectContaining({
-        id: "sess_daemon",
-        description: "Daemon · Local daemon",
-      }),
-    ]);
+  it("never surfaces daemon-scoped conversations in the workspace-scoped search", () => {
+    expect(buildCockpitSearchResults({ ...baseInput, query: "global" })).toEqual([]);
+    expect(buildCockpitSearchResults({ ...baseInput, query: "local daemon" })).toEqual([]);
   });
 
   it("returns workspace links after conversation matches", () => {

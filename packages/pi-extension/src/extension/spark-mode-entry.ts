@@ -3,7 +3,6 @@ import {
   renderSparkImplementationModePrompt,
   renderSparkPhaseVisibleMessage,
   renderSparkPlanningModePrompt,
-  renderSparkResearchModePrompt,
 } from "./mode/index.ts";
 import { roadmapPlanningContext } from "../flows/roadmap-flow.ts";
 import {
@@ -65,31 +64,6 @@ export function dispatchSparkAgentInstruction(
   );
 }
 
-export async function enterSparkResearchMode(
-  piApi: SparkModeMessageApi,
-  deps: SparkModeEntryDeps,
-  ctx: SparkToolContext,
-  graph: TaskGraph,
-  focus?: string,
-): Promise<void> {
-  const project = await currentSparkProject(ctx.cwd, ctx, graph);
-  ctx.sparkActiveLens = sparkActiveLens("research", "assist");
-  if (project) await saveSparkPhase(ctx.cwd, ctx, { phase: "research", projectRef: project.ref });
-  else {
-    await saveSparkPhase(ctx.cwd, ctx, { phase: "research" });
-    await clearCurrentProjectRef(ctx.cwd, ctx);
-  }
-  await deps.refreshSparkWidget(ctx.cwd, ctx);
-  ctx.ui?.notify?.("Spark default research: investigate without changing tasks.", "info");
-  dispatchSparkAgentInstruction(
-    piApi,
-    deps,
-    ctx,
-    renderSparkResearchModePrompt(graph, project?.ref, focus),
-    renderSparkPhaseVisibleMessage("research", project?.title, focus),
-  );
-}
-
 export async function enterSparkPlanningMode(
   piApi: SparkModeMessageApi,
   deps: SparkModeEntryDeps,
@@ -108,7 +82,10 @@ export async function enterSparkPlanningMode(
   }
   if (roadmapResult?.mutated) await saveSparkGraphAndTodos(ctx.cwd, graph, ctx);
   await deps.refreshSparkWidget(ctx.cwd, ctx);
-  ctx.ui?.notify?.("Spark planning phase: research, clarify, and add projects/tasks.", "info");
+  ctx.ui?.notify?.(
+    "Spark plan phase: investigate, answer, and plan durable work when needed.",
+    "info",
+  );
   dispatchSparkAgentInstruction(
     piApi,
     deps,

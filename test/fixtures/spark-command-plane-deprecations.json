@@ -2,7 +2,7 @@
   {
     "legacy": "/tasks",
     "canonicalSlash": "/task list",
-    "canonicalCliTarget": "spark server task list",
+    "canonicalCliTarget": "spark cockpit task list",
     "status": "deprecated alias"
   },
   {
@@ -14,25 +14,25 @@
   {
     "legacy": "/workflow-runs",
     "canonicalSlash": "/workflow list",
-    "canonicalCliTarget": "spark server workflow list",
+    "canonicalCliTarget": "spark cockpit workflow list",
     "status": "deprecated alias"
   },
   {
     "legacy": "/workflow-pause",
     "canonicalSlash": "/workflow pause <run>",
-    "canonicalCliTarget": "spark server workflow pause <run>",
+    "canonicalCliTarget": "spark cockpit workflow pause <run>",
     "status": "deprecated alias"
   },
   {
     "legacy": "/workflow-resume",
     "canonicalSlash": "/workflow resume <run>",
-    "canonicalCliTarget": "spark server workflow resume <run>",
+    "canonicalCliTarget": "spark cockpit workflow resume <run>",
     "status": "deprecated alias"
   },
   {
     "legacy": "/workflow-stop",
     "canonicalSlash": "/workflow stop <run>",
-    "canonicalCliTarget": "spark server workflow stop <run>",
+    "canonicalCliTarget": "spark cockpit workflow stop <run>",
     "status": "deprecated alias"
   },
   {

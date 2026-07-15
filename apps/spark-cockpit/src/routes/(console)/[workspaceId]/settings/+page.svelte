@@ -71,7 +71,7 @@
 <style>
   .settings-page {
     display: grid;
-    gap: 18px;
+    gap: var(--spacing-lg);
     max-width: 960px;
     min-width: 0;
     width: 100%;
@@ -79,7 +79,7 @@
 
   .workspace-form {
     display: grid;
-    gap: 12px;
+    gap: var(--spacing-sm);
     grid-template-columns: minmax(0, 1fr) minmax(220px, 0.66fr);
   }
 
@@ -92,26 +92,26 @@
     align-items: center;
     border-top: 1px solid var(--color-border);
     display: flex;
-    gap: 12px;
+    gap: var(--spacing-sm);
     justify-content: space-between;
-    padding-top: 12px;
+    padding-top: var(--spacing-sm);
   }
 
   .workspace-meta {
     color: var(--color-ink-subtle);
     display: flex;
     flex-wrap: wrap;
-    font-size: 12px;
-    gap: 8px 14px;
+    font-size: var(--text-caption);
+    gap: var(--spacing-xs) var(--spacing-md);
   }
 
   .form-message {
     background: var(--color-warning-weak);
     border: 1px solid var(--color-warning-soft);
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     color: var(--color-warning-strong);
-    font-size: 13px;
-    padding: 12px;
+    font-size: var(--text-body);
+    padding: var(--spacing-sm);
   }
 
   @media (max-width: 640px) {

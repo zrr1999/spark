@@ -166,7 +166,7 @@
       var(--color-canvas);
     color: var(--color-ink);
     display: grid;
-    min-height: 100vh;
+    min-height: 100dvh;
     padding: clamp(18px, 5vw, 64px);
   }
 

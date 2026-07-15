@@ -114,7 +114,7 @@ export async function ensureSparkStateForActiveWorkspace(
 
 export function renderSparkActiveSystemPrompt(
   basePrompt: string,
-  phase: SparkSessionPhase = "research",
+  phase: SparkSessionPhase = "plan",
   language?: SparkLanguage,
 ): string {
   return renderSparkPhaseSystemPrompt({ basePrompt, phase, language });

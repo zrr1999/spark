@@ -166,7 +166,9 @@ export {
 export {
   SparkSkillResolver,
   defaultBuiltinSkillsDir,
+  defaultProjectAgentsSkillsDirs,
   defaultSparkSkillsRoot,
+  defaultUserAgentsSkillsDir,
   defaultUserSkillsDir,
   formatSparkSkillsForPrompt,
   loadMatchingSparkSkillsForPrompt,

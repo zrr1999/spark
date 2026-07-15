@@ -1,5 +1,5 @@
 import { error } from "@sveltejs/kit";
-import { loadWorkspaceDashboard } from "@zendev-lab/spark-server/cockpit-queries";
+import { loadWorkspaceDashboard } from "@zendev-lab/spark-coordination/cockpit-queries";
 import { getDatabase } from "$lib/server/db";
 import type { PageServerLoad } from "./$types";
 

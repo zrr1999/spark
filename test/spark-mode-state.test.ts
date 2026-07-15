@@ -24,10 +24,10 @@ async function withTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
   }
 }
 
-void test("loadSparkPhase defaults to research with no persisted state", async () => {
+void test("loadSparkPhase defaults to plan with no persisted state", async () => {
   await withTempDir(async (dir) => {
     const state = await loadSparkPhase(dir, undefined);
-    assert.deepEqual(state, { phase: "research" });
+    assert.deepEqual(state, { phase: "plan" });
   });
 });
 
@@ -38,6 +38,18 @@ void test("loadSparkPhase exposes current host active lens without changing pers
 
     assert.deepEqual(state, { phase: "implement" });
     assert.deepEqual(await loadSparkPhase(dir, undefined), { phase: "plan" });
+  });
+});
+
+void test("loadSparkPhase normalizes a legacy research active lens to plan", async () => {
+  await withTempDir(async (dir) => {
+    await saveSparkPhase(dir, undefined, { phase: "implement" });
+    const legacyContext = { sparkActiveLens: { phase: "research" } } as unknown as NonNullable<
+      Parameters<typeof loadSparkPhase>[1]
+    >;
+
+    assert.deepEqual(await loadSparkPhase(dir, legacyContext), { phase: "plan" });
+    assert.deepEqual(await loadSparkPhase(dir, undefined), { phase: "implement" });
   });
 });
 
@@ -101,15 +113,26 @@ void test("clearSparkPhase removes current project selection but preserves sessi
 void test("saveSparkPhase without projectRef preserves existing current project selection", async () => {
   await withTempDir(async (dir) => {
     const projectRef = "proj:test-clear-empty" as ProjectRef;
-    await saveSparkPhase(dir, undefined, { phase: "research", projectRef });
+    await saveSparkPhase(dir, undefined, { phase: "implement", projectRef });
     await saveSparkPhase(dir, undefined, { phase: "plan" });
     assert.deepEqual(await loadSparkPhase(dir, undefined), { phase: "plan", projectRef });
   });
 });
 
+void test("legacy persisted research phase normalizes one-way to plan", async () => {
+  await withTempDir(async (dir) => {
+    const statePath = join(dir, ".spark", "sessions", "session-ephemeral.json");
+    await mkdir(join(dir, ".spark", "sessions"), { recursive: true });
+    await writeFile(statePath, '{"version":1,"phase":"research"}\n', "utf8");
+
+    assert.deepEqual(await loadSparkPhase(dir, undefined), { phase: "plan" });
+    await saveSparkPhase(dir, undefined, { phase: "plan" });
+    assert.doesNotMatch(await readFile(statePath, "utf8"), /"phase": "research"/u);
+  });
+});
+
 void test("nextSparkSessionPhase walks the canonical cycle", () => {
-  assert.deepEqual(SPARK_SESSION_PHASE_CYCLE, ["research", "plan", "implement"]);
-  assert.equal(nextSparkSessionPhase("research"), "plan");
+  assert.deepEqual(SPARK_SESSION_PHASE_CYCLE, ["plan", "implement"]);
   assert.equal(nextSparkSessionPhase("plan"), "implement");
-  assert.equal(nextSparkSessionPhase("implement"), "research");
+  assert.equal(nextSparkSessionPhase("implement"), "plan");
 });

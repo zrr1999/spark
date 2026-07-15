@@ -262,18 +262,10 @@
 <style>
   .registration-page {
     display: grid;
-    gap: 18px;
+    gap: var(--spacing-lg);
     max-width: 1120px;
     min-width: 0;
     width: 100%;
-  }
-
-  .eyebrow {
-    color: var(--color-primary);
-    font-size: 12px;
-    font-weight: 800;
-    letter-spacing: 0;
-    margin: 0 0 8px;
   }
 
   h2,
@@ -380,7 +372,7 @@
 
   .device-commands pre {
     background: var(--color-ink);
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     color: var(--color-border);
     font-family: var(--font-mono);
     font-size: 12px;
@@ -396,7 +388,7 @@
   .loopback-warning {
     background: var(--color-warning-weak);
     border: 1px solid var(--color-warning-soft);
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     color: var(--color-warning-strong);
     font-size: 13px;
     line-height: 1.5;
@@ -445,7 +437,7 @@
 
   .table-heading span {
     background: var(--color-primary-weak);
-    border-radius: 999px;
+    border-radius: var(--rounded-full);
     color: var(--color-primary);
     font-size: 11px;
     font-weight: 800;
@@ -474,7 +466,7 @@
   .token-created,
   .form-message,
   .empty-state {
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     padding: 12px;
   }
 
@@ -493,7 +485,7 @@
 
   .token-created pre {
     background: var(--color-ink);
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     color: var(--color-border);
     font-size: 12px;
     line-height: 1.55;
@@ -506,7 +498,7 @@
   code {
     background: var(--color-surface-soft);
     border: 1px solid var(--color-border);
-    border-radius: 5px;
+    border-radius: var(--rounded-sm);
     color: var(--color-ink-muted);
     font-size: 0.92em;
     padding: 1px 5px;
@@ -521,7 +513,7 @@
 
   .token-table {
     border: 1px solid var(--color-border);
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     display: grid;
     overflow: hidden;
   }
@@ -656,7 +648,7 @@
 
   .status-pill {
     background: var(--color-primary-weak);
-    border-radius: 999px;
+    border-radius: var(--rounded-full);
     color: var(--color-primary);
     flex: 0 0 auto;
     font-size: 11px;
@@ -697,7 +689,7 @@
 
   .status-dot {
     background: var(--color-ink-disabled);
-    border-radius: 999px;
+    border-radius: var(--rounded-full);
     height: 9px;
     width: 9px;
   }

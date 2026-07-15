@@ -244,7 +244,7 @@ async function saveSessionGoalSnapshot(
   snapshot: SparkSessionGoalSnapshot,
 ): Promise<void> {
   await writeJsonFileAtomic(sessionGoalStorePath(cwd, ctx), snapshot);
-  await rebuildSessionIndex(cwd);
+  await rebuildSessionIndex(cwd, ctx);
 }
 
 function normalizeSessionGoal(

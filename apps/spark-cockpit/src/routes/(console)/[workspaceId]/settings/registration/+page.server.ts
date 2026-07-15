@@ -13,7 +13,7 @@ import {
   createRuntimeEnrollmentToken,
   revokeRuntimeEnrollmentToken,
 } from "$lib/server/runtime-registration";
-import { loadWorkspaceRegistrationPage } from "@zendev-lab/spark-server/cockpit-queries";
+import { loadWorkspaceRegistrationPage } from "@zendev-lab/spark-coordination/cockpit-queries";
 import { workspacePath } from "$lib/workspace-routes";
 import type { Actions, PageServerLoad } from "./$types";
 

@@ -505,7 +505,7 @@ void test("Spark extension refreshes SparkWidget after claim and TODO tools", as
     await executeTool(
       requireTool(tools, "task_write"),
       {
-        action: "todo_update",
+        action: "plan_update",
         scope: "task",
         ops: [
           { op: "init", items: ["First child TODO"] },

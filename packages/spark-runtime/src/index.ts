@@ -1162,6 +1162,13 @@ async function runNativeSparkRole(
     userStore: defaultUserRoleModelSettingsStore(),
   });
   const model = roleModel?.model ?? (options.sessionModel?.trim() || undefined);
+  let streamedEventCount = 0;
+  const onEvent = options.onRoleEvent
+    ? async (event: unknown) => {
+        streamedEventCount += 1;
+        await options.onRoleEvent?.(event);
+      }
+    : undefined;
   const result = await runRole({
     runRef: baseRecord.ref,
     roleRef: role.ref,
@@ -1178,10 +1185,13 @@ async function runNativeSparkRole(
     forkFromSession: options.forkFromSession,
     env: options.env,
     nativeExecutor: options.roleExecutor,
+    onEvent,
     noSession: options.launch !== "forked",
     onTimeout: () => undefined,
   });
-  for (const event of result.jsonEvents) void options.onRoleEvent?.(event);
+  if (streamedEventCount === 0) {
+    for (const event of result.jsonEvents) await options.onRoleEvent?.(event);
+  }
   return {
     record: {
       ...baseRecord,

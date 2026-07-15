@@ -1,8 +1,9 @@
 /** Persisted Spark agent session facade shared by TUI/daemon-style callers. */
 
 import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai";
+import { sparkTextPhaseFromSignature } from "@zendev-lab/spark-protocol";
 
-import { assistantMessageToText, type SparkCliHostServices } from "./bootstrap.ts";
+import type { SparkCliHostServices } from "./bootstrap.ts";
 import type {
   SparkBranchSummaryEntry,
   SparkCompactionEntry,
@@ -39,6 +40,7 @@ export class SparkAgentSession {
 
   async run(options: SparkAgentSessionRunOptions): Promise<SparkAgentSessionRunResult> {
     const record = await this.loadOrCreateRecord(options);
+    this.services.runtime.setSessionId(record.header.id);
     this.services.agentLoop.setViewSessionId(record.header.id);
     const priorMessages = sessionRecordToAgentMessages(record);
     this.services.agentLoop.replaceMessages(priorMessages);
@@ -65,13 +67,14 @@ export class SparkAgentSession {
       sessionId: record.header.id,
       sessionPath: record.path,
       newMessageCount: newMessages.length,
-      assistantText: assistantMessageToText(assistant),
+      assistantText: assistantMessageToFinalAnswerText(assistant),
       assistant,
       sessionPersistence: "persistent",
     };
   }
 
   async runAnonymous(options: SparkAgentSessionRunOptions): Promise<SparkAgentSessionRunResult> {
+    this.services.runtime.setSessionId(options.sessionId);
     this.services.agentLoop.setViewSessionId(options.sessionId);
     this.services.agentLoop.replaceMessages([]);
     const beforeCount = this.services.agentLoop.getMessages().length;
@@ -82,7 +85,7 @@ export class SparkAgentSession {
       sessionId: options.sessionId,
       sessionPath: "",
       newMessageCount: this.services.agentLoop.getMessages().slice(beforeCount).length,
-      assistantText: assistantMessageToText(assistant),
+      assistantText: assistantMessageToFinalAnswerText(assistant),
       assistant,
       sessionPersistence: "anonymous",
     };
@@ -99,6 +102,43 @@ export class SparkAgentSession {
     const existing = await this.services.sessionStore.findById(options.sessionId);
     return existing ?? this.services.sessionStore.createSession({ id: options.sessionId });
   }
+}
+
+/**
+ * Extract only display-safe answer prose from the terminal assistant message.
+ * Thinking, tool arguments, and signed commentary remain available in the
+ * structured session record but must never become a channel/static reply.
+ */
+export function assistantMessageToFinalAnswerText(message: {
+  content?: unknown;
+  stopReason?: unknown;
+}): string {
+  if (typeof message.content === "string") {
+    return message.stopReason === "toolUse" ? "" : message.content;
+  }
+  if (!Array.isArray(message.content)) return "";
+  let hasToolCall = false;
+  const textParts = message.content.flatMap((value): Array<{ text: string; phase?: string }> => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const part = value as Record<string, unknown>;
+    if (part.type === "toolCall" || part.type === "tool-call") hasToolCall = true;
+    if (part.type !== "text" || typeof part.text !== "string") return [];
+    const phase = sparkTextPhaseFromSignature(part.textSignature);
+    if (phase === "commentary") return [];
+    return [{ text: part.text, ...(phase ? { phase } : {}) }];
+  });
+  const explicitFinal = textParts.filter((part) => part.phase === "final_answer");
+  if (explicitFinal.length > 0) {
+    return explicitFinal
+      .map((part) => part.text)
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (message.stopReason === "toolUse" || hasToolCall) return "";
+  return textParts
+    .map((part) => part.text)
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function sessionRecordToAgentMessages(record: SparkSessionRecord): Message[] {

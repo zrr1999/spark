@@ -9,6 +9,7 @@ import {
 
 const nav: ConsoleNavLabels = {
   modelsProviders: "Models & providers",
+  invocationDiagnostics: "Invocation diagnostics",
   channels: "Message platforms",
   workspaceSettings: "Basics",
   registration: "Runtime registration",
@@ -36,7 +37,10 @@ describe("console nav", () => {
       ["workspace", "Workspace · Local"],
     ]);
     expect(result[0]?.items.map((item) => item.href)).toEqual(["/workspaces/new"]);
-    expect(result[1]?.items.map((item) => item.href)).toEqual(["/settings/models"]);
+    expect(result[1]?.items.map((item) => item.href)).toEqual([
+      "/settings/models",
+      "/settings/invocations",
+    ]);
     expect(result[2]?.items.map((item) => item.href)).toEqual([
       "/local/settings",
       "/local/settings/channels",
@@ -90,6 +94,9 @@ describe("console nav", () => {
     );
     expect(currentConsolePageLabel({ pathname: "/settings/models", nav })).toBe(
       "Models & providers",
+    );
+    expect(currentConsolePageLabel({ pathname: "/settings/invocations", nav })).toBe(
+      "Invocation diagnostics",
     );
     expect(currentConsolePageLabel({ pathname: "/workspaces/new", nav })).toBe("Create workspace");
     expect(currentConsolePageLabel({ pathname: "/local/settings", nav })).toBe("Basics");

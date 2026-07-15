@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { runtimeServerCommandKindOptions } from "../command-events.ts";
+import {
+  runtimeServerCommandKindOptions,
+  runtimeServerCommandSpecification,
+  sparkProtocolJsonObjectSchema,
+} from "../command-events.ts";
 import { isoDateTimeSchema, prefixedIdSchema } from "../refs.ts";
 import { runtimeEnvelopeFor, runtimeFeatureSchema } from "./envelope.ts";
 
@@ -161,6 +165,9 @@ export const workspaceSnapshotPayloadSchema = z.object({
 });
 
 export const commandKindSchema = z.enum(runtimeServerCommandKindOptions);
+export const runtimeServerCommandScopeSchema = z.enum(["daemon", "workspace"]);
+export const maxRuntimeCommandPayloadBytes = 64 * 1024;
+export const maxRuntimeCommandResultBytes = 64 * 1024;
 
 export const payloadRefSchema = z.object({
   url: z.string().min(1),
@@ -169,12 +176,27 @@ export const payloadRefSchema = z.object({
   sizeBytes: z.number().int().nonnegative().optional(),
 });
 
-export const serverCommandPayloadSchema = z.object({
-  kind: commandKindSchema,
-  title: z.string().min(1).optional(),
-  payload: jsonObjectSchema.optional(),
-  payloadRef: payloadRefSchema.optional(),
-});
+export const serverCommandPayloadSchema = z
+  .object({
+    kind: commandKindSchema,
+    scope: runtimeServerCommandScopeSchema.optional(),
+    title: z.string().min(1).optional(),
+    payload: sparkProtocolJsonObjectSchema.optional(),
+    payloadRef: payloadRefSchema.optional(),
+  })
+  .superRefine((command, context) => {
+    const specification = runtimeServerCommandSpecification(command.kind);
+    if (!specification || (command.scope && command.scope !== specification.scope)) {
+      context.addIssue({
+        code: "custom",
+        path: ["scope"],
+        message: `Command ${command.kind} must use ${specification?.scope ?? "a declared"} scope`,
+      });
+    }
+    validateBoundedPublicPayload(command.payload ?? {}, maxRuntimeCommandPayloadBytes, context, [
+      "payload",
+    ]);
+  });
 
 export const runtimeCommandAckPayloadSchema = z.object({
   accepted: z.literal(true),
@@ -184,9 +206,35 @@ export const runtimeCommandAckPayloadSchema = z.object({
 
 export const runtimeCommandRejectPayloadSchema = z.object({
   reasonCode: z.string().min(1),
-  message: z.string().min(1),
+  message: z.string().min(1).max(4_096),
   retryable: z.boolean().optional(),
 });
+
+export const runtimeCommandProjectionKindSchema = z.enum([
+  "daemon.status",
+  "workspace.snapshot",
+  "session.list",
+  "session.detail",
+  "model.catalog",
+  "channel.status",
+]);
+
+export const runtimeCommandResultPayloadSchema = z
+  .object({
+    status: z.enum(["succeeded", "failed"]),
+    result: sparkProtocolJsonObjectSchema.default({}),
+    projection: z
+      .object({
+        kind: runtimeCommandProjectionKindSchema,
+        data: sparkProtocolJsonObjectSchema,
+      })
+      .optional(),
+    completedAt: isoDateTimeSchema,
+    replayed: z.boolean().optional(),
+  })
+  .superRefine((result, context) => {
+    validateBoundedPublicPayload(result, maxRuntimeCommandResultBytes, context, []);
+  });
 
 export const humanQuestionOptionSchema = z.object({
   id: z.string().min(1),
@@ -206,6 +254,9 @@ export const humanRequestKindSchema = z.enum(["ask_user", "review", "approval", 
 
 export const humanRequestCreatedPayloadSchema = z.object({
   kind: humanRequestKindSchema,
+  delivery: z.enum(["blocking", "async"]).optional(),
+  interactionRequestId: z.string().min(1).optional(),
+  sessionId: z.string().min(1).optional(),
   toolCallId: z.string().min(1).optional(),
   title: z.string().min(1),
   prompt: z.string().min(1),
@@ -220,8 +271,23 @@ export const humanResponseDeliverPayloadSchema = z.object({
   responseArtifactRefs: z.array(artifactRefSchema).default([]),
 });
 
+/**
+ * A response accepted directly by the runtime from a channel surface or a
+ * daemon-owned cancellation. Unlike
+ * `human.response.deliver`, this is an already-committed fact and must not be
+ * delivered back to the runtime by the server.
+ */
+export const humanResponseRecordedPayloadSchema = humanResponseDeliverPayloadSchema.extend({
+  source: z.enum(["channel", "daemon"]),
+});
+
 export const humanResponseAckPayloadSchema = z.object({
   returnedToTool: z.boolean(),
+  outcome: z
+    .enum(["accepted", "replayed", "already_resolved", "orphaned", "unknown_request", "transient"])
+    .optional(),
+  retryable: z.boolean().optional(),
+  winnerResponseId: prefixedIdSchema("hres").optional(),
   message: z.string().optional(),
 });
 
@@ -276,6 +342,8 @@ export const invocationStatusSchema = z.enum([
 
 export const invocationUpdatePayloadSchema = z.object({
   runtimeInvocationId: prefixedIdSchema("inv"),
+  /** Durable per-invocation event sequence used for replay and dedupe when available. */
+  sequence: z.number().int().positive().optional(),
   taskRuntimeId: z.string().optional(),
   agentName: z.string().optional(),
   status: invocationStatusSchema,
@@ -377,23 +445,50 @@ export const workspaceSnapshotEnvelopeSchema = routedRuntimeEnvelopeFor(
   type: z.literal("workspace.snapshot"),
 });
 
-export const serverCommandEnvelopeSchema = routedRuntimeEnvelopeFor(
-  serverCommandPayloadSchema,
-).extend({
-  type: z.literal("server.command"),
-});
+export const serverCommandEnvelopeSchema = routedRuntimeEnvelopeFor(serverCommandPayloadSchema)
+  .extend({
+    type: z.literal("server.command"),
+  })
+  .superRefine((envelope, context) => {
+    const scope =
+      envelope.payload.scope ?? runtimeServerCommandSpecification(envelope.payload.kind)?.scope;
+    requireRouteField(envelope.runtimeId, "runtimeId", context);
+    requireRouteField(envelope.commandId, "commandId", context);
+    if (scope === "workspace") {
+      requireRouteField(envelope.workspaceBindingId, "workspaceBindingId", context);
+      requireRouteField(envelope.workspaceId, "workspaceId", context);
+    } else if (envelope.workspaceBindingId || envelope.workspaceId || envelope.projectId) {
+      context.addIssue({
+        code: "custom",
+        path: ["payload", "scope"],
+        message: "Daemon-scoped commands must not include workspace or project routing",
+      });
+    }
+  });
 
 export const runtimeCommandAckEnvelopeSchema = routedRuntimeEnvelopeFor(
   runtimeCommandAckPayloadSchema,
-).extend({
-  type: z.literal("runtime.command.ack"),
-});
+)
+  .extend({
+    type: z.literal("runtime.command.ack"),
+  })
+  .superRefine(requireCommandResponseRoute);
 
 export const runtimeCommandRejectEnvelopeSchema = routedRuntimeEnvelopeFor(
   runtimeCommandRejectPayloadSchema,
-).extend({
-  type: z.literal("runtime.command.reject"),
-});
+)
+  .extend({
+    type: z.literal("runtime.command.reject"),
+  })
+  .superRefine(requireCommandResponseRoute);
+
+export const runtimeCommandResultEnvelopeSchema = routedRuntimeEnvelopeFor(
+  runtimeCommandResultPayloadSchema,
+)
+  .extend({
+    type: z.literal("runtime.command.result"),
+  })
+  .superRefine(requireCommandResponseRoute);
 
 export const humanRequestCreatedEnvelopeSchema = routedRuntimeEnvelopeFor(
   humanRequestCreatedPayloadSchema,
@@ -405,6 +500,12 @@ export const humanResponseDeliverEnvelopeSchema = routedRuntimeEnvelopeFor(
   humanResponseDeliverPayloadSchema,
 ).extend({
   type: z.literal("human.response.deliver"),
+});
+
+export const humanResponseRecordedEnvelopeSchema = routedRuntimeEnvelopeFor(
+  humanResponseRecordedPayloadSchema,
+).extend({
+  type: z.literal("human.response.recorded"),
 });
 
 export const humanResponseAckEnvelopeSchema = routedRuntimeEnvelopeFor(
@@ -451,8 +552,10 @@ export const runtimeMessageEnvelopeSchema = z.discriminatedUnion("type", [
   serverCommandEnvelopeSchema,
   runtimeCommandAckEnvelopeSchema,
   runtimeCommandRejectEnvelopeSchema,
+  runtimeCommandResultEnvelopeSchema,
   humanRequestCreatedEnvelopeSchema,
   humanResponseDeliverEnvelopeSchema,
+  humanResponseRecordedEnvelopeSchema,
   humanResponseAckEnvelopeSchema,
   taskGraphSnapshotEnvelopeSchema,
   invocationUpdateEnvelopeSchema,
@@ -480,8 +583,11 @@ export type WorkspaceSnapshotPayload = z.infer<typeof workspaceSnapshotPayloadSc
 export type ServerCommandPayload = z.infer<typeof serverCommandPayloadSchema>;
 export type RuntimeCommandAckPayload = z.infer<typeof runtimeCommandAckPayloadSchema>;
 export type RuntimeCommandRejectPayload = z.infer<typeof runtimeCommandRejectPayloadSchema>;
+export type RuntimeCommandResultPayload = z.infer<typeof runtimeCommandResultPayloadSchema>;
+export type RuntimeCommandProjectionKind = z.infer<typeof runtimeCommandProjectionKindSchema>;
 export type HumanRequestCreatedPayload = z.infer<typeof humanRequestCreatedPayloadSchema>;
 export type HumanResponseDeliverPayload = z.infer<typeof humanResponseDeliverPayloadSchema>;
+export type HumanResponseRecordedPayload = z.infer<typeof humanResponseRecordedPayloadSchema>;
 export type HumanResponseAckPayload = z.infer<typeof humanResponseAckPayloadSchema>;
 export type TaskGraphSnapshotPayload = z.infer<typeof taskGraphSnapshotPayloadSchema>;
 export type InvocationUpdatePayload = z.infer<typeof invocationUpdatePayloadSchema>;
@@ -489,3 +595,91 @@ export type InvocationLogChunkStream = z.infer<typeof invocationLogChunkStreamSc
 export type InvocationLogChunkPayload = z.infer<typeof invocationLogChunkPayloadSchema>;
 export type DaemonEventPayload = z.infer<typeof daemonEventPayloadSchema>;
 export type ArtifactProjectionPayload = z.infer<typeof artifactProjectionPayloadSchema>;
+
+const sensitiveRuntimePayloadKeys = new Set([
+  "apikey",
+  "accesstoken",
+  "refreshtoken",
+  "runtimetoken",
+  "registrationtoken",
+  "devicecode",
+  "password",
+  "secret",
+  "clientsecret",
+  "credential",
+  "credentials",
+  "authorization",
+  "oauthcode",
+  "oauthresponse",
+]);
+
+function validateBoundedPublicPayload(
+  value: unknown,
+  maxBytes: number,
+  context: z.RefinementCtx,
+  path: Array<string | number>,
+): void {
+  const bytes = new TextEncoder().encode(JSON.stringify(value)).byteLength;
+  if (bytes > maxBytes) {
+    context.addIssue({
+      code: "custom",
+      path,
+      message: `Payload exceeds ${maxBytes} bytes`,
+    });
+  }
+  inspectPublicPayload(value, context, path);
+}
+
+function inspectPublicPayload(
+  value: unknown,
+  context: z.RefinementCtx,
+  path: Array<string | number>,
+): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => inspectPublicPayload(item, context, [...path, index]));
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+
+  const record = value as Record<string, unknown>;
+  if (typeof record.method === "string" && Object.hasOwn(record, "params")) {
+    context.addIssue({
+      code: "custom",
+      path,
+      message: "Arbitrary RPC method/params payloads are not allowed",
+    });
+  }
+  for (const [key, item] of Object.entries(record)) {
+    const normalizedKey = key.toLowerCase().replaceAll(/[^a-z0-9]/gu, "");
+    if (sensitiveRuntimePayloadKeys.has(normalizedKey)) {
+      context.addIssue({
+        code: "custom",
+        path: [...path, key],
+        message: "Secret-bearing payload fields are not allowed on durable runtime commands",
+      });
+      continue;
+    }
+    inspectPublicPayload(item, context, [...path, key]);
+  }
+}
+
+function requireCommandResponseRoute(
+  envelope: { runtimeId?: string | undefined; commandId?: string | undefined },
+  context: z.RefinementCtx,
+): void {
+  requireRouteField(envelope.runtimeId, "runtimeId", context);
+  requireRouteField(envelope.commandId, "commandId", context);
+}
+
+function requireRouteField(
+  value: string | undefined,
+  field: string,
+  context: z.RefinementCtx,
+): void {
+  if (value) return;
+  context.addIssue({
+    code: "custom",
+    path: [field],
+    message: `server.command requires ${field}`,
+  });
+}

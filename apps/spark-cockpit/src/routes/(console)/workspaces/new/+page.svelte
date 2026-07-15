@@ -69,6 +69,7 @@
     },
   );
   let targetRunnerBinding = $derived(data.targetRunnerBinding);
+  let pendingRuntimeConnection = $derived(data.pendingRuntimeConnection);
   let hasTargetWorkspaceBinding = $derived(Boolean(targetRunnerBinding));
   let workspaceCreationState = $derived(
     resolveWorkspaceCreationState<RegistrationCommand>({
@@ -245,28 +246,73 @@
   async function writeClipboardText(
     value: string,
   ): Promise<ClipboardWriteResult> {
-    if (!window.isSecureContext) {
-      return { ok: false, reason: "insecure-context" };
+    // Prefer the async Clipboard API, which is only exposed in secure contexts
+    // (HTTPS or localhost). Cockpit is frequently reached over plain HTTP on an
+    // internal host, where `navigator.clipboard` is undefined, so fall back to
+    // the legacy `execCommand("copy")` selection path before giving up.
+    if (window.isSecureContext && navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(value);
+        return { ok: true };
+      } catch (error) {
+        const fallback = copyWithExecCommand(value);
+        if (fallback.ok) return fallback;
+        const detail = error instanceof Error ? error.message : String(error);
+        const name = error instanceof Error ? error.name : "";
+        return {
+          ok: false,
+          reason:
+            name === "NotAllowedError" || name === "SecurityError"
+              ? "not-allowed"
+              : "write-failed",
+          detail,
+        };
+      }
     }
 
-    if (!navigator.clipboard?.writeText) {
-      return { ok: false, reason: "api-unavailable" };
-    }
+    return copyWithExecCommand(value);
+  }
 
+  function copyWithExecCommand(value: string): ClipboardWriteResult {
+    if (typeof document === "undefined") {
+      return { ok: false, reason: window.isSecureContext ? "api-unavailable" : "insecure-context" };
+    }
+    const textarea = document.createElement("textarea");
+    textarea.value = value;
+    // Keep the node out of the layout/scroll flow and away from screen readers
+    // while it is briefly selected for the copy command.
+    textarea.setAttribute("readonly", "");
+    textarea.setAttribute("aria-hidden", "true");
+    textarea.tabIndex = -1;
+    textarea.style.position = "fixed";
+    textarea.style.top = "0";
+    textarea.style.left = "0";
+    textarea.style.width = "1px";
+    textarea.style.height = "1px";
+    textarea.style.padding = "0";
+    textarea.style.opacity = "0";
+    const activeElement =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    document.body.appendChild(textarea);
     try {
-      await navigator.clipboard.writeText(value);
-      return { ok: true };
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      const name = error instanceof Error ? error.name : "";
+      textarea.focus();
+      textarea.select();
+      const copied = document.execCommand("copy");
+      if (copied) return { ok: true };
       return {
         ok: false,
-        reason:
-          name === "NotAllowedError" || name === "SecurityError"
-            ? "not-allowed"
-            : "write-failed",
+        reason: window.isSecureContext ? "write-failed" : "insecure-context",
+      };
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        reason: window.isSecureContext ? "write-failed" : "insecure-context",
         detail,
       };
+    } finally {
+      textarea.remove();
+      activeElement?.focus();
     }
   }
 
@@ -572,6 +618,24 @@
                   <span>{t.emptyWorkspace.form.submit}</span>
                 </Button>
               </form>
+            {:else if pendingRuntimeConnection}
+              {@const pending = pendingRuntimeConnection}
+              <div class="runtime-pending" role="status">
+                <p class="runtime-pending-title">
+                  {t.emptyWorkspace.stepActions.runtimeRegisteredOfflineTitle}
+                </p>
+                <p>{t.emptyWorkspace.stepActions.runtimeRegisteredOfflineBody}</p>
+                <dl class="runtime-pending-detail">
+                  <div>
+                    <dt>{t.emptyWorkspace.stepActions.runtimeRegisteredOfflineRuntimeLabel}</dt>
+                    <dd>{pending.runtimeName ?? pending.bindingDisplayName}</dd>
+                  </div>
+                  <div>
+                    <dt>{t.emptyWorkspace.stepActions.runtimeRegisteredOfflineStatusLabel}</dt>
+                    <dd><code>{pending.runtimeStatus}</code></dd>
+                  </div>
+                </dl>
+              </div>
             {:else}
               <p class="step-note">
                 {t.emptyWorkspace.stepActions.waitForWorkspace}
@@ -664,7 +728,7 @@
 
   .step-header > span {
     background: var(--color-primary);
-    border-radius: 999px;
+    border-radius: var(--rounded-full);
     color: var(--color-surface);
     display: grid;
     font-size: 12px;
@@ -726,6 +790,58 @@
     margin-top: 2px;
   }
 
+  .runtime-pending {
+    background: var(--color-warning-weak);
+    border: 1px solid var(--color-warning-soft);
+    border-radius: var(--rounded-md);
+    display: grid;
+    gap: 8px;
+    padding: 12px 14px;
+  }
+
+  .runtime-pending p {
+    color: var(--color-warning-strong);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .runtime-pending-title {
+    font-weight: 750;
+  }
+
+  .runtime-pending-detail {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+  }
+
+  .runtime-pending-detail > div {
+    align-items: baseline;
+    display: grid;
+    gap: 8px;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .runtime-pending-detail dt {
+    color: var(--color-ink-subtle);
+    font-size: 12px;
+    font-weight: 750;
+    margin: 0;
+  }
+
+  .runtime-pending-detail dd {
+    color: var(--color-ink);
+    font-size: 12px;
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .runtime-pending-detail code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+  }
+
   .token-created {
     display: grid;
     gap: 10px;
@@ -738,7 +854,7 @@
   .loopback-warning {
     background: var(--color-warning-weak);
     border: 1px solid var(--color-warning-soft);
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     color: var(--color-warning-strong);
     font-size: 12px;
     line-height: 1.5;
@@ -750,7 +866,7 @@
     align-items: stretch;
     background: var(--color-ink);
     border: 1px solid var(--color-code-surface-soft);
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     display: grid;
     gap: 0;
     grid-template-columns: minmax(0, 1fr) 84px;
@@ -843,7 +959,7 @@
     align-items: start;
     background: var(--color-canvas);
     border: 1px solid var(--color-border);
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     cursor: pointer;
     display: grid;
     min-height: 68px;
@@ -938,7 +1054,7 @@
   .form-message {
     background: var(--color-warning-weak);
     border: 1px solid var(--color-warning-soft);
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     color: var(--color-warning-strong);
     font-size: 13px;
     grid-column: 1 / -1;

@@ -8,7 +8,7 @@ import {
   runSparkDispatcher,
 } from "../apps/spark-cli/src/cli.ts";
 
-void test("parseSparkDispatcherArgs routes default, tui, daemon, server/cockpit, sessions, and print commands", () => {
+void test("parseSparkDispatcherArgs routes default, tui, daemon, cockpit, sessions, and print commands", () => {
   assert.deepEqual(parseSparkDispatcherArgs([]), {
     kind: "dispatch",
     target: "tui",
@@ -24,11 +24,9 @@ void test("parseSparkDispatcherArgs routes default, tui, daemon, server/cockpit,
     target: "daemon",
     argv: ["status", "--json"],
   });
-  assert.deepEqual(parseSparkDispatcherArgs(["server", "--port", "5174"]), {
-    kind: "dispatch",
-    target: "server",
-    argv: ["--port", "5174"],
-  });
+  const removedServer = parseSparkDispatcherArgs(["server", "status"]);
+  assert.equal(removedServer.kind, "error");
+  assert.match(removedServer.kind === "error" ? removedServer.message : "", /spark cockpit/u);
   assert.deepEqual(parseSparkDispatcherArgs(["cockpit", "--port", "5174"]), {
     kind: "dispatch",
     target: "cockpit",
@@ -82,10 +80,10 @@ void test("parseSparkDispatcherArgs routes default, tui, daemon, server/cockpit,
   });
 });
 
-void test("spark dispatcher help snapshots canonical daemon, server, and TUI planes", () => {
+void test("spark dispatcher help snapshots canonical daemon, Cockpit, and TUI surfaces", () => {
   const help = helpText();
   assert.match(help, /spark daemon\s+daemon execution plane/u);
-  assert.match(help, /spark server\s+server coordination plane/u);
+  assert.match(help, /spark cockpit\s+cross-daemon coordination and Web presentation host/u);
   assert.match(help, /spark tui\s+tui local control plane/u);
   assert.match(help, /Unknown subcommands fail loudly/u);
   assert.doesNotMatch(help, /spark daemon sessions list --all-workspaces/u);

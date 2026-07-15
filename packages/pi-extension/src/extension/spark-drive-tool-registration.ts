@@ -97,7 +97,7 @@ export function registerSparkDriveTool(
           // Stopping assist is a no-op; assist is the default when no foreground drive is active.
         }
         const after = await driveSnapshot(cwd, ctx, { ignoreActiveLens: true });
-        ctx.sparkActiveLens = sparkActiveLens(ctx.sparkActiveLens?.phase ?? "research", after.mode);
+        ctx.sparkActiveLens = sparkActiveLens(ctx.sparkActiveLens?.phase ?? "plan", after.mode);
         await deps.refreshSparkWidget?.(cwd, ctx);
         return driveMutationResult("stopped", stoppedDrive, after, project);
       }
@@ -155,10 +155,10 @@ export function registerSparkDriveTool(
 function activeLensPhaseForDrive(
   ctx: SparkToolContext,
   snapshot: { mode: SparkDriveMode; repro: Awaited<ReturnType<typeof readSessionRepro>> },
-): "research" | "plan" | "implement" {
+): "plan" | "implement" {
   if (snapshot.mode === "repro" && snapshot.repro?.status === "active")
     return snapshot.repro.currentPhase;
-  return ctx.sparkActiveLens?.phase ?? "research";
+  return ctx.sparkActiveLens?.phase ?? "plan";
 }
 
 function normalizeDriveAction(value: unknown): "status" | "start" | "switch" | "stop" {

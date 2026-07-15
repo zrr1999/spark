@@ -1138,8 +1138,8 @@ export function createSparkNativeLocalControlSlashCommands(): SparkNativeSlashCo
       extensionId: SPARK_NATIVE_LOCAL_CONTROL_EXTENSION_ID,
       plane: canonicalCliTarget.startsWith("spark daemon")
         ? "daemon"
-        : canonicalCliTarget.startsWith("spark server")
-          ? "server"
+        : canonicalCliTarget.startsWith("spark cockpit")
+          ? "cockpit"
           : "tui",
       resource,
       verbs: ["list", "open"],
@@ -1188,10 +1188,10 @@ export function createSparkNativeLocalControlSlashCommands(): SparkNativeSlashCo
       metadata: {
         source: "extension",
         extensionId: SPARK_NATIVE_LOCAL_CONTROL_EXTENSION_ID,
-        plane: "server",
+        plane: "cockpit",
         resource: "status",
         verbs: ["open"],
-        canonicalCliTarget: "spark server status",
+        canonicalCliTarget: "spark cockpit status",
       },
       getArgumentCompletions: (prefix) =>
         ["overview", "workflows", "runs", "tasks", "artifacts", "reviews", "graft", "off"]
@@ -1199,17 +1199,17 @@ export function createSparkNativeLocalControlSlashCommands(): SparkNativeSlashCo
           .map((value) => ({ value, label: value })),
       handler: (args, ctx) => ctx.app.openCockpitPanelFromArgs(args) || undefined,
     },
-    workflows: panelCommand("workflows", "spark server workflow list", "workflow"),
+    workflows: panelCommand("workflows", "spark cockpit workflow list", "workflow"),
     runs: panelCommand("runs", "spark daemon run list", "run"),
     run: panelCommand("runs", "spark daemon run list", "run"),
-    tasks: panelCommand("tasks", "spark server task list", "task"),
-    task: panelCommand("tasks", "spark server task list", "task"),
-    artifacts: panelCommand("artifacts", "spark server artifact list", "artifact"),
-    artifact: panelCommand("artifacts", "spark server artifact list", "artifact"),
-    evidence: panelCommand("artifacts", "spark server artifact list", "artifact"),
-    reviews: panelCommand("reviews", "spark server review list", "review"),
-    review: panelCommand("reviews", "spark server review list", "review"),
-    graft: panelCommand("graft", "spark server status", "graft"),
+    tasks: panelCommand("tasks", "spark cockpit task list", "task"),
+    task: panelCommand("tasks", "spark cockpit task list", "task"),
+    artifacts: panelCommand("artifacts", "spark cockpit artifact list", "artifact"),
+    artifact: panelCommand("artifacts", "spark cockpit artifact list", "artifact"),
+    evidence: panelCommand("artifacts", "spark cockpit artifact list", "artifact"),
+    reviews: panelCommand("reviews", "spark cockpit review list", "review"),
+    review: panelCommand("reviews", "spark cockpit review list", "review"),
+    graft: panelCommand("graft", "spark cockpit status", "graft"),
   };
 }
 

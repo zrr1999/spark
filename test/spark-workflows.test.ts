@@ -177,7 +177,7 @@ void test("spark-workflows lists and reads builtin workflows without frontmatter
   );
   assert.deepEqual(
     listing.workflows.map((workflow) => workflow.mode),
-    ["research", "research"],
+    ["plan", "plan"],
   );
 
   const { descriptor, script } = await readSavedWorkflow({
@@ -186,7 +186,7 @@ void test("spark-workflows lists and reads builtin workflows without frontmatter
     includeUser: false,
   });
   assert.equal(descriptor.source, "builtin");
-  assert.equal(descriptor.mode, "research");
+  assert.equal(descriptor.mode, "plan");
   assert.equal(descriptor.path, "builtin:research");
   assert.deepEqual(descriptor.stages, ["Plan", "Search", "Fetch", "Verify", "Report"]);
   assert.deepEqual(descriptor.phases, ["Plan", "Search", "Fetch", "Verify", "Report"]);
@@ -212,7 +212,7 @@ void test("spark-workflows research builtin fans out with collected errors and r
     includeUser: false,
   });
   assert.equal(descriptor.source, "builtin");
-  assert.equal(descriptor.mode, "research");
+  assert.equal(descriptor.mode, "plan");
   assert.deepEqual(descriptor.stages, ["Plan", "Search", "Fetch", "Verify", "Report"]);
   assert.deepEqual(descriptor.phases, ["Plan", "Search", "Fetch", "Verify", "Report"]);
 

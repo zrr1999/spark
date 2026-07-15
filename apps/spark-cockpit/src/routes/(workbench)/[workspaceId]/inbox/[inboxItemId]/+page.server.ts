@@ -5,12 +5,12 @@ import {
   buildApprovalDeliveryCommandPayload,
   describeApprovalCenterItem,
   type ApprovalDecision,
-} from "@zendev-lab/spark-server/approval-center";
+} from "@zendev-lab/spark-coordination/approval-center";
 import {
   getCurrentUserIdBySessionToken,
   loadInboxDetailPage,
-  type HumanQuestion,
-} from "@zendev-lab/spark-server/cockpit-queries";
+} from "@zendev-lab/spark-coordination/cockpit-queries";
+import { parseHumanQuestions } from "$lib/pending-ask";
 import { submitServerCommand } from "$lib/server/command-submission";
 import { getDatabase } from "$lib/server/db";
 import { formText, formTextList } from "$lib/server/form-data";
@@ -25,7 +25,7 @@ export const load: PageServerLoad = ({ params }) => {
   return {
     item: {
       ...page.detail,
-      questions: parseQuestions(page.detail.questionsJson),
+      questions: parseHumanQuestions(page.detail.questionsJson),
       context,
       approval: describeApprovalCenterItem({
         requestKind: page.detail.requestKind,
@@ -50,9 +50,12 @@ export const actions: Actions = {
     const db = getDatabase();
     const page = loadInboxDetailPage(db, params.workspaceId, params.inboxItemId);
     if (!page) throw kitError(404, "Inbox item not found");
-    const { workspace, detail } = page;
+    const { workspace, detail, latestResponses } = page;
 
     if (detail.status !== "pending" || detail.requestStatus !== "pending") {
+      return fail(409, { message: t.alreadyResolved });
+    }
+    if (hasPendingHumanResponse(latestResponses)) {
       return fail(409, { message: t.alreadyResolved });
     }
 
@@ -106,22 +109,25 @@ export const actions: Actions = {
       cookieLocale: cookies.get(localeCookieName),
       acceptLanguage: request.headers.get("accept-language"),
     }).inboxDetail.formMessages;
+    const formData = await request.formData();
     const db = getDatabase();
     const page = loadInboxDetailPage(db, params.workspaceId, params.inboxItemId);
     if (!page) throw kitError(404, "Inbox item not found");
-    const { workspace, detail } = page;
+    const { workspace, detail, latestResponses } = page;
 
     if (detail.status !== "pending" || detail.requestStatus !== "pending") {
       return fail(409, { message: t.alreadyResolved });
     }
+    if (hasPendingHumanResponse(latestResponses)) {
+      return fail(409, { message: t.alreadyResolved });
+    }
 
-    const formData = await request.formData();
     const status = formText(formData, "status", "answered");
     if (status !== "answered" && status !== "cancelled" && status !== "archived") {
       return fail(400, { message: t.unsupportedStatus });
     }
 
-    const questions = parseQuestions(detail.questionsJson);
+    const questions = parseHumanQuestions(detail.questionsJson);
     const answers: Record<string, unknown> = {};
     const missingRequired = [];
 
@@ -184,32 +190,15 @@ export const actions: Actions = {
   },
 };
 
-function parseQuestions(value: string): HumanQuestion[] {
-  const parsed = JSON.parse(value) as unknown;
-  if (!Array.isArray(parsed)) {
-    return [];
-  }
-  return parsed.filter(isHumanQuestion);
-}
-
-function isHumanQuestion(value: unknown): value is HumanQuestion {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as { id?: unknown; type?: unknown; prompt?: unknown };
-  return (
-    typeof candidate.id === "string" &&
-    typeof candidate.prompt === "string" &&
-    (candidate.type === "single" ||
-      candidate.type === "multi" ||
-      candidate.type === "freeform" ||
-      candidate.type === "preview")
-  );
-}
-
 function parseJsonObject(value: string): Record<string, unknown> {
   const parsed = JSON.parse(value) as unknown;
   return parsed && typeof parsed === "object" && !Array.isArray(parsed)
     ? (parsed as Record<string, unknown>)
     : {};
+}
+
+function hasPendingHumanResponse(responses: Array<{ status: string }>): boolean {
+  return responses.some(
+    (response) => response.status === "recorded" || response.status === "delivering",
+  );
 }

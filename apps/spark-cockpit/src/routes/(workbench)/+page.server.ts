@@ -1,5 +1,5 @@
 import { redirect } from "@sveltejs/kit";
-import { loadWorkbenchHome } from "@zendev-lab/spark-server/cockpit-queries";
+import { loadWorkbenchHome } from "@zendev-lab/spark-coordination/cockpit-queries";
 import { getDatabase } from "$lib/server/db";
 import type { PageServerLoad } from "./$types";
 

@@ -1,0 +1,80 @@
+[
+  {
+    "protocolVersion": "spark.runtime.v1alpha1",
+    "messageId": "msg_10000000000000000000000000000000",
+    "type": "server.command",
+    "sentAt": "2026-07-15T00:00:00.000Z",
+    "runtimeId": "rt_10000000000000000000000000000000",
+    "commandId": "cmd_10000000000000000000000000000000",
+    "idempotencyKey": "idem_10000000000000000000000000000000",
+    "payload": {
+      "kind": "daemon.status.request",
+      "scope": "daemon"
+    }
+  },
+  {
+    "protocolVersion": "spark.runtime.v1alpha1",
+    "messageId": "msg_20000000000000000000000000000000",
+    "type": "server.command",
+    "sentAt": "2026-07-15T00:00:01.000Z",
+    "runtimeId": "rt_10000000000000000000000000000000",
+    "workspaceBindingId": "rtwb_20000000000000000000000000000000",
+    "workspaceId": "ws_20000000000000000000000000000000",
+    "commandId": "cmd_20000000000000000000000000000000",
+    "payload": {
+      "kind": "workspace.snapshot.request",
+      "scope": "workspace"
+    }
+  },
+  {
+    "protocolVersion": "spark.runtime.v1alpha1",
+    "messageId": "msg_30000000000000000000000000000000",
+    "type": "runtime.command.ack",
+    "sentAt": "2026-07-15T00:00:02.000Z",
+    "runtimeId": "rt_10000000000000000000000000000000",
+    "commandId": "cmd_10000000000000000000000000000000",
+    "ackOf": "msg_10000000000000000000000000000000",
+    "payload": {
+      "accepted": true
+    }
+  },
+  {
+    "protocolVersion": "spark.runtime.v1alpha1",
+    "messageId": "msg_40000000000000000000000000000000",
+    "type": "runtime.command.reject",
+    "sentAt": "2026-07-15T00:00:03.000Z",
+    "runtimeId": "rt_10000000000000000000000000000000",
+    "workspaceBindingId": "rtwb_20000000000000000000000000000000",
+    "workspaceId": "ws_20000000000000000000000000000000",
+    "commandId": "cmd_20000000000000000000000000000000",
+    "ackOf": "msg_20000000000000000000000000000000",
+    "payload": {
+      "reasonCode": "WORKSPACE_BORROWED",
+      "message": "Workspace is snapshot-only while borrowed.",
+      "retryable": true
+    }
+  },
+  {
+    "protocolVersion": "spark.runtime.v1alpha1",
+    "messageId": "msg_50000000000000000000000000000000",
+    "type": "runtime.command.result",
+    "sentAt": "2026-07-15T00:00:04.000Z",
+    "runtimeId": "rt_10000000000000000000000000000000",
+    "commandId": "cmd_10000000000000000000000000000000",
+    "ackOf": "msg_10000000000000000000000000000000",
+    "payload": {
+      "status": "succeeded",
+      "result": {
+        "workspaceCount": 1,
+        "activeInvocationCount": 0
+      },
+      "projection": {
+        "kind": "daemon.status",
+        "data": {
+          "online": true
+        }
+      },
+      "completedAt": "2026-07-15T00:00:04.000Z"
+    }
+  }
+]

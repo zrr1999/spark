@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { configureCockpitPublicUrl } from "../src/lib/server/public-url.js";
-import { getDatabase } from "../src/lib/server/db.js";
+import { closeDatabase, getDatabase } from "../src/lib/server/db.js";
 import { isRemoteAccessConfigured } from "../src/lib/server/remote-access.js";
 import { attachRuntimeWebSocket, authenticateRuntimeToken } from "../src/lib/server/runtime-ws.js";
 import { startWebPushEventDispatcher } from "../src/lib/server/web-push.js";
@@ -44,7 +44,26 @@ server.on("upgrade", (request, socket, head) => {
 });
 
 const stopWebPushDispatcher = startWebPushEventDispatcher({ db: getDatabase() });
-server.on("close", () => stopWebPushDispatcher());
+server.on("close", () => {
+  stopWebPushDispatcher();
+  closeDatabase();
+});
+
+let shuttingDown = false;
+const requestShutdown = () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  for (const client of wss.clients) client.terminate();
+  wss.close();
+  server.close();
+};
+process.once("SIGINT", requestShutdown);
+process.once("SIGTERM", requestShutdown);
+server.on("error", () => {
+  process.exitCode = 1;
+  stopWebPushDispatcher();
+  closeDatabase();
+});
 
 server.listen(port, host, () => {
   console.log(`Spark Cockpit server listening on http://${host}:${port}`);

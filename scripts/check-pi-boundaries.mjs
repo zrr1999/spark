@@ -7,7 +7,7 @@ const root = (process.env.SPARK_BOUNDARY_ROOT ?? new URL("..", import.meta.url).
   /\/$/u,
   "",
 );
-const sourceFilePattern = /\.(?:c|m)?(?:t|j)sx?$/u;
+const sourceFilePattern = /(?:\.(?:c|m)?(?:t|j)sx?|\.svelte)$/u;
 const importSpecifierPattern =
   /\bfrom\s+["']([^"']+)["']|\bimport\s+["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)|\brequire\s*\(\s*["']([^"']+)["']\s*\)/gu;
 
@@ -34,8 +34,8 @@ const piAllowedSparkFoundationSpecifiers = [
 const forbiddenImportRulesByBoundary = {
   pi: [
     {
-      reason: "pi-* packages must not depend on cockpit packages",
-      matches: isCockpitSpecifier,
+      reason: "pi-* packages must not depend on Spark product adapter packages",
+      matches: isProductAdapterSpecifier,
     },
     {
       reason:
@@ -51,8 +51,9 @@ const forbiddenImportRulesByBoundary = {
         specifier === "@zendev-lab/spark-tui" || specifier.startsWith("@zendev-lab/spark-tui/"),
     },
     {
-      reason: "Spark core/runtime packages must not depend on cockpit or daemon adapter packages",
-      matches: isCockpitSpecifier,
+      reason:
+        "Spark core/runtime packages must not depend on product coordination or app adapter packages",
+      matches: isProductAdapterSpecifier,
     },
     {
       reason: "Spark shared packages must not import Spark app host internals",
@@ -70,8 +71,13 @@ const forbiddenImportRulesByBoundary = {
   ],
   "spark-core": [
     {
-      reason: "Spark core/runtime packages must not depend on cockpit or daemon adapter packages",
-      matches: isCockpitSpecifier,
+      reason: "Spark foundation packages must not import pi-extension policy",
+      matches: isPiExtensionSpecifier,
+    },
+    {
+      reason:
+        "Spark core/runtime packages must not depend on product coordination or app adapter packages",
+      matches: isProductAdapterSpecifier,
     },
     {
       reason: "Spark shared packages must not import Spark app host internals",
@@ -88,6 +94,12 @@ const forbiddenImportRulesByBoundary = {
     {
       reason: "Cockpit packages must not import Spark CLI host internals",
       matches: isSparkAppInternalSpecifier,
+    },
+  ],
+  "spark-app": [
+    {
+      reason: "Spark apps must consume workspace packages through declared package exports",
+      matches: isWorkspacePackageSourceSpecifier,
     },
   ],
 };
@@ -183,9 +195,9 @@ async function checkFoundationContractPackage(packageDir, manifest) {
     const deps = manifest[field];
     if (!deps || typeof deps !== "object") continue;
     for (const name of Object.keys(deps)) {
-      if (isSparkAppInternalSpecifier(name) || isCockpitSpecifier(name)) {
+      if (isSparkAppInternalSpecifier(name) || isProductAdapterSpecifier(name)) {
         violations.push(
-          `${formatPath(packageJsonPath)}: ${field}.${name} (foundation contract packages must not depend on app or cockpit adapters)`,
+          `${formatPath(packageJsonPath)}: ${field}.${name} (foundation contract packages must not depend on product coordination or app adapters)`,
         );
       }
     }
@@ -281,10 +293,12 @@ function isPiAllowedSparkFoundationSpecifier(specifier) {
   );
 }
 
-function isCockpitSpecifier(specifier) {
+function isProductAdapterSpecifier(specifier) {
   return (
     specifier === "@zendev-lab/spark-cockpit" ||
     specifier === "@zendev-lab/spark-daemon" ||
+    specifier === "@zendev-lab/spark-coordination" ||
+    specifier.startsWith("@zendev-lab/spark-coordination/") ||
     specifier.startsWith("@zendev-lab/spark-cockpit-") ||
     specifier.startsWith("spark-cockpit") ||
     specifier.startsWith("spark-daemon")
@@ -307,6 +321,18 @@ function isSparkAppInternalSpecifier(specifier) {
     specifier.includes("../spark-tui/") ||
     specifier.includes("../../spark-tui/")
   );
+}
+
+function isPiExtensionSpecifier(specifier) {
+  return (
+    specifier === "@zendev-lab/pi-extension" ||
+    specifier.startsWith("@zendev-lab/pi-extension/") ||
+    /(?:^|\/)pi-extension(?:\/|$)/u.test(specifier)
+  );
+}
+
+function isWorkspacePackageSourceSpecifier(specifier) {
+  return /(?:^|\/)packages\/[^/]+\/src(?:\/|$)/u.test(specifier);
 }
 
 function formatPath(path) {

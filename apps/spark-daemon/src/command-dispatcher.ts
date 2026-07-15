@@ -1,6 +1,6 @@
 import {
   parseSparkCommand,
-  runtimeServerCommandKindOptions,
+  runtimeServerCommandSpecification,
   sparkCommandKindForLocalRpcMethod,
   sparkCommandKindForRuntimeServerCommand,
   sparkProtocolJsonObjectSchema,
@@ -20,6 +20,8 @@ export interface LocalRpcCommandRequestLike {
 
 export interface SparkDaemonCommandPolicyInput {
   command: SparkCommand;
+  runtimeId?: string | undefined;
+  expectedRuntimeId?: string | undefined;
   workspaceBindingId?: string | undefined;
   knownWorkspaceBindingIds?: Set<string> | undefined;
   workspaceAccess?:
@@ -38,7 +40,6 @@ export interface SparkDaemonCommandPolicyDecision {
   retryable?: boolean;
 }
 
-const runtimeServerCommandKinds = new Set<SparkCommandKind>(runtimeServerCommandKindOptions);
 const borrowedWorkspaceAllowedKinds = new Set<SparkCommandKind>([
   "workspace.snapshot.request",
   "diagnostics.request",
@@ -123,7 +124,24 @@ export function sparkCommandFromServerCommandEnvelope(
 export function decideSparkDaemonCommandPolicy(
   input: SparkDaemonCommandPolicyInput,
 ): SparkDaemonCommandPolicyDecision {
-  if (requiresOwnedWorkspace(input.command.kind)) {
+  if (input.expectedRuntimeId && input.runtimeId !== input.expectedRuntimeId) {
+    return {
+      accepted: false,
+      reasonCode: "RUNTIME_ID_MISMATCH",
+      message: "Command was routed to a different Spark daemon runtime.",
+    };
+  }
+
+  const specification = runtimeServerCommandSpecification(input.command.kind);
+  if (!specification) {
+    return {
+      accepted: false,
+      reasonCode: "COMMAND_KIND_UNKNOWN",
+      message: "Command kind is not allowed over the runtime protocol.",
+    };
+  }
+
+  if (specification.scope === "workspace") {
     if (
       !input.workspaceBindingId ||
       !input.knownWorkspaceBindingIds?.has(input.workspaceBindingId)
@@ -136,7 +154,7 @@ export function decideSparkDaemonCommandPolicy(
     }
   }
 
-  if (input.workspaceAccess?.detached && input.command.kind !== "invocation.cancel.request") {
+  if (input.workspaceAccess?.detached && !specification.allowDetached) {
     return {
       accepted: false,
       reasonCode: "WORKSPACE_DETACHED",
@@ -145,7 +163,11 @@ export function decideSparkDaemonCommandPolicy(
     };
   }
 
-  if (input.workspaceAccess?.borrowed && !borrowedWorkspaceAllowedKinds.has(input.command.kind)) {
+  if (
+    input.workspaceAccess?.borrowed &&
+    !specification.allowBorrowed &&
+    !borrowedWorkspaceAllowedKinds.has(input.command.kind)
+  ) {
     return {
       accepted: false,
       reasonCode: "WORKSPACE_BORROWED",
@@ -155,10 +177,7 @@ export function decideSparkDaemonCommandPolicy(
     };
   }
 
-  const needsMutation =
-    input.command.kind === "task.start.request" ||
-    input.command.kind === "assignment.create.request";
-  if (needsMutation && input.allowMutation === false) {
+  if (specification.operation === "mutation" && input.allowMutation === false) {
     return {
       accepted: false,
       reasonCode: "MUTATION_NOT_ALLOWED",
@@ -167,10 +186,6 @@ export function decideSparkDaemonCommandPolicy(
   }
 
   return { accepted: true };
-}
-
-function requiresOwnedWorkspace(kind: SparkCommandKind): boolean {
-  return runtimeServerCommandKinds.has(kind);
 }
 
 function jsonObjectPayload(value: unknown): Record<string, unknown> {
@@ -184,7 +199,14 @@ function localRpcRoute(method: string, params: unknown): Partial<SparkCommand["r
   if (method === "turn.submit" && typeof params.sessionId === "string") {
     return { sessionId: params.sessionId };
   }
-  if (method === "turn.cancel" && typeof params.invocationId === "string") {
+  if (
+    (method === "turn.status" ||
+      method === "turn.result" ||
+      method === "turn.stream" ||
+      method === "turn.cancel" ||
+      method === "invocation.retry") &&
+    typeof params.invocationId === "string"
+  ) {
     return { invocationId: params.invocationId };
   }
   if (method.startsWith("session.") && typeof params.sessionId === "string") {

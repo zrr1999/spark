@@ -2,6 +2,17 @@
   "commands": [
     {
       "schemaVersion": "spark.command.v1",
+      "id": "rpc_daemon_restart",
+      "kind": "daemon.restart.request",
+      "title": "Drain restart local daemon",
+      "transport": {
+        "kind": "local-rpc",
+        "method": "daemon.restart",
+        "requestId": "daemon_restart"
+      }
+    },
+    {
+      "schemaVersion": "spark.command.v1",
       "id": "rpc_turn_submit",
       "kind": "turn.submit.request",
       "title": "Local turn submit",
@@ -24,7 +35,7 @@
       "kind": "turn.cancel.request",
       "title": "Local turn cancel",
       "route": {
-        "invocationId": "turn-file.json"
+        "invocationId": "inv_0123456789abcdef"
       },
       "payload": {
         "reason": "test cancel"
@@ -40,13 +51,13 @@
       "id": "rpc_turn_status",
       "kind": "turn.status.request",
       "title": "Local turn status",
-      "payload": {
-        "state": "inbox"
+      "route": {
+        "invocationId": "inv_0123456789abcdef"
       },
       "transport": {
         "kind": "local-rpc",
-        "method": "daemon.queue",
-        "requestId": "queue_list"
+        "method": "turn.status",
+        "requestId": "turn_status"
       }
     },
     {
@@ -142,11 +153,12 @@
       "kind": "command.status",
       "status": "cancelled",
       "route": {
-        "invocationId": "turn-file.json"
+        "invocationId": "inv_0123456789abcdef"
       },
       "payload": {
-        "cancelled": true,
-        "message": "Cancellation signalled for Spark daemon invocation turn-file.json."
+        "invocationId": "inv_0123456789abcdef",
+        "status": "running",
+        "cancelRequested": true
       },
       "transport": {
         "kind": "local-rpc",
@@ -187,10 +199,12 @@
         "kind": "daemon"
       },
       "payload": {
-        "queue": {
-          "inbox": 1,
-          "processed": 0,
-          "failed": 0
+        "invocations": {
+          "queued": 1,
+          "running": 0,
+          "succeeded": 0,
+          "failed": 0,
+          "cancelled": 0
         }
       },
       "diagnostic": {

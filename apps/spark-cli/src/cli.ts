@@ -8,7 +8,7 @@ export const SPARK_CLI_VERSION = "0.1.0";
 
 const dispatcherStrings = sparkCliDispatcherStrings();
 
-export type SparkDispatcherTarget = "tui" | "daemon" | "server" | "cockpit";
+export type SparkDispatcherTarget = "tui" | "daemon" | "cockpit";
 
 export type SparkDispatcherCommand =
   | {
@@ -44,7 +44,12 @@ export function parseSparkDispatcherArgs(argv: string[]): SparkDispatcherCommand
   if (first === "doctor") return { kind: "dispatch", target: "daemon", argv: ["doctor", ...rest] };
   if (first === "tui") return { kind: "dispatch", target: "tui", argv: rest };
   if (first === "daemon") return { kind: "dispatch", target: "daemon", argv: rest };
-  if (first === "server") return { kind: "dispatch", target: "server", argv: rest };
+  if (first === "server") {
+    return {
+      kind: "error",
+      message: 'The "spark server" namespace was removed. Use "spark cockpit" instead.',
+    };
+  }
   if (first === "cockpit") return { kind: "dispatch", target: "cockpit", argv: rest };
   if (first === "sessions" || first === "session") {
     return { kind: "dispatch", target: "tui", argv };
@@ -259,7 +264,7 @@ export function resolveTargetCommand(target: SparkDispatcherTarget): {
   if (local && existsSync(local)) {
     return {
       command: local,
-      args: target === "server" ? ["server"] : target === "daemon" ? ["daemon"] : [],
+      args: target === "daemon" ? ["daemon"] : [],
       label: targetLabel(target),
     };
   }
@@ -272,8 +277,6 @@ export function resolveTargetCommand(target: SparkDispatcherTarget): {
       // (status/start/stop/logs/workspace) while also owning canonical
       // session/run/events plane resources.
       return { command: "spark-tui", args: ["daemon"], label: targetLabel(target) };
-    case "server":
-      return { command: "spark-tui", args: ["server"], label: targetLabel(target) };
     case "cockpit":
       return { command: "spark-cockpit", args: [], label: targetLabel(target) };
   }
@@ -288,8 +291,6 @@ function localTargetCommand(target: SparkDispatcherTarget): string | undefined {
     case "tui":
       return fileURLToPath(new URL("../../spark-tui/bin/spark-tui", import.meta.url));
     case "daemon":
-      return fileURLToPath(new URL("../../spark-tui/bin/spark-tui", import.meta.url));
-    case "server":
       return fileURLToPath(new URL("../../spark-tui/bin/spark-tui", import.meta.url));
     case "cockpit":
       return fileURLToPath(new URL("../../spark-cockpit/bin/spark-cockpit", import.meta.url));

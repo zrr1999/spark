@@ -10,6 +10,7 @@ import {
   registerRuntimeWorkspace,
   RuntimeAccessTokenError,
   RuntimeEnrollmentError,
+  RuntimeWorkspaceOwnerConflictError,
 } from "$lib/server/runtime-registration";
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
@@ -46,6 +47,15 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
       bearerToken(request),
     );
   } catch (caught) {
+    if (caught instanceof RuntimeWorkspaceOwnerConflictError) {
+      return errorJson(
+        caught.reasonCode.toLowerCase(),
+        caught.message,
+        409,
+        undefined,
+        locals.requestId,
+      );
+    }
     if (caught instanceof RuntimeAccessTokenError || caught instanceof RuntimeEnrollmentError) {
       const status =
         caught.reasonCode === "RUNTIME_TOKEN_SCOPE_INVALID" ||

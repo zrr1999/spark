@@ -7,6 +7,7 @@ import {
   sanitizeStoreScope,
   sparkSessionOwnerKey,
   sparkSessionKey,
+  sparkStateRootPath,
   type SparkSessionContext,
 } from "./session-identity.ts";
 
@@ -44,7 +45,7 @@ export function currentSessionDirectoryName(ctx?: SparkSessionContext): string {
 }
 
 export function sessionDirectoryPath(cwd: string, ctx?: SparkSessionContext): string {
-  return join(cwd, ".spark", "sessions", currentSessionDirectoryName(ctx));
+  return join(sparkStateRootPath(cwd, ctx), "sessions", currentSessionDirectoryName(ctx));
 }
 
 export function sessionRelativeDirectory(ctx?: SparkSessionContext): string {
@@ -76,21 +77,28 @@ export function sessionHiddenRoleRunInboxStorePath(cwd: string, ctx?: SparkSessi
 }
 
 export function legacyCurrentProjectStorePath(cwd: string, ctx?: SparkSessionContext): string {
-  return join(cwd, ".spark", "sessions", `${currentSessionDirectoryName(ctx)}.json`);
+  return join(sparkStateRootPath(cwd, ctx), "sessions", `${currentSessionDirectoryName(ctx)}.json`);
 }
 
 export function legacySessionGoalStorePath(cwd: string, ctx?: SparkSessionContext): string {
-  return join(cwd, ".spark", "session-goals", `${currentSessionDirectoryName(ctx)}.json`);
+  return join(
+    sparkStateRootPath(cwd, ctx),
+    "session-goals",
+    `${currentSessionDirectoryName(ctx)}.json`,
+  );
 }
 
 export function legacySessionLoopStorePath(cwd: string, ctx?: SparkSessionContext): string {
-  return join(cwd, ".spark", "session-loops", `${currentSessionDirectoryName(ctx)}.json`);
+  return join(
+    sparkStateRootPath(cwd, ctx),
+    "session-loops",
+    `${currentSessionDirectoryName(ctx)}.json`,
+  );
 }
 
 export function legacyTodoDisplayNumberStorePath(cwd: string, ctx?: SparkSessionContext): string {
   return join(
-    cwd,
-    ".spark",
+    sparkStateRootPath(cwd, ctx),
     "todo-display-numbers",
     `${sanitizeStoreScope(sparkSessionKey(ctx))}.json`,
   );
@@ -98,19 +106,21 @@ export function legacyTodoDisplayNumberStorePath(cwd: string, ctx?: SparkSession
 
 export function legacyHiddenRoleRunInboxStorePath(cwd: string, ctx?: SparkSessionContext): string {
   return join(
-    cwd,
-    ".spark",
+    sparkStateRootPath(cwd, ctx),
     "background-role-results-inbox",
     `${currentSessionDirectoryName(ctx)}.json`,
   );
 }
 
-export async function rebuildSessionIndex(cwd: string): Promise<SparkSessionIndexSnapshot> {
-  const sessionsRoot = join(cwd, ".spark", "sessions");
+export async function rebuildSessionIndex(
+  cwd: string,
+  ctx?: SparkSessionContext,
+): Promise<SparkSessionIndexSnapshot> {
+  const sessionsRoot = join(sparkStateRootPath(cwd, ctx), "sessions");
   const sessionDirs = await listSessionDirectories(sessionsRoot);
   const sessions: SparkSessionIndexEntry[] = [];
   for (const name of sessionDirs) {
-    const entry = await buildSessionIndexEntry(cwd, name);
+    const entry = await buildSessionIndexEntry(cwd, name, ctx);
     if (entry) sessions.push(entry);
   }
   sessions.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
@@ -129,12 +139,12 @@ export async function rebuildSessionIndex(cwd: string): Promise<SparkSessionInde
     ],
     sessions,
   };
-  await writeJsonFileAtomic(sessionIndexStorePath(cwd), snapshot);
+  await writeJsonFileAtomic(sessionIndexStorePath(cwd, ctx), snapshot);
   return snapshot;
 }
 
-export function sessionIndexStorePath(cwd: string): string {
-  return join(cwd, ".spark", "sessions", "index.json");
+export function sessionIndexStorePath(cwd: string, ctx?: SparkSessionContext): string {
+  return join(sparkStateRootPath(cwd, ctx), "sessions", "index.json");
 }
 
 async function listSessionDirectories(sessionsRoot: string): Promise<string[]> {
@@ -154,9 +164,10 @@ async function listSessionDirectories(sessionsRoot: string): Promise<string[]> {
 async function buildSessionIndexEntry(
   cwd: string,
   directoryName: string,
+  ctx?: SparkSessionContext,
 ): Promise<SparkSessionIndexEntry | undefined> {
   const sessionKey = sessionKeyFromDirectoryName(directoryName);
-  const base = join(cwd, ".spark", "sessions", directoryName);
+  const base = join(sparkStateRootPath(cwd, ctx), "sessions", directoryName);
   const relativeBase = join("sessions", directoryName);
   const statePath = join(base, "state.json");
   const goalPath = join(base, "goal.json");

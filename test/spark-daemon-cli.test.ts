@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -322,8 +321,8 @@ void test("spark daemon session mailto and inbox send list read ack without daem
       turnStream: async () => {
         throw new Error("turnStream must not be called by mailto");
       },
-      daemonQueue: async () => {
-        throw new Error("daemonQueue must not be called by mailto");
+      turnStatus: async () => {
+        throw new Error("turnStatus must not be called by mailto");
       },
     } satisfies SparkDaemonClientOptions;
 
@@ -438,7 +437,7 @@ void test("daemon sessions list --all-workspaces shows persistent sessions acros
         daemonStatus: async () => ({
           observedAt: "2026-01-03T00:00:00.000Z",
           servers: [],
-          queue: { inbox: 0, processed: 0, failed: 0 },
+          invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
         }),
       },
     );
@@ -733,38 +732,32 @@ void test("daemon run and events plane commands expose stable JSON resources", a
     const paths = testDaemonPaths(dir);
     const client = {
       paths,
-      daemonQueue: async () => ({
+      runList: async () => ({
+        plane: "daemon" as const,
+        resource: "run" as const,
+        runs: [
+          {
+            runKey: "run:inv_a",
+            id: "inv_a",
+            state: "queued" as const,
+            sessionKey: "session:fixture-a",
+            prompt: "do work",
+          },
+          {
+            runKey: "run:inv_b",
+            id: "inv_b",
+            state: "succeeded" as const,
+            sessionKey: "session:fixture-b",
+            prompt: "done",
+          },
+        ],
+        text: "run:inv_a queued\nrun:inv_b succeeded\n",
         observedAt: "2026-07-08T00:03:00.000Z",
-        state: "all" as const,
-        byState: {
-          inbox: [
-            {
-              fileName: "run-a.json",
-              filePath: join(dir, "run-a.json"),
-              payload: {
-                enqueuedAt: "2026-07-08T00:00:00.000Z",
-                task: { type: "session.run" as const, sessionId: "fixture-a", prompt: "do work" },
-              },
-            },
-          ],
-          processed: [
-            {
-              fileName: "run-b.json",
-              filePath: join(dir, "run-b.json"),
-              payload: {
-                enqueuedAt: "2026-07-08T00:01:00.000Z",
-                processedAt: "2026-07-08T00:02:00.000Z",
-                task: { type: "session.run" as const, sessionId: "fixture-b", prompt: "done" },
-              },
-            },
-          ],
-        },
       }),
       turnCancel: async (_paths, input) => ({
         invocationId: input.invocationId,
-        cancelled: true,
-        message: "cancelled",
-        observedAt: "2026-07-08T00:04:00.000Z",
+        status: "running" as const,
+        cancelRequested: true,
       }),
       eventsWatch: async () => ({
         plane: "daemon" as const,
@@ -790,30 +783,27 @@ void test("daemon run and events plane commands expose stable JSON resources", a
     };
     assert.equal(listResult.plane, "daemon");
     assert.equal(listResult.resource, "run");
-    assert.deepEqual(listResult.runs.map((run) => run.runKey).sort(), [
-      "run:run-a.json",
-      "run:run-b.json",
-    ]);
+    assert.deepEqual(listResult.runs.map((run) => run.runKey).sort(), ["run:inv_a", "run:inv_b"]);
     assert.equal(
-      listResult.runs.find((run) => run.runKey === "run:run-a.json")?.sessionKey,
+      listResult.runs.find((run) => run.runKey === "run:inv_a")?.sessionKey,
       "session:fixture-a",
     );
 
     const show = await handleSparkDaemonCliCommand(
-      { action: "runs", subcommand: "show", json: true, runId: "run-a.json" },
+      { action: "runs", subcommand: "show", json: true, runId: "inv_a" },
       client,
     );
     assert.equal(show.action, "runs");
     const showResult = show.result as { runKey: string; run?: { state: string } };
-    assert.equal(showResult.runKey, "run:run-a.json");
-    assert.equal(showResult.run?.state, "inbox");
+    assert.equal(showResult.runKey, "run:inv_a");
+    assert.equal(showResult.run?.state, "queued");
 
     const cancel = await handleSparkDaemonCliCommand(
-      { action: "runs", subcommand: "cancel", json: true, runId: "run-a.json" },
+      { action: "runs", subcommand: "cancel", json: true, runId: "inv_a" },
       client,
     );
     assert.equal(cancel.action, "runs");
-    assert.equal((cancel.result as { cancelled: boolean }).cancelled, true);
+    assert.equal((cancel.result as { cancelRequested: boolean }).cancelRequested, true);
 
     const events = await handleSparkDaemonCliCommand(
       { action: "events", subcommand: "watch", json: true, limit: 1 },
@@ -912,12 +902,24 @@ void test("parseSparkDaemonCliArgs parses daemon IPC commands", async () => {
       prompt: "trailing prompt",
     },
   );
-  assert.deepEqual(parseSparkDaemonCliArgs(["queue", "--state", "all", "--limit", "2"]), {
-    action: "queue",
+  assert.deepEqual(parseSparkDaemonCliArgs(["invocation", "status", "inv_1"]), {
+    action: "invocation",
+    subcommand: "status",
+    invocationId: "inv_1",
     json: false,
-    state: "all",
-    limit: 2,
   });
+  assert.deepEqual(
+    parseSparkDaemonCliArgs(["invocation", "stream", "inv_1", "--after", "10", "--limit", "2"]),
+    {
+      action: "invocation",
+      subcommand: "stream",
+      invocationId: "inv_1",
+      after: 10,
+      limit: 2,
+      json: false,
+    },
+  );
+  assert.throws(() => parseSparkDaemonCliArgs(["queue"]), /unknown spark daemon command: queue/u);
   assert.deepEqual(
     parseSparkDaemonCliArgs([
       "sessions",
@@ -1007,7 +1009,8 @@ void test("parseSparkDaemonCliArgs parses daemon IPC commands", async () => {
   });
   const daemonHelp = await handleSparkDaemonCliCommand({ action: "help" });
   assert.equal(daemonHelp.action, "help");
-  assert.match(daemonHelp.text, /spark daemon queue/u);
+  assert.match(daemonHelp.text, /spark daemon invocation status/u);
+  assert.doesNotMatch(daemonHelp.text, /spark daemon queue/u);
   assert.match(daemonHelp.text, /spark daemon events watch/u);
   assert.match(daemonHelp.text, /spark daemon logs/u);
   assert.doesNotMatch(daemonHelp.text, /spark daemon task/u);
@@ -1022,7 +1025,7 @@ void test("parseSparkDaemonCliArgs parses daemon IPC commands", async () => {
   });
 });
 
-void test("daemon CLI handlers use Spark daemon local IPC instead of direct queue execution", async () => {
+void test("daemon CLI handlers use invocation-based Spark daemon local IPC", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-daemon-cli-"));
   try {
     const paths = testDaemonPaths(dir);
@@ -1036,27 +1039,20 @@ void test("daemon CLI handlers use Spark daemon local IPC instead of direct queu
       daemonStatus: async () => ({
         observedAt: "2026-06-19T00:00:00.000Z",
         servers: [],
-        queue: { inbox: 1, processed: 0, failed: 0 },
+        invocations: { queued: 1, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
       }),
-      daemonQueue: async () => ({
-        observedAt: "2026-06-19T00:00:00.000Z",
-        state: "inbox" as const,
-        entries: [
-          {
-            fileName: "queued.json",
-            filePath: join(dir, "queued.json"),
-            payload: {
-              enqueuedAt: "2026-06-19T00:00:00.000Z",
-              task: { type: "session.run" as const, sessionId: "session-a", prompt: "hello" },
-            },
-          },
-        ],
+      turnSubmit: async () => ({
+        invocationId: "inv_queued",
+        status: "queued" as const,
+        acceptedAt: "2026-06-19T00:00:00.000Z",
       }),
-      turnSubmit: async (_paths: typeof paths, input: { sessionId: string; prompt: string }) => ({
-        observedAt: "2026-06-19T00:00:00.000Z",
-        fileName: "queued.json",
-        filePath: join(dir, "queued.json"),
-        task: { type: "session.run" as const, sessionId: input.sessionId, prompt: input.prompt },
+      turnStatus: async () => ({
+        invocationId: "inv_queued",
+        sessionId: "session-a",
+        status: "queued" as const,
+        createdAt: "2026-06-19T00:00:00.000Z",
+        updatedAt: "2026-06-19T00:00:00.000Z",
+        eventCursor: 0,
       }),
       workspaceList: async () => ({
         observedAt: "2026-06-19T00:00:00.000Z",
@@ -1086,18 +1082,20 @@ void test("daemon CLI handlers use Spark daemon local IPC instead of direct queu
     );
     assert.equal(started, true);
     assert.equal(submit.action, "submit");
-    assert.equal(submit.result.task.sessionId, "session-a");
+    assert.equal(submit.result.invocationId, "inv_queued");
 
     const status = await handleSparkDaemonCliCommand({ action: "status", json: true }, client);
     assert.equal(status.action, "status");
     assert.equal(status.daemon.running, true);
 
-    const queue = await handleSparkDaemonCliCommand(
-      { action: "queue", json: true, state: "inbox" },
+    const invocation = await handleSparkDaemonCliCommand(
+      { action: "invocation", subcommand: "status", invocationId: "inv_queued", json: true },
       client,
     );
-    assert.equal(queue.action, "queue");
-    assert.equal(queue.result.entries?.[0]?.payload.task.prompt, "hello");
+    assert.equal(invocation.action, "invocation");
+    assert.equal("invocationId" in invocation.result, true);
+    if (!("invocationId" in invocation.result)) assert.fail("missing invocation id");
+    assert.equal(invocation.result.invocationId, "inv_queued");
 
     const sessions = await handleSparkDaemonCliCommand(
       { action: "sessions", json: false, subcommand: "list" },
@@ -1188,13 +1186,12 @@ void test("handleSparkRpcLine always routes prompt/state through daemon IPC", as
         daemonStatus: async () => ({
           observedAt: "2026-06-19T00:00:00.000Z",
           servers: [],
-          queue: { inbox: 0, processed: 0, failed: 0 },
+          invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
         }),
-        turnSubmit: async (_paths, input) => ({
-          observedAt: "2026-06-19T00:00:00.000Z",
-          fileName: "turn.json",
-          filePath: "/tmp/turn.json",
-          task: { type: "session.run" as const, ...input },
+        turnSubmit: async () => ({
+          invocationId: "inv_turn",
+          status: "queued" as const,
+          acceptedAt: "2026-06-19T00:00:00.000Z",
         }),
       },
       { sessionId: "rpc-daemon" },
@@ -1207,7 +1204,7 @@ void test("handleSparkRpcLine always routes prompt/state through daemon IPC", as
         daemonStatus: async () => ({
           observedAt: "2026-06-19T00:00:00.000Z",
           servers: [],
-          queue: { inbox: 0, processed: 0, failed: 0 },
+          invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
         }),
       },
       {},
@@ -1228,8 +1225,8 @@ void test("handleSparkRpcLine always routes prompt/state through daemon IPC", as
 
     assert.equal((writes[0]?.data as { action?: string } | undefined)?.action, "submit");
     assert.equal(
-      (writes[0]?.data as { result?: { fileName?: string } } | undefined)?.result?.fileName,
-      "turn.json",
+      (writes[0]?.data as { result?: { invocationId?: string } } | undefined)?.result?.invocationId,
+      "inv_turn",
     );
     assert.equal((writes[1]?.data as { action?: string } | undefined)?.action, "status");
     assert.deepEqual((writes[2]?.data as { messages?: unknown[] } | undefined)?.messages, []);
@@ -1276,7 +1273,7 @@ void test("Spark TUI and headless print attach and release workspace clients", a
       daemonStatus: async () => ({
         observedAt: "2026-06-19T00:00:00.000Z",
         servers: [],
-        queue: { inbox: 0, processed: 0, failed: 0 },
+        invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
       }),
       workspaceEnsureLocal: async (_paths, input) => {
         ensures.push(input);
@@ -1356,10 +1353,9 @@ void test("Spark TUI and headless print attach and release workspace clients", a
       turnSubmit: async (_paths, input) => {
         submitted.push(input);
         return {
-          observedAt: "2026-06-19T00:00:00.000Z",
-          fileName: "turn.json",
-          filePath: join(dir, "turn.json"),
-          task: { type: "session.run" as const, sessionId: input.sessionId, prompt: input.prompt },
+          invocationId: "inv_turn",
+          status: "queued" as const,
+          acceptedAt: "2026-06-19T00:00:00.000Z",
         };
       },
     };
@@ -1520,7 +1516,7 @@ void test("Spark TUI and headless print attach and release workspace clients", a
       ],
     );
     assert.equal(submitted[0]?.prompt, "headless prompt");
-    assert.match(logs.join("\n"), /turn\.json/u);
+    assert.match(logs.join("\n"), /inv_turn/u);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -1853,7 +1849,7 @@ function createDurableSessionAttachTestDeps(dir: string, stateRoot: string) {
     daemonStatus: async () => ({
       observedAt: now,
       servers: [],
-      queue: { inbox: 0, processed: 0, failed: 0 },
+      invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
     }),
     workspaceEnsureLocal: async () => workspace,
     workspaceClientAttach: async () => ({
@@ -2000,7 +1996,7 @@ function createWorkspaceAttachTestDeps(
     daemonStatus: async () => ({
       observedAt: now,
       servers: [],
-      queue: { inbox: 0, processed: 0, failed: 0 },
+      invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
     }),
     workspaceEnsureLocal: async () => workspace,
     workspaceClientAttach: async () => ({
@@ -2132,7 +2128,7 @@ void test("native TUI model selection and following turn share one managed sessi
     }> = [];
     const controlCalls: Array<{ method: string; params: unknown }> = [];
     const submitted: Array<{
-      fileName: string;
+      invocationId: string;
       input: { sessionId: string; prompt: string };
     }> = [];
     const daemonClient: SparkDaemonClientOptions = {
@@ -2212,30 +2208,21 @@ void test("native TUI model selection and following turn share one managed sessi
         throw new Error(`unexpected model control method: ${method}`);
       },
       turnSubmit: async (_paths, input) => {
-        const fileName = `turn-${submitted.length + 1}.json`;
-        submitted.push({ fileName, input });
+        const invocationId = `inv_${submitted.length + 1}`;
+        submitted.push({ invocationId, input });
         return {
-          observedAt: "2026-07-13T00:02:00.000Z",
-          fileName,
-          filePath: join(dir, fileName),
-          task: { type: "session.run" as const, ...input },
+          invocationId,
+          status: "queued" as const,
+          acceptedAt: "2026-07-13T00:02:00.000Z",
         };
       },
-      daemonQueue: async () => ({
-        state: "all" as const,
-        observedAt: "2026-07-13T00:02:01.000Z",
-        byState: {
-          processed: submitted.map(({ fileName, input }) => ({
-            fileName,
-            filePath: join(dir, fileName),
-            payload: {
-              enqueuedAt: "2026-07-13T00:02:00.000Z",
-              processedAt: "2026-07-13T00:02:01.000Z",
-              task: { type: "session.run" as const, ...input },
-              result: { assistantText: `answer:${input.prompt}`, stderr: "" },
-            },
-          })),
-        },
+      turnStatus: async (_paths, { invocationId }) => ({
+        invocationId,
+        status: "succeeded" as const,
+        createdAt: "2026-07-13T00:02:00.000Z",
+        updatedAt: "2026-07-13T00:02:01.000Z",
+        finishedAt: "2026-07-13T00:02:01.000Z",
+        eventCursor: 0,
       }),
     };
 
@@ -2253,9 +2240,9 @@ void test("native TUI model selection and following turn share one managed sessi
             handler: (args: string, context: never) => Promise<unknown>;
           };
           await modelCommand.handler("provider-a/model-b", {} as never);
-          assert.equal(
-            await options.responder?.("after model switch", { messages: [] }),
-            "answer:after model switch",
+          assert.match(
+            (await options.responder?.("after model switch", { messages: [] })) ?? "",
+            /completed session same-session: inv_1/u,
           );
         },
       }),
@@ -2281,131 +2268,17 @@ void test("native TUI model selection and following turn share one managed sessi
     ]);
     assert.deepEqual(
       submitted.map(({ input }) => input),
-      [{ sessionId: "same-session", prompt: "after model switch" }],
+      [
+        {
+          sessionId: "same-session",
+          prompt: "after model switch",
+          messageMetadata: {
+            origin: { kind: "user", host: "tui", surface: "local" },
+          },
+        },
+      ],
     );
   } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-void test("Spark native responder preserves split UTF-8 daemon stream chunks", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-cli-stream-utf8-"));
-  const paths = testDaemonPaths(dir);
-  await mkdir(paths.runtimeDir, { recursive: true });
-  const server = createServer((socket) => {
-    socket.once("data", (requestChunk) => {
-      const request = JSON.parse(requestChunk.toString("utf8").trim()) as { id: string };
-      const result = `${JSON.stringify({
-        id: request.id,
-        ok: true,
-        result: {
-          observedAt: "2026-06-19T00:00:00.000Z",
-          fileName: "turn.json",
-          filePath: "/tmp/turn.json",
-          task: { type: "session.run", sessionId: "native-session", prompt: "hello" },
-        },
-      })}\n`;
-      const viewEvent = Buffer.from(
-        `${JSON.stringify({
-          id: request.id,
-          ok: true,
-          event: {
-            version: 1,
-            type: "daemon.view_event",
-            source: "daemon",
-            emittedAt: "2026-06-19T00:00:00.000Z",
-            sessionId: "native-session",
-            invocationId: "turn.json",
-            view: {
-              version: 1,
-              type: "session.message",
-              sessionId: "native-session",
-              message: {
-                version: 1,
-                id: "assistant",
-                role: "assistant",
-                text: "你好",
-                status: "streaming",
-                createdAt: "2026-06-19T00:00:00.000Z",
-                metadata: {},
-              },
-            },
-          },
-        })}\n`,
-        "utf8",
-      );
-      const characterStart = viewEvent.indexOf(Buffer.from("你", "utf8"));
-      const terminal = `${JSON.stringify({
-        id: request.id,
-        ok: true,
-        event: {
-          version: 1,
-          type: "daemon.task.lifecycle",
-          source: "daemon",
-          emittedAt: "2026-06-19T00:00:01.000Z",
-          sessionId: "native-session",
-          invocationId: "turn.json",
-          taskFileName: "turn.json",
-          taskType: "session.run",
-          status: "succeeded",
-        },
-      })}\n`;
-      socket.write(result);
-      socket.write(viewEvent.subarray(0, characterStart + 1));
-      setTimeout(() => {
-        socket.write(viewEvent.subarray(characterStart + 1));
-        socket.end(terminal);
-      }, 5);
-    });
-  });
-
-  try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(paths.socketPath, resolve);
-    });
-    const chunks: string[] = [];
-    const responder = createSparkDaemonNativeResponder(
-      {
-        paths,
-        daemonStatus: async () => ({
-          observedAt: "2026-06-19T00:00:00.000Z",
-          servers: [],
-          queue: { inbox: 0, processed: 0, failed: 0 },
-        }),
-        daemonQueue: async () => ({
-          state: "all" as const,
-          observedAt: "2026-06-19T00:00:01.000Z",
-          byState: {
-            processed: [
-              {
-                fileName: "turn.json",
-                filePath: "/tmp/turn.json",
-                payload: {
-                  enqueuedAt: "2026-06-19T00:00:00.000Z",
-                  processedAt: "2026-06-19T00:00:01.000Z",
-                  task: {
-                    type: "session.run" as const,
-                    sessionId: "native-session",
-                    prompt: "hello",
-                  },
-                  result: { assistantText: "你好", stderr: "" },
-                },
-              },
-            ],
-          },
-        }),
-      },
-      { sessionId: "native-session" },
-    );
-
-    assert.equal(
-      await responder("hello", { appendAssistantChunk: (chunk) => chunks.push(chunk) }),
-      "",
-    );
-    assert.deepEqual(chunks, ["你好"]);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -2418,58 +2291,47 @@ void test("Spark native responder streams daemon view events as assistant chunks
       daemonStatus: async () => ({
         observedAt: "2026-06-19T00:00:00.000Z",
         servers: [],
-        queue: { inbox: 0, processed: 0, failed: 0 },
+        invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
       }),
-      turnStream: async (_paths, input, handlers) => {
-        for (const text of ["hel", "hello"]) {
-          handlers.onEvent?.({
+      turnSubmit: async () => ({
+        invocationId: "inv_stream",
+        status: "queued" as const,
+        acceptedAt: "2026-06-19T00:00:00.000Z",
+      }),
+      turnStream: async () => ({
+        invocationId: "inv_stream",
+        events: ["hel", "hello"].map((text, index) => ({
+          invocationId: "inv_stream",
+          sequence: index + 1,
+          kind: "daemon.view_event",
+          payload: {
             version: 1,
             type: "daemon.view_event",
             source: "daemon",
             emittedAt: "2026-06-19T00:00:00.000Z",
-            sessionId: input.sessionId,
-            invocationId: "turn.json",
-            taskFileName: "turn.json",
+            sessionId: "native-session",
+            invocationId: "inv_stream",
             view: {
               version: 1,
               type: "session.message",
-              sessionId: input.sessionId,
+              sessionId: "native-session",
               message: { id: "assistant", role: "assistant", text, status: "streaming" },
             },
-          } as never);
-        }
-        return {
-          observedAt: "2026-06-19T00:00:00.000Z",
-          fileName: "turn.json",
-          filePath: "/tmp/turn.json",
-          task: { type: "session.run" as const, sessionId: input.sessionId, prompt: input.prompt },
-        };
-      },
-      daemonQueue: async (_paths, params) => {
-        assert.deepEqual(params, { state: "all", fileName: "turn.json" });
-        return {
-          state: "all" as const,
-          observedAt: "2026-06-19T00:00:00.000Z",
-          byState: {
-            processed: [
-              {
-                fileName: "turn.json",
-                filePath: "/tmp/turn.json",
-                payload: {
-                  enqueuedAt: "2026-06-19T00:00:00.000Z",
-                  processedAt: "2026-06-19T00:00:01.000Z",
-                  task: {
-                    type: "session.run" as const,
-                    sessionId: "native-session",
-                    prompt: "hello",
-                  },
-                  result: { assistantText: "hello", stderr: "" },
-                },
-              },
-            ],
           },
-        };
-      },
+          createdAt: "2026-06-19T00:00:00.000Z",
+        })),
+        nextCursor: 2,
+        hasMore: false,
+      }),
+      turnStatus: async () => ({
+        invocationId: "inv_stream",
+        sessionId: "native-session",
+        status: "succeeded" as const,
+        createdAt: "2026-06-19T00:00:00.000Z",
+        updatedAt: "2026-06-19T00:00:01.000Z",
+        finishedAt: "2026-06-19T00:00:01.000Z",
+        eventCursor: 2,
+      }),
     },
     { sessionId: "native-session" },
   );
@@ -2480,6 +2342,309 @@ void test("Spark native responder streams daemon view events as assistant chunks
 
   assert.equal(output, "");
   assert.deepEqual(chunks, ["hel", "lo"]);
+});
+
+void test("Spark native responder accepts an empty terminal page and ignores non-daemon payloads", async () => {
+  const chunks: string[] = [];
+  let streamCalls = 0;
+  const responder = createSparkDaemonNativeResponder(
+    {
+      turnSubmit: async () => ({
+        invocationId: "inv_empty_terminal",
+        status: "queued" as const,
+        acceptedAt: "2026-06-19T00:00:00.000Z",
+      }),
+      turnStream: async () => {
+        streamCalls += 1;
+        return {
+          invocationId: "inv_empty_terminal",
+          events: [
+            {
+              invocationId: "inv_empty_terminal",
+              sequence: 1,
+              kind: "diagnostic",
+              payload: { type: "not-a-daemon-event", detail: "ignore me" },
+              createdAt: "2026-06-19T00:00:00.000Z",
+            },
+          ],
+          nextCursor: 1,
+          hasMore: false,
+        };
+      },
+      turnStatus: async () => ({
+        invocationId: "inv_empty_terminal",
+        sessionId: "native-empty-terminal",
+        status: "succeeded" as const,
+        createdAt: "2026-06-19T00:00:00.000Z",
+        updatedAt: "2026-06-19T00:00:01.000Z",
+        finishedAt: "2026-06-19T00:00:01.000Z",
+        eventCursor: 1,
+      }),
+    },
+    { sessionId: "native-empty-terminal" },
+  );
+
+  const output = await responder("empty terminal", {
+    appendAssistantChunk: (chunk) => chunks.push(chunk),
+  });
+
+  assert.match(output, /completed session native-empty-terminal: inv_empty_terminal/u);
+  assert.equal(streamCalls, 1);
+  assert.deepEqual(chunks, []);
+});
+
+void test("Spark native responder aborts before polling the invocation stream", async () => {
+  const controller = new AbortController();
+  controller.abort(new Error("user stopped"));
+  let streamCalls = 0;
+  const responder = createSparkDaemonNativeResponder(
+    {
+      turnSubmit: async () => ({
+        invocationId: "inv_aborted",
+        status: "queued" as const,
+        acceptedAt: "2026-06-19T00:00:00.000Z",
+      }),
+      turnStream: async () => {
+        streamCalls += 1;
+        return {
+          invocationId: "inv_aborted",
+          events: [],
+          nextCursor: 0,
+          hasMore: false,
+        };
+      },
+      turnStatus: async () => ({
+        invocationId: "inv_aborted",
+        sessionId: "native-aborted",
+        status: "running" as const,
+        createdAt: "2026-06-19T00:00:00.000Z",
+        updatedAt: "2026-06-19T00:00:01.000Z",
+        eventCursor: 0,
+      }),
+    },
+    { sessionId: "native-aborted" },
+  );
+
+  await assert.rejects(
+    () =>
+      responder("abort", {
+        signal: controller.signal,
+        appendAssistantChunk: () => undefined,
+      }),
+    /user stopped/u,
+  );
+  assert.equal(streamCalls, 0);
+});
+
+void test("Spark native responder enforces the stream deadline after a live page", async () => {
+  const responder = createSparkDaemonNativeResponder(
+    {
+      turnSubmit: async () => ({
+        invocationId: "inv_deadline",
+        status: "queued" as const,
+        acceptedAt: "2026-06-19T00:00:00.000Z",
+      }),
+      turnStream: async () => ({
+        invocationId: "inv_deadline",
+        events: [],
+        nextCursor: 0,
+        hasMore: false,
+      }),
+      turnStatus: async () => ({
+        invocationId: "inv_deadline",
+        sessionId: "native-deadline",
+        status: "running" as const,
+        createdAt: "2026-06-19T00:00:00.000Z",
+        updatedAt: "2026-07-13T00:00:01.000Z",
+        eventCursor: 0,
+      }),
+    },
+    { sessionId: "native-deadline", timeoutMs: 0 },
+  );
+
+  await assert.rejects(
+    () => responder("deadline", { appendAssistantChunk: () => undefined }),
+    /Timed out while streaming invocation inv_deadline/u,
+  );
+});
+
+void test("Spark native responder reconnects from its durable cursor without duplicate terminal rendering", async () => {
+  const chunks: string[] = [];
+  const cursors: number[] = [];
+  let streamAttempt = 0;
+  let terminalRenderCount = 0;
+  const event = (sequence: number, text: string) => ({
+    invocationId: "inv_reconnect",
+    sequence,
+    kind: "daemon.view_event",
+    payload: {
+      version: 1,
+      type: "daemon.view_event",
+      source: "daemon",
+      emittedAt: "2026-06-19T00:00:00.000Z",
+      sessionId: "native-reconnect",
+      invocationId: "inv_reconnect",
+      view: {
+        version: 1,
+        type: "session.message",
+        sessionId: "native-reconnect",
+        message: { id: "assistant", role: "assistant", text, status: "streaming" },
+      },
+    },
+    createdAt: "2026-06-19T00:00:00.000Z",
+  });
+  const responder = createSparkDaemonNativeResponder(
+    {
+      startService: () => ({ kind: "detached" as const, alreadyRunning: false, detail: "started" }),
+      daemonStatus: async () => ({
+        observedAt: "2026-06-19T00:00:00.000Z",
+        servers: [],
+        invocations: { queued: 0, running: 0, succeeded: 1, failed: 0, cancelled: 0 },
+      }),
+      turnSubmit: async () => ({
+        invocationId: "inv_reconnect",
+        status: "queued" as const,
+        acceptedAt: "2026-06-19T00:00:00.000Z",
+      }),
+      turnStream: async (_paths, input) => {
+        cursors.push(input.after ?? 0);
+        streamAttempt += 1;
+        if (streamAttempt === 1) {
+          return {
+            invocationId: "inv_reconnect",
+            events: [event(1, "a"), event(2, "ab")],
+            nextCursor: 2,
+            hasMore: false,
+          };
+        }
+        if (streamAttempt === 2) throw new Error("daemon socket disconnected");
+        return {
+          invocationId: "inv_reconnect",
+          events: [event(3, "abc")],
+          nextCursor: 3,
+          hasMore: false,
+        };
+      },
+      turnStatus: async () => ({
+        invocationId: "inv_reconnect",
+        sessionId: "native-reconnect",
+        status: streamAttempt >= 3 ? ("succeeded" as const) : ("running" as const),
+        createdAt: "2026-06-19T00:00:00.000Z",
+        updatedAt: "2026-06-19T00:00:01.000Z",
+        eventCursor: 3,
+      }),
+    },
+    { sessionId: "native-reconnect" },
+  );
+
+  const output = await responder("reconnect", {
+    appendAssistantChunk: (chunk) => chunks.push(chunk),
+    finishAssistantMessage: () => {
+      terminalRenderCount += 1;
+    },
+  });
+
+  assert.equal(output, "");
+  assert.deepEqual(cursors, [0, 2, 2]);
+  assert.deepEqual(chunks, ["a", "b", "c"]);
+  assert.equal(terminalRenderCount, 1);
+  console.info(
+    "SPARK_TUI_INVOCATION_RECONNECT_TRANSCRIPT",
+    JSON.stringify({
+      invocationId: "inv_reconnect",
+      cursors,
+      eventSequences: [1, 2, 3],
+      duplicateEventCount: 0,
+      terminalRenderCount,
+    }),
+  );
+});
+
+void test("Spark native responder drains 10,000 bounded invocation events without status arrays", async () => {
+  const invocationId = "inv_0123456789abcdef0123456789abcdef";
+  const events = Array.from({ length: 10_000 }, (_, index) => ({
+    invocationId,
+    sequence: index + 1,
+    kind: "daemon.task.lifecycle",
+    payload: {
+      version: 1,
+      type: "daemon.task.lifecycle",
+      source: "daemon",
+      emittedAt: "2026-06-19T00:00:00.000Z",
+      invocationId,
+      taskType: "session.run",
+      status: "running",
+      metadata: {},
+    },
+    createdAt: "2026-06-19T00:00:00.000Z",
+  }));
+  let maxPageBytes = 0;
+  let statusBytes = 0;
+  let statusCallCount = 0;
+  const responder = createSparkDaemonNativeResponder(
+    {
+      startService: () => ({ kind: "detached" as const, alreadyRunning: false, detail: "started" }),
+      daemonStatus: async () => ({
+        observedAt: "2026-06-19T00:00:00.000Z",
+        servers: [],
+        invocations: { queued: 0, running: 0, succeeded: 1, failed: 0, cancelled: 0 },
+      }),
+      turnSubmit: async () => ({
+        invocationId,
+        status: "queued" as const,
+        acceptedAt: "2026-06-19T00:00:00.000Z",
+      }),
+      turnStream: async (_paths, input) => {
+        const after = input.after ?? 0;
+        const limit = input.limit ?? 100;
+        const pageEvents = events.slice(after, after + limit);
+        const page = {
+          invocationId,
+          events: pageEvents,
+          nextCursor: pageEvents.at(-1)?.sequence ?? after,
+          hasMore: after + pageEvents.length < events.length,
+        };
+        maxPageBytes = Math.max(maxPageBytes, Buffer.byteLength(JSON.stringify(page)));
+        assert.ok(page.events.length <= 100);
+        assert.ok(maxPageBytes < 1024 * 1024);
+        return page;
+      },
+      turnStatus: async () => {
+        statusCallCount += 1;
+        const status = {
+          invocationId,
+          status: "succeeded" as const,
+          createdAt: "2026-06-19T00:00:00.000Z",
+          updatedAt: "2026-06-19T00:00:01.000Z",
+          finishedAt: "2026-06-19T00:00:01.000Z",
+          eventCursor: events.length,
+        };
+        statusBytes = Buffer.byteLength(JSON.stringify(status));
+        assert.equal("events" in status, false);
+        assert.ok(statusBytes < 1024 * 1024);
+        return status;
+      },
+    },
+    { sessionId: "native-large-stream" },
+  );
+
+  const output = await responder("large stream", { appendAssistantChunk: () => undefined });
+  assert.match(output, /completed session native-large-stream/u);
+  assert.equal(statusCallCount, 101);
+  assert.ok(maxPageBytes < 1024 * 1024);
+  assert.ok(statusBytes < 1024 * 1024);
+  console.info(
+    "SPARK_TUI_INVOCATION_LARGE_STREAM_TRANSCRIPT",
+    JSON.stringify({
+      invocationId,
+      eventCount: events.length,
+      pageLimit: 100,
+      statusCallCount,
+      maxPageBytes,
+      statusBytes,
+      statusContainsEvents: false,
+    }),
+  );
 });
 
 void test("Spark native responder ensures its workspace session once before submission", async () => {
@@ -2500,7 +2665,7 @@ void test("Spark native responder ensures its workspace session once before subm
       daemonStatus: async () => ({
         observedAt: "2026-06-19T00:00:00.000Z",
         servers: [],
-        queue: { inbox: 0, processed: 0, failed: 0 },
+        invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
       }),
       managedSessions: {
         list: async () => {
@@ -2532,32 +2697,18 @@ void test("Spark native responder ensures its workspace session once before subm
       turnSubmit: async (_paths, input) => {
         calls.push(`submit:${input.sessionId}:${input.prompt}`);
         return {
-          observedAt: "2026-06-19T00:00:00.000Z",
-          fileName: `${input.prompt}.json`,
-          filePath: `/tmp/${input.prompt}.json`,
-          task: { type: "session.run" as const, sessionId: input.sessionId, prompt: input.prompt },
+          invocationId: `inv_${input.prompt}`,
+          status: "queued" as const,
+          acceptedAt: "2026-06-19T00:00:00.000Z",
         };
       },
-      daemonQueue: async () => ({
-        state: "all" as const,
-        observedAt: "2026-06-19T00:00:00.000Z",
-        byState: {
-          processed: calls
-            .filter((call) => call.startsWith("submit:"))
-            .map((call) => {
-              const [, sessionId, prompt] = call.split(":");
-              return {
-                fileName: `${prompt}.json`,
-                filePath: `/tmp/${prompt}.json`,
-                payload: {
-                  enqueuedAt: "2026-06-19T00:00:00.000Z",
-                  processedAt: "2026-06-19T00:00:01.000Z",
-                  task: { type: "session.run" as const, sessionId: sessionId!, prompt: prompt! },
-                  result: { assistantText: `answer:${prompt}`, stderr: "" },
-                },
-              };
-            }),
-        },
+      turnStatus: async (_paths, { invocationId }) => ({
+        invocationId,
+        status: "succeeded" as const,
+        createdAt: "2026-06-19T00:00:00.000Z",
+        updatedAt: "2026-06-19T00:00:01.000Z",
+        finishedAt: "2026-06-19T00:00:01.000Z",
+        eventCursor: 0,
       }),
     },
     {
@@ -2567,8 +2718,8 @@ void test("Spark native responder ensures its workspace session once before subm
     },
   );
 
-  assert.equal(await responder("one"), "answer:one");
-  assert.equal(await responder("two"), "answer:two");
+  assert.match(await responder("one"), /completed session native-session: inv_one/u);
+  assert.match(await responder("two"), /completed session native-session: inv_two/u);
   assert.deepEqual(calls, [
     "list",
     "create:native-session",
@@ -2585,32 +2736,23 @@ void test("Spark native responder submits prompts through daemon IPC", async () 
       daemonStatus: async () => ({
         observedAt: "2026-06-19T00:00:00.000Z",
         servers: [],
-        queue: { inbox: 0, processed: 0, failed: 0 },
+        invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
       }),
       turnSubmit: async (_paths, input) => {
         calls.push({ sessionId: input.sessionId, prompt: input.prompt });
         return {
-          observedAt: "2026-06-19T00:00:00.000Z",
-          fileName: `turn-${calls.length}.json`,
-          filePath: `/tmp/turn-${calls.length}.json`,
-          task: { type: "session.run" as const, sessionId: input.sessionId, prompt: input.prompt },
+          invocationId: `inv_${calls.length}`,
+          status: "queued" as const,
+          acceptedAt: "2026-06-19T00:00:00.000Z",
         };
       },
-      daemonQueue: async () => ({
-        state: "all" as const,
-        observedAt: "2026-06-19T00:00:00.000Z",
-        byState: {
-          processed: calls.map((call, index) => ({
-            fileName: `turn-${index + 1}.json`,
-            filePath: `/tmp/turn-${index + 1}.json`,
-            payload: {
-              enqueuedAt: "2026-06-19T00:00:00.000Z",
-              processedAt: "2026-06-19T00:00:01.000Z",
-              task: { type: "session.run" as const, ...call },
-              result: { assistantText: `answer ${index + 1}`, stderr: "" },
-            },
-          })),
-        },
+      turnStatus: async (_paths, { invocationId }) => ({
+        invocationId,
+        status: "succeeded" as const,
+        createdAt: "2026-06-19T00:00:00.000Z",
+        updatedAt: "2026-06-19T00:00:01.000Z",
+        finishedAt: "2026-06-19T00:00:01.000Z",
+        eventCursor: 0,
       }),
     },
     { sessionId: "native-session" },
@@ -2618,8 +2760,8 @@ void test("Spark native responder submits prompts through daemon IPC", async () 
 
   const firstOutput = await responder("hello through daemon");
   const secondOutput = await responder("follow-up through daemon");
-  assert.equal(firstOutput, "answer 1");
-  assert.equal(secondOutput, "answer 2");
+  assert.match(firstOutput, /completed session native-session: inv_1/u);
+  assert.match(secondOutput, /completed session native-session: inv_2/u);
   assert.deepEqual(calls, [
     { sessionId: "native-session", prompt: "hello through daemon" },
     { sessionId: "native-session", prompt: "follow-up through daemon" },

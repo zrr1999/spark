@@ -62,6 +62,17 @@ interface InfoflowSdkMessageApi {
   }): Promise<unknown>;
 }
 
+type InfoflowStreamingSession = Pick<
+  StreamingCardSession,
+  | "start"
+  | "appendText"
+  | "appendReasoning"
+  | "notifyToolStart"
+  | "notifyToolResult"
+  | "complete"
+  | "fail"
+>;
+
 export interface InfoflowSdkClientLike {
   im: {
     message: InfoflowSdkMessageApi;
@@ -69,16 +80,7 @@ export interface InfoflowSdkClientLike {
       createSession(input: {
         to: string;
         answerFormat?: "text" | "markdown";
-      }): Pick<
-        StreamingCardSession,
-        | "start"
-        | "appendText"
-        | "appendReasoning"
-        | "notifyToolStart"
-        | "notifyToolResult"
-        | "complete"
-        | "fail"
-      >;
+      }): InfoflowStreamingSession;
     };
   };
 }
@@ -128,17 +130,12 @@ export function createInfoflowSdkOutbound(
 }
 
 /**
- * Infoflow's StreamingCardSession.complete(label) writes the same label to both
- * `think_status_text` (outer star row) and `status_info` (details / 收起详情 row).
- * Patch the final contents so the details row is not a second "已完成".
+ * Infoflow's streaming template nests process details under the outer status row.
+ * Keep the inner process installed so one outer disclosure click reveals it, and
+ * keep the completed outer/inner labels distinct.
  */
-export function wrapInfoflowReplyStream(
-  session: Pick<
-    StreamingCardSession,
-    "appendText" | "appendReasoning" | "notifyToolStart" | "notifyToolResult" | "complete" | "fail"
-  >,
-): InfoflowReplyStream {
-  patchStreamingCardFinalLabels(session);
+export function wrapInfoflowReplyStream(session: InfoflowStreamingSession): InfoflowReplyStream {
+  patchStreamingCardPresentation(session);
   return {
     appendText: (delta) => session.appendText(delta),
     appendReasoning: (delta) => session.appendReasoning(delta),
@@ -160,25 +157,22 @@ type StreamingCardBuildContents = (opts: {
   error?: string;
 }) => Record<string, StreamingCardContentsNode>;
 
-function patchStreamingCardFinalLabels(
-  session: Pick<
-    StreamingCardSession,
-    "appendText" | "appendReasoning" | "notifyToolStart" | "notifyToolResult" | "complete" | "fail"
-  >,
-): void {
+function patchStreamingCardPresentation(session: InfoflowStreamingSession): void {
   const mutable = session as typeof session & {
     buildContents?: StreamingCardBuildContents;
-    __sparkPatchedFinalLabels?: boolean;
+    __sparkPatchedPresentation?: boolean;
   };
-  if (mutable.__sparkPatchedFinalLabels) return;
+  if (mutable.__sparkPatchedPresentation) return;
   const original = mutable.buildContents;
   if (typeof original !== "function") {
-    // Fake/test sessions may omit private SDK helpers; complete() still works.
-    mutable.__sparkPatchedFinalLabels = true;
+    // Fake/test sessions may omit private SDK helpers; public stream methods still work.
+    mutable.__sparkPatchedPresentation = true;
     return;
   }
   mutable.buildContents = (opts) => {
     const contents = original.call(mutable, opts);
+    contents.status_info_1_install = { type: "text", content: "1" };
+    contents.flex_item_status_info_1_install = { type: "text", content: "1" };
     if (opts.final && !opts.error) {
       const doneLabel = opts.doneLabel?.trim() || INFOFLOW_STREAM_DONE_LABEL;
       contents.think_status_text = { type: "text", content: doneLabel };
@@ -186,7 +180,7 @@ function patchStreamingCardFinalLabels(
     }
     return contents;
   };
-  mutable.__sparkPatchedFinalLabels = true;
+  mutable.__sparkPatchedPresentation = true;
 }
 
 function createOfficialClient(config: InfoflowAdapterConfig): InfoflowSdkClientLike {

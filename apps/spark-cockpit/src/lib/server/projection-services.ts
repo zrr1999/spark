@@ -1,1 +1,1 @@
-export * from "@zendev-lab/spark-server/projection-services";
+export * from "@zendev-lab/spark-coordination/projection-services";

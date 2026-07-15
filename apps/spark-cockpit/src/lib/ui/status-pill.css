@@ -22,7 +22,8 @@
 .status-pill.completed,
 .status-pill.succeeded,
 .status-pill.resolved,
-.status-pill.acked {
+.status-pill.acked,
+.status-pill.available {
   background: var(--color-success-soft);
   color: var(--color-success);
 }
@@ -31,7 +32,8 @@
 .status-pill.pending,
 .status-pill.queued,
 .status-pill.offline,
-.status-pill.disconnected {
+.status-pill.disconnected,
+.status-pill.degraded {
   background: var(--color-warning-soft);
   color: var(--color-warning);
 }

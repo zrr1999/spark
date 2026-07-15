@@ -7,6 +7,7 @@ import {
   type InvocationUpdatePayload,
   type RuntimeCommandAckPayload,
   type RuntimeCommandRejectPayload,
+  type RuntimeCommandResultPayload,
   type RuntimeReconcileReportPayload,
   type TaskGraphSnapshotPayload,
   type WorkspaceSnapshotPayload,
@@ -24,10 +25,15 @@ export interface RouteContext {
   ackOf?: string | undefined;
 }
 
-export function runtimeEnvelope(type: string, payload: unknown, route: RouteContext) {
+export function runtimeEnvelope(
+  type: string,
+  payload: unknown,
+  route: RouteContext,
+  options: { messageId?: string } = {},
+) {
   return {
     protocolVersion: runtimeProtocolVersion,
-    messageId: createId("msg"),
+    messageId: options.messageId ?? createId("msg"),
     type,
     sentAt: new Date().toISOString(),
     runtimeId: route.runtimeId,
@@ -51,12 +57,28 @@ export function commandReject(payload: RuntimeCommandRejectPayload, route: Route
   return runtimeEnvelope("runtime.command.reject", payload, route);
 }
 
-export function invocationUpdated(payload: InvocationUpdatePayload, route: RouteContext) {
-  return runtimeEnvelope("invocation.updated", payload, route);
+export function commandResult(
+  payload: RuntimeCommandResultPayload,
+  route: RouteContext,
+  options: { messageId?: string } = {},
+) {
+  return runtimeEnvelope("runtime.command.result", payload, route, options);
 }
 
-export function invocationLogChunk(payload: InvocationLogChunkPayload, route: RouteContext) {
-  return runtimeEnvelope("invocation.log_chunk", payload, route);
+export function invocationUpdated(
+  payload: InvocationUpdatePayload,
+  route: RouteContext,
+  options: { messageId?: string } = {},
+) {
+  return runtimeEnvelope("invocation.updated", payload, route, options);
+}
+
+export function invocationLogChunk(
+  payload: InvocationLogChunkPayload,
+  route: RouteContext,
+  options: { messageId?: string } = {},
+) {
+  return runtimeEnvelope("invocation.log_chunk", payload, route, options);
 }
 
 export function taskGraphSnapshot(payload: TaskGraphSnapshotPayload, route: RouteContext) {

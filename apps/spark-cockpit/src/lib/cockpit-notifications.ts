@@ -1,4 +1,4 @@
-import type { SerializedEvent } from "@zendev-lab/spark-server/events";
+import type { SerializedEvent } from "@zendev-lab/spark-coordination/events";
 
 export const notificationPreferenceStorageKey = "spark-cockpit:notifications:enabled";
 

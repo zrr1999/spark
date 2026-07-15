@@ -3,7 +3,7 @@ import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import {
   loadArtifactDetailPage,
   prepareArtifactPreviewForWorkspace,
-} from "@zendev-lab/spark-server/cockpit-queries";
+} from "@zendev-lab/spark-coordination/cockpit-queries";
 import { getDatabase } from "$lib/server/db";
 import type { ArtifactPreviewStatus } from "$lib/server/artifact-cache";
 import type { Actions, PageServerLoad } from "./$types";

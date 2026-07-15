@@ -6,7 +6,6 @@ import {
   type SparkDaemonEvent,
 } from "@zendev-lab/spark-protocol";
 import type { InfoflowAttachment } from "@zendev-lab/spark-channels";
-import { SparkDaemonInvocationRegistry } from "./invocations.ts";
 
 export type SparkDaemonTask = SparkDaemonSessionRunTask;
 
@@ -43,6 +42,8 @@ export interface SparkDaemonSessionRunTask {
   workspaceId?: string;
   projectId?: string;
   assignment?: SparkAssignment;
+  /** Direct request message metadata persisted on the target user turn. */
+  messageMetadata?: Record<string, unknown>;
   /** When set, daemon sends the assistant reply back through channel notify. */
   channelReply?: {
     workspaceId: string;
@@ -53,45 +54,14 @@ export interface SparkDaemonSessionRunTask {
   channelContext?: SparkDaemonChannelContext;
 }
 
-export interface SparkDaemonQueuePayload<TTask extends SparkDaemonTask = SparkDaemonTask> {
-  enqueuedAt: string;
-  task: TTask;
-  processedAt?: string;
-  result?: unknown;
-  failedAt?: string;
-  error?: string;
-}
-
-export interface SparkDaemonProcessedQueuePayload<
-  TTask extends SparkDaemonTask = SparkDaemonTask,
-> extends SparkDaemonQueuePayload<TTask> {
-  processedAt: string;
-  result?: unknown;
-}
-
-export interface SparkDaemonFailedQueuePayload<
-  TTask extends SparkDaemonTask = SparkDaemonTask,
-> extends SparkDaemonQueuePayload<TTask> {
-  failedAt: string;
-  error: string;
-}
-
-export type SparkDaemonQueueState = "inbox" | "processed" | "failed";
-
-export interface SparkDaemonQueueEntry<TTask extends SparkDaemonTask = SparkDaemonTask> {
-  fileName: string;
-  filePath: string;
-  payload: SparkDaemonQueuePayload<TTask>;
-}
-
 export type SparkDaemonEventSink = (event: SparkDaemonEvent) => void | Promise<void>;
 
 export interface SparkDaemonTaskExecutionContext {
-  fileName: string;
-  queueEntry: SparkDaemonQueueEntry;
   invocationId: string;
   signal: AbortSignal;
   timeoutMs?: number;
+  /** Pause the task wall-clock timeout while waiting on an explicit human decision. */
+  withPausedTimeout?<T>(operation: () => Promise<T>): Promise<T>;
   emitEvent?: SparkDaemonEventSink;
 }
 
@@ -99,21 +69,6 @@ export type SparkDaemonTaskExecutor = (
   task: SparkDaemonTask,
   context: SparkDaemonTaskExecutionContext,
 ) => Promise<unknown>;
-
-export interface SparkDaemonActiveTasks {
-  /** Queue-worker concurrency slots. These may be released before an aborted executor settles. */
-  files: Set<string>;
-  /** Session fences owned by the underlying executors, including abort cleanup. */
-  sessions: Set<string>;
-  /** Invocation/session authority; an entry lives until its underlying executor settles. */
-  invocations: SparkDaemonInvocationRegistry;
-}
-
-export function createSparkDaemonActiveTasks(
-  invocations = new SparkDaemonInvocationRegistry(),
-): SparkDaemonActiveTasks {
-  return { files: new Set(), sessions: new Set(), invocations };
-}
 
 export function getSparkDaemonTaskSessionId(task: SparkDaemonTask): string | null {
   return task.type === "session.run" ? task.sessionId : null;
@@ -138,6 +93,7 @@ export function validateSparkDaemonTask(value: unknown): SparkDaemonTask {
     sessionId: task.sessionId.trim(),
     prompt: task.prompt,
     model: nonEmptyString(task.model),
+    thinkingLevel: nonEmptyString(task.thinkingLevel),
     reset: typeof task.reset === "boolean" ? task.reset : undefined,
     actor: nonEmptyString(task.actor),
     note: nonEmptyString(task.note),
@@ -147,6 +103,9 @@ export function validateSparkDaemonTask(value: unknown): SparkDaemonTask {
     workspaceId: nonEmptyString(task.workspaceId),
     projectId: nonEmptyString(task.projectId),
     assignment: task.assignment === undefined ? undefined : parseSparkAssignment(task.assignment),
+    ...(task.messageMetadata === undefined
+      ? {}
+      : { messageMetadata: requiredRecord(task.messageMetadata, "messageMetadata") }),
     ...(parseChannelReply(task.channelReply)
       ? { channelReply: parseChannelReply(task.channelReply) }
       : {}),
@@ -217,6 +176,13 @@ function parseInfoflowAttachments(value: unknown): InfoflowAttachment[] {
       },
     ];
   });
+}
+
+function requiredRecord(value: unknown, field: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`daemon task ${field} must be an object`);
+  }
+  return value as Record<string, unknown>;
 }
 
 function nonEmptyString(value: unknown): string | undefined {

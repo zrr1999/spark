@@ -29,12 +29,6 @@ import {
   type SparkDaemonCliCommand,
 } from "./cli/daemon.ts";
 import {
-  parseSparkServerCliArgs,
-  runSparkServerCliCommand,
-  type SparkServerCliCommand,
-  type SparkServerCliOptions,
-} from "./cli/server.ts";
-import {
   createSparkNativeLocalControlSlashCommands,
   createSparkNativeRuntimeSlashCommands,
   createSparkNativeUiTransport,
@@ -80,6 +74,7 @@ import {
 } from "./tui/model-selector.ts";
 import {
   CREATE_SPARK_SESSION_SELECTION,
+  isSelectableSparkSession,
   runNativeSparkSessionSelector,
   type SparkSessionSelectorOptions,
 } from "./tui/session-selector.ts";
@@ -135,7 +130,7 @@ export type SparkCliCommand =
     }
   | { kind: "tui"; initialMessage?: string; options?: SparkCliRuntimeOptions }
   | { kind: "daemon"; command: SparkDaemonCliCommand }
-  | { kind: "server"; command: SparkServerCliCommand };
+  | { kind: "error"; message: string };
 
 export interface SparkCliTerminalState {
   stdinIsTTY?: boolean;
@@ -144,7 +139,6 @@ export interface SparkCliTerminalState {
 
 export interface RunSparkCliOptions {
   daemonClient?: SparkDaemonClientOptions;
-  serverClient?: SparkServerCliOptions;
   runTui?: typeof runNativeSparkTui;
   selectSession?: (options: SparkSessionSelectorOptions) => Promise<string | null>;
   createHostServices?: (options?: SparkCliHostServicesOptions) => Promise<SparkCliHostServices>;
@@ -168,8 +162,12 @@ export function parseSparkCliCommand(argv: string[]): SparkCliCommand {
   }
   if (argv[0] === "daemon")
     return { kind: "daemon", command: parseSparkDaemonCliArgs(argv.slice(1)) };
-  if (argv[0] === "server")
-    return { kind: "server", command: parseSparkServerCliArgs(argv.slice(1)) };
+  if (argv[0] === "server") {
+    return {
+      kind: "error",
+      message: '"server" is not a spark-tui command. Use "spark cockpit" instead.',
+    };
+  }
   if (argv[0] === "sessions" || argv[0] === "session") {
     return { kind: "daemon", command: parseSparkDaemonCliArgs(argv) };
   }
@@ -476,7 +474,7 @@ async function selectSparkCliWorkspaceSession(
       },
       daemonClient,
     )
-  ).filter((session) => session.status !== "archived");
+  ).filter(isSelectableSparkSession);
   const selection = await selectSession({
     sessions,
     workspaceLabel: `${lease.workspace.displayName} • ${services.cwd}`,
@@ -799,8 +797,8 @@ export async function runSparkCli(
       return 0;
     case "daemon":
       return await runSparkDaemonCliCommand(command.command, undefined, daemonClient);
-    case "server":
-      return await runSparkServerCliCommand(command.command, undefined, options.serverClient);
+    case "error":
+      throw new Error(command.message);
     case "resources": {
       const result = await runSparkResourceCommand(command.action, command.source, {
         kind: command.resourceKind,
@@ -872,6 +870,7 @@ export async function runSparkCli(
         let pendingNativeUiTransport: ReturnType<typeof createSparkNativeUiTransport> | undefined;
         const services = await createHostServices({
           ...(await hostServiceOptionsFromRuntime(command.options)),
+          sessionSource: "tui",
           hasUI: true,
           modelPicker: (state, ctx) =>
             pendingNativeUiTransport
@@ -1491,7 +1490,7 @@ export async function handleSparkRpcLine(
           type: "response",
           command,
           success: false,
-          error: "abort requires invocationId, fileName, or a prior submitted turn",
+          error: "abort requires invocationId or a prior submitted turn",
         });
         return;
       }
@@ -1507,9 +1506,11 @@ export async function handleSparkRpcLine(
         id,
         type: "response",
         command,
-        success: result.cancelled,
+        success: result.cancelRequested,
         data: result,
-        ...(result.cancelled ? {} : { error: result.message }),
+        ...(result.cancelRequested
+          ? {}
+          : { error: `Invocation ${invocationId} was not cancelled` }),
       });
       return;
     }
@@ -1540,14 +1541,12 @@ function invocationIdFromSubmitResult(result: unknown): string | undefined {
   const submit = record.result;
   if (!submit || typeof submit !== "object") return undefined;
   const submitRecord = submit as Record<string, unknown>;
-  return typeof submitRecord.fileName === "string" ? submitRecord.fileName : undefined;
+  return typeof submitRecord.invocationId === "string" ? submitRecord.invocationId : undefined;
 }
 
 function rpcAbortInvocationId(request: Record<string, unknown>): string | undefined {
-  for (const key of ["invocationId", "fileName", "taskFileName"]) {
-    const value = request[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
+  const value = request.invocationId;
+  if (typeof value === "string" && value.trim()) return value.trim();
   const nested = request.data ?? request.params;
   if (nested && typeof nested === "object") {
     return rpcAbortInvocationId(nested as Record<string, unknown>);

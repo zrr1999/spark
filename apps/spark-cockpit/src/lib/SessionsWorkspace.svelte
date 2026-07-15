@@ -43,6 +43,11 @@
     SESSION_TIMELINE_PAGE_SIZE,
     sessionTimelineWindow,
   } from "$lib/session-timeline";
+  import {
+    parseSessionSnapshotWindow,
+    SESSION_SNAPSHOT_PAGE_SIZE,
+    type SessionSnapshotHistory,
+  } from "$lib/session-snapshot-window";
   import { buildSessionWorkbenchView, type SessionInspectorLabels } from "$lib/session-workbench";
   import { Button } from "$lib/ui";
   import {
@@ -146,6 +151,7 @@
     locale: string;
     activity?: SessionActivity | null;
     sessionView?: SparkSessionView | null;
+    sessionHistory?: SessionSnapshotHistory | null;
     initialEventCursor?: string | null;
     formMessage?: string | null;
     formIntent?: string | null;
@@ -164,6 +170,7 @@
     locale,
     activity = null,
     sessionView = null,
+    sessionHistory = null,
     initialEventCursor = null,
     formMessage = null,
     formIntent = null,
@@ -176,6 +183,10 @@
     sessions.find((session) => session.sessionId === selectedSessionId) ?? null,
   );
   let liveSessionView = $state<SparkSessionView | null>(untrack(() => sessionView));
+  let liveSessionHistory = $state<SessionSnapshotHistory | null>(
+    untrack(() => sessionHistory),
+  );
+  let historyLoadState = $state<"idle" | "loading" | "error">("idle");
   let liveEventState = $state<SessionLiveEventState | null>(null);
   let liveSessionId = $state("");
   let lastServerViewKey = $state("");
@@ -297,6 +308,9 @@
   let renderedTimeline = $derived(
     sessionTimelineWindow(timelineItems, effectiveTimelineRenderLimit),
   );
+  let hiddenTimelineCount = $derived(
+    renderedTimeline.hiddenCount + (liveSessionHistory?.hiddenMessages ?? 0),
+  );
   let activeProcessItemId = $derived(
     activeSessionTimelineProcessItemId(
       timelineItems,
@@ -396,6 +410,8 @@
         cursor,
       });
       liveSessionView = liveEventState.view;
+      liveSessionHistory = sessionHistory;
+      historyLoadState = "idle";
       return;
     }
 
@@ -644,6 +660,39 @@
     } finally {
       finishSessionActivityRefresh(activityRefreshState);
       armActivityRefresh();
+    }
+  }
+
+  async function showEarlierTimeline() {
+    if (historyLoadState === "loading") return;
+    const sessionId = selectedSessionId;
+    const history = liveSessionHistory;
+    if (!sessionId || !history || history.hiddenMessages === 0) {
+      timelineRenderLimit += SESSION_TIMELINE_PAGE_SIZE;
+      return;
+    }
+
+    historyLoadState = "loading";
+    try {
+      const nextLimit = Math.min(
+        history.totalMessages,
+        history.loadedMessages + SESSION_SNAPSHOT_PAGE_SIZE,
+      );
+      const response = await fetch(
+        `/api/v1/sessions/${encodeURIComponent(sessionId)}/snapshot?limit=${nextLimit}`,
+        { cache: "no-store" },
+      );
+      if (!response.ok) throw new Error(`session history request failed: ${response.status}`);
+      const window = parseSessionSnapshotWindow(await response.json());
+      if (window.snapshot.sessionId !== sessionId || selectedSessionId !== sessionId) return;
+
+      liveSessionView = window.snapshot;
+      if (liveEventState?.sessionId === sessionId) liveEventState.view = window.snapshot;
+      liveSessionHistory = window.history;
+      timelineRenderLimit += SESSION_TIMELINE_PAGE_SIZE;
+      historyLoadState = "idle";
+    } catch {
+      historyLoadState = "error";
     }
   }
 
@@ -978,7 +1027,6 @@
             aria-busy={startState === "submitting"}
             use:enhance={enhanceStartConversation}
           >
-            <input type="hidden" name="scopeKind" value="workspace" />
             {#if activeWorkspace}
               <input type="hidden" name="workspaceId" value={activeWorkspace.id} />
             {/if}
@@ -1099,14 +1147,18 @@
             <p>{copy.timelineEmpty}</p>
           </div>
         {:else}
-          {#if renderedTimeline.hiddenCount > 0}
+          {#if hiddenTimelineCount > 0}
             <button
               class="timeline-history-button"
               type="button"
-              onclick={() => (timelineRenderLimit += SESSION_TIMELINE_PAGE_SIZE)}
+              disabled={historyLoadState === "loading"}
+              onclick={showEarlierTimeline}
             >
-              {copy.showEarlier} ({renderedTimeline.hiddenCount})
+              {copy.showEarlier} ({hiddenTimelineCount})
             </button>
+            {#if historyLoadState === "error"}
+              <p class="timeline-history-error">{copy.unavailable}</p>
+            {/if}
           {/if}
           {#each renderedTimeline.items as item (item.id)}
             <ConversationMessage
@@ -1526,9 +1578,21 @@
     color: var(--color-primary);
   }
 
+  .timeline-history-button:disabled {
+    cursor: wait;
+    opacity: 0.6;
+  }
+
   .timeline-history-button:focus-visible {
     box-shadow: var(--shadow-focus);
     outline: none;
+  }
+
+  .timeline-history-error {
+    color: var(--color-danger);
+    font-size: 12px;
+    margin: 0;
+    text-align: center;
   }
 
   .conversation-composer {

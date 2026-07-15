@@ -1,5 +1,6 @@
 /** Skill discovery for the native Spark TUI host. */
 
+import { existsSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -7,7 +8,7 @@ import {
   defaultBuiltinSkillsDir,
   parseSkillFrontmatter,
   type SparkSkillFrontmatter,
-} from "../../../../packages/pi-extension/src/extension/spark-builtin-skills.ts";
+} from "@zendev-lab/pi-extension/host-support";
 
 export { defaultBuiltinSkillsDir, parseSkillFrontmatter };
 export type { SparkSkillFrontmatter };
@@ -38,7 +39,9 @@ export interface SparkSkillResolverOptions {
   sparkHome?: string;
   builtinDirs?: string[];
   workspaceDir?: string;
+  workspaceAgentsDirs?: string[];
   userDir?: string;
+  userAgentsDir?: string;
   skillDirs?: string[];
 }
 
@@ -57,7 +60,9 @@ export class SparkSkillResolver {
   readonly cwd: string;
   readonly builtinDirs: string[];
   readonly workspaceDir: string;
+  readonly workspaceAgentsDirs: string[];
   readonly userDir: string;
+  readonly userAgentsDir: string;
   readonly configuredSkillDirs: string[];
 
   constructor(options: SparkSkillResolverOptions) {
@@ -69,8 +74,15 @@ export class SparkSkillResolver {
       options.workspaceDir ?? join(this.cwd, ".spark", "skills"),
       this.cwd,
     );
+    this.workspaceAgentsDirs =
+      options.workspaceAgentsDirs?.map((dir) => resolvePath(dir, this.cwd)) ??
+      defaultProjectAgentsSkillsDirs(this.cwd);
     this.userDir = resolvePath(
       options.userDir ?? defaultUserSkillsDir(options.sparkHome),
+      this.cwd,
+    );
+    this.userAgentsDir = resolvePath(
+      options.userAgentsDir ?? defaultUserAgentsSkillsDir(),
       this.cwd,
     );
     this.configuredSkillDirs = options.skillDirs?.map((dir) => resolvePath(dir, this.cwd)) ?? [];
@@ -79,10 +91,16 @@ export class SparkSkillResolver {
   async resolve(): Promise<SparkSkillResolveResult> {
     const diagnostics: SparkSkillDiagnostic[] = [];
     const skillsByName = new Map<string, SparkSkill>();
+    const scannedDirs = new Set<string>();
 
     for (const layer of skillLayerSpecs(this)) {
-      for (const dir of layer.dirs) {
-        const result = await loadSkillsFromDir(dir, layer.layer);
+      for (const entry of layer.dirs) {
+        const dir = resolve(entry.path);
+        if (scannedDirs.has(dir)) continue;
+        scannedDirs.add(dir);
+        const result = await loadSkillsFromDir(dir, layer.layer, {
+          rootMarkdownAsSkill: entry.rootMarkdownAsSkill,
+        });
         diagnostics.push(...result.diagnostics);
         for (const skill of result.skills) {
           if (skill.disabled) continue;
@@ -123,14 +141,38 @@ export function defaultUserSkillsDir(sparkHome?: string): string {
   return join(defaultSparkSkillsRoot(sparkHome), "skills");
 }
 
+/** Cross-harness user skills directory shared with Pi and other agents (`~/.agents/skills`). */
+export function defaultUserAgentsSkillsDir(): string {
+  return join(homedir(), ".agents", "skills");
+}
+
+/**
+ * Project `.agents/skills` directories from `cwd` up to the git repository root
+ * (or the filesystem root when not in a repo), mirroring Pi's discovery. Ordered
+ * outermost-first so the directory closest to `cwd` wins on a name collision.
+ */
+export function defaultProjectAgentsSkillsDirs(cwd: string): string[] {
+  const dirs: string[] = [];
+  let current = resolve(cwd);
+  while (true) {
+    dirs.push(join(current, ".agents", "skills"));
+    if (existsSync(join(current, ".git"))) break;
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return dirs.reverse();
+}
+
 export async function loadSkillsFromDir(
   dir: string,
   layer: SparkSkillLayer,
+  options: { rootMarkdownAsSkill?: boolean } = {},
 ): Promise<SparkSkillResolveResult> {
   const skills: SparkSkill[] = [];
   const diagnostics: SparkSkillDiagnostic[] = [];
   const root = resolve(dir);
-  await scanSkillDir(root, layer, true, skills, diagnostics);
+  await scanSkillDir(root, layer, options.rootMarkdownAsSkill ?? true, skills, diagnostics);
   return { skills, diagnostics };
 }
 
@@ -295,13 +337,38 @@ function skillSearchWords(request: string): string[] {
   return words;
 }
 
+interface SkillDirSpec {
+  path: string;
+  rootMarkdownAsSkill: boolean;
+}
+
 function skillLayerSpecs(
   resolver: SparkSkillResolver,
-): Array<{ layer: SparkSkillLayer; dirs: string[] }> {
+): Array<{ layer: SparkSkillLayer; dirs: SkillDirSpec[] }> {
   return [
-    { layer: "builtin", dirs: resolver.builtinDirs },
-    { layer: "workspace", dirs: [resolver.workspaceDir, ...resolver.configuredSkillDirs] },
-    { layer: "user", dirs: [resolver.userDir] },
+    {
+      layer: "builtin",
+      dirs: resolver.builtinDirs.map((path) => ({ path, rootMarkdownAsSkill: true })),
+    },
+    {
+      layer: "workspace",
+      // `.agents/skills` follows the shared cross-harness convention: root `.md`
+      // files are ignored there, only `SKILL.md` directories are skills. Spark's
+      // own `.spark/skills` and explicitly configured dirs still allow root `.md`
+      // and take precedence over the generic `.agents` location.
+      dirs: [
+        ...resolver.workspaceAgentsDirs.map((path) => ({ path, rootMarkdownAsSkill: false })),
+        { path: resolver.workspaceDir, rootMarkdownAsSkill: true },
+        ...resolver.configuredSkillDirs.map((path) => ({ path, rootMarkdownAsSkill: true })),
+      ],
+    },
+    {
+      layer: "user",
+      dirs: [
+        { path: resolver.userAgentsDir, rootMarkdownAsSkill: false },
+        { path: resolver.userDir, rootMarkdownAsSkill: true },
+      ],
+    },
   ];
 }
 

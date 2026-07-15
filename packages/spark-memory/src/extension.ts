@@ -554,7 +554,11 @@ export function registerSparkMemoryCheckpointEvents(
       details: { checkpoint },
     };
     if (!isRecord(_event) || _event.consumeMessage !== true) {
-      pi.sendMessage?.(message, { deliverAs: "steer", triggerTurn: false });
+      // Deliver as a hidden next-turn message so the checkpoint rides the next
+      // real user prompt instead of being flushed as a standalone steered turn
+      // right after compaction. triggerTurn stays false: this must never start
+      // its own request.
+      pi.sendMessage?.(message, { deliverAs: "nextTurn", triggerTurn: false });
     }
     return { sparkMemoryCheckpoint: checkpoint, message };
   });

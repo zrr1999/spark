@@ -144,7 +144,7 @@
         {#if data.recentEvents.length === 0}
           <p class="empty-copy">{t.eventsEmpty}</p>
         {:else}
-          <div class="diagnostic-list">
+          <div class="diagnostic-list events-list">
             {#each data.recentEvents as event}
               <article>
                 <div><strong>{event.kind}</strong><small>{event.actorKind}{event.subjectKind ? ` · ${event.subjectKind}` : ""}</small></div>
@@ -298,6 +298,7 @@
 
   .diagnostic-list article > div { display: grid; gap: var(--spacing-xxs); min-width: 0; }
   .diagnostic-list strong, .diagnostic-list small { overflow-wrap: anywhere; }
+  .events-list article { grid-template-columns: minmax(0, 1fr) auto; }
 
   .secondary-action {
     align-items: center;

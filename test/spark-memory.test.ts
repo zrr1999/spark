@@ -108,6 +108,10 @@ void test("spark memory extension registers policy-only memory tool", async () =
 
     const compactEventResult = await api.handlers.get("session_before_compact")?.({}, { cwd: dir });
     assert.equal(api.messages[1]?.message.customType, "spark-memory-checkpoint");
+    // The checkpoint must ride the next real user prompt, not trigger its own
+    // post-compaction turn/request.
+    assert.equal(api.messages[1]?.options?.deliverAs, "nextTurn");
+    assert.notEqual(api.messages[1]?.options?.triggerTurn, true);
     assert.equal(
       (compactEventResult as { message?: { customType?: string } } | undefined)?.message
         ?.customType,

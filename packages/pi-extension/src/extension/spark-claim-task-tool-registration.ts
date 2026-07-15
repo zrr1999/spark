@@ -447,11 +447,11 @@ function renderClaimedTaskText(
   lines.push("");
   if (hasActiveTodos) {
     lines.push(
-      'Task plan items are present for this claim. Next: execute the task plan items, and refine them with task_write({ action: "todo_update", scope: "task", ops: [...] }) if the breakdown is incomplete.',
+      'Task plan items are present for this claim. Next: execute the task plan items, and refine them with task_write({ action: "plan_update", scope: "task", ops: [...] }) if the breakdown is incomplete.',
     );
   } else {
     lines.push(
-      'Next: set task-local TODOs with task_write({ action: "todo_update", scope: "task", ops: [{ op: "init", items: [...] }] }) before doing implementation work.',
+      'Next: set task plan items with task_write({ action: "plan_update", scope: "task", ops: [{ op: "init", items: [...] }] }) before doing implementation work.',
     );
   }
   return lines.join("\n");

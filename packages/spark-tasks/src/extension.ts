@@ -19,10 +19,29 @@ export type PiTaskWriteAction =
   | "plan"
   | "finish"
   | "recover"
-  | "todo_update"
+  | "plan_update"
   | "cache_cleanup";
 export type PiTaskAssignAction = "assign";
 export type PiTaskAction = PiTaskReadAction | PiTaskWriteAction | PiTaskAssignAction;
+
+/**
+ * Session-bound TODO checklist ops. The `todo` tool is a lightweight, action-style
+ * checklist that survives reload for the current session and is not tied to a claimed
+ * task. Task plan items live on task_write({ action: "plan_update" }) instead.
+ */
+export type PiTodoAction =
+  | "list"
+  | "init"
+  | "append"
+  | "start"
+  | "done"
+  | "upsert_done"
+  | "block"
+  | "cancel"
+  | "delete"
+  | "restore"
+  | "remove"
+  | "note";
 
 type ToolExecute = ToolConfig["execute"];
 type ToolOnUpdate = Parameters<ToolExecute>[3];
@@ -48,6 +67,11 @@ export interface PiTaskExtensionApi {
 
 export interface PiTaskToolOptions {
   handlers: PiTaskToolHandlers;
+}
+
+/** The `todo` tool routes every action through one session-bound handler. */
+export interface PiTodoToolOptions {
+  handler: PiTaskActionHandler;
 }
 
 class ToolCallText implements ToolRenderComponent {
@@ -80,8 +104,23 @@ const TASK_WRITE_ACTIONS: readonly PiTaskWriteAction[] = [
   "plan",
   "finish",
   "recover",
-  "todo_update",
+  "plan_update",
   "cache_cleanup",
+];
+
+const TODO_ACTIONS: readonly PiTodoAction[] = [
+  "list",
+  "init",
+  "append",
+  "start",
+  "done",
+  "upsert_done",
+  "block",
+  "cancel",
+  "delete",
+  "restore",
+  "remove",
+  "note",
 ];
 
 export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOptions): void {
@@ -166,18 +205,19 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
     name: "task_write",
     label: "Task Write",
     description:
-      "Project/task/TODO graph mutation capability. Use intent-specific actions to select/finish/rename/update projects, claim/plan/finish tasks, update TODOs, or clean task-owned caches.",
+      "Project/task graph mutation capability. Use intent-specific actions to select/finish/rename/update projects, claim/plan/finish tasks, update task plan items, or clean task-owned caches.",
     promptGuidelines: [
-      "Use task_write for project/task/TODO graph mutations.",
+      "Use task_write for project/task graph mutations.",
       "Creating or claiming a task is plan-locked: every task must have a bound high-bar task.plan before claim/creation completes; objectives, success criteria, evidence, and plan items must be concrete and objectively verifiable.",
+      "Use action=plan_update to refine the claimed task's plan items; use the session-bound todo tool for standalone session checklists.",
       "Use assign for explicit role-run spawning; task_write does not expose run_ready or run_control.",
     ],
     parameters: Type.Object({
       action: Type.String({
         description:
-          "project_use | project_rename | project_metadata_update | claim | plan | finish | recover | todo_update | cache_cleanup",
+          "project_use | project_rename | project_metadata_update | claim | plan | finish | recover | plan_update | cache_cleanup",
       }),
-      scope: Type.Optional(Type.String({ description: "For todo_update: task plan items only." })),
+      scope: Type.Optional(Type.String({ description: "For plan_update: task plan items only." })),
       project: Type.Optional(Type.String({ description: "Project selector/ref/title." })),
       projectRef: Type.Optional(Type.String({ description: "Project ref filter or selector." })),
       task: Type.Optional(Type.String({ description: "Task selector/ref/name/title." })),
@@ -236,15 +276,15 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
         Type.Array(
           Type.Any({
             description:
-              "Plan-item operation entries, e.g. init/append/start/done/upsert_done/block/cancel/delete/restore/remove/note.",
+              "Plan-item operation entries for plan_update, e.g. init/append/start/done/upsert_done/block/cancel/delete/restore/remove/note.",
           }),
         ),
       ),
-      items: Type.Optional(Type.Array(Type.String({ description: "TODO item text list." }))),
-      item: Type.Optional(Type.String({ description: "TODO item text." })),
-      id: Type.Optional(Type.String({ description: "TODO id." })),
+      items: Type.Optional(Type.Array(Type.String({ description: "Plan-item text list." }))),
+      item: Type.Optional(Type.String({ description: "Plan-item text." })),
+      id: Type.Optional(Type.String({ description: "Plan-item id." })),
       text: Type.Optional(
-        Type.String({ description: "TODO note/free text or completion summary." }),
+        Type.String({ description: "Plan-item note/free text or completion summary." }),
       ),
       summary: Type.Optional(Type.String({ description: "Task completion/failure summary." })),
       evidenceRefs: Type.Optional(
@@ -328,6 +368,45 @@ function executePiTaskAction(
   return handler(args);
 }
 
+export function registerPiTodoTool(pi: PiTaskExtensionApi, options: PiTodoToolOptions): void {
+  pi.registerTool({
+    name: "todo",
+    label: "Todo",
+    description:
+      "Session-bound TODO checklist. Track lightweight, standalone next-steps for the current session that survive reload and are not tied to a claimed task. Use action=list to view the checklist and init/append/start/done/upsert_done/block/cancel/delete/restore/remove/note to edit it.",
+    promptGuidelines: [
+      "Use todo for standalone session next-steps that are not tied to a claimed durable task.",
+      "Use task_write({ action: 'plan_update' }) for plan items of the currently claimed task, and task_write({ action: 'plan' }) to create durable project tasks.",
+      "Prefer one in_progress item at a time; start advances the checklist and done/cancel close items.",
+    ],
+    parameters: Type.Object({
+      action: Type.String({
+        description:
+          "list | init | append | start | done | upsert_done | block | cancel | delete | restore | remove | note",
+      }),
+      id: Type.Optional(Type.String({ description: "Target TODO id for id-addressed ops." })),
+      item: Type.Optional(Type.String({ description: "TODO item text for single-item ops." })),
+      items: Type.Optional(
+        Type.Array(Type.String({ description: "TODO item text list for init/append." })),
+      ),
+      text: Type.Optional(Type.String({ description: "Note text for the note op." })),
+      blockedBy: Type.Optional(
+        Type.Array(Type.String({ description: "Blocking references for the block op." })),
+      ),
+    }),
+    renderCall(args, theme) {
+      const action = typeof args.action === "string" ? args.action : undefined;
+      const item = typeof args.item === "string" ? args.item : undefined;
+      const text = ["todo", action && `action=${action}`, item].filter(Boolean).join(" ");
+      return new ToolCallText(theme.bold ? theme.bold(text) : text);
+    },
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      normalizePiTodoAction(params.action);
+      return options.handler({ toolCallId, params, signal, onUpdate, ctx });
+    },
+  });
+}
+
 function renderTaskCall(
   toolName: string,
   args: Record<string, unknown>,
@@ -353,4 +432,9 @@ function normalizePiTaskReadAction(value: unknown): PiTaskReadAction {
 function normalizePiTaskWriteAction(value: unknown): PiTaskWriteAction {
   if (TASK_WRITE_ACTIONS.includes(value as PiTaskWriteAction)) return value as PiTaskWriteAction;
   throw new Error(`task_write.action must be one of: ${TASK_WRITE_ACTIONS.join(", ")}`);
+}
+
+export function normalizePiTodoAction(value: unknown): PiTodoAction {
+  if (TODO_ACTIONS.includes(value as PiTodoAction)) return value as PiTodoAction;
+  throw new Error(`todo.action must be one of: ${TODO_ACTIONS.join(", ")}`);
 }

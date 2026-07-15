@@ -2,6 +2,7 @@ import type { IconName } from "./icons";
 
 export interface ConsoleNavLabels {
   modelsProviders: string;
+  invocationDiagnostics: string;
   channels: string;
   workspaceSettings: string;
   registration: string;
@@ -50,7 +51,14 @@ export function buildConsoleNavGroups(input: {
     {
       id: "daemon",
       label: input.groups.daemon,
-      items: [{ href: "/settings/models", label: input.nav.modelsProviders, icon: "spark" }],
+      items: [
+        { href: "/settings/models", label: input.nav.modelsProviders, icon: "spark" },
+        {
+          href: "/settings/invocations",
+          label: input.nav.invocationDiagnostics,
+          icon: "activity",
+        },
+      ],
     },
   ];
 
@@ -128,6 +136,7 @@ export function currentConsolePageLabel(input: {
   if (top === "settings") {
     if (segments[1] === "channels") return input.nav.channels;
     if (segments[1] === "models") return input.nav.modelsProviders;
+    if (segments[1] === "invocations") return input.nav.invocationDiagnostics;
     return input.nav.modelsProviders;
   }
 

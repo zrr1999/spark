@@ -3,8 +3,8 @@ import { SPARK_PROTOCOL_VERSION, type SparkDaemonEvent } from "@zendev-lab/spark
 import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import type { SparkDaemonSessionRunTask, SparkDaemonTaskExecutionContext } from "../core/types.ts";
 import {
-  createChannelAwareQueueTaskExecutor,
-  createSparkDaemonQueueTaskExecutor,
+  createChannelAwareTaskExecutor,
+  createSparkDaemonTaskExecutor,
   executeSparkDaemonSessionRunTask,
 } from "./session-run.ts";
 
@@ -14,16 +14,10 @@ const paths = resolveSparkPaths({
 });
 
 function context(
-  task: SparkDaemonSessionRunTask,
+  _task: SparkDaemonSessionRunTask,
   emitted: SparkDaemonEvent[] = [],
 ): SparkDaemonTaskExecutionContext {
   return {
-    fileName: "turn.json",
-    queueEntry: {
-      fileName: "turn.json",
-      filePath: "/tmp/turn.json",
-      payload: { enqueuedAt: "2026-07-10T08:00:00.000Z", task },
-    },
     invocationId: "invocation-1",
     signal: new AbortController().signal,
     emitEvent: (event) => {
@@ -106,7 +100,7 @@ describe("daemon native session execution", () => {
       });
       return { assistantText: "你好" };
     });
-    const executor = createChannelAwareQueueTaskExecutor({
+    const executor = createChannelAwareTaskExecutor({
       paths,
       createSparkHeadlessSessionExecutor: () => executeSession,
       channelIngress: {
@@ -130,6 +124,109 @@ describe("daemon native session execution", () => {
     expect(sendReply).not.toHaveBeenCalled();
   });
 
+  it("completes a separate execution stream before sending the final channel reply", async () => {
+    const appendText = vi.fn();
+    const appendProgress = vi.fn();
+    const notifyToolStart = vi.fn();
+    const complete = vi.fn(async () => undefined);
+    const sendReply = vi.fn(async () => undefined);
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_qq_separate",
+      prompt: "请检查",
+      channelReply: {
+        workspaceId: "workspace-qq",
+        adapterId: "qqbot",
+        recipient: "c2c:user-1",
+      },
+      channelContext: {
+        externalKey: "qqbot:c2c:user-1",
+        senderId: "user-1",
+        messageId: "message-1",
+      },
+    };
+    const executeSession = vi.fn(async (input: { onEvent?: (event: unknown) => unknown }) => {
+      await input.onEvent?.({
+        type: "view_event",
+        event: {
+          version: SPARK_PROTOCOL_VERSION,
+          type: "session.message",
+          sessionId: task.sessionId,
+          message: {
+            version: SPARK_PROTOCOL_VERSION,
+            id: "assistant-progress",
+            role: "assistant",
+            text: "先检查目录",
+            status: "done",
+            parts: [
+              {
+                id: "assistant-progress:part:0",
+                type: "text",
+                text: "先检查目录",
+                phase: "commentary",
+                status: "complete",
+                metadata: {},
+              },
+            ],
+            metadata: { stopReason: "toolUse" },
+          },
+        },
+      });
+      await input.onEvent?.({
+        type: "view_event",
+        event: {
+          version: SPARK_PROTOCOL_VERSION,
+          type: "session.message",
+          sessionId: task.sessionId,
+          message: {
+            version: SPARK_PROTOCOL_VERSION,
+            id: "tool-call:1",
+            role: "tool",
+            text: "private input",
+            status: "pending",
+            toolName: "cue_exec",
+            metadata: {},
+          },
+        },
+      });
+      return { assistantText: "检查完成" };
+    });
+    const executor = createChannelAwareTaskExecutor({
+      paths,
+      createSparkHeadlessSessionExecutor: () => executeSession,
+      channelIngress: {
+        openReplyStream: vi.fn(async () => ({
+          answerMode: "separate" as const,
+          appendText,
+          appendProgress,
+          notifyToolStart,
+          notifyToolResult: vi.fn(),
+          complete,
+          fail: vi.fn(async () => undefined),
+        })),
+        sendReply,
+      },
+    });
+
+    await executor(task, context(task));
+
+    expect(appendProgress).toHaveBeenCalledWith("先检查目录");
+    expect(notifyToolStart).toHaveBeenCalledWith({ name: "cue_exec", phase: "执行中" });
+    expect(appendText).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledWith("已完成");
+    expect(sendReply).toHaveBeenCalledTimes(1);
+    expect(sendReply).toHaveBeenCalledWith("workspace-qq", "qqbot", {
+      recipient: "c2c:user-1",
+      senderId: "user-1",
+      messageId: "message-1",
+      preview: "请检查",
+      text: "检查完成",
+    });
+    expect(complete.mock.invocationCallOrder[0]).toBeLessThan(
+      sendReply.mock.invocationCallOrder[0]!,
+    );
+  });
+
   it("falls back to a rich channel reply when a stream is unavailable", async () => {
     const sendReply = vi.fn(async () => undefined);
     const task: SparkDaemonSessionRunTask = {
@@ -147,7 +244,7 @@ describe("daemon native session execution", () => {
         messageId: "message-1",
       },
     };
-    const executor = createChannelAwareQueueTaskExecutor({
+    const executor = createChannelAwareTaskExecutor({
       paths,
       createSparkHeadlessSessionExecutor: () => async () => ({ assistantText: "**完成**" }),
       channelIngress: {
@@ -181,7 +278,7 @@ describe("daemon native session execution", () => {
       channelContext: { externalKey: "infoflow:user:alice", senderId: "alice" },
     };
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const executor = createChannelAwareQueueTaskExecutor({
+    const executor = createChannelAwareTaskExecutor({
       paths,
       createSparkHeadlessSessionExecutor: () => async () => ({ assistantText: "done" }),
       channelIngress: {
@@ -245,6 +342,7 @@ describe("daemon native session execution", () => {
           prompt?: string;
           systemPrompt?: string;
           messageMetadata?: Record<string, unknown>;
+          sessionSource?: string;
           approvalMethod?: string;
           sessionSurface?: string;
           allowedTools?: readonly string[];
@@ -253,24 +351,39 @@ describe("daemon native session execution", () => {
     expect(input?.prompt).toBe("@神经蛙 你叫什么名字");
     expect(input?.approvalMethod).toBe("auto");
     expect(input?.sessionSurface).toBe("channel");
-    expect(input?.allowedTools).toEqual(["session"]);
+    expect(input?.allowedTools).toEqual(["session", "ask", "context", "todo"]);
     expect(input?.systemPrompt).toContain(
       "Current conversation surface: Infoflow (如流) group chat",
     );
     expect(input?.systemPrompt).toContain("Use platform-supplied sender metadata for identity");
     expect(input?.systemPrompt).toContain("Dynamic context checkpoint: infoflow-message.");
-    expect(input?.systemPrompt).toContain("Message-platform sessions are coordination-only");
     expect(input?.systemPrompt).toContain(
-      'session({ action: "list", scope: "workspace", surface: "local" })',
+      "Message-platform sessions expose only a bounded safe tool surface",
     );
-    expect(input?.systemPrompt).toContain('session({ action: "send", toSessionId');
+    expect(input?.systemPrompt).toContain('session({ action: "list", scope: "workspace" })');
+    expect(input?.systemPrompt).toContain(
+      'session({ action: "send", kind: "notification", toSessionId',
+    );
+    expect(input?.systemPrompt).toContain(
+      'a local surface=local target with kind="request" for queued work',
+    );
     expect(input?.systemPrompt).toContain('senderId: "zhanrongrui"');
     expect(input?.systemPrompt).toContain('groupId: "10838226"');
     expect(input?.systemPrompt).toContain('messageId: "1870319775739153405"');
     expect(input?.systemPrompt).toContain('eventType: "MESSAGE_RECEIVE"');
     expect(input?.systemPrompt).toContain('contentType: "mixed"');
     expect(input?.systemPrompt).toContain('"reference":"image-fid-1"');
+    expect(input?.sessionSource).toBe("channel");
     expect(input?.messageMetadata).toEqual({
+      origin: {
+        kind: "user",
+        host: "channel",
+        surface: "channel",
+        adapter: "infoflow",
+        externalKey: "infoflow:group:10838226",
+        senderId: "zhanrongrui",
+        senderName: "詹荣瑞",
+      },
       channel: {
         adapter: "infoflow",
         externalKey: "infoflow:group:10838226",
@@ -285,6 +398,69 @@ describe("daemon native session execution", () => {
     });
     expect(input?.systemPrompt).not.toContain("@神经蛙 你叫什么名字");
     expect(input?.systemPrompt).not.toContain("You are handling an Infoflow");
+  });
+
+  it("keeps direct session requests exact and projects their execution source as session", async () => {
+    const messageMetadata = {
+      origin: {
+        kind: "session",
+        sessionId: "sess_sender",
+        surface: "local",
+        host: "tui",
+      },
+      sessionMail: {
+        messageId: "mail:request-1",
+        kind: "request",
+        intent: "work.request",
+        fromSessionId: "sess_sender",
+        toSessionId: "sess_target",
+      },
+    };
+    const executeSession = vi.fn(async () => ({ assistantText: "done" }));
+
+    await executeSparkDaemonSessionRunTask(
+      {
+        type: "session.run",
+        sessionId: "sess_target",
+        prompt: "Run exactly this request",
+        messageMetadata,
+      },
+      context({
+        type: "session.run",
+        sessionId: "sess_target",
+        prompt: "Run exactly this request",
+      }),
+      { paths, executeSession },
+    );
+
+    expect(executeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "Run exactly this request",
+        messageMetadata,
+        sessionSource: "session",
+      }),
+    );
+  });
+
+  it("adds a daemon origin to generic queued turns", async () => {
+    const executeSession = vi.fn(async () => ({ assistantText: "done" }));
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_daemon",
+      prompt: "generic daemon turn",
+    };
+
+    await executeSparkDaemonSessionRunTask(task, context(task), { paths, executeSession });
+
+    expect(executeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "generic daemon turn",
+        sessionSource: "daemon",
+        messageMetadata: {
+          origin: { kind: "user", host: "daemon", surface: "local" },
+        },
+      }),
+    );
   });
 
   it("keeps channel-bound sessions restricted on non-channel submitted turns", async () => {
@@ -320,8 +496,10 @@ describe("daemon native session execution", () => {
     expect(executeSession).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionSurface: "channel",
-        allowedTools: ["session"],
-        systemPrompt: expect.stringContaining('session({ action: "send", toSessionId'),
+        allowedTools: ["session", "ask", "context", "todo"],
+        systemPrompt: expect.stringContaining(
+          'a local surface=local target with kind="request" for queued work',
+        ),
       }),
     );
   });
@@ -364,7 +542,7 @@ describe("daemon native session execution", () => {
         eventsStreamed: true,
       };
     });
-    const executor = createSparkDaemonQueueTaskExecutor({
+    const executor = createSparkDaemonTaskExecutor({
       paths,
       sessionRegistry: { recordTurnQueued, recordTurnSettled, recordRun },
       createSparkHeadlessSessionExecutor: () => executeSession,
@@ -418,9 +596,8 @@ describe("daemon native session execution", () => {
       sessionId: "sess_auto_title",
       prompt: "Diagnose why the daemon does not start.",
       model: "baidu-oneapi/gpt-5.6-sol",
-      workspaceId: "workspace-title",
     };
-    const executor = createSparkDaemonQueueTaskExecutor({
+    const executor = createSparkDaemonTaskExecutor({
       paths,
       modelControl: {
         effectiveModel: vi.fn(async () => ({
@@ -465,7 +642,7 @@ describe("daemon native session execution", () => {
         signal: expect.any(AbortSignal),
       }),
     );
-    // The main queue task has already resolved while the advisory title leaf is pending.
+    // The main invocation has already resolved while the advisory title leaf is pending.
     expect(setTitleIfMissing).not.toHaveBeenCalled();
     resolveTitle("Daemon startup diagnosis");
     await vi.waitFor(() =>
@@ -476,7 +653,6 @@ describe("daemon native session execution", () => {
         expect.objectContaining({
           type: "daemon.session.updated",
           sessionId: task.sessionId,
-          workspaceId: "workspace-title",
           title: "Daemon startup diagnosis",
         }),
       ),
@@ -494,7 +670,7 @@ describe("daemon native session execution", () => {
       prompt: "This should keep the mechanical sidebar fallback.",
       model: "baidu-oneapi/gpt-5.6-sol",
     };
-    const executor = createSparkDaemonQueueTaskExecutor({
+    const executor = createSparkDaemonTaskExecutor({
       paths,
       modelControl: {
         effectiveModel: vi.fn(async () => ({
@@ -543,7 +719,7 @@ describe("daemon native session execution", () => {
       sessionPath: "/daemon/sessions/sess_warning.jsonl",
       assistantText: "done once",
     }));
-    const executor = createSparkDaemonQueueTaskExecutor({
+    const executor = createSparkDaemonTaskExecutor({
       paths,
       sessionRegistry: { recordTurnQueued, recordTurnSettled, recordRun },
       createSparkHeadlessSessionExecutor: () => executeSession,
@@ -581,7 +757,7 @@ describe("daemon native session execution", () => {
       sessionId: "sess_missing_path",
       assistantText: "done once",
     }));
-    const executor = createSparkDaemonQueueTaskExecutor({
+    const executor = createSparkDaemonTaskExecutor({
       paths,
       sessionRegistry: { recordTurnQueued, recordTurnSettled, recordRun },
       createSparkHeadlessSessionExecutor: () => executeSession,

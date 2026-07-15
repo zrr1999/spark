@@ -210,6 +210,15 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
     renderCall(sessionTools, "session", { action: "list", surface: "local" }, 80),
     /session action=list surface=local/u,
   );
+  assert.match(
+    renderCall(
+      sessionTools,
+      "session",
+      { action: "send", kind: "request", toSessionId: "session:worker" },
+      80,
+    ),
+    /session action=send to=session:worker kind=request/u,
+  );
 
   const graftTools = registerGraftToolsForRendering();
   t.assert.fileSnapshot(

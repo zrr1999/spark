@@ -5,6 +5,7 @@ export * from "./command-delivery.ts";
 export * from "./command-events.ts";
 export * from "./command-sources.ts";
 export * from "./errors.ts";
+export * from "./invocation-lifecycle.ts";
 export * from "./model-control.ts";
 export * from "./refs.ts";
 export * from "./runtime-v1/envelope.ts";
@@ -303,6 +304,11 @@ export const sparkInteractionBaseRequestSchema = z.object({
 
 export const sparkAskFlowInteractionRequestSchema = sparkInteractionBaseRequestSchema.extend({
   kind: z.literal("askFlow"),
+  /**
+   * `blocking` keeps the tool call suspended until a human answers. `async`
+   * durably opens the request and returns its handle to the caller immediately.
+   */
+  delivery: z.enum(["blocking", "async"]).optional(),
   mode: z.enum(["clarification", "decision", "approval", "unblock"]).default("clarification"),
   flow: z.string().min(1).optional(),
   questions: z.array(sparkAskQuestionViewSchema).min(1),
@@ -375,13 +381,15 @@ export const sparkInteractionRequestSchema = z.discriminatedUnion("kind", [
 const sparkInteractionResponseBaseSchema = z.object({
   version: sparkProtocolVersionSchema.default(SPARK_PROTOCOL_VERSION),
   requestId: z.string().min(1),
-  status: z.enum(["answered", "cancelled", "blocked", "error"]),
+  status: z.enum(["answered", "pending", "cancelled", "blocked", "error"]),
   message: z.string().optional(),
   metadata: sparkJsonObjectSchema.default({}),
 });
 
 export const sparkAskFlowInteractionResponseSchema = sparkInteractionResponseBaseSchema.extend({
   kind: z.literal("askFlow"),
+  /** Present for daemon-backed asks, and required by convention for `pending`. */
+  humanRequestId: z.string().min(1).optional(),
   answers: sparkJsonObjectSchema.default({}),
   nextAction: z.enum(["resume", "block", "cancel"]).optional(),
 });
@@ -455,7 +463,6 @@ const sparkDaemonEventBaseSchema = z.object({
 export const sparkDaemonTaskLifecycleEventSchema = sparkDaemonEventBaseSchema.extend({
   type: z.literal("daemon.task.lifecycle"),
   taskType: z.string().min(1),
-  taskFileName: z.string().min(1).optional(),
   status: z.enum(["queued", "running", "succeeded", "failed", "cancelled"]),
   summary: z.string().optional(),
 });

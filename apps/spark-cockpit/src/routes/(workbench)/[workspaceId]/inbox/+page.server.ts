@@ -1,5 +1,5 @@
 import { error as kitError } from "@sveltejs/kit";
-import { loadInboxPage } from "@zendev-lab/spark-server/cockpit-queries";
+import { loadInboxPage } from "@zendev-lab/spark-coordination/cockpit-queries";
 import { getDatabase } from "$lib/server/db";
 import type { PageServerLoad } from "./$types";
 

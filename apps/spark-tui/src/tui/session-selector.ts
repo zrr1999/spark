@@ -16,6 +16,24 @@ import {
 
 export const CREATE_SPARK_SESSION_SELECTION = "__spark_create_session__";
 
+/**
+ * Legacy message-platform conversations may be recognizable only by their stored
+ * `channel <adapter>:<scope>:<id>` title when an explicit binding is unavailable.
+ */
+const CHANNEL_SESSION_TITLE_RE =
+  /^channel\s+(?:infoflow|qqbot|feishu):(?:group|user|c2c|channel|chat):.+$/iu;
+const UNTITLED_SESSION_LABEL = "New conversation";
+
+/**
+ * Keep naming aligned with Cockpit while applying the native picker's narrower
+ * policy: only local, non-archived sessions are attachable here.
+ */
+export function isSelectableSparkSession(session: SparkSessionRegistryRecord): boolean {
+  if (session.status === "archived") return false;
+  if (session.bindings.length > 0) return false;
+  return !CHANNEL_SESSION_TITLE_RE.test(session.title?.trim() ?? "");
+}
+
 const plain = (text: string): string => text;
 
 const PLAIN_SESSION_SELECTOR_THEME: SelectListTheme = {
@@ -142,9 +160,9 @@ function sessionSelectItems(sessions: SparkSessionRegistryRecord[]): SelectItem[
       label: "+ New session",
       description: "Create a daemon-managed session in this workspace",
     },
-    ...sessions.map((session) => ({
+    ...sessions.filter(isSelectableSparkSession).map((session) => ({
       value: session.sessionId,
-      label: session.title?.trim() || session.sessionId,
+      label: session.title?.trim() || UNTITLED_SESSION_LABEL,
       description: [
         session.sessionId,
         session.model ? `${session.model.providerName}/${session.model.modelId}` : undefined,

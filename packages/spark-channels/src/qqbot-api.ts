@@ -3,6 +3,8 @@
  * Protocol behavior aligned with tencent-connect/openclaw-qqbot; no OpenClaw dependency.
  */
 
+import type { QqbotMarkdownKeyboardMessageRequest } from "./qqbot-types.ts";
+
 export const QQBOT_API_PRODUCTION_BASE = "https://api.sgroup.qq.com";
 export const QQBOT_API_SANDBOX_BASE = "https://sandbox.api.sgroup.qq.com";
 
@@ -36,14 +38,18 @@ export interface QqbotStreamMessageRequest {
   input_state: 1 | 10;
   content_type: "markdown";
   content_raw: string;
-  event_id?: string;
-  msg_id?: string;
+  event_id: string;
+  msg_id: string;
   msg_seq: number;
   index: number;
   stream_msg_id?: string;
 }
 
+export type QqbotInteractionAckCode = 0 | 1 | 2 | 3 | 4 | 5;
+
 export interface QqbotApiClient {
+  /** Allocate a collision-free sequence for one passive-reply source message. */
+  nextMessageSequence(messageId?: string): number;
   getAccessToken(appId: string, clientSecret: string): Promise<string>;
   getGatewayUrl(accessToken: string): Promise<string>;
   sendC2CMessage(
@@ -58,6 +64,30 @@ export interface QqbotApiClient {
     content: string,
     msgId?: string,
   ): Promise<QqbotMessageResponse>;
+  sendC2CMarkdownMessage(
+    accessToken: string,
+    openid: string,
+    content: string,
+    msgId?: string,
+    msgSeq?: number,
+  ): Promise<QqbotMessageResponse>;
+  sendGroupMarkdownMessage(
+    accessToken: string,
+    groupOpenid: string,
+    content: string,
+    msgId?: string,
+    msgSeq?: number,
+  ): Promise<QqbotMessageResponse>;
+  sendC2CMarkdownKeyboardMessage(
+    accessToken: string,
+    openid: string,
+    request: QqbotMarkdownKeyboardMessageRequest,
+  ): Promise<QqbotMessageResponse>;
+  sendGroupMarkdownKeyboardMessage(
+    accessToken: string,
+    groupOpenid: string,
+    request: QqbotMarkdownKeyboardMessageRequest,
+  ): Promise<QqbotMessageResponse>;
   sendChannelMessage(
     accessToken: string,
     channelId: string,
@@ -69,6 +99,11 @@ export interface QqbotApiClient {
     openid: string,
     req: QqbotStreamMessageRequest,
   ): Promise<QqbotMessageResponse>;
+  acknowledgeInteraction(
+    accessToken: string,
+    interactionId: string,
+    code?: QqbotInteractionAckCode,
+  ): Promise<void>;
 }
 
 interface TokenCacheEntry {
@@ -87,6 +122,7 @@ export function createQqbotApiClient(
   const apiBase = (options.baseUrl ?? QQBOT_API_BASE).replace(/\/+$/, "");
   const tokenCache = new Map<string, TokenCacheEntry>();
   const inflight = new Map<string, Promise<string>>();
+  const messageSequences = new Map<string, { next: number; touchedAt: number }>();
 
   async function getAccessToken(appId: string, clientSecret: string): Promise<string> {
     const normalizedAppId = appId.trim();
@@ -173,24 +209,79 @@ export function createQqbotApiClient(
     return data as T;
   }
 
-  function nextMsgSeq(msgId?: string): number {
+  function pruneMessageSequences(now: number): void {
+    for (const [key, state] of messageSequences) {
+      if (now - state.touchedAt >= 60 * 60 * 1000) messageSequences.delete(key);
+    }
+  }
+
+  function nextMessageSequence(msgId?: string): number {
     if (!msgId) return 1;
-    const timePart = Date.now() % 100_000_000;
-    const random = Math.floor(Math.random() * 65536);
-    return (timePart ^ random) % 65536;
+    const now = Date.now();
+    pruneMessageSequences(now);
+    const state = messageSequences.get(msgId) ?? { next: 1, touchedAt: now };
+    const value = state.next;
+    state.next += 1;
+    state.touchedAt = now;
+    messageSequences.set(msgId, state);
+    return value;
+  }
+
+  function useMessageSequence(msgId: string | undefined, explicit?: number): number {
+    if (explicit === undefined) return nextMessageSequence(msgId);
+    if (!Number.isSafeInteger(explicit) || explicit <= 0) {
+      throw new Error(`QQ Bot msg_seq must be a positive safe integer; got ${explicit}`);
+    }
+    if (msgId) {
+      const now = Date.now();
+      pruneMessageSequences(now);
+      const state = messageSequences.get(msgId) ?? { next: 1, touchedAt: now };
+      state.next = Math.max(state.next, explicit + 1);
+      state.touchedAt = now;
+      messageSequences.set(msgId, state);
+    }
+    return explicit;
   }
 
   function buildTextBody(content: string, msgId?: string): Record<string, unknown> {
     const body: Record<string, unknown> = {
       content,
       msg_type: 0,
-      msg_seq: nextMsgSeq(msgId),
+      msg_seq: nextMessageSequence(msgId),
     };
     if (msgId) body.msg_id = msgId;
     return body;
   }
 
+  function buildMarkdownKeyboardBody(
+    request: QqbotMarkdownKeyboardMessageRequest,
+  ): Record<string, unknown> {
+    const body = buildMarkdownBody(request.markdown.content, request.msg_id, request.msg_seq);
+    return {
+      ...body,
+      keyboard: request.keyboard,
+      ...(request.event_id ? { event_id: request.event_id } : {}),
+    };
+  }
+
+  function buildMarkdownBody(
+    content: string,
+    msgId?: string,
+    msgSeq?: number,
+  ): Record<string, unknown> {
+    if (!content.trim()) {
+      throw new Error("QQ Bot Markdown message requires non-empty content");
+    }
+    return {
+      markdown: { content },
+      msg_type: 2,
+      msg_seq: useMessageSequence(msgId, msgSeq),
+      ...(msgId ? { msg_id: msgId } : {}),
+    };
+  }
+
   return {
+    nextMessageSequence,
     getAccessToken,
     async getGatewayUrl(accessToken) {
       const data = await apiRequest<{ url: string }>(accessToken, "GET", "/gateway");
@@ -213,6 +304,38 @@ export function createQqbotApiClient(
         buildTextBody(content, msgId),
       );
     },
+    async sendC2CMarkdownMessage(accessToken, openid, content, msgId, msgSeq) {
+      return await apiRequest<QqbotMessageResponse>(
+        accessToken,
+        "POST",
+        `/v2/users/${encodeURIComponent(openid)}/messages`,
+        buildMarkdownBody(content, msgId, msgSeq),
+      );
+    },
+    async sendGroupMarkdownMessage(accessToken, groupOpenid, content, msgId, msgSeq) {
+      return await apiRequest<QqbotMessageResponse>(
+        accessToken,
+        "POST",
+        `/v2/groups/${encodeURIComponent(groupOpenid)}/messages`,
+        buildMarkdownBody(content, msgId, msgSeq),
+      );
+    },
+    async sendC2CMarkdownKeyboardMessage(accessToken, openid, request) {
+      return await apiRequest<QqbotMessageResponse>(
+        accessToken,
+        "POST",
+        `/v2/users/${encodeURIComponent(openid)}/messages`,
+        buildMarkdownKeyboardBody(request),
+      );
+    },
+    async sendGroupMarkdownKeyboardMessage(accessToken, groupOpenid, request) {
+      return await apiRequest<QqbotMessageResponse>(
+        accessToken,
+        "POST",
+        `/v2/groups/${encodeURIComponent(groupOpenid)}/messages`,
+        buildMarkdownKeyboardBody(request),
+      );
+    },
     async sendChannelMessage(accessToken, channelId, content, msgId) {
       return await apiRequest<QqbotMessageResponse>(
         accessToken,
@@ -225,6 +348,7 @@ export function createQqbotApiClient(
       );
     },
     async sendC2CStreamMessage(accessToken, openid, req) {
+      useMessageSequence(req.msg_id, req.msg_seq);
       const body: Record<string, unknown> = {
         input_mode: req.input_mode,
         input_state: req.input_state,
@@ -241,6 +365,14 @@ export function createQqbotApiClient(
         "POST",
         `/v2/users/${encodeURIComponent(openid)}/stream_messages`,
         body,
+      );
+    },
+    async acknowledgeInteraction(accessToken, interactionId, code = 0) {
+      await apiRequest<void>(
+        accessToken,
+        "PUT",
+        `/interactions/${encodeURIComponent(interactionId)}`,
+        { code },
       );
     },
   };

@@ -67,6 +67,54 @@ describe("migrateSparkDaemonDatabase", () => {
     }
   });
 
+  it("creates the durable invocation lifecycle schema and indexes", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      migrateSparkDaemonDatabase(db);
+      expect(tableExists(db, "invocations")).toBe(true);
+      expect(tableExists(db, "invocation_events")).toBe(true);
+      expect(tableExists(db, "invocation_event_deliveries")).toBe(true);
+      expect(tableExists(db, "runtime_command_receipts")).toBe(true);
+      expect(columnNames(db, "runtime_command_receipts")).toEqual(
+        expect.arrayContaining([
+          "command_id",
+          "payload_hash",
+          "delivery_count",
+          "ack_json",
+          "terminal_message_id",
+          "terminal_json",
+          "terminal_acked_at",
+        ]),
+      );
+      expect(columnNames(db, "invocations")).toEqual(
+        expect.arrayContaining([
+          "session_id",
+          "idempotency_key",
+          "retry_of_invocation_id",
+          "worker_id",
+          "cancel_reason",
+          "error_code",
+          "error_message",
+          "claimed_at",
+          "started_at",
+          "finished_at",
+        ]),
+      );
+      expect(indexNames(db, "invocations")).toEqual(
+        expect.arrayContaining(["invocations_status_idx", "invocations_session_status_idx"]),
+      );
+      expect(indexNames(db, "invocation_events")).toContain("invocation_events_cursor_idx");
+      expect(indexNames(db, "invocation_event_deliveries")).toContain(
+        "invocation_event_deliveries_cursor_idx",
+      );
+      expect(indexNames(db, "runtime_command_receipts")).toContain(
+        "runtime_command_receipts_terminal_idx",
+      );
+    } finally {
+      db.close();
+    }
+  });
+
   it("migrates pre-registration workspace rows into daemon-owned workspace projections", () => {
     const db = new DatabaseSync(":memory:");
     try {
@@ -141,6 +189,16 @@ describe("migrateSparkDaemonDatabase", () => {
 function workspaceColumns(db: DatabaseSync, table: string): string[] {
   return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
     (column) => column.name,
+  );
+}
+
+function columnNames(db: DatabaseSync, table: string): string[] {
+  return workspaceColumns(db, table);
+}
+
+function indexNames(db: DatabaseSync, table: string): string[] {
+  return (db.prepare(`PRAGMA index_list(${table})`).all() as Array<{ name: string }>).map(
+    (index) => index.name,
   );
 }
 

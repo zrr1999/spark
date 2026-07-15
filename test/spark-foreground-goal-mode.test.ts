@@ -26,11 +26,8 @@ void test("foreground goal mode continues concrete unfinished implement work ins
   assert.equal(suggestForegroundGoalMode(graph, projectRef, "按 GOAL.md 要求复现"), "implement");
 });
 
-void test("foreground goal mode keeps research for only research/review unfinished work", () => {
-  assert.equal(
-    foregroundUnfinishedTaskMode([{ kind: "research" }, { kind: "review" }]),
-    "research",
-  );
+void test("foreground goal mode plans research/review unfinished work", () => {
+  assert.equal(foregroundUnfinishedTaskMode([{ kind: "research" }, { kind: "review" }]), "plan");
 });
 
 void test("foreground goal mode plans only when no project or no unfinished frontier needs planning", () => {

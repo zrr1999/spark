@@ -8,6 +8,9 @@
   let t = $derived(data.messages.inboxDetail);
   let common = $derived(data.messages.common);
   let latestResponse = $derived(data.latestResponses[0]);
+  let responsePending = $derived(
+    latestResponse?.status === "recorded" || latestResponse?.status === "delivering",
+  );
 
   function formatRelative(value: string | null) {
     return formatRelativeTime(value, data.locale, common);
@@ -59,7 +62,7 @@
         <div class="form-error" role="alert">{form.message}</div>
       {/if}
 
-      {#if data.item.status === "pending" && data.item.requestStatus === "pending"}
+      {#if data.item.status === "pending" && data.item.requestStatus === "pending" && !responsePending}
         <form method="POST" action="?/respond">
           {#if data.item.questions.length === 0}
             <Field id="answer-message" label={t.response.answer} required>
@@ -195,26 +198,32 @@
 </section>
 
 <style>
+  @import "$lib/ui/status-pill.css";
+
   .inbox-detail-page {
     display: grid;
-    gap: 24px;
+    gap: var(--spacing-xl);
   }
 
   .page-actions {
     align-items: center;
     display: flex;
     flex-wrap: wrap;
-    gap: 14px;
+    gap: var(--spacing-md);
   }
 
   .page-actions a {
     align-items: center;
     color: var(--color-ink-muted);
     display: inline-flex;
-    font-size: 13px;
-    font-weight: 750;
-    gap: 5px;
+    font-size: var(--text-body);
+    font-weight: var(--weight-body-medium);
+    gap: var(--spacing-xxs);
     text-decoration: none;
+  }
+
+  .page-actions a:hover {
+    color: var(--color-primary);
   }
 
   .back-icon {
@@ -225,6 +234,7 @@
   .hero {
     align-items: center;
     display: flex;
+    gap: var(--spacing-md);
     justify-content: space-between;
   }
 
@@ -239,8 +249,10 @@
   }
 
   h1 {
-    font-size: 34px;
-    letter-spacing: -0.03em;
+    font-size: var(--text-page-title);
+    font-weight: var(--weight-page-title);
+    letter-spacing: var(--tracking-page-title);
+    line-height: var(--leading-page-title);
     overflow-wrap: anywhere;
   }
 
@@ -249,12 +261,12 @@
   .preview-copy,
   .option-row small {
     color: var(--color-ink-subtle);
-    line-height: 1.55;
+    line-height: var(--leading-body);
   }
 
   .lede {
-    margin-top: 10px;
-    max-width: 760px;
+    margin-top: var(--spacing-xs);
+    max-width: 76ch;
   }
 
   .created-at {
@@ -265,8 +277,8 @@
 
   .audit-list span {
     color: var(--color-ink-subtle);
-    font-size: 12px;
-    font-weight: 800;
+    font-size: var(--text-caption);
+    font-weight: var(--weight-caption-medium);
     text-transform: uppercase;
   }
 
@@ -277,31 +289,11 @@
 
   :global(.response-panel .ui-panel-body) { gap: 0; }
 
-  .status-pill {
-    background: var(--color-surface-soft);
-    border-radius: 999px;
-    color: var(--color-ink-subtle);
-    font-size: 12px;
-    font-weight: 800;
-    padding: 6px 10px;
-    text-transform: capitalize;
-  }
-
-  .status-pill.pending {
-    background: var(--color-warning-soft);
-    color: var(--color-warning);
-  }
-
-  .status-pill.resolved {
-    background: var(--color-success-soft);
-    color: var(--color-success);
-  }
-
   form,
   .audit-list {
     display: grid;
-    gap: 16px;
-    padding: 22px 24px 24px;
+    gap: var(--spacing-md);
+    padding: var(--spacing-lg) var(--spacing-xl) var(--spacing-xl);
   }
 
   .optional-note {
@@ -338,35 +330,35 @@
 
   legend {
     color: var(--color-ink);
-    font-size: 14px;
-    font-weight: 800;
+    font-size: var(--text-body);
+    font-weight: 700;
     padding: 0;
   }
 
   .option-list {
     display: grid;
-    gap: 8px;
+    gap: var(--spacing-xs);
   }
 
   .option-row {
     align-items: flex-start;
     background: var(--color-canvas);
     border: 1px solid var(--color-border);
-    border-radius: 12px;
+    border-radius: var(--rounded-md);
     display: flex;
-    gap: 10px;
-    padding: 12px;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm);
   }
 
   .option-row span {
     display: grid;
-    gap: 4px;
+    gap: var(--spacing-xxs);
   }
 
   .form-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 10px;
+    gap: var(--spacing-sm);
   }
 
   .form-error {
@@ -374,19 +366,19 @@
     border-bottom: 1px solid var(--color-danger-soft);
     color: var(--color-danger-strong);
     font-weight: 700;
-    padding: 14px 24px;
+    padding: var(--spacing-md) var(--spacing-xl);
   }
 
   .answered-state {
     align-items: center;
     display: flex;
-    gap: 14px;
-    padding: 24px;
+    gap: var(--spacing-md);
+    padding: var(--spacing-xl);
   }
 
   .empty-icon {
     background: var(--color-primary-weak);
-    border-radius: 999px;
+    border-radius: var(--rounded-full);
     color: var(--color-primary);
     display: grid;
     height: 52px;
@@ -396,7 +388,7 @@
 
   .audit-list article {
     display: grid;
-    gap: 6px;
+    gap: var(--spacing-xs);
   }
 
   .raw-context summary {
@@ -404,7 +396,7 @@
     color: var(--color-ink-muted);
     cursor: pointer;
     display: flex;
-    font-weight: 800;
+    font-weight: var(--weight-button);
     min-height: 40px;
   }
 
@@ -431,11 +423,11 @@
 
   pre {
     background: var(--color-ink);
-    border-radius: 12px;
+    border-radius: var(--rounded-md);
     color: var(--color-border);
-    font-size: 12px;
+    font-size: var(--text-mono);
     overflow: auto;
-    padding: 14px;
+    padding: var(--spacing-md);
     white-space: pre-wrap;
   }
 
@@ -443,11 +435,7 @@
     .hero {
       align-items: flex-start;
       flex-direction: column;
-      gap: 12px;
-    }
-
-    h1 {
-      font-size: 28px;
+      gap: var(--spacing-sm);
     }
 
   }

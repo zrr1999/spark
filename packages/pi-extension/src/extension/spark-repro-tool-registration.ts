@@ -222,10 +222,7 @@ export function registerSparkReproTool(
         if (stageAdvanced) {
           await writeSessionRepro(cwd, stageAdvanced, ctx);
           if (stageAdvanced.status === "complete") {
-            ctx.sparkActiveLens = sparkActiveLens(
-              ctx.sparkActiveLens?.phase ?? "research",
-              "assist",
-            );
+            ctx.sparkActiveLens = sparkActiveLens(ctx.sparkActiveLens?.phase ?? "plan", "assist");
             await deps.refreshSparkWidget?.(cwd, ctx);
             return {
               content: [
@@ -272,7 +269,7 @@ export function registerSparkReproTool(
           };
         }
         await writeSessionRepro(cwd, undefined, ctx);
-        ctx.sparkActiveLens = sparkActiveLens(ctx.sparkActiveLens?.phase ?? "research", "assist");
+        ctx.sparkActiveLens = sparkActiveLens(ctx.sparkActiveLens?.phase ?? "plan", "assist");
         await deps.refreshSparkWidget?.(cwd, ctx);
         return {
           content: [{ type: "text" as const, text: "Repro drive stopped." }],
@@ -410,7 +407,7 @@ export function renderReproTickInstruction(repro: SparkSessionRepro): string {
   lines.push(
     "",
     "Repro drive requirements:",
-    `- Operate in the selected phase (${repro.currentPhase}); use its tool policy for research, plan, or implement work.`,
+    `- Operate in the selected phase (${repro.currentPhase}); use its tool policy for plan or implement work.`,
     "- Advance milestones with the repro tool (satisfy/gate/advance); do not silently self-certify gates.",
     "- If you are blocked on a human decision or an external dependency, report the blocker instead of lowering scope; use /repro stop to end the drive.",
     "- End the turn after one concrete step; the next repro tick is scheduled automatically.",
@@ -421,16 +418,9 @@ export function renderReproTickInstruction(repro: SparkSessionRepro): string {
     lines.push(
       "",
       "Plan-phase guidance:",
-      "- Actively create, decompose, reorder, or update project tasks to reflect the current stage's acceptance criteria.",
-      "- Each unsatisfied condition should map to one or more concrete tasks; claim or plan tasks as needed.",
-      "- Do not wait passively — reshape the task graph so it drives toward the stage milestones.",
-    );
-  } else if (repro.currentPhase === "research") {
-    lines.push(
-      "",
-      "Research-phase guidance:",
       "- Investigate unknowns, read code/docs, and gather evidence needed by the current stage.",
-      "- Record findings as artifacts or task notes so they persist for later phases.",
+      "- Answer or record findings directly when no durable work is needed.",
+      "- Create, decompose, reorder, or update project tasks only when concrete stage work needs durable planning.",
     );
   } else if (repro.currentPhase === "implement") {
     lines.push(

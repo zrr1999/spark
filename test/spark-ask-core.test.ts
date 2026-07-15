@@ -138,6 +138,104 @@ void test("ask_user prefers protocol interaction answers before legacy selectors
   assert.deepEqual(result.answers.route?.labels, ["Safe"]);
 });
 
+void test("async ask_user returns a durable pending handle without invoking legacy UI", async () => {
+  let fallbackSelectCalls = 0;
+  const result = await askUser(
+    {
+      delivery: "async",
+      mode: "decision",
+      title: "Choose later",
+      questions: [
+        {
+          id: "route",
+          prompt: "Which route?",
+          type: "single",
+          required: true,
+          options: [
+            { value: "fast", label: "Fast" },
+            { value: "safe", label: "Safe" },
+          ],
+        },
+      ],
+    },
+    {
+      interaction: async (request) => {
+        assert.equal(request.delivery, "async");
+        return {
+          kind: "askFlow",
+          requestId: request.requestId,
+          humanRequestId: "hreq_async",
+          status: "pending",
+        };
+      },
+      select: async () => {
+        fallbackSelectCalls += 1;
+        return "Fast";
+      },
+    },
+  );
+
+  assert.equal(fallbackSelectCalls, 0);
+  assert.equal(result.status, "pending");
+  assert.equal(result.humanRequestId, "hreq_async");
+  assert.equal(result.nextAction, "resume");
+});
+
+void test("blocking ask_user keeps the interaction pending until the daemon answers", async () => {
+  let resolveInteraction!: (value: {
+    kind: "askFlow";
+    requestId: string;
+    status: "answered";
+    answers: { route: string };
+  }) => void;
+  let requestId = "";
+  const interaction = new Promise<{
+    kind: "askFlow";
+    requestId: string;
+    status: "answered";
+    answers: { route: string };
+  }>((resolve) => {
+    resolveInteraction = resolve;
+  });
+  const resultPromise = askUser(
+    {
+      delivery: "blocking",
+      title: "Choose now",
+      questions: [
+        {
+          id: "route",
+          prompt: "Which route?",
+          type: "single",
+          options: [{ value: "safe", label: "Safe" }],
+        },
+      ],
+    },
+    {
+      interaction: async (request) => {
+        assert.equal(request.delivery, "blocking");
+        requestId = request.requestId;
+        return await interaction;
+      },
+    },
+  );
+
+  let settled = false;
+  void resultPromise.then(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  resolveInteraction({
+    kind: "askFlow",
+    requestId,
+    status: "answered",
+    answers: { route: "safe" },
+  });
+  const result = await resultPromise;
+  assert.equal(result.status, "answered");
+  assert.deepEqual(result.answers.route?.values, ["safe"]);
+});
+
 void test("ask_user falls back to legacy selectors when protocol interaction is blocked", async () => {
   let fallbackSelectCalls = 0;
   const result = await askUser(
@@ -271,6 +369,43 @@ void test("ask_flow uses protocol interaction answers and blocked fallback selec
   assert.equal(fallbackSelectCalls, 1);
   assert.equal(fallbackResult.status, "answered");
   assert.deepEqual(fallbackResult.answers.route?.values, ["fast"]);
+});
+
+void test("async ask_flow returns pending and does not block approval gates", async () => {
+  const request = createPiAskFlowRequest({
+    delivery: "async",
+    flow: "async-approval",
+    mode: "approval",
+    title: "Approve later",
+    questions: [
+      {
+        id: "approval",
+        prompt: "Approve?",
+        type: "single",
+        required: true,
+        options: [
+          { value: "approve", label: "Approve" },
+          { value: "reject", label: "Reject" },
+        ],
+      },
+    ],
+  });
+  const result = await runPiAskFlow(request, {
+    interaction: async (protocolRequest) => {
+      assert.equal(protocolRequest.delivery, "async");
+      return {
+        kind: "askFlow",
+        requestId: protocolRequest.requestId,
+        humanRequestId: "hreq_flow_async",
+        status: "pending",
+      };
+    },
+  });
+
+  assert.equal(result.status, "pending");
+  assert.equal(result.humanRequestId, "hreq_flow_async");
+  assert.equal(result.nextAction, "resume");
+  assert.equal(isPiAskFlowGateBlocked(result, request), false);
 });
 
 void test("decision/approval asks expose no-selection as a blocking result envelope", async () => {

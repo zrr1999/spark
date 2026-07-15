@@ -1,6 +1,14 @@
 <script lang="ts">
+  import { browser } from "$app/environment";
+  import { invalidateAll } from "$app/navigation";
   import { page } from "$app/state";
+  import GlobalAskDialog from "$lib/GlobalAskDialog.svelte";
   import Icon from "$lib/Icon.svelte";
+  import {
+    parsePendingAskEvent,
+    pendingAskEventCursor,
+    shouldInvalidatePendingAsk,
+  } from "$lib/pending-ask";
   import WorkbenchSessionRail from "$lib/WorkbenchSessionRail.svelte";
   import CockpitTopbar from "$lib/shell/CockpitTopbar.svelte";
   import type { CockpitSearchSession } from "$lib/shell/cockpit-search";
@@ -23,6 +31,7 @@
   let t = $derived(data.messages.layout);
   let common = $derived(data.messages.common);
   let workspaceOptions = $derived(data.workspaces ?? []);
+  let activeWorkspaceId = $derived(data.activeWorkspace?.id ?? null);
   let mobileSidebarOpen = $state(false);
   let lastWorkbenchPath = $state("");
   let activeWorkspacePath = $derived(
@@ -45,6 +54,52 @@
       lastWorkbenchPath = pathname;
       mobileSidebarOpen = false;
     }
+  });
+
+  $effect(() => {
+    const workspaceId = activeWorkspaceId;
+    if (!browser || !workspaceId) return;
+
+    let stopped = false;
+    let eventSource: EventSource | null = null;
+    let reconnectTimer: number | undefined;
+    let invalidationTimer: number | undefined;
+
+    const invalidatePendingAsk = () => {
+      if (invalidationTimer !== undefined) return;
+      invalidationTimer = window.setTimeout(() => {
+        invalidationTimer = undefined;
+        void invalidateAll();
+      }, 100);
+    };
+
+    const connect = () => {
+      if (stopped) return;
+      const url = new URL("/api/v1/events", window.location.origin);
+      const cursor = readPendingAskCursor();
+      if (cursor) url.searchParams.set("cursor", cursor);
+
+      eventSource = new EventSource(url);
+      eventSource.addEventListener("spark-cockpit.event", (message) => {
+        const event = parsePendingAskEvent(message.data);
+        if (!event) return;
+        writePendingAskCursor(pendingAskEventCursor(event));
+        if (shouldInvalidatePendingAsk(event, workspaceId)) invalidatePendingAsk();
+      });
+      eventSource.onerror = () => {
+        eventSource?.close();
+        eventSource = null;
+        if (!stopped) reconnectTimer = window.setTimeout(connect, 2_000);
+      };
+    };
+
+    connect();
+    return () => {
+      stopped = true;
+      eventSource?.close();
+      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+      if (invalidationTimer !== undefined) window.clearTimeout(invalidationTimer);
+    };
   });
 
   function isActive(href: string) {
@@ -82,6 +137,24 @@
       return id || null;
     } catch {
       return null;
+    }
+  }
+
+  const pendingAskCursorKey = "spark-cockpit:pending-ask:events-cursor";
+
+  function readPendingAskCursor() {
+    try {
+      return window.sessionStorage.getItem(pendingAskCursorKey);
+    } catch {
+      return null;
+    }
+  }
+
+  function writePendingAskCursor(cursor: string) {
+    try {
+      window.sessionStorage.setItem(pendingAskCursorKey, cursor);
+    } catch {
+      // Database-backed layout loading remains authoritative when storage is unavailable.
     }
   }
 </script>
@@ -128,7 +201,6 @@
         {common}
         messages={{
           workspaceConversation: data.messages.sessions.workspaceConversation,
-          daemonConversation: data.messages.sessions.daemonConversation,
           searchPlaceholder: data.messages.sessions.searchPlaceholder,
           emptyTitle: data.messages.sessions.emptyTitle,
           daemonUnavailableTitle: data.messages.sessions.daemonUnavailableTitle,
@@ -136,8 +208,9 @@
           listLabel: data.messages.sessions.listLabel,
           untitledConversation: data.messages.sessions.untitledConversation,
           unknownWorkspace: data.messages.sessions.unknownWorkspace,
-          daemonGroup: data.messages.sessions.daemonGroup,
           channelSessionBadge: data.messages.sessions.channelSessionBadge,
+          channelLabels: data.messages.sessions.channelLabels,
+          sessionTypes: data.messages.sessions.sessionTypes,
           archiveSubmit: data.messages.sessions.archiveSubmit,
         }}
       />
@@ -163,6 +236,15 @@
     </div>
   </div>
 </div>
+
+{#if data.pendingAsk}
+  {#key data.pendingAsk.id}
+    <GlobalAskDialog
+      ask={data.pendingAsk}
+      messages={data.messages.inboxDetail}
+    />
+  {/key}
+{/if}
 
 <style>
   :global(body) {
@@ -209,7 +291,7 @@
 
   .nav-link {
     align-items: center;
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     color: var(--color-ink-muted);
     display: flex;
     font-size: 13px;
@@ -242,7 +324,7 @@
     container-type: inline-size;
     min-height: 0;
     overflow: auto;
-    padding: 26px 36px 40px;
+    padding: var(--spacing-xl) var(--spacing-xxl) var(--spacing-section);
   }
 
   .content:has(:global(.sessions-stage)) {
@@ -301,7 +383,7 @@
     }
 
     .content {
-      padding: 22px 18px 32px;
+      padding: var(--spacing-lg) var(--spacing-md) var(--spacing-xxl);
     }
 
     .content:has(:global(.sessions-stage)) {

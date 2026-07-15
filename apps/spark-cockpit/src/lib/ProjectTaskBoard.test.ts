@@ -9,14 +9,14 @@ describe("ProjectTaskBoard component contract", () => {
   it("renders board columns, evidence links, and assign forms in the browser-facing component", () => {
     const source = readFileSync(componentPath, "utf8");
 
-    expect(source).toContain('aria-label="Task board"');
+    expect(source).toContain("aria-label={messages.aria}");
     expect(source).toContain("{#each columns as column}");
     expect(source).toContain('class="task-card"');
-    expect(source).toContain("Ready frontier");
+    expect(source).toContain("{messages.readyFrontier}");
     expect(source).toContain('class="evidence-links"');
     expect(source).toContain("href={`${workspaceUrl}/artifacts/${artifact.id}`}");
     expect(source).toContain('action="?/assignTask"');
     expect(source).toContain('name="runtimeTaskId"');
-    expect(source).toContain('card.assignable ? "Assign" : "Not assignable"');
+    expect(source).toContain("card.assignable ? messages.assign : messages.notAssignable");
   });
 });

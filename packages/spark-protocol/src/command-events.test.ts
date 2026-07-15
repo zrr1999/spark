@@ -36,10 +36,15 @@ describe("SparkCommand vocabulary", () => {
     expect(Object.keys(localRpcMethodToSparkCommandKind)).toEqual([
       "daemon.status",
       "daemon.stop",
-      "daemon.queue",
+      "daemon.restart",
+      "turn.status",
+      "turn.result",
       "turn.submit",
       "turn.cancel",
       "turn.stream",
+      "invocation.list",
+      "invocation.retry",
+      "invocation.retention.preview",
       "channel.status",
       "channel.configure",
       "channel.reload",
@@ -60,6 +65,7 @@ describe("SparkCommand vocabulary", () => {
       "session.bind",
       "session.unbind",
       "session.archive",
+      "session.notification.deliver",
       "session.model.set",
       "session.thinking.set",
       "model.catalog",
@@ -72,8 +78,9 @@ describe("SparkCommand vocabulary", () => {
       "provider.auth.login.cancel",
     ]);
     expect(sparkCommandKindForLocalRpcMethod("turn.submit")).toBe("turn.submit.request");
+    expect(sparkCommandKindForLocalRpcMethod("daemon.restart")).toBe("daemon.restart.request");
     expect(sparkCommandKindForLocalRpcMethod("turn.cancel")).toBe("turn.cancel.request");
-    expect(sparkCommandKindForLocalRpcMethod("daemon.queue")).toBe("turn.status.request");
+    expect(sparkCommandKindForLocalRpcMethod("turn.status")).toBe("turn.status.request");
     expect(sparkCommandKindForLocalRpcMethod("channel.configure")).toBe(
       "channel.configure.request",
     );
@@ -94,6 +101,7 @@ describe("SparkCommand vocabulary", () => {
 
   it("maps every runtime server.command kind into the same command vocabulary", () => {
     expect(Object.keys(runtimeServerCommandKindToSparkCommandKind)).toEqual([
+      "daemon.status.request",
       "workspace.snapshot.request",
       "project.create.request",
       "task.start.request",
@@ -123,6 +131,7 @@ describe("SparkCommand vocabulary", () => {
     const parsed = vocabularySamples.commands.map((command) => parseSparkCommand(command));
 
     expect(parsed.map((command) => command.kind)).toEqual([
+      "daemon.restart.request",
       "turn.submit.request",
       "turn.cancel.request",
       "turn.status.request",
@@ -155,18 +164,21 @@ describe("SparkEvent vocabulary", () => {
     expect(Object.keys(runtimeEnvelopeTypeToSparkEventKind)).toEqual([
       "runtime.command.ack",
       "runtime.command.reject",
+      "runtime.command.result",
       "workspace.snapshot",
       "task_graph.snapshot",
       "artifact.projected",
       "invocation.updated",
       "invocation.log_chunk",
       "human.request.created",
+      "human.response.recorded",
       "human.response.ack",
       "runtime.reconcile.report",
       "daemon.event",
     ]);
     expect(sparkEventKindForRuntimeEnvelopeType("runtime.command.ack")).toBe("command.accepted");
     expect(sparkEventKindForRuntimeEnvelopeType("runtime.command.reject")).toBe("command.rejected");
+    expect(sparkEventKindForRuntimeEnvelopeType("runtime.command.result")).toBe("command.result");
     expect(sparkEventKindForRuntimeEnvelopeType("workspace.snapshot")).toBe(
       "projection.workspace.snapshot",
     );

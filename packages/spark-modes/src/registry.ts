@@ -2,7 +2,7 @@ import type { Mode, ModeDefinition } from "./types.ts";
 
 /**
  * Open registry of operating-lens definitions. Hosts register the built-in
- * research/plan/implement lenses plus any custom modes; registration order is
+ * plan/implement lenses plus any custom modes; registration order is
  * preserved for menu/cycle rendering.
  */
 export interface ModeRegistry {

@@ -31,6 +31,7 @@ void test("runSparkHeadlessSession times out a never-resolving agent turn", asyn
     },
     runtime: {
       onDaemonEvent: () => () => unsubscribed.push("runtime"),
+      setSessionId: () => undefined,
     },
     sessionStore: {
       createSession: () => record,

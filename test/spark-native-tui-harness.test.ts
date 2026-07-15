@@ -47,12 +47,12 @@ void test("native TUI kernel slash commands are minimal and resource slash is ex
 
   const local = createSparkNativeLocalControlSlashCommands();
   assert.equal(local.tasks?.metadata?.source, "extension");
-  assert.equal(local.tasks?.metadata?.plane, "server");
+  assert.equal(local.tasks?.metadata?.plane, "cockpit");
   assert.equal(local.tasks?.metadata?.resource, "task");
-  assert.equal(local.tasks?.metadata?.canonicalCliTarget, "spark server task list");
-  assert.equal(local.task?.metadata?.canonicalCliTarget, "spark server task list");
-  assert.equal(local.artifact?.metadata?.canonicalCliTarget, "spark server artifact list");
-  assert.equal(local.review?.metadata?.canonicalCliTarget, "spark server review list");
+  assert.equal(local.tasks?.metadata?.canonicalCliTarget, "spark cockpit task list");
+  assert.equal(local.task?.metadata?.canonicalCliTarget, "spark cockpit task list");
+  assert.equal(local.artifact?.metadata?.canonicalCliTarget, "spark cockpit artifact list");
+  assert.equal(local.review?.metadata?.canonicalCliTarget, "spark cockpit review list");
   assert.equal(local.run?.metadata?.canonicalCliTarget, "spark daemon run list");
   assert.equal(local.stop?.metadata?.canonicalCliTarget, "spark daemon run cancel <run>");
 
@@ -62,10 +62,10 @@ void test("native TUI kernel slash commands are minimal and resource slash is ex
     metadata: {
       source: "extension",
       extensionId: "spark-drive",
-      plane: "server",
+      plane: "cockpit",
       resource: "goal",
       verbs: ["status"],
-      canonicalCliTarget: "spark server goal status",
+      canonicalCliTarget: "spark cockpit goal status",
     },
     handler: () => undefined,
   });
@@ -74,10 +74,10 @@ void test("native TUI kernel slash commands are minimal and resource slash is ex
     metadata: {
       source: "extension",
       extensionId: "spark-workflow",
-      plane: "server",
+      plane: "cockpit",
       resource: "workflow",
       verbs: ["list"],
-      canonicalCliTarget: "spark server workflow list",
+      canonicalCliTarget: "spark cockpit workflow list",
     },
     handler: () => undefined,
   });
@@ -87,11 +87,11 @@ void test("native TUI kernel slash commands are minimal and resource slash is ex
     metadata: {
       source: "extension",
       extensionId: "spark-workflow",
-      plane: "server",
+      plane: "cockpit",
       resource: "workflow",
       verbs: ["pause"],
-      canonicalCliTarget: "spark server workflow pause <run>",
-      deprecatedAliasFor: "spark server workflow pause <run>",
+      canonicalCliTarget: "spark cockpit workflow pause <run>",
+      deprecatedAliasFor: "spark cockpit workflow pause <run>",
     },
     handler: () => undefined,
   });
@@ -111,7 +111,7 @@ void test("native TUI kernel slash commands are minimal and resource slash is ex
   const runtime = createSparkNativeRuntimeSlashCommands(host);
   assert.equal(runtime.goal?.metadata?.source, "extension");
   assert.equal(runtime.goal?.metadata?.extensionId, "spark-drive");
-  assert.equal(runtime.goal?.metadata?.canonicalCliTarget, "spark server goal status");
+  assert.equal(runtime.goal?.metadata?.canonicalCliTarget, "spark cockpit goal status");
 
   const slashFixture = {
     "/session list": runtime.session,
@@ -125,12 +125,12 @@ void test("native TUI kernel slash commands are minimal and resource slash is ex
   } as const;
   const expectedTargets = {
     "/session list": "spark daemon session list",
-    "/task list": "spark server task list",
-    "/goal status": "spark server goal status",
-    "/workflow list": "spark server workflow list",
-    "/workflow-pause": "spark server workflow pause <run>",
-    "/review list": "spark server review list",
-    "/artifact list": "spark server artifact list",
+    "/task list": "spark cockpit task list",
+    "/goal status": "spark cockpit goal status",
+    "/workflow list": "spark cockpit workflow list",
+    "/workflow-pause": "spark cockpit workflow pause <run>",
+    "/review list": "spark cockpit review list",
+    "/artifact list": "spark cockpit artifact list",
     "/run list": "spark daemon run list",
   } as const;
   for (const [input, command] of Object.entries(slashFixture)) {
@@ -148,18 +148,18 @@ void test("native TUI kernel slash commands are minimal and resource slash is ex
   assert.match(rendered, /System\s+\/help/);
   assert.match(rendered, /\/reload — reload extension-owned slash command state/);
   assert.match(rendered, /Extensions\s+\d+ extension commands available/);
-  assert.match(rendered, /\/goal — Goal command \[extension\] → spark server goal status/);
+  assert.match(rendered, /\/goal — Goal command \[extension\] → spark cockpit goal status/);
   assert.match(
     rendered,
     /\/session \[list\] — Session command \[extension\] → spark daemon session list/,
   );
   assert.match(
     rendered,
-    /\/task — open the tasks cockpit panel \[extension\] → spark server task list/,
+    /\/task — open the tasks cockpit panel \[extension\] → spark cockpit task list/,
   );
   assert.match(
     rendered,
-    /\/workflow-pause <runRef> — Workflow pause alias \[extension\] → spark server workflow pause\s+<run>/,
+    /\/workflow-pause <runRef> — Workflow pause alias \[extension\] → spark cockpit workflow pause\s+<run>/,
   );
   assert.doesNotMatch(rendered, /\/task — .*\[system\]/);
 });

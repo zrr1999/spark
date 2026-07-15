@@ -69,6 +69,7 @@ void test("SparkHostRuntime permanently excludes tools outside the host allowlis
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-host-runtime-channel-test",
     sessionSurface: "channel",
+    sessionSource: "channel",
     allowedTools: ["session"],
   });
   for (const name of ["cue_exec", "cue_jobs", "session"]) {
@@ -86,6 +87,7 @@ void test("SparkHostRuntime permanently excludes tools outside the host allowlis
   host.setActiveTools(["cue_exec", "cue_jobs", "session"]);
   assert.deepEqual(host.getActiveTools(), ["session"]);
   assert.equal(host.makeContext().sessionSurface, "channel");
+  assert.equal(host.makeContext().sessionSource, "channel");
 });
 
 void test("SparkHostRuntime registerCommand adds numeric suffix for duplicate names", async () => {

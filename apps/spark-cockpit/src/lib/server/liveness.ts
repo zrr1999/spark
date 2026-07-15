@@ -1,1 +1,1 @@
-export * from "@zendev-lab/spark-server/liveness";
+export * from "@zendev-lab/spark-coordination/liveness";

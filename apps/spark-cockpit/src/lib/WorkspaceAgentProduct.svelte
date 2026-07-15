@@ -20,7 +20,7 @@
     type Locale,
   } from "$lib/i18n";
   import { workspaceControlControlLabel } from "$lib/workspace-control-display";
-  import type { AgentsProductProjection } from "@zendev-lab/spark-server/agents-product";
+  import type { AgentsProductProjection } from "@zendev-lab/spark-coordination/agents-product";
 
   type WorkspaceAgentProductData = AgentsProductProjection & {
     locale: Locale;
@@ -582,7 +582,7 @@
   .run-rail {
     display: grid;
     gap: 10px;
-    max-height: calc(100vh - 150px);
+    max-height: calc(100dvh - 150px);
     min-height: 0;
     overflow: hidden;
     padding: 12px;
@@ -948,7 +948,7 @@
   .task-form button {
     background: var(--color-primary);
     border: 0;
-    color: var(--color-primary-contrast);
+    color: var(--color-on-primary);
     padding: 10px 14px;
   }
 

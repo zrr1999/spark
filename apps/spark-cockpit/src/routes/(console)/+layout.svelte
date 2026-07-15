@@ -24,6 +24,7 @@
   );
   let navLabels = $derived({
     modelsProviders: t.nav.models,
+    invocationDiagnostics: data.messages.invocationDiagnostics.navLabel,
     channels: t.nav.channels,
     workspaceSettings: consoleMessages.nav.workspaceDetails,
     registration: consoleMessages.nav.registration,
@@ -205,7 +206,7 @@
 
   .nav-link {
     align-items: center;
-    border-radius: 8px;
+    border-radius: var(--rounded-md);
     color: var(--color-ink-muted);
     display: flex;
     font-size: 13px;
@@ -273,7 +274,7 @@
   .console-content {
     min-height: 0;
     overflow-y: auto;
-    padding: 28px 32px 48px;
+    padding: var(--spacing-xl) var(--spacing-xxl) var(--spacing-section);
   }
 
   .console-nav-backdrop {
@@ -322,11 +323,11 @@
 
   @media (max-width: 640px) {
     .console-contextbar {
-      padding-inline: 16px;
+      padding-inline: var(--spacing-md);
     }
 
     .console-content {
-      padding: 20px 16px 32px;
+      padding: var(--spacing-lg) var(--spacing-md) var(--spacing-xxl);
     }
   }
 </style>

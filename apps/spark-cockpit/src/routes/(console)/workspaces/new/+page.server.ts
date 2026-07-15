@@ -3,7 +3,7 @@ import {
   isReservedWorkbenchPathSegment,
   loadWorkbenchHome,
   resolvePendingWorkspaceBinding,
-} from "@zendev-lab/spark-server/cockpit-queries";
+} from "@zendev-lab/spark-coordination/cockpit-queries";
 import { getRequestDictionary, localeCookieName, type AppMessages } from "$lib/i18n";
 import { ensureCurrentOwnerSession } from "$lib/server/auth";
 import { getDatabase } from "$lib/server/db";
@@ -54,6 +54,7 @@ export const load: PageServerLoad = ({ cookies, url }) => {
     ownerBindings: page.ownerBindings,
     pendingWorkspaceSetup,
     targetRunnerBinding: page.targetRunnerBinding,
+    pendingRuntimeConnection: page.pendingRuntimeConnection,
   };
 };
 

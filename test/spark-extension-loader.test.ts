@@ -50,6 +50,40 @@ void test("root Pi extension list and native builtins both expose self-extension
   assert.ok([...DEFAULT_SPARK_EXTENSION_SPECS].includes("@zendev-lab/spark-web/extension"));
 });
 
+void test("published Spark TUI resolves builtins through declared package exports", async () => {
+  const tuiPackage = JSON.parse(
+    await readFile(new URL("../apps/spark-tui/package.json", import.meta.url), "utf8"),
+  ) as { dependencies?: Record<string, string> };
+  const loaderSource = await readFile(
+    new URL("../apps/spark-tui/src/host/extension-loader.ts", import.meta.url),
+    "utf8",
+  );
+
+  for (const specifier of DEFAULT_SPARK_EXTENSION_SPECS) {
+    const packageName = specifier.split("/").slice(0, 2).join("/");
+    assert.ok(
+      tuiPackage.dependencies?.[packageName],
+      `${packageName} must be a runtime dependency of the published TUI`,
+    );
+    assert.match(loaderSource, new RegExp(`from ["']${specifier.replaceAll("/", "\\/")}["']`, "u"));
+  }
+  assert.doesNotMatch(loaderSource, /packages\/[^/]+\/src\//u);
+});
+
+void test("Spark command policy is owned by pi-extension, not spark-host", async () => {
+  const piPackage = JSON.parse(
+    await readFile(new URL("../packages/pi-extension/package.json", import.meta.url), "utf8"),
+  ) as { exports?: Record<string, string> };
+  const hostPackage = JSON.parse(
+    await readFile(new URL("../packages/spark-host/package.json", import.meta.url), "utf8"),
+  ) as { dependencies?: Record<string, string>; exports?: Record<string, string> };
+
+  assert.equal(piPackage.exports?.["./host-support"], "./src/host-support.ts");
+  assert.equal(hostPackage.dependencies?.["@zendev-lab/pi-extension"], undefined);
+  assert.equal(hostPackage.exports?.["./spark-command-registration"], undefined);
+  assert.equal(hostPackage.exports?.["./spark-command-workflow-registration"], undefined);
+});
+
 void test("SparkExtensionLoader loads builtin factories through explicit imports", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-extension-loader-test", hasUI: true });
   const result = await new SparkExtensionLoader({
@@ -117,7 +151,7 @@ void test("channel host keeps only explicitly allowed tools active after extensi
   );
 
   await host.emit("session_start", { reason: "channel-turn" });
-  assert.deepEqual(host.getActiveTools(), ["session"]);
+  assert.deepEqual(host.getActiveTools().sort(), ["ask", "context", "session", "todo"]);
 });
 
 void test("SparkExtensionLoader isolates one extension failure and continues loading later extensions", async () => {

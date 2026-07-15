@@ -1,4 +1,10 @@
-import { parseSparkAssignment, type SparkAssignment } from "@zendev-lab/spark-protocol";
+import {
+  parseSparkAssignment,
+  sparkTurnCancelResultSchema,
+  sparkTurnSubmitResultSchema,
+  type SparkAssignment,
+  type SparkInvocationStatus,
+} from "@zendev-lab/spark-protocol";
 import { requestSparkDaemonLocalRpc } from "@zendev-lab/spark-system";
 
 export interface SubmitCockpitConversationTurnInput {
@@ -13,19 +19,15 @@ export interface SubmittedCockpitConversationTurn {
 }
 
 export interface CancelCockpitConversationTurnInput {
-  /** Queue fileName returned as `turnId` by submitConversationTurnForCockpit. */
   turnId: string;
   sessionId: string;
   reason?: string;
 }
 
-export type CockpitConversationTurnCancelOutcome = "cancel-requested" | "dequeued" | "not-found";
-
 export interface CancelledCockpitConversationTurn {
   turnId: string;
-  cancelled: boolean;
-  outcome: CockpitConversationTurnCancelOutcome;
-  message: string;
+  status: SparkInvocationStatus;
+  cancelRequested: boolean;
 }
 
 export interface CockpitConversationControlClient {
@@ -33,11 +35,12 @@ export interface CockpitConversationControlClient {
     sessionId: string;
     prompt: string;
     assignment: SparkAssignment;
+    messageMetadata?: Record<string, unknown>;
   }): Promise<unknown>;
 }
 
 export interface CockpitConversationCancelClient {
-  cancel(input: { invocationId: string; sessionId: string; reason?: string }): Promise<unknown>;
+  cancel(input: { invocationId: string; reason?: string }): Promise<unknown>;
 }
 
 const daemonConversationControlClient: CockpitConversationControlClient &
@@ -70,11 +73,14 @@ export async function submitConversationTurnForCockpit(
     sessionId: input.sessionId,
     prompt: input.prompt,
     assignment,
+    messageMetadata: {
+      origin: { kind: "user", host: "web", surface: "local" },
+    },
   });
-  if (!isRecord(result) || typeof result.fileName !== "string" || !result.fileName.trim()) {
+  const receipt = sparkTurnSubmitResultSchema.safeParse(result);
+  if (!receipt.success)
     throw new Error("Spark daemon returned an invalid conversation turn receipt.");
-  }
-  return { turnId: result.fileName };
+  return { turnId: receipt.data.invocationId };
 }
 
 /** Cancel a queued or active daemon turn after binding it to the selected session. */
@@ -89,31 +95,15 @@ export async function cancelConversationTurnForCockpit(
   const reason = input.reason?.trim();
   const result = await client.cancel({
     invocationId: turnId,
-    sessionId,
     ...(reason ? { reason } : {}),
   });
-  if (
-    !isRecord(result) ||
-    typeof result.cancelled !== "boolean" ||
-    !isTurnCancelOutcome(result.outcome) ||
-    result.cancelled !== (result.outcome !== "not-found") ||
-    typeof result.message !== "string" ||
-    !result.message.trim()
-  ) {
+  const receipt = sparkTurnCancelResultSchema.safeParse(result);
+  if (!receipt.success) {
     throw new Error("Spark daemon returned an invalid conversation turn cancellation receipt.");
   }
   return {
     turnId,
-    cancelled: result.cancelled,
-    outcome: result.outcome,
-    message: result.message,
+    status: receipt.data.status,
+    cancelRequested: receipt.data.cancelRequested,
   };
-}
-
-function isTurnCancelOutcome(value: unknown): value is CockpitConversationTurnCancelOutcome {
-  return value === "cancel-requested" || value === "dequeued" || value === "not-found";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

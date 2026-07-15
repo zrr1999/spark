@@ -70,7 +70,7 @@ export const sparkDriveRegistry = new SparkDriveRegistry<SparkDriveMode>();
 for (const descriptor of DEFAULT_SPARK_DRIVE_DESCRIPTORS) sparkDriveRegistry.register(descriptor);
 
 export interface SparkActiveLensDriveState {
-  phase?: "research" | "plan" | "implement";
+  phase?: "plan" | "implement";
   drive?: SparkDriveModeInput;
 }
 
@@ -86,17 +86,16 @@ export function sparkActiveLensDriveMode(
 
 export function sparkActiveLensPhase(
   lens: SparkActiveLensDriveState | undefined,
-): "research" | "plan" | "implement" {
-  if (lens?.phase === "research" || lens?.phase === "plan" || lens?.phase === "implement")
-    return lens.phase;
-  return "research";
+): "plan" | "implement" {
+  if (lens?.phase === "plan" || lens?.phase === "implement") return lens.phase;
+  return "plan";
 }
 
 export function sparkActiveLens(
-  phase: "research" | "plan" | "implement",
+  phase: "plan" | "implement",
   drive: SparkDriveModeInput = "assist",
 ): {
-  phase: "research" | "plan" | "implement";
+  phase: "plan" | "implement";
   drive: SparkDriveMode;
 } {
   const normalized = normalizeSparkDriveMode(drive) ?? "assist";

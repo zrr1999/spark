@@ -168,7 +168,7 @@ const INSTRUCTIONS: Record<SparkLanguage, GoalInstructionStrings> = {
     goalLine: (objective) => `Goal: ${objective}`,
     loopTickHeader: "Spark foreground goal loop tick.",
     loopModeDecisionContract:
-      "Goal driver requirements: use the objective, current project/task state, blockers, and validation needs to choose concrete next actions; do not classify the whole tick as research, plan, or implement. Use workflow, subagent role, and role-run only as tools inside the goal driver boundary.",
+      "Goal driver requirements: use the objective, current project/task state, blockers, and validation needs to choose concrete next actions; do not classify the whole tick as plan or implement. Use workflow, subagent role, and role-run only as tools inside the goal driver boundary.",
     loopReviewerOwnership:
       "Goal supplies the objective, idle tick cadence, and reviewer-gated completion flow: the main session requests completion, the reviewer audits, and Spark applies the approved state transition. When blocked, resolve the blocking work instead of pausing or weakening the goal.",
     emptyGoalNotSet: "Spark session goal is not set.",
@@ -188,7 +188,7 @@ const INSTRUCTIONS: Record<SparkLanguage, GoalInstructionStrings> = {
     goalLine: (objective) => `目标：${objective}`,
     loopTickHeader: "Spark 前台目标循环节拍。",
     loopModeDecisionContract:
-      "Goal driver requirements：基于目标、当前项目/任务状态、阻塞与验证需求选择具体下一步；不要把整个 tick 归类为 research、plan 或 implement。workflow、subagent role、role-run 只作为 goal driver 边界内的工具使用。",
+      "Goal driver requirements：基于目标、当前项目/任务状态、阻塞与验证需求选择具体下一步；不要把整个 tick 归类为 plan 或 implement。workflow、subagent role、role-run 只作为 goal driver 边界内的工具使用。",
     loopReviewerOwnership:
       "goal 提供目标、空闲节拍循环与 reviewer-gated completion 流程：主 session 发起完成请求，reviewer 审核裁决，Spark 应用通过后的状态转换。遇到阻塞时先解决阻塞工作，不要自主暂停或降低目标难度。",
     emptyGoalNotSet: "尚未设置 Spark 会话目标。",
@@ -353,6 +353,7 @@ const SPARK_EXTENSION_TOOL_COPY: Record<string, Partial<SparkExtensionToolCopy>>
   impl_claim_task: { label: "Spark Claim Task" },
   impl_plan_tasks: { label: "Spark Plan Tasks" },
   impl_finish_task: { label: "Spark Finish Task" },
+  impl_todo: { label: "Spark Session TODOs" },
   impl_update_task_plan_items: { label: "Spark Update Task plan items" },
   impl_run_ready_tasks: { label: "Spark Run Ready Tasks" },
   impl_recover_task_claim: { label: "Spark Recover Task Claim" },

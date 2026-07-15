@@ -1,6 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import webPush, { type PushSubscription, type RequestOptions } from "web-push";
-import { cursorFromEvent, loadEventBatch, serializeEventRow, type EventCursor } from "./events";
+import {
+  cursorFromEvent,
+  latestEventCursor,
+  loadEventBatch,
+  serializeEventRow,
+  type EventCursor,
+} from "./events";
 import {
   notificationFromCockpitEvent,
   sanitizeNotificationPayload,
@@ -129,15 +135,6 @@ export async function dispatchNotificationsForEventBatch(input: {
     else skipped += 1;
   }
   return { cursor, sent, skipped, failed };
-}
-
-export function latestEventCursor(db: DatabaseSync): EventCursor | null {
-  const row = db
-    .prepare(
-      "SELECT id, created_at AS createdAt FROM events ORDER BY created_at DESC, id DESC LIMIT 1",
-    )
-    .get() as { id: string; createdAt: string } | undefined;
-  return row ? { id: row.id, createdAt: row.createdAt } : null;
 }
 
 export function startWebPushEventDispatcher(input: {

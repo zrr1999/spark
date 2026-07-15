@@ -9,7 +9,8 @@ export interface AskSummaryAnswer {
 }
 
 export interface AskSummaryResult {
-  status: "answered" | "cancelled" | "no_selection";
+  status: "answered" | "pending" | "cancelled" | "no_selection";
+  humanRequestId?: string;
   answers: Record<string, AskSummaryAnswer>;
   nextAction?: "resume" | "clarify_then_reask" | "block";
   mode?: string;
@@ -35,6 +36,9 @@ export function summarizeAskResult(
   const title = request.title ?? request.flow ?? options.prefix ?? "ask";
   const answerText = summarizeAskAnswers(result.answers);
   const blockedPrefix = options.blocked ? " blocked" : "";
+  if (result.status === "pending") {
+    return `${title}: pending${result.humanRequestId ? `; request=${result.humanRequestId}` : ""}`;
+  }
   if (result.status !== "answered")
     return `${title}${blockedPrefix}: ${result.status}; ${answerText}`;
   const nextAction =

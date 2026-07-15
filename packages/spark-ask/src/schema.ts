@@ -76,6 +76,10 @@ export const PiAskFlowMode = Type.Union([
 
 export type PiAskFlowModeVal = Static<typeof PiAskFlowMode>;
 
+export const PiAskDeliverySchema = Type.Union([Type.Literal("blocking"), Type.Literal("async")]);
+
+export type PiAskDeliveryVal = Static<typeof PiAskDeliverySchema>;
+
 export const PiAskFlowBehaviourSchema = Type.Object({
   allowElaborate: Type.Optional(Type.Boolean()),
   allowReplay: Type.Optional(Type.Boolean()),
@@ -89,6 +93,7 @@ export const PiAskFlowRequestSchema = Type.Object({
   context: Type.Optional(Type.String()),
   flow: Type.Optional(Type.String()),
   mode: Type.Optional(PiAskFlowMode),
+  delivery: Type.Optional(PiAskDeliverySchema),
   questions: Type.Array(PiAskFlowQuestionSchema, { minItems: 1, maxItems: MAX_QUESTIONS }),
   behaviour: Type.Optional(PiAskFlowBehaviourSchema),
 });
@@ -111,7 +116,7 @@ export interface PiAskFlowAnswerEntry {
   preview?: string;
 }
 
-export type PiAskFlowResultStatus = "answered" | "cancelled" | "no_selection";
+export type PiAskFlowResultStatus = "answered" | "pending" | "cancelled" | "no_selection";
 
 export interface PiAskFlowResult {
   /**
@@ -119,6 +124,8 @@ export interface PiAskFlowResult {
    * `cancelled`, empty answers, or mode-specific text.
    */
   status: PiAskFlowResultStatus;
+  /** Durable daemon-owned request handle for an async ask. */
+  humanRequestId?: string;
   answers: Record<string, PiAskFlowAnswerEntry>;
   flow?: string;
   mode: "submit" | "elaborate" | "cancel";

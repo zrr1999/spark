@@ -61,7 +61,7 @@ function renderGoalDriverGuidance(focus: string | undefined): string {
     "## Goal driver guidance",
     `- Active goal objective: ${goal}`,
     "- Work toward the objective using goal-driver task/project state and evidence boundaries. The main session requests completion, the reviewer audits, and Spark applies any approved state transition.",
-    "- Goal turns do not need to classify the whole turn as research/plan/implement; choose concrete next actions from current task state, blockers, and validation needs.",
+    "- Goal turns do not need to classify the whole turn as plan or implement; choose concrete next actions from current task state, blockers, and validation needs.",
     "- Goal turns may use canonical ask only with reviewer auto-answer; if the reviewer cannot answer, record or report the blocker and keep the objective unchanged.",
     '- Request goal({ action: "complete" }) only after evidence covers every requirement in the objective.',
   ].join("\n");

@@ -1,1 +1,1 @@
-export * from "@zendev-lab/spark-server/session-activity";
+export * from "@zendev-lab/spark-coordination/session-activity";

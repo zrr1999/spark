@@ -323,6 +323,8 @@ export type ExtensionRoleRunner = (
   request: ExtensionRoleRunRequest,
 ) => Promise<ExtensionRoleRunResult>;
 
+export type SparkSessionMessageSource = "tui" | "web" | "channel" | "daemon" | "session";
+
 export interface ExtensionContext {
   cwd?: string;
   /** Current Spark view/session identity for session-scoped extension state. */
@@ -331,6 +333,12 @@ export interface ExtensionContext {
   sparkStateRoot?: string;
   /** Execution surface policy supplied by the host for this session. */
   sessionSurface?: "local" | "channel";
+  /** Origin label for hidden session-message metadata. */
+  sessionSource?: SparkSessionMessageSource;
+  /** Current daemon invocation, available only in daemon-owned headless turns. */
+  invocationId?: string;
+  /** Session IDs already participating in a synchronous question chain. */
+  sessionQuestionChain?: string[];
   model?: SessionModelRef;
   hasUI?: boolean;
   ui?: ExtensionUi;

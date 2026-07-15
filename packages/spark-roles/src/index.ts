@@ -120,6 +120,7 @@ export interface RoleRunLauncherInput extends RoleRunCommandInput {
   stdinMode?: "pipe" | "ignore";
   roleId?: string;
   nativeExecutor?: ExtensionRoleRunner;
+  onEvent?: (event: unknown) => void | Promise<void>;
   onTimeout?: () => void;
 }
 
@@ -179,7 +180,7 @@ export type RoleCapability = (typeof ROLE_CAPABILITY_VOCAB)[number];
 
 export const BUILTIN_ROLE_CAPABILITY_PROFILES = {
   scout: ["read", "net"],
-  reviewer: ["read", "net", "exec"],
+  reviewer: ["read", "net"],
   worker: ["read", "net", "exec", "write"],
 } as const satisfies Record<BuiltinRoleId, readonly RoleCapability[]>;
 
@@ -1472,6 +1473,7 @@ export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResul
       ...(input.noSession ? { noSession: true, sessionPersistence: "anonymous" as const } : {}),
       env: nativeEnv,
       inputControl,
+      ...(input.onEvent ? { onEvent: input.onEvent } : {}),
     };
 
     const result = await runNativeRoleWithTimeout({

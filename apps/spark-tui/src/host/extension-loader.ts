@@ -2,16 +2,16 @@
 
 import type { ExtensionAPI } from "@zendev-lab/spark-extension-api";
 
-import sparkAskExtension from "../../../../packages/spark-ask/src/extension.ts";
-import sparkCueExtension from "../../../../packages/spark-cue/src/index.ts";
-import sparkFilesExtension from "../../../../packages/spark-files/src/extension.ts";
-import sparkGraftExtension from "../../../../packages/spark-graft/src/extension.ts";
-import sparkMemoryExtension from "../../../../packages/spark-memory/src/extension.ts";
-import sparkRolesExtension from "../../../../packages/spark-roles/src/extension.ts";
-import sparkSessionExtension from "../../../../packages/spark-session/src/extension.ts";
-import sparkWebExtension from "../../../../packages/spark-web/src/extension.ts";
-import sparkModelsExtension from "../../../../packages/spark-ai/src/models-extension.ts";
-import sparkExtension from "../../../../packages/pi-extension/src/extension/index.ts";
+import sparkAskExtension from "@zendev-lab/spark-ask/extension";
+import sparkCueExtension from "@zendev-lab/spark-cue/extension";
+import sparkFilesExtension from "@zendev-lab/spark-files/extension";
+import sparkGraftExtension from "@zendev-lab/spark-graft/extension";
+import sparkMemoryExtension from "@zendev-lab/spark-memory/extension";
+import sparkRolesExtension from "@zendev-lab/spark-roles/extension";
+import sparkSessionExtension from "@zendev-lab/spark-session/extension";
+import sparkWebExtension from "@zendev-lab/spark-web/extension";
+import sparkModelsExtension from "@zendev-lab/spark-ai/models-extension";
+import sparkExtension from "@zendev-lab/pi-extension/extension";
 
 export type SparkBuiltinExtensionName =
   | "@zendev-lab/spark-ask"

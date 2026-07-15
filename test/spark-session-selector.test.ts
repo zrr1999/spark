@@ -6,8 +6,10 @@ import type { Component } from "../apps/spark-tui/src/tui/pi-tui-adapter.ts";
 import {
   CREATE_SPARK_SESSION_SELECTION,
   createSparkSessionSelectorComponent,
+  isSelectableSparkSession,
   selectSparkSessionFromCustomUi,
 } from "../apps/spark-tui/src/tui/session-selector.ts";
+import type { SparkSessionRegistryRecord } from "@zendev-lab/spark-protocol";
 import type {
   SparkModelSelectorCustomUi,
   SparkModelSelectorTheme,
@@ -28,6 +30,49 @@ const sessions = [
     updatedAt: "2026-07-13T01:00:00.000Z",
   },
 ];
+
+const untitledSession: SparkSessionRegistryRecord = {
+  sessionId: "session-untitled",
+  scope: { kind: "workspace", workspaceId: "workspace-1" },
+  workspaceId: "workspace-1",
+  status: "ready",
+  bindings: [],
+  createdAt: "2026-07-13T00:00:00.000Z",
+  updatedAt: "2026-07-13T02:00:00.000Z",
+};
+
+const archivedSession: SparkSessionRegistryRecord = {
+  sessionId: "session-archived",
+  title: "Archived conversation",
+  scope: { kind: "workspace", workspaceId: "workspace-1" },
+  workspaceId: "workspace-1",
+  status: "archived",
+  bindings: [],
+  createdAt: "2026-07-12T00:00:00.000Z",
+  updatedAt: "2026-07-12T01:00:00.000Z",
+};
+
+const channelBindingSession: SparkSessionRegistryRecord = {
+  sessionId: "session-channel-bound",
+  title: "Ops room",
+  scope: { kind: "workspace", workspaceId: "workspace-1" },
+  workspaceId: "workspace-1",
+  status: "ready",
+  bindings: [{ kind: "channel", adapter: "feishu", externalKey: "feishu:chat:oc_ops" }],
+  createdAt: "2026-07-13T00:00:00.000Z",
+  updatedAt: "2026-07-13T02:00:00.000Z",
+};
+
+const channelTitleSession: SparkSessionRegistryRecord = {
+  sessionId: "session-channel-title",
+  title: "channel qqbot:c2c:398418FB5E7F1C597DFFD117597D6500",
+  scope: { kind: "workspace", workspaceId: "workspace-1" },
+  workspaceId: "workspace-1",
+  status: "ready",
+  bindings: [],
+  createdAt: "2026-07-13T00:00:00.000Z",
+  updatedAt: "2026-07-13T02:00:00.000Z",
+};
 
 void test("Spark session selector renders new and daemon-managed session choices", () => {
   const selected: string[] = [];
@@ -61,6 +106,62 @@ void test("Spark session selector renders new and daemon-managed session choices
 
   component.handleInput?.("\r");
   assert.deepEqual(selected, [CREATE_SPARK_SESSION_SELECTION]);
+});
+
+void test("Spark session selector uses the Cockpit fallback for untitled sessions", () => {
+  const component = createSparkSessionSelectorComponent({
+    sessions: [untitledSession],
+    workspaceLabel: "spark • /workspace/spark",
+    onSelect: () => undefined,
+  });
+
+  const lines = component.render(72);
+  assert.equal(
+    lines.some((line) => line.includes("New conversation")),
+    true,
+  );
+  assert.equal(
+    lines.some((line) => line.includes("session-untitled")),
+    true,
+  );
+});
+
+void test("Spark session selector hides archived and message-platform sessions", () => {
+  const component = createSparkSessionSelectorComponent({
+    sessions: [
+      ...(sessions as SparkSessionRegistryRecord[]),
+      archivedSession,
+      channelBindingSession,
+      channelTitleSession,
+    ],
+    workspaceLabel: "spark • /workspace/spark",
+    onSelect: () => undefined,
+  });
+
+  const lines = component.render(72);
+  assert.equal(
+    lines.some((line) => line.includes("Recent conversation")),
+    true,
+  );
+  assert.equal(
+    lines.some((line) => line.includes("Archived conversation")),
+    false,
+  );
+  assert.equal(
+    lines.some((line) => line.includes("Ops room")),
+    false,
+  );
+  assert.equal(
+    lines.some((line) => line.includes("qqbot")),
+    false,
+  );
+});
+
+void test("isSelectableSparkSession keeps only local, non-archived sessions", () => {
+  assert.equal(isSelectableSparkSession(sessions[0] as SparkSessionRegistryRecord), true);
+  assert.equal(isSelectableSparkSession(archivedSession), false);
+  assert.equal(isSelectableSparkSession(channelBindingSession), false);
+  assert.equal(isSelectableSparkSession(channelTitleSession), false);
 });
 
 void test("Spark session selector custom UI returns an existing daemon session", async () => {

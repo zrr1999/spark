@@ -1,4 +1,4 @@
-export type BuiltinWorkflowMode = "research" | "plan" | "implement";
+export type BuiltinWorkflowMode = "plan" | "implement";
 
 export interface BuiltinWorkflowDefinition {
   id: string;
@@ -11,7 +11,7 @@ export interface BuiltinWorkflowDefinition {
 export const builtinWorkflowDefinitions: readonly BuiltinWorkflowDefinition[] = [
   {
     id: "research",
-    mode: "research",
+    mode: "plan",
     title: "research",
     description:
       "Deep research workflow with query planning, web search, source fetching, verification, and cited synthesis",
@@ -19,7 +19,7 @@ export const builtinWorkflowDefinitions: readonly BuiltinWorkflowDefinition[] = 
   },
   {
     id: "review",
-    mode: "research",
+    mode: "plan",
     title: "review",
     description: "Adversarial review workflow with critique, rebuttal, and verdict synthesis",
     scriptFactory: reviewWorkflowScript,

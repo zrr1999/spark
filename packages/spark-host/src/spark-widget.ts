@@ -15,6 +15,7 @@ export type { SessionTodoEntry, SessionTodoStatus } from "@zendev-lab/spark-task
  *   ├─ ◐ @me/worker role-run task title
  *   │  ├─ ✓ #7 task plan item
  *   │  └─ ○ #12 task plan item
+ *   ├─ ○ #3 session TODO (independent of any claimed task)
  */
 
 export interface TaskEntry {
@@ -117,7 +118,7 @@ export type SparkWidgetDriveModeInput =
   | "interactive";
 
 export interface SparkWidgetActiveLens {
-  phase: "research" | "plan" | "implement";
+  phase: "plan" | "implement";
   drive?: SparkWidgetDriveModeInput;
 }
 
@@ -209,6 +210,14 @@ function isVisibleTaskTodo(todo: SessionTodoEntry): boolean {
   return todo.status !== "deleted";
 }
 
+/**
+ * Session-bound (independent) TODOs only surface active work: done/cancelled/deleted
+ * items drop out of the widget instead of lingering as strikethrough rows.
+ */
+function isVisibleIndependentTodo(todo: SessionTodoEntry): boolean {
+  return todo.status !== "done" && todo.status !== "cancelled" && todo.status !== "deleted";
+}
+
 function hasWidgetContent(state: SparkWidgetState | undefined): state is SparkWidgetState {
   return Boolean(
     state &&
@@ -219,8 +228,13 @@ function hasWidgetContent(state: SparkWidgetState | undefined): state is SparkWi
       state.repro ||
       (state.projectKind?.panels.length ?? 0) > 0 ||
       hasVisibleProjects(state.projects) ||
-      state.tasks.length > 0),
+      state.tasks.length > 0 ||
+      hasVisibleIndependentTodos(state.independentTodos)),
   );
+}
+
+function hasVisibleIndependentTodos(todos: SessionTodoEntry[] | undefined): boolean {
+  return Boolean(todos?.some(isVisibleIndependentTodo));
 }
 
 function hasVisibleProjects(projects: SparkProjectWidgetEntry[] | undefined): boolean {
@@ -261,7 +275,8 @@ export function renderSparkWidgetLines(
     !state.repro &&
     (state.projectKind?.panels.length ?? 0) === 0 &&
     !hasVisibleProjects(state.projects) &&
-    state.tasks.length === 0
+    state.tasks.length === 0 &&
+    !hasVisibleIndependentTodos(state.independentTodos)
   )
     return [];
 
@@ -289,7 +304,11 @@ export function renderSparkWidgetLines(
     ...task,
     animationFrame: task.animationFrame ?? state.animationFrame ?? 0,
   }));
-  const projectRows = [...flattenProjectRows(state.projects ?? []), ...flattenTaskRows(tasks)];
+  const projectRows = [
+    ...flattenProjectRows(state.projects ?? []),
+    ...flattenTaskRows(tasks),
+    ...flattenIndependentTodoRows(state.independentTodos),
+  ];
   const fixedLineCount =
     [goalLine, projectHeaderLine, backgroundLine, dynamicWorkflowLine].filter(Boolean).length +
     projectKindLines.length;
@@ -494,13 +513,9 @@ function sparkWidgetActiveLensDriveMode(
   return lens.drive;
 }
 
-function sparkWidgetActiveLensPhase(
-  lens: SparkWidgetActiveLens | undefined,
-): "research" | "plan" | "implement" {
-  if (lens?.phase === "research" || lens?.phase === "plan" || lens?.phase === "implement") {
-    return lens.phase;
-  }
-  return "research";
+function sparkWidgetActiveLensPhase(lens: SparkWidgetActiveLens | undefined): "plan" | "implement" {
+  if (lens?.phase === "plan" || lens?.phase === "implement") return lens.phase;
+  return "plan";
 }
 
 function formatPhaseSummary(lens: SparkWidgetActiveLens | undefined): string {
@@ -615,7 +630,8 @@ function formatTaskTitle(task: TaskEntry, theme: SparkWidgetTheme): string {
 type WidgetRow =
   | { kind: "project"; project: SparkProjectWidgetEntry }
   | { kind: "task"; task: TaskEntry }
-  | { kind: "task-todo"; todo: SessionTodoEntry; fallbackNumber: number };
+  | { kind: "task-todo"; todo: SessionTodoEntry; fallbackNumber: number }
+  | { kind: "independent-todo"; todo: SessionTodoEntry; fallbackNumber: number };
 
 function flattenProjectRows(projects: SparkProjectWidgetEntry[]): WidgetRow[] {
   return projects
@@ -629,6 +645,16 @@ function flattenTaskRows(tasks: TaskEntry[]): WidgetRow[] {
   for (const task of sortTasksForVisibility(tasks))
     todoIndex = appendTaskRows(rows, task, todoIndex);
   return rows;
+}
+
+function flattenIndependentTodoRows(todos: SessionTodoEntry[] | undefined): WidgetRow[] {
+  if (!todos?.length) return [];
+  let fallbackNumber = 1;
+  return sortTodosForVisibility(todos.filter(isVisibleIndependentTodo)).map((todo) => ({
+    kind: "independent-todo" as const,
+    todo,
+    fallbackNumber: fallbackNumber++,
+  }));
 }
 
 function appendTaskRows(rows: WidgetRow[], task: TaskEntry, todoIndex: number): number {
@@ -703,6 +729,8 @@ function formatWidgetRow(row: WidgetRow, theme: SparkWidgetTheme, branch: "├�
       return `${theme.fg("dim", branch)} ${taskIcon(row.task, theme)} ${formatTaskTitle(row.task, theme)}`;
     case "task-todo":
       return `${theme.fg("dim", `│  ${branch}`)} ${todoIcon(row.todo.status, theme)} #${todoDisplayNumber(row.todo, row.fallbackNumber)} ${formatTodoContent(row.todo, theme)}`;
+    case "independent-todo":
+      return `${theme.fg("dim", branch)} ${todoIcon(row.todo.status, theme)} #${todoDisplayNumber(row.todo, row.fallbackNumber)} ${formatTodoContent(row.todo, theme)}`;
   }
 }
 

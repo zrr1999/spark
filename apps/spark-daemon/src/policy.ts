@@ -7,6 +7,8 @@ import {
 
 export interface CommandPolicyInput {
   command: ServerCommandPayload | SparkCommand;
+  runtimeId?: string | undefined;
+  expectedRuntimeId?: string | undefined;
   workspaceBindingId?: string | undefined;
   knownWorkspaceBindingIds: Set<string>;
   allowMutation?: boolean | undefined;
@@ -28,6 +30,8 @@ export function decideCommandPolicy(input: CommandPolicyInput): CommandPolicyDec
       });
   return decideSparkDaemonCommandPolicy({
     command,
+    runtimeId: input.runtimeId,
+    expectedRuntimeId: input.expectedRuntimeId,
     workspaceBindingId: input.workspaceBindingId,
     knownWorkspaceBindingIds: input.knownWorkspaceBindingIds,
     allowMutation: input.allowMutation,
