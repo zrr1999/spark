@@ -73,7 +73,7 @@
   </section>
 
   <section class="action-grid" aria-label={t.actions.aria}>
-    <a class="action-card primary" href="/sessions?new=workspace">
+    <a class="action-card primary" href="/sessions">
       <span class="action-icon"><Icon name="spark" size={22} /></span>
       <span><strong>{t.actions.conversationTitle}</strong><small>{t.actions.conversationBody}</small></span>
       <Icon name="chevron" size={18} />

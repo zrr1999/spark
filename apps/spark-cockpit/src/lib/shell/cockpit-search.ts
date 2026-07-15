@@ -43,16 +43,11 @@ export function buildCockpitSearchResults(input: {
   const sessionResults = input.sessions
     .filter((session) => {
       const scope = workbenchSessionScope(session);
-      if (scope.kind === "unknown") return false;
-      const workspace = scope.kind === "workspace" ? workspaceById.get(scope.workspaceId) : null;
-      const daemonLabel = scope.kind === "daemon" ? (scope.daemonLabel ?? scope.daemonId) : "";
-      return [
-        session.sessionId,
-        session.title ?? "",
-        workspace?.name ?? "",
-        workspace?.slug ?? "",
-        daemonLabel,
-      ]
+      // Cockpit search is workspace-scoped. Daemon-scoped conversations are
+      // owned by the session tool / TUI and are not surfaced here.
+      if (scope.kind !== "workspace") return false;
+      const workspace = workspaceById.get(scope.workspaceId);
+      return [session.sessionId, session.title ?? "", workspace?.name ?? "", workspace?.slug ?? ""]
         .join("\n")
         .toLowerCase()
         .includes(query);
@@ -62,7 +57,6 @@ export function buildCockpitSearchResults(input: {
       const scope = workbenchSessionScope(session);
       const workspace =
         scope.kind === "workspace" ? workspaceById.get(scope.workspaceId) : undefined;
-      const daemonLabel = scope.kind === "daemon" ? (scope.daemonLabel ?? scope.daemonId) : null;
       const activityStatus = session.activityStatus ?? session.status;
       return {
         id: session.sessionId,
@@ -71,7 +65,7 @@ export function buildCockpitSearchResults(input: {
           labels: input.channelLabels,
           fallback: input.untitledConversationLabel,
         }),
-        description: workspace?.name ?? daemonLabel,
+        description: workspace ? workspace.name : null,
         status: activityStatus,
         href: `/sessions/${session.sessionId}`,
       };

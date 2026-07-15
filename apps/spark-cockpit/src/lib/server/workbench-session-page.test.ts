@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  cursor: vi.fn(),
   get: vi.fn(),
   list: vi.fn(),
   snapshot: vi.fn(),
@@ -18,13 +17,10 @@ vi.mock("$lib/server/managed-sessions", () => ({
 }));
 
 vi.mock("$lib/server/db", () => ({ getDatabase: () => ({}) }));
-vi.mock("$lib/server/events", () => ({ latestEventCursor: mocks.cursor }));
+vi.mock("$lib/server/events", () => ({ latestEventCursor: () => null }));
 vi.mock("$lib/server/session-activity", () => ({ loadSessionActivity: mocks.activity }));
 vi.mock("$lib/session-snapshot-window", () => ({
-  sessionSnapshotWindow: (snapshot: unknown) => ({
-    snapshot,
-    history: snapshot ? { hasEarlier: true, nextBefore: "cursor-before" } : null,
-  }),
+  sessionSnapshotWindow: (snapshot: unknown) => ({ snapshot, history: null }),
 }));
 vi.mock("$lib/server/model-control", () => ({
   loadModelControlForCockpit: mocks.modelControl,
@@ -68,29 +64,39 @@ const daemonSession = {
   workspaceId: undefined,
 };
 
+const otherWorkspaceSession = {
+  ...workspaceSession,
+  sessionId: "sess_other_workspace",
+  scope: { kind: "workspace" as const, workspaceId: "ws_other" },
+  workspaceId: "ws_other",
+};
+
+function pageEvent(sessionId: string, activeWorkspaceId = "ws_current") {
+  return {
+    params: { sessionId },
+    parent: async () => ({ activeWorkspace: { id: activeWorkspaceId } }),
+  } as never;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.list.mockResolvedValue({
     available: true,
-    sessions: [workspaceSession, channelSession, daemonSession],
+    sessions: [workspaceSession, channelSession, daemonSession, otherWorkspaceSession],
   });
   mocks.snapshot.mockResolvedValue(null);
-  mocks.cursor.mockReturnValue(null);
   mocks.modelControl.mockResolvedValue({ available: true, snapshot: null });
   mocks.activity.mockReturnValue({ commands: [], reports: [] });
 });
 
 describe("workbench session page scope", () => {
-  it("keeps workspace, channel, and daemon-global registry records in the conversation rail", async () => {
+  it("keeps workspace and channel sessions while removing daemon-global registry records", async () => {
     mocks.get.mockResolvedValue(workspaceSession);
 
-    const result = await load({
-      params: { sessionId: workspaceSession.sessionId },
-      parent: async () => ({ activeWorkspace: { id: "ws_current" } }),
-    } as never);
+    const result = await load(pageEvent(workspaceSession.sessionId));
 
     expect(result).toMatchObject({
-      sessions: [workspaceSession, channelSession, daemonSession],
+      sessions: [workspaceSession, channelSession],
       selectedSessionId: workspaceSession.sessionId,
     });
     expect(mocks.activity).toHaveBeenCalledWith(
@@ -99,25 +105,18 @@ describe("workbench session page scope", () => {
     );
   });
 
-  it("opens a daemon-global conversation without querying workspace activity", async () => {
+  it("does not expose a daemon-global session through a stale direct URL", async () => {
     mocks.get.mockResolvedValue(daemonSession);
-    mocks.snapshot.mockResolvedValue({ sessionId: daemonSession.sessionId, messages: [] });
-    mocks.cursor.mockReturnValue({
-      createdAt: "2026-07-15T00:01:00.000Z",
-      id: "evt-global",
-    });
 
-    await expect(
-      load({
-        params: { sessionId: daemonSession.sessionId },
-        parent: async () => ({ activeWorkspace: { id: "ws_current" } }),
-      } as never),
-    ).resolves.toMatchObject({
-      sessions: [workspaceSession, channelSession, daemonSession],
-      selectedSessionId: daemonSession.sessionId,
-      sessionEventCursor: "2026-07-15T00:01:00.000Z|evt-global",
-      sessionHistory: { hasEarlier: true, nextBefore: "cursor-before" },
-      sessionActivity: { commands: [], reports: [] },
+    await expect(load(pageEvent(daemonSession.sessionId))).rejects.toMatchObject({ status: 404 });
+    expect(mocks.activity).not.toHaveBeenCalled();
+  });
+
+  it("does not restore a detached workspace session through a direct URL", async () => {
+    mocks.get.mockResolvedValue(otherWorkspaceSession);
+
+    await expect(load(pageEvent(otherWorkspaceSession.sessionId))).rejects.toMatchObject({
+      status: 404,
     });
     expect(mocks.activity).not.toHaveBeenCalled();
   });

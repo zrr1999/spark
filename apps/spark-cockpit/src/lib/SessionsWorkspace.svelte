@@ -51,7 +51,6 @@
   import { buildSessionWorkbenchView, type SessionInspectorLabels } from "$lib/session-workbench";
   import { Button } from "$lib/ui";
   import {
-    daemonIdentityForWorkbenchSession,
     workbenchSessionScope,
     workspaceIdForWorkbenchSession,
   } from "$lib/workbench-session-scope";
@@ -125,7 +124,6 @@
   };
 
   type FormValues = {
-    scopeKind?: string;
     workspaceId?: string;
     sessionId?: string;
     message?: string;
@@ -148,7 +146,6 @@
     workspaces: WorkspaceOption[];
     selectedSessionId: string | null;
     activeWorkspaceId?: string | null;
-    startScope?: "workspace" | "daemon";
     messages: Messages;
     common: Parameters<typeof getStatusLabel>[1];
     locale: string;
@@ -168,7 +165,6 @@
     workspaces,
     selectedSessionId,
     activeWorkspaceId = null,
-    startScope = "workspace",
     messages,
     common,
     locale,
@@ -710,9 +706,6 @@
   function sessionScopeLabel(session: SessionRecord) {
     const scope = workbenchSessionScope(session);
     if (scope.kind === "workspace") return workspaceLabel(scope.workspaceId);
-    if (scope.kind === "daemon") {
-      return daemonIdentityForWorkbenchSession(session)?.label ?? scope.daemonId;
-    }
     return messages.unknownWorkspace;
   }
 
@@ -947,7 +940,7 @@
           </div>
         {/if}
         <div>
-          <dt>{selectedWorkspaceId ? messages.workspaceLabel : messages.daemonLabel}</dt>
+          <dt>{messages.workspaceLabel}</dt>
           <dd>
             {#if selectedWorkspaceHref}
               <a href={selectedWorkspaceHref}>{sessionScopeLabel(selected)}</a>
@@ -1008,7 +1001,7 @@
   <main class="stage-pane">
     {#if !selected}
       <div class="conversation-start">
-        {#if !activeWorkspace && startScope === "workspace"}
+        {#if !activeWorkspace}
           <div class="stage-empty">
             <Icon name="agents" size={28} />
             <div>
@@ -1023,7 +1016,7 @@
             <div>
               <p class="kicker">Spark</p>
               <h1>{copy.newConversation}</h1>
-              <p>{startScope === "daemon" ? copy.daemonStartHint : copy.workspaceStartHint}</p>
+              <p>{copy.workspaceStartHint}</p>
             </div>
           </div>
 
@@ -1034,8 +1027,7 @@
             aria-busy={startState === "submitting"}
             use:enhance={enhanceStartConversation}
           >
-            <input type="hidden" name="scopeKind" value={startScope} />
-            {#if startScope === "workspace" && activeWorkspace}
+            {#if activeWorkspace}
               <input type="hidden" name="workspaceId" value={activeWorkspace.id} />
             {/if}
             <Composer

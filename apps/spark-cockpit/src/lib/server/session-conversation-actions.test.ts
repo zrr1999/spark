@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   listManagedSessionsForCockpit: vi.fn(),
   loadModelControlForCockpit: vi.fn(),
   setSessionModelForCockpit: vi.fn(),
+  setSessionThinkingLevelForCockpit: vi.fn(),
   submitConversationTurnForCockpit: vi.fn(),
 }));
 
@@ -63,7 +64,9 @@ vi.mock("$lib/server/model-control", () => ({
     if (!providerName || !modelId) throw new Error("invalid model");
     return { providerName, modelId };
   },
+  parseThinkingLevelValue: (value: string) => value,
   setSessionModelForCockpit: mocks.setSessionModelForCockpit,
+  setSessionThinkingLevelForCockpit: mocks.setSessionThinkingLevelForCockpit,
 }));
 
 vi.mock("$lib/server/agents-product", () => ({
@@ -85,7 +88,7 @@ vi.mock("$lib/server/form-data", () => ({
   },
 }));
 
-import { actions, load } from "../../routes/(workbench)/sessions/+page.server";
+import { actions } from "../../routes/(workbench)/sessions/+page.server";
 
 const session = {
   sessionId: "sess_conversation",
@@ -96,13 +99,6 @@ const session = {
   bindings: [],
   createdAt: "2026-07-10T00:00:00.000Z",
   updatedAt: "2026-07-10T00:00:00.000Z",
-};
-
-const daemonSession = {
-  ...session,
-  sessionId: "sess_global",
-  scope: { kind: "daemon" as const, daemonId: "daemon-local" },
-  workspaceId: undefined,
 };
 
 beforeEach(() => {
@@ -117,11 +113,8 @@ beforeEach(() => {
     available: true,
     snapshot: { providers: [], diagnostics: [] },
   });
-  mocks.listManagedSessionsForCockpit.mockResolvedValue({
-    available: true,
-    sessions: [session, daemonSession],
-  });
   mocks.setSessionModelForCockpit.mockResolvedValue(session);
+  mocks.setSessionThinkingLevelForCockpit.mockResolvedValue(session);
   mocks.cancelConversationTurnForCockpit.mockResolvedValue({
     turnId: "inv_conversation",
     status: "running",
@@ -131,18 +124,6 @@ beforeEach(() => {
 });
 
 describe("session conversation actions", () => {
-  it("selects the daemon-global composer from the new-conversation query", async () => {
-    const result = await load({
-      url: new URL("http://localhost/sessions?new=daemon"),
-      parent: async () => ({ activeWorkspace: { id: "ws_demo" } }),
-    } as never);
-
-    expect(result).toMatchObject({
-      newSessionScope: "daemon",
-      sessions: [session, daemonSession],
-    });
-  });
-
   it("creates an untitled session, keeps the first prompt as assignment title, and redirects", async () => {
     const action = requireAction("startConversation");
 
@@ -166,26 +147,20 @@ describe("session conversation actions", () => {
     expect(mocks.archiveManagedSessionForCockpit).not.toHaveBeenCalled();
   });
 
-  it("creates a daemon-global conversation without inventing a workspace target", async () => {
-    mocks.createManagedSessionForCockpit.mockResolvedValueOnce(daemonSession);
+  it("requires a workspace target and ignores any legacy daemon scope hint", async () => {
+    const result = await requireAction("startConversation")(
+      actionEvent({ scopeKind: "daemon", message: "Inspect daemon health." }),
+    );
 
-    await expect(
-      requireAction("startConversation")(
-        actionEvent({ scopeKind: "daemon", message: "Inspect daemon health." }),
-      ),
-    ).rejects.toMatchObject({
-      status: 303,
-      location: "/sessions/sess_global",
+    expect(result).toMatchObject({
+      status: 400,
+      data: {
+        intent: "startConversation",
+        success: false,
+      },
     });
-    expect(mocks.createManagedSessionForCockpit).toHaveBeenCalledWith({
-      scope: { kind: "daemon" },
-    });
-    expect(mocks.submitConversationTurnForCockpit).toHaveBeenCalledWith({
-      workspaceId: undefined,
-      sessionId: "sess_global",
-      prompt: "Inspect daemon health.",
-      title: "Inspect daemon health.",
-    });
+    expect(mocks.createManagedSessionForCockpit).not.toHaveBeenCalled();
+    expect(mocks.submitConversationTurnForCockpit).not.toHaveBeenCalled();
   });
 
   it("preserves the first message and archives the new session when queueing fails", async () => {
@@ -246,24 +221,51 @@ describe("session conversation actions", () => {
     });
   });
 
-  it("queues later daemon-global messages without a workspace target", async () => {
-    mocks.getManagedSessionForCockpit.mockResolvedValueOnce(daemonSession);
+  it("rejects stale form submissions for daemon-global conversations", async () => {
+    mocks.getManagedSessionForCockpit.mockResolvedValueOnce({
+      ...session,
+      sessionId: "sess_global",
+      scope: { kind: "daemon", daemonId: "daemon-local" },
+      workspaceId: undefined,
+    });
 
     await expect(
       requireAction("sendMessage")(
         actionEvent({ sessionId: "sess_global", message: "Continue globally." }),
       ),
     ).resolves.toMatchObject({
-      intent: "sendMessage",
-      success: true,
-      queuedTurnId: "turn_conversation",
+      status: 400,
+      data: {
+        intent: "sendMessage",
+        success: false,
+      },
     });
-    expect(mocks.submitConversationTurnForCockpit).toHaveBeenCalledWith({
-      workspaceId: undefined,
+    expect(mocks.submitConversationTurnForCockpit).not.toHaveBeenCalled();
+  });
+
+  it("rejects every session mutation action for daemon-global conversations", async () => {
+    mocks.getManagedSessionForCockpit.mockResolvedValue({
+      ...session,
       sessionId: "sess_global",
-      prompt: "Continue globally.",
-      title: "Continue globally.",
+      scope: { kind: "daemon", daemonId: "daemon-local" },
+      workspaceId: undefined,
     });
+
+    for (const [name, values] of [
+      ["cancelTurn", { sessionId: "sess_global", turnId: "turn_global" }],
+      ["selectModel", { sessionId: "sess_global", model: "baidu-oneapi/gpt-5.6-sol" }],
+      ["selectThinking", { sessionId: "sess_global", thinkingLevel: "high" }],
+      ["archiveSession", { sessionId: "sess_global" }],
+    ] as const) {
+      await expect(requireAction(name)(actionEvent(values))).resolves.toMatchObject({
+        status: 400,
+      });
+    }
+
+    expect(mocks.cancelConversationTurnForCockpit).not.toHaveBeenCalled();
+    expect(mocks.setSessionModelForCockpit).not.toHaveBeenCalled();
+    expect(mocks.setSessionThinkingLevelForCockpit).not.toHaveBeenCalled();
+    expect(mocks.archiveManagedSessionForCockpit).not.toHaveBeenCalled();
   });
 
   it("persists a conversation model through the daemon control plane", async () => {

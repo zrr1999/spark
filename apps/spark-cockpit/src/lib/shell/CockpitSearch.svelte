@@ -40,7 +40,13 @@
     if (!activeWorkspace) return pages;
     const base = `/${encodeURIComponent(activeWorkspace.slug)}`;
     const workspacePages: CockpitSearchResult[] = [
-      { id: "new-workspace", type: "page", title: sessionMessages.workspaceConversation, description: activeWorkspace.name, href: "/sessions?new=workspace" },
+      {
+        id: "new-workspace",
+        type: "page",
+        title: sessionMessages.newSession,
+        description: activeWorkspace.name,
+        href: "/sessions",
+      },
       { id: "overview", type: "page", title: layout.nav.overview, description: activeWorkspace.name, href: base },
       { id: "inbox", type: "page", title: layout.nav.inbox, description: activeWorkspace.name, href: `${base}/inbox` },
       { id: "artifacts", type: "page", title: layout.nav.artifacts, description: activeWorkspace.name, href: `${base}/artifacts` },

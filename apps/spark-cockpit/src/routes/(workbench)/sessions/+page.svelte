@@ -14,7 +14,6 @@
   workspaces={data.workspaces ?? []}
   selectedSessionId={data.selectedSessionId}
   activeWorkspaceId={data.activeWorkspace?.id ?? null}
-  startScope={data.newSessionScope}
   messages={t}
   common={data.messages.common}
   locale={data.locale}

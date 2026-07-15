@@ -6,7 +6,10 @@ import { loadConversationSummaries } from "$lib/server/conversation-summaries";
 import { getDatabase } from "$lib/server/db";
 import { loadPendingWorkbenchAsk } from "$lib/server/pending-ask";
 import { loadShellWorkspaceLayout } from "$lib/server/shell-layout";
-import { sessionsForWorkbench, workspaceIdForWorkbenchSession } from "$lib/workbench-session-scope";
+import {
+  workspaceIdForWorkbenchSession,
+  workspaceSessionsForWorkbench,
+} from "$lib/workbench-session-scope";
 import type { LayoutServerLoad } from "./$types";
 
 export const load: LayoutServerLoad = async ({ cookies, url }) => {
@@ -24,7 +27,7 @@ export const load: LayoutServerLoad = async ({ cookies, url }) => {
     preferredWorkspaceSlug: url.searchParams.get("workspace"),
   });
   const db = getDatabase();
-  const sessions = sessionsForWorkbench(
+  const sessions = workspaceSessionsForWorkbench(
     loadConversationSummaries(db, managedSessions.sessions),
     layout.activeWorkspace?.id,
   );

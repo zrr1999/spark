@@ -35,17 +35,9 @@ describe("cockpit search", () => {
     ]);
   });
 
-  it("finds daemon-global conversations by title or daemon identity", () => {
-    expect(buildCockpitSearchResults({ ...baseInput, query: "global" })).toEqual([
-      expect.objectContaining({
-        id: "sess_daemon",
-        description: "Local daemon",
-        href: "/sessions/sess_daemon",
-      }),
-    ]);
-    expect(buildCockpitSearchResults({ ...baseInput, query: "local daemon" })).toEqual([
-      expect.objectContaining({ id: "sess_daemon" }),
-    ]);
+  it("never surfaces daemon-scoped conversations in the workspace-scoped search", () => {
+    expect(buildCockpitSearchResults({ ...baseInput, query: "global" })).toEqual([]);
+    expect(buildCockpitSearchResults({ ...baseInput, query: "local daemon" })).toEqual([]);
   });
 
   it("returns workspace links after conversation matches", () => {

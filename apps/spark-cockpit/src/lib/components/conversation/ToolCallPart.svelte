@@ -36,7 +36,7 @@
 <details
   class="tool-part {state}"
   class:nested
-  open={state === "running" || state === "awaiting-approval" || (nested && Boolean(preview))}
+  open={state === "running" || state === "awaiting-approval"}
 >
   <summary>
     <span class="tool-name"><Icon name="activity" size={14} />{name}</span>

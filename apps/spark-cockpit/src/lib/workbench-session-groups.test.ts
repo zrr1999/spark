@@ -16,7 +16,6 @@ const options = {
 describe("workbench session type groups", () => {
   it.each([
     [session("workspace"), "workspace"],
-    [session("daemon", { scope: { kind: "daemon", daemonId: "local" } }), "daemon"],
     [channelSession("infoflow:user:alice"), "private"],
     [channelSession("qqbot:c2c:alice"), "private"],
     [channelSession("infoflow:group:ops"), "group"],
@@ -25,6 +24,15 @@ describe("workbench session type groups", () => {
     [channelSession("feishu:chat:oc_ops"), "conversation"],
   ] as const)("classifies %s as %s", (value, expected) => {
     expect(workbenchSessionType(value, options)).toBe(expected);
+  });
+
+  it("does not create a group for daemon-global sessions", () => {
+    const daemon = session("daemon", { scope: { kind: "daemon", daemonId: "local" } });
+
+    expect(workbenchSessionType(daemon, options)).toBeNull();
+    expect(groupWorkbenchSessionsByType([session("workspace"), daemon], options)).toEqual([
+      expect.objectContaining({ key: "workspace" }),
+    ]);
   });
 
   it("uses binding identity with a custom title and legacy title-only identity", () => {
@@ -47,12 +55,6 @@ describe("workbench session type groups", () => {
     ).toBe("conversation");
   });
 
-  it("does not turn an unknown non-channel record into a workspace conversation", () => {
-    expect(
-      workbenchSessionType(session("unknown", { workspaceId: undefined, scope: null }), options),
-    ).toBeNull();
-  });
-
   it("keeps a stable type order and attention order without mutating input", () => {
     const input = [
       channelSession("infoflow:group:old", { updatedAt: "2026-07-14T08:00:00Z" }),
@@ -62,21 +64,20 @@ describe("workbench session type groups", () => {
         updatedAt: "2026-07-14T07:00:00Z",
       }),
       channelSession("qqbot:c2c:alice"),
-      session("daemon", { scope: { kind: "daemon", daemonId: "local" } }),
     ];
 
     const groups = groupWorkbenchSessionsByType(input, options);
 
-    expect(groups.map((group) => group.key)).toEqual(["workspace", "private", "group", "daemon"]);
-    expect(
-      groups.find((group) => group.key === "group")?.sessions.map((value) => value.sessionId),
-    ).toEqual(["infoflow:group:running", "infoflow:group:old"]);
+    expect(groups.map((group) => group.key)).toEqual(["workspace", "private", "group"]);
+    expect(groups.at(-1)?.sessions.map((value) => value.sessionId)).toEqual([
+      "infoflow:group:running",
+      "infoflow:group:old",
+    ]);
     expect(input.map((value) => value.sessionId)).toEqual([
       "infoflow:group:old",
       "workspace",
       "infoflow:group:running",
       "qqbot:c2c:alice",
-      "daemon",
     ]);
   });
 });

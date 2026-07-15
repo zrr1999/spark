@@ -1,14 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-  daemonIdentityForWorkbenchSession,
   isSessionVisibleInWorkbenchRail,
-  sessionsForWorkbench,
   workbenchSessionScope,
+  workspaceSessionsForWorkbench,
   workspaceIdForWorkbenchSession,
 } from "./workbench-session-scope";
 
 describe("workbench session scope", () => {
-  it("shows the active workspace plus explicitly daemon-scoped sessions", () => {
+  it("shows only sessions scoped to the active workspace and hides daemon-scoped ones", () => {
     expect(isSessionVisibleInWorkbenchRail({ workspaceId: "ws_spore" }, "ws_spore")).toBe(true);
     expect(isSessionVisibleInWorkbenchRail({ workspaceId: "spark" }, "ws_spore")).toBe(false);
     expect(
@@ -16,7 +15,7 @@ describe("workbench session scope", () => {
         { workspaceId: "legacy", scope: { kind: "daemon", daemonId: "daemon-a" } },
         "ws_spore",
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("prefers canonical workspace scope over the legacy compatibility field", () => {
@@ -32,27 +31,21 @@ describe("workbench session scope", () => {
     expect(workspaceIdForWorkbenchSession(session)).toBe("ws_current");
   });
 
-  it("keeps daemon identity available for the global conversation group", () => {
-    expect(
-      daemonIdentityForWorkbenchSession({
-        scope: { kind: "daemon", daemonId: "daemon-a", daemonLabel: "Mac Studio" },
-      }),
-    ).toEqual({ id: "daemon-a", label: "Mac Studio" });
-    expect(
-      daemonIdentityForWorkbenchSession({
-        scope: { kind: "daemon", daemonId: "daemon-b" },
-      }),
-    ).toEqual({ id: "daemon-b", label: "daemon-b" });
+  it("keeps daemon-scoped sessions out of the workspace-scoped Cockpit view", () => {
+    const session = { scope: { kind: "daemon" as const, daemonId: "daemon-a" } };
+    expect(workbenchSessionScope(session)).toEqual({ kind: "daemon", daemonId: "daemon-a" });
+    expect(workspaceIdForWorkbenchSession(session)).toBeNull();
   });
 
-  it("projects only the active workspace plus global daemon conversations", () => {
+  it("projects daemon registry results to the active workspace only", () => {
     const workspaceSession = {
       sessionId: "sess_workspace",
       scope: { kind: "workspace" as const, workspaceId: "ws_current" },
     };
-    const otherWorkspaceSession = {
-      sessionId: "sess_other",
-      scope: { kind: "workspace" as const, workspaceId: "ws_other" },
+    const channelSession = {
+      sessionId: "sess_channel",
+      scope: { kind: "workspace" as const, workspaceId: "ws_current" },
+      bindings: [{ kind: "channel", externalKey: "infoflow:user:u1" }],
     };
     const daemonSession = {
       sessionId: "sess_daemon",
@@ -60,7 +53,18 @@ describe("workbench session scope", () => {
     };
 
     expect(
-      sessionsForWorkbench([workspaceSession, otherWorkspaceSession, daemonSession], "ws_current"),
-    ).toEqual([workspaceSession, daemonSession]);
+      workspaceSessionsForWorkbench(
+        [
+          workspaceSession,
+          channelSession,
+          daemonSession,
+          {
+            sessionId: "sess_other_workspace",
+            scope: { kind: "workspace" as const, workspaceId: "ws_other" },
+          },
+        ],
+        "ws_current",
+      ),
+    ).toEqual([workspaceSession, channelSession]);
   });
 });

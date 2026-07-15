@@ -404,9 +404,6 @@ const messages = {
     title: "Conversations",
     lede: "Continue a conversation in this workspace.",
     newSession: "New conversation",
-    workspaceConversation: "Workspace chat",
-    daemonConversation: "Global chat",
-    daemonGroup: "Global conversations",
     searchPlaceholder: "Filter conversations",
     emptyTitle: "No conversations yet",
     emptyBody:
@@ -449,7 +446,6 @@ const messages = {
     },
     sessionTypes: {
       workspace: "Workspace chats",
-      daemon: "Global",
       private: "Direct chats",
       group: "Group chats",
       channel: "Channels",
@@ -504,12 +500,9 @@ const messages = {
     effectiveModelMissing: "The Spark daemon did not return an effective conversation model.",
     selectThinkingRequired: "Select a conversation and thinking level.",
     unknownWorkspace: "Unknown workspace",
-    daemonLabel: "Daemon",
     workbench: {
       newConversation: "New conversation",
-      workspaceConversation: "Workspace chat",
       workspaceStartHint: "Start a conversation in the current workspace.",
-      daemonStartHint: "Start a global conversation with the local Spark daemon.",
       messageLabel: "Message",
       startPlaceholder: "Tell Spark what you want to accomplish…",
       messagePlaceholder: "Add context, constraints, or steer the work…",

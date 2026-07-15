@@ -15,41 +15,66 @@ vi.mock("$lib/session-snapshot-window", () => ({
   sessionSnapshotWindow: (snapshot: unknown, limit: number) => ({ snapshot, limit }),
 }));
 
+vi.mock("$lib/workbench-session-scope", () => ({
+  workspaceIdForWorkbenchSession: (session: { scope?: { kind?: string; workspaceId?: string } }) =>
+    session.scope?.kind === "workspace" ? (session.scope.workspaceId ?? null) : null,
+}));
+
 import { GET } from "../../routes/api/v1/sessions/[sessionId]/snapshot/+server";
+
+const workspaceSession = {
+  sessionId: "sess_workspace",
+  scope: { kind: "workspace" as const, workspaceId: "ws_current" },
+  workspaceId: "ws_current",
+};
+
+function requestEvent(sessionId: string) {
+  return {
+    params: { sessionId },
+    url: new URL(`http://localhost/api/v1/sessions/${sessionId}/snapshot`),
+  } as never;
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.snapshot.mockResolvedValue({ sessionId: "sess_global", messages: [] });
+  mocks.snapshot.mockResolvedValue({
+    sessionId: workspaceSession.sessionId,
+    messages: [],
+  });
 });
 
-describe("session snapshot route", () => {
-  it("returns snapshot history for a daemon-global conversation", async () => {
-    mocks.get.mockResolvedValue({
-      sessionId: "sess_global",
-      scope: { kind: "daemon", daemonId: "daemon-local" },
-    });
+describe("session snapshot route scope", () => {
+  it("returns a snapshot for a workspace session", async () => {
+    mocks.get.mockResolvedValue(workspaceSession);
 
-    const response = await getSnapshot("sess_global");
+    const response = await GET(requestEvent(workspaceSession.sessionId));
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      snapshot: { sessionId: "sess_global", messages: [] },
+      snapshot: { sessionId: workspaceSession.sessionId, messages: [] },
       limit: 80,
     });
+    expect(mocks.snapshot).toHaveBeenCalledWith(workspaceSession.sessionId);
   });
 
-  it("keeps an unknown session private", async () => {
-    mocks.get.mockResolvedValue(null);
+  it("does not expose a daemon-global session snapshot", async () => {
+    mocks.get.mockResolvedValue({
+      sessionId: "sess_daemon",
+      scope: { kind: "daemon", daemonId: "daemon-local" },
+    });
 
-    const response = await getSnapshot("sess_missing");
+    const response = await GET(requestEvent("sess_daemon"));
 
     expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toEqual({ error: "session_not_found" });
+    expect(mocks.snapshot).not.toHaveBeenCalled();
+  });
+
+  it("returns not found before requesting a snapshot for a missing session", async () => {
+    mocks.get.mockResolvedValue(null);
+
+    const response = await GET(requestEvent("sess_missing"));
+
+    expect(response.status).toBe(404);
     expect(mocks.snapshot).not.toHaveBeenCalled();
   });
 });
-
-async function getSnapshot(sessionId: string): Promise<Response> {
-  const url = new URL(`http://localhost/api/v1/sessions/${sessionId}/snapshot?limit=80`);
-  return (await GET({ params: { sessionId }, url } as Parameters<typeof GET>[0])) as Response;
-}
