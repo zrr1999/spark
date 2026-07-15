@@ -10,6 +10,51 @@ function createStore(): { db: DatabaseSync; store: SparkInvocationStore } {
 }
 
 describe("SparkInvocationStore", () => {
+  it("reports session activity from durable queued and running invocations", () => {
+    const { db, store } = createStore();
+    try {
+      const queued = store.submit({
+        sessionId: "session-active",
+        prompt: "queued",
+        now: "2026-07-15T00:00:00.000Z",
+      });
+      expect(store.sessionActivity("session-active")).toEqual({
+        active: true,
+        updatedAt: "2026-07-15T00:00:00.000Z",
+      });
+
+      store.claimNext("worker", "2026-07-15T00:00:01.000Z");
+      expect(store.sessionActivity("session-active")).toEqual({
+        active: true,
+        updatedAt: "2026-07-15T00:00:01.000Z",
+      });
+
+      store.complete(queued.invocationId, {
+        status: "succeeded",
+        now: "2026-07-15T00:00:02.000Z",
+      });
+      expect(store.sessionActivity("session-active")).toEqual({
+        active: false,
+        updatedAt: "2026-07-15T00:00:02.000Z",
+      });
+      expect(store.sessionActivity("session-missing")).toEqual({ active: false });
+      expect(
+        Object.fromEntries(
+          store.sessionActivities(["session-active", "session-missing", "session-active"]),
+        ),
+      ).toEqual({
+        "session-active": {
+          active: false,
+          updatedAt: "2026-07-15T00:00:02.000Z",
+        },
+        "session-missing": { active: false },
+      });
+      expect(store.sessionActivities([])).toEqual(new Map());
+    } finally {
+      db.close();
+    }
+  });
+
   it("persists independent ids and enforces valid terminal transitions", () => {
     const { db, store } = createStore();
     try {

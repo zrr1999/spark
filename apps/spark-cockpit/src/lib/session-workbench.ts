@@ -130,12 +130,9 @@ export interface SessionInspectorLabels {
   ariaLabel: string;
   tabs: Record<SessionInspectorTab, string>;
   summaryHeading: string;
-  runsHeading: string;
   tasksHeading: string;
   changesHeading: string;
   mailboxHeading: string;
-  noRunsTitle: string;
-  noRunsBody: string;
   noTasksTitle: string;
   noTasksBody: string;
   noChangesTitle: string;
@@ -143,7 +140,6 @@ export interface SessionInspectorLabels {
   noMailboxTitle: string;
   noMailboxBody: string;
   unassignedProject: string;
-  latestOutput: string;
   progress: string;
   mailFrom: string;
   mailRequest: string;

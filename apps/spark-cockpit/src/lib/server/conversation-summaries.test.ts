@@ -9,7 +9,7 @@ import {
 import { conversationActivityStatus, loadConversationSummaries } from "./conversation-summaries";
 
 describe("conversation summaries", () => {
-  it("rolls internal invocation state up to the visible conversation", () => {
+  it("does not let a stale Cockpit invocation override settled daemon truth", () => {
     const db = openMemoryDatabase();
     migrate(db);
     const now = "2026-07-10T00:00:00.000Z";
@@ -75,12 +75,12 @@ describe("conversation summaries", () => {
 
     expect(summary).toMatchObject({
       sessionId: "sess_visible",
-      activityStatus: "running",
+      activityStatus: "ready",
       activityUpdatedAt: invocation.updatedAt,
     });
   });
 
-  it("keeps a visible session status when newer unrelated commands exceed the old row window", () => {
+  it("keeps settled daemon truth when stale activity exceeds the old row window", () => {
     const db = openMemoryDatabase();
     migrate(db);
     const now = "2026-07-10T00:00:00.000Z";
@@ -161,7 +161,7 @@ describe("conversation summaries", () => {
 
     expect(summary).toMatchObject({
       sessionId: "sess_visible",
-      activityStatus: "running",
+      activityStatus: "ready",
     });
   });
 

@@ -44,6 +44,7 @@ import {
   type SparkSessionCreateRequest,
   type SparkSessionGetRequest,
   type SparkSessionListRequest,
+  type SparkSessionRegistryRecord,
   type SparkSessionView,
   type SparkSessionUnbindRequest,
   type SparkTurnCancelResult,
@@ -85,7 +86,11 @@ import {
   type SparkDaemonRestartRequestResult,
   type SparkDaemonTask,
 } from "./core/index.ts";
-import { SparkInvocationStore, isRetryableInvocationError } from "./store/invocations.ts";
+import {
+  SparkInvocationStore,
+  isRetryableInvocationError,
+  type SparkInvocationSessionActivity,
+} from "./store/invocations.ts";
 import {
   attachWorkspace,
   attachWorkspaceClient,
@@ -1226,7 +1231,16 @@ export async function handleLocalRpcLine(
       }
       case "session.list": {
         const sessions = await requireSessionRegistry(options).list(request.params);
-        return { id: request.id, ok: true, result: sessions };
+        const activities = new SparkInvocationStore(db).sessionActivities(
+          sessions.map((session) => session.sessionId),
+        );
+        return {
+          id: request.id,
+          ok: true,
+          result: sessions.map((session) =>
+            projectSessionInvocationState(session, activities.get(session.sessionId)),
+          ),
+        };
       }
       case "session.get": {
         const session = await requireSessionRegistry(options).get(request.params.sessionId);
@@ -1236,16 +1250,29 @@ export async function handleLocalRpcLine(
             `unknown session: ${request.params.sessionId}`,
           );
         }
-        return { id: request.id, ok: true, result: session };
+        return {
+          id: request.id,
+          ok: true,
+          result: projectSessionInvocationState(
+            session,
+            new SparkInvocationStore(db).sessionActivity(session.sessionId),
+          ),
+        };
       }
       case "session.snapshot": {
-        const session = await requireSessionRegistry(options).get(request.params.sessionId);
-        if (!session) {
+        const registeredSession = await requireSessionRegistry(options).get(
+          request.params.sessionId,
+        );
+        if (!registeredSession) {
           throw new SparkSessionRegistryError(
             "session_not_found",
             `unknown session: ${request.params.sessionId}`,
           );
         }
+        const session = projectSessionInvocationState(
+          registeredSession,
+          new SparkInvocationStore(db).sessionActivity(registeredSession.sessionId),
+        );
         if (!paths.piAgentDir) {
           throw new Error("Spark daemon native session storage is not available.");
         }
@@ -1460,7 +1487,11 @@ function projectPendingSessionTurns(
   snapshot: SparkSessionView,
 ): SparkSessionView {
   const pending = new SparkInvocationStore(db).listPendingForSession(snapshot.sessionId);
-  if (pending.length === 0) return snapshot;
+  if (pending.length === 0) {
+    return snapshot.status === "idle"
+      ? snapshot
+      : parseSparkSessionView({ ...snapshot, status: "idle" });
+  }
 
   const messages = pending.map((invocation) => ({
     id: `invocation:${invocation.invocationId}`,
@@ -1483,6 +1514,25 @@ function projectPendingSessionTurns(
         ? snapshot.updatedAt
         : pendingUpdatedAt,
   });
+}
+
+/**
+ * Reconcile the registry's convenience status with durable invocation truth at
+ * the daemon boundary. A daemon crash can leave registry.json at `running`
+ * after SQLite has already recovered every invocation to a terminal state.
+ */
+function projectSessionInvocationState(
+  session: SparkSessionRegistryRecord,
+  activity: SparkInvocationSessionActivity = { active: false },
+): SparkSessionRegistryRecord {
+  if (session.status === "archived") return session;
+  const status = activity.active ? "running" : "ready";
+  const updatedAt =
+    activity.updatedAt && activity.updatedAt > session.updatedAt
+      ? activity.updatedAt
+      : session.updatedAt;
+  if (status === session.status && updatedAt === session.updatedAt) return session;
+  return { ...session, status, updatedAt };
 }
 
 async function projectSessionMailbox(

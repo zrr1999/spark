@@ -226,6 +226,7 @@ export async function runSparkCommandBridge(
     invocationId,
     commandId: input.command.commandId,
     workspaceBindingId: input.workspace.id,
+    sessionId: sessionIdForCommand(command),
     prompt,
     now: startedAt,
   });
@@ -653,17 +654,19 @@ function recordInvocationStarted(
     invocationId: string;
     commandId?: string | undefined;
     workspaceBindingId: string;
+    sessionId?: string | undefined;
     prompt: string;
     now: string;
   },
 ): void {
   db.prepare(
     `INSERT INTO invocations
-      (id, command_id, workspace_binding_id, status, prompt, created_at, updated_at)
-     VALUES (?, ?, ?, 'running', ?, ?, ?)
+      (id, command_id, workspace_binding_id, session_id, status, prompt, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'running', ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
       command_id = excluded.command_id,
       workspace_binding_id = excluded.workspace_binding_id,
+      session_id = COALESCE(excluded.session_id, invocations.session_id),
       status = excluded.status,
       prompt = excluded.prompt,
       updated_at = excluded.updated_at`,
@@ -671,6 +674,7 @@ function recordInvocationStarted(
     input.invocationId,
     input.commandId ?? null,
     input.workspaceBindingId,
+    input.sessionId ?? null,
     input.prompt,
     input.now,
     input.now,
@@ -711,6 +715,15 @@ function eventTypeOf(event: unknown): string | undefined {
 function retryOfInvocationId(command: ServerCommandPayload): string | undefined {
   const value = command.payload?.retryOfInvocationId;
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function sessionIdForCommand(command: ServerCommandPayload): string | undefined {
+  const direct = command.payload?.sessionId;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  const target = command.payload?.target;
+  if (!isRecord(target)) return undefined;
+  const sessionId = target.sessionId;
+  return typeof sessionId === "string" && sessionId.trim() ? sessionId.trim() : undefined;
 }
 
 function promptForCommand(command: ServerCommandPayload): string {

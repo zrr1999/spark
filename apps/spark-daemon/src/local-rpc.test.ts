@@ -1195,6 +1195,55 @@ describe("Spark daemon local RPC", () => {
       const fetched = await request("session_get", "session.get", { sessionId: "sess_a" });
       expect(fetched).toMatchObject({ ok: true, result: { title: "First" } });
 
+      await sessionRegistry.recordTurnQueued("sess_a");
+      const staleRegistry = await request("session_get_stale", "session.get", {
+        sessionId: "sess_a",
+      });
+      expect(staleRegistry).toMatchObject({
+        ok: true,
+        result: { sessionId: "sess_a", status: "ready" },
+      });
+
+      const invocationStore = new SparkInvocationStore(db);
+      const activeInvocation = invocationStore.submit({
+        sessionId: "sess_a",
+        prompt: "active turn",
+        now: "2099-07-15T00:00:00.000Z",
+      });
+      const activeSession = await request("session_get_active", "session.get", {
+        sessionId: "sess_a",
+      });
+      expect(activeSession).toMatchObject({
+        ok: true,
+        result: {
+          sessionId: "sess_a",
+          status: "running",
+          updatedAt: "2099-07-15T00:00:00.000Z",
+        },
+      });
+      expect(
+        await request("session_list_active", "session.list", { workspaceId: "ws_a" }),
+      ).toMatchObject({ ok: true, result: [{ sessionId: "sess_a", status: "running" }] });
+      invocationStore.claimNext("test-worker", "2099-07-15T00:00:01.000Z");
+      invocationStore.complete(activeInvocation.invocationId, {
+        status: "succeeded",
+        now: "2099-07-15T00:00:02.000Z",
+      });
+      const settledSession = await request("session_get_settled", "session.get", {
+        sessionId: "sess_a",
+      });
+      expect(settledSession).toMatchObject({
+        ok: true,
+        result: {
+          sessionId: "sess_a",
+          status: "ready",
+          updatedAt: "2099-07-15T00:00:02.000Z",
+        },
+      });
+      expect(
+        await request("session_list_settled", "session.list", { workspaceId: "ws_a" }),
+      ).toMatchObject({ ok: true, result: [{ sessionId: "sess_a", status: "ready" }] });
+
       const bound = await request("session_bind", "session.bind", {
         sessionId: "sess_a",
         externalKey: "feishu:chat:oc_demo",
@@ -1212,6 +1261,9 @@ describe("Spark daemon local RPC", () => {
         sessionId: "sess_a",
       });
       expect(archived).toMatchObject({ ok: true, result: { status: "archived" } });
+      expect(
+        await request("session_get_archived", "session.get", { sessionId: "sess_a" }),
+      ).toMatchObject({ ok: true, result: { sessionId: "sess_a", status: "archived" } });
 
       const missing = await request("session_missing", "session.get", {
         sessionId: "sess_missing",
@@ -1746,6 +1798,7 @@ describe("Spark daemon local RPC", () => {
       expect(JSON.stringify(emptyResult.mailbox)).not.toContain("not-for-cockpit");
       expect(JSON.stringify(emptyResult.mailbox)).not.toContain("secret-idempotency");
 
+      await sessionRegistry.recordTurnQueued("sess_view");
       const store = new SparkInvocationStore(db);
       const queued = store.submit({
         sessionId: "sess_view",
@@ -1771,7 +1824,14 @@ describe("Spark daemon local RPC", () => {
       store.claimNext("test-worker");
       store.complete(queued.invocationId, { status: "succeeded" });
       const settled = await request("snapshot_pending_settled");
-      expect(settled).toMatchObject({ ok: true, result: { messages: [] } });
+      expect(settled).toMatchObject({
+        ok: true,
+        result: {
+          status: "idle",
+          messages: [],
+          metadata: { registryStatus: "ready" },
+        },
+      });
 
       const fallbackPath = join(
         paths.piAgentDir!,

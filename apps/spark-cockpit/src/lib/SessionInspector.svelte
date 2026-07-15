@@ -41,10 +41,6 @@
     return status.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
   }
 
-  function progressValue(progress: number) {
-    return Math.min(1, Math.max(0, progress));
-  }
-
   function mailKindLabel(kind: "request" | "notification") {
     return kind === "request" ? labels.mailRequest : labels.mailNotification;
   }
@@ -67,7 +63,7 @@
     return `${instanceId}-${tab}-panel`;
   }
 
-  function headingId(section: SessionInspectorTab | "runs") {
+  function headingId(section: SessionInspectorTab) {
     return `${instanceId}-${section}-heading`;
   }
 
@@ -167,50 +163,6 @@
         </dl>
       </section>
 
-      {#if view.runs.length === 0}
-        <EmptyState title={labels.noRunsTitle} body={labels.noRunsBody} icon="activity" compact />
-      {:else}
-        <section class="inspector-section" aria-labelledby={headingId("runs")}>
-          <h2 id={headingId("runs")}>{labels.runsHeading}</h2>
-          <div class="card-list">
-            {#each view.runs as run (run.id)}
-              <article class="inspector-card">
-                <header class="card-header">
-                  <div class="card-title">
-                    <Icon name="play" size={16} />
-                    <div>
-                      <h3>{run.title}</h3>
-                      <p>{run.runtimeName ?? run.kind}</p>
-                    </div>
-                  </div>
-                  <span class={`status-pill ${statusClass(run.status)}`}>
-                    {statusLabel(run.status)}
-                  </span>
-                </header>
-                {#if run.summary}
-                  <p class="card-summary">{run.summary}</p>
-                {/if}
-                {#if run.progress !== null}
-                  <div class="progress-row">
-                    <progress
-                      max="1"
-                      value={progressValue(run.progress)}
-                      aria-label={labels.progress}
-                    ></progress>
-                    <span>{Math.round(progressValue(run.progress) * 100)}%</span>
-                  </div>
-                {/if}
-                {#if run.latestOutput}
-                  <details class="output-details">
-                    <summary>{labels.latestOutput}</summary>
-                    <pre>{run.latestOutput}</pre>
-                  </details>
-                {/if}
-              </article>
-            {/each}
-          </div>
-        </section>
-      {/if}
     {:else if activeTab === "changes"}
       {#if view.changes.length === 0}
         <EmptyState title={labels.noChangesTitle} body={labels.noChangesBody} icon="repos" compact />
@@ -407,10 +359,6 @@
     padding: var(--spacing-lg);
   }
 
-  .inspector-section + .inspector-section {
-    border-top: 1px solid var(--color-border-soft);
-  }
-
   .inspector-section > h2 {
     color: var(--color-ink);
     font-size: var(--text-section-title);
@@ -557,24 +505,11 @@
     min-width: 80px;
   }
 
-  .output-details {
-    border-top: 1px solid var(--color-border-soft);
-    padding-top: var(--spacing-sm);
-  }
-
-  .output-details summary {
-    color: var(--color-ink-subtle);
-    cursor: pointer;
-    font-size: var(--text-caption);
-    font-weight: var(--weight-caption-medium);
-  }
-
   pre,
   code {
     font-family: var(--font-mono);
   }
 
-  .output-details pre,
   .artifact-preview {
     background: var(--color-canvas);
     border: 1px solid var(--color-border);

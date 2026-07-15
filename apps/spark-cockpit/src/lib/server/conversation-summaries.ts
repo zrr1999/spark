@@ -112,13 +112,25 @@ export function loadConversationSummaries(
 
   return sessions.map((session) => {
     const latest = latestBySession.get(session.sessionId);
-    const daemonOwnsLatestState = !latest || session.updatedAt > latest.activityUpdatedAt;
+    const daemonStatus = sessionFallbackStatus(session.status);
+    // Active execution is daemon-owned. A delayed Cockpit mirror may still say
+    // queued/running after the daemon invocation has reached a terminal state;
+    // never let that optional projection resurrect a settled conversation.
+    const projectedOutcome =
+      latest &&
+      latest.activityUpdatedAt >= session.updatedAt &&
+      latest.activityStatus !== "queued" &&
+      latest.activityStatus !== "running"
+        ? latest.activityStatus
+        : null;
     return {
       ...session,
-      activityStatus: daemonOwnsLatestState
-        ? sessionFallbackStatus(session.status)
-        : latest.activityStatus,
-      activityUpdatedAt: daemonOwnsLatestState ? session.updatedAt : latest.activityUpdatedAt,
+      activityStatus:
+        daemonStatus === "running" ? daemonStatus : (projectedOutcome ?? daemonStatus),
+      activityUpdatedAt:
+        latest && latest.activityUpdatedAt > session.updatedAt
+          ? latest.activityUpdatedAt
+          : session.updatedAt,
     };
   });
 }

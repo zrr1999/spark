@@ -19,7 +19,6 @@
     channelSessionPresentation,
     sessionHasChannelBinding,
   } from "$lib/channel-session-title";
-  import { visibleSessionStatus } from "$lib/conversation-status";
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
   import SessionInspector from "$lib/SessionInspector.svelte";
@@ -257,10 +256,13 @@
     modelControl.available &&
       availableModels.some((entry) => modelValue(entry.model) === startModel),
   );
-  let conversationBusy = $derived(
-    selected?.status === "running" || liveSessionView?.status === "running",
-  );
   let activeTurnId = $derived(liveEventState?.activeTurnId ?? null);
+  // A session registry flag can survive a daemon restart. Only a durable
+  // active invocation makes the conversation busy in the UI.
+  let conversationBusy = $derived(Boolean(activeTurnId));
+  let displayedSessionStatus = $derived<"running" | "archived" | null>(
+    selected?.status === "archived" ? "archived" : conversationBusy ? "running" : null,
+  );
   let cancelState = $state<SubmissionState>("idle");
   let cancelFeedback = $state<string | null>(null);
   let cancelledTurnId = $state<string | null>(null);
@@ -338,12 +340,9 @@
       mailbox: copy.mailboxTab,
     },
     summaryHeading: copy.summaryHeading,
-    runsHeading: copy.runsHeading,
     tasksHeading: copy.tasksHeading,
     changesHeading: copy.changesHeading,
     mailboxHeading: copy.mailboxHeading,
-    noRunsTitle: copy.noRunsTitle,
-    noRunsBody: copy.noRunsBody,
     noTasksTitle: copy.noTasksTitle,
     noTasksBody: copy.noTasksBody,
     noChangesTitle: copy.noChangesTitle,
@@ -351,7 +350,6 @@
     noMailboxTitle: copy.noMailboxTitle,
     noMailboxBody: copy.noMailboxBody,
     unassignedProject: copy.unassignedProject,
-    latestOutput: copy.latestOutput,
     progress: copy.progress,
     mailFrom: copy.mailFrom,
     mailRequest: copy.mailRequest,
@@ -367,11 +365,15 @@
     updatedAt: copy.updatedAt,
     unavailable: copy.unavailable,
   });
-  let workbenchView = $derived(
-    liveSessionView
-      ? buildSessionWorkbenchView({ session: liveSessionView, activity })
-      : null,
-  );
+  let workbenchView = $derived.by(() => {
+    if (!liveSessionView) return null;
+    const effectiveStatus: "running" | "idle" = conversationBusy ? "running" : "idle";
+    const session =
+      liveSessionView.status === effectiveStatus
+        ? liveSessionView
+        : { ...liveSessionView, status: effectiveStatus };
+    return buildSessionWorkbenchView({ session, activity });
+  });
   let timelineFollowKey = $derived.by(() => {
     const latest = timelineItems.at(-1);
     return latest ? `${latest.id}:${latest.status ?? "done"}:${latest.body.length}` : "empty";
@@ -930,7 +932,6 @@
 
 {#snippet sessionDetails(compact = false)}
   {#if selected}
-    {@const displayedSessionStatus = visibleSessionStatus(selected.status)}
     <div class:compact-details={compact} class="details-content">
       <dl class="details-grid">
         {#if displayedSessionStatus}
@@ -1077,7 +1078,6 @@
         {/if}
       </div>
     {:else}
-      {@const displayedSessionStatus = visibleSessionStatus(selected.status)}
       {@const selectedPresentation = sessionPresentation(selected)}
       <header class="stage-header">
         <div class="stage-title">

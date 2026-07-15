@@ -96,6 +96,11 @@ export interface SparkInvocationSummaryPage {
   offset: number;
 }
 
+export interface SparkInvocationSessionActivity {
+  active: boolean;
+  updatedAt?: string;
+}
+
 export interface SparkInvocationRetentionPreview {
   before: string;
   invocationIds: string[];
@@ -416,6 +421,66 @@ export class SparkInvocationStore {
         )
         .all(normalizedSessionId) as unknown as InvocationRow[]
     ).map(invocationRecord);
+  }
+
+  /**
+   * Return the durable execution state for one session without hydrating task
+   * or result payloads. Session registry status is only a convenience mirror;
+   * SQLite invocations are the execution source of truth.
+   */
+  sessionActivity(sessionId: string): SparkInvocationSessionActivity {
+    const normalizedSessionId = sessionId.trim();
+    if (!normalizedSessionId) return { active: false };
+    return (
+      this.sessionActivities([normalizedSessionId]).get(normalizedSessionId) ?? {
+        active: false,
+      }
+    );
+  }
+
+  /** Resolve a session list in one query. The two existing covering indexes
+   * keep active-state and latest-update lookups independent of history size. */
+  sessionActivities(sessionIds: string[]): Map<string, SparkInvocationSessionActivity> {
+    const normalizedSessionIds = [
+      ...new Set(sessionIds.map((sessionId) => sessionId.trim()).filter(Boolean)),
+    ];
+    if (normalizedSessionIds.length === 0) return new Map();
+    const rows = this.db
+      .prepare(
+        `WITH requested_sessions(session_id) AS (
+           SELECT DISTINCT CAST(value AS TEXT)
+             FROM json_each(?)
+         )
+         SELECT requested_sessions.session_id,
+                EXISTS(
+                  SELECT 1
+                    FROM invocations active_invocation
+                   WHERE active_invocation.session_id = requested_sessions.session_id
+                     AND active_invocation.status IN ('queued', 'running')
+                ) AS active,
+                (
+                  SELECT latest_invocation.updated_at
+                    FROM invocations latest_invocation
+                   WHERE latest_invocation.session_id = requested_sessions.session_id
+                   ORDER BY latest_invocation.updated_at DESC
+                   LIMIT 1
+                ) AS updated_at
+           FROM requested_sessions`,
+      )
+      .all(JSON.stringify(normalizedSessionIds)) as unknown as Array<{
+      active: number;
+      session_id: string;
+      updated_at: string | null;
+    }>;
+    return new Map(
+      rows.map((row) => [
+        row.session_id,
+        {
+          active: row.active === 1,
+          ...(row.updated_at ? { updatedAt: row.updated_at } : {}),
+        },
+      ]),
+    );
   }
 
   findByIdempotencyKey(idempotencyKey: string): SparkInvocationRecord | undefined {

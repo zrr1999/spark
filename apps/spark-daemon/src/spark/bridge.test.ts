@@ -8,6 +8,7 @@ import {
   serverCommandEnvelopeSchema,
 } from "@zendev-lab/spark-protocol";
 import { resolveSparkPaths } from "@zendev-lab/spark-system";
+import { SparkInvocationStore } from "../store/invocations.js";
 import { openSparkDaemonDatabase } from "../store/schema.js";
 import { addWorkspace } from "../store/workspaces.js";
 import { runSparkCommandBridge } from "./bridge.js";
@@ -89,7 +90,10 @@ describe("Spark daemon bridge", () => {
       };
 
       const result = await runSparkCommandBridge({
-        command: command(h.workspace.id),
+        command: command(h.workspace.id, {
+          prompt: "Use Spark",
+          sessionId: "sess_bridge",
+        }),
         workspace: h.workspace,
         route: {
           runtimeId: "rt_11111111111111111111111111111111",
@@ -105,6 +109,9 @@ describe("Spark daemon bridge", () => {
         taskGraphStore: store,
         artifactStore,
         executeSparkTask: async (input) => {
+          expect(new SparkInvocationStore(h.db).sessionActivity("sess_bridge")).toMatchObject({
+            active: true,
+          });
           expect(input.cwd).toBe(h.workspace.localPath);
           expect(input.dryRun).toBe(false);
           return {
@@ -132,8 +139,14 @@ describe("Spark daemon bridge", () => {
         payload: { contentRef: { sparkArtifactRef?: string } };
       };
       expect(artifact.payload.contentRef.sparkArtifactRef).toBe("artifact:bridge-output");
-      expect(h.db.prepare("SELECT status FROM invocations").get()).toMatchObject({
+      expect(
+        h.db.prepare("SELECT session_id AS sessionId, status FROM invocations").get(),
+      ).toMatchObject({
+        sessionId: "sess_bridge",
         status: "succeeded",
+      });
+      expect(new SparkInvocationStore(h.db).sessionActivity("sess_bridge")).toMatchObject({
+        active: false,
       });
     } finally {
       h.cleanup();

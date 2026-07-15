@@ -212,6 +212,8 @@ function addMissingInvocationColumns(db: DatabaseSync): void {
       PRIMARY KEY (invocation_id, sequence)
     );
     CREATE INDEX IF NOT EXISTS invocations_session_status_idx ON invocations(session_id, status);
+    CREATE INDEX IF NOT EXISTS invocations_session_updated_idx
+      ON invocations(session_id, updated_at DESC);
     CREATE UNIQUE INDEX IF NOT EXISTS invocations_idempotency_idx
       ON invocations(idempotency_key)
       WHERE idempotency_key IS NOT NULL;

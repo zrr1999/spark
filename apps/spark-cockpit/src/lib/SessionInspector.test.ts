@@ -25,7 +25,10 @@ describe("SessionInspector component contract", () => {
     expect(source).toContain('id: "mailbox"');
     expect(source).not.toContain('id: "evidence"');
     expect(source).not.toContain('id: "context"');
-    expect(source).toContain("view.runs");
+    expect(source).not.toContain("view.runs");
+    expect(source).not.toContain("labels.noRunsTitle");
+    expect(source).not.toContain("labels.noRunsBody");
+    expect(source).not.toContain("labels.runsHeading");
     expect(source).toContain("view.tasks");
     expect(source).toContain("view.changes");
     expect(source).toContain("view.mailbox");
@@ -69,6 +72,16 @@ describe("SessionInspector component contract", () => {
     const workspace = readFileSync(workspacePath, "utf8");
     expect(workspace).toContain(
       'compact ? "session-inspector-mobile" : "session-inspector-desktop"',
+    );
+  });
+
+  it("derives busy presentation from an active invocation instead of stale session flags", () => {
+    const workspace = readFileSync(workspacePath, "utf8");
+
+    expect(workspace).toContain("let conversationBusy = $derived(Boolean(activeTurnId))");
+    expect(workspace).not.toContain('selected?.status === "running" ||');
+    expect(workspace).toContain(
+      'const effectiveStatus: "running" | "idle" = conversationBusy ? "running" : "idle"',
     );
   });
 });

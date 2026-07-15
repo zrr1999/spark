@@ -101,7 +101,11 @@ describe("migrateSparkDaemonDatabase", () => {
         ]),
       );
       expect(indexNames(db, "invocations")).toEqual(
-        expect.arrayContaining(["invocations_status_idx", "invocations_session_status_idx"]),
+        expect.arrayContaining([
+          "invocations_status_idx",
+          "invocations_session_status_idx",
+          "invocations_session_updated_idx",
+        ]),
       );
       expect(indexNames(db, "invocation_events")).toContain("invocation_events_cursor_idx");
       expect(indexNames(db, "invocation_event_deliveries")).toContain(
