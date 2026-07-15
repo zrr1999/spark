@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { getCockpitDictionary } from "@zendev-lab/spark-i18n";
 import {
   channelSessionPresentation,
   channelSessionScopeKind,
@@ -6,6 +7,9 @@ import {
   sessionHasChannelBinding,
   shortenOpaqueChannelId,
 } from "./channel-session-title";
+
+const enLabels = getCockpitDictionary("en").sessions.channelLabels;
+const zhLabels = getCockpitDictionary("zh-CN").sessions.channelLabels;
 
 describe("channelSessionScopeKind", () => {
   it.each([
@@ -29,13 +33,13 @@ describe("formatChannelSessionTitle", () => {
   it("formats Infoflow titles like the session rail", () => {
     expect(
       formatChannelSessionTitle("channel infoflow:user:zhanrongrui", {
-        locale: "zh-CN",
+        labels: zhLabels,
         fallback: "未命名",
       }),
     ).toBe("如流私聊 · zhanrongrui");
     expect(
       formatChannelSessionTitle("channel infoflow:group:10838226", {
-        locale: "en",
+        labels: enLabels,
         fallback: "Untitled",
       }),
     ).toBe("Infoflow group · 10838226");
@@ -44,26 +48,28 @@ describe("formatChannelSessionTitle", () => {
   it("formats QQ Bot titles instead of raw external keys", () => {
     expect(
       formatChannelSessionTitle("channel qqbot:c2c:398418FB5E7F1C597DFFD117597D6500", {
-        locale: "zh-CN",
+        labels: zhLabels,
         fallback: "未命名",
       }),
     ).toBe("QQ 私聊 · 398418FB…");
     expect(
       formatChannelSessionTitle("channel qqbot:c2c:Alice", {
-        locale: "zh-CN",
+        labels: zhLabels,
         fallback: "未命名",
       }),
     ).toBe("QQ 私聊 · Alice");
     expect(
       formatChannelSessionTitle("channel qqbot:group:g1", {
-        locale: "en",
+        labels: enLabels,
         fallback: "Untitled",
       }),
     ).toBe("QQ group · g1");
   });
 
   it("returns the fallback for empty titles", () => {
-    expect(formatChannelSessionTitle("", { fallback: "Untitled" })).toBe("Untitled");
+    expect(formatChannelSessionTitle("", { labels: enLabels, fallback: "Untitled" })).toBe(
+      "Untitled",
+    );
   });
 });
 
@@ -81,7 +87,7 @@ describe("channelSessionPresentation", () => {
             },
           ],
         },
-        { locale: "zh-CN", fallback: "未命名" },
+        { labels: zhLabels, fallback: "未命名" },
       ),
     ).toEqual({
       title: "398418FB…",
@@ -101,7 +107,7 @@ describe("channelSessionPresentation", () => {
           title: "运维飞书群",
           bindings: [{ kind: "channel", adapter: "feishu", externalKey: "feishu:chat:oc_ops" }],
         },
-        { locale: "zh-CN", fallback: "未命名" },
+        { labels: zhLabels, fallback: "未命名" },
       ),
     ).toMatchObject({
       title: "运维飞书群",
@@ -113,7 +119,7 @@ describe("channelSessionPresentation", () => {
     expect(
       channelSessionPresentation(
         { title: "修复登录问题", bindings: [] },
-        { locale: "zh-CN", fallback: "未命名" },
+        { labels: zhLabels, fallback: "未命名" },
       ),
     ).toEqual({ title: "修复登录问题", channel: null });
   });

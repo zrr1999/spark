@@ -10,6 +10,7 @@
     value?: string;
     name?: string;
     label?: string;
+    valueLabels?: Partial<Record<ThinkingLevel, string>>;
     disabled?: boolean;
     compact?: boolean;
     form?: string;
@@ -20,6 +21,7 @@
     value = $bindable("medium"),
     name = "thinkingLevel",
     label,
+    valueLabels = {},
     disabled = false,
     compact = false,
     form,
@@ -28,6 +30,7 @@
 
   let open = $state(false);
   let index = $derived(levelIndex(value));
+  let visibleValue = $derived(valueLabels[value as ThinkingLevel] ?? value);
 
   function levelIndex(level: string) {
     const found = THINKING_LEVELS.indexOf(level as ThinkingLevel);
@@ -52,9 +55,10 @@
       type="button"
       {disabled}
       aria-label={label ?? name}
-      title={`${label ?? name}: ${value}`}
+      title={`${label ?? name}: ${visibleValue}`}
     >
-      <span class="thinking-label">{label ?? value}</span>
+      {#if label}<span class="thinking-label">{label}</span>{/if}
+      <span class="thinking-value">{visibleValue}</span>
     </Popover.Trigger>
     <Popover.Portal>
       <Popover.Content
@@ -69,7 +73,7 @@
             {#if label}
               <span class="thinking-popover-label">{label}</span>
             {/if}
-            <span class="thinking-popover-value">{value}</span>
+            <span class="thinking-popover-value">{visibleValue}</span>
           </div>
           <div class="thinking-control">
             <Slider.Root
@@ -96,7 +100,7 @@
                   <Slider.Thumb
                     class="thinking-thumb"
                     index={thumb.index}
-                    aria-valuetext={value}
+                    aria-valuetext={visibleValue}
                   />
                 {/each}
               {/snippet}
@@ -164,12 +168,19 @@
     font-weight: 650;
   }
 
+  .thinking-value {
+    color: var(--color-ink-subtle);
+    flex: 0 0 auto;
+    font-size: 10px;
+    font-weight: 600;
+  }
+
   /* Portal content is outside the component tree — keep these global. */
   :global(.thinking-popover-panel) {
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: var(--rounded-md);
-    box-shadow: var(--shadow-md, 0 8px 24px rgb(0 0 0 / 12%));
+    box-shadow: var(--shadow-popover);
     outline: none;
     padding: 10px 12px;
     z-index: 40;
@@ -251,7 +262,7 @@
     background: var(--color-surface);
     border: 2px solid var(--color-primary);
     border-radius: 999px;
-    box-shadow: var(--shadow-sm, 0 1px 2px rgb(0 0 0 / 8%));
+    box-shadow: var(--shadow-card);
     cursor: grab;
     display: block;
     height: 14px;

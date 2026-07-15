@@ -8,10 +8,12 @@
     visibleConversationPartText,
   } from "$lib/components/conversation";
   import type { ConversationPartLabels } from "$lib/components/conversation/types";
-  import { ModelPicker, type ModelPickerGroup } from "$lib/components/model-selector";
-  import ThinkingLevelSlider, {
-    THINKING_LEVELS,
-  } from "$lib/components/ThinkingLevelSlider.svelte";
+  import {
+    ModelRuntimeControl,
+    type ModelPickerGroup,
+    type ModelRuntimeControlLabels,
+  } from "$lib/components/model-selector";
+  import { THINKING_LEVELS } from "$lib/components/ThinkingLevelSlider.svelte";
   import ChannelSessionIcon from "$lib/ChannelSessionIcon.svelte";
   import {
     channelSessionPresentation,
@@ -35,7 +37,12 @@
     sessionViewRevisionKey,
     type SessionLiveEventState,
   } from "$lib/session-live-events";
-  import { buildSessionTimeline } from "$lib/session-timeline";
+  import {
+    activeSessionTimelineProcessItemId,
+    buildSessionTimeline,
+    SESSION_TIMELINE_PAGE_SIZE,
+    sessionTimelineWindow,
+  } from "$lib/session-timeline";
   import { buildSessionWorkbenchView, type SessionInspectorLabels } from "$lib/session-workbench";
   import { Button } from "$lib/ui";
   import {
@@ -50,6 +57,7 @@
     SparkMessageView,
     SparkSessionView,
   } from "@zendev-lab/spark-protocol";
+  import type { CockpitMessages } from "@zendev-lab/spark-i18n";
   import type { SubmitFunction } from "@sveltejs/kit";
   import { onMount, tick, untrack } from "svelte";
 
@@ -112,7 +120,6 @@
 
   type FormValues = {
     workspaceId?: string;
-    scopeKind?: string;
     sessionId?: string;
     message?: string;
     model?: string;
@@ -127,36 +134,19 @@
 
   type SubmissionState = "idle" | "submitting" | "success" | "error";
 
-  type Messages = {
-    aria: string;
-    createNoWorkspaceTitle: string;
-    createNoWorkspaceBody: string;
-    createWorkspaceAction: string;
-    detailsTitle: string;
-    statusLabel: string;
-    workspaceLabel: string;
-    roleLabel: string;
-    channelRoutingTitle: string;
-    channelRoutingBody: string;
-    configureChannels: string;
-    channelSessionBadge: string;
-    channelSessionKicker: string;
-    channelBindingLabel: string;
-    openChannelSettings: string;
-    unknownWorkspace: string;
-  };
+  type Messages = CockpitMessages["sessions"];
 
   type Props = {
     sessions: SessionRecord[];
     workspaces: WorkspaceOption[];
     selectedSessionId: string | null;
     activeWorkspaceId?: string | null;
-    startScope?: "workspace" | "daemon";
     messages: Messages;
     common: Parameters<typeof getStatusLabel>[1];
     locale: string;
     activity?: SessionActivity | null;
     sessionView?: SparkSessionView | null;
+    initialEventCursor?: string | null;
     formMessage?: string | null;
     formIntent?: string | null;
     formValues?: FormValues | null;
@@ -169,12 +159,12 @@
     workspaces,
     selectedSessionId,
     activeWorkspaceId = null,
-    startScope = "workspace",
     messages,
     common,
     locale,
     activity = null,
     sessionView = null,
+    initialEventCursor = null,
     formMessage = null,
     formIntent = null,
     formValues = null,
@@ -263,213 +253,37 @@
   let cancelState = $state<SubmissionState>("idle");
   let cancelFeedback = $state<string | null>(null);
   let cancelledTurnId = $state<string | null>(null);
-
-  let isZh = $derived(locale.toLowerCase().startsWith("zh"));
-  let copy = $derived(
-    isZh
-      ? {
-          newConversation: "新对话",
-          workspaceConversation: "工作区对话",
-          daemonConversation: "全局对话",
-          scopeChoiceLabel: "对话范围",
-          workspaceStartHint: "在当前工作空间中开始对话。",
-          daemonStartHint: "直接与当前 Spark daemon 对话，不绑定任何工作区。",
-          daemonScope: "当前 Spark daemon",
-          scopeLabel: "范围",
-          messageLabel: "消息",
-          startPlaceholder: "告诉 Spark 你想完成什么……",
-          messagePlaceholder: "继续说明、补充约束或调整方向……",
-          queuePlaceholder: "补充说明将排在当前执行之后……",
-          startSubmit: "开始对话",
-          sendSubmit: "发送",
-          queueSubmit: "排队",
-          sending: "发送中…",
-          sent: "",
-          sendFailed: "消息发送失败，请重试。",
-          startFailed: "无法开始对话，请重试。",
-          timelineTitle: "对话",
-          timelineEmpty: "发送第一条消息后，Spark 的回复和执行进度会出现在这里。",
-          you: "你",
-          spark: "Spark",
-          conversationContext: "会话上下文",
-          conversationWorkbench: "编码工作台",
-          collapseDetails: "会话与运行详情",
-          modelLabel: "模型",
-          thinkingLabel: "推理",
-          chooseModel: "选择模型",
-          chooseModelHint: "搜索模型或服务商；选择后会保留 Spark 的会话与执行状态。",
-          searchModels: "搜索模型或服务商…",
-          noModelsFound: "没有匹配的模型",
-          closeModelPicker: "关闭模型选择器",
-          clearModelSearch: "清除搜索",
-          modelUnavailable: "没有已登录且可用的模型",
-          currentModelUnavailable: "当前模型不可用，请先切换模型",
-          configureModels: "配置模型服务商",
-          providerLoginRequired: "登录后可用",
-          modelUpdated: "模型已切换，将用于之后发送的消息。",
-          modelFailed: "无法切换模型。",
-          thinkingUpdated: "推理强度已更新，将用于之后发送的消息。",
-          thinkingFailed: "无法更新推理强度。",
-          stop: "停止",
-          stopping: "正在停止…",
-          stopped: "已请求取消当前执行。",
-          stopFailed: "无法停止当前执行，请重试。",
-          live: "实时",
-          connecting: "连接中",
-          reconnecting: "正在重连",
-          offline: "离线",
-          inspectorAria: "Coding agent 工作台",
-          summaryTab: "摘要",
-          changesTab: "变更",
-          tasksTab: "项目与任务",
-          mailboxTab: "邮箱",
-          summaryHeading: "会话摘要",
-          runsHeading: "运行",
-          tasksHeading: "项目与任务",
-          changesHeading: "结构化变更",
-          mailboxHeading: "会话邮箱",
-          noRunsTitle: "尚无运行",
-          noRunsBody: "发送消息后，Spark 自动创建的运行会显示在这里。",
-          noTasksTitle: "尚无项目或任务",
-          noTasksBody: "Spark 为当前会话创建的内部项目和任务会显示在这里。",
-          noChangesTitle: "尚无结构化变更",
-          noChangesBody: "当前 runtime 没有提供 canonical diff；这里不会从回复文本推断 Git 变更。",
-          noMailboxTitle: "邮箱为空",
-          noMailboxBody: "其他会话发送给当前会话的请求和通知会出现在这里。",
-          unassignedProject: "未归属项目",
-          latestOutput: "最近输出",
-          progress: "进度",
-          mailFrom: "来自",
-          mailRequest: "请求",
-          mailNotification: "通知",
-          mailUnread: "未读",
-          mailRead: "已读",
-          mailAcknowledged: "已确认",
-          sessionId: "会话 ID",
-          sessionStatus: "会话状态",
-          workingDirectory: "工作目录",
-          contextModel: "模型",
-          createdAt: "创建时间",
-          updatedAt: "更新时间",
-          unavailable: "不可用",
-          copyMessage: "复制消息",
-          copiedMessage: "已复制",
-          jumpToLatest: "回到最新消息",
-          multilineHint: "Enter 发送 · Shift+Enter 换行",
-          reasoning: "思考过程",
-          reasoningStreaming: "正在思考…",
-          chain: "执行过程",
-          chainStreaming: "执行中…",
-          tool: "工具",
-          task: "内部任务",
-          approval: "需要确认",
-          unknownPart: "暂不支持的会话事件",
-          collapse: "收起",
-          expand: "展开",
-        }
-      : {
-          newConversation: "New conversation",
-          workspaceConversation: "Workspace chat",
-          daemonConversation: "Global chat",
-          scopeChoiceLabel: "Conversation scope",
-          workspaceStartHint: "Start a conversation in the current workspace.",
-          daemonStartHint:
-            "Talk directly to this Spark daemon without binding the conversation to a workspace.",
-          daemonScope: "This Spark daemon",
-          scopeLabel: "Scope",
-          messageLabel: "Message",
-          startPlaceholder: "Tell Spark what you want to accomplish…",
-          messagePlaceholder: "Add context, constraints, or steer the work…",
-          queuePlaceholder: "This follow-up will run after the current turn…",
-          startSubmit: "Start conversation",
-          sendSubmit: "Send",
-          queueSubmit: "Queue",
-          sending: "Sending…",
-          sent: "",
-          sendFailed: "Could not send the message. Try again.",
-          startFailed: "Could not start the conversation. Try again.",
-          timelineTitle: "Conversation",
-          timelineEmpty: "Spark replies and execution progress will appear here after you send a message.",
-          you: "You",
-          spark: "Spark",
-          conversationContext: "Conversation context",
-          conversationWorkbench: "Coding workbench",
-          collapseDetails: "Conversation and run details",
-          modelLabel: "Model",
-          thinkingLabel: "Thinking",
-          chooseModel: "Choose a model",
-          chooseModelHint: "Search models or providers. Spark keeps the current conversation and execution state.",
-          searchModels: "Search models or providers…",
-          noModelsFound: "No matching models",
-          closeModelPicker: "Close model picker",
-          clearModelSearch: "Clear search",
-          modelUnavailable: "No authenticated model is available",
-          currentModelUnavailable: "Current model unavailable — choose another model",
-          configureModels: "Configure providers",
-          providerLoginRequired: "Available after login",
-          modelUpdated: "Model updated. It will be used for future messages.",
-          modelFailed: "Could not switch models.",
-          thinkingUpdated: "Thinking level updated. It will be used for future messages.",
-          thinkingFailed: "Could not update the thinking level.",
-          stop: "Stop",
-          stopping: "Stopping…",
-          stopped: "Cancellation requested for the active turn.",
-          stopFailed: "Could not stop the active turn. Try again.",
-          live: "Live",
-          connecting: "Connecting",
-          reconnecting: "Reconnecting",
-          offline: "Offline",
-          inspectorAria: "Coding agent workbench",
-          summaryTab: "Summary",
-          changesTab: "Changes",
-          tasksTab: "Project & tasks",
-          mailboxTab: "Mailbox",
-          summaryHeading: "Session summary",
-          runsHeading: "Runs",
-          tasksHeading: "Project & tasks",
-          changesHeading: "Structured changes",
-          mailboxHeading: "Session mailbox",
-          noRunsTitle: "No runs yet",
-          noRunsBody: "Runs created by Spark appear here after you send a message.",
-          noTasksTitle: "No project or tasks yet",
-          noTasksBody: "Internal projects and tasks created by Spark for this conversation appear here.",
-          noChangesTitle: "No structured changes yet",
-          noChangesBody:
-            "The runtime has not provided a canonical diff. This view never infers Git changes from prose.",
-          noMailboxTitle: "Mailbox is empty",
-          noMailboxBody: "Requests and notifications sent to this conversation by other sessions appear here.",
-          unassignedProject: "Unassigned project",
-          latestOutput: "Latest output",
-          progress: "Progress",
-          mailFrom: "From",
-          mailRequest: "Request",
-          mailNotification: "Notification",
-          mailUnread: "Unread",
-          mailRead: "Read",
-          mailAcknowledged: "Acknowledged",
-          sessionId: "Session ID",
-          sessionStatus: "Session status",
-          workingDirectory: "Working directory",
-          contextModel: "Model",
-          createdAt: "Created",
-          updatedAt: "Updated",
-          unavailable: "Unavailable",
-          copyMessage: "Copy message",
-          copiedMessage: "Copied",
-          jumpToLatest: "Jump to latest",
-          multilineHint: "Enter to send · Shift+Enter for newline",
-          reasoning: "Reasoning",
-          reasoningStreaming: "Reasoning…",
-          chain: "Execution",
-          chainStreaming: "Working…",
-          tool: "Tool",
-          task: "Internal task",
-          approval: "Approval required",
-          unknownPart: "Unsupported conversation event",
-          collapse: "Collapse",
-          expand: "Expand",
-        },
+  let timelineRenderLimit = $state(SESSION_TIMELINE_PAGE_SIZE);
+  let timelineRenderSessionId = $state("");
+  let effectiveTimelineRenderLimit = $derived(
+    selectedSessionId === timelineRenderSessionId
+      ? timelineRenderLimit
+      : SESSION_TIMELINE_PAGE_SIZE,
   );
+
+  let copy = $derived(messages.workbench);
+
+  let modelRuntimeLabels = $derived<ModelRuntimeControlLabels>({
+    aria: copy.modelRuntimeAria,
+    model: copy.modelLabel,
+    thinking: copy.thinkingLabel,
+    chooseModel: copy.chooseModel,
+    chooseModelHint: copy.chooseModelHint,
+    searchModels: copy.searchModels,
+    noModelsFound: copy.noModelsFound,
+    closeModelPicker: copy.closeModelPicker,
+    clearModelSearch: copy.clearModelSearch,
+    modelUnavailable: copy.modelUnavailable,
+    configureModels: copy.configureModels,
+    thinkingLevels: {
+      off: copy.thinkingOff,
+      minimal: copy.thinkingMinimal,
+      low: copy.thinkingLow,
+      medium: copy.thinkingMedium,
+      high: copy.thinkingHigh,
+      xhigh: copy.thinkingXHigh,
+    },
+  });
 
   let timelineItems = $derived(
     buildSessionTimeline({
@@ -480,14 +294,15 @@
         sessionView?.updatedAt ?? selected?.updatedAt ?? new Date(0).toISOString(),
     }),
   );
-  let activeProcessItemId = $derived.by(() => {
-    if (!conversationBusy || !activeTurnId) return null;
-    return (
-      timelineItems.findLast(
-        (item) => item.actor === "spark" && item.parts.some((part) => part.type === "chain"),
-      )?.id ?? null
-    );
-  });
+  let renderedTimeline = $derived(
+    sessionTimelineWindow(timelineItems, effectiveTimelineRenderLimit),
+  );
+  let activeProcessItemId = $derived(
+    activeSessionTimelineProcessItemId(
+      timelineItems,
+      conversationBusy && Boolean(activeTurnId),
+    ),
+  );
   let conversationPartLabels = $derived<ConversationPartLabels>({
     reasoning: copy.reasoning,
     reasoningStreaming: copy.reasoningStreaming,
@@ -566,7 +381,8 @@
 
     const nextServerViewKey = sessionViewRevisionKey(sessionView);
     if (sessionId !== liveSessionId || nextServerViewKey !== lastServerViewKey) {
-      const cursor = sessionId === liveSessionId ? liveEventState?.cursor : null;
+      const cursor =
+        sessionId === liveSessionId ? liveEventState?.cursor : initialEventCursor;
       liveSessionId = sessionId;
       lastServerViewKey = nextServerViewKey;
       liveEventState = createSessionLiveEventState({
@@ -626,6 +442,13 @@
 
   $effect(() => {
     sessionThinkingLevel = effectiveThinkingLevel;
+  });
+
+  $effect(() => {
+    const nextSessionId = selectedSessionId ?? "";
+    if (nextSessionId === timelineRenderSessionId) return;
+    timelineRenderSessionId = nextSessionId;
+    timelineRenderLimit = SESSION_TIMELINE_PAGE_SIZE;
   });
 
   $effect(() => {
@@ -834,19 +657,12 @@
   function sessionScopeLabel(session: SessionRecord) {
     const scope = workbenchSessionScope(session);
     if (scope.kind === "workspace") return workspaceLabel(scope.workspaceId);
-    if (scope.kind === "daemon") {
-      return scope.daemonLabel ? `${copy.daemonScope} · ${scope.daemonLabel}` : copy.daemonScope;
-    }
     return messages.unknownWorkspace;
-  }
-
-  function sessionIsWorkspaceScoped(session: SessionRecord) {
-    return workbenchSessionScope(session).kind === "workspace";
   }
 
   function sessionPresentation(session: SessionRecord) {
     return channelSessionPresentation(session, {
-      locale,
+      labels: messages.channelLabels,
       fallback: copy.newConversation,
     });
   }
@@ -1075,7 +891,7 @@
           </div>
         {/if}
         <div>
-          <dt>{sessionIsWorkspaceScoped(selected) ? messages.workspaceLabel : copy.scopeLabel}</dt>
+          <dt>{messages.workspaceLabel}</dt>
           <dd>
             {#if selectedWorkspaceHref}
               <a href={selectedWorkspaceHref}>{sessionScopeLabel(selected)}</a>
@@ -1136,7 +952,7 @@
   <main class="stage-pane">
     {#if !selected}
       <div class="conversation-start">
-        {#if startScope === "workspace" && !activeWorkspace}
+        {#if !activeWorkspace}
           <div class="stage-empty">
             <Icon name="agents" size={28} />
             <div>
@@ -1151,7 +967,7 @@
             <div>
               <p class="kicker">Spark</p>
               <h1>{copy.newConversation}</h1>
-              <p>{startScope === "daemon" ? copy.daemonStartHint : copy.workspaceStartHint}</p>
+              <p>{copy.workspaceStartHint}</p>
             </div>
           </div>
 
@@ -1162,13 +978,13 @@
             aria-busy={startState === "submitting"}
             use:enhance={enhanceStartConversation}
           >
-            <input type="hidden" name="scopeKind" value={startScope} />
-            {#if startScope === "workspace" && activeWorkspace}
+            <input type="hidden" name="scopeKind" value="workspace" />
+            {#if activeWorkspace}
               <input type="hidden" name="workspaceId" value={activeWorkspace.id} />
             {/if}
             <Composer
               id="start-conversation-message"
-              rows={5}
+              rows={2}
               placeholder={copy.startPlaceholder}
               bind:value={startMessage}
               disabled={startState === "submitting"}
@@ -1178,43 +994,24 @@
               submittingLabel={copy.sending}
               ariaLabel={copy.messageLabel}
               multilineHint={copy.multilineHint}
-              roomy
             >
-              {#snippet header()}
-                <div class="composer-selects">
-                  {#if modelProviders.length > 0}
-                    <div class="model-select">
-                      <span>{copy.modelLabel}</span>
-                      <ModelPicker
-                        id="start-conversation-model"
-                        name="model"
-                        required
-                        bind:value={startModel}
-                        disabled={availableModels.length === 0}
-                        groups={modelGroups}
-                        label={copy.modelLabel}
-                        title={copy.chooseModel}
-                        description={copy.chooseModelHint}
-                        placeholder={copy.modelUnavailable}
-                        searchPlaceholder={copy.searchModels}
-                        emptyLabel={copy.noModelsFound}
-                        closeLabel={copy.closeModelPicker}
-                        clearSearchLabel={copy.clearModelSearch}
-                        settingsHref="/settings/models"
-                        settingsLabel={copy.configureModels}
-                      />
-                    </div>
-                    <ThinkingLevelSlider
-                      bind:value={startThinkingLevel}
-                      name="thinkingLevel"
-                      label={copy.thinkingLabel}
-                    />
-                  {:else}
-                    <a class="model-settings-link" href="/settings/models">
-                      <Icon name="settings" size={14} />{copy.configureModels}
-                    </a>
-                  {/if}
-                </div>
+              {#snippet context()}
+                {#if modelProviders.length > 0}
+                  <ModelRuntimeControl
+                    id="start-conversation"
+                    required
+                    bind:modelValue={startModel}
+                    bind:thinkingValue={startThinkingLevel}
+                    groups={modelGroups}
+                    labels={modelRuntimeLabels}
+                    modelDisabled={availableModels.length === 0}
+                    settingsHref="/settings/models"
+                  />
+                {:else}
+                  <a class="model-settings-link" href="/settings/models">
+                    <Icon name="settings" size={14} />{copy.configureModels}
+                  </a>
+                {/if}
               {/snippet}
               {#snippet feedback()}
                 {#if startFeedback}
@@ -1302,7 +1099,16 @@
             <p>{copy.timelineEmpty}</p>
           </div>
         {:else}
-          {#each timelineItems as item (item.id)}
+          {#if renderedTimeline.hiddenCount > 0}
+            <button
+              class="timeline-history-button"
+              type="button"
+              onclick={() => (timelineRenderLimit += SESSION_TIMELINE_PAGE_SIZE)}
+            >
+              {copy.showEarlier} ({renderedTimeline.hiddenCount})
+            </button>
+          {/if}
+          {#each renderedTimeline.items as item (item.id)}
             <ConversationMessage
               {item}
               active={item.id === activeProcessItemId}
@@ -1350,7 +1156,7 @@
         <input type="hidden" name="sessionId" value={selected.sessionId} />
         <Composer
           id="conversation-message"
-          rows={3}
+          rows={2}
           placeholder={conversationBusy ? copy.queuePlaceholder : copy.messagePlaceholder}
           bind:value={message}
           disabled={!canAssign || sendState === "submitting"}
@@ -1363,35 +1169,20 @@
         >
           {#snippet context()}
             {#if modelProviders.length > 0}
-              <ModelPicker
-                id="conversation-model"
-                form="session-model-form"
-                name="model"
-                bind:value={sessionModel}
+              <ModelRuntimeControl
+                id="conversation"
+                modelForm="session-model-form"
+                thinkingForm="session-thinking-form"
+                bind:modelValue={sessionModel}
+                bind:thinkingValue={sessionThinkingLevel}
                 groups={modelGroups}
-                disabled={modelState === "submitting" || availableModels.length === 0}
-                label={copy.modelLabel}
-                title={copy.chooseModel}
-                description={copy.chooseModelHint}
-                placeholder={copy.modelUnavailable}
+                labels={modelRuntimeLabels}
+                modelDisabled={modelState === "submitting" || availableModels.length === 0}
+                thinkingDisabled={thinkingState === "submitting"}
                 selectedLabel={!effectiveModelAvailable ? copy.currentModelUnavailable : undefined}
-                searchPlaceholder={copy.searchModels}
-                emptyLabel={copy.noModelsFound}
-                closeLabel={copy.closeModelPicker}
-                clearSearchLabel={copy.clearModelSearch}
-                compact
                 settingsHref="/settings/models"
-                settingsLabel={copy.configureModels}
-                onValueChange={submitModelSelection}
-              />
-              <ThinkingLevelSlider
-                bind:value={sessionThinkingLevel}
-                name="thinkingLevel"
-                form="session-thinking-form"
-                label={copy.thinkingLabel}
-                compact
-                disabled={thinkingState === "submitting"}
-                onValueCommit={() => void submitThinkingSelection()}
+                onModelChange={submitModelSelection}
+                onThinkingCommit={() => void submitThinkingSelection()}
               />
             {:else}
               <a class="model-settings-link compact" href="/settings/models">
@@ -1410,8 +1201,23 @@
               </p>
             {/if}
             {#if modelFeedback}
-              <p class="form-feedback {modelState}" role={modelState === "error" ? "alert" : "status"}>
+              <p
+                class="form-feedback {modelState}"
+                class:sr-only={modelState !== "error"}
+                role={modelState === "error" ? "alert" : "status"}
+                aria-live="polite"
+              >
                 {modelFeedback}
+              </p>
+            {/if}
+            {#if thinkingFeedback}
+              <p
+                class="form-feedback {thinkingState}"
+                class:sr-only={thinkingState !== "error"}
+                role={thinkingState === "error" ? "alert" : "status"}
+                aria-live="polite"
+              >
+                {thinkingFeedback}
               </p>
             {/if}
             {#if cancelFeedback}
@@ -1701,6 +1507,30 @@
     max-width: 380px;
   }
 
+  .timeline-history-button {
+    background: var(--color-surface-soft);
+    border: 1px solid var(--color-border);
+    border-radius: var(--rounded-full);
+    color: var(--color-ink-muted);
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    justify-self: center;
+    min-height: 36px;
+    padding: 0 14px;
+  }
+
+  .timeline-history-button:hover {
+    border-color: var(--color-primary-soft);
+    color: var(--color-primary);
+  }
+
+  .timeline-history-button:focus-visible {
+    box-shadow: var(--shadow-focus);
+    outline: none;
+  }
+
   .conversation-composer {
     align-self: center;
     flex: 0 0 auto;
@@ -1725,43 +1555,6 @@
 
   .stage-actions .context-chip {
     max-width: min(260px, 36vw);
-  }
-
-  .conversation-composer :global([data-model-picker-trigger]) {
-    flex: 1 1 10rem;
-    max-width: min(320px, 100%);
-    min-width: 0;
-  }
-
-  .composer-selects {
-    align-items: center;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    width: 100%;
-  }
-
-  .model-select {
-    align-items: center;
-    display: flex;
-    flex: 1 1 auto;
-    gap: 10px;
-    min-width: 0;
-  }
-
-  .model-select > span {
-    color: var(--color-ink-subtle);
-    flex: 0 0 auto;
-    font-size: 11px;
-    font-weight: 650;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-  }
-
-  .model-select :global([data-model-picker-trigger]) {
-    flex: 1 1 auto;
-    max-width: 360px;
-    min-width: min(220px, 100%);
   }
 
   .sr-only {
@@ -2027,20 +1820,6 @@
 
     .mobile-details .details-grid {
       grid-template-columns: 1fr 1fr;
-    }
-
-    .model-select {
-      align-items: stretch;
-      display: grid;
-      flex: 1 1 100%;
-      gap: 6px;
-      width: 100%;
-    }
-
-    .model-select :global([data-model-picker-trigger]) {
-      max-width: none;
-      min-width: 0;
-      width: 100%;
     }
 
   }

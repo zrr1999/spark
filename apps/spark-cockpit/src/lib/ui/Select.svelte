@@ -11,7 +11,7 @@
     value = $bindable(""),
     groups,
     label,
-    placeholder = "Select",
+    placeholder = label,
     disabled = false,
     required = false,
     compact = false,

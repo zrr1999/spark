@@ -54,7 +54,10 @@ describe("source-derived conversation component boundary", () => {
     expect(workspace).toContain("<ConversationViewport");
     expect(workspace).toContain("<ConversationMessage");
     expect(workspace).toContain("<Composer");
+    expect(workspace).toContain("<ModelRuntimeControl");
     expect(workspace).toContain('action="?/sendMessage"');
+    expect(workspace).toContain('action="?/selectModel"');
+    expect(workspace).toContain('action="?/selectThinking"');
     expect(workspace).toContain("use:enhance={enhanceSendMessage}");
     expect(workspace).not.toContain('class="timeline-entry');
     expect(workspace).not.toContain('class="message-block');

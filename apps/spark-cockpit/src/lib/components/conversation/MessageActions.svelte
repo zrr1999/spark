@@ -33,7 +33,7 @@
     onclick={copyMessage}
   >
     <Icon name={copied ? "check" : "copy"} size={14} stroke={2.1} />
-    <span>{copied ? copiedLabel : copyLabel}</span>
+    <span class="sr-only">{copied ? copiedLabel : copyLabel}</span>
   </button>
 </div>
 
@@ -41,7 +41,7 @@
   .message-actions {
     align-items: center;
     display: flex;
-    min-height: 32px;
+    min-height: 26px;
   }
 
   button {
@@ -53,11 +53,10 @@
     cursor: pointer;
     display: inline-flex;
     font: inherit;
-    font-size: 11px;
-    font-weight: 600;
-    gap: 5px;
-    min-height: 32px;
-    padding: 0 7px;
+    height: 26px;
+    justify-content: center;
+    padding: 0;
+    width: 26px;
   }
 
   button:hover:not(:disabled) {
@@ -74,6 +73,19 @@
   button:disabled {
     cursor: default;
     opacity: 0.45;
+  }
+
+  .sr-only {
+    border: 0;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    padding: 0;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
   }
 
   @media (hover: hover) {

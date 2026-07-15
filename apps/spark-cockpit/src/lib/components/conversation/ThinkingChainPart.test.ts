@@ -13,17 +13,21 @@ describe("ThinkingChainPart component contract", () => {
     expect(() => compile(source, { filename: componentPath, generate: "server" })).not.toThrow();
   });
 
-  it("keeps active and failed execution details compact without a persistent pill", () => {
+  it("keeps execution details during work, then collapses and reveals compact history on hover", () => {
     const source = readFileSync(componentPath, "utf8");
 
-    expect(source).toContain('class="thinking-chain {state}"');
-    expect(source).toContain('open={active || state === "streaming" || hasTerminalIssue}');
+    expect(source).toContain('class="thinking-chain {chainState}"');
+    expect(source).toContain("bind:open={expanded}");
+    expect(source).toContain("{#if expanded}");
+    expect(source).toContain('statusLabel("failed")');
     expect(source).toContain("margin-inline: auto");
     expect(source).toContain("min-height: 22px");
     expect(source).toContain("animation: chain-pulse");
+    expect(source).toContain('previousState === "streaming" && chainState === "complete"');
+    expect(source).toContain("!active ||");
+    expect(source).toContain("@media (hover: hover) and (pointer: fine)");
+    expect(source).toContain(":global(.conversation-message:hover)");
     expect(source).not.toContain("background: var(--color-surface-soft)");
-    expect(source).not.toContain("@media (hover: hover) and (pointer: fine)");
-    expect(source).not.toContain(":global(.conversation-message:hover)");
     expect(source).not.toContain("min-height: 40px");
   });
 });

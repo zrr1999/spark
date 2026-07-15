@@ -2,6 +2,7 @@ import { createId } from "@zendev-lab/spark-protocol";
 import type { Handle, RequestEvent } from "@sveltejs/kit";
 import { getCurrentUserId, sessionCookieName } from "$lib/server/auth";
 import { getDatabase } from "$lib/server/db";
+import { localeCookieName, resolveRequestLocale } from "$lib/i18n";
 import {
   bearerRemoteAccessToken,
   isRemoteAccessAllowed,
@@ -19,7 +20,15 @@ export const handle: Handle = async ({ event, resolve }) => {
     return remoteAccessRequiredResponse(event);
   }
 
-  return resolve(event);
+  const locale = resolveRequestLocale({
+    requestedLocale: event.url.searchParams.get("lang"),
+    cookieLocale: event.cookies.get(localeCookieName),
+    acceptLanguage: event.request.headers.get("accept-language"),
+  });
+
+  return resolve(event, {
+    transformPageChunk: ({ html }) => html.replace("%spark.locale%", locale),
+  });
 };
 
 function isRemoteRequestAuthenticated(event: RequestEvent, clientAddress: string | null): boolean {

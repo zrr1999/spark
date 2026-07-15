@@ -15,7 +15,6 @@
     submittingLabel: string;
     ariaLabel: string;
     multilineHint: string;
-    roomy?: boolean;
     header?: Snippet;
     context?: Snippet;
     feedback?: Snippet;
@@ -34,11 +33,27 @@
     submittingLabel,
     ariaLabel,
     multilineHint,
-    roomy = false,
     header,
     context,
     feedback,
   }: Props = $props();
+
+  let textareaElement = $state<HTMLTextAreaElement | null>(null);
+
+  function resizeTextarea(textarea: HTMLTextAreaElement | null) {
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    const nextHeight = Math.min(textarea.scrollHeight, 192);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > 192 ? "auto" : "hidden";
+  }
+
+  $effect(() => {
+    void value;
+    if (!textareaElement) return;
+    const frame = requestAnimationFrame(() => resizeTextarea(textareaElement));
+    return () => cancelAnimationFrame(frame);
+  });
 
   function submitOnEnter(event: KeyboardEvent) {
     if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
@@ -51,7 +66,7 @@
   }
 </script>
 
-<div class:roomy class="conversation-composer-shell">
+<div class="conversation-composer-shell">
   {#if header}<div class="composer-header">{@render header()}</div>{/if}
   <label class="sr-only" for={id}>{ariaLabel}</label>
   <textarea
@@ -61,7 +76,9 @@
     required
     {placeholder}
     bind:value
+    bind:this={textareaElement}
     {disabled}
+    oninput={(event) => resizeTextarea(event.currentTarget)}
     onkeydown={submitOnEnter}
   ></textarea>
   {#if feedback}<div class="composer-feedback">{@render feedback()}</div>{/if}
@@ -110,18 +127,15 @@
     background: transparent;
     border: 0;
     color: var(--color-ink);
+    field-sizing: content;
     font: inherit;
     line-height: 1.5;
-    max-height: 240px;
-    min-height: 64px;
+    max-height: 192px;
+    min-height: 48px;
     outline: none;
     padding: 3px;
-    resize: vertical;
+    resize: none;
     width: 100%;
-  }
-
-  .roomy textarea {
-    min-height: 118px;
   }
 
   textarea::placeholder {

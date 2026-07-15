@@ -1,8 +1,41 @@
 import { describe, expect, it } from "vitest";
 import type { SparkJsonObject } from "@zendev-lab/spark-protocol";
-import { buildSessionTimeline } from "./session-timeline";
+import {
+  activeSessionTimelineProcessItemId,
+  buildSessionTimeline,
+  sessionTimelineWindow,
+  type SessionTimelineItem,
+} from "./session-timeline";
 
 describe("session timeline", () => {
+  it("windows historical rendering without splitting a user and assistant turn", () => {
+    const items = [
+      timelineItem("u1", "user"),
+      timelineItem("a1", "spark"),
+      timelineItem("u2", "user"),
+      timelineItem("a2", "spark"),
+      timelineItem("u3", "user"),
+      timelineItem("a3", "spark"),
+    ];
+
+    expect(sessionTimelineWindow(items, 3)).toMatchObject({
+      hiddenCount: 2,
+      items: [{ id: "u2" }, { id: "a2" }, { id: "u3" }, { id: "a3" }],
+    });
+    expect(sessionTimelineWindow(items, 20)).toMatchObject({ hiddenCount: 0, items });
+  });
+
+  it("marks only a streaming chain as the active process item", () => {
+    const completed = timelineItem("completed", "spark");
+    completed.parts = [{ type: "chain", state: "complete", steps: [] }];
+    const streaming = timelineItem("streaming", "spark");
+    streaming.parts = [{ type: "chain", state: "streaming", steps: [] }];
+
+    expect(activeSessionTimelineProcessItemId([streaming, completed], true)).toBe("streaming");
+    expect(activeSessionTimelineProcessItemId([streaming, completed], false)).toBeNull();
+    expect(activeSessionTimelineProcessItemId([completed], true)).toBeNull();
+  });
+
   it("uses the daemon transcript as conversation truth and keeps run-only projections", () => {
     const timeline = buildSessionTimeline({
       fallbackTimestamp: "2026-07-10T00:00:00.000Z",
@@ -695,6 +728,21 @@ describe("session timeline", () => {
     expect(JSON.stringify(timeline[0]?.parts)).not.toMatch(/call-1\|/);
   });
 });
+
+function timelineItem(id: string, actor: "user" | "spark"): SessionTimelineItem {
+  return {
+    id,
+    actor,
+    body: id,
+    title: null,
+    status: null,
+    timestamp: "2026-07-10T00:00:00.000Z",
+    meta: null,
+    senderLabel: null,
+    order: 0,
+    parts: [{ type: "text", text: id, streaming: false }],
+  };
+}
 
 function message(
   id: string,

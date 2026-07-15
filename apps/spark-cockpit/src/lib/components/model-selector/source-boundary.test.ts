@@ -32,8 +32,14 @@ describe("source-derived model selector boundary", () => {
 
   it("keeps model changes on the existing SvelteKit form path", () => {
     const workspace = readFileSync(join(appRoot, "src/lib/SessionsWorkspace.svelte"), "utf8");
+    const runtimeControl = readFileSync(
+      join(modelSelectorRoot, "ModelRuntimeControl.svelte"),
+      "utf8",
+    );
 
-    expect(workspace).toContain("<ModelPicker");
+    expect(workspace).toContain("<ModelRuntimeControl");
+    expect(runtimeControl).toContain("<ModelPicker");
+    expect(runtimeControl).toContain("<ThinkingLevelSlider");
     expect(workspace).toContain('action="?/selectModel"');
     expect(workspace).toContain("use:enhance={enhanceSelectModel}");
     expect(workspace).toContain("sessionModelForm?.requestSubmit()");

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 export const idPrefixSchema = z.enum([
@@ -50,7 +49,7 @@ export function prefixedIdSchema(prefix: IdPrefix) {
 export const anyPrefixedIdSchema = z.string().regex(/^[a-z]+_[a-f0-9]{32}$/);
 
 export function createId(prefix: IdPrefix): string {
-  return `${prefix}_${randomUUID().replaceAll("-", "")}`;
+  return `${prefix}_${globalThis.crypto.randomUUID().replaceAll("-", "")}`;
 }
 
 export const isoDateTimeSchema = z.string().datetime({ offset: true });

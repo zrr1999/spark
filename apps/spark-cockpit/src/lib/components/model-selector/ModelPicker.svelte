@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from "$lib/Icon.svelte";
+  import { Dialog as DialogShell } from "$lib/ui";
   import { Command, Dialog } from "bits-ui";
   import type { ModelPickerGroup } from "./types";
 
@@ -79,94 +80,100 @@
 
 <input type="hidden" {name} {form} {disabled} {value} />
 
-<Dialog.Root bind:open onOpenChangeComplete={resetSearch}>
-  <Dialog.Trigger
-    id={id}
-    class="model-picker-trigger {compact ? 'compact' : ''}"
-    {disabled}
-    aria-label={label}
-    aria-required={required}
-    title={selectedOption?.label ?? selectedLabel ?? placeholder}
-    data-model-picker-trigger
-  >
-    <span class="trigger-icon"><Icon name="spark" size={compact ? 14 : 15} /></span>
-    <span class="trigger-copy">
-      <strong>{selectedOption?.label ?? selectedLabel ?? placeholder}</strong>
-      {#if !compact && selectedGroup}<small>{selectedGroup.label}</small>{/if}
-    </span>
-    <Icon name="chevron-down" size={14} />
-  </Dialog.Trigger>
+<DialogShell
+  bind:open
+  layout="grid"
+  overflow="hidden"
+  mobile="sheet"
+  maxHeight="min(680px, calc(100dvh - 32px))"
+  contentClass="model-picker-dialog"
+  describedBy={`${id}-description`}
+  onOpenChangeComplete={resetSearch}
+>
+  {#snippet trigger()}
+    <Dialog.Trigger
+      id={id}
+      class="model-picker-trigger {compact ? 'compact' : ''}"
+      {disabled}
+      aria-label={label}
+      aria-required={required}
+      title={selectedOption?.label ?? selectedLabel ?? placeholder}
+      data-model-picker-trigger
+    >
+      <span class="trigger-icon"><Icon name="spark" size={compact ? 14 : 15} /></span>
+      <span class="trigger-copy">
+        <strong>{selectedOption?.label ?? selectedLabel ?? placeholder}</strong>
+        {#if !compact && selectedGroup}<small>{selectedGroup.label}</small>{/if}
+      </span>
+      <Icon name="chevron-down" size={14} />
+    </Dialog.Trigger>
+  {/snippet}
 
-  <Dialog.Portal>
-    <Dialog.Overlay class="model-picker-overlay" />
-    <Dialog.Content class="model-picker-dialog" aria-describedby={`${id}-description`}>
-      <header class="dialog-heading">
-        <div>
-          <Dialog.Title class="model-picker-title">{title}</Dialog.Title>
-          <Dialog.Description id={`${id}-description`} class="model-picker-description">
-            {description}
-          </Dialog.Description>
-        </div>
-        <Dialog.Close class="model-picker-close" aria-label={closeLabel}>
-          <Icon name="close" size={17} />
-        </Dialog.Close>
-      </header>
+  <header class="dialog-heading">
+    <div>
+      <Dialog.Title class="model-picker-title">{title}</Dialog.Title>
+      <Dialog.Description id={`${id}-description`} class="model-picker-description">
+        {description}
+      </Dialog.Description>
+    </div>
+    <Dialog.Close class="model-picker-close" aria-label={closeLabel}>
+      <Icon name="close" size={17} />
+    </Dialog.Close>
+  </header>
 
-      <Command.Root class="model-picker-command" label={title} loop bind:value={commandValue}>
-        <div class="command-search">
-          <Icon name="search" size={17} />
-          <Command.Input bind:value={search} placeholder={searchPlaceholder} autocomplete="off" autofocus />
-          {#if search}
-            <button type="button" class="clear-search" aria-label={clearSearchLabel} onclick={() => (search = "")}>
-              <Icon name="close" size={14} />
-            </button>
-          {/if}
-        </div>
-
-        <Command.List class="model-picker-list">
-          <Command.Empty class="model-picker-empty">{emptyLabel}</Command.Empty>
-          {#each groups as group (group.id)}
-            <Command.Group value={group.id} class="model-picker-group">
-              <Command.GroupHeading class="model-picker-group-heading">
-                <span class="provider-mark">{monogram(group.label)}</span>
-                <span>
-                  <strong>{group.label}</strong>
-                  {#if group.description}<small>{group.description}</small>{/if}
-                </span>
-              </Command.GroupHeading>
-              <Command.GroupItems class="model-picker-group-items">
-                {#each group.options as option (option.value)}
-                  <Command.Item
-                    value={option.value}
-                    keywords={[option.label, group.label, option.description ?? "", ...(option.keywords ?? [])]}
-                    disabled={option.disabled}
-                    class="model-picker-item"
-                    onSelect={() => select(option.value)}
-                  >
-                    <span class="item-copy">
-                      <strong>{option.label}</strong>
-                      {#if option.description}<small>{option.description}</small>{/if}
-                    </span>
-                    {#if option.value === value}<Icon name="check" size={16} />{/if}
-                  </Command.Item>
-                {/each}
-              </Command.GroupItems>
-            </Command.Group>
-          {/each}
-        </Command.List>
-      </Command.Root>
-
-      {#if settingsHref && settingsLabel}
-        <footer class="model-picker-footer">
-          <a class="model-picker-settings" href={settingsHref}>
-            <Icon name="settings" size={14} />
-            {settingsLabel}
-          </a>
-        </footer>
+  <Command.Root class="model-picker-command" label={title} loop bind:value={commandValue}>
+    <div class="command-search">
+      <Icon name="search" size={17} />
+      <Command.Input bind:value={search} placeholder={searchPlaceholder} autocomplete="off" autofocus />
+      {#if search}
+        <button type="button" class="clear-search" aria-label={clearSearchLabel} onclick={() => (search = "")}>
+          <Icon name="close" size={14} />
+        </button>
       {/if}
-    </Dialog.Content>
-  </Dialog.Portal>
-</Dialog.Root>
+    </div>
+
+    <Command.List class="model-picker-list">
+      <Command.Empty class="model-picker-empty">{emptyLabel}</Command.Empty>
+      {#each groups as group (group.id)}
+        <Command.Group value={group.id} class="model-picker-group">
+          <Command.GroupHeading class="model-picker-group-heading">
+            <span class="provider-mark">{monogram(group.label)}</span>
+            <span>
+              <strong>{group.label}</strong>
+              {#if group.description}<small>{group.description}</small>{/if}
+            </span>
+          </Command.GroupHeading>
+          <Command.GroupItems class="model-picker-group-items">
+            {#each group.options as option (option.value)}
+              <Command.Item
+                value={option.value}
+                keywords={[option.label, group.label, option.description ?? "", ...(option.keywords ?? [])]}
+                disabled={option.disabled}
+                class="model-picker-item"
+                onSelect={() => select(option.value)}
+              >
+                <span class="item-copy">
+                  <strong>{option.label}</strong>
+                  {#if option.description}<small>{option.description}</small>{/if}
+                </span>
+                {#if option.value === value}<Icon name="check" size={16} />{/if}
+              </Command.Item>
+            {/each}
+          </Command.GroupItems>
+        </Command.Group>
+      {/each}
+    </Command.List>
+  </Command.Root>
+
+  {#if settingsHref && settingsLabel}
+    <footer class="model-picker-footer">
+      <a class="model-picker-settings" href={settingsHref}>
+        <Icon name="settings" size={14} />
+        {settingsLabel}
+      </a>
+    </footer>
+  {/if}
+</DialogShell>
 
 <style>
   :global(.model-picker-trigger) {
@@ -500,17 +507,6 @@
       width: 100%;
     }
 
-    :global(.model-picker-dialog) {
-      border-radius: var(--rounded-lg) var(--rounded-lg) 0 0;
-      bottom: 0;
-      left: 0;
-      max-height: calc(100dvh - 16px);
-      max-width: none;
-      top: auto;
-      transform: none;
-      width: 100%;
-    }
-
     .dialog-heading,
     .command-search,
     .model-picker-footer {
@@ -520,22 +516,6 @@
 
     :global(.model-picker-list) {
       max-height: min(60dvh, 520px);
-    }
-  }
-
-  @media (prefers-reduced-motion: no-preference) {
-    :global(.model-picker-overlay),
-    :global(.model-picker-dialog) {
-      animation: model-picker-in 120ms ease-out;
-    }
-
-    @keyframes model-picker-in {
-      from {
-        opacity: 0;
-      }
-      to {
-        opacity: 1;
-      }
     }
   }
 </style>

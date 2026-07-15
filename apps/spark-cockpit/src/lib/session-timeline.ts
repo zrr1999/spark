@@ -44,6 +44,46 @@ export type SessionTimelineItem = ConversationMessageView & {
   order: number;
 };
 
+export const SESSION_TIMELINE_PAGE_SIZE = 32;
+
+/**
+ * Bound the amount of historical conversation UI mounted at once. Session
+ * snapshots remain complete; this only windows the expensive Markdown and
+ * tool-chain component tree, and callers can reveal older pages on demand.
+ */
+export function sessionTimelineWindow(
+  items: readonly SessionTimelineItem[],
+  requestedLimit: number,
+): { items: SessionTimelineItem[]; hiddenCount: number } {
+  const limit = Math.max(1, Math.floor(requestedLimit));
+  let start = Math.max(0, items.length - limit);
+
+  // Avoid opening a window on an assistant reply when its user prompt is the
+  // immediately preceding item. The extra item keeps turn context intact.
+  if (start > 0 && items[start]?.actor === "spark" && items[start - 1]?.actor === "user") {
+    start -= 1;
+  }
+
+  return {
+    items: items.slice(start),
+    hiddenCount: start,
+  };
+}
+
+export function activeSessionTimelineProcessItemId(
+  items: readonly SessionTimelineItem[],
+  hasActiveTurn: boolean,
+): string | null {
+  if (!hasActiveTurn) return null;
+  return (
+    items.findLast(
+      (item) =>
+        item.actor === "spark" &&
+        item.parts.some((part) => part.type === "chain" && part.state === "streaming"),
+    )?.id ?? null
+  );
+}
+
 export function buildSessionTimeline(input: {
   messages: SparkMessageView[];
   commands: SessionTimelineCommand[];

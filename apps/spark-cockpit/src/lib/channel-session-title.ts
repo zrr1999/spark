@@ -7,6 +7,22 @@ export type ChannelSessionAdapter = "infoflow" | "qqbot" | "feishu";
 export type ChannelSessionScope = "group" | "user" | "c2c" | "channel" | "chat";
 export type ChannelSessionScopeKind = "private" | "group" | "channel" | "conversation";
 
+export type ChannelSessionLabels = {
+  infoflowGroup: string;
+  infoflowPrivate: string;
+  qqGroup: string;
+  qqChannel: string;
+  qqPrivate: string;
+  feishuConversation: string;
+};
+
+type ChannelSessionPresentationOptions = {
+  fallback: string;
+  labels?: ChannelSessionLabels;
+  /** @deprecated Pass translated `labels`; kept for older Cockpit consumers. */
+  locale?: string;
+};
+
 export type ChannelSessionDescriptor = {
   adapter: ChannelSessionAdapter;
   scope: ChannelSessionScope;
@@ -46,7 +62,7 @@ export function sessionHasChannelBinding(session: {
 
 export function formatChannelSessionTitle(
   title: string | undefined | null,
-  options: { locale?: string; fallback: string },
+  options: ChannelSessionPresentationOptions,
 ): string {
   const raw = title?.trim() || options.fallback;
   const match = raw.match(CHANNEL_TITLE_RE);
@@ -55,8 +71,7 @@ export function formatChannelSessionTitle(
   const adapter = match[1]!.toLowerCase();
   const scope = match[2]!.toLowerCase();
   const id = match[3]!.trim();
-  const zh = (options.locale ?? "").toLowerCase().startsWith("zh");
-  const scopeLabel = channelScopeLabel(adapter, scope, zh);
+  const scopeLabel = channelScopeLabel(adapter, scope, resolveChannelSessionLabels(options));
   if (!scopeLabel) return raw;
   return `${scopeLabel} · ${shortenOpaqueChannelId(id)}`;
 }
@@ -75,7 +90,7 @@ export function channelSessionPresentation(
       externalKey?: string;
     }> | null;
   },
-  options: { locale?: string; fallback: string },
+  options: ChannelSessionPresentationOptions,
 ): ChannelSessionPresentation {
   const rawTitle = session.title?.trim() ?? "";
   const titleIdentity = parseChannelIdentity(rawTitle.replace(/^channel\s+/iu, ""));
@@ -84,8 +99,6 @@ export function channelSessionPresentation(
     .map((binding) => parseChannelIdentity(binding.externalKey ?? ""))
     .find((identity) => identity !== null);
   const identity = bindingIdentity ?? titleIdentity;
-  const zh = (options.locale ?? "").toLowerCase().startsWith("zh");
-
   return {
     title: titleIdentity
       ? shortenOpaqueChannelId(titleIdentity.externalId)
@@ -94,8 +107,11 @@ export function channelSessionPresentation(
       ? {
           ...identity,
           label:
-            channelScopeLabel(identity.adapter, identity.scope, zh) ??
-            `${identity.adapter} ${identity.scope}`,
+            channelScopeLabel(
+              identity.adapter,
+              identity.scope,
+              resolveChannelSessionLabels(options),
+            ) ?? `${identity.adapter} ${identity.scope}`,
         }
       : null,
   };
@@ -107,24 +123,60 @@ function parseChannelIdentity(value: string): Omit<ChannelSessionDescriptor, "la
   const adapter = match[1]!.toLowerCase() as ChannelSessionAdapter;
   const scope = match[2]!.toLowerCase() as ChannelSessionScope;
   const externalId = match[3]!.trim();
-  return channelScopeLabel(adapter, scope, false) && externalId
+  return isSupportedChannelIdentity(adapter, scope) && externalId
     ? { adapter, scope, externalId }
     : null;
 }
 
-function channelScopeLabel(adapter: string, scope: string, zh: boolean): string | null {
+function isSupportedChannelIdentity(adapter: string, scope: string): boolean {
+  return (
+    (adapter === "infoflow" && (scope === "group" || scope === "user")) ||
+    (adapter === "qqbot" && (scope === "group" || scope === "channel" || scope === "c2c")) ||
+    (adapter === "feishu" && scope === "chat")
+  );
+}
+
+function resolveChannelSessionLabels(
+  options: Pick<ChannelSessionPresentationOptions, "labels" | "locale">,
+): ChannelSessionLabels {
+  if (options.labels) return options.labels;
+  const zh = options.locale?.toLowerCase().startsWith("zh") ?? false;
+  return zh
+    ? {
+        infoflowGroup: "如流群聊",
+        infoflowPrivate: "如流私聊",
+        qqGroup: "QQ 群聊",
+        qqChannel: "QQ 频道",
+        qqPrivate: "QQ 私聊",
+        feishuConversation: "飞书会话",
+      }
+    : {
+        infoflowGroup: "Infoflow group",
+        infoflowPrivate: "Infoflow chat",
+        qqGroup: "QQ group",
+        qqChannel: "QQ channel",
+        qqPrivate: "QQ chat",
+        feishuConversation: "Feishu chat",
+      };
+}
+
+function channelScopeLabel(
+  adapter: string,
+  scope: string,
+  labels: ChannelSessionLabels,
+): string | null {
   switch (adapter) {
     case "infoflow":
-      if (scope === "group") return zh ? "如流群聊" : "Infoflow group";
-      if (scope === "user") return zh ? "如流私聊" : "Infoflow chat";
+      if (scope === "group") return labels.infoflowGroup;
+      if (scope === "user") return labels.infoflowPrivate;
       return null;
     case "qqbot":
-      if (scope === "group") return zh ? "QQ 群聊" : "QQ group";
-      if (scope === "channel") return zh ? "QQ 频道" : "QQ channel";
-      if (scope === "c2c") return zh ? "QQ 私聊" : "QQ chat";
+      if (scope === "group") return labels.qqGroup;
+      if (scope === "channel") return labels.qqChannel;
+      if (scope === "c2c") return labels.qqPrivate;
       return null;
     case "feishu":
-      if (scope === "chat") return zh ? "飞书会话" : "Feishu chat";
+      if (scope === "chat") return labels.feishuConversation;
       return null;
     default:
       return null;

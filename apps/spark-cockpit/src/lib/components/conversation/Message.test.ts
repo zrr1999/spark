@@ -5,6 +5,7 @@ import { compile } from "svelte/compiler";
 import { describe, expect, it } from "vitest";
 
 const componentPath = resolve(dirname(fileURLToPath(import.meta.url)), "Message.svelte");
+const actionsPath = resolve(dirname(fileURLToPath(import.meta.url)), "MessageActions.svelte");
 
 describe("Message component contract", () => {
   it("compiles as a Svelte component", () => {
@@ -24,5 +25,14 @@ describe("Message component contract", () => {
     expect(source).toContain("<MessageActions text={copyableText}");
     expect(source).not.toContain("<MessageActions text={item.body}");
     expect(source).toContain("{active}");
+  });
+
+  it("uses the compact source-derived message action instead of visible copy text", () => {
+    const source = readFileSync(actionsPath, "utf8");
+
+    expect(source).toContain("aria-label={copied ? copiedLabel : copyLabel}");
+    expect(source).toContain('<span class="sr-only">');
+    expect(source).toContain("@media (hover: hover)");
+    expect(source).toContain(":global(.conversation-message:hover) .message-actions");
   });
 });
