@@ -238,6 +238,14 @@
             <div class="runner-row binding-row">
               <div>
                 <strong>{binding.displayName}</strong>
+                <small
+                  class="binding-path"
+                  class:pending={!binding.localPath}
+                  title={binding.localPath ?? t.bindings.pathPending}
+                >
+                  <Icon name="folder" size={13} />
+                  <span>{binding.localPath ?? t.bindings.pathPending}</span>
+                </small>
                 <small>{binding.runtimeName} · {binding.localWorkspaceKey}</small>
               </div>
               <span class="status-pill {binding.status}">{statusLabel(binding.status)}</span>
@@ -364,6 +372,12 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .device-commands > .token-display {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
   .device-commands pre {
     background: var(--color-ink);
     border-radius: 8px;
@@ -372,7 +386,8 @@
     font-size: 12px;
     line-height: 1.55;
     margin: 0;
-    min-height: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-x: auto;
     padding: 12px;
     white-space: pre-wrap;
@@ -566,6 +581,26 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .runner-row .binding-path {
+    align-items: flex-start;
+    display: flex;
+    gap: 6px;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .binding-path span {
+    font-family: var(--font-mono);
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .binding-path :global(svg) {
+    flex: 0 0 auto;
+    margin-top: 2px;
   }
 
   .empty-state {

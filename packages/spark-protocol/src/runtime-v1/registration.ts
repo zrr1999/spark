@@ -4,6 +4,7 @@ import { runtimeFeatureSchema, runtimeProtocolVersionSchema } from "./envelope.t
 
 export const runtimeWorkspaceRegistrationDetailsSchema = z.object({
   localWorkspaceKey: z.string().min(1),
+  localPath: z.string().min(1).optional(),
   displayName: z.string().min(1),
   workspaceName: z.string().min(1).optional(),
   workspaceSlug: z.string().min(1).optional(),

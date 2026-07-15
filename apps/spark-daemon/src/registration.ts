@@ -48,6 +48,7 @@ export interface SparkDaemonRegistrationInput {
   installationId?: string;
   workspaceRegistration?: {
     localWorkspaceKey: string;
+    localPath?: string;
     displayName: string;
     workspaceName?: string;
     workspaceSlug?: string;
@@ -329,6 +330,7 @@ function isLoopbackHostname(hostname: string): boolean {
 export async function verifySparkDaemonWorkspaceConnection(input: {
   config: SparkDaemonConfig;
   workspaceBinding: NonNullable<RuntimeRegistrationResponse["workspaceBinding"]>;
+  localPath?: string;
   timeoutMs?: number;
   createWebSocket?: RegistrationWebSocketFactory;
 }): Promise<void> {
@@ -383,6 +385,7 @@ export async function verifySparkDaemonWorkspaceConnection(input: {
               {
                 bindingId: input.workspaceBinding.bindingId,
                 localWorkspaceKey: input.workspaceBinding.localWorkspaceKey,
+                ...(input.localPath ? { localPath: input.localPath } : {}),
                 displayName: input.workspaceBinding.displayName,
                 status: input.workspaceBinding.status,
                 capabilities: {},

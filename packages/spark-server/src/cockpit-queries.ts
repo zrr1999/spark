@@ -32,6 +32,7 @@ export interface RuntimeWorkspaceBindingView {
   id: string;
   runtimeId: string;
   localWorkspaceKey: string;
+  localPath: string | null;
   displayName: string;
   status: RuntimeWorkspaceStatus;
   lastSnapshotAt: string | null;
@@ -905,6 +906,7 @@ function listAllRuntimeWorkspaceBindings(db: DatabaseSync) {
       `SELECT rb.id,
               rb.runtime_id AS runtimeId,
               rb.local_workspace_key AS localWorkspaceKey,
+              rb.local_path AS localPath,
               rb.display_name AS displayName,
               rb.status,
               rb.last_snapshot_at AS lastSnapshotAt,
@@ -924,6 +926,7 @@ function listOwnerRuntimeWorkspaceBindings(db: DatabaseSync, workspaceId: string
       `SELECT rb.id,
               rb.runtime_id AS runtimeId,
               rb.local_workspace_key AS localWorkspaceKey,
+              rb.local_path AS localPath,
               rb.display_name AS displayName,
               rb.status,
               rb.last_snapshot_at AS lastSnapshotAt,
@@ -1040,6 +1043,7 @@ function findMatchingWorkspaceBinding(
       `SELECT rb.id,
               rb.runtime_id AS runtimeId,
               rb.local_workspace_key AS localWorkspaceKey,
+              rb.local_path AS localPath,
               rb.display_name AS displayName,
               rb.status,
               rb.last_snapshot_at AS lastSnapshotAt,
@@ -1073,6 +1077,7 @@ function findOnlyAvailableWorkspaceBindingForRuntime(
       `SELECT rb.id,
               rb.runtime_id AS runtimeId,
               rb.local_workspace_key AS localWorkspaceKey,
+              rb.local_path AS localPath,
               rb.display_name AS displayName,
               rb.status,
               rb.last_snapshot_at AS lastSnapshotAt,

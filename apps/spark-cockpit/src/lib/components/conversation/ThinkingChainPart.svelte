@@ -12,18 +12,28 @@
     steps: ConversationChainStep[];
     labels: ConversationPartLabels;
     statusLabel: (status: string) => string;
+    active?: boolean;
   };
 
-  let { state, steps, labels, statusLabel }: Props = $props();
+  let { state, steps, labels, statusLabel, active = false }: Props = $props();
+  let hasTerminalIssue = $derived(
+    steps.some(
+      (step) =>
+        step.type === "tool" &&
+        (step.state === "failed" || step.state === "denied" || step.state === "cancelled"),
+    ),
+  );
 </script>
 
-<details class="thinking-chain" open={state === "streaming"}>
+<details class="thinking-chain {state}" open={active || state === "streaming" || hasTerminalIssue}>
   <summary>
     <span class:streaming={state === "streaming"} class="chain-icon">
-      <Icon name="spark" size={14} stroke={2.1} />
+      <Icon name="spark" size={11} stroke={2.1} />
     </span>
-    <span>{state === "streaming" ? labels.chainStreaming : labels.chain}</span>
-    <span class="disclosure"><Icon name="chevron-down" size={14} /></span>
+    <span class="chain-label">
+      {state === "streaming" ? labels.chainStreaming : labels.chain}
+    </span>
+    <span class="disclosure"><Icon name="chevron-down" size={11} /></span>
   </summary>
   <div class="chain-steps">
     {#each steps as step, index (`${step.type}:${index}:${step.type === "tool" ? step.callId : "r"}`)}
@@ -60,20 +70,24 @@
 
 <style>
   .thinking-chain {
-    border-left: 2px solid var(--color-border);
     color: var(--color-ink-subtle);
-    padding-left: 10px;
+    min-width: 0;
   }
 
   summary {
     align-items: center;
+    border-radius: var(--rounded-sm);
+    color: var(--color-ink-subtle);
     cursor: pointer;
     display: flex;
-    font-size: 12px;
-    font-weight: 650;
-    gap: 7px;
+    font-size: 11px;
+    font-weight: 600;
+    gap: 5px;
     list-style: none;
-    min-height: 40px;
+    margin-inline: auto;
+    max-width: min(100%, 320px);
+    min-height: 22px;
+    padding: 0 3px;
     width: fit-content;
   }
 
@@ -82,23 +96,36 @@
   }
 
   summary:focus-visible {
-    border-radius: 6px;
     box-shadow: var(--shadow-focus);
     outline: none;
+  }
+
+  summary:hover {
+    color: var(--color-ink-muted);
   }
 
   .chain-icon {
     align-items: center;
     display: inline-flex;
+    flex: 0 0 auto;
   }
 
   .chain-icon.streaming {
     color: var(--color-primary);
+    animation: chain-pulse 1.4s ease-in-out infinite;
   }
 
   .disclosure {
     display: inline-flex;
+    flex: 0 0 auto;
     transition: transform 120ms ease;
+  }
+
+  .chain-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   details[open] .disclosure {
@@ -106,9 +133,11 @@
   }
 
   .chain-steps {
+    border-left: 1px solid var(--color-border);
     display: grid;
     gap: 8px;
-    padding: 2px 4px 10px 21px;
+    margin: 5px 0 0 7px;
+    padding: 2px 4px 10px 15px;
   }
 
   .redacted {
@@ -117,8 +146,20 @@
     margin: 0;
   }
 
+  @keyframes chain-pulse {
+    0%,
+    100% {
+      opacity: 0.5;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
+    .chain-icon.streaming,
     .disclosure {
+      animation: none;
       transition: none;
     }
   }

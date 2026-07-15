@@ -1,6 +1,11 @@
 import type { SparkMessageView } from "@zendev-lab/spark-protocol";
 import { describe, expect, it } from "vitest";
-import { conversationPartsFromMessage, groupThinkingChainParts } from "./conversation-view";
+import {
+  conversationPartsFromMessage,
+  groupThinkingChainParts,
+  visibleConversationParts,
+  visibleConversationPartText,
+} from "./conversation-view";
 
 describe("Cockpit conversation view adapter", () => {
   it("keeps the legacy text field as a compatible presentation fallback", () => {
@@ -94,6 +99,51 @@ describe("Cockpit conversation view adapter", () => {
       ],
     });
   });
+
+  it("retains completed execution for collapsed history without copying it", () => {
+    const parts = groupThinkingChainParts([
+      {
+        type: "commentary",
+        summary: "Inspect the workspace",
+        state: "complete",
+      },
+      {
+        type: "tool",
+        callId: "call-success",
+        name: "cue_exec",
+        state: "completed",
+        summary: "Checks passed",
+      },
+      {
+        type: "text",
+        text: "The workspace is ready.",
+        streaming: false,
+      },
+    ]);
+
+    expect(visibleConversationParts(parts).map((part) => part.type)).toEqual(["chain", "text"]);
+    expect(visibleConversationPartText(parts)).toBe("The workspace is ready.");
+  });
+
+  it.each(["failed", "denied", "cancelled"] as const)(
+    "retains %s process detail without copying internal output",
+    (state) => {
+      const parts = groupThinkingChainParts([
+        {
+          type: "tool",
+          callId: `call-${state}`,
+          name: "cue_exec",
+          state,
+          summary: `Execution ${state}`,
+        },
+      ]);
+
+      expect(visibleConversationParts(parts)).toMatchObject([
+        { type: "chain", steps: [{ type: "tool", state }] },
+      ]);
+      expect(visibleConversationPartText(parts)).toBe("");
+    },
+  );
 
   it("keeps provider commentary inside the execution chain instead of answer prose", () => {
     const parts = conversationPartsFromMessage(

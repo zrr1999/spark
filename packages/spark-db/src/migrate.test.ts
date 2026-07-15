@@ -83,7 +83,15 @@ describe("migrations", () => {
       "0006",
       "0007",
       "0008",
+      "0009",
     ]);
+
+    const bindingColumns = db
+      .prepare("PRAGMA table_info(runtime_workspace_bindings)")
+      .all() as Array<{
+      name: string;
+    }>;
+    expect(bindingColumns.map((column) => column.name)).toContain("local_path");
     db.close();
   });
 
@@ -97,7 +105,35 @@ describe("migrations", () => {
       count: number;
     };
 
-    expect(migrationCount.count).toBe(8);
+    expect(migrationCount.count).toBe(9);
+    db.close();
+  });
+
+  it("keeps existing runtime workspace bindings when adding local paths", () => {
+    const db = openMemoryDatabase();
+    const migrations = loadMigrations();
+    migrate(
+      db,
+      migrations.filter((migration) => migration.version <= "0008"),
+    );
+    const now = "2026-07-14T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO runtime_connections
+        (id, installation_id, name, status, capabilities_json, labels_json, created_at, updated_at)
+       VALUES ('rt_legacy', 'install-legacy', 'Legacy daemon', 'offline', '{}', '{}', ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO runtime_workspace_bindings
+        (id, runtime_id, local_workspace_key, display_name, status, capabilities_json, diagnostics_json, created_at, updated_at)
+       VALUES ('rtwb_legacy', 'rt_legacy', 'legacy', 'Legacy workspace', 'available', '{}', '{}', ?, ?)`,
+    ).run(now, now);
+
+    migrate(db, migrations);
+
+    const binding = db
+      .prepare("SELECT local_path AS localPath FROM runtime_workspace_bindings WHERE id = ?")
+      .get("rtwb_legacy") as { localPath: string | null };
+    expect(binding.localPath).toBeNull();
     db.close();
   });
 

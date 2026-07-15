@@ -69,6 +69,7 @@ function setupRuntime() {
         {
           bindingId: workspaceBindingId,
           localWorkspaceKey: "local-default",
+          localPath: "/Users/test/workspaces/local-default",
           displayName: "Local default",
           status: "available",
           capabilities: {},
@@ -330,11 +331,15 @@ describe("runtime WebSocket handling", () => {
     expect(runtime.status).toBe("online");
 
     const binding = db
-      .prepare("SELECT display_name FROM runtime_workspace_bindings WHERE id = ?")
+      .prepare(
+        "SELECT display_name, local_path AS localPath FROM runtime_workspace_bindings WHERE id = ?",
+      )
       .get(workspaceBindingId) as {
       display_name: string;
+      localPath: string | null;
     };
     expect(binding.display_name).toBe("Local default");
+    expect(binding.localPath).toBe("/Users/test/workspaces/local-default");
     db.close();
   });
 
@@ -369,11 +374,15 @@ describe("runtime WebSocket handling", () => {
 
     const bindingRows = db
       .prepare(
-        `SELECT id, display_name AS displayName
+        `SELECT id, display_name AS displayName, local_path AS localPath
          FROM runtime_workspace_bindings
          WHERE runtime_id = ? AND local_workspace_key = ?`,
       )
-      .all(runtimeId, "local-default") as Array<{ id: string; displayName: string }>;
+      .all(runtimeId, "local-default") as Array<{
+      id: string;
+      displayName: string;
+      localPath: string | null;
+    }>;
     const ownerBinding = db
       .prepare(
         `SELECT runtime_workspace_binding_id AS runtimeWorkspaceBindingId
@@ -383,7 +392,11 @@ describe("runtime WebSocket handling", () => {
       .get(workspace.id) as { runtimeWorkspaceBindingId: string };
 
     expect(bindingRows).toEqual([
-      { id: workspaceBindingId, displayName: "Local default after reconnect" },
+      {
+        id: workspaceBindingId,
+        displayName: "Local default after reconnect",
+        localPath: "/Users/test/workspaces/local-default",
+      },
     ]);
     expect(ownerBinding.runtimeWorkspaceBindingId).toBe(workspaceBindingId);
     db.close();

@@ -5,6 +5,7 @@
   import { formatRelativeTime } from "$lib/i18n";
   import { Button, Field, Input, PageHeader } from "$lib/ui";
   import { slugifyWorkspaceIdentifier } from "$lib/slugify";
+  import { resolveWorkspaceCreationState } from "$lib/workspace-creation-state";
   import type { SubmitFunction } from "@sveltejs/kit";
 
   type ClipboardWriteResult =
@@ -48,13 +49,54 @@
   let t = $derived(data.messages.home);
   let common = $derived(data.messages.common);
   let registrationCommand = $state<RegistrationCommand | null>(null);
+  let actionRegistrationCommand = $derived.by(
+    (): RegistrationCommand | null => {
+      if (
+        form?.intent !== "workspaceRegistration" ||
+        form.registrationMode !== "token" ||
+        !form.enrollCommand ||
+        !form.profileSetup
+      ) {
+        return null;
+      }
+
+      return {
+        registrationMode: "token",
+        enrollCommand: form.enrollCommand,
+        enrollmentExpiresAt: form.enrollmentExpiresAt ?? null,
+        profileSetup: form.profileSetup,
+      };
+    },
+  );
+  let targetRunnerBinding = $derived(data.targetRunnerBinding);
+  let hasTargetWorkspaceBinding = $derived(Boolean(targetRunnerBinding));
+  let workspaceCreationState = $derived(
+    resolveWorkspaceCreationState<RegistrationCommand>({
+      actionCommand: actionRegistrationCommand,
+      retainedCommand: registrationCommand,
+      hasPendingSetup: Boolean(data.pendingWorkspaceSetup),
+      hasWorkspaceBinding: hasTargetWorkspaceBinding,
+    }),
+  );
+  let visibleRegistrationCommand = $derived(
+    workspaceCreationState.registrationCommand,
+  );
   let registrationProfile = $derived(
-    registrationCommand?.profileSetup ??
+    visibleRegistrationCommand?.profileSetup ??
       form?.profileSetup ??
       data.pendingWorkspaceSetup ??
       fallbackRegistrationProfile,
   );
-  let selectedProfileSource = $state<"git" | "builtin:fresh">("git");
+  let selectedProfileSourceOverride = $state<
+    "git" | "builtin:fresh" | null
+  >(null);
+  let selectedProfileSource = $derived(
+    selectedProfileSourceOverride ??
+      visibleRegistrationCommand?.profileSetup.profileSource ??
+      form?.profileSetup?.profileSource ??
+      data.pendingWorkspaceSetup?.profileSource ??
+      "git",
+  );
   let workspaceNameOverride = $state<string | null>(null);
   let workspaceSlugOverride = $state<string | null>(null);
   let workspaceSetupSeed = $state("");
@@ -72,21 +114,10 @@
   let workspaceSlugEdited = $state(false);
   let commandCopyStatus = $state<"idle" | "copied" | "failed">("idle");
   let commandCopyError = $state<string | null>(null);
-  let targetRunnerBinding = $derived(data.targetRunnerBinding);
-  let hasTargetWorkspaceBinding = $derived(Boolean(targetRunnerBinding));
-  let hasConfirmedWorkspaceSetup = $derived(
-    Boolean(
-      registrationCommand?.profileSetup ||
-      form?.profileSetup ||
-      data.pendingWorkspaceSetup,
-    ),
-  );
   let shouldPollForWorkspaceBinding = $derived(
-    hasConfirmedWorkspaceSetup && !hasTargetWorkspaceBinding,
+    workspaceCreationState.shouldPollForWorkspaceBinding,
   );
-  let currentStepIndex = $derived(
-    !hasConfirmedWorkspaceSetup ? 0 : hasTargetWorkspaceBinding ? 2 : 1,
-  );
+  let currentStepIndex = $derived(workspaceCreationState.currentStepIndex);
   let lastFocusedWorkspaceBindingId = $state<string | null>(null);
 
   const keepRegistrationCommandVisible: SubmitFunction = () => {
@@ -146,16 +177,6 @@
   }
 
   $effect(() => {
-    const source =
-      registrationCommand?.profileSetup.profileSource ??
-      form?.profileSetup?.profileSource ??
-      data.pendingWorkspaceSetup?.profileSource;
-    if (source) {
-      selectedProfileSource = source;
-    }
-  });
-
-  $effect(() => {
     const nextSeed = workspaceSetupKey(registrationProfile);
     if (nextSeed === workspaceSetupSeed) {
       return;
@@ -172,26 +193,9 @@
   });
 
   $effect(() => {
-    if (!registrationCommand && data.pendingDeviceRegistrationCommand) {
-      registrationCommand = data.pendingDeviceRegistrationCommand;
+    if (actionRegistrationCommand) {
+      registrationCommand = actionRegistrationCommand;
     }
-  });
-
-  $effect(() => {
-    if (
-      form?.intent !== "workspaceRegistration" ||
-      !form.enrollCommand ||
-      !form.profileSetup
-    ) {
-      return;
-    }
-
-    registrationCommand = {
-      registrationMode: form.registrationMode === "token" ? "token" : "device",
-      enrollCommand: form.enrollCommand,
-      enrollmentExpiresAt: form.enrollmentExpiresAt ?? null,
-      profileSetup: form.profileSetup,
-    };
   });
 
   $effect(() => {
@@ -337,6 +341,11 @@
                 {#if form?.intent === "workspaceRegistration" && form?.message && !form?.enrollCommand}
                   <p class="form-message" role="alert">{form.message}</p>
                 {/if}
+                {#if data.pendingWorkspaceSetup?.enrollmentTokenId && !visibleRegistrationCommand}
+                  <p class="form-message" role="status">
+                    {t.emptyWorkspace.stepActions.commandUnavailable}
+                  </p>
+                {/if}
 
                 <div class="profile-form-layout">
                   <fieldset class="profile-choice">
@@ -347,7 +356,8 @@
                           type="radio"
                           name="profileSource"
                           value="git"
-                          bind:group={selectedProfileSource}
+                          checked={selectedProfileSource === "git"}
+                          onchange={() => (selectedProfileSourceOverride = "git")}
                         />
                         <span>
                           <strong>{t.emptyWorkspace.form.gitProfile}</strong>
@@ -362,7 +372,9 @@
                           type="radio"
                           name="profileSource"
                           value="builtin:fresh"
-                          bind:group={selectedProfileSource}
+                          checked={selectedProfileSource === "builtin:fresh"}
+                          onchange={() =>
+                            (selectedProfileSourceOverride = "builtin:fresh")}
                         />
                         <span>
                           <strong>{t.emptyWorkspace.form.freshProfile}</strong>
@@ -425,22 +437,11 @@
                           value={registrationProfile.description ?? ""}
                         />
                       </Field>
+                      <input type="hidden" name="registrationMethod" value="token" />
                       <div class="registration-actions">
-                        <Button
-                          type="submit"
-                          name="registrationMethod"
-                          value="device"
-                        >
+                        <Button type="submit">
                           <Icon name="spark" size={16} stroke={2.4} />
-                          <span>{t.emptyWorkspace.stepActions.createDeviceCommand}</span>
-                        </Button>
-                        <Button
-                          type="submit"
-                          variant="secondary"
-                          name="registrationMethod"
-                          value="token"
-                        >
-                          <span>{t.emptyWorkspace.stepActions.createTokenFallback}</span>
+                          <span>{t.emptyWorkspace.stepActions.createToken}</span>
                         </Button>
                       </div>
                     </div>
@@ -448,8 +449,8 @@
                 </div>
               </form>
             {:else if index === 1}
-              {#if registrationCommand}
-                {@const currentCommand = registrationCommand}
+              {#if visibleRegistrationCommand}
+                {@const currentCommand = visibleRegistrationCommand}
                 <div
                   class="token-created workspace-command"
                   aria-label={t.emptyWorkspace.stepActions.commandCreatedAria}

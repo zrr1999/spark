@@ -10,7 +10,7 @@ import {
   emptyChannelEditorValues,
   loadChannelsConfigForCockpit,
   loadChannelStatusForCockpit,
-  mergeAdapterCredentialsForCreate,
+  mergeMessagePlatformCredentials,
   saveChannelsConfigForCockpit,
   type CockpitChannelDaemonClient,
   type CockpitChannelStatusSnapshot,
@@ -246,7 +246,7 @@ describe("cockpit channel status", () => {
     );
   });
 
-  it("merges create-channel credentials onto one adapter without dropping others", () => {
+  it("merges one platform account without dropping other adapters", () => {
     const previous = {
       ...emptyChannelEditorValues(),
       feishuEnabled: true,
@@ -255,7 +255,7 @@ describe("cockpit channel status", () => {
       infoflowEnabled: false,
     };
 
-    const merged = mergeAdapterCredentialsForCreate(previous, {
+    const merged = mergeMessagePlatformCredentials(previous, {
       adapter: "infoflow",
       infoflowAppKey: "key_new",
       infoflowAppAgentId: "43163",

@@ -164,6 +164,7 @@ export interface RuntimeWorkspaceBindingsTable {
   id: string;
   runtime_id: string;
   local_workspace_key: string;
+  local_path: string | null;
   display_name: string;
   status: "available" | "indexing" | "degraded" | "unavailable" | "archived";
   capabilities_json: string;

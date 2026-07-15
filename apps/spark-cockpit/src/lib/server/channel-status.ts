@@ -8,7 +8,7 @@ import {
   SparkDaemonLocalRpcUnavailableError,
   touchPrivateFile,
 } from "@zendev-lab/spark-system";
-import type { CreateChannelAdapter } from "../create-channel";
+import type { MessagePlatformAdapter } from "../message-platform";
 
 export interface CockpitChannelStatusSnapshot {
   workspaceId: string;
@@ -165,8 +165,8 @@ export function emptyChannelEditorValues(): CockpitChannelEditorValues {
   };
 }
 
-export type CreateChannelCredentialPatch = {
-  adapter: CreateChannelAdapter;
+export type MessagePlatformCredentialPatch = {
+  adapter: MessagePlatformAdapter;
   feishuAppId?: string;
   feishuAppSecret?: string;
   infoflowEndpoint?: string;
@@ -178,10 +178,10 @@ export type CreateChannelCredentialPatch = {
   qqbotSandbox?: boolean;
 };
 
-/** Merge create-form credentials onto existing editor values without dropping other adapters. */
-export function mergeAdapterCredentialsForCreate(
+/** Merge one account connection onto existing editor values without dropping other adapters. */
+export function mergeMessagePlatformCredentials(
   previous: CockpitChannelEditorValues,
-  patch: CreateChannelCredentialPatch,
+  patch: MessagePlatformCredentialPatch,
 ): CockpitChannelEditorValues {
   const next: CockpitChannelEditorValues = {
     ...previous,
@@ -218,7 +218,7 @@ export function mergeAdapterCredentialsForCreate(
       break;
     default: {
       const _exhaustive: never = patch.adapter;
-      throw new Error(`unsupported create-channel adapter: ${String(_exhaustive)}`);
+      throw new Error(`unsupported message platform adapter: ${String(_exhaustive)}`);
     }
   }
 
@@ -227,7 +227,7 @@ export function mergeAdapterCredentialsForCreate(
 
 export function channelAdapterCredentialsComplete(
   values: CockpitChannelEditorValues,
-  adapter: CreateChannelAdapter,
+  adapter: MessagePlatformAdapter,
 ): boolean {
   switch (adapter) {
     case "feishu":
@@ -248,7 +248,7 @@ export function channelAdapterCredentialsComplete(
       );
     default: {
       const _exhaustive: never = adapter;
-      throw new Error(`unsupported create-channel adapter: ${String(_exhaustive)}`);
+      throw new Error(`unsupported message platform adapter: ${String(_exhaustive)}`);
     }
   }
 }

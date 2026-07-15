@@ -71,6 +71,7 @@ describe("Spark daemon workspace store", () => {
         {
           bindingId: workspace.id,
           localWorkspaceKey: "local-default",
+          localPath: realpathSync(root),
           displayName: "Local default renamed",
           status: "available",
           capabilities: {},

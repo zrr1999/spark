@@ -53,15 +53,6 @@ export const load: PageServerLoad = ({ cookies, url }) => {
     runnerBindings: page.runnerBindings,
     ownerBindings: page.ownerBindings,
     pendingWorkspaceSetup,
-    pendingDeviceRegistrationCommand:
-      pendingWorkspaceSetup && !pendingWorkspaceSetup.enrollmentTokenId
-        ? {
-            registrationMode: "device" as const,
-            enrollCommand: buildDeviceRegistrationCommand(url.origin, pendingWorkspaceSetup),
-            enrollmentExpiresAt: null,
-            profileSetup: pendingWorkspaceSetup,
-          }
-        : null,
     targetRunnerBinding: page.targetRunnerBinding,
   };
 };
@@ -76,7 +67,7 @@ export const actions: Actions = {
     const userId = ensureCurrentOwnerSession(db, cookies, locals.sessionToken);
 
     const formData = await request.formData();
-    const registrationMethod = readFormString(formData, "registrationMethod") || "device";
+    const registrationMethod = readFormString(formData, "registrationMethod") || "token";
     let workspaceSetup: PendingWorkspaceSetup;
     try {
       workspaceSetup = resolvePendingWorkspaceSetup(formData);

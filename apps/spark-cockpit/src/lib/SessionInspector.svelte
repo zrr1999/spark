@@ -7,6 +7,7 @@
   import type {
     SessionInspectorLabels,
     SessionInspectorTab,
+    SessionWorkbenchTask,
     SessionWorkbenchView,
   } from "$lib/session-workbench";
 
@@ -15,7 +16,7 @@
     labels,
     instanceId,
     statusLabel = (status: string) => status,
-    initialTab = "runs",
+    initialTab = "summary",
   }: {
     view: SessionWorkbenchView;
     labels: SessionInspectorLabels;
@@ -26,12 +27,12 @@
 
   let activeTab = $state<SessionInspectorTab>(untrack(() => initialTab));
   let tabs = $derived<{ id: SessionInspectorTab; label: string; icon: IconName }[]>([
-    { id: "runs", label: labels.tabs.runs, icon: "activity" },
+    { id: "summary", label: labels.tabs.summary, icon: "activity" },
     { id: "changes", label: labels.tabs.changes, icon: "repos" },
-    { id: "evidence", label: labels.tabs.evidence, icon: "artifacts" },
+    { id: "tasks", label: labels.tabs.tasks, icon: "folder" },
     { id: "mailbox", label: labels.tabs.mailbox, icon: "inbox" },
-    { id: "context", label: labels.tabs.context, icon: "folder" },
   ]);
+  let taskGroups = $derived(groupTasksByProject(view.tasks));
   let unreadMailCount = $derived(
     view.mailbox.filter((message) => message.status === "unread").length,
   );
@@ -66,8 +67,19 @@
     return `${instanceId}-${tab}-panel`;
   }
 
-  function headingId(section: SessionInspectorTab | "tasks") {
+  function headingId(section: SessionInspectorTab | "runs") {
     return `${instanceId}-${section}-heading`;
+  }
+
+  function groupTasksByProject(tasks: SessionWorkbenchTask[]) {
+    const groups = new Map<string, { projectRef: string | null; tasks: SessionWorkbenchTask[] }>();
+    for (const task of tasks) {
+      const key = task.projectRef ?? "";
+      const group = groups.get(key) ?? { projectRef: task.projectRef, tasks: [] };
+      group.tasks.push(task);
+      groups.set(key, group);
+    }
+    return [...groups.values()];
   }
 
   function handleTabKeydown(event: KeyboardEvent, index: number) {
@@ -116,91 +128,88 @@
     role="tabpanel"
     aria-labelledby={tabId(activeTab)}
   >
-    {#if activeTab === "runs"}
-      {#if view.runs.length === 0 && view.tasks.length === 0}
+    {#if activeTab === "summary"}
+      <section class="inspector-section" aria-labelledby={headingId("summary")}>
+        <h2 id={headingId("summary")}>{labels.summaryHeading}</h2>
+        <dl class="context-list">
+          <div>
+            <dt>{labels.sessionStatus}</dt>
+            <dd>
+              <span class={`status-pill ${statusClass(view.context.status)}`}>
+                {statusLabel(view.context.status)}
+              </span>
+            </dd>
+          </div>
+          <div>
+            <dt>{labels.workingDirectory}</dt>
+            <dd title={view.context.cwd ?? labels.unavailable}><code>{view.context.cwd ?? labels.unavailable}</code></dd>
+          </div>
+          <div>
+            <dt>{labels.model}</dt>
+            <dd title={view.context.model?.displayLabel ?? labels.unavailable}>{view.context.model?.displayLabel ?? labels.unavailable}</dd>
+          </div>
+          <div>
+            <dt>{labels.sessionId}</dt>
+            <dd title={view.context.sessionId}><code>{view.context.sessionId}</code></dd>
+          </div>
+          <div>
+            <dt>{labels.createdAt}</dt>
+            <dd title={view.context.createdAt ?? labels.unavailable}>
+              {view.context.createdAt
+                ? compactTimestamp(view.context.createdAt)
+                : labels.unavailable}
+            </dd>
+          </div>
+          <div>
+            <dt>{labels.updatedAt}</dt>
+            <dd title={view.context.updatedAt ?? labels.unavailable}>{view.context.updatedAt ? compactTimestamp(view.context.updatedAt) : labels.unavailable}</dd>
+          </div>
+        </dl>
+      </section>
+
+      {#if view.runs.length === 0}
         <EmptyState title={labels.noRunsTitle} body={labels.noRunsBody} icon="activity" compact />
       {:else}
-        {#if view.runs.length > 0}
-          <section class="inspector-section" aria-labelledby={headingId("runs")}>
-            <h2 id={headingId("runs")}>{labels.runsHeading}</h2>
-            <div class="card-list">
-              {#each view.runs as run (run.id)}
-                <article class="inspector-card">
-                  <header class="card-header">
-                    <div class="card-title">
-                      <Icon name="play" size={16} />
-                      <div>
-                        <h3>{run.title}</h3>
-                        <p>{run.runtimeName ?? run.kind}</p>
-                      </div>
+        <section class="inspector-section" aria-labelledby={headingId("runs")}>
+          <h2 id={headingId("runs")}>{labels.runsHeading}</h2>
+          <div class="card-list">
+            {#each view.runs as run (run.id)}
+              <article class="inspector-card">
+                <header class="card-header">
+                  <div class="card-title">
+                    <Icon name="play" size={16} />
+                    <div>
+                      <h3>{run.title}</h3>
+                      <p>{run.runtimeName ?? run.kind}</p>
                     </div>
-                    <span class={`status-pill ${statusClass(run.status)}`}>
-                      {statusLabel(run.status)}
-                    </span>
-                  </header>
-                  {#if run.summary}
-                    <p class="card-summary">{run.summary}</p>
-                  {/if}
-                  {#if run.progress !== null}
-                    <div class="progress-row">
-                      <progress
-                        max="1"
-                        value={progressValue(run.progress)}
-                        aria-label={labels.progress}
-                      ></progress>
-                      <span>{Math.round(progressValue(run.progress) * 100)}%</span>
-                    </div>
-                  {/if}
-                  {#if run.latestOutput}
-                    <details class="output-details">
-                      <summary>{labels.latestOutput}</summary>
-                      <pre>{run.latestOutput}</pre>
-                    </details>
-                  {/if}
-                </article>
-              {/each}
-            </div>
-          </section>
-        {/if}
-
-        {#if view.tasks.length > 0}
-          <section class="inspector-section" aria-labelledby={headingId("tasks")}>
-            <h2 id={headingId("tasks")}>{labels.tasksHeading}</h2>
-            <div class="card-list">
-              {#each view.tasks as task (task.id)}
-                <article class="inspector-card">
-                  <header class="card-header">
-                    <div class="card-title">
-                      <Icon name="check" size={16} />
-                      <div>
-                        <h3>{task.title}</h3>
-                        {#if task.owner}
-                          <p>{task.owner}</p>
-                        {/if}
-                      </div>
-                    </div>
-                    <span class={`status-pill ${statusClass(task.status)}`}>
-                      {statusLabel(task.status)}
-                    </span>
-                  </header>
-                  {#if task.description}
-                    <p class="card-summary">{task.description}</p>
-                  {/if}
-                  {#if task.todoTotal > 0}
-                    <div class="progress-row">
-                      <progress
-                        max={task.todoTotal}
-                        value={task.todoDone}
-                        aria-label={labels.progress}
-                      ></progress>
-                      <span>{task.todoDone}/{task.todoTotal}</span>
-                    </div>
-                  {/if}
-                </article>
-              {/each}
-            </div>
-          </section>
-        {/if}
+                  </div>
+                  <span class={`status-pill ${statusClass(run.status)}`}>
+                    {statusLabel(run.status)}
+                  </span>
+                </header>
+                {#if run.summary}
+                  <p class="card-summary">{run.summary}</p>
+                {/if}
+                {#if run.progress !== null}
+                  <div class="progress-row">
+                    <progress
+                      max="1"
+                      value={progressValue(run.progress)}
+                      aria-label={labels.progress}
+                    ></progress>
+                    <span>{Math.round(progressValue(run.progress) * 100)}%</span>
+                  </div>
+                {/if}
+                {#if run.latestOutput}
+                  <details class="output-details">
+                    <summary>{labels.latestOutput}</summary>
+                    <pre>{run.latestOutput}</pre>
+                  </details>
+                {/if}
+              </article>
+            {/each}
+          </div>
+        </section>
       {/if}
     {:else if activeTab === "changes"}
       {#if view.changes.length === 0}
@@ -234,34 +243,57 @@
           </div>
         </section>
       {/if}
-    {:else if activeTab === "evidence"}
-      {#if view.evidence.length === 0}
-        <EmptyState title={labels.noEvidenceTitle} body={labels.noEvidenceBody} icon="artifacts" compact />
+    {:else if activeTab === "tasks"}
+      {#if view.tasks.length === 0}
+        <EmptyState title={labels.noTasksTitle} body={labels.noTasksBody} icon="folder" compact />
       {:else}
-        <section class="inspector-section" aria-labelledby={headingId("evidence")}>
-          <h2 id={headingId("evidence")}>{labels.evidenceHeading}</h2>
-          <div class="card-list">
-            {#each view.evidence as artifact (artifact.id)}
-              <article class="inspector-card artifact-card">
-                <header class="card-header">
-                  <div class="card-title">
-                    <Icon name="artifacts" size={16} />
-                    <div>
-                      <h3>{artifact.title}</h3>
-                      <p>{artifact.kind} · {artifact.format}</p>
-                      <code class="artifact-ref">{artifact.ref}</code>
-                    </div>
-                  </div>
-                  {#if artifact.status}
-                    <span class={`status-pill ${statusClass(artifact.status)}`}>
-                      {statusLabel(artifact.status)}
-                    </span>
+        <section class="inspector-section" aria-labelledby={headingId("tasks")}>
+          <h2 id={headingId("tasks")}>{labels.tasksHeading}</h2>
+          <div class="project-list">
+            {#each taskGroups as group (group.projectRef ?? "unassigned")}
+              <section class="project-group">
+                <header class="project-header">
+                  <Icon name="folder" size={15} />
+                  {#if group.projectRef}
+                    <code>{group.projectRef}</code>
+                  {:else}
+                    <span>{labels.unassignedProject}</span>
                   {/if}
                 </header>
-                {#if artifact.preview}
-                  <pre class="artifact-preview">{artifact.preview}</pre>
-                {/if}
-              </article>
+                <div class="card-list">
+                  {#each group.tasks as task (task.id)}
+                    <article class="inspector-card">
+                      <header class="card-header">
+                        <div class="card-title">
+                          <Icon name="check" size={16} />
+                          <div>
+                            <h3>{task.title}</h3>
+                            {#if task.owner}
+                              <p>{task.owner}</p>
+                            {/if}
+                          </div>
+                        </div>
+                        <span class={`status-pill ${statusClass(task.status)}`}>
+                          {statusLabel(task.status)}
+                        </span>
+                      </header>
+                      {#if task.description}
+                        <p class="card-summary">{task.description}</p>
+                      {/if}
+                      {#if task.todoTotal > 0}
+                        <div class="progress-row">
+                          <progress
+                            max={task.todoTotal}
+                            value={task.todoDone}
+                            aria-label={labels.progress}
+                          ></progress>
+                          <span>{task.todoDone}/{task.todoTotal}</span>
+                        </div>
+                      {/if}
+                    </article>
+                  {/each}
+                </div>
+              </section>
             {/each}
           </div>
         </section>
@@ -300,40 +332,6 @@
           </div>
         </section>
       {/if}
-    {:else}
-      <section class="inspector-section" aria-labelledby={headingId("context")}>
-        <h2 id={headingId("context")}>{labels.contextHeading}</h2>
-        <dl class="context-list">
-          <div>
-            <dt>{labels.sessionId}</dt>
-            <dd title={view.context.sessionId}><code>{view.context.sessionId}</code></dd>
-          </div>
-          <div>
-            <dt>{labels.sessionStatus}</dt>
-            <dd>
-              <span class={`status-pill ${statusClass(view.context.status)}`}>
-                {statusLabel(view.context.status)}
-              </span>
-            </dd>
-          </div>
-          <div>
-            <dt>{labels.workingDirectory}</dt>
-            <dd title={view.context.cwd ?? labels.unavailable}><code>{view.context.cwd ?? labels.unavailable}</code></dd>
-          </div>
-          <div>
-            <dt>{labels.model}</dt>
-            <dd title={view.context.model?.displayLabel ?? labels.unavailable}>{view.context.model?.displayLabel ?? labels.unavailable}</dd>
-          </div>
-          <div>
-            <dt>{labels.createdAt}</dt>
-            <dd title={view.context.createdAt ?? labels.unavailable}>{view.context.createdAt ? compactTimestamp(view.context.createdAt) : labels.unavailable}</dd>
-          </div>
-          <div>
-            <dt>{labels.updatedAt}</dt>
-            <dd title={view.context.updatedAt ?? labels.unavailable}>{view.context.updatedAt ? compactTimestamp(view.context.updatedAt) : labels.unavailable}</dd>
-          </div>
-        </dl>
-      </section>
     {/if}
   </div>
 </section>
@@ -371,6 +369,7 @@
     font-size: var(--text-caption);
     font-weight: var(--weight-caption-medium);
     gap: var(--spacing-xs);
+    justify-content: center;
     min-height: 42px;
     min-width: 0;
     padding: 0 3px;
@@ -422,6 +421,33 @@
   .card-list {
     display: grid;
     gap: var(--spacing-sm);
+  }
+
+  .project-list,
+  .project-group {
+    display: grid;
+    gap: var(--spacing-md);
+  }
+
+  .project-group + .project-group {
+    border-top: 1px solid var(--color-border-soft);
+    padding-top: var(--spacing-md);
+  }
+
+  .project-header {
+    align-items: center;
+    color: var(--color-ink-subtle);
+    display: flex;
+    gap: var(--spacing-xs);
+    min-width: 0;
+  }
+
+  .project-header code,
+  .project-header span {
+    font-size: var(--text-caption);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .inspector-card {

@@ -96,7 +96,7 @@
     min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
-    padding: 8px max(0px, calc((100% - 800px) / 2)) 20px;
+    padding: 8px max(var(--spacing-sm), calc((100% - 800px) / 2)) 20px;
     scrollbar-gutter: stable;
   }
 
@@ -152,7 +152,7 @@
 
   @media (max-width: 960px) {
     .conversation-scroll {
-      padding-inline: 0;
+      padding-inline: var(--spacing-sm);
     }
   }
 

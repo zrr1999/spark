@@ -9,6 +9,10 @@
   import TaskRunPart from "./TaskRunPart.svelte";
   import ThinkingChainPart from "./ThinkingChainPart.svelte";
   import ToolCallPart from "./ToolCallPart.svelte";
+  import {
+    visibleConversationParts,
+    visibleConversationPartText,
+  } from "./conversation-view";
   import type { ConversationMessageView, ConversationPartLabels } from "./types";
 
   type Props = {
@@ -17,6 +21,7 @@
     assistantLabel: string;
     copyLabel: string;
     copiedLabel: string;
+    active?: boolean;
     partLabels: ConversationPartLabels;
     relativeTime: (value: string) => string;
     statusLabel: (status: string) => string;
@@ -28,6 +33,7 @@
     assistantLabel,
     copyLabel,
     copiedLabel,
+    active = false,
     partLabels,
     relativeTime,
     statusLabel,
@@ -36,104 +42,109 @@
   let actorLabel = $derived(
     item.actor === "user" ? (item.senderLabel ?? userLabel) : assistantLabel,
   );
-  let hasCopyableText = $derived(item.parts.some((part) => part.type === "text"));
+  let visibleParts = $derived(visibleConversationParts(item.parts));
+  let copyableText = $derived(visibleConversationPartText(item.parts));
+  let hasCopyableText = $derived(copyableText.length > 0);
 </script>
 
-<article class="conversation-message {item.actor}" data-message-id={item.id}>
-  <span class="actor-mark" aria-hidden="true">
-    {#if item.actor === "spark"}
-      <Icon name="spark" size={16} />
-    {:else}
-      {actorLabel.slice(0, 1)}
-    {/if}
-  </span>
-  <div class="message-column">
-    <header class="message-meta">
-      <strong>{actorLabel}</strong>
-      <time datetime={item.timestamp}>{relativeTime(item.timestamp)}</time>
-      {#if item.status}
-        <span class="message-status {item.status}">{statusLabel(item.status)}</span>
+{#if visibleParts.length > 0}
+  <article class="conversation-message {item.actor}" data-message-id={item.id}>
+    <span class="actor-mark" aria-hidden="true">
+      {#if item.actor === "spark"}
+        <Icon name="spark" size={16} />
+      {:else}
+        {actorLabel.slice(0, 1)}
       {/if}
-    </header>
-
-    <div class="message-content">
-      {#if item.title && item.title !== item.body}<h2>{item.title}</h2>{/if}
-      {#each item.parts as part, partIndex (`${item.id}:${part.type}:${partIndex}`)}
-        {#if part.type === "text"}
-          {#if item.actor === "spark"}
-            <div class="assistant-content">
-              <AgentMdxStream source={part.text} streaming={part.streaming} />
-            </div>
-          {:else}
-            <p class="user-content">{part.text}</p>
-          {/if}
-        {:else if part.type === "reasoning"}
-          <ReasoningPart
-            summary={part.summary}
-            state={part.state}
-            redacted={part.redacted}
-            labels={partLabels}
-          />
-        {:else if part.type === "commentary"}
-          <ReasoningPart summary={part.summary} state={part.state} labels={partLabels} />
-        {:else if part.type === "chain"}
-          <ThinkingChainPart
-            state={part.state}
-            steps={part.steps}
-            labels={partLabels}
-            {statusLabel}
-          />
-        {:else if part.type === "tool"}
-          <ToolCallPart
-            callId={part.callId}
-            name={part.name}
-            state={part.state}
-            summary={part.summary}
-            labels={partLabels}
-            {statusLabel}
-          />
-        {:else if part.type === "task"}
-          <TaskRunPart
-            taskRef={part.taskRef}
-            title={part.title}
-            state={part.state}
-            summary={part.summary}
-            labels={partLabels}
-            {statusLabel}
-          />
-        {:else if part.type === "approval"}
-          <ApprovalPart
-            requestId={part.requestId}
-            title={part.title}
-            state={part.state}
-            kind={part.kind}
-            summary={part.summary}
-            labels={partLabels}
-            {statusLabel}
-          />
-        {:else if part.type === "artifact"}
-          <ArtifactPart
-            artifactRef={part.artifactRef}
-            title={part.title}
-            kind={part.kind}
-            state={part.state}
-            summary={part.summary}
-            {statusLabel}
-          />
-        {:else if part.type === "error"}
-          <ErrorPart title={part.title} message={part.message} code={part.code} />
-        {:else}
-          <p class="unknown-part">{partLabels.unknown}: {part.label}</p>
+    </span>
+    <div class="message-column">
+      <header class="message-meta">
+        <strong>{actorLabel}</strong>
+        <time datetime={item.timestamp}>{relativeTime(item.timestamp)}</time>
+        {#if item.status}
+          <span class="message-status {item.status}">{statusLabel(item.status)}</span>
         {/if}
-      {/each}
-      {#if item.meta}<small>{item.meta}</small>{/if}
-    </div>
+      </header>
 
-    {#if hasCopyableText}
-      <MessageActions text={item.body} {copyLabel} {copiedLabel} />
-    {/if}
-  </div>
-</article>
+      <div class="message-content">
+        {#if item.title && item.title !== item.body}<h2>{item.title}</h2>{/if}
+        {#each visibleParts as part, partIndex (`${item.id}:${part.type}:${partIndex}`)}
+          {#if part.type === "text"}
+            {#if item.actor === "spark"}
+              <div class="assistant-content">
+                <AgentMdxStream source={part.text} streaming={part.streaming} />
+              </div>
+            {:else}
+              <p class="user-content">{part.text}</p>
+            {/if}
+          {:else if part.type === "reasoning"}
+            <ReasoningPart
+              summary={part.summary}
+              state={part.state}
+              redacted={part.redacted}
+              labels={partLabels}
+            />
+          {:else if part.type === "commentary"}
+            <ReasoningPart summary={part.summary} state={part.state} labels={partLabels} />
+          {:else if part.type === "chain"}
+            <ThinkingChainPart
+              state={part.state}
+              steps={part.steps}
+              labels={partLabels}
+              {statusLabel}
+              {active}
+            />
+          {:else if part.type === "tool"}
+            <ToolCallPart
+              callId={part.callId}
+              name={part.name}
+              state={part.state}
+              summary={part.summary}
+              labels={partLabels}
+              {statusLabel}
+            />
+          {:else if part.type === "task"}
+            <TaskRunPart
+              taskRef={part.taskRef}
+              title={part.title}
+              state={part.state}
+              summary={part.summary}
+              labels={partLabels}
+              {statusLabel}
+            />
+          {:else if part.type === "approval"}
+            <ApprovalPart
+              requestId={part.requestId}
+              title={part.title}
+              state={part.state}
+              kind={part.kind}
+              summary={part.summary}
+              labels={partLabels}
+              {statusLabel}
+            />
+          {:else if part.type === "artifact"}
+            <ArtifactPart
+              artifactRef={part.artifactRef}
+              title={part.title}
+              kind={part.kind}
+              state={part.state}
+              summary={part.summary}
+              {statusLabel}
+            />
+          {:else if part.type === "error"}
+            <ErrorPart title={part.title} message={part.message} code={part.code} />
+          {:else}
+            <p class="unknown-part">{partLabels.unknown}: {part.label}</p>
+          {/if}
+        {/each}
+        {#if item.meta}<small>{item.meta}</small>{/if}
+      </div>
+
+      {#if hasCopyableText}
+        <MessageActions text={copyableText} {copyLabel} {copiedLabel} />
+      {/if}
+    </div>
+  </article>
+{/if}
 
 <style>
   .conversation-message {

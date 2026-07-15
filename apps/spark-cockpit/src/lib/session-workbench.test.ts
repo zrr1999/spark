@@ -40,6 +40,7 @@ describe("session workbench projection", () => {
         tasks: [
           {
             ref: "task:build",
+            projectRef: "project:cockpit",
             title: "Build the inspector",
             status: "claimed",
             owner: "worker",
@@ -101,7 +102,13 @@ describe("session workbench projection", () => {
       runtimeName: "spark-daemon",
     });
     expect(view.tasks).toMatchObject([
-      { id: "task:build", source: "session", todoDone: 1, todoTotal: 2 },
+      {
+        id: "task:build",
+        projectRef: "project:cockpit",
+        source: "session",
+        todoDone: 1,
+        todoTotal: 2,
+      },
     ]);
     expect(view.evidence).toMatchObject([
       { id: "report-1", title: "Inspector report", canonicalChange: false },
@@ -255,6 +262,7 @@ describe("session workbench projection", () => {
     expect(view.tasks).toMatchObject([
       {
         id: "task:reload-safe",
+        projectRef: null,
         source: "activity",
         title: "Reload-safe task",
         status: "claimed",

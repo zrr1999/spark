@@ -68,14 +68,16 @@ describe("runtime protocol fixtures", () => {
   });
 
   it("allows an installation-scoped runtime token to register another workspace", () => {
-    expect(
-      runtimeWorkspaceRegistrationRequestSchema.parse({
-        workspaceRegistration: {
-          localWorkspaceKey: "spore",
-          displayName: "Spore",
-        },
-      }).registrationToken,
-    ).toBeUndefined();
+    const parsed = runtimeWorkspaceRegistrationRequestSchema.parse({
+      workspaceRegistration: {
+        localWorkspaceKey: "spore",
+        localPath: "/Users/test/workspaces/spore",
+        displayName: "Spore",
+      },
+    });
+
+    expect(parsed.registrationToken).toBeUndefined();
+    expect(parsed.workspaceRegistration.localPath).toBe("/Users/test/workspaces/spore");
   });
 
   it("validates runtime hello fixture", () => {
@@ -84,6 +86,7 @@ describe("runtime protocol fixtures", () => {
     expect(parsed.payload.supportedFeatures).toContain("workspace-clients-v1");
     expect(parsed.payload.supportedFeatures).toContain("executor-client-v1");
     expect(parsed.payload.workspaceBindings[0]?.borrowed?.borrowed).toBe(true);
+    expect(parsed.payload.workspaceBindings[0]?.localPath).toBe("/Users/test/workspaces/local-dev");
     expect(parsed.payload.workspaceBindings[0]?.executor?.state).toBe("online");
   });
 
@@ -91,6 +94,9 @@ describe("runtime protocol fixtures", () => {
     const parsed = runtimeHeartbeatEnvelopeSchema.parse(heartbeat);
     expect(parsed.payload.sequence).toBe(1);
     expect(parsed.payload.workspaceBindings?.[0]?.connection?.status).toBe("connected");
+    expect(parsed.payload.workspaceBindings?.[0]?.localPath).toBe(
+      "/Users/test/workspaces/local-dev",
+    );
     expect(parsed.payload.workspaceBindings?.[0]?.workspaceClients?.[0]?.kind).toBe("interactive");
   });
 

@@ -384,6 +384,7 @@ describe("Spark daemon workspace registration", () => {
         displayName: "spore",
         status: "indexing",
       },
+      localPath: "/Users/test/workspaces/spore",
       timeoutMs: 1_000,
       createWebSocket,
     });
@@ -399,6 +400,7 @@ describe("Spark daemon workspace registration", () => {
           {
             bindingId: "rtwb_33333333333341113333333333333333",
             localWorkspaceKey: "spore",
+            localPath: "/Users/test/workspaces/spore",
             displayName: "spore",
             status: "indexing",
           },

@@ -1043,6 +1043,7 @@ export async function handleLocalRpcLine(
           ...(request.params.allowInsecureHttp ? { allowInsecureHttp: true } : {}),
           workspaceRegistration: {
             localWorkspaceKey: planned.localWorkspaceKey,
+            localPath: planned.localPath,
             displayName: planned.displayName,
             workspaceName: planned.workspaceName,
             workspaceSlug: planned.workspaceSlug,
@@ -1057,6 +1058,7 @@ export async function handleLocalRpcLine(
         await verifyWorkspaceConnection({
           config: serviceRegistration.config,
           workspaceBinding: serviceRegistration.workspaceBinding,
+          localPath: planned.localPath,
         });
         return {
           id: request.id,

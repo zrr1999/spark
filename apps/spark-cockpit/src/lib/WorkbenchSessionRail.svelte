@@ -1,5 +1,10 @@
 <script lang="ts">
   import Icon from "$lib/Icon.svelte";
+  import ChannelSessionIcon from "$lib/ChannelSessionIcon.svelte";
+  import {
+    channelSessionPresentation,
+    sessionHasChannelBinding,
+  } from "$lib/channel-session-title";
   import { visibleConversationActivityStatus } from "$lib/conversation-status";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
   import { orderWorkbenchSessionsByAttention } from "$lib/workbench-session-order";
@@ -8,7 +13,6 @@
     isSessionVisibleInWorkbenchRail,
     workbenchSessionScope,
   } from "$lib/workbench-session-scope";
-  import { formatChannelSessionTitle, sessionHasChannelBinding } from "$lib/channel-session-title";
 
   type SessionRecord = {
     sessionId: string;
@@ -72,9 +76,12 @@
       const query = filter.trim().toLowerCase();
       if (!query) return true;
       const scopeLabel = sessionScopeLabel(session).toLowerCase();
+      const presentation = sessionPresentation(session);
       return (
         session.sessionId.toLowerCase().includes(query) ||
         (session.title ?? "").toLowerCase().includes(query) ||
+        presentation.title.toLowerCase().includes(query) ||
+        (presentation.channel?.label.toLowerCase().includes(query) ?? false) ||
         scopeLabel.includes(query)
       );
     }),
@@ -147,11 +154,15 @@
     return visibleConversationActivityStatus(activityStatus(session));
   }
 
-  function sessionTitle(session: SessionRecord) {
-    return formatChannelSessionTitle(session.title, {
+  function sessionPresentation(session: SessionRecord) {
+    return channelSessionPresentation(session, {
       locale,
       fallback: messages.untitledConversation,
     });
+  }
+
+  function sessionTitle(session: SessionRecord) {
+    return sessionPresentation(session).title;
   }
 </script>
 
@@ -215,6 +226,7 @@
           {#each group.sessions as session}
             {@const displayedStatus = displayedActivityStatus(session)}
             {@const isSelected = session.sessionId === selectedSessionId}
+            {@const presentation = sessionPresentation(session)}
             {@const canArchive = isSelected && session.status !== "archived" && !sessionHasChannelBinding(session)}
             <div class="session-item-row">
               <a
@@ -225,10 +237,14 @@
                 href={`/sessions/${session.sessionId}`}
               >
                 <span class="session-title-row">
-                  <strong>{sessionTitle(session)}</strong>
-                  {#if sessionHasChannelBinding(session)}
-                    <span class="channel-badge">{messages.channelSessionBadge}</span>
+                  {#if presentation.channel}
+                    <ChannelSessionIcon
+                      adapter={presentation.channel.adapter}
+                      scope={presentation.channel.scope}
+                      label={presentation.channel.label}
+                    />
                   {/if}
+                  <strong>{presentation.title}</strong>
                   {#if displayedStatus}
                     <span
                       class="session-status {displayedStatus}"
@@ -522,18 +538,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .channel-badge {
-    background: color-mix(in srgb, var(--color-primary, #2563eb) 12%, transparent);
-    border-radius: 999px;
-    color: var(--color-primary, #2563eb);
-    flex-shrink: 0;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    line-height: 1;
-    padding: 4px 6px;
   }
 
   .session-status {

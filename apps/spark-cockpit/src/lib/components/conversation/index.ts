@@ -14,6 +14,8 @@ export {
   groupThinkingChainParts,
   preferToolSummary,
   textConversationPart,
+  visibleConversationParts,
+  visibleConversationPartText,
 } from "./conversation-view";
 export type {
   ConversationApprovalState,

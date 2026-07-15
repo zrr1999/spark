@@ -192,6 +192,7 @@ describe("runtime registration", () => {
         ...registrationRequest,
         workspaceRegistration: {
           localWorkspaceKey: "local-default",
+          localPath: "/Users/test/workspaces/local-default",
           displayName: "Local default",
         },
       },
@@ -217,6 +218,7 @@ describe("runtime registration", () => {
         `SELECT id,
                 runtime_id AS runtimeId,
                 local_workspace_key AS localWorkspaceKey,
+                local_path AS localPath,
                 display_name AS displayName,
                 status
          FROM runtime_workspace_bindings
@@ -226,9 +228,11 @@ describe("runtime registration", () => {
       id: string;
       runtimeId: string;
       localWorkspaceKey: string;
+      localPath: string | null;
       displayName: string;
       status: string;
     };
+    expect(binding.localPath).toBe("/Users/test/workspaces/local-default");
     const owner = db
       .prepare(
         `SELECT workspace_id AS workspaceId,

@@ -1066,6 +1066,7 @@ function workspaceSummary(
   return {
     bindingId: workspace.id,
     localWorkspaceKey: workspace.localWorkspaceKey,
+    localPath: workspace.localPath,
     displayName: workspace.displayName,
     status: workspace.status,
     capabilities: workspace.capabilities,

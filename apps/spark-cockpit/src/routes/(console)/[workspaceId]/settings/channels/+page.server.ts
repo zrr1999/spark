@@ -1,13 +1,11 @@
-import { fail, error as kitError, redirect } from "@sveltejs/kit";
-import { createChannelExternalKey } from "@zendev-lab/spark-channels";
+import { error as kitError, fail } from "@sveltejs/kit";
 import { loadWorkspaceSettings } from "@zendev-lab/spark-server/cockpit-queries";
 import {
-  defaultCreateChannelScope,
-  isValidCreateChannelScope,
-  workspaceChannelListFromSessions,
-  type CreateChannelAdapter,
-  type CreateChannelFormValues,
-} from "$lib/create-channel";
+  isMessagePlatformAdapter,
+  workspaceMessagePlatformConnections,
+  type MessagePlatformAdapter,
+  type MessagePlatformFormValues,
+} from "$lib/message-platform";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import { formText } from "$lib/server/form-data";
 import {
@@ -16,34 +14,24 @@ import {
   DEFAULT_INFOFLOW_ENDPOINT,
   loadChannelStatusForCockpit,
   loadChannelsConfigForCockpit,
-  mergeAdapterCredentialsForCreate,
+  mergeMessagePlatformCredentials,
   saveChannelsConfigForCockpit,
-  type CreateChannelCredentialPatch,
   type CockpitChannelEditorValues,
+  type MessagePlatformCredentialPatch,
 } from "$lib/server/channel-status";
-import {
-  archiveManagedSessionForCockpit,
-  bindManagedSessionForCockpit,
-  createManagedSessionForCockpit,
-  listManagedSessionsForCockpit,
-} from "$lib/server/managed-sessions";
 import { getDatabase } from "$lib/server/db";
 import { workspacePath } from "$lib/workspace-routes";
 import type { Actions, PageServerLoad } from "./$types";
 
-export type { CreateChannelFormValues } from "$lib/create-channel";
+export type { MessagePlatformFormValues } from "$lib/message-platform";
 
 export const load: PageServerLoad = async ({ params }) => {
   const workspace = loadWorkspaceSettings(getDatabase(), params.workspaceId);
   if (!workspace) throw kitError(404, "Workspace not found.");
 
-  const [channelStatus, loaded, sessionList] = await Promise.all([
+  const [channelStatus, loaded] = await Promise.all([
     loadChannelStatusForCockpit(workspace.id),
     loadChannelsConfigForCockpit(workspace.id),
-    listManagedSessionsForCockpit({
-      scope: { kind: "workspace", workspaceId: workspace.id },
-      workspaceId: workspace.id,
-    }),
   ]);
   const editor = channelEditorValuesFromConfig(loaded.config);
   return {
@@ -51,18 +39,16 @@ export const load: PageServerLoad = async ({ params }) => {
     settingsPath: workspacePath(workspace, "/settings"),
     channelStatus,
     editor,
-    channels: workspaceChannelListFromSessions(sessionList.sessions),
-    sessionsAvailable: sessionList.available,
+    platforms: workspaceMessagePlatformConnections(editor, channelStatus.adapters),
     defaults: {
       infoflowEndpoint: DEFAULT_INFOFLOW_ENDPOINT,
-      adapter: defaultCreateAdapter(editor),
-      scope: defaultCreateChannelScope(defaultCreateAdapter(editor)),
+      adapter: defaultMessagePlatformAdapter(editor),
     },
   };
 };
 
 export const actions: Actions = {
-  createChannel: async ({ cookies, request, params }) => {
+  savePlatform: async ({ cookies, request, params }) => {
     const workspace = loadWorkspaceSettings(getDatabase(), params.workspaceId);
     if (!workspace) throw kitError(404, "Workspace not found.");
 
@@ -71,125 +57,39 @@ export const actions: Actions = {
       acceptLanguage: request.headers.get("accept-language"),
     }).channelsSettings;
     const formData = await request.formData();
-    const values = readCreateChannelForm(formData);
+    const values = readMessagePlatformForm(formData);
     const loaded = await loadChannelsConfigForCockpit(workspace.id);
     const previous = channelEditorValuesFromConfig(loaded.config);
 
-    if (!isValidCreateChannelScope(values.adapter, values.scope)) {
-      return fail(400, {
-        intent: "createChannel",
-        message: t.createInvalidScope,
-        values,
-      });
-    }
-
-    if (!values.externalId.trim()) {
-      return fail(400, {
-        intent: "createChannel",
-        message: t.createExternalIdRequired,
-        values,
-      });
-    }
-
-    let externalKey: string;
-    try {
-      externalKey = createChannelExternalKey(values.adapter, values.scope, values.externalId);
-    } catch (error) {
-      return fail(400, {
-        intent: "createChannel",
-        message: error instanceof Error ? error.message : t.createFailed,
-        values,
-      });
-    }
-
-    const credentialError = await saveAdapterCredentials(workspace.id, values, previous, t);
+    const credentialError = await saveMessagePlatformCredentials(workspace.id, values, previous, t);
     if (credentialError) {
       return fail(credentialError.status, {
-        intent: "createChannel",
-        message: credentialError.message,
-        values,
-      });
-    }
-
-    const title = values.title.trim() || `channel ${externalKey}`;
-    let session;
-    try {
-      session = await createManagedSessionForCockpit({
-        scope: { kind: "workspace", workspaceId: workspace.id },
-        workspaceId: workspace.id,
-        title,
-      });
-    } catch (error) {
-      return fail(500, {
-        intent: "createChannel",
-        message: error instanceof Error ? error.message : t.createFailed,
-        values,
-      });
-    }
-
-    try {
-      await bindManagedSessionForCockpit({
-        sessionId: session.sessionId,
-        externalKey,
-      });
-    } catch (error) {
-      try {
-        await archiveManagedSessionForCockpit(session.sessionId);
-      } catch {
-        // best-effort cleanup when bind fails after create
-      }
-      return fail(500, {
-        intent: "createChannel",
-        message: error instanceof Error ? error.message : t.createFailed,
-        values,
-      });
-    }
-
-    throw redirect(303, `/sessions/${session.sessionId}`);
-  },
-
-  saveCredentials: async ({ cookies, request, params }) => {
-    const workspace = loadWorkspaceSettings(getDatabase(), params.workspaceId);
-    if (!workspace) throw kitError(404, "Workspace not found.");
-
-    const t = getRequestDictionary({
-      cookieLocale: cookies.get(localeCookieName),
-      acceptLanguage: request.headers.get("accept-language"),
-    }).channelsSettings;
-    const formData = await request.formData();
-    const values = readCreateChannelForm(formData);
-    const loaded = await loadChannelsConfigForCockpit(workspace.id);
-    const previous = channelEditorValuesFromConfig(loaded.config);
-
-    const credentialError = await saveAdapterCredentials(workspace.id, values, previous, t);
-    if (credentialError) {
-      return fail(credentialError.status, {
-        intent: "saveCredentials",
+        intent: "savePlatform",
         message: credentialError.message,
         values,
       });
     }
 
     return {
-      intent: "saveCredentials",
-      message: t.saveCredentialsSuccess,
+      intent: "savePlatform",
+      message: t.savePlatformSuccess,
       values,
     };
   },
 };
 
-async function saveAdapterCredentials(
+async function saveMessagePlatformCredentials(
   workspaceId: string,
-  values: CreateChannelFormValues,
+  values: MessagePlatformFormValues,
   previous: CockpitChannelEditorValues,
   t: {
     saveFeishuRequired: string;
     saveInfoflowRequired: string;
     saveQqbotRequired: string;
-    saveCredentialsFailed: string;
+    savePlatformFailed: string;
   },
 ): Promise<{ status: number; message: string } | null> {
-  const merged = mergeAdapterCredentialsForCreate(previous, credentialPatchFromForm(values));
+  const merged = mergeMessagePlatformCredentials(previous, credentialPatchFromForm(values));
   if (values.adapter === "infoflow" && !merged.infoflowEndpoint.trim()) {
     merged.infoflowEndpoint = DEFAULT_INFOFLOW_ENDPOINT;
   }
@@ -212,25 +112,21 @@ async function saveAdapterCredentials(
   } catch (error) {
     return {
       status: 500,
-      message: error instanceof Error ? error.message : t.saveCredentialsFailed,
+      message: error instanceof Error ? error.message : t.savePlatformFailed,
     };
   }
 }
 
-function defaultCreateAdapter(editor: CockpitChannelEditorValues): CreateChannelAdapter {
-  if (editor.infoflowEnabled) return "infoflow";
-  if (editor.qqbotEnabled) return "qqbot";
-  if (editor.feishuEnabled) return "feishu";
+function defaultMessagePlatformAdapter(editor: CockpitChannelEditorValues): MessagePlatformAdapter {
+  if (!editor.infoflowEnabled) return "infoflow";
+  if (!editor.qqbotEnabled) return "qqbot";
+  if (!editor.feishuEnabled) return "feishu";
   return "infoflow";
 }
 
-function readCreateChannelForm(formData: FormData): CreateChannelFormValues {
-  const adapter = parseAdapter(formText(formData, "adapter"));
+function readMessagePlatformForm(formData: FormData): MessagePlatformFormValues {
   return {
-    adapter,
-    scope: formText(formData, "scope").trim() || defaultCreateChannelScope(adapter),
-    externalId: formText(formData, "externalId"),
-    title: formText(formData, "title"),
+    adapter: parseAdapter(formText(formData, "adapter")),
     feishuAppId: formText(formData, "feishuAppId"),
     feishuAppSecret: formText(formData, "feishuAppSecret"),
     infoflowEndpoint: formText(formData, "infoflowEndpoint"),
@@ -243,7 +139,9 @@ function readCreateChannelForm(formData: FormData): CreateChannelFormValues {
   };
 }
 
-function credentialPatchFromForm(values: CreateChannelFormValues): CreateChannelCredentialPatch {
+function credentialPatchFromForm(
+  values: MessagePlatformFormValues,
+): MessagePlatformCredentialPatch {
   switch (values.adapter) {
     case "feishu":
       return {
@@ -268,12 +166,11 @@ function credentialPatchFromForm(values: CreateChannelFormValues): CreateChannel
       };
     default: {
       const _exhaustive: never = values.adapter;
-      throw new Error(`unsupported create-channel adapter: ${String(_exhaustive)}`);
+      throw new Error(`unsupported message platform adapter: ${String(_exhaustive)}`);
     }
   }
 }
 
-function parseAdapter(raw: string): CreateChannelAdapter {
-  if (raw === "feishu" || raw === "infoflow" || raw === "qqbot") return raw;
-  return "infoflow";
+function parseAdapter(raw: string): MessagePlatformAdapter {
+  return isMessagePlatformAdapter(raw) ? raw : "infoflow";
 }

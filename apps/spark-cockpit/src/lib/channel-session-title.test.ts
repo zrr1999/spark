@@ -1,9 +1,29 @@
 import { describe, expect, it } from "vitest";
 import {
+  channelSessionPresentation,
+  channelSessionScopeKind,
   formatChannelSessionTitle,
   sessionHasChannelBinding,
   shortenOpaqueChannelId,
 } from "./channel-session-title";
+
+describe("channelSessionScopeKind", () => {
+  it.each([
+    ["infoflow", "user", "private"],
+    ["qqbot", "c2c", "private"],
+    ["infoflow", "group", "group"],
+    ["qqbot", "group", "group"],
+    ["qqbot", "channel", "channel"],
+    ["feishu", "chat", "conversation"],
+  ] as const)("maps %s:%s to %s", (adapter, scope, expected) => {
+    expect(channelSessionScopeKind(adapter, scope)).toBe(expected);
+  });
+
+  it("keeps invalid adapter/scope combinations visually neutral", () => {
+    expect(channelSessionScopeKind("infoflow", "channel")).toBe("conversation");
+    expect(channelSessionScopeKind("feishu", "group")).toBe("conversation");
+  });
+});
 
 describe("formatChannelSessionTitle", () => {
   it("formats Infoflow titles like the session rail", () => {
@@ -44,6 +64,58 @@ describe("formatChannelSessionTitle", () => {
 
   it("returns the fallback for empty titles", () => {
     expect(formatChannelSessionTitle("", { fallback: "Untitled" })).toBe("Untitled");
+  });
+});
+
+describe("channelSessionPresentation", () => {
+  it("uses adapter and scope metadata for an icon while keeping only the compact id as title", () => {
+    expect(
+      channelSessionPresentation(
+        {
+          title: "channel qqbot:c2c:398418FB5E7F1C597DFFD117597D6500",
+          bindings: [
+            {
+              kind: "channel",
+              adapter: "qqbot",
+              externalKey: "qqbot:c2c:398418FB5E7F1C597DFFD117597D6500",
+            },
+          ],
+        },
+        { locale: "zh-CN", fallback: "未命名" },
+      ),
+    ).toEqual({
+      title: "398418FB…",
+      channel: {
+        adapter: "qqbot",
+        scope: "c2c",
+        externalId: "398418FB5E7F1C597DFFD117597D6500",
+        label: "QQ 私聊",
+      },
+    });
+  });
+
+  it("keeps custom channel titles and derives identity from the binding", () => {
+    expect(
+      channelSessionPresentation(
+        {
+          title: "运维飞书群",
+          bindings: [{ kind: "channel", adapter: "feishu", externalKey: "feishu:chat:oc_ops" }],
+        },
+        { locale: "zh-CN", fallback: "未命名" },
+      ),
+    ).toMatchObject({
+      title: "运维飞书群",
+      channel: { adapter: "feishu", scope: "chat", label: "飞书会话" },
+    });
+  });
+
+  it("leaves ordinary conversation titles unchanged", () => {
+    expect(
+      channelSessionPresentation(
+        { title: "修复登录问题", bindings: [] },
+        { locale: "zh-CN", fallback: "未命名" },
+      ),
+    ).toEqual({ title: "修复登录问题", channel: null });
   });
 });
 

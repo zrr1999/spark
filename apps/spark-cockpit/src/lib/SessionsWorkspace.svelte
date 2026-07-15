@@ -5,12 +5,18 @@
     Composer,
     ConversationViewport,
     Message as ConversationMessage,
+    visibleConversationPartText,
   } from "$lib/components/conversation";
   import type { ConversationPartLabels } from "$lib/components/conversation/types";
   import { ModelPicker, type ModelPickerGroup } from "$lib/components/model-selector";
   import ThinkingLevelSlider, {
     THINKING_LEVELS,
   } from "$lib/components/ThinkingLevelSlider.svelte";
+  import ChannelSessionIcon from "$lib/ChannelSessionIcon.svelte";
+  import {
+    channelSessionPresentation,
+    sessionHasChannelBinding,
+  } from "$lib/channel-session-title";
   import { visibleSessionStatus } from "$lib/conversation-status";
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
@@ -31,7 +37,6 @@
   } from "$lib/session-live-events";
   import { buildSessionTimeline } from "$lib/session-timeline";
   import { buildSessionWorkbenchView, type SessionInspectorLabels } from "$lib/session-workbench";
-  import { formatChannelSessionTitle, sessionHasChannelBinding } from "$lib/channel-session-title";
   import { Button } from "$lib/ui";
   import {
     workbenchSessionScope,
@@ -314,25 +319,24 @@
           reconnecting: "正在重连",
           offline: "离线",
           inspectorAria: "Coding agent 工作台",
-          runsTab: "运行",
+          summaryTab: "摘要",
           changesTab: "变更",
-          evidenceTab: "证据",
+          tasksTab: "项目与任务",
           mailboxTab: "邮箱",
-          contextTab: "上下文",
+          summaryHeading: "会话摘要",
           runsHeading: "运行",
-          tasksHeading: "内部任务",
+          tasksHeading: "项目与任务",
           changesHeading: "结构化变更",
-          evidenceHeading: "证据与产物",
           mailboxHeading: "会话邮箱",
-          contextHeading: "执行上下文",
           noRunsTitle: "尚无运行",
-          noRunsBody: "发送消息后，Spark 自动创建的运行和内部任务会出现在这里。",
+          noRunsBody: "发送消息后，Spark 自动创建的运行会显示在这里。",
+          noTasksTitle: "尚无项目或任务",
+          noTasksBody: "Spark 为当前会话创建的内部项目和任务会显示在这里。",
           noChangesTitle: "尚无结构化变更",
           noChangesBody: "当前 runtime 没有提供 canonical diff；这里不会从回复文本推断 Git 变更。",
-          noEvidenceTitle: "尚无证据",
-          noEvidenceBody: "运行生成报告、产物或验证结果后，会自动归集到这里。",
           noMailboxTitle: "邮箱为空",
           noMailboxBody: "其他会话发送给当前会话的请求和通知会出现在这里。",
+          unassignedProject: "未归属项目",
           latestOutput: "最近输出",
           progress: "进度",
           mailFrom: "来自",
@@ -416,26 +420,25 @@
           reconnecting: "Reconnecting",
           offline: "Offline",
           inspectorAria: "Coding agent workbench",
-          runsTab: "Runs",
+          summaryTab: "Summary",
           changesTab: "Changes",
-          evidenceTab: "Evidence",
+          tasksTab: "Project & tasks",
           mailboxTab: "Mailbox",
-          contextTab: "Context",
+          summaryHeading: "Session summary",
           runsHeading: "Runs",
-          tasksHeading: "Internal tasks",
+          tasksHeading: "Project & tasks",
           changesHeading: "Structured changes",
-          evidenceHeading: "Evidence and artifacts",
           mailboxHeading: "Session mailbox",
-          contextHeading: "Execution context",
           noRunsTitle: "No runs yet",
-          noRunsBody: "Runs and internal tasks created by Spark appear here after you send a message.",
+          noRunsBody: "Runs created by Spark appear here after you send a message.",
+          noTasksTitle: "No project or tasks yet",
+          noTasksBody: "Internal projects and tasks created by Spark for this conversation appear here.",
           noChangesTitle: "No structured changes yet",
           noChangesBody:
             "The runtime has not provided a canonical diff. This view never infers Git changes from prose.",
-          noEvidenceTitle: "No evidence yet",
-          noEvidenceBody: "Reports, artifacts, and verification results are collected here as runs produce them.",
           noMailboxTitle: "Mailbox is empty",
           noMailboxBody: "Requests and notifications sent to this conversation by other sessions appear here.",
+          unassignedProject: "Unassigned project",
           latestOutput: "Latest output",
           progress: "Progress",
           mailFrom: "From",
@@ -477,6 +480,14 @@
         sessionView?.updatedAt ?? selected?.updatedAt ?? new Date(0).toISOString(),
     }),
   );
+  let activeProcessItemId = $derived.by(() => {
+    if (!conversationBusy || !activeTurnId) return null;
+    return (
+      timelineItems.findLast(
+        (item) => item.actor === "spark" && item.parts.some((part) => part.type === "chain"),
+      )?.id ?? null
+    );
+  });
   let conversationPartLabels = $derived<ConversationPartLabels>({
     reasoning: copy.reasoning,
     reasoningStreaming: copy.reasoningStreaming,
@@ -492,26 +503,25 @@
   let inspectorLabels = $derived<SessionInspectorLabels>({
     ariaLabel: copy.inspectorAria,
     tabs: {
-      runs: copy.runsTab,
+      summary: copy.summaryTab,
       changes: copy.changesTab,
-      evidence: copy.evidenceTab,
+      tasks: copy.tasksTab,
       mailbox: copy.mailboxTab,
-      context: copy.contextTab,
     },
+    summaryHeading: copy.summaryHeading,
     runsHeading: copy.runsHeading,
     tasksHeading: copy.tasksHeading,
     changesHeading: copy.changesHeading,
-    evidenceHeading: copy.evidenceHeading,
     mailboxHeading: copy.mailboxHeading,
-    contextHeading: copy.contextHeading,
     noRunsTitle: copy.noRunsTitle,
     noRunsBody: copy.noRunsBody,
+    noTasksTitle: copy.noTasksTitle,
+    noTasksBody: copy.noTasksBody,
     noChangesTitle: copy.noChangesTitle,
     noChangesBody: copy.noChangesBody,
-    noEvidenceTitle: copy.noEvidenceTitle,
-    noEvidenceBody: copy.noEvidenceBody,
     noMailboxTitle: copy.noMailboxTitle,
     noMailboxBody: copy.noMailboxBody,
+    unassignedProject: copy.unassignedProject,
     latestOutput: copy.latestOutput,
     progress: copy.progress,
     mailFrom: copy.mailFrom,
@@ -540,7 +550,7 @@
   let latestAnnouncement = $derived.by(() => {
     const latest = timelineItems.findLast((item) => item.actor === "spark");
     if (!latest || latest.status === "running" || latest.status === "streaming") return "";
-    const compact = latest.body.trim().replace(/\s+/g, " ");
+    const compact = visibleConversationPartText(latest.parts).trim().replace(/\s+/g, " ");
     return compact.length <= 200 ? compact : `${compact.slice(0, 199)}…`;
   });
 
@@ -834,8 +844,8 @@
     return workbenchSessionScope(session).kind === "workspace";
   }
 
-  function sessionTitle(title: string | undefined) {
-    return formatChannelSessionTitle(title, {
+  function sessionPresentation(session: SessionRecord) {
+    return channelSessionPresentation(session, {
       locale,
       fallback: copy.newConversation,
     });
@@ -1223,16 +1233,19 @@
       </div>
     {:else}
       {@const displayedSessionStatus = visibleSessionStatus(selected.status)}
+      {@const selectedPresentation = sessionPresentation(selected)}
       <header class="stage-header">
         <div class="stage-title">
-          <p class="kicker">
-            {selectedIsChannelSession ? messages.channelSessionKicker : copy.timelineTitle}
-          </p>
+          <p class="kicker">{copy.timelineTitle}</p>
           <h1>
-            <span class="session-heading-title">{sessionTitle(selected.title)}</span>
-            {#if selectedIsChannelSession}
-              <span class="channel-badge">{messages.channelSessionBadge}</span>
+            {#if selectedPresentation.channel}
+              <ChannelSessionIcon
+                adapter={selectedPresentation.channel.adapter}
+                scope={selectedPresentation.channel.scope}
+                label={selectedPresentation.channel.label}
+              />
             {/if}
+            <span class="session-heading-title">{selectedPresentation.title}</span>
           </h1>
           <p>{sessionScopeLabel(selected)}</p>
         </div>
@@ -1292,6 +1305,7 @@
           {#each timelineItems as item (item.id)}
             <ConversationMessage
               {item}
+              active={item.id === activeProcessItemId}
               userLabel={copy.you}
               assistantLabel={copy.spark}
               copyLabel={copy.copyMessage}

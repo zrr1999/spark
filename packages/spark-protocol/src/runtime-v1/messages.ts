@@ -55,6 +55,7 @@ export const executorClientProjectionSchema = z.object({
 export const runtimeWorkspaceBindingSummarySchema = z.object({
   bindingId: prefixedIdSchema("rtwb"),
   localWorkspaceKey: z.string().min(1),
+  localPath: z.string().min(1).optional(),
   displayName: z.string().min(1),
   status: runtimeWorkspaceBindingStatusSchema,
   capabilities: jsonObjectSchema.default({}),

@@ -24,17 +24,18 @@ uses a dual-track shell:
   registration, and create workspace (`/workspaces/new`).
 
 Channel setup lives under **Console → Workspace settings → Channels**
-(`/{workspace}/settings/channels`): list existing channel-bound sessions, or create
-a new one by picking Feishu/Infoflow/QQ Bot, entering credentials when that
-adapter is not yet configured, and providing a chat/user/group id. Cockpit merges
-adapter credentials into
-`$SPARK_HOME/workspaces/<workspaceId>/channels/config.json` via `channel.configure`,
-creates a workspace session (`session.create`), binds
-`externalKey` (`session.bind`), and redirects to `/sessions/{sessionId}`.
-Cockpit and TUI read listener liveness through `channel.status`; they never
-reconstruct it from the config file. Message I/O is daemon↔IM only (no
-server/cockpit relay). Legacy `$SPARK_HOME/channels/config.json` is migrated into
-a workspace on first load/configure.
+(`/{workspace}/settings/channels`): list and configure workspace-level platform
+account connections for Feishu/Infoflow/QQ Bot. It does not ask for a private
+chat, group, channel, or session id. Cockpit merges account credentials into
+`$SPARK_HOME/workspaces/<workspaceId>/channels/config.json` via
+`channel.configure`. When the daemon receives a message, the adapter derives the
+real `externalKey`; ingress then resolves an existing binding or creates the
+workspace session according to `on_unbound`. One account connection can
+therefore own many private-chat, group, and channel sessions. Cockpit and TUI
+read listener liveness through `channel.status`; they never reconstruct it from
+the config file. Message I/O is daemon↔IM only (no server/cockpit relay). Legacy
+`$SPARK_HOME/channels/config.json` is migrated into a workspace on first
+load/configure.
 
 Do **not** maintain a second state machine for channels. Channel ingress and
 Cockpit both submit through the daemon session/turn control plane. The

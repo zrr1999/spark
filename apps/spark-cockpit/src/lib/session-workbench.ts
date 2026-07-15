@@ -3,7 +3,7 @@ import type { SparkJsonObject, SparkSessionView } from "@zendev-lab/spark-protoc
 const MAX_OUTPUT_CHARS = 4_000;
 const MAX_PREVIEW_CHARS = 8_000;
 
-export type SessionInspectorTab = "runs" | "changes" | "evidence" | "mailbox" | "context";
+export type SessionInspectorTab = "summary" | "changes" | "tasks" | "mailbox";
 
 export interface SessionWorkbenchActivityCommand {
   id: string;
@@ -63,6 +63,7 @@ export interface SessionWorkbenchRun {
 export interface SessionWorkbenchTask {
   id: string;
   ref: string | null;
+  projectRef: string | null;
   source: "session" | "activity";
   title: string;
   description: string | null;
@@ -128,20 +129,20 @@ export interface SessionWorkbenchView {
 export interface SessionInspectorLabels {
   ariaLabel: string;
   tabs: Record<SessionInspectorTab, string>;
+  summaryHeading: string;
   runsHeading: string;
   tasksHeading: string;
   changesHeading: string;
-  evidenceHeading: string;
   mailboxHeading: string;
-  contextHeading: string;
   noRunsTitle: string;
   noRunsBody: string;
+  noTasksTitle: string;
+  noTasksBody: string;
   noChangesTitle: string;
   noChangesBody: string;
-  noEvidenceTitle: string;
-  noEvidenceBody: string;
   noMailboxTitle: string;
   noMailboxBody: string;
+  unassignedProject: string;
   latestOutput: string;
   progress: string;
   mailFrom: string;
@@ -331,6 +332,7 @@ function sessionTask(task: SparkSessionView["tasks"][number]): SessionWorkbenchT
   return {
     id: task.ref,
     ref: task.ref,
+    projectRef: task.projectRef ?? null,
     source: "session",
     title: task.title,
     description: nonEmpty(task.description),
@@ -347,6 +349,7 @@ function activityTask(report: SessionWorkbenchActivityReport): SessionWorkbenchT
   return {
     id: report.id,
     ref: report.id,
+    projectRef: null,
     source: "activity",
     title: report.title || report.id,
     description: nonEmpty(report.text),

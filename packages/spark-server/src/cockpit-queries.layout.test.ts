@@ -6,6 +6,7 @@ import {
   loadArtifactDetailPage,
   loadInboxDetailPage,
   loadWorkbenchLayout,
+  loadWorkspaceRegistrationPage,
   updateWorkspaceSettings,
 } from "./cockpit-queries";
 import {
@@ -29,9 +30,9 @@ function setupWorkspace(slug = "spore") {
   ).run(runtimeId, "install", runtimeProtocolVersion, now, now);
   db.prepare(
     `INSERT INTO runtime_workspace_bindings
-      (id, runtime_id, local_workspace_key, display_name, status, capabilities_json, diagnostics_json, created_at, updated_at)
-     VALUES (?, ?, 'local-default', 'Local default', 'available', '{}', '{}', ?, ?)`,
-  ).run(bindingId, runtimeId, now, now);
+      (id, runtime_id, local_workspace_key, local_path, display_name, status, capabilities_json, diagnostics_json, created_at, updated_at)
+     VALUES (?, ?, 'local-default', ?, 'Local default', 'available', '{}', '{}', ?, ?)`,
+  ).run(bindingId, runtimeId, `/Users/test/workspaces/${slug}`, now, now);
   const workspace = createWorkspaceWithOwnerBinding(db, {
     slug,
     name: slug,
@@ -111,6 +112,18 @@ describe("loadWorkbenchLayout", () => {
     });
     expect(layout.activeWorkspace?.slug).toBe("live");
     expect(layout.workspaces.map((item) => item.slug)).toEqual(["live"]);
+    db.close();
+  });
+});
+
+describe("loadWorkspaceRegistrationPage", () => {
+  it("projects the connected directory path", () => {
+    const { db } = setupWorkspace("spore");
+
+    const page = loadWorkspaceRegistrationPage(db, "spore");
+
+    expect(page?.runnerBindings).toHaveLength(1);
+    expect(page?.runnerBindings[0]?.localPath).toBe("/Users/test/workspaces/spore");
     db.close();
   });
 });

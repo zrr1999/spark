@@ -1040,22 +1040,29 @@ function upsertRegisteredWorkspaceBinding(
     db.prepare(
       `UPDATE runtime_workspace_bindings
        SET display_name = ?,
+           local_path = COALESCE(?, local_path),
            status = 'available',
            updated_at = ?
        WHERE id = ?`,
-    ).run(workspaceRegistration.displayName, now, existing.id);
+    ).run(
+      workspaceRegistration.displayName,
+      workspaceRegistration.localPath ?? null,
+      now,
+      existing.id,
+    );
     return { bindingId: existing.id };
   }
 
   const bindingId = createId("rtwb");
   db.prepare(
     `INSERT INTO runtime_workspace_bindings
-      (id, runtime_id, local_workspace_key, display_name, status, capabilities_json, diagnostics_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'available', '{}', '{}', ?, ?)`,
+      (id, runtime_id, local_workspace_key, local_path, display_name, status, capabilities_json, diagnostics_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 'available', '{}', '{}', ?, ?)`,
   ).run(
     bindingId,
     runtimeId,
     workspaceRegistration.localWorkspaceKey,
+    workspaceRegistration.localPath ?? null,
     workspaceRegistration.displayName,
     now,
     now,

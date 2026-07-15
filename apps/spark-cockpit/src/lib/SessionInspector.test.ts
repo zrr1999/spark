@@ -14,26 +14,29 @@ describe("SessionInspector component contract", () => {
     expect(() => compile(source, { filename: componentPath, generate: "server" })).not.toThrow();
   });
 
-  it("renders the five read-only coding-session views with explicit empty states", () => {
+  it("renders the four focused coding-session views with explicit empty states", () => {
     const source = readFileSync(componentPath, "utf8");
 
     expect(source).toContain('role="tablist"');
     expect(source).toContain('role="tab"');
-    expect(source).toContain('id: "runs"');
+    expect(source).toContain('id: "summary"');
     expect(source).toContain('id: "changes"');
-    expect(source).toContain('id: "evidence"');
+    expect(source).toContain('id: "tasks"');
     expect(source).toContain('id: "mailbox"');
-    expect(source).toContain('id: "context"');
+    expect(source).not.toContain('id: "evidence"');
+    expect(source).not.toContain('id: "context"');
     expect(source).toContain("view.runs");
     expect(source).toContain("view.tasks");
     expect(source).toContain("view.changes");
-    expect(source).toContain("view.evidence");
     expect(source).toContain("view.mailbox");
     expect(source).toContain("view.context");
+    expect(source).toContain("labels.noTasksTitle");
+    expect(source).toContain("labels.noTasksBody");
     expect(source).toContain("labels.noChangesTitle");
     expect(source).toContain("labels.noChangesBody");
     expect(source).toContain("labels.noMailboxTitle");
     expect(source).toContain("labels.noMailboxBody");
+    expect(source).toContain("justify-content: center");
   });
 
   it("does not expose invented Git or terminal controls", () => {
@@ -44,13 +47,14 @@ describe("SessionInspector component contract", () => {
     expect(source).not.toContain("<form");
   });
 
-  it("keeps daemon artifacts read-only until a canonical Cockpit route exists", () => {
+  it("groups only canonical task project references without inventing project metadata", () => {
     const source = readFileSync(componentPath, "utf8");
 
-    expect(source).not.toContain("artifactHref");
-    expect(source).not.toContain('class="artifact-link"');
-    expect(source).not.toContain("/artifacts/");
-    expect(source).toContain('<code class="artifact-ref">{artifact.ref}</code>');
+    expect(source).toContain("groupTasksByProject(view.tasks)");
+    expect(source).toContain("task.projectRef ??");
+    expect(source).toContain("labels.unassignedProject");
+    expect(source).not.toContain("project.title");
+    expect(source).not.toContain("project.status");
   });
 
   it("names tabs, panels, and headings from the inspector instance", () => {

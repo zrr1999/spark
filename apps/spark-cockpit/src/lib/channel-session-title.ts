@@ -1,6 +1,40 @@
-/** Turn stored `channel <adapter>:<scope>:<id>` titles into sidebar-friendly labels. */
+/** Turn stored `channel <adapter>:<scope>:<id>` titles into UI-friendly labels. */
 
 const CHANNEL_TITLE_RE = /^channel\s+(infoflow|qqbot|feishu):(group|user|c2c|channel|chat):(.+)$/iu;
+const CHANNEL_KEY_RE = /^(infoflow|qqbot|feishu):(group|user|c2c|channel|chat):(.+)$/iu;
+
+export type ChannelSessionAdapter = "infoflow" | "qqbot" | "feishu";
+export type ChannelSessionScope = "group" | "user" | "c2c" | "channel" | "chat";
+export type ChannelSessionScopeKind = "private" | "group" | "channel" | "conversation";
+
+export type ChannelSessionDescriptor = {
+  adapter: ChannelSessionAdapter;
+  scope: ChannelSessionScope;
+  externalId: string;
+  label: string;
+};
+
+export type ChannelSessionPresentation = {
+  title: string;
+  channel: ChannelSessionDescriptor | null;
+};
+
+/** Map adapter-specific scopes to the visual meaning we can assert from runtime data. */
+export function channelSessionScopeKind(
+  adapter: ChannelSessionAdapter,
+  scope: ChannelSessionScope,
+): ChannelSessionScopeKind {
+  if (adapter === "infoflow") {
+    if (scope === "user") return "private";
+    if (scope === "group") return "group";
+  }
+  if (adapter === "qqbot") {
+    if (scope === "c2c") return "private";
+    if (scope === "group") return "group";
+    if (scope === "channel") return "channel";
+  }
+  return "conversation";
+}
 
 export function sessionHasChannelBinding(session: {
   bindings?: Array<{ kind?: string }> | null;
@@ -25,6 +59,57 @@ export function formatChannelSessionTitle(
   const scopeLabel = channelScopeLabel(adapter, scope, zh);
   if (!scopeLabel) return raw;
   return `${scopeLabel} · ${shortenOpaqueChannelId(id)}`;
+}
+
+/**
+ * Keep a channel session compact where an icon already carries adapter/scope.
+ * Custom user titles remain untouched; generated channel titles collapse to the
+ * human or shortened external id.
+ */
+export function channelSessionPresentation(
+  session: {
+    title?: string | null;
+    bindings?: Array<{
+      kind?: string;
+      adapter?: string;
+      externalKey?: string;
+    }> | null;
+  },
+  options: { locale?: string; fallback: string },
+): ChannelSessionPresentation {
+  const rawTitle = session.title?.trim() ?? "";
+  const titleIdentity = parseChannelIdentity(rawTitle.replace(/^channel\s+/iu, ""));
+  const bindingIdentity = session.bindings
+    ?.filter((binding) => !binding.kind || binding.kind === "channel")
+    .map((binding) => parseChannelIdentity(binding.externalKey ?? ""))
+    .find((identity) => identity !== null);
+  const identity = bindingIdentity ?? titleIdentity;
+  const zh = (options.locale ?? "").toLowerCase().startsWith("zh");
+
+  return {
+    title: titleIdentity
+      ? shortenOpaqueChannelId(titleIdentity.externalId)
+      : rawTitle || (identity ? shortenOpaqueChannelId(identity.externalId) : options.fallback),
+    channel: identity
+      ? {
+          ...identity,
+          label:
+            channelScopeLabel(identity.adapter, identity.scope, zh) ??
+            `${identity.adapter} ${identity.scope}`,
+        }
+      : null,
+  };
+}
+
+function parseChannelIdentity(value: string): Omit<ChannelSessionDescriptor, "label"> | null {
+  const match = value.trim().match(CHANNEL_KEY_RE);
+  if (!match) return null;
+  const adapter = match[1]!.toLowerCase() as ChannelSessionAdapter;
+  const scope = match[2]!.toLowerCase() as ChannelSessionScope;
+  const externalId = match[3]!.trim();
+  return channelScopeLabel(adapter, scope, false) && externalId
+    ? { adapter, scope, externalId }
+    : null;
 }
 
 function channelScopeLabel(adapter: string, scope: string, zh: boolean): string | null {

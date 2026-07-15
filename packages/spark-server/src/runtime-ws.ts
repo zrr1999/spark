@@ -713,12 +713,13 @@ function upsertWorkspaceBindings(
   );
   const insert = db.prepare(
     `INSERT INTO runtime_workspace_bindings
-      (id, runtime_id, local_workspace_key, display_name, status, capabilities_json, diagnostics_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (id, runtime_id, local_workspace_key, local_path, display_name, status, capabilities_json, diagnostics_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const update = db.prepare(
     `UPDATE runtime_workspace_bindings
      SET local_workspace_key = ?,
+         local_path = COALESCE(?, local_path),
          display_name = ?,
          status = ?,
          capabilities_json = ?,
@@ -737,6 +738,7 @@ function upsertWorkspaceBindings(
     if (existing) {
       update.run(
         binding.localWorkspaceKey,
+        binding.localPath ?? null,
         binding.displayName,
         binding.status,
         JSON.stringify(binding.capabilities),
@@ -752,6 +754,7 @@ function upsertWorkspaceBindings(
       binding.bindingId,
       runtimeId,
       binding.localWorkspaceKey,
+      binding.localPath ?? null,
       binding.displayName,
       binding.status,
       JSON.stringify(binding.capabilities),

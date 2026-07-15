@@ -79,6 +79,16 @@ export function groupThinkingChainParts(parts: readonly ConversationPart[]): Con
   return [...rest.slice(0, firstTextIndex), chain, ...rest.slice(firstTextIndex)];
 }
 
+/** Keep the execution chain in history; its component controls expanded/collapsed state. */
+export function visibleConversationParts(parts: readonly ConversationPart[]): ConversationPart[] {
+  return [...parts];
+}
+
+/** Copy and live-region text intentionally excludes internal execution detail. */
+export function visibleConversationPartText(parts: readonly ConversationPart[]) {
+  return conversationPartText(parts.filter((part) => part.type !== "chain"));
+}
+
 export function conversationPartText(parts: readonly ConversationPart[]) {
   return parts
     .flatMap((part) => {

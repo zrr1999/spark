@@ -38,6 +38,7 @@ describe("Spark daemon local RPC", () => {
 
     try {
       mkdirSync(workspacePath);
+      const normalizedWorkspacePath = realpathSync(workspacePath);
       const ensureRegistration = vi.fn(async () => ({
         config: {
           installationId: "install-test",
@@ -67,7 +68,7 @@ describe("Spark daemon local RPC", () => {
           method: "workspace.register",
           params: {
             serverUrl: "http://127.0.0.1:5173/",
-            localPath: workspacePath,
+            localPath: normalizedWorkspacePath,
             displayName: "Spore",
             workspaceName: "Spore profile",
             workspaceSlug: "spore-profile",
@@ -101,6 +102,7 @@ describe("Spark daemon local RPC", () => {
           registrationToken: "spark_wsreg_local_rpc",
           workspaceRegistration: {
             localWorkspaceKey: "spore",
+            localPath: normalizedWorkspacePath,
             displayName: "Spore",
             workspaceName: "Spore profile",
             workspaceSlug: "spore-profile",
@@ -109,6 +111,7 @@ describe("Spark daemon local RPC", () => {
       );
       expect(verifyConnection).toHaveBeenCalledWith(
         expect.objectContaining({
+          localPath: normalizedWorkspacePath,
           workspaceBinding: expect.objectContaining({
             bindingId: "rtwb_33333333333341113333333333333333",
           }),

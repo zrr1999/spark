@@ -18,6 +18,7 @@
       {
         "bindingId": "rtwb_11111111111141111111111111111111",
         "localWorkspaceKey": "local-dev",
+        "localPath": "/Users/test/workspaces/local-dev",
         "displayName": "Local development workspace",
         "status": "available",
         "capabilities": {},

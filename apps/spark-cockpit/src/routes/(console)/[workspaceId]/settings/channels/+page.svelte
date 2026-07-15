@@ -1,15 +1,13 @@
 <script lang="ts">
   import { enhance } from "$app/forms";
-  import { formatChannelSessionTitle } from "$lib/channel-session-title";
   import {
-    createChannelScopes,
-    defaultCreateChannelScope,
-    parseChannelExternalKeyParts,
-    type CreateChannelAdapter,
-    type CreateChannelFormValues,
-    type WorkspaceChannelListItem,
-  } from "$lib/create-channel";
-  import { formatRelativeTime, statusLabel } from "$lib/i18n";
+    freshMessagePlatformFormValues,
+    type MessagePlatformAdapter,
+    type MessagePlatformFormValues,
+    type WorkspaceMessagePlatformConnection,
+  } from "$lib/message-platform";
+  import Icon from "$lib/Icon.svelte";
+  import { statusLabel } from "$lib/i18n";
   import { Button, Field, Input, PageHeader, Select } from "$lib/ui";
   import type { SubmitFunction } from "@sveltejs/kit";
   import { untrack } from "svelte";
@@ -19,32 +17,27 @@
   let common = $derived(data.messages.common);
   let status = $derived(data.channelStatus);
   let editor = $derived(data.editor);
-  let channels = $derived(data.channels);
+  let platforms = $derived(data.platforms);
   let defaultEndpoint = $derived(data.defaults.infoflowEndpoint);
 
-  let values = $state<CreateChannelFormValues>(
-    structuredClone(
-      untrack(() =>
-        form?.values ?? {
-          adapter: data.defaults.adapter,
-          scope: data.defaults.scope,
-          externalId: "",
-          title: "",
-          feishuAppId: data.editor.feishuAppId,
-          feishuAppSecret: "",
-          infoflowEndpoint: data.editor.infoflowEndpoint || data.defaults.infoflowEndpoint,
-          infoflowAppKey: data.editor.infoflowAppKey,
-          infoflowAppAgentId: data.editor.infoflowAppAgentId,
-          infoflowAppSecret: "",
-          qqbotAppId: data.editor.qqbotAppId,
-          qqbotClientSecret: "",
-          qqbotSandbox: data.editor.qqbotSandbox,
-        },
-      ),
-    ),
+  function freshPlatformValues(): MessagePlatformFormValues {
+    return freshMessagePlatformFormValues({
+      adapter: data.defaults.adapter,
+      infoflowDefaultEndpoint: data.defaults.infoflowEndpoint,
+      feishuAppId: data.editor.feishuAppId,
+      infoflowEndpoint: data.editor.infoflowEndpoint,
+      infoflowAppKey: data.editor.infoflowAppKey,
+      infoflowAppAgentId: data.editor.infoflowAppAgentId,
+      qqbotAppId: data.editor.qqbotAppId,
+      qqbotSandbox: data.editor.qqbotSandbox,
+    });
+  }
+
+  let values = $state<MessagePlatformFormValues>(
+    structuredClone(untrack(() => form?.values ?? freshPlatformValues())),
   );
   let formMode = $state<"create" | "editCredentials">("create");
-  let editingSessionId = $state<string | null>(null);
+  let editingAdapter = $state<MessagePlatformAdapter | null>(null);
   let submitState = $state<"idle" | "creating" | "saving" | "saved" | "error">("idle");
   let errorMessage = $state<string | null>(null);
   let statusMessage = $state<string | null>(null);
@@ -53,11 +46,12 @@
   $effect(() => {
     if (form?.values) {
       values = structuredClone(form.values);
-      if (form.intent === "saveCredentials" && form.message === t.saveCredentialsSuccess) {
+      if (form.intent === "savePlatform" && form.message === t.savePlatformSuccess) {
         statusMessage = form.message;
         errorMessage = null;
         submitState = "saved";
         formMode = "editCredentials";
+        editingAdapter = values.adapter;
         return;
       }
       if (form.message) {
@@ -79,16 +73,6 @@
     },
   ]);
 
-  let scopeOptions = $derived([
-    {
-      id: "channel-scope",
-      options: createChannelScopes(values.adapter).map((scope) => ({
-        value: scope,
-        label: scopeLabel(values.adapter, scope),
-      })),
-    },
-  ]);
-
   let credentialsReady = $derived(
     values.adapter === "feishu"
       ? editor.feishuEnabled && editor.feishuAppSecretSet
@@ -97,7 +81,7 @@
         : editor.qqbotEnabled && editor.qqbotClientSecretSet,
   );
 
-  function adapterLabel(adapter: CreateChannelAdapter): string {
+  function adapterLabel(adapter: MessagePlatformAdapter): string {
     switch (adapter) {
       case "feishu":
         return t.feishuTitle;
@@ -107,24 +91,7 @@
         return t.qqbotTitle;
       default: {
         const _exhaustive: never = adapter;
-        throw new Error(`unsupported create-channel adapter: ${String(_exhaustive)}`);
-      }
-    }
-  }
-
-  function scopeLabel(adapter: CreateChannelAdapter, scope: string): string {
-    switch (adapter) {
-      case "feishu":
-        return t.scopeFeishuChat;
-      case "infoflow":
-        return scope === "group" ? t.scopeInfoflowGroup : t.scopeInfoflowUser;
-      case "qqbot":
-        if (scope === "group") return t.scopeQqbotGroup;
-        if (scope === "channel") return t.scopeQqbotChannel;
-        return t.scopeQqbotC2c;
-      default: {
-        const _exhaustive: never = adapter;
-        throw new Error(`unsupported create-channel adapter: ${String(_exhaustive)}`);
+        throw new Error(`unsupported message platform adapter: ${String(_exhaustive)}`);
       }
     }
   }
@@ -133,9 +100,6 @@
     const adapter =
       next === "feishu" || next === "infoflow" || next === "qqbot" ? next : "infoflow";
     values.adapter = adapter;
-    if (!createChannelScopes(adapter).includes(values.scope)) {
-      values.scope = defaultCreateChannelScope(adapter);
-    }
     if (adapter === "feishu") {
       values.feishuAppId = values.feishuAppId || editor.feishuAppId;
     } else if (adapter === "infoflow") {
@@ -149,7 +113,7 @@
     }
   }
 
-  function fillCredentialsFromEditor(adapter: CreateChannelAdapter) {
+  function fillCredentialsFromEditor(adapter: MessagePlatformAdapter) {
     if (adapter === "feishu") {
       values.feishuAppId = editor.feishuAppId;
       values.feishuAppSecret = "";
@@ -165,17 +129,10 @@
     }
   }
 
-  function editChannelSettings(channel: WorkspaceChannelListItem) {
-    const binding = channel.bindings[0];
-    if (!binding) return;
-    const parts = parseChannelExternalKeyParts(binding.externalKey);
-    if (!parts) return;
-    values.adapter = parts.adapter;
-    values.scope = parts.scope;
-    values.externalId = parts.id;
-    values.title = channel.title.startsWith("channel ") ? "" : channel.title;
-    fillCredentialsFromEditor(parts.adapter);
-    editingSessionId = channel.sessionId;
+  function editPlatformSettings(platform: WorkspaceMessagePlatformConnection) {
+    values.adapter = platform.adapter;
+    fillCredentialsFromEditor(platform.adapter);
+    editingAdapter = platform.adapter;
     formMode = "editCredentials";
     errorMessage = null;
     statusMessage = null;
@@ -186,12 +143,17 @@
     });
   }
 
-  function cancelEditCredentials() {
+  function startConnectPlatform() {
+    values = freshPlatformValues();
     formMode = "create";
-    editingSessionId = null;
+    editingAdapter = null;
     statusMessage = null;
     errorMessage = null;
     submitState = "idle";
+    queueMicrotask(() => {
+      editorSection?.scrollIntoView({ behavior: "smooth", block: "start" });
+      document.getElementById("channel-adapter")?.focus({ preventScroll: true });
+    });
   }
 
   const handleEnhance: SubmitFunction = () => {
@@ -211,18 +173,19 @@
         submitState = "error";
         const payload = result.data as { message?: string } | undefined;
         errorMessage =
-          payload?.message ??
-          (savingCredentials ? t.saveCredentialsFailed : t.createFailed);
+          payload?.message ?? t.savePlatformFailed;
         return;
       }
-      if (result.type === "success" && savingCredentials) {
+      if (result.type === "success") {
         submitState = "saved";
         const payload = result.data as { message?: string } | undefined;
-        statusMessage = payload?.message ?? t.saveCredentialsSuccess;
+        statusMessage = payload?.message ?? t.savePlatformSuccess;
+        formMode = "editCredentials";
+        editingAdapter = values.adapter;
         return;
       }
       submitState = "error";
-      errorMessage = savingCredentials ? t.saveCredentialsFailed : t.createFailed;
+      errorMessage = t.savePlatformFailed;
     };
   };
 </script>
@@ -253,44 +216,35 @@
     <div class="panel-heading">
       <h2 id="channel-list-title">{t.listTitle}</h2>
     </div>
-    {#if !data.sessionsAvailable}
-      <p class="muted">{t.listUnavailable}</p>
-    {:else if channels.length === 0}
+    {#if platforms.length === 0}
       <p class="muted">{t.listEmpty}</p>
     {:else}
       <ul class="channel-rows">
-        {#each channels as channel (channel.sessionId)}
+        {#each platforms as platform (platform.adapter)}
           <li>
             <div class="channel-row-main">
-              <strong>
-                {formatChannelSessionTitle(channel.title, {
-                  locale: data.locale,
-                  fallback: channel.sessionId,
-                })}
-              </strong>
+              <strong>{adapterLabel(platform.adapter)}</strong>
               <span class="meta-line">
-                {#each channel.bindings as binding, index (binding.externalKey)}
-                  {#if index > 0}<span aria-hidden="true"> · </span>{/if}
-                  <span>{adapterLabel(binding.adapter)}</span>
-                  <span class="mono">{binding.externalKey}</span>
-                {/each}
+                <span>{t.accountIdLabel}</span>
+                <span class="mono">{platform.accountId || "—"}</span>
               </span>
               <small>
-                {statusLabel(channel.status, common)}
-                · {formatRelativeTime(channel.updatedAt, data.locale, common)}
+                {status.available
+                  ? statusLabel(platform.runtimeState ?? "stopped", common)
+                  : t.runtimeUnavailable}
               </small>
+              {#if platform.runtimeError}<small class="adapter-error">{platform.runtimeError}</small>{/if}
             </div>
             <div class="channel-row-actions">
               <button
                 type="button"
                 class="row-action"
                 class:active={formMode === "editCredentials" &&
-                  editingSessionId === channel.sessionId}
-                onclick={() => editChannelSettings(channel)}
+                  editingAdapter === platform.adapter}
+                onclick={() => editPlatformSettings(platform)}
               >
                 {t.listSettings}
               </button>
-              <a class="row-action" href={`/sessions/${channel.sessionId}`}>{t.listOpen}</a>
             </div>
           </li>
         {/each}
@@ -301,16 +255,24 @@
   <form
     class="panel editor"
     method="POST"
-    action={formMode === "editCredentials" ? "?/saveCredentials" : "?/createChannel"}
+    action="?/savePlatform"
     use:enhance={handleEnhance}
     bind:this={editorSection}
   >
-    <div class="credentials-heading">
-      <h2 id="create-channel-title">
-        {formMode === "editCredentials" ? t.editCredentialsTitle : t.createSectionTitle}
-      </h2>
+    <div class="panel-heading">
+      <div class="credentials-heading">
+        <h2 id="platform-editor-title">
+          {formMode === "editCredentials" ? t.editCredentialsTitle : t.createSectionTitle}
+        </h2>
+        {#if formMode === "editCredentials"}
+          <p>{t.editCredentialsHint}</p>
+        {/if}
+      </div>
       {#if formMode === "editCredentials"}
-        <p>{t.editCredentialsHint}</p>
+        <Button type="button" variant="ghost" size="compact" onclick={startConnectPlatform}>
+          <Icon name="plus" size={14} />
+          {t.createSectionTitle}
+        </Button>
       {/if}
     </div>
 
@@ -326,52 +288,27 @@
             onValueChange={onAdapterChange}
           />
         </Field>
-        <Field id="channel-scope" label={t.scopeLabel} hint={t.scopeHint} required>
-          <Select
-            id="channel-scope"
-            name="scope"
-            bind:value={values.scope}
-            groups={scopeOptions}
-            label={t.scopeLabel}
-          />
-        </Field>
-        <Field id="channel-external-id" label={t.externalIdLabel} hint={t.externalIdHint} required>
-          <Input
-            id="channel-external-id"
-            name="externalId"
-            type="text"
-            autocomplete="off"
-            bind:value={values.externalId}
-            placeholder={t.externalIdPlaceholder}
-            required
-          />
-        </Field>
-        <Field id="channel-title" label={t.titleLabel} hint={t.titleHint}>
-          <Input
-            id="channel-title"
-            name="title"
-            type="text"
-            autocomplete="off"
-            bind:value={values.title}
-            placeholder={t.titlePlaceholder}
-          />
-        </Field>
       </div>
     {:else}
       <input type="hidden" name="adapter" value={values.adapter} />
-      <input type="hidden" name="scope" value={values.scope} />
-      <input type="hidden" name="externalId" value={values.externalId} />
       <dl class="binding-summary">
         <div>
           <dt>{t.listAdapter}</dt>
           <dd>{adapterLabel(values.adapter)}</dd>
         </div>
         <div>
-          <dt>{t.listBinding}</dt>
-          <dd class="mono">{values.adapter}:{values.scope}:{values.externalId}</dd>
+          <dt>{t.accountIdLabel}</dt>
+          <dd class="mono">
+            {platforms.find((platform) => platform.adapter === values.adapter)?.accountId || "—"}
+          </dd>
         </div>
       </dl>
     {/if}
+
+    <div class="toggle-row">
+      <Icon name="message" size={15} />
+      <span>{t.sessionIdentityHint}</span>
+    </div>
 
     <section class="credentials" aria-labelledby="credentials-title">
       <div class="credentials-heading">
@@ -486,15 +423,15 @@
 
     <div class="actions">
       {#if formMode === "editCredentials"}
-        <Button type="button" variant="ghost" onclick={cancelEditCredentials}>
+        <Button type="button" variant="ghost" onclick={startConnectPlatform}>
           {t.cancelEdit}
         </Button>
         <Button type="submit" disabled={submitState === "saving"}>
-          {submitState === "saving" ? t.savingCredentials : t.saveCredentialsSubmit}
+          {submitState === "saving" ? t.savingPlatform : t.savePlatformSubmit}
         </Button>
       {:else}
         <Button type="submit" disabled={submitState === "creating"}>
-          {submitState === "creating" ? t.creating : t.createSubmit}
+          {submitState === "creating" ? t.connectingPlatform : t.connectPlatformSubmit}
         </Button>
       {/if}
     </div>
