@@ -28,6 +28,39 @@ function event(
 }
 
 describe("session live events", () => {
+  it("applies a post-commit session title event and requests a sidebar refresh", () => {
+    const state = createSessionLiveEventState({
+      sessionId: "sess_current",
+      workspaceId: "ws_spore",
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        title: "New conversation",
+        status: "idle",
+      }),
+    });
+
+    const result = applySessionLiveEvent(
+      state,
+      event({
+        id: "evt_session_title",
+        kind: "daemon.session.updated",
+        payload: {
+          type: "daemon.session.updated",
+          source: "daemon",
+          sessionId: "sess_current",
+          title: "Diagnose daemon startup",
+          emittedAt: "2026-07-13T08:00:01.000Z",
+        },
+      }),
+    );
+
+    expect(result).toEqual({ changed: true, refreshActivity: true });
+    expect(state.view).toMatchObject({
+      title: "Diagnose daemon startup",
+      updatedAt: "2026-07-13T08:00:01.000Z",
+    });
+  });
+
   it("reduces selected-session messages and structured work without a reload", () => {
     const state = createSessionLiveEventState({
       sessionId: "sess_current",

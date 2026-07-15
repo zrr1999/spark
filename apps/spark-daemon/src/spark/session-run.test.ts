@@ -394,6 +394,144 @@ describe("daemon native session execution", () => {
     ]);
   });
 
+  it("names an untitled local session only after its completed transcript is indexed", async () => {
+    const recordTurnQueued = vi.fn(async () => ({}) as never);
+    const recordTurnSettled = vi.fn(async () => ({}) as never);
+    const recordRun = vi.fn(async () => ({}) as never);
+    const setTitleIfMissing = vi.fn(async (_sessionId: string, title: string) => ({
+      sessionId: task.sessionId,
+      scope: { kind: "workspace" as const, workspaceId: "workspace-title" },
+      workspaceId: "workspace-title",
+      title,
+      status: "ready" as const,
+      bindings: [],
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-10T00:02:00.000Z",
+      sessionPath: "/daemon/sessions/sess_auto_title.jsonl",
+    }));
+    let resolveTitle!: (title: string) => void;
+    const generateSessionTitle = vi.fn(
+      async () => await new Promise<string>((resolve) => (resolveTitle = resolve)),
+    );
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_auto_title",
+      prompt: "Diagnose why the daemon does not start.",
+      model: "baidu-oneapi/gpt-5.6-sol",
+      workspaceId: "workspace-title",
+    };
+    const executor = createSparkDaemonQueueTaskExecutor({
+      paths,
+      modelControl: {
+        effectiveModel: vi.fn(async () => ({
+          providerName: "baidu-oneapi",
+          modelId: "gpt-5.6-sol",
+        })),
+        prepareModel: vi.fn(async () => undefined),
+        generateSessionTitle,
+      },
+      sessionRegistry: {
+        get: vi.fn(async () => ({
+          sessionId: task.sessionId,
+          scope: { kind: "workspace" as const, workspaceId: "workspace-title" },
+          workspaceId: "workspace-title",
+          status: "ready" as const,
+          bindings: [],
+          createdAt: "2026-07-10T00:00:00.000Z",
+          updatedAt: "2026-07-10T00:01:00.000Z",
+          sessionPath: "/daemon/sessions/sess_auto_title.jsonl",
+        })),
+        setTitleIfMissing,
+        recordTurnQueued,
+        recordTurnSettled,
+        recordRun,
+      },
+      createSparkHeadlessSessionExecutor: () => async () => ({
+        sessionId: task.sessionId,
+        sessionPath: "/daemon/sessions/sess_auto_title.jsonl",
+        assistantText: "done",
+      }),
+    });
+
+    const emitted: SparkDaemonEvent[] = [];
+    await expect(executor(task, context(task, emitted))).resolves.toMatchObject({
+      assistantText: "done",
+    });
+    expect(recordRun).toHaveBeenCalledOnce();
+    await vi.waitFor(() =>
+      expect(generateSessionTitle).toHaveBeenCalledWith({
+        prompt: task.prompt,
+        model: { providerName: "baidu-oneapi", modelId: "gpt-5.6-sol" },
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    // The main queue task has already resolved while the advisory title leaf is pending.
+    expect(setTitleIfMissing).not.toHaveBeenCalled();
+    resolveTitle("Daemon startup diagnosis");
+    await vi.waitFor(() =>
+      expect(setTitleIfMissing).toHaveBeenCalledWith(task.sessionId, "Daemon startup diagnosis"),
+    );
+    await vi.waitFor(() =>
+      expect(emitted).toContainEqual(
+        expect.objectContaining({
+          type: "daemon.session.updated",
+          sessionId: task.sessionId,
+          workspaceId: "workspace-title",
+          title: "Daemon startup diagnosis",
+        }),
+      ),
+    );
+    expect(recordRun.mock.invocationCallOrder[0]).toBeLessThan(
+      generateSessionTitle.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("does not name a session when transcript indexing fails", async () => {
+    const generateSessionTitle = vi.fn(async () => "Unused title");
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_title_index_failure",
+      prompt: "This should keep the mechanical sidebar fallback.",
+      model: "baidu-oneapi/gpt-5.6-sol",
+    };
+    const executor = createSparkDaemonQueueTaskExecutor({
+      paths,
+      modelControl: {
+        effectiveModel: vi.fn(async () => ({
+          providerName: "baidu-oneapi",
+          modelId: "gpt-5.6-sol",
+        })),
+        prepareModel: vi.fn(async () => undefined),
+        generateSessionTitle,
+      },
+      sessionRegistry: {
+        get: vi.fn(async () => undefined),
+        setTitleIfMissing: vi.fn(async () => ({}) as never),
+        recordTurnQueued: vi.fn(async () => ({}) as never),
+        recordTurnSettled: vi.fn(async () => ({}) as never),
+        recordRun: vi.fn(async () => {
+          throw new Error("registry unavailable");
+        }),
+      },
+      createSparkHeadlessSessionExecutor: () => async () => ({
+        sessionId: task.sessionId,
+        sessionPath: "/daemon/sessions/sess_title_index_failure.jsonl",
+        assistantText: "completed once",
+      }),
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      await expect(executor(task, context(task))).resolves.toMatchObject({
+        assistantText: "completed once",
+        registryPersistence: { status: "failed" },
+      });
+      expect(generateSessionTitle).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it("processes an already-committed turn with a durable warning when registry indexing fails", async () => {
     const recordTurnQueued = vi.fn(async () => ({}) as never);
     const recordTurnSettled = vi.fn(async () => ({}) as never);

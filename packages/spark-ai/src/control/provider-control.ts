@@ -1,7 +1,9 @@
 import { resolve } from "node:path";
 
 import type { OAuthProviderInterface } from "@earendil-works/pi-ai/oauth";
+import type { LeafCapabilityRequest, LeafCapabilityResult } from "@zendev-lab/spark-extension-api";
 
+import { createProviderRegistryLeafRunner } from "../leaf-host-runner.ts";
 import {
   SparkProviderRegistry,
   type ProviderConfig,
@@ -96,6 +98,8 @@ export interface SparkProviderControl {
   resolveApiKeyAsync(provider: ProviderConfig): Promise<string | undefined>;
   /** Refresh/validate credentials for the selected model before starting a turn. */
   prepareModel(modelRef: string): Promise<void>;
+  /** Run one bounded, tool-free advisory completion without changing active selection. */
+  runLeaf?(request: LeafCapabilityRequest): Promise<LeafCapabilityResult>;
 }
 
 interface LoadedControlState {
@@ -248,6 +252,17 @@ class LocalSparkProviderControl implements SparkProviderControl {
       const ref = status.ref ? ` (${status.ref})` : "";
       throw new Error(`No authentication configured for Spark provider "${provider.name}"${ref}`);
     }
+  }
+
+  async runLeaf(request: LeafCapabilityRequest): Promise<LeafCapabilityResult> {
+    const state = await this.#loadState();
+    await this.#reloadAuth();
+    return await createProviderRegistryLeafRunner({
+      registry: state.registry,
+      runnerOptions: {
+        resolveApiKey: (provider) => this.#authResolver.resolveApiKey(provider),
+      },
+    })(request);
   }
 
   async #loadState(): Promise<LoadedControlState> {

@@ -231,6 +231,50 @@ export class SparkSessionRegistry {
     return updated;
   }
 
+  /**
+   * Assign the generated title for an otherwise untitled local session.
+   *
+   * This compare-and-set transition deliberately becomes a no-op when another
+   * writer has already titled, channel-bound, or archived the session. The
+   * daemon serializes this complete read-modify-write operation, so a slow
+   * advisory title model can never overwrite newer user/channel state.
+   */
+  async setTitleIfMissing(
+    sessionId: string,
+    title: string,
+    now = new Date(),
+  ): Promise<SparkSessionRegistryRecord> {
+    const file = await this.loadFile();
+    const index = file.sessions.findIndex((session) => session.sessionId === sessionId);
+    if (index < 0) {
+      throw new SparkSessionRegistryError("session_not_found", `unknown session: ${sessionId}`);
+    }
+    const current = file.sessions[index]!;
+    if (
+      current.title?.trim() ||
+      current.bindings.some((binding) => binding.kind === "channel") ||
+      current.status === "archived"
+    ) {
+      return current;
+    }
+    const normalizedTitle = title.trim();
+    if (!normalizedTitle) {
+      throw new SparkSessionRegistryError(
+        "invalid_session_title",
+        `session title must not be blank: ${sessionId}`,
+      );
+    }
+    const observedAt = now.toISOString();
+    const updated: SparkSessionRegistryRecord = {
+      ...current,
+      title: normalizedTitle,
+      updatedAt: observedAt > current.updatedAt ? observedAt : current.updatedAt,
+    };
+    file.sessions[index] = updated;
+    await this.saveFile(file);
+    return updated;
+  }
+
   async setModel(
     sessionId: string,
     model: SparkModelRef,

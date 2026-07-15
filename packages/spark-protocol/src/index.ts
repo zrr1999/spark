@@ -475,11 +475,17 @@ export const sparkDaemonInteractionResponseEventSchema = sparkDaemonEventBaseSch
   response: sparkInteractionResponseSchema,
 });
 
+export const sparkDaemonSessionUpdatedEventSchema = sparkDaemonEventBaseSchema.extend({
+  type: z.literal("daemon.session.updated"),
+  title: z.string().min(1).optional(),
+});
+
 export const sparkDaemonEventSchema = z.discriminatedUnion("type", [
   sparkDaemonTaskLifecycleEventSchema,
   sparkDaemonViewEventSchema,
   sparkDaemonInteractionRequestEventSchema,
   sparkDaemonInteractionResponseEventSchema,
+  sparkDaemonSessionUpdatedEventSchema,
 ]);
 
 export type SparkViewModelStatus = z.infer<typeof sparkViewModelStatusSchema>;
@@ -511,6 +517,7 @@ export type SparkDaemonInteractionRequestEvent = z.infer<
 export type SparkDaemonInteractionResponseEvent = z.infer<
   typeof sparkDaemonInteractionResponseEventSchema
 >;
+export type SparkDaemonSessionUpdatedEvent = z.infer<typeof sparkDaemonSessionUpdatedEventSchema>;
 export type SparkDaemonEvent = z.infer<typeof sparkDaemonEventSchema>;
 
 export function parseSparkInteractionRequest(value: unknown): SparkInteractionRequest {

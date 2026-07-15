@@ -77,12 +77,10 @@ export const actions: Actions = {
         scopeKind === "daemon"
           ? {
               scope: { kind: "daemon" },
-              title: titleFromPrompt(message),
             }
           : {
               scope: { kind: "workspace", workspaceId },
               workspaceId,
-              title: titleFromPrompt(message),
             },
       );
     } catch (caught) {

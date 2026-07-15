@@ -112,7 +112,7 @@ beforeEach(() => {
 });
 
 describe("session conversation actions", () => {
-  it("creates a titled session from the first message, queues it, and redirects", async () => {
+  it("creates an untitled session, keeps the first prompt as assignment title, and redirects", async () => {
     const action = requireAction("startConversation");
 
     await expect(
@@ -125,7 +125,6 @@ describe("session conversation actions", () => {
     expect(mocks.createManagedSessionForCockpit).toHaveBeenCalledWith({
       scope: { kind: "workspace", workspaceId: "ws_demo" },
       workspaceId: "ws_demo",
-      title: "Inspect the daemon path.",
     });
     expect(mocks.submitConversationTurnForCockpit).toHaveBeenCalledWith({
       workspaceId: "ws_demo",
@@ -155,7 +154,6 @@ describe("session conversation actions", () => {
 
     expect(mocks.createManagedSessionForCockpit).toHaveBeenCalledWith({
       scope: { kind: "daemon" },
-      title: "Inspect daemon health.",
     });
     expect(mocks.submitConversationTurnForCockpit).toHaveBeenCalledWith({
       sessionId: "sess_global",

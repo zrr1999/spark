@@ -191,6 +191,53 @@ describe("SparkSessionRegistry", () => {
     } satisfies Partial<SparkSessionRegistryError>);
   });
 
+  it("sets a generated title once and preserves newer local or channel state", async () => {
+    const registry = await tempRegistry();
+    const untitled = await registry.create({
+      sessionId: "sess_untitled",
+      workspaceId: "ws_title",
+      now: new Date("2026-07-10T07:00:00.000Z"),
+    });
+
+    const titled = await registry.setTitleIfMissing(
+      untitled.sessionId,
+      "  Diagnose the daemon  ",
+      new Date("2026-07-10T07:01:00.000Z"),
+    );
+    expect(titled).toMatchObject({
+      title: "Diagnose the daemon",
+      updatedAt: "2026-07-10T07:01:00.000Z",
+    });
+    await expect(
+      registry.setTitleIfMissing(
+        untitled.sessionId,
+        "Do not replace the first title",
+        new Date("2026-07-10T07:02:00.000Z"),
+      ),
+    ).resolves.toEqual(titled);
+
+    const channel = await registry.create({
+      sessionId: "sess_channel_title",
+      workspaceId: "ws_title",
+    });
+    const bound = await registry.bind({
+      sessionId: channel.sessionId,
+      externalKey: "infoflow:user:alice",
+    });
+    await expect(
+      registry.setTitleIfMissing(channel.sessionId, "Do not title channels"),
+    ).resolves.toEqual(bound);
+
+    const archived = await registry.create({
+      sessionId: "sess_archived_title",
+      workspaceId: "ws_title",
+    });
+    const archivedRecord = await registry.archive(archived.sessionId);
+    await expect(
+      registry.setTitleIfMissing(archived.sessionId, "Do not title archives"),
+    ).resolves.toEqual(archivedRecord);
+  });
+
   it("records a completed native transcript idempotently without moving updatedAt backwards", async () => {
     const registry = await tempRegistry();
     const created = await registry.create({

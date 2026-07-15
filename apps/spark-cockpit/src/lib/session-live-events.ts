@@ -231,6 +231,17 @@ function applyDaemonEvent(
     return { changed: false, refreshActivity: false };
   }
 
+  if (daemonEvent.type === "daemon.session.updated") {
+    if (state.view && daemonEvent.title) {
+      state.view = {
+        ...state.view,
+        title: daemonEvent.title,
+        updatedAt: daemonEvent.emittedAt ?? event.createdAt,
+      };
+    }
+    return { changed: Boolean(daemonEvent.title), refreshActivity: true };
+  }
+
   if (daemonEvent.type !== "daemon.view_event") {
     if (daemonEvent.type === "daemon.task.lifecycle") {
       const turnId = daemonEvent.taskFileName ?? daemonEvent.invocationId ?? null;
@@ -393,7 +404,8 @@ function daemonEventFromPayload(value: unknown): SparkDaemonEvent | null {
     value.type !== "daemon.task.lifecycle" &&
     value.type !== "daemon.view_event" &&
     value.type !== "daemon.interaction.request" &&
-    value.type !== "daemon.interaction.response"
+    value.type !== "daemon.interaction.response" &&
+    value.type !== "daemon.session.updated"
   ) {
     return null;
   }

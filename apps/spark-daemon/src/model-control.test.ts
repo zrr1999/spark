@@ -86,10 +86,48 @@ describe("daemon model control", () => {
     expect(flow).not.toHaveProperty("credentials");
     expect(flow).not.toHaveProperty("access");
   });
+
+  it("uses the current session model for a bounded title leaf without a provider override", async () => {
+    const root = await mkdtemp(join(tmpdir(), "spark-model-title-"));
+    roots.push(root);
+    const sessionRegistry = createDaemonSessionRegistry(root, {
+      daemonId: "install-model-title",
+      daemonCwd: root,
+    });
+    const runLeaf = vi.fn(async () => ({ degraded: false, text: " Diagnose daemon startup " }));
+    const control = createSparkDaemonModelControl({
+      providerControl: fakeProviderControl(undefined, runLeaf),
+      sessionRegistry,
+    });
+
+    await expect(
+      control.generateSessionTitle!({ prompt: "Why does startup fail?", model: selectedModel }),
+    ).resolves.toBe("Diagnose daemon startup");
+    expect(runLeaf).toHaveBeenCalledWith({
+      role: "session-title",
+      brief: expect.stringContaining("Return only the title"),
+      input: "Why does startup fail?",
+      sessionModel: "baidu-oneapi/ernie-4.6",
+      maxTokens: 48,
+      reasoning: false,
+    });
+
+    runLeaf.mockResolvedValueOnce({ degraded: true, text: "" });
+    await expect(
+      control.generateSessionTitle!({ prompt: "fallback", model: selectedModel }),
+    ).resolves.toBeUndefined();
+
+    await control.generateSessionTitle!({ prompt: "x".repeat(2_100), model: selectedModel });
+    expect(runLeaf).toHaveBeenLastCalledWith(expect.objectContaining({ input: "x".repeat(2_000) }));
+  });
 });
 
 function fakeProviderControl(
-  prepareModel: (modelRef: string) => Promise<void> = async () => undefined,
+  prepareModel: ((modelRef: string) => Promise<void>) | undefined = async () => undefined,
+  runLeaf: NonNullable<SparkProviderControl["runLeaf"]> = async () => ({
+    degraded: true,
+    text: "",
+  }),
 ): SparkProviderControl {
   const snapshot: SparkProviderControlSnapshot = {
     activeModelId: "baidu-oneapi/ernie-4.5",
@@ -162,6 +200,7 @@ function fakeProviderControl(
     cancelOAuth: () => ({ ...flow, phase: "cancelled" }),
     resolveApiKey: () => "key",
     resolveApiKeyAsync: async () => "key",
-    prepareModel,
+    prepareModel: prepareModel ?? (async () => undefined),
+    runLeaf,
   };
 }

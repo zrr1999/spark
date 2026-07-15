@@ -47,6 +47,8 @@ describe("daemon session registry", () => {
       bind: (input) => track(() => backing.bind(input)),
       unbind: (sessionId, externalKey) => track(() => backing.unbind(sessionId, externalKey)),
       archive: (sessionId) => track(() => backing.archive(sessionId)),
+      setTitleIfMissing: (sessionId, title) =>
+        track(() => backing.setTitleIfMissing(sessionId, title)),
       setModel: (sessionId, model) => track(() => backing.setModel(sessionId, model)),
       setThinkingLevel: (sessionId, thinkingLevel) =>
         track(() => backing.setThinkingLevel(sessionId, thinkingLevel)),
@@ -59,6 +61,7 @@ describe("daemon session registry", () => {
 
     await registry.create({ sessionId: "bind_target", workspaceId: "ws_ops" });
     await registry.create({ sessionId: "archive_target", workspaceId: "ws_ops" });
+    await registry.create({ sessionId: "title_target", workspaceId: "ws_ops" });
 
     const [channelSession] = await Promise.all([
       registry.resolveBinding({
@@ -72,18 +75,28 @@ describe("daemon session registry", () => {
         externalKey: "infoflow:user:u_bound",
       }),
       registry.archive("archive_target"),
+      registry.setTitleIfMissing?.("title_target", "Generated title"),
     ]);
 
     expect(maximumActiveMutations).toBe(1);
     const persisted = await backing.list({ includeArchived: true });
     expect(persisted.map((session) => session.sessionId).sort()).toEqual(
-      ["archive_target", "bind_target", channelSession.sessionId, "created_concurrently"].sort(),
+      [
+        "archive_target",
+        "bind_target",
+        "title_target",
+        channelSession.sessionId,
+        "created_concurrently",
+      ].sort(),
     );
     expect(persisted.find((session) => session.sessionId === "bind_target")?.bindings).toEqual([
       expect.objectContaining({ externalKey: "infoflow:user:u_bound" }),
     ]);
     expect(persisted.find((session) => session.sessionId === "archive_target")?.status).toBe(
       "archived",
+    );
+    expect(persisted.find((session) => session.sessionId === "title_target")?.title).toBe(
+      "Generated title",
     );
     expect(channelSession.bindings).toEqual([
       expect.objectContaining({ externalKey: "feishu:chat:oc_channel" }),

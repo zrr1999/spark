@@ -28,6 +28,7 @@ export interface DaemonSessionRegistry {
   bind(input: SparkSessionBindRequest): Promise<SparkSessionRegistryRecord>;
   unbind(sessionId: string, externalKey: string): Promise<SparkSessionRegistryRecord>;
   archive(sessionId: SparkSessionArchiveRequest["sessionId"]): Promise<SparkSessionRegistryRecord>;
+  setTitleIfMissing?(sessionId: string, title: string): Promise<SparkSessionRegistryRecord>;
   setModel(sessionId: string, model: SparkModelRef): Promise<SparkSessionRegistryRecord>;
   setThinkingLevel(
     sessionId: string,
@@ -80,6 +81,12 @@ export function createSerializedDaemonSessionRegistry(
     bind: (input) => mutate(() => registry.bind(input)),
     unbind: (sessionId, externalKey) => mutate(() => registry.unbind(sessionId, externalKey)),
     archive: (sessionId) => mutate(() => registry.archive(sessionId)),
+    ...(registry.setTitleIfMissing
+      ? {
+          setTitleIfMissing: (sessionId: string, title: string) =>
+            mutate(() => registry.setTitleIfMissing!(sessionId, title)),
+        }
+      : {}),
     setModel: (sessionId, model) => mutate(() => registry.setModel(sessionId, model)),
     setThinkingLevel: (sessionId, thinkingLevel) =>
       mutate(() => registry.setThinkingLevel(sessionId, thinkingLevel)),
@@ -104,6 +111,8 @@ export function createDaemonSessionRegistry(
     bind: async (input) => await registry.bind(input),
     unbind: async (sessionId, externalKey) => await registry.unbind(sessionId, externalKey),
     archive: async (sessionId) => await registry.archive(sessionId),
+    setTitleIfMissing: async (sessionId, title) =>
+      await registry.setTitleIfMissing(sessionId, title),
     setModel: async (sessionId, model) => await registry.setModel(sessionId, model),
     setThinkingLevel: async (sessionId, thinkingLevel) =>
       await registry.setThinkingLevel(sessionId, thinkingLevel),

@@ -36,6 +36,7 @@ import type { SparkDaemonModelControl } from "../model-control.ts";
 import type { DaemonSessionRegistry } from "../session-registry.ts";
 import { daemonTaskRouteMetadata } from "../core/queue-worker.ts";
 import { ChannelReplyEventProjector } from "../channels/reply-stream.ts";
+import { assignCompletedSessionTitle } from "./session-title.ts";
 
 export interface SparkDaemonQueueTaskExecutorOptions {
   paths: SparkPaths;
@@ -44,12 +45,13 @@ export interface SparkDaemonQueueTaskExecutorOptions {
   controlSparkHome?: string;
   /** Workspace channels config root (`$SPARK_HOME`); defaults to controlSparkHome. */
   channelsSparkHome?: string;
-  modelControl?: Pick<SparkDaemonModelControl, "effectiveModel" | "prepareModel">;
+  modelControl?: Pick<SparkDaemonModelControl, "effectiveModel" | "prepareModel"> &
+    Partial<Pick<SparkDaemonModelControl, "generateSessionTitle">>;
   sessionRegistry?: Pick<
     DaemonSessionRegistry,
     "recordRun" | "recordTurnQueued" | "recordTurnSettled"
   > &
-    Partial<Pick<DaemonSessionRegistry, "get">>;
+    Partial<Pick<DaemonSessionRegistry, "get" | "setTitleIfMissing">>;
   createSparkHeadlessSessionExecutor?: CreateSparkHeadlessSessionExecutorFn;
 }
 
@@ -81,7 +83,17 @@ export function createSparkDaemonQueueTaskExecutor(
           ...options,
           executeSession: await getSessionExecutor(),
         });
-        return await recordCompletedSessionRun(effectiveTask, result, options.sessionRegistry);
+        const completed = await recordCompletedSessionRun(
+          effectiveTask,
+          result,
+          options.sessionRegistry,
+        );
+        if (completed.indexed) {
+          // Naming is a post-commit projection. It must not keep the successful
+          // queue task open or inherit its cancel/timeout lifecycle.
+          void assignTitleAfterCompletedSessionRun(effectiveTask, context, options);
+        }
+        return completed.result;
       } catch (error) {
         await settleFailedSessionRun(task.sessionId, options.sessionRegistry);
         throw error;
@@ -424,22 +436,25 @@ async function recordCompletedSessionRun(
   task: SparkDaemonSessionRunTask,
   result: unknown,
   registry: Pick<DaemonSessionRegistry, "recordRun" | "recordTurnSettled"> | undefined,
-): Promise<unknown> {
-  if (!registry) return result;
+): Promise<{ result: unknown; indexed: boolean }> {
+  if (!registry) return { result, indexed: false };
   const sessionPath =
     isRecord(result) && typeof result.sessionPath === "string" && result.sessionPath.trim()
       ? result.sessionPath.trim()
       : undefined;
   if (!sessionPath) {
     await settleSessionRun(task.sessionId, registry, "missing native sessionPath");
-    return registryWarning(
-      result,
-      `session ${task.sessionId} completed without a native sessionPath`,
-    );
+    return {
+      result: registryWarning(
+        result,
+        `session ${task.sessionId} completed without a native sessionPath`,
+      ),
+      indexed: false,
+    };
   }
   try {
     await registry.recordRun({ sessionId: task.sessionId, sessionPath });
-    return result;
+    return { result, indexed: true };
   } catch (error) {
     const message = `failed to index completed session ${task.sessionId}: ${errorMessage(error)}`;
     console.error(`[spark-daemon] ${message}`);
@@ -447,7 +462,55 @@ async function recordCompletedSessionRun(
     // processed and surface the indexing failure in its durable result so a
     // retry cannot duplicate the completed user turn.
     await settleSessionRun(task.sessionId, registry, "registry persistence failure");
-    return registryWarning(result, message);
+    return { result: registryWarning(result, message), indexed: false };
+  }
+}
+
+async function assignTitleAfterCompletedSessionRun(
+  task: SparkDaemonSessionRunTask,
+  context: SparkDaemonTaskExecutionContext,
+  options: SparkDaemonQueueTaskExecutorOptions,
+): Promise<void> {
+  const generateSessionTitle = options.modelControl?.generateSessionTitle;
+  const get = options.sessionRegistry?.get;
+  const setTitleIfMissing = options.sessionRegistry?.setTitleIfMissing;
+  if (!task.model || !generateSessionTitle || !get || !setTitleIfMissing) return;
+  try {
+    const session = await assignCompletedSessionTitle(
+      {
+        sessionId: task.sessionId,
+        prompt: task.prompt,
+        model: modelRefFromValue(task.model),
+        signal: AbortSignal.timeout(5_000),
+      },
+      {
+        modelControl: {
+          generateSessionTitle: (input) => options.modelControl!.generateSessionTitle!(input),
+        },
+        sessionRegistry: {
+          get: (sessionId) => options.sessionRegistry!.get!(sessionId),
+          setTitleIfMissing: (sessionId, title) =>
+            options.sessionRegistry!.setTitleIfMissing!(sessionId, title),
+        },
+      },
+    );
+    if (!session?.title) return;
+    await context.emitEvent?.({
+      version: SPARK_PROTOCOL_VERSION,
+      type: "daemon.session.updated",
+      source: "daemon",
+      emittedAt: new Date().toISOString(),
+      ...(task.workspaceId ? { workspaceId: task.workspaceId } : {}),
+      ...(task.projectId ? { projectId: task.projectId } : {}),
+      sessionId: task.sessionId,
+      invocationId: context.invocationId,
+      title: session.title,
+      metadata: daemonTaskRouteMetadata(task),
+    });
+  } catch {
+    // Keep naming fully advisory even if a future dependency implementation
+    // violates the helper's best-effort contract.
+    console.error(`[spark-daemon] unexpected session title failure for ${task.sessionId}`);
   }
 }
 

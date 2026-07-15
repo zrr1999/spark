@@ -147,6 +147,15 @@ void test("spark protocol validates daemon-routable view and interaction events"
   });
   assert.equal(requestEvent.type, "daemon.interaction.request");
   assert.equal(requestEvent.request.kind, "toolApproval");
+
+  const sessionUpdated = parseSparkDaemonEvent({
+    type: "daemon.session.updated",
+    source: "daemon",
+    sessionId: "session-daemon",
+    title: "Diagnose daemon startup",
+  });
+  assert.equal(sessionUpdated.type, "daemon.session.updated");
+  assert.equal(sessionUpdated.title, "Diagnose daemon startup");
 });
 
 void test("spark protocol rejects malformed interaction requests", () => {
