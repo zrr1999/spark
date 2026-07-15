@@ -33,7 +33,7 @@
     "build": "pnpm --filter @zendev-lab/spark-daemon run build && pnpm --filter @zendev-lab/spark-cockpit run build",
     "preview": "pnpm --filter @zendev-lab/spark-cockpit run dev",
     "publish": "pnpm run check && pnpm run build && pnpm -r --filter './apps/*' --filter @zendev-lab/pi-extension publish --access public",
-    "prepare": "corepack pnpm dlx @j178/prek install --hook-type commit-msg --hook-type pre-commit"
+    "prepare": "prek install --hook-type commit-msg --hook-type pre-commit"
   },
   "dependencies": {
     "@zendev-lab/pi-btw": "workspace:^",
@@ -65,6 +65,7 @@
     "typebox": "^1.2.13"
   },
   "devDependencies": {
+    "@j178/prek": "0.4.6",
     "@types/node": "^26.0.1",
     "@zendev-lab/spark-system": "workspace:*",
     "oxlint": "1.70.0",
