@@ -85,7 +85,7 @@ vi.mock("$lib/server/form-data", () => ({
   },
 }));
 
-import { actions } from "../../routes/(workbench)/sessions/+page.server";
+import { actions, load } from "../../routes/(workbench)/sessions/+page.server";
 
 const session = {
   sessionId: "sess_conversation",
@@ -96,6 +96,13 @@ const session = {
   bindings: [],
   createdAt: "2026-07-10T00:00:00.000Z",
   updatedAt: "2026-07-10T00:00:00.000Z",
+};
+
+const daemonSession = {
+  ...session,
+  sessionId: "sess_global",
+  scope: { kind: "daemon" as const, daemonId: "daemon-local" },
+  workspaceId: undefined,
 };
 
 beforeEach(() => {
@@ -110,6 +117,10 @@ beforeEach(() => {
     available: true,
     snapshot: { providers: [], diagnostics: [] },
   });
+  mocks.listManagedSessionsForCockpit.mockResolvedValue({
+    available: true,
+    sessions: [session, daemonSession],
+  });
   mocks.setSessionModelForCockpit.mockResolvedValue(session);
   mocks.cancelConversationTurnForCockpit.mockResolvedValue({
     turnId: "inv_conversation",
@@ -120,6 +131,18 @@ beforeEach(() => {
 });
 
 describe("session conversation actions", () => {
+  it("selects the daemon-global composer from the new-conversation query", async () => {
+    const result = await load({
+      url: new URL("http://localhost/sessions?new=daemon"),
+      parent: async () => ({ activeWorkspace: { id: "ws_demo" } }),
+    } as never);
+
+    expect(result).toMatchObject({
+      newSessionScope: "daemon",
+      sessions: [session, daemonSession],
+    });
+  });
+
   it("creates an untitled session, keeps the first prompt as assignment title, and redirects", async () => {
     const action = requireAction("startConversation");
 
@@ -143,20 +166,26 @@ describe("session conversation actions", () => {
     expect(mocks.archiveManagedSessionForCockpit).not.toHaveBeenCalled();
   });
 
-  it("requires a workspace target and ignores any legacy daemon scope hint", async () => {
-    const result = await requireAction("startConversation")(
-      actionEvent({ scopeKind: "daemon", message: "Inspect daemon health." }),
-    );
+  it("creates a daemon-global conversation without inventing a workspace target", async () => {
+    mocks.createManagedSessionForCockpit.mockResolvedValueOnce(daemonSession);
 
-    expect(result).toMatchObject({
-      status: 400,
-      data: {
-        intent: "startConversation",
-        success: false,
-      },
+    await expect(
+      requireAction("startConversation")(
+        actionEvent({ scopeKind: "daemon", message: "Inspect daemon health." }),
+      ),
+    ).rejects.toMatchObject({
+      status: 303,
+      location: "/sessions/sess_global",
     });
-    expect(mocks.createManagedSessionForCockpit).not.toHaveBeenCalled();
-    expect(mocks.submitConversationTurnForCockpit).not.toHaveBeenCalled();
+    expect(mocks.createManagedSessionForCockpit).toHaveBeenCalledWith({
+      scope: { kind: "daemon" },
+    });
+    expect(mocks.submitConversationTurnForCockpit).toHaveBeenCalledWith({
+      workspaceId: undefined,
+      sessionId: "sess_global",
+      prompt: "Inspect daemon health.",
+      title: "Inspect daemon health.",
+    });
   });
 
   it("preserves the first message and archives the new session when queueing fails", async () => {
@@ -217,26 +246,24 @@ describe("session conversation actions", () => {
     });
   });
 
-  it("rejects stale form submissions for daemon-global conversations", async () => {
-    mocks.getManagedSessionForCockpit.mockResolvedValueOnce({
-      ...session,
-      sessionId: "sess_global",
-      scope: { kind: "daemon", daemonId: "daemon-local" },
-      workspaceId: undefined,
-    });
+  it("queues later daemon-global messages without a workspace target", async () => {
+    mocks.getManagedSessionForCockpit.mockResolvedValueOnce(daemonSession);
 
     await expect(
       requireAction("sendMessage")(
         actionEvent({ sessionId: "sess_global", message: "Continue globally." }),
       ),
     ).resolves.toMatchObject({
-      status: 400,
-      data: {
-        intent: "sendMessage",
-        success: false,
-      },
+      intent: "sendMessage",
+      success: true,
+      queuedTurnId: "turn_conversation",
     });
-    expect(mocks.submitConversationTurnForCockpit).not.toHaveBeenCalled();
+    expect(mocks.submitConversationTurnForCockpit).toHaveBeenCalledWith({
+      workspaceId: undefined,
+      sessionId: "sess_global",
+      prompt: "Continue globally.",
+      title: "Continue globally.",
+    });
   });
 
   it("persists a conversation model through the daemon control plane", async () => {

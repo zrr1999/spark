@@ -201,6 +201,7 @@
         {common}
         messages={{
           workspaceConversation: data.messages.sessions.workspaceConversation,
+          daemonConversation: data.messages.sessions.daemonConversation,
           searchPlaceholder: data.messages.sessions.searchPlaceholder,
           emptyTitle: data.messages.sessions.emptyTitle,
           daemonUnavailableTitle: data.messages.sessions.daemonUnavailableTitle,
@@ -208,6 +209,7 @@
           listLabel: data.messages.sessions.listLabel,
           untitledConversation: data.messages.sessions.untitledConversation,
           unknownWorkspace: data.messages.sessions.unknownWorkspace,
+          daemonGroup: data.messages.sessions.daemonGroup,
           channelSessionBadge: data.messages.sessions.channelSessionBadge,
           channelLabels: data.messages.sessions.channelLabels,
           sessionTypes: data.messages.sessions.sessionTypes,

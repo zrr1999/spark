@@ -11,12 +11,12 @@ import { loadModelControlForCockpit } from "$lib/server/model-control";
 import { sessionSnapshotWindow } from "$lib/session-snapshot-window";
 import type { PageServerLoad } from "./$types";
 import {
+  sessionsForWorkbench,
   workspaceIdForWorkbenchSession,
-  workspaceSessionsForWorkbench,
 } from "../../../../lib/workbench-session-scope";
 import { actions as sessionsActions } from "../+page.server";
 
-export const load: PageServerLoad = async ({ params }) => {
+export const load: PageServerLoad = async ({ params, parent }) => {
   const db = getDatabase();
   // Capture the event watermark before loading daemon truth. Events committed
   // during the load are replayed after this cursor; older history must not
@@ -32,12 +32,8 @@ export const load: PageServerLoad = async ({ params }) => {
     throw error(404, "Session not found");
   }
   const workspaceId = workspaceIdForWorkbenchSession(selected);
-  if (!workspaceId) {
-    // Daemon-global sessions belong to the daemon/TUI control plane. Do not
-    // make them reachable through a stale Cockpit URL.
-    throw error(404, "Session not found");
-  }
-  const sessions = workspaceSessionsForWorkbench(managedSessions.sessions);
+  const parentData = await parent();
+  const sessions = sessionsForWorkbench(managedSessions.sessions, parentData.activeWorkspace?.id);
   const visibleSessions = sessions.some((session) => session.sessionId === selected.sessionId)
     ? sessions
     : [selected, ...sessions];
@@ -52,10 +48,12 @@ export const load: PageServerLoad = async ({ params }) => {
     sessionEventCursor: eventCursor ? `${eventCursor.createdAt}|${eventCursor.id}` : null,
     canAssign: selected.status !== "archived",
     modelControl,
-    sessionActivity: loadSessionActivity(db, {
-      workspaceId,
-      sessionId: selected.sessionId,
-    }),
+    sessionActivity: workspaceId
+      ? loadSessionActivity(db, {
+          workspaceId,
+          sessionId: selected.sessionId,
+        })
+      : { commands: [], reports: [] },
   };
 };
 

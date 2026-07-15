@@ -21,23 +21,27 @@ import {
   setSessionThinkingLevelForCockpit,
 } from "$lib/server/model-control";
 import {
+  sessionsForWorkbench,
   workspaceIdForWorkbenchSession,
-  workspaceSessionsForWorkbench,
 } from "../../../lib/workbench-session-scope";
 import { sessionHasChannelBinding } from "../../../lib/channel-session-title";
 import type { Actions, PageServerLoad } from "./$types";
 
-export const load: PageServerLoad = async () => {
+export const load: PageServerLoad = async ({ parent, url }) => {
+  const parentData = await parent();
+  const newSessionScope: "workspace" | "daemon" =
+    url.searchParams.get("new") === "daemon" ? "daemon" : "workspace";
   const [managedSessions, modelControl] = await Promise.all([
     listManagedSessionsForCockpit(),
     loadModelControlForCockpit(),
   ]);
   return {
-    sessions: workspaceSessionsForWorkbench(managedSessions.sessions),
+    sessions: sessionsForWorkbench(managedSessions.sessions, parentData.activeWorkspace?.id),
     sessionsAvailable: managedSessions.available,
     selectedSessionId: null as string | null,
     sessionActivity: null,
     modelControl,
+    newSessionScope,
   };
 };
 
@@ -49,12 +53,13 @@ export const actions: Actions = {
     }).sessions;
     const formData = await request.formData();
     const workspaceId = formText(formData, "workspaceId").trim();
+    const scopeKind = formText(formData, "scopeKind").trim() === "daemon" ? "daemon" : "workspace";
     const message = formText(formData, "message").trim();
     const model = formText(formData, "model").trim();
     const thinkingLevel = formText(formData, "thinkingLevel").trim();
-    const values = { workspaceId, message, model, thinkingLevel };
+    const values = { scopeKind, workspaceId, message, model, thinkingLevel };
 
-    if (!workspaceId) {
+    if (scopeKind === "workspace" && !workspaceId) {
       return fail(400, {
         intent: "startConversation",
         success: false,
@@ -75,10 +80,14 @@ export const actions: Actions = {
 
     let session;
     try {
-      session = await createManagedSessionForCockpit({
-        scope: { kind: "workspace", workspaceId },
-        workspaceId,
-      });
+      session = await createManagedSessionForCockpit(
+        scopeKind === "daemon"
+          ? { scope: { kind: "daemon" } }
+          : {
+              scope: { kind: "workspace", workspaceId },
+              workspaceId,
+            },
+      );
     } catch (caught) {
       const error = caught instanceof Error ? caught.message : t.createFailed;
       return fail(400, {
@@ -175,15 +184,6 @@ export const actions: Actions = {
       });
     }
     const workspaceId = workspaceIdForWorkbenchSession(session);
-    if (!workspaceId) {
-      return fail(400, {
-        intent: "sendMessage",
-        success: false,
-        error: t.assignSessionRequired,
-        message: t.assignSessionRequired,
-        values,
-      });
-    }
     if (session.status === "archived") {
       return fail(400, {
         intent: "sendMessage",
@@ -196,7 +196,7 @@ export const actions: Actions = {
 
     try {
       const turn = await submitConversationMessage({
-        workspaceId,
+        workspaceId: workspaceId ?? undefined,
         sessionId,
         message,
       });

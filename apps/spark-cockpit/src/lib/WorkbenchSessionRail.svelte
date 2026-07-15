@@ -13,6 +13,7 @@
     type WorkbenchSessionType,
   } from "$lib/workbench-session-groups";
   import {
+    daemonIdentityForWorkbenchSession,
     isSessionVisibleInWorkbenchRail,
     workbenchSessionScope,
   } from "$lib/workbench-session-scope";
@@ -57,6 +58,7 @@
     common: Parameters<typeof getStatusLabel>[1];
     messages: {
       workspaceConversation: string;
+      daemonConversation: string;
       searchPlaceholder: string;
       emptyTitle: string;
       daemonUnavailableTitle: string;
@@ -64,6 +66,7 @@
       listLabel: string;
       untitledConversation: string;
       unknownWorkspace: string;
+      daemonGroup: string;
       channelSessionBadge: string;
       channelLabels: ChannelSessionLabels;
       sessionTypes: Record<WorkbenchSessionType, string>;
@@ -108,6 +111,10 @@
   function sessionScopeLabel(session: SessionRecord) {
     const scope = workbenchSessionScope(session);
     if (scope.kind === "workspace") return workspaceLabel(scope.workspaceId);
+    if (scope.kind === "daemon") {
+      const identity = daemonIdentityForWorkbenchSession(session);
+      return `${messages.daemonGroup} · ${identity?.label ?? scope.daemonId}`;
+    }
     return messages.unknownWorkspace;
   }
 
@@ -165,6 +172,28 @@
             <span class="sr-only">{messages.workspaceConversation}</span>
           </span>
         {/if}
+      {/if}
+      {#if sessionsAvailable}
+        <a
+          class="new-session"
+          href="/sessions?new=daemon"
+          aria-label={messages.daemonConversation}
+          title={messages.daemonConversation}
+        >
+          <Icon name="spark" size={16} stroke={2.2} />
+          <span class="sr-only">{messages.daemonConversation}</span>
+        </a>
+      {:else}
+        <span
+          class="new-session disabled"
+          role="link"
+          aria-disabled="true"
+          aria-label={messages.daemonConversation}
+          title={messages.daemonConversation}
+        >
+          <Icon name="spark" size={16} stroke={2.2} />
+          <span class="sr-only">{messages.daemonConversation}</span>
+        </span>
       {/if}
     </div>
 

@@ -32,13 +32,13 @@ describe("WorkbenchSessionRail component contract", () => {
     expect(source).toContain("!sessionHasChannelBinding(session)");
   });
 
-  it("offers only workspace-scoped conversation creation", () => {
+  it("offers separate workspace and global conversation creation", () => {
     const source = readFileSync(componentPath, "utf8");
 
     expect(source).toContain('href="/sessions?new=workspace"');
-    expect(source).not.toContain("new=daemon");
-    expect(source).not.toContain("daemonConversation");
-    expect(source).not.toContain("daemonGroup");
+    expect(source).toContain('href="/sessions?new=daemon"');
+    expect(source).toContain("daemonConversation");
+    expect(source).toContain("daemonGroup");
   });
 
   it("groups conversations by session type in collapsible sections", () => {
@@ -49,12 +49,13 @@ describe("WorkbenchSessionRail component contract", () => {
     expect(source).toContain("labels: messages.sessionTypes");
   });
 
-  it("keeps the compact new-conversation action beside the filter", () => {
+  it("keeps compact new-conversation actions beside the filter", () => {
     const source = readFileSync(componentPath, "utf8");
 
     expect(source).toContain('<div class="session-toolbar">');
     expect(source).toContain('<div class="new-session-actions">');
     expect(source).toContain('<label class="session-filter">');
     expect(source).toContain('<span class="sr-only">{messages.workspaceConversation}</span>');
+    expect(source).toContain('<span class="sr-only">{messages.daemonConversation}</span>');
   });
 });

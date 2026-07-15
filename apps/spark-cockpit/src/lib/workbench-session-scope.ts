@@ -39,9 +39,7 @@ export function isSessionVisibleInWorkbenchRail(
   activeWorkspaceId: string | null | undefined,
 ) {
   const scope = workbenchSessionScope(session);
-  // Cockpit is workspace-scoped. Daemon-scoped ("global") conversations are
-  // managed through the session tool / TUI and are not surfaced in the
-  // workbench rail.
+  if (scope.kind === "daemon") return true;
   return scope.kind === "workspace" && scope.workspaceId === activeWorkspaceId;
 }
 
@@ -50,16 +48,18 @@ export function workspaceIdForWorkbenchSession(session: WorkbenchSessionScopeLik
   return scope.kind === "workspace" ? scope.workspaceId : null;
 }
 
-/**
- * Project daemon registry records onto the Cockpit workbench boundary.
- *
- * The daemon registry also contains daemon-global sessions used by the TUI and
- * session tools. Keeping the projection here prevents those records from
- * leaking back into a Web surface when a caller forwards an unscoped
- * `session.list` response.
- */
-export function workspaceSessionsForWorkbench<T extends WorkbenchSessionScopeLike>(
+export function daemonIdentityForWorkbenchSession(session: WorkbenchSessionScopeLike) {
+  const scope = workbenchSessionScope(session);
+  if (scope.kind !== "daemon") return null;
+  return {
+    id: scope.daemonId,
+    label: scope.daemonLabel ?? scope.daemonId,
+  };
+}
+
+export function sessionsForWorkbench<T extends WorkbenchSessionScopeLike>(
   sessions: readonly T[],
+  activeWorkspaceId: string | null | undefined,
 ): T[] {
-  return sessions.filter((session) => workbenchSessionScope(session).kind === "workspace");
+  return sessions.filter((session) => isSessionVisibleInWorkbenchRail(session, activeWorkspaceId));
 }

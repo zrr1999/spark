@@ -10,7 +10,13 @@ import {
 } from "./workbench-session-order";
 import { workbenchSessionScope, type WorkbenchSessionScopeLike } from "./workbench-session-scope";
 
-export type WorkbenchSessionType = "workspace" | "private" | "group" | "channel" | "conversation";
+export type WorkbenchSessionType =
+  | "workspace"
+  | "daemon"
+  | "private"
+  | "group"
+  | "channel"
+  | "conversation";
 
 export type WorkbenchSessionGroupLike = WorkbenchSessionOrderLike &
   WorkbenchSessionScopeLike & {
@@ -34,6 +40,7 @@ export const workbenchSessionTypeOrder: readonly WorkbenchSessionType[] = [
   "group",
   "channel",
   "conversation",
+  "daemon",
 ];
 
 export function workbenchSessionType(
@@ -48,7 +55,9 @@ export function workbenchSessionType(
     return channelSessionScopeKind(presentation.channel.adapter, presentation.channel.scope);
   }
   if (sessionHasChannelBinding(session)) return "conversation";
-  return workbenchSessionScope(session).kind === "workspace" ? "workspace" : null;
+  const scope = workbenchSessionScope(session);
+  if (scope.kind === "daemon") return "daemon";
+  return scope.kind === "workspace" ? "workspace" : null;
 }
 
 export function groupWorkbenchSessionsByType<T extends WorkbenchSessionGroupLike>(

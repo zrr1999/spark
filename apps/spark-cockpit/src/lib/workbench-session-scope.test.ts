@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  daemonIdentityForWorkbenchSession,
   isSessionVisibleInWorkbenchRail,
+  sessionsForWorkbench,
   workbenchSessionScope,
-  workspaceSessionsForWorkbench,
   workspaceIdForWorkbenchSession,
 } from "./workbench-session-scope";
 
 describe("workbench session scope", () => {
-  it("shows only sessions scoped to the active workspace and hides daemon-scoped ones", () => {
+  it("shows the active workspace plus explicitly daemon-scoped sessions", () => {
     expect(isSessionVisibleInWorkbenchRail({ workspaceId: "ws_spore" }, "ws_spore")).toBe(true);
     expect(isSessionVisibleInWorkbenchRail({ workspaceId: "spark" }, "ws_spore")).toBe(false);
     expect(
@@ -15,7 +16,7 @@ describe("workbench session scope", () => {
         { workspaceId: "legacy", scope: { kind: "daemon", daemonId: "daemon-a" } },
         "ws_spore",
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("prefers canonical workspace scope over the legacy compatibility field", () => {
@@ -31,21 +32,27 @@ describe("workbench session scope", () => {
     expect(workspaceIdForWorkbenchSession(session)).toBe("ws_current");
   });
 
-  it("keeps daemon-scoped sessions out of the workspace-scoped Cockpit view", () => {
-    const session = { scope: { kind: "daemon" as const, daemonId: "daemon-a" } };
-    expect(workbenchSessionScope(session)).toEqual({ kind: "daemon", daemonId: "daemon-a" });
-    expect(workspaceIdForWorkbenchSession(session)).toBeNull();
+  it("keeps daemon identity available for the global conversation group", () => {
+    expect(
+      daemonIdentityForWorkbenchSession({
+        scope: { kind: "daemon", daemonId: "daemon-a", daemonLabel: "Mac Studio" },
+      }),
+    ).toEqual({ id: "daemon-a", label: "Mac Studio" });
+    expect(
+      daemonIdentityForWorkbenchSession({
+        scope: { kind: "daemon", daemonId: "daemon-b" },
+      }),
+    ).toEqual({ id: "daemon-b", label: "daemon-b" });
   });
 
-  it("projects daemon registry results to workspace and channel-owned conversations", () => {
+  it("projects only the active workspace plus global daemon conversations", () => {
     const workspaceSession = {
       sessionId: "sess_workspace",
       scope: { kind: "workspace" as const, workspaceId: "ws_current" },
     };
-    const channelSession = {
-      sessionId: "sess_channel",
-      scope: { kind: "workspace" as const, workspaceId: "ws_current" },
-      bindings: [{ kind: "channel", externalKey: "infoflow:user:u1" }],
+    const otherWorkspaceSession = {
+      sessionId: "sess_other",
+      scope: { kind: "workspace" as const, workspaceId: "ws_other" },
     };
     const daemonSession = {
       sessionId: "sess_daemon",
@@ -53,7 +60,7 @@ describe("workbench session scope", () => {
     };
 
     expect(
-      workspaceSessionsForWorkbench([workspaceSession, channelSession, daemonSession]),
-    ).toEqual([workspaceSession, channelSession]);
+      sessionsForWorkbench([workspaceSession, otherWorkspaceSession, daemonSession], "ws_current"),
+    ).toEqual([workspaceSession, daemonSession]);
   });
 });

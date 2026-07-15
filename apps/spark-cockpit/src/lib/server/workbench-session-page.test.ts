@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  cursor: vi.fn(),
   get: vi.fn(),
   list: vi.fn(),
   snapshot: vi.fn(),
@@ -17,10 +18,13 @@ vi.mock("$lib/server/managed-sessions", () => ({
 }));
 
 vi.mock("$lib/server/db", () => ({ getDatabase: () => ({}) }));
-vi.mock("$lib/server/events", () => ({ latestEventCursor: () => null }));
+vi.mock("$lib/server/events", () => ({ latestEventCursor: mocks.cursor }));
 vi.mock("$lib/server/session-activity", () => ({ loadSessionActivity: mocks.activity }));
 vi.mock("$lib/session-snapshot-window", () => ({
-  sessionSnapshotWindow: (snapshot: unknown) => ({ snapshot, history: null }),
+  sessionSnapshotWindow: (snapshot: unknown) => ({
+    snapshot,
+    history: snapshot ? { hasEarlier: true, nextBefore: "cursor-before" } : null,
+  }),
 }));
 vi.mock("$lib/server/model-control", () => ({
   loadModelControlForCockpit: mocks.modelControl,
@@ -71,18 +75,22 @@ beforeEach(() => {
     sessions: [workspaceSession, channelSession, daemonSession],
   });
   mocks.snapshot.mockResolvedValue(null);
+  mocks.cursor.mockReturnValue(null);
   mocks.modelControl.mockResolvedValue({ available: true, snapshot: null });
   mocks.activity.mockReturnValue({ commands: [], reports: [] });
 });
 
 describe("workbench session page scope", () => {
-  it("keeps workspace and channel sessions while removing daemon-global registry records", async () => {
+  it("keeps workspace, channel, and daemon-global registry records in the conversation rail", async () => {
     mocks.get.mockResolvedValue(workspaceSession);
 
-    const result = await load({ params: { sessionId: workspaceSession.sessionId } } as never);
+    const result = await load({
+      params: { sessionId: workspaceSession.sessionId },
+      parent: async () => ({ activeWorkspace: { id: "ws_current" } }),
+    } as never);
 
     expect(result).toMatchObject({
-      sessions: [workspaceSession, channelSession],
+      sessions: [workspaceSession, channelSession, daemonSession],
       selectedSessionId: workspaceSession.sessionId,
     });
     expect(mocks.activity).toHaveBeenCalledWith(
@@ -91,12 +99,26 @@ describe("workbench session page scope", () => {
     );
   });
 
-  it("does not expose a daemon-global session through a stale direct URL", async () => {
+  it("opens a daemon-global conversation without querying workspace activity", async () => {
     mocks.get.mockResolvedValue(daemonSession);
+    mocks.snapshot.mockResolvedValue({ sessionId: daemonSession.sessionId, messages: [] });
+    mocks.cursor.mockReturnValue({
+      createdAt: "2026-07-15T00:01:00.000Z",
+      id: "evt-global",
+    });
 
     await expect(
-      load({ params: { sessionId: daemonSession.sessionId } } as never),
-    ).rejects.toMatchObject({ status: 404 });
+      load({
+        params: { sessionId: daemonSession.sessionId },
+        parent: async () => ({ activeWorkspace: { id: "ws_current" } }),
+      } as never),
+    ).resolves.toMatchObject({
+      sessions: [workspaceSession, channelSession, daemonSession],
+      selectedSessionId: daemonSession.sessionId,
+      sessionEventCursor: "2026-07-15T00:01:00.000Z|evt-global",
+      sessionHistory: { hasEarlier: true, nextBefore: "cursor-before" },
+      sessionActivity: { commands: [], reports: [] },
+    });
     expect(mocks.activity).not.toHaveBeenCalled();
   });
 });
