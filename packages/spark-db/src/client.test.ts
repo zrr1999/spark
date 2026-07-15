@@ -9,20 +9,19 @@ afterEach(() => {
 });
 
 describe("defaultDatabasePath", () => {
-  it("uses the Spark Cockpit XDG data path by default", () => {
+  it("uses the unified default Spark root", () => {
     process.env = { HOME: "/Users/example" };
 
     expect(defaultDatabasePath()).toBe(
-      join("/Users/example", ".local", "share", "spark", "cockpit", "cockpit.sqlite"),
+      join("/Users/example", ".spark", "apps", "cockpit", "data", "cockpit.sqlite"),
     );
   });
 
-  it("uses SPARK_COCKPIT_DATA_DIR as the Cockpit data override", () => {
-    process.env = {
-      HOME: "/Users/example",
-      SPARK_COCKPIT_DATA_DIR: "/Users/example/spark-cockpit",
-    };
+  it("relocates Cockpit data with SPARK_HOME", () => {
+    process.env = { HOME: "/Users/example", SPARK_HOME: "/Users/example/spark-home" };
 
-    expect(defaultDatabasePath()).toBe(join("/Users/example/spark-cockpit", "cockpit.sqlite"));
+    expect(defaultDatabasePath()).toBe(
+      join("/Users/example/spark-home", "apps", "cockpit", "data", "cockpit.sqlite"),
+    );
   });
 });

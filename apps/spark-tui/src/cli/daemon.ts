@@ -2,8 +2,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
@@ -36,6 +35,7 @@ import {
 } from "@zendev-lab/spark-protocol";
 import { sparkDaemonCliStrings } from "@zendev-lab/spark-i18n/cli";
 import { cappedExponentialCeiling, equalJitter } from "@zendev-lab/spark-retry";
+import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import {
   requestSparkDaemonLocalRpcWire,
   SparkDaemonLocalRpcError,
@@ -2715,20 +2715,7 @@ function resolveSparkDaemonClientPaths(
   client: SparkDaemonClientOptions = {},
 ): SparkDaemonClientPaths {
   if (client.paths) return client.paths;
-  const home = process.env.HOME || homedir();
-  const cwd = process.cwd();
-  const stateHome = resolve(cwd, process.env.XDG_STATE_HOME ?? join(home, ".local", "state"));
-  const stateDir = resolve(
-    cwd,
-    process.env.SPARK_DAEMON_STATE_DIR ?? join(stateHome, "spark", "daemon"),
-  );
-  const runtimeDir = resolve(
-    cwd,
-    process.env.SPARK_DAEMON_RUNTIME_DIR ??
-      (process.env.XDG_RUNTIME_DIR
-        ? join(process.env.XDG_RUNTIME_DIR, "spark", "daemon")
-        : join(stateDir, "run")),
-  );
+  const runtimeDir = resolveSparkPaths({ app: "daemon" }).runtimeDir;
   return {
     runtimeDir,
     socketPath: join(runtimeDir, "daemon.sock"),

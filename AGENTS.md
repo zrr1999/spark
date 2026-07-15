@@ -63,5 +63,5 @@ Target package topology follows type-first names:
 - Public/default repo-owned tools should use canonical `tool({ action })` surfaces when operations share one domain/state/permission/render/result contract; do not keep fragmented duplicate aliases public, and render action tools as `tool action=<value> ...`.
 - Prefer `vp fmt` / `vp check` before committing when touching TS/Markdown; pre-commit runs `vp check --fix`.
 - Do not commit secrets or `.env` files.
-- **State directories** — Workspace agent runtime lives under `.spark/`; local learnings under `.learnings/`. Cockpit and daemon app databases live under XDG paths via `resolveSparkPaths()` (`~/.local/share/spark/cockpit`, `~/.local/share/spark/daemon`).
+- **State directories** — Workspace agent runtime lives under `.spark/`; local learnings under `.learnings/`. All user-level Spark configuration and app state live under `${SPARK_HOME:-$HOME/.spark}` via `resolveSparkUserPaths()` and `resolveSparkPaths()`.
 - Boundary checks should keep retained `pi-*` packages independent from Spark product/Cockpit packages except for renamed Spark foundation packages, and keep Spark shared packages independent from Cockpit/daemon adapter packages.

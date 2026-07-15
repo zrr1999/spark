@@ -1,6 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 import {
   getBuiltinWorkflowDefinition,
   listBuiltinWorkflows,
@@ -58,7 +58,7 @@ export function workspaceWorkflowDir(cwd: string): string {
 }
 
 export function userWorkflowDir(): string {
-  return join(homedir(), ".agents", "workflows");
+  return resolveSparkUserPaths().workflowsDir;
 }
 
 export async function listSavedWorkflows(

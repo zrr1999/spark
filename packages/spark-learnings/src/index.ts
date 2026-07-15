@@ -1,5 +1,4 @@
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import {
@@ -19,6 +18,7 @@ import {
   nowIso,
   stableId,
 } from "@zendev-lab/spark-extension-api";
+import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 
 export type LearningCategory = "pattern" | "gotcha" | "decision" | "workflow" | "tool" | "project";
 export type LearningLocation = "user" | "workspace" | "repo";
@@ -449,7 +449,7 @@ function learningProvenanceNote(action: string): string {
 }
 
 function defaultUserLearningRoot(): string {
-  return join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "learning");
+  return resolveSparkUserPaths().learningsDir;
 }
 
 function findGitRoot(cwd: string): string | undefined {

@@ -6,8 +6,8 @@ import type {
 } from "@zendev-lab/spark-extension-api";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { resolveRoleNativeExecutor } from "./native-executor.ts";
-import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, sep } from "node:path";
+import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 
 export type RoleSource = "builtin" | "extension" | "project" | "user";
 export type WritableRoleSource = "project" | "user";
@@ -541,8 +541,9 @@ export function defaultProjectRoleStore(cwd: string): MarkdownRoleStore {
   return new MarkdownRoleStore({ rootDir: join(cwd, ".agents", "roles"), source: "project" });
 }
 
-export function defaultUserRoleStore(home = homedir()): MarkdownRoleStore {
-  return new MarkdownRoleStore({ rootDir: join(home, ".agents", "roles"), source: "user" });
+export function defaultUserRoleStore(home?: string): MarkdownRoleStore {
+  const rootDir = home ? join(home, ".agents", "roles") : resolveSparkUserPaths().rolesDir;
+  return new MarkdownRoleStore({ rootDir, source: "user" });
 }
 
 export type RoleModelSettingsSource = "project" | "user";
@@ -636,10 +637,11 @@ export function defaultProjectRoleModelSettingsStore(cwd: string): RoleModelSett
   return new RoleModelSettingsStore(join(cwd, ".spark", "role-model-settings.json"), "project");
 }
 
-export function defaultUserRoleModelSettingsStore(
-  home = process.env.PI_ROLES_HOME || homedir(),
-): RoleModelSettingsStore {
-  return new RoleModelSettingsStore(join(home, ".agents", "role-model-settings.json"), "user");
+export function defaultUserRoleModelSettingsStore(sparkHome?: string): RoleModelSettingsStore {
+  return new RoleModelSettingsStore(
+    resolveSparkUserPaths({ sparkHome }).roleModelSettingsFile,
+    "user",
+  );
 }
 
 export async function resolveRoleModelSetting(input: {

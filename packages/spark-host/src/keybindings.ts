@@ -37,8 +37,8 @@
  */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { homedir } from "node:os";
+import { dirname } from "node:path";
+import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 
 export type SparkKeybindingId = string;
 
@@ -275,8 +275,7 @@ export class SparkKeybindings {
 }
 
 export function defaultKeybindingsPath(): string {
-  const root = process.env.SPARK_AGENT_DIR ?? join(homedir(), ".spark", "agent");
-  return join(root, "keybindings.json");
+  return resolveSparkUserPaths().keybindingsFile;
 }
 
 export function defaultSparkKeybindings(options: SparkKeybindingsOptions = {}): SparkKeybindings {

@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 
 import type { MarkdownTheme } from "../tui/pi-tui-adapter.ts";
 import type { SparkHostRenderTheme } from "./types.ts";
@@ -233,7 +234,7 @@ async function discoverThemeFiles(
   diagnostics: SparkThemeDiagnostic[],
 ): Promise<string[]> {
   const candidates = [
-    join(options.sparkHome ?? join(homedir(), ".spark"), "themes"),
+    resolveSparkUserPaths({ sparkHome: options.sparkHome }).themesDir,
     ...(options.configuredThemePaths ?? []).map((entry) => resolveThemePath(entry, options.cwd)),
   ];
   const files: string[] = [];

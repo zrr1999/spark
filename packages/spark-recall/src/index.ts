@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { writeJsonFileAtomic } from "@zendev-lab/spark-extension-api";
+import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 
 export type RecallScope = "user" | "workspace" | "repo";
 export type RecallCandidateStatus = "candidate" | "rejected";
@@ -128,7 +129,7 @@ export function recallStorePath(
   const explicitPath = paths[scope];
   if (explicitPath?.trim()) return explicitPath;
   return scope === "user"
-    ? join(process.env.PI_CODING_AGENT_DIR ?? join(cwd, ".spark"), "recall-candidates.json")
+    ? resolveSparkUserPaths().recallFile
     : join(cwd, ".spark", "recall-candidates.json");
 }
 

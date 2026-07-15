@@ -1,6 +1,5 @@
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 import {
   getOAuthProvider,
@@ -13,6 +12,7 @@ import {
 } from "@earendil-works/pi-ai/oauth";
 
 import type { ProviderConfig } from "../provider-registry.ts";
+import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 import { withPathMutation } from "./path-mutation.ts";
 
 export type SparkStoredCredential =
@@ -60,8 +60,7 @@ export const resetSparkOAuthProviders = resetOAuthProviders;
 export type SparkOAuthProviderInterface = OAuthProviderInterface;
 
 export function defaultSparkAuthPath(sparkHome?: string): string {
-  const root = sparkHome ?? process.env.SPARK_HOME ?? join(homedir(), ".spark");
-  return join(root, "auth.json");
+  return resolveSparkUserPaths({ sparkHome }).authFile;
 }
 
 export class SparkAuthStore {

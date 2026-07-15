@@ -274,10 +274,33 @@ void test("spark-roles resolves role model settings with project and user preced
   }
 });
 
+void test("spark-roles persists user model settings under SPARK_HOME", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-roles-unified-home-"));
+  const previousSparkHome = process.env.SPARK_HOME;
+  process.env.SPARK_HOME = dir;
+  try {
+    const store = defaultUserRoleModelSettingsStore();
+    await store.save("role:builtin-reviewer", "provider/reviewer-model");
+
+    assert.equal(store.filePath, join(dir, "role-model-settings.json"));
+    assert.deepEqual(await store.loadAll(), [
+      {
+        selector: "role:builtin-reviewer",
+        model: "provider/reviewer-model",
+        source: "user",
+      },
+    ]);
+  } finally {
+    if (previousSparkHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousSparkHome;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("spark runtime role dispatch can run native roles without model settings", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-runtime-missing-model-"));
-  const previousHome = process.env.PI_ROLES_HOME;
-  process.env.PI_ROLES_HOME = join(dir, "home");
+  const previousHome = process.env.SPARK_HOME;
+  process.env.SPARK_HOME = join(dir, "home");
   try {
     const registry = new RoleRegistry();
     let capturedModel: string | undefined;
@@ -303,8 +326,8 @@ void test("spark runtime role dispatch can run native roles without model settin
     assert.equal(result.record.status, "succeeded");
     assert.equal(capturedModel, undefined);
   } finally {
-    if (previousHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousHome;
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -397,8 +420,8 @@ void test("runSparkTask records native timeout failure and leaves no active role
 
 void test("spark runtime role dispatch inherits session model when no role model is saved", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-runtime-session-model-"));
-  const previousHome = process.env.PI_ROLES_HOME;
-  process.env.PI_ROLES_HOME = join(dir, "home");
+  const previousHome = process.env.SPARK_HOME;
+  process.env.SPARK_HOME = join(dir, "home");
   try {
     const registry = new RoleRegistry();
     const result = await runRoleInstructionOnly(
@@ -429,16 +452,16 @@ void test("spark runtime role dispatch inherits session model when no role model
     assert.equal(result.record.status, "succeeded");
     assert.equal(result.record.model, "test/model");
   } finally {
-    if (previousHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousHome;
     await rm(dir, { recursive: true, force: true });
   }
 });
 
 void test("spark runtime role dispatch passes per-run env and tool policy to injected executor", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-runtime-env-tools-"));
-  const previousHome = process.env.PI_ROLES_HOME;
-  process.env.PI_ROLES_HOME = join(dir, "home");
+  const previousHome = process.env.SPARK_HOME;
+  process.env.SPARK_HOME = join(dir, "home");
   try {
     let seenEnv: NodeJS.ProcessEnv | undefined;
     let seenAllowedTools: string[] | undefined;
@@ -478,16 +501,16 @@ void test("spark runtime role dispatch passes per-run env and tool policy to inj
     assert.equal(seenEnv?.GRAFT_BASE_REF, "tree:native-base");
     assert.deepEqual(seenAllowedTools, ["graft_read", "graft_write"]);
   } finally {
-    if (previousHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousHome;
     await rm(dir, { recursive: true, force: true });
   }
 });
 
 void test("spark runtime role dispatch passes per-run env and tool policy to injected executor", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-runtime-injected-env-tools-"));
-  const previousHome = process.env.PI_ROLES_HOME;
-  process.env.PI_ROLES_HOME = join(dir, "home");
+  const previousHome = process.env.SPARK_HOME;
+  process.env.SPARK_HOME = join(dir, "home");
   try {
     let seenEnv: NodeJS.ProcessEnv | undefined;
     let seenAllowedTools: string[] | undefined;
@@ -527,8 +550,8 @@ void test("spark runtime role dispatch passes per-run env and tool policy to inj
     assert.equal(seenEnv?.GRAFT_BASE_REF, "tree:injected-base");
     assert.deepEqual(seenAllowedTools, ["graft_read", "graft_candidate_from_scratch"]);
   } finally {
-    if (previousHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousHome;
     await rm(dir, { recursive: true, force: true });
   }
 });

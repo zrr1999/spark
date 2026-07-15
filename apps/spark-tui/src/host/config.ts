@@ -22,15 +22,15 @@
  */
 
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 
 import {
   DEFAULT_SPARK_PROVIDER_SPECS,
   mergeSparkProviderSpecs,
 } from "@zendev-lab/spark-ai/control";
-import { DEFAULT_SPARK_EXTENSION_SPECS } from "./extension-specs.ts";
+import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 import { DEFAULT_SPARK_COMPACTION_SETTINGS, type SparkCompactionSettings } from "./compaction.ts";
+import { DEFAULT_SPARK_EXTENSION_SPECS } from "./extension-specs.ts";
 
 export interface SparkConfig {
   extensions: string[];
@@ -77,8 +77,7 @@ export const DEFAULT_SPARK_CONFIG: SparkConfig = {
 };
 
 export function defaultSparkConfigPath(): string {
-  const root = process.env.SPARK_HOME ?? join(homedir(), ".spark");
-  return join(root, "config.json");
+  return resolveSparkUserPaths().configFile;
 }
 
 export async function loadSparkConfig(

@@ -11,8 +11,8 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { resolveSparkHome } from "@zendev-lab/spark-system";
 
 export const CURRENT_SPARK_SESSION_VERSION = 3;
 
@@ -329,7 +329,7 @@ export function defaultSparkSessionsRoot(sparkHome = defaultSparkHome()): string
 }
 
 export function defaultSparkHome(): string {
-  return process.env.SPARK_HOME ?? join(homedir(), ".spark");
+  return resolveSparkHome();
 }
 
 export function workspaceSessionHash(cwd: string): string {

@@ -10,6 +10,7 @@ import {
   parseSkillFrontmatter,
   type SparkSkillFrontmatter,
 } from "@zendev-lab/pi-extension/host-support";
+import { resolveSparkHome, resolveSparkUserPaths } from "@zendev-lab/spark-system";
 
 export { defaultBuiltinSkillsDir, defaultPiCueSkillsDir, parseSkillFrontmatter };
 export type { SparkSkillFrontmatter };
@@ -136,16 +137,16 @@ export class SparkSkillResolver {
 }
 
 export function defaultSparkSkillsRoot(sparkHome?: string): string {
-  return sparkHome ?? process.env.SPARK_HOME ?? join(homedir(), ".spark");
+  return resolveSparkHome({ sparkHome });
 }
 
 export function defaultUserSkillsDir(sparkHome?: string): string {
   return join(defaultSparkSkillsRoot(sparkHome), "skills");
 }
 
-/** Cross-harness user skills directory shared with Pi and other agents (`~/.agents/skills`). */
+/** Public cross-harness user skills directory; independent of SPARK_HOME. */
 export function defaultUserAgentsSkillsDir(): string {
-  return join(homedir(), ".agents", "skills");
+  return resolveSparkUserPaths().userAgentsSkillsDir;
 }
 
 /**

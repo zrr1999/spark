@@ -3,6 +3,7 @@
 import { basename, join, resolve } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import { stableId, type ExtensionAPI } from "@zendev-lab/spark-extension-api";
+import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 import {
   createProviderRegistryLeafRunner,
   createProviderRegistryStreamFunction,
@@ -552,8 +553,7 @@ function currentSparkCliLeafId(store: SparkSessionStore, cwd: string): string {
 }
 
 export function defaultSparkCliKeybindingsPath(sparkHome?: string): string {
-  const root = sparkHome ?? process.env.SPARK_HOME ?? join(process.env.HOME ?? "", ".spark");
-  return join(root, "agent", "keybindings.json");
+  return resolveSparkUserPaths({ sparkHome }).keybindingsFile;
 }
 
 function formatPromptTemplateDiagnostic(

@@ -3,6 +3,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { resolveSparkHome } from "@zendev-lab/spark-system";
 
 import { parseSkillFrontmatter } from "./skill-resolver.ts";
 
@@ -112,7 +113,7 @@ export class SparkPromptTemplateResolver {
 }
 
 export function defaultSparkPromptTemplatesRoot(sparkHome?: string): string {
-  return sparkHome ?? process.env.SPARK_HOME ?? join(homedir(), ".spark");
+  return resolveSparkHome({ sparkHome });
 }
 
 export function defaultSparkPromptTemplatesDir(sparkHome?: string): string {

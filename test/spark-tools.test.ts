@@ -9694,10 +9694,10 @@ void test("impl_state workflow_run_prune defaults to dry-run and does not write 
 
 void test("impl_workflow_runs exposes active child runs and refuses broad kill", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-background-runs-active-"));
-  const previousBindingHome = process.env.PI_ROLES_HOME;
+  const previousBindingHome = process.env.SPARK_HOME;
   const previousPath = process.env.PATH;
   try {
-    process.env.PI_ROLES_HOME = dir;
+    process.env.SPARK_HOME = dir;
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
     ctx.runRole = createTestRoleRunner({ waitForCancel: true, inputControl: false });
@@ -9988,8 +9988,8 @@ void test("impl_workflow_runs exposes active child runs and refuses broad kill",
         5_000,
       ).catch(() => undefined);
     }
-    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousBindingHome;
+    if (previousBindingHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousBindingHome;
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
@@ -9998,10 +9998,10 @@ void test("impl_workflow_runs exposes active child runs and refuses broad kill",
 
 void test("impl_workflow_runs reply records failed delivery without successful activity transition", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-workflow-runs-reply-failed-delivery-"));
-  const previousBindingHome = process.env.PI_ROLES_HOME;
+  const previousBindingHome = process.env.SPARK_HOME;
   let runPromise: Promise<unknown> | undefined;
   try {
-    process.env.PI_ROLES_HOME = dir;
+    process.env.SPARK_HOME = dir;
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
     ctx.runRole = createTestRoleRunner({ waitForCancel: true, inputControl: false });
@@ -10112,18 +10112,18 @@ void test("impl_workflow_runs reply records failed delivery without successful a
       5_000,
     ).catch(() => undefined);
     await runPromise?.catch(() => undefined);
-    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousBindingHome;
+    if (previousBindingHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousBindingHome;
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
 
 void test("impl_workflow_runs reply delivers through native role-run input control", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-workflow-runs-reply-native-delivery-"));
-  const previousBindingHome = process.env.PI_ROLES_HOME;
+  const previousBindingHome = process.env.SPARK_HOME;
   let runPromise: Promise<unknown> | undefined;
   try {
-    process.env.PI_ROLES_HOME = dir;
+    process.env.SPARK_HOME = dir;
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
     ctx.runRole = createTestRoleRunner({ waitForCancel: true });
@@ -10232,8 +10232,8 @@ void test("impl_workflow_runs reply delivers through native role-run input contr
   } finally {
     await killActiveSparkRoleRunProcesses({ forceAfterMs: 0, waitMs: 1_000 });
     await runPromise?.catch(() => undefined);
-    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousBindingHome;
+    if (previousBindingHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousBindingHome;
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
@@ -10737,10 +10737,10 @@ void test("legacy /run commands are not registered", () => {
 
 void test("impl_run_ready_tasks preflights current ready frontier with configured Pi command", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-frontier-preflight-"));
-  const previousBindingHome = process.env.PI_ROLES_HOME;
+  const previousBindingHome = process.env.SPARK_HOME;
   const previousPath = process.env.PATH;
   try {
-    process.env.PI_ROLES_HOME = dir;
+    process.env.SPARK_HOME = dir;
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
     ctx.inputValue = "test/model";
@@ -10801,7 +10801,7 @@ void test("impl_run_ready_tasks preflights current ready frontier with configure
     assert.equal(runControl?.policy.maxConcurrency, 1);
     assert.equal(runControl?.policy.timeoutMs, 123);
     const settingsFile = JSON.parse(
-      await readFile(join(dir, ".agents", "role-model-settings.json"), "utf8"),
+      await readFile(join(dir, "role-model-settings.json"), "utf8"),
     ) as { roleModels: Record<string, string> };
     assert.deepEqual(settingsFile.roleModels, { "role:builtin-worker": "test/model" });
     await waitFor(async () => {
@@ -10809,8 +10809,8 @@ void test("impl_run_ready_tasks preflights current ready frontier with configure
       return dagStatus.succeeded === 1 || dagStatus.failed > 0;
     }, 10_000);
   } finally {
-    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousBindingHome;
+    if (previousBindingHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousBindingHome;
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
@@ -10819,10 +10819,10 @@ void test("impl_run_ready_tasks preflights current ready frontier with configure
 
 void test("workflow-run manager preflights role models with configured Pi command", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-manager-pi-command-"));
-  const previousBindingHome = process.env.PI_ROLES_HOME;
+  const previousBindingHome = process.env.SPARK_HOME;
   const previousPath = process.env.PATH;
   try {
-    process.env.PI_ROLES_HOME = dir;
+    process.env.SPARK_HOME = dir;
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
     ctx.inputValue = "test/model";
@@ -10876,15 +10876,15 @@ void test("workflow-run manager preflights role models with configured Pi comman
 
     assert.equal(result.continuePolling, false);
     const settingsFile = JSON.parse(
-      await readFile(join(dir, ".agents", "role-model-settings.json"), "utf8"),
+      await readFile(join(dir, "role-model-settings.json"), "utf8"),
     ) as { roleModels: Record<string, string> };
     assert.deepEqual(settingsFile.roleModels, { "role:builtin-worker": "test/model" });
     const dagStatus = await defaultWorkflowRunStore(dir).status();
     assert.equal(dagStatus.succeeded, 1);
     assert.equal(dagStatus.lastRun?.projectRef, project.ref);
   } finally {
-    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousBindingHome;
+    if (previousBindingHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousBindingHome;
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
@@ -10893,11 +10893,11 @@ void test("workflow-run manager preflights role models with configured Pi comman
 
 void test("impl_run_ready_tasks scheduler exposes native reply control on active children", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-native-reply-"));
-  const previousBindingHome = process.env.PI_ROLES_HOME;
+  const previousBindingHome = process.env.SPARK_HOME;
   const previousPath = process.env.PATH;
   const deliveredInputs: string[] = [];
   try {
-    process.env.PI_ROLES_HOME = dir;
+    process.env.SPARK_HOME = dir;
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
     ctx.runRole = createTestRoleRunner({ waitForCancel: true, deliveredInputs });
@@ -11047,8 +11047,8 @@ void test("impl_run_ready_tasks scheduler exposes native reply control on active
       () => !listActiveSparkRoleRunProcesses().some((process) => process.cwd === dir),
       5_000,
     ).catch(() => undefined);
-    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousBindingHome;
+    if (previousBindingHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousBindingHome;
     process.env.PATH = previousPath;
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -11056,9 +11056,9 @@ void test("impl_run_ready_tasks scheduler exposes native reply control on active
 
 void test("impl_run_ready_tasks reports workflow-run completion without queuing a follow-up user message", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-followup-"));
-  const previousBindingHome = process.env.PI_ROLES_HOME;
+  const previousBindingHome = process.env.SPARK_HOME;
   try {
-    process.env.PI_ROLES_HOME = dir;
+    process.env.SPARK_HOME = dir;
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
     ctx.runRole = createTestRoleRunner({
@@ -11171,8 +11171,8 @@ void test("impl_run_ready_tasks reports workflow-run completion without queuing 
     assert.equal((hiddenInbox.match(/artifacts=artifact:/gu) ?? []).length, 2);
     assert.equal(await tryConsumeSparkModeContext(extension, ctx), undefined);
   } finally {
-    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousBindingHome;
+    if (previousBindingHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousBindingHome;
     await waitFor(
       () => listActiveSparkRoleRunProcesses().every((process) => process.cwd !== dir),
       5_000,
@@ -11251,9 +11251,9 @@ void test("impl_status renders legacy large role-run artifacts by refs without a
 
 void test("impl_run_ready_tasks marks Spark workflow-run scheduler failed when child role-run fails", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-child-failed-"));
-  const previousBindingHome = process.env.PI_ROLES_HOME;
+  const previousBindingHome = process.env.SPARK_HOME;
   try {
-    process.env.PI_ROLES_HOME = dir;
+    process.env.SPARK_HOME = dir;
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
     ctx.runRole = createTestRoleRunner();
@@ -11313,8 +11313,8 @@ void test("impl_run_ready_tasks marks Spark workflow-run scheduler failed when c
     assert.equal(await tryConsumeSparkModeContext(extension, ctx), undefined);
     assert.equal(existsSync(join(dir, ".spark", "todos")), false);
   } finally {
-    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousBindingHome;
+    if (previousBindingHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousBindingHome;
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });

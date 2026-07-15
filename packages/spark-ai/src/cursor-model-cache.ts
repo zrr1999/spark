@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 
 import type { ModelListItem } from "@cursor/sdk";
+import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 
 const CURSOR_MODEL_CACHE_VERSION = 1;
 export const DEFAULT_CURSOR_MODEL_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -16,7 +16,7 @@ interface CursorModelCacheFile {
 }
 
 export function defaultCursorModelCachePath(): string {
-  return join(process.env.SPARK_HOME ?? join(homedir(), ".spark"), "cursor-sdk-model-list.json");
+  return resolveSparkUserPaths().cursorModelCacheFile;
 }
 
 export function fingerprintCursorApiKey(apiKey: string): string {

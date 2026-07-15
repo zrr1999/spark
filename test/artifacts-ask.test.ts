@@ -505,7 +505,7 @@ void test("ask flow payload store saves and loads the latest payload", async () 
 
     assert.deepEqual(await store.load(dir), payload);
     assert.deepEqual(
-      (await readdir(join(dir, ".pi", "asks"))).filter((entry) => entry.endsWith(".tmp")),
+      (await readdir(join(dir, ".spark", "asks"))).filter((entry) => entry.endsWith(".tmp")),
       [],
     );
   } finally {
@@ -517,10 +517,10 @@ void test("ask flow payload store rejects malformed persisted payloads", async (
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-payload-store-invalid-"));
   try {
     const store = new PiAskFlowPayloadStore();
-    const filePath = join(dir, ".pi", "asks", "latest.json");
+    const filePath = join(dir, ".spark", "asks", "latest.json");
 
     assert.equal(await store.load(dir), null);
-    await mkdir(join(dir, ".pi", "asks"), { recursive: true });
+    await mkdir(join(dir, ".spark", "asks"), { recursive: true });
 
     await writeFile(filePath, "{not-json", "utf8");
     await assert.rejects(
@@ -625,6 +625,24 @@ void test("ask config store defaults only when the config file is missing", asyn
       [],
     );
   } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("ask config store persists under SPARK_HOME by default", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-ask-unified-home-"));
+  const previous = process.env.SPARK_HOME;
+  process.env.SPARK_HOME = dir;
+  try {
+    const store = createAskConfigStore();
+    store.save({ schemaVersion: 1 });
+
+    assert.deepEqual(JSON.parse(await readFile(join(dir, "ask.json"), "utf8")), {
+      schemaVersion: 1,
+    });
+  } finally {
+    if (previous === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previous;
     await rm(dir, { recursive: true, force: true });
   }
 });

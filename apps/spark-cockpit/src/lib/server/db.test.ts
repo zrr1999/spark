@@ -27,7 +27,7 @@ describe("Cockpit database lifecycle", () => {
   it("holds one process lock, survives repeated access, and preserves instance identity", () => {
     const root = mkdtempSync(join(tmpdir(), "spark-cockpit-db-lifecycle-"));
     roots.push(root);
-    process.env = { ...originalEnv, SPARK_COCKPIT_DATA_DIR: root };
+    process.env = { ...originalEnv, SPARK_HOME: root };
     const databasePath = defaultDatabasePath();
     const lockPath = cockpitDatabaseLockPath(databasePath);
 
@@ -50,7 +50,7 @@ describe("Cockpit database lifecycle", () => {
   it("invalidates a real browser session after restore", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-cockpit-db-restore-"));
     roots.push(root);
-    process.env = { ...originalEnv, SPARK_COCKPIT_DATA_DIR: root };
+    process.env = { ...originalEnv, SPARK_HOME: root };
     const databasePath = defaultDatabasePath();
     const snapshotPath = join(root, "browser-session.snapshot");
     const db = getDatabase();

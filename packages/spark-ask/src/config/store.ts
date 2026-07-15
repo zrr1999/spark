@@ -1,12 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
-import type { AskConfig, AskConfigStore } from "./schema.ts";
+import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 
-const CONFIG_DIR = join(homedir(), ".pi", "agent", "extensions");
-const CONFIG_FILE = join(CONFIG_DIR, "spark-ask.json");
+import type { AskConfig, AskConfigStore } from "./schema.ts";
 
 export interface AskConfigStoreOptions {
   filePath?: string;
@@ -16,14 +14,14 @@ export class AskConfigStoreFormatError extends Error {
   readonly filePath: string;
 
   constructor(filePath: string, message: string) {
-    super(`invalid Pi ask config store: ${filePath}: ${message}`);
+    super(`invalid Spark ask config store: ${filePath}: ${message}`);
     this.name = "AskConfigStoreFormatError";
     this.filePath = filePath;
   }
 }
 
 export function createAskConfigStore(options: AskConfigStoreOptions = {}): AskConfigStore {
-  const filePath = options.filePath ?? CONFIG_FILE;
+  const filePath = options.filePath ?? resolveSparkUserPaths().askConfigFile;
   return {
     load() {
       let text: string;

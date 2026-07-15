@@ -9,17 +9,19 @@ afterEach(() => {
 });
 
 describe("Cockpit system paths", () => {
-  it("uses the Spark Cockpit XDG cache path for artifact previews", () => {
+  it("uses the unified default Spark root for artifact previews", () => {
     process.env = { HOME: "/Users/example" };
 
     expect(defaultArtifactCacheRoot()).toBe(
-      join("/Users/example", ".cache", "spark", "cockpit", "artifacts"),
+      join("/Users/example", ".spark", "apps", "cockpit", "cache", "artifacts"),
     );
   });
 
-  it("honors SPARK_COCKPIT_CACHE_DIR for artifact previews", () => {
-    process.env = { HOME: "/Users/example", SPARK_COCKPIT_CACHE_DIR: "/Users/example/spark-cache" };
+  it("relocates artifact previews with SPARK_HOME", () => {
+    process.env = { HOME: "/Users/example", SPARK_HOME: "/Users/example/spark-home" };
 
-    expect(defaultArtifactCacheRoot()).toBe(join("/Users/example/spark-cache", "artifacts"));
+    expect(defaultArtifactCacheRoot()).toBe(
+      join("/Users/example/spark-home", "apps", "cockpit", "cache", "artifacts"),
+    );
   });
 });

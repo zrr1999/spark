@@ -316,10 +316,10 @@ void test("default learning store uses child repo .learnings over parent workspa
   }
 });
 
-void test("default learning store writes user learnings under PI_CODING_AGENT_DIR", async () => {
+void test("default learning store writes user learnings under SPARK_HOME", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-learnings-user-location-"));
-  const previous = process.env.PI_CODING_AGENT_DIR;
-  process.env.PI_CODING_AGENT_DIR = dir;
+  const previous = process.env.SPARK_HOME;
+  process.env.SPARK_HOME = dir;
   try {
     const store = defaultLearningStore(dir, "user");
     assert.equal(store.location, "user");
@@ -328,10 +328,10 @@ void test("default learning store writes user learnings under PI_CODING_AGENT_DI
       title: "User learning store",
       statement: "User learnings live outside the repo/workspace.",
     });
-    assert.ok((await stat(join(dir, "learning", "learning-user-location-path.json"))).isFile());
+    assert.ok((await stat(join(dir, "learnings", "learning-user-location-path.json"))).isFile());
   } finally {
-    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previous;
+    if (previous === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previous;
     await rm(dir, { recursive: true, force: true });
   }
 });

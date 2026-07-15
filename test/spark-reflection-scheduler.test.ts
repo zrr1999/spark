@@ -70,6 +70,43 @@ void test("runReflectionOnce scans incrementally, writes cursor/candidates/repor
   }
 });
 
+void test("runReflectionOnce reads the unified Spark session root by default", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-reflection-unified-home-"));
+  const previous = process.env.SPARK_HOME;
+  process.env.SPARK_HOME = join(dir, "spark-home");
+  try {
+    const sessionDir = join(
+      process.env.SPARK_HOME,
+      "sessions",
+      "--Users-zhanrongrui-workspace-demo--",
+    );
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(
+      join(sessionDir, "2026-06-18T00-00-00-000Z_session-one.jsonl"),
+      [
+        JSON.stringify({
+          type: "session",
+          id: "session-one",
+          cwd: "/Users/zhanrongrui/workspace/demo",
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "u1",
+          message: { role: "user", content: "TODO: scan unified Spark sessions" },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const summary = await runReflectionOnce({ cwd: join(dir, "workspace") });
+    assert.equal(summary.observations, 1);
+  } finally {
+    if (previous === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("/reflect command runs once and session-local scheduler starts/stops safely", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reflection-command-"));
   try {

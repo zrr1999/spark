@@ -1629,19 +1629,7 @@ function sparkDaemonCliCommand(): string[] {
 }
 
 function serviceEnvironment(): Record<string, string> {
-  const keys = [
-    "HOME",
-    "PATH",
-    "XDG_CONFIG_HOME",
-    "XDG_DATA_HOME",
-    "XDG_CACHE_HOME",
-    "XDG_STATE_HOME",
-    "XDG_RUNTIME_DIR",
-    "SPARK_DAEMON_DATA_DIR",
-    "SPARK_DAEMON_CACHE_DIR",
-    "SPARK_DAEMON_STATE_DIR",
-    "SPARK_DAEMON_RUNTIME_DIR",
-  ];
+  const keys = ["HOME", "PATH", "SPARK_HOME"];
   const env: Record<string, string> = {};
   for (const key of keys) {
     const value = process.env[key];

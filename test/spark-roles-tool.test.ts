@@ -146,8 +146,8 @@ void test("role action tool dispatches canonical list, get, and create actions",
 
 void test("role action tool manages role model settings", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-model-action-tool-"));
-  const previousBindingHome = process.env.PI_ROLES_HOME;
-  process.env.PI_ROLES_HOME = dir;
+  const previousBindingHome = process.env.SPARK_HOME;
+  process.env.SPARK_HOME = dir;
   try {
     const fakePi = join(dir, "fake-pi.cjs");
     await writeFile(
@@ -241,8 +241,8 @@ void test("role action tool manages role model settings", async () => {
       /model validation failed/,
     );
   } finally {
-    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousBindingHome;
+    if (previousBindingHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousBindingHome;
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -296,8 +296,8 @@ void test("role spec tools keep patch presets out of builtin role lookup", async
 
 void test("call_role launches fresh role runs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-tool-"));
-  const previousBindingHome = process.env.PI_ROLES_HOME;
-  process.env.PI_ROLES_HOME = dir;
+  const previousBindingHome = process.env.SPARK_HOME;
+  process.env.SPARK_HOME = dir;
   try {
     const tools = registerRoleToolsForTest();
     let capturedNativeInput: Parameters<ExtensionRoleRunner>[0] | undefined;
@@ -365,16 +365,16 @@ void test("call_role launches fresh role runs", async () => {
     );
     assert.match(canonical.content[0]?.text ?? "", /Role call succeeded: worker/);
   } finally {
-    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousBindingHome;
+    if (previousBindingHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousBindingHome;
     await rm(dir, { recursive: true, force: true });
   }
 });
 
 void test("call_role inherits the active session model when no role model is saved", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-session-model-"));
-  const previousBindingHome = process.env.PI_ROLES_HOME;
-  process.env.PI_ROLES_HOME = dir;
+  const previousBindingHome = process.env.SPARK_HOME;
+  process.env.SPARK_HOME = dir;
   try {
     const tools = registerRoleToolsForTest();
 
@@ -394,16 +394,16 @@ void test("call_role inherits the active session model when no role model is sav
     assert.match(result.content[0]?.text ?? "", /Role call succeeded: worker/);
     assert.match(result.content[0]?.text ?? "", /model=test\/model/);
   } finally {
-    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousBindingHome;
+    if (previousBindingHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousBindingHome;
     await rm(dir, { recursive: true, force: true });
   }
 });
 
 void test("call_role does not expose raw JSON protocol fragments as output", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-protocol-fragment-"));
-  const previousBindingHome = process.env.PI_ROLES_HOME;
-  process.env.PI_ROLES_HOME = dir;
+  const previousBindingHome = process.env.SPARK_HOME;
+  process.env.SPARK_HOME = dir;
   try {
     const tools = registerRoleToolsForTest();
     const result = await executeCallRole(
@@ -422,16 +422,16 @@ void test("call_role does not expose raw JSON protocol fragments as output", asy
     assert.doesNotMatch(result.content[0]?.text ?? "", /toolcall_delta/);
     assert.equal((result.details as { delivery?: { status?: string } }).delivery?.status, "empty");
   } finally {
-    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousBindingHome;
+    if (previousBindingHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousBindingHome;
     await rm(dir, { recursive: true, force: true });
   }
 });
 
 void test("call_role exposes empty delivery when JSON events have no final assistant message", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-empty-delivery-"));
-  const previousBindingHome = process.env.PI_ROLES_HOME;
-  process.env.PI_ROLES_HOME = dir;
+  const previousBindingHome = process.env.SPARK_HOME;
+  process.env.SPARK_HOME = dir;
   try {
     const tools = registerRoleToolsForTest();
     const result = await executeCallRole(
@@ -460,8 +460,8 @@ void test("call_role exposes empty delivery when JSON events have no final assis
     assert.equal(details.delivery?.hasFinalAssistantText, false);
     assert.equal(details.delivery?.jsonEventCount, 2);
   } finally {
-    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousBindingHome;
+    if (previousBindingHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousBindingHome;
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -520,8 +520,8 @@ void test("spark-roles tools require ctx cwd unless call_role cwd is explicit", 
   );
 
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-explicit-cwd-"));
-  const previousBindingHome = process.env.PI_ROLES_HOME;
-  process.env.PI_ROLES_HOME = dir;
+  const previousBindingHome = process.env.SPARK_HOME;
+  process.env.SPARK_HOME = dir;
   try {
     const explicit = await executeRoleToolWithoutCwd(
       tools,
@@ -536,8 +536,8 @@ void test("spark-roles tools require ctx cwd unless call_role cwd is explicit", 
     );
     assert.match(explicit.content[0]?.text ?? "", /Role call succeeded: worker/);
   } finally {
-    if (previousBindingHome === undefined) delete process.env.PI_ROLES_HOME;
-    else process.env.PI_ROLES_HOME = previousBindingHome;
+    if (previousBindingHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousBindingHome;
     await rm(dir, { recursive: true, force: true });
   }
 });

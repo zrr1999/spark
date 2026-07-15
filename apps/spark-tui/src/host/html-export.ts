@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { resolveSparkHome } from "@zendev-lab/spark-system";
 
 import type { SparkTheme } from "./theme.ts";
 import type {
@@ -265,7 +266,7 @@ function resolveHtmlOutputPath(options: SparkHtmlWriteOptions): string {
 }
 
 function defaultSparkHtmlRoot(sparkHome?: string): string {
-  return sparkHome ?? process.env.SPARK_HOME ?? join(homedir(), ".spark");
+  return resolveSparkHome({ sparkHome });
 }
 
 function resolvePath(path: string, cwd: string): string {

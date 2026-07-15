@@ -3,6 +3,37 @@ import { join, resolve } from "node:path";
 
 export type SparkApp = "cockpit" | "daemon";
 
+export interface ResolveSparkHomeOptions {
+  sparkHome?: string | undefined;
+  env?: Record<string, string | undefined> | undefined;
+  cwd?: string | undefined;
+}
+
+export interface SparkUserPaths {
+  root: string;
+  configFile: string;
+  authFile: string;
+  sessionsDir: string;
+  askConfigFile: string;
+  rolesDir: string;
+  roleModelSettingsFile: string;
+  workflowsDir: string;
+  skillsDir: string;
+  userAgentsSkillsDir: string;
+  promptTemplatesDir: string;
+  themesDir: string;
+  learningsDir: string;
+  recallFile: string;
+  memoryFile: string;
+  agentDir: string;
+  keybindingsFile: string;
+  exportsDir: string;
+  shareDir: string;
+  workspacesDir: string;
+  cursorModelCacheFile: string;
+  cueVersionCacheFile: string;
+}
+
 export interface SparkPathOverrides {
   configFile?: string;
   dataDir?: string;
@@ -11,11 +42,9 @@ export interface SparkPathOverrides {
   runtimeDir?: string;
 }
 
-export interface ResolveSparkPathsOptions {
+export interface ResolveSparkPathsOptions extends ResolveSparkHomeOptions {
   app: SparkApp;
-  env?: Record<string, string | undefined>;
   overrides?: SparkPathOverrides;
-  cwd?: string;
 }
 
 export interface SparkPaths {
@@ -40,40 +69,62 @@ const appDatabaseNames: Record<SparkApp, string> = {
   daemon: "daemon.sqlite",
 };
 
-export function resolveSparkPaths(options: ResolveSparkPathsOptions): SparkPaths {
+/** Resolve the single user-level Spark root. Workspace state remains under `<cwd>/.spark`. */
+export function resolveSparkHome(options: ResolveSparkHomeOptions = {}): string {
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
-  const home = env.HOME || homedir();
+  const home = nonEmpty(env.HOME) ?? homedir();
+  return absolutePath(
+    nonEmpty(options.sparkHome) ?? nonEmpty(env.SPARK_HOME) ?? join(home, ".spark"),
+    cwd,
+  );
+}
+
+/** Resolve Spark-owned user paths plus the public cross-harness discovery roots. */
+export function resolveSparkUserPaths(options: ResolveSparkHomeOptions = {}): SparkUserPaths {
+  const env = options.env ?? process.env;
+  const home = nonEmpty(env.HOME) ?? homedir();
+  const root = resolveSparkHome(options);
+  const agentDir = join(root, "agent");
+
+  return {
+    root,
+    configFile: join(root, "config.json"),
+    authFile: join(root, "auth.json"),
+    sessionsDir: join(root, "sessions"),
+    askConfigFile: join(root, "ask.json"),
+    rolesDir: join(home, ".agents", "roles"),
+    roleModelSettingsFile: join(root, "role-model-settings.json"),
+    workflowsDir: join(root, "workflows"),
+    skillsDir: join(root, "skills"),
+    userAgentsSkillsDir: join(home, ".agents", "skills"),
+    promptTemplatesDir: join(root, "prompts"),
+    themesDir: join(root, "themes"),
+    learningsDir: join(root, "learnings"),
+    recallFile: join(root, "recall-candidates.json"),
+    memoryFile: join(root, "memory", "memory.json"),
+    agentDir,
+    keybindingsFile: join(agentDir, "keybindings.json"),
+    exportsDir: join(root, "exports"),
+    shareDir: join(root, "share"),
+    workspacesDir: join(root, "workspaces"),
+    cursorModelCacheFile: join(root, "cursor-sdk-model-list.json"),
+    cueVersionCacheFile: join(root, "cache", "cued-version.json"),
+  };
+}
+
+export function resolveSparkPaths(options: ResolveSparkPathsOptions): SparkPaths {
+  const cwd = options.cwd ?? process.cwd();
   const app = options.app;
-  const prefix = app === "daemon" ? "SPARK_DAEMON" : "SPARK_COCKPIT";
   const overrides = options.overrides ?? {};
+  const appRoot = join(resolveSparkHome(options), "apps", app);
+  const configDir = appRoot;
 
-  const configHome = absoluteDir(env.XDG_CONFIG_HOME ?? join(home, ".config"), cwd);
-  const dataHome = absoluteDir(env.XDG_DATA_HOME ?? join(home, ".local", "share"), cwd);
-  const cacheHome = absoluteDir(env.XDG_CACHE_HOME ?? join(home, ".cache"), cwd);
-  const stateHome = absoluteDir(env.XDG_STATE_HOME ?? join(home, ".local", "state"), cwd);
-
-  const namespace = "spark";
-  const configDir = join(configHome, namespace);
-  const configFile = absoluteDir(overrides.configFile ?? join(configDir, `${app}.toml`), cwd);
-  const dataDir = absoluteDir(
-    overrides.dataDir ?? env[`${prefix}_DATA_DIR`] ?? join(dataHome, namespace, app),
-    cwd,
-  );
-  const cacheDir = absoluteDir(
-    overrides.cacheDir ?? env[`${prefix}_CACHE_DIR`] ?? join(cacheHome, namespace, app),
-    cwd,
-  );
-  const stateDir = absoluteDir(
-    overrides.stateDir ?? env[`${prefix}_STATE_DIR`] ?? join(stateHome, namespace, app),
-    cwd,
-  );
-  const runtimeDir = absoluteDir(
-    overrides.runtimeDir ??
-      env[`${prefix}_RUNTIME_DIR`] ??
-      (env.XDG_RUNTIME_DIR ? join(env.XDG_RUNTIME_DIR, namespace, app) : join(stateDir, "run")),
-    cwd,
-  );
+  const configFile = absolutePath(overrides.configFile ?? join(appRoot, "config.toml"), cwd);
+  const dataDir = absolutePath(overrides.dataDir ?? join(appRoot, "data"), cwd);
+  const cacheDir = absolutePath(overrides.cacheDir ?? join(appRoot, "cache"), cwd);
+  const stateDir = absolutePath(overrides.stateDir ?? join(appRoot, "state"), cwd);
+  const runtimeDir = absolutePath(overrides.runtimeDir ?? join(appRoot, "run"), cwd);
   const artifactCacheDir = join(cacheDir, "artifacts");
 
   return {
@@ -97,6 +148,11 @@ export function resolveSparkPaths(options: ResolveSparkPathsOptions): SparkPaths
   };
 }
 
-function absoluteDir(path: string, cwd: string): string {
+function nonEmpty(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized || undefined;
+}
+
+function absolutePath(path: string, cwd: string): string {
   return resolve(cwd, path);
 }

@@ -3,6 +3,7 @@
 These files are current contracts or operator procedures. Product and package implementation details belong in source and package READMEs.
 
 - [`specs/command-planes.md`](./specs/command-planes.md): canonical CLI planes and placement rules.
+- [`specs/configuration-and-paths.md`](./specs/configuration-and-paths.md): unified `SPARK_HOME` layout, precedence, and migration policy.
 - [`specs/tools.md`](./specs/tools.md): public agent-facing tools and commands.
 - [`specs/sessions-and-channels.md`](./specs/sessions-and-channels.md): persistent sessions, origins, mail, and channel policy.
 - [`specs/human-interaction.md`](./specs/human-interaction.md): ask/approval waits, status vocabulary, and correlation.

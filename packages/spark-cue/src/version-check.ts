@@ -17,7 +17,7 @@
  *    - Pre-version-reporting daemons reply with `Pong: {}`, surfaced as
  *      `null` and treated as "outdated, version unknown".
  * 2. In the background, fetch the latest release tag from GitHub
- *    (cached in `~/.cache/spark-cue/cued-version.json`, TTL 6h).
+ *    (cached in `${SPARK_HOME:-$HOME/.spark}/cache/cued-version.json`, TTL 6h).
  * 3. Compare. Warn at most once per process when:
  *    - daemon hides its version, OR
  *    - daemon reports a version older than the latest release.
@@ -34,9 +34,10 @@
  */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import process from "node:process";
+
+import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 
 import type { CueClient } from "./cue-client.ts";
 
@@ -191,7 +192,7 @@ async function resolveLatest(override: VersionCheckOptions["latest"]): Promise<s
 export async function fetchLatestRelease(): Promise<string | null> {
   const apiUrl = process.env[ENV_API_URL] ?? DEFAULT_API_URL;
   const ttl = parseTtl(process.env[ENV_TTL]) ?? DEFAULT_TTL_MS;
-  const cachePath = cacheFilePath();
+  const cachePath = defaultCuedVersionCachePath();
 
   const cached = await readCache(cachePath);
   if (cached && cached.url === apiUrl && Date.now() - cached.fetchedAt < ttl) {
@@ -212,12 +213,8 @@ interface CacheEntry {
   fetchedAt: number;
 }
 
-function cacheFilePath(): string {
-  const base =
-    process.env.XDG_CACHE_HOME && process.env.XDG_CACHE_HOME.length > 0
-      ? process.env.XDG_CACHE_HOME
-      : join(homedir(), ".cache");
-  return join(base, "@zendev-lab/spark-cue", "cued-version.json");
+export function defaultCuedVersionCachePath(): string {
+  return resolveSparkUserPaths().cueVersionCacheFile;
 }
 
 async function readCache(path: string): Promise<CacheEntry | null> {

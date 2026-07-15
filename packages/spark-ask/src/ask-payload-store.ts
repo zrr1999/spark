@@ -45,7 +45,7 @@ export class PiAskFlowPayloadStore {
 }
 
 function askPayloadPath(cwd: string): string {
-  return join(cwd, ".pi", "asks", "latest.json");
+  return join(cwd, ".spark", "asks", "latest.json");
 }
 
 function parseStoredAskPayload(text: string, filePath: string): StoredAskPayload {

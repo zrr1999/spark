@@ -1,6 +1,5 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { Type } from "typebox";
 import {
@@ -10,6 +9,7 @@ import {
   type ToolRenderComponent,
   type ToolRenderTheme,
 } from "@zendev-lab/spark-extension-api";
+import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 import {
   assertNoSecrets,
   defaultSparkMemoryStore,
@@ -742,9 +742,7 @@ function renderMemoryCall(
 function resolveCompatMemoryDir(options: SparkMemoryToolOptions, override: unknown): string {
   if (typeof override === "string" && override.trim()) return override.trim();
   if (options.compatMemoryDir?.trim()) return options.compatMemoryDir;
-  if (process.env.SPARK_MEMORY_COMPAT_DIR?.trim()) return process.env.SPARK_MEMORY_COMPAT_DIR;
-  if (process.env.PI_MEMORY_DIR?.trim()) return process.env.PI_MEMORY_DIR;
-  return join(homedir(), ".pi", "agent", "memory");
+  return dirname(resolveSparkUserPaths().memoryFile);
 }
 
 function legacyMemoryPaths(memoryDir: string) {

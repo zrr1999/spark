@@ -200,6 +200,7 @@ export {
   checkAndWarn as checkCuedVersionAndWarn,
   classifyDaemonVersion,
   compareSemver,
+  defaultCuedVersionCachePath,
   fetchLatestRelease,
   renderWarning as renderCuedVersionWarning,
 } from "./version-check.ts";

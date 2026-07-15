@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { resolveSparkHome } from "@zendev-lab/spark-system";
 
 export type SparkSessionMailKind = "request" | "notification";
 export type SparkSessionMailVisibility = "internal" | "user";
@@ -501,7 +501,7 @@ function mailboxDirectoryName(toSessionId: string): string {
 }
 
 export function defaultSparkHome(): string {
-  return process.env.SPARK_HOME ?? join(homedir(), ".spark");
+  return resolveSparkHome();
 }
 
 function normalizeRequiredSessionId(value: string, label: string): string {

@@ -1,7 +1,7 @@
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
+import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 import { SparkProviderRegistry, type ProviderRegistrationAPI } from "../provider-registry.ts";
 import registerBaiduOneApiProvider from "../baidu-oneapi-provider.ts";
 import registerCursorProvider from "../cursor-provider.ts";
@@ -41,8 +41,7 @@ export interface SparkProviderConfigState {
 }
 
 export function defaultSparkProviderConfigPath(sparkHome?: string): string {
-  const root = sparkHome ?? process.env.SPARK_HOME ?? join(homedir(), ".spark");
-  return join(root, "config.json");
+  return resolveSparkUserPaths({ sparkHome }).configFile;
 }
 
 export async function loadSparkProviderCatalog(

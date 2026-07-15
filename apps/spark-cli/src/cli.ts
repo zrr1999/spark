@@ -3,6 +3,11 @@ import { existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { sparkCliDispatcherStrings } from "@zendev-lab/spark-i18n/cli";
+import {
+  resolveSparkHome,
+  resolveSparkPaths,
+  resolveSparkUserPaths,
+} from "@zendev-lab/spark-system";
 
 export const SPARK_CLI_VERSION = "0.1.0";
 
@@ -19,6 +24,7 @@ export type SparkDispatcherCommand =
     }
   | { kind: "help" }
   | { kind: "version" }
+  | { kind: "paths"; json: boolean }
   | { kind: "error"; message: string };
 
 type SparkDispatcherOutput = Pick<NodeJS.WriteStream, "write"> & { isTTY?: boolean };
@@ -39,6 +45,7 @@ export function parseSparkDispatcherArgs(argv: string[]): SparkDispatcherCommand
   if (!first) return { kind: "dispatch", target: "tui", argv: [] };
   if (first === "help" || first === "--help" || first === "-h") return { kind: "help" };
   if (first === "version" || first === "--version" || first === "-v") return { kind: "version" };
+  if (first === "paths") return parseSparkPathsCommand(rest);
   if (first === "run") return parseSparkRunCommand(rest);
   if (first === "bg") return parseSparkBackgroundCommand(rest);
   if (first === "doctor") return { kind: "dispatch", target: "daemon", argv: ["doctor", ...rest] };
@@ -76,6 +83,18 @@ export async function runSparkDispatcher(
     case "version":
       stdout.write(`${SPARK_CLI_VERSION}\n`);
       return 0;
+    case "paths": {
+      const payload = {
+        sparkHome: resolveSparkHome(),
+        user: resolveSparkUserPaths(),
+        cockpit: resolveSparkPaths({ app: "cockpit" }),
+        daemon: resolveSparkPaths({ app: "daemon" }),
+      };
+      stdout.write(
+        command.json ? `${JSON.stringify(payload, null, 2)}\n` : formatSparkPaths(payload),
+      );
+      return 0;
+    }
     case "error":
       stderr.write(`${command.message}\n`);
       return 2;
@@ -174,6 +193,30 @@ function parseSparkBackgroundCommand(argv: string[]): SparkDispatcherCommand {
     argv: mapped,
     ...(hasSession ? {} : { autoSessionPrefix: "spark-bg" }),
   };
+}
+
+function parseSparkPathsCommand(argv: string[]): SparkDispatcherCommand {
+  if (argv.length === 0) return { kind: "paths", json: false };
+  if (argv.length === 1 && argv[0] === "--json") return { kind: "paths", json: true };
+  return errorCommand('spark paths accepts only the optional "--json" flag');
+}
+
+function formatSparkPaths(payload: {
+  sparkHome: string;
+  user: ReturnType<typeof resolveSparkUserPaths>;
+  cockpit: ReturnType<typeof resolveSparkPaths>;
+  daemon: ReturnType<typeof resolveSparkPaths>;
+}): string {
+  const lines = [`SPARK_HOME=${payload.sparkHome}`, "", "user:"];
+  for (const [key, value] of Object.entries(payload.user)) lines.push(`  ${key}=${value}`);
+  for (const [label, paths] of [
+    ["cockpit", payload.cockpit],
+    ["daemon", payload.daemon],
+  ] as const) {
+    lines.push("", `${label}:`);
+    for (const [key, value] of Object.entries(paths)) lines.push(`  ${key}=${value}`);
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 function errorCommand(message: string): SparkDispatcherCommand {

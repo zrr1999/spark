@@ -1,7 +1,5 @@
 import { createHash } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import WebSocket, { type RawData } from "ws";
@@ -25,7 +23,7 @@ import {
   type RuntimeWorkspaceBindingSummary,
 } from "@zendev-lab/spark-protocol";
 import { SparkSessionMailStore } from "@zendev-lab/spark-session";
-import { writePrivateFile, type SparkPaths } from "@zendev-lab/spark-system";
+import { resolveSparkHome, writePrivateFile, type SparkPaths } from "@zendev-lab/spark-system";
 import { readSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
 import {
   getSparkDaemonServerProfile,
@@ -382,10 +380,8 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
             createChannelAwareTaskExecutor({
               paths: options.paths,
               cwd: process.cwd(),
-              controlSparkHome:
-                (options.sparkHome ?? process.env.SPARK_HOME?.trim()) || join(homedir(), ".spark"),
-              channelsSparkHome:
-                (options.sparkHome ?? process.env.SPARK_HOME?.trim()) || join(homedir(), ".spark"),
+              controlSparkHome: resolveSparkHome({ sparkHome: options.sparkHome }),
+              channelsSparkHome: resolveSparkHome({ sparkHome: options.sparkHome }),
               ...(options.modelControl ? { modelControl: options.modelControl } : {}),
               ...(options.sessionRegistry ? { sessionRegistry: options.sessionRegistry } : {}),
               channelIngress: {
@@ -520,7 +516,7 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
   const mailStore =
     options.mailStore ??
     new SparkSessionMailStore({
-      sparkHome: (options.sparkHome ?? process.env.SPARK_HOME?.trim()) || join(homedir(), ".spark"),
+      sparkHome: resolveSparkHome({ sparkHome: options.sparkHome }),
     });
   let notificationReconcileLoop: Promise<void> | undefined;
   let channelDeliveryReconcileLoop: Promise<void> | undefined;
@@ -741,8 +737,7 @@ function prepareChannelIngress(
   channelDeliveryOutbox: DaemonChannelDeliveryOutbox,
 ): DaemonChannelIngressRuntime | null {
   if (options.once || options.runScheduler === false) return null;
-  const sparkHome =
-    (options.sparkHome ?? process.env.SPARK_HOME?.trim()) || join(homedir(), ".spark");
+  const sparkHome = resolveSparkHome({ sparkHome: options.sparkHome });
   const invocationStore = new SparkInvocationStore(options.db);
   return (
     options.channelIngress ??

@@ -6,6 +6,7 @@ import {
   checkCuedVersionAndWarn,
   classifyDaemonVersion,
   compareSemver,
+  defaultCuedVersionCachePath,
   renderCuedVersionWarning,
 } from "../packages/spark-cue/src/index.ts";
 import type { CueClient } from "../packages/spark-cue/src/index.ts";
@@ -32,6 +33,17 @@ void test("compareSemver orders release tags numerically", () => {
   for (const [left, right, expected, message] of cases) {
     if (message) assert.equal(compareSemver(left, right), expected, message);
     else assert.equal(compareSemver(left, right), expected);
+  }
+});
+
+void test("cued version cache follows SPARK_HOME", () => {
+  const previous = process.env.SPARK_HOME;
+  process.env.SPARK_HOME = "/tmp/spark-cue-home";
+  try {
+    assert.equal(defaultCuedVersionCachePath(), "/tmp/spark-cue-home/cache/cued-version.json");
+  } finally {
+    if (previous === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previous;
   }
 });
 

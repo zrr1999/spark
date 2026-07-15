@@ -22,6 +22,7 @@
   "dependencies": {
     "@zendev-lab/spark-extension-api": "workspace:^",
     "@zendev-lab/spark-host": "workspace:^",
+    "@zendev-lab/spark-system": "workspace:^",
     "@zendev-lab/spark-tui": "workspace:^",
     "typebox": "catalog:"
   },

@@ -57,6 +57,10 @@ void test("parseSparkDispatcherArgs routes default, tui, daemon, cockpit, sessio
     target: "tui",
     argv: ["--print", "--mode", "json", "--session", "s1", "hello"],
   });
+  assert.deepEqual(parseSparkDispatcherArgs(["paths", "--json"]), {
+    kind: "paths",
+    json: true,
+  });
   assert.deepEqual(parseSparkDispatcherArgs(["doctor", "--json"]), {
     kind: "dispatch",
     target: "daemon",
@@ -87,6 +91,50 @@ void test("parseSparkDispatcherArgs keeps help/version local and rejects unknown
   assert.equal(command.kind, "error");
   assert.match(command.kind === "error" ? command.message : "", /Unknown spark subcommand: build/u);
   assert.match(command.kind === "error" ? command.message : "", /spark tui build this/u);
+});
+
+void test("spark paths reports one SPARK_HOME without dispatching or writing", async () => {
+  const previousSparkHome = process.env.SPARK_HOME;
+  const root = `/tmp/spark-paths-${process.pid}-${Date.now()}`;
+  const stdout: string[] = [];
+  let dispatched = false;
+  process.env.SPARK_HOME = root;
+  try {
+    const code = await runSparkDispatcher(
+      ["paths", "--json"],
+      {
+        stdout: {
+          write: (text) => {
+            stdout.push(String(text));
+            return true;
+          },
+        },
+      },
+      {
+        run: async () => {
+          dispatched = true;
+          return 1;
+        },
+      },
+    );
+
+    assert.equal(code, 0);
+    assert.equal(dispatched, false);
+    const paths = JSON.parse(stdout.join("")) as {
+      sparkHome: string;
+      user: { roleModelSettingsFile: string; memoryFile: string };
+      daemon: { databasePath: string };
+      cockpit: { cacheDir: string };
+    };
+    assert.equal(paths.sparkHome, root);
+    assert.equal(paths.user.roleModelSettingsFile, `${root}/role-model-settings.json`);
+    assert.equal(paths.user.memoryFile, `${root}/memory/memory.json`);
+    assert.equal(paths.daemon.databasePath, `${root}/apps/daemon/data/daemon.sqlite`);
+    assert.equal(paths.cockpit.cacheDir, `${root}/apps/cockpit/cache`);
+  } finally {
+    if (previousSparkHome === undefined) delete process.env.SPARK_HOME;
+    else process.env.SPARK_HOME = previousSparkHome;
+  }
 });
 
 void test("dispatcher resolves daemon plane through spark-tui adapter", () => {

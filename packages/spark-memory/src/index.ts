@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { writeJsonFileAtomic } from "@zendev-lab/spark-extension-api";
+import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 
 export type SparkMemoryScope = "user" | "workspace" | "repo";
 export type SparkMemoryCategory =
@@ -267,7 +267,7 @@ export function sparkMemoryStorePath(
 ): string {
   const explicit = paths[scope];
   if (explicit?.trim()) return explicit;
-  if (scope === "user") return join(defaultUserMemoryHome(), "memory.json");
+  if (scope === "user") return resolveSparkUserPaths().memoryFile;
   return join(cwd, ".spark", "memory", "memory.json");
 }
 
@@ -319,12 +319,6 @@ export function normalizeSparkMemoryCategory(value: unknown): SparkMemoryCategor
     return value as SparkMemoryCategory;
   }
   throw new Error(`memory.category must be one of: ${SPARK_MEMORY_CATEGORIES.join(", ")}`);
-}
-
-function defaultUserMemoryHome(): string {
-  if (process.env.SPARK_MEMORY_HOME?.trim()) return process.env.SPARK_MEMORY_HOME;
-  if (process.env.XDG_DATA_HOME?.trim()) return join(process.env.XDG_DATA_HOME, "spark", "memory");
-  return join(homedir(), ".local", "share", "spark", "memory");
 }
 
 function requiredText(value: unknown, field: string): string {

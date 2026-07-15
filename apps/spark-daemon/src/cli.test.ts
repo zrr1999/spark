@@ -3104,27 +3104,13 @@ async function withTempSparkEnv<T>(callback: (root: string) => Promise<T>): Prom
   const previousEnv = {
     HOME: process.env.HOME,
     INIT_CWD: process.env.INIT_CWD,
-    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
-    XDG_DATA_HOME: process.env.XDG_DATA_HOME,
-    XDG_CACHE_HOME: process.env.XDG_CACHE_HOME,
-    XDG_STATE_HOME: process.env.XDG_STATE_HOME,
-    XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
-    SPARK_DAEMON_DATA_DIR: process.env.SPARK_DAEMON_DATA_DIR,
-    SPARK_DAEMON_CACHE_DIR: process.env.SPARK_DAEMON_CACHE_DIR,
-    SPARK_DAEMON_STATE_DIR: process.env.SPARK_DAEMON_STATE_DIR,
+    SPARK_HOME: process.env.SPARK_HOME,
     SPARK_DAEMON_CWD: process.env.SPARK_DAEMON_CWD,
     SPARK_WORKSPACE_REGISTRATION_TOKEN: process.env.SPARK_WORKSPACE_REGISTRATION_TOKEN,
   };
 
   process.env.HOME = root;
-  process.env.XDG_CONFIG_HOME = join(root, "config");
-  process.env.XDG_DATA_HOME = join(root, "data");
-  process.env.XDG_CACHE_HOME = join(root, "cache");
-  process.env.XDG_STATE_HOME = join(root, "state");
-  process.env.XDG_RUNTIME_DIR = join(root, "run");
-  delete process.env.SPARK_DAEMON_DATA_DIR;
-  delete process.env.SPARK_DAEMON_CACHE_DIR;
-  delete process.env.SPARK_DAEMON_STATE_DIR;
+  process.env.SPARK_HOME = join(root, "spark-home");
   delete process.env.SPARK_DAEMON_CWD;
   delete process.env.SPARK_WORKSPACE_REGISTRATION_TOKEN;
 

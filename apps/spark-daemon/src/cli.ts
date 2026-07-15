@@ -9,8 +9,7 @@ import {
   watchFile,
   unwatchFile,
 } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -19,6 +18,7 @@ import { createId } from "@zendev-lab/spark-protocol";
 import {
   ensureSparkPathDirs,
   gitCommand,
+  resolveSparkHome,
   resolveSparkPaths,
   writePrivateFile,
 } from "@zendev-lab/spark-system";
@@ -501,7 +501,7 @@ async function start(
   const localEventBus = createSparkDaemonLocalEventBus();
   const invocationRegistry = new SparkDaemonInvocationRegistry();
   await migrateLegacyQueueHistory({ db, queueRoot: legacySparkDaemonQueueRoot({ paths }) });
-  const sparkHome = process.env.SPARK_HOME?.trim() || join(homedir(), ".spark");
+  const sparkHome = resolveSparkHome();
   const config = existsSync(paths.configFile)
     ? readSparkDaemonConfig(paths)
     : defaultSparkDaemonConfig();

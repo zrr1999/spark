@@ -1,6 +1,7 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+
+import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 
 import {
   emptyReflectionScanCursor,
@@ -140,7 +141,7 @@ export async function runReflectionOnce(
   const candidateStorePath = options.candidateStorePath ?? reflectionCandidateStorePath(ctx.cwd);
   const reportPath =
     options.reportPath ?? join(ctx.cwd, ".spark", "reflections", "latest-report.md");
-  const sessionRoot = options.sessionRoot ?? join(homedir(), ".pi", "agent", "sessions");
+  const sessionRoot = options.sessionRoot ?? resolveSparkUserPaths().sessionsDir;
   const key = reflectionSessionKey(ctx);
   if (activeReflectionRuns.has(key)) {
     return skippedReflectionRunSummary({ cursorPath, candidateStorePath, reportPath });
@@ -192,7 +193,7 @@ export function startReflectionScheduler(
 ): void {
   stopReflectionScheduler(ctx);
   const intervalMs = Math.max(options.intervalMs, REFLECTION_MIN_INTERVAL_MS);
-  const sessionRoot = options.sessionRoot ?? join(homedir(), ".pi", "agent", "sessions");
+  const sessionRoot = options.sessionRoot ?? resolveSparkUserPaths().sessionsDir;
   const timer = setInterval(() => {
     void runReflectionOnce(ctx, { ...options, sessionRoot })
       .then((summary) => sendReflectionReport(pi, summary))
