@@ -308,6 +308,7 @@ test("live daemon relocates between snapshot-restored HTTPS/WSS Cockpits without
     console.log(`SPARK_RELOCATION_FAILURE_EVIDENCE ${JSON.stringify(failureEvidence)}`);
 
     const sourceHeartbeatCountBefore = frameCount(source.frames, "runtime.heartbeat");
+    const sourceReconcileCountBefore = frameCount(source.frames, "runtime.reconcile.report");
     const relocation = await relocateSparkDaemonCockpit(
       paths,
       daemonDb,
@@ -349,7 +350,49 @@ test("live daemon relocates between snapshot-restored HTTPS/WSS Cockpits without
     });
     expect(hasInvocationStatus(source.frames, invocation.invocationId, "succeeded")).toBe(false);
     await waitUntil(() => source!.wss.clients.size === 0);
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    const heartbeatObservationWindows: Array<{
+      window: number;
+      sourceDelta: number;
+      targetDelta: number;
+      sourceClientCount: number;
+      targetClientCount: number;
+    }> = [];
+    let previousSourceHeartbeats = frameCount(source.frames, "runtime.heartbeat");
+    let previousTargetHeartbeats = frameCount(target.frames, "runtime.heartbeat");
+    for (let window = 1; window <= 2; window += 1) {
+      await waitUntil(
+        () => frameCount(target!.frames, "runtime.heartbeat") > previousTargetHeartbeats,
+        20_000,
+      );
+      const sourceHeartbeats = frameCount(source.frames, "runtime.heartbeat");
+      const targetHeartbeats = frameCount(target.frames, "runtime.heartbeat");
+      heartbeatObservationWindows.push({
+        window,
+        sourceDelta: sourceHeartbeats - previousSourceHeartbeats,
+        targetDelta: targetHeartbeats - previousTargetHeartbeats,
+        sourceClientCount: source.wss.clients.size,
+        targetClientCount: target.wss.clients.size,
+      });
+      previousSourceHeartbeats = sourceHeartbeats;
+      previousTargetHeartbeats = targetHeartbeats;
+    }
+    expect(heartbeatObservationWindows).toEqual([
+      {
+        window: 1,
+        sourceDelta: 0,
+        targetDelta: expect.any(Number),
+        sourceClientCount: 0,
+        targetClientCount: 1,
+      },
+      {
+        window: 2,
+        sourceDelta: 0,
+        targetDelta: expect.any(Number),
+        sourceClientCount: 0,
+        targetClientCount: 1,
+      },
+    ]);
+    expect(heartbeatObservationWindows.every(({ targetDelta }) => targetDelta > 0)).toBe(true);
     expect(frameCount(source.frames, "runtime.heartbeat")).toBe(sourceHeartbeatCountBefore);
     expect(frameCount(target.frames, "runtime.heartbeat")).toBeGreaterThanOrEqual(1);
     expect(target.wss.clients.size).toBe(1);
@@ -387,6 +430,11 @@ test("live daemon relocates between snapshot-restored HTTPS/WSS Cockpits without
         invocationStatus: store.require(invocation.invocationId).status,
         sourceHeartbeatCount: frameCount(source.frames, "runtime.heartbeat"),
         targetHeartbeatCount: frameCount(target.frames, "runtime.heartbeat"),
+        heartbeatObservationWindows,
+        sourceHelloCount: frameCount(source.frames, "runtime.hello"),
+        targetHelloCount: frameCount(target.frames, "runtime.hello"),
+        sourceReconcileCountBefore,
+        targetReconcileCount: frameCount(target.frames, "runtime.reconcile.report"),
         sourceClientCount: source.wss.clients.size,
         targetClientCount: target.wss.clients.size,
         sourceBindingIds: [...frameBindingIds(source.frames)],

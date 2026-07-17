@@ -318,6 +318,17 @@ test("HTTPS Cockpit controls models and channels over WSS without a daemon socke
     const commandKinds = cockpitDb
       .prepare("SELECT DISTINCT kind FROM runtime_control_commands ORDER BY kind")
       .all() as Array<{ kind: string }>;
+    const durableCommandText = JSON.stringify(commandKinds);
+    const genericOutboxRows = cockpitDb
+      .prepare(
+        `SELECT payload_json AS payloadJson
+         FROM commands
+         ORDER BY id`,
+      )
+      .all() as Array<{ payloadJson: string }>;
+    const genericOutboxText = JSON.stringify(genericOutboxRows);
+    assert.equal(durableCommandText.includes(secretMarker), false);
+    assert.equal(genericOutboxText.includes(secretMarker), false);
     assert.equal(
       commandKinds.some(({ kind }) => kind.includes("api_key")),
       false,
@@ -331,6 +342,27 @@ test("HTTPS Cockpit controls models and channels over WSS without a daemon socke
       "SPARK_REMOTE_MODEL_CHANNEL_CONTROL_TRANSCRIPT",
       JSON.stringify({
         transport: { page: "https", runtime: "wss" },
+        pageAndApiPaths: {
+          conversation: "/sessions/[sessionId]",
+          models: "/settings/models",
+          channels: "/[workspaceId]/settings/channels",
+          controlApi: "/control",
+        },
+        exercisedActions: [
+          "catalog",
+          "setDefault",
+          "setSessionModel",
+          "setThinking",
+          "setApiKey",
+          "logout",
+          "oauthStart",
+          "oauthStatus",
+          "oauthRespond",
+          "oauthCancel",
+          "channelStatus",
+          "channelConfigure",
+          "channelReload",
+        ],
         runtimeId,
         workspaceId: cockpitWorkspace.id,
         sessionId: workspaceSessionId,
@@ -349,6 +381,8 @@ test("HTTPS Cockpit controls models and channels over WSS without a daemon socke
         cockpitCacheMatchCount: 0,
         artifactMatchCount: 0,
         capturedLogMatchCount: 0,
+        durableCommandMatchCount: 0,
+        genericOutboxMatchCount: 0,
         daemonCredentialTargetMatchCount: 3,
         daemonSocketUsed: false,
       }),
