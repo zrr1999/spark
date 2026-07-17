@@ -451,12 +451,14 @@ function validatePong(value: unknown, path: string): void {
     value,
     path,
     ["version", "protocol_version", "capabilities"],
-    ["instance_id"],
+    ["instance_id", "generation_id", "ready"],
   );
   stringField(record, "version", path);
   u32Field(record, "protocol_version", path);
   stringArrayField(record, "capabilities", path);
   if (record.instance_id !== undefined) stringField(record, "instance_id", path);
+  if (record.generation_id !== undefined) stringField(record, "generation_id", path);
+  if (record.ready !== undefined) booleanField(record, "ready", path);
 }
 
 function validateJobStateChanged(value: unknown, path: string): void {

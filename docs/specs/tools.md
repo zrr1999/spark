@@ -33,7 +33,7 @@ Direct role/session calls do not create task attribution.
 
 - `role` manages reusable definitions/model settings and fresh anonymous calls. It does not accept session lifecycle, mail, `resource=session`, or `sessionId`.
 - `session` manages persistent lifecycle, bindings, calls, classification, and mail. List/get expose surface, activity, lifecycle, adapters, and external keys.
-- `send kind=request` submits the exact body to an unarchived local session; `send kind=notification` persists mail and delivers through channel bindings.
+- `send kind=request` asynchronously submits the exact body to an unarchived local session; `send kind=question` requires an idle local target and waits for a bounded terminal result without cancelling execution on wait timeout; `send kind=notification` persists without triggering and may deliver through channel bindings.
 
 Both call paths share one headless host and `SparkAgentSession`. Full policy is in [`sessions-and-channels.md`](./sessions-and-channels.md).
 
@@ -43,7 +43,15 @@ Both call paths share one headless host and `SparkAgentSession`. Full policy is 
 
 `script_run`/`script_eval` support cue-shell and Python. Python uses `uv run --script <path>` or `uv run --script -`; `venv` is python-only, and `scope` is not a `script_run`/`script_eval` parameter. Cue-shell scripts use `RunScript { path, input }` in a fresh isolated scope.
 
-`spark-files` provides bounded `read`, `write`, `edit`, `ls`, `grep`, and `find`. `graft_*` exposes explicit scratch/candidate/validation/admission provenance.
+`spark-files` provides bounded `read`, `write`, `edit`, `ls`, `grep`, and `find`. `read` has one UTF-8 text protocol: it always renders the raw-content SHA-256 version and stable `LINE#HASH:text` anchors for the returned window, with matching structured metadata; the byte limit applies to this final rendered output, including anchors. Read pagination accepts positive integers only; LF, CRLF, CR-only, mixed separators, and a UTF-8 BOM are reported as metadata, while invalid UTF-8 fails explicitly. `write` has no blind compatibility path: `expectedVersion` is required and must be the version returned by `read`, or `missing` for create-only intent. It uses a same-directory temporary file plus fsync/rename and rejects stale rewrites. Spark serializes writes by canonical target path inside one process (including symlinked parent aliases), rejects direct symbolic-link targets, and therefore gives same-version in-process Spark writers one winner. `edit` commits through the same atomic content-version check. Cross-process and non-cooperating external writers remain an optimistic-concurrency race; atomic replacement also detaches the replaced name from any sibling hard links rather than mutating their shared inode.
+
+These are working-tree mechanisms, not Graft state. Scratch graphs, candidates, daemon lifecycle, and promotion remain in `@zendev-lab/spark-graft`, which is retained for explicit opt-in use but is not loaded by Spark's default extension profile or base prompt.
+
+## Tool execution policy
+
+Tool owners declare one canonical `policy` with `effect`, sibling-call `executionMode`, domains, phases, and approval. The host resolves and freezes that policy at registration. Legacy top-level effect/execution/approval fields remain compatibility inputs, but conflicts or malformed declarations fail closed to unknown effect, sequential execution, and required approval.
+
+Registered tools and active tools are distinct. Only active tools enter the model schema or prompt manifest. A batch executes concurrently only when every call resolves to an active, approval-free `read` tool with `executionMode=parallel`; mixed, unknown, write-capable, or policy-changing batches stay sequential. Parallel results are committed to the transcript in the model's original call order, with a default concurrency limit of four.
 
 ## Web and host policy
 

@@ -21,6 +21,7 @@ export interface WorkspaceProfileRegistration {
 
 export interface SparkDaemonWorkspace {
   id: string;
+  serverWorkspaceId?: string;
   serverUrl: string;
   localWorkspaceKey: string;
   displayName: string;
@@ -545,6 +546,25 @@ export function listWorkspaces(db: DatabaseSync): SparkDaemonWorkspace[] {
   return rows.map((row) => mapWorkspaceRow(row, db));
 }
 
+export function listWorkspacesForServer(
+  db: DatabaseSync,
+  serverUrl: string,
+): SparkDaemonWorkspace[] {
+  return listWorkspaces(db).filter((workspace) => workspace.serverUrl === serverUrl);
+}
+
+export function workspaceBindingBelongsToServer(
+  db: DatabaseSync,
+  workspaceBindingId: string,
+  serverUrl: string,
+): boolean {
+  return Boolean(
+    db
+      .prepare("SELECT 1 AS present FROM workspaces WHERE id = ? AND server_url = ? LIMIT 1")
+      .get(workspaceBindingId, serverUrl),
+  );
+}
+
 export function getWorkspaceById(db: DatabaseSync, id: string): SparkDaemonWorkspace | null {
   const row = db
     .prepare(
@@ -984,8 +1004,20 @@ export function reconcileWorkspaces(
   });
 }
 
-export function workspaceSummaries(db: DatabaseSync): RuntimeWorkspaceBindingSummary[] {
-  return listWorkspaces(db).map((workspace) => ({
+export function reconcileWorkspacesForServer(
+  db: DatabaseSync,
+  serverUrl: string,
+  now = new Date().toISOString(),
+): SparkDaemonWorkspace[] {
+  return reconcileWorkspaces(db, now).filter((workspace) => workspace.serverUrl === serverUrl);
+}
+
+export function workspaceSummaries(
+  db: DatabaseSync,
+  serverUrl?: string,
+): RuntimeWorkspaceBindingSummary[] {
+  const workspaces = serverUrl ? listWorkspacesForServer(db, serverUrl) : listWorkspaces(db);
+  return workspaces.map((workspace) => ({
     bindingId: workspace.id,
     localWorkspaceKey: workspace.localWorkspaceKey,
     localPath: workspace.localPath,
@@ -1015,11 +1047,25 @@ interface WorkspaceRow {
   updatedAt: string;
 }
 
+function workspaceServerWorkspaceId(db: DatabaseSync, workspaceId: string): string | undefined {
+  const row = db
+    .prepare(
+      `SELECT server_workspace_id AS serverWorkspaceId
+       FROM daemon_workspaces
+       WHERE id = ?
+       LIMIT 1`,
+    )
+    .get(workspaceId) as { serverWorkspaceId: string | null } | undefined;
+  return row?.serverWorkspaceId ?? undefined;
+}
+
 function mapWorkspaceRow(row: WorkspaceRow, db?: DatabaseSync): SparkDaemonWorkspace {
   const projection = db ? workspaceInvocationProjection(db, row.id) : {};
   const clientProjection = db ? workspaceClientStateProjection(db, row.id) : {};
+  const serverWorkspaceId = db ? workspaceServerWorkspaceId(db, row.id) : undefined;
   return {
     id: row.id,
+    ...(serverWorkspaceId ? { serverWorkspaceId } : {}),
     serverUrl: row.serverUrl,
     localWorkspaceKey: row.localWorkspaceKey,
     displayName: row.displayName,

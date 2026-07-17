@@ -6,6 +6,7 @@ import type { Component } from "../apps/spark-tui/src/tui/pi-tui-adapter.ts";
 import {
   CREATE_SPARK_SESSION_SELECTION,
   createSparkSessionSelectorComponent,
+  formatSparkSessionListByWorkspace,
   isSelectableSparkSession,
   selectSparkSessionFromCustomUi,
 } from "../apps/spark-tui/src/tui/session-selector.ts";
@@ -74,10 +75,46 @@ const channelTitleSession: SparkSessionRegistryRecord = {
   updatedAt: "2026-07-13T02:00:00.000Z",
 };
 
+const otherWorkspaceSession: SparkSessionRegistryRecord = {
+  sessionId: "session-other-workspace",
+  title: "Other workspace",
+  scope: { kind: "workspace", workspaceId: "workspace-2" },
+  workspaceId: "workspace-2",
+  cwd: "/workspace/other",
+  status: "running",
+  bindings: [],
+  createdAt: "2026-07-13T00:00:00.000Z",
+  updatedAt: "2026-07-13T03:00:00.000Z",
+};
+
+const legacyWorkspaceSession: SparkSessionRegistryRecord = {
+  sessionId: "session-legacy-workspace",
+  title: "Legacy workspace",
+  scope: { kind: "workspace", workspaceId: "spark" },
+  workspaceId: "spark",
+  cwd: "/workspace/spark",
+  status: "ready",
+  bindings: [],
+  createdAt: "2026-07-13T00:00:00.000Z",
+  updatedAt: "2026-07-13T03:30:00.000Z",
+};
+
+const daemonSession: SparkSessionRegistryRecord = {
+  sessionId: "session-daemon",
+  title: "Daemon conversation",
+  scope: { kind: "daemon", daemonId: "daemon-1" },
+  cwd: "/daemon",
+  status: "ready",
+  bindings: [],
+  createdAt: "2026-07-13T00:00:00.000Z",
+  updatedAt: "2026-07-13T04:00:00.000Z",
+};
+
 void test("Spark session selector renders new and daemon-managed session choices", () => {
   const selected: string[] = [];
   const component = createSparkSessionSelectorComponent({
     sessions,
+    workspaceId: "workspace-1",
     workspaceLabel: "spark • /workspace/spark",
     onSelect: (value) => selected.push(value),
   });
@@ -111,6 +148,7 @@ void test("Spark session selector renders new and daemon-managed session choices
 void test("Spark session selector uses the Cockpit fallback for untitled sessions", () => {
   const component = createSparkSessionSelectorComponent({
     sessions: [untitledSession],
+    workspaceId: "workspace-1",
     workspaceLabel: "spark • /workspace/spark",
     onSelect: () => undefined,
   });
@@ -126,21 +164,57 @@ void test("Spark session selector uses the Cockpit fallback for untitled session
   );
 });
 
-void test("Spark session selector hides archived and message-platform sessions", () => {
+void test("Spark session selector switches workspace groups horizontally", () => {
+  const selected: string[] = [];
   const component = createSparkSessionSelectorComponent({
     sessions: [
       ...(sessions as SparkSessionRegistryRecord[]),
       archivedSession,
       channelBindingSession,
       channelTitleSession,
+      otherWorkspaceSession,
+      legacyWorkspaceSession,
+      daemonSession,
     ],
+    workspaceId: "workspace-1",
     workspaceLabel: "spark • /workspace/spark",
-    onSelect: () => undefined,
+    workspaces: [
+      {
+        id: "workspace-2",
+        canonicalId: "workspace-2",
+        displayName: "spore",
+        localPath: "/workspace/spark",
+      },
+      {
+        id: "spark",
+        canonicalId: "workspace-1",
+        displayName: "spark",
+        localPath: "/workspace/spark",
+      },
+    ],
+    maxVisible: 20,
+    onSelect: (value) => selected.push(value),
   });
 
-  const lines = component.render(72);
+  let lines = component.render(96);
+  assert.equal(
+    lines.some((line) => line.includes("[spark (4)]")),
+    true,
+  );
+  assert.equal(
+    lines.some((line) => line.includes("spore (1)")),
+    true,
+  );
+  assert.equal(
+    lines.some((line) => line.includes("TUI only (1)")),
+    true,
+  );
   assert.equal(
     lines.some((line) => line.includes("Recent conversation")),
+    true,
+  );
+  assert.equal(
+    lines.some((line) => line.includes("Legacy workspace")),
     true,
   );
   assert.equal(
@@ -149,19 +223,82 @@ void test("Spark session selector hides archived and message-platform sessions",
   );
   assert.equal(
     lines.some((line) => line.includes("Ops room")),
+    true,
+  );
+  assert.equal(
+    lines.some((line) => line.includes("feishu")),
+    true,
+  );
+  assert.equal(
+    lines.some((line) => line.includes("Other workspace")),
     false,
   );
   assert.equal(
-    lines.some((line) => line.includes("qqbot")),
+    lines.some((line) => line.includes("Daemon conversation")),
     false,
   );
+
+  component.handleInput?.("\u001b[C");
+  lines = component.render(96);
+  assert.equal(
+    lines.some((line) => line.includes("[spore (1)]")),
+    true,
+  );
+  assert.equal(
+    lines.some((line) => line.includes("Other workspace")),
+    true,
+  );
+  assert.equal(
+    lines.some((line) => line.includes("Recent conversation")),
+    false,
+  );
+
+  component.handleInput?.("\u001b[C");
+  lines = component.render(96);
+  assert.equal(
+    lines.some((line) => line.includes("[TUI only (1)]")),
+    true,
+  );
+  assert.equal(
+    lines.some((line) => line.includes("Daemon conversation")),
+    true,
+  );
+  component.handleInput?.("\r");
+  assert.deepEqual(selected, [daemonSession.sessionId]);
 });
 
-void test("isSelectableSparkSession keeps only local, non-archived sessions", () => {
+void test("isSelectableSparkSession matches the daemon default non-archived list", () => {
   assert.equal(isSelectableSparkSession(sessions[0] as SparkSessionRegistryRecord), true);
   assert.equal(isSelectableSparkSession(archivedSession), false);
-  assert.equal(isSelectableSparkSession(channelBindingSession), false);
-  assert.equal(isSelectableSparkSession(channelTitleSession), false);
+  assert.equal(isSelectableSparkSession(channelBindingSession), true);
+  assert.equal(isSelectableSparkSession(channelTitleSession), true);
+});
+
+void test("Spark session list text uses the same workspace groups as the selector", () => {
+  const text = formatSparkSessionListByWorkspace({
+    sessions: [
+      ...(sessions as SparkSessionRegistryRecord[]),
+      channelBindingSession,
+      otherWorkspaceSession,
+      daemonSession,
+    ],
+    workspaceId: "workspace-1",
+    workspaceLabel: "spark • /workspace/spark",
+    workspaces: [
+      {
+        id: "workspace-2",
+        canonicalId: "workspace-2",
+        displayName: "spore",
+        localPath: "/workspace/spark",
+      },
+    ],
+  });
+
+  assert.match(text, /^Spark daemon sessions:/u);
+  assert.match(text, /spark • \/workspace\/spark \(2\)/u);
+  assert.match(text, /spore • \/workspace\/spark \(1\)/u);
+  assert.match(text, /TUI only \(1\)/u);
+  assert.match(text, /Ops room • session-channel-bound • feishu/u);
 });
 
 void test("Spark session selector custom UI returns an existing daemon session", async () => {
@@ -194,6 +331,7 @@ void test("Spark session selector custom UI returns an existing daemon session",
 
   const selection = await selectSparkSessionFromCustomUi(customUi, {
     sessions,
+    workspaceId: "workspace-1",
     workspaceLabel: "spark • /workspace/spark",
   });
   assert.equal(rendered, true);

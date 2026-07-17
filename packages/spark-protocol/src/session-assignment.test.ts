@@ -47,8 +47,19 @@ describe("session ownership protocol", () => {
         scope: { kind: "daemon", daemonId: "spoofed-installation" },
       }),
     ).toThrow();
-    expect(sparkSessionListRequestSchema.parse({ scope: { kind: "daemon" } })).toEqual({
+    expect(
+      sparkSessionListRequestSchema.parse({
+        scope: { kind: "daemon" },
+        cursor: "sess_cursor",
+        limit: 100,
+      }),
+    ).toEqual({
       scope: { kind: "daemon" },
+      cursor: "sess_cursor",
+      limit: 100,
     });
+    expect(() =>
+      sparkSessionListRequestSchema.parse({ scope: { kind: "daemon" }, limit: 101 }),
+    ).toThrow();
   });
 });

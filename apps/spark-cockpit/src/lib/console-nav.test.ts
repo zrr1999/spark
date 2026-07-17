@@ -36,7 +36,10 @@ describe("console nav", () => {
       ["daemon", "Daemon"],
       ["workspace", "Workspace · Local"],
     ]);
-    expect(result[0]?.items.map((item) => item.href)).toEqual(["/workspaces/new"]);
+    expect(result[0]?.items.map((item) => item.href)).toEqual([
+      "/workspaces/new",
+      "/local/settings/registration",
+    ]);
     expect(result[1]?.items.map((item) => item.href)).toEqual([
       "/settings/models",
       "/settings/invocations",
@@ -44,11 +47,10 @@ describe("console nav", () => {
     expect(result[2]?.items.map((item) => item.href)).toEqual([
       "/local/settings",
       "/local/settings/channels",
-      "/local/settings/registration",
     ]);
   });
 
-  it("omits workspace group when no workspace is active", () => {
+  it("omits workspace group and registration when no workspace is active", () => {
     const result = buildConsoleNavGroups({
       activeWorkspacePath: "",
       hasActiveWorkspace: false,
@@ -56,6 +58,7 @@ describe("console nav", () => {
       groups,
     });
     expect(result.map((group) => group.id)).toEqual(["cockpit", "daemon"]);
+    expect(result[0]?.items.map((item) => item.href)).toEqual(["/workspaces/new"]);
   });
 
   it("keeps Cockpit, daemon, and workspace active states distinct", () => {
@@ -100,5 +103,8 @@ describe("console nav", () => {
     );
     expect(currentConsolePageLabel({ pathname: "/workspaces/new", nav })).toBe("Create workspace");
     expect(currentConsolePageLabel({ pathname: "/local/settings", nav })).toBe("Basics");
+    expect(currentConsolePageLabel({ pathname: "/local/settings/registration", nav })).toBe(
+      "Runtime registration",
+    );
   });
 });

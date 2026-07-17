@@ -23,6 +23,8 @@ export interface SparkModeMessageApi {
       content: string;
       display?: boolean;
       details?: Record<string, unknown>;
+      authority?: "runtime_control" | "runtime_data";
+      trust?: "trusted" | "untrusted";
     },
     options?: { deliverAs?: "steer" | "followUp" | "nextTurn"; triggerTurn?: boolean },
   ): void;
@@ -58,6 +60,8 @@ export function dispatchSparkAgentInstruction(
       customType: "spark-mode-request",
       content: instruction,
       display: false,
+      authority: "runtime_control",
+      trust: "trusted",
       details: { visible: visibleMessage },
     },
     idle ? { triggerTurn: true } : { deliverAs: "followUp", triggerTurn: true },

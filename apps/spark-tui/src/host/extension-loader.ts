@@ -5,11 +5,14 @@ import type { ExtensionAPI } from "@zendev-lab/spark-extension-api";
 import sparkAskExtension from "@zendev-lab/spark-ask/extension";
 import sparkCueExtension from "@zendev-lab/spark-cue/extension";
 import sparkFilesExtension from "@zendev-lab/spark-files/extension";
-import sparkGraftExtension from "@zendev-lab/spark-graft/extension";
 import sparkMemoryExtension from "@zendev-lab/spark-memory/extension";
 import sparkRolesExtension from "@zendev-lab/spark-roles/extension";
 import sparkSessionExtension from "@zendev-lab/spark-session/extension";
 import sparkWebExtension from "@zendev-lab/spark-web/extension";
+
+import { DEFAULT_SPARK_EXTENSION_SPECS } from "./extension-specs.ts";
+
+export { DEFAULT_SPARK_EXTENSION_SPECS } from "./extension-specs.ts";
 import sparkModelsExtension from "@zendev-lab/spark-ai/models-extension";
 import sparkExtension from "@zendev-lab/pi-extension/extension";
 
@@ -50,19 +53,6 @@ export interface SparkExtensionLoaderOptions {
   extensions?: string[];
   importer?: (specifier: string) => Promise<unknown>;
 }
-
-export const DEFAULT_SPARK_EXTENSION_SPECS = [
-  "@zendev-lab/spark-ask/extension",
-  "@zendev-lab/spark-cue/extension",
-  "@zendev-lab/spark-files/extension",
-  "@zendev-lab/spark-ai/models-extension",
-  "@zendev-lab/spark-memory/extension",
-  "@zendev-lab/spark-roles/extension",
-  "@zendev-lab/spark-session/extension",
-  "@zendev-lab/spark-web/extension",
-  "@zendev-lab/spark-graft/extension",
-  "@zendev-lab/pi-extension/extension",
-] as const;
 
 const BUILTIN_EXTENSION_FACTORIES: readonly SparkBuiltinExtensionFactory[] = [
   {
@@ -108,7 +98,7 @@ const BUILTIN_EXTENSION_FACTORIES: readonly SparkBuiltinExtensionFactory[] = [
   {
     name: "@zendev-lab/spark-graft",
     specifier: "@zendev-lab/spark-graft/extension",
-    factory: sparkGraftExtension as SparkExtensionFactory,
+    factory: loadSparkGraftExtension,
   },
   {
     name: "spark",
@@ -116,6 +106,13 @@ const BUILTIN_EXTENSION_FACTORIES: readonly SparkBuiltinExtensionFactory[] = [
     factory: sparkExtension as SparkExtensionFactory,
   },
 ];
+
+async function loadSparkGraftExtension(api: ExtensionAPI): Promise<void> {
+  // Graft is an optional compatibility package. Keep module evaluation off the
+  // default startup path and import it only after explicit config/CLI opt-in.
+  const module = await import("@zendev-lab/spark-graft/extension");
+  await (module.default as SparkExtensionFactory)(api);
+}
 
 export class SparkExtensionLoader {
   private readonly api: ExtensionAPI;

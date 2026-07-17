@@ -33,6 +33,8 @@ export interface SparkCommandApi {
       content: string;
       display?: boolean;
       details?: Record<string, unknown>;
+      authority?: "runtime_control" | "runtime_data";
+      trust?: "trusted" | "untrusted";
     },
     options?: { deliverAs?: "steer" | "followUp" | "nextTurn"; triggerTurn?: boolean },
   ): void;

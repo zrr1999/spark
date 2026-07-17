@@ -23,7 +23,12 @@
  * See ARCHITECTURE.md for the category-theoretic model.
  */
 
-import type { ExtensionAPI } from "@zendev-lab/spark-extension-api";
+import type {
+  ExtensionAPI,
+  ToolEffect,
+  ToolExecutionMode,
+  ToolPolicy,
+} from "@zendev-lab/spark-extension-api";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as nodePath from "node:path";
@@ -34,7 +39,7 @@ import { cueShellProcessEnvironment } from "./executable-environment.ts";
 export interface PiCueExtensionApi {
   registerTool(config: PiCueToolConfig): void;
   on?(event: string, handler: (event?: unknown, ctx?: unknown) => unknown): void;
-  getAllTools?(): Array<{ name: string }>;
+  getActiveTools?(): string[];
   setActiveTools?(names: string[]): void;
 }
 
@@ -56,6 +61,10 @@ export interface PiCueToolConfig {
   name: string;
   label?: string;
   description: string;
+  policy?: ToolPolicy;
+  /** Legacy mirrors populated from policy for Pi/current Spark turn hosts. */
+  effect?: ToolEffect;
+  executionMode?: ToolExecutionMode;
   /** Cue exec family tools require host approval gated by session approvalMethod. */
   requiresApproval?: boolean;
   parameters: unknown;
@@ -74,6 +83,69 @@ export interface PiCueToolConfig {
     content: Array<{ type: "text"; text: string }>;
     details?: Record<string, unknown>;
   }>;
+}
+
+const CUE_EXECUTION_TOOL_POLICY = {
+  effect: "external_write",
+  executionMode: "sequential",
+  domains: ["cue", "execution"],
+  phases: ["implement"],
+  approval: "required",
+} as const satisfies ToolPolicy;
+
+const CUE_JOBS_TOOL_POLICY = {
+  effect: "external_write",
+  executionMode: "sequential",
+  domains: ["cue", "jobs"],
+  phases: ["implement"],
+  approval: "required",
+} as const satisfies ToolPolicy;
+
+const CUE_RESOURCES_TOOL_POLICY = {
+  effect: "read",
+  executionMode: "parallel",
+  domains: ["cue", "resources"],
+  phases: ["plan", "implement"],
+  approval: "none",
+} as const satisfies ToolPolicy;
+
+const CUE_SCHEDULE_TOOL_POLICY = {
+  effect: "external_write",
+  executionMode: "sequential",
+  domains: ["cue", "schedules"],
+  phases: ["implement"],
+  approval: "required",
+} as const satisfies ToolPolicy;
+
+const CUE_SCOPE_TOOL_POLICY = {
+  // cue_scope combines inspection with cwd/env mutation, so the whole action
+  // surface is conservatively stateful until actions gain parameter policies.
+  effect: "external_write",
+  executionMode: "sequential",
+  domains: ["cue", "scope"],
+  phases: ["plan", "implement"],
+  approval: "none",
+} as const satisfies ToolPolicy;
+
+const CUE_HISTORY_TOOL_POLICY = {
+  effect: "read",
+  executionMode: "parallel",
+  domains: ["cue", "history"],
+  phases: ["plan", "implement"],
+  approval: "none",
+} as const satisfies ToolPolicy;
+
+function registerCueTool(pi: PiCueExtensionApi, config: PiCueToolConfig): void {
+  const effect = config.effect ?? config.policy?.effect;
+  const executionMode = config.executionMode ?? config.policy?.executionMode;
+  const requiresApproval =
+    config.requiresApproval ?? (config.policy?.approval === "required" ? true : undefined);
+  pi.registerTool({
+    ...config,
+    ...(effect ? { effect } : {}),
+    ...(executionMode ? { executionMode } : {}),
+    ...(requiresApproval === true ? { requiresApproval } : {}),
+  });
 }
 
 interface ToolCallRenderTheme {
@@ -1421,10 +1493,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
   //  cue_exec — execute a command and create a job
   // ═══════════════════════════════════════════════════════════════════
 
-  pi.registerTool({
+  registerCueTool(pi, {
     name: "cue_exec",
     label: "Run Command",
-    requiresApproval: true,
+    policy: CUE_EXECUTION_TOOL_POLICY,
     description:
       "Execute a command in cue-shell using the active cue-client transport profile (Unix socket or SSH gateway). " +
       "SSH profiles connect through the configured remote `cued gateway --stdio`; spark-cue does not auto-start remote daemons. " +
@@ -1739,10 +1811,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     return { ...output, details };
   }
 
-  pi.registerTool({
+  registerCueTool(pi, {
     name: "cue_run",
     label: "Run Cue File",
-    requiresApproval: true,
+    policy: CUE_EXECUTION_TOOL_POLICY,
     description:
       "Run a .cue file in cue-shell, mirroring `cue run <file.cue>`. " +
       "Top-level items execute sequentially with fail-fast semantics inside a fresh isolated scope forked from HEAD. " +
@@ -1822,10 +1894,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     },
   });
 
-  pi.registerTool({
+  registerCueTool(pi, {
     name: "cue_script",
     label: "Run Cue Script",
-    requiresApproval: true,
+    policy: CUE_EXECUTION_TOOL_POLICY,
     description:
       "Run an inline .cue script body in cue-shell. " +
       "Top-level items execute sequentially with fail-fast semantics inside a fresh isolated scope forked from HEAD. " +
@@ -1912,10 +1984,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
   //  script_run / script_eval — generic script runners
   // ═══════════════════════════════════════════════════════════════════
 
-  pi.registerTool({
+  registerCueTool(pi, {
     name: "script_run",
     label: "Run Script File",
-    requiresApproval: true,
+    policy: CUE_EXECUTION_TOOL_POLICY,
     description:
       "Run a script file with an explicit language runner. " +
       "Supported languages in this version: cue-shell and python. " +
@@ -2030,10 +2102,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     },
   });
 
-  pi.registerTool({
+  registerCueTool(pi, {
     name: "script_eval",
     label: "Evaluate Script",
-    requiresApproval: true,
+    policy: CUE_EXECUTION_TOOL_POLICY,
     description:
       "Run an inline script body with an explicit language runner. " +
       "Supported languages in this version: cue-shell and python. " +
@@ -2149,10 +2221,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
   //  cue_jobs — manage and inspect jobs
   // ═══════════════════════════════════════════════════════════════════
 
-  pi.registerTool({
+  registerCueTool(pi, {
     name: "cue_jobs",
     label: "Cue Jobs",
-    requiresApproval: true,
+    policy: CUE_JOBS_TOOL_POLICY,
     description:
       "Manage cue-shell jobs. action='list' lists jobs, action='status' inspects a job, chain, or cron, action='wait' waits for a job or chain, and action='stop' stops a job or removes a cron.",
     parameters: Type.Object({
@@ -2433,9 +2505,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
   //  cue_resources — inspect resource providers and capacity
   // ═══════════════════════════════════════════════════════════════════
 
-  pi.registerTool({
+  registerCueTool(pi, {
     name: "cue_resources",
     label: "Cue Resources",
+    policy: CUE_RESOURCES_TOOL_POLICY,
     description:
       "Inspect cue-shell resource scheduling state. action='providers' lists registered providers, routed resource keys, and active reservations; action='resources' shows current provider snapshots/units when providers support probing.",
     parameters: Type.Object({
@@ -2497,10 +2570,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
   //  cue_schedule — unified schedule management
   // ═══════════════════════════════════════════════════════════════════
 
-  pi.registerTool({
+  registerCueTool(pi, {
     name: "cue_schedule",
     label: "Cue Schedule",
-    requiresApproval: true,
+    policy: CUE_SCHEDULE_TOOL_POLICY,
     description:
       "Manage scheduled cue-shell jobs. " +
       "action='add': schedule a recurring or one-shot job (requires schedule + command). " +
@@ -2705,9 +2778,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
   //  cue_scope — inspect scopes, env, or config
   // ═══════════════════════════════════════════════════════════════════
 
-  pi.registerTool({
+  registerCueTool(pi, {
     name: "cue_scope",
     label: "Cue Scope",
+    policy: CUE_SCOPE_TOOL_POLICY,
     description:
       "Inspect or mutate cue-shell session state. action='list' lists scopes, 'env' shows session env, 'config' shows config, 'env_set' sets KEY=VALUE, 'env_unset' removes KEY, 'path_prepend' prepends PATH, 'cd' changes session cwd, 'refresh' explicitly refreshes the session from host cwd/env, and 'status' shows bounded cwd/PATH status.",
     parameters: Type.Object({
@@ -2937,9 +3011,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
   //  cue_history — show history
   // ═══════════════════════════════════════════════════════════════════
 
-  pi.registerTool({
+  registerCueTool(pi, {
     name: "cue_history",
     label: "Cue History",
+    policy: CUE_HISTORY_TOOL_POLICY,
     description:
       "Show recent cue-shell history. Pass an id to focus on one job/cron. Output is bounded by default.",
     parameters: Type.Object({
@@ -3010,11 +3085,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
   // ── Lifecycle ──────────────────────────────────────────────────────
 
   pi.on?.("session_start", () => {
-    if (!pi.getAllTools || !pi.setActiveTools) return;
-    const withoutBash = pi
-      .getAllTools()
-      .map((t) => t.name)
-      .filter((name) => name !== "bash");
+    if (!pi.getActiveTools || !pi.setActiveTools) return;
+    const withoutBash = pi.getActiveTools().filter((name) => name !== "bash");
     pi.setActiveTools(withoutBash);
   });
 
@@ -3032,7 +3104,7 @@ export default function piCueExtension(pi: ExtensionAPI) {
           pi.on?.(event, (payload, ctx) => handler(payload, ctx));
         }
       : undefined,
-    getAllTools: pi.getAllTools ? () => pi.getAllTools!() : undefined,
+    getActiveTools: pi.getActiveTools ? () => pi.getActiveTools!() : undefined,
     setActiveTools: pi.setActiveTools ? (names) => pi.setActiveTools!(names) : undefined,
   });
 }

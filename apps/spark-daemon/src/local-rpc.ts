@@ -58,11 +58,7 @@ import {
   type ChannelNotifyInput,
   type ChannelsConfig,
 } from "@zendev-lab/spark-channels";
-import {
-  loadSparkSessionSnapshot,
-  SparkSessionMailStore,
-  SparkSessionRegistryError,
-} from "@zendev-lab/spark-session";
+import { SparkSessionMailStore, SparkSessionRegistryError } from "@zendev-lab/spark-session";
 import type { SparkPaths } from "@zendev-lab/spark-system";
 import {
   requestSparkDaemonLocalRpcWire,
@@ -76,21 +72,25 @@ import type {
   DaemonChannelIngressRuntime,
   DaemonChannelIngressStatus,
 } from "./channels/ingress.ts";
+import { createDaemonChannelDeliveryOutbox } from "./channels/delivery-outbox.ts";
 import {
   deliverSessionNotification,
+  type SessionNotificationDeliveryQueue,
   type SessionNotificationDeliveryResult,
 } from "./session-notification-delivery.ts";
 import {
-  validateSparkDaemonTask,
   type SparkDaemonLifecycleSnapshot,
   type SparkDaemonRestartRequestResult,
-  type SparkDaemonTask,
 } from "./core/index.ts";
 import {
   SparkInvocationStore,
   isRetryableInvocationError,
   type SparkInvocationSessionActivity,
 } from "./store/invocations.ts";
+import {
+  SparkChannelDeliveryStore,
+  type SparkChannelDeliverySummary,
+} from "./store/channel-deliveries.ts";
 import {
   attachWorkspace,
   attachWorkspaceClient,
@@ -116,6 +116,13 @@ import {
 } from "./registration.js";
 import { createDaemonSessionRegistry, type DaemonSessionRegistry } from "./session-registry.ts";
 import type { SparkDaemonModelControl } from "./model-control.ts";
+import { executeSparkDaemonSessionControl } from "./session-control.ts";
+import {
+  relocateSparkDaemonCockpit,
+  SparkDaemonRelocationError,
+  type SparkDaemonRelocationRequest,
+  type SparkDaemonRelocationResult,
+} from "./relocation.ts";
 
 export {
   createDaemonSessionRegistry,
@@ -161,6 +168,7 @@ export interface LocalDaemonStatusResult {
   }>;
   invocations: Record<"queued" | "running" | "succeeded" | "failed" | "cancelled", number>;
   invocationHealth: { oldestQueuedAt?: string; oldestRunningAt?: string };
+  channelDeliveries?: SparkChannelDeliverySummary;
   lifecycle: SparkDaemonLifecycleSnapshot;
   observedAt: string;
 }
@@ -191,6 +199,9 @@ export type LocalDaemonRestartResult = SparkDaemonRestartRequestResult;
 export interface LocalWorkspaceRegisterRequest extends RegisterWorkspaceOptions {
   registrationToken?: string;
 }
+
+export type LocalWorkspaceRelocateRequest = SparkDaemonRelocationRequest;
+export type LocalWorkspaceRelocateResult = SparkDaemonRelocationResult;
 
 export interface LocalWorkspaceEnsureLocalRequest {
   localPath: string;
@@ -236,9 +247,14 @@ interface LocalRpcHandlerOptions {
   sessionRegistry?: DaemonSessionRegistry;
   modelControl?: SparkDaemonModelControl;
   mailStore?: LocalRpcMailStore;
+  notificationDeliveryQueue?: SessionNotificationDeliveryQueue;
   onStopRequested?: () => void;
   onRestart?: () => LocalDaemonRestartResult | Promise<LocalDaemonRestartResult>;
+  relocateSparkDaemonCockpit?: typeof relocateSparkDaemonCockpit;
+  onUplinkReconfigure?: () => void;
   getLifecycle?: () => SparkDaemonLifecycleSnapshot;
+  /** Startup fence: before this opens, only readiness/status and stop are admitted. */
+  isReady?: () => boolean;
 }
 
 type LocalRpcRequest =
@@ -322,6 +338,12 @@ type LocalRpcRequest =
       id: string;
       method: "workspace.register";
       params: LocalWorkspaceRegisterParams;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "workspace.relocate";
+      params: LocalWorkspaceRelocateRequest;
       sparkCommand: SparkCommand;
     }
   | {
@@ -472,6 +494,8 @@ type LocalRpcResponse =
 
 export class LocalRpcUnavailableError extends Error {}
 
+class SparkDaemonStillStartingError extends Error {}
+
 export function localRpcSocketPath(paths: SparkPaths): string {
   return join(paths.runtimeDir, "daemon.sock");
 }
@@ -484,7 +508,9 @@ export async function startLocalRpcServer(options: {
   onStop?: () => void | Promise<void>;
   onStopRequested?: () => void;
   onRestart?: () => LocalDaemonRestartResult | Promise<LocalDaemonRestartResult>;
+  onUplinkReconfigure?: () => void;
   getLifecycle?: () => SparkDaemonLifecycleSnapshot;
+  isReady?: () => boolean;
   eventBus?: SparkDaemonLocalEventBus;
   channelIngress?: DaemonChannelIngressRuntime;
   sessionRegistry?: DaemonSessionRegistry;
@@ -511,6 +537,11 @@ export async function startLocalRpcServer(options: {
     });
   const mailStore =
     options.mailStore ?? new SparkSessionMailStore({ sparkHome: options.sparkHome });
+  const notificationDeliveryStore = new SparkChannelDeliveryStore(options.db);
+  const notificationDeliveryQueue = {
+    store: notificationDeliveryStore,
+    outbox: createDaemonChannelDeliveryOutbox(notificationDeliveryStore),
+  } satisfies SessionNotificationDeliveryQueue;
   const server = createServer((socket) => {
     if (closing) {
       socket.destroy();
@@ -528,11 +559,16 @@ export async function startLocalRpcServer(options: {
       {
         sessionRegistry,
         mailStore,
+        notificationDeliveryQueue,
         ...(options.channelIngress ? { channelIngress: options.channelIngress } : {}),
         ...(options.modelControl ? { modelControl: options.modelControl } : {}),
         ...(options.onStopRequested ? { onStopRequested: options.onStopRequested } : {}),
         ...(options.onRestart ? { onRestart: options.onRestart } : {}),
+        ...(options.onUplinkReconfigure
+          ? { onUplinkReconfigure: options.onUplinkReconfigure }
+          : {}),
         ...(options.getLifecycle ? { getLifecycle: options.getLifecycle } : {}),
+        ...(options.isReady ? { isReady: options.isReady } : {}),
       },
       {
         onRequestStart: (request) => {
@@ -728,6 +764,17 @@ export async function requestWorkspaceRegister(
       params: localWorkspaceRegisterParams(params),
     },
     sparkDaemonWorkspace,
+  );
+}
+
+export async function requestWorkspaceRelocate(
+  paths: SparkPaths,
+  params: LocalWorkspaceRelocateRequest,
+): Promise<LocalWorkspaceRelocateResult> {
+  return localRpcRequest(
+    paths,
+    { id: localRequestId(), method: "workspace.relocate", params },
+    relocationResult,
   );
 }
 
@@ -932,6 +979,15 @@ export async function handleLocalRpcLine(
     }
     const request = parseLocalRpcRequest(line);
     requestId = request.id;
+    if (
+      options.isReady &&
+      !options.isReady() &&
+      !isLocalRpcSafeWhileAdmissionClosed(request.method)
+    ) {
+      throw new SparkDaemonStillStartingError(
+        "Spark daemon is still starting; retry after readiness.",
+      );
+    }
     switch (request.method) {
       case "daemon.status": {
         const store = new SparkInvocationStore(db);
@@ -946,6 +1002,7 @@ export async function handleLocalRpcLine(
               ...(oldestActive.queued ? { oldestQueuedAt: oldestActive.queued } : {}),
               ...(oldestActive.running ? { oldestRunningAt: oldestActive.running } : {}),
             },
+            channelDeliveries: new SparkChannelDeliveryStore(db).summary(),
             lifecycle: options.getLifecycle?.() ?? { state: "running" },
             observedAt: new Date().toISOString(),
           },
@@ -1006,51 +1063,24 @@ export async function handleLocalRpcLine(
         return { id: request.id, ok: true, result };
       }
       case "turn.submit": {
-        const model = await effectiveTurnModel(options, request.params.sessionId);
-        const thinkingLevel = await effectiveTurnThinkingLevel(options, request.params.sessionId);
-        const route = await sessionTurnRoute(
-          options,
-          db,
-          request.params.sessionId,
-          request.params.assignment,
+        const executed = await executeSparkDaemonSessionControl(
+          sessionControlOptions(paths, db, options),
+          {
+            kind: "turn.submit.request",
+            scope: "any",
+            sessionId: request.params.sessionId,
+            idempotencyKey: request.params.idempotencyKey,
+            payload: { ...request.params },
+          },
         );
-        const result = await enqueueManagedSessionTurn(
-          options,
-          request.params.sessionId,
-          async () =>
-            submitInvocationTask(
-              db,
-              {
-                type: "session.run",
-                sessionId: request.params.sessionId,
-                prompt: request.params.prompt,
-                ...(model ? { model } : {}),
-                ...(thinkingLevel ? { thinkingLevel } : {}),
-                ...(request.params.reset !== undefined ? { reset: request.params.reset } : {}),
-                ...(route.cwd ? { cwd: route.cwd } : {}),
-                ...(route.workspaceId ? { workspaceId: route.workspaceId } : {}),
-                ...(request.params.assignment ? { assignment: request.params.assignment } : {}),
-                ...(request.params.messageMetadata
-                  ? { messageMetadata: request.params.messageMetadata }
-                  : {}),
-                actor: "spark-daemon-local-rpc",
-              },
-              request.params.idempotencyKey,
-              invocationSource(request.params.messageMetadata),
-            ),
-        );
-        const submittedInvocation = new SparkInvocationStore(db).require(result.invocationId);
-        if (isTerminalInvocationStatus(submittedInvocation.status)) {
-          await settleManagedSessionTurn(options.sessionRegistry, request.params.sessionId);
-        }
-        return { id: request.id, ok: true, result };
+        return { id: request.id, ok: true, result: executed.result };
       }
       case "turn.status": {
-        return {
-          id: request.id,
-          ok: true,
-          result: invocationStatusResult(new SparkInvocationStore(db), request.params.invocationId),
-        };
+        const executed = await executeSparkDaemonSessionControl(
+          sessionControlOptions(paths, db, options),
+          { kind: "turn.status.request", scope: "any", payload: { ...request.params } },
+        );
+        return { id: request.id, ok: true, result: executed.result };
       }
       case "turn.result": {
         return {
@@ -1110,31 +1140,18 @@ export async function handleLocalRpcLine(
         };
       }
       case "turn.stream": {
-        return {
-          id: request.id,
-          ok: true,
-          result: sparkTurnStreamPageSchema.parse(
-            new SparkInvocationStore(db).eventPage(
-              request.params.invocationId,
-              request.params.after,
-              request.params.limit,
-            ),
-          ),
-        };
+        const executed = await executeSparkDaemonSessionControl(
+          sessionControlOptions(paths, db, options),
+          { kind: "turn.stream.subscribe", scope: "any", payload: { ...request.params } },
+        );
+        return { id: request.id, ok: true, result: executed.result };
       }
       case "turn.cancel": {
-        const reason = request.params.reason ?? "Spark local RPC turn cancellation requested.";
-        const result = await cancelManagedTurn(
-          new SparkInvocationStore(db),
-          request.params.invocationId,
-          reason,
-          options.sessionRegistry,
+        const executed = await executeSparkDaemonSessionControl(
+          sessionControlOptions(paths, db, options),
+          { kind: "turn.cancel.request", scope: "any", payload: { ...request.params } },
         );
-        return {
-          id: request.id,
-          ok: true,
-          result,
-        };
+        return { id: request.id, ok: true, result: executed.result };
       }
       case "workspace.list":
         return {
@@ -1150,6 +1167,17 @@ export async function handleLocalRpcLine(
           id: request.id,
           ok: true,
           result: ensureLocalWorkspace(db, request.params),
+        };
+      case "workspace.relocate":
+        return {
+          id: request.id,
+          ok: true,
+          result: await (options.relocateSparkDaemonCockpit ?? relocateSparkDaemonCockpit)(
+            paths,
+            db,
+            request.params,
+            { onUplinkReconfigure: options.onUplinkReconfigure },
+          ),
         };
       case "workspace.register":
         const planned = planWorkspaceRegistration(db, request.params);
@@ -1230,81 +1258,61 @@ export async function handleLocalRpcLine(
         return { id: request.id, ok: true, result: workspaceClientResult(db, client) };
       }
       case "session.list": {
-        const sessions = await requireSessionRegistry(options).list(request.params);
-        const activities = new SparkInvocationStore(db).sessionActivities(
-          sessions.map((session) => session.sessionId),
+        const executed = await executeSparkDaemonSessionControl(
+          sessionControlOptions(paths, db, options),
+          { kind: "session.list.request", scope: "any", payload: { ...request.params } },
         );
-        return {
-          id: request.id,
-          ok: true,
-          result: sessions.map((session) =>
-            projectSessionInvocationState(session, activities.get(session.sessionId)),
-          ),
-        };
+        return { id: request.id, ok: true, result: executed.result.sessions };
       }
       case "session.get": {
-        const session = await requireSessionRegistry(options).get(request.params.sessionId);
-        if (!session) {
-          throw new SparkSessionRegistryError(
-            "session_not_found",
-            `unknown session: ${request.params.sessionId}`,
-          );
-        }
-        return {
-          id: request.id,
-          ok: true,
-          result: projectSessionInvocationState(
-            session,
-            new SparkInvocationStore(db).sessionActivity(session.sessionId),
-          ),
-        };
+        const executed = await executeSparkDaemonSessionControl(
+          sessionControlOptions(paths, db, options),
+          {
+            kind: "session.get.request",
+            scope: "any",
+            sessionId: request.params.sessionId,
+            payload: { ...request.params },
+          },
+        );
+        return { id: request.id, ok: true, result: executed.result.session };
       }
       case "session.snapshot": {
-        const registeredSession = await requireSessionRegistry(options).get(
-          request.params.sessionId,
+        const executed = await executeSparkDaemonSessionControl(
+          sessionControlOptions(paths, db, options),
+          {
+            kind: "session.snapshot.request",
+            scope: "any",
+            sessionId: request.params.sessionId,
+            payload: { ...request.params },
+          },
         );
-        if (!registeredSession) {
-          throw new SparkSessionRegistryError(
-            "session_not_found",
-            `unknown session: ${request.params.sessionId}`,
-          );
-        }
-        const session = projectSessionInvocationState(
-          registeredSession,
-          new SparkInvocationStore(db).sessionActivity(registeredSession.sessionId),
-        );
-        if (!paths.piAgentDir) {
-          throw new Error("Spark daemon native session storage is not available.");
-        }
-        const snapshot = await loadSparkSessionSnapshot({
-          sessionsRoot: join(paths.piAgentDir, "sessions"),
-          session,
-        });
-        const projected = projectPendingSessionTurns(db, snapshot);
-        return {
-          id: request.id,
-          ok: true,
-          result: await projectSessionMailbox(options, projected),
-        };
+        const snapshot = parseSparkSessionView(executed.result.snapshot);
+        return { id: request.id, ok: true, result: await projectSessionMailbox(options, snapshot) };
       }
       case "session.create": {
-        const session = await requireSessionRegistry(options).create(request.params);
-        return { id: request.id, ok: true, result: session };
-      }
-      case "session.bind": {
-        const session = await requireSessionRegistry(options).bind(request.params);
-        return { id: request.id, ok: true, result: session };
-      }
-      case "session.unbind": {
-        const session = await requireSessionRegistry(options).unbind(
-          request.params.sessionId,
-          request.params.externalKey,
+        const executed = await executeSparkDaemonSessionControl(
+          sessionControlOptions(paths, db, options),
+          { kind: "session.create.request", scope: "any", payload: { ...request.params } },
         );
-        return { id: request.id, ok: true, result: session };
+        return { id: request.id, ok: true, result: executed.result.session };
       }
+      case "session.bind":
+      case "session.unbind":
       case "session.archive": {
-        const session = await requireSessionRegistry(options).archive(request.params.sessionId);
-        return { id: request.id, ok: true, result: session };
+        const kind = `${request.method}.request` as
+          | "session.bind.request"
+          | "session.unbind.request"
+          | "session.archive.request";
+        const executed = await executeSparkDaemonSessionControl(
+          sessionControlOptions(paths, db, options),
+          {
+            kind,
+            scope: "any",
+            sessionId: request.params.sessionId,
+            payload: { ...request.params },
+          },
+        );
+        return { id: request.id, ok: true, result: executed.result.session };
       }
       case "session.model.set": {
         const session = await requireModelControl(options).setSessionModel(
@@ -1369,6 +1377,24 @@ export async function handleLocalRpcLine(
   }
 }
 
+/**
+ * Starting and planned-drain generations keep the control socket alive. Reads
+ * and cancellation must remain available so an operator can observe or break
+ * the exact invocation that is delaying handoff; only new work admission stays
+ * behind readiness.
+ */
+function isLocalRpcSafeWhileAdmissionClosed(method: string): boolean {
+  return (
+    method === "daemon.status" ||
+    method === "daemon.stop" ||
+    method === "turn.status" ||
+    method === "turn.result" ||
+    method === "turn.stream" ||
+    method === "turn.cancel" ||
+    method === "invocation.list"
+  );
+}
+
 function workspaceClientResult(
   db: DatabaseSync,
   client: SparkDaemonWorkspaceClient,
@@ -1380,7 +1406,24 @@ function workspaceClientResult(
   return { client, workspace, observedAt: new Date().toISOString() };
 }
 
+function sessionControlOptions(
+  paths: SparkPaths,
+  db: DatabaseSync,
+  options: LocalRpcHandlerOptions,
+) {
+  return {
+    paths,
+    db,
+    sessionRegistry: options.sessionRegistry,
+    modelControl: options.modelControl,
+    actor: "spark-daemon-local-rpc" as const,
+  };
+}
+
 function localRpcError(error: unknown): LocalRpcErrorPayload {
+  if (error instanceof SparkDaemonStillStartingError) {
+    return { message: error.message, code: "daemon_starting" };
+  }
   if (error instanceof SparkSessionRegistryError) {
     return { message: error.message, code: error.code };
   }
@@ -1397,6 +1440,9 @@ function localRpcError(error: unknown): LocalRpcErrorPayload {
       code: "registration_grant_refused",
     };
   }
+  if (error instanceof SparkDaemonRelocationError) {
+    return { message: error.message, code: error.code.toLowerCase() };
+  }
   return { message: error instanceof Error ? error.message : String(error) };
 }
 
@@ -1412,127 +1458,6 @@ function requireModelControl(options: LocalRpcHandlerOptions): SparkDaemonModelC
     throw new Error("Spark daemon model/auth control is not available.");
   }
   return options.modelControl;
-}
-
-async function effectiveTurnModel(
-  options: LocalRpcHandlerOptions,
-  sessionId: string,
-): Promise<string | undefined> {
-  if (!options.modelControl) return undefined;
-  const model = await options.modelControl.effectiveModel(sessionId);
-  await options.modelControl.prepareModel(model);
-  return `${model.providerName}/${model.modelId}`;
-}
-
-async function effectiveTurnThinkingLevel(
-  options: LocalRpcHandlerOptions,
-  sessionId: string,
-): Promise<string | undefined> {
-  if (!options.modelControl) return undefined;
-  return await options.modelControl.effectiveThinkingLevel(sessionId);
-}
-
-async function sessionTurnRoute(
-  options: LocalRpcHandlerOptions,
-  db: DatabaseSync,
-  sessionId: string,
-  assignment?: SparkAssignment,
-): Promise<{ cwd?: string; workspaceId?: string }> {
-  if (!options.sessionRegistry) {
-    // Lightweight test/embedding callers may omit registry ownership. The
-    // production local server always supplies it.
-    return assignment?.target.workspaceId ? { workspaceId: assignment.target.workspaceId } : {};
-  }
-  const session = await options.sessionRegistry.get(sessionId);
-  if (!session) {
-    throw new SparkSessionRegistryError("session_not_found", `unknown session: ${sessionId}`);
-  }
-  if (session.scope.kind === "daemon") {
-    if (assignment?.target.workspaceId) {
-      throw new SparkSessionRegistryError(
-        "session_scope_mismatch",
-        `daemon-global session ${sessionId} cannot target a workspace`,
-      );
-    }
-    const cwd = session.cwd?.trim();
-    if (!cwd) {
-      throw new SparkSessionRegistryError(
-        "session_cwd_unavailable",
-        `daemon-global session ${sessionId} has no execution directory`,
-      );
-    }
-    return { cwd };
-  }
-  const workspaceId = session.scope.workspaceId;
-  if (assignment?.target.workspaceId && assignment.target.workspaceId !== workspaceId) {
-    throw new SparkSessionRegistryError(
-      "session_scope_mismatch",
-      `session ${sessionId} belongs to workspace ${workspaceId}, not ${assignment.target.workspaceId}`,
-    );
-  }
-  const sessionCwd = session.cwd?.trim();
-  const cwd =
-    sessionCwd && sessionCwd !== "/" ? sessionCwd : resolveWorkspaceLocalPath(db, workspaceId);
-  if (!cwd?.trim() || cwd.trim() === "/") {
-    throw new SparkSessionRegistryError(
-      "session_cwd_unavailable",
-      `workspace session ${sessionId} has no daemon-local execution directory`,
-    );
-  }
-  return { workspaceId, cwd: cwd.trim() };
-}
-
-function projectPendingSessionTurns(
-  db: DatabaseSync,
-  snapshot: SparkSessionView,
-): SparkSessionView {
-  const pending = new SparkInvocationStore(db).listPendingForSession(snapshot.sessionId);
-  if (pending.length === 0) {
-    return snapshot.status === "idle"
-      ? snapshot
-      : parseSparkSessionView({ ...snapshot, status: "idle" });
-  }
-
-  const messages = pending.map((invocation) => ({
-    id: `invocation:${invocation.invocationId}`,
-    role: "user" as const,
-    text: validateSparkDaemonTask(invocation.task).prompt,
-    status: "done" as const,
-    createdAt: invocation.createdAt,
-    metadata: {
-      source: "daemon.invocation",
-      invocationId: invocation.invocationId,
-    },
-  }));
-  const pendingUpdatedAt = messages.at(-1)!.createdAt;
-  return parseSparkSessionView({
-    ...snapshot,
-    status: "running",
-    messages: [...snapshot.messages, ...messages],
-    updatedAt:
-      snapshot.updatedAt && snapshot.updatedAt > pendingUpdatedAt
-        ? snapshot.updatedAt
-        : pendingUpdatedAt,
-  });
-}
-
-/**
- * Reconcile the registry's convenience status with durable invocation truth at
- * the daemon boundary. A daemon crash can leave registry.json at `running`
- * after SQLite has already recovered every invocation to a terminal state.
- */
-function projectSessionInvocationState(
-  session: SparkSessionRegistryRecord,
-  activity: SparkInvocationSessionActivity = { active: false },
-): SparkSessionRegistryRecord {
-  if (session.status === "archived") return session;
-  const status = activity.active ? "running" : "ready";
-  const updatedAt =
-    activity.updatedAt && activity.updatedAt > session.updatedAt
-      ? activity.updatedAt
-      : session.updatedAt;
-  if (status === session.status && updatedAt === session.updatedAt) return session;
-  return { ...session, status, updatedAt };
 }
 
 async function projectSessionMailbox(
@@ -1553,61 +1478,6 @@ async function projectSessionMailbox(
     ackedAt: message.ackedAt,
   }));
   return parseSparkSessionView({ ...snapshot, mailbox });
-}
-
-function submitInvocationTask(
-  db: DatabaseSync,
-  task: SparkDaemonTask,
-  idempotencyKey?: string,
-  source?: { kind: string; ref?: string },
-): LocalTurnSubmitResult {
-  const invocation = new SparkInvocationStore(db).submit({
-    sessionId: task.sessionId,
-    workspaceBindingId: task.workspaceBindingId,
-    idempotencyKey,
-    prompt: task.prompt,
-    task,
-    ...(source ? { sourceKind: source.kind, sourceRef: source.ref } : {}),
-  });
-  return sparkTurnSubmitResultSchema.parse({
-    invocationId: invocation.invocationId,
-    status: "queued",
-    acceptedAt: invocation.createdAt,
-  });
-}
-
-function invocationSource(
-  messageMetadata: Record<string, unknown> | undefined,
-): { kind: string; ref?: string } | undefined {
-  const mail = messageMetadata?.sessionMail;
-  if (!isRecord(mail)) return undefined;
-  const kind = mail.kind;
-  if (kind !== "request" && kind !== "question") return undefined;
-  const messageId = typeof mail.messageId === "string" ? mail.messageId.trim() : "";
-  return { kind: `session.${kind}`, ...(messageId ? { ref: messageId } : {}) };
-}
-
-function invocationStatusResult(
-  store: SparkInvocationStore,
-  invocationId: string,
-): LocalTurnStatusResult {
-  const invocation = store.require(invocationId);
-  const eventCursor = store.latestEventSequence(invocationId);
-  return sparkTurnStatusResultSchema.parse({
-    invocationId,
-    sessionId: invocation.sessionId,
-    retryOfInvocationId: invocation.retryOfInvocationId,
-    status: invocation.status,
-    createdAt: invocation.createdAt,
-    updatedAt: invocation.updatedAt,
-    startedAt: invocation.startedAt,
-    finishedAt: invocation.finishedAt,
-    cancelReason: invocation.cancelReason,
-    ...(invocation.errorMessage
-      ? { error: { code: invocation.errorCode, message: invocation.errorMessage } }
-      : {}),
-    eventCursor,
-  });
 }
 
 function invocationResult(store: SparkInvocationStore, invocationId: string): LocalTurnResult {
@@ -1657,43 +1527,6 @@ function invocationListResult(
   });
 }
 
-async function enqueueManagedSessionTurn<T>(
-  options: LocalRpcHandlerOptions,
-  sessionId: string,
-  enqueue: () => Promise<T>,
-): Promise<T> {
-  await options.sessionRegistry?.recordTurnQueued(sessionId);
-  try {
-    return await enqueue();
-  } catch (error) {
-    try {
-      await options.sessionRegistry?.recordTurnSettled(sessionId);
-    } catch (settleError) {
-      console.error("[spark-daemon] failed to settle rejected session turn", settleError);
-    }
-    throw error;
-  }
-}
-
-async function cancelManagedTurn(
-  store: SparkInvocationStore,
-  invocationId: string,
-  reason: string,
-  sessionRegistry?: DaemonSessionRegistry,
-): Promise<LocalTurnCancelResult> {
-  const invocation = store.require(invocationId);
-  const outcome = store.requestCancellation(invocationId, reason);
-  if (outcome === "cancelled" && invocation.sessionId) {
-    await settleManagedSessionTurn(sessionRegistry, invocation.sessionId);
-  }
-  const current = store.require(invocationId);
-  return sparkTurnCancelResultSchema.parse({
-    invocationId,
-    status: current.status,
-    cancelRequested: outcome === "cancelled" || outcome === "requested",
-  });
-}
-
 function isTerminalInvocationStatus(status: SparkInvocationStatus): boolean {
   return status === "succeeded" || status === "failed" || status === "cancelled";
 }
@@ -1724,6 +1557,9 @@ async function deliverSessionNotificationFromLocalRpc(
     },
     sessionRegistry: requireSessionRegistry(options),
     channelIngress: requireChannelIngress(options),
+    ...(options.notificationDeliveryQueue
+      ? { deliveryQueue: options.notificationDeliveryQueue }
+      : {}),
   });
 }
 function requireChannelIngress(
@@ -1834,6 +1670,13 @@ function parseLocalRpcRequest(line: string): LocalRpcRequest {
       id: value.id,
       method: value.method,
       params: parseLocalWorkspaceRegisterParams(value.params),
+    });
+  }
+  if (value.method === "workspace.relocate") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: parseLocalWorkspaceRelocateParams(value.params),
     });
   }
   if (value.method === "workspace.ensure-local") {
@@ -2042,6 +1885,36 @@ function localTurnSubmitParams(params: LocalTurnSubmitParams): LocalTurnSubmitPa
     ...(params.assignment ? { assignment: params.assignment } : {}),
     ...(params.messageMetadata ? { messageMetadata: params.messageMetadata } : {}),
   };
+}
+
+function parseLocalWorkspaceRelocateParams(value: unknown): LocalWorkspaceRelocateRequest {
+  if (!isRecord(value) || typeof value.toServerUrl !== "string") {
+    throw new Error("Workspace relocation requires toServerUrl.");
+  }
+  return {
+    toServerUrl: value.toServerUrl,
+    ...(typeof value.fromServerUrl === "string" ? { fromServerUrl: value.fromServerUrl } : {}),
+  };
+}
+
+function relocationResult(value: unknown): LocalWorkspaceRelocateResult {
+  if (
+    !isRecord(value) ||
+    value.relocated !== true ||
+    typeof value.instanceId !== "string" ||
+    typeof value.installationId !== "string" ||
+    typeof value.runtimeId !== "string" ||
+    typeof value.fromServerUrl !== "string" ||
+    typeof value.toServerUrl !== "string" ||
+    typeof value.webSocketUrl !== "string" ||
+    !Array.isArray(value.workspaceBindingIds) ||
+    !value.workspaceBindingIds.every((id) => typeof id === "string") ||
+    typeof value.workspaceCount !== "number" ||
+    typeof value.relocatedAt !== "string"
+  ) {
+    throw new Error("Invalid workspace relocation response.");
+  }
+  return value as unknown as LocalWorkspaceRelocateResult;
 }
 
 function localWorkspaceRegisterParams(
@@ -2383,13 +2256,32 @@ function daemonStatus(value: unknown): LocalDaemonStatusResult {
     servers: value.servers.map(daemonServerSummary),
     invocations: invocationCountsResult(value.invocations),
     invocationHealth: invocationHealthResult(value.invocationHealth),
+    channelDeliveries: channelDeliverySummary(value.channelDeliveries),
     lifecycle: daemonLifecycle(value.lifecycle),
     observedAt: typeof value.observedAt === "string" ? value.observedAt : new Date().toISOString(),
   };
 }
 
+function channelDeliverySummary(value: unknown): SparkChannelDeliverySummary {
+  if (!isRecord(value)) return { pending: 0, retrying: 0, inFlight: 0, delivered: 0 };
+  return {
+    pending: typeof value.pending === "number" ? value.pending : 0,
+    retrying: typeof value.retrying === "number" ? value.retrying : 0,
+    inFlight: typeof value.inFlight === "number" ? value.inFlight : 0,
+    delivered: typeof value.delivered === "number" ? value.delivered : 0,
+    ...(typeof value.oldestPendingAt === "string"
+      ? { oldestPendingAt: value.oldestPendingAt }
+      : {}),
+    ...(typeof value.lastError === "string" ? { lastError: value.lastError } : {}),
+    ...(typeof value.lastErrorAt === "string" ? { lastErrorAt: value.lastErrorAt } : {}),
+  };
+}
+
 function daemonLifecycle(value: unknown): SparkDaemonLifecycleSnapshot {
-  if (!isRecord(value) || (value.state !== "running" && value.state !== "draining")) {
+  if (
+    !isRecord(value) ||
+    (value.state !== "starting" && value.state !== "running" && value.state !== "draining")
+  ) {
     return { state: "running" };
   }
   const processIdentity = isRecord(value.process) ? value.process : undefined;
@@ -2405,7 +2297,9 @@ function daemonLifecycle(value: unknown): SparkDaemonLifecycleSnapshot {
     typeof processIdentity.startedAt === "string";
   return {
     state: value.state,
-    ...(value.phase === "serving" || value.phase === "draining-active-work"
+    ...(value.phase === "initializing" ||
+    value.phase === "serving" ||
+    value.phase === "draining-active-work"
       ? { phase: value.phase }
       : {}),
     ...(validProcessIdentity
@@ -2643,6 +2537,9 @@ function sparkDaemonWorkspace(value: unknown): SparkDaemonWorkspace {
 
   const workspace: SparkDaemonWorkspace = {
     id: value.id,
+    ...(typeof value.serverWorkspaceId === "string"
+      ? { serverWorkspaceId: value.serverWorkspaceId }
+      : {}),
     serverUrl: value.serverUrl,
     localWorkspaceKey: value.localWorkspaceKey,
     displayName: value.displayName,

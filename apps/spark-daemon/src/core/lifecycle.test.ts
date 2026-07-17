@@ -3,6 +3,31 @@ import { describe, expect, it } from "vitest";
 import { SparkDaemonLifecycle, SparkDaemonRestartRequestedError } from "./lifecycle.ts";
 
 describe("SparkDaemonLifecycle", () => {
+  it("publishes starting until startup admission is synchronously activated", () => {
+    const lifecycle = new SparkDaemonLifecycle(
+      {
+        pid: 101,
+        instanceId: "instance-starting",
+        generation: "generation-starting",
+        startedAt: "2026-07-15T00:00:00.000Z",
+      },
+      { initiallyServing: false },
+    );
+
+    expect(lifecycle.isServing).toBe(false);
+    expect(lifecycle.snapshot()).toMatchObject({ state: "starting", phase: "initializing" });
+
+    lifecycle.activate();
+
+    expect(lifecycle.isServing).toBe(true);
+    expect(lifecycle.snapshot()).toMatchObject({ state: "running", phase: "serving" });
+
+    lifecycle.deactivate();
+
+    expect(lifecycle.isServing).toBe(false);
+    expect(lifecycle.snapshot()).toMatchObject({ state: "starting", phase: "initializing" });
+  });
+
   it("turns repeated restart requests into one observable draining intent", async () => {
     const lifecycle = new SparkDaemonLifecycle({
       pid: 101,

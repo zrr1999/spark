@@ -1,6 +1,7 @@
 import {
   parseSparkCommand,
   runtimeServerCommandSpecification,
+  runtimeServerCommandSupportsScope,
   sparkCommandKindForLocalRpcMethod,
   sparkCommandKindForRuntimeServerCommand,
   sparkProtocolJsonObjectSchema,
@@ -109,6 +110,7 @@ export function sparkCommandFromServerCommandEnvelope(
       humanRequestId: envelope.humanRequestId,
       humanResponseId: envelope.humanResponseId,
       invocationId: envelope.invocationId,
+      sessionId: envelope.sessionId,
     } as Partial<SparkCommand["route"]>),
     idempotencyKey: envelope.idempotencyKey,
     requestedAt: envelope.sentAt,
@@ -141,11 +143,17 @@ export function decideSparkDaemonCommandPolicy(
     };
   }
 
-  if (specification.scope === "workspace") {
-    if (
-      !input.workspaceBindingId ||
-      !input.knownWorkspaceBindingIds?.has(input.workspaceBindingId)
-    ) {
+  const effectiveScope = input.workspaceBindingId ? "workspace" : "daemon";
+  if (!runtimeServerCommandSupportsScope(specification, effectiveScope)) {
+    return {
+      accepted: false,
+      reasonCode: "COMMAND_SCOPE_INVALID",
+      message: `Command ${input.command.kind} does not support ${effectiveScope} scope.`,
+    };
+  }
+
+  if (effectiveScope === "workspace") {
+    if (!input.knownWorkspaceBindingIds?.has(input.workspaceBindingId!)) {
       return {
         accepted: false,
         reasonCode: "UNKNOWN_WORKSPACE_BINDING",

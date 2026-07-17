@@ -15,7 +15,7 @@ import {
   type SparkCliHostServices,
   type SparkCliHostServicesOptions,
 } from "./host/bootstrap.ts";
-import type { SparkAgentLoopEvent } from "./host/agent-loop.ts";
+import type { SparkAgentLoopEvent, SparkRunOutcome } from "./host/agent-loop.ts";
 import { SparkAgentSession } from "./host/agent-session.ts";
 import type { SparkActiveSelection } from "./host/provider-registry.ts";
 
@@ -87,6 +87,10 @@ export interface SparkHeadlessSessionRunInput {
   sparkHome?: string;
   sessionSurface?: "local" | "channel";
   sessionSource?: "tui" | "web" | "channel" | "daemon" | "session";
+  channelBinding?: {
+    adapter: "feishu" | "infoflow" | "qqbot";
+    externalKey: string;
+  };
   invocationId?: string;
   sessionQuestionChain?: readonly string[];
   allowedTools?: readonly string[];
@@ -96,7 +100,7 @@ export interface SparkHeadlessSessionRunInput {
   messageMetadata?: Record<string, unknown>;
   /**
    * Tool approval method for `requiresApproval` tools.
-   * Channel sessions should pass `auto`; defaults to host bootstrap (`skip`).
+   * Defaults to `auto`; callers must opt into `skip` explicitly.
    */
   approvalMethod?: "skip" | "human" | "auto";
   approvalRejectAction?: "ask" | "deny";
@@ -137,6 +141,7 @@ export async function runSparkHeadlessSession(
   input: SparkHeadlessSessionRunInput,
   options: SparkHeadlessRoleExecutorOptions = {},
 ): Promise<SparkHeadlessSessionRunResult> {
+  throwIfHeadlessAborted(input.signal);
   const jsonEvents: unknown[] = [];
   const createServices = options.createServices ?? createSparkCliHostServices;
   const services = await createServices({
@@ -146,15 +151,21 @@ export async function runSparkHeadlessSession(
     ...(options.controlSparkHome ? { sparkStateRoot: options.controlSparkHome } : {}),
     sessionSurface: input.sessionSurface,
     sessionSource: input.sessionSource,
+    channelBinding: input.channelBinding,
     invocationId: input.invocationId,
     sessionQuestionChain: input.sessionQuestionChain,
     allowedTools: input.allowedTools,
     hasUI: false,
     ...(input.interaction ? { ui: { interaction: input.interaction } } : {}),
     ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
-    ...(input.approvalMethod ? { approvalMethod: input.approvalMethod } : {}),
+    approvalMethod: input.approvalMethod ?? "auto",
     ...(input.approvalRejectAction ? { approvalRejectAction: input.approvalRejectAction } : {}),
   } satisfies SparkCliHostServicesOptions);
+  // Service bootstrap can be asynchronous (provider discovery, extension
+  // loading, session-store setup). A cancellation that wins during bootstrap
+  // must never fall through to agentLoop.submit: abort() is intentionally a
+  // no-op while the loop is idle and therefore cannot serve as this fence.
+  throwIfHeadlessAborted(input.signal);
   if (input.model?.trim()) selectHeadlessModel(services, input.model.trim());
   if (input.thinkingLevel?.trim()) {
     const level = input.thinkingLevel.trim();
@@ -178,6 +189,7 @@ export async function runSparkHeadlessSession(
 
   try {
     const session = new SparkAgentSession(services);
+    throwIfHeadlessAborted(input.signal);
     const result = await runWithHeadlessTimeout(
       session.run({
         sessionId: input.sessionId,
@@ -188,6 +200,7 @@ export async function runSparkHeadlessSession(
       input.timeoutMs,
       abort,
     );
+    assertSuccessfulHeadlessSessionOutcome(result.outcome, result.assistant, input.signal);
     return {
       sessionId: result.sessionId,
       sessionPath: result.sessionPath,
@@ -208,6 +221,7 @@ export async function runSparkHeadlessRoleInstruction(
   input: SparkHeadlessRoleInstructionInput,
   options: SparkHeadlessRoleExecutorOptions = {},
 ): Promise<SparkHeadlessRoleInstructionResult> {
+  throwIfHeadlessAborted(input.signal);
   const launch = input.launch ?? input.record.launch ?? "fresh";
   const forkFromSession = input.forkFromSession ?? input.record.forkFromSession;
   const noSession = input.noSession === true || input.record.noSession === true;
@@ -228,7 +242,9 @@ export async function runSparkHeadlessRoleInstruction(
     ...controlPlaneServicePaths(options.controlSparkHome),
     hasUI: false,
     systemPrompt: input.role.systemPrompt,
+    approvalMethod: "auto",
   } satisfies SparkCliHostServicesOptions);
+  throwIfHeadlessAborted(input.signal);
 
   const recordEvent = (event: unknown) => {
     jsonEvents.push(event);
@@ -288,12 +304,13 @@ export async function runSparkHeadlessRoleInstruction(
       reset: true,
       ...(launch === "forked" && forkFromSession ? { forkFromSession } : {}),
     };
+    throwIfHeadlessAborted(input.signal);
     const result = await runWithHeadlessTimeout(
       noSession ? session.runAnonymous(sessionRunInput) : session.run(sessionRunInput),
       input.timeoutMs,
       abort,
     );
-    const status = statusForAssistant(result.assistant, input.signal);
+    const status = statusForOutcome(result.outcome, result.assistant, input.signal);
     return {
       record: {
         ...input.record,
@@ -384,6 +401,13 @@ function normalizeHeadlessTimeoutMs(timeoutMs: number | undefined): number | und
   return normalized > 0 ? normalized : undefined;
 }
 
+function throwIfHeadlessAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new Error("Spark headless session aborted");
+}
+
 function applyAllowedTools(
   services: Awaited<ReturnType<typeof createSparkCliHostServices>>,
   allowedTools: string[] | undefined,
@@ -460,6 +484,54 @@ function statusForAssistant(
   return "succeeded";
 }
 
+function statusForOutcome(
+  outcome: SparkRunOutcome | undefined,
+  assistant: AssistantMessage | undefined,
+  signal: AbortSignal | undefined,
+): SparkHeadlessRoleRunStatus {
+  if (signal?.aborted) return "cancelled";
+  if (!outcome) return statusForAssistant(assistant, signal);
+  if (outcome.status === "completed") return "succeeded";
+  if (outcome.status === "aborted") return "cancelled";
+  return "failed";
+}
+
+function assertSuccessfulHeadlessSessionOutcome(
+  outcome: SparkRunOutcome | undefined,
+  assistant: AssistantMessage | undefined,
+  signal: AbortSignal | undefined,
+): void {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new Error("Spark headless session aborted");
+  }
+  if (!outcome) {
+    assertSuccessfulHeadlessSessionAssistant(assistant, signal);
+    return;
+  }
+  if (outcome.status === "completed") return;
+  const detail = outcome.status === "aborted" ? outcome.reason.trim() : outcome.errorMessage.trim();
+  throw new Error(`Spark headless session ${outcome.status}${detail ? `: ${detail}` : ""}`);
+}
+
+function assertSuccessfulHeadlessSessionAssistant(
+  assistant: AssistantMessage | undefined,
+  signal: AbortSignal | undefined,
+): asserts assistant is AssistantMessage {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new Error("Spark headless session aborted");
+  }
+  if (!assistant) throw new Error("Spark headless session produced no assistant response");
+  if (assistant.stopReason !== "error" && assistant.stopReason !== "aborted") return;
+
+  const detail = assistant.errorMessage?.trim();
+  const outcome = assistant.stopReason === "error" ? "failed" : "aborted";
+  throw new Error(`Spark headless session ${outcome}${detail ? `: ${detail}` : ""}`);
+}
+
 function headlessSessionId(input: SparkHeadlessRoleInstructionInput): string {
   const base = input.runName?.trim() || input.record.runName?.trim() || input.record.ref;
   return `spark-daemon-${base.replace(/[^A-Za-z0-9_.:-]+/gu, "-")}`;
@@ -469,12 +541,18 @@ function serializeLoopEvent(event: SparkAgentLoopEvent): unknown {
   switch (event.type) {
     case "user_message":
       return { type: event.type, message: event.message };
+    case "runtime_message":
+      return { type: event.type, item: event.item };
+    case "prompt_manifest":
+      return { type: event.type, manifest: event.manifest };
     case "stream_event":
       return { type: event.type, event: event.event };
     case "tool_result":
       return { type: event.type, message: event.message };
     case "turn_complete":
       return { type: event.type, message: event.assistant, reason: event.reason };
+    case "run_outcome":
+      return { type: event.type, outcome: event.outcome };
     case "view_event":
       return { type: event.type, event: event.event };
     case "abort":

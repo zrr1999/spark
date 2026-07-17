@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import WebSocket from "ws";
 import { describe, expect, it, vi } from "vitest";
 import type { QqbotApiClient } from "./qqbot-api.ts";
-import { createQqbotTransport } from "./qqbot-transport.ts";
+import { createQqbotTransport, type QqbotGatewayCursor } from "./qqbot-transport.ts";
 import type { QqbotAdapterConfig } from "./types.ts";
 
 const config: QqbotAdapterConfig = {
@@ -63,6 +63,377 @@ function createApiMock() {
 }
 
 describe("createQqbotTransport", () => {
+  it("reconnects when the gateway stops acknowledging heartbeats", async () => {
+    vi.useFakeTimers();
+    const sockets: FakeWebSocket[] = [];
+    const { api } = createApiMock();
+    const transport = createQqbotTransport(config, {
+      api,
+      connectTimeoutMs: 100,
+      reconnectDelaysMs: [1],
+      webSocketFactory: () => {
+        const socket = new FakeWebSocket();
+        sockets.push(socket);
+        return socket as unknown as WebSocket;
+      },
+    });
+    try {
+      const starting = transport.start(() => undefined);
+      await vi.waitFor(() => expect(sockets).toHaveLength(1));
+      sockets[0]?.emit(
+        "message",
+        Buffer.from(JSON.stringify({ op: 10, d: { heartbeat_interval: 10 } })),
+      );
+      await starting;
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(JSON.parse(sockets[0]?.sent.at(-1) ?? "{}")).toMatchObject({ op: 1 });
+      await vi.advanceTimersByTimeAsync(11);
+      expect(sockets).toHaveLength(2);
+      expect(transport.status?.()).toMatchObject({ state: "connecting" });
+    } finally {
+      await transport.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out a missing Gateway Hello and retries the initial connection", async () => {
+    const sockets: FakeWebSocket[] = [];
+    const { api } = createApiMock();
+    const reconnectRandom = vi.fn(() => 1);
+    const transport = createQqbotTransport(config, {
+      api,
+      connectTimeoutMs: 10,
+      reconnectDelaysMs: [1],
+      reconnectRandom,
+      webSocketFactory: () => {
+        const socket = new FakeWebSocket();
+        sockets.push(socket);
+        if (sockets.length === 2) {
+          queueMicrotask(() => {
+            socket.emit(
+              "message",
+              Buffer.from(JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } })),
+            );
+            socket.emit(
+              "message",
+              Buffer.from(
+                JSON.stringify({
+                  op: 0,
+                  s: 1,
+                  t: "READY",
+                  d: { session_id: "session-1" },
+                }),
+              ),
+            );
+          });
+        }
+        return socket as unknown as WebSocket;
+      },
+    });
+
+    await transport.start(() => undefined);
+    await vi.waitFor(() => expect(sockets).toHaveLength(2));
+    expect(reconnectRandom).toHaveBeenCalled();
+    await vi.waitFor(() => expect(transport.status?.()).toEqual({ state: "connected" }));
+    await transport.stop();
+  });
+
+  it("times out after Hello when Identify never reaches READY and reconnects", async () => {
+    const sockets: FakeWebSocket[] = [];
+    const { api } = createApiMock();
+    const transport = createQqbotTransport(config, {
+      api,
+      connectTimeoutMs: 10,
+      reconnectDelaysMs: [1],
+      reconnectRandom: () => 1,
+      webSocketFactory: () => {
+        const socket = new FakeWebSocket();
+        sockets.push(socket);
+        queueMicrotask(() => {
+          socket.emit(
+            "message",
+            Buffer.from(JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } })),
+          );
+          if (sockets.length === 2) {
+            socket.emit(
+              "message",
+              Buffer.from(
+                JSON.stringify({
+                  op: 0,
+                  s: 1,
+                  t: "READY",
+                  d: { session_id: "session-ready" },
+                }),
+              ),
+            );
+          }
+        });
+        return socket as unknown as WebSocket;
+      },
+    });
+
+    await transport.start(() => undefined);
+    await vi.waitFor(() => expect(sockets).toHaveLength(2));
+    expect(JSON.parse(sockets[0]?.sent[0] ?? "{}")).toMatchObject({ op: 2 });
+    await vi.waitFor(() => expect(transport.status?.()).toEqual({ state: "connected" }));
+    await transport.stop();
+  });
+
+  it("cancels a pending initial reconnect when stopped", async () => {
+    const sockets: FakeWebSocket[] = [];
+    const { api } = createApiMock();
+    const transport = createQqbotTransport(config, {
+      api,
+      connectTimeoutMs: 5,
+      reconnectDelaysMs: [100],
+      webSocketFactory: () => {
+        const socket = new FakeWebSocket();
+        sockets.push(socket);
+        return socket as unknown as WebSocket;
+      },
+    });
+
+    await transport.start(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(transport.status?.()).toMatchObject({ state: "reconnecting" });
+    await transport.stop();
+    await new Promise((resolve) => setTimeout(resolve, 110));
+    expect(sockets).toHaveLength(1);
+    expect(transport.status?.()).toEqual({ state: "stopped" });
+  });
+
+  it("resumes before a message whose durable receipt failed", async () => {
+    const sockets: FakeWebSocket[] = [];
+    const { api } = createApiMock();
+    let receiptAttempts = 0;
+    let persistedCursor: QqbotGatewayCursor | null = null;
+    const transport = createQqbotTransport(config, {
+      api,
+      connectTimeoutMs: 100,
+      reconnectDelaysMs: [1],
+      loadCursor: () => persistedCursor,
+      saveCursor: (cursor) => {
+        persistedCursor = cursor;
+      },
+      webSocketFactory: () => {
+        const socket = new FakeWebSocket();
+        sockets.push(socket);
+        return socket as unknown as WebSocket;
+      },
+    });
+    const starting = transport.start(() => {
+      receiptAttempts += 1;
+      if (receiptAttempts === 1) throw new Error("receipt unavailable");
+    });
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    sockets[0]?.emit(
+      "message",
+      Buffer.from(JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } })),
+    );
+    await starting;
+    sockets[0]?.emit(
+      "message",
+      Buffer.from(JSON.stringify({ op: 0, s: 1, t: "READY", d: { session_id: "session-1" } })),
+    );
+    sockets[0]?.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          op: 0,
+          s: 2,
+          t: "C2C_MESSAGE_CREATE",
+          d: { id: "message-2", content: "retry", author: { user_openid: "user-1" } },
+        }),
+      ),
+    );
+
+    await vi.waitFor(() => expect(sockets).toHaveLength(2));
+    expect(persistedCursor).toEqual({ sessionId: "session-1", lastSeq: 1 });
+    sockets[1]?.emit(
+      "message",
+      Buffer.from(JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } })),
+    );
+    const resume = JSON.parse(sockets[1]?.sent[0] ?? "{}") as { d?: { seq?: number } };
+    expect(resume.d?.seq).toBe(1);
+    sockets[1]?.emit("message", Buffer.from(JSON.stringify({ op: 0, s: 1, t: "RESUMED", d: {} })));
+    sockets[1]?.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          op: 0,
+          s: 2,
+          t: "C2C_MESSAGE_CREATE",
+          d: { id: "message-2", content: "retry", author: { user_openid: "user-1" } },
+        }),
+      ),
+    );
+    await vi.waitFor(() => expect(receiptAttempts).toBe(2));
+    await vi.waitFor(() => expect(persistedCursor).toEqual({ sessionId: "session-1", lastSeq: 2 }));
+
+    sockets[1]?.emit("close");
+    await vi.waitFor(() => expect(sockets).toHaveLength(3));
+    sockets[2]?.emit(
+      "message",
+      Buffer.from(JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } })),
+    );
+    const nextResume = JSON.parse(sockets[2]?.sent[0] ?? "{}") as { d?: { seq?: number } };
+    expect(nextResume.d?.seq).toBe(2);
+    await transport.stop();
+  });
+
+  it("loads a durable cursor when a transport is recreated for planned restart", async () => {
+    let persistedCursor: QqbotGatewayCursor | null = null;
+    const cursorOptions = {
+      loadCursor: () => persistedCursor,
+      saveCursor: (cursor: QqbotGatewayCursor | null) => {
+        persistedCursor = cursor;
+      },
+    };
+    const firstSockets: FakeWebSocket[] = [];
+    const firstApi = createApiMock();
+    const first = createQqbotTransport(config, {
+      api: firstApi.api,
+      ...cursorOptions,
+      webSocketFactory: () => {
+        const socket = new FakeWebSocket();
+        firstSockets.push(socket);
+        return socket as unknown as WebSocket;
+      },
+    });
+    await first.start(() => undefined);
+    await vi.waitFor(() => expect(firstSockets).toHaveLength(1));
+    firstSockets[0]?.emit(
+      "message",
+      Buffer.from(JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } })),
+    );
+    expect(JSON.parse(firstSockets[0]?.sent[0] ?? "{}")).toMatchObject({ op: 2 });
+    firstSockets[0]?.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({ op: 0, s: 4, t: "READY", d: { session_id: "session-restart" } }),
+      ),
+    );
+    firstSockets[0]?.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          op: 0,
+          s: 5,
+          t: "C2C_MESSAGE_CREATE",
+          d: { id: "message-5", content: "durable", author: { user_openid: "user-1" } },
+        }),
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(persistedCursor).toEqual({ sessionId: "session-restart", lastSeq: 5 }),
+    );
+    await first.stop();
+
+    const secondSockets: FakeWebSocket[] = [];
+    const secondApi = createApiMock();
+    const recreated = createQqbotTransport(config, {
+      api: secondApi.api,
+      ...cursorOptions,
+      webSocketFactory: () => {
+        const socket = new FakeWebSocket();
+        secondSockets.push(socket);
+        return socket as unknown as WebSocket;
+      },
+    });
+    await recreated.start(() => undefined);
+    await vi.waitFor(() => expect(secondSockets).toHaveLength(1));
+    secondSockets[0]?.emit(
+      "message",
+      Buffer.from(JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } })),
+    );
+    expect(JSON.parse(secondSockets[0]?.sent[0] ?? "{}")).toMatchObject({
+      op: 6,
+      d: { session_id: "session-restart", seq: 5 },
+    });
+    secondSockets[0]?.emit(
+      "message",
+      Buffer.from(JSON.stringify({ op: 0, s: 5, t: "RESUMED", d: {} })),
+    );
+    await vi.waitFor(() => expect(recreated.status?.()).toEqual({ state: "connected" }));
+    await recreated.stop();
+  });
+
+  it("retries an interaction from the last durably settled sequence", async () => {
+    const sockets: FakeWebSocket[] = [];
+    const { api } = createApiMock();
+    let settlementAttempts = 0;
+    const transport = createQqbotTransport(config, {
+      api,
+      connectTimeoutMs: 100,
+      reconnectDelaysMs: [1],
+      reconnectRandom: () => 1,
+      webSocketFactory: () => {
+        const socket = new FakeWebSocket();
+        sockets.push(socket);
+        return socket as unknown as WebSocket;
+      },
+    });
+    const interaction = {
+      op: 0,
+      s: 2,
+      t: "INTERACTION_CREATE",
+      d: {
+        id: "interaction-retry",
+        type: 11,
+        scene: "c2c",
+        chat_type: 2,
+        user_openid: "user-1",
+        data: { resolved: { button_id: "continue", button_data: "opaque-retry" } },
+        version: 1,
+      },
+    };
+
+    await transport.start(
+      () => undefined,
+      async () => {
+        settlementAttempts += 1;
+        if (settlementAttempts === 1) throw new Error("settlement unavailable");
+      },
+    );
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    sockets[0]?.emit(
+      "message",
+      Buffer.from(JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } })),
+    );
+    sockets[0]?.emit(
+      "message",
+      Buffer.from(JSON.stringify({ op: 0, s: 1, t: "READY", d: { session_id: "session-1" } })),
+    );
+    await vi.waitFor(() => expect(transport.status?.()).toEqual({ state: "connected" }));
+    sockets[0]?.emit("message", Buffer.from(JSON.stringify(interaction)));
+
+    await vi.waitFor(() => expect(sockets).toHaveLength(2));
+    sockets[1]?.emit(
+      "message",
+      Buffer.from(JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } })),
+    );
+    expect(JSON.parse(sockets[1]?.sent[0] ?? "{}")).toMatchObject({
+      op: 6,
+      d: { session_id: "session-1", seq: 1 },
+    });
+    sockets[1]?.emit("message", Buffer.from(JSON.stringify({ op: 0, s: 1, t: "RESUMED", d: {} })));
+    sockets[1]?.emit("message", Buffer.from(JSON.stringify(interaction)));
+    await vi.waitFor(() => expect(settlementAttempts).toBe(2));
+
+    sockets[1]?.emit("close");
+    await vi.waitFor(() => expect(sockets).toHaveLength(3));
+    sockets[2]?.emit(
+      "message",
+      Buffer.from(JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } })),
+    );
+    expect(JSON.parse(sockets[2]?.sent[0] ?? "{}")).toMatchObject({
+      op: 6,
+      d: { session_id: "session-1", seq: 2 },
+    });
+    await transport.stop();
+  });
+
   it("sends only the original C2C final reply body", async () => {
     const { api, sendC2CMarkdownMessage, sendC2CStreamMessage } = createApiMock();
     const transport = createQqbotTransport(config, { api });
@@ -221,7 +592,7 @@ describe("createQqbotTransport", () => {
     );
   });
 
-  it("conservatively consumes an ask slot when the send outcome is ambiguous", async () => {
+  it("retries the same durable ask after an ambiguous outcome without opening another ask slot", async () => {
     const { api, sendC2CMarkdownMessage, sendC2CMarkdownKeyboardMessage } = createApiMock();
     sendC2CMarkdownKeyboardMessage.mockRejectedValueOnce(new Error("response timeout"));
     const transport = createQqbotTransport(config, { api });
@@ -229,15 +600,22 @@ describe("createQqbotTransport", () => {
     const request = {
       prompt: "继续吗？",
       messageId,
+      idempotencyKey: "channel.ask:request-1",
       options: [{ label: "继续", data: "opaque" }],
     };
 
     await expect(transport.interaction?.sendAsk("c2c:user-1", request)).rejects.toThrow(
       "response timeout",
     );
-    await expect(transport.interaction?.sendAsk("c2c:user-1", request)).rejects.toThrow(
-      "reserved for the final answer",
-    );
+    await expect(transport.interaction?.sendAsk("c2c:user-1", { ...request })).resolves.toEqual({
+      messageId: "ask-c2c",
+    });
+    await expect(
+      transport.interaction?.sendAsk("c2c:user-1", {
+        ...request,
+        idempotencyKey: "channel.ask:request-2",
+      }),
+    ).rejects.toThrow("reserved for the final answer");
     await transport.reply?.sendReply({
       recipient: "c2c:user-1",
       messageId,
@@ -247,7 +625,10 @@ describe("createQqbotTransport", () => {
     const askCalls = sendC2CMarkdownKeyboardMessage.mock.calls as unknown as Array<
       Parameters<QqbotApiClient["sendC2CMarkdownKeyboardMessage"]>
     >;
-    expect(askCalls.map((call) => call[2].msg_seq)).toEqual([2]);
+    expect(askCalls.map((call) => ({ msgId: call[2].msg_id, msgSeq: call[2].msg_seq }))).toEqual([
+      { msgId: messageId, msgSeq: 2 },
+      { msgId: messageId, msgSeq: 2 },
+    ]);
     expect(sendC2CMarkdownMessage).toHaveBeenLastCalledWith(
       "token",
       "user-1",
@@ -281,6 +662,11 @@ describe("createQqbotTransport", () => {
       Buffer.from(JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } })),
     );
     await starting;
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ op: 0, s: 1, t: "READY", d: { session_id: "session-1" } })),
+    );
+    await vi.waitFor(() => expect(transport.status?.()).toEqual({ state: "connected" }));
 
     const identify = JSON.parse(socket.sent[0] ?? "{}") as { d?: { intents?: number } };
     expect((identify.d?.intents ?? 0) & (1 << 26)).not.toBe(0);
@@ -290,6 +676,7 @@ describe("createQqbotTransport", () => {
       Buffer.from(
         JSON.stringify({
           op: 0,
+          s: 2,
           t: "INTERACTION_CREATE",
           d: {
             id: "interaction-1",
@@ -311,7 +698,7 @@ describe("createQqbotTransport", () => {
     );
 
     expect(messages).toEqual([]);
-    expect(interactions).toHaveLength(1);
+    await vi.waitFor(() => expect(interactions).toHaveLength(1));
     expect(interactions[0]).toMatchObject({
       adapter: "qqbot",
       interactionId: "interaction-1",

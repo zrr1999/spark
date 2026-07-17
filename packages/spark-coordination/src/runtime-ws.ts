@@ -12,6 +12,7 @@ import {
   runtimeCommandAckEnvelopeSchema,
   runtimeCommandRejectEnvelopeSchema,
   runtimeCommandResultEnvelopeSchema,
+  runtimeEphemeralSecretResultEnvelopeSchema,
   runtimeHeartbeatEnvelopeSchema,
   runtimeHelloEnvelopeSchema,
   runtimeProtocolVersion,
@@ -29,9 +30,17 @@ import {
   recordRuntimeControlCommandReject,
   recordRuntimeControlCommandResult,
   recoverUnacknowledgedRuntimeControlCommands,
+  registerRuntimeControlDispatcher,
   requireRuntimeControlCommand,
 } from "./runtime-control.ts";
 import { hashSecret } from "./security.ts";
+import {
+  recordRuntimeEphemeralSecretProjection,
+  recordRuntimeModelChannelProjection,
+  registerRuntimeEphemeralSecretDispatcher,
+} from "./runtime-model-channel-control.ts";
+import { RuntimeControlCommandError } from "./runtime-control.ts";
+import { recordRuntimeSessionControlProjection } from "./runtime-session-control.ts";
 import {
   appendEvent,
   ingestTaskGraphSnapshot,
@@ -51,6 +60,7 @@ export interface RuntimeWebSocketContext {
   db: DatabaseSync;
   runtimeId: string;
   remoteAddress?: string;
+  secureTransport?: boolean;
 }
 
 export interface RuntimeWebSocketConnection {
@@ -69,6 +79,7 @@ interface RoutedContext {
   humanRequestId?: string;
   humanResponseId?: string;
   invocationId?: string;
+  sessionId?: string;
 }
 
 export function attachRuntimeWebSocket(
@@ -76,6 +87,22 @@ export function attachRuntimeWebSocket(
   context: RuntimeWebSocketContext,
 ): void {
   let runtimeSessionId: string | undefined;
+  let unregisterControlDispatcher: (() => void) | undefined;
+  let unregisterEphemeralSecretDispatcher: (() => void) | undefined;
+  const pendingEphemeralSecrets = new Map<
+    string,
+    {
+      envelope: Parameters<
+        Parameters<typeof registerRuntimeEphemeralSecretDispatcher>[2]
+      >[0]["envelope"];
+      resolve: Parameters<
+        Parameters<typeof registerRuntimeEphemeralSecretDispatcher>[2]
+      >[0]["resolve"];
+      reject: Parameters<
+        Parameters<typeof registerRuntimeEphemeralSecretDispatcher>[2]
+      >[0]["reject"];
+    }
+  >();
 
   ws.on("message", (data) => {
     const parsed = parseMessage(data);
@@ -113,6 +140,53 @@ export function attachRuntimeWebSocket(
       );
       if (hello.data.payload.supportedFeatures.includes("reconcile-v1")) {
         sendReconcileRequest(ws, hello.data.protocolVersion, context.runtimeId, "startup");
+      }
+      unregisterControlDispatcher?.();
+      unregisterControlDispatcher = registerRuntimeControlDispatcher(
+        context.db,
+        context.runtimeId,
+        () => flushPendingRuntimeDeliveries(ws, context),
+      );
+      unregisterEphemeralSecretDispatcher?.();
+      unregisterEphemeralSecretDispatcher = undefined;
+      if (
+        context.secureTransport === true &&
+        hello.data.payload.supportedFeatures.includes("ephemeral-secret-v1")
+      ) {
+        unregisterEphemeralSecretDispatcher = registerRuntimeEphemeralSecretDispatcher(
+          context.db,
+          context.runtimeId,
+          ({ envelope, resolve, reject }) => {
+            if (pendingEphemeralSecrets.has(envelope.ephemeralRequestId)) {
+              reject(
+                new RuntimeControlCommandError(
+                  "Secret request id is already active.",
+                  "SECRET_REPLAY_REJECTED",
+                ),
+              );
+              return () => {};
+            }
+            pendingEphemeralSecrets.set(envelope.ephemeralRequestId, {
+              envelope,
+              resolve,
+              reject,
+            });
+            try {
+              ws.send(JSON.stringify(envelope));
+            } catch {
+              pendingEphemeralSecrets.delete(envelope.ephemeralRequestId);
+              reject(
+                new RuntimeControlCommandError(
+                  "Secure runtime connection closed before the secret request was sent.",
+                  "SECRET_RUNTIME_DISCONNECTED",
+                ),
+              );
+            }
+            return () => {
+              pendingEphemeralSecrets.delete(envelope.ephemeralRequestId);
+            };
+          },
+        );
       }
       flushPendingRuntimeDeliveries(ws, context);
       return;
@@ -160,6 +234,45 @@ export function attachRuntimeWebSocket(
       return;
     }
 
+    const ephemeralSecretResult = runtimeEphemeralSecretResultEnvelopeSchema.safeParse(
+      parsed.value,
+    );
+    if (ephemeralSecretResult.success) {
+      const result = ephemeralSecretResult.data;
+      const pending = pendingEphemeralSecrets.get(result.ephemeralRequestId);
+      if (!pending) {
+        sendError(ws, "unknown_ephemeral_secret_request", "Secret result has no active request.");
+        return;
+      }
+      if (
+        result.runtimeId !== context.runtimeId ||
+        result.payload.operation !== pending.envelope.payload.operation ||
+        result.workspaceId !== pending.envelope.workspaceId ||
+        result.workspaceBindingId !== pending.envelope.workspaceBindingId
+      ) {
+        pendingEphemeralSecrets.delete(result.ephemeralRequestId);
+        pending.reject(
+          new RuntimeControlCommandError(
+            "Secret result did not match its in-memory request route.",
+            "SECRET_ROUTE_MISMATCH",
+          ),
+        );
+        return;
+      }
+      pendingEphemeralSecrets.delete(result.ephemeralRequestId);
+      try {
+        recordRuntimeEphemeralSecretProjection(context.db, {
+          runtimeId: context.runtimeId,
+          runtimeWorkspaceBindingId: result.workspaceBindingId,
+          result: result.payload,
+        });
+        pending.resolve(result.payload);
+      } catch (error) {
+        pending.reject(error);
+      }
+      return;
+    }
+
     if (handleMvpRuntimeMessage(ws, context, parsed.value)) {
       return;
     }
@@ -168,6 +281,19 @@ export function attachRuntimeWebSocket(
   });
 
   ws.on("close", (_code, reason) => {
+    unregisterControlDispatcher?.();
+    unregisterControlDispatcher = undefined;
+    unregisterEphemeralSecretDispatcher?.();
+    unregisterEphemeralSecretDispatcher = undefined;
+    for (const pending of pendingEphemeralSecrets.values()) {
+      pending.reject(
+        new RuntimeControlCommandError(
+          "Secure runtime connection closed; the secret request will not be retried.",
+          "SECRET_RUNTIME_DISCONNECTED",
+        ),
+      );
+    }
+    pendingEphemeralSecrets.clear();
     if (runtimeSessionId) {
       markSessionClosed(context.db, runtimeSessionId, reason.toString("utf8") || null);
     }
@@ -363,6 +489,10 @@ function handleMvpRuntimeMessage(
       commandId: routed.commandId,
       messageId: commandResult.data.messageId,
       payload: commandResult.data.payload,
+      project: (command, payload) => {
+        recordRuntimeSessionControlProjection(context.db, command, payload);
+        recordRuntimeModelChannelProjection(context.db, command, payload);
+      },
     });
     rememberProcessedRuntimeMessage(context, commandResult.data);
     sendIngestAck(
@@ -977,6 +1107,7 @@ function requireRoutedContext(
   humanRequestId: string;
   humanResponseId: string;
   invocationId?: string;
+  sessionId?: string;
 } | null {
   if (envelope.runtimeId && envelope.runtimeId !== context.runtimeId) {
     sendError(ws, "runtime_id_mismatch", "Runtime message did not match the WebSocket runtime id.");
@@ -1034,6 +1165,7 @@ function requireRoutedContext(
     humanRequestId: envelope.humanRequestId ?? "",
     humanResponseId: envelope.humanResponseId ?? "",
     invocationId: envelope.invocationId,
+    sessionId: envelope.sessionId,
   };
 }
 
@@ -1059,6 +1191,15 @@ function requireCommandRoutedContext(
     command: true,
   });
   if (!routed) return null;
+
+  if (persisted?.sessionId && persisted.sessionId !== envelope.sessionId) {
+    sendError(
+      ws,
+      "command_route_mismatch",
+      "Runtime command response omitted or changed its session route.",
+    );
+    return null;
+  }
 
   if (persisted?.scope === "daemon") {
     if (envelope.workspaceBindingId || envelope.workspaceId || envelope.projectId) {
@@ -1117,6 +1258,7 @@ function flushPendingRuntimeControlCommands(
       workspaceBindingId: command.runtimeWorkspaceBindingId,
       workspaceId: command.workspaceId,
       projectId: command.projectId,
+      sessionId: command.sessionId,
       commandId: command.commandId,
       idempotencyKey: command.idempotencyKey,
       sentAt: now,

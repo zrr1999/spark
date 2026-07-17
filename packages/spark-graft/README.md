@@ -2,6 +2,8 @@
 
 `@zendev-lab/spark-graft` is a Spark extension package for graft-backed editing workflows. It provides direct tools for the high-frequency agent path while leaving Pi's built-in `read`, `write`, and `edit` tools available.
 
+Spark and the repository root Pi profile do not load this extension by default. Load `@zendev-lab/spark-graft/extension` explicitly when Graft-backed tools and the patcher role are required; the package and its compatibility/runtime surfaces remain maintained for that opt-in path.
+
 ## Mental model
 
 `@zendev-lab/spark-graft` does not edit the working tree directly and does not speak graftd's socket protocol. Its TypeScript `graft-client` bridge is a thin process wrapper over `graft --json <argv>`: the Rust `graft` CLI remains the only wire translator, resolving socket location, daemon startup, typed daemon ops, daemon-owned `cli_exec`, and local routing internally. Tools shape convenient parameters into CLI argv/stdin and parse the JSON envelope/result:

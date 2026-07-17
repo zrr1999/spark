@@ -88,6 +88,12 @@ vi.mock("$lib/server/form-data", () => ({
   },
 }));
 
+vi.mock("$lib/server/submission-idempotency", () => ({
+  createCockpitSubmissionId: () => "generated-browser-submission",
+  cockpitSubmissionIdempotencyKey: (submissionId: string, phase: string) =>
+    `idem_${phase === "session.create" ? "1" : "2"}${submissionId.length.toString(16).padStart(31, "0")}`,
+}));
+
 import { actions, load } from "../../routes/(workbench)/sessions/+page.server";
 import { conversationStartSessionId } from "./conversation-submission";
 
@@ -150,12 +156,14 @@ describe("session conversation actions", () => {
     expect(mocks.createManagedSessionForCockpit).toHaveBeenCalledWith({
       scope: { kind: "workspace", workspaceId: "ws_demo" },
       workspaceId: "ws_demo",
+      idempotencyKey: expect.stringMatching(/^idem_[a-f0-9]{32}$/u),
     });
     expect(mocks.submitConversationTurnForCockpit).toHaveBeenCalledWith({
       workspaceId: "ws_demo",
       sessionId: "sess_conversation",
       prompt: "Inspect the daemon path.",
       title: "Inspect the daemon path.",
+      submissionId: expect.any(String),
     });
     expect(mocks.archiveManagedSessionForCockpit).not.toHaveBeenCalled();
   });
@@ -186,6 +194,7 @@ describe("session conversation actions", () => {
       scope: { kind: "workspace", workspaceId: "ws_demo" },
       workspaceId: "ws_demo",
       sessionId: deterministicSessionId,
+      idempotencyKey: expect.stringMatching(/^idem_[a-f0-9]{32}$/u),
     });
     expect(mocks.getManagedSessionForCockpit).toHaveBeenCalledWith(deterministicSessionId);
     expect(mocks.submitConversationTurnForCockpit).toHaveBeenCalledWith({
@@ -288,13 +297,18 @@ describe("session conversation actions", () => {
       success: true,
       message: "Assignment queued for the owning Spark daemon.",
       queuedTurnId: "turn_conversation",
-      values: { sessionId: "sess_conversation", message: "" },
+      values: {
+        sessionId: "sess_conversation",
+        message: "",
+        submissionId: expect.any(String),
+      },
     });
     expect(mocks.submitConversationTurnForCockpit).toHaveBeenCalledWith({
       workspaceId: "ws_demo",
       sessionId: "sess_conversation",
       prompt: "Now run the focused tests.",
       title: "Now run the focused tests.",
+      submissionId: expect.any(String),
     });
   });
 
@@ -321,7 +335,7 @@ describe("session conversation actions", () => {
     });
   });
 
-  it("rejects stale form submissions for daemon-global conversations", async () => {
+  it("rejects daemon-global conversations at the workspace-scoped Web boundary", async () => {
     mocks.getManagedSessionForCockpit.mockResolvedValueOnce({
       ...session,
       sessionId: "sess_global",
@@ -338,6 +352,11 @@ describe("session conversation actions", () => {
       data: {
         intent: "sendMessage",
         success: false,
+        values: {
+          sessionId: "sess_global",
+          message: "Continue globally.",
+          submissionId: expect.any(String),
+        },
       },
     });
     expect(mocks.submitConversationTurnForCockpit).not.toHaveBeenCalled();
@@ -366,6 +385,31 @@ describe("session conversation actions", () => {
     expect(mocks.setSessionModelForCockpit).not.toHaveBeenCalled();
     expect(mocks.setSessionThinkingLevelForCockpit).not.toHaveBeenCalled();
     expect(mocks.archiveManagedSessionForCockpit).not.toHaveBeenCalled();
+  });
+
+
+  it("keeps both start phases stable when the same browser form is delivered twice", async () => {
+    const action = requireAction("startConversation");
+    const values = {
+      workspaceId: "ws_demo",
+      message: "Submit exactly once.",
+      submissionId: "browser-start-submission",
+    };
+
+    await expect(action(actionEvent(values))).rejects.toMatchObject({ status: 303 });
+    await expect(action(actionEvent(values))).rejects.toMatchObject({ status: 303 });
+
+    const firstCreateKey = mocks.createManagedSessionForCockpit.mock.calls[0]?.[0].idempotencyKey;
+    expect(firstCreateKey).toMatch(/^idem_[a-f0-9]{32}$/u);
+    expect(mocks.createManagedSessionForCockpit.mock.calls[1]?.[0].idempotencyKey).toBe(
+      firstCreateKey,
+    );
+    expect(mocks.submitConversationTurnForCockpit.mock.calls[0]?.[0].submissionId).toBe(
+      values.submissionId,
+    );
+    expect(mocks.submitConversationTurnForCockpit.mock.calls[1]?.[0].submissionId).toBe(
+      values.submissionId,
+    );
   });
 
   it("persists a conversation model through the daemon control plane", async () => {

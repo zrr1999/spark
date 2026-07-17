@@ -91,17 +91,49 @@ export function registerSparkExtensionEvents(
       pendingSparkAgentInstructions.delete(sessionKey);
       return undefined;
     }
-    const contentParts = pendingInstruction ? [pendingInstruction.instruction] : [];
-    if (inbox.summaries.length > 0) contentParts.push(formatHiddenRoleRunInbox(inbox));
     if (inbox.summaries.length > 0)
       await markHiddenRoleRunInboxDelivered(ctx.cwd, ctx, inbox.summaries);
     if (pendingInstruction) pendingSparkAgentInstructions.delete(sessionKey);
+    const messages = [
+      ...(pendingInstruction
+        ? [
+            {
+              customType: "spark-mode-context",
+              content: pendingInstruction.instruction,
+              display: false,
+              authority: "runtime_control" as const,
+              trust: "trusted" as const,
+            },
+          ]
+        : []),
+      ...(inbox.summaries.length > 0
+        ? [
+            {
+              customType: "spark-role-run-inbox",
+              content: formatHiddenRoleRunInbox(inbox),
+              display: false,
+              authority: "runtime_data" as const,
+              trust: "untrusted" as const,
+            },
+          ]
+        : []),
+    ];
+    const compatibilityMessage =
+      messages.length === 1
+        ? messages[0]
+        : {
+            customType: "spark-mode-context",
+            content: messages.map((message) => message.content).join("\n\n"),
+            display: false,
+            // Pi-compatible hosts only understand one message. When control
+            // and role output coexist, fail closed instead of elevating the
+            // model-authored inbox content with the control instruction.
+            authority: "runtime_data" as const,
+            trust: "untrusted" as const,
+          };
     return {
-      message: {
-        customType: "spark-mode-context",
-        content: contentParts.join("\n\n"),
-        display: false,
-      },
+      message: compatibilityMessage,
+      messages,
     };
   });
   pi.on?.("turn_start", async (_event: unknown, ctx: SparkToolContext) => {

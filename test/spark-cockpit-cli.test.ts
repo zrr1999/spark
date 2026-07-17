@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
+import { Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Server } from "node:net";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { TaskGraph } from "@zendev-lab/spark-tasks";
@@ -64,6 +66,10 @@ void test("spark cockpit help documents coordination resources and excludes daem
   assert.match(help, /spark cockpit artifact list/u);
   assert.match(help, /spark cockpit review list/u);
   assert.match(help, /spark cockpit workflow list/u);
+  assert.match(help, /spark cockpit instance backup/u);
+  assert.match(help, /spark cockpit instance inspect/u);
+  assert.match(help, /spark cockpit instance restore/u);
+  assert.match(help, /spark cockpit instance status/u);
   assert.doesNotMatch(help, /spark cockpit queue/u);
   assert.doesNotMatch(help, /spark cockpit events watch/u);
 });
@@ -322,6 +328,78 @@ void test("runSparkCockpitCliCommand prints JSON for Cockpit status and task lis
   assert.equal(tasks.result.tasks.length, 3);
 });
 
+void test("spark cockpit assign crosses the real daemon RPC without starting HTTP", async () => {
+  const root = await mkdtemp(join(tmpdir(), "spark-cockpit-daemon-acceptance-"));
+  const child = startCockpitAcceptanceDaemon(root);
+  const activeServers = () =>
+    (process as NodeJS.Process & { _getActiveHandles(): unknown[] })
+      ._getActiveHandles()
+      .filter((handle: unknown): handle is Server => handle instanceof Server).length;
+
+  try {
+    const ready = await waitForAcceptanceMessage(child, "ready");
+    const listenersBefore = activeServers();
+    const result = await handleSparkCockpitCliCommand(
+      {
+        resource: "assign",
+        verb: "create",
+        json: true,
+        sessionId: ready.sessionId,
+        goal: "prove Cockpit to daemon coordination",
+        title: "Acceptance assignment",
+        role: "role:reviewer",
+      },
+      {
+        graph: new TaskGraph(),
+        daemonClient: { runtimeDir: ready.runtimeDir },
+      },
+    );
+
+    assert.equal(result.action, "assign");
+    assert.equal(result.result.status, "queued");
+    assert.equal(result.result.commandKind, "assignment.create.request");
+    assert.equal(activeServers(), listenersBefore);
+
+    const inspectionPromise = waitForAcceptanceMessage(child, "inspection");
+    child.send({ action: "inspect" });
+    const { invocation } = await inspectionPromise;
+    assert.ok(invocation);
+    assert.equal(invocation.sessionId, ready.sessionId);
+    assert.equal(invocation.prompt, "prove Cockpit to daemon coordination");
+    assert.deepEqual(invocation.task, {
+      type: "session.run",
+      sessionId: ready.sessionId,
+      prompt: "prove Cockpit to daemon coordination",
+      assignment: {
+        goal: "prove Cockpit to daemon coordination",
+        target: {
+          sessionId: ready.sessionId,
+          role: "role:reviewer",
+          workspaceId: "ws_cockpit_acceptance",
+        },
+        constraints: [],
+        evidence: [],
+        source: { kind: "cli" },
+        title: "Acceptance assignment",
+      },
+      workspaceId: "ws_cockpit_acceptance",
+      cwd: root,
+      messageMetadata: { origin: { kind: "cockpit", host: "cockpit", surface: "local" } },
+      actor: "spark-daemon-local-rpc",
+    });
+    assert.equal(existsSync(join(root, "assignments", "v1", "assignments.json")), false);
+  } finally {
+    if (child.connected) {
+      const stopped = waitForAcceptanceMessage(child, "stopped");
+      const exited = waitForChildExit(child);
+      child.send({ action: "stop" });
+      await stopped;
+      await exited;
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 void test("spark cockpit assign submits through the daemon RPC without a side assignment store", async () => {
   const root = await mkdtemp(join(tmpdir(), "spark-cockpit-assign-"));
   const runtimeDir = join(root, "runtime");
@@ -387,6 +465,77 @@ void test("spark cockpit assign submits through the daemon RPC without a side as
   assert.equal(existsSync(join(root, "assignments", "v1", "assignments.json")), false);
   await rm(root, { recursive: true, force: true });
 });
+
+type AcceptanceMessage =
+  | { kind: "ready"; runtimeDir: string; sessionId: string }
+  | { kind: "inspection"; invocation?: AcceptanceInvocation }
+  | { kind: "stopped" };
+
+type AcceptanceInvocation = {
+  sessionId?: string;
+  prompt?: string;
+  task?: unknown;
+};
+
+function startCockpitAcceptanceDaemon(root: string): ChildProcess {
+  return spawn(
+    fileURLToPath(new URL("../node_modules/.bin/tsx", import.meta.url)),
+    [
+      fileURLToPath(new URL("./support/spark-cockpit-daemon-acceptance-child.ts", import.meta.url)),
+      root,
+    ],
+    { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+  );
+}
+
+function waitForAcceptanceMessage<K extends AcceptanceMessage["kind"]>(
+  child: ChildProcess,
+  kind: K,
+): Promise<Extract<AcceptanceMessage, { kind: K }>> {
+  return new Promise((resolve, reject) => {
+    let stderr = "";
+    const onStderr = (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    };
+    const onMessage = (message: AcceptanceMessage) => {
+      if (message.kind !== kind) return;
+      cleanup();
+      resolve(message as Extract<AcceptanceMessage, { kind: K }>);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onExit = (code: number | null) => {
+      cleanup();
+      reject(
+        new Error(
+          `Cockpit acceptance daemon exited before ${kind} with code ${String(code)}.${stderr ? `\n${stderr}` : ""}`,
+        ),
+      );
+    };
+    const cleanup = () => {
+      child.off("message", onMessage);
+      child.off("error", onError);
+      child.off("exit", onExit);
+      child.stderr?.off("data", onStderr);
+    };
+    child.on("message", onMessage);
+    child.once("error", onError);
+    child.once("exit", onExit);
+    child.stderr?.on("data", onStderr);
+  });
+}
+
+function waitForChildExit(child: ChildProcess): Promise<void> {
+  return new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Cockpit acceptance daemon exited with code ${String(code)}.`));
+    });
+  });
+}
 
 function fixtureCockpitOptions() {
   const graph = new TaskGraph();

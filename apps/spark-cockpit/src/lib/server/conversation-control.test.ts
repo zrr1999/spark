@@ -31,6 +31,7 @@ describe("Cockpit conversation control", () => {
     expect(client.submit).toHaveBeenCalledWith({
       sessionId: "sess_demo",
       prompt: "Continue the same conversation.",
+      idempotencyKey: expect.stringMatching(/^idem_[a-f0-9]{32}$/u),
       assignment: {
         goal: "Continue the same conversation.",
         title: "Continue the same conversation.",
@@ -93,6 +94,7 @@ describe("Cockpit conversation control", () => {
     expect(submit).toHaveBeenCalledWith({
       sessionId: "sess_global",
       prompt: "Inspect daemon health",
+      idempotencyKey: expect.stringMatching(/^idem_[a-f0-9]{32}$/u),
       assignment: expect.objectContaining({
         target: { sessionId: "sess_global" },
       }),
@@ -100,6 +102,27 @@ describe("Cockpit conversation control", () => {
         origin: { kind: "user", host: "web", surface: "local" },
       },
     });
+  });
+
+  it("reuses the browser submission identity across repeated action delivery", async () => {
+    const submit = vi.fn().mockResolvedValue({
+      invocationId: "inv_stable",
+      status: "queued",
+      acceptedAt: "2026-07-14T00:00:00.000Z",
+    });
+    const input = {
+      sessionId: "sess_stable",
+      prompt: "Retry this exact message",
+      title: "Retry this exact message",
+      submissionId: "browser-submission-1",
+    };
+
+    await submitConversationTurnForCockpit(input, { submit });
+    await submitConversationTurnForCockpit(input, { submit });
+
+    const firstKey = submit.mock.calls[0]?.[0].idempotencyKey;
+    expect(firstKey).toMatch(/^idem_[a-f0-9]{32}$/u);
+    expect(submit.mock.calls[1]?.[0].idempotencyKey).toBe(firstKey);
   });
 
   it("rejects malformed daemon receipts", async () => {
@@ -145,6 +168,7 @@ describe("Cockpit conversation control", () => {
     });
 
     expect(client.cancel).toHaveBeenCalledWith({
+      sessionId: "sess_001",
       invocationId: "inv_001",
       reason: "Stopped from Cockpit.",
     });
@@ -169,6 +193,7 @@ describe("Cockpit conversation control", () => {
     });
 
     expect(cancel).toHaveBeenCalledWith({
+      sessionId: "sess_001",
       invocationId: "inv_missing",
     });
   });

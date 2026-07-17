@@ -152,18 +152,51 @@ describe("QqbotAdapter", () => {
     ).toBeUndefined();
   });
 
-  it("dedupes repeated message ids", () => {
+  it("dedupes repeated message ids only after successful receipt", async () => {
+    const transport = new FakeChannelTransport();
+    const onMessage = vi.fn();
     const adapter = new QqbotAdapter({
       id: "qqbot",
       config: baseConfig,
-      transport: new FakeChannelTransport(),
+      transport,
+      onMessage,
     });
     const raw = {
       event_type: "C2C_MESSAGE_CREATE",
       d: { id: "dup", content: "once", author: { user_openid: "u1" } },
     };
-    expect(adapter.parseInbound(raw)?.text).toBe("once");
-    expect(adapter.parseInbound(raw)).toBeUndefined();
+    await adapter.start();
+    transport.emitInbound(raw);
+    transport.emitInbound(raw);
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage.mock.calls[0]?.[0]).toMatchObject({ text: "once", messageId: "dup" });
+    await adapter.stop();
+  });
+
+  it("redelivers when the durable receipt callback fails", async () => {
+    const transport = new FakeChannelTransport();
+    let attempts = 0;
+    const adapter = new QqbotAdapter({
+      id: "qqbot",
+      config: baseConfig,
+      transport,
+      onMessage: () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("receipt unavailable");
+      },
+    });
+    const raw = {
+      event_type: "C2C_MESSAGE_CREATE",
+      d: { id: "retry", content: "again", author: { user_openid: "u1" } },
+    };
+    await adapter.start();
+
+    expect(() => transport.emitInbound(raw)).toThrow("receipt unavailable");
+    expect(() => transport.emitInbound(raw)).not.toThrow();
+    transport.emitInbound(raw);
+    expect(attempts).toBe(2);
+    await adapter.stop();
   });
 
   it("exposes reply capability from transport", async () => {
@@ -206,6 +239,32 @@ describe("QqbotAdapter", () => {
     expect(
       adapter.parseInbound({ event_type: "INTERACTION_CREATE", d: { id: "interaction-1" } }),
     ).toBeUndefined();
+
+    await adapter.stop();
+  });
+
+  it("propagates native interaction settlement failures to the transport", async () => {
+    const transport = new FakeChannelTransport();
+    const adapter = new QqbotAdapter({
+      id: "qq-main",
+      config: baseConfig,
+      transport,
+      onInteraction: async () => {
+        throw new Error("settlement unavailable");
+      },
+    });
+    await adapter.start();
+
+    await expect(
+      transport.emitInteraction({
+        adapter: "qqbot",
+        interactionId: "interaction-failed",
+        actorId: "u1",
+        scene: "c2c",
+        recipient: "c2c:u1",
+        buttonData: "opaque-token",
+      }),
+    ).rejects.toThrow("settlement unavailable");
 
     await adapter.stop();
   });

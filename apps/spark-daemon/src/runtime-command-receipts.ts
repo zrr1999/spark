@@ -1,20 +1,29 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
+  runtimeCommandAckEnvelopeSchema,
+  runtimeCommandResultEnvelopeSchema,
   runtimeProtocolVersion,
   runtimeServerCommandSpecification,
+  serverCommandPayloadSchema,
+  sparkTurnSubmitResultSchema,
   type ServerCommandEnvelope,
 } from "@zendev-lab/spark-protocol";
+import { assertIdempotentTurnPayloadReplay } from "./session-control.ts";
+import { SparkInvocationStore } from "./store/invocations.ts";
 
 export type RuntimeCommandReceiptClaim =
-  | { kind: "new" }
+  | { kind: "new"; claimToken: string }
   | { kind: "replay"; ack?: unknown; terminal?: unknown }
   | { kind: "conflict" };
+
+export const DEFAULT_RUNTIME_COMMAND_RECEIPT_LEASE_MS = 30_000;
 
 export function claimRuntimeCommandReceipt(
   db: DatabaseSync,
   command: ServerCommandEnvelope,
   claimedAt = new Date().toISOString(),
+  options: { leaseMs?: number } = {},
 ): RuntimeCommandReceiptClaim {
   const commandId = command.commandId;
   const runtimeId = command.runtimeId;
@@ -24,15 +33,29 @@ export function claimRuntimeCommandReceipt(
     throw new Error("Runtime command receipt requires a fully routed server command.");
   }
   const payloadHash = runtimeCommandPayloadHash(command);
+  const claimToken = randomUUID();
+  const leaseExpiresAt = new Date(
+    Date.parse(claimedAt) +
+      Math.max(1, Math.floor(options.leaseMs ?? DEFAULT_RUNTIME_COMMAND_RECEIPT_LEASE_MS)),
+  ).toISOString();
   db.exec("BEGIN IMMEDIATE");
   try {
     const existing = db
       .prepare(
-        `SELECT payload_hash AS payloadHash, ack_json AS ackJson, terminal_json AS terminalJson
+        `SELECT payload_hash AS payloadHash, kind, status,
+                ack_json AS ackJson, terminal_json AS terminalJson,
+                lease_expires_at AS leaseExpiresAt
          FROM runtime_command_receipts WHERE command_id = ?`,
       )
       .get(commandId) as
-      | { payloadHash: string; ackJson: string | null; terminalJson: string | null }
+      | {
+          payloadHash: string;
+          kind: string;
+          status: string;
+          ackJson: string | null;
+          terminalJson: string | null;
+          leaseExpiresAt: string | null;
+        }
       | undefined;
     if (existing) {
       db.prepare(
@@ -40,8 +63,30 @@ export function claimRuntimeCommandReceipt(
          SET delivery_count = delivery_count + 1, last_seen_at = ?, updated_at = ?
          WHERE command_id = ?`,
       ).run(claimedAt, claimedAt, commandId);
+      if (existing.payloadHash !== payloadHash) {
+        db.exec("COMMIT");
+        return { kind: "conflict" };
+      }
+      if (
+        !existing.terminalJson &&
+        existing.kind === "turn.submit.request" &&
+        (existing.status === "processing" || existing.status === "accepted") &&
+        (!existing.leaseExpiresAt || existing.leaseExpiresAt <= claimedAt)
+      ) {
+        const reclaimed = db
+          .prepare(
+            `UPDATE runtime_command_receipts
+             SET status = 'processing', claim_token = ?, lease_expires_at = ?, updated_at = ?
+             WHERE command_id = ? AND payload_hash = ? AND terminal_json IS NULL
+               AND (lease_expires_at IS NULL OR lease_expires_at <= ?)`,
+          )
+          .run(claimToken, leaseExpiresAt, claimedAt, commandId, payloadHash, claimedAt);
+        if (Number(reclaimed.changes) > 0) {
+          db.exec("COMMIT");
+          return { kind: "new", claimToken };
+        }
+      }
       db.exec("COMMIT");
-      if (existing.payloadHash !== payloadHash) return { kind: "conflict" };
       return {
         kind: "replay",
         ...(existing.ackJson ? { ack: JSON.parse(existing.ackJson) as unknown } : {}),
@@ -54,9 +99,10 @@ export function claimRuntimeCommandReceipt(
     db.prepare(
       `INSERT INTO runtime_command_receipts
         (command_id, runtime_id, scope, workspace_binding_id, workspace_id, project_id,
-         kind, payload_hash, status, delivery_count, first_seen_at, last_seen_at,
-         created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'processing', 1, ?, ?, ?, ?)`,
+         session_id, idempotency_key, request_message_id, payload_json, claim_token,
+         lease_expires_at, kind, payload_hash, status, delivery_count, first_seen_at,
+         last_seen_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', 1, ?, ?, ?, ?)`,
     ).run(
       commandId,
       runtimeId,
@@ -64,6 +110,12 @@ export function claimRuntimeCommandReceipt(
       command.workspaceBindingId ?? null,
       command.workspaceId ?? null,
       command.projectId ?? null,
+      command.sessionId ?? null,
+      command.idempotencyKey ?? null,
+      command.messageId,
+      JSON.stringify(command.payload),
+      claimToken,
+      leaseExpiresAt,
       command.payload.kind,
       payloadHash,
       claimedAt,
@@ -72,7 +124,7 @@ export function claimRuntimeCommandReceipt(
       claimedAt,
     );
     db.exec("COMMIT");
-    return { kind: "new" };
+    return { kind: "new", claimToken };
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
@@ -84,13 +136,25 @@ export function recordRuntimeCommandAck(
   commandId: string,
   envelope: unknown,
   recordedAt = new Date().toISOString(),
-): void {
+  claimToken?: string,
+): boolean {
   const serialized = JSON.stringify(envelope);
-  db.prepare(
-    `UPDATE runtime_command_receipts
-     SET status = 'accepted', ack_json = COALESCE(ack_json, ?), updated_at = ?
-     WHERE command_id = ?`,
-  ).run(serialized, recordedAt, commandId);
+  const result = claimToken
+    ? db
+        .prepare(
+          `UPDATE runtime_command_receipts
+           SET status = 'accepted', ack_json = COALESCE(ack_json, ?), updated_at = ?
+           WHERE command_id = ? AND claim_token = ? AND terminal_json IS NULL`,
+        )
+        .run(serialized, recordedAt, commandId, claimToken)
+    : db
+        .prepare(
+          `UPDATE runtime_command_receipts
+           SET status = 'accepted', ack_json = COALESCE(ack_json, ?), updated_at = ?
+           WHERE command_id = ? AND terminal_json IS NULL`,
+        )
+        .run(serialized, recordedAt, commandId);
+  return Number(result.changes) > 0;
 }
 
 export function recordRuntimeCommandTerminal(
@@ -100,34 +164,58 @@ export function recordRuntimeCommandTerminal(
     status: "succeeded" | "failed" | "rejected";
     envelope: unknown;
     recordedAt?: string;
+    claimToken?: string;
   },
-): void {
+): boolean {
   const recordedAt = input.recordedAt ?? new Date().toISOString();
   const serialized = JSON.stringify(input.envelope);
   const existing = db
     .prepare(
-      "SELECT terminal_json AS terminalJson FROM runtime_command_receipts WHERE command_id = ?",
+      `SELECT claim_token AS claimToken, terminal_json AS terminalJson
+       FROM runtime_command_receipts WHERE command_id = ?`,
     )
-    .get(input.commandId) as { terminalJson: string | null } | undefined;
+    .get(input.commandId) as { claimToken: string | null; terminalJson: string | null } | undefined;
   if (!existing) throw new Error(`Unknown runtime command receipt: ${input.commandId}`);
+  if (input.claimToken && existing.claimToken !== input.claimToken) return false;
   if (existing.terminalJson) {
     if (existing.terminalJson !== serialized) {
       throw new Error(`RUNTIME_COMMAND_TERMINAL_CONFLICT: ${input.commandId}`);
     }
-    return;
+    return true;
   }
-  db.prepare(
-    `UPDATE runtime_command_receipts
-     SET status = ?, terminal_message_id = ?, terminal_json = ?, completed_at = ?, updated_at = ?
-     WHERE command_id = ? AND terminal_json IS NULL`,
-  ).run(
-    input.status,
-    messageIdOf(input.envelope),
-    serialized,
-    recordedAt,
-    recordedAt,
-    input.commandId,
-  );
+  const result = input.claimToken
+    ? db
+        .prepare(
+          `UPDATE runtime_command_receipts
+           SET status = ?, terminal_message_id = ?, terminal_json = ?, completed_at = ?,
+               lease_expires_at = NULL, updated_at = ?
+           WHERE command_id = ? AND claim_token = ? AND terminal_json IS NULL`,
+        )
+        .run(
+          input.status,
+          messageIdOf(input.envelope),
+          serialized,
+          recordedAt,
+          recordedAt,
+          input.commandId,
+          input.claimToken,
+        )
+    : db
+        .prepare(
+          `UPDATE runtime_command_receipts
+           SET status = ?, terminal_message_id = ?, terminal_json = ?, completed_at = ?,
+               lease_expires_at = NULL, updated_at = ?
+           WHERE command_id = ? AND terminal_json IS NULL`,
+        )
+        .run(
+          input.status,
+          messageIdOf(input.envelope),
+          serialized,
+          recordedAt,
+          recordedAt,
+          input.commandId,
+        );
+  return Number(result.changes) > 0;
 }
 
 export function acknowledgeRuntimeCommandTerminal(
@@ -156,7 +244,9 @@ export function recoverInterruptedRuntimeCommandReceipts(
     .prepare(
       `SELECT command_id AS commandId, runtime_id AS runtimeId,
               workspace_binding_id AS workspaceBindingId, workspace_id AS workspaceId,
-              project_id AS projectId
+              project_id AS projectId, session_id AS sessionId,
+              idempotency_key AS idempotencyKey, request_message_id AS requestMessageId,
+              payload_json AS payloadJson, kind
        FROM runtime_command_receipts
        WHERE status IN ('processing', 'accepted') AND terminal_json IS NULL`,
     )
@@ -166,34 +256,148 @@ export function recoverInterruptedRuntimeCommandReceipts(
     workspaceBindingId: string | null;
     workspaceId: string | null;
     projectId: string | null;
+    sessionId: string | null;
+    idempotencyKey: string | null;
+    requestMessageId: string | null;
+    payloadJson: string | null;
+    kind: string;
   }>;
   for (const row of rows) {
-    recordRuntimeCommandTerminal(db, {
-      commandId: row.commandId,
-      status: "failed",
-      envelope: {
-        protocolVersion: runtimeProtocolVersion,
-        messageId: stableTerminalMessageId(row.commandId),
-        type: "runtime.command.result",
-        sentAt: recoveredAt,
-        runtimeId: row.runtimeId,
-        workspaceBindingId: row.workspaceBindingId ?? undefined,
-        workspaceId: row.workspaceId ?? undefined,
-        projectId: row.projectId ?? undefined,
-        commandId: row.commandId,
-        payload: {
-          status: "failed",
-          result: {
-            reasonCode: "DAEMON_RESTARTED",
-            message: "Spark daemon restarted before the command reached a terminal result.",
-          },
-          completedAt: recoveredAt,
-        },
-      },
-      recordedAt: recoveredAt,
+    if (row.kind === "turn.submit.request" && row.idempotencyKey) {
+      const invocation = new SparkInvocationStore(db).findByIdempotencyKey(row.idempotencyKey);
+      if (invocation) {
+        try {
+          if (row.payloadJson) {
+            const commandPayload = serverCommandPayloadSchema.parse(JSON.parse(row.payloadJson));
+            if (commandPayload.kind !== "turn.submit.request") {
+              throw new Error(`Runtime command receipt kind mismatch: ${row.commandId}`);
+            }
+            assertIdempotentTurnPayloadReplay(invocation, {
+              payload: commandPayload.payload ?? {},
+              sessionId: row.sessionId ?? undefined,
+              idempotencyKey: row.idempotencyKey,
+            });
+          }
+        } catch (error) {
+          recordInterruptedCommandFailure(db, row, recoveredAt, {
+            reasonCode: "IDEMPOTENCY_CONFLICT",
+            message: error instanceof Error ? error.message : String(error),
+          });
+          continue;
+        }
+        recoverTurnSubmitAdmission(
+          db,
+          row,
+          invocation.invocationId,
+          invocation.createdAt,
+          recoveredAt,
+        );
+        continue;
+      }
+      // Admission did not commit. Removing only the incomplete daemon-side
+      // receipt lets Cockpit redeliver the same durable command and key.
+      db.prepare(
+        `DELETE FROM runtime_command_receipts
+         WHERE command_id = ? AND terminal_json IS NULL`,
+      ).run(row.commandId);
+      continue;
+    }
+    recordInterruptedCommandFailure(db, row, recoveredAt, {
+      reasonCode: "DAEMON_RESTARTED",
+      message: "Spark daemon restarted before the command reached a terminal result.",
     });
   }
   return rows.length;
+}
+
+function recordInterruptedCommandFailure(
+  db: DatabaseSync,
+  row: {
+    commandId: string;
+    runtimeId: string;
+    workspaceBindingId: string | null;
+    workspaceId: string | null;
+    projectId: string | null;
+    sessionId: string | null;
+    requestMessageId: string | null;
+  },
+  recoveredAt: string,
+  failure: { reasonCode: string; message: string },
+): void {
+  recordRuntimeCommandTerminal(db, {
+    commandId: row.commandId,
+    status: "failed",
+    envelope: {
+      protocolVersion: runtimeProtocolVersion,
+      messageId: stableTerminalMessageId(row.commandId),
+      type: "runtime.command.result",
+      sentAt: recoveredAt,
+      runtimeId: row.runtimeId,
+      workspaceBindingId: row.workspaceBindingId ?? undefined,
+      workspaceId: row.workspaceId ?? undefined,
+      projectId: row.projectId ?? undefined,
+      sessionId: row.sessionId ?? undefined,
+      commandId: row.commandId,
+      ackOf: row.requestMessageId ?? undefined,
+      payload: { status: "failed", result: failure, completedAt: recoveredAt },
+    },
+    recordedAt: recoveredAt,
+  });
+}
+
+function recoverTurnSubmitAdmission(
+  db: DatabaseSync,
+  row: {
+    commandId: string;
+    runtimeId: string;
+    workspaceBindingId: string | null;
+    workspaceId: string | null;
+    projectId: string | null;
+    sessionId: string | null;
+    requestMessageId: string | null;
+  },
+  invocationId: string,
+  acceptedAt: string,
+  recoveredAt: string,
+): void {
+  const route = {
+    runtimeId: row.runtimeId,
+    workspaceBindingId: row.workspaceBindingId ?? undefined,
+    workspaceId: row.workspaceId ?? undefined,
+    projectId: row.projectId ?? undefined,
+    sessionId: row.sessionId ?? undefined,
+    commandId: row.commandId,
+    invocationId,
+    ackOf: row.requestMessageId ?? undefined,
+  };
+  const ack = runtimeCommandAckEnvelopeSchema.parse({
+    protocolVersion: runtimeProtocolVersion,
+    messageId: stableReceiptMessageId(row.commandId, "ack"),
+    type: "runtime.command.ack",
+    sentAt: recoveredAt,
+    ...route,
+    payload: { accepted: true, invocationId },
+  });
+  const result = sparkTurnSubmitResultSchema.parse({
+    invocationId,
+    status: "queued",
+    acceptedAt,
+  });
+  const terminal = runtimeCommandResultEnvelopeSchema.parse({
+    protocolVersion: runtimeProtocolVersion,
+    messageId: stableReceiptMessageId(row.commandId, "terminal"),
+    type: "runtime.command.result",
+    sentAt: recoveredAt,
+    ...route,
+    payload: { status: "succeeded", result, completedAt: recoveredAt },
+  });
+  recordRuntimeCommandAck(db, row.commandId, ack, recoveredAt);
+  recordRuntimeCommandTerminal(db, {
+    commandId: row.commandId,
+    status: "succeeded",
+    envelope: terminal,
+    recordedAt: recoveredAt,
+  });
 }
 
 export function pendingRuntimeCommandTerminals(db: DatabaseSync, limit = 100): unknown[] {
@@ -254,6 +458,7 @@ function runtimeCommandPayloadHash(command: ServerCommandEnvelope): string {
         workspaceBindingId: command.workspaceBindingId,
         workspaceId: command.workspaceId,
         projectId: command.projectId,
+        sessionId: command.sessionId,
         commandId: command.commandId,
         idempotencyKey: command.idempotencyKey,
         payload: command.payload,
@@ -263,7 +468,11 @@ function runtimeCommandPayloadHash(command: ServerCommandEnvelope): string {
 }
 
 function stableTerminalMessageId(commandId: string): string {
-  return `msg_${createHash("sha256").update(`${commandId}:terminal`).digest("hex").slice(0, 32)}`;
+  return stableReceiptMessageId(commandId, "terminal");
+}
+
+function stableReceiptMessageId(commandId: string, kind: "ack" | "terminal"): string {
+  return `msg_${createHash("sha256").update(`${commandId}:${kind}`).digest("hex").slice(0, 32)}`;
 }
 
 function messageIdOf(envelope: unknown): string {

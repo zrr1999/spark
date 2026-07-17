@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ExtensionContext } from "@zendev-lab/spark-extension-api";
+import type { ExtensionContext, ToolConfig } from "@zendev-lab/spark-extension-api";
 
 import { SparkHostRuntime } from "../apps/spark-tui/src/host/runtime.ts";
 
@@ -31,7 +31,7 @@ void test("SparkHostRuntime registers tools and reflects them in getAllTools", (
   assert.deepEqual(names, ["impl_status", "impl_use_project"]);
 });
 
-void test("SparkHostRuntime setActiveTools toggles getAllTools view", () => {
+void test("SparkHostRuntime keeps registered and active tool queries distinct", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
   host.registerTool({
     name: "tool_a",
@@ -59,10 +59,93 @@ void test("SparkHostRuntime setActiveTools toggles getAllTools view", () => {
 
   host.setActiveTools(["tool_b"]);
   assert.deepEqual(
-    host.getAllTools().map((tool) => tool.name),
-    ["tool_b"],
+    host
+      .getAllTools()
+      .map((tool) => tool.name)
+      .sort(),
+    ["tool_a", "tool_b"],
   );
+  assert.deepEqual(host.getActiveTools(), ["tool_b"]);
   assert.equal(host.listTools().length, 2, "all tools remain registered, only active flag flips");
+});
+
+void test("SparkHostRuntime resolves and exposes immutable fail-closed tool policies", () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-policy-test" });
+  host.registerTool({
+    name: "safe_read",
+    description: "read-only inspection",
+    parameters: {},
+    policy: {
+      effect: "read",
+      executionMode: "parallel",
+      domains: [" files ", "files"],
+      phases: ["plan", "implement"],
+      approval: "none",
+    },
+    async execute() {
+      return { content: [{ type: "text", text: "ok" }] };
+    },
+  });
+
+  const safePolicy = host.getTool("safe_read")?.policy;
+  assert.deepEqual(safePolicy, {
+    effect: "read",
+    executionMode: "parallel",
+    domains: ["files"],
+    phases: ["plan", "implement"],
+    approval: "none",
+  });
+  assert.equal(Object.isFrozen(safePolicy), true);
+  assert.equal(Object.isFrozen(safePolicy?.domains), true);
+  assert.deepEqual(
+    host.getAllTools().find((tool) => tool.name === "safe_read")?.policy,
+    safePolicy,
+  );
+
+  host.registerTool({
+    name: "malformed",
+    description: "runtime-invalid policy",
+    parameters: {},
+    effect: "external_write",
+    executionMode: "parallel",
+    policy: {
+      effect: "read",
+      executionMode: "parallel",
+      domains: ["cue", 42],
+      phases: "implement",
+      approval: "sometimes",
+    },
+    async execute() {
+      return { content: [{ type: "text", text: "never" }] };
+    },
+  } as unknown as ToolConfig);
+
+  assert.deepEqual(host.getTool("malformed")?.policy, {
+    effect: "unknown",
+    executionMode: "sequential",
+    domains: [],
+    phases: [],
+    approval: "required",
+  });
+
+  host.registerTool({
+    name: "conflicting_effect",
+    description: "canonical and legacy declarations disagree",
+    parameters: {},
+    effect: "external_write",
+    executionMode: "parallel",
+    policy: { effect: "read", executionMode: "parallel", approval: "none" },
+    async execute() {
+      return { content: [{ type: "text", text: "never" }] };
+    },
+  });
+  assert.deepEqual(host.getTool("conflicting_effect")?.policy, {
+    effect: "unknown",
+    executionMode: "sequential",
+    domains: [],
+    phases: [],
+    approval: "required",
+  });
 });
 
 void test("SparkHostRuntime permanently excludes tools outside the host allowlist", () => {
@@ -137,6 +220,8 @@ void test("SparkHostRuntime sendMessage and sendUserMessage push envelopes into 
       content: "Spark default research requested",
       display: true,
       details: { project: "p1" },
+      authority: "runtime_control",
+      trust: "trusted",
     },
     { deliverAs: "steer", triggerTurn: true },
   );
@@ -149,6 +234,8 @@ void test("SparkHostRuntime sendMessage and sendUserMessage push envelopes into 
   assert.equal(drained[0]!.customType, "spark-mode-request");
   assert.equal(drained[0]!.options.deliverAs, "steer");
   assert.equal(drained[0]!.options.triggerTurn, true);
+  assert.equal(drained[0]!.authority, "runtime_control");
+  assert.equal(drained[0]!.trust, "trusted");
   assert.equal(drained[1]!.kind, "user");
 });
 

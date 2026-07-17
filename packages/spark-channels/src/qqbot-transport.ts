@@ -17,6 +17,7 @@ import {
   type QqbotKeyboardPermission,
   type QqbotMessageKeyboard,
 } from "./qqbot-types.ts";
+import { reconnectDelayWithJitter } from "./reconnect-delay.ts";
 
 const INTENTS = {
   PUBLIC_GUILD_MESSAGES: 1 << 30,
@@ -32,6 +33,7 @@ const FULL_INTENTS =
   INTENTS.INTERACTION;
 
 const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10_000, 30_000, 60_000];
+const DEFAULT_QQBOT_CONNECT_TIMEOUT_MS = 30_000;
 // Passive reply slots are deliberately stable across daemon restarts. Even if
 // the in-memory budget is lost, one idempotent native ask=2 and final=4 cannot
 // collide. Group uses ask=1 and final=5. Later asks remain in Cockpit rather
@@ -42,7 +44,24 @@ const QQBOT_GROUP_PASSIVE_REPLY_LIMIT = 5;
 export interface QqbotTransportOptions {
   api?: QqbotApiClient;
   webSocketFactory?: (url: string) => WebSocket;
+  /** Deadline through Identify/Resume until READY or RESUMED is received. */
+  connectTimeoutMs?: number;
+  /** Test seam; production retries remain capped at 60 seconds forever. */
+  reconnectDelaysMs?: readonly number[];
+  /** Test seam for equal-jitter reconnect delays. */
+  reconnectRandom?: () => number;
+  /** Load the daemon-owned resumable cursor before the first gateway connect. */
+  loadCursor?: () => QqbotGatewayCursor | null | Promise<QqbotGatewayCursor | null>;
+  /** Persist a durable cursor, or clear an invalidated gateway session. */
+  saveCursor?: (cursor: QqbotGatewayCursor | null) => void | Promise<void>;
 }
+
+export interface QqbotGatewayCursor {
+  sessionId: string;
+  lastSeq: number;
+}
+
+type QqbotGatewayPayload = { op?: number; s?: number | null; t?: string; d?: unknown };
 
 /**
  * QQ Bot transport:
@@ -60,6 +79,15 @@ export function createQqbotTransport(
       baseUrl: resolveQqbotApiBase(config.api_environment),
     });
   const webSocketFactory = options.webSocketFactory ?? ((url: string) => new WebSocket(url));
+  const connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_QQBOT_CONNECT_TIMEOUT_MS;
+  if (!Number.isFinite(connectTimeoutMs) || connectTimeoutMs <= 0) {
+    throw new Error("qqbot connectTimeoutMs must be a positive finite number");
+  }
+  const reconnectDelays =
+    options.reconnectDelaysMs?.length === 0
+      ? RECONNECT_DELAYS_MS
+      : (options.reconnectDelaysMs ?? RECONNECT_DELAYS_MS);
+  const reconnectRandom = options.reconnectRandom ?? Math.random;
 
   let onMessage: ((raw: unknown) => void) | null = null;
   let onInteraction: ((event: ChannelInteractionEvent) => void | Promise<void>) | null = null;
@@ -68,10 +96,14 @@ export function createQqbotTransport(
   let connectionError: string | undefined;
   let ws: WebSocket | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let awaitingHeartbeatAck = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempt = 0;
+  let connectionGeneration = 0;
+  let cancelPendingConnect: ((error: Error) => void) | null = null;
   let sessionId: string | null = null;
   let lastSeq: number | null = null;
+  let cursorLoaded = false;
   let stopping = false;
   const passiveReplyBudget = createQqbotPassiveReplyBudget();
 
@@ -82,6 +114,20 @@ export function createQqbotTransport(
       throw new Error("qqbot requires app_id and client_secret");
     }
     return await api.getAccessToken(appId, clientSecret);
+  }
+
+  async function loadCursorOnce(): Promise<void> {
+    if (cursorLoaded) return;
+    const cursor = (await options.loadCursor?.()) ?? null;
+    if (cursor) {
+      const loadedSessionId = cursor.sessionId.trim();
+      if (!loadedSessionId || !Number.isSafeInteger(cursor.lastSeq) || cursor.lastSeq < 0) {
+        throw new Error("qqbot loadCursor returned an invalid gateway cursor");
+      }
+      sessionId = loadedSessionId;
+      lastSeq = cursor.lastSeq;
+    }
+    cursorLoaded = true;
   }
 
   async function sendText(recipient: string, text: string, msgId?: string): Promise<void> {
@@ -162,6 +208,7 @@ export function createQqbotTransport(
         target,
         request.messageId,
         "ask",
+        request.idempotencyKey,
       );
       if (!reservation) {
         throw new Error("qqbot passive reply budget reserved for the final answer");
@@ -189,6 +236,7 @@ export function createQqbotTransport(
       clearInterval(heartbeatTimer);
       heartbeatTimer = null;
     }
+    awaitingHeartbeatAck = false;
   }
 
   function clearReconnect(): void {
@@ -198,8 +246,11 @@ export function createQqbotTransport(
     }
   }
 
-  function cleanupSocket(): void {
+  function cleanupSocket(cancelReason?: Error): void {
     clearHeartbeat();
+    const cancel = cancelPendingConnect;
+    cancelPendingConnect = null;
+    cancel?.(cancelReason ?? new Error("qqbot websocket connection superseded"));
     if (ws) {
       try {
         ws.removeAllListeners();
@@ -216,11 +267,15 @@ export function createQqbotTransport(
   function scheduleReconnect(): void {
     if (stopping || !running) return;
     clearReconnect();
-    const delay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)]!;
+    const ceiling =
+      reconnectDelays[Math.min(reconnectAttempt, reconnectDelays.length - 1)] ??
+      RECONNECT_DELAYS_MS.at(-1)!;
+    const delay = reconnectDelayWithJitter(ceiling, reconnectRandom);
     reconnectAttempt += 1;
     connectionState = "reconnecting";
     reconnectTimer = setTimeout(() => {
       void connect().catch((error) => {
+        if (stopping || !running) return;
         connectionState = "degraded";
         connectionError = error instanceof Error ? error.message : String(error);
         scheduleReconnect();
@@ -229,165 +284,267 @@ export function createQqbotTransport(
   }
 
   async function connect(): Promise<void> {
-    cleanupSocket();
+    const generation = ++connectionGeneration;
+    cleanupSocket(new Error("qqbot websocket connection superseded"));
     connectionState = "connecting";
     connectionError = undefined;
+    await loadCursorOnce();
+    assertConnectAttemptActive(generation);
     const token = await resolveToken();
+    assertConnectAttemptActive(generation);
     const gatewayUrl = await api.getGatewayUrl(token);
+    assertConnectAttemptActive(generation);
     const socket = webSocketFactory(gatewayUrl);
     ws = socket;
 
-    await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const fail = (error: Error) => {
-        if (settled) return;
-        settled = true;
-        reject(error);
-      };
-      const ok = () => {
-        if (settled) return;
-        settled = true;
-        resolve();
-      };
-
-      socket.on("open", () => {
-        // Wait for Hello (op 10) before considering identify complete.
-      });
-
-      socket.on("message", (data) => {
-        let payload: { op?: number; s?: number | null; t?: string; d?: unknown };
-        try {
-          payload = JSON.parse(rawDataToText(data)) as typeof payload;
-        } catch {
-          return;
-        }
-        if (typeof payload.s === "number") lastSeq = payload.s;
-
-        switch (payload.op) {
-          case 10: {
-            const interval =
-              payload.d && typeof payload.d === "object" && !Array.isArray(payload.d)
-                ? Number((payload.d as { heartbeat_interval?: number }).heartbeat_interval)
-                : NaN;
-            if (sessionId && lastSeq !== null) {
-              socket.send(
-                JSON.stringify({
-                  op: 6,
-                  d: {
-                    token: `QQBot ${token}`,
-                    session_id: sessionId,
-                    seq: lastSeq,
-                  },
-                }),
-              );
-            } else {
-              socket.send(
-                JSON.stringify({
-                  op: 2,
-                  d: {
-                    token: `QQBot ${token}`,
-                    intents: FULL_INTENTS,
-                    shard: [0, 1],
-                  },
-                }),
-              );
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        let readyConfirmed = false;
+        let timeout: ReturnType<typeof setTimeout> | null = null;
+        let dispatchChain = Promise.resolve();
+        const isCurrentSocket = () =>
+          running && !stopping && generation === connectionGeneration && ws === socket;
+        const fail = (error: Error) => {
+          if (settled) return;
+          settled = true;
+          if (timeout) clearTimeout(timeout);
+          if (cancelPendingConnect === fail) cancelPendingConnect = null;
+          reject(error);
+        };
+        const ok = () => {
+          if (settled) return;
+          settled = true;
+          if (timeout) clearTimeout(timeout);
+          if (cancelPendingConnect === fail) cancelPendingConnect = null;
+          resolve();
+        };
+        const failSocket = (error: Error, label: string) => {
+          if (!isCurrentSocket()) return;
+          connectionState = "degraded";
+          connectionError = error.message;
+          console.error(`[spark-channels] qqbot ${label} failed`, error);
+          const reconnectDirectly = readyConfirmed;
+          cleanupSocket(error);
+          // Before READY/RESUMED, cleanup rejects this connect attempt and its
+          // supervisor schedules exactly one retry. Afterwards we own it here.
+          if (reconnectDirectly) scheduleReconnect();
+        };
+        const commitDurableSequence = async (
+          payload: QqbotGatewayPayload,
+          nextSessionId: string | null = sessionId,
+        ) => {
+          if (typeof payload.s !== "number") {
+            if (isCurrentSocket()) sessionId = nextSessionId;
+            return;
+          }
+          if (options.saveCursor) {
+            if (!nextSessionId) {
+              throw new Error("qqbot cannot persist a gateway sequence without a session id");
             }
-            clearHeartbeat();
-            if (Number.isFinite(interval) && interval > 0) {
-              heartbeatTimer = setInterval(() => {
-                if (socket.readyState === WebSocket.OPEN) {
-                  socket.send(JSON.stringify({ op: 1, d: lastSeq }));
-                }
-              }, interval);
-            }
+            await options.saveCursor({ sessionId: nextSessionId, lastSeq: payload.s });
+          }
+          if (!isCurrentSocket()) return;
+          sessionId = nextSessionId;
+          lastSeq = payload.s;
+        };
+        const handleDispatch = async (payload: QqbotGatewayPayload) => {
+          if (!isCurrentSocket()) return;
+          const eventType = payload.t?.trim();
+          if (eventType === "READY") {
+            const ready = payload.d as { session_id?: string } | undefined;
+            const readySessionId = ready?.session_id?.trim() || null;
+            await commitDurableSequence(payload, readySessionId);
+            if (!isCurrentSocket()) return;
+            readyConfirmed = true;
+            connectionState = "connected";
+            connectionError = undefined;
+            reconnectAttempt = 0;
             ok();
-            break;
+            return;
           }
-          case 0: {
-            const eventType = payload.t?.trim();
-            if (eventType === "READY") {
-              const ready = payload.d as { session_id?: string } | undefined;
-              if (ready?.session_id) sessionId = ready.session_id;
-              connectionState = "connected";
-              connectionError = undefined;
-              reconnectAttempt = 0;
-              return;
-            }
-            if (eventType === "RESUMED") {
-              connectionState = "connected";
-              connectionError = undefined;
-              reconnectAttempt = 0;
-              return;
-            }
-            if (eventType === "INTERACTION_CREATE") {
-              const rawEvent = {
-                event_type: eventType,
-                d: payload.d,
-              };
-              const normalized = normalizeQqbotInteractionEvent(rawEvent);
-              const event = normalized ? toChannelInteractionEvent(normalized) : undefined;
-              if (event) {
-                try {
-                  const handled = onInteraction?.(event);
-                  if (handled) {
-                    void handled.catch((error: unknown) => {
-                      console.error("[spark-channels] qqbot interaction callback failed", error);
-                    });
-                  }
-                } catch (error) {
-                  console.error("[spark-channels] qqbot interaction callback failed", error);
-                }
+          if (eventType === "RESUMED") {
+            await commitDurableSequence(payload);
+            if (!isCurrentSocket()) return;
+            readyConfirmed = true;
+            connectionState = "connected";
+            connectionError = undefined;
+            reconnectAttempt = 0;
+            ok();
+            return;
+          }
+          if (eventType === "INTERACTION_CREATE") {
+            const normalized = normalizeQqbotInteractionEvent({
+              event_type: eventType,
+              d: payload.d,
+            });
+            const event = normalized ? toChannelInteractionEvent(normalized) : undefined;
+            if (event) await onInteraction?.(event);
+            // Settlement may span an async SQLite transaction. Only advance
+            // the resumable sequence after that durable boundary succeeds.
+            if (isCurrentSocket()) await commitDurableSequence(payload);
+            return;
+          }
+          if (
+            eventType === "C2C_MESSAGE_CREATE" ||
+            eventType === "GROUP_AT_MESSAGE_CREATE" ||
+            eventType === "GROUP_MESSAGE_CREATE" ||
+            eventType === "AT_MESSAGE_CREATE" ||
+            eventType === "MESSAGE_CREATE"
+          ) {
+            onMessage?.({ event_type: eventType, d: payload.d });
+          }
+          if (isCurrentSocket()) await commitDurableSequence(payload);
+        };
+        const enqueueDispatch = (payload: QqbotGatewayPayload) => {
+          // Gateway dispatch sequence is ordered. Serializing callbacks keeps a
+          // later event from committing past an unsettled interaction.
+          dispatchChain = dispatchChain
+            .then(async () => await handleDispatch(payload))
+            .catch((error: unknown) => {
+              failSocket(
+                error instanceof Error ? error : new Error(String(error)),
+                payload.t === "INTERACTION_CREATE"
+                  ? "durable interaction settlement"
+                  : "durable inbound receipt",
+              );
+            });
+        };
+
+        timeout = setTimeout(() => {
+          fail(
+            new Error(
+              `qqbot websocket did not receive READY or RESUMED within ${connectTimeoutMs}ms`,
+            ),
+          );
+        }, connectTimeoutMs);
+        cancelPendingConnect = fail;
+
+        socket.on("open", () => {
+          // Readiness is fenced by READY/RESUMED after Identify/Resume.
+        });
+
+        socket.on("message", (data) => {
+          let payload: QqbotGatewayPayload;
+          try {
+            payload = JSON.parse(rawDataToText(data)) as QqbotGatewayPayload;
+          } catch {
+            return;
+          }
+
+          switch (payload.op) {
+            case 10: {
+              const interval =
+                payload.d && typeof payload.d === "object" && !Array.isArray(payload.d)
+                  ? Number((payload.d as { heartbeat_interval?: number }).heartbeat_interval)
+                  : NaN;
+              if (sessionId && lastSeq !== null) {
+                socket.send(
+                  JSON.stringify({
+                    op: 6,
+                    d: {
+                      token: `QQBot ${token}`,
+                      session_id: sessionId,
+                      seq: lastSeq,
+                    },
+                  }),
+                );
+              } else {
+                socket.send(
+                  JSON.stringify({
+                    op: 2,
+                    d: {
+                      token: `QQBot ${token}`,
+                      intents: FULL_INTENTS,
+                      shard: [0, 1],
+                    },
+                  }),
+                );
               }
-              return;
+              clearHeartbeat();
+              if (Number.isFinite(interval) && interval > 0) {
+                heartbeatTimer = setInterval(() => {
+                  if (socket.readyState !== WebSocket.OPEN) return;
+                  if (awaitingHeartbeatAck) {
+                    failSocket(new Error("qqbot websocket heartbeat ACK timed out"), "heartbeat");
+                    return;
+                  }
+                  try {
+                    socket.send(JSON.stringify({ op: 1, d: lastSeq }));
+                    awaitingHeartbeatAck = true;
+                  } catch (error) {
+                    failSocket(
+                      error instanceof Error ? error : new Error(String(error)),
+                      "heartbeat send",
+                    );
+                  }
+                }, interval);
+              }
+              break;
             }
-            if (
-              eventType === "C2C_MESSAGE_CREATE" ||
-              eventType === "GROUP_AT_MESSAGE_CREATE" ||
-              eventType === "GROUP_MESSAGE_CREATE" ||
-              eventType === "AT_MESSAGE_CREATE" ||
-              eventType === "MESSAGE_CREATE"
-            ) {
-              onMessage?.({
-                event_type: eventType,
-                d: payload.d,
-              });
+            case 0:
+              enqueueDispatch(payload);
+              break;
+            case 7:
+              failSocket(new Error("qqbot gateway requested reconnect"), "gateway reconnect");
+              break;
+            case 11:
+              awaitingHeartbeatAck = false;
+              break;
+            case 9: {
+              dispatchChain = dispatchChain
+                .then(async () => {
+                  await options.saveCursor?.(null);
+                  if (!isCurrentSocket()) return;
+                  sessionId = null;
+                  lastSeq = null;
+                  failSocket(new Error("qqbot gateway rejected the session"), "session resume");
+                })
+                .catch((error: unknown) => {
+                  failSocket(
+                    error instanceof Error ? error : new Error(String(error)),
+                    "cursor invalidation",
+                  );
+                });
+              break;
             }
-            break;
+            default:
+              break;
           }
-          case 7: {
-            // Reconnect requested by gateway.
-            cleanupSocket();
-            scheduleReconnect();
-            break;
-          }
-          case 9: {
-            // Invalid session — drop resume state.
-            sessionId = null;
-            lastSeq = null;
-            cleanupSocket();
-            scheduleReconnect();
-            break;
-          }
-          default:
-            break;
-        }
-      });
+        });
 
-      socket.on("error", (error) => {
-        connectionError = error.message;
-        fail(error instanceof Error ? error : new Error(String(error)));
-      });
+        socket.on("error", (error) => {
+          connectionError = error.message;
+          if (readyConfirmed) {
+            failSocket(error instanceof Error ? error : new Error(String(error)), "websocket");
+            return;
+          }
+          fail(error instanceof Error ? error : new Error(String(error)));
+        });
 
-      socket.on("close", () => {
-        clearHeartbeat();
-        if (stopping || !running) {
-          connectionState = "stopped";
-          return;
-        }
-        connectionState = "reconnecting";
-        scheduleReconnect();
+        socket.on("close", () => {
+          clearHeartbeat();
+          if (stopping || !running) {
+            connectionState = "stopped";
+            return;
+          }
+          if (!readyConfirmed) {
+            fail(new Error("qqbot websocket closed before READY or RESUMED"));
+            return;
+          }
+          connectionState = "reconnecting";
+          scheduleReconnect();
+        });
       });
-    });
+    } catch (error) {
+      if (ws === socket) cleanupSocket();
+      throw error;
+    }
+  }
+
+  function assertConnectAttemptActive(generation: number): void {
+    if (running && !stopping && generation === connectionGeneration) return;
+    throw new Error("qqbot websocket connection attempt was cancelled");
   }
 
   return {
@@ -399,26 +556,25 @@ export function createQqbotTransport(
       stopping = false;
       onMessage = handler;
       onInteraction = interactionHandler ?? null;
-      try {
-        await connect();
-      } catch (error) {
-        running = false;
-        onMessage = null;
-        onInteraction = null;
-        connectionState = "stopped";
+      // Arming the supervised connector is the startup boundary. External
+      // Gateway Hello latency must not hold daemon admission/restart readiness.
+      void connect().catch((error) => {
+        if (stopping || !running) return;
+        connectionState = "degraded";
         connectionError = error instanceof Error ? error.message : String(error);
-        cleanupSocket();
-        throw error;
-      }
+        scheduleReconnect();
+      });
     },
     async stop() {
       stopping = true;
       running = false;
+      connectionGeneration += 1;
       onMessage = null;
       onInteraction = null;
       clearReconnect();
-      cleanupSocket();
+      cleanupSocket(new Error("qqbot websocket stopped"));
       connectionState = "stopped";
+      connectionError = undefined;
     },
     async send(recipient, text) {
       await sendText(recipient, text);
@@ -579,16 +735,22 @@ interface QqbotPassiveReplyBudget {
     recipient: string,
     messageId: string | undefined,
     kind: QqbotPassiveReplyKind,
+    idempotencyKey?: string,
   ): QqbotPassiveReplyReservation | undefined;
 }
 
 function createQqbotPassiveReplyBudget(): QqbotPassiveReplyBudget {
   const entries = new Map<
     string,
-    { askCount: number; finalReserved: boolean; touchedAt: number }
+    {
+      askCount: number;
+      askIdempotencyKey?: string;
+      finalReserved: boolean;
+      touchedAt: number;
+    }
   >();
   return {
-    reserve(scope, recipient, messageId, kind) {
+    reserve(scope, recipient, messageId, kind, idempotencyKey) {
       if (!messageId) return {};
       const now = Date.now();
       for (const [key, entry] of entries) {
@@ -605,9 +767,15 @@ function createQqbotPassiveReplyBudget(): QqbotPassiveReplyBudget {
       if (kind !== "final" && entry.finalReserved) return undefined;
       let msgSeq: number;
       if (kind === "ask") {
+        if (idempotencyKey && entry.askIdempotencyKey === idempotencyKey) {
+          entry.touchedAt = now;
+          entries.set(key, entry);
+          return { msgSeq: scope === "c2c" ? 2 : 1 };
+        }
         const askLimit = 1;
         if (entry.askCount >= askLimit) return undefined;
         entry.askCount += 1;
+        if (idempotencyKey) entry.askIdempotencyKey = idempotencyKey;
         msgSeq = scope === "c2c" ? 2 : 1;
       } else {
         entry.finalReserved = true;
@@ -625,10 +793,13 @@ function reservePassiveReplyForTarget(
   target: ReturnType<typeof parseQqbotRecipient>,
   messageId: string | undefined,
   kind: QqbotPassiveReplyKind,
+  idempotencyKey?: string,
 ): QqbotPassiveReplyReservation | undefined {
-  if (target.kind === "c2c") return budget.reserve("c2c", target.openid, messageId, kind);
+  if (target.kind === "c2c") {
+    return budget.reserve("c2c", target.openid, messageId, kind, idempotencyKey);
+  }
   if (target.kind === "group") {
-    return budget.reserve("group", target.groupOpenid, messageId, kind);
+    return budget.reserve("group", target.groupOpenid, messageId, kind, idempotencyKey);
   }
   return {};
 }

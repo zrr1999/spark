@@ -1,6 +1,7 @@
 import { fail, redirect } from "@sveltejs/kit";
 import { getDictionary, localeCookieName, resolveRequestLocale } from "$lib/i18n";
 import { formText } from "$lib/server/form-data";
+import { requireSecretRequestContext } from "$lib/server/secret-request-context";
 import {
   cancelProviderOAuthForCockpit,
   getProviderOAuthFlowForCockpit,
@@ -41,13 +42,14 @@ export const actions: Actions = {
     }
   },
 
-  saveApiKey: async ({ cookies, request }) => {
+  saveApiKey: async (event) => {
+    const { cookies, request } = event;
     const form = await request.formData();
     const copy = actionCopy(cookies.get(localeCookieName), request.headers.get("accept-language"));
     const providerName = formText(form, "providerName").trim();
     const apiKey = formText(form, "apiKey");
     try {
-      await setProviderApiKeyForCockpit(providerName, apiKey);
+      await setProviderApiKeyForCockpit(providerName, apiKey, requireSecretRequestContext(event));
       return { intent: "saveApiKey", success: true, message: copy.credentialSaved };
     } catch (error) {
       return fail(400, actionError("saveApiKey", error));
@@ -77,7 +79,8 @@ export const actions: Actions = {
     redirect(303, flowUrl(url, flowId));
   },
 
-  respondOAuth: async ({ request, url }) => {
+  respondOAuth: async (event) => {
+    const { request, url } = event;
     const form = await request.formData();
     const flowId = formText(form, "flowId").trim();
     try {
@@ -85,6 +88,7 @@ export const actions: Actions = {
         flowId,
         formText(form, "promptId").trim(),
         formText(form, "response"),
+        requireSecretRequestContext(event),
       );
     } catch (error) {
       return fail(400, actionError("respondOAuth", error));

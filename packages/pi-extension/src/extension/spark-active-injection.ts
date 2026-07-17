@@ -15,7 +15,7 @@ import {
 import { loadSessionGoal } from "./spark-session-goals.ts";
 import { sparkLanguageForProject, type SparkLanguage } from "./spark-i18n.ts";
 import { renderSparkPhaseSystemPrompt } from "./mode/index.ts";
-import { renderBaseSystemPromptsPrompt } from "./spark-builtin-skills.ts";
+import { renderBaseSystemPromptsCatalogPrompt } from "./spark-builtin-skills.ts";
 import type { SparkModeEntryDeps, SparkModeMessageApi } from "./spark-mode-entry.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 
@@ -53,7 +53,7 @@ export async function injectSparkHints(event: unknown, ctx: SparkToolContext): P
     phase,
     summary?.language,
   );
-  const builtinSkillsPrompt = await renderBaseSystemPromptsPrompt();
+  const builtinSkillsPrompt = await renderBaseSystemPromptsCatalogPrompt();
   const sections = [sparkPrompt, builtinSkillsPrompt, summary?.content].filter(
     (section): section is string => Boolean(section),
   );

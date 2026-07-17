@@ -30,6 +30,9 @@ vi.mock("$lib/server/model-control", () => ({
   setSessionModelForCockpit: vi.fn(),
   setSessionThinkingLevelForCockpit: vi.fn(),
 }));
+vi.mock("$lib/server/submission-idempotency", () => ({
+  createCockpitSubmissionId: () => "generated-browser-submission",
+}));
 vi.mock("../../routes/(workbench)/sessions/+page.server", () => ({ actions: {} }));
 
 import { load } from "../../routes/(workbench)/sessions/[sessionId]/+page.server";
@@ -71,13 +74,6 @@ const otherWorkspaceSession = {
   workspaceId: "ws_other",
 };
 
-function pageEvent(sessionId: string, activeWorkspaceId = "ws_current") {
-  return {
-    params: { sessionId },
-    parent: async () => ({ activeWorkspace: { id: activeWorkspaceId } }),
-  } as never;
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.list.mockResolvedValue({
@@ -90,35 +86,61 @@ beforeEach(() => {
 });
 
 describe("workbench session page scope", () => {
-  it("keeps workspace and channel sessions while removing daemon-global registry records", async () => {
-    mocks.get.mockResolvedValue(workspaceSession);
+  it("reuses the parent workspace projection instead of refetching the session list", async () => {
+    const parent = vi.fn().mockResolvedValue({
+      sessions: [workspaceSession, channelSession],
+      sessionsAvailable: true,
+      activeWorkspace: { id: "ws_current" },
+    });
 
-    const result = await load(pageEvent(workspaceSession.sessionId));
+    const result = await load({
+      params: { sessionId: workspaceSession.sessionId },
+      parent,
+    } as never);
 
     expect(result).toMatchObject({
       sessions: [workspaceSession, channelSession],
       selectedSessionId: workspaceSession.sessionId,
       sendSubmissionIdSeed: expect.stringMatching(/^idem_/),
     });
+    expect(parent).toHaveBeenCalledOnce();
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.get).not.toHaveBeenCalled();
+    expect(mocks.snapshot).toHaveBeenCalledWith(workspaceSession.sessionId);
+    expect(mocks.modelControl).toHaveBeenCalledWith(workspaceSession.sessionId);
     expect(mocks.activity).toHaveBeenCalledWith(
       {},
       expect.objectContaining({ workspaceId: "ws_current" }),
     );
   });
 
-  it("does not expose a daemon-global session through a stale direct URL", async () => {
-    mocks.get.mockResolvedValue(daemonSession);
+  it("does not expose a daemon-global direct URL", async () => {
+    const parent = vi.fn().mockResolvedValue({
+      sessions: [workspaceSession, channelSession, daemonSession],
+      sessionsAvailable: true,
+      activeWorkspace: { id: "ws_current" },
+    });
 
-    await expect(load(pageEvent(daemonSession.sessionId))).rejects.toMatchObject({ status: 404 });
+    await expect(
+      load({ params: { sessionId: daemonSession.sessionId }, parent } as never),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(mocks.snapshot).not.toHaveBeenCalled();
+    expect(mocks.modelControl).not.toHaveBeenCalled();
     expect(mocks.activity).not.toHaveBeenCalled();
   });
 
   it("does not restore a detached workspace session through a direct URL", async () => {
-    mocks.get.mockResolvedValue(otherWorkspaceSession);
-
-    await expect(load(pageEvent(otherWorkspaceSession.sessionId))).rejects.toMatchObject({
-      status: 404,
+    const parent = vi.fn().mockResolvedValue({
+      sessions: [workspaceSession, channelSession, otherWorkspaceSession],
+      sessionsAvailable: true,
+      activeWorkspace: { id: "ws_current" },
     });
+
+    await expect(
+      load({ params: { sessionId: otherWorkspaceSession.sessionId }, parent } as never),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(mocks.snapshot).not.toHaveBeenCalled();
+    expect(mocks.modelControl).not.toHaveBeenCalled();
     expect(mocks.activity).not.toHaveBeenCalled();
   });
 });

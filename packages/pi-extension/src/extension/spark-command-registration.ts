@@ -1531,6 +1531,8 @@ export function registerSparkCommands(
         customType: "spark-mode-request",
         content: instruction,
         display: false,
+        authority: "runtime_control",
+        trust: "trusted",
         details: { visible },
       },
       { deliverAs: "followUp", triggerTurn: true },

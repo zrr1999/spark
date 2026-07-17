@@ -10,16 +10,16 @@ import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import { formText } from "$lib/server/form-data";
 import {
   channelAdapterCredentialsComplete,
-  channelEditorValuesFromConfig,
+  channelEditorValuesFromProjection,
   DEFAULT_INFOFLOW_ENDPOINT,
   loadChannelStatusForCockpit,
-  loadChannelsConfigForCockpit,
   mergeMessagePlatformCredentials,
   saveChannelsConfigForCockpit,
   type CockpitChannelEditorValues,
   type MessagePlatformCredentialPatch,
 } from "$lib/server/channel-status";
 import { getDatabase } from "$lib/server/db";
+import { requireSecretRequestContext } from "$lib/server/secret-request-context";
 import { workspacePath } from "$lib/workspace-routes";
 import type { Actions, PageServerLoad } from "./$types";
 
@@ -29,11 +29,8 @@ export const load: PageServerLoad = async ({ params }) => {
   const workspace = loadWorkspaceSettings(getDatabase(), params.workspaceId);
   if (!workspace) throw kitError(404, "Workspace not found.");
 
-  const [channelStatus, loaded] = await Promise.all([
-    loadChannelStatusForCockpit(workspace.id),
-    loadChannelsConfigForCockpit(workspace.id),
-  ]);
-  const editor = channelEditorValuesFromConfig(loaded.config);
+  const channelStatus = await loadChannelStatusForCockpit(workspace.id);
+  const editor = channelEditorValuesFromProjection(channelStatus.configuration);
   return {
     workspace,
     settingsPath: workspacePath(workspace, "/settings"),
@@ -48,7 +45,8 @@ export const load: PageServerLoad = async ({ params }) => {
 };
 
 export const actions: Actions = {
-  savePlatform: async ({ cookies, request, params }) => {
+  savePlatform: async (event) => {
+    const { cookies, request, params } = event;
     const workspace = loadWorkspaceSettings(getDatabase(), params.workspaceId);
     if (!workspace) throw kitError(404, "Workspace not found.");
 
@@ -58,10 +56,16 @@ export const actions: Actions = {
     }).channelsSettings;
     const formData = await request.formData();
     const values = readMessagePlatformForm(formData);
-    const loaded = await loadChannelsConfigForCockpit(workspace.id);
-    const previous = channelEditorValuesFromConfig(loaded.config);
+    const status = await loadChannelStatusForCockpit(workspace.id);
+    const previous = channelEditorValuesFromProjection(status.configuration);
 
-    const credentialError = await saveMessagePlatformCredentials(workspace.id, values, previous, t);
+    const credentialError = await saveMessagePlatformCredentials(
+      workspace.id,
+      values,
+      previous,
+      requireSecretRequestContext(event),
+      t,
+    );
     if (credentialError) {
       return fail(credentialError.status, {
         intent: "savePlatform",
@@ -82,6 +86,7 @@ async function saveMessagePlatformCredentials(
   workspaceId: string,
   values: MessagePlatformFormValues,
   previous: CockpitChannelEditorValues,
+  context: Parameters<typeof saveChannelsConfigForCockpit>[2],
   t: {
     saveFeishuRequired: string;
     saveInfoflowRequired: string;
@@ -107,7 +112,7 @@ async function saveMessagePlatformCredentials(
   }
 
   try {
-    await saveChannelsConfigForCockpit(workspaceId, merged);
+    await saveChannelsConfigForCockpit(workspaceId, merged, context);
     return null;
   } catch (error) {
     return {

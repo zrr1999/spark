@@ -99,12 +99,28 @@ export type SparkDaemonRunState =
   | "all";
 
 const STRINGS = sparkDaemonCliStrings();
+// Accepted invocations are durable and scheduler execution time pauses during
+// human interaction. Keep reads unbounded by default; callers own cancellation
+// through AbortSignal and may still provide an explicit timeout.
+const DEFAULT_NATIVE_TURN_WAIT_TIMEOUT_MS = Number.POSITIVE_INFINITY;
+const TURN_TRANSPORT_RETRY_BASE_MS = 100;
+const TURN_TRANSPORT_RETRY_MAX_MS = 5_000;
+const TURN_TRANSPORT_RECOVERY_INTERVAL = 4;
 
 export interface SparkDaemonClientPaths {
   runtimeDir: string;
   socketPath: string;
   pidFile: string;
   lockPath: string;
+}
+
+export interface SparkDaemonTurnTransportRetryEvent {
+  operation: "submit" | "read";
+  failureCount: number;
+  error: string;
+  nextRetryMs: number;
+  recoveryAttempted: boolean;
+  recoveryError?: string;
 }
 
 export interface SparkDaemonClientOptions {
@@ -172,8 +188,13 @@ export interface SparkDaemonClientOptions {
   ) => Promise<LocalDaemonEventsWatchResult>;
   serviceCommand?: (argv: string[]) => Promise<number>;
   managedSessions?: SparkDaemonManagedSessionsClient;
-  sleep?: (ms: number) => Promise<void>;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  random?: () => number;
   now?: () => number;
+  /** Periodically re-run daemon service recovery after this many transport failures. */
+  turnTransportRecoveryInterval?: number;
+  /** Retry visibility hook; recurring failures otherwise fall back to stderr. */
+  onTurnTransportRetry?: (event: SparkDaemonTurnTransportRetryEvent) => void;
   sparkHome?: string;
 }
 
@@ -188,8 +209,17 @@ export interface SparkDaemonLocalStatus {
   }>;
   invocations: Record<"queued" | "running" | "succeeded" | "failed" | "cancelled", number>;
   invocationHealth?: { oldestQueuedAt?: string; oldestRunningAt?: string };
+  channelDeliveries?: {
+    pending: number;
+    retrying: number;
+    inFlight: number;
+    delivered: number;
+    oldestPendingAt?: string;
+    lastError?: string;
+    lastErrorAt?: string;
+  };
   lifecycle?: {
-    state: "running" | "draining";
+    state: "starting" | "running" | "draining";
     restartRequestedAt?: string;
   };
 }
@@ -285,6 +315,7 @@ export interface LocalDaemonEventsWatchResult {
 
 export interface SparkDaemonWorkspace {
   id: string;
+  serverWorkspaceId?: string;
   serverUrl: string;
   localWorkspaceKey: string;
   displayName: string;
@@ -625,7 +656,7 @@ export function parseSparkDaemonCliArgs(argv: string[]): SparkDaemonCliCommand {
           json,
           status: readInvocationStatus(readStringOption(parsed.options, "status")),
           sessionId: readStringOption(parsed.options, "session")?.trim(),
-          since: readIsoDateTimeOption(parsed.options, "since"),
+          since: readInvocationSinceOption(parsed.options),
           limit: readNumberOption(parsed.options, "limit"),
           offset: readNumberOption(parsed.options, "offset"),
         };
@@ -754,6 +785,26 @@ function readInvocationStatus(value: string | undefined): SparkInvocationStatus 
   throw new Error(
     "spark daemon invocation --status must be queued, running, succeeded, failed, or cancelled",
   );
+}
+
+function readInvocationSinceOption(
+  options: ReturnType<typeof parseSparkCliOptions>["options"],
+): string | undefined {
+  const value = readStringOption(options, "since")?.trim();
+  if (!value) return undefined;
+  const relative = value.match(/^(\d+)(s|m|h|d)$/iu);
+  if (relative) {
+    const amount = Number(relative[1]);
+    const unitMs = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }[
+      relative[2]!.toLowerCase() as "s" | "m" | "h" | "d"
+    ];
+    const durationMs = amount * unitMs;
+    if (amount < 1 || !Number.isSafeInteger(durationMs) || durationMs > 365 * 86_400_000) {
+      throw new Error("spark daemon invocation --since duration must be between 1s and 365d");
+    }
+    return new Date(Date.now() - durationMs).toISOString();
+  }
+  return readIsoDateTimeOption(options, "since");
 }
 
 function readIsoDateTimeOption(
@@ -1167,12 +1218,33 @@ async function waitForSubmittedTurn(
   client: SparkDaemonClientOptions,
   options: SubmittedTurnWaitOptions = {},
 ): Promise<string> {
-  const timeoutMs = options.timeoutMs ?? 5 * 60_000;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_NATIVE_TURN_WAIT_TIMEOUT_MS;
   const pollIntervalMs = options.pollIntervalMs ?? 500;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const now = client.now ?? Date.now;
+  const deadline = now() + timeoutMs;
+  const deadlineError = new TurnReadDeadlineError();
+  while (now() < deadline) {
     throwIfAborted(options.signal);
-    const status = await clientTurnStatus({ invocationId: submitted.invocationId }, client);
+    let status: LocalTurnStatusResult;
+    try {
+      status = await retryTurnTransportRead(
+        () =>
+          clientTurnStatus({ invocationId: submitted.invocationId }, client, {
+            signal: options.signal,
+            ensureRunning: false,
+            timeoutMs: Math.max(1, deadline - now()),
+          }),
+        client,
+        {
+          signal: options.signal,
+          deadline,
+          deadlineError,
+        },
+      );
+    } catch (error) {
+      if (error === deadlineError) break;
+      throw error;
+    }
     if (status.status === "failed") {
       throw new Error(status.error?.message ?? `Invocation ${submitted.invocationId} failed`);
     }
@@ -1182,14 +1254,11 @@ async function waitForSubmittedTurn(
     if (status.status === "succeeded") {
       return STRINGS.completedSession(sessionId, submitted.invocationId);
     }
-    await delay(pollIntervalMs, undefined, { signal: options.signal });
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) break;
+    await delay(Math.min(pollIntervalMs, remainingMs), undefined, { signal: options.signal });
   }
   return STRINGS.queuedSession(sessionId, submitted.invocationId);
-}
-
-function isInvocationStreamSemanticError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /Unknown Spark invocation|INVOCATION_CURSOR_GAP|Invalid local RPC/u.test(message);
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
@@ -1881,34 +1950,214 @@ async function clientInvocation(
 async function clientSubmit(
   input: SparkDaemonTurnSubmitInput,
   client: SparkDaemonClientOptions,
+  options: { signal?: AbortSignal } = {},
 ): Promise<LocalTurnSubmitResult> {
   const paths = resolveSparkDaemonClientPaths(client);
+  throwIfAborted(options.signal);
   await clientEnsureRunning(client);
-  const stableInput = { ...input, idempotencyKey: input.idempotencyKey ?? createId("idem") };
-  const submit = async () =>
-    client.turnSubmit
-      ? await client.turnSubmit(paths, stableInput)
-      : await localRpcRequest<LocalTurnSubmitResult>(
-          paths,
-          localRpcWireRequest("turn.submit", stableInput),
-        );
-  try {
-    return await submit();
-  } catch (error) {
-    if (!isAmbiguousSubmitTransportError(error)) throw error;
-    // The daemon may have committed the invocation before the local ACK was
-    // lost. A single retry with the same durable key is safe and recovers the
-    // original invocation instead of enqueueing the prompt twice.
-    return await submit();
+  const admissionId = localRequestId();
+  const admissionInput = {
+    ...input,
+    idempotencyKey: input.idempotencyKey ?? `turn.submit:${admissionId}`,
+  };
+  const wireRequest = localRpcWireRequest("turn.submit", admissionInput, admissionId);
+  let failureCount = 0;
+  while (true) {
+    throwIfAborted(options.signal);
+    try {
+      return client.turnSubmit
+        ? await client.turnSubmit(paths, admissionInput)
+        : await localRpcRequest<LocalTurnSubmitResult>(paths, wireRequest, {
+            signal: options.signal,
+          });
+    } catch (error) {
+      if (options.signal?.aborted) throwIfAborted(options.signal);
+      if (!isRetryableTurnTransportError(error)) throw error;
+      failureCount += 1;
+      const delayMs = turnTransportRetryDelayMs(failureCount, client.random ?? Math.random);
+      const recovery = await recoverTurnTransportIfDue(error, failureCount, client, options.signal);
+      reportTurnTransportRetry(client, {
+        operation: "submit",
+        failureCount,
+        error: turnTransportErrorMessage(error),
+        nextRetryMs: delayMs,
+        ...recovery,
+      });
+      await waitBeforeTurnTransportRetry(delayMs, client, options.signal);
+    }
   }
 }
 
-function isAmbiguousSubmitTransportError(error: unknown): boolean {
+function isRetryableTurnTransportError(error: unknown): boolean {
+  if (error instanceof SparkDaemonLocalRpcRemoteError) {
+    return isDaemonStartingRemoteError(error);
+  }
+  if (error instanceof SparkDaemonLocalRpcUnavailableError) {
+    return !/does not support|unknown local RPC method/iu.test(error.message);
+  }
+  return (
+    error instanceof SparkDaemonLocalRpcError &&
+    /connection closed before a response/iu.test(error.message)
+  );
+}
+
+function isDaemonStartingRemoteError(error: SparkDaemonLocalRpcRemoteError): boolean {
+  const payload = isRecord(error.payload) ? error.payload : undefined;
+  return (
+    payload?.code === "daemon_starting" ||
+    /daemon is still starting; retry after readiness/iu.test(
+      typeof payload?.message === "string" ? payload.message : error.message,
+    )
+  );
+}
+
+function turnTransportRetryDelayMs(failureCount: number, random: () => number): number {
+  const exponent = Math.min(16, Math.max(0, failureCount - 1));
+  const ceiling = Math.min(
+    TURN_TRANSPORT_RETRY_MAX_MS,
+    TURN_TRANSPORT_RETRY_BASE_MS * 2 ** exponent,
+  );
+  const jitter = Math.max(0, Math.min(1, random()));
+  return Math.floor(ceiling / 2 + (ceiling / 2) * jitter);
+}
+
+async function recoverTurnTransportIfDue(
+  error: unknown,
+  failureCount: number,
+  client: SparkDaemonClientOptions,
+  signal: AbortSignal | undefined,
+): Promise<{ recoveryAttempted: boolean; recoveryError?: string }> {
+  const configuredInterval = client.turnTransportRecoveryInterval;
+  const interval =
+    typeof configuredInterval === "number" && Number.isFinite(configuredInterval)
+      ? Math.max(1, Math.floor(configuredInterval))
+      : TURN_TRANSPORT_RECOVERY_INTERVAL;
+  if (!isDaemonUnavailableTransportError(error) || failureCount % interval !== 0) {
+    return { recoveryAttempted: false };
+  }
+
+  throwIfAborted(signal);
+  try {
+    await clientEnsureRunning(client);
+    throwIfAborted(signal);
+    return { recoveryAttempted: true };
+  } catch (recoveryError) {
+    if (signal?.aborted) throwIfAborted(signal);
+    return {
+      recoveryAttempted: true,
+      recoveryError: turnTransportErrorMessage(recoveryError),
+    };
+  }
+}
+
+function isDaemonUnavailableTransportError(error: unknown): boolean {
   return (
     error instanceof SparkDaemonLocalRpcUnavailableError ||
     (error instanceof SparkDaemonLocalRpcError &&
-      !(error instanceof SparkDaemonLocalRpcRemoteError))
+      !(error instanceof SparkDaemonLocalRpcRemoteError) &&
+      /connection closed before a response/iu.test(error.message))
   );
+}
+
+function reportTurnTransportRetry(
+  client: SparkDaemonClientOptions,
+  event: SparkDaemonTurnTransportRetryEvent,
+): void {
+  if (client.onTurnTransportRetry) {
+    try {
+      client.onTurnTransportRetry(event);
+      return;
+    } catch (error) {
+      console.error("[spark] turn transport retry observer failed", error);
+    }
+  }
+  // A one-off transient close need not be noisy. Recurring failures are
+  // surfaced at powers of two and every service recovery attempt.
+  if (
+    !event.recoveryAttempted &&
+    event.failureCount !== 1 &&
+    (event.failureCount & (event.failureCount - 1)) !== 0
+  ) {
+    return;
+  }
+  console.error(
+    `[spark] ${event.operation} transport retry ${event.failureCount}; retrying in ${event.nextRetryMs}ms: ${event.error}${event.recoveryError ? `; recovery failed: ${event.recoveryError}` : ""}`,
+  );
+}
+
+function turnTransportErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function waitBeforeTurnTransportRetry(
+  ms: number,
+  client: SparkDaemonClientOptions,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  throwIfAborted(signal);
+  if (!client.sleep) {
+    await delay(ms, undefined, { signal });
+    return;
+  }
+  if (!signal) {
+    await client.sleep(ms);
+    return;
+  }
+
+  let rejectAbort!: (error: Error) => void;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const onAbort = () =>
+    rejectAbort(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+  signal.addEventListener("abort", onAbort, { once: true });
+  if (signal.aborted) onAbort();
+  try {
+    await Promise.race([client.sleep(ms, signal), aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
+class TurnReadDeadlineError extends Error {}
+
+async function retryTurnTransportRead<T>(
+  read: () => Promise<T>,
+  client: SparkDaemonClientOptions,
+  options: {
+    signal?: AbortSignal;
+    deadline: number;
+    deadlineError: TurnReadDeadlineError;
+  },
+): Promise<T> {
+  const now = client.now ?? Date.now;
+  let failureCount = 0;
+  while (true) {
+    throwIfAborted(options.signal);
+    if (now() >= options.deadline) throw options.deadlineError;
+    try {
+      return await read();
+    } catch (error) {
+      if (options.signal?.aborted) throwIfAborted(options.signal);
+      if (!isRetryableTurnTransportError(error)) throw error;
+      failureCount += 1;
+      const remainingMs = options.deadline - now();
+      if (remainingMs <= 0) throw options.deadlineError;
+      const delayMs = Math.min(
+        turnTransportRetryDelayMs(failureCount, client.random ?? Math.random),
+        remainingMs,
+      );
+      const recovery = await recoverTurnTransportIfDue(error, failureCount, client, options.signal);
+      reportTurnTransportRetry(client, {
+        operation: "read",
+        failureCount,
+        error: turnTransportErrorMessage(error),
+        nextRetryMs: delayMs,
+        ...recovery,
+      });
+      await waitBeforeTurnTransportRetry(delayMs, client, options.signal);
+    }
+  }
 }
 
 /** Shared daemon-owned model/auth control request used by native TUI adapters. */
@@ -1926,26 +2175,34 @@ export async function requestSparkDaemonControl<T>(
 export async function clientTurnStatus(
   input: { invocationId: string },
   client: SparkDaemonClientOptions,
+  options: { signal?: AbortSignal; ensureRunning?: boolean; timeoutMs?: number } = {},
 ): Promise<LocalTurnStatusResult> {
+  throwIfAborted(options.signal);
   const paths = resolveSparkDaemonClientPaths(client);
-  await clientEnsureRunning(client);
+  if (options.ensureRunning !== false) await clientEnsureRunning(client);
+  throwIfAborted(options.signal);
   if (client.turnStatus) return await client.turnStatus(paths, input);
   return await localRpcRequest<LocalTurnStatusResult>(
     paths,
     localRpcWireRequest("turn.status", input),
+    { signal: options.signal, timeoutMs: options.timeoutMs },
   );
 }
 
 export async function clientTurnStreamPage(
   input: { invocationId: string; after?: number; limit?: number },
   client: SparkDaemonClientOptions,
+  options: { signal?: AbortSignal; ensureRunning?: boolean; timeoutMs?: number } = {},
 ): Promise<LocalTurnStreamResult> {
+  throwIfAborted(options.signal);
   const paths = resolveSparkDaemonClientPaths(client);
-  await clientEnsureRunning(client);
+  if (options.ensureRunning !== false) await clientEnsureRunning(client);
+  throwIfAborted(options.signal);
   if (client.turnStream) return await client.turnStream(paths, input);
   return await localRpcRequest<LocalTurnStreamResult>(
     paths,
     localRpcWireRequest("turn.stream", input),
+    { signal: options.signal, timeoutMs: options.timeoutMs },
   );
 }
 
@@ -1971,8 +2228,9 @@ async function clientSubmitStreaming(
     timeoutMs?: number;
   } = {},
 ): Promise<LocalTurnSubmitResult> {
+  throwIfAborted(handlers.signal);
   await clientEnsureRunning(client);
-  const submitted = await clientSubmit(input, client);
+  const submitted = await clientSubmit(input, client, { signal: handlers.signal });
   if (handlers.onEvent) await pollInvocationEvents(submitted.invocationId, client, handlers);
   return submitted;
 }
@@ -1987,41 +2245,70 @@ async function pollInvocationEvents(
   },
 ): Promise<void> {
   let cursor = 0;
-  const deadline = Date.now() + (handlers.timeoutMs ?? 5 * 60_000);
+  const now = client.now ?? Date.now;
+  const deadline = now() + (handlers.timeoutMs ?? DEFAULT_NATIVE_TURN_WAIT_TIMEOUT_MS);
+  const deadlineError = new TurnReadDeadlineError();
+  const streamTimeoutError = () =>
+    new Error(`Timed out while streaming invocation ${invocationId}`);
   while (true) {
     throwIfAborted(handlers.signal);
-    let page: LocalTurnStreamResult;
     try {
-      page = await clientTurnStreamPage({ invocationId, after: cursor, limit: 100 }, client);
+      if (now() >= deadline) throw deadlineError;
+      const page = await retryTurnTransportRead(
+        () =>
+          clientTurnStreamPage({ invocationId, after: cursor, limit: 100 }, client, {
+            signal: handlers.signal,
+            ensureRunning: false,
+            timeoutMs: Math.max(1, deadline - now()),
+          }),
+        client,
+        { signal: handlers.signal, deadline, deadlineError },
+      );
+      for (const event of page.events) {
+        try {
+          handlers.onEvent?.(parseSparkDaemonEvent(event.payload));
+        } catch {
+          // Invocation event storage can also contain non-daemon diagnostic payloads.
+        }
+      }
+      cursor = page.nextCursor;
+      if (now() >= deadline) throw deadlineError;
+      const status = await retryTurnTransportRead(
+        () =>
+          clientTurnStatus({ invocationId }, client, {
+            signal: handlers.signal,
+            ensureRunning: false,
+            timeoutMs: Math.max(1, deadline - now()),
+          }),
+        client,
+        { signal: handlers.signal, deadline, deadlineError },
+      );
+      if (
+        (status.status === "succeeded" ||
+          status.status === "failed" ||
+          status.status === "cancelled") &&
+        !page.hasMore &&
+        cursor >= status.eventCursor
+      ) {
+        return;
+      }
+      if (!page.hasMore) {
+        const remainingMs = deadline - now();
+        if (remainingMs <= 0) throw deadlineError;
+        await delay(Math.min(25, remainingMs), undefined, { signal: handlers.signal });
+      }
     } catch (error) {
       if (handlers.signal?.aborted) throwIfAborted(handlers.signal);
-      if (isInvocationStreamSemanticError(error) || Date.now() >= deadline) throw error;
-      await delay(25, undefined, { signal: handlers.signal });
-      continue;
+      if (error === deadlineError) throw streamTimeoutError();
+      throw error;
     }
-    for (const event of page.events) {
-      try {
-        handlers.onEvent?.(parseSparkDaemonEvent(event.payload));
-      } catch {
-        // Invocation event storage can also contain non-daemon diagnostic payloads.
-      }
-    }
-    cursor = page.nextCursor;
-    if (Date.now() >= deadline) {
-      throw new Error(`Timed out while streaming invocation ${invocationId}`);
-    }
-    const status = await clientTurnStatus({ invocationId }, client);
-    if (
-      (status.status === "succeeded" ||
-        status.status === "failed" ||
-        status.status === "cancelled") &&
-      !page.hasMore &&
-      cursor >= status.eventCursor
-    ) {
-      return;
-    }
-    if (!page.hasMore) await delay(25, undefined, { signal: handlers.signal });
   }
+}
+
+export async function clientListDaemonWorkspaces(
+  client: SparkDaemonClientOptions = {},
+): Promise<LocalDaemonWorkspaceListResult> {
+  return await clientWorkspaceList(client);
 }
 
 async function clientWorkspaceList(
@@ -2213,13 +2500,24 @@ async function waitForDaemonRpc(
 async function localRpcRequest<T>(
   paths: SparkDaemonClientPaths,
   request: LocalRpcWireRequest,
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<T> {
   try {
+    const timeoutMs =
+      options.timeoutMs === undefined ? undefined : Math.max(1, Math.floor(options.timeoutMs));
     return await requestSparkDaemonLocalRpcWire<T>(request, {
       socketPath: paths.socketPath,
+      signal: options.signal,
+      ...(timeoutMs === undefined
+        ? {}
+        : {
+            connectTimeoutMs: Math.min(1_000, timeoutMs),
+            responseTimeoutMs: Math.min(30_000, timeoutMs),
+          }),
     });
   } catch (error) {
     if (error instanceof SparkDaemonLocalRpcRemoteError) {
+      if (isDaemonStartingRemoteError(error)) throw error;
       const message =
         isRecord(error.payload) && typeof error.payload.message === "string"
           ? error.payload.message
@@ -2302,6 +2600,15 @@ function formatNativeDaemonStatus(status: SparkDaemonClientStatus): string {
       `invocations: queued=${invocations.queued} running=${invocations.running} succeeded=${invocations.succeeded} failed=${invocations.failed} cancelled=${invocations.cancelled}`,
     );
   }
+  const channelDeliveries = status.channelDeliveries;
+  if (isChannelDeliveryCounts(channelDeliveries)) {
+    lines.push(
+      `channel-deliveries: pending=${channelDeliveries.pending} retrying=${channelDeliveries.retrying} in-flight=${channelDeliveries.inFlight} delivered=${channelDeliveries.delivered}`,
+    );
+    if (typeof channelDeliveries.lastError === "string") {
+      lines.push(`channel-delivery-error: ${channelDeliveries.lastError}`);
+    }
+  }
   const servers = Array.isArray(status.servers) ? status.servers : [];
   for (const server of servers) {
     if (!isNativeDaemonServer(server)) continue;
@@ -2309,6 +2616,19 @@ function formatNativeDaemonStatus(status: SparkDaemonClientStatus): string {
     lines.push(`server: ${server.url} workspaces=${server.workspaceCount} ws=${connected}`);
   }
   return lines.join("\n");
+}
+
+function isChannelDeliveryCounts(
+  value: unknown,
+): value is NonNullable<SparkDaemonLocalStatus["channelDeliveries"]> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { pending?: unknown }).pending === "number" &&
+    typeof (value as { retrying?: unknown }).retrying === "number" &&
+    typeof (value as { inFlight?: unknown }).inFlight === "number" &&
+    typeof (value as { delivered?: unknown }).delivered === "number"
+  );
 }
 
 function isInvocationCounts(value: unknown): value is SparkDaemonLocalStatus["invocations"] {

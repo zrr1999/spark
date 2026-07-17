@@ -126,8 +126,8 @@ void test("runSparkCli keeps explicit print mode usable without an interactive t
   const submissions: Array<{
     sessionId: string;
     prompt: string;
-    idempotencyKey?: string;
     reset?: boolean;
+    idempotencyKey?: string;
   }> = [];
   const previousLog = console.log;
   const daemonClient = fakeHeadlessDaemonClient(submissions);
@@ -153,7 +153,12 @@ void test("runSparkCli keeps explicit print mode usable without an interactive t
 
 void test("runSparkCli JSON print emits documented JSONL event order", async () => {
   const logs: string[] = [];
-  const submissions: Array<{ sessionId: string; prompt: string; reset?: boolean }> = [];
+  const submissions: Array<{
+    sessionId: string;
+    prompt: string;
+    reset?: boolean;
+    idempotencyKey?: string;
+  }> = [];
   const previousLog = console.log;
   const daemonClient = fakeHeadlessDaemonClient(submissions);
 
@@ -188,8 +193,8 @@ void test("handleSparkRpcLine abort cancels the last submitted daemon turn", asy
   const submissions: Array<{
     sessionId: string;
     prompt: string;
-    idempotencyKey?: string;
     reset?: boolean;
+    idempotencyKey?: string;
   }> = [];
   const cancellations: Array<{ invocationId: string; reason?: string }> = [];
   const now = new Date(0).toISOString();
@@ -231,13 +236,12 @@ void test("handleSparkRpcLine abort cancels the last submitted daemon turn", asy
 
   assert.equal(submissions.length, 1);
   assert.deepEqual(
-    { ...submissions[0], idempotencyKey: undefined },
     {
-      sessionId: "rpc-session",
-      prompt: "do work",
-      idempotencyKey: undefined,
-      reset: undefined,
+      sessionId: submissions[0]?.sessionId,
+      prompt: submissions[0]?.prompt,
+      reset: submissions[0]?.reset,
     },
+    { sessionId: "rpc-session", prompt: "do work", reset: undefined },
   );
   assert.match(submissions[0]?.idempotencyKey ?? "", /^idem_[a-f0-9]{32}$/);
   assert.deepEqual(cancellations, [

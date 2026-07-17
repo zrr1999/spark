@@ -23,6 +23,8 @@
     "./projection-services": "./src/projection-services.ts",
     "./runtime-control": "./src/runtime-control.ts",
     "./runtime-registration": "./src/runtime-registration.ts",
+    "./runtime-model-channel-control": "./src/runtime-model-channel-control.ts",
+    "./runtime-session-control": "./src/runtime-session-control.ts",
     "./runtime-ws": "./src/runtime-ws.ts",
     "./routing": "./src/routing.ts",
     "./session-activity": "./src/session-activity.ts",

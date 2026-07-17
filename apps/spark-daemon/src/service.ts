@@ -2,12 +2,15 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -23,6 +26,15 @@ import { SPARK_PROTOCOL_VERSION } from "@zendev-lab/spark-protocol";
 const launchdLabel = "dev.spark.daemon";
 const restartIntentFileName = "restart.intent.json";
 const restartStartingFileName = "restart.starting.json";
+const restartTerminalFilePrefix = "restart.terminal.";
+const restartTerminalFileSuffix = ".json";
+const legacyRestartTerminalFileName = "restart.terminal.json";
+const processIdentityFileName = "daemon.identity.json";
+const processOwnershipMutexName = "daemon.identity.lock";
+const restartStartRetryBaseMs = 100;
+const restartStartRetryMaxMs = 5_000;
+
+type SparkDaemonRestartRecordState = "armed" | "claimed" | "cancelled" | "completed";
 
 export interface SparkDaemonRestartIntent {
   restartId: string;
@@ -35,7 +47,17 @@ export interface SparkDaemonRestartIntent {
   targetGeneration: string;
   protocolVersion: typeof SPARK_PROTOCOL_VERSION;
   requestedAt: string;
+  /** Whether the predecessor is owned by a supervisor that may replace it on exit. */
+  supervisorManaged?: boolean;
 }
+
+interface SparkDaemonRestartRecord extends SparkDaemonRestartIntent {
+  state: SparkDaemonRestartRecordState;
+}
+
+type SparkDaemonRestartTerminalRecord = SparkDaemonRestartRecord & {
+  state: "cancelled" | "completed";
+};
 
 export interface SparkDaemonRestartSchedule extends SparkDaemonRestartIntent {
   helperPid?: number;
@@ -50,6 +72,32 @@ export interface SparkDaemonRestartSuccessorContext {
   predecessorGeneration: string;
 }
 
+export interface SparkDaemonRestartTerminal {
+  state: "cancelled" | "completed";
+  restartId: string;
+  previousPid: number;
+  targetInstanceId: string;
+  targetGeneration: string;
+}
+
+export interface SparkDaemonRestartRetryFailure {
+  phase: "start" | "readiness";
+  attempt: number;
+  error: Error;
+  service?: SparkDaemonServiceResult;
+}
+
+export interface SparkDaemonProcessOwnership {
+  pid: number;
+  processStartToken: string;
+  instanceId: string;
+  generation: string;
+}
+
+export type SparkDaemonRestartStartDecision =
+  | { start: false; reason: "cancelled" | "completed" | "missing" | "superseded" }
+  | { start: true; successorContext: SparkDaemonRestartSuccessorContext | null };
+
 export interface SparkDaemonServiceResult {
   kind: "launchd" | "detached";
   alreadyRunning: boolean;
@@ -60,33 +108,60 @@ export interface SparkDaemonServiceResult {
   processStartToken?: string;
 }
 
-export function startSparkDaemonService(paths: SparkPaths): SparkDaemonServiceResult {
+export function startSparkDaemonService(
+  paths: SparkPaths,
+  options: { expectedRestartId?: string } = {},
+): SparkDaemonServiceResult {
   if (process.platform === "darwin") {
     return startLaunchdService(paths);
   }
 
-  return startDetachedSparkDaemon(paths);
+  return startDetachedSparkDaemon(paths, options.expectedRestartId);
 }
 
 export function stopSparkDaemonService(paths: SparkPaths): SparkDaemonServiceResult | null {
   if (process.platform === "darwin") {
-    const stopped = stopSparkDaemonLaunchdLabel();
-    if (stopped) return stopped;
+    return stopSparkDaemonLaunchdLabel();
   }
 
-  return stopPidFileProcess(paths);
+  return stopSparkDaemonPidFileProcess(paths);
 }
 
-/** Cancel a detached successor that has been armed but has not started yet. */
-export function cancelSparkDaemonRestartSuccessor(paths: SparkPaths): boolean {
-  let cancelled = false;
-  for (const path of [restartIntentPath(paths), restartStartingPath(paths)]) {
-    if (!existsSync(path)) continue;
-    rmSync(path, { force: true });
-    cancelled = true;
+/**
+ * Durably cancel the exact active restart before removing its transient files.
+ * The terminal tombstone is authoritative over a helper that already observed
+ * an Armed/Claimed record, closing the check-then-start race with `stop`.
+ */
+export function cancelSparkDaemonRestartSuccessor(
+  paths: SparkPaths,
+  expected?: { previousPid: number; restartId: string },
+): boolean {
+  const active = readRestartActiveRecord(paths);
+  const terminal = readRestartTerminalRecord(paths, expected?.restartId);
+  if (
+    expected &&
+    (!active ||
+      active.previousPid !== expected.previousPid ||
+      active.restartId !== expected.restartId)
+  ) {
+    return terminal?.state === "cancelled";
   }
-  if (cancelled) fsyncDirectory(paths.runtimeDir);
-  return cancelled;
+  if (!active) return terminal?.state === "cancelled";
+  writeRestartTerminalDurably(paths, { ...active, state: "cancelled" });
+  removeRestartActiveRecord(paths, active.restartId);
+  return true;
+}
+
+/** Public/manual start supersedes an earlier terminal restart decision. */
+export function clearSparkDaemonRestartFenceForExplicitStart(paths: SparkPaths): void {
+  for (const path of [
+    restartIntentPath(paths),
+    restartStartingPath(paths),
+    ...restartTerminalPaths(paths),
+  ]) {
+    rmSync(path, { force: true });
+  }
+  fsyncDirectory(paths.runtimeDir);
 }
 
 /**
@@ -104,6 +179,7 @@ export async function scheduleSparkDaemonRestartSuccessor(
     helperReadyTimeoutMs?: number;
     helperCommand?: string[];
     helperEnv?: NodeJS.ProcessEnv;
+    supervisorManaged?: boolean;
   } = {},
 ): Promise<SparkDaemonRestartSchedule> {
   // launchd normally wins on macOS; the helper remains as a fenced watchdog
@@ -129,7 +205,7 @@ export async function scheduleSparkDaemonRestartSuccessor(
     previousGeneration: previousIdentity.generation,
     previousStartedAt: previousIdentity.startedAt,
     previousProcessStartToken:
-      processStartToken(previousPid) ??
+      processStartTokenForPid(previousPid) ??
       (() => {
         throw new Error(`Cannot identify Spark daemon process ${previousPid} for restart.`);
       })(),
@@ -137,7 +213,16 @@ export async function scheduleSparkDaemonRestartSuccessor(
     targetGeneration: randomUUID(),
     protocolVersion: SPARK_PROTOCOL_VERSION,
     requestedAt,
+    supervisorManaged: options.supervisorManaged === true,
   };
+  if (!existing) {
+    // A running daemon owns the process lock while arming a new restart, so it
+    // may safely supersede an older terminal tombstone before publishing the
+    // new restart id. Delayed helpers for the old id then observe supersession.
+    for (const path of restartTerminalPaths(paths)) rmSync(path, { force: true });
+    rmSync(restartStartingPath(paths), { force: true });
+    fsyncDirectory(paths.runtimeDir);
+  }
   if (options.signal?.aborted) throw options.signal.reason;
   mkdirSync(paths.logDir, { recursive: true, mode: 0o700 });
   const stdout = openSync(join(paths.logDir, "service.stdout.log"), "a", 0o600);
@@ -158,7 +243,7 @@ export async function scheduleSparkDaemonRestartSuccessor(
     );
     if (!child.pid) throw new Error("Spark daemon restart helper did not receive a process id.");
     helperPid = child.pid;
-    helperProcessStartToken = processStartToken(child.pid) ?? undefined;
+    helperProcessStartToken = processStartTokenForPid(child.pid) ?? undefined;
     await armRestartHelper(
       child,
       intent,
@@ -174,7 +259,7 @@ export async function scheduleSparkDaemonRestartSuccessor(
     if (options.signal?.aborted) throw options.signal.reason;
     child.disconnect();
     child.unref();
-    helperProcessStartToken ??= processStartToken(child.pid) ?? undefined;
+    helperProcessStartToken ??= processStartTokenForPid(child.pid) ?? undefined;
     return {
       ...intent,
       helperPid: child.pid,
@@ -188,7 +273,7 @@ export async function scheduleSparkDaemonRestartSuccessor(
     if (
       helperPid &&
       helperProcessStartToken &&
-      processStartToken(helperPid) === helperProcessStartToken
+      processStartTokenForPid(helperPid) === helperProcessStartToken
     ) {
       try {
         process.kill(helperPid, "SIGTERM");
@@ -207,17 +292,129 @@ export async function scheduleSparkDaemonRestartSuccessor(
 export function readSparkDaemonRestartSuccessorContext(
   paths: SparkPaths,
 ): SparkDaemonRestartSuccessorContext | null {
-  const intent = readRestartFence(paths);
+  const intent = readRestartActiveRecord(paths);
   if (!intent || predecessorProcessMatches(intent)) {
     return null;
   }
+  return restartSuccessorContext(intent);
+}
+
+/**
+ * Resolve daemon startup only after the process lock has been acquired. A
+ * service-managed activation adopts the exact active generation; an expected
+ * detached successor exits cleanly when its restart was cancelled/completed or
+ * superseded. The readiness path performs the final state transition.
+ */
+export function prepareSparkDaemonRestartAwareStart(
+  paths: SparkPaths,
+  expectedRestartId?: string,
+): SparkDaemonRestartStartDecision {
+  let active = readRestartActiveRecord(paths);
+  const terminal = readRestartTerminalRecord(paths, expectedRestartId ?? active?.restartId);
+  if (expectedRestartId && terminal?.restartId === expectedRestartId) {
+    return { start: false, reason: terminal.state };
+  }
+
+  if (expectedRestartId && (!active || active.restartId !== expectedRestartId)) {
+    return { start: false, reason: active ? "superseded" : "missing" };
+  }
+  if (!active) {
+    if (terminal?.state === "cancelled") return { start: false, reason: "cancelled" };
+    if (terminal?.state === "completed") {
+      for (const path of restartTerminalPaths(paths)) rmSync(path, { force: true });
+      fsyncDirectory(paths.runtimeDir);
+    }
+    return { start: true, successorContext: null };
+  }
+  if (predecessorProcessMatches(active)) {
+    return { start: false, reason: "missing" };
+  }
+  if (active.state === "armed") {
+    if (!claimRestartIntentFor(paths, active.previousPid, active.restartId)) {
+      return { start: false, reason: "superseded" };
+    }
+    active = readRestartActiveRecord(paths);
+  }
+  if (!active || active.state !== "claimed") {
+    return { start: false, reason: "superseded" };
+  }
+  return { start: true, successorContext: restartSuccessorContext(active) };
+}
+
+/**
+ * Complete the exact successor fence only after the caller has opened every
+ * daemon admission gate and entered its synchronous serving transition. A
+ * concurrent Cancelled tombstone wins and asks this process to exit.
+ */
+export function completeSparkDaemonRestartSuccessor(
+  paths: SparkPaths,
+  identity: {
+    acceptedRestartId?: string;
+    instanceId: string;
+    generation: string;
+  },
+): boolean {
+  if (!identity.acceptedRestartId) return true;
+  const terminal = readRestartTerminalRecord(paths, identity.acceptedRestartId);
+  if (terminal?.restartId === identity.acceptedRestartId) {
+    return terminal.state === "completed";
+  }
+  const active = readRestartActiveRecord(paths);
+  if (
+    !active ||
+    active.state !== "claimed" ||
+    active.restartId !== identity.acceptedRestartId ||
+    active.targetInstanceId !== identity.instanceId ||
+    active.targetGeneration !== identity.generation
+  ) {
+    return false;
+  }
+  const completed = writeRestartTerminalDurably(paths, { ...active, state: "completed" });
+  removeRestartActiveRecord(paths, active.restartId);
+  return (
+    completed || readRestartTerminalRecord(paths, identity.acceptedRestartId)?.state === "completed"
+  );
+}
+
+/**
+ * Read the durable terminal decision for one exact restart generation. The
+ * caller supplies both predecessor pid and restart id so an older waiter can
+ * never consume a later restart's tombstone after files are rotated.
+ */
+export function readSparkDaemonRestartTerminal(
+  paths: SparkPaths,
+  expected: { previousPid: number; restartId: string },
+): SparkDaemonRestartTerminal | null {
+  const terminal = readRestartTerminalRecord(paths, expected.restartId);
+  if (
+    !terminal ||
+    terminal.previousPid !== expected.previousPid ||
+    terminal.restartId !== expected.restartId
+  ) {
+    return null;
+  }
   return {
-    acceptedRestartId: intent.restartId,
-    instanceId: intent.targetInstanceId,
-    generation: intent.targetGeneration,
-    predecessorInstanceId: intent.previousInstanceId,
-    predecessorGeneration: intent.previousGeneration,
+    state: terminal.state,
+    restartId: terminal.restartId,
+    previousPid: terminal.previousPid,
+    targetInstanceId: terminal.targetInstanceId,
+    targetGeneration: terminal.targetGeneration,
   };
+}
+
+/** Exact filesystem fallback used only when the helper's parent IPC vanishes. */
+export function isSparkDaemonRestartArmed(
+  paths: SparkPaths,
+  previousPid: number,
+  restartId: string,
+): boolean {
+  const active = readRestartActiveRecord(paths);
+  return Boolean(
+    active &&
+    active.state === "armed" &&
+    active.previousPid === previousPid &&
+    active.restartId === restartId,
+  );
 }
 
 /** Internal successor entrypoint; it never runs concurrently as an active daemon. */
@@ -230,7 +427,7 @@ export async function runSparkDaemonRestartSuccessor(
     pollIntervalMs?: number;
     processAlive?: (pid: number) => boolean;
     runningPid?: () => number | null;
-    startService?: () => SparkDaemonServiceResult;
+    startService?: (expectedRestartId?: string) => SparkDaemonServiceResult;
     stopStartedService?: (service: SparkDaemonServiceResult) => void;
     expectedRestartId?: string;
     intentArmTimeoutMs?: number;
@@ -238,18 +435,31 @@ export async function runSparkDaemonRestartSuccessor(
     restartIntentActive?: () => boolean;
     claimRestartIntent?: () => boolean;
     restartClaimActive?: () => boolean;
+    restartCompleted?: () => boolean;
     completeRestartIntent?: () => void;
-    startedReadyTimeoutMs?: number;
     replacementReady?: (pid: number) => Promise<boolean>;
-    maxStartAttempts?: number;
+    sleep?: (delayMs: number) => Promise<void>;
+    now?: () => number;
+    startRetryBaseMs?: number;
+    startRetryMaxMs?: number;
+    /** Maximum time an exactly-owned spawned child may stay alive without RPC readiness. */
+    replacementReadinessTimeoutMs?: number;
+    /** Test/adapter seam for exact child liveness. */
+    startedServiceAlive?: (service: SparkDaemonServiceResult) => boolean;
+    /** Observability hook; production defaults to the helper's persisted stderr. */
+    onRetryFailure?: (failure: SparkDaemonRestartRetryFailure) => void;
+    /** Test/adapter seam for the live service-manager registration probe. */
+    supervisorRegistered?: () => boolean;
   } = {},
 ): Promise<SparkDaemonServiceResult | null> {
   const pollIntervalMs = options.pollIntervalMs ?? 50;
+  const sleep = options.sleep ?? (async (delayMs: number) => await delay(delayMs));
+  const now = options.now ?? Date.now;
   if (options.expectedRestartId && options.intentArmTimeoutMs !== undefined) {
-    const armDeadline = Date.now() + options.intentArmTimeoutMs;
+    const armDeadline = now() + options.intentArmTimeoutMs;
     while (!restartIntentMatches(paths, previousPid, options.expectedRestartId)) {
-      if (Date.now() >= armDeadline) return null;
-      await delay(pollIntervalMs);
+      if (now() >= armDeadline) return null;
+      await sleep(pollIntervalMs);
     }
   }
   const expectedIntent = readRestartFence(paths);
@@ -268,7 +478,8 @@ export async function runSparkDaemonRestartSuccessor(
     (() =>
       expectedIntent ? predecessorProcessMatches(expectedIntent) : isProcessAlive(previousPid));
   const runningPid = options.runningPid ?? (() => readRunningPid(paths));
-  const startService = options.startService ?? (() => startSparkDaemonService(paths));
+  const startService =
+    options.startService ?? ((restartId?: string) => startDetachedSparkDaemon(paths, restartId));
   const stopStartedService =
     options.stopStartedService ??
     ((service: SparkDaemonServiceResult) => stopSparkDaemonRestartStartedService(paths, service));
@@ -281,7 +492,12 @@ export async function runSparkDaemonRestartSuccessor(
   const restartClaimActive =
     options.restartClaimActive ??
     (() => restartClaimMatches(paths, previousPid, expectedRestartId));
-  const completeRestartIntent = options.completeRestartIntent ?? (() => clearRestartClaim(paths));
+  const restartCompleted =
+    options.restartCompleted ??
+    (() => restartTerminalMatches(paths, previousPid, expectedRestartId, "completed"));
+  const completeRestartIntent =
+    options.completeRestartIntent ??
+    (() => completeRestartClaim(paths, previousPid, expectedRestartId));
   const replacementReady =
     options.replacementReady ??
     (async (pid) =>
@@ -293,16 +509,38 @@ export async function runSparkDaemonRestartSuccessor(
             targetGeneration: expectedIntent?.targetGeneration,
           })
         : false);
+  const configuredReadinessTimeoutMs = options.replacementReadinessTimeoutMs;
+  const replacementReadinessTimeoutMs =
+    typeof configuredReadinessTimeoutMs === "number" &&
+    Number.isFinite(configuredReadinessTimeoutMs)
+      ? Math.max(1, Math.floor(configuredReadinessTimeoutMs))
+      : 30_000;
+  const startedServiceAlive = options.startedServiceAlive ?? sparkDaemonRestartStartedServiceAlive;
+  const reportRetryFailure = (failure: SparkDaemonRestartRetryFailure) => {
+    if (options.onRetryFailure) {
+      try {
+        options.onRetryFailure(failure);
+        return;
+      } catch (observerError) {
+        console.error("[spark-daemon] restart retry observer failed", observerError);
+      }
+    }
+    console.error(
+      `[spark-daemon] restart successor ${failure.phase} attempt ${failure.attempt} failed; retrying`,
+      failure.error,
+    );
+  };
   const waitForClaimedReplacement = async (
-    initialService: SparkDaemonServiceResult,
+    initialService?: SparkDaemonServiceResult,
   ): Promise<SparkDaemonServiceResult | null> => {
     let service = initialService;
-    let startAttempts = 1;
-    const startedReadyTimeoutMs = options.startedReadyTimeoutMs ?? 30_000;
-    const startedDeadline = Date.now() + startedReadyTimeoutMs;
+    let lastService = initialService;
+    let serviceStartedAt = initialService ? now() : undefined;
+    let failedStartAttempts = 0;
     while (true) {
       if (!restartClaimActive()) {
-        stopStartedService(service);
+        if (restartCompleted()) return service ?? lastService ?? null;
+        if (service) stopStartedService(service);
         return null;
       }
       const replacementPid = runningPid();
@@ -312,43 +550,102 @@ export async function runSparkDaemonRestartSuccessor(
         (await replacementReady(replacementPid))
       ) {
         completeRestartIntent();
-        return service;
-      }
-      if (
-        service.kind === "detached" &&
-        !service.alreadyRunning &&
-        !sparkDaemonRestartStartedServiceAlive(service) &&
-        startAttempts < (options.maxStartAttempts ?? 3)
-      ) {
-        startAttempts += 1;
-        await delay(Math.max(pollIntervalMs, 100));
-        if (!restartClaimActive()) {
-          stopStartedService(service);
-          return null;
-        }
-        service = startService();
-        continue;
-      }
-      if (Date.now() >= startedDeadline) {
-        stopStartedService(service);
-        completeRestartIntent();
-        throw new Error(
-          `Spark daemon restart successor did not become ready within ${startedReadyTimeoutMs}ms.`,
+        return (
+          service ??
+          lastService ?? {
+            kind: process.platform === "darwin" ? "launchd" : "detached",
+            alreadyRunning: true,
+            detail: `Spark daemon supervisor started replacement process ${replacementPid}.`,
+            ownership: "observed",
+            pid: replacementPid,
+          }
         );
       }
-      await delay(pollIntervalMs);
+
+      if (service) {
+        const exactOwnedChild =
+          service.kind === "detached" &&
+          service.ownership === "spawned" &&
+          Boolean(service.pid && service.processStartToken);
+        const serviceMayStillBecomeReady =
+          service.kind === "launchd" ||
+          (service.pid
+            ? startedServiceAlive(service)
+            : replacementPid !== null && replacementPid !== previousPid);
+        const readinessExpired =
+          exactOwnedChild &&
+          serviceMayStillBecomeReady &&
+          serviceStartedAt !== undefined &&
+          now() - serviceStartedAt >= replacementReadinessTimeoutMs;
+        if (readinessExpired) {
+          failedStartAttempts += 1;
+          const error = new Error(
+            `Spark daemon replacement process ${service.pid} stayed alive without RPC readiness for ${replacementReadinessTimeoutMs}ms.`,
+          );
+          reportRetryFailure({
+            phase: "readiness",
+            attempt: failedStartAttempts,
+            error,
+            service,
+          });
+          // stopStartedService is identity-fenced and refuses observed or
+          // tokenless processes, so a stale watchdog cannot kill a later owner.
+          stopStartedService(service);
+          service = undefined;
+          serviceStartedAt = undefined;
+        } else if (serviceMayStillBecomeReady) {
+          await sleep(pollIntervalMs);
+          continue;
+        } else {
+          // The exact spawned child is already dead (or never acquired a pid).
+          // Keep the Claimed fence and let the detached watchdog retry forever;
+          // only an explicit Cancelled/Completed tombstone ends this loop.
+          stopStartedService(service);
+          service = undefined;
+          serviceStartedAt = undefined;
+          failedStartAttempts += 1;
+        }
+      }
+
+      if (failedStartAttempts > 0) {
+        await sleep(
+          restartStartRetryDelayMs(
+            failedStartAttempts,
+            options.startRetryBaseMs,
+            options.startRetryMaxMs,
+          ),
+        );
+        if (!restartClaimActive()) {
+          if (restartCompleted()) return lastService ?? null;
+          return null;
+        }
+      }
+
+      try {
+        service = startService(expectedRestartId);
+        lastService = service;
+        serviceStartedAt = now();
+      } catch (error) {
+        failedStartAttempts += 1;
+        reportRetryFailure({
+          phase: "start",
+          attempt: failedStartAttempts,
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+        // Spawn/service-manager failures are transient during replacement.
+        // Preserve the durable claim and retry with capped backoff instead of
+        // manufacturing a permanent Cancelled tombstone after a fixed count.
+      }
     }
   };
   const previousExitDeadline =
-    options.previousExitTimeoutMs === undefined
-      ? undefined
-      : Date.now() + options.previousExitTimeoutMs;
+    options.previousExitTimeoutMs === undefined ? undefined : now() + options.previousExitTimeoutMs;
   while (processAlive(previousPid)) {
     if (!restartIntentActive()) return null;
-    if (previousExitDeadline !== undefined && Date.now() >= previousExitDeadline) {
+    if (previousExitDeadline !== undefined && now() >= previousExitDeadline) {
       throw new Error(`Spark daemon process ${previousPid} did not exit for restart handoff.`);
     }
-    await delay(pollIntervalMs);
+    await sleep(pollIntervalMs);
   }
 
   if (!restartIntentActive()) return null;
@@ -357,9 +654,14 @@ export async function runSparkDaemonRestartSuccessor(
   // probed, rather than racing the new process startup.
   if (!claimRestartIntent() || !restartClaimActive()) return null;
 
+  const supervisorMayRestart =
+    expectedIntent?.supervisorManaged === true &&
+    (options.supervisorRegistered?.() ?? isSparkDaemonSupervisorRegistered());
   const supervisorDeadline =
-    Date.now() + (options.supervisorGraceMs ?? (process.platform === "darwin" ? 30_000 : 2_000));
-  while (Date.now() < supervisorDeadline) {
+    now() +
+    (options.supervisorGraceMs ??
+      (supervisorMayRestart ? (process.platform === "darwin" ? 30_000 : 2_000) : 0));
+  while (now() < supervisorDeadline) {
     if (!restartClaimActive()) return null;
     const replacementPid = runningPid();
     if (replacementPid && replacementPid !== previousPid) {
@@ -371,19 +673,22 @@ export async function runSparkDaemonRestartSuccessor(
         pid: replacementPid,
       });
     }
-    await delay(pollIntervalMs);
+    await sleep(pollIntervalMs);
   }
   if (!restartClaimActive()) return null;
 
-  let service: SparkDaemonServiceResult;
-  try {
-    service = startService();
-  } catch (error) {
-    completeRestartIntent();
-    throw error;
-  }
+  return await waitForClaimedReplacement();
+}
 
-  return await waitForClaimedReplacement(service);
+function restartStartRetryDelayMs(
+  failedAttempts: number,
+  configuredBaseMs?: number,
+  configuredMaxMs?: number,
+): number {
+  const baseMs = Math.max(0, Math.floor(configuredBaseMs ?? restartStartRetryBaseMs));
+  const maxMs = Math.max(baseMs, Math.floor(configuredMaxMs ?? restartStartRetryMaxMs));
+  const exponent = Math.min(16, Math.max(0, failedAttempts - 1));
+  return Math.min(maxMs, baseMs * 2 ** exponent);
 }
 
 async function probeSparkDaemonReady(
@@ -456,9 +761,34 @@ function restartStartingPath(paths: SparkPaths): string {
   return join(paths.runtimeDir, restartStartingFileName);
 }
 
+function restartTerminalPath(paths: SparkPaths, restartId: string): string {
+  return join(
+    paths.runtimeDir,
+    `${restartTerminalFilePrefix}${encodeURIComponent(restartId)}${restartTerminalFileSuffix}`,
+  );
+}
+
+function restartTerminalPaths(paths: SparkPaths): string[] {
+  try {
+    return readdirSync(paths.runtimeDir)
+      .filter(
+        (name) =>
+          name === legacyRestartTerminalFileName ||
+          (name.startsWith(restartTerminalFilePrefix) && name.endsWith(restartTerminalFileSuffix)),
+      )
+      .map((name) => join(paths.runtimeDir, name));
+  } catch {
+    return [];
+  }
+}
+
+function processIdentityPath(paths: SparkPaths): string {
+  return join(paths.runtimeDir, processIdentityFileName);
+}
+
 function restartIntentMatches(paths: SparkPaths, previousPid: number, restartId?: string): boolean {
   return restartFenceMatches(
-    readRestartIntentFile(restartIntentPath(paths)),
+    readRestartIntentFile(restartIntentPath(paths), "armed"),
     previousPid,
     restartId,
   );
@@ -473,6 +803,16 @@ function claimRestartIntentFor(
   try {
     renameSync(restartIntentPath(paths), restartStartingPath(paths));
     fsyncDirectory(paths.runtimeDir);
+    const claimed = readRestartIntentFile(restartStartingPath(paths), "claimed");
+    if (claimed) writeRestartRecordDurably(restartStartingPath(paths), claimed, true);
+    if (restartTerminalMatches(paths, previousPid, restartId)) {
+      if (claimed) removeRestartActiveRecord(paths, claimed.restartId);
+      else {
+        rmSync(restartStartingPath(paths), { force: true });
+        fsyncDirectory(paths.runtimeDir);
+      }
+      return false;
+    }
     return restartClaimMatches(paths, previousPid, restartId);
   } catch {
     return false;
@@ -480,16 +820,33 @@ function claimRestartIntentFor(
 }
 
 function restartClaimMatches(paths: SparkPaths, previousPid: number, restartId?: string): boolean {
-  return restartFenceMatches(
-    readRestartIntentFile(restartStartingPath(paths)),
-    previousPid,
-    restartId,
+  const claimed = readRestartIntentFile(restartStartingPath(paths), "claimed");
+  return (
+    !restartTerminalMatches(paths, previousPid, restartId) &&
+    restartFenceMatches(claimed, previousPid, restartId)
   );
 }
 
-function clearRestartClaim(paths: SparkPaths): void {
-  rmSync(restartStartingPath(paths), { force: true });
-  fsyncDirectory(paths.runtimeDir);
+function restartTerminalMatches(
+  paths: SparkPaths,
+  previousPid: number,
+  restartId: string | undefined,
+  state?: "cancelled" | "completed",
+): boolean {
+  const terminal = readRestartTerminalRecord(paths, restartId);
+  return Boolean(
+    terminal &&
+    terminal.previousPid === previousPid &&
+    (restartId === undefined || terminal.restartId === restartId) &&
+    (state === undefined || terminal.state === state),
+  );
+}
+
+function completeRestartClaim(paths: SparkPaths, previousPid: number, restartId?: string): void {
+  const claimed = readRestartIntentFile(restartStartingPath(paths), "claimed");
+  if (!restartFenceMatches(claimed, previousPid, restartId)) return;
+  writeRestartTerminalDurably(paths, { ...claimed!, state: "completed" });
+  removeRestartActiveRecord(paths, claimed!.restartId);
 }
 
 function writeRestartIntentDurably(paths: SparkPaths, intent: SparkDaemonRestartIntent): void {
@@ -497,16 +854,52 @@ function writeRestartIntentDurably(paths: SparkPaths, intent: SparkDaemonRestart
   if (existsSync(target) || existsSync(restartStartingPath(paths))) {
     throw new Error("Spark daemon restart intent changed while a helper was being armed.");
   }
-  const temporary = join(paths.runtimeDir, `.restart.intent.${process.pid}.${randomUUID()}.tmp`);
+  writeRestartRecordDurably(target, { ...intent, state: "armed" }, false);
+}
+
+/** First terminal writer linearizes completion versus an explicit stop. */
+function writeRestartTerminalDurably(paths: SparkPaths, record: SparkDaemonRestartRecord): boolean {
+  const target = restartTerminalPath(paths, record.restartId);
+  if (existsSync(target)) return false;
+  const temporary = join(paths.runtimeDir, `.restart.terminal.${process.pid}.${randomUUID()}.tmp`);
   let file: number | undefined;
   try {
     file = openSync(temporary, "wx", 0o600);
-    writeFileSync(file, `${JSON.stringify(intent)}\n`, "utf8");
+    writeFileSync(file, `${JSON.stringify(record)}\n`, "utf8");
     fsyncSync(file);
     closeSync(file);
     file = undefined;
-    renameSync(temporary, target);
+    linkSync(temporary, target);
+    rmSync(temporary, { force: true });
     fsyncDirectory(paths.runtimeDir);
+    return true;
+  } catch (error) {
+    if (file !== undefined) closeSync(file);
+    rmSync(temporary, { force: true });
+    if (existsSync(target)) return false;
+    throw error;
+  }
+}
+
+function writeRestartRecordDurably(
+  target: string,
+  record: SparkDaemonRestartRecord,
+  replace: boolean,
+): void {
+  const directory = join(target, "..");
+  const temporary = join(directory, `.restart.record.${process.pid}.${randomUUID()}.tmp`);
+  let file: number | undefined;
+  try {
+    file = openSync(temporary, "wx", 0o600);
+    writeFileSync(file, `${JSON.stringify(record)}\n`, "utf8");
+    fsyncSync(file);
+    closeSync(file);
+    file = undefined;
+    if (!replace && existsSync(target)) {
+      throw new Error("Spark daemon restart record already exists.");
+    }
+    renameSync(temporary, target);
+    fsyncDirectory(directory);
   } catch (error) {
     if (file !== undefined) closeSync(file);
     rmSync(temporary, { force: true });
@@ -529,16 +922,49 @@ function fsyncDirectory(path: string): void {
 }
 
 function readRestartFence(paths: SparkPaths): SparkDaemonRestartIntent | null {
+  return readRestartActiveRecord(paths);
+}
+
+function readRestartActiveRecord(paths: SparkPaths): SparkDaemonRestartRecord | null {
+  const active =
+    readRestartIntentFile(restartStartingPath(paths), "claimed") ??
+    readRestartIntentFile(restartIntentPath(paths), "armed");
+  if (!active) return null;
+  const terminal = readRestartTerminalRecord(paths, active.restartId);
+  return terminal?.restartId === active.restartId ? null : active;
+}
+
+function readRestartTerminalRecord(
+  paths: SparkPaths,
+  restartId?: string,
+): SparkDaemonRestartTerminalRecord | null {
+  const candidates = restartId
+    ? [restartTerminalPath(paths, restartId), join(paths.runtimeDir, legacyRestartTerminalFileName)]
+    : restartTerminalPaths(paths);
+  const records = candidates
+    .map((path) => readRestartIntentFile(path))
+    .filter(
+      (record): record is SparkDaemonRestartTerminalRecord =>
+        (record?.state === "cancelled" || record?.state === "completed") &&
+        (restartId === undefined || record.restartId === restartId),
+    );
   return (
-    readRestartIntentFile(restartStartingPath(paths)) ??
-    readRestartIntentFile(restartIntentPath(paths))
+    records.sort((left, right) => right.requestedAt.localeCompare(left.requestedAt))[0] ?? null
   );
 }
 
-function readRestartIntentFile(path: string): SparkDaemonRestartIntent | null {
+function readRestartIntentFile(
+  path: string,
+  expectedState?: "armed" | "claimed",
+): SparkDaemonRestartRecord | null {
   try {
     const value = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    const state = expectedState ?? value.state;
     if (
+      (state !== "armed" &&
+        state !== "claimed" &&
+        state !== "cancelled" &&
+        state !== "completed") ||
       typeof value.restartId !== "string" ||
       value.restartId.length === 0 ||
       !Number.isInteger(value.previousPid) ||
@@ -560,6 +986,7 @@ function readRestartIntentFile(path: string): SparkDaemonRestartIntent | null {
       return null;
     }
     return {
+      state,
       restartId: value.restartId,
       previousPid: Number(value.previousPid),
       previousInstanceId: value.previousInstanceId,
@@ -570,10 +997,34 @@ function readRestartIntentFile(path: string): SparkDaemonRestartIntent | null {
       targetGeneration: value.targetGeneration,
       protocolVersion: SPARK_PROTOCOL_VERSION,
       requestedAt: value.requestedAt,
+      supervisorManaged: value.supervisorManaged === true,
     };
   } catch {
     return null;
   }
+}
+
+function removeRestartActiveRecord(paths: SparkPaths, restartId: string): void {
+  for (const [path, state] of [
+    [restartIntentPath(paths), "armed"],
+    [restartStartingPath(paths), "claimed"],
+  ] as const) {
+    const record = readRestartIntentFile(path, state);
+    if (record?.restartId === restartId) rmSync(path, { force: true });
+  }
+  fsyncDirectory(paths.runtimeDir);
+}
+
+function restartSuccessorContext(
+  intent: SparkDaemonRestartIntent,
+): SparkDaemonRestartSuccessorContext {
+  return {
+    acceptedRestartId: intent.restartId,
+    instanceId: intent.targetInstanceId,
+    generation: intent.targetGeneration,
+    predecessorInstanceId: intent.previousInstanceId,
+    predecessorGeneration: intent.previousGeneration,
+  };
 }
 
 function restartFenceMatches(
@@ -692,29 +1143,185 @@ export function isSparkDaemonRestartPredecessorAlive(
     processAlive?: (pid: number) => boolean;
   } = {},
 ): boolean {
-  const token = (options.readProcessStartToken ?? processStartToken)(intent.previousPid);
+  const token = (options.readProcessStartToken ?? processStartTokenForPid)(intent.previousPid);
   if (token !== null) return token === intent.previousProcessStartToken;
   return (options.processAlive ?? isProcessAlive)(intent.previousPid);
 }
 
-export function stopSparkDaemonRestartStartedService(
+export function publishSparkDaemonProcessOwnership(
   paths: SparkPaths,
+  identity: { pid: number; instanceId: string; generation: string },
+): SparkDaemonProcessOwnership {
+  return withProcessOwnershipMutex(paths, () => {
+    const processStartToken = processStartTokenForPid(identity.pid);
+    if (!processStartToken) {
+      throw new Error(`Cannot identify Spark daemon process ${identity.pid}.`);
+    }
+    const ownership: SparkDaemonProcessOwnership = { ...identity, processStartToken };
+    mkdirSync(paths.runtimeDir, { recursive: true, mode: 0o700 });
+    const target = processIdentityPath(paths);
+    const temporary = join(
+      paths.runtimeDir,
+      `.daemon.identity.${identity.pid}.${randomUUID()}.tmp`,
+    );
+    let file: number | undefined;
+    try {
+      file = openSync(temporary, "wx", 0o600);
+      writeFileSync(file, `${JSON.stringify(ownership)}\n`, "utf8");
+      fsyncSync(file);
+      closeSync(file);
+      file = undefined;
+      renameSync(temporary, target);
+      fsyncDirectory(paths.runtimeDir);
+      return ownership;
+    } catch (error) {
+      if (file !== undefined) closeSync(file);
+      rmSync(temporary, { force: true });
+      throw error;
+    }
+  });
+}
+
+export function clearSparkDaemonProcessOwnership(
+  paths: SparkPaths,
+  identity: { pid: number; instanceId: string; generation: string },
+): void {
+  withProcessOwnershipMutex(paths, () => {
+    const current = readSparkDaemonProcessOwnership(paths);
+    if (
+      !current ||
+      current.pid !== identity.pid ||
+      current.instanceId !== identity.instanceId ||
+      current.generation !== identity.generation
+    ) {
+      return;
+    }
+    try {
+      if (Number(readFileSync(paths.pidFile, "utf8").trim()) === identity.pid) {
+        rmSync(paths.pidFile, { force: true });
+      }
+    } catch {
+      // The runtime loop normally removes the pidfile first.
+    }
+    rmSync(processIdentityPath(paths), { force: true });
+    fsyncDirectory(paths.runtimeDir);
+  });
+}
+
+/** Keep ownership visible through shutdown; clear only after releasing the daemon lock. */
+export async function releaseSparkDaemonProcessOwnership(
+  paths: SparkPaths,
+  identity: { pid: number; instanceId: string; generation: string },
+  releaseLock: () => Promise<void>,
+): Promise<void> {
+  await releaseLock();
+  clearSparkDaemonProcessOwnership(paths, identity);
+}
+
+function withProcessOwnershipMutex<T>(paths: SparkPaths, action: () => T): T {
+  mkdirSync(paths.runtimeDir, { recursive: true, mode: 0o700 });
+  const lockPath = join(paths.runtimeDir, processOwnershipMutexName);
+  const ownerPath = join(lockPath, "owner.json");
+  const deadline = Date.now() + 5_000;
+  while (true) {
+    try {
+      mkdirSync(lockPath, { mode: 0o700 });
+      writeFileSync(
+        ownerPath,
+        `${JSON.stringify({
+          pid: process.pid,
+          processStartToken: processStartTokenForPid(process.pid),
+        })}\n`,
+        { mode: 0o600 },
+      );
+      break;
+    } catch (error) {
+      if (!existsSync(lockPath)) throw error;
+      let stale = false;
+      try {
+        const owner = JSON.parse(readFileSync(ownerPath, "utf8")) as Record<string, unknown>;
+        stale =
+          !Number.isInteger(owner.pid) ||
+          typeof owner.processStartToken !== "string" ||
+          processStartTokenForPid(Number(owner.pid)) !== owner.processStartToken;
+      } catch {
+        try {
+          stale = Date.now() - statSync(lockPath).mtimeMs > 5_000;
+        } catch {
+          if (Date.now() >= deadline) {
+            throw new Error("Timed out waiting for Spark daemon ownership publication lock.");
+          }
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+          continue;
+        }
+      }
+      if (stale) {
+        rmSync(lockPath, { recursive: true, force: true });
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error("Timed out waiting for Spark daemon ownership publication lock.");
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+  }
+  try {
+    return action();
+  } finally {
+    rmSync(lockPath, { recursive: true, force: true });
+    fsyncDirectory(paths.runtimeDir);
+  }
+}
+
+export function readSparkDaemonProcessOwnership(
+  paths: SparkPaths,
+): SparkDaemonProcessOwnership | null {
+  try {
+    const value = JSON.parse(readFileSync(processIdentityPath(paths), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    if (
+      !Number.isInteger(value.pid) ||
+      Number(value.pid) <= 0 ||
+      typeof value.processStartToken !== "string" ||
+      value.processStartToken.length === 0 ||
+      typeof value.instanceId !== "string" ||
+      value.instanceId.length === 0 ||
+      typeof value.generation !== "string" ||
+      value.generation.length === 0
+    ) {
+      return null;
+    }
+    return {
+      pid: Number(value.pid),
+      processStartToken: value.processStartToken,
+      instanceId: value.instanceId,
+      generation: value.generation,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function stopSparkDaemonRestartStartedService(
+  _paths: SparkPaths,
   service: SparkDaemonServiceResult,
   options: {
     readProcessStartToken?: (pid: number) => string | null;
     kill?: (pid: number, signal: NodeJS.Signals) => void;
-    stopLaunchd?: (paths: SparkPaths) => void;
   } = {},
 ): void {
-  if (service.kind === "launchd") {
-    (options.stopLaunchd ?? (() => void stopSparkDaemonLaunchdLabel()))(paths);
-    return;
-  }
+  // Never boot out the shared launchd label from a stale helper. An observed
+  // manager process may belong to a later explicit start. Cancellation is
+  // enforced by the durable tombstone and by the exact successor itself.
+  if (service.kind === "launchd") return;
   if (
     service.ownership !== "spawned" ||
     !service.pid ||
     !service.processStartToken ||
-    (options.readProcessStartToken ?? processStartToken)(service.pid) !== service.processStartToken
+    (options.readProcessStartToken ?? processStartTokenForPid)(service.pid) !==
+      service.processStartToken
   ) {
     return;
   }
@@ -725,18 +1332,48 @@ export function stopSparkDaemonRestartStartedService(
   }
 }
 
-function stopSparkDaemonLaunchdLabel(): SparkDaemonServiceResult | null {
-  if (process.platform !== "darwin") return null;
-  const uid = readCurrentUid();
+type LaunchctlResult = { status: number | null; stdout: string; stderr: string };
+
+/** True only when launchd currently owns a job that can replace the daemon. */
+export function isSparkDaemonSupervisorRegistered(
+  options: {
+    platform?: NodeJS.Platform;
+    uid?: number;
+    run?: (args: string[]) => LaunchctlResult;
+  } = {},
+): boolean {
+  if ((options.platform ?? process.platform) !== "darwin") return false;
+  const uid = options.uid ?? process.getuid?.();
+  if (uid === undefined) return false;
+  const result = (options.run ?? runLaunchctl)(["print", `gui/${uid}/${launchdLabel}`]);
+  return result.status === 0;
+}
+
+export function stopSparkDaemonLaunchdLabel(
+  options: {
+    uid?: number;
+    run?: (args: string[]) => LaunchctlResult;
+  } = {},
+): SparkDaemonServiceResult {
+  const uid = options.uid ?? readCurrentUid();
   const target = `gui/${uid}/${launchdLabel}`;
-  const stopped = runLaunchctl(["bootout", target]);
-  return stopped.status === 0
-    ? {
-        kind: "launchd",
-        alreadyRunning: false,
-        detail: `Stopped Spark daemon ${launchdLabel}.`,
-      }
-    : null;
+  const run = options.run ?? runLaunchctl;
+  const stopped = run(["bootout", target]);
+  const registered = run(["print", target]);
+  if (registered.status === 0) {
+    const detail = stopped.stderr || stopped.stdout || "launchctl still reports the job";
+    throw new Error(
+      `Failed to unregister Spark daemon ${launchdLabel}; the launchd label remains registered: ${detail}`,
+    );
+  }
+  return {
+    kind: "launchd",
+    alreadyRunning: false,
+    detail:
+      stopped.status === 0
+        ? `Stopped Spark daemon ${launchdLabel}.`
+        : `Spark daemon ${launchdLabel} was not registered.`,
+  };
 }
 
 export function isSparkDaemonRestartHelperDefinitelyDead(
@@ -747,7 +1384,7 @@ export function isSparkDaemonRestartHelperDefinitelyDead(
   } = {},
 ): boolean {
   if (!schedule.helperPid) return false;
-  const token = (options.readProcessStartToken ?? processStartToken)(schedule.helperPid);
+  const token = (options.readProcessStartToken ?? processStartTokenForPid)(schedule.helperPid);
   if (token !== null && schedule.helperProcessStartToken) {
     return token !== schedule.helperProcessStartToken;
   }
@@ -757,12 +1394,12 @@ export function isSparkDaemonRestartHelperDefinitelyDead(
 function sparkDaemonRestartStartedServiceAlive(service: SparkDaemonServiceResult): boolean {
   if (!service.pid) return false;
   if (!service.processStartToken) return isProcessAlive(service.pid);
-  const token = processStartToken(service.pid);
+  const token = processStartTokenForPid(service.pid);
   if (token !== null) return token === service.processStartToken;
   return isProcessAlive(service.pid);
 }
 
-function processStartToken(pid: number): string | null {
+function processStartTokenForPid(pid: number): string | null {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   if (process.platform === "linux") {
     try {
@@ -784,7 +1421,7 @@ function processStartToken(pid: number): string | null {
 
 function startLaunchdService(paths: SparkPaths): SparkDaemonServiceResult {
   const uid = readCurrentUid();
-  const plistPath = writeLaunchdPlist(paths);
+  const plistPath = writeSparkDaemonLaunchdPlist(paths);
   const target = `gui/${uid}/${launchdLabel}`;
 
   runLaunchctl(["bootout", target]);
@@ -806,8 +1443,11 @@ function startLaunchdService(paths: SparkPaths): SparkDaemonServiceResult {
   };
 }
 
-function writeLaunchdPlist(paths: SparkPaths): string {
-  const home = process.env.HOME || homedir();
+export function writeSparkDaemonLaunchdPlist(
+  paths: SparkPaths,
+  options: { home?: string } = {},
+): string {
+  const home = options.home ?? process.env.HOME ?? homedir();
   const launchAgentsDir = join(home, "Library", "LaunchAgents");
   const plistPath = join(launchAgentsDir, `${launchdLabel}.plist`);
   mkdirSync(launchAgentsDir, { recursive: true, mode: 0o755 });
@@ -841,7 +1481,10 @@ ${Object.entries(environment)
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
-  <true/>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
   <key>WorkingDirectory</key>
   <string>${xmlEscape(process.cwd())}</string>
   <key>StandardOutPath</key>
@@ -859,7 +1502,10 @@ ${Object.entries(environment)
   return plistPath;
 }
 
-function startDetachedSparkDaemon(paths: SparkPaths): SparkDaemonServiceResult {
+function startDetachedSparkDaemon(
+  paths: SparkPaths,
+  expectedRestartId?: string,
+): SparkDaemonServiceResult {
   const runningPid = readRunningPid(paths);
   if (runningPid) {
     return {
@@ -877,14 +1523,17 @@ function startDetachedSparkDaemon(paths: SparkPaths): SparkDaemonServiceResult {
   const command = sparkDaemonStartCommand();
   const child = spawn(command[0]!, command.slice(1), {
     detached: true,
-    env: process.env,
+    env: {
+      ...process.env,
+      ...(expectedRestartId ? { SPARK_DAEMON_EXPECTED_RESTART_ID: expectedRestartId } : {}),
+    },
     stdio: ["ignore", stdout, stderr],
   });
   child.once("error", (error) => {
     console.error("[spark-daemon] detached service failed to spawn", error);
   });
   child.unref();
-  const childStartToken = child.pid ? processStartToken(child.pid) : null;
+  const childStartToken = child.pid ? processStartTokenForPid(child.pid) : null;
 
   return {
     kind: "detached",
@@ -896,13 +1545,31 @@ function startDetachedSparkDaemon(paths: SparkPaths): SparkDaemonServiceResult {
   };
 }
 
-function stopPidFileProcess(paths: SparkPaths): SparkDaemonServiceResult | null {
+export function stopSparkDaemonPidFileProcess(
+  paths: SparkPaths,
+  options: {
+    readProcessStartToken?: (pid: number) => string | null;
+    kill?: (pid: number, signal: NodeJS.Signals) => void;
+  } = {},
+): SparkDaemonServiceResult | null {
   const runningPid = readRunningPid(paths);
   if (!runningPid) {
     return null;
   }
 
-  process.kill(runningPid, "SIGTERM");
+  const ownership = readSparkDaemonProcessOwnership(paths);
+  if (
+    !ownership ||
+    ownership.pid !== runningPid ||
+    (options.readProcessStartToken ?? processStartTokenForPid)(runningPid) !==
+      ownership.processStartToken
+  ) {
+    // Legacy numeric-only pidfiles and PID reuse are not proof of ownership.
+    // The local RPC path is attempted first; the fallback must fail closed.
+    return null;
+  }
+
+  (options.kill ?? ((pid, signal) => process.kill(pid, signal)))(runningPid, "SIGTERM");
   return {
     kind: "detached",
     alreadyRunning: false,
@@ -920,16 +1587,24 @@ export function readRunningPid(paths: SparkPaths): number | null {
     return null;
   }
 
-  try {
-    process.kill(pid, 0);
+  const ownership = readSparkDaemonProcessOwnership(paths);
+  if (ownership) {
+    const token = processStartTokenForPid(pid);
+    if (ownership.pid !== pid || token !== ownership.processStartToken) {
+      if (ownership.pid === pid) {
+        rmSync(paths.pidFile, { force: true });
+        rmSync(processIdentityPath(paths), { force: true });
+        fsyncDirectory(paths.runtimeDir);
+      }
+      return null;
+    }
     return pid;
-  } catch {
-    return null;
   }
+  return isProcessAlive(pid) ? pid : null;
 }
 
 function sparkDaemonStartCommand(): string[] {
-  return [...sparkDaemonCliCommand(), "start"];
+  return [...sparkDaemonCliCommand(), "__service-start"];
 }
 
 function sparkDaemonCliCommand(): string[] {

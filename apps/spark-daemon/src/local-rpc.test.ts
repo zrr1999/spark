@@ -32,6 +32,211 @@ import type {
 } from "./channels/ingress.ts";
 
 describe("Spark daemon local RPC", () => {
+  it("keeps turn observation and cancellation available while admission is closed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-starting-"));
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const lifecycle = new SparkDaemonLifecycle({}, { initiallyServing: false });
+    const invocation = new SparkInvocationStore(db).submit({
+      sessionId: "session-existing",
+      prompt: "already durable",
+      task: {
+        type: "session.run",
+        sessionId: "session-existing",
+        prompt: "already durable",
+      },
+    });
+    const options = {
+      isReady: () => lifecycle.isServing,
+      getLifecycle: () => lifecycle.snapshot(),
+    };
+    try {
+      const status = await handleLocalRpcLine(
+        JSON.stringify({ id: "starting_status", method: "daemon.status" }),
+        paths,
+        db,
+        undefined,
+        options,
+      );
+      expect(status).toMatchObject({
+        ok: true,
+        result: { lifecycle: { state: "starting", phase: "initializing" } },
+      });
+
+      const submit = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "starting_submit",
+          method: "turn.submit",
+          params: { sessionId: "session-a", prompt: "must wait" },
+        }),
+        paths,
+        db,
+        undefined,
+        options,
+      );
+      expect(submit).toMatchObject({
+        ok: false,
+        error: {
+          code: "daemon_starting",
+          message: "Spark daemon is still starting; retry after readiness.",
+        },
+      });
+      expect(new SparkInvocationStore(db).counts().queued).toBe(1);
+
+      const statusWhileClosed = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "starting_turn_status",
+          method: "turn.status",
+          params: { invocationId: invocation.invocationId },
+        }),
+        paths,
+        db,
+        undefined,
+        options,
+      );
+      expect(statusWhileClosed).toMatchObject({
+        ok: true,
+        result: { invocationId: invocation.invocationId, status: "queued" },
+      });
+
+      const streamWhileClosed = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "starting_turn_stream",
+          method: "turn.stream",
+          params: { invocationId: invocation.invocationId, after: 0 },
+        }),
+        paths,
+        db,
+        undefined,
+        options,
+      );
+      expect(streamWhileClosed).toMatchObject({
+        ok: true,
+        result: { invocationId: invocation.invocationId, events: [] },
+      });
+
+      const cancelWhileClosed = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "starting_turn_cancel",
+          method: "turn.cancel",
+          params: { invocationId: invocation.invocationId, reason: "unblock restart" },
+        }),
+        paths,
+        db,
+        undefined,
+        options,
+      );
+      expect(cancelWhileClosed).toMatchObject({
+        ok: true,
+        result: { invocationId: invocation.invocationId, status: "cancelled" },
+      });
+
+      const resultWhileClosed = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "starting_turn_result",
+          method: "turn.result",
+          params: { invocationId: invocation.invocationId },
+        }),
+        paths,
+        db,
+        undefined,
+        options,
+      );
+      expect(resultWhileClosed).toMatchObject({
+        ok: true,
+        result: { invocationId: invocation.invocationId, status: "cancelled" },
+      });
+
+      const stop = await handleLocalRpcLine(
+        JSON.stringify({ id: "starting_stop", method: "daemon.stop" }),
+        paths,
+        db,
+        undefined,
+        options,
+      );
+      expect(stop).toMatchObject({ ok: true, result: { stopping: true } });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Cockpit relocation on the daemon-local RPC owner surface", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-relocate-"));
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const onUplinkReconfigure = vi.fn();
+    const relocateSparkDaemonCockpit = vi.fn(async () => ({
+      relocated: true as const,
+      instanceId: "cockpit_11111111111111111111111111111111",
+      installationId: "install-relocation",
+      runtimeId: "rt_11111111111111111111111111111111",
+      fromServerUrl: "https://source.example.test/",
+      toServerUrl: "https://target.example.test/",
+      webSocketUrl:
+        "wss://target.example.test/api/v1/runtime/runtimes/rt_11111111111111111111111111111111/ws",
+      workspaceBindingIds: ["rtwb_11111111111111111111111111111111"],
+      workspaceCount: 1,
+      relocatedAt: "2026-07-15T00:00:00.000Z",
+    }));
+    try {
+      const response = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "rpc_relocate",
+          method: "workspace.relocate",
+          params: {
+            fromServerUrl: "https://source.example.test",
+            toServerUrl: "https://target.example.test",
+          },
+        }),
+        paths,
+        db,
+        undefined,
+        { relocateSparkDaemonCockpit, onUplinkReconfigure },
+      );
+
+      expect(response).toMatchObject({
+        id: "rpc_relocate",
+        ok: true,
+        result: {
+          instanceId: "cockpit_11111111111111111111111111111111",
+          runtimeId: "rt_11111111111111111111111111111111",
+          workspaceCount: 1,
+        },
+      });
+      expect(relocateSparkDaemonCockpit).toHaveBeenCalledWith(
+        paths,
+        db,
+        {
+          fromServerUrl: "https://source.example.test",
+          toServerUrl: "https://target.example.test",
+        },
+        { onUplinkReconfigure },
+      );
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("commits workspace registration only after server grant and websocket verification", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-"));
     const workspacePath = join(root, "workspace");
@@ -1372,6 +1577,60 @@ describe("Spark daemon local RPC", () => {
       );
       expect(globalInvocation.task).toMatchObject({ sessionId: "sess_global", cwd: daemonCwd });
       expect(globalInvocation.task).not.toHaveProperty("workspaceId");
+      expect(
+        await request("get_global_running", "session.get", { sessionId: "sess_global" }),
+      ).toMatchObject({
+        ok: true,
+        result: { status: "running" },
+      });
+
+      await request("create_question", "session.create", {
+        sessionId: "sess_question",
+        scope: { kind: "daemon" },
+      });
+      const questionInput = {
+        sessionId: "sess_question",
+        prompt: "blocking question",
+        idempotencyKey: "question-idempotency",
+        messageMetadata: {
+          sessionMail: { kind: "question", messageId: "mail:question" },
+        },
+      };
+      const question = await request("turn_question", "turn.submit", questionInput);
+      const questionReplay = await request("turn_question_replay", "turn.submit", questionInput);
+      expect(questionReplay).toMatchObject({
+        ok: true,
+        result: {
+          invocationId: (question as { result: { invocationId: string } }).result.invocationId,
+          status: "queued",
+        },
+      });
+      const rejectedQuestion = await request("turn_question_rejected", "turn.submit", {
+        ...questionInput,
+        idempotencyKey: "question-idempotency-second",
+      });
+      expect(rejectedQuestion).toMatchObject({
+        ok: false,
+        error: { message: expect.stringContaining("SESSION_NOT_IDLE") },
+      });
+      const queuedRequest = await request("turn_request_after_question", "turn.submit", {
+        sessionId: "sess_question",
+        prompt: "asynchronous request",
+        idempotencyKey: "request-after-question",
+        messageMetadata: {
+          sessionMail: { kind: "request", messageId: "mail:request" },
+        },
+      });
+      expect(queuedRequest).toMatchObject({
+        ok: true,
+        result: { status: "queued" },
+      });
+      expect(
+        await request("get_question_running", "session.get", { sessionId: "sess_question" }),
+      ).toMatchObject({
+        ok: true,
+        result: { status: "running" },
+      });
 
       const workspaceTurn = await request("turn_workspace", "turn.submit", {
         sessionId: "sess_workspace",
@@ -1990,7 +2249,7 @@ describe("Spark daemon local RPC", () => {
       },
     });
     const db = openSparkDaemonDatabase(paths);
-    const model = { providerName: "baidu-oneapi", modelId: "ernie-4.5" };
+    let model = { providerName: "baidu-oneapi", modelId: "ernie-4.5" };
     const snapshot = {
       providers: [],
       defaultModel: model,
@@ -2066,7 +2325,11 @@ describe("Spark daemon local RPC", () => {
         JSON.stringify({
           id: "turn_model",
           method: "turn.submit",
-          params: { sessionId: "sess_model", prompt: "Use the selected model" },
+          params: {
+            sessionId: "sess_model",
+            prompt: "Use the selected model",
+            idempotencyKey: "turn-model-stable",
+          },
         }),
         paths,
         db,
@@ -2083,6 +2346,30 @@ describe("Spark daemon local RPC", () => {
         ).task,
       ).toMatchObject({ model: "baidu-oneapi/ernie-4.5" });
       expect(prepareModel).toHaveBeenCalledWith(model);
+
+      const firstInvocationId = (submitted as { result: { invocationId: string } }).result
+        .invocationId;
+      model = { providerName: "openai", modelId: "gpt-next" };
+      const replayed = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "turn_model_replay",
+          method: "turn.submit",
+          params: {
+            sessionId: "sess_model",
+            prompt: "Use the selected model",
+            idempotencyKey: "turn-model-stable",
+          },
+        }),
+        paths,
+        db,
+        undefined,
+        { modelControl },
+      );
+      expect(replayed).toMatchObject({
+        ok: true,
+        result: { invocationId: firstInvocationId },
+      });
+      expect(prepareModel).toHaveBeenCalledTimes(1);
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });

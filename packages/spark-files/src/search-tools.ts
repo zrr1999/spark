@@ -11,7 +11,7 @@ import { readFile, stat } from "node:fs/promises";
 import { basename, relative, sep } from "node:path";
 import { Type } from "typebox";
 import { minimatch } from "minimatch";
-import type { ToolConfig } from "@zendev-lab/spark-extension-api";
+import type { ToolConfig, ToolPolicy } from "@zendev-lab/spark-extension-api";
 
 import { walkTree } from "./gitignore-walker.ts";
 import {
@@ -29,6 +29,14 @@ import {
   truncateLine,
 } from "./truncate.ts";
 import { resolveToCwd } from "./path-utils.ts";
+
+const FILE_SEARCH_POLICY = {
+  effect: "read",
+  executionMode: "parallel",
+  domains: ["files", "search"],
+  phases: ["plan", "implement"],
+  approval: "none",
+} as const satisfies ToolPolicy;
 
 function toPosix(value: string): string {
   return value.split(sep).join("/");
@@ -75,6 +83,9 @@ export function createGrepToolConfig(): ToolConfig {
     description: `Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output is truncated to ${GREP_DEFAULT_LIMIT} matches or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Long lines are truncated to ${GREP_MAX_LINE_LENGTH} chars.`,
     promptGuidelines: ["Use grep to search file contents instead of shell grep/rg."],
     parameters: grepSchema,
+    policy: FILE_SEARCH_POLICY,
+    effect: FILE_SEARCH_POLICY.effect,
+    executionMode: FILE_SEARCH_POLICY.executionMode,
     async execute(_toolCallId, params, signal, _onUpdate, ctx): Promise<ToolExecResult> {
       throwIfAborted(signal);
       const cwd = resolveToolCwd(ctx);
@@ -228,6 +239,9 @@ export function createFindToolConfig(): ToolConfig {
     description: `Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is truncated to ${FIND_DEFAULT_LIMIT} results or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first).`,
     promptGuidelines: ["Use find to locate files by glob instead of shell find/fd."],
     parameters: findSchema,
+    policy: FILE_SEARCH_POLICY,
+    effect: FILE_SEARCH_POLICY.effect,
+    executionMode: FILE_SEARCH_POLICY.executionMode,
     async execute(_toolCallId, params, signal, _onUpdate, ctx): Promise<ToolExecResult> {
       throwIfAborted(signal);
       const cwd = resolveToolCwd(ctx);

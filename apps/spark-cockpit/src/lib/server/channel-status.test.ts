@@ -1,260 +1,135 @@
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { ChannelsConfig } from "@zendev-lab/spark-channels";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEphemeralSecretRequestContext } from "@zendev-lab/spark-coordination/runtime-model-channel-control";
+import type { SparkChannelControlSnapshot } from "@zendev-lab/spark-protocol";
+import { describe, expect, it, vi } from "vitest";
 import {
-  channelEditorValuesFromConfig,
-  channelsConfigPath,
+  channelAdapterCredentialsComplete,
+  channelEditorValuesFromProjection,
   DEFAULT_INFOFLOW_ENDPOINT,
   emptyChannelEditorValues,
-  loadChannelsConfigForCockpit,
   loadChannelStatusForCockpit,
   mergeMessagePlatformCredentials,
   saveChannelsConfigForCockpit,
   type CockpitChannelDaemonClient,
-  type CockpitChannelStatusSnapshot,
 } from "./channel-status";
 
-const previousSparkHome = process.env.SPARK_HOME;
-const workspaceId = "ws_demo";
+const workspaceId = "ws_11111111111111111111111111111111";
+const secretContext: RuntimeEphemeralSecretRequestContext = {
+  actorUserId: "usr_11111111111111111111111111111111",
+  browserRequestId: "msg_11111111111111111111111111111111",
+  csrfVerified: true,
+  pageProtocol: "https:",
+};
 
-afterEach(() => {
-  if (previousSparkHome === undefined) {
-    delete process.env.SPARK_HOME;
-  } else {
-    process.env.SPARK_HOME = previousSparkHome;
-  }
-});
-
-describe("cockpit channel status", () => {
-  it("uses daemon status as the runtime truth even when config is missing locally", async () => {
-    const root = join(tmpdir(), `spark-channels-${Date.now()}-missing`);
-    process.env.SPARK_HOME = root;
-    const client = daemonClient();
-
-    const status = await loadChannelStatusForCockpit(workspaceId, client);
-
-    expect(client.status).toHaveBeenCalledWith(workspaceId);
-    expect(status).toMatchObject({
-      workspaceId,
-      available: true,
-      configured: false,
-      state: "unconfigured",
-      adapters: [],
-    });
-  });
-
-  it("reports daemon adapter liveness without exposing stored secrets", async () => {
-    const root = join(tmpdir(), `spark-channels-${Date.now()}-ok`);
-    process.env.SPARK_HOME = root;
-    const path = channelsConfigPath(workspaceId);
-    await mkdir(join(root, "workspaces", workspaceId, "channels"), { recursive: true });
-    await writeFile(
-      path,
-      JSON.stringify({
-        adapters: {
-          feishu: {
-            type: "feishu",
-            event_mode: "websocket",
-            app_id: "cli_secret",
-            app_secret: "do-not-leak",
-          },
-        },
-        routes: { ops: { adapter: "feishu", recipient: "oc_demo" } },
-        ingress: { enabled: true, on_unbound: "reject" },
-      }),
-      "utf8",
-    );
+describe("Cockpit channel runtime adapter", () => {
+  it("uses the redacted daemon projection as status and editor truth", async () => {
     const client = daemonClient({
       configured: true,
       ingressEnabled: true,
       state: "running",
       adapters: [
         {
-          id: "feishu",
-          type: "feishu",
+          id: "infoflow",
+          type: "infoflow",
           running: true,
-          state: "reconnecting",
-          error: "network lost",
+          state: "connected",
         },
       ],
-      routes: [{ name: "ops", adapter: "feishu", recipient: "oc_demo" }],
-      text: "channels running adapters=1/1 routes=1 ingress=on\n",
+      configuration: {
+        infoflow: {
+          endpoint: DEFAULT_INFOFLOW_ENDPOINT,
+          appKeySet: true,
+          appAgentId: "43163",
+          appSecretSet: true,
+          allowedUserIds: [],
+          groupPolicy: "disabled",
+          groupTrigger: "mention",
+          allowedGroupIds: [],
+          systemPrompt: "",
+        },
+        routes: [],
+        onUnbound: "create",
+      },
     });
 
     const status = await loadChannelStatusForCockpit(workspaceId, client);
+    const editor = channelEditorValuesFromProjection(status.configuration);
 
-    expect(status.adapters).toEqual([
-      {
-        id: "feishu",
-        type: "feishu",
-        running: true,
-        state: "reconnecting",
-        error: "network lost",
-      },
-    ]);
-    expect(JSON.stringify(status)).not.toContain("do-not-leak");
-    const editor = channelEditorValuesFromConfig(
-      (await loadChannelsConfigForCockpit(workspaceId)).config,
-    );
-    expect(editor.feishuAppSecret).toBe("");
-    expect(editor.feishuAppSecretSet).toBe(true);
-    if (process.platform !== "win32") {
-      expect((await stat(path)).mode & 0o777).toBe(0o600);
-    }
+    expect(client.status).toHaveBeenCalledWith(workspaceId);
+    expect(editor).toMatchObject({
+      infoflowEnabled: true,
+      infoflowAppKey: "",
+      infoflowAppKeySet: true,
+      infoflowAppSecret: "",
+      infoflowAppSecretSet: true,
+      infoflowAppAgentId: "43163",
+    });
+    expect(JSON.stringify({ status, editor })).not.toContain("secret-marker");
   });
 
-  it("does not infer running state from a local draft config", async () => {
-    const root = join(tmpdir(), `spark-channels-${Date.now()}-draft`);
-    process.env.SPARK_HOME = root;
-    await mkdir(join(root, "workspaces", workspaceId, "channels"), { recursive: true });
-    await writeFile(
-      channelsConfigPath(workspaceId),
-      JSON.stringify({
-        adapters: {
-          infoflow: { type: "infoflow" },
-          feishu: { type: "feishu", event_mode: "websocket" },
-        },
-        routes: {},
-        ingress: { enabled: false, on_unbound: "reject" },
-      }),
-      "utf8",
-    );
-
-    const status = await loadChannelStatusForCockpit(workspaceId, daemonClient());
-    expect(status).toMatchObject({ configured: false, adapters: [] });
-
-    const editor = channelEditorValuesFromConfig(
-      (await loadChannelsConfigForCockpit(workspaceId)).config,
-    );
-    expect(editor.feishuEnabled).toBe(false);
-    expect(editor.infoflowEnabled).toBe(false);
-    expect(editor.infoflowEndpoint).toBe(DEFAULT_INFOFLOW_ENDPOINT);
-    expect(editor.infoflowGroupTrigger).toBe("mention");
-  });
-
-  it("sends validated editor config to daemon and waits for its acknowledgement", async () => {
-    const root = join(tmpdir(), `spark-channels-${Date.now()}-save`);
-    process.env.SPARK_HOME = root;
+  it("sends credentials only through the explicit secure configure context", async () => {
     const client = daemonClient({ configured: true, state: "stopped" });
+    const values = {
+      ...emptyChannelEditorValues(),
+      infoflowEnabled: true,
+      infoflowEndpoint: "",
+      infoflowAppKey: "key-marker",
+      infoflowAppAgentId: "43163",
+      infoflowAppSecret: "secret-marker",
+      onUnbound: "reject" as const,
+    };
 
-    const saved = await saveChannelsConfigForCockpit(
-      workspaceId,
-      {
-        feishuEnabled: false,
-        feishuAppId: "",
-        feishuAppSecret: "",
-        feishuAppSecretSet: false,
-        infoflowEnabled: true,
-        infoflowEndpoint: "",
-        infoflowAppKey: "key_demo",
-        infoflowAppAgentId: "43163",
-        infoflowAppSecret: "secret_demo",
-        infoflowAppSecretSet: false,
-        infoflowAllowedUserIds: "",
-        infoflowGroupPolicy: "disabled",
-        infoflowGroupTrigger: "mention",
-        infoflowAllowedGroupIds: "",
-        infoflowSystemPrompt: "",
-        qqbotEnabled: false,
-        qqbotAppId: "",
-        qqbotClientSecret: "",
-        qqbotClientSecretSet: false,
-        qqbotSandbox: true,
-        qqbotAllowedUserIds: "",
-        qqbotGroupPolicy: "disabled",
-        qqbotGroupTrigger: "mention",
-        qqbotAllowedGroupIds: "",
-        qqbotSystemPrompt: "",
-        routeName: "ops",
-        routeAdapter: "infoflow",
-        routeRecipient: "",
-        ingressEnabled: false,
-        onUnbound: "reject",
-      },
-      client,
-    );
+    const saved = await saveChannelsConfigForCockpit(workspaceId, values, secretContext, client);
 
-    expect(client.configure).toHaveBeenCalledOnce();
     expect(client.configure).toHaveBeenCalledWith(
       workspaceId,
       expect.objectContaining({
         adapters: {
           infoflow: expect.objectContaining({
             endpoint: DEFAULT_INFOFLOW_ENDPOINT,
-            app_key: "key_demo",
-            app_secret: "secret_demo",
+            app_key: "key-marker",
+            app_secret: "secret-marker",
             app_agent_id: "43163",
-            group_policy: "disabled",
-            group_trigger: "mention",
           }),
         },
-        ingress: expect.objectContaining({
-          enabled: true,
-        }),
       }),
+      secretContext,
     );
     expect(saved.status.state).toBe("stopped");
-    await expect(readFile(saved.path, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("keeps a stored secret when sending an editor patch to daemon", async () => {
-    const root = join(tmpdir(), `spark-channels-${Date.now()}-keep-secret`);
-    process.env.SPARK_HOME = root;
-    const path = channelsConfigPath(workspaceId);
-    await mkdir(join(root, "workspaces", workspaceId, "channels"), { recursive: true });
-    await writeFile(
-      path,
-      JSON.stringify({
-        adapters: {
-          infoflow: {
-            type: "infoflow",
-            endpoint: DEFAULT_INFOFLOW_ENDPOINT,
-            app_key: "key_demo",
-            app_agent_id: "43163",
-            app_secret: "secret_keep",
-            group_trigger: "all",
-          },
-        },
-        routes: {},
-        ingress: { enabled: false, on_unbound: "reject" },
-      }),
-    );
-    const editor = channelEditorValuesFromConfig(
-      (await loadChannelsConfigForCockpit(workspaceId)).config,
-    );
-    expect(editor.infoflowGroupTrigger).toBe("all");
-    const client = daemonClient({ configured: true, state: "stopped" });
+  it("represents existing private values with booleans and blank form fields", () => {
+    const editor = channelEditorValuesFromProjection({
+      feishu: { appId: "cli", appSecretSet: true },
+      infoflow: {
+        endpoint: DEFAULT_INFOFLOW_ENDPOINT,
+        appKeySet: true,
+        appAgentId: "43163",
+        appSecretSet: true,
+        allowedUserIds: [],
+        groupPolicy: "disabled",
+        groupTrigger: "mention",
+        allowedGroupIds: [],
+        systemPrompt: "",
+      },
+      routes: [],
+      onUnbound: "create",
+    });
 
-    await saveChannelsConfigForCockpit(
-      workspaceId,
-      { ...editor, infoflowAppKey: "key_updated", infoflowAppSecret: "" },
-      client,
-    );
-
-    expect(client.configure).toHaveBeenCalledWith(
-      workspaceId,
-      expect.objectContaining({
-        adapters: {
-          infoflow: expect.objectContaining({
-            app_key: "key_updated",
-            app_secret: "secret_keep",
-          }),
-        },
-      }),
-    );
+    expect(editor.feishuAppSecret).toBe("");
+    expect(editor.infoflowAppKey).toBe("");
+    expect(editor.infoflowAppSecret).toBe("");
+    expect(channelAdapterCredentialsComplete(editor, "feishu")).toBe(true);
+    expect(channelAdapterCredentialsComplete(editor, "infoflow")).toBe(true);
   });
 
-  it("merges one platform account without dropping other adapters", () => {
+  it("merges one account patch without dropping another projected adapter", () => {
     const previous = {
       ...emptyChannelEditorValues(),
       feishuEnabled: true,
       feishuAppId: "cli_keep",
       feishuAppSecretSet: true,
-      infoflowEnabled: false,
     };
-
     const merged = mergeMessagePlatformCredentials(previous, {
       adapter: "infoflow",
       infoflowAppKey: "key_new",
@@ -262,49 +137,49 @@ describe("cockpit channel status", () => {
       infoflowAppSecret: "secret_new",
     });
 
-    expect(merged.feishuEnabled).toBe(true);
-    expect(merged.feishuAppId).toBe("cli_keep");
-    expect(merged.infoflowEnabled).toBe(true);
-    expect(merged.infoflowAppKey).toBe("key_new");
-    expect(merged.infoflowAppAgentId).toBe("43163");
-    expect(merged.infoflowAppSecret).toBe("secret_new");
-    expect(merged.onUnbound).toBe("create");
-    expect(merged.ingressEnabled).toBe(true);
+    expect(merged).toMatchObject({
+      feishuEnabled: true,
+      feishuAppId: "cli_keep",
+      infoflowEnabled: true,
+      infoflowAppKey: "key_new",
+      infoflowAppAgentId: "43163",
+      infoflowAppSecret: "secret_new",
+    });
   });
 });
 
-function daemonClient(overrides: Partial<DaemonStatusFixture> = {}): CockpitChannelDaemonClient & {
-  status: ReturnType<typeof vi.fn>;
-  configure: ReturnType<typeof vi.fn>;
-} {
+function daemonClient(overrides: Partial<SparkChannelControlSnapshot> = {}) {
   const status = daemonStatus(overrides);
   return {
     status: vi.fn(async (_workspaceId: string) => status),
-    configure: vi.fn(async (_workspaceId: string, _config: ChannelsConfig) => status),
+    configure: vi.fn(
+      async (
+        _workspaceId: string,
+        _config: ChannelsConfig,
+        _context: RuntimeEphemeralSecretRequestContext,
+      ) => status,
+    ),
+    reload: vi.fn(async (_workspaceId: string) => status),
+  } satisfies CockpitChannelDaemonClient & {
+    status: ReturnType<typeof vi.fn>;
+    configure: ReturnType<typeof vi.fn>;
+    reload: ReturnType<typeof vi.fn>;
   };
 }
 
-type DaemonStatusFixture = CockpitChannelStatusSnapshot & {
-  plane: "daemon";
-  resource: "channel";
-  available: true;
-  state: Exclude<CockpitChannelStatusSnapshot["state"], "unavailable">;
-};
-
-function daemonStatus(overrides: Partial<DaemonStatusFixture> = {}): DaemonStatusFixture {
-  const root = process.env.SPARK_HOME ?? "/tmp/spark";
+function daemonStatus(
+  overrides: Partial<SparkChannelControlSnapshot> = {},
+): SparkChannelControlSnapshot {
   return {
-    plane: "daemon" as const,
-    resource: "channel" as const,
     workspaceId,
-    configPath: join(root, "workspaces", workspaceId, "channels", "config.json"),
     available: true as const,
     configured: false,
     ingressEnabled: false,
-    state: "unconfigured",
+    state: "unconfigured" as const,
     adapters: [],
     routes: [],
-    observedAt: new Date().toISOString(),
+    configuration: { routes: [], onUnbound: "create" },
+    observedAt: "2026-07-15T00:00:00.000Z",
     text: "channels not configured\n",
     ...overrides,
   };

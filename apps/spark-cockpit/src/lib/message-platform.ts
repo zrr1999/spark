@@ -35,7 +35,6 @@ type MessagePlatformEditorProjection = {
   feishuEnabled: boolean;
   feishuAppId: string;
   infoflowEnabled: boolean;
-  infoflowAppKey: string;
   infoflowAppAgentId: string;
   qqbotEnabled: boolean;
   qqbotAppId: string;
@@ -75,7 +74,7 @@ export function workspaceMessagePlatformConnections(
   if (editor.infoflowEnabled) {
     configured.push({
       adapter: "infoflow",
-      accountId: editor.infoflowAppAgentId.trim() || editor.infoflowAppKey.trim(),
+      accountId: editor.infoflowAppAgentId.trim(),
     });
   }
   if (editor.qqbotEnabled) {

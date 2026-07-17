@@ -26,7 +26,6 @@
       infoflowDefaultEndpoint: data.defaults.infoflowEndpoint,
       feishuAppId: data.editor.feishuAppId,
       infoflowEndpoint: data.editor.infoflowEndpoint,
-      infoflowAppKey: data.editor.infoflowAppKey,
       infoflowAppAgentId: data.editor.infoflowAppAgentId,
       qqbotAppId: data.editor.qqbotAppId,
       qqbotSandbox: data.editor.qqbotSandbox,
@@ -105,7 +104,6 @@
     } else if (adapter === "infoflow") {
       values.infoflowEndpoint =
         values.infoflowEndpoint || editor.infoflowEndpoint || defaultEndpoint;
-      values.infoflowAppKey = values.infoflowAppKey || editor.infoflowAppKey;
       values.infoflowAppAgentId = values.infoflowAppAgentId || editor.infoflowAppAgentId;
     } else {
       values.qqbotAppId = values.qqbotAppId || editor.qqbotAppId;
@@ -119,7 +117,7 @@
       values.feishuAppSecret = "";
     } else if (adapter === "infoflow") {
       values.infoflowEndpoint = editor.infoflowEndpoint || defaultEndpoint;
-      values.infoflowAppKey = editor.infoflowAppKey;
+      values.infoflowAppKey = "";
       values.infoflowAppAgentId = editor.infoflowAppAgentId;
       values.infoflowAppSecret = "";
     } else {
@@ -455,10 +453,6 @@
         </span>
       </div>
       <dl class="meta">
-        <div>
-          <dt>{t.configPath}</dt>
-          <dd class="mono">{status.configPath}</dd>
-        </div>
         <div>
           <dt>{t.ingress}</dt>
           <dd>{status.available ? (status.ingressEnabled ? t.ingressOn : t.ingressOff) : "—"}</dd>

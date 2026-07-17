@@ -7,10 +7,19 @@ export {
   type SparkWorkflowModelRunRequest,
   type SparkWorkflowModelRunResponse,
 } from "./host/bootstrap.ts";
-export { SparkAgentLoop, type SparkAgentLoopEvent } from "./host/agent-loop.ts";
+export {
+  SparkAgentLoop,
+  type SparkAgentLoopEvent,
+  type SparkPromptItem,
+  type SparkPromptManifest,
+  type SparkPromptManifestOptions,
+  type SparkRunOutcome,
+} from "./host/agent-loop.ts";
 export {
   SparkAgentSession,
+  sessionEntriesToPromptItems,
   sessionRecordToAgentMessages,
+  sessionRecordToPromptItems,
   type SparkAgentSessionRunOptions,
   type SparkAgentSessionRunResult,
 } from "./host/agent-session.ts";

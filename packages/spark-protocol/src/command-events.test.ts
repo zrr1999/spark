@@ -51,6 +51,7 @@ describe("SparkCommand vocabulary", () => {
       "channel.notify",
       "workspace.list",
       "workspace.register",
+      "workspace.relocate",
       "workspace.ensure-local",
       "workspace.attach",
       "workspace.stop",
@@ -87,6 +88,10 @@ describe("SparkCommand vocabulary", () => {
     expect(sparkCommandKindForLocalRpcMethod("workspace.register")).toBe(
       "workspace.register.request",
     );
+    expect(sparkCommandKindForLocalRpcMethod("workspace.relocate")).toBe(
+      "workspace.relocate.request",
+    );
+    expect(sparkCommandKindForRuntimeServerCommand("workspace.relocate.request")).toBeNull();
     expect(sparkCommandKindForLocalRpcMethod("session.create")).toBe("session.create.request");
     expect(sparkCommandKindForLocalRpcMethod("session.snapshot")).toBe("session.snapshot.request");
     expect(sparkCommandKindForLocalRpcMethod("session.model.set")).toBe(
@@ -106,10 +111,27 @@ describe("SparkCommand vocabulary", () => {
       "project.create.request",
       "task.start.request",
       "assignment.create.request",
+      "session.list.request",
+      "session.get.request",
+      "session.snapshot.request",
       "session.create.request",
       "session.bind.request",
       "session.unbind.request",
       "session.archive.request",
+      "turn.submit.request",
+      "turn.cancel.request",
+      "turn.status.request",
+      "turn.stream.subscribe",
+      "session.model.set.request",
+      "session.thinking.set.request",
+      "model.catalog.request",
+      "model.default.set.request",
+      "provider.auth.logout.request",
+      "provider.auth.login.start.request",
+      "provider.auth.login.status.request",
+      "provider.auth.login.cancel.request",
+      "channel.status.request",
+      "channel.reload.request",
       "invocation.cancel.request",
       "artifact.content.request",
       "human.response.deliver.request",

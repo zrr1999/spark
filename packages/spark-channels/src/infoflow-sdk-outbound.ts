@@ -192,6 +192,11 @@ export function wrapInfoflowReplyStream(
   patchStreamingCardPresentation(session);
   return {
     ...(deliveryRecovery ? { deliveryRecovery } : {}),
+    // The card is an execution/progress surface. The daemon always delivers the
+    // final assistant answer through sendReply, whose durable delivery lifecycle
+    // is independent from the SDK's best-effort streaming-card updates.
+    answerMode: "separate",
+    appendProgress: (delta) => session.appendText(delta),
     appendText: (delta) => session.appendText(delta),
     appendReasoning: (delta) => session.appendReasoning(delta),
     notifyToolStart: (input) => session.notifyToolStart(input),

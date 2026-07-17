@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 import { writePrivateFile, type SparkPaths } from "@zendev-lab/spark-system";
@@ -34,7 +34,13 @@ export function readSparkDaemonConfig(paths: SparkPaths): SparkDaemonConfig {
 }
 
 export function writeSparkDaemonConfig(paths: SparkPaths, config: SparkDaemonConfig): void {
-  writePrivateFile(paths.configFile, serializeTomlSubset(config));
+  const temporary = `${paths.configFile}.tmp-${process.pid}-${randomUUID()}`;
+  try {
+    writePrivateFile(temporary, serializeTomlSubset(config));
+    renameSync(temporary, paths.configFile);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
 }
 
 function parseTomlSubset(contents: string): Partial<SparkDaemonConfig> {

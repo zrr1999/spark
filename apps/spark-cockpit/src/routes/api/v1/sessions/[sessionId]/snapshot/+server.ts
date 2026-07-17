@@ -3,13 +3,12 @@ import {
   getManagedSessionSnapshotForCockpit,
 } from "$lib/server/managed-sessions";
 import { normalizeSessionSnapshotLimit, sessionSnapshotWindow } from "$lib/session-snapshot-window";
-import { workspaceIdForWorkbenchSession } from "$lib/workbench-session-scope";
 import { json } from "@sveltejs/kit";
 import type { RequestHandler } from "./$types";
 
 export const GET: RequestHandler = async ({ params, url }) => {
   const session = await getManagedSessionForCockpit(params.sessionId);
-  if (!session || !workspaceIdForWorkbenchSession(session)) {
+  if (!session) {
     return json({ error: "session_not_found" }, { status: 404 });
   }
   const snapshot = await getManagedSessionSnapshotForCockpit(params.sessionId);

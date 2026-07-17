@@ -9,6 +9,8 @@ export * from "./project-cockpit.ts";
 export * from "./projection-services.ts";
 export * from "./runtime-control.ts";
 export * from "./runtime-registration.ts";
+export * from "./runtime-model-channel-control.ts";
+export * from "./runtime-session-control.ts";
 export * from "./runtime-ws.ts";
 export * from "./routing.ts";
 export * from "./session-activity.ts";

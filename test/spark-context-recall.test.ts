@@ -13,6 +13,13 @@ type ToolResult = {
 };
 interface ToolConfig {
   name: string;
+  policy?: {
+    effect?: string;
+    executionMode?: string;
+    domains?: readonly string[];
+    phases?: readonly string[];
+    approval?: string;
+  };
   execute(
     toolCallId: string,
     params: Record<string, unknown>,
@@ -40,6 +47,14 @@ void test("context tool lists and previews registered providers within budgets",
       ],
     },
   );
+
+  assert.deepEqual(tools.get("context")?.policy, {
+    effect: "read",
+    executionMode: "parallel",
+    domains: ["context"],
+    phases: ["plan", "implement"],
+    approval: "none",
+  });
 
   const listed = await executeTool(tools, "context", { action: "list" });
   assert.match(toolText(listed), /test\.provider/);

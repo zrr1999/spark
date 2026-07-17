@@ -13,11 +13,14 @@
   } = $props();
 
   let document = $derived(parseSparkUiSource(source));
+  let streamCaretOwnedByMarkdown = $derived(
+    document.blocks.at(-1)?.type === "markdown" || document.blocks.at(-1)?.type === "callout",
+  );
 </script>
 
 <div class="agent-mdx-stream" class:streaming>
-  <SparkUiRenderer {document} {source} {showSource} />
-  {#if streaming}
+  <SparkUiRenderer {document} {source} {streaming} {showSource} />
+  {#if streaming && !streamCaretOwnedByMarkdown}
     <span class="streaming-caret" aria-hidden="true"></span>
   {/if}
 </div>

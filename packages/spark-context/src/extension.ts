@@ -76,6 +76,13 @@ export function registerPiContextTool(
       "Do not pass arbitrary system prompt text; context content must come from registered providers with budgets.",
       "Use providerIds and budgetChars to keep context bounded and explicit.",
     ],
+    policy: {
+      effect: "read",
+      executionMode: "parallel",
+      domains: ["context"],
+      phases: ["plan", "implement"],
+      approval: "none",
+    },
     parameters: Type.Object({
       action: Type.String({ description: "list | preview" }),
       providerIds: Type.Optional(

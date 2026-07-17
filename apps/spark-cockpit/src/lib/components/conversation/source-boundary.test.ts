@@ -20,7 +20,7 @@ describe("source-derived conversation component boundary", () => {
     expect(license).toContain("The above copyright notice and this permission notice");
   });
 
-  it("keeps provider, AI chat runtime, and alternate rendering stacks outside the components", () => {
+  it("keeps provider and AI chat runtimes outside the source-derived conversation shell", () => {
     const source = sourceFiles(conversationRoot)
       .map((path) => readFileSync(path, "utf8"))
       .join("\n");
@@ -35,7 +35,6 @@ describe("source-derived conversation component boundary", () => {
 
     expect(source).not.toMatch(/from\s+["']ai["']/);
     expect(source).not.toContain("@ai-sdk/svelte");
-    expect(source).not.toContain("streamdown-svelte");
     expect(source).not.toMatch(/from\s+["']shiki["']/);
     expect(source).not.toContain("tailwindcss");
     expect(source).not.toContain("UIMessage");
@@ -43,8 +42,8 @@ describe("source-derived conversation component boundary", () => {
     expect(source).not.toContain("FileUIPart");
     expect(dependencyNames).not.toContain("ai");
     expect(dependencyNames).not.toContain("@ai-sdk/svelte");
-    expect(dependencyNames).not.toContain("streamdown-svelte");
-    expect(dependencyNames).not.toContain("shiki");
+    expect(dependencyNames).toContain("streamdown-svelte");
+    expect(dependencyNames).toContain("@shikijs/themes");
     expect(dependencyNames).not.toContain("tailwindcss");
   });
 

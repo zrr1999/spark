@@ -12,6 +12,8 @@ export function sendSparkRuntimeInstruction(
       customType,
       content: instruction,
       display: false,
+      authority: "runtime_control",
+      trust: "trusted",
       details: { ...details, visible },
     },
     { deliverAs: "followUp", triggerTurn: true },

@@ -83,10 +83,14 @@ export async function requestSparkDaemonLocalRpcWire<T>(
     let buffer = "";
     let responseBytes = 0;
     let settled = false;
+    let connectTimer: ReturnType<typeof setTimeout> | undefined;
+    let responseTimer: ReturnType<typeof setTimeout> | undefined;
 
     const finish = (result: { ok: true; value: T } | { ok: false; error: Error }) => {
       if (settled) return;
       settled = true;
+      if (connectTimer) clearTimeout(connectTimer);
+      if (responseTimer) clearTimeout(responseTimer);
       options.signal?.removeEventListener("abort", onAbort);
       socket.destroy();
       if (result.ok) resolve(result.value);
@@ -95,25 +99,34 @@ export async function requestSparkDaemonLocalRpcWire<T>(
     const onAbort = () => finish({ ok: false, error: abortError() });
 
     options.signal?.addEventListener("abort", onAbort, { once: true });
+    if (options.signal?.aborted) {
+      onAbort();
+      return;
+    }
 
-    socket.setTimeout(options.connectTimeoutMs ?? 1_000, () => {
+    connectTimer = setTimeout(() => {
       finish({
         ok: false,
         error: new SparkDaemonLocalRpcUnavailableError(`Timed out connecting to ${socketPath}`),
       });
-    });
+    }, options.connectTimeoutMs ?? 1_000);
     socket.once("error", (error) => {
       finish({ ok: false, error: new SparkDaemonLocalRpcUnavailableError(error.message) });
     });
     socket.once("connect", () => {
-      socket.setTimeout(options.responseTimeoutMs ?? 30_000, () => {
+      if (settled) return;
+      if (connectTimer) {
+        clearTimeout(connectTimer);
+        connectTimer = undefined;
+      }
+      responseTimer = setTimeout(() => {
         finish({
           ok: false,
           error: new SparkDaemonLocalRpcUnavailableError(
             `Timed out waiting for daemon RPC response from ${socketPath}`,
           ),
         });
-      });
+      }, options.responseTimeoutMs ?? 30_000);
       socket.write(`${JSON.stringify(request)}\n`);
     });
     socket.once("close", () => {

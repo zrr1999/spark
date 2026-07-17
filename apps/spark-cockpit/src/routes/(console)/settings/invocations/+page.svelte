@@ -100,20 +100,16 @@
           <p>{pageStart}-{pageEnd} / {diagnostics.list.total}</p>
         </div>
         <div class="pagination">
-          <Button
-            variant="secondary"
-            size="compact"
-            href={pageHref(previousOffset)}
-            disabled={diagnostics.list.offset === 0}
-            ariaLabel={copy.previous}
-          ><Icon name="chevron" size={15} /></Button>
-          <Button
-            variant="secondary"
-            size="compact"
-            href={pageHref(nextOffset)}
-            disabled={pageEnd >= diagnostics.list.total}
-            ariaLabel={copy.next}
-          ><Icon name="chevron" size={15} /></Button>
+          {#if diagnostics.list.offset === 0}
+            <Button variant="secondary" size="compact" disabled ariaLabel={copy.previous}><Icon name="chevron" size={15} /></Button>
+          {:else}
+            <Button variant="secondary" size="compact" href={pageHref(previousOffset)} ariaLabel={copy.previous}><Icon name="chevron" size={15} /></Button>
+          {/if}
+          {#if pageEnd >= diagnostics.list.total}
+            <Button variant="secondary" size="compact" disabled ariaLabel={copy.next}><Icon name="chevron" size={15} /></Button>
+          {:else}
+            <Button variant="secondary" size="compact" href={pageHref(nextOffset)} ariaLabel={copy.next}><Icon name="chevron" size={15} /></Button>
+          {/if}
         </div>
       </div>
 
@@ -281,7 +277,7 @@
     align-items: center;
     display: grid;
     gap: var(--spacing-sm);
-    grid-template-columns: minmax(260px, 1.5fr) minmax(150px, 1fr) 72px 120px;
+    grid-template-columns: minmax(220px, 1.6fr) minmax(110px, 1fr) 56px 90px;
   }
 
   .table-head {

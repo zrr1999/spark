@@ -33,11 +33,14 @@
 These are source-derived Spark components, not a registry snapshot. The composition and interaction
 ideas above were translated to Svelte 5 components that use Cockpit's scoped CSS and Spark tokens.
 
-- Removed Tailwind, shadcn-svelte, Bits UI, `runed`, Streamdown, Shiki, and AI SDK dependencies.
+- Removed Tailwind, shadcn-svelte, Bits UI, `runed`, and AI SDK dependencies from the conversation
+  shell. Markdown rendering now delegates to the separately vendored Svelte AI Elements Response
+  boundary in `../response/`.
 - Replaced AI SDK message, tool, file, and chat state types with Cockpit-local `ConversationPart` types.
 - Kept the daemon session snapshot and SvelteKit form actions as the only conversation truth and
   submission path. The components own presentation state such as scroll position and disclosure only.
-- Kept `AgentMdxStream` as Spark's safe Markdown and generative-UI rendering boundary.
+- Kept `AgentMdxStream` as Spark's safe Markdown and generative-UI rendering boundary; its Markdown
+  blocks now use the Response/Streamdown implementation instead of the legacy block parser.
 - Replaced upstream tool-state vocabulary with Spark states and expose only display-safe tool name,
   status, summary, and reference fields.
 - Added a bounded live region, keyboard composer submission, IME-safe Enter handling, jump-to-latest,

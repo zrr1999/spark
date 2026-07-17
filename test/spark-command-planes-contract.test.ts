@@ -85,6 +85,10 @@ void test("dispatcher, daemon, Cockpit, and TUI help snapshots expose the three-
   );
   assert.match(cockpitHelp, /spark cockpit - Spark cross-daemon coordination and Web cockpit/u);
   assert.match(cockpitHelp, /Cockpit coordinates across daemon execution planes/u);
+  assert.match(cockpitHelp, /spark cockpit instance backup/u);
+  assert.match(cockpitHelp, /spark cockpit instance inspect/u);
+  assert.match(cockpitHelp, /spark cockpit instance restore/u);
+  assert.match(cockpitHelp, /spark cockpit instance status/u);
   assert.doesNotMatch(cockpitHelp, /\b(?:dev|build|preview)\b/u);
   assert.match(cockpitHelp, /SPARK_COCKPIT_PUBLIC_URL=https:\/\//u);
   assert.match(cockpitHelp, /SPARK_COCKPIT_TRUST_PROXY=loopback/u);
@@ -108,6 +112,15 @@ void test("root dispatcher reaches Cockpit and rejects the removed server namesp
     assert.match(failure.stderr ?? "", /Use "spark cockpit" instead/u);
     return true;
   });
+  await assert.rejects(
+    execFileAsync(dispatcher, ["server", "instance", "status"]),
+    (error: unknown) => {
+      const failure = error as { code?: number; stderr?: string };
+      assert.equal(failure.code, 2);
+      assert.match(failure.stderr ?? "", /Use "spark cockpit" instead/u);
+      return true;
+    },
+  );
 });
 
 void test("daemon and Cockpit status JSON contracts validate current envelopes", () => {

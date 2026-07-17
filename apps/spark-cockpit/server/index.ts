@@ -39,9 +39,23 @@ server.on("upgrade", (request, socket, head) => {
   }
 
   wss.handleUpgrade(request, socket, head, (ws) => {
-    attachRuntimeWebSocket(ws, { db, runtimeId, remoteAddress: request.socket.remoteAddress });
+    attachRuntimeWebSocket(ws, {
+      db,
+      runtimeId,
+      remoteAddress: request.socket.remoteAddress,
+      secureTransport: runtimeUpgradeIsSecure(request, publicUrl.trustedProxy),
+    });
   });
 });
+
+function runtimeUpgradeIsSecure(request: IncomingMessage, trustedProxy: boolean): boolean {
+  const encrypted = "encrypted" in request.socket && request.socket.encrypted === true;
+  if (encrypted) return true;
+  if (!trustedProxy) return false;
+  const forwarded = request.headers["x-forwarded-proto"];
+  const protocol = Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(",")[0];
+  return protocol?.trim().toLowerCase() === "https";
+}
 
 const stopWebPushDispatcher = startWebPushEventDispatcher({ db: getDatabase() });
 server.on("close", () => {

@@ -72,6 +72,13 @@ export function registerSparkModelsTool(pi: SparkModelsExtensionApi): void {
       "By default, models lists only currently usable models with configured credentials.",
       "Pass includeUnavailable=true only when the user asks for all registered models, including those without credentials.",
     ],
+    policy: {
+      effect: "read",
+      executionMode: "parallel",
+      domains: ["models"],
+      phases: ["plan", "implement"],
+      approval: "none",
+    },
     parameters: Type.Object({
       query: Type.Optional(
         Type.String({

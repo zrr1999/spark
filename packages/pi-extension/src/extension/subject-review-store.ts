@@ -162,6 +162,9 @@ export async function recordGoalSubjectReview(
         ? { projectStatus: input.projectStatus as unknown as JsonValue }
         : {}),
       evidenceRefs: input.evidenceRefs,
+      requirements: input.requirements ?? [],
+      validationRuns: input.validationRuns ?? [],
+      unresolved: input.unresolved ?? [],
     } as unknown as JsonValue,
     legacyImportOnly: LEGACY_REVIEW_IMPORT_ONLY,
   };

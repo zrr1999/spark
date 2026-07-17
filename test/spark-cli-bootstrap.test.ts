@@ -8,10 +8,14 @@ import { stableId } from "../packages/spark-extension-api/src/index.ts";
 import { callLeafOrDegrade } from "../packages/spark-extension-api/src/index.ts";
 import { DEFAULT_SPARK_PROVIDER_SPECS } from "../packages/spark-ai/src/control/provider-catalog.ts";
 import { parseSparkCliArgs, parseSparkCliCommand } from "../apps/spark-tui/src/cli.ts";
+import { saveSessionPhase } from "../packages/pi-extension/src/extension/current-project-state.ts";
 import {
   assistantMessageToText,
   createProviderRegistryWorkflowModelRunner,
   createSparkCliHostServices,
+  SparkAgentLoop,
+  SparkHostRuntime,
+  type SparkAgentStreamFunction,
   type SparkConfig,
 } from "../apps/spark-tui/src/host/index.ts";
 
@@ -54,6 +58,15 @@ function messageContentText(content: unknown): string {
 function fakeProviderModule(
   captured: {
     systemPrompt?: string;
+    systemPromptStable?: string;
+    systemPromptDynamic?: string;
+    promptSnapshots?: Array<{
+      systemPrompt?: string;
+      systemPromptStable?: string;
+      systemPromptDynamic?: string;
+    }>;
+    toolSnapshots?: string[][];
+    assistantMessages?: Array<Record<string, unknown>>;
     modelId?: string;
     userPrompt?: string;
     streamCalls?: number;
@@ -67,16 +80,37 @@ function fakeProviderModule(
         api: "openai-completions",
         streamSimple: (
           _model: unknown,
-          context: { messages?: Array<{ content?: unknown }>; systemPrompt?: string },
+          context: {
+            messages?: Array<{ content?: unknown }>;
+            systemPrompt?: string;
+            systemPromptStable?: string;
+            systemPromptDynamic?: string;
+            tools?: Array<{ name?: string }>;
+          },
         ) => {
           captured.streamCalls = (captured.streamCalls ?? 0) + 1;
           captured.systemPrompt = context.systemPrompt;
+          captured.systemPromptStable = context.systemPromptStable;
+          captured.systemPromptDynamic = context.systemPromptDynamic;
+          captured.promptSnapshots?.push({
+            systemPrompt: context.systemPrompt,
+            systemPromptStable: context.systemPromptStable,
+            systemPromptDynamic: context.systemPromptDynamic,
+          });
+          captured.toolSnapshots?.push(
+            (context.tools ?? []).flatMap((tool) =>
+              typeof tool.name === "string" ? [tool.name] : [],
+            ),
+          );
           captured.modelId = (_model as { id?: string }).id;
           captured.userPrompt = messageContentText(context.messages?.at(-1)?.content);
-          const message = assistant(`boot ok:${context.messages?.length ?? 0}`);
+          const message =
+            captured.assistantMessages?.[captured.streamCalls - 1] ??
+            assistant(`boot ok:${context.messages?.length ?? 0}`);
+          const reason = typeof message.stopReason === "string" ? message.stopReason : "stop";
           return {
             async *[Symbol.asyncIterator]() {
-              yield { type: "done", reason: "stop", message };
+              yield { type: "done", reason, message };
             },
             result: async () => message,
           };
@@ -190,12 +224,410 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
     assert.doesNotMatch(captured.systemPrompt ?? "", /running in the native spark-tui host/);
     assert.match(captured.systemPrompt ?? "", /Spark phase: plan\./);
     assert.match(captured.systemPrompt ?? "", /Tools: task_read, task_write, assign/);
-    assert.match(captured.systemPrompt ?? "", /<base_system_prompts>/);
+    assert.match(captured.systemPrompt ?? "", /<available_skills>/);
     assert.doesNotMatch(captured.systemPrompt ?? "", /# Spark/);
-    assert.match(captured.systemPrompt ?? "", /# spark-cue/);
-    assert.match(captured.systemPrompt ?? "", /# spark-graft/);
+    assert.match(captured.systemPrompt ?? "", /<name>spark-cue<\/name>/);
+    assert.doesNotMatch(captured.systemPrompt ?? "", /# spark-cue/);
+    assert.doesNotMatch(captured.systemPrompt ?? "", /<base_system_prompts>/);
+    assert.doesNotMatch(captured.systemPrompt ?? "", /# spark-graft/);
     assert.doesNotMatch(captured.systemPrompt ?? "", /at most one unfinished claimed task/);
     assert.match(captured.systemPrompt ?? "", /workspace-skill/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("native host selects at most three request skills dynamically and clears them next submit", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-dynamic-skills-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(join(cwd, ".spark", "skills", "workspace-skill"), { recursive: true });
+    await writeFile(
+      join(cwd, ".spark", "skills", "workspace-skill", "SKILL.md"),
+      "---\nname: workspace-skill\ndescription: Use for the unique frobnicate architecture workflow\n---\n\n# Workspace Skill Body\n\nApply frobnicate rules.\n",
+      "utf8",
+    );
+
+    const captured: Parameters<typeof fakeProviderModule>[0] = { promptSnapshots: [] };
+    const services = await createSparkCliHostServices({
+      cwd,
+      sparkHome,
+      config: { extensions: [], providers: ["fake-provider"] },
+      providerImporter: async () => fakeProviderModule(captured),
+    });
+
+    await services.agentLoop.submit("please frobnicate this architecture");
+    const selectedManifest = services.agentLoop.getLastPromptManifest();
+    assert.ok(selectedManifest?.selectedSkills.includes("workspace-skill"));
+    assert.ok((selectedManifest?.selectedSkills.length ?? 0) <= 3);
+    const selectedSnapshot = captured.promptSnapshots?.[0];
+    assert.match(selectedSnapshot?.systemPromptDynamic ?? "", /# Workspace Skill Body/);
+    assert.doesNotMatch(selectedSnapshot?.systemPromptStable ?? "", /# Workspace Skill Body/);
+
+    await services.agentLoop.submit("zzzz-unmatched-unique-token");
+    const clearedManifest = services.agentLoop.getLastPromptManifest();
+    assert.deepEqual(clearedManifest?.selectedSkills, []);
+    const clearedSnapshot = captured.promptSnapshots?.[1];
+    assert.doesNotMatch(clearedSnapshot?.systemPromptDynamic ?? "", /# Workspace Skill Body/);
+    assert.equal(
+      selectedSnapshot?.systemPromptStable,
+      clearedSnapshot?.systemPromptStable,
+      "selected skill bodies must not perturb the stable prompt hash input",
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("native host keeps prompt phase and executable tool profile on one loaded state", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-phase-profile-"));
+  try {
+    const captured: Parameters<typeof fakeProviderModule>[0] = {};
+    const services = await createSparkCliHostServices({
+      cwd: dir,
+      sparkHome: join(dir, ".spark-home"),
+      config: { extensions: [], providers: ["fake-provider"] },
+      providerImporter: async () => fakeProviderModule(captured),
+    });
+
+    assert.equal(services.agentLoop.getCurrentPhase(), "plan");
+
+    await saveSessionPhase(dir, services.runtime.makeContext(), "implement");
+    await services.agentLoop.submit("refresh the phase profile");
+    assert.equal(services.agentLoop.getCurrentPhase(), "implement");
+    assert.match(captured.systemPrompt ?? "", /Spark phase: implement\./);
+
+    await saveSessionPhase(dir, services.runtime.makeContext(), "plan");
+    await services.runtime.emit("before_agent_start", {});
+    assert.equal(services.agentLoop.getCurrentPhase(), "plan");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("background turns use a driver profile and the next user submit restores persisted plan", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-background-driver-profile-"));
+  try {
+    const backgroundToolUse = assistant("run background write");
+    backgroundToolUse.content = [
+      {
+        type: "toolCall",
+        id: "tc-background-write",
+        name: "implement_write",
+        arguments: {},
+      },
+    ];
+    backgroundToolUse.stopReason = "toolUse";
+    const captured: Parameters<typeof fakeProviderModule>[0] = {
+      promptSnapshots: [],
+      toolSnapshots: [],
+      assistantMessages: [
+        backgroundToolUse,
+        assistant("background complete"),
+        assistant("user complete"),
+      ],
+    };
+    const services = await createSparkCliHostServices({
+      cwd: dir,
+      sparkHome: join(dir, ".spark-home"),
+      config: { extensions: [], providers: ["fake-provider"] },
+      providerImporter: async () => fakeProviderModule(captured),
+    });
+    let writeExecutions = 0;
+    services.runtime.registerTool({
+      name: "implement_write",
+      description: "implement-only write used by background drivers",
+      parameters: { type: "object" },
+      policy: {
+        effect: "local_write",
+        executionMode: "sequential",
+        phases: ["implement"],
+        approval: "none",
+      },
+      async execute() {
+        writeExecutions += 1;
+        return { content: [{ type: "text", text: "written" }] };
+      },
+    });
+    await saveSessionPhase(dir, services.runtime.makeContext(), "plan");
+    assert.equal(services.agentLoop.getCurrentPhase(), "plan");
+
+    const backgroundDone = new Promise<void>((resolve) => {
+      const unsubscribe = services.agentLoop.onEvent((event) => {
+        if (event.type !== "run_outcome") return;
+        unsubscribe();
+        resolve();
+      });
+    });
+    services.runtime.sendMessage(
+      {
+        customType: "background-driver-test",
+        content: "continue the background driver",
+        display: false,
+        authority: "runtime_control",
+        trust: "trusted",
+      },
+      { deliverAs: "followUp", triggerTurn: true },
+    );
+    await backgroundDone;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(writeExecutions, 1);
+    assert.equal(services.agentLoop.getCurrentPhase(), undefined);
+    for (const snapshot of captured.promptSnapshots?.slice(0, 2) ?? []) {
+      assert.match(snapshot.systemPrompt ?? "", /You are Spark,/u);
+      assert.match(snapshot.systemPrompt ?? "", /<available_skills>/u);
+      assert.doesNotMatch(snapshot.systemPrompt ?? "", /Spark phase: (?:plan|implement)\./u);
+    }
+    assert.deepEqual(captured.toolSnapshots?.slice(0, 2), [
+      ["implement_write"],
+      ["implement_write"],
+    ]);
+
+    await services.agentLoop.submit("resume the real user plan");
+
+    assert.equal(services.agentLoop.getCurrentPhase(), "plan");
+    assert.match(captured.promptSnapshots?.[2]?.systemPrompt ?? "", /Spark phase: plan\./u);
+    assert.deepEqual(captured.toolSnapshots?.[2], []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("native submit preparation rejects concurrent submits before request context can race", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-submit-preparation-race" });
+  let releasePrepare: () => void = () => undefined;
+  const prepareGate = new Promise<void>((resolve) => {
+    releasePrepare = resolve;
+  });
+  let markPrepareStarted: () => void = () => undefined;
+  const prepareStarted = new Promise<void>((resolve) => {
+    markPrepareStarted = resolve;
+  });
+  const prepared: string[] = [];
+  const promptSnapshots: string[] = [];
+  let selected = "";
+  let loop: SparkAgentLoop;
+  const streamFunction: SparkAgentStreamFunction = (_model, context) => {
+    promptSnapshots.push(context.systemPrompt ?? "");
+    const message = assistant("prepared");
+    return {
+      async *[Symbol.asyncIterator]() {
+        yield { type: "done", reason: "stop", message } as never;
+      },
+      result: async () => message as never,
+    } as ReturnType<SparkAgentStreamFunction>;
+  };
+  loop = new SparkAgentLoop({
+    host,
+    streamFunction,
+    getModel: () => ({ id: "model", provider: "provider", api: "openai-completions" }) as never,
+    prepareUserSubmit: async (content) => {
+      prepared.push(content);
+      markPrepareStarted();
+      await prepareGate;
+      selected = content;
+      loop.setSystemPrompt(`Dynamic context checkpoint: ${content}`);
+    },
+    promptManifest: { getSelectedSkills: () => (selected ? [selected] : []) },
+  });
+
+  const first = loop.submitWithOutcome("request-a");
+  await prepareStarted;
+  await assert.rejects(loop.submitWithOutcome("request-b"), /state=preparing/u);
+  releasePrepare();
+  await first;
+
+  assert.deepEqual(prepared, ["request-a"]);
+  assert.deepEqual(promptSnapshots, ["Dynamic context checkpoint: request-a"]);
+  assert.deepEqual(loop.getLastPromptManifest()?.selectedSkills, ["request-a"]);
+});
+
+void test("native submit preparation does not start while a trigger turn is in pre-stream lifecycle", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-trigger-before-prepare-race" });
+  let releaseBackground: () => void = () => undefined;
+  const backgroundGate = new Promise<void>((resolve) => {
+    releaseBackground = resolve;
+  });
+  let markBackgroundStarted: () => void = () => undefined;
+  const backgroundStarted = new Promise<void>((resolve) => {
+    markBackgroundStarted = resolve;
+  });
+  host.on("before_agent_start", async (event) => {
+    if ((event as { source?: unknown }).source !== "triggerTurn") return;
+    markBackgroundStarted();
+    await backgroundGate;
+  });
+  let prepareCalls = 0;
+  const message = assistant("background complete");
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: () =>
+      ({
+        async *[Symbol.asyncIterator]() {
+          yield { type: "done", reason: "stop", message } as never;
+        },
+        result: async () => message as never,
+      }) as ReturnType<SparkAgentStreamFunction>,
+    getModel: () => ({ id: "model", provider: "provider", api: "openai-completions" }) as never,
+    prepareUserSubmit: () => {
+      prepareCalls += 1;
+    },
+  });
+  const backgroundDone = new Promise<void>((resolve) => {
+    const unsubscribe = loop.onEvent((event) => {
+      if (event.type !== "run_outcome") return;
+      unsubscribe();
+      resolve();
+    });
+  });
+
+  host.sendMessage(
+    { customType: "background-race", content: "background", display: false },
+    { deliverAs: "followUp", triggerTurn: true },
+  );
+  await backgroundStarted;
+
+  await assert.rejects(loop.submitWithOutcome("must not prepare"), /state=triggerTurn/u);
+  assert.equal(prepareCalls, 0);
+
+  releaseBackground();
+  await backgroundDone;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(loop.getState(), "idle");
+});
+
+void test("trigger turns queued during user preparation are deferred without entering the user prompt", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-trigger-during-prepare-race" });
+  let releasePrepare: () => void = () => undefined;
+  const prepareGate = new Promise<void>((resolve) => {
+    releasePrepare = resolve;
+  });
+  let markPrepareStarted: () => void = () => undefined;
+  const prepareStarted = new Promise<void>((resolve) => {
+    markPrepareStarted = resolve;
+  });
+  const contexts: unknown[] = [];
+  const message = assistant("complete");
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: (_model, context) => {
+      contexts.push(context.messages);
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "done", reason: "stop", message } as never;
+        },
+        result: async () => message as never,
+      } as ReturnType<SparkAgentStreamFunction>;
+    },
+    getModel: () => ({ id: "model", provider: "provider", api: "openai-completions" }) as never,
+    prepareUserSubmit: async () => {
+      markPrepareStarted();
+      await prepareGate;
+    },
+  });
+  let outcomes = 0;
+  const backgroundDone = new Promise<void>((resolve) => {
+    loop.onEvent((event) => {
+      if (event.type !== "run_outcome") return;
+      outcomes += 1;
+      if (outcomes === 2) resolve();
+    });
+  });
+
+  const userRun = loop.submitWithOutcome("real user request");
+  await prepareStarted;
+  host.sendMessage(
+    { customType: "deferred-background", content: "background payload", display: false },
+    { deliverAs: "followUp", triggerTurn: true },
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(contexts.length, 0, "background must not start while preparation owns prompt state");
+
+  releasePrepare();
+  await userRun;
+  await backgroundDone;
+
+  assert.equal(contexts.length, 2);
+  assert.match(JSON.stringify(contexts[0]), /real user request/u);
+  assert.doesNotMatch(JSON.stringify(contexts[0]), /deferred-background|background payload/u);
+  assert.match(JSON.stringify(contexts[1]), /deferred-background/u);
+  assert.match(JSON.stringify(contexts[1]), /background payload/u);
+  assert.equal(loop.getState(), "idle");
+});
+
+void test("completed user submit clears selected skills before an agent_end background turn", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-background-skill-clear-"));
+  try {
+    const cwd = join(dir, "repo");
+    await mkdir(join(cwd, ".spark", "skills", "request-skill"), { recursive: true });
+    await writeFile(
+      join(cwd, ".spark", "skills", "request-skill", "SKILL.md"),
+      "---\nname: request-skill\ndescription: Use for zyx-request-skill tasks\n---\n\n# Request-only body\n",
+      "utf8",
+    );
+    const captured: Parameters<typeof fakeProviderModule>[0] = { promptSnapshots: [] };
+    const services = await createSparkCliHostServices({
+      cwd,
+      sparkHome: join(dir, ".spark-home"),
+      config: { extensions: [], providers: ["fake-provider"] },
+      providerImporter: async () => fakeProviderModule(captured),
+    });
+    let queuedBackground = false;
+    services.runtime.on("agent_end", () => {
+      if (queuedBackground) return;
+      queuedBackground = true;
+      services.runtime.sendMessage(
+        { customType: "background-test", content: "background continuation", display: false },
+        { deliverAs: "followUp", triggerTurn: true },
+      );
+    });
+    let completedTurns = 0;
+    const backgroundComplete = new Promise<void>((resolve) => {
+      services.agentLoop.onEvent((event) => {
+        if (event.type !== "turn_complete") return;
+        completedTurns += 1;
+        if (completedTurns === 2) resolve();
+      });
+    });
+
+    await services.agentLoop.submit("use request-skill for this task");
+    await backgroundComplete;
+
+    assert.match(captured.promptSnapshots?.[0]?.systemPromptDynamic ?? "", /# Request-only body/u);
+    assert.doesNotMatch(
+      captured.promptSnapshots?.[1]?.systemPromptDynamic ?? "",
+      /# Request-only body/u,
+    );
+    assert.deepEqual(services.agentLoop.getLastPromptManifest()?.selectedSkills, []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("native host honors config extensions for explicit Graft opt-in and full disable", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-config-extensions-"));
+  try {
+    const graftServices = await createSparkCliHostServices({
+      cwd: dir,
+      sparkHome: join(dir, "graft-home"),
+      config: {
+        extensions: ["@zendev-lab/spark-graft/extension"],
+        providers: [],
+      },
+    });
+    assert.equal(
+      graftServices.runtime.getAllTools().some((tool) => tool.name === "graft_read"),
+      true,
+    );
+
+    const disabledServices = await createSparkCliHostServices({
+      cwd: dir,
+      sparkHome: join(dir, "disabled-home"),
+      config: { extensions: [], providers: [] },
+    });
+    assert.deepEqual(disabledServices.runtime.getAllTools(), []);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -284,7 +716,10 @@ void test("native host registers spark-files working-tree tools via the builtin 
       () => undefined,
       services.runtime.makeContext(),
     );
-    assert.equal(result.content.map((part) => part.text).join("\n"), "alpha\nbeta\n");
+    assert.match(
+      result.content.map((part) => part.text).join("\n"),
+      /^\[File version: sha256:[0-9a-f]{64}\]\n\n1#[0-9a-f]{12}:alpha\n2#[0-9a-f]{12}:beta\n3#[0-9a-f]{12}:$/u,
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

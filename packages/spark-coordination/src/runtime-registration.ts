@@ -111,6 +111,15 @@ export class RuntimeTokenRefreshError extends Error {
   }
 }
 
+export class RuntimeRelocationPreflightError extends Error {
+  constructor(
+    message: string,
+    readonly reasonCode: string,
+  ) {
+    super(message);
+  }
+}
+
 export class RuntimeAccessTokenError extends Error {
   readonly reasonCode: string;
 
@@ -714,77 +723,115 @@ export function refreshRuntimeToken(
   },
 ): RefreshedRuntimeToken {
   const refreshedAt = input.refreshedAt ?? new Date().toISOString();
+  return withRuntimeRegistrationTransaction(db, () =>
+    rotateRuntimeTokenInTransaction(db, input.runtimeId, input.refreshToken, refreshedAt),
+  );
+}
 
-  if (!input.refreshToken) {
+export function preflightRuntimeRelocation(
+  db: DatabaseSync,
+  input: {
+    runtimeId: string;
+    installationId: string;
+    refreshToken: string | null;
+    refreshedAt?: string;
+  },
+): RefreshedRuntimeToken {
+  const refreshedAt = input.refreshedAt ?? new Date().toISOString();
+  return withRuntimeRegistrationTransaction(db, () => {
+    const runtime = db
+      .prepare("SELECT installation_id AS installationId FROM runtime_connections WHERE id = ?")
+      .get(input.runtimeId) as { installationId: string | null } | undefined;
+    if (!runtime) {
+      throw new RuntimeRelocationPreflightError(
+        "Target Cockpit does not contain the requested runtime.",
+        "RELOCATION_RUNTIME_NOT_FOUND",
+      );
+    }
+    if (runtime.installationId !== input.installationId) {
+      throw new RuntimeRelocationPreflightError(
+        "Target runtime installation identity does not match this daemon.",
+        "RELOCATION_INSTALLATION_MISMATCH",
+      );
+    }
+    const connected = db
+      .prepare(
+        `SELECT 1 AS present FROM runtime_sessions
+         WHERE runtime_id = ? AND status = 'connected'
+         LIMIT 1`,
+      )
+      .get(input.runtimeId) as { present: number } | undefined;
+    if (connected) {
+      throw new RuntimeRelocationPreflightError(
+        "Target runtime already has a connected uplink.",
+        "RELOCATION_TARGET_COLLISION",
+      );
+    }
+    return rotateRuntimeTokenInTransaction(db, input.runtimeId, input.refreshToken, refreshedAt);
+  });
+}
+
+function rotateRuntimeTokenInTransaction(
+  db: DatabaseSync,
+  runtimeId: string,
+  refreshTokenValue: string | null,
+  refreshedAt: string,
+): RefreshedRuntimeToken {
+  if (!refreshTokenValue) {
     throw new RuntimeTokenRefreshError(
       "Runtime refresh token is required.",
       "REFRESH_TOKEN_REQUIRED",
     );
   }
+  const refreshToken = db
+    .prepare(
+      `SELECT id,
+              scopes_json AS scopesJson,
+              expires_at AS expiresAt,
+              revoked_at AS revokedAt
+       FROM runtime_tokens
+       WHERE runtime_id = ? AND token_hash = ?
+       LIMIT 1`,
+    )
+    .get(runtimeId, hashSecret(refreshTokenValue)) as
+    | {
+        id: string;
+        scopesJson: string;
+        expiresAt: string | null;
+        revokedAt: string | null;
+      }
+    | undefined;
 
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const refreshToken = db
-      .prepare(
-        `SELECT id,
-                scopes_json AS scopesJson,
-                expires_at AS expiresAt,
-                revoked_at AS revokedAt
-         FROM runtime_tokens
-         WHERE runtime_id = ? AND token_hash = ?
-         LIMIT 1`,
-      )
-      .get(input.runtimeId, hashSecret(input.refreshToken)) as
-      | {
-          id: string;
-          scopesJson: string;
-          expiresAt: string | null;
-          revokedAt: string | null;
-        }
-      | undefined;
-
-    validateRuntimeRefreshToken(refreshToken, refreshedAt);
-    const grantScopes = parseScopes(refreshToken.scopesJson);
-    const credentials = createRuntimeCredentials(refreshedAt);
-
-    const consumed = db
-      .prepare(
-        `UPDATE runtime_tokens
-         SET revoked_at = ?
-         WHERE id = ? AND revoked_at IS NULL`,
-      )
-      .run(refreshedAt, refreshToken.id);
-    if (consumed.changes !== 1) {
-      throw new RuntimeTokenRefreshError(
-        "Runtime refresh token has already been used.",
-        "REFRESH_TOKEN_USED",
-      );
-    }
-
-    revokeActiveRuntimeAccessTokens(db, input.runtimeId, refreshedAt);
-    insertRuntimeToken(db, {
-      runtimeId: input.runtimeId,
-      token: credentials.runtimeToken,
-      label: "runtime access token",
-      scopes: runtimeAccessScopesFromGrant(grantScopes),
-      createdAt: refreshedAt,
-      expiresAt: credentials.runtimeTokenExpiresAt,
-    });
-    insertRuntimeToken(db, {
-      runtimeId: input.runtimeId,
-      token: credentials.refreshToken,
-      label: "runtime refresh token",
-      scopes: runtimeRefreshScopesFromGrant(grantScopes),
-      createdAt: refreshedAt,
-      expiresAt: credentials.refreshTokenExpiresAt,
-    });
-
-    db.exec("COMMIT");
-    return { runtimeId: input.runtimeId, ...credentials, refreshedAt };
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
+  validateRuntimeRefreshToken(refreshToken, refreshedAt);
+  const grantScopes = parseScopes(refreshToken.scopesJson);
+  const credentials = createRuntimeCredentials(refreshedAt);
+  const consumed = db
+    .prepare("UPDATE runtime_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
+    .run(refreshedAt, refreshToken.id);
+  if (consumed.changes !== 1) {
+    throw new RuntimeTokenRefreshError(
+      "Runtime refresh token has already been used.",
+      "REFRESH_TOKEN_USED",
+    );
   }
+  revokeActiveRuntimeAccessTokens(db, runtimeId, refreshedAt);
+  insertRuntimeToken(db, {
+    runtimeId,
+    token: credentials.runtimeToken,
+    label: "runtime access token",
+    scopes: runtimeAccessScopesFromGrant(grantScopes),
+    createdAt: refreshedAt,
+    expiresAt: credentials.runtimeTokenExpiresAt,
+  });
+  insertRuntimeToken(db, {
+    runtimeId,
+    token: credentials.refreshToken,
+    label: "runtime refresh token",
+    scopes: runtimeRefreshScopesFromGrant(grantScopes),
+    createdAt: refreshedAt,
+    expiresAt: credentials.refreshTokenExpiresAt,
+  });
+  return { runtimeId, ...credentials, refreshedAt };
 }
 
 function consumeRuntimeEnrollmentToken(

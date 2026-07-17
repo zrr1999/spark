@@ -10,7 +10,9 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./src/agent-loop.ts"
+    ".": "./src/agent-loop.ts",
+    "./behavior-eval": "./src/behavior-eval.ts",
+    "./prompt-manifest": "./src/prompt-manifest.ts"
   },
   "publishConfig": {
     "access": "public"

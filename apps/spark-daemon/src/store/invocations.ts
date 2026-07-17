@@ -269,6 +269,41 @@ export class SparkInvocationStore {
     return this.require(invocationId);
   }
 
+  submitIfSessionIdle(input: SubmitSparkInvocationInput): SparkInvocationRecord {
+    const sessionId = input.sessionId?.trim();
+    if (!sessionId) throw new Error("SESSION_NOT_IDLE: idle admission requires sessionId");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      if (input.idempotencyKey) {
+        const existing = this.findByIdempotencyKey(input.idempotencyKey);
+        if (existing) {
+          assertIdempotentSubmission(existing, input);
+          this.db.exec("COMMIT");
+          return existing;
+        }
+      }
+      const pending = this.db
+        .prepare(
+          `SELECT id
+           FROM invocations
+           WHERE session_id = ? AND status IN ('queued', 'running')
+           LIMIT 1`,
+        )
+        .get(sessionId) as { id: string } | undefined;
+      if (pending) {
+        throw new Error(
+          `SESSION_NOT_IDLE: session ${sessionId} already has pending invocation ${pending.id}`,
+        );
+      }
+      const invocation = this.submit({ ...input, sessionId });
+      this.db.exec("COMMIT");
+      return invocation;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   importRecord(input: ImportSparkInvocationInput): SparkInvocationRecord {
     if (input.idempotencyKey) {
       const existing = this.findByIdempotencyKey(input.idempotencyKey);
@@ -406,6 +441,17 @@ export class SparkInvocationStore {
       limit,
       offset,
     };
+  }
+
+  pendingSessionIds(): Set<string> {
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT session_id
+         FROM invocations
+         WHERE session_id IS NOT NULL AND status IN ('queued', 'running')`,
+      )
+      .all() as unknown as Array<{ session_id: string }>;
+    return new Set(rows.map((row) => row.session_id));
   }
 
   /** Hydration hot path: filter in SQLite so terminal result payloads are never materialized. */
@@ -665,12 +711,29 @@ export class SparkInvocationStore {
     return row ? invocationEvent(row) : undefined;
   }
 
-  pendingDeliveries(destination: string, limit = 500): SparkInvocationPendingDelivery[] {
+  pendingDeliveries(
+    destination: string,
+    limit = 500,
+    workspaceBindingIds?: readonly string[],
+  ): SparkInvocationPendingDelivery[] {
     const normalizedDestination = destination.trim();
     if (!normalizedDestination) {
       throw new Error("invocation delivery destination must not be blank");
     }
     const normalizedLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO invocation_event_delivery_consumers (destination, registered_at)
+         VALUES (?, ?)`,
+      )
+      .run(normalizedDestination, new Date().toISOString());
+    const normalizedBindings = workspaceBindingIds
+      ? [...new Set(workspaceBindingIds.map((value) => value.trim()).filter(Boolean))]
+      : undefined;
+    if (normalizedBindings?.length === 0) return [];
+    const bindingFilter = normalizedBindings
+      ? ` AND i.workspace_binding_id IN (${normalizedBindings.map(() => "?").join(", ")})`
+      : "";
     const rows = this.db
       .prepare(
         `SELECT ${invocationSelectColumns("i")},
@@ -683,11 +746,15 @@ export class SparkInvocationStore {
          JOIN invocations i ON i.id = e.invocation_id
          LEFT JOIN invocation_event_deliveries d
            ON d.destination = ? AND d.invocation_id = e.invocation_id
-         WHERE e.sequence > COALESCE(d.sequence, 0)
+         WHERE e.sequence > COALESCE(d.sequence, 0)${bindingFilter}
          ORDER BY e.created_at, e.invocation_id, e.sequence
          LIMIT ?`,
       )
-      .all(normalizedDestination, normalizedLimit) as unknown as PendingDeliveryRow[];
+      .all(
+        normalizedDestination,
+        ...(normalizedBindings ?? []),
+        normalizedLimit,
+      ) as unknown as PendingDeliveryRow[];
     return rows.map((row) => ({
       invocation: invocationRecord(row),
       event: invocationEvent({
@@ -712,6 +779,12 @@ export class SparkInvocationStore {
       throw new Error("invocation delivery destination must not be blank");
     }
     const normalizedSequence = Math.max(0, Math.floor(sequence));
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO invocation_event_delivery_consumers (destination, registered_at)
+         VALUES (?, ?)`,
+      )
+      .run(normalizedDestination, now);
     if (normalizedSequence > this.latestEventSequence(invocationId)) {
       throw new Error(
         `INVOCATION_DELIVERY_CURSOR_GAP: cursor ${normalizedSequence} is beyond latest sequence`,
@@ -777,10 +850,7 @@ export class SparkInvocationStore {
                   WHERE latest.invocation_id = i.id
                 ), 0) > 0 AND EXISTS (
                   SELECT 1
-                  FROM (
-                    SELECT DISTINCT destination
-                    FROM invocation_event_deliveries
-                  ) known
+                  FROM invocation_event_delivery_consumers known
                   LEFT JOIN invocation_event_deliveries d
                     ON d.destination = known.destination
                    AND d.invocation_id = i.id

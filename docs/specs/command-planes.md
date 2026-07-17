@@ -24,9 +24,13 @@ spark <plane> <resource> <verb> [args...]
 spark daemon session list --json
 spark daemon session create --workspace <id> --json
 spark daemon submit --session <session-id> --prompt <text> --json
+spark daemon invocation list --status failed --since 24h --limit 50 --json
 spark daemon invocation status <invocation-id> --json
+spark daemon invocation result <invocation-id> --json
 spark daemon invocation stream <invocation-id> --after <cursor> --limit 500 --json
 spark daemon invocation cancel <invocation-id> --reason <text> --json
+spark daemon invocation retry <invocation-id> --json
+spark daemon invocation retention --before <iso-time> --limit 100 --json
 spark daemon channel status --json
 spark daemon events watch --json
 

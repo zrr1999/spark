@@ -59,10 +59,12 @@ void test("injectSparkHints injects default plan lens without initialized Spark 
 
     assert.equal(typeof result, "object");
     const prompt = (result as { systemPrompt?: string }).systemPrompt ?? "";
-    assert.match(prompt, /<base_system_prompts>/);
+    assert.match(prompt, /<available_skills>/);
     assert.doesNotMatch(prompt, /# Spark/);
-    assert.match(prompt, /# spark-cue/);
-    assert.match(prompt, /# spark-graft/);
+    assert.match(prompt, /<name>spark-cue<\/name>/);
+    assert.doesNotMatch(prompt, /# spark-cue/);
+    assert.doesNotMatch(prompt, /<base_system_prompts>/);
+    assert.doesNotMatch(prompt, /# spark-graft/);
     assert.equal((await loadSparkMode(dir, ctx)).mode, "plan");
   } finally {
     await rm(dir, { recursive: true, force: true });

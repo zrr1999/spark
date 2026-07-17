@@ -49,6 +49,13 @@ describe("WorkbenchSessionRail component contract", () => {
     expect(source).toContain("labels: messages.sessionTypes");
   });
 
+  it("preloads a conversation before navigation to reduce switching latency", () => {
+    const source = readFileSync(componentPath, "utf8");
+
+    expect(source).toContain('data-sveltekit-preload-data="hover"');
+    expect(source).toContain("/sessions/${encodeURIComponent(session.sessionId)}");
+  });
+
   it("keeps the compact new-conversation action beside the filter", () => {
     const source = readFileSync(componentPath, "utf8");
 

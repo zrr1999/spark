@@ -24,6 +24,7 @@ export interface ServerCommandRouting {
   workspaceBindingId?: string;
   workspaceId?: string;
   projectId?: string;
+  sessionId?: string;
   commandId: string;
   idempotencyKey?: string;
 }
@@ -50,6 +51,7 @@ export function createServerCommandEnvelope(input: CreateServerCommandEnvelopeIn
     workspaceBindingId: input.workspaceBindingId,
     workspaceId: input.workspaceId,
     projectId: input.projectId,
+    sessionId: input.sessionId,
     commandId: input.commandId,
     idempotencyKey: input.idempotencyKey,
     payload: serverCommandPayloadSchema.parse({

@@ -12,11 +12,14 @@ interface RaceRegistrationInput {
 }
 
 process.on("message", (message: RaceRegistrationInput) => {
-  const db = new DatabaseSync(message.databasePath);
-  db.exec("PRAGMA foreign_keys = ON");
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA busy_timeout = 5000");
+  let db: DatabaseSync | undefined;
   try {
+    db = new DatabaseSync(message.databasePath);
+    // Install the busy handler before WAL setup because concurrent connections
+    // may need to wait while SQLite reads or changes the journal mode.
+    db.exec("PRAGMA busy_timeout = 5000");
+    db.exec("PRAGMA journal_mode = WAL");
+    db.exec("PRAGMA foreign_keys = ON");
     registerRuntimeWorkspace(
       db,
       message.runtimeId,
@@ -39,7 +42,7 @@ process.on("message", (message: RaceRegistrationInput) => {
           : "UNEXPECTED_REGISTRATION_ERROR",
     });
   } finally {
-    db.close();
+    db?.close();
     process.disconnect?.();
   }
 });

@@ -29,9 +29,12 @@ import {
   DEFAULT_SPARK_PROVIDER_SPECS,
   mergeSparkProviderSpecs,
 } from "@zendev-lab/spark-ai/control";
+import { DEFAULT_SPARK_EXTENSION_SPECS } from "./extension-specs.ts";
 
 export interface SparkConfig {
   extensions: string[];
+  /** Version of the bundled extension profile last reconciled with this config. */
+  extensionProfileVersion?: number;
   providers: string[];
   skills?: string[];
   promptTemplates?: string[];
@@ -47,16 +50,21 @@ export interface SparkConfig {
   activeThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 }
 
+export const CURRENT_SPARK_EXTENSION_PROFILE_VERSION = 1;
+
+const LEGACY_SPARK_EXTENSION_FACADE = "@zendev-lab/spark-extension/extension";
+const CURRENT_SPARK_EXTENSION_FACADE = "@zendev-lab/pi-extension/extension";
+const LEGACY_DEFAULT_EXTENSION_CORE = [
+  "@zendev-lab/spark-ask/extension",
+  "@zendev-lab/spark-cue/extension",
+  "@zendev-lab/spark-files/extension",
+  "@zendev-lab/spark-ai/models-extension",
+  "@zendev-lab/spark-roles/extension",
+] as const;
+
 export const DEFAULT_SPARK_CONFIG: SparkConfig = {
-  extensions: [
-    "@zendev-lab/spark-ask/extension",
-    "@zendev-lab/spark-cue/extension",
-    "@zendev-lab/spark-files/extension",
-    "@zendev-lab/spark-ai/models-extension",
-    "@zendev-lab/spark-roles/extension",
-    "@zendev-lab/spark-graft/extension",
-    "@zendev-lab/pi-extension/extension",
-  ],
+  extensions: [...DEFAULT_SPARK_EXTENSION_SPECS],
+  extensionProfileVersion: CURRENT_SPARK_EXTENSION_PROFILE_VERSION,
   providers: [...DEFAULT_SPARK_PROVIDER_SPECS],
   skills: [],
   promptTemplates: [],
@@ -103,7 +111,11 @@ export function mergeWithDefault(raw: unknown): SparkConfig {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return cloneDefault();
   const fields = raw as Partial<Record<keyof SparkConfig, unknown>>;
   return {
-    extensions: stringArray(fields.extensions, DEFAULT_SPARK_CONFIG.extensions),
+    extensions: migrateSparkExtensionProfile(
+      stringArray(fields.extensions, DEFAULT_SPARK_CONFIG.extensions),
+      fields.extensionProfileVersion,
+    ),
+    extensionProfileVersion: CURRENT_SPARK_EXTENSION_PROFILE_VERSION,
     providers: mergeSparkProviderSpecs(stringArray(fields.providers, [])),
     skills: stringArray(fields.skills, DEFAULT_SPARK_CONFIG.skills ?? []),
     promptTemplates: stringArray(
@@ -127,6 +139,7 @@ export function mergeWithDefault(raw: unknown): SparkConfig {
 function cloneDefault(): SparkConfig {
   return {
     extensions: [...DEFAULT_SPARK_CONFIG.extensions],
+    extensionProfileVersion: CURRENT_SPARK_EXTENSION_PROFILE_VERSION,
     providers: [...DEFAULT_SPARK_CONFIG.providers],
     skills: [...(DEFAULT_SPARK_CONFIG.skills ?? [])],
     promptTemplates: [...(DEFAULT_SPARK_CONFIG.promptTemplates ?? [])],
@@ -134,6 +147,61 @@ function cloneDefault(): SparkConfig {
     contextFiles: [...(DEFAULT_SPARK_CONFIG.contextFiles ?? [])],
     trustedWorkspaces: [...(DEFAULT_SPARK_CONFIG.trustedWorkspaces ?? [])],
   };
+}
+
+/**
+ * Reconcile only known historical bundled profiles. Arbitrary subsets and
+ * custom extensions stay explicit; a standalone Graft entry therefore remains
+ * an opt-in. Old default profiles are upgraded to the current defaults so
+ * removed defaults cannot silently resurrect from persisted config.
+ */
+export function migrateSparkExtensionProfile(
+  extensions: readonly string[],
+  rawVersion: unknown,
+): string[] {
+  const version = typeof rawVersion === "number" && Number.isInteger(rawVersion) ? rawVersion : 0;
+  const normalized = dedupeStrings(
+    extensions.map((specifier) =>
+      specifier === LEGACY_SPARK_EXTENSION_FACADE ? CURRENT_SPARK_EXTENSION_FACADE : specifier,
+    ),
+  );
+  if (version >= CURRENT_SPARK_EXTENSION_PROFILE_VERSION) return normalized;
+  if (extensions.includes(LEGACY_SPARK_EXTENSION_FACADE)) {
+    const historicalBundled = new Set<string>([
+      ...LEGACY_DEFAULT_EXTENSION_CORE,
+      "@zendev-lab/spark-memory/extension",
+      "@zendev-lab/spark-session/extension",
+      "@zendev-lab/spark-web/extension",
+      "@zendev-lab/spark-graft/extension",
+      CURRENT_SPARK_EXTENSION_FACADE,
+    ]);
+    const custom = normalized.filter((specifier) => !historicalBundled.has(specifier));
+    return dedupeStrings([...DEFAULT_SPARK_EXTENSION_SPECS, ...custom]);
+  }
+  if (extensions.length === 1 && extensions[0] === CURRENT_SPARK_EXTENSION_FACADE) {
+    return [...DEFAULT_SPARK_EXTENSION_SPECS];
+  }
+
+  const legacyDefault =
+    LEGACY_DEFAULT_EXTENSION_CORE.every((specifier) => normalized.includes(specifier)) &&
+    normalized.includes(CURRENT_SPARK_EXTENSION_FACADE) &&
+    normalized.includes("@zendev-lab/spark-graft/extension");
+  if (!legacyDefault) return normalized;
+
+  const legacyBundled = new Set<string>([
+    ...LEGACY_DEFAULT_EXTENSION_CORE,
+    "@zendev-lab/spark-memory/extension",
+    "@zendev-lab/spark-session/extension",
+    "@zendev-lab/spark-web/extension",
+    "@zendev-lab/spark-graft/extension",
+    CURRENT_SPARK_EXTENSION_FACADE,
+  ]);
+  const custom = normalized.filter((specifier) => !legacyBundled.has(specifier));
+  return dedupeStrings([...DEFAULT_SPARK_EXTENSION_SPECS, ...custom]);
+}
+
+function dedupeStrings(values: readonly string[]): string[] {
+  return [...new Set(values)];
 }
 
 function stringArray(value: unknown, fallback: string[]): string[] {

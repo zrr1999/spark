@@ -1,13 +1,22 @@
+import { createHash } from "node:crypto";
 import {
   SparkSessionMailStore,
   SparkSessionRegistryError,
   type SparkSessionMailDeliveryReceipt,
 } from "@zendev-lab/spark-session";
 import type {
+  DaemonChannelDeliveryOutbox,
+  DaemonChannelNotificationDeliveryInput,
+} from "./channels/delivery-outbox.ts";
+import type {
   DaemonChannelIngressRuntime,
   DaemonChannelIngressStatus,
 } from "./channels/ingress.ts";
 import type { DaemonSessionRegistry } from "./session-registry.ts";
+import type {
+  SparkChannelDeliveryRecord,
+  SparkChannelDeliveryStore,
+} from "./store/channel-deliveries.ts";
 
 export interface SessionNotificationDeliveryReceipt {
   adapter: string;
@@ -24,24 +33,29 @@ export interface SessionNotificationDeliveryResult {
 
 type DeliveryMailStore = Pick<SparkSessionMailStore, "get" | "recordChannelDelivery">;
 
+export interface SessionNotificationDeliveryQueue {
+  store: Pick<SparkChannelDeliveryStore, "findByIdempotencyKey">;
+  outbox: Pick<DaemonChannelDeliveryOutbox, "enqueueNotification">;
+}
+
+type SessionNotificationDeliveryDeps = {
+  mailStore: DeliveryMailStore;
+  sessionRegistry: Pick<DaemonSessionRegistry, "get">;
+  channelIngress: Pick<DaemonChannelIngressRuntime, "status" | "notify">;
+  /** Production path: persist platform intent before any network send. */
+  deliveryQueue?: SessionNotificationDeliveryQueue;
+};
+
 export async function deliverSessionNotification(
   input: { sessionId: string; messageId: string },
-  deps: {
-    mailStore: DeliveryMailStore;
-    sessionRegistry: Pick<DaemonSessionRegistry, "get">;
-    channelIngress: Pick<DaemonChannelIngressRuntime, "status" | "notify">;
-  },
+  deps: SessionNotificationDeliveryDeps,
 ): Promise<SessionNotificationDeliveryResult> {
   return await deliverSelectedSessionNotificationTargets(input, deps);
 }
 
 async function deliverSelectedSessionNotificationTargets(
   input: { sessionId: string; messageId: string },
-  deps: {
-    mailStore: DeliveryMailStore;
-    sessionRegistry: Pick<DaemonSessionRegistry, "get">;
-    channelIngress: Pick<DaemonChannelIngressRuntime, "status" | "notify">;
-  },
+  deps: SessionNotificationDeliveryDeps,
   selectedTargets?: ReadonlySet<string>,
 ): Promise<SessionNotificationDeliveryResult> {
   const session = await deps.sessionRegistry.get(input.sessionId);
@@ -74,6 +88,74 @@ async function deliverSelectedSessionNotificationTargets(
   for (const target of message.deliveries) {
     if (target.status === "delivered" || !isSelectedTarget(target, selectedTargets)) {
       deliveries.push(projectDelivery(target));
+      continue;
+    }
+    if (deps.deliveryQueue) {
+      const idempotencyKey = sessionNotificationDeliveryIdempotencyKey({
+        sessionId: input.sessionId,
+        messageId: input.messageId,
+        adapter: target.adapter,
+        externalKey: target.externalKey,
+      });
+      const existing = deps.deliveryQueue.store.findByIdempotencyKey(idempotencyKey);
+      if (existing?.status === "delivered") {
+        try {
+          const updated = await deps.mailStore.recordChannelDelivery(
+            input.sessionId,
+            input.messageId,
+            target,
+            { ok: true, receipt: existing.receipt },
+          );
+          deliveries.push(projectDelivery(findRecordedDelivery(updated.deliveries, target)));
+        } catch (error) {
+          // The durable outbox remains the source of truth, so a failed
+          // mailbox projection is retried without another platform send.
+          console.error(
+            `[spark-daemon] delivered session notification receipt could not be projected` +
+              ` session=${input.sessionId} message=${input.messageId}` +
+              ` target=${target.adapter}:${target.externalKey}`,
+            error,
+          );
+          deliveries.push(
+            projectQueuedDelivery(
+              target,
+              existing,
+              `delivery receipt persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+            ),
+          );
+        }
+        continue;
+      }
+      if (existing) {
+        deliveries.push(projectQueuedDelivery(target, existing));
+        continue;
+      }
+      try {
+        const queued = notificationOutboxInput(
+          {
+            sessionId: input.sessionId,
+            messageId: input.messageId,
+            workspaceId: session.scope.workspaceId,
+            body: message.body,
+            target,
+          },
+          deps.channelIngress.status(session.scope.workspaceId),
+          idempotencyKey,
+        );
+        await deps.deliveryQueue.outbox.enqueueNotification(queued);
+        const persisted = deps.deliveryQueue.store.findByIdempotencyKey(idempotencyKey);
+        deliveries.push(
+          persisted ? projectQueuedDelivery(target, persisted) : projectDelivery(target),
+        );
+      } catch (error) {
+        const updated = await deps.mailStore.recordChannelDelivery(
+          input.sessionId,
+          input.messageId,
+          target,
+          { ok: false, error: error instanceof Error ? error.message : String(error) },
+        );
+        deliveries.push(projectDelivery(findRecordedDelivery(updated.deliveries, target)));
+      }
       continue;
     }
     let receipt: unknown;
@@ -116,6 +198,7 @@ export async function reconcileSessionNotificationDeliveries(
     >;
     sessionRegistry: Pick<DaemonSessionRegistry, "get">;
     channelIngress: Pick<DaemonChannelIngressRuntime, "status" | "notify">;
+    deliveryQueue?: SessionNotificationDeliveryQueue;
   },
   limit = 50,
 ): Promise<{ attempted: number; delivered: number; failed: number }> {
@@ -159,14 +242,79 @@ export async function reconcileSessionNotificationDeliveries(
             ok: false,
             error: errorMessage,
           });
-        } catch {
-          // One corrupt/unwritable mailbox must not poison later delivery groups.
+        } catch (recordError) {
+          // One corrupt/unwritable mailbox must not poison later delivery
+          // groups, but it must remain visible to operators.
+          console.error(
+            `[spark-daemon] session notification failure receipt could not be recorded` +
+              ` session=${message.toSessionId} message=${message.id}` +
+              ` target=${target.adapter}:${target.externalKey}`,
+            recordError,
+          );
         }
         failed += 1;
       }
     }
   }
   return { attempted, delivered, failed };
+}
+
+export function sessionNotificationDeliveryIdempotencyKey(input: {
+  sessionId: string;
+  messageId: string;
+  adapter: string;
+  externalKey: string;
+}): string {
+  const digest = createHash("sha256")
+    .update(JSON.stringify([input.sessionId, input.messageId, input.adapter, input.externalKey]))
+    .digest("hex");
+  return `session.notification:${digest}`;
+}
+
+function notificationOutboxInput(
+  input: {
+    sessionId: string;
+    messageId: string;
+    workspaceId: string;
+    body: string;
+    target: Pick<SparkSessionMailDeliveryReceipt, "adapter" | "externalKey">;
+  },
+  status: DaemonChannelIngressStatus,
+  idempotencyKey: string,
+): DaemonChannelNotificationDeliveryInput {
+  return {
+    idempotencyKey,
+    sessionId: input.sessionId,
+    messageId: input.messageId,
+    workspaceId: input.workspaceId,
+    adapterId: resolveNotificationAdapterId(status, input.target.adapter),
+    externalKey: input.target.externalKey,
+    recipient: notificationRecipient(input.target.externalKey, input.target.adapter),
+    text: input.body,
+  };
+}
+
+function projectQueuedDelivery(
+  target: SparkSessionMailDeliveryReceipt,
+  delivery: SparkChannelDeliveryRecord,
+  projectionError?: string,
+): SessionNotificationDeliveryReceipt {
+  if (projectionError || delivery.status === "retry_wait") {
+    return {
+      adapter: target.adapter,
+      externalKey: target.externalKey,
+      status: "failed",
+      attemptCount: delivery.attemptCount,
+      error: projectionError ?? delivery.lastError ?? "channel delivery is waiting to retry",
+    };
+  }
+  return {
+    adapter: target.adapter,
+    externalKey: target.externalKey,
+    status: delivery.status === "delivered" ? "delivered" : "pending",
+    attemptCount: delivery.attemptCount,
+    ...(delivery.receipt !== undefined ? { receipt: delivery.receipt } : {}),
+  };
 }
 
 function isSelectedTarget(

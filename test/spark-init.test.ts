@@ -127,8 +127,9 @@ void test("Spark prompt preserves base prompt and stays a single-line phase mark
   assert.match(prompt, /Tools:/);
   assert.match(
     prompt,
-    /task_read, task_write, assign, artifact, ask, role, learning, context, recall, workflow, spark-cue, spark-graft/,
+    /task_read, task_write, assign, artifact, ask, role, learning, context, recall, workflow, spark-cue/,
   );
+  assert.doesNotMatch(prompt, /spark-graft/);
   assert.doesNotMatch(prompt, /workflow, patch/);
   assert.doesNotMatch(prompt, /no guessing: ask unless user says infer\/research/);
   assert.doesNotMatch(prompt, /Spark active/);

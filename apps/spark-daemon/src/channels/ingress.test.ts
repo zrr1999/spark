@@ -164,6 +164,33 @@ describe("channel ingress", () => {
     expect(recordTurnSettled).not.toHaveBeenCalled();
   });
 
+  it("passes workspace identity to daemon-owned transport creation", async () => {
+    const sparkHome = await mkdtemp(join(tmpdir(), "spark-channel-transport-context-"));
+    roots.push(sparkHome);
+    const transport = new FakeChannelTransport();
+    const createWorkspaceTransport = vi.fn(() => transport);
+    const runtime = createDaemonChannelIngressRuntime({
+      sparkHome,
+      hooks: { onAssignment: async () => undefined },
+      createWorkspaceTransport,
+    });
+
+    await runtime.configure(
+      "ws_transport",
+      parseChannelsConfig({
+        adapters: { "qq-main": { type: "qqbot", app_id: "app", client_secret: "secret" } },
+        routes: {},
+      }),
+    );
+
+    expect(createWorkspaceTransport).toHaveBeenCalledWith({
+      workspaceId: "ws_transport",
+      adapterId: "qq-main",
+      config: { type: "qqbot", app_id: "app", client_secret: "secret" },
+    });
+    await runtime.stop();
+  });
+
   it("resolves binding and emits assignment for feishu inbound", async () => {
     const sparkHome = await mkdtemp(join(tmpdir(), "spark-channel-ingress-"));
     roots.push(sparkHome);
@@ -539,6 +566,24 @@ describe("channel ingress", () => {
         },
       },
     ]);
+    runtime.setInteractionHandler?.(async () => {
+      throw new Error("durable settlement unavailable");
+    });
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(
+        transport.emitInteraction({
+          adapter: "qqbot",
+          interactionId: "interaction_2",
+          actorId: "user_1",
+          scene: "c2c",
+          recipient: "c2c:user_1",
+          buttonData: "opaque_token_2",
+        }),
+      ).rejects.toThrow("durable settlement unavailable");
+    } finally {
+      log.mockRestore();
+    }
     await runtime.stop();
   });
 });

@@ -35,14 +35,61 @@ export interface TruncateOptions {
   maxBytes?: number;
 }
 
+export type TextLineEnding = "" | "\n" | "\r\n" | "\r";
+
+export interface TextLineSegment {
+  text: string;
+  ending: TextLineEnding;
+}
+
 function byteLength(value: string): number {
   return Buffer.byteLength(value, "utf-8");
 }
 
-function splitLinesForCounting(content: string): string[] {
+/** Split text into logical lines without normalizing its original separators. */
+export function splitTextLines(content: string): TextLineSegment[] {
+  const lines: TextLineSegment[] = [];
+  let start = 0;
+  let index = 0;
+  while (index < content.length) {
+    const character = content[index];
+    if (character === "\r") {
+      const ending: TextLineEnding = content[index + 1] === "\n" ? "\r\n" : "\r";
+      lines.push({ text: content.slice(start, index), ending });
+      index += ending.length;
+      start = index;
+      continue;
+    }
+    if (character === "\n") {
+      lines.push({ text: content.slice(start, index), ending: "\n" });
+      index += 1;
+      start = index;
+      continue;
+    }
+    index += 1;
+  }
+  lines.push({ text: content.slice(start), ending: "" });
+  return lines;
+}
+
+/** Join a contiguous line window, omitting the separator after its final line. */
+export function joinTextLines(lines: readonly TextLineSegment[]): string {
+  let content = "";
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line === undefined) continue;
+    content += line.text;
+    if (index < lines.length - 1) content += line.ending;
+  }
+  return content;
+}
+
+function splitLinesForCounting(content: string): TextLineSegment[] {
   if (content.length === 0) return [];
-  const lines = content.split("\n");
-  if (content.endsWith("\n")) lines.pop();
+  const lines = splitTextLines(content);
+  const last = lines.at(-1);
+  const previous = lines.at(-2);
+  if (last?.text === "" && last.ending === "" && previous?.ending !== "") lines.pop();
   return lines;
 }
 
@@ -81,7 +128,7 @@ export function truncateHead(content: string, options: TruncateOptions = {}): Tr
     };
   }
 
-  const firstLineBytes = byteLength(lines[0] ?? "");
+  const firstLineBytes = byteLength(lines[0]?.text ?? "");
   if (firstLineBytes > maxBytes) {
     return {
       content: "",
@@ -98,32 +145,36 @@ export function truncateHead(content: string, options: TruncateOptions = {}): Tr
     };
   }
 
-  const outputLinesArr: string[] = [];
+  let outputContent = "";
+  let outputLines = 0;
   let outputBytesCount = 0;
   let truncatedBy: TruncatedBy = "lines";
   for (let i = 0; i < lines.length && i < maxLines; i++) {
-    const line = lines[i] ?? "";
-    const lineBytes = byteLength(line) + (i > 0 ? 1 : 0); // +1 for newline
-    if (outputBytesCount + lineBytes > maxBytes) {
+    const line = lines[i];
+    if (line === undefined) continue;
+    const separator = i > 0 ? (lines[i - 1]?.ending ?? "") : "";
+    const addition = `${separator}${line.text}`;
+    const additionBytes = byteLength(addition);
+    if (outputBytesCount + additionBytes > maxBytes) {
       truncatedBy = "bytes";
       break;
     }
-    outputLinesArr.push(line);
-    outputBytesCount += lineBytes;
+    outputContent += addition;
+    outputLines += 1;
+    outputBytesCount += additionBytes;
   }
 
-  if (outputLinesArr.length >= maxLines && outputBytesCount <= maxBytes) {
+  if (outputLines >= maxLines && outputBytesCount <= maxBytes) {
     truncatedBy = "lines";
   }
 
-  const outputContent = outputLinesArr.join("\n");
   return {
     content: outputContent,
     truncated: true,
     truncatedBy,
     totalLines,
     totalBytes,
-    outputLines: outputLinesArr.length,
+    outputLines,
     outputBytes: byteLength(outputContent),
     lastLinePartial: false,
     firstLineExceedsLimit: false,

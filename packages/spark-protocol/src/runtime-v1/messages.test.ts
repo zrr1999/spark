@@ -56,6 +56,34 @@ describe("typed runtime control messages", () => {
     ).toBe("workspace");
   });
 
+  it("accepts explicit daemon and workspace session scopes with session routing", () => {
+    const sessionId = "sess_runtime_control";
+    expect(
+      serverCommandEnvelopeSchema.parse({
+        ...base,
+        sessionId,
+        payload: {
+          kind: "session.get.request",
+          scope: "daemon",
+          payload: { sessionId },
+        },
+      }).sessionId,
+    ).toBe(sessionId);
+    expect(
+      serverCommandEnvelopeSchema.parse({
+        ...base,
+        sessionId,
+        workspaceBindingId: createId("rtwb"),
+        workspaceId: createId("ws"),
+        payload: {
+          kind: "turn.submit.request",
+          scope: "workspace",
+          payload: { sessionId, prompt: "continue" },
+        },
+      }).payload.scope,
+    ).toBe("workspace");
+  });
+
   it("reports every missing workspace route at the envelope field", () => {
     const parsed = serverCommandEnvelopeSchema.safeParse({
       protocolVersion: runtimeProtocolVersion,

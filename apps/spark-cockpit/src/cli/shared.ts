@@ -6,7 +6,13 @@ export interface SparkCliOutput {
 
 export const consoleSparkCliOutput: SparkCliOutput = {
   write(text) {
-    console.log(text);
+    process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
+  },
+};
+
+export const consoleSparkCliErrorOutput: SparkCliOutput = {
+  write(text) {
+    process.stderr.write(text.endsWith("\n") ? text : `${text}\n`);
   },
 };
 
@@ -114,7 +120,16 @@ export function formatSparkCliHuman(value: unknown): string {
   return lines.join("\n");
 }
 
-const BOOLEAN_OPTIONS = new Set(["help", "json", "once", "reset", "all-workspaces", "all"]);
+const BOOLEAN_OPTIONS = new Set([
+  "help",
+  "json",
+  "once",
+  "reset",
+  "all-workspaces",
+  "all",
+  "yes",
+  "y",
+]);
 
 function normalizeOptionName(name: string): string {
   switch (name) {

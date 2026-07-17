@@ -9,6 +9,7 @@ export {
   SelectList,
   TUI,
   truncateToWidth,
+  visibleWidth,
   wrapTextWithAnsi,
 } from "@zendev-lab/spark-tui/pi-tui";
 export type {

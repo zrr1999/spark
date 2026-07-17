@@ -135,6 +135,9 @@ export class InfoflowAdapter implements ChannelAdapter {
       console.log(`[spark-channels] infoflow dropped duplicate message=${messageId}`);
       return;
     }
+    this.onMessage?.(message);
+    // The callback is the daemon's durable receipt boundary. Do not suppress a
+    // platform redelivery until that receipt has completed successfully.
     if (dedupeKey) {
       this.seenMessages.set(dedupeKey, now);
       if (this.seenMessages.size > INFOFLOW_DEDUPE_CAPACITY) {
@@ -142,7 +145,6 @@ export class InfoflowAdapter implements ChannelAdapter {
         if (oldest) this.seenMessages.delete(oldest);
       }
     }
-    this.onMessage?.(message);
   }
 
   private pruneSeenMessages(now: number): void {

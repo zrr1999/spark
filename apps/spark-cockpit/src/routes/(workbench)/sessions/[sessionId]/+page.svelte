@@ -27,4 +27,5 @@
   formValues={form?.values ?? null}
   canAssign={data.canAssign}
   modelControl={data.modelControl}
+  initialSubmissionId={data.submissionId}
 />

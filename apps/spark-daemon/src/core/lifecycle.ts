@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { SPARK_PROTOCOL_VERSION } from "@zendev-lab/spark-protocol";
 
-export type SparkDaemonLifecycleState = "running" | "draining";
-export type SparkDaemonLifecyclePhase = "serving" | "draining-active-work";
+export type SparkDaemonLifecycleState = "starting" | "running" | "draining";
+export type SparkDaemonLifecyclePhase = "initializing" | "serving" | "draining-active-work";
 
 export interface SparkDaemonProcessIdentity {
   pid: number;
@@ -58,10 +58,12 @@ export class SparkDaemonLifecycle {
   private targetInstanceId: string | undefined;
   private targetGeneration: string | undefined;
   private restartRequestedAt: string | undefined;
+  private serving: boolean;
 
   constructor(
     identity: Partial<Omit<SparkDaemonProcessIdentity, "pid" | "generation" | "startedAt">> &
       Pick<Partial<SparkDaemonProcessIdentity>, "pid" | "generation" | "startedAt"> = {},
+    options: { initiallyServing?: boolean } = {},
   ) {
     this.identity = {
       pid: identity.pid ?? process.pid,
@@ -77,6 +79,7 @@ export class SparkDaemonLifecycle {
         ? { predecessorInstanceId: identity.predecessorInstanceId }
         : {}),
     };
+    this.serving = options.initiallyServing !== false;
   }
 
   /** Synchronous admission gate: no new work may start once this aborts. */
@@ -93,6 +96,25 @@ export class SparkDaemonLifecycle {
     return this.restartRequestedAt !== undefined;
   }
 
+  /** Open externally observable work admission for the final synchronous startup commit. */
+  activate(): void {
+    this.serving = true;
+  }
+
+  /**
+   * Roll back an unobservable startup activation when the final restart-fence
+   * compare-and-swap loses to an explicit stop. Callers pair this
+   * synchronously with `activate()` so local RPC cannot observe a false
+   * serving generation between the two operations.
+   */
+  deactivate(): void {
+    this.serving = false;
+  }
+
+  get isServing(): boolean {
+    return this.serving && !this.restartRequestedAt;
+  }
+
   get processGeneration(): string {
     return this.identity.generation;
   }
@@ -102,17 +124,20 @@ export class SparkDaemonLifecycle {
   }
 
   snapshot(): SparkDaemonLifecycleSnapshot {
-    return this.restartRequestedAt
-      ? {
-          state: "draining",
-          phase: "draining-active-work",
-          process: this.identity,
-          restartId: this.restartId,
-          targetInstanceId: this.targetInstanceId,
-          targetGeneration: this.targetGeneration,
-          restartRequestedAt: this.restartRequestedAt,
-        }
-      : { state: "running", phase: "serving", process: this.identity };
+    if (this.restartRequestedAt) {
+      return {
+        state: "draining",
+        phase: "draining-active-work",
+        process: this.identity,
+        restartId: this.restartId,
+        targetInstanceId: this.targetInstanceId,
+        targetGeneration: this.targetGeneration,
+        restartRequestedAt: this.restartRequestedAt,
+      };
+    }
+    return this.serving
+      ? { state: "running", phase: "serving", process: this.identity }
+      : { state: "starting", phase: "initializing", process: this.identity };
   }
 
   requestRestart(

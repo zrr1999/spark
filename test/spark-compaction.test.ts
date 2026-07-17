@@ -25,6 +25,7 @@ import { createSparkPiParitySlashCommands } from "../apps/spark-tui/src/cli/pi-p
 import { SparkNativeSession } from "../apps/spark-tui/src/native-tui.ts";
 import { defaultSparkMemoryStore } from "../packages/spark-memory/src/index.ts";
 import sparkMemoryExtension from "../packages/spark-memory/src/extension.ts";
+import { SPARK_PROMPT_ITEM_METADATA_KEY } from "../packages/spark-turn/src/agent-loop.ts";
 
 function compactableRecord(store: SparkSessionStore): SparkSessionRecord {
   const record = store.createSession({ id: "compact", timestamp: "2026-06-03T06:00:00.000Z" });
@@ -138,10 +139,12 @@ void test("sessionEntriesToAgentMessages rebuilds compacted context with summary
       messages.map((message) => message.role),
       ["user", "assistant"],
     );
-    assert.equal(
-      messages[0]?.content,
-      "The conversation history before this point was compacted into the following summary:\n\n<summary>\nOlder conversation summary.\n</summary>",
+    assert.match(
+      testContentText(messages[0]?.content),
+      /<spark_runtime_data trust="untrusted" custom_type="spark-compaction-summary">/u,
     );
+    assert.match(testContentText(messages[0]?.content), /&lt;summary&gt;/u);
+    assert.match(testContentText(messages[0]?.content), /Older conversation summary\./u);
     assert.deepEqual(messages[1]?.content, [{ type: "text", text: "recent answer" }]);
     assert.doesNotMatch(JSON.stringify(messages), /a{20}|b{20}|recent request/);
 
@@ -309,7 +312,15 @@ void test("entriesToMessages includes custom messages and branch summaries but n
   try {
     const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
     const record = store.createSession({ id: "messages", timestamp: "2026-06-03T07:00:00.000Z" });
-    store.appendCustomMessage(record, "spark", "custom content", true, { k: "v" });
+    store.appendCustomMessage(record, "spark", "custom content", false, {
+      k: "v",
+      [SPARK_PROMPT_ITEM_METADATA_KEY]: {
+        authority: "runtime_control",
+        trust: "trusted",
+        visibility: "hidden",
+        persistence: "session",
+      },
+    });
     record.entries.push({
       type: "branch_summary",
       id: "branch-summary",
@@ -328,10 +339,15 @@ void test("entriesToMessages includes custom messages and branch summaries but n
       tokensBefore: 100,
     });
 
+    const messages = entriesToMessages(record.entries);
     assert.deepEqual(
-      entriesToMessages(record.entries).map((message) => message.role),
+      messages.map((message) => message.role),
       ["custom", "branchSummary"],
     );
+    assert.equal(messages[0]?.promptAuthority, "runtime_control");
+    assert.equal(messages[0]?.promptTrust, "trusted");
+    assert.equal(messages[0]?.promptVisibility, "hidden");
+    assert.equal(messages[0]?.promptPersistence, "session");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -23,8 +23,12 @@ import {
   setSessionThinkingLevelForCockpit,
 } from "$lib/server/model-control";
 import {
-  workspaceIdForWorkbenchSession,
+  cockpitSubmissionIdempotencyKey,
+  createCockpitSubmissionId,
+} from "$lib/server/submission-idempotency";
+import {
   workspaceSessionsForWorkbench,
+  workspaceIdForWorkbenchSession,
 } from "../../../lib/workbench-session-scope";
 import { sessionHasChannelBinding } from "../../../lib/channel-session-title";
 import type { Actions, PageServerLoad } from "./$types";
@@ -45,6 +49,7 @@ export const load: PageServerLoad = async ({ parent }) => {
     startSubmissionIdSeed: createId("idem"),
     sessionActivity: null,
     modelControl,
+    submissionId: createCockpitSubmissionId(),
   };
 };
 
@@ -59,14 +64,9 @@ export const actions: Actions = {
     const message = formText(formData, "message").trim();
     const model = formText(formData, "model").trim();
     const thinkingLevel = formText(formData, "thinkingLevel").trim();
-    const submissionId = formText(formData, "submissionId").trim();
-    const values = {
-      workspaceId,
-      message,
-      model,
-      thinkingLevel,
-      ...(submissionId ? { submissionId } : {}),
-    };
+    const submittedId = formText(formData, "submissionId").trim();
+    const submissionId = submittedId || createCockpitSubmissionId();
+    const values = { workspaceId, message, model, thinkingLevel, submissionId };
 
     if (!workspaceId) {
       return fail(400, {
@@ -95,6 +95,7 @@ export const actions: Actions = {
         scope: { kind: "workspace", workspaceId },
         workspaceId,
         ...(deterministicSessionId ? { sessionId: deterministicSessionId } : {}),
+        idempotencyKey: cockpitSubmissionIdempotencyKey(submissionId, "session.create"),
       });
     } catch (caught) {
       if (deterministicSessionId) {
@@ -134,10 +135,12 @@ export const actions: Actions = {
         workspaceId,
         sessionId: session.sessionId,
         message,
-        ...(submissionId ? { submissionId } : {}),
+        submissionId,
       });
     } catch (caught) {
-      if (!submissionId) {
+      // Client-provided submission ids stay recoverable for retries; server-minted
+      // ones are cleaned up so empty plain posts do not leave orphan sessions.
+      if (!submittedId) {
         try {
           await archiveManagedSessionForCockpit(session.sessionId);
         } catch {
@@ -166,8 +169,8 @@ export const actions: Actions = {
     const formData = await request.formData();
     const sessionId = formText(formData, "sessionId").trim();
     const message = formText(formData, "message").trim();
-    const submissionId = formText(formData, "submissionId").trim();
-    const values = { sessionId, message, ...(submissionId ? { submissionId } : {}) };
+    const submissionId = formText(formData, "submissionId").trim() || createCockpitSubmissionId();
+    const values = { sessionId, message, submissionId };
 
     if (!sessionId) {
       return fail(400, {
@@ -235,7 +238,7 @@ export const actions: Actions = {
         workspaceId,
         sessionId,
         message,
-        ...(submissionId ? { submissionId } : {}),
+        submissionId,
       });
 
       return {
@@ -243,7 +246,7 @@ export const actions: Actions = {
         success: true,
         message: t.assignQueued,
         queuedTurnId: turn.turnId,
-        values: { sessionId, message: "" },
+        values: { sessionId, message: "", submissionId: createCockpitSubmissionId() },
       };
     } catch (caught) {
       const error = caught instanceof Error ? caught.message : t.assignFailed;
@@ -299,7 +302,16 @@ export const actions: Actions = {
         values,
       });
     }
-    if (!session || !workspaceIdForWorkbenchSession(session)) {
+    if (!session) {
+      return fail(400, {
+        intent: "cancelTurn",
+        success: false,
+        error: t.cancelSessionRequired,
+        message: t.cancelSessionRequired,
+        values,
+      });
+    }
+    if (!workspaceIdForWorkbenchSession(session)) {
       return fail(400, {
         intent: "cancelTurn",
         success: false,

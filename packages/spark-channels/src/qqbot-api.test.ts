@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { createQqbotApiClient } from "./qqbot-api.ts";
+import {
+  createQqbotApiClient,
+  DEFAULT_QQBOT_REQUEST_TIMEOUT_MS,
+  QqbotRequestTimeoutError,
+} from "./qqbot-api.ts";
 import type { QqbotMessageKeyboard } from "./qqbot-types.ts";
 
 function requestUrl(input: RequestInfo | URL): string {
@@ -13,6 +17,94 @@ function requestBody(init?: RequestInit): unknown {
 }
 
 describe("createQqbotApiClient", () => {
+  it("uses a 30 second default application deadline", () => {
+    expect(DEFAULT_QQBOT_REQUEST_TIMEOUT_MS).toBe(30_000);
+  });
+
+  it.each([
+    [
+      "token",
+      (api: ReturnType<typeof createQqbotApiClient>) => api.getAccessToken("app", "secret"),
+    ],
+    ["gateway", (api: ReturnType<typeof createQqbotApiClient>) => api.getGatewayUrl("token")],
+  ])("aborts a timed-out %s request without retrying", async (_label, request) => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(init.signal?.reason ?? new Error("aborted")),
+            { once: true },
+          );
+        }),
+    );
+    const api = createQqbotApiClient({
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      requestTimeoutMs: 25,
+    });
+
+    try {
+      const pending = request(api);
+      const rejected = expect(pending).rejects.toMatchObject({
+        name: "QqbotRequestTimeoutError",
+        code: "QQBOT_REQUEST_TIMEOUT",
+        timeoutMs: 25,
+      } satisfies Partial<QqbotRequestTimeoutError>);
+      await vi.advanceTimersByTimeAsync(25);
+      await rejected;
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the application deadline active while consuming the response body", async () => {
+    vi.useFakeTimers();
+    let requestSignal: AbortSignal | undefined;
+    const textStarted = vi.fn();
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined;
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          textStarted();
+          return await new Promise<string>(() => undefined);
+        },
+      } as Response;
+    });
+    const api = createQqbotApiClient({
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      requestTimeoutMs: 25,
+    });
+
+    try {
+      const pending = api.getGatewayUrl("token");
+      const rejected = expect(pending).rejects.toMatchObject({
+        name: "QqbotRequestTimeoutError",
+        code: "QQBOT_REQUEST_TIMEOUT",
+        method: "GET",
+        timeoutMs: 25,
+      } satisfies Partial<QqbotRequestTimeoutError>);
+      await vi.advanceTimersByTimeAsync(25);
+      await rejected;
+
+      expect(textStarted).toHaveBeenCalledTimes(1);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(requestSignal?.aborted).toBe(true);
+      expect(requestSignal?.reason).toBeInstanceOf(QqbotRequestTimeoutError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects invalid application deadlines", () => {
+    expect(() => createQqbotApiClient({ requestTimeoutMs: 0 })).toThrow(
+      "requestTimeoutMs must be a positive finite number",
+    );
+  });
+
   it("caches access tokens until near expiry", async () => {
     const fetchImpl = vi.fn(async () => {
       return new Response(JSON.stringify({ access_token: "tok", expires_in: 7200 }), {

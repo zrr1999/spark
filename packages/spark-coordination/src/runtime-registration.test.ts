@@ -543,18 +543,25 @@ describe("runtime registration", () => {
     try {
       const children = runtimes.map(() => startRaceChild());
       await Promise.all(children.map((child) => waitForRaceMessage(child, "ready")));
-      const exits = children.map((child) => waitForRaceExit(child));
-      const results = children.map((child) => waitForRaceMessage(child, "ok"));
+      const results = children.map((child) => waitForRaceResult(child));
       children.forEach((child, index) => {
-        child.send({
+        child.process.send({
           databasePath,
           runtimeId: runtimes[index]?.runtimeId,
           runtimeToken: runtimes[index]?.runtimeToken,
           localWorkspaceKey: `race-local-${index}`,
         });
       });
-      const outcomes = await Promise.all(results);
-      await Promise.all(exits);
+      const settledResults = await Promise.allSettled(results);
+      const childErrors = settledResults.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (childErrors.length > 0) {
+        throw new AggregateError(childErrors, "Owner race child process failed.");
+      }
+      const outcomes = settledResults.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      );
 
       expect(outcomes.filter((outcome) => outcome.ok)).toHaveLength(1);
       expect(outcomes.filter((outcome) => !outcome.ok)).toEqual([
@@ -1313,15 +1320,24 @@ interface RaceMessage {
   reasonCode?: string;
 }
 
-function startRaceChild(): ChildProcess {
-  return spawn(
+interface RaceChild {
+  process: ChildProcess;
+  stderr: string[];
+}
+
+function startRaceChild(): RaceChild {
+  const child = spawn(
     fileURLToPath(new URL("../../../node_modules/.bin/tsx", import.meta.url)),
     [fileURLToPath(new URL("./runtime-registration-race-child.ts", import.meta.url))],
     { stdio: ["ignore", "ignore", "pipe", "ipc"] },
   );
+  const stderr: string[] = [];
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (chunk: string) => stderr.push(chunk));
+  return { process: child, stderr };
 }
 
-function waitForRaceMessage(child: ChildProcess, field: "ready" | "ok"): Promise<RaceMessage> {
+function waitForRaceMessage(child: RaceChild, field: "ready"): Promise<RaceMessage> {
   return new Promise((resolve, reject) => {
     const onMessage = (message: RaceMessage) => {
       if (!(field in message)) return;
@@ -1334,27 +1350,66 @@ function waitForRaceMessage(child: ChildProcess, field: "ready" | "ok"): Promise
     };
     const onExit = (code: number | null) => {
       cleanup();
-      reject(new Error(`Owner race child exited before ${field} with code ${String(code)}.`));
+      reject(
+        new Error(
+          `Owner race child exited before ${field} with code ${String(code)}.${raceChildStderr(child)}`,
+        ),
+      );
     };
     const cleanup = () => {
-      child.off("message", onMessage);
-      child.off("error", onError);
-      child.off("exit", onExit);
+      child.process.off("message", onMessage);
+      child.process.off("error", onError);
+      child.process.off("exit", onExit);
     };
-    child.on("message", onMessage);
-    child.once("error", onError);
-    child.once("exit", onExit);
+    child.process.on("message", onMessage);
+    child.process.once("error", onError);
+    child.process.once("exit", onExit);
   });
 }
 
-function waitForRaceExit(child: ChildProcess): Promise<void> {
+function waitForRaceResult(child: RaceChild): Promise<RaceMessage> {
   return new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`Owner race child exited with code ${String(code)}.`));
-    });
+    let outcome: RaceMessage | undefined;
+    const onMessage = (message: RaceMessage) => {
+      if (!("ok" in message)) return;
+      outcome = message;
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+      cleanup();
+      if (code !== 0) {
+        reject(
+          new Error(
+            `Owner race child exited with code ${String(code)} and signal ${String(signal)}.${raceChildStderr(child)}`,
+          ),
+        );
+        return;
+      }
+      if (!outcome) {
+        reject(
+          new Error(`Owner race child exited without a result message.${raceChildStderr(child)}`),
+        );
+        return;
+      }
+      resolve(outcome);
+    };
+    const cleanup = () => {
+      child.process.off("message", onMessage);
+      child.process.off("error", onError);
+      child.process.off("close", onClose);
+    };
+    child.process.on("message", onMessage);
+    child.process.once("error", onError);
+    child.process.once("close", onClose);
   });
+}
+
+function raceChildStderr(child: RaceChild): string {
+  const stderr = child.stderr.join("").trim();
+  return stderr ? ` stderr: ${stderr}` : "";
 }
 
 function expectRuntimeEnrollmentError(

@@ -48,6 +48,22 @@ export interface GoalReviewEvidencePreview {
   error?: string;
 }
 
+export type GoalReviewRequirementStatus = "verified" | "missing" | "blocked";
+
+export interface GoalReviewRequirement {
+  id: string;
+  description: string;
+  status: GoalReviewRequirementStatus;
+  evidenceRefs: ArtifactRef[];
+  note?: string;
+}
+
+export interface GoalCompletionProtocol {
+  requirements: GoalReviewRequirement[];
+  validationRuns: string[];
+  unresolved: string[];
+}
+
 export interface GoalReviewInput {
   targetKind: "goal";
   cwd: string;
@@ -83,6 +99,10 @@ export interface GoalReviewInput {
   proposedObjective?: string;
   evidenceRefs: ArtifactRef[];
   evidencePreviews?: GoalReviewEvidencePreview[];
+  /** Machine-readable completion claims. Legacy callers derive one objective requirement. */
+  requirements?: GoalReviewRequirement[];
+  validationRuns?: string[];
+  unresolved?: string[];
   sessionKey?: string;
   forkFromSession?: string;
 }
@@ -99,6 +119,57 @@ export interface ToolApprovalReviewInput {
 }
 
 export type ReviewInput = TaskReviewInput | GoalReviewInput | ToolApprovalReviewInput;
+
+/**
+ * Normalize the completion packet once for prompts, runtime gates, and persisted reviews.
+ * Older callers remain compatible through one requirement representing the immutable objective.
+ */
+export function resolveGoalCompletionProtocol(input: GoalReviewInput): GoalCompletionProtocol {
+  const explicitRequirements = input.requirements?.map((requirement) => ({
+    id: requirement.id.trim(),
+    description: requirement.description.trim(),
+    status: requirement.status,
+    evidenceRefs: [...new Set(requirement.evidenceRefs)],
+    ...(requirement.note?.trim() ? { note: requirement.note.trim() } : {}),
+  }));
+  return {
+    requirements: explicitRequirements?.length
+      ? explicitRequirements
+      : [
+          {
+            id: "goal:objective",
+            description: (input.originalObjective ?? input.objective).trim(),
+            status: "verified",
+            evidenceRefs: [...new Set(input.evidenceRefs)],
+          },
+        ],
+    validationRuns: normalizeCompletionStringList(input.validationRuns),
+    unresolved: normalizeCompletionStringList(input.unresolved),
+  };
+}
+
+/** Return deterministic reasons that make a goal completion packet ineligible for approval. */
+export function goalCompletionProtocolBlockers(input: GoalReviewInput): string[] {
+  if (input.requestedStatus !== "complete") return [];
+  const protocol = resolveGoalCompletionProtocol(input);
+  const blockers = protocol.requirements.flatMap((requirement) => {
+    if (!requirement.id) return ["goal completion requirement has an empty id"];
+    if (!requirement.description)
+      return [`goal completion requirement ${requirement.id} has an empty description`];
+    if (requirement.status !== "verified")
+      return [
+        `goal completion requirement ${requirement.id} is ${requirement.status}: ${requirement.description}`,
+      ];
+    return requirement.evidenceRefs.length > 0
+      ? []
+      : [`goal completion verified requirement ${requirement.id} has no mapped evidenceRefs`];
+  });
+  return [...blockers, ...protocol.unresolved.map((item) => `goal completion unresolved: ${item}`)];
+}
+
+function normalizeCompletionStringList(values: readonly string[] | undefined): string[] {
+  return [...new Set(values?.map((value) => value.trim()).filter(Boolean) ?? [])];
+}
 
 export interface ReviewVerdict {
   outcome: ReviewVerdictOutcome;
@@ -227,7 +298,7 @@ const REVIEWER_JSON_SCHEMA = [
   'Use outcome exactly one of: "approved", "needs_changes", "blocked".',
   'Use confidence exactly one of: "low", "medium", "high".',
   "For task reviews, omit achieved, remainingWork, evidence_valid, and objective_satisfied.",
-  "For goal completion reviews, include achieved, evidence_valid, objective_satisfied, and remainingWork. Approve only when evidence_valid=true and objective_satisfied=true.",
+  "For goal completion reviews, include achieved, evidence_valid, objective_satisfied, and remainingWork. Approve only when every requirement is verified with mapped evidenceRefs, unresolved is empty, evidence_valid=true, and objective_satisfied=true.",
   "Task review example:",
   '{"outcome":"approved","summary":"one sentence","findings":[],"blockers":[],"confidence":"high"}',
   "Goal review example:",
@@ -482,6 +553,10 @@ export function renderReviewerInstruction(input: ReviewInput): string {
 }
 
 function renderTaskOrGoalReviewerInstruction(input: TaskReviewInput | GoalReviewInput): string {
+  const completionProtocol =
+    input.targetKind === "goal" && input.requestedStatus === "complete"
+      ? resolveGoalCompletionProtocol(input)
+      : undefined;
   const packet =
     input.targetKind === "task"
       ? {
@@ -509,6 +584,7 @@ function renderTaskOrGoalReviewerInstruction(input: TaskReviewInput | GoalReview
           proposedObjective: input.proposedObjective,
           evidenceRefs: input.evidenceRefs,
           evidencePreviews: input.evidencePreviews,
+          ...(completionProtocol ?? {}),
           sessionKey: input.sessionKey,
         };
   const transitionGuidance =
@@ -520,16 +596,11 @@ function renderTaskOrGoalReviewerInstruction(input: TaskReviewInput | GoalReview
         ]
       : [
           "For targetKind=goal, review semantic satisfaction of the immutable original user goal, not only whether evidence supports a task description, intermediate artifact, or latest completion wording.",
-          "For requestedStatus=complete, first answer internally: what was the user's original goal, does the current completion definition strictly cover it, and has anything been downgraded into an intermediate artifact, simulation, summary, manifest, wrapper, deterministic packaging result, or fixed-point-looking substitute?",
-          "For requestedStatus=complete, return evidence_valid=true only when the cited commands/files/tests are real and support the factual completion claim; return objective_satisfied=true only when that valid evidence satisfies originalObjective without scope drift or semantic laundering. Approve only if both are true.",
-          "For requestedStatus=complete, provide a plain-language assessment in summary/findings of what works now, what still cannot be done, and any Rust/native/trusted dependency that remains. If the packet lacks enough plain-language claim or evidence to answer honestly, use needs_changes.",
-          "Adversarial check: identify the most likely concept substitution in the completion claim and how a user would independently verify the original goal was truly implemented; if this cannot be ruled out, use needs_changes.",
-          "For compiler, self-hosting, bootstrap, interpreter, VM, or execution-engine goals, require core execution path proof: command/call trace, code that executed the core logic, Rust/native/trusted boundary list, and host-implementation dependencies. If trusted/native code still performs the core goal, do not claim self-host/self-compile completion.",
-          "For self-hosting/bootstrap goals, ask negative-counterexample questions: did the new compiler actually execute a compile function written in the target language; is a Rust helper/native primitive still doing core compilation; could byte-identical output be deterministic packaging; and if the Rust runner/helper is disabled, can stage1 still compile itself? If evidence does not answer these, use needs_changes.",
-          'Treat evidence terms such as "image runner", "summary", "trusted native", "manifest", "mock", "snapshot", "fixed point", or "wrapper" as high-risk naming-misleading indicators; verify they are not packaging around a weaker substitute before approving.',
-          "For requestedStatus=complete, require a user-reproducible acceptance command or equivalent direct validation that tests the original goal, not merely an internal task/subgoal. If only project task graph completion is shown but the original goal is not semantically met, use needs_changes and say the task graph is insufficient/create additional tasks/do not complete goal.",
+          "Completion success criteria (all required): every requirements[].status is verified and has mapped evidenceRefs; unresolved is empty; evidence_valid=true; objective_satisfied=true; and cited evidence directly and reproducibly tests originalObjective without scope drift. validationRuns are supplemental and do not replace per-requirement evidence.",
+          "Reject intermediate artifacts, simulations, summaries, manifests, wrappers, deterministic packaging, snapshots, mocks, or fixed-point-looking substitutes when they do not prove the original outcome. State what works, what remains, and any native/trusted dependency.",
+          "For compiler, self-hosting, bootstrap, interpreter, VM, or execution-engine goals, require core execution path proof: the acceptance command/call trace, code that executed core logic, native/trusted boundaries, and behavior when host helpers are disabled.",
           'For requestedStatus=complete, a goal may complete without a current project only when evidenceRefs/projectStatus directly cover originalObjective. Otherwise, currentProjectSelected=false or projectEvidenceSource=project_evidence_fallback means the next step is research/plan: create/select a project with task_write({ action: "project_use", title, description }) and plan concrete tasks with task_write({ action: "plan" }); never use "no current project", "project cleared", or "all historical tasks are done" as the completion rationale.',
-          "If projectStatus.taskCounts.unfinished > 0, default to needs_changes unless originalObjective explicitly says this is planning-only/readiness-only and does not ask for project/task implementation completion.",
+          "If projectStatus.taskCounts.unfinished > 0, default to needs_changes unless originalObjective is planning-only/readiness-only, or explicit requirements plus direct evidence demonstrate to the reviewer that the unfinished tasks are outside this narrower goal.",
           "When unfinished project work remains, include concrete remainingWork using projectStatus.readyTasks and unfinishedTasks instead of treating planning evidence as implementation completion.",
           "For requestedStatus=paused, reject main-agent autonomous pauses; blockers should be resolved by doing or planning blocking work, not by pausing the goal.",
           "For requestedStatus=edited, approve only when the proposed objective corrects a material description error or wrong direction in the current objective and does not reduce difficulty, remove required outcomes, narrow scope, or turn implementation work into planning-only/readiness-only work; compare proposedObjective against originalObjective.",
@@ -677,15 +748,28 @@ export function parseReviewerVerdictForInput(input: ReviewInput, text: string): 
         "objective_satisfied",
         "objectiveSatisfied",
       );
+      const protocolBlockers = goalCompletionProtocolBlockers(input);
       const missingRequiredApprovalFields =
         input.requestedStatus === "complete" &&
         parsed.outcome === "approved" &&
         (evidenceValid !== true || objectiveSatisfied !== true);
-      const outcome = missingRequiredApprovalFields ? "needs_changes" : parsed.outcome;
-      const blockers = missingRequiredApprovalFields
+      const protocolRejectedApproval =
+        input.requestedStatus === "complete" &&
+        parsed.outcome === "approved" &&
+        protocolBlockers.length > 0;
+      const invalidApproval = missingRequiredApprovalFields || protocolRejectedApproval;
+      const outcome = invalidApproval ? "needs_changes" : parsed.outcome;
+      const blockers = invalidApproval
         ? [
-            ...parsed.blockers,
-            "goal completion approval must explicitly set evidence_valid=true and objective_satisfied=true",
+            ...new Set([
+              ...parsed.blockers,
+              ...(missingRequiredApprovalFields
+                ? [
+                    "goal completion approval must explicitly set evidence_valid=true and objective_satisfied=true",
+                  ]
+                : []),
+              ...protocolBlockers,
+            ]),
           ]
         : parsed.blockers;
       const achieved =
@@ -693,10 +777,13 @@ export function parseReviewerVerdictForInput(input: ReviewInput, text: string): 
         outcome === "approved" &&
         (parseBooleanField(value, "achieved") ?? true) &&
         evidenceValid === true &&
-        objectiveSatisfied === true;
+        objectiveSatisfied === true &&
+        protocolBlockers.length === 0;
       const summary = missingRequiredApprovalFields
         ? "goal completion approval missing required evidence_valid/objective_satisfied semantic gate"
-        : parsed.summary;
+        : protocolRejectedApproval
+          ? "goal completion approval failed structured completion protocol"
+          : parsed.summary;
       const remainingWork = stringField(value, "remainingWork") ?? (achieved ? "" : summary);
       return {
         ...parsed,

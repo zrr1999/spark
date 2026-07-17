@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { createId } from "@zendev-lab/spark-protocol";
+import type { ChannelAskRequest } from "@zendev-lab/spark-channels";
 import { runtimeEnvelope } from "../protocol/outbound.ts";
 import type { SparkDaemonHumanInteractionOpened } from "../core/human-interactions.ts";
 import {
@@ -7,11 +8,13 @@ import {
   type SparkDaemonHumanWaitDeliveryOutcome,
 } from "../core/human-waits.ts";
 import type { ChannelIngressHooks, DaemonChannelIngressRuntime } from "./ingress.ts";
+import type { DaemonChannelDeliveryOutbox } from "./delivery-outbox.ts";
 
 /** Best-effort QQ projection of a daemon-owned request. Cockpit remains authoritative. */
 export async function projectChannelAsk(
   channelIngress: DaemonChannelIngressRuntime,
   input: SparkDaemonHumanInteractionOpened,
+  deliveryOutbox?: Pick<DaemonChannelDeliveryOutbox, "enqueueAsk">,
 ): Promise<void> {
   const channel = input.channel;
   if (!channel || channel.adapterId !== "qqbot" || input.callbackOptions.length === 0) return;
@@ -30,17 +33,28 @@ export async function projectChannelAsk(
     ...(descriptions.length > 0 ? [descriptions.join("\n")] : []),
     ...(omitted > 0 ? [`另有 ${omitted} 个选项，请在 Spark Cockpit 中查看。`] : []),
   ].join("\n\n");
-  await channelIngress.sendAsk(channel.workspaceId, channel.adapterId, channel.recipient, {
+  const request: ChannelAskRequest = {
     prompt,
     options: options.map((option, index) => ({
       id: String(index + 1),
       label: option.label,
       data: option.token,
     })),
-    audience: { kind: "users", userIds: [channel.actorId] },
+    audience: { kind: "users" as const, userIds: [channel.actorId] },
     ...(channel.messageId ? { messageId: channel.messageId } : {}),
     unsupportedText: "请在 Spark Cockpit 中回答。",
-  });
+  };
+  if (deliveryOutbox) {
+    await deliveryOutbox.enqueueAsk({
+      idempotencyKey: `channel.ask:${input.wait.humanRequestId}`,
+      workspaceId: channel.workspaceId,
+      adapterId: channel.adapterId,
+      recipient: channel.recipient,
+      request,
+    });
+    return;
+  }
+  await channelIngress.sendAsk(channel.workspaceId, channel.adapterId, channel.recipient, request);
 }
 
 /** Validate an opaque QQ callback, settle exactly one wait, then ACK the platform event. */
@@ -48,17 +62,15 @@ export async function settleChannelAskInteraction(
   channelIngress: DaemonChannelIngressRuntime,
   waits: SparkDaemonHumanWaitRegistry,
   input: Parameters<NonNullable<ChannelIngressHooks["onInteraction"]>>[0],
-  options: { runtimeId: string },
+  options: {
+    runtimeId: string;
+    deliveryOutbox?: Pick<DaemonChannelDeliveryOutbox, "enqueueInteractionAck">;
+  },
 ): Promise<void> {
   const { event, workspaceId } = input;
   const callback = waits.findCallback(event.buttonData);
   if (!callback) {
-    await channelIngress.ackInteraction(
-      workspaceId,
-      event.adapterId,
-      event.interactionId,
-      "forbidden",
-    );
+    await deliverInteractionAck(channelIngress, event, workspaceId, "forbidden", options);
     return;
   }
 
@@ -73,12 +85,7 @@ export async function settleChannelAskInteraction(
     expectedActorId === event.actorId &&
     (!event.recipient || !expectedRecipient || event.recipient === expectedRecipient);
   if (!routeMatches) {
-    await channelIngress.ackInteraction(
-      workspaceId,
-      event.adapterId,
-      event.interactionId,
-      "forbidden",
-    );
+    await deliverInteractionAck(channelIngress, event, workspaceId, "forbidden", options);
     return;
   }
 
@@ -119,20 +126,38 @@ export async function settleChannelAskInteraction(
       },
     ).outcome;
   } catch (error) {
-    await channelIngress.ackInteraction(
-      workspaceId,
-      event.adapterId,
-      event.interactionId,
-      "rate_limited",
-    );
+    await deliverInteractionAck(channelIngress, event, workspaceId, "rate_limited", options);
     throw error;
   }
-  await channelIngress.ackInteraction(
+  await deliverInteractionAck(
+    channelIngress,
+    event,
     workspaceId,
-    event.adapterId,
-    event.interactionId,
     channelInteractionAckStatus(outcome),
+    options,
   );
+}
+
+async function deliverInteractionAck(
+  channelIngress: DaemonChannelIngressRuntime,
+  event: Parameters<NonNullable<ChannelIngressHooks["onInteraction"]>>[0]["event"],
+  workspaceId: string,
+  status: Parameters<DaemonChannelIngressRuntime["ackInteraction"]>[3],
+  options: {
+    deliveryOutbox?: Pick<DaemonChannelDeliveryOutbox, "enqueueInteractionAck">;
+  },
+): Promise<void> {
+  if (options.deliveryOutbox) {
+    await options.deliveryOutbox.enqueueInteractionAck({
+      idempotencyKey: `channel.interaction-ack:${event.adapterId}:${event.interactionId}`,
+      workspaceId,
+      adapterId: event.adapterId,
+      interactionId: event.interactionId,
+      status: status ?? "success",
+    });
+    return;
+  }
+  await channelIngress.ackInteraction(workspaceId, event.adapterId, event.interactionId, status);
 }
 
 function channelInteractionResponseId(adapterId: string, interactionId: string): string {

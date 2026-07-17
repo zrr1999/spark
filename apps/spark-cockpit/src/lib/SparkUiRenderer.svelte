@@ -23,11 +23,13 @@
   let {
     document,
     source = "",
+    streaming = false,
     showSource = false,
     labels = defaultLabels,
   }: {
     document: SparkUiDocumentV1;
     source?: string;
+    streaming?: boolean;
     showSource?: boolean;
     labels?: Partial<Labels>;
   } = $props();
@@ -45,9 +47,10 @@
 
 <div class="spark-ui-document" data-schema-version={document.schemaVersion}>
   {#each document.blocks as block, index (`${block.type}-${index}`)}
+    {@const blockStreaming = streaming && index === document.blocks.length - 1}
     <section class="spark-ui-block {block.type}">
       {#if block.type === "markdown"}
-        <SafeMarkdown source={block.text} />
+        <SafeMarkdown source={block.text} streaming={blockStreaming} />
       {:else if block.type === "artifact"}
         <article class="reference-card artifact-card">
           <span class="reference-kicker">{mergedLabels.artifact}</span>
@@ -71,7 +74,7 @@
           {#if block.title}
             <strong>{block.title}</strong>
           {/if}
-          <SafeMarkdown source={block.body} />
+          <SafeMarkdown source={block.body} streaming={blockStreaming} />
         </article>
       {:else}
         <article class="reference-card unsupported-card">

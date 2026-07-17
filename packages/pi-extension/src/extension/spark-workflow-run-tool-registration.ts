@@ -138,7 +138,6 @@ export function registerSparkWorkflowRunTool(
       "Every agent() prompt must include enough context; intermediate values stay in workflow variables and only the compact final result returns to the conversation.",
       "Prefer quality helpers: verify for adversarial checks, judgePanel for best-of-N, loopUntilDry for exhaustive discovery, and completenessCheck before final synthesis.",
       "Use tokenBudget/maxAgents/concurrency when the user asks for spend/time bounds or the fan-out is large.",
-      "Use agent(prompt, { isolation: 'graft' }) only for code-editing agents that should work through Graft scratch/candidate tools; Spark injects GRAFT_BASE_REF from persisted workflow base metadata and narrows tools to Graft operations.",
       "workflow_run starts managed background dynamic workflow runs by default and returns a runRef quickly; pass wait=true only when an explicitly synchronous result is required.",
       "workflow_run persists script body/hash, args, stages, journal, result/error, and base metadata; use runRef/resumeRunRef to resume a prior dynamic workflow run.",
     ],

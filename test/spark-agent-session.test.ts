@@ -7,9 +7,12 @@ import test from "node:test";
 import {
   SparkAgentSession,
   createSparkCliHostServices,
+  sessionEntriesToAgentMessages,
+  sessionEntriesToPromptItems,
   type SparkCliHostServicesOptions,
   type SparkConfig,
 } from "../apps/spark-tui/src/host/index.ts";
+import { SPARK_PROMPT_ITEM_METADATA_KEY } from "../packages/spark-turn/src/agent-loop.ts";
 import { assistantMessageToFinalAnswerText } from "../apps/spark-tui/src/host/agent-session.ts";
 import { createSparkHeadlessRoleExecutor } from "../apps/spark-tui/src/headless-role-executor.ts";
 import {
@@ -50,6 +53,10 @@ const ESC = String.fromCharCode(27);
 const ANSI_PATTERN = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]`, "gu");
 function stripAnsi(text: string): string {
   return text.replace(ANSI_PATTERN, "");
+}
+
+function testContentText(content: unknown): string {
+  return typeof content === "string" ? content : JSON.stringify(content);
 }
 
 function fakeTui(): TUI {
@@ -95,6 +102,65 @@ void test("channel-facing assistant text does not turn a tool-use preamble into 
     }),
     "",
   );
+});
+
+void test("session replay retains runtime authority without promoting legacy custom data", () => {
+  const entries = [
+    {
+      type: "custom_message" as const,
+      id: "runtime-control",
+      parentId: null,
+      timestamp: "2026-07-15T00:00:00.000Z",
+      customType: "runtime-policy",
+      content: "policy <bounded>",
+      display: false,
+      details: {
+        [SPARK_PROMPT_ITEM_METADATA_KEY]: {
+          authority: "runtime_control",
+          trust: "trusted",
+          visibility: "hidden",
+          persistence: "session",
+        },
+      },
+    },
+    {
+      type: "custom_message" as const,
+      id: "legacy-data",
+      parentId: "runtime-control",
+      timestamp: "2026-07-15T00:00:01.000Z",
+      customType: "legacy-extension-data",
+      content: "legacy payload",
+      display: true,
+    },
+  ];
+
+  const items = sessionEntriesToPromptItems(entries);
+  assert.deepEqual(
+    items.map(({ authority, trust, visibility, persistence }) => ({
+      authority,
+      trust,
+      visibility,
+      persistence,
+    })),
+    [
+      {
+        authority: "runtime_control",
+        trust: "trusted",
+        visibility: "hidden",
+        persistence: "session",
+      },
+      {
+        authority: "runtime_data",
+        trust: "untrusted",
+        visibility: "visible",
+        persistence: "session",
+      },
+    ],
+  );
+  const lowered = sessionEntriesToAgentMessages(entries);
+  assert.match(testContentText(lowered[0]?.content), /<spark_runtime_control trust="trusted"/u);
+  assert.match(testContentText(lowered[0]?.content), /policy &lt;bounded&gt;/u);
+  assert.match(testContentText(lowered[1]?.content), /<spark_runtime_data trust="untrusted"/u);
 });
 
 void test("SparkAgentSession persists and resumes JSONL sessions", async () => {
@@ -200,9 +266,13 @@ void test("Spark headless role executor supports forked session runs", async () 
     services.sessionStore.appendMessage(parent, { role: "assistant", content: "parent answer" });
     await services.sessionStore.save(parent);
 
+    let roleApprovalMethod: SparkCliHostServicesOptions["approvalMethod"];
     const executeRole = createSparkHeadlessRoleExecutor({
       sparkHome,
-      createServices: async (options = {}) => await makeFakeServices(options),
+      createServices: async (options = {}) => {
+        roleApprovalMethod = options.approvalMethod;
+        return await makeFakeServices(options);
+      },
     });
     const result = await executeRole({
       role: {
@@ -231,6 +301,7 @@ void test("Spark headless role executor supports forked session runs", async () 
     assert.equal(result.record.status, "succeeded");
     assert.equal(result.record.launch, "forked");
     assert.equal(result.record.forkFromSession, "parent-session");
+    assert.equal(roleApprovalMethod, "auto");
     assert.equal(result.stdout, "count:3");
 
     const child = await services.sessionStore.findById("spark-daemon-run:forked");

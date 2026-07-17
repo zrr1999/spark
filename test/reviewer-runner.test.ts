@@ -232,7 +232,7 @@ void test("goal reviewer approval requires explicit evidence and objective seman
     objective: "Finish bootstrap fixed point evidence",
     status: "active",
     requestedStatus: "complete",
-    evidenceRefs: [],
+    evidenceRefs: ["artifact:compiler-proof"],
   };
 
   const missing = parseReviewerVerdictForInput(
@@ -273,6 +273,137 @@ void test("goal reviewer approval requires explicit evidence and objective seman
   assert.equal(approved.achieved, true);
   assert.equal(approved.evidenceValid, true);
   assert.equal(approved.objectiveSatisfied, true);
+});
+
+void test("goal reviewer rejects an approved verdict when any requirement is missing", () => {
+  const input: GoalReviewInput = {
+    targetKind: "goal",
+    cwd: process.cwd(),
+    goalId: "goal-requirements",
+    objective: "Ship the complete feature",
+    status: "active",
+    requestedStatus: "complete",
+    evidenceRefs: ["artifact:implemented"],
+    requirements: [
+      {
+        id: "implemented",
+        description: "Feature is implemented",
+        status: "verified",
+        evidenceRefs: ["artifact:implemented"],
+      },
+      {
+        id: "validated",
+        description: "Feature passes acceptance validation",
+        status: "missing",
+        evidenceRefs: [],
+      },
+    ],
+    unresolved: [],
+  };
+  const verdict = parseReviewerVerdictForInput(
+    input,
+    JSON.stringify({
+      outcome: "approved",
+      summary: "incorrect approval",
+      findings: [],
+      blockers: [],
+      confidence: "high",
+      achieved: true,
+      evidence_valid: true,
+      objective_satisfied: true,
+      remainingWork: "",
+    }),
+  );
+
+  assert.equal(verdict.targetKind, "goal");
+  assert.equal(verdict.outcome, "needs_changes");
+  assert.equal(verdict.achieved, false);
+  assert.match(verdict.blockers.join("\n"), /requirement validated is missing/);
+});
+
+void test("goal reviewer rejects unresolved work and verified requirements without evidence", () => {
+  const base: GoalReviewInput = {
+    targetKind: "goal",
+    cwd: process.cwd(),
+    goalId: "goal-unresolved",
+    objective: "Ship the complete feature",
+    status: "active",
+    requestedStatus: "complete",
+    evidenceRefs: ["artifact:global-only"],
+    requirements: [
+      {
+        id: "acceptance",
+        description: "Acceptance behavior is verified",
+        status: "verified",
+        evidenceRefs: [],
+      },
+    ],
+    unresolved: ["verify the rollback path"],
+  };
+  const verdictJson = JSON.stringify({
+    outcome: "approved",
+    summary: "incorrect approval",
+    findings: [],
+    blockers: [],
+    confidence: "high",
+    achieved: true,
+    evidence_valid: true,
+    objective_satisfied: true,
+    remainingWork: "",
+  });
+  const verdict = parseReviewerVerdictForInput(base, verdictJson);
+
+  assert.equal(verdict.targetKind, "goal");
+  assert.equal(verdict.outcome, "needs_changes");
+  assert.equal(verdict.achieved, false);
+  assert.match(verdict.blockers.join("\n"), /verified requirement acceptance has no mapped/);
+  assert.match(verdict.blockers.join("\n"), /unresolved: verify the rollback path/);
+});
+
+void test("goal reviewer approves only an evidence-mapped fully resolved protocol", () => {
+  const input: GoalReviewInput = {
+    targetKind: "goal",
+    cwd: process.cwd(),
+    goalId: "goal-resolved",
+    objective: "Ship the complete feature",
+    status: "active",
+    requestedStatus: "complete",
+    evidenceRefs: ["artifact:implementation", "artifact:acceptance"],
+    requirements: [
+      {
+        id: "implemented",
+        description: "Feature is implemented",
+        status: "verified",
+        evidenceRefs: ["artifact:implementation"],
+      },
+      {
+        id: "validated",
+        description: "Acceptance behavior passes",
+        status: "verified",
+        evidenceRefs: ["artifact:acceptance"],
+      },
+    ],
+    validationRuns: ["pnpm test: passed"],
+    unresolved: [],
+  };
+  const verdict = parseReviewerVerdictForInput(
+    input,
+    JSON.stringify({
+      outcome: "approved",
+      summary: "all requirements are evidenced",
+      findings: [],
+      blockers: [],
+      confidence: "high",
+      achieved: true,
+      evidence_valid: true,
+      objective_satisfied: true,
+      remainingWork: "",
+    }),
+  );
+
+  assert.equal(verdict.targetKind, "goal");
+  assert.equal(verdict.outcome, "approved");
+  assert.equal(verdict.achieved, true);
 });
 
 void test("reviewer verdict parser normalizes common outcome aliases", () => {
@@ -375,6 +506,10 @@ void test("goal reviewer instruction still gates completion on unfinished projec
   assert.match(instruction, /If projectStatus\.taskCounts\.unfinished > 0/);
   assert.match(instruction, /When unfinished project work remains/);
   assert.match(instruction, /"requestedStatus": "complete"/);
+  assert.match(instruction, /"requirements": \[/);
+  assert.match(instruction, /"id": "goal:objective"/);
+  assert.match(instruction, /"validationRuns": \[\]/);
+  assert.match(instruction, /"unresolved": \[\]/);
 });
 
 void test("goal reviewer instruction does not treat missing current project as completion", () => {

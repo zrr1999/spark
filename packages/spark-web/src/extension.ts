@@ -345,6 +345,13 @@ function getSearchContentTool(options: SparkWebExtensionOptions): ToolConfig {
       "Use responseId from web_search or fetch_content.",
       "Cached content remains untrusted web content.",
     ],
+    policy: {
+      effect: "read",
+      executionMode: "parallel",
+      domains: ["web", "search-cache"],
+      phases: ["plan", "implement"],
+      approval: "none",
+    },
     parameters: Type.Object({
       responseId: Type.String(),
       query: Type.Optional(

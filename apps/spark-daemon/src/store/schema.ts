@@ -60,6 +60,11 @@ export function migrateSparkDaemonDatabase(db: DatabaseSync): void {
       PRIMARY KEY (destination, invocation_id)
     );
 
+    CREATE TABLE IF NOT EXISTS invocation_event_delivery_consumers (
+      destination TEXT PRIMARY KEY,
+      registered_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS outbox (
       id TEXT PRIMARY KEY,
       kind TEXT NOT NULL,
@@ -69,6 +74,34 @@ export function migrateSparkDaemonDatabase(db: DatabaseSync): void {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS channel_deliveries (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL CHECK (kind IN ('reply', 'ask', 'interaction_ack', 'inbound', 'notification')),
+      idempotency_key TEXT NOT NULL UNIQUE,
+      payload_json TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'retry_wait', 'delivered')),
+      attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+      next_attempt_at TEXT NOT NULL,
+      lease_owner TEXT,
+      lease_token TEXT,
+      lease_expires_at TEXT,
+      claimed_at TEXT,
+      last_error TEXT,
+      receipt_json TEXT,
+      delivered_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS qqbot_gateway_cursors (
+      workspace_id TEXT NOT NULL,
+      adapter_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      last_seq INTEGER NOT NULL CHECK (last_seq >= 0),
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (workspace_id, adapter_id)
+    );
+
     CREATE TABLE IF NOT EXISTS runtime_command_receipts (
       command_id TEXT PRIMARY KEY,
       runtime_id TEXT NOT NULL,
@@ -76,6 +109,12 @@ export function migrateSparkDaemonDatabase(db: DatabaseSync): void {
       workspace_binding_id TEXT,
       workspace_id TEXT,
       project_id TEXT,
+      session_id TEXT,
+      idempotency_key TEXT,
+      request_message_id TEXT,
+      payload_json TEXT,
+      claim_token TEXT,
+      lease_expires_at TEXT,
       kind TEXT NOT NULL,
       payload_hash TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('processing', 'accepted', 'succeeded', 'failed', 'rejected')),
@@ -113,12 +152,29 @@ export function migrateSparkDaemonDatabase(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS invocation_event_deliveries_cursor_idx
       ON invocation_event_deliveries(destination, invocation_id, sequence);
     CREATE INDEX IF NOT EXISTS outbox_status_idx ON outbox(status, created_at);
+    CREATE INDEX IF NOT EXISTS channel_deliveries_due_idx
+      ON channel_deliveries(status, next_attempt_at, lease_expires_at, created_at)
+      WHERE status IN ('pending', 'retry_wait');
+    CREATE TRIGGER IF NOT EXISTS channel_deliveries_idempotency_key_immutable
+      BEFORE UPDATE OF idempotency_key ON channel_deliveries
+      WHEN NEW.idempotency_key IS NOT OLD.idempotency_key
+      BEGIN
+        SELECT RAISE(ABORT, 'channel delivery idempotency_key is immutable');
+      END;
     CREATE INDEX IF NOT EXISTS runtime_command_receipts_terminal_idx
       ON runtime_command_receipts(terminal_acked_at, completed_at)
       WHERE terminal_json IS NOT NULL;
     CREATE INDEX IF NOT EXISTS daemon_human_waits_status_idx ON daemon_human_waits(status, created_at);
   `);
+  migrateChannelDeliveryKinds(db);
+  addMissingRuntimeCommandReceiptColumns(db);
   addMissingInvocationColumns(db);
+  db.exec(`
+    INSERT OR IGNORE INTO invocation_event_delivery_consumers (destination, registered_at)
+    SELECT DISTINCT destination, MIN(updated_at)
+    FROM invocation_event_deliveries
+    GROUP BY destination
+  `);
   const humanWaitColumns = workspaceColumns(db, "daemon_human_waits");
   if (!humanWaitColumns.has("accepted_response_id")) {
     db.exec("ALTER TABLE daemon_human_waits ADD COLUMN accepted_response_id TEXT");
@@ -128,6 +184,79 @@ export function migrateSparkDaemonDatabase(db: DatabaseSync): void {
   db.exec("CREATE INDEX IF NOT EXISTS workspaces_status_idx ON workspaces(status)");
   migrateSparkDaemonRegistrationTables(db);
   backfillSparkDaemonRegistrationTables(db);
+}
+
+function addMissingRuntimeCommandReceiptColumns(db: DatabaseSync): void {
+  const columns = workspaceColumns(db, "runtime_command_receipts");
+  for (const [name, type] of [
+    ["session_id", "TEXT"],
+    ["idempotency_key", "TEXT"],
+    ["request_message_id", "TEXT"],
+    ["payload_json", "TEXT"],
+    ["claim_token", "TEXT"],
+    ["lease_expires_at", "TEXT"],
+  ] as const) {
+    if (!columns.has(name))
+      db.exec(`ALTER TABLE runtime_command_receipts ADD COLUMN ${name} ${type}`);
+  }
+}
+
+function migrateChannelDeliveryKinds(db: DatabaseSync): void {
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'channel_deliveries'")
+    .get() as { sql?: string } | undefined;
+  if (!row?.sql || (row.sql.includes("'inbound'") && row.sql.includes("'notification'"))) return;
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec(`
+      DROP INDEX IF EXISTS channel_deliveries_due_idx;
+      DROP TRIGGER IF EXISTS channel_deliveries_idempotency_key_immutable;
+      ALTER TABLE channel_deliveries RENAME TO channel_deliveries_legacy;
+      CREATE TABLE channel_deliveries (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('reply', 'ask', 'interaction_ack', 'inbound', 'notification')),
+        idempotency_key TEXT NOT NULL UNIQUE,
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'retry_wait', 'delivered')),
+        attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+        next_attempt_at TEXT NOT NULL,
+        lease_owner TEXT,
+        lease_token TEXT,
+        lease_expires_at TEXT,
+        claimed_at TEXT,
+        last_error TEXT,
+        receipt_json TEXT,
+        delivered_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO channel_deliveries (
+        id, kind, idempotency_key, payload_json, status, attempt_count,
+        next_attempt_at, lease_owner, lease_token, lease_expires_at, claimed_at,
+        last_error, receipt_json, delivered_at, created_at, updated_at
+      )
+      SELECT
+        id, kind, idempotency_key, payload_json, status, attempt_count,
+        next_attempt_at, lease_owner, lease_token, lease_expires_at, claimed_at,
+        last_error, receipt_json, delivered_at, created_at, updated_at
+      FROM channel_deliveries_legacy;
+      DROP TABLE channel_deliveries_legacy;
+      CREATE INDEX channel_deliveries_due_idx
+        ON channel_deliveries(status, next_attempt_at, lease_expires_at, created_at)
+        WHERE status IN ('pending', 'retry_wait');
+      CREATE TRIGGER channel_deliveries_idempotency_key_immutable
+        BEFORE UPDATE OF idempotency_key ON channel_deliveries
+        WHEN NEW.idempotency_key IS NOT OLD.idempotency_key
+        BEGIN
+          SELECT RAISE(ABORT, 'channel delivery idempotency_key is immutable');
+        END;
+    `);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 /**
@@ -217,6 +346,10 @@ function addMissingInvocationColumns(db: DatabaseSync): void {
     CREATE UNIQUE INDEX IF NOT EXISTS invocations_idempotency_idx
       ON invocations(idempotency_key)
       WHERE idempotency_key IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS invocation_event_delivery_consumers (
+      destination TEXT PRIMARY KEY,
+      registered_at TEXT NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS invocation_events_cursor_idx
       ON invocation_events(invocation_id, sequence);
   `);
@@ -342,6 +475,17 @@ function migrateSparkDaemonRegistrationTables(db: DatabaseSync): void {
       lease_expires_at TEXT,
       released_at TEXT,
       metadata_json TEXT NOT NULL DEFAULT '{}'
+    );
+
+    CREATE TABLE IF NOT EXISTS daemon_relocation_audit (
+      id TEXT PRIMARY KEY,
+      instance_id TEXT NOT NULL,
+      runtime_id TEXT NOT NULL,
+      from_server_url TEXT NOT NULL,
+      to_server_url TEXT NOT NULL,
+      workspace_count INTEGER NOT NULL,
+      outcome TEXT NOT NULL CHECK (outcome IN ('succeeded')),
+      created_at TEXT NOT NULL
     );
 
     CREATE INDEX IF NOT EXISTS daemon_workspaces_status_idx

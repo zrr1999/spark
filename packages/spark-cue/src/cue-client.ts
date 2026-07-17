@@ -341,6 +341,10 @@ export interface PongPayload {
   capabilities: string[];
   /** Unique to one daemon process lifetime when supported by the daemon. */
   instance_id?: string;
+  /** Restart generation fence added by newer daemons; absent on compatible v2 peers. */
+  generation_id?: string;
+  /** Explicit startup-readiness hint; omission preserves legacy ready behavior. */
+  ready?: boolean;
 }
 
 export interface ScopeCreatedPayload {
@@ -1279,7 +1283,7 @@ async function initializeConnectedClient(
     return client;
   } catch (error) {
     client.close();
-    if (error instanceof CueError) throw error;
+    if (error instanceof CueError || error instanceof CueDaemonStartingError) throw error;
     throw unsupportedProtocolError(
       "cue-shell daemon accepted the connection but IPC initialization failed; upgrade/restart cued",
       error,
@@ -1641,6 +1645,9 @@ export class CueClient {
           `cue-shell daemon is missing required IPC capability ${capability}; upgrade/restart cued`,
         );
       }
+    }
+    if (pong.ready === false) {
+      throw new CueDaemonStartingError("cue-shell daemon is still starting; retry the connection");
     }
     const instanceId = pong.instance_id;
     if (instanceId !== undefined && (typeof instanceId !== "string" || instanceId.length === 0)) {
@@ -3367,6 +3374,14 @@ export class CueTransportError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "CueTransportError";
+  }
+}
+
+/** Compatible daemon generation is reachable but has not opened work admission yet. */
+class CueDaemonStartingError extends CueTransportError {
+  constructor(message: string) {
+    super(message);
+    this.name = "CueDaemonStartingError";
   }
 }
 

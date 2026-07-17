@@ -27,6 +27,7 @@ export interface SparkSessionMailMessage {
   visibility: SparkSessionMailVisibility;
   delivery: SparkSessionMailDelivery;
   deliveries: SparkSessionMailDeliveryReceipt[];
+  originBinding?: { adapter: "feishu" | "infoflow" | "qqbot"; externalKey: string };
   intent: string;
   payload: Record<string, unknown>;
   correlationId: string;
@@ -58,6 +59,7 @@ export interface SparkSessionMailSendInput {
   visibility?: SparkSessionMailVisibility;
   delivery?: SparkSessionMailDelivery;
   deliveryTargets?: Array<{ adapter: string; externalKey: string }>;
+  originBinding?: { adapter: "feishu" | "infoflow" | "qqbot"; externalKey: string };
   intent?: string;
   payload?: Record<string, unknown>;
   correlationId?: string;
@@ -113,6 +115,9 @@ export class SparkSessionMailStore {
       visibility,
       delivery,
       deliveries,
+      ...(input.originBinding
+        ? { originBinding: normalizeOriginBinding(input.originBinding) }
+        : {}),
       intent,
       payload,
       correlationId: input.correlationId?.trim(),
@@ -138,6 +143,9 @@ export class SparkSessionMailStore {
           visibility,
           delivery,
           deliveries,
+          ...(input.originBinding
+            ? { originBinding: normalizeOriginBinding(input.originBinding) }
+            : {}),
           intent,
           payload,
           correlationId,
@@ -554,6 +562,9 @@ function normalizeMailMessage(value: unknown): SparkSessionMailMessage | undefin
     visibility: record.visibility === "user" ? "user" : "internal",
     delivery: record.delivery === "channel" ? "channel" : "mailbox",
     deliveries: normalizeStoredDeliveries(record.deliveries),
+    ...(record.originBinding
+      ? { originBinding: normalizeOriginBinding(record.originBinding) }
+      : {}),
     intent:
       typeof record.intent === "string" && record.intent.trim() ? record.intent : "session.mail",
     payload: normalizePayload(record.payload),
@@ -609,6 +620,17 @@ function normalizePayload(value: unknown): Record<string, unknown> {
       }`,
     );
   }
+}
+
+function normalizeOriginBinding(value: unknown): {
+  adapter: "feishu" | "infoflow" | "qqbot";
+  externalKey: string;
+} {
+  const target = normalizeDeliveryTarget(value);
+  if (target.adapter !== "feishu" && target.adapter !== "infoflow" && target.adapter !== "qqbot") {
+    throw new Error(`unsupported originating channel adapter: ${target.adapter}`);
+  }
+  return { adapter: target.adapter, externalKey: target.externalKey };
 }
 
 function normalizeDeliveryTargets(
@@ -760,6 +782,7 @@ function assertSameLogicalMessage(
     visibility: SparkSessionMailVisibility;
     delivery: SparkSessionMailDelivery;
     deliveries: SparkSessionMailDeliveryReceipt[];
+    originBinding?: SparkSessionMailMessage["originBinding"];
     intent: string;
     payload: Record<string, unknown>;
     correlationId?: string;
@@ -778,6 +801,7 @@ function assertSameLogicalMessage(
       adapter,
       externalKey,
     })),
+    originBinding: existing.originBinding ?? null,
     intent: existing.intent,
     payload: existing.payload,
     ...(candidate.correlationId ? { correlationId: existing.correlationId } : {}),
@@ -795,6 +819,7 @@ function assertSameLogicalMessage(
       adapter,
       externalKey,
     })),
+    originBinding: candidate.originBinding ?? null,
     intent: candidate.intent,
     payload: candidate.payload,
     ...(candidate.correlationId ? { correlationId: candidate.correlationId } : {}),

@@ -7,9 +7,11 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
   ExtensionUiNotifyLevel,
+  ResolvedToolPolicy,
   ToolConfig,
   ToolInfo,
 } from "@zendev-lab/spark-extension-api";
+import { resolveToolPolicy } from "@zendev-lab/spark-extension-api";
 
 import { SparkHostRuntime } from "../apps/spark-tui/src/host/runtime.ts";
 import type {
@@ -21,6 +23,7 @@ import type {
 interface ContractObservation {
   registeredTools: string[];
   activeTools: string[];
+  resolvedPolicy: ResolvedToolPolicy;
   commandNames: string[];
   eventResults: unknown[];
   commandReturn: unknown;
@@ -48,6 +51,7 @@ interface ContractDriver {
   emit(event: string, payload?: unknown): Promise<unknown[]>;
   listTools(): RegisteredTool[];
   getTool(name: string): RegisteredTool | undefined;
+  getActiveTools(): string[];
   getAllTools(): ToolInfo[];
   setActiveTools(names: string[]): void;
   listCommands(): Array<{ name: string; command: RegisteredCommand }>;
@@ -78,7 +82,11 @@ class PiExtensionApiAdapter implements ExtensionAPI {
 
   registerTool(config: ToolConfig): void {
     const existing = this.tools.get(config.name);
-    this.tools.set(config.name, { config, active: existing?.active ?? true });
+    this.tools.set(config.name, {
+      config,
+      policy: resolveToolPolicy(config),
+      active: existing?.active ?? true,
+    });
   }
 
   registerCommand(name: string, config: CommandConfig): void {
@@ -97,10 +105,18 @@ class PiExtensionApiAdapter implements ExtensionAPI {
     this.listeners.set(event, list);
   }
 
+  getActiveTools(): string[] {
+    const names: string[] = [];
+    for (const [name, tool] of this.tools) {
+      if (tool.active) names.push(name);
+    }
+    return names;
+  }
+
   getAllTools(): ToolInfo[] {
     const tools: ToolInfo[] = [];
     for (const [name, tool] of this.tools) {
-      if (tool.active) tools.push({ name });
+      tools.push({ name, policy: tool.policy });
     }
     return tools;
   }
@@ -232,6 +248,7 @@ function makeSparkDriver(): ContractDriver {
     emit: (event, payload) => host.emit(event, payload),
     listTools: () => host.listTools(),
     getTool: (name) => host.getTool(name),
+    getActiveTools: () => host.getActiveTools(),
     getAllTools: () => host.getAllTools(),
     setActiveTools: (names) => host.setActiveTools(names),
     listCommands: () => host.listCommands(),
@@ -254,6 +271,7 @@ function makePiAdapterDriver(): ContractDriver {
     emit: (event, payload) => adapter.emit(event, payload),
     listTools: () => adapter.listTools(),
     getTool: (name) => adapter.getTool(name),
+    getActiveTools: () => adapter.getActiveTools(),
     getAllTools: () => adapter.getAllTools(),
     setActiveTools: (names) => adapter.setActiveTools(names),
     listCommands: () => adapter.listCommands(),
@@ -269,6 +287,13 @@ function contractFixtureExtension(pi: ExtensionAPI): void {
     name: "contract_echo",
     description: "Echo test tool",
     parameters: { type: "object", properties: { text: { type: "string" } } },
+    policy: {
+      effect: "read",
+      executionMode: "parallel",
+      domains: ["contract"],
+      phases: ["plan"],
+      approval: "none",
+    },
     async execute(toolCallId, params, _signal, onUpdate, ctx) {
       const text = typeof params.text === "string" ? params.text : "";
       onUpdate({ content: [{ type: "text", text: `update:${text}` }] });
@@ -352,16 +377,13 @@ function contractFixtureExtension(pi: ExtensionAPI): void {
 async function exercise(driver: ContractDriver): Promise<ContractObservation> {
   contractFixtureExtension(driver.api);
 
-  const registeredTools = driver
-    .listTools()
-    .map((tool) => tool.config.name)
-    .sort();
-
   driver.setActiveTools(["contract_echo"]);
-  const activeTools = driver
+  const registeredTools = driver
     .getAllTools()
     .map((tool) => tool.name)
     .sort();
+  const activeTools = driver.getActiveTools().sort();
+  const resolvedPolicy = driver.getTool("contract_echo")!.policy;
 
   const commandNames = driver
     .listCommands()
@@ -394,6 +416,7 @@ async function exercise(driver: ContractDriver): Promise<ContractObservation> {
   return {
     registeredTools,
     activeTools,
+    resolvedPolicy,
     commandNames,
     eventResults,
     commandReturn,
@@ -424,6 +447,13 @@ void test("ExtensionAPI contract fixture behaves the same on SparkHostRuntime an
   assert.deepEqual(spark, piAdapter);
   assert.deepEqual(spark.registeredTools, ["contract_echo", "contract_other"]);
   assert.deepEqual(spark.activeTools, ["contract_echo"]);
+  assert.deepEqual(spark.resolvedPolicy, {
+    effect: "read",
+    executionMode: "parallel",
+    domains: ["contract"],
+    phases: ["plan"],
+    approval: "none",
+  });
   assert.deepEqual(spark.commandNames, ["contract", "contract:1"]);
   assert.deepEqual(spark.eventResults, ["session-started", "turn-started"]);
   assert.deepEqual(spark.toolUpdates, ["update:hello"]);

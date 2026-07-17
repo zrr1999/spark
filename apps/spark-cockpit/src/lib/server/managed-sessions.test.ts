@@ -1,8 +1,5 @@
 import type { SparkSessionRegistryRecord } from "@zendev-lab/spark-protocol";
-import {
-  SparkDaemonLocalRpcRemoteError,
-  SparkDaemonLocalRpcUnavailableError,
-} from "@zendev-lab/spark-system";
+import { RuntimeControlCommandError } from "@zendev-lab/spark-coordination/runtime-control";
 import { describe, expect, it, vi } from "vitest";
 import {
   archiveManagedSessionForCockpit,
@@ -13,6 +10,7 @@ import {
   listManagedSessionsForCockpit,
   type CockpitManagedSessionsClient,
 } from "./managed-sessions";
+import { CockpitRuntimeSessionUnavailableError } from "./cockpit-runtime-session-client";
 
 const session: SparkSessionRegistryRecord = {
   sessionId: "sess_a",
@@ -23,6 +21,13 @@ const session: SparkSessionRegistryRecord = {
   bindings: [],
   createdAt: "2026-07-10T00:00:00.000Z",
   updatedAt: "2026-07-10T00:00:00.000Z",
+};
+
+const daemonSession: SparkSessionRegistryRecord = {
+  ...session,
+  sessionId: "sess_daemon",
+  scope: { kind: "daemon", daemonId: "daemon-a" },
+  workspaceId: undefined,
 };
 
 const snapshot = {
@@ -67,10 +72,31 @@ describe("managed sessions for cockpit", () => {
     expect(client.snapshot).toHaveBeenCalledWith("sess_a");
   });
 
+  it("keeps daemon-scoped sessions outside every Cockpit read surface", async () => {
+    const client = daemonClient();
+    client.list.mockResolvedValueOnce([session, daemonSession]);
+    client.get.mockResolvedValue(daemonSession);
+
+    await expect(listManagedSessionsForCockpit({}, client)).resolves.toEqual({
+      available: true,
+      sessions: [session],
+    });
+    await expect(
+      listManagedSessionsForCockpit({ scope: { kind: "daemon" } }, client),
+    ).resolves.toEqual({ available: true, sessions: [] });
+    await expect(getManagedSessionForCockpit(daemonSession.sessionId, client)).resolves.toBeNull();
+    await expect(
+      getManagedSessionSnapshotForCockpit(daemonSession.sessionId, client),
+    ).resolves.toBeNull();
+
+    expect(client.list).toHaveBeenCalledTimes(1);
+    expect(client.snapshot).not.toHaveBeenCalled();
+  });
+
   it("returns an empty read model when the daemon is unavailable or stale", async () => {
     const client = daemonClient();
     client.list.mockRejectedValueOnce(
-      new SparkDaemonLocalRpcUnavailableError("restart or upgrade the daemon"),
+      new CockpitRuntimeSessionUnavailableError("restart or upgrade the daemon"),
     );
 
     await expect(listManagedSessionsForCockpit({}, client)).resolves.toEqual({
@@ -83,12 +109,9 @@ describe("managed sessions for cockpit", () => {
   it("returns null for get when the daemon is unavailable or the session is missing", async () => {
     const client = daemonClient();
     client.get
-      .mockRejectedValueOnce(new SparkDaemonLocalRpcUnavailableError("daemon offline"))
+      .mockRejectedValueOnce(new CockpitRuntimeSessionUnavailableError("daemon offline"))
       .mockRejectedValueOnce(
-        new SparkDaemonLocalRpcRemoteError("unknown session: sess_missing", {
-          code: "session_not_found",
-          message: "unknown session: sess_missing",
-        }),
+        new RuntimeControlCommandError("unknown session: sess_missing", "session_not_found"),
       );
 
     await expect(getManagedSessionForCockpit("sess_a", client)).resolves.toBeNull();
@@ -98,7 +121,7 @@ describe("managed sessions for cockpit", () => {
   it("returns null for snapshot when the daemon read fails", async () => {
     const client = daemonClient();
     client.snapshot
-      .mockRejectedValueOnce(new SparkDaemonLocalRpcUnavailableError("daemon offline"))
+      .mockRejectedValueOnce(new CockpitRuntimeSessionUnavailableError("daemon offline"))
       .mockRejectedValueOnce(new Error("invalid session view"));
 
     await expect(getManagedSessionSnapshotForCockpit("sess_a", client)).resolves.toBeNull();
@@ -155,6 +178,22 @@ describe("managed sessions for cockpit", () => {
     expect(client.archive).toHaveBeenCalledWith("sess_a");
   });
 
+  it("does not create native-TUI-only daemon sessions", async () => {
+    const client = daemonClient();
+
+    await expect(
+      createManagedSessionForCockpit(
+        {
+          runtimeId: "runtime-a",
+          scope: { kind: "daemon" },
+          title: "TUI only",
+        },
+        client,
+      ),
+    ).rejects.toThrow("workspace-scoped sessions only");
+    expect(client.create).not.toHaveBeenCalled();
+  });
+
   it("does not fabricate an offline fallback when the daemon rejects a mutation", async () => {
     const client = daemonClient();
     client.create.mockRejectedValueOnce(new Error("Spark daemon is offline"));
@@ -184,6 +223,7 @@ function daemonClient(
     snapshot: vi.fn(async () => snapshot),
     create: vi.fn(async () => session),
     bind: vi.fn(async () => options.bindResult ?? session),
+    unbind: vi.fn(async () => options.bindResult ?? session),
     archive: vi.fn(async () => options.archiveResult ?? session),
   } satisfies CockpitManagedSessionsClient;
 }

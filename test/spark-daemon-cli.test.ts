@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+
+import {
+  SparkDaemonLocalRpcError,
+  SparkDaemonLocalRpcRemoteError,
+  SparkDaemonLocalRpcUnavailableError,
+} from "@zendev-lab/spark-system/daemon-local-rpc";
 
 import {
   handleSparkRpcLine,
@@ -1045,6 +1052,63 @@ void test("parseSparkDaemonCliArgs parses daemon IPC commands", async () => {
   });
 });
 
+void test("parseSparkDaemonCliArgs normalizes bounded relative invocation windows", () => {
+  const originalNow = Date.now;
+  Date.now = () => Date.parse("2026-07-15T12:00:00.000Z");
+  try {
+    assert.deepEqual(
+      parseSparkDaemonCliArgs([
+        "invocation",
+        "list",
+        "--status",
+        "failed",
+        "--since",
+        "24h",
+        "--limit",
+        "50",
+        "--json",
+      ]),
+      {
+        action: "invocation",
+        subcommand: "list",
+        json: true,
+        status: "failed",
+        sessionId: undefined,
+        since: "2026-07-14T12:00:00.000Z",
+        limit: 50,
+        offset: undefined,
+      },
+    );
+    assert.deepEqual(
+      parseSparkDaemonCliArgs([
+        "invocation",
+        "retention",
+        "--before",
+        "2026-07-01T00:00:00Z",
+        "--limit",
+        "100",
+      ]),
+      {
+        action: "invocation",
+        subcommand: "retention",
+        before: "2026-07-01T00:00:00.000Z",
+        limit: 100,
+        json: false,
+      },
+    );
+    assert.throws(
+      () => parseSparkDaemonCliArgs(["invocation", "list", "--since", "0h"]),
+      /duration must be between 1s and 365d/u,
+    );
+    assert.throws(
+      () => parseSparkDaemonCliArgs(["invocation", "list", "--since", "366d"]),
+      /duration must be between 1s and 365d/u,
+    );
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
 void test("daemon CLI handlers use invocation-based Spark daemon local IPC", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-daemon-cli-"));
   try {
@@ -1187,6 +1251,308 @@ function testDaemonPaths(root: string) {
     socketPath: join(runtimeDir, "daemon.sock"),
     pidFile: join(runtimeDir, "daemon.pid"),
     lockPath: join(runtimeDir, "daemon.lock"),
+  };
+}
+
+type CapturedLocalRpcRequest = {
+  id: string;
+  method: string;
+  params?: { idempotencyKey?: string; [key: string]: unknown };
+  sparkCommand?: unknown;
+};
+
+void test("turn submit retries an ambiguous local RPC close with one stable idempotency key", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-turn-admission-retry-"));
+  const paths = testDaemonPaths(dir);
+  const requests: CapturedLocalRpcRequest[] = [];
+  const retryDelays: number[] = [];
+  const server = createServer((socket) => {
+    readLocalRpcRequest(socket, (request) => {
+      requests.push(request);
+      if (requests.length < 9) {
+        socket.destroy();
+        return;
+      }
+      socket.end(
+        `${JSON.stringify({
+          id: request.id,
+          ok: true,
+          result: {
+            invocationId: "inv_recovered_admission",
+            status: "queued",
+            acceptedAt: "2026-07-15T00:00:00.000Z",
+          },
+        })}\n`,
+      );
+    });
+  });
+  try {
+    await mkdir(paths.runtimeDir, { recursive: true });
+    await listenLocalRpcServer(server, paths.socketPath);
+    const result = await handleSparkDaemonCliCommand(
+      { action: "submit", json: true, sessionId: "stable-session", prompt: "run once" },
+      {
+        paths,
+        daemonStatus: async () => runningDaemonStatus(),
+        random: () => 0,
+        sleep: async (ms) => {
+          retryDelays.push(ms);
+        },
+      },
+    );
+
+    assert.equal(result.action, "submit");
+    assert.equal(result.result.invocationId, "inv_recovered_admission");
+    assert.equal(requests.length, 9);
+    for (const request of requests) assert.deepEqual(request, requests[0]);
+    assert.equal(requests[0]?.params?.idempotencyKey, `turn.submit:${requests[0]?.id}`);
+    assert.deepEqual(retryDelays, [50, 100, 200, 400, 800, 1_600, 2_500, 2_500]);
+  } finally {
+    await closeLocalRpcServer(server);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("turn submit periodically recovers daemon service without changing the request", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-turn-admission-recovery-"));
+  const paths = testDaemonPaths(dir);
+  const inputs: Array<{ idempotencyKey?: string }> = [];
+  const retryEvents: Array<{
+    failureCount: number;
+    recoveryAttempted: boolean;
+    nextRetryMs: number;
+  }> = [];
+  let submitAttempts = 0;
+  let serviceStarts = 0;
+  try {
+    const result = await handleSparkDaemonCliCommand(
+      { action: "submit", json: true, sessionId: "recovery-session", prompt: "run once" },
+      {
+        paths,
+        startService: () => {
+          serviceStarts += 1;
+        },
+        daemonStatus: async () => runningDaemonStatus(),
+        turnSubmit: async (_paths, input) => {
+          submitAttempts += 1;
+          inputs.push(input);
+          if (submitAttempts <= 4) {
+            throw new SparkDaemonLocalRpcUnavailableError("connect ENOENT");
+          }
+          return {
+            invocationId: "inv_recovered_service",
+            status: "queued" as const,
+            acceptedAt: "2026-07-15T00:00:00.000Z",
+          };
+        },
+        random: () => 0,
+        sleep: async () => undefined,
+        turnTransportRecoveryInterval: 4,
+        onTurnTransportRetry: (event) => retryEvents.push(event),
+      },
+    );
+
+    assert.equal(result.action, "submit");
+    assert.equal(result.result.invocationId, "inv_recovered_service");
+    assert.equal(serviceStarts, 2, "initial ensure plus periodic recovery");
+    assert.equal(submitAttempts, 5);
+    assert.equal(new Set(inputs.map((input) => input.idempotencyKey)).size, 1);
+    assert.deepEqual(
+      retryEvents.map(({ failureCount, recoveryAttempted, nextRetryMs }) => ({
+        failureCount,
+        recoveryAttempted,
+        nextRetryMs,
+      })),
+      [
+        { failureCount: 1, recoveryAttempted: false, nextRetryMs: 50 },
+        { failureCount: 2, recoveryAttempted: false, nextRetryMs: 100 },
+        { failureCount: 3, recoveryAttempted: false, nextRetryMs: 200 },
+        { failureCount: 4, recoveryAttempted: true, nextRetryMs: 400 },
+      ],
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("turn submit retries a bound successor's starting response with the same request", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-turn-start-"));
+  const paths = testDaemonPaths(dir);
+  const requests: CapturedLocalRpcRequest[] = [];
+  const retryDelays: number[] = [];
+  const server = createServer((socket) => {
+    readLocalRpcRequest(socket, (request) => {
+      requests.push(request);
+      if (requests.length < 4) {
+        socket.end(
+          `${JSON.stringify({
+            id: request.id,
+            ok: false,
+            error: {
+              code: "daemon_starting",
+              message: "Spark daemon is still starting; retry after readiness.",
+            },
+          })}\n`,
+        );
+        return;
+      }
+      socket.end(
+        `${JSON.stringify({
+          id: request.id,
+          ok: true,
+          result: {
+            invocationId: "inv_successor_ready",
+            status: "queued",
+            acceptedAt: "2026-07-15T00:00:00.000Z",
+          },
+        })}\n`,
+      );
+    });
+  });
+  try {
+    await mkdir(paths.runtimeDir, { recursive: true });
+    await listenLocalRpcServer(server, paths.socketPath);
+    const result = await handleSparkDaemonCliCommand(
+      { action: "submit", json: true, sessionId: "successor-session", prompt: "run once" },
+      {
+        paths,
+        daemonStatus: async () => runningDaemonStatus(),
+        random: () => 0,
+        sleep: async (ms) => {
+          retryDelays.push(ms);
+        },
+      },
+    );
+
+    assert.equal(result.action, "submit");
+    assert.equal(result.result.invocationId, "inv_successor_ready");
+    assert.equal(requests.length, 4);
+    for (const request of requests) assert.deepEqual(request, requests[0]);
+    assert.deepEqual(retryDelays, [50, 100, 200]);
+  } finally {
+    await closeLocalRpcServer(server);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("turn submit does not retry a daemon validation error", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-turn-admission-validation-"));
+  const paths = testDaemonPaths(dir);
+  const requests: CapturedLocalRpcRequest[] = [];
+  const retryDelays: number[] = [];
+  const server = createServer((socket) => {
+    readLocalRpcRequest(socket, (request) => {
+      requests.push(request);
+      socket.end(
+        `${JSON.stringify({
+          id: request.id,
+          ok: false,
+          error: { message: "turn validation rejected" },
+        })}\n`,
+      );
+    });
+  });
+  try {
+    await mkdir(paths.runtimeDir, { recursive: true });
+    await listenLocalRpcServer(server, paths.socketPath);
+    await assert.rejects(
+      handleSparkDaemonCliCommand(
+        { action: "submit", json: true, sessionId: "invalid-session", prompt: "invalid" },
+        {
+          paths,
+          daemonStatus: async () => runningDaemonStatus(),
+          sleep: async (ms) => {
+            retryDelays.push(ms);
+          },
+        },
+      ),
+      /turn validation rejected/u,
+    );
+
+    assert.equal(requests.length, 1);
+    assert.deepEqual(retryDelays, []);
+  } finally {
+    await closeLocalRpcServer(server);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("native responder can cancel turn admission during retry backoff", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-turn-admission-cancel-"));
+  const paths = testDaemonPaths(dir);
+  const requests: CapturedLocalRpcRequest[] = [];
+  const controller = new AbortController();
+  const reason = new Error("cancel admission retry");
+  const server = createServer((socket) => {
+    readLocalRpcRequest(socket, (request) => {
+      requests.push(request);
+      socket.destroy();
+    });
+  });
+  try {
+    await mkdir(paths.runtimeDir, { recursive: true });
+    await listenLocalRpcServer(server, paths.socketPath);
+    const responder = createSparkDaemonNativeResponder(
+      {
+        paths,
+        daemonStatus: async () => runningDaemonStatus(),
+        random: () => 0,
+        sleep: async (_ms, signal) => {
+          assert.equal(signal, controller.signal);
+          controller.abort(reason);
+        },
+      },
+      { sessionId: "cancel-admission" },
+    );
+
+    await assert.rejects(
+      responder("cancel this admission", { signal: controller.signal }),
+      (error) => error === reason,
+    );
+    assert.equal(requests.length, 1);
+  } finally {
+    await closeLocalRpcServer(server);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+function readLocalRpcRequest(
+  socket: Socket,
+  onRequest: (request: CapturedLocalRpcRequest) => void,
+): void {
+  let buffer = "";
+  socket.setEncoding("utf8");
+  socket.on("data", (chunk) => {
+    buffer += chunk;
+    const newline = buffer.indexOf("\n");
+    if (newline < 0) return;
+    socket.removeAllListeners("data");
+    onRequest(JSON.parse(buffer.slice(0, newline)) as CapturedLocalRpcRequest);
+  });
+}
+
+async function listenLocalRpcServer(server: Server, socketPath: string): Promise<void> {
+  await new Promise<void>((resolvePromise, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, () => {
+      server.removeListener("error", reject);
+      resolvePromise();
+    });
+  });
+}
+
+async function closeLocalRpcServer(server: Server): Promise<void> {
+  if (!server.listening) return;
+  await new Promise<void>((resolvePromise, reject) => {
+    server.close((error) => (error ? reject(error) : resolvePromise()));
+  });
+}
+
+function runningDaemonStatus() {
+  return {
+    observedAt: "2026-07-15T00:00:00.000Z",
+    servers: [],
+    invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
   };
 }
 
@@ -1683,6 +2049,131 @@ void test("native TUI selects an existing daemon session and restores its snapsh
   }
 });
 
+void test("native TUI lists all daemon sessions and routes a cross-workspace selection", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-all-sessions-"));
+  try {
+    const base = createWorkspaceAttachTestDeps(dir, { existingSessionIds: new Set() });
+    const now = "2026-07-13T00:00:00.000Z";
+    const otherDir = join(dir, "other-workspace");
+    const current = {
+      sessionId: "session-current",
+      title: "Current workspace",
+      scope: { kind: "workspace" as const, workspaceId: "workspace-current" },
+      workspaceId: "workspace-current",
+      cwd: dir,
+      status: "ready" as const,
+      bindings: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    const other = {
+      sessionId: "session-other",
+      title: "Other workspace channel",
+      scope: { kind: "workspace" as const, workspaceId: "workspace-other" },
+      workspaceId: "workspace-other",
+      cwd: otherDir,
+      status: "ready" as const,
+      bindings: [
+        { kind: "channel" as const, adapter: "feishu" as const, externalKey: "feishu:chat:other" },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    };
+    const listRequests: unknown[] = [];
+    const daemonClient: SparkDaemonClientOptions = {
+      ...base.daemonClient,
+      managedSessions: {
+        list: async (options) => {
+          listRequests.push(options);
+          return [current, other];
+        },
+        create: async () => {
+          throw new Error("existing selection must not create a session");
+        },
+        get: async (sessionId) => (sessionId === other.sessionId ? other : current),
+        bind: async () => other,
+        unbind: async () => other,
+        archive: async () => ({ ...other, status: "archived" as const }),
+      },
+      workspaceList: async () => ({
+        workspaces: [
+          {
+            id: "workspace-current",
+            serverUrl: "",
+            localWorkspaceKey: "spark",
+            displayName: "spark",
+            localPath: dir,
+            status: "active",
+          },
+          {
+            id: "workspace-other-binding",
+            serverWorkspaceId: "workspace-other",
+            serverUrl: "http://127.0.0.1:5173/",
+            localWorkspaceKey: "spore",
+            displayName: "spore",
+            localPath: otherDir,
+            status: "active",
+          },
+        ],
+        observedAt: now,
+      }),
+      controlRequest: async (method, params) => {
+        assert.equal(method, "session.snapshot");
+        assert.deepEqual(params, { sessionId: other.sessionId });
+        return {
+          version: 1,
+          sessionId: other.sessionId,
+          title: other.title,
+          status: "idle",
+          messages: [],
+          tools: [],
+          runs: [],
+          tasks: [],
+          artifacts: [],
+          metadata: {},
+        };
+      },
+    };
+    let selectorSessionIds: string[] = [];
+
+    assert.equal(
+      await runSparkCli([], {
+        daemonClient,
+        createHostServices: base.createHostServices,
+        terminal: { stdinIsTTY: true, stdoutIsTTY: true },
+        selectSession: async (options) => {
+          assert.equal(options.workspaceId, "workspace-current");
+          selectorSessionIds = options.sessions.map((session) => session.sessionId);
+          assert.deepEqual(
+            options.workspaces?.find((workspace) => workspace.id === "workspace-other"),
+            {
+              id: "workspace-other",
+              canonicalId: "workspace-other-binding",
+              displayName: "spore",
+              localPath: otherDir,
+            },
+          );
+          return other.sessionId;
+        },
+        runTui: async (input) => {
+          assert.equal(typeof input, "object");
+          assert.notEqual(input, null);
+          const options = input as Exclude<typeof input, string | undefined>;
+          assert.equal(options.workspaceSession?.attachTarget, other.sessionId);
+          assert.equal(options.workspaceSession?.workspaceDir, otherDir);
+          assert.equal(options.autocompleteBasePath, otherDir);
+        },
+      }),
+      0,
+    );
+
+    assert.deepEqual(listRequests, [{}]);
+    assert.deepEqual(selectorSessionIds, [current.sessionId, other.sessionId]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("native TUI explicit session attach requires matching workspace", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-workspace-attach-"));
   try {
@@ -1896,6 +2387,26 @@ function createDurableSessionAttachTestDeps(dir: string, stateRoot: string) {
       workspace,
       observedAt: now,
     }),
+    managedSessions: {
+      list: async () => {
+        throw new Error("registry unavailable in durable-session fallback fixture");
+      },
+      create: async () => {
+        throw new Error("not used");
+      },
+      get: async () => {
+        throw new Error("registry unavailable in durable-session fallback fixture");
+      },
+      bind: async () => {
+        throw new Error("not used");
+      },
+      unbind: async () => {
+        throw new Error("not used");
+      },
+      archive: async () => {
+        throw new Error("not used");
+      },
+    },
   } satisfies SparkDaemonClientOptions;
   const createHostServices = async (
     hostOptions: { sessionManager?: unknown; sparkStateRoot?: string } = {},
@@ -2397,6 +2908,297 @@ void test("Spark native responder streams daemon view events as assistant chunks
   assert.deepEqual(chunks, ["hel", "lo"]);
 });
 
+void test("Spark native responder retries completion status transport failures without resubmitting", async () => {
+  let submitCalls = 0;
+  const statusInvocationIds: string[] = [];
+  const retryDelays: number[] = [];
+  const failures: Error[] = [
+    new SparkDaemonLocalRpcUnavailableError("connect ENOENT"),
+    new SparkDaemonLocalRpcUnavailableError("Timed out waiting for daemon RPC response"),
+    new SparkDaemonLocalRpcError("Spark daemon local RPC connection closed before a response."),
+  ];
+  const responder = createSparkDaemonNativeResponder(
+    {
+      turnSubmit: async () => {
+        submitCalls += 1;
+        return {
+          invocationId: "inv_status_retry",
+          status: "queued" as const,
+          acceptedAt: "2026-07-15T00:00:00.000Z",
+        };
+      },
+      turnStatus: async (_paths, input) => {
+        statusInvocationIds.push(input.invocationId);
+        const failure = failures.shift();
+        if (failure) throw failure;
+        return {
+          invocationId: input.invocationId,
+          status: "succeeded" as const,
+          createdAt: "2026-07-15T00:00:00.000Z",
+          updatedAt: "2026-07-15T00:00:01.000Z",
+          finishedAt: "2026-07-15T00:00:01.000Z",
+          eventCursor: 0,
+        };
+      },
+      random: () => 0,
+      sleep: async (ms) => {
+        retryDelays.push(ms);
+      },
+    },
+    { sessionId: "status-retry-session" },
+  );
+
+  assert.match(
+    await responder("wait through restart"),
+    /completed session status-retry-session: inv_status_retry/u,
+  );
+  assert.equal(submitCalls, 1);
+  assert.deepEqual(statusInvocationIds, Array(4).fill("inv_status_retry"));
+  assert.deepEqual(retryDelays, [50, 100, 200]);
+});
+
+void test("Spark native responder retries stream and terminal status from stable invocation state", async () => {
+  let submitCalls = 0;
+  const streamCursors: number[] = [];
+  const statusInvocationIds: string[] = [];
+  const retryDelays: number[] = [];
+  let streamFailures = 4;
+  let statusFailures = 4;
+  const transientFailure = (remaining: number): Error => {
+    if (remaining === 4) {
+      return new SparkDaemonLocalRpcRemoteError(
+        "Spark daemon is still starting; retry after readiness.",
+        {
+          code: "daemon_starting",
+          message: "Spark daemon is still starting; retry after readiness.",
+        },
+      );
+    }
+    if (remaining === 3) return new SparkDaemonLocalRpcUnavailableError("connect ENOENT");
+    if (remaining === 2) {
+      return new SparkDaemonLocalRpcUnavailableError("Timed out waiting for daemon RPC response");
+    }
+    return new SparkDaemonLocalRpcError(
+      "Spark daemon local RPC connection closed before a response.",
+    );
+  };
+  const responder = createSparkDaemonNativeResponder(
+    {
+      turnSubmit: async () => {
+        submitCalls += 1;
+        return {
+          invocationId: "inv_stream_transport_retry",
+          status: "queued" as const,
+          acceptedAt: "2026-07-15T00:00:00.000Z",
+        };
+      },
+      turnStream: async (_paths, input) => {
+        streamCursors.push(input.after ?? 0);
+        if (streamFailures > 0) throw transientFailure(streamFailures--);
+        return {
+          invocationId: "inv_stream_transport_retry",
+          events: [
+            {
+              invocationId: "inv_stream_transport_retry",
+              sequence: 1,
+              kind: "daemon.view_event",
+              payload: {
+                version: 1,
+                type: "daemon.view_event",
+                source: "daemon",
+                emittedAt: "2026-07-15T00:00:00.000Z",
+                sessionId: "stream-transport-retry-session",
+                invocationId: "inv_stream_transport_retry",
+                view: {
+                  version: 1,
+                  type: "session.message",
+                  sessionId: "stream-transport-retry-session",
+                  message: {
+                    id: "assistant",
+                    role: "assistant",
+                    text: "done",
+                    status: "streaming",
+                  },
+                },
+              },
+              createdAt: "2026-07-15T00:00:00.000Z",
+            },
+          ],
+          nextCursor: 1,
+          hasMore: false,
+        };
+      },
+      turnStatus: async (_paths, input) => {
+        statusInvocationIds.push(input.invocationId);
+        if (statusFailures > 0) throw transientFailure(statusFailures--);
+        return {
+          invocationId: input.invocationId,
+          status: "succeeded" as const,
+          createdAt: "2026-07-15T00:00:00.000Z",
+          updatedAt: "2026-07-15T00:00:01.000Z",
+          finishedAt: "2026-07-15T00:00:01.000Z",
+          eventCursor: 1,
+        };
+      },
+      random: () => 0,
+      sleep: async (ms) => {
+        retryDelays.push(ms);
+      },
+    },
+    { sessionId: "stream-transport-retry-session" },
+  );
+  const chunks: string[] = [];
+
+  assert.equal(
+    await responder("stream through restart", {
+      appendAssistantChunk: (chunk) => chunks.push(chunk),
+    }),
+    "",
+  );
+  assert.equal(submitCalls, 1);
+  assert.deepEqual(streamCursors, [0, 0, 0, 0, 0]);
+  assert.deepEqual(statusInvocationIds, Array(6).fill("inv_stream_transport_retry"));
+  assert.deepEqual(retryDelays, [50, 100, 200, 400, 50, 100, 200, 400]);
+  assert.deepEqual(chunks, ["done"]);
+});
+
+void test("Spark native responder does not retry remote or protocol read failures", async () => {
+  let remoteStatusCalls = 0;
+  let remoteSubmitCalls = 0;
+  const remoteRetryDelays: number[] = [];
+  const remoteResponder = createSparkDaemonNativeResponder(
+    {
+      turnSubmit: async () => {
+        remoteSubmitCalls += 1;
+        return {
+          invocationId: "inv_remote_failure",
+          status: "queued" as const,
+          acceptedAt: "2026-07-15T00:00:00.000Z",
+        };
+      },
+      turnStatus: async () => {
+        remoteStatusCalls += 1;
+        throw new SparkDaemonLocalRpcRemoteError("turn validation rejected", {
+          code: "INVALID_ARGUMENT",
+        });
+      },
+      sleep: async (ms) => {
+        remoteRetryDelays.push(ms);
+      },
+    },
+    { sessionId: "remote-failure-session" },
+  );
+
+  await assert.rejects(() => remoteResponder("remote failure"), /turn validation rejected/u);
+  assert.equal(remoteSubmitCalls, 1);
+  assert.equal(remoteStatusCalls, 1);
+  assert.deepEqual(remoteRetryDelays, []);
+
+  let protocolStreamCalls = 0;
+  let protocolStatusCalls = 0;
+  const protocolRetryDelays: number[] = [];
+  const protocolResponder = createSparkDaemonNativeResponder(
+    {
+      turnSubmit: async () => ({
+        invocationId: "inv_protocol_failure",
+        status: "queued" as const,
+        acceptedAt: "2026-07-15T00:00:00.000Z",
+      }),
+      turnStream: async () => {
+        protocolStreamCalls += 1;
+        throw new SparkDaemonLocalRpcError("Invalid local RPC response.");
+      },
+      turnStatus: async () => {
+        protocolStatusCalls += 1;
+        throw new Error("status must not be reached");
+      },
+      sleep: async (ms) => {
+        protocolRetryDelays.push(ms);
+      },
+    },
+    { sessionId: "protocol-failure-session" },
+  );
+
+  await assert.rejects(
+    () => protocolResponder("protocol failure", { appendAssistantChunk: () => undefined }),
+    /Invalid local RPC response/u,
+  );
+  assert.equal(protocolStreamCalls, 1);
+  assert.equal(protocolStatusCalls, 0);
+  assert.deepEqual(protocolRetryDelays, []);
+});
+
+void test("Spark native responder bounds completion read retries by deadline and abort signal", async () => {
+  let clock = 0;
+  let deadlineSubmitCalls = 0;
+  let deadlineStatusCalls = 0;
+  const deadlineRetryDelays: number[] = [];
+  const deadlineResponder = createSparkDaemonNativeResponder(
+    {
+      turnSubmit: async () => {
+        deadlineSubmitCalls += 1;
+        return {
+          invocationId: "inv_read_deadline",
+          status: "queued" as const,
+          acceptedAt: "2026-07-15T00:00:00.000Z",
+        };
+      },
+      turnStatus: async () => {
+        deadlineStatusCalls += 1;
+        throw new SparkDaemonLocalRpcUnavailableError("connect ENOENT");
+      },
+      now: () => clock,
+      random: () => 0,
+      sleep: async (ms) => {
+        deadlineRetryDelays.push(ms);
+        clock += ms;
+      },
+    },
+    { sessionId: "read-deadline-session", timeoutMs: 149 },
+  );
+
+  assert.match(
+    await deadlineResponder("deadline"),
+    /queued for Spark daemon session read-deadline-session/u,
+  );
+  assert.equal(deadlineSubmitCalls, 1);
+  assert.equal(deadlineStatusCalls, 2);
+  assert.deepEqual(deadlineRetryDelays, [50, 99]);
+
+  const controller = new AbortController();
+  const abortReason = new Error("cancel completion retry");
+  let abortSubmitCalls = 0;
+  let abortStatusCalls = 0;
+  const abortResponder = createSparkDaemonNativeResponder(
+    {
+      turnSubmit: async () => {
+        abortSubmitCalls += 1;
+        return {
+          invocationId: "inv_read_abort",
+          status: "queued" as const,
+          acceptedAt: "2026-07-15T00:00:00.000Z",
+        };
+      },
+      turnStatus: async () => {
+        abortStatusCalls += 1;
+        throw new SparkDaemonLocalRpcUnavailableError("connect ENOENT");
+      },
+      sleep: async (_ms, signal) => {
+        assert.equal(signal, controller.signal);
+        controller.abort(abortReason);
+      },
+    },
+    { sessionId: "read-abort-session" },
+  );
+
+  await assert.rejects(
+    () => abortResponder("abort", { signal: controller.signal }),
+    (error) => error === abortReason,
+  );
+  assert.equal(abortSubmitCalls, 1);
+  assert.equal(abortStatusCalls, 1);
+});
+
 void test("Spark native responder accepts an empty terminal page and ignores non-daemon payloads", async () => {
   const chunks: string[] = [];
   let streamCalls = 0;
@@ -2570,7 +3372,9 @@ void test("Spark native responder reconnects from its durable cursor without dup
             hasMore: false,
           };
         }
-        if (streamAttempt === 2) throw new Error("daemon socket disconnected");
+        if (streamAttempt === 2) {
+          throw new SparkDaemonLocalRpcUnavailableError("daemon socket disconnected");
+        }
         return {
           invocationId: "inv_reconnect",
           events: [event(3, "abc")],
@@ -2783,6 +3587,7 @@ void test("Spark native responder ensures its workspace session once before subm
 
 void test("Spark native responder submits prompts through daemon IPC", async () => {
   const calls: Array<{ sessionId: string; prompt: string }> = [];
+  const idempotencyKeys: string[] = [];
   const responder = createSparkDaemonNativeResponder(
     {
       startService: () => ({ kind: "detached" as const, alreadyRunning: false, detail: "started" }),
@@ -2793,6 +3598,7 @@ void test("Spark native responder submits prompts through daemon IPC", async () 
       }),
       turnSubmit: async (_paths, input) => {
         calls.push({ sessionId: input.sessionId, prompt: input.prompt });
+        idempotencyKeys.push(input.idempotencyKey ?? "");
         return {
           invocationId: `inv_${calls.length}`,
           status: "queued" as const,
@@ -2819,4 +3625,7 @@ void test("Spark native responder submits prompts through daemon IPC", async () 
     { sessionId: "native-session", prompt: "hello through daemon" },
     { sessionId: "native-session", prompt: "follow-up through daemon" },
   ]);
+  assert.match(idempotencyKeys[0] ?? "", /^turn\.submit:spark_cli_/u);
+  assert.match(idempotencyKeys[1] ?? "", /^turn\.submit:spark_cli_/u);
+  assert.notEqual(idempotencyKeys[0], idempotencyKeys[1]);
 });

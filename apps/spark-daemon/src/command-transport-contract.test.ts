@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { createServerCommandEnvelope } from "@zendev-lab/spark-protocol";
+import { createId, createServerCommandEnvelope } from "@zendev-lab/spark-protocol";
 import {
   decideSparkDaemonCommandPolicy,
   sparkCommandFromLocalRpcRequest,
@@ -88,6 +88,76 @@ describe("turn command transport contract", () => {
     expect(status.kind).toBe("workspace.snapshot.request");
   });
 
+  it("normalizes session create/bind/archive and turn submit/cancel across both transports", () => {
+    const sessionId = "sess_transport_contract";
+    for (const [method, kind, params] of [
+      [
+        "session.create",
+        "session.create.request",
+        { sessionId, scope: { kind: "daemon" }, title: "Transport contract" },
+      ],
+      [
+        "session.bind",
+        "session.bind.request",
+        { sessionId, externalKey: "infoflow:user:transport" },
+      ],
+      ["session.archive", "session.archive.request", { sessionId }],
+      ["turn.submit", "turn.submit.request", { sessionId, prompt: "continue" }],
+    ] as const) {
+      const local = sparkCommandFromLocalRpcRequest({
+        id: `local_${kind}`,
+        method,
+        params,
+      });
+      const runtime = sparkCommandFromServerCommandEnvelope(
+        createServerCommandEnvelope({
+          runtimeId: route.runtimeId,
+          sessionId,
+          commandId: createId("cmd"),
+          payload: { kind, scope: "daemon", payload: params },
+        }),
+      );
+      expect(local).toMatchObject({ kind, route: { sessionId }, payload: params });
+      expect(runtime).toMatchObject({ kind, route: { sessionId }, payload: params });
+      expect(
+        decideSparkDaemonCommandPolicy({
+          command: runtime,
+          runtimeId: route.runtimeId,
+          expectedRuntimeId: route.runtimeId,
+          allowMutation: true,
+        }),
+      ).toEqual({ accepted: true });
+    }
+
+    const cancelParams = {
+      invocationId: "inv_01234567890123456789012345678901",
+      reason: "stop",
+    };
+    const localCancel = sparkCommandFromLocalRpcRequest({
+      id: "local_session_cancel",
+      method: "turn.cancel",
+      params: cancelParams,
+    });
+    const runtimeCancel = sparkCommandFromServerCommandEnvelope(
+      createServerCommandEnvelope({
+        runtimeId: route.runtimeId,
+        sessionId,
+        commandId: createId("cmd"),
+        payload: {
+          kind: "turn.cancel.request",
+          scope: "daemon",
+          payload: cancelParams,
+        },
+      }),
+    );
+    expect(localCancel).toMatchObject({ kind: "turn.cancel.request", payload: cancelParams });
+    expect(runtimeCancel).toMatchObject({
+      kind: "turn.cancel.request",
+      route: { sessionId },
+      payload: cancelParams,
+    });
+  });
+
   it("uses one daemon policy path for transport-independent errors", () => {
     const submit = sparkCommandFromServerCommandEnvelope(
       createServerCommandEnvelope({
@@ -139,6 +209,8 @@ describe("turn command transport contract", () => {
     );
 
     expect(daemonSource).toContain("serverCommandEnvelopeSchema.safeParse");
+    expect(daemonSource).not.toContain("command.payload.scope ??");
+    expect(daemonSource).toContain('reasonCode: "WORKSPACE_ROUTE_MISMATCH"');
     for (const source of [daemonSource, dispatcherSource]) {
       expect(source).not.toMatch(/requestSparkDaemonLocalRpcWire/u);
       expect(source).not.toMatch(/from ["']node:http["']/u);

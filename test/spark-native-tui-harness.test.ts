@@ -743,6 +743,16 @@ void test("Spark native editor expands @file/image refs and bang commands throug
     await submitEditorText(harness, "!!printf hidden-bang");
     await harness.flush();
     assert.equal(submitted.length, beforeHidden);
+    await waitForNativeCondition(
+      () =>
+        harness.session.messages.some(
+          (message) =>
+            message.role === "tool" &&
+            message.toolName === "shell" &&
+            message.toolStatus === "succeeded",
+        ),
+      "the hidden shell command to reach a terminal tool state",
+    );
     assert.match(stripAnsi(harness.render()), /tool:shell \[succeeded\]/);
     harness.app.toggleTools();
     assert.match(stripAnsi(harness.render()), /\[hidden shell command completed\]/);
@@ -1275,6 +1285,19 @@ async function submitEditorText(
 
 async function waitForNativeTimers(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 40));
+}
+
+async function waitForNativeCondition(
+  predicate: () => boolean,
+  description: string,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`Timed out waiting for ${description}.`);
 }
 
 const fakeStream: ProviderConfig["streamSimple"] = () => ({}) as unknown;

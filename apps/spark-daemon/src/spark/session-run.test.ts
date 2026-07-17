@@ -3,6 +3,7 @@ import { SPARK_PROTOCOL_VERSION, type SparkDaemonEvent } from "@zendev-lab/spark
 import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import type { SparkDaemonSessionRunTask, SparkDaemonTaskExecutionContext } from "../core/types.ts";
 import {
+  channelReplyDeliveryForCompletion,
   createChannelAwareTaskExecutor,
   createSparkDaemonTaskExecutor,
   executeSparkDaemonSessionRunTask,
@@ -27,6 +28,23 @@ function context(
 }
 
 describe("daemon native session execution", () => {
+  it("leaves daemon execution timeout ownership with the pausable scheduler", async () => {
+    const executeSession = vi.fn(async () => ({ assistantText: "done" }));
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_scheduler_timeout",
+      prompt: "wait for scheduler",
+    };
+    const executionContext = context(task);
+    executionContext.timeoutMs = 10;
+
+    await executeSparkDaemonSessionRunTask(task, executionContext, { paths, executeSession });
+
+    expect(executeSession).toHaveBeenCalledWith(
+      expect.not.objectContaining({ timeoutMs: expect.anything() }),
+    );
+  });
+
   it("streams display-safe assistant text and tool lifecycle to a channel reply card", async () => {
     const appendText = vi.fn();
     const notifyToolStart = vi.fn();
@@ -214,20 +232,15 @@ describe("daemon native session execution", () => {
     expect(notifyToolStart).toHaveBeenCalledWith({ name: "cue_exec", phase: "执行中" });
     expect(appendText).not.toHaveBeenCalled();
     expect(complete).toHaveBeenCalledWith("已完成");
-    expect(sendReply).toHaveBeenCalledTimes(1);
-    expect(sendReply).toHaveBeenCalledWith("workspace-qq", "qqbot", {
-      recipient: "c2c:user-1",
-      senderId: "user-1",
-      messageId: "message-1",
-      preview: "请检查",
-      text: "检查完成",
-    });
-    expect(complete.mock.invocationCallOrder[0]).toBeLessThan(
-      sendReply.mock.invocationCallOrder[0]!,
-    );
+    expect(sendReply).not.toHaveBeenCalled();
+    expect(
+      channelReplyDeliveryForCompletion(task, "invocation-1", "final", {
+        assistantText: "检查完成",
+      }),
+    ).toMatchObject({ text: "检查完成", idempotencyKey: "channel.reply:final:invocation-1" });
   });
 
-  it("falls back to a rich channel reply when a stream is unavailable", async () => {
+  it("leaves final delivery to the scheduler transaction when a stream is unavailable", async () => {
     const sendReply = vi.fn(async () => undefined);
     const task: SparkDaemonSessionRunTask = {
       type: "session.run",
@@ -255,16 +268,156 @@ describe("daemon native session execution", () => {
 
     await executor(task, context(task));
 
-    expect(sendReply).toHaveBeenCalledWith("workspace-infoflow", "infoflow", {
-      recipient: "group:10838226",
-      senderId: "zhanrongrui",
-      messageId: "message-1",
-      preview: "原始消息",
+    expect(sendReply).not.toHaveBeenCalled();
+    expect(
+      channelReplyDeliveryForCompletion(task, "invocation-1", "final", {
+        assistantText: "**完成**",
+      }),
+    ).toMatchObject({
+      target: {
+        recipient: "group:10838226",
+        senderId: "zhanrongrui",
+        messageId: "message-1",
+        preview: "原始消息",
+      },
       text: "**完成**",
     });
   });
 
-  it("uses the final fallback when streaming card completion fails", async () => {
+  it("builds one stable final delivery intent from the terminal result", async () => {
+    const sendReply = vi.fn(async () => {
+      throw new Error("direct delivery must not run");
+    });
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_channel_outbox",
+      prompt: "finish this",
+      channelReply: {
+        workspaceId: "workspace-qq",
+        adapterId: "qqbot",
+        recipient: "c2c:user-1",
+      },
+      channelContext: {
+        externalKey: "qqbot:c2c:user-1",
+        senderId: "user-1",
+        messageId: "source-message-1",
+      },
+    };
+    const executor = createChannelAwareTaskExecutor({
+      paths,
+      createSparkHeadlessSessionExecutor: () => async () => ({ assistantText: "done" }),
+      channelIngress: {
+        openReplyStream: vi.fn(async () => undefined),
+        sendReply,
+      },
+    });
+
+    await executor(task, context(task));
+
+    expect(sendReply).not.toHaveBeenCalled();
+    expect(
+      channelReplyDeliveryForCompletion(task, "invocation-1", "final", {
+        assistantText: "done",
+      }),
+    ).toEqual({
+      kind: "final",
+      idempotencyKey: "channel.reply:final:invocation-1",
+      invocationId: "invocation-1",
+      sessionId: "sess_channel_outbox",
+      workspaceId: "workspace-qq",
+      adapterId: "qqbot",
+      externalKey: "qqbot:c2c:user-1",
+      target: {
+        recipient: "c2c:user-1",
+        senderId: "user-1",
+        messageId: "source-message-1",
+        preview: "finish this",
+      },
+      text: "done",
+    });
+  });
+
+  it("does not couple model success to a direct platform send attempt", async () => {
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_channel_delivery_failure",
+      prompt: "finish this",
+      channelReply: {
+        workspaceId: "workspace-infoflow",
+        adapterId: "infoflow",
+        recipient: "alice",
+      },
+      channelContext: { externalKey: "infoflow:user:alice", senderId: "alice" },
+    };
+    const executor = createChannelAwareTaskExecutor({
+      paths,
+      createSparkHeadlessSessionExecutor: () => async () => ({ assistantText: "done" }),
+      channelIngress: {
+        openReplyStream: vi.fn(async () => undefined),
+        sendReply: vi.fn(async () => {
+          throw new Error("platform unavailable");
+        }),
+      },
+    });
+
+    await expect(executor(task, context(task))).resolves.toMatchObject({ assistantText: "done" });
+  });
+
+  it("builds a stable channel-visible failure intent for scheduler commit", async () => {
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_channel_model_failure",
+      prompt: "fail visibly",
+      channelReply: {
+        workspaceId: "workspace-qq",
+        adapterId: "qqbot",
+        recipient: "c2c:user-1",
+      },
+      channelContext: {
+        externalKey: "qqbot:c2c:user-1",
+        senderId: "user-1",
+        messageId: "source-message-1",
+      },
+    };
+    const executor = createChannelAwareTaskExecutor({
+      paths,
+      createSparkHeadlessSessionExecutor: () => async () => {
+        throw new Error("provider failed");
+      },
+      channelIngress: {
+        openReplyStream: vi.fn(async () => undefined),
+        sendReply: vi.fn(async () => undefined),
+      },
+    });
+
+    await expect(executor(task, context(task))).rejects.toThrow("provider failed");
+    expect(channelReplyDeliveryForCompletion(task, "invocation-1", "failure")).toMatchObject({
+      kind: "failure",
+      idempotencyKey: "channel.reply:failure:invocation-1",
+      text: "处理失败，请稍后重试",
+    });
+  });
+
+  it("never leaves a successful channel turn without a visible reply", () => {
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_channel_empty",
+      prompt: "finish silently",
+      channelReply: {
+        workspaceId: "workspace-qq",
+        adapterId: "qqbot",
+        recipient: "c2c:user-1",
+      },
+    };
+
+    expect(channelReplyDeliveryForCompletion(task, "invocation-empty", "final", {})).toMatchObject({
+      kind: "final",
+      idempotencyKey: "channel.reply:final:invocation-empty",
+      text: "处理完成，但未生成可展示的回复",
+    });
+  });
+
+  it("does not let streaming card completion failure block the durable answer path", async () => {
     const sendReply = vi.fn(async () => undefined);
     const acknowledge = vi.fn();
     const rerouteToMessage = vi.fn();
@@ -318,11 +471,12 @@ describe("daemon native session execution", () => {
     });
 
     try {
-      await executor(task, context(task));
-      expect(sendReply).toHaveBeenCalledWith(
-        "workspace-infoflow",
-        "infoflow",
-        expect.objectContaining({ recipient: "alice", text: "done" }),
+      await expect(executor(task, context(task))).resolves.toMatchObject({ assistantText: "done" });
+      await Promise.resolve();
+      expect(sendReply).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining("durable answer remains queued"),
+        expect.any(Error),
       );
       expect(stage).toHaveBeenCalledWith(
         expect.objectContaining({ deliveryMode: "inline-stream", text: "done" }),
@@ -595,6 +749,36 @@ describe("daemon native session execution", () => {
     });
     expect(input?.systemPrompt).not.toContain("@神经蛙 你叫什么名字");
     expect(input?.systemPrompt).not.toContain("You are handling an Infoflow");
+  });
+
+  it("passes the exact originating channel binding to the headless session", async () => {
+    const executeSession = vi.fn(async () => ({ assistantText: "done" }));
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_qq_origin",
+      prompt: "research this",
+      channelReply: {
+        workspaceId: "workspace-qq",
+        adapterId: "qqbot",
+        recipient: "qq:user:42",
+      },
+      channelContext: {
+        externalKey: "qqbot:user:42",
+        senderId: "42",
+      },
+    };
+
+    await executeSparkDaemonSessionRunTask(task, context(task), { paths, executeSession });
+
+    expect(executeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionSurface: "channel",
+        channelBinding: {
+          adapter: "qqbot",
+          externalKey: "qqbot:user:42",
+        },
+      }),
+    );
   });
 
   it("keeps direct session requests exact and projects their execution source as session", async () => {

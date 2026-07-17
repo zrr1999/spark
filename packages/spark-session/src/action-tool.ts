@@ -278,8 +278,13 @@ export async function executeSparkSessionAction(
           ? {
               visibility: "user",
               delivery: "channel",
-              deliveryTargets: channelDeliveryTargets(targetSession, ctx, kind),
+              deliveryTargets: original?.originBinding
+                ? [original.originBinding]
+                : channelDeliveryTargets(targetSession, ctx, kind),
             }
+          : {}),
+        ...(kind === "request" && ctx.sessionSurface === "channel" && ctx.channelBinding
+          ? { originBinding: ctx.channelBinding }
           : {}),
         source: "tool",
       });
@@ -884,12 +889,17 @@ function renderSessionList(
   total: number,
   offset: number,
 ): string {
-  if (sessions.length === 0) return "No persistent Spark sessions found.";
+  if (sessions.length === 0) {
+    return total > 0
+      ? `No sessions at offset ${offset}; remaining=0. Use session list with a lower offset.`
+      : "No persistent Spark sessions found.";
+  }
   const end = offset + sessions.length;
-  const suffix = total > end ? `\n… ${total - end} more session(s)` : "";
-  return `Persistent Spark sessions (${offset + 1}-${end}/${total}):\n${sessions
+  const remaining = Math.max(0, total - end);
+  const page = `Persistent Spark sessions (${offset + 1}-${end}/${total}):\n${sessions
     .map(renderSession)
-    .join("\n")}${suffix}`;
+    .join("\n")}`;
+  return `${page}\nnext offset=${remaining > 0 ? end : "none"}; remaining=${remaining}; use session get for details.`;
 }
 
 function renderSession(session: SparkSessionProjection): string {
@@ -913,15 +923,20 @@ function renderInbox(
   total: number,
   offset: number,
 ): string {
-  if (messages.length === 0) return `No Spark session mail for ${sessionId}.`;
+  if (messages.length === 0) {
+    return total > 0
+      ? `No mail at offset ${offset} for ${sessionId}; remaining=0. Use inbox with a lower offset.`
+      : `No Spark session mail for ${sessionId}.`;
+  }
   const end = offset + messages.length;
-  const suffix = total > end ? `\n… ${total - end} more message(s)` : "";
-  return `Spark session inbox for ${sessionId} (${offset + 1}-${end}/${total}):\n${messages
+  const remaining = Math.max(0, total - end);
+  const page = `Spark session inbox for ${sessionId} (${offset + 1}-${end}/${total}):\n${messages
     .map(
       (message) =>
         `${message.id} ${message.status} from=${message.fromSessionId} ${message.createdAt} ${message.preview}`,
     )
-    .join("\n")}${suffix}`;
+    .join("\n")}`;
+  return `${page}\nnext offset=${remaining > 0 ? end : "none"}; remaining=${remaining}; use session read for full message details.`;
 }
 
 function renderMailMessage(

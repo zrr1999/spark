@@ -34,6 +34,7 @@ export const runtimeFeatureSchema = z.enum([
   "workspace-clients-v1",
   "executor-client-v1",
   "snapshot-control-v1",
+  "ephemeral-secret-v1",
 ]);
 
 export type RuntimeFeature = z.infer<typeof runtimeFeatureSchema>;

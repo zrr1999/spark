@@ -16,19 +16,25 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { createSparkProviderControl } from "@zendev-lab/spark-ai/control";
 import { createId } from "@zendev-lab/spark-protocol";
-import { ensureSparkPathDirs, gitCommand, resolveSparkPaths } from "@zendev-lab/spark-system";
+import {
+  ensureSparkPathDirs,
+  gitCommand,
+  resolveSparkPaths,
+  writePrivateFile,
+} from "@zendev-lab/spark-system";
 import { sparkDaemonCliStrings } from "@zendev-lab/spark-i18n/cli";
 import {
   defaultSparkDaemonConfig,
   readSparkDaemonConfig,
   writeSparkDaemonConfig,
 } from "./config.js";
-import { sparkDaemonVersion, startSparkDaemon } from "./daemon.js";
+import { createSparkDaemonUplinkControl, sparkDaemonVersion, startSparkDaemon } from "./daemon.js";
 import { createSparkDaemonModelControl } from "./model-control.ts";
 import {
-  channelIngressIdempotencyKey,
-  createDaemonChannelIngressRuntime,
-} from "./channels/ingress.ts";
+  channelInboundInvocationIdempotencyKey,
+  submitChannelInboundInvocation,
+} from "./channels/admission.ts";
+import { createDaemonChannelIngressRuntime } from "./channels/ingress.ts";
 import {
   SparkDaemonLifecycle,
   SparkDaemonInvocationRegistry,
@@ -47,6 +53,7 @@ import {
   requestWorkspaceAttach,
   requestWorkspaceList,
   requestWorkspaceRegister,
+  requestWorkspaceRelocate,
   requestWorkspaceStop,
   startLocalRpcServer,
 } from "./local-rpc.js";
@@ -73,9 +80,15 @@ import {
 } from "./store/workspaces.js";
 import {
   cancelSparkDaemonRestartSuccessor,
+  clearSparkDaemonRestartFenceForExplicitStart,
+  completeSparkDaemonRestartSuccessor,
   isSparkDaemonRestartHelperDefinitelyDead,
-  readSparkDaemonRestartSuccessorContext,
+  isSparkDaemonRestartArmed,
+  prepareSparkDaemonRestartAwareStart,
+  publishSparkDaemonProcessOwnership,
   readRunningPid,
+  readSparkDaemonRestartTerminal,
+  releaseSparkDaemonProcessOwnership,
   runSparkDaemonRestartSuccessor,
   scheduleSparkDaemonRestartSuccessor,
   startSparkDaemonService,
@@ -94,6 +107,7 @@ export interface CliIo {
   turnSubmitToService?: typeof requestTurnSubmit;
   listWorkspacesFromService?: typeof requestWorkspaceList;
   registerWorkspaceInService?: typeof requestWorkspaceRegister;
+  relocateWorkspaceInService?: typeof requestWorkspaceRelocate;
   attachWorkspaceInService?: typeof requestWorkspaceAttach;
   stopWorkspaceInService?: typeof requestWorkspaceStop;
   openExternal?: (url: string) => boolean;
@@ -150,8 +164,24 @@ export async function main(argv = process.argv.slice(2), io: CliIo = defaultIo):
         return 0;
       case "login":
         return await login(paths, args.slice(1), io);
-      case "start":
-        return await start(paths);
+      case "start": {
+        const managed = process.env.XPC_SERVICE_NAME === "dev.spark.daemon";
+        return await start(paths, {
+          // Plists created by older Spark versions invoked `start` directly.
+          // launchd exposes the label here, so legacy managed activation must
+          // still honor a durable Cancelled tombstone instead of clearing it.
+          explicit: !managed,
+          managed,
+        });
+      }
+      case "__service-start":
+        // This entrypoint is shared by launchd and detached starts. Only the
+        // former has a supervisor that can replace a planned restart exit.
+        return await start(paths, {
+          explicit: false,
+          managed: process.env.XPC_SERVICE_NAME === "dev.spark.daemon",
+          expectedRestartId: process.env.SPARK_DAEMON_EXPECTED_RESTART_ID?.trim() || undefined,
+        });
       case "stop":
         return await stop(paths, args.slice(1), io);
       case "restart":
@@ -381,14 +411,35 @@ async function status(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): P
   return 0;
 }
 
-async function start(paths: ReturnType<typeof resolveSparkPaths>): Promise<number> {
+export function sparkDaemonServiceExitCode(input: {
+  managed: boolean;
+  restartRequested: boolean;
+  stopRequested: boolean;
+}): number {
+  // EX_TEMPFAIL tells launchd/systemd that this was a planned supervisor
+  // handoff, while explicit stop remains a successful exit and stays stopped.
+  return input.managed && input.restartRequested && !input.stopRequested ? 75 : 0;
+}
+
+async function start(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  options: { explicit: boolean; managed: boolean; expectedRestartId?: string },
+): Promise<number> {
   prepareSparkDaemonState(paths);
   const lock = await acquireSparkDaemonLock({ runtimeDir: paths.runtimeDir, cwd: process.cwd() });
+  if (options.explicit) clearSparkDaemonRestartFenceForExplicitStart(paths);
+  const restartStart = prepareSparkDaemonRestartAwareStart(paths, options.expectedRestartId);
+  if (!restartStart.start) {
+    await lock.release();
+    return 0;
+  }
   const db = openSparkDaemonDatabase(paths);
   const shutdown = new AbortController();
   const stopIntent = new AbortController();
-  const successorContext = readSparkDaemonRestartSuccessorContext(paths);
-  const lifecycle = new SparkDaemonLifecycle(successorContext ?? {});
+  const successorContext = restartStart.successorContext;
+  const lifecycle = new SparkDaemonLifecycle(successorContext ?? {}, { initiallyServing: false });
+  publishSparkDaemonProcessOwnership(paths, lifecycle.processIdentity);
+  writePrivateFile(paths.pidFile, `${process.pid}\n`);
   let stopRequested = false;
   const onShutdownSignal = () => {
     stopRequested = true;
@@ -422,7 +473,7 @@ async function start(paths: ReturnType<typeof resolveSparkPaths>): Promise<numbe
     sessionRegistry,
     hooks: {
       onAssignment: async (assignment) => {
-        const idempotencyKey = channelIngressIdempotencyKey(assignment);
+        const idempotencyKey = channelInboundInvocationIdempotencyKey(assignment);
         if (idempotencyKey && invocationStore.findByIdempotencyKey(idempotencyKey)) {
           return "duplicate";
         }
@@ -454,78 +505,76 @@ async function start(paths: ReturnType<typeof resolveSparkPaths>): Promise<numbe
           channelReply: assignment.channelReply,
           ...(assignment.channelContext ? { channelContext: assignment.channelContext } : {}),
         };
-        invocationStore.submit({
-          sessionId: task.sessionId,
-          prompt: task.prompt,
-          task,
-          ...(idempotencyKey ? { idempotencyKey } : {}),
-          sourceKind: "channel",
-          sourceRef: assignment.source.externalRef ?? assignment.externalKey,
-        });
+        submitChannelInboundInvocation(invocationStore, assignment, task);
       },
     },
   });
+  const uplinkControl = createSparkDaemonUplinkControl();
   let armedRestart: Awaited<ReturnType<typeof scheduleSparkDaemonRestartSuccessor>> | undefined;
   let restartArming: ReturnType<typeof scheduleSparkDaemonRestartSuccessor> | undefined;
-  const localRpc = await startLocalRpcServer({
-    paths,
-    sparkHome,
-    db,
-    onStopRequested: () => {
-      stopRequested = true;
-      stopIntent.abort(new Error("Spark daemon stop request won restart handoff."));
-      cancelSparkDaemonRestartSuccessor(paths);
-    },
-    onStop: () => shutdown.abort(),
-    onRestart: async () => {
-      if (stopRequested || shutdown.signal.aborted) {
-        throw new Error("Spark daemon is already stopping; restart was not armed.");
-      }
-      if (
-        lifecycle.restartRequested &&
-        armedRestart &&
-        !isSparkDaemonRestartHelperDefinitelyDead(armedRestart)
-      ) {
-        return lifecycle.requestRestart(armedRestart.requestedAt, armedRestart.restartId, {
-          instanceId: armedRestart.targetInstanceId,
-          generation: armedRestart.targetGeneration,
-        });
-      }
-      const requestedAt = new Date().toISOString();
-      const arming =
-        restartArming ??
-        scheduleSparkDaemonRestartSuccessor(
-          paths,
-          process.pid,
-          lifecycle.processIdentity,
-          requestedAt,
-          { signal: stopIntent.signal },
-        );
-      restartArming = arming;
-      let armed;
-      try {
-        armed = await arming;
-        armedRestart = armed;
-      } finally {
-        if (restartArming === arming) restartArming = undefined;
-      }
-      if (stopRequested || shutdown.signal.aborted || stopIntent.signal.aborted) {
+  let localRpc: Awaited<ReturnType<typeof startLocalRpcServer>> | undefined;
+  const startLocalControl = () =>
+    startLocalRpcServer({
+      paths,
+      sparkHome,
+      db,
+      onStopRequested: () => {
+        stopRequested = true;
+        stopIntent.abort(new Error("Spark daemon stop request won restart handoff."));
         cancelSparkDaemonRestartSuccessor(paths);
-        throw new Error("Spark daemon stopped while restart was being armed.");
-      }
-      // Admission closes only after durable intent and its external helper
-      // exist. A crash during a long drain therefore still has a successor.
-      return lifecycle.requestRestart(armed.requestedAt, armed.restartId, {
-        instanceId: armed.targetInstanceId,
-        generation: armed.targetGeneration,
-      });
-    },
-    getLifecycle: () => lifecycle.snapshot(),
-    eventBus: localEventBus,
-    channelIngress,
-    sessionRegistry,
-    modelControl,
-  });
+      },
+      onStop: () => shutdown.abort(),
+      onUplinkReconfigure: () => uplinkControl.requestReconfigure(),
+      onRestart: async () => {
+        if (stopRequested || shutdown.signal.aborted) {
+          throw new Error("Spark daemon is already stopping; restart was not armed.");
+        }
+        if (
+          lifecycle.restartRequested &&
+          armedRestart &&
+          !isSparkDaemonRestartHelperDefinitelyDead(armedRestart)
+        ) {
+          return lifecycle.requestRestart(armedRestart.requestedAt, armedRestart.restartId, {
+            instanceId: armedRestart.targetInstanceId,
+            generation: armedRestart.targetGeneration,
+          });
+        }
+        const requestedAt = new Date().toISOString();
+        const arming =
+          restartArming ??
+          scheduleSparkDaemonRestartSuccessor(
+            paths,
+            process.pid,
+            lifecycle.processIdentity,
+            requestedAt,
+            { signal: stopIntent.signal, supervisorManaged: options.managed },
+          );
+        restartArming = arming;
+        let armed;
+        try {
+          armed = await arming;
+          armedRestart = armed;
+        } finally {
+          if (restartArming === arming) restartArming = undefined;
+        }
+        if (stopRequested || shutdown.signal.aborted || stopIntent.signal.aborted) {
+          cancelSparkDaemonRestartSuccessor(paths);
+          throw new Error("Spark daemon stopped while restart was being armed.");
+        }
+        // Admission closes only after durable intent and its external helper
+        // exist. A crash during a long drain therefore still has a successor.
+        return lifecycle.requestRestart(armed.requestedAt, armed.restartId, {
+          instanceId: armed.targetInstanceId,
+          generation: armed.targetGeneration,
+        });
+      },
+      getLifecycle: () => lifecycle.snapshot(),
+      isReady: () => lifecycle.isServing,
+      eventBus: localEventBus,
+      channelIngress,
+      sessionRegistry,
+      modelControl,
+    });
   try {
     await startSparkDaemon({
       paths,
@@ -540,14 +589,41 @@ async function start(paths: ReturnType<typeof resolveSparkPaths>): Promise<numbe
       channelIngress,
       sessionRegistry,
       modelControl,
+      uplinkControl,
+      managePidFile: false,
+      onReady: async () => {
+        // Bind status/stop while startup admission remains closed. Binding a
+        // socket is not successor readiness: the Claimed fence remains active
+        // until every daemon admission loop is live below.
+        localRpc = await startLocalControl();
+      },
+      onServing: () => {
+        // Admission loops are live before this synchronous callback. Publish
+        // running first, then complete the exact restart fence in the same
+        // event-loop turn. If an explicit stop won the durable CAS, roll the
+        // unobservable lifecycle transition back and shut this successor down.
+        lifecycle.activate();
+        if (!completeSparkDaemonRestartSuccessor(paths, lifecycle.processIdentity)) {
+          lifecycle.deactivate();
+          stopRequested = true;
+          stopIntent.abort(new Error("Spark daemon restart was cancelled before readiness."));
+          shutdown.abort();
+        }
+      },
     });
-    return 0;
+    return sparkDaemonServiceExitCode({
+      managed: options.managed,
+      restartRequested: lifecycle.restartRequested,
+      stopRequested,
+    });
   } finally {
-    await localRpc.close();
+    await localRpc?.close();
     db.close();
-    await lock.release();
     process.off("SIGINT", onShutdownSignal);
     process.off("SIGTERM", onShutdownSignal);
+    await releaseSparkDaemonProcessOwnership(paths, lifecycle.processIdentity, () =>
+      lock.release(),
+    );
   }
 }
 
@@ -564,15 +640,17 @@ async function stop(
   const cancelledRestart = cancelSparkDaemonRestartSuccessor(paths);
   const pid = readRunningPid(paths);
   if (!pid) {
-    // During launchd handoff there is a short pidfile gap even though the
-    // KeepAlive job still owns replacement. Bootout remains the source of
-    // truth for an explicit stop in that window.
+    // The service label remains the source of truth during a managed handoff.
     if (process.platform === "darwin") {
       const service = (io.stopService ?? stopSparkDaemonService)(paths);
       if (service) {
         io.stdout.write(`${service.detail}\n`);
         return 0;
       }
+      io.stderr.write(
+        "Failed to unregister the Spark daemon launchd service; it may remain registered.\n",
+      );
+      return 1;
     }
     if (cancelledRestart) {
       io.stdout.write("Cancelled pending Spark daemon restart.\n");
@@ -590,6 +668,10 @@ async function stop(
         io.stdout.write(`${service.detail}\n`);
         return 0;
       }
+      io.stderr.write(
+        "Spark daemon stopped accepting RPC, but its launchd service may remain registered.\n",
+      );
+      return 1;
     }
     io.stdout.write(`Stopped Spark daemon process ${pid}.\n`);
     return 0;
@@ -599,15 +681,16 @@ async function stop(
     }
   }
 
-  const service = stopSparkDaemonService(paths);
+  const service = (io.stopService ?? stopSparkDaemonService)(paths);
   if (service) {
     io.stdout.write(`${service.detail}\n`);
     return 0;
   }
 
-  process.kill(pid, "SIGTERM");
-  io.stdout.write(`Stopped Spark daemon process ${pid}.\n`);
-  return 0;
+  io.stderr.write(
+    `Spark daemon process ${pid} could not be reached and its ownership could not be verified; no signal was sent.\n`,
+  );
+  return 1;
 }
 
 async function daemon(
@@ -631,7 +714,7 @@ async function daemon(
     case "status":
       return await daemonStatus(paths, args, io);
     case "start":
-      return await start(paths);
+      return await start(paths, { explicit: true, managed: false });
     case "stop":
       return await stop(paths, args, io);
     case "restart":
@@ -658,6 +741,7 @@ async function restart(
 
   const previousPid = readRunningPid(paths);
   if (!previousPid) {
+    clearSparkDaemonRestartFenceForExplicitStart(paths);
     const service = startSparkDaemonProcess(paths, io);
     io.stdout.write(`${service.detail}\n`);
     if (flags.wait === "true" && flags["no-wait"] !== "true") {
@@ -719,6 +803,7 @@ async function restart(
     );
     return 1;
   }
+  clearSparkDaemonRestartFenceForExplicitStart(paths);
   const service = startSparkDaemonProcess(paths, io);
   io.stdout.write(`${service.detail}\n`);
   if (flags.wait === "true" && flags["no-wait"] !== "true") {
@@ -738,13 +823,25 @@ async function restartSuccessor(
   if (!Number.isInteger(previousPid) || previousPid <= 0 || !restartId || args.length !== 2) {
     throw new Error("Invalid Spark daemon restart successor request.");
   }
-  const intentCommitted = waitForRestartIntentCommit(restartId);
+  const intentCommitted = waitForRestartIntentCommit(paths, previousPid, restartId);
   await notifyRestartHelperReady(restartId);
-  await intentCommitted;
+  const commitSource = await intentCommitted;
+  if (commitSource === "cancelled") {
+    io.stdout.write("Spark daemon restart successor was cancelled.\n");
+    return 0;
+  }
   const service = await runSparkDaemonRestartSuccessor(paths, previousPid, {
     expectedRestartId: restartId,
     onIntentArmed: async (intent) => {
-      await notifyRestartHelperArmed(intent);
+      if (commitSource !== "ipc") return;
+      try {
+        await notifyRestartHelperArmed(intent);
+      } catch (error) {
+        // Once exact Armed intent is durable, parent death transfers ownership
+        // to this detached helper. If the parent is alive it will publish a
+        // Cancelled tombstone when its two-stage handshake fails.
+        if (!isSparkDaemonRestartArmed(paths, previousPid, restartId)) throw error;
+      }
     },
   });
   io.stdout.write(
@@ -777,17 +874,20 @@ async function sendRestartHelperMessage(message: Record<string, string>): Promis
   });
 }
 
-async function waitForRestartIntentCommit(restartId: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
+async function waitForRestartIntentCommit(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  previousPid: number,
+  restartId: string,
+): Promise<"ipc" | "durable" | "cancelled"> {
+  return await new Promise<"ipc" | "durable" | "cancelled">((resolve) => {
     let settled = false;
-    const finish = (error?: Error) => {
+    const finish = (result: "ipc" | "durable" | "cancelled") => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
       process.off("message", onMessage);
       process.off("disconnect", onDisconnect);
-      if (error) reject(error);
-      else resolve();
+      resolve(result);
     };
     const onMessage = (message: unknown) => {
       if (
@@ -798,15 +898,13 @@ async function waitForRestartIntentCommit(restartId: string): Promise<void> {
         "restartId" in message &&
         message.restartId === restartId
       ) {
-        finish();
+        finish("ipc");
       }
     };
-    const onDisconnect = () =>
-      finish(new Error("Spark daemon restart parent disconnected before intent commit."));
-    const timeout = setTimeout(
-      () => finish(new Error("Spark daemon restart intent commit was not received.")),
-      10_000,
-    );
+    const finishFromDurableState = () =>
+      finish(isSparkDaemonRestartArmed(paths, previousPid, restartId) ? "durable" : "cancelled");
+    const onDisconnect = () => finishFromDurableState();
+    const timeout = setTimeout(finishFromDurableState, 10_000);
     timeout.unref();
     process.on("message", onMessage);
     process.once("disconnect", onDisconnect);
@@ -824,27 +922,71 @@ async function waitForDaemonReady(
   },
 ): Promise<number> {
   let replacementDeadline = previousPid === null ? Date.now() + 30_000 : undefined;
+  let observedTerminal: ReturnType<typeof readSparkDaemonRestartTerminal> = null;
   while (true) {
     const currentPid = readRunningPid(paths);
-    if (currentPid && currentPid !== previousPid) {
+    if (expectedRestart && previousPid !== null && !observedTerminal) {
+      observedTerminal = readSparkDaemonRestartTerminal(paths, {
+        previousPid,
+        restartId: expectedRestart.restartId,
+      });
+      if (observedTerminal?.state === "cancelled") {
+        throw new Error(`Spark daemon restart ${expectedRestart.restartId} was cancelled.`);
+      }
+    }
+
+    // An exact local-RPC identity is stronger readiness evidence than the
+    // pidfile projection. During handoff the pidfile/identity pair can be
+    // briefly absent while the accepted successor is already serving. Probe
+    // unconditionally for exact restarts so that projection race cannot leave
+    // --wait spinning forever.
+    if (expectedRestart || (currentPid && currentPid !== previousPid)) {
       try {
         const status = await (io.daemonStatusFromService ?? requestDaemonStatus)(paths);
         const identity = status.lifecycle.process;
+        const targetInstanceId =
+          observedTerminal?.state === "completed"
+            ? observedTerminal.targetInstanceId
+            : expectedRestart?.targetInstanceId;
+        const targetGeneration =
+          observedTerminal?.state === "completed"
+            ? observedTerminal.targetGeneration
+            : expectedRestart?.targetGeneration;
+        const exactAcceptedSuccessor = Boolean(
+          expectedRestart &&
+          identity !== undefined &&
+          identity.pid !== previousPid &&
+          identity.instanceId === targetInstanceId &&
+          identity.generation === targetGeneration &&
+          identity.acceptedRestartId === expectedRestart.restartId,
+        );
         if (
-          !expectedRestart ||
-          (status.lifecycle.state === "running" &&
-            identity?.pid === currentPid &&
-            identity.instanceId === expectedRestart.targetInstanceId &&
-            identity.generation === expectedRestart.targetGeneration &&
-            identity.acceptedRestartId === expectedRestart.restartId)
+          (!expectedRestart && status.lifecycle.state === "running") ||
+          (exactAcceptedSuccessor &&
+            (status.lifecycle.state === "running" || status.lifecycle.state === "draining"))
         ) {
-          return currentPid;
+          return expectedRestart ? identity!.pid : currentPid!;
+        }
+        if (
+          expectedRestart &&
+          identity?.pid !== previousPid &&
+          identity?.acceptedRestartId &&
+          identity.acceptedRestartId !== expectedRestart.restartId &&
+          (status.lifecycle.state === "running" || status.lifecycle.state === "draining")
+        ) {
+          throw new Error(
+            `Spark daemon restart ${expectedRestart.restartId} was superseded by ${identity.acceptedRestartId}.`,
+          );
         }
       } catch (error) {
         if (!(error instanceof LocalRpcUnavailableError)) throw error;
       }
     }
-    if (previousPid === null || !isProcessAlive(previousPid)) {
+    if (
+      previousPid === null ||
+      !isProcessAlive(previousPid) ||
+      observedTerminal?.state === "completed"
+    ) {
       replacementDeadline ??= Date.now() + 30_000;
       if (Date.now() >= replacementDeadline) {
         throw new Error(
@@ -1030,8 +1172,8 @@ type DaemonStatus =
         cancelled: number;
       };
       lifecycle: {
-        state: "running" | "draining";
-        phase?: "serving" | "draining-active-work";
+        state: "starting" | "running" | "draining";
+        phase?: "initializing" | "serving" | "draining-active-work";
         process?: {
           pid: number;
           instanceId: string;
@@ -1124,7 +1266,11 @@ async function workspace(
     return await registerWorkspaceCommand(paths, args, io);
   }
 
-  throw new Error("Usage: spark daemon workspace <register|ls|show|stop>");
+  if (subcommand === "relocate") {
+    return await relocateWorkspaceCommand(paths, args, io);
+  }
+
+  throw new Error("Usage: spark daemon workspace <register|relocate|ls|show|stop>");
 }
 
 async function registerWorkspaceCommand(
@@ -1181,6 +1327,45 @@ async function registerWorkspaceCommand(
   if (readRunningPid(paths) !== null) {
     io.stdout.write("Spark daemon is running.\n");
   }
+  return 0;
+}
+
+async function relocateWorkspaceCommand(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  args: string[],
+  io: CliIo,
+): Promise<number> {
+  const flags = parseFlags(args);
+  const toServerUrl = flags["to-server-url"] ?? flags.to ?? positionalArgs(args)[0];
+  if (!toServerUrl) {
+    throw new Error("Workspace relocation requires --to-server-url <https-origin>.");
+  }
+  if (!(await confirmAction(io, flags, `Relocate Cockpit uplink to ${toServerUrl}?`))) {
+    io.stdout.write("Cancelled.\n");
+    return 4;
+  }
+  const result = await requestWorkspaceService(
+    paths,
+    io,
+    async () =>
+      await (io.relocateWorkspaceInService ?? requestWorkspaceRelocate)(paths, {
+        toServerUrl,
+        ...(flags["from-server-url"] ? { fromServerUrl: flags["from-server-url"] } : {}),
+      }),
+  );
+  if (flags.json === "true") {
+    io.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return 0;
+  }
+  io.stdout.write(
+    `✓ Cockpit uplink relocated\n` +
+      `  instance   ${result.instanceId}\n` +
+      `  runtime    ${result.runtimeId}\n` +
+      `  from       ${result.fromServerUrl}\n` +
+      `  to         ${result.toServerUrl}\n` +
+      `  workspaces ${result.workspaceCount}\n` +
+      `  bindings   ${result.workspaceBindingIds.join(", ") || "none"}\n`,
+  );
   return 0;
 }
 
@@ -2086,6 +2271,7 @@ Commands:
   spark daemon --workspace <name>
   login --server-url <url> [--no-open] [--allow-insecure-http]
   workspace register [path] --server-url <url> [--token <workspace-registration-token|->] --name <name> [--profile <path-or-git-url>] [--allow-insecure-http]
+  workspace relocate --to-server-url <https-origin> [--from-server-url <origin>] [--yes] [--json]
   workspace ls [--json] [--all] [--full]
   workspace show [name] [--workspace <name>] [--json]
   workspace stop <name> [--workspace <name>] [--yes]
@@ -2107,6 +2293,7 @@ function printWorkspaceHelp(io: CliIo): void {
 
 Commands:
   register [path] --server-url <url> [--token <workspace-registration-token|->] --name <name> [--profile <path-or-git-url>] [--allow-insecure-http]
+  relocate --to-server-url <https-origin> [--from-server-url <origin>] [--yes] [--json]
   ls [--json] [--all] [--full]
   show [name] [--workspace <name>] [--json]
   stop <name> [--workspace <name>] [--yes]

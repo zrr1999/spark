@@ -16,7 +16,6 @@ import {
   PiRolesReviewerRunner,
   createSparkRoleRegistry,
   loadSparkMode,
-  renderBaseSystemPromptsPrompt,
   renderSparkActiveSystemPrompt,
   type SparkSessionContext,
 } from "@zendev-lab/pi-extension/host-support";
@@ -28,11 +27,7 @@ import {
   loadSparkConfig,
   saveSparkConfig,
 } from "./config.ts";
-import {
-  DEFAULT_SPARK_EXTENSION_SPECS,
-  SparkExtensionLoader,
-  type SparkExtensionLoadResult,
-} from "./extension-loader.ts";
+import { SparkExtensionLoader, type SparkExtensionLoadResult } from "./extension-loader.ts";
 import { SparkKeybindings } from "./keybindings.ts";
 import {
   SparkModelSelector,
@@ -50,7 +45,11 @@ import {
 import { SparkProviderRegistry, type SparkActiveSelection } from "./provider-registry.ts";
 import { SparkHostRuntime, type SparkHostRuntimeOptions } from "./runtime.ts";
 import { SparkSessionStore } from "./session-store.ts";
-import { SparkSkillResolver } from "./skill-resolver.ts";
+import {
+  SparkSkillResolver,
+  formatSelectedSparkSkillsForPrompt,
+  type SparkSkillPromptMatch,
+} from "./skill-resolver.ts";
 import { loadSparkThemeCatalog, type SparkTheme, type SparkThemeCatalog } from "./theme.ts";
 
 export interface SparkCliHostDiagnostic {
@@ -86,6 +85,7 @@ export interface SparkCliHostServicesOptions {
   sparkStateRoot?: string;
   sessionSurface?: "local" | "channel";
   sessionSource?: "tui" | "web" | "channel" | "daemon" | "session";
+  channelBinding?: SparkHostRuntimeOptions["channelBinding"];
   invocationId?: string;
   sessionQuestionChain?: readonly string[];
   allowedTools?: readonly string[];
@@ -142,6 +142,7 @@ export async function createSparkCliHostServices(
     sparkStateRoot: options.sparkStateRoot,
     sessionSurface: options.sessionSurface,
     sessionSource: options.sessionSource,
+    channelBinding: options.channelBinding,
     invocationId: options.invocationId,
     sessionQuestionChain: options.sessionQuestionChain,
     allowedTools: options.allowedTools,
@@ -150,6 +151,10 @@ export async function createSparkCliHostServices(
     sessionManager: options.sessionManager,
     keybindings,
   });
+  // Registered before extensions so request-scoped prompt state is cleared
+  // before any extension's agent_end handler can enqueue a background turn.
+  let clearRequestSkillSelection: () => void = () => undefined;
+  runtime.on("agent_end", () => clearRequestSkillSelection());
 
   const providerRegistry = new SparkProviderRegistry();
   const providerLoadResult = await loadPlugins({
@@ -224,7 +229,7 @@ export async function createSparkCliHostServices(
 
   const extensionLoadResult = await new SparkExtensionLoader({
     api: runtime as ExtensionAPI,
-    extensions: options.extensions ?? [...DEFAULT_SPARK_EXTENSION_SPECS],
+    extensions: options.extensions ?? config.extensions,
     importer: options.extensionImporter,
   }).load();
   for (const outcome of extensionLoadResult.outcomes) {
@@ -263,9 +268,17 @@ export async function createSparkCliHostServices(
   for (const diagnostic of promptTemplates.diagnostics) {
     diagnostics.push({ type: "warning", message: formatPromptTemplateDiagnostic(diagnostic) });
   }
-  const builtinSkillsPrompt = await renderBaseSystemPromptsPrompt();
-  const skillsPrompt = await skillResolver.formatAvailableSkillsForPrompt();
+  const skillsCatalogPrompt = await skillResolver.formatAvailableSkillsForPrompt();
+  let selectedSkillMatches: SparkSkillPromptMatch[] = [];
+  let selectedSkillsPrompt = "";
   const baseSystemPrompt = options.systemPrompt ?? DEFAULT_SPARK_IDENTITY_PROMPT;
+  const initialPromptState = await resolveSparkCliAgentPromptState(
+    cwd,
+    runtime.makeContext(),
+    baseSystemPrompt,
+    skillsCatalogPrompt,
+    selectedSkillsPrompt,
+  );
   const streamFunction = createProviderRegistryStreamFunction(providerRegistry, {
     resolveApiKey: (provider) => authResolver.resolveApiKey(provider),
   });
@@ -278,13 +291,34 @@ export async function createSparkCliHostServices(
       return model as Model<string>;
     },
     getReasoning: () => config.activeThinkingLevel,
-    systemPrompt: await renderSparkCliAgentSystemPrompt(
-      cwd,
-      runtime.makeContext(),
-      baseSystemPrompt,
-      builtinSkillsPrompt,
-      skillsPrompt,
-    ),
+    systemPrompt: initialPromptState.systemPrompt,
+    prepareUserSubmit: async (request) => {
+      // Selection belongs to exactly one real user request. Clear the prior
+      // bodies before resolving so an empty/unmatched request cannot inherit
+      // stale instructions from the preceding turn.
+      selectedSkillMatches = [];
+      selectedSkillsPrompt = "";
+      try {
+        selectedSkillMatches = await skillResolver.loadMatchingSkillsForPrompt(request, 3);
+        selectedSkillsPrompt = formatSelectedSparkSkillsForPrompt(selectedSkillMatches);
+      } finally {
+        // A disappearing/unreadable skill may reject this submit, but it must
+        // never leave the previous request's bodies installed in the prompt.
+        const promptState = await resolveSparkCliAgentPromptState(
+          cwd,
+          runtime.makeContext(),
+          baseSystemPrompt,
+          skillsCatalogPrompt,
+          selectedSkillsPrompt,
+        );
+        agentLoop.setSystemPrompt(promptState.systemPrompt);
+        agentLoop.setCurrentPhase(promptState.phase);
+      }
+    },
+    finishUserSubmit: () => clearRequestSkillSelection(),
+    promptManifest: {
+      getSelectedSkills: () => selectedSkillMatches.map((match) => match.skill.name),
+    },
     // Local interactive TUI skips approval gates; channel/headless pass `auto`.
     approvalMethod: options.approvalMethod ?? "skip",
     ...(options.approvalRejectAction ? { approvalRejectAction: options.approvalRejectAction } : {}),
@@ -314,16 +348,44 @@ export async function createSparkCliHostServices(
       };
     },
   });
-  runtime.on("before_agent_start", async (_event, ctx) => {
+  agentLoop.setCurrentPhase(initialPromptState.phase);
+  clearRequestSkillSelection = () => {
+    const hadSelection = selectedSkillMatches.length > 0 || selectedSkillsPrompt.length > 0;
+    selectedSkillMatches = [];
+    selectedSkillsPrompt = "";
+    if (!hadSelection) return;
     agentLoop.setSystemPrompt(
-      await renderSparkCliAgentSystemPrompt(
+      composeSparkCliAgentSystemPrompt(
         cwd,
-        ctx,
         baseSystemPrompt,
-        builtinSkillsPrompt,
-        skillsPrompt,
+        skillsCatalogPrompt,
+        selectedSkillsPrompt,
+        agentLoop.getCurrentPhase() ?? initialPromptState.phase,
       ),
     );
+  };
+  runtime.on("before_agent_start", async (event, ctx) => {
+    if (sparkAgentLifecycleSource(event) === "triggerTurn") {
+      // Driver/background turns (goal, loop, repro, scheduled continuations)
+      // are not assist-plan turns. Do not inherit a request skill body or a
+      // persisted plan/implement tool profile from the last user session.
+      selectedSkillMatches = [];
+      selectedSkillsPrompt = "";
+      agentLoop.setSystemPrompt(
+        composeSparkCliDriverSystemPrompt(cwd, baseSystemPrompt, skillsCatalogPrompt),
+      );
+      agentLoop.setCurrentPhase(undefined);
+      return;
+    }
+    const promptState = await resolveSparkCliAgentPromptState(
+      cwd,
+      ctx,
+      baseSystemPrompt,
+      skillsCatalogPrompt,
+      selectedSkillsPrompt,
+    );
+    agentLoop.setSystemPrompt(promptState.systemPrompt);
+    agentLoop.setCurrentPhase(promptState.phase);
   });
 
   return {
@@ -349,20 +411,62 @@ export async function createSparkCliHostServices(
   };
 }
 
-async function renderSparkCliAgentSystemPrompt(
+async function resolveSparkCliAgentPromptState(
   cwd: string,
   ctx: SparkSessionContext,
   baseSystemPrompt: string,
-  builtinSkillsPrompt: string,
-  skillsPrompt: string,
-): Promise<string> {
+  skillsCatalogPrompt: string,
+  selectedSkillsPrompt: string,
+): Promise<{ systemPrompt: string; phase: "plan" | "implement" }> {
   const mode = (await loadSparkMode(cwd, ctx)).mode;
+  return {
+    phase: mode,
+    systemPrompt: composeSparkCliAgentSystemPrompt(
+      cwd,
+      baseSystemPrompt,
+      skillsCatalogPrompt,
+      selectedSkillsPrompt,
+      mode,
+    ),
+  };
+}
+
+function composeSparkCliAgentSystemPrompt(
+  cwd: string,
+  baseSystemPrompt: string,
+  skillsCatalogPrompt: string,
+  selectedSkillsPrompt: string,
+  phase: "plan" | "implement",
+): string {
   return composeAgentSystemPrompt([
-    renderSparkActiveSystemPrompt(baseSystemPrompt, mode),
-    builtinSkillsPrompt,
-    skillsPrompt,
+    renderSparkActiveSystemPrompt(baseSystemPrompt, phase),
+    skillsCatalogPrompt,
+    selectedSkillsPrompt,
     renderAgentRuntimeContextPrompt({ cwd }),
   ]);
+}
+
+function composeSparkCliDriverSystemPrompt(
+  cwd: string,
+  baseSystemPrompt: string,
+  skillsCatalogPrompt: string,
+): string {
+  return composeAgentSystemPrompt([
+    baseSystemPrompt,
+    skillsCatalogPrompt,
+    renderAgentRuntimeContextPrompt({ cwd }),
+  ]);
+}
+
+function sparkAgentLifecycleSource(event: unknown): "agentLoop" | "triggerTurn" {
+  if (
+    event &&
+    typeof event === "object" &&
+    (event as { source?: unknown }).source === "triggerTurn"
+  ) {
+    return "triggerTurn";
+  }
+  return "agentLoop";
 }
 
 export {

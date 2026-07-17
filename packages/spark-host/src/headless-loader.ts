@@ -26,6 +26,10 @@ export interface SparkHeadlessSessionRunInput {
   sparkHome?: string;
   sessionSurface?: "local" | "channel";
   sessionSource?: "tui" | "web" | "channel" | "daemon" | "session";
+  channelBinding?: {
+    adapter: "feishu" | "infoflow" | "qqbot";
+    externalKey: string;
+  };
   invocationId?: string;
   sessionQuestionChain?: readonly string[];
   allowedTools?: readonly string[];

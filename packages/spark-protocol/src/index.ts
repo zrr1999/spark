@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { sparkModelRefSchema } from "./model-control.ts";
 
+export * from "./channel-control.ts";
 export * from "./command-delivery.ts";
 export * from "./command-events.ts";
 export * from "./command-sources.ts";
@@ -9,6 +10,7 @@ export * from "./invocation-lifecycle.ts";
 export * from "./model-control.ts";
 export * from "./refs.ts";
 export * from "./runtime-v1/envelope.ts";
+export * from "./runtime-v1/ephemeral-secret.ts";
 export * from "./runtime-v1/messages.ts";
 export * from "./runtime-v1/registration.ts";
 export * from "./session-assignment.ts";

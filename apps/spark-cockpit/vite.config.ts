@@ -9,6 +9,8 @@ const runtimeWsPattern = /^\/api\/v1\/runtime\/runtimes\/(rt_[a-f0-9]{32})\/ws$/
 export default defineConfig({
   plugins: [runtimeWebSocketDevServer(), sveltekit()],
   ssr: {
+    // Lucide publishes Svelte source that must pass through the Svelte
+    // transform before Rolldown parses the SSR graph.
     noExternal: ["@lucide/svelte"],
   },
 });

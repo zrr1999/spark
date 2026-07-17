@@ -19,6 +19,22 @@ export const QQBOT_TOKEN_URL = `${
 }/app/getAppAccessToken`;
 
 export const QQBOT_USER_AGENT = "SparkQQBot/0.1.0";
+export const DEFAULT_QQBOT_REQUEST_TIMEOUT_MS = 30_000;
+
+export class QqbotRequestTimeoutError extends Error {
+  readonly code = "QQBOT_REQUEST_TIMEOUT";
+  readonly method: string;
+  readonly url: string;
+  readonly timeoutMs: number;
+
+  constructor(method: string, url: string, timeoutMs: number) {
+    super(`QQ Bot request timed out after ${timeoutMs}ms: ${method} ${url}`);
+    this.name = "QqbotRequestTimeoutError";
+    this.method = method;
+    this.url = url;
+    this.timeoutMs = timeoutMs;
+  }
+}
 
 export function resolveQqbotApiBase(
   environment: "production" | "sandbox" | undefined = "production",
@@ -116,13 +132,47 @@ export function createQqbotApiClient(
     fetchImpl?: typeof fetch;
     /** OpenAPI host; defaults to production (or `QQBOT_BASE_URL` when set). */
     baseUrl?: string;
+    /** Application deadline shared by token, gateway, and OpenAPI requests. */
+    requestTimeoutMs?: number;
   } = {},
 ): QqbotApiClient {
   const fetchImpl = options.fetchImpl ?? fetch;
   const apiBase = (options.baseUrl ?? QQBOT_API_BASE).replace(/\/+$/, "");
+  const requestTimeoutMs = normalizeRequestTimeoutMs(options.requestTimeoutMs);
   const tokenCache = new Map<string, TokenCacheEntry>();
   const inflight = new Map<string, Promise<string>>();
   const messageSequences = new Map<string, { next: number; touchedAt: number }>();
+
+  async function fetchTextWithDeadline(
+    method: string,
+    url: string,
+    init: RequestInit,
+  ): Promise<{ response: Response; raw: string }> {
+    const controller = new AbortController();
+    const timeoutError = new QqbotRequestTimeoutError(method, url, requestTimeoutMs);
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort(timeoutError);
+        reject(timeoutError);
+      }, requestTimeoutMs);
+    });
+    try {
+      const fetchAndConsume = (async () => {
+        const response = await fetchImpl(url, { ...init, signal: controller.signal });
+        const raw = await response.text();
+        return { response, raw };
+      })();
+      return await Promise.race([fetchAndConsume, deadline]);
+    } catch (error) {
+      if (timedOut) throw timeoutError;
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
 
   async function getAccessToken(appId: string, clientSecret: string): Promise<string> {
     const normalizedAppId = appId.trim();
@@ -138,7 +188,7 @@ export function createQqbotApiClient(
 
     const promise = (async () => {
       try {
-        const response = await fetchImpl(QQBOT_TOKEN_URL, {
+        const { response, raw } = await fetchTextWithDeadline("POST", QQBOT_TOKEN_URL, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -146,7 +196,6 @@ export function createQqbotApiClient(
           },
           body: JSON.stringify({ appId: normalizedAppId, clientSecret }),
         });
-        const raw = await response.text();
         let data: { access_token?: string; expires_in?: number };
         try {
           data = JSON.parse(raw) as { access_token?: string; expires_in?: number };
@@ -179,7 +228,8 @@ export function createQqbotApiClient(
     path: string,
     body?: unknown,
   ): Promise<T> {
-    const response = await fetchImpl(`${apiBase}${path}`, {
+    const url = `${apiBase}${path}`;
+    const { response, raw } = await fetchTextWithDeadline(method, url, {
       method,
       headers: {
         Authorization: `QQBot ${accessToken}`,
@@ -188,7 +238,6 @@ export function createQqbotApiClient(
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
-    const raw = await response.text();
     let data: unknown = {};
     if (raw.trim()) {
       try {
@@ -376,4 +425,12 @@ export function createQqbotApiClient(
       );
     },
   };
+}
+
+function normalizeRequestTimeoutMs(value: number | undefined): number {
+  const timeoutMs = value ?? DEFAULT_QQBOT_REQUEST_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error(`QQ Bot requestTimeoutMs must be a positive finite number; got ${timeoutMs}`);
+  }
+  return Math.max(1, Math.floor(timeoutMs));
 }

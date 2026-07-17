@@ -33,13 +33,23 @@ export type {
   SparkAgentLoopOptions,
   SparkAgentLoopState,
   SparkAgentStreamFunction,
+  SparkPromptAuthority,
+  SparkPromptItem,
+  SparkPromptManifest,
+  SparkPromptManifestOptions,
+  SparkPromptPersistence,
+  SparkPromptTrust,
+  SparkPromptVisibility,
+  SparkRunOutcome,
 } from "./agent-loop.ts";
 export {
   SparkAgentSession,
   agentMessageToSessionMessage,
   sessionEntriesToAgentMessages,
+  sessionEntriesToPromptItems,
   sessionMessageToAgentMessage,
   sessionRecordToAgentMessages,
+  sessionRecordToPromptItems,
 } from "./agent-session.ts";
 export type { SparkAgentSessionRunOptions, SparkAgentSessionRunResult } from "./agent-session.ts";
 export {
@@ -99,10 +109,12 @@ export {
   selectInitialModel,
 } from "./bootstrap.ts";
 export {
+  CURRENT_SPARK_EXTENSION_PROFILE_VERSION,
   DEFAULT_SPARK_CONFIG,
   defaultSparkConfigPath,
   loadSparkConfig,
   mergeWithDefault as mergeSparkConfigWithDefault,
+  migrateSparkExtensionProfile,
   saveSparkConfig,
 } from "./config.ts";
 export {
@@ -166,11 +178,13 @@ export {
 export {
   SparkSkillResolver,
   defaultBuiltinSkillsDir,
+  defaultPiCueSkillsDir,
   defaultProjectAgentsSkillsDirs,
   defaultSparkSkillsRoot,
   defaultUserAgentsSkillsDir,
   defaultUserSkillsDir,
   formatSparkSkillsForPrompt,
+  formatSelectedSparkSkillsForPrompt,
   loadMatchingSparkSkillsForPrompt,
   loadSkillsFromDir,
   parseSkillFrontmatter,

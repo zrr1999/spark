@@ -35,6 +35,7 @@ export const idPrefixSchema = z.enum([
   "blob",
   "msg",
   "idem",
+  "eph",
   "asn",
 ]);
 

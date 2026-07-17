@@ -28,6 +28,7 @@ export interface RuntimeControlCommandRecord {
   workspaceId?: string;
   runtimeWorkspaceBindingId?: string;
   projectId?: string;
+  sessionId?: string;
   kind: ServerCommandPayload["kind"];
   status: RuntimeControlCommandStatus;
   attemptCount: number;
@@ -42,6 +43,7 @@ export interface SubmitRuntimeControlCommandInput {
   workspaceId?: string;
   projectId?: string | null;
   requestedByUserId?: string | null;
+  sessionId?: string | null;
   idempotencyKey?: string | null;
   payload: ServerCommandPayload;
   createdAt?: string;
@@ -53,6 +55,49 @@ export class RuntimeControlCommandError extends Error {
     readonly reasonCode: string,
   ) {
     super(message);
+  }
+}
+
+const runtimeDispatchers = new WeakMap<DatabaseSync, Map<string, Set<() => void>>>();
+
+export function registerRuntimeControlDispatcher(
+  db: DatabaseSync,
+  runtimeId: string,
+  dispatch: () => void,
+): () => void {
+  const byRuntime = runtimeDispatchers.get(db) ?? new Map<string, Set<() => void>>();
+  runtimeDispatchers.set(db, byRuntime);
+  const dispatchers = byRuntime.get(runtimeId) ?? new Set<() => void>();
+  byRuntime.set(runtimeId, dispatchers);
+  dispatchers.add(dispatch);
+  return () => {
+    dispatchers.delete(dispatch);
+    if (dispatchers.size === 0) byRuntime.delete(runtimeId);
+    if (byRuntime.size === 0) runtimeDispatchers.delete(db);
+  };
+}
+
+export function dispatchRuntimeControlCommands(db: DatabaseSync, runtimeId: string): void {
+  for (const dispatch of runtimeDispatchers.get(db)?.get(runtimeId) ?? []) dispatch();
+}
+
+export async function waitForRuntimeControlCommand(
+  db: DatabaseSync,
+  commandId: string,
+  options: { timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<RuntimeControlCommandRecord> {
+  const deadline = Date.now() + (options.timeoutMs ?? 15_000);
+  while (true) {
+    if (options.signal?.aborted) throw options.signal.reason;
+    const command = requireRuntimeControlCommand(db, commandId);
+    if (isTerminal(command.status)) return command;
+    if (Date.now() >= deadline) {
+      throw new RuntimeControlCommandError(
+        "Runtime command is still pending; it remains durable and may complete after reconnect.",
+        "COMMAND_RESULT_TIMEOUT",
+      );
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
   }
 }
 
@@ -94,6 +139,7 @@ export function submitRuntimeControlCommand(
           workspaceId: route.workspaceId,
           bindingId: route.bindingId,
           projectId: scope === "workspace" ? (input.projectId ?? undefined) : undefined,
+          sessionId: input.sessionId?.trim() || undefined,
         });
         db.exec("COMMIT");
         return existing;
@@ -103,10 +149,10 @@ export function submitRuntimeControlCommand(
     const commandId = createId("cmd");
     db.prepare(
       `INSERT INTO runtime_control_commands
-        (id, runtime_id, scope, workspace_id, runtime_workspace_binding_id, project_id,
+        (id, runtime_id, scope, workspace_id, runtime_workspace_binding_id, project_id, session_id,
          kind, title, payload_json, requested_by_user_id, idempotency_key, status,
          created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)`,
     ).run(
       commandId,
       input.runtimeId,
@@ -114,6 +160,7 @@ export function submitRuntimeControlCommand(
       route.workspaceId ?? null,
       route.bindingId ?? null,
       scope === "workspace" ? (input.projectId ?? null) : null,
+      input.sessionId?.trim() || null,
       payload.kind,
       payload.title ?? null,
       canonicalPayloadJson,
@@ -149,6 +196,7 @@ export function submitRuntimeControlCommand(
           workspaceId: fallbackRoute.workspaceId,
           bindingId: fallbackRoute.bindingId,
           projectId: scope === "workspace" ? (input.projectId ?? undefined) : undefined,
+          sessionId: input.sessionId?.trim() || undefined,
         });
         return existing;
       }
@@ -217,6 +265,7 @@ export function recordRuntimeControlCommandResult(
     commandId: string;
     messageId: string;
     payload: RuntimeCommandResultPayload;
+    project?: (command: RuntimeControlCommandRecord, payload: RuntimeCommandResultPayload) => void;
   },
 ): void {
   const payload = runtimeCommandResultPayloadSchema.parse(input.payload);
@@ -261,6 +310,7 @@ export function recordRuntimeControlCommandResult(
       input.commandId,
       input.runtimeId,
     );
+    input.project?.(command, payload);
     appendRuntimeControlEvent(
       db,
       command,
@@ -281,10 +331,28 @@ export function recoverUnacknowledgedRuntimeControlCommands(
       .prepare(
         `UPDATE runtime_control_commands
          SET status = 'queued', updated_at = ?
-         WHERE runtime_id = ? AND status = 'delivered'`,
+         WHERE runtime_id = ? AND status IN ('delivered', 'accepted')`,
       )
       .run(recoveredAt, runtimeId).changes,
   );
+}
+
+/**
+ * Make an ambiguous non-terminal delivery eligible for replay with the same
+ * command id. The daemon receipt ledger fences duplicate execution, while a
+ * late terminal result can still win this status transition.
+ */
+export function requeueRuntimeControlCommand(
+  db: DatabaseSync,
+  commandId: string,
+  requeuedAt = new Date().toISOString(),
+): RuntimeControlCommandRecord {
+  db.prepare(
+    `UPDATE runtime_control_commands
+     SET status = 'queued', updated_at = ?
+     WHERE id = ? AND status IN ('delivered', 'accepted')`,
+  ).run(requeuedAt, commandId);
+  return requireRuntimeControlCommand(db, commandId);
 }
 
 export function pendingRuntimeControlCommands(
@@ -336,8 +404,9 @@ export function requireRuntimeControlCommand(
     .prepare(
       `SELECT id, runtime_id AS runtimeId, scope, workspace_id AS workspaceId,
               runtime_workspace_binding_id AS runtimeWorkspaceBindingId,
-              project_id AS projectId, kind, status, attempt_count AS attemptCount,
-              idempotency_key AS idempotencyKey, result_json AS resultJson,
+              project_id AS projectId, session_id AS sessionId, kind, status,
+              attempt_count AS attemptCount, idempotency_key AS idempotencyKey,
+              result_json AS resultJson,
               created_at AS createdAt, updated_at AS updatedAt
        FROM runtime_control_commands WHERE id = ?`,
     )
@@ -418,7 +487,12 @@ function assertIdempotentCommand(
   db: DatabaseSync,
   existing: RuntimeControlCommandRecord,
   canonicalPayloadJson: string,
-  route: { workspaceId?: string; bindingId?: string; projectId?: string },
+  route: {
+    workspaceId?: string;
+    bindingId?: string;
+    projectId?: string;
+    sessionId?: string;
+  },
 ): void {
   const stored = db
     .prepare("SELECT payload_json AS payloadJson FROM runtime_control_commands WHERE id = ?")
@@ -427,6 +501,7 @@ function assertIdempotentCommand(
     existing.workspaceId !== route.workspaceId ||
     existing.runtimeWorkspaceBindingId !== route.bindingId ||
     existing.projectId !== route.projectId ||
+    existing.sessionId !== route.sessionId ||
     stored.payloadJson !== canonicalPayloadJson
   ) {
     throw new RuntimeControlCommandError(
@@ -466,6 +541,7 @@ function runtimeControlCommandRecord(row: RuntimeControlCommandRow): RuntimeCont
       ? { runtimeWorkspaceBindingId: row.runtimeWorkspaceBindingId }
       : {}),
     ...(row.projectId ? { projectId: row.projectId } : {}),
+    ...(row.sessionId ? { sessionId: row.sessionId } : {}),
     kind: row.kind,
     status: row.status,
     attemptCount: Number(row.attemptCount),
@@ -503,6 +579,7 @@ interface RuntimeControlCommandRow {
   workspaceId: string | null;
   runtimeWorkspaceBindingId: string | null;
   projectId: string | null;
+  sessionId: string | null;
   kind: ServerCommandPayload["kind"];
   status: RuntimeControlCommandStatus;
   attemptCount: number;

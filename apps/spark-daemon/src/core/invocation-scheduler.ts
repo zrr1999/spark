@@ -7,7 +7,10 @@ import {
   type SparkJsonObject,
 } from "@zendev-lab/spark-protocol";
 import {
+  SPARK_INVOCATION_INTERRUPTED_ERROR_CODE,
+  SPARK_INVOCATION_INTERRUPTED_ERROR_MESSAGE,
   SparkInvocationStore,
+  type CompleteSparkInvocationInput,
   type SparkInvocationEvent,
   type SparkInvocationRecord,
 } from "../store/invocations.ts";
@@ -32,28 +35,47 @@ interface ActiveInvocation {
 export interface SparkInvocationSchedulerOptions {
   store: SparkInvocationStore;
   executeTask: SparkDaemonTaskExecutor;
+  /**
+   * Optional daemon-owned terminal commit. Production uses this to commit the
+   * invocation outcome and its channel-delivery intent in one SQLite
+   * transaction; the core scheduler otherwise completes the invocation
+   * directly.
+   */
+  completeInvocation?: (
+    invocation: SparkInvocationRecord,
+    task: SparkDaemonTask,
+    completion: CompleteSparkInvocationInput,
+  ) => SparkInvocationRecord;
   emitEvent?: (event: SparkInvocationEvent) => void | Promise<void>;
   workerId?: string;
   concurrency?: number;
   taskTimeoutMs?: number;
+  /** @deprecated Executors now drain to actual settlement after cancellation. */
   abortDrainMs?: number;
+  /** Keep durable claims closed until the owning daemon commits its serving fence. */
+  initiallyAccepting?: boolean;
 }
 
 export class SparkInvocationScheduler {
   private readonly store: SparkInvocationStore;
   private readonly executeTask: SparkDaemonTaskExecutor;
+  private readonly completeInvocation: NonNullable<
+    SparkInvocationSchedulerOptions["completeInvocation"]
+  >;
   private readonly emitEvent?: (event: SparkInvocationEvent) => void | Promise<void>;
   private readonly workerId: string;
   private readonly concurrency: number;
   private readonly taskTimeoutMs: number;
-  private readonly abortDrainMs: number;
   private readonly active = new Map<string, ActiveInvocation>();
   private readonly activeSessions = new Set<string>();
-  private accepting = true;
+  private accepting: boolean;
 
   constructor(options: SparkInvocationSchedulerOptions) {
     this.store = options.store;
     this.executeTask = options.executeTask;
+    this.completeInvocation =
+      options.completeInvocation ??
+      ((invocation, _task, completion) => this.store.complete(invocation.invocationId, completion));
     this.emitEvent = options.emitEvent;
     this.workerId = options.workerId ?? `daemon-${process.pid}`;
     this.concurrency = positiveInteger(
@@ -64,14 +86,41 @@ export class SparkInvocationScheduler {
       options.taskTimeoutMs,
       DEFAULT_INVOCATION_TASK_TIMEOUT_MS,
     );
-    this.abortDrainMs = nonNegativeInteger(options.abortDrainMs, DEFAULT_INVOCATION_ABORT_DRAIN_MS);
+    this.accepting = options.initiallyAccepting !== false;
   }
 
   recover(now?: string): number {
     // A crashed session.run has an uncertain external side-effect boundary.
-    // Fail closed and require the existing explicit retry flow; queued work is
-    // still safe to claim normally after a planned restart.
-    return this.store.failInterruptedRunning(now);
+    // Fail closed and require the existing explicit retry flow. Route the
+    // terminal transition through the same completion hook so a channel user
+    // also receives a durable failure notice after process recovery.
+    let recovered = 0;
+    while (true) {
+      const running = this.store.listPage({ status: "running", limit: 100 }).invocations;
+      if (running.length === 0) return recovered;
+      for (const invocation of running) {
+        let task: SparkDaemonTask;
+        try {
+          task = validateSparkDaemonTask(invocation.task);
+        } catch {
+          this.store.complete(invocation.invocationId, {
+            status: "failed",
+            errorCode: SPARK_INVOCATION_INTERRUPTED_ERROR_CODE,
+            errorMessage: SPARK_INVOCATION_INTERRUPTED_ERROR_MESSAGE,
+            ...(now ? { now } : {}),
+          });
+          recovered += 1;
+          continue;
+        }
+        this.completeInvocation(invocation, task, {
+          status: "failed",
+          errorCode: SPARK_INVOCATION_INTERRUPTED_ERROR_CODE,
+          errorMessage: SPARK_INVOCATION_INTERRUPTED_ERROR_MESSAGE,
+          ...(now ? { now } : {}),
+        });
+        recovered += 1;
+      }
+    }
   }
 
   processBatch(): boolean {
@@ -129,6 +178,11 @@ export class SparkInvocationScheduler {
     return this.active.size;
   }
 
+  /** Open durable claims only after the daemon generation owns its serving fence. */
+  activateAdmission(): void {
+    this.accepting = true;
+  }
+
   get draining(): boolean {
     return !this.accepting;
   }
@@ -140,7 +194,10 @@ export class SparkInvocationScheduler {
   }
 
   async wait(options: { timeoutMs?: number; pollIntervalMs?: number } = {}): Promise<void> {
-    const deadline = Date.now() + (options.timeoutMs ?? 30_000);
+    // Process ownership must outlive the real executor. Callers that are only
+    // observing may opt into a deadline, but daemon shutdown/drain is unbounded
+    // and remains externally cancellable through the invocation signal.
+    const deadline = Date.now() + (options.timeoutMs ?? Number.POSITIVE_INFINITY);
     while (this.active.size > 0) {
       if (Date.now() > deadline) throw new Error("timed out waiting for Spark daemon invocations");
       await delay(options.pollIntervalMs ?? 5);
@@ -238,18 +295,18 @@ export class SparkInvocationScheduler {
           this.emit(event);
         }
       }
-      this.store.complete(invocation.invocationId, { status: "succeeded", result });
+      this.completeInvocation(invocation, task, { status: "succeeded", result });
       this.emit(lifecycleEvent(invocation.invocationId, task, "succeeded"));
     } catch (error) {
       const reason = abortReason(controller.signal, error);
       if (reason instanceof InvocationCancelledError) {
-        this.store.complete(invocation.invocationId, {
+        this.completeInvocation(invocation, task, {
           status: "cancelled",
           cancelReason: reason.message,
         });
         this.emit(lifecycleEvent(invocation.invocationId, task, "cancelled", reason.message));
       } else {
-        this.store.complete(invocation.invocationId, {
+        this.completeInvocation(invocation, task, {
           status: "failed",
           errorCode: executionErrorCode(reason),
           errorMessage: reason.message,
@@ -257,7 +314,11 @@ export class SparkInvocationScheduler {
         this.emit(lifecycleEvent(invocation.invocationId, task, "failed", reason.message));
       }
       if (controller.signal.aborted && executorSettled) {
-        await Promise.race([executorSettled.catch(() => undefined), delay(this.abortDrainMs)]);
+        // A terminal row is visible as soon as cancellation/timeout wins, but
+        // the daemon must retain the session fence and process ownership until
+        // the real executor settles. Otherwise an abort-ignoring provider/tool
+        // can continue side effects after restart and overlap an explicit retry.
+        await executorSettled.catch(() => undefined);
       }
     } finally {
       timeout.clear();

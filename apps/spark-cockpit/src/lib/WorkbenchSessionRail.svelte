@@ -213,7 +213,8 @@
                   class:active={isSelected}
                   class:has-action={canArchive}
                   aria-current={isSelected ? "page" : undefined}
-                  href={`/sessions/${session.sessionId}`}
+                  href={`/sessions/${encodeURIComponent(session.sessionId)}`}
+                  data-sveltekit-preload-data="hover"
                 >
                   <span class="session-title-row">
                     {#if presentation.channel}

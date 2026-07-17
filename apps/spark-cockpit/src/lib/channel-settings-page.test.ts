@@ -48,7 +48,8 @@ describe("channel settings page contract", () => {
     const source = readFileSync(serverPath, "utf8");
 
     expect(source).toContain("savePlatform: async");
-    expect(source).toContain("saveChannelsConfigForCockpit(workspaceId, merged)");
+    expect(source).toContain("saveChannelsConfigForCockpit(workspaceId, merged, context)");
+    expect(source).toContain("requireSecretRequestContext(event)");
     expect(source).not.toContain("createManagedSessionForCockpit");
     expect(source).not.toContain("bindManagedSessionForCockpit");
     expect(source).not.toContain("archiveManagedSessionForCockpit");

@@ -101,10 +101,6 @@ export class QqbotAdapter implements ChannelAdapter {
     ) {
       return undefined;
     }
-    if (isDuplicateMessage(this.seenMessages, normalized.messageId)) {
-      return undefined;
-    }
-
     const externalKey =
       normalized.chatType === "group" && normalized.chatId
         ? createChannelExternalKey("qqbot", "group", normalized.chatId)
@@ -134,23 +130,26 @@ export class QqbotAdapter implements ChannelAdapter {
     try {
       const message = this.parseInbound(raw);
       if (!message) return;
+      const dedupeKey = message.messageId?.trim()
+        ? `${message.externalKey}\u0000${message.messageId.trim()}`
+        : undefined;
+      const now = Date.now();
+      pruneSeenMessages(this.seenMessages, now);
+      if (dedupeKey && this.seenMessages.has(dedupeKey)) return;
       this.onMessage?.(message);
+      // Mark only after the daemon has synchronously persisted the durable
+      // inbound receipt. A thrown receipt error must remain redeliverable.
+      if (dedupeKey) markMessageSeen(this.seenMessages, dedupeKey, now);
     } catch (error) {
-      console.error("[spark-channels] qqbot inbound parse failed", error);
+      console.error("[spark-channels] qqbot inbound receipt failed", error);
+      throw error;
     }
   }
 
-  private handleInteraction(event: ChannelInteractionEvent): void {
-    try {
-      const handled = this.onInteraction?.({ ...event, adapterId: this.id });
-      if (handled) {
-        void handled.catch((error: unknown) => {
-          console.error("[spark-channels] qqbot interaction handler failed", error);
-        });
-      }
-    } catch (error) {
-      console.error("[spark-channels] qqbot interaction handler failed", error);
-    }
+  private async handleInteraction(event: ChannelInteractionEvent): Promise<void> {
+    // The gateway sequence is committed by the transport only after this
+    // promise resolves. Never turn settlement failures into a successful ACK.
+    await this.onInteraction?.({ ...event, adapterId: this.id });
   }
 }
 
@@ -271,15 +270,21 @@ function stripBotMention(text: string): string {
     .trim();
 }
 
-function isDuplicateMessage(seen: Map<string, number>, messageId?: string): boolean {
-  if (!messageId?.trim()) return false;
-  const now = Date.now();
+const QQBOT_DEDUPE_CAPACITY = 2_048;
+const QQBOT_DEDUPE_TTL_MS = 10 * 60_000;
+
+function pruneSeenMessages(seen: Map<string, number>, now: number): void {
   for (const [id, at] of seen) {
-    if (now - at > 5 * 60 * 1000) seen.delete(id);
+    if (now - at < QQBOT_DEDUPE_TTL_MS) break;
+    seen.delete(id);
   }
-  if (seen.has(messageId)) return true;
-  seen.set(messageId, now);
-  return false;
+}
+
+function markMessageSeen(seen: Map<string, number>, key: string, now: number): void {
+  seen.set(key, now);
+  if (seen.size <= QQBOT_DEDUPE_CAPACITY) return;
+  const oldest = seen.keys().next().value;
+  if (oldest) seen.delete(oldest);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

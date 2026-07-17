@@ -185,6 +185,19 @@ void test("spark-web extension registers tools, retrieves cache, and skips confl
     assert.ok(api.tools.has("code_search"));
     assert.ok(api.tools.has("fetch_content"));
     assert.ok(api.tools.has("get_search_content"));
+    assert.deepEqual(api.tools.get("get_search_content")?.policy, {
+      effect: "read",
+      executionMode: "parallel",
+      domains: ["web", "search-cache"],
+      phases: ["plan", "implement"],
+      approval: "none",
+    });
+    // These apparently read-oriented tools also persist recoverable cache
+    // records. Keep them sequential until the store has a concurrency-safe
+    // append/merge protocol.
+    for (const toolName of ["web_search", "code_search", "fetch_content"]) {
+      assert.notEqual(api.tools.get(toolName)?.policy?.executionMode, "parallel", toolName);
+    }
 
     const fetchTool = api.tools.get("fetch_content")!;
     const fetchResult = await fetchTool.execute(

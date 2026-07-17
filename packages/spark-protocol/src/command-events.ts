@@ -43,6 +43,7 @@ export const sparkCommandKindOptions = [
   "channel.notify.request",
   "workspace.list.request",
   "workspace.register.request",
+  "workspace.relocate.request",
   "workspace.ensure_local.request",
   "workspace.attach.request",
   "workspace.stop.request",
@@ -254,6 +255,7 @@ export const localRpcMethodToSparkCommandKind = {
   "channel.notify": "channel.notify.request",
   "workspace.list": "workspace.list.request",
   "workspace.register": "workspace.register.request",
+  "workspace.relocate": "workspace.relocate.request",
   "workspace.ensure-local": "workspace.ensure_local.request",
   "workspace.attach": "workspace.attach.request",
   "workspace.stop": "workspace.stop.request",
@@ -287,10 +289,27 @@ export const runtimeServerCommandKindOptions = [
   "project.create.request",
   "task.start.request",
   "assignment.create.request",
+  "session.list.request",
+  "session.get.request",
+  "session.snapshot.request",
   "session.create.request",
   "session.bind.request",
   "session.unbind.request",
   "session.archive.request",
+  "turn.submit.request",
+  "turn.cancel.request",
+  "turn.status.request",
+  "turn.stream.subscribe",
+  "session.model.set.request",
+  "session.thinking.set.request",
+  "model.catalog.request",
+  "model.default.set.request",
+  "provider.auth.logout.request",
+  "provider.auth.login.start.request",
+  "provider.auth.login.status.request",
+  "provider.auth.login.cancel.request",
+  "channel.status.request",
+  "channel.reload.request",
   "invocation.cancel.request",
   "artifact.content.request",
   "human.response.deliver.request",
@@ -300,7 +319,10 @@ export type RuntimeServerCommandKind = (typeof runtimeServerCommandKindOptions)[
 export type RuntimeServerCommandScope = "daemon" | "workspace";
 export type RuntimeServerCommandOperation = "read" | "mutation";
 export interface RuntimeServerCommandSpecification {
+  /** Default scope when an older caller omits the explicit wire scope. */
   scope: RuntimeServerCommandScope;
+  /** Session/turn commands are valid at either an explicit daemon or workspace route. */
+  allowedScopes?: readonly RuntimeServerCommandScope[];
   operation: RuntimeServerCommandOperation;
   allowBorrowed: boolean;
   allowDetached: boolean;
@@ -312,10 +334,30 @@ export const runtimeServerCommandSpecifications = {
   "project.create.request": workspaceMutationCommand(),
   "task.start.request": workspaceMutationCommand(),
   "assignment.create.request": workspaceMutationCommand(),
-  "session.create.request": workspaceMutationCommand(),
-  "session.bind.request": workspaceMutationCommand(),
-  "session.unbind.request": workspaceMutationCommand(),
-  "session.archive.request": workspaceMutationCommand(),
+  "session.list.request": sessionCommand("read"),
+  "session.get.request": sessionCommand("read"),
+  "session.snapshot.request": sessionCommand("read"),
+  "session.create.request": sessionCommand("mutation"),
+  "session.bind.request": sessionCommand("mutation"),
+  "session.unbind.request": sessionCommand("mutation"),
+  "session.archive.request": sessionCommand("mutation"),
+  "turn.submit.request": sessionCommand("mutation"),
+  "turn.cancel.request": sessionCommand("mutation", {
+    allowBorrowed: true,
+    allowDetached: true,
+  }),
+  "turn.status.request": sessionCommand("read"),
+  "turn.stream.subscribe": sessionCommand("read"),
+  "session.model.set.request": sessionCommand("mutation"),
+  "session.thinking.set.request": sessionCommand("mutation"),
+  "model.catalog.request": sessionCommand("read"),
+  "model.default.set.request": daemonMutationCommand(),
+  "provider.auth.logout.request": daemonMutationCommand(),
+  "provider.auth.login.start.request": daemonMutationCommand(),
+  "provider.auth.login.status.request": daemonReadCommand(),
+  "provider.auth.login.cancel.request": daemonMutationCommand(),
+  "channel.status.request": workspaceReadCommand(),
+  "channel.reload.request": workspaceMutationCommand(),
   "invocation.cancel.request": workspaceMutationCommand({
     allowBorrowed: true,
     allowDetached: true,
@@ -338,12 +380,23 @@ export function runtimeServerCommandSpecification(
   return runtimeServerCommandSpecifications[kind as RuntimeServerCommandKind] ?? null;
 }
 
+export function runtimeServerCommandSupportsScope(
+  specification: RuntimeServerCommandSpecification,
+  scope: RuntimeServerCommandScope,
+): boolean {
+  return (specification.allowedScopes ?? [specification.scope]).includes(scope);
+}
+
 function daemonReadCommand(): RuntimeServerCommandSpecification {
   return { scope: "daemon", operation: "read", allowBorrowed: true, allowDetached: true };
 }
 
 function workspaceReadCommand(): RuntimeServerCommandSpecification {
   return { scope: "workspace", operation: "read", allowBorrowed: true, allowDetached: true };
+}
+
+function daemonMutationCommand(): RuntimeServerCommandSpecification {
+  return { scope: "daemon", operation: "mutation", allowBorrowed: true, allowDetached: true };
 }
 
 function workspaceMutationCommand(
@@ -356,6 +409,21 @@ function workspaceMutationCommand(
     operation: "mutation",
     allowBorrowed: overrides.allowBorrowed ?? false,
     allowDetached: overrides.allowDetached ?? false,
+  };
+}
+
+function sessionCommand(
+  operation: RuntimeServerCommandOperation,
+  overrides: Partial<
+    Pick<RuntimeServerCommandSpecification, "allowBorrowed" | "allowDetached">
+  > = {},
+): RuntimeServerCommandSpecification {
+  return {
+    scope: "workspace",
+    allowedScopes: ["daemon", "workspace"],
+    operation,
+    allowBorrowed: overrides.allowBorrowed ?? operation === "read",
+    allowDetached: overrides.allowDetached ?? operation === "read",
   };
 }
 

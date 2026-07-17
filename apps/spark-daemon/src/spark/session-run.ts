@@ -78,6 +78,18 @@ export interface SparkDaemonTaskExecutorOptions {
   ) => Promise<SparkInteractionResponse>;
 }
 
+export interface SparkDaemonChannelReplyDeliveryInput {
+  kind: "final" | "failure";
+  idempotencyKey: string;
+  invocationId: string;
+  sessionId: string;
+  workspaceId: string;
+  adapterId: string;
+  externalKey?: string;
+  target: ChannelReplyTarget;
+  text: string;
+}
+
 export { loadSparkHeadlessSessionModule };
 
 export function createSparkDaemonTaskExecutor(
@@ -191,11 +203,11 @@ export function createChannelAwareTaskExecutor(
       result = await base(task, executionContext);
     } catch (error) {
       if (stream) {
-        try {
-          await stream.fail("处理失败，请稍后重试");
-        } catch (streamError) {
+        // Progress-card finalization is a best-effort projection. Never put it
+        // in front of the scheduler's durable terminal commit/outbox insert.
+        void stream.fail(CHANNEL_FAILURE_REPLY_TEXT).catch((streamError) => {
           console.error("[spark-daemon] channel reply stream failure update failed", streamError);
-        }
+        });
       }
       throw error;
     }
@@ -231,7 +243,7 @@ export function createChannelAwareTaskExecutor(
         streamCompleted = true;
       } catch (error) {
         console.error(
-          "[spark-daemon] channel reply stream completion failed; using fallback",
+          "[spark-daemon] channel reply stream completion failed; durable answer remains queued",
           error,
         );
       }
@@ -288,6 +300,35 @@ function acknowledgeChannelReplyDelivery(
   }
 }
 
+export const CHANNEL_FAILURE_REPLY_TEXT = "处理失败，请稍后重试";
+export const CHANNEL_EMPTY_REPLY_TEXT = "处理完成，但未生成可展示的回复";
+
+/** Build the immutable delivery intent committed beside a terminal invocation. */
+export function channelReplyDeliveryForCompletion(
+  task: SparkDaemonSessionRunTask,
+  invocationId: string,
+  kind: SparkDaemonChannelReplyDeliveryInput["kind"],
+  result?: unknown,
+): SparkDaemonChannelReplyDeliveryInput | undefined {
+  const channelReply = task.channelReply;
+  if (!channelReply) return undefined;
+  const text =
+    kind === "failure"
+      ? CHANNEL_FAILURE_REPLY_TEXT
+      : (assistantTextFromResult(result) ?? CHANNEL_EMPTY_REPLY_TEXT);
+  return {
+    kind,
+    idempotencyKey: `channel.reply:${kind}:${invocationId}`,
+    invocationId,
+    sessionId: task.sessionId,
+    workspaceId: channelReply.workspaceId,
+    adapterId: channelReply.adapterId,
+    ...(task.channelContext?.externalKey ? { externalKey: task.channelContext.externalKey } : {}),
+    target: channelReplyTarget(task),
+    text,
+  };
+}
+
 function channelReplyTarget(task: SparkDaemonSessionRunTask): ChannelReplyTarget {
   return {
     recipient: task.channelReply?.recipient ?? "",
@@ -320,11 +361,22 @@ export async function executeSparkDaemonSessionRunTask(
     ...(task.thinkingLevel ? { thinkingLevel: task.thinkingLevel } : {}),
     reset: task.reset,
     signal: context.signal,
-    timeoutMs: context.timeoutMs,
+    // The daemon scheduler is the single execution-time budget owner. It can
+    // pause that budget while awaiting a human response; adding the headless
+    // wall-clock timer here would incorrectly time out the same turn while its
+    // scheduler budget is paused.
     ...(systemPrompt ? { systemPrompt } : {}),
     ...(messageMetadata ? { messageMetadata } : {}),
     ...(sessionSurface ? { sessionSurface } : {}),
     sessionSource: sessionSourceForTask(task),
+    ...(task.channelReply && task.channelContext
+      ? {
+          channelBinding: {
+            adapter: sessionChannelAdapter(task.channelReply.adapterId),
+            externalKey: task.channelContext.externalKey,
+          },
+        }
+      : {}),
     invocationId: context.invocationId,
     ...(sessionQuestionChainForTask(task)
       ? { sessionQuestionChain: sessionQuestionChainForTask(task) }
@@ -398,6 +450,13 @@ function sessionQuestionChainForTask(task: SparkDaemonSessionRunTask): string[] 
     .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
     .filter(Boolean);
   return normalized.length > 0 ? normalized : undefined;
+}
+
+function sessionChannelAdapter(adapterId: string): "feishu" | "infoflow" | "qqbot" {
+  if (adapterId === "feishu" || adapterId === "infoflow" || adapterId === "qqbot") {
+    return adapterId;
+  }
+  throw new Error(`Unsupported session channel adapter: ${adapterId}`);
 }
 
 function sessionSourceForTask(

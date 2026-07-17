@@ -6,11 +6,12 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
   defaultBuiltinSkillsDir,
+  defaultPiCueSkillsDir,
   parseSkillFrontmatter,
   type SparkSkillFrontmatter,
 } from "@zendev-lab/pi-extension/host-support";
 
-export { defaultBuiltinSkillsDir, parseSkillFrontmatter };
+export { defaultBuiltinSkillsDir, defaultPiCueSkillsDir, parseSkillFrontmatter };
 export type { SparkSkillFrontmatter };
 
 export type SparkSkillLayer = "builtin" | "workspace" | "user";
@@ -69,6 +70,7 @@ export class SparkSkillResolver {
     this.cwd = resolve(options.cwd);
     this.builtinDirs = options.builtinDirs?.map((dir) => resolvePath(dir, this.cwd)) ?? [
       defaultBuiltinSkillsDir(),
+      defaultPiCueSkillsDir(),
     ];
     this.workspaceDir = resolvePath(
       options.workspaceDir ?? join(this.cwd, ".spark", "skills"),
@@ -216,6 +218,38 @@ export async function loadMatchingSparkSkillsForPrompt(
   return matches;
 }
 
+/**
+ * Render request-selected skill bodies as a dynamic prompt section.
+ *
+ * Every content line is indented, including blank lines. That keeps the whole
+ * section together under the turn loop's paragraph-based dynamic prompt
+ * splitter, so selected bodies never alter the stable prompt/cache hash.
+ */
+export function formatSelectedSparkSkillsForPrompt(
+  matches: readonly SparkSkillPromptMatch[],
+): string {
+  if (matches.length === 0) return "";
+  const lines = [
+    "Dynamic context checkpoint: selected skills for current user request.",
+    "The following matching skill files are loaded for this request only. Follow their instructions when relevant.",
+    "<selected_skills>",
+  ];
+  for (const match of matches) {
+    lines.push("  <skill>");
+    lines.push(`    <name>${escapeXml(match.skill.name)}</name>`);
+    lines.push(`    <description>${escapeXml(match.skill.description)}</description>`);
+    lines.push(`    <location>${escapeXml(match.skill.filePath)}</location>`);
+    lines.push("    <content>");
+    for (const contentLine of match.content.replace(/\r\n?/gu, "\n").split("\n")) {
+      lines.push(`      ${contentLine}`);
+    }
+    lines.push("    </content>");
+    lines.push("  </skill>");
+  }
+  lines.push("</selected_skills>");
+  return lines.join("\n");
+}
+
 async function scanSkillDir(
   dir: string,
   layer: SparkSkillLayer,
@@ -272,7 +306,7 @@ async function loadSkillFromFile(
   }
 
   const { frontmatter } = parseSkillFrontmatter(raw);
-  const description = stringField(frontmatter.description);
+  const description = skillDescription(frontmatter, raw);
   if (!description) {
     diagnostics.push({ type: "warning", message: "description is required", path: filePath });
     return { diagnostics };
@@ -312,29 +346,162 @@ function isValidSkillName(name: string): boolean {
 }
 
 function scoreSkillMatch(skill: SparkSkill, request: string): number {
-  const haystack = `${skill.name} ${skill.description}`.toLowerCase();
-  const words = skillSearchWords(request);
+  const name = skill.name.toLowerCase();
+  const description = skill.description.toLowerCase();
+  const requestText = request.toLowerCase();
+  const requestTerms = skillSearchTerms(requestText);
+  const descriptionWords = new Set(asciiSearchWords(description));
+  const nameWords = new Set(asciiSearchWords(name));
   let score = 0;
-  for (const word of new Set(words)) {
-    if (skill.name.includes(word)) score += 4;
-    if (haystack.includes(word)) score += 1;
+
+  // An explicit skill name is the strongest signal. Name components also
+  // remain useful for requests such as "design an svg logo" -> svg-design.
+  if (containsDelimitedName(requestText, name)) score += 12;
+  for (const word of requestTerms.ascii) {
+    if (nameWords.has(word)) score += 4;
+    if (!COMMON_ASCII_SKILL_TERMS.has(word) && descriptionWords.has(word)) score += 1;
   }
+
+  const matchedCjkTerms = requestTerms.cjk.filter((term) => description.includes(term.value));
+  const longCjkTerms = matchedCjkTerms.filter((term) => term.size >= 3);
+  if (longCjkTerms.length > 0) {
+    // Longer shared phrases are strong enough on their own. Prefer the most
+    // specific phrases without counting every contained bigram as evidence.
+    score += Math.max(...longCjkTerms.map((term) => term.size));
+  } else {
+    const distinctBigrams = new Set(
+      matchedCjkTerms
+        .filter((term) => term.size === 2 && !COMMON_CJK_SKILL_BIGRAMS.has(term.value))
+        .map((term) => term.value),
+    );
+    // A single generated CJK bigram is too weak: common words such as "工具"
+    // otherwise load unrelated mail/Python skills. Two independent matches
+    // retain useful short intents such as "优化" + "架构".
+    if (distinctBigrams.size >= 2) score += distinctBigrams.size;
+  }
+
   return score;
 }
 
-function skillSearchWords(request: string): string[] {
-  const words: string[] = [];
+interface SkillSearchTerm {
+  value: string;
+  size: number;
+}
+
+interface SkillSearchTerms {
+  ascii: Set<string>;
+  cjk: SkillSearchTerm[];
+}
+
+const COMMON_ASCII_SKILL_TERMS = new Set([
+  "app",
+  "apps",
+  "code",
+  "file",
+  "files",
+  "read",
+  "tool",
+  "tools",
+  "use",
+  "user",
+  "users",
+  "write",
+]);
+
+const COMMON_CJK_SKILL_BIGRAMS = new Set([
+  "代码",
+  "功能",
+  "工具",
+  "工作",
+  "进行",
+  "使用",
+  "适用",
+  "文件",
+  "相关",
+  "用户",
+  "需要",
+  "任务",
+  "项目",
+  "操作",
+]);
+
+function skillSearchTerms(request: string): SkillSearchTerms {
+  const ascii = new Set<string>();
+  const cjkTerms = new Map<string, SkillSearchTerm>();
   let current = "";
+  let cjk = "";
+  const flushAscii = () => {
+    if (current.length >= 3) ascii.add(current);
+    current = "";
+  };
+  const flushCjk = () => {
+    const chars = Array.from(cjk);
+    if (chars.length >= 2) {
+      const maxGram = Math.min(4, chars.length);
+      for (let size = 2; size <= maxGram; size += 1) {
+        for (let index = 0; index + size <= chars.length; index += 1) {
+          const value = chars.slice(index, index + size).join("");
+          cjkTerms.set(`${size}:${value}`, { value, size });
+        }
+      }
+    }
+    cjk = "";
+  };
   for (const char of request.toLowerCase()) {
     if ((char >= "a" && char <= "z") || (char >= "0" && char <= "9") || char === "-") {
+      flushCjk();
       current += char;
+    } else if (isCjkSearchCharacter(char)) {
+      flushAscii();
+      cjk += char;
     } else {
-      if (current.length >= 3) words.push(current);
-      current = "";
+      flushAscii();
+      flushCjk();
     }
   }
-  if (current.length >= 3) words.push(current);
-  return words;
+  flushAscii();
+  flushCjk();
+  return { ascii, cjk: [...cjkTerms.values()] };
+}
+
+function asciiSearchWords(value: string): string[] {
+  return value.split(/[^a-z0-9]+/u).filter((word) => word.length >= 3);
+}
+
+function containsDelimitedName(request: string, name: string): boolean {
+  if (!name) return false;
+  const index = request.indexOf(name);
+  if (index < 0) return false;
+  const before = request[index - 1];
+  const after = request[index + name.length];
+  return !isAsciiNameCharacter(before) && !isAsciiNameCharacter(after);
+}
+
+function isAsciiNameCharacter(value: string | undefined): boolean {
+  return value !== undefined && /[a-z0-9-]/u.test(value);
+}
+
+function isCjkSearchCharacter(char: string): boolean {
+  return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(char);
+}
+
+function skillDescription(frontmatter: SparkSkillFrontmatter, raw: string): string | undefined {
+  const scalar = stringField(frontmatter.description);
+  if (scalar !== "|" && scalar !== ">") return scalar;
+
+  const frontmatterEnd = raw.indexOf("\n---", 4);
+  if (!raw.startsWith("---\n") || frontmatterEnd < 0) return undefined;
+  const lines = raw.slice(4, frontmatterEnd).split(/\r?\n/u);
+  const start = lines.findIndex((line) => /^description:\s*[|>]\s*$/u.test(line));
+  if (start < 0) return undefined;
+  const block: string[] = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    if (line.trim().length > 0 && !/^\s/u.test(line)) break;
+    block.push(line.replace(/^\s+/u, ""));
+  }
+  const value = scalar === ">" ? block.join(" ") : block.join("\n");
+  return value.trim() || undefined;
 }
 
 interface SkillDirSpec {

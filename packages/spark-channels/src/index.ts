@@ -12,10 +12,12 @@ export {
 } from "./qqbot-adapter.ts";
 export {
   createQqbotApiClient,
+  DEFAULT_QQBOT_REQUEST_TIMEOUT_MS,
   QQBOT_API_BASE,
   QQBOT_API_PRODUCTION_BASE,
   QQBOT_API_SANDBOX_BASE,
   QQBOT_TOKEN_URL,
+  QqbotRequestTimeoutError,
   resolveQqbotApiBase,
   type QqbotApiClient,
   type QqbotInteractionAckCode,
@@ -37,7 +39,11 @@ export {
   resolveQqbotGroupPolicy,
   resolveQqbotGroupTrigger,
 } from "./qqbot-policy.ts";
-export { createQqbotTransport } from "./qqbot-transport.ts";
+export {
+  createQqbotTransport,
+  type QqbotGatewayCursor,
+  type QqbotTransportOptions,
+} from "./qqbot-transport.ts";
 export {
   formatQqbotRecipient,
   parseQqbotRecipient,

@@ -242,6 +242,42 @@ describe("SparkInvocationStore", () => {
     }
   });
 
+  it("admits only one idle-gated question while allowing asynchronous work to queue", () => {
+    const { db, store } = createStore();
+    try {
+      const first = store.submitIfSessionIdle({
+        sessionId: "session-question",
+        idempotencyKey: "question:first",
+        prompt: "first question",
+      });
+      expect(
+        store.submitIfSessionIdle({
+          sessionId: "session-question",
+          idempotencyKey: "question:first",
+          prompt: "first question",
+        }),
+      ).toEqual(first);
+      expect(() =>
+        store.submitIfSessionIdle({
+          sessionId: "session-question",
+          idempotencyKey: "question:second",
+          prompt: "second question",
+        }),
+      ).toThrow(/SESSION_NOT_IDLE/u);
+
+      const request = store.submit({
+        sessionId: "session-question",
+        idempotencyKey: "request:queued",
+        prompt: "asynchronous request",
+      });
+      expect(
+        store.listPendingForSession("session-question").map((entry) => entry.invocationId),
+      ).toEqual([first.invocationId, request.invocationId]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("retries terminal transient failures as new durable invocations with explicit ancestry", () => {
     const { db, store } = createStore();
     try {
@@ -310,6 +346,7 @@ describe("SparkInvocationStore", () => {
         now: "2026-07-13T00:01:00.000Z",
       });
       store.acknowledgeDelivery("cockpit:runtime-a", blocked.invocationId, 1);
+      expect(store.pendingDeliveries("cockpit:runtime-b").length).toBeGreaterThan(0);
 
       const recent = store.submit({ prompt: "recent" });
       store.complete(recent.invocationId, {

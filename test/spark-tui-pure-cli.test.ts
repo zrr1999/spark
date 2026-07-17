@@ -8,4 +8,8 @@ void test("spark-tui rejects the removed server route with Cockpit guidance", ()
     kind: "error",
     message: '"server" is not a spark-tui command. Use "spark cockpit" instead.',
   });
+  assert.deepEqual(parseSparkCliCommand(["server", "instance", "status"]), {
+    kind: "error",
+    message: '"server" is not a spark-tui command. Use "spark cockpit" instead.',
+  });
 });

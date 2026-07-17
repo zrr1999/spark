@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { WSClient } from "@core-workspace/infoflow-sdk-nodejs";
-import { describe, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { InfoflowSdkOutbound } from "./infoflow-sdk-outbound.ts";
 import { createInfoflowTransport, normalizeInfoflowInbound } from "./infoflow-transport.ts";
 
@@ -104,6 +104,167 @@ describe("infoflow transport", () => {
     assert.deepEqual(transport.status?.(), { state: "connected" });
     await transport.stop();
     assert.deepEqual(transport.status?.(), { state: "stopped" });
+  });
+
+  it("keeps retrying an initial SDK connection failure until it succeeds", async () => {
+    let state = "disconnected";
+    let attempts = 0;
+    const handlers = new Map<string, (event: unknown) => void>();
+    const client = {
+      on(pattern: string, handler: (event: unknown) => void) {
+        handlers.set(pattern, handler);
+      },
+      off(pattern: string) {
+        handlers.delete(pattern);
+      },
+      async connect() {
+        attempts += 1;
+        if (attempts === 1) throw new Error("endpoint unavailable");
+        state = "connected";
+        handlers.get("connected")?.({ type: "connected" });
+      },
+      disconnect() {
+        state = "disconnected";
+      },
+      getState() {
+        return state;
+      },
+    } as unknown as WSClient;
+    const reconnectRandom = vi.fn(() => 1);
+    const transport = createInfoflowTransport(
+      { type: "infoflow", app_key: "key", app_secret: "secret", app_agent_id: "19690" },
+      { wsClientFactory: () => client, reconnectDelaysMs: [1], reconnectRandom },
+    );
+
+    await transport.start(() => undefined);
+    expect(transport.status?.()).toMatchObject({ state: "reconnecting" });
+    await vi.waitFor(() => expect(attempts).toBe(2));
+    expect(reconnectRandom).toHaveBeenCalled();
+    expect(transport.status?.()).toEqual({ state: "connected" });
+    await transport.stop();
+  });
+
+  it("does not block daemon startup on a hung SDK handshake", async () => {
+    vi.useFakeTimers();
+    let state = "connecting";
+    let attempts = 0;
+    const handlers = new Map<string, (event: unknown) => void>();
+    const client = {
+      on(pattern: string, handler: (event: unknown) => void) {
+        handlers.set(pattern, handler);
+      },
+      off(pattern: string) {
+        handlers.delete(pattern);
+      },
+      async connect() {
+        attempts += 1;
+        if (attempts === 1) await new Promise<never>(() => undefined);
+        state = "connected";
+        handlers.get("connected")?.({ type: "connected" });
+      },
+      disconnect() {
+        state = "disconnected";
+      },
+      getState() {
+        return state;
+      },
+    } as unknown as WSClient;
+    const transport = createInfoflowTransport(
+      { type: "infoflow", app_key: "key", app_secret: "secret", app_agent_id: "19690" },
+      { wsClientFactory: () => client, connectTimeoutMs: 10, reconnectDelaysMs: [1] },
+    );
+    try {
+      await expect(transport.start(() => undefined)).resolves.toBeUndefined();
+      expect(attempts).toBe(1);
+      expect(transport.status?.()).toMatchObject({ state: "connecting" });
+
+      await vi.advanceTimersByTimeAsync(11);
+      expect(attempts).toBe(2);
+      expect(transport.status?.()).toEqual({ state: "connected" });
+    } finally {
+      await transport.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reconnects when the SDK heartbeat receives no pong", async () => {
+    vi.useFakeTimers();
+    let state = "connected";
+    let attempts = 0;
+    const handlers = new Map<string, (event: unknown) => void>();
+    const client = {
+      on(pattern: string, handler: (event: unknown) => void) {
+        handlers.set(pattern, handler);
+      },
+      off(pattern: string) {
+        handlers.delete(pattern);
+      },
+      async connect() {
+        attempts += 1;
+        state = "connected";
+        handlers.get("connected")?.({ type: "connected" });
+      },
+      disconnect() {
+        state = "disconnected";
+      },
+      getState() {
+        return state;
+      },
+    } as unknown as WSClient;
+    const transport = createInfoflowTransport(
+      { type: "infoflow", app_key: "key", app_secret: "secret", app_agent_id: "19690" },
+      { wsClientFactory: () => client, reconnectDelaysMs: [1], pongTimeoutMs: 10 },
+    );
+    try {
+      await transport.start(() => undefined);
+      handlers.get("heartbeat")?.({ type: "heartbeat", data: { type: "ping" } });
+      await vi.advanceTimersByTimeAsync(11);
+      expect(attempts).toBe(2);
+      expect(transport.status?.()).toEqual({ state: "connected" });
+    } finally {
+      await transport.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not swallow a durable inbound receipt failure in its handler", async () => {
+    let state = "connected";
+    let disconnects = 0;
+    const handlers = new Map<string, (event: unknown) => void>();
+    const client = {
+      on(pattern: string, handler: (event: unknown) => void) {
+        handlers.set(pattern, handler);
+      },
+      off(pattern: string) {
+        handlers.delete(pattern);
+      },
+      async connect() {},
+      disconnect() {
+        disconnects += 1;
+        state = "disconnected";
+      },
+      getState() {
+        return state;
+      },
+    } as unknown as WSClient;
+    const transport = createInfoflowTransport(
+      { type: "infoflow", app_key: "key", app_secret: "secret", app_agent_id: "19690" },
+      { wsClientFactory: () => client },
+    );
+    await transport.start(() => {
+      throw new Error("receipt unavailable");
+    });
+
+    expect(() =>
+      handlers.get("private.*")?.({
+        type: "private.text",
+        data: {
+          raw: { FromUserId: "alice", Content: "hi", MsgId: "message-1" },
+        },
+      }),
+    ).toThrow("receipt unavailable");
+    expect(disconnects).toBe(1);
+    await transport.stop();
   });
 
   it("normalizes private and group inbound payloads", () => {

@@ -123,10 +123,13 @@ describe("Infoflow SDK outbound", () => {
 
     const stream = await outbound.openReplyStream("group:10838226");
     expect(stream).toBeTruthy();
+    expect(stream?.answerMode).toBe("separate");
     expect(fake.createSession).toHaveBeenCalledWith({
       to: "group:10838226",
       answerFormat: "markdown",
     });
+    stream?.appendProgress?.("正在处理");
+    expect(fake.stream.appendText).toHaveBeenCalledWith("正在处理");
     await stream!.complete("已完成");
     expect(fake.stream.complete).toHaveBeenCalledWith("已完成");
 

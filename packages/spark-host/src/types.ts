@@ -10,7 +10,10 @@
 import type {
   CommandMetadata,
   ExtensionContext,
+  ExtensionRuntimeMessageAuthority,
+  ExtensionRuntimeMessageTrust,
   ExtensionUi,
+  ResolvedToolPolicy,
   ToolConfig,
   ToolInfo,
 } from "@zendev-lab/spark-extension-api";
@@ -35,6 +38,8 @@ export interface SparkHostModelRegistryLike {
 
 export interface RegisteredTool {
   config: ToolConfig;
+  /** Immutable policy snapshot resolved when the tool was registered. */
+  policy: ResolvedToolPolicy;
   active: boolean;
 }
 
@@ -77,10 +82,14 @@ export type EventListener = (event: unknown, ctx: ExtensionContext) => unknown;
  */
 export interface OutboxEnvelope {
   kind: "custom" | "user";
+  /** Session active when the message was enqueued; prevents cross-session drain. */
+  sessionId?: string;
   customType?: string;
   content: string | Array<{ type: string; [key: string]: unknown }>;
   display?: boolean;
   details?: Record<string, unknown>;
+  authority?: ExtensionRuntimeMessageAuthority;
+  trust?: ExtensionRuntimeMessageTrust;
   options: {
     deliverAs?: "steer" | "followUp" | "nextTurn";
     streamingBehavior?: "steer" | "followUp";
@@ -100,6 +109,8 @@ export interface SparkHostCustomMessage {
   content: string | Array<{ type: string; [key: string]: unknown }>;
   display?: boolean;
   details?: Record<string, unknown>;
+  authority?: ExtensionRuntimeMessageAuthority;
+  trust?: ExtensionRuntimeMessageTrust;
 }
 
 export interface SparkHostUiTransport extends ExtensionUi {

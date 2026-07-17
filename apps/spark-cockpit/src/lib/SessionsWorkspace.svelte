@@ -173,6 +173,8 @@
     formValues?: FormValues | null;
     canAssign?: boolean;
     modelControl?: ModelControlState;
+    /** Fallback seed when start/send-specific seeds are absent. */
+    initialSubmissionId?: string;
   };
 
   let {
@@ -194,6 +196,7 @@
     formValues = null,
     canAssign = true,
     modelControl = { available: false, snapshot: { providers: [], diagnostics: [] } },
+    initialSubmissionId = "",
   }: Props = $props();
 
   let selected = $derived(
@@ -266,7 +269,7 @@
     untrack(() =>
       formIntent === "startConversation" && formValues?.submissionId
         ? formValues.submissionId
-        : startSubmissionIdSeed || createId("idem"),
+        : startSubmissionIdSeed || initialSubmissionId || createId("idem"),
     ),
   );
   let lastStartSubmittedContextKey = $state("");
@@ -279,7 +282,7 @@
     untrack(() =>
       formIntent === "sendMessage" && formValues?.submissionId
         ? formValues.submissionId
-        : sendSubmissionIdSeed || createId("idem"),
+        : sendSubmissionIdSeed || initialSubmissionId || createId("idem"),
     ),
   );
   let lastSubmittedMessage = $state("");

@@ -72,6 +72,13 @@ async function executeModels(
 void test("models registers one standalone tool", () => {
   const tools = registerTools();
   assert.deepEqual([...tools.keys()], ["models"]);
+  assert.deepEqual(tools.get("models")?.policy, {
+    effect: "read",
+    executionMode: "parallel",
+    domains: ["models"],
+    phases: ["plan", "implement"],
+    approval: "none",
+  });
 });
 
 void test("models lists available models by default", async () => {

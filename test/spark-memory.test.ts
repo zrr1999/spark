@@ -152,6 +152,22 @@ void test("spark memory extension covers pi-memory compatibility workflows", asy
     ]) {
       assert.ok(api.tools.has(toolName), `${toolName} should be registered`);
     }
+    for (const toolName of ["memory_read", "memory_status"]) {
+      assert.deepEqual(api.tools.get(toolName)?.policy, {
+        effect: "read",
+        executionMode: "parallel",
+        domains: ["memory"],
+        phases: ["plan", "implement"],
+        approval: "none",
+      });
+    }
+    assert.deepEqual(api.tools.get("memory_search")?.policy, {
+      effect: "read",
+      executionMode: "sequential",
+      domains: ["memory"],
+      phases: ["plan", "implement"],
+      approval: "none",
+    });
 
     const memoryWrite = api.tools.get("memory_write")!;
     await memoryWrite.execute(

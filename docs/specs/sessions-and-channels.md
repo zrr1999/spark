@@ -41,16 +41,25 @@ The visible user content remains the exact human/request body. Origin and mail-e
 
 `session({ action: "send" })` is the canonical proactive and cross-session send path. The sender is always the current session and cannot be supplied by the caller.
 
-- `kind=request` persists an envelope, then submits the exact body as one user turn to an unarchived local session. It never scans older inbox entries and cannot target channel sessions.
-- `kind=notification` persists an envelope. Channel targets also receive the body through every authoritative binding and return delivery receipts.
+- `kind=request` persists an envelope, then asynchronously submits the exact body as one user turn to an unarchived local session. It may wait behind work already active for that session, never scans older inbox entries, and cannot target channel sessions.
+- `kind=question` persists and submits the exact body to an idle, unarchived local session, then waits 1–300 seconds for the terminal result. The default is 120 seconds. Wait timeout stops only the sender wait; the target invocation continues. Questions cannot nest or form a session loop; delegated work uses `request`.
+- `kind=notification` persists without triggering the target. Channel targets receive the body through authoritative bindings and persist per-binding `pending | delivered | failed` receipts. The daemon retries due failed receipts with capped exponential backoff and no attempt limit, and never resends a delivered binding.
 - `mailto` is a notification compatibility alias. Replies are notifications with `replyToMessageId`.
-- New input accepts only `request | notification`; stored `inform | reply` values normalize to notification when read.
+- New input accepts only `request | question | notification`; stored `inform | reply` values normalize to notification when read.
 - Inbox/read/ack access only the current session. Idempotency keys are unique across mailboxes.
 
-Mailbox persistence and invocation acceptance are an at-least-once boundary. Failure after persistence reports the stored message ID. Platform delivery has the same retry window when a receipt is lost.
+Mailbox persistence and invocation acceptance are an at-least-once boundary. Failure after persistence reports the stored message ID. Platform delivery has the same retry window when a receipt is lost. Question idle admission is atomic in the daemon invocation store; only one concurrent question can reserve an idle target.
 
 ## Channel policy
 
 A channel-bound host exposes only canonical `session`. It permanently disables cue tools, `role`, `assign`, and `workflow_run`, including after extension lifecycle events. The caller may inspect and notify same-workspace sessions, request work only from an unarchived local session, and may not perform lifecycle or call actions.
 
-Inbound adapters resolve/bind the platform conversation, submit the human body with channel origin metadata, and use their dedicated automatic reply/stream transport. Proactive platform messages use `session.send`; inbound streaming does not pass through mailbox delivery semantics.
+Inbound adapters first persist a normalized, raw-payload-free receipt in the daemon SQLite ledger. A leased worker then resolves/binds the platform conversation and submits the exact human body with channel origin metadata. `(workspace, adapter, externalKey, platformMessageId)` produces a stable hashed identity, so platform replay and overlapping restart generations converge on one invocation. Messages whose platform supplies no ID remain at-least-once.
+
+The invocation terminal transition and its final/failure reply intent commit in one SQLite transaction. Final replies, native asks, interaction acknowledgements, and inbound receipts share a leased worker with token fencing, lease heartbeats, concurrent independent attempts, a three-minute per-attempt application deadline, jittered exponential backoff capped at 60 seconds, and no attempt-count limit. A stuck third-party call therefore cannot head-of-line block unrelated deliveries. Every failed or timed-out attempt is logged and projected by `daemon.status`; delivered work is never reclaimed. A crashed running invocation is failed closed and atomically queues a channel-visible failure notice instead of replaying the model turn.
+
+Streaming cards are progress projections only. Their start/update/finish calls are best effort and never block the durable final answer. Platform sends are at-least-once: adapters must carry stable platform identities where supported, while an ambiguous timeout on a platform without a client idempotency field can produce a duplicate rather than silent loss. Proactive platform messages continue to use `session.send` and their per-binding receipts.
+
+External channel handshakes are supervised health, not daemon readiness gates. Infoflow and QQ arm their connectors and return immediately, then retry initial connection, disconnects, missing Gateway Hello, and missed heartbeat acknowledgements with capped backoff and no attempt limit. An inbound platform sequence/message is marked consumed only after the daemon's synchronous SQLite receipt succeeds; receipt failure closes the connection before acknowledgement so platform redelivery can resume from the last durable cursor.
+
+QQ Gateway resume state is stored in daemon SQLite by `(workspaceId, adapterId)`. A rebuilt transport loads the prior `sessionId` and sequence before connecting; `READY`, `RESUMED`, message, and interaction sequences advance only after their durable handler succeeds, and an invalid-session response clears the cursor. A sequence for the same gateway session can never move backwards.

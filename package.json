@@ -62,17 +62,17 @@
     "@zendev-lab/spark-turn": "workspace:^",
     "@zendev-lab/spark-web": "workspace:^",
     "@zendev-lab/spark-workflows": "workspace:^",
-    "typebox": "^1.2.13"
+    "typebox": "^1.3.6"
   },
   "devDependencies": {
     "@j178/prek": "0.4.6",
-    "@types/node": "^26.0.1",
+    "@types/node": "^26.1.1",
     "@zendev-lab/spark-system": "workspace:*",
     "oxlint": "1.70.0",
     "typescript": "^6.0.3",
-    "vite": "catalog:",
-    "vite-plus": "catalog:",
-    "vitest": "catalog:"
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.1",
+    "vite-plus": "0.2.1",
+    "vitest": "4.1.9"
   },
   "optionalDependencies": {
     "@cursor/sdk-darwin-arm64": "1.0.23",
@@ -100,7 +100,6 @@
       "./packages/spark-recall/src/extension-entry.ts",
       "./packages/spark-web/src/extension-entry.ts",
       "./packages/spark-workflows/src/extension-entry.ts",
-      "./packages/spark-graft/src/extension-entry.ts",
       "./packages/spark-ai/src/baidu-oneapi-provider.ts",
       "./packages/pi-extension/src/extension/index.ts"
     ],

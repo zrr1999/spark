@@ -67,6 +67,59 @@ describe("migrateSparkDaemonDatabase", () => {
     }
   });
 
+  it("widens an existing channel delivery ledger for durable inbound receipts", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec(`
+        CREATE TABLE channel_deliveries (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL CHECK (kind IN ('reply', 'ask', 'interaction_ack')),
+          idempotency_key TEXT NOT NULL UNIQUE,
+          payload_json TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('pending', 'retry_wait', 'delivered')),
+          attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+          next_attempt_at TEXT NOT NULL,
+          lease_owner TEXT,
+          lease_token TEXT,
+          lease_expires_at TEXT,
+          claimed_at TEXT,
+          last_error TEXT,
+          receipt_json TEXT,
+          delivered_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO channel_deliveries (
+          id, kind, idempotency_key, payload_json, status, next_attempt_at, created_at, updated_at
+        ) VALUES (
+          'old-reply', 'reply', 'old-reply-key', '{}', 'pending',
+          '2026-07-15T00:00:00.000Z', '2026-07-15T00:00:00.000Z', '2026-07-15T00:00:00.000Z'
+        );
+      `);
+
+      migrateSparkDaemonDatabase(db);
+      db.prepare(
+        `INSERT INTO channel_deliveries (
+           id, kind, idempotency_key, payload_json, status, next_attempt_at, created_at, updated_at
+         ) VALUES (?, 'inbound', ?, '{}', 'pending', ?, ?, ?)`,
+      ).run(
+        "new-inbound",
+        "new-inbound-key",
+        "2026-07-15T00:00:01.000Z",
+        "2026-07-15T00:00:01.000Z",
+        "2026-07-15T00:00:01.000Z",
+      );
+
+      expect(db.prepare("SELECT id, kind FROM channel_deliveries ORDER BY id").all()).toEqual([
+        { id: "new-inbound", kind: "inbound" },
+        { id: "old-reply", kind: "reply" },
+      ]);
+      expect(indexNames(db, "channel_deliveries")).toContain("channel_deliveries_due_idx");
+    } finally {
+      db.close();
+    }
+  });
+
   it("creates the durable invocation lifecycle schema and indexes", () => {
     const db = new DatabaseSync(":memory:");
     try {
@@ -74,11 +127,19 @@ describe("migrateSparkDaemonDatabase", () => {
       expect(tableExists(db, "invocations")).toBe(true);
       expect(tableExists(db, "invocation_events")).toBe(true);
       expect(tableExists(db, "invocation_event_deliveries")).toBe(true);
+      expect(tableExists(db, "invocation_event_delivery_consumers")).toBe(true);
       expect(tableExists(db, "runtime_command_receipts")).toBe(true);
+      expect(tableExists(db, "qqbot_gateway_cursors")).toBe(true);
       expect(columnNames(db, "runtime_command_receipts")).toEqual(
         expect.arrayContaining([
           "command_id",
           "payload_hash",
+          "session_id",
+          "idempotency_key",
+          "request_message_id",
+          "claim_token",
+          "lease_expires_at",
+          "payload_json",
           "delivery_count",
           "ack_json",
           "terminal_message_id",

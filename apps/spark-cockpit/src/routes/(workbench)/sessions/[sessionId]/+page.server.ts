@@ -1,20 +1,14 @@
 import { error } from "@sveltejs/kit";
 import { createId } from "@zendev-lab/spark-protocol";
-import {
-  getManagedSessionForCockpit,
-  getManagedSessionSnapshotForCockpit,
-  listManagedSessionsForCockpit,
-} from "$lib/server/managed-sessions";
+import { getManagedSessionSnapshotForCockpit } from "$lib/server/managed-sessions";
 import { getDatabase } from "$lib/server/db";
 import { latestEventCursor } from "$lib/server/events";
 import { loadSessionActivity } from "$lib/server/session-activity";
 import { loadModelControlForCockpit } from "$lib/server/model-control";
+import { createCockpitSubmissionId } from "$lib/server/submission-idempotency";
 import { sessionSnapshotWindow } from "$lib/session-snapshot-window";
 import type { PageServerLoad } from "./$types";
-import {
-  workspaceIdForWorkbenchSession,
-  workspaceSessionsForWorkbench,
-} from "../../../../lib/workbench-session-scope";
+import { workspaceIdForWorkbenchSession } from "../../../../lib/workbench-session-scope";
 import { actions as sessionsActions } from "../+page.server";
 
 export const load: PageServerLoad = async ({ params, parent }) => {
@@ -23,35 +17,27 @@ export const load: PageServerLoad = async ({ params, parent }) => {
   // during the load are replayed after this cursor; older history must not
   // invalidate and rebuild the freshly hydrated page.
   const eventCursor = latestEventCursor(db);
-  const [managedSessions, selected, sessionSnapshot, modelControl] = await Promise.all([
-    listManagedSessionsForCockpit(),
-    getManagedSessionForCockpit(params.sessionId),
-    getManagedSessionSnapshotForCockpit(params.sessionId),
-    loadModelControlForCockpit(params.sessionId),
-  ]);
-  if (!selected) {
-    throw error(404, "Session not found");
-  }
-  const workspaceId = workspaceIdForWorkbenchSession(selected);
-  if (!workspaceId) {
-    // Daemon-global sessions belong to the daemon/TUI control plane. Do not
-    // make them reachable through a stale Cockpit URL.
-    throw error(404, "Session not found");
-  }
   const parentData = await parent();
+  const selected = parentData.sessions.find((session) => session.sessionId === params.sessionId);
+  const workspaceId = selected ? workspaceIdForWorkbenchSession(selected) : null;
+  if (!selected || !workspaceId) {
+    // Resolve scope before any session-specific RPC. Daemon-scoped sessions are
+    // intentionally reachable only from the native TUI.
+    throw error(404, "Session not found");
+  }
   if (workspaceId !== parentData.activeWorkspace?.id) {
     // The layout only activates registered workspaces. Do not let a stale or
     // detached registry record re-enter the rail through a direct URL.
     throw error(404, "Session not found");
   }
-  const sessions = workspaceSessionsForWorkbench(
-    managedSessions.sessions,
-    parentData.activeWorkspace?.id,
-  );
+  const [sessionSnapshot, modelControl] = await Promise.all([
+    getManagedSessionSnapshotForCockpit(params.sessionId),
+    loadModelControlForCockpit(params.sessionId),
+  ]);
   const snapshotWindow = sessionSnapshot ? sessionSnapshotWindow(sessionSnapshot) : null;
   return {
-    sessions,
-    sessionsAvailable: managedSessions.available,
+    sessions: parentData.sessions,
+    sessionsAvailable: parentData.sessionsAvailable,
     selectedSessionId: selected.sessionId,
     sendSubmissionIdSeed: createId("idem"),
     selectedSession: selected,
@@ -64,6 +50,7 @@ export const load: PageServerLoad = async ({ params, parent }) => {
       : null,
     canAssign: selected.status !== "archived",
     modelControl,
+    submissionId: createCockpitSubmissionId(),
     sessionActivity: loadSessionActivity(db, {
       workspaceId,
       sessionId: selected.sessionId,

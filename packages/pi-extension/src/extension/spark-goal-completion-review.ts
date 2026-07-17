@@ -8,12 +8,15 @@ import {
   type RoleRef,
 } from "@zendev-lab/spark-extension-api";
 import { updateSessionGoalStatus, type SparkSessionGoal } from "./spark-session-goals.ts";
-import type {
-  GoalReviewEvidencePreview,
-  GoalReviewInput,
-  GoalReviewVerdict,
-  ReviewerRunResult,
-  ReviewerRunner,
+import {
+  goalCompletionProtocolBlockers,
+  resolveGoalCompletionProtocol,
+  type GoalReviewEvidencePreview,
+  type GoalReviewInput,
+  type GoalReviewRequirement,
+  type GoalReviewVerdict,
+  type ReviewerRunResult,
+  type ReviewerRunner,
 } from "./reviewer-runner.ts";
 import { withSparkReviewerLease } from "./spark-reviewer-lease.ts";
 import { recordGoalSubjectReview } from "./subject-review-store.ts";
@@ -67,10 +70,72 @@ export async function requestGoalCompletionReview(
   ctx: SparkToolContext,
   deps: GoalCompletionReviewDeps,
   active: GoalCompletionReviewActive,
-  options: { trigger: GoalCompletionReviewTrigger; completionClaimPlainLanguage?: string },
+  options: {
+    trigger: GoalCompletionReviewTrigger;
+    completionClaimPlainLanguage?: string;
+    requirements?: GoalReviewRequirement[];
+    validationRuns?: string[];
+    unresolved?: string[];
+  },
 ): Promise<GoalCompletionReviewOutcome> {
   const reviewContext = await goalReviewContext(ctx, active);
-  if (!reviewContext.projectRef && reviewContext.evidenceRefs.length === 0) {
+  const evidenceRefs = [
+    ...new Set([
+      ...reviewContext.evidenceRefs,
+      ...(options.requirements?.flatMap((requirement) => requirement.evidenceRefs) ?? []),
+    ]),
+  ];
+  const evidencePreviews =
+    evidenceRefs.length === reviewContext.evidenceRefs.length &&
+    evidenceRefs.every((ref, index) => ref === reviewContext.evidenceRefs[index])
+      ? reviewContext.evidencePreviews
+      : await goalReviewEvidencePreviews(ctx.cwd, evidenceRefs);
+  const explicitRequirements = (options.requirements?.length ?? 0) > 0;
+  const unfinishedProjectTasks = reviewContext.projectStatus?.unfinishedTasks ?? [];
+  const unfinishedProjectCount =
+    reviewContext.projectStatus?.taskCounts.unfinished ?? unfinishedProjectTasks.length;
+  const legacyProjectUnresolved =
+    !explicitRequirements &&
+    unfinishedProjectCount > 0 &&
+    !isPlanningOnlyGoalObjective(active.goal.originalObjective ?? active.goal.objective)
+      ? [
+          ...unfinishedProjectTasks.map(
+            (task) =>
+              `unfinished project task ${task.name ? `@${task.name}` : task.ref}: ${task.title}`,
+          ),
+          ...(unfinishedProjectCount > unfinishedProjectTasks.length
+            ? [
+                `${unfinishedProjectCount - unfinishedProjectTasks.length} additional unfinished project task(s)`,
+              ]
+            : []),
+        ]
+      : [];
+  const reviewInputSeed: GoalReviewInput = {
+    targetKind: "goal",
+    cwd: ctx.cwd,
+    projectRef: reviewContext.projectRef,
+    currentProjectSelected: reviewContext.currentProjectSelected,
+    projectEvidenceSource: reviewContext.projectEvidenceSource,
+    projectStatus: reviewContext.projectStatus,
+    goalId: active.goal.goalId,
+    originalObjective: active.goal.originalObjective ?? active.goal.objective,
+    objective: active.goal.objective,
+    status: active.goal.status,
+    requestedStatus: "complete",
+    reason: options.completionClaimPlainLanguage,
+    evidenceRefs,
+    evidencePreviews,
+    requirements: options.requirements,
+    validationRuns: options.validationRuns,
+    unresolved: [...(options.unresolved ?? []), ...legacyProjectUnresolved],
+    sessionKey: active.goal.sessionKey,
+    forkFromSession: ctx.sessionManager?.getSessionFile?.(),
+  };
+  const reviewInput: GoalReviewInput = {
+    ...reviewInputSeed,
+    ...resolveGoalCompletionProtocol(reviewInputSeed),
+  };
+  if (!reviewInput.projectRef && reviewInput.evidenceRefs.length === 0) {
     const reviewedAt = nowIso();
     const reason = "Goal progress needs a current Spark project before completion review.";
     const remainingWork =
@@ -91,10 +156,37 @@ export async function requestGoalCompletionReview(
     return { outcome: "blocked", goal: updated, reason, remainingWork, blockers };
   }
 
+  const protocolBlockers = goalCompletionProtocolBlockers(reviewInput);
+  if (protocolBlockers.length > 0) {
+    const reviewedAt = nowIso();
+    const reason = "Goal completion packet has unverified requirements or unresolved work.";
+    const remainingWork = protocolBlockers.join("; ");
+    const updated = await updateSessionGoalStatus(ctx.cwd, ctx, "active", {
+      review: {
+        achieved: false,
+        confidence: "deterministic-blocker",
+        reason,
+        remainingWork,
+        blockers: protocolBlockers,
+        reviewedAt,
+      },
+      expectedGoalId: active.goal.goalId,
+    });
+    await deps.refreshSparkWidget(ctx.cwd, ctx);
+    return {
+      outcome: "blocked",
+      goal: updated,
+      reason,
+      remainingWork,
+      blockers: protocolBlockers,
+    };
+  }
+
   const preReviewBlocker = goalCompletionDeterministicBlocker(
     active.goal.objective,
-    reviewContext.projectStatus,
-    reviewContext.evidenceRefs,
+    reviewInput.projectStatus,
+    reviewInput.evidenceRefs,
+    { allowEvidencedReviewerAudit: true },
   );
   if (preReviewBlocker) {
     const reviewedAt = nowIso();
@@ -126,24 +218,6 @@ export async function requestGoalCompletionReview(
       reason: "goal completion review requires a reviewer runner",
     };
   }
-  const reviewInput: GoalReviewInput = {
-    targetKind: "goal",
-    cwd: ctx.cwd,
-    projectRef: reviewContext.projectRef,
-    currentProjectSelected: reviewContext.currentProjectSelected,
-    projectEvidenceSource: reviewContext.projectEvidenceSource,
-    projectStatus: reviewContext.projectStatus,
-    goalId: active.goal.goalId,
-    originalObjective: active.goal.originalObjective ?? active.goal.objective,
-    objective: active.goal.objective,
-    status: active.goal.status,
-    requestedStatus: "complete",
-    reason: options.completionClaimPlainLanguage,
-    evidenceRefs: reviewContext.evidenceRefs,
-    evidencePreviews: reviewContext.evidencePreviews,
-    sessionKey: active.goal.sessionKey,
-    forkFromSession: ctx.sessionManager?.getSessionFile?.(),
-  };
   const leasedReview = await withSparkReviewerLease(ctx.cwd, ctx, () =>
     runGoalCompletionReviewer(reviewerRunner, reviewInput),
   );
@@ -161,11 +235,16 @@ export async function requestGoalCompletionReview(
     active.goal.objective,
     reviewInput.projectStatus,
     reviewInput.evidenceRefs,
+    {
+      allowEvidencedReviewerAudit:
+        verdict.evidenceValid === true && verdict.objectiveSatisfied === true,
+    },
   );
   const effectiveAchieved =
     verdict.achieved &&
-    verdict.evidenceValid !== false &&
-    verdict.objectiveSatisfied !== false &&
+    verdict.evidenceValid === true &&
+    verdict.objectiveSatisfied === true &&
+    goalCompletionProtocolBlockers(reviewInput).length === 0 &&
     !postReviewBlocker;
   const reviewSummary = {
     achieved: effectiveAchieved,
@@ -212,16 +291,18 @@ function goalCompletionDeterministicBlocker(
   objective: string,
   projectStatus: GoalReviewInput["projectStatus"] | undefined,
   evidenceRefs: readonly ArtifactRef[],
+  options: { allowEvidencedReviewerAudit?: boolean } = {},
 ): { reason: string; remainingWork: string; blockers: string[] } | undefined {
   const unfinishedTasks = projectStatus?.unfinishedTasks ?? [];
   const unfinished = unfinishedTasks.length || (projectStatus?.taskCounts.unfinished ?? 0);
   if (unfinished <= 0) return undefined;
   if (isPlanningOnlyGoalObjective(objective)) return undefined;
-  const relevantUnfinished = unfinishedTasks.filter((task) =>
-    goalObjectiveTaskLikelyRelated(objective, task),
-  );
-  if (evidenceRefs.length > 0 && relevantUnfinished.length === 0) return undefined;
-  const blockingTasks = relevantUnfinished.length > 0 ? relevantUnfinished : unfinishedTasks;
+  // Do not guess task relevance by token overlap: it was language-dependent
+  // and let one artifact bypass unfinished Chinese/paraphrased objectives.
+  // EVIDENCED narrow goals may proceed only through the structured reviewer,
+  // whose explicit evidence/objective gates are checked again after review.
+  if (evidenceRefs.length > 0 && options.allowEvidencedReviewerAudit) return undefined;
+  const blockingTasks = unfinishedTasks;
   const blockingTaskRefs = new Set(blockingTasks.map((task) => task.ref));
   const readyTasks = (projectStatus?.readyTasks ?? []).filter((task) =>
     blockingTaskRefs.size === 0 ? true : blockingTaskRefs.has(task.ref),
@@ -238,47 +319,6 @@ function goalCompletionDeterministicBlocker(
     remainingWork: `${reason} Next ready frontier: ${readyText}. Continue by claiming a ready task with task-local TODOs, or narrow the goal objective if only planning readiness is intended.`,
     blockers: [`unfinished_project_tasks=${blockedCount}`, `ready_frontier=${readyText}`],
   };
-}
-
-function goalObjectiveTaskLikelyRelated(
-  objective: string,
-  task: NonNullable<NonNullable<GoalReviewInput["projectStatus"]>["unfinishedTasks"]>[number],
-): boolean {
-  const objectiveTokens = meaningfulGoalTokens(objective);
-  if (objectiveTokens.size === 0) return false;
-  const taskTokens = meaningfulGoalTokens(
-    [task.name, task.title, task.kind].filter((item): item is string => Boolean(item)).join(" "),
-  );
-  for (const token of objectiveTokens) {
-    if (taskTokens.has(token)) return true;
-  }
-  return false;
-}
-
-function meaningfulGoalTokens(value: string): Set<string> {
-  const stopwords = new Set([
-    "active",
-    "complete",
-    "completion",
-    "driver",
-    "foreground",
-    "goal",
-    "implement",
-    "implementation",
-    "project",
-    "ready",
-    "review",
-    "spark",
-    "status",
-    "task",
-    "tasks",
-  ]);
-  return new Set(
-    value
-      .toLocaleLowerCase()
-      .match(/[\p{Letter}\p{Number}]+/gu)
-      ?.filter((token) => token.length >= 4 && !stopwords.has(token)) ?? [],
-  );
 }
 
 function isPlanningOnlyGoalObjective(objective: string): boolean {
@@ -492,6 +532,9 @@ async function recordGoalReviewArtifact(
     ...(input.projectStatus ? { projectStatus: input.projectStatus } : {}),
     evidenceRefs: input.evidenceRefs,
     evidencePreviews: input.evidencePreviews ?? [],
+    requirements: input.requirements ?? [],
+    validationRuns: input.validationRuns ?? [],
+    unresolved: input.unresolved ?? [],
     ...(input.reason ? { completionClaimPlainLanguage: input.reason } : {}),
   };
   const previous = await store.tryGet(ref);

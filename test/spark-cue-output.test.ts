@@ -784,7 +784,7 @@ function registerCueToolsForTest(): Map<string, RegisteredPiCueTool> {
   registerPiCueTools({
     registerTool: (config) => tools.set(config.name, config),
     on: () => undefined,
-    getAllTools: () => [...tools.keys()].map((name) => ({ name })),
+    getActiveTools: () => [...tools.keys()],
     setActiveTools: () => undefined,
   });
   return tools;

@@ -1,11 +1,14 @@
+import { basename } from "node:path";
+
 import type { SparkSessionRegistryRecord } from "@zendev-lab/spark-protocol";
 import {
+  Key,
   ProcessTerminal,
-  SelectList,
   TUI,
+  matchesKey,
   truncateToWidth,
+  visibleWidth,
   type Component,
-  type SelectItem,
   type SelectListTheme,
 } from "./pi-tui-adapter.ts";
 import {
@@ -16,22 +19,11 @@ import {
 
 export const CREATE_SPARK_SESSION_SELECTION = "__spark_create_session__";
 
-/**
- * Legacy message-platform conversations may be recognizable only by their stored
- * `channel <adapter>:<scope>:<id>` title when an explicit binding is unavailable.
- */
-const CHANNEL_SESSION_TITLE_RE =
-  /^channel\s+(?:infoflow|qqbot|feishu):(?:group|user|c2c|channel|chat):.+$/iu;
 const UNTITLED_SESSION_LABEL = "New conversation";
 
-/**
- * Keep naming aligned with Cockpit while applying the native picker's narrower
- * policy: only local, non-archived sessions are attachable here.
- */
+/** Match the daemon and Cockpit default list boundary: archived sessions are opt-in. */
 export function isSelectableSparkSession(session: SparkSessionRegistryRecord): boolean {
-  if (session.status === "archived") return false;
-  if (session.bindings.length > 0) return false;
-  return !CHANNEL_SESSION_TITLE_RE.test(session.title?.trim() ?? "");
+  return session.status !== "archived";
 }
 
 const plain = (text: string): string => text;
@@ -44,10 +36,20 @@ const PLAIN_SESSION_SELECTOR_THEME: SelectListTheme = {
   noMatch: plain,
 };
 
+export interface SparkSessionSelectorWorkspace {
+  id: string;
+  canonicalId: string;
+  displayName: string;
+  localPath: string;
+}
+
 export interface SparkSessionSelectorOptions {
   sessions: SparkSessionRegistryRecord[];
+  workspaceId: string;
   workspaceLabel: string;
+  workspaces?: SparkSessionSelectorWorkspace[];
   title?: string;
+  maxVisible?: number;
 }
 
 export async function runNativeSparkSessionSelector(
@@ -112,67 +114,257 @@ export function createSparkSessionSelectorComponent(
   return new SparkSessionSelectorComponent(options);
 }
 
+interface SparkSessionSelectionItem {
+  value: string;
+  label: string;
+  description: string;
+}
+
+interface SparkSessionSelectionGroup {
+  key: string;
+  label: string;
+  tabLabel: string;
+  items: SparkSessionSelectionItem[];
+}
+
 class SparkSessionSelectorComponent implements Component {
   private readonly title: string;
-  private readonly workspaceLabel: string;
   private readonly requestRender?: () => void;
-  private readonly selectList: SelectList;
+  private readonly onSelect: (selection: string) => void;
+  private readonly onCancel?: () => void;
+  private readonly theme: SelectListTheme;
+  private readonly groups: SparkSessionSelectionGroup[];
+  private readonly selectedByGroup = new Map<string, number>();
+  private readonly maxVisible: number;
+  private activeGroupIndex = 0;
 
   constructor(options: SparkSessionSelectorComponentOptions) {
     this.title = options.title ?? "Open Spark Session";
-    this.workspaceLabel = options.workspaceLabel;
     this.requestRender = options.requestRender;
-    const items = sessionSelectItems(options.sessions);
-    this.selectList = new SelectList(
-      items,
-      Math.min(Math.max(items.length, 1), 12),
-      options.theme ?? PLAIN_SESSION_SELECTOR_THEME,
-      { minPrimaryColumnWidth: 32, maxPrimaryColumnWidth: 64 },
-    );
-    this.selectList.onSelect = (item) => options.onSelect(item.value);
-    this.selectList.onCancel = () => options.onCancel?.();
+    this.onSelect = options.onSelect;
+    this.onCancel = options.onCancel;
+    this.theme = options.theme ?? PLAIN_SESSION_SELECTOR_THEME;
+    this.groups = sessionSelectionGroups(options);
+    this.maxVisible = Math.max(1, options.maxVisible ?? 14);
   }
 
-  invalidate(): void {
-    this.selectList.invalidate();
-  }
+  invalidate(): void {}
 
   handleInput(data: string): void {
-    this.selectList.handleInput(data);
+    if (matchesKey(data, Key.left) || data === "h") {
+      this.moveGroup(-1);
+    } else if (matchesKey(data, Key.right) || data === "l") {
+      this.moveGroup(1);
+    } else if (matchesKey(data, Key.up) || data === "k") {
+      this.moveSelection(-1);
+    } else if (matchesKey(data, Key.down) || data === "j") {
+      this.moveSelection(1);
+    } else if (matchesKey(data, Key.enter)) {
+      const selected = this.activeGroup().items[this.selectedIndex()];
+      if (selected) this.onSelect(selected.value);
+    } else if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+      this.onCancel?.();
+    }
     this.requestRender?.();
   }
 
   render(width: number): string[] {
-    return [
+    const group = this.activeGroup();
+    const visibleItems = this.visibleItems(group);
+    const lines = [
       truncateToWidth(this.title, width),
-      truncateToWidth(this.workspaceLabel, width),
+      this.renderGroupTabs(width),
       truncateToWidth("".padEnd(Math.min(width, 80), "─"), width),
-      ...this.selectList.render(width),
-      truncateToWidth("↑↓ navigate • enter open • esc exit", width),
-    ].map((line) => truncateToWidth(line, width));
+      ...visibleItems.map((item) => this.renderItem(item, width)),
+    ];
+    if (group.items.length > visibleItems.length) {
+      lines.push(this.theme.scrollInfo(`  (${this.selectedIndex() + 1}/${group.items.length})`));
+    }
+    lines.push(truncateToWidth("←→ group • ↑↓ session • enter open • esc exit", width));
+    return lines.map((line) => truncateToWidth(line, width));
+  }
+
+  private activeGroup(): SparkSessionSelectionGroup {
+    return this.groups[this.activeGroupIndex]!;
+  }
+
+  private selectedIndex(group = this.activeGroup()): number {
+    return Math.min(this.selectedByGroup.get(group.key) ?? 0, group.items.length - 1);
+  }
+
+  private moveGroup(step: number): void {
+    this.activeGroupIndex =
+      (this.activeGroupIndex + step + this.groups.length) % this.groups.length;
+  }
+
+  private moveSelection(step: number): void {
+    const group = this.activeGroup();
+    if (group.items.length === 0) return;
+    const selected = (this.selectedIndex(group) + step + group.items.length) % group.items.length;
+    this.selectedByGroup.set(group.key, selected);
+  }
+
+  private visibleItems(group: SparkSessionSelectionGroup): SparkSessionSelectionItem[] {
+    if (group.items.length <= this.maxVisible) return group.items;
+    const selected = this.selectedIndex(group);
+    let start = Math.max(0, selected - Math.floor(this.maxVisible / 2));
+    start = Math.min(start, group.items.length - this.maxVisible);
+    return group.items.slice(start, start + this.maxVisible);
+  }
+
+  private renderGroupTabs(width: number): string {
+    const tabs = this.groups.map((group, index) => {
+      const count = sessionGroupCount(group);
+      const label = `${group.tabLabel} (${count})`;
+      return index === this.activeGroupIndex
+        ? this.theme.selectedText(`[${label}]`)
+        : this.theme.description(label);
+    });
+    const allTabs = `← ${tabs.join("  ")} →`;
+    if (visibleWidth(allTabs) <= width) return allTabs;
+    const active = tabs[this.activeGroupIndex]!;
+    return truncateToWidth(
+      `← ${active} →  ${this.activeGroupIndex + 1}/${this.groups.length}`,
+      width,
+    );
+  }
+
+  private renderItem(item: SparkSessionSelectionItem, width: number): string {
+    const selected = item.value === this.activeGroup().items[this.selectedIndex()]?.value;
+    const prefix = selected ? "→ " : "  ";
+    const labelWidth =
+      width > 56 ? Math.min(48, Math.max(24, Math.floor(width * 0.45))) : width - 4;
+    const label = truncateToWidth(`  ${item.label}`, Math.max(1, labelWidth), "");
+    const padded = `${prefix}${label}${" ".repeat(Math.max(2, labelWidth - visibleWidth(label) + 2))}`;
+    const descriptionWidth = Math.max(0, width - visibleWidth(padded) - 1);
+    const description =
+      descriptionWidth > 10 ? truncateToWidth(item.description, descriptionWidth, "") : "";
+    const line = `${padded}${description}`;
+    return selected ? this.theme.selectedText(line) : line;
   }
 }
 
-function sessionSelectItems(sessions: SparkSessionRegistryRecord[]): SelectItem[] {
+export function formatSparkSessionListByWorkspace(options: SparkSessionSelectorOptions): string {
+  const groups = sessionSelectionGroups(options)
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => item.value !== CREATE_SPARK_SESSION_SELECTION),
+    }))
+    .filter((group) => group.items.length > 0);
+  if (groups.length === 0) return "No managed Spark sessions in daemon.";
   return [
-    {
-      value: CREATE_SPARK_SESSION_SELECTION,
-      label: "+ New session",
-      description: "Create a daemon-managed session in this workspace",
-    },
-    ...sessions.filter(isSelectableSparkSession).map((session) => ({
-      value: session.sessionId,
-      label: session.title?.trim() || UNTITLED_SESSION_LABEL,
-      description: [
-        session.sessionId,
-        session.model ? `${session.model.providerName}/${session.model.modelId}` : undefined,
-        session.thinkingLevel ? `thinking=${session.thinkingLevel}` : undefined,
-        relativeSessionUpdate(session.updatedAt),
-      ]
-        .filter(Boolean)
-        .join(" • "),
-    })),
-  ];
+    "Spark daemon sessions:",
+    ...groups.flatMap((group) => [
+      `${group.label} (${group.items.length})`,
+      ...group.items.map((item) => `  ${item.label} • ${item.description}`),
+    ]),
+  ].join("\n");
+}
+
+function sessionSelectionGroups(
+  options: SparkSessionSelectorOptions,
+): SparkSessionSelectionGroup[] {
+  const byKey = new Map<string, SparkSessionSelectionGroup>();
+  const currentKey = `workspace:${options.workspaceId}`;
+  byKey.set(currentKey, {
+    key: currentKey,
+    label: options.workspaceLabel,
+    tabLabel: currentWorkspaceTabLabel(options),
+    items: [
+      {
+        value: CREATE_SPARK_SESSION_SELECTION,
+        label: "+ New session",
+        description: "Create a daemon-managed session in this workspace",
+      },
+    ],
+  });
+
+  for (const session of options.sessions.filter(isSelectableSparkSession)) {
+    const identity = sessionGroupIdentity(session, options);
+    const group = byKey.get(identity.key) ?? {
+      key: identity.key,
+      label: identity.label,
+      tabLabel: identity.tabLabel,
+      items: [],
+    };
+    group.items.push(sessionSelectionItem(session));
+    byKey.set(identity.key, group);
+  }
+  return [...byKey.values()];
+}
+
+function sessionGroupCount(group: SparkSessionSelectionGroup): number {
+  return group.items.filter((item) => item.value !== CREATE_SPARK_SESSION_SELECTION).length;
+}
+
+function currentWorkspaceTabLabel(options: SparkSessionSelectorOptions): string {
+  return options.workspaceLabel.split(" • ")[0]?.trim() || options.workspaceId;
+}
+
+function sessionGroupIdentity(
+  session: SparkSessionRegistryRecord,
+  options: SparkSessionSelectorOptions,
+): { key: string; label: string; tabLabel: string } {
+  if (session.scope.kind === "daemon") {
+    return {
+      key: "tui-only",
+      label: "TUI only",
+      tabLabel: "TUI only",
+    };
+  }
+  const workspaceId = session.scope.workspaceId;
+  if (workspaceId === options.workspaceId) {
+    return {
+      key: `workspace:${workspaceId}`,
+      label: options.workspaceLabel,
+      tabLabel: currentWorkspaceTabLabel(options),
+    };
+  }
+  const workspace = options.workspaces?.find((candidate) => candidate.id === workspaceId);
+  if (workspace?.canonicalId === options.workspaceId) {
+    return {
+      key: `workspace:${options.workspaceId}`,
+      label: options.workspaceLabel,
+      tabLabel: currentWorkspaceTabLabel(options),
+    };
+  }
+  if (workspace) {
+    return {
+      key: `workspace:${workspace.canonicalId}`,
+      label: `${workspace.displayName} • ${workspace.localPath}`,
+      tabLabel: workspace.displayName,
+    };
+  }
+  if (!session.cwd) {
+    return { key: `workspace:${workspaceId}`, label: workspaceId, tabLabel: workspaceId };
+  }
+  const workspaceName = basename(session.cwd);
+  return {
+    key: `workspace:${workspaceId}`,
+    label:
+      workspaceName === workspaceId
+        ? `${workspaceId} • ${session.cwd}`
+        : `${workspaceName} • ${workspaceId} • ${session.cwd}`,
+    tabLabel: workspaceName,
+  };
+}
+
+function sessionSelectionItem(session: SparkSessionRegistryRecord): SparkSessionSelectionItem {
+  const channel = session.bindings[0];
+  return {
+    value: session.sessionId,
+    label: session.title?.trim() || UNTITLED_SESSION_LABEL,
+    description: [
+      session.sessionId,
+      channel ? channel.adapter : undefined,
+      session.status === "running" ? session.status : undefined,
+      session.model ? `${session.model.providerName}/${session.model.modelId}` : undefined,
+      session.thinkingLevel ? `thinking=${session.thinkingLevel}` : undefined,
+      relativeSessionUpdate(session.updatedAt),
+    ]
+      .filter(Boolean)
+      .join(" • "),
+  };
 }
 
 function relativeSessionUpdate(updatedAt: string): string {

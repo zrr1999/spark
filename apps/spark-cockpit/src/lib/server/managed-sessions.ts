@@ -1,61 +1,28 @@
-import {
-  parseSparkSessionRegistryRecord,
-  parseSparkSessionRegistryRecords,
-  sparkSessionViewSchema,
-  type SparkSessionBindRequest,
-  type SparkSessionCreateRequest,
-  type SparkSessionListRequest,
-  type SparkSessionRegistryRecord,
-  type SparkSessionView,
+import type {
+  SparkSessionBindRequest,
+  SparkSessionRegistryRecord,
+  SparkSessionView,
 } from "@zendev-lab/spark-protocol";
+
 import {
-  requestSparkDaemonLocalRpc,
-  SparkDaemonLocalRpcRemoteError,
-  SparkDaemonLocalRpcUnavailableError,
-} from "@zendev-lab/spark-system";
+  CockpitRuntimeSessionUnavailableError,
+  createCockpitRuntimeSessionClient,
+  isCockpitRuntimeSessionNotFoundError,
+  type CockpitRuntimeSessionCreateRequest,
+  type CockpitRuntimeSessionListRequest,
+} from "./cockpit-runtime-session-client";
 
 export interface CockpitManagedSessionsClient {
-  list(options?: SparkSessionListRequest): Promise<SparkSessionRegistryRecord[]>;
+  list(options?: CockpitRuntimeSessionListRequest): Promise<SparkSessionRegistryRecord[]>;
   get(sessionId: string): Promise<SparkSessionRegistryRecord>;
   snapshot(sessionId: string): Promise<SparkSessionView>;
-  create(input: SparkSessionCreateRequest): Promise<SparkSessionRegistryRecord>;
+  create(input: CockpitRuntimeSessionCreateRequest): Promise<SparkSessionRegistryRecord>;
   bind(input: SparkSessionBindRequest): Promise<SparkSessionRegistryRecord>;
+  unbind(input: SparkSessionBindRequest): Promise<SparkSessionRegistryRecord>;
   archive(sessionId: string): Promise<SparkSessionRegistryRecord>;
 }
 
-function isSessionNotFoundError(error: unknown): boolean {
-  if (!(error instanceof SparkDaemonLocalRpcRemoteError)) return false;
-  const payload = error.payload;
-  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return false;
-  return (payload as { code?: unknown }).code === "session_not_found";
-}
-
-const daemonManagedSessionsClient: CockpitManagedSessionsClient = {
-  list: async (params = {}) =>
-    parseSparkSessionRegistryRecords(
-      await requestSparkDaemonLocalRpc<unknown>("session.list", params),
-    ),
-  get: async (sessionId) =>
-    parseSparkSessionRegistryRecord(
-      await requestSparkDaemonLocalRpc<unknown>("session.get", { sessionId }),
-    ),
-  snapshot: async (sessionId) =>
-    sparkSessionViewSchema.parse(
-      await requestSparkDaemonLocalRpc<unknown>("session.snapshot", { sessionId }),
-    ),
-  create: async (input) =>
-    parseSparkSessionRegistryRecord(
-      await requestSparkDaemonLocalRpc<unknown>("session.create", input),
-    ),
-  bind: async (input) =>
-    parseSparkSessionRegistryRecord(
-      await requestSparkDaemonLocalRpc<unknown>("session.bind", input),
-    ),
-  archive: async (sessionId) =>
-    parseSparkSessionRegistryRecord(
-      await requestSparkDaemonLocalRpc<unknown>("session.archive", { sessionId }),
-    ),
-};
+const runtimeManagedSessionsClient = createCockpitRuntimeSessionClient();
 
 export type CockpitManagedSessionsList = {
   available: boolean;
@@ -64,13 +31,18 @@ export type CockpitManagedSessionsList = {
 };
 
 export async function listManagedSessionsForCockpit(
-  options: SparkSessionListRequest = {},
-  client: CockpitManagedSessionsClient = daemonManagedSessionsClient,
+  options: CockpitRuntimeSessionListRequest = {},
+  client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
 ): Promise<CockpitManagedSessionsList> {
+  if (options.scope?.kind === "daemon") return { available: true, sessions: [] };
   try {
-    return { available: true, sessions: await client.list(options) };
+    const sessions = await client.list(options);
+    return {
+      available: true,
+      sessions: sessions.filter(isCockpitWorkspaceSession),
+    };
   } catch (error) {
-    if (error instanceof SparkDaemonLocalRpcUnavailableError) {
+    if (error instanceof CockpitRuntimeSessionUnavailableError) {
       return {
         available: false,
         sessions: [],
@@ -83,52 +55,70 @@ export async function listManagedSessionsForCockpit(
 
 export async function getManagedSessionForCockpit(
   sessionId: string,
-  client: CockpitManagedSessionsClient = daemonManagedSessionsClient,
+  client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
 ): Promise<SparkSessionRegistryRecord | null> {
   try {
-    return await client.get(sessionId);
+    const session = await client.get(sessionId);
+    return isCockpitWorkspaceSession(session) ? session : null;
   } catch (error) {
-    // Match listManagedSessionsForCockpit: daemon restart / missing session
-    // must not turn the workbench layout or session page into a 500.
-    if (error instanceof SparkDaemonLocalRpcUnavailableError) return null;
-    if (isSessionNotFoundError(error)) return null;
+    // A disconnected owner or stale projection must not turn the workbench
+    // layout or session page into a 500.
+    if (error instanceof CockpitRuntimeSessionUnavailableError) return null;
+    if (isCockpitRuntimeSessionNotFoundError(error)) return null;
     throw error;
   }
 }
 
 export async function getManagedSessionSnapshotForCockpit(
   sessionId: string,
-  client: CockpitManagedSessionsClient = daemonManagedSessionsClient,
+  client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
 ): Promise<SparkSessionView | null> {
   try {
+    const session = await client.get(sessionId);
+    if (!isCockpitWorkspaceSession(session)) return null;
     return await client.snapshot(sessionId);
   } catch (error) {
     // Snapshot is best-effort for the conversation pane; registry metadata is
-    // enough to keep the page reachable when the daemon is mid-restart or the
-    // projected view fails validation.
-    if (error instanceof SparkDaemonLocalRpcUnavailableError) return null;
-    if (isSessionNotFoundError(error)) return null;
+    // enough to keep the page reachable while the runtime reconnects.
+    if (error instanceof CockpitRuntimeSessionUnavailableError) return null;
+    if (isCockpitRuntimeSessionNotFoundError(error)) return null;
     return null;
   }
 }
 
 export async function createManagedSessionForCockpit(
-  input: SparkSessionCreateRequest,
-  client: CockpitManagedSessionsClient = daemonManagedSessionsClient,
+  input: CockpitRuntimeSessionCreateRequest,
+  client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
 ): Promise<SparkSessionRegistryRecord> {
+  if (input.scope?.kind !== "workspace") {
+    throw new Error("Cockpit can create workspace-scoped sessions only.");
+  }
   return await client.create(input);
 }
 
 export async function bindManagedSessionForCockpit(
   input: SparkSessionBindRequest,
-  client: CockpitManagedSessionsClient = daemonManagedSessionsClient,
+  client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
 ): Promise<SparkSessionRegistryRecord> {
   return await client.bind(input);
 }
 
+export async function unbindManagedSessionForCockpit(
+  input: SparkSessionBindRequest,
+  client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
+): Promise<SparkSessionRegistryRecord> {
+  return await client.unbind(input);
+}
+
 export async function archiveManagedSessionForCockpit(
   sessionId: string,
-  client: CockpitManagedSessionsClient = daemonManagedSessionsClient,
+  client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
 ): Promise<SparkSessionRegistryRecord> {
   return await client.archive(sessionId);
+}
+
+function isCockpitWorkspaceSession(
+  session: SparkSessionRegistryRecord,
+): session is SparkSessionRegistryRecord & { scope: { kind: "workspace"; workspaceId: string } } {
+  return session.scope.kind === "workspace";
 }

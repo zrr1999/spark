@@ -2598,6 +2598,7 @@ void test("/goal foreground loop completes active goal when reviewer says achiev
       },
     });
     await useOnlySparkProject(run.tools, ctx);
+    await putProjectGoalCompletionEvidence(ctx, "Already verified objective evidence");
     await executeSparkTool(run.tools, "goal", ctx, {
       action: "start",
       objective: "Already verified objective",
@@ -2997,6 +2998,7 @@ void test("/goal foreground loop records unmet reviewer verdict before continuat
       },
     });
     await useOnlySparkProject(run.tools, ctx);
+    await putProjectGoalCompletionEvidence(ctx, "Unmet goal reviewer evidence");
     await executeSparkTool(run.tools, "goal", ctx, {
       action: "start",
       objective: "Need more work",
@@ -3174,20 +3176,26 @@ void test("goal reviewer state machine covers restart, idle review, and task fin
     const fake = timer as unknown as FakeTimer | undefined;
     if (fake) fake.cleared = true;
   }) as typeof clearTimeout;
-  async function flushAsyncWork(until?: () => boolean): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      if (until?.()) return;
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
+  async function waitForAsyncState(
+    until: () => boolean | Promise<boolean>,
+    description: string,
+    timeoutMs = 5_000,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (await until()) return;
+      await new Promise((resolve) => originalSetTimeout(resolve, 10));
     }
+    assert.fail(`Timed out waiting for ${description}.`);
   }
 
   async function waitForGoalStatus(status: "active" | "complete") {
-    for (let index = 0; index < 100; index += 1) {
-      const goal = await loadSessionGoal(dir, testSparkContext(dir, "main"));
-      if (goal?.status === status) return goal;
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-    return await loadSessionGoal(dir, testSparkContext(dir, "main"));
+    let goal = await loadSessionGoal(dir, testSparkContext(dir, "main"));
+    await waitForAsyncState(async () => {
+      goal = await loadSessionGoal(dir, testSparkContext(dir, "main"));
+      return goal?.status === status;
+    }, `the session goal to reach status ${status}`);
+    return goal;
   }
 
   try {
@@ -3217,6 +3225,7 @@ void test("goal reviewer state machine covers restart, idle review, and task fin
 
     const run = registerSparkToolsForTest({ reviewerRunner });
     await useOnlySparkProjectInExplicitPlanMode(run.tools, ctx);
+    await putProjectGoalCompletionEvidence(ctx, "Goal reviewer state-machine evidence");
 
     const sessionStarted = await executeSparkTool(run.tools, "goal", ctx, {
       action: "start",
@@ -3233,8 +3242,9 @@ void test("goal reviewer state machine covers restart, idle review, and task fin
 
     const messagesBeforeUnmet = restarted.customMessages.length;
     timers[0]?.callback();
-    await flushAsyncWork(
+    await waitForAsyncState(
       () => goalReviewerCalls === 1 && restarted.customMessages.length > messagesBeforeUnmet,
+      "the unmet goal review to persist and queue its follow-up",
     );
     assert.equal(goalReviewerCalls, 1);
     assert.ok(restarted.customMessages.length > messagesBeforeUnmet);
@@ -3251,10 +3261,9 @@ void test("goal reviewer state machine covers restart, idle review, and task fin
     assert.equal(timers.length, 2);
     const messagesBeforeAchieved = restarted.customMessages.length;
     timers[1]?.callback();
-    await flushAsyncWork(() => goalReviewerCalls === 2);
+    goal = await waitForGoalStatus("complete");
     assert.equal(goalReviewerCalls, 2);
     assert.equal(restarted.customMessages.length, messagesBeforeAchieved);
-    goal = await waitForGoalStatus("complete");
     assert.equal(goal?.status, "complete");
     assert.ok(goal?.lastReviewArtifactRef);
 
@@ -7197,9 +7206,26 @@ void test("spark_goal tool sets and updates durable session goals", async () => 
     assert.equal(editedGoal?.lastReviewArtifactRef, undefined);
     assert.equal(editedGoal?.lastReviewedAt, undefined);
 
+    const completionEvidence = await defaultArtifactStore(dir).put({
+      kind: "trace",
+      title: "Durable goal slice completion",
+      format: "text",
+      body: "The durable goal lifecycle slice was exercised successfully.",
+      provenance: { producer: "spark" },
+    });
     const completed = await executeSparkTool(tools, "goal", ctx, {
       action: "complete",
       reason: "review passed",
+      requirements: [
+        {
+          id: "durable-goal-slice",
+          description: "The durable goal lifecycle slice is complete",
+          status: "verified",
+          evidenceRefs: [completionEvidence.ref],
+        },
+      ],
+      validationRuns: ["goal lifecycle test passed"],
+      unresolved: [],
     });
     assert.equal(
       (completed.details as { goal?: { status?: string } } | undefined)?.goal?.status,
@@ -7232,6 +7258,22 @@ void test("spark_goal complete uses deterministic blocker before reviewer when w
       const project = graph.projects()[0];
       assert.ok(project);
       await saveCurrentProjectRef(dir, ctx, project.ref);
+      const doneTask = graph.createTask({
+        projectRef: project.ref,
+        name: "completed-evidence-does-not-bypass",
+        title: "Completed evidence must not bypass unfinished work",
+        description: "Provides global evidence while another required task remains unfinished.",
+        status: "done",
+        plan: executionReadyPlan("Completed evidence must not bypass unfinished work"),
+      });
+      const evidence = await defaultArtifactStore(dir).put({
+        kind: "trace",
+        title: "Partial completion evidence",
+        format: "text",
+        body: "One completed task has evidence, but the project still has unfinished work.",
+        provenance: { producer: "task", projectRef: project.ref, taskRef: doneTask.ref },
+      });
+      graph.attachOutputArtifact(doneTask.ref, evidence.ref);
       graph.createTask({
         projectRef: project.ref,
         name: "unfinished-complete-blocker",
@@ -7262,12 +7304,79 @@ void test("spark_goal complete uses deterministic blocker before reviewer when w
   }
 });
 
-void test("spark_goal complete allows evidenced narrow goal despite unrelated project backlog", async () => {
+void test("spark_goal complete requires explicit evidence and objective reviewer gates", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-tool-goal-explicit-review-gates-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest({
+      reviewerRunner: {
+        async review(input: ReviewInput): Promise<ReviewerRunResult> {
+          assert.equal(input.targetKind, "goal");
+          return {
+            record: {
+              runRef: "run:missing-goal-gates",
+              roleRef: "role:reviewer",
+              startedAt: new Date().toISOString(),
+              finishedAt: new Date().toISOString(),
+            },
+            verdict: {
+              targetKind: "goal",
+              goalId: input.targetKind === "goal" ? input.goalId : "unexpected",
+              achieved: true,
+              outcome: "approved",
+              confidence: "high",
+              summary: "claimed complete without explicit evidence gates",
+              remainingWork: "",
+              blockers: [],
+            },
+          } as unknown as ReviewerRunResult;
+        },
+      },
+    });
+    await executeSparkTool(tools, "impl_use_project", ctx, { project: "Tool persistence" });
+    await executeSparkTool(tools, "goal", ctx, {
+      action: "start",
+      objective: "Finish the explicit reviewer gate slice",
+    });
+    const evidence = await defaultArtifactStore(dir).put({
+      kind: "trace",
+      title: "Explicit reviewer gate evidence",
+      format: "text",
+      body: "Evidence supplied so the request reaches the reviewer semantic gates.",
+      provenance: { producer: "spark" },
+    });
+
+    const completed = await executeSparkTool(tools, "goal", ctx, {
+      action: "complete",
+      requirements: [
+        {
+          id: "review-gate-slice",
+          description: "The explicit reviewer gate slice is complete",
+          status: "verified",
+          evidenceRefs: [evidence.ref],
+        },
+      ],
+      unresolved: [],
+    });
+
+    assert.equal(
+      (completed.details as { error?: string } | undefined)?.error,
+      "goal_completion_needs_changes",
+    );
+    assert.equal((await loadSessionGoal(dir, ctx))?.status, "active");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("spark_goal complete allows an explicitly evidenced narrow goal after reviewer audit", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-goal-complete-unrelated-backlog-"));
   try {
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
     let reviewerCalls = 0;
+    let completionEvidenceRef: ArtifactRef | undefined;
     const { tools } = registerSparkToolsForTest({
       reviewerRunner: {
         async review(input: ReviewInput): Promise<ReviewerRunResult> {
@@ -7276,6 +7385,8 @@ void test("spark_goal complete allows evidenced narrow goal despite unrelated pr
           if (input.targetKind === "goal") {
             assert.equal(input.evidenceRefs.length, 1);
             assert.equal(input.projectStatus?.taskCounts.unfinished, 1);
+            assert.deepEqual(input.unresolved, []);
+            assert.equal(input.requirements?.[0]?.id, "loop-stop-lifecycle");
           }
           return createApprovingReviewerRunner().review(input);
         },
@@ -7302,6 +7413,7 @@ void test("spark_goal complete allows evidenced narrow goal despite unrelated pr
         body: "tsc, lint, boundaries, and tests passed for plain loop stop lifecycle.",
         provenance: { producer: "task", projectRef: project.ref, taskRef: doneTask.ref },
       });
+      completionEvidenceRef = evidence.ref;
       graph.attachOutputArtifact(doneTask.ref, evidence.ref);
       graph.createTask({
         projectRef: project.ref,
@@ -7319,7 +7431,21 @@ void test("spark_goal complete allows evidenced narrow goal despite unrelated pr
         "将 Spark 的 plain /loop stop 语义统一为 clear/removal，并完成持久前台驱动、/goal 互斥、widget 展示、文档与验证对齐。",
     });
 
-    await executeSparkTool(tools, "goal", ctx, { action: "complete" });
+    assert.ok(completionEvidenceRef);
+    await executeSparkTool(tools, "goal", ctx, {
+      action: "complete",
+      reason: "The remaining role-TUI task is outside the explicitly scoped loop-stop goal.",
+      requirements: [
+        {
+          id: "loop-stop-lifecycle",
+          description: "Plain loop stop lifecycle is implemented and validated",
+          status: "verified",
+          evidenceRefs: [completionEvidenceRef],
+        },
+      ],
+      validationRuns: ["tsc, lint, boundaries, and loop lifecycle tests passed"],
+      unresolved: [],
+    });
 
     assert.equal(reviewerCalls, 1);
     const goal = await loadSessionGoal(dir, ctx);
@@ -10985,7 +11111,7 @@ void test("impl_run_ready_tasks reports workflow-run completion without queuing 
       true,
     );
 
-    const hiddenInbox = await consumeSparkModeContext(extension, ctx);
+    const hiddenInbox = await consumeSparkRoleRunInbox(extension, ctx);
     assert.match(hiddenInbox, /Recent unread background role-run results:/);
     assert.equal((hiddenInbox.match(/\[succeeded\] task=task:/gu) ?? []).length, 2);
     assert.equal((hiddenInbox.match(/artifacts=artifact:/gu) ?? []).length, 2);
@@ -11125,7 +11251,7 @@ void test("impl_run_ready_tasks marks Spark workflow-run scheduler failed when c
       ctx.notifications.at(-1)?.message ?? "",
       /failed: inspect task_read\(\{ action: "run_status"/,
     );
-    const hiddenInbox = await consumeSparkModeContext(extension, ctx);
+    const hiddenInbox = await consumeSparkRoleRunInbox(extension, ctx);
     assert.match(hiddenInbox, /Recent unread background role-run results:/);
     assert.match(hiddenInbox, /\[failed\] task=task:/);
     assert.match(hiddenInbox, /next=inspect with task_read\(\{ action: "run_status"/);
@@ -12872,25 +12998,40 @@ async function tryConsumeSparkModeContext(
   run: ReturnType<typeof registerSparkToolsForTest>,
   ctx: TestSparkContext,
 ): Promise<string | undefined> {
+  return tryConsumeSparkRuntimeContext(run, ctx, "spark-mode-context");
+}
+
+async function tryConsumeSparkRuntimeContext(
+  run: ReturnType<typeof registerSparkToolsForTest>,
+  ctx: TestSparkContext,
+  customType: "spark-mode-context" | "spark-role-run-inbox",
+): Promise<string | undefined> {
   for (const handler of run.eventHandlers.get("before_agent_start") ?? []) {
     const result = (await handler({}, ctx)) as
-      | { message?: { customType?: string; content?: string; display?: boolean } }
+      | {
+          message?: { customType?: string; content?: string; display?: boolean };
+          messages?: Array<{ customType?: string; content?: string; display?: boolean }>;
+        }
       | undefined;
-    if (result?.message?.customType === "spark-mode-context") {
-      assert.equal(result.message.display, false);
-      assert.ok(result.message.content);
-      return result.message.content;
+    const message =
+      result?.messages?.find((candidate) => candidate.customType === customType) ??
+      (result?.message?.customType === customType ? result.message : undefined);
+    if (message) {
+      assert.equal(message.display, false);
+      assert.ok(message.content);
+      return message.content;
     }
   }
   return undefined;
 }
 
-async function consumeSparkModeContext(
+async function consumeSparkRoleRunInbox(
   run: ReturnType<typeof registerSparkToolsForTest>,
   ctx: TestSparkContext,
 ): Promise<string> {
   return (
-    (await tryConsumeSparkModeContext(run, ctx)) ?? assert.fail("missing hidden Spark mode context")
+    (await tryConsumeSparkRuntimeContext(run, ctx, "spark-role-run-inbox")) ??
+    assert.fail("missing hidden Spark role-run inbox")
   );
 }
 
@@ -12910,6 +13051,24 @@ async function useOnlySparkProject(
   ctx: TestSparkContext,
 ): Promise<void> {
   await executeSparkTool(tools, "impl_use_project", ctx, { project: "Tool persistence" });
+}
+
+async function putProjectGoalCompletionEvidence(
+  ctx: TestSparkContext,
+  title: string,
+): Promise<ArtifactRef> {
+  const state = JSON.parse(await readFile(currentProjectStatePath(ctx.cwd, ctx), "utf8")) as {
+    projectRef?: ProjectRef;
+  };
+  assert.ok(state.projectRef, "goal completion evidence requires a current project");
+  const artifact = await defaultArtifactStore(ctx.cwd).put({
+    kind: "trace",
+    title,
+    format: "text",
+    body: `${title}. This fixture provides project-scoped evidence for reviewer evaluation.`,
+    provenance: { producer: "review", projectRef: state.projectRef },
+  });
+  return artifact.ref;
 }
 
 async function planAndClaimTask(

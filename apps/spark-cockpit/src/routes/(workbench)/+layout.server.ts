@@ -27,10 +27,20 @@ export const load: LayoutServerLoad = async ({ cookies, url }) => {
     preferredWorkspaceSlug: url.searchParams.get("workspace"),
   });
   const db = getDatabase();
-  const sessions = workspaceSessionsForWorkbench(
-    loadConversationSummaries(db, managedSessions.sessions),
+  const projectedSessions = workspaceSessionsForWorkbench(
+    managedSessions.sessions,
     layout.activeWorkspace?.id,
   );
+  if (
+    selectedSession &&
+    workspaceIdForWorkbenchSession(selectedSession) === layout.activeWorkspace?.id &&
+    !projectedSessions.some((session) => session.sessionId === selectedSession.sessionId)
+  ) {
+    projectedSessions.unshift(selectedSession);
+  }
+  // Filter before the SQLite enrichment query so daemon-global registry rows
+  // cannot increase Cockpit navigation work.
+  const sessions = loadConversationSummaries(db, projectedSessions);
   const pendingAsk = layout.activeWorkspace
     ? loadPendingWorkbenchAsk(db, layout.activeWorkspace.id)
     : null;

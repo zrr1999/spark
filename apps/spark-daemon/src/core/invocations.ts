@@ -100,6 +100,11 @@ export class SparkDaemonInvocationRegistry {
     return this.active.size;
   }
 
+  /** Open direct runtime admission after the daemon serving fence commits. */
+  activateAdmission(): void {
+    this.accepting = true;
+  }
+
   get draining(): boolean {
     return !this.accepting;
   }

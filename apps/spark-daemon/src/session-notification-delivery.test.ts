@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelNotifyInput, ChannelNotifyResult } from "@zendev-lab/spark-channels";
 import type { SparkSessionRegistryRecord } from "@zendev-lab/spark-protocol";
@@ -9,13 +10,125 @@ import type {
   DaemonChannelIngressRuntime,
   DaemonChannelIngressStatus,
 } from "./channels/ingress.ts";
-import { reconcileSessionNotificationDeliveries } from "./session-notification-delivery.ts";
+import {
+  createDaemonChannelDeliveryOutbox,
+  reconcileDaemonChannelDeliveries,
+} from "./channels/delivery-outbox.ts";
+import {
+  reconcileSessionNotificationDeliveries,
+  sessionNotificationDeliveryIdempotencyKey,
+} from "./session-notification-delivery.ts";
+import { SparkChannelDeliveryStore } from "./store/channel-deliveries.ts";
+import { migrateSparkDaemonDatabase } from "./store/schema.ts";
 
 describe("daemon session notification delivery reconciliation", () => {
   const roots: string[] = [];
 
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it("persists notification intent before send and never blind-resends after receipt projection fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-notification-outbox-"));
+    roots.push(root);
+    const now = "2026-07-15T04:30:00.000Z";
+    const mailStore = new SparkSessionMailStore({ sparkHome: root, now: () => Date.parse(now) });
+    const db = new DatabaseSync(":memory:");
+    migrateSparkDaemonDatabase(db);
+    const deliveryStore = new SparkChannelDeliveryStore(db, { now: () => now, random: () => 1 });
+    const deliveryOutbox = createDaemonChannelDeliveryOutbox(deliveryStore);
+    const session: SparkSessionRegistryRecord = {
+      sessionId: "sess_outbox",
+      scope: { kind: "workspace", workspaceId: "ws_outbox" },
+      workspaceId: "ws_outbox",
+      status: "ready",
+      bindings: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    const status = channelStatus("ws_outbox");
+    const notify = vi.fn(async (_workspaceId: string, input: ChannelNotifyInput) => ({
+      action: "send" as const,
+      adapter: input.adapter!,
+      recipient: input.recipient!,
+      text: input.text ?? "",
+    }));
+    const baseDeps = {
+      mailStore,
+      sessionRegistry: { get: vi.fn(async () => session) },
+      channelIngress: { status: vi.fn(() => status), notify },
+      deliveryQueue: { store: deliveryStore, outbox: deliveryOutbox },
+    };
+    const sent = await mailStore.send({
+      toSessionId: session.sessionId,
+      kind: "notification",
+      visibility: "user",
+      delivery: "channel",
+      deliveryTargets: [{ adapter: "infoflow", externalKey: "infoflow:user:user-1" }],
+      body: "Durable notice",
+      source: "tool",
+    });
+
+    try {
+      await expect(reconcileSessionNotificationDeliveries(baseDeps)).resolves.toEqual({
+        attempted: 1,
+        delivered: 0,
+        failed: 0,
+      });
+      expect(notify).not.toHaveBeenCalled();
+      const key = sessionNotificationDeliveryIdempotencyKey({
+        sessionId: session.sessionId,
+        messageId: sent.message.id,
+        adapter: "infoflow",
+        externalKey: "infoflow:user:user-1",
+      });
+      expect(deliveryStore.findByIdempotencyKey(key)).toMatchObject({
+        kind: "notification",
+        status: "pending",
+      });
+
+      await expect(
+        reconcileDaemonChannelDeliveries({
+          store: deliveryStore,
+          workerId: "notification-worker",
+          channelIngress: {
+            notify,
+            sendReply: vi.fn(),
+            sendAsk: vi.fn(),
+            ackInteraction: vi.fn(),
+          },
+        }),
+      ).resolves.toEqual({ attempted: 1, delivered: 1, failed: 0 });
+      expect(notify).toHaveBeenCalledOnce();
+
+      const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        await expect(
+          reconcileSessionNotificationDeliveries({
+            ...baseDeps,
+            mailStore: {
+              pendingChannelDeliveries: mailStore.pendingChannelDeliveries.bind(mailStore),
+              get: mailStore.get.bind(mailStore),
+              recordChannelDelivery: vi.fn(async () => {
+                throw new Error("mailbox readonly");
+              }),
+            },
+          }),
+        ).resolves.toEqual({ attempted: 1, delivered: 0, failed: 1 });
+      } finally {
+        log.mockRestore();
+      }
+      expect(notify).toHaveBeenCalledOnce();
+
+      await expect(reconcileSessionNotificationDeliveries(baseDeps)).resolves.toEqual({
+        attempted: 1,
+        delivered: 1,
+        failed: 0,
+      });
+      expect(notify).toHaveBeenCalledOnce();
+    } finally {
+      db.close();
+    }
   });
 
   it("retries due failed targets and permanently skips delivered targets", async () => {

@@ -14,6 +14,7 @@ import {
   recoverInterruptedRuntimeCommandReceipts,
   runtimeCommandReceipt,
 } from "./runtime-command-receipts.ts";
+import { SparkInvocationStore } from "./store/invocations.ts";
 import { migrateSparkDaemonDatabase } from "./store/schema.ts";
 
 const receiptCommandId = "cmd_10000000000000000000000000000000";
@@ -28,12 +29,30 @@ function daemonCommand() {
   });
 }
 
+function turnSubmitCommand() {
+  return createServerCommandEnvelope({
+    runtimeId: "rt_10000000000000000000000000000000",
+    commandId: receiptCommandId,
+    idempotencyKey: "idem_10000000000000000000000000000000",
+    sessionId: "sess-recovery",
+    sentAt: "2026-07-15T00:00:00.000Z",
+    payload: {
+      kind: "turn.submit.request",
+      scope: "daemon",
+      payload: { sessionId: "sess-recovery", prompt: "recover admission" },
+    },
+  });
+}
+
 describe("runtime command receipts", () => {
   it("claims once, replays persisted terminal state, and rejects payload conflicts", () => {
     const db = openMemoryDatabase();
     migrateSparkDaemonDatabase(db);
     const command = daemonCommand();
-    expect(claimRuntimeCommandReceipt(db, command)).toEqual({ kind: "new" });
+    expect(claimRuntimeCommandReceipt(db, command)).toMatchObject({
+      kind: "new",
+      claimToken: expect.any(String),
+    });
     const ack = {
       protocolVersion: runtimeProtocolVersion,
       messageId: createId("msg"),
@@ -107,6 +126,180 @@ describe("runtime command receipts", () => {
       },
     });
     expect(pendingRuntimeCommandTerminals(db)).toHaveLength(1);
+    db.close();
+  });
+
+  it("recovers a committed turn admission instead of reporting a contradictory restart failure", () => {
+    const db = openMemoryDatabase();
+    migrateSparkDaemonDatabase(db);
+    const command = turnSubmitCommand();
+    claimRuntimeCommandReceipt(db, command, "2026-07-15T00:00:00.000Z");
+    const invocation = new SparkInvocationStore(db).submit({
+      sessionId: "sess-recovery",
+      idempotencyKey: command.idempotencyKey,
+      prompt: "recover admission",
+      task: {
+        type: "session.run",
+        sessionId: "sess-recovery",
+        prompt: "recover admission",
+      },
+      now: "2026-07-15T00:00:01.000Z",
+    });
+
+    expect(recoverInterruptedRuntimeCommandReceipts(db, "2026-07-15T00:01:00.000Z")).toBe(1);
+    expect(runtimeCommandReceipt(db, receiptCommandId)).toMatchObject({
+      status: "succeeded",
+      ack: {
+        type: "runtime.command.ack",
+        commandId: receiptCommandId,
+        invocationId: invocation.invocationId,
+        payload: { accepted: true, invocationId: invocation.invocationId },
+      },
+      terminal: {
+        type: "runtime.command.result",
+        commandId: receiptCommandId,
+        invocationId: invocation.invocationId,
+        payload: {
+          status: "succeeded",
+          result: {
+            invocationId: invocation.invocationId,
+            status: "queued",
+            acceptedAt: invocation.createdAt,
+          },
+        },
+      },
+    });
+    expect(pendingRuntimeCommandTerminals(db)).toHaveLength(1);
+    db.close();
+  });
+
+  it("releases an interrupted turn receipt when admission never committed", () => {
+    const db = openMemoryDatabase();
+    migrateSparkDaemonDatabase(db);
+    const command = turnSubmitCommand();
+    claimRuntimeCommandReceipt(db, command, "2026-07-15T00:00:00.000Z");
+
+    expect(recoverInterruptedRuntimeCommandReceipts(db, "2026-07-15T00:01:00.000Z")).toBe(1);
+    expect(runtimeCommandReceipt(db, receiptCommandId)).toBeUndefined();
+    expect(claimRuntimeCommandReceipt(db, command)).toMatchObject({
+      kind: "new",
+      claimToken: expect.any(String),
+    });
+    db.close();
+  });
+
+  it("reclaims an expired turn admission lease and fences the stale claimant", () => {
+    const db = openMemoryDatabase();
+    migrateSparkDaemonDatabase(db);
+    const command = turnSubmitCommand();
+    const first = claimRuntimeCommandReceipt(db, command, "2026-07-15T00:00:00.000Z", {
+      leaseMs: 1_000,
+    });
+    expect(first).toMatchObject({ kind: "new", claimToken: expect.any(String) });
+    if (first.kind !== "new") throw new Error("expected the initial receipt claim");
+
+    expect(
+      claimRuntimeCommandReceipt(db, command, "2026-07-15T00:00:00.500Z", { leaseMs: 1_000 }),
+    ).toEqual({ kind: "replay" });
+    const second = claimRuntimeCommandReceipt(db, command, "2026-07-15T00:00:01.001Z", {
+      leaseMs: 1_000,
+    });
+    expect(second).toMatchObject({ kind: "new", claimToken: expect.any(String) });
+    if (second.kind !== "new") throw new Error("expected the expired receipt to be reclaimed");
+    expect(second.claimToken).not.toBe(first.claimToken);
+
+    const staleTerminal = {
+      messageId: createId("msg"),
+      type: "runtime.command.result",
+      payload: { status: "succeeded" },
+    };
+    expect(
+      recordRuntimeCommandAck(
+        db,
+        receiptCommandId,
+        { type: "runtime.command.ack" },
+        "2026-07-15T00:00:01.002Z",
+        first.claimToken,
+      ),
+    ).toBe(false);
+    expect(
+      recordRuntimeCommandTerminal(db, {
+        commandId: receiptCommandId,
+        status: "succeeded",
+        envelope: staleTerminal,
+        claimToken: first.claimToken,
+      }),
+    ).toBe(false);
+    expect(runtimeCommandReceipt(db, receiptCommandId)).toMatchObject({
+      status: "processing",
+      ack: null,
+      terminal: null,
+    });
+
+    const terminal = { ...staleTerminal, messageId: createId("msg") };
+    expect(
+      recordRuntimeCommandAck(
+        db,
+        receiptCommandId,
+        { type: "runtime.command.ack" },
+        "2026-07-15T00:00:01.003Z",
+        second.claimToken,
+      ),
+    ).toBe(true);
+    expect(
+      recordRuntimeCommandTerminal(db, {
+        commandId: receiptCommandId,
+        status: "succeeded",
+        envelope: terminal,
+        claimToken: second.claimToken,
+      }),
+    ).toBe(true);
+    expect(runtimeCommandReceipt(db, receiptCommandId)).toMatchObject({
+      status: "succeeded",
+      terminal,
+    });
+    db.close();
+  });
+
+  it("treats the outer session route as part of receipt replay identity", () => {
+    const db = openMemoryDatabase();
+    migrateSparkDaemonDatabase(db);
+    const command = turnSubmitCommand();
+    claimRuntimeCommandReceipt(db, command);
+
+    expect(
+      claimRuntimeCommandReceipt(db, {
+        ...command,
+        sessionId: "sess-other",
+      }),
+    ).toEqual({ kind: "conflict" });
+    db.close();
+  });
+
+  it("fails loudly when the recovered idempotency key belongs to a different turn", () => {
+    const db = openMemoryDatabase();
+    migrateSparkDaemonDatabase(db);
+    const command = turnSubmitCommand();
+    claimRuntimeCommandReceipt(db, command, "2026-07-15T00:00:00.000Z");
+    new SparkInvocationStore(db).submit({
+      sessionId: "sess-recovery",
+      idempotencyKey: command.idempotencyKey,
+      prompt: "different prompt",
+      task: {
+        type: "session.run",
+        sessionId: "sess-recovery",
+        prompt: "different prompt",
+      },
+      now: "2026-07-15T00:00:01.000Z",
+    });
+
+    expect(recoverInterruptedRuntimeCommandReceipts(db, "2026-07-15T00:01:00.000Z")).toBe(1);
+    expect(runtimeCommandReceipt(db, receiptCommandId)).toMatchObject({
+      status: "failed",
+      terminal: {
+        payload: { status: "failed", result: { reasonCode: "IDEMPOTENCY_CONFLICT" } },
+      },
+    });
     db.close();
   });
 });

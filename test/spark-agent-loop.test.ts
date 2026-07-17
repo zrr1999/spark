@@ -6,14 +6,19 @@ import test from "node:test";
 
 import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
 import { registerPiArtifactTool } from "@zendev-lab/spark-artifacts/extension";
+import { evaluateSparkBehavior } from "@zendev-lab/spark-turn/behavior-eval";
 import {
   SparkAgentLoop,
   SparkHostRuntime,
   type SparkAgentLoopEvent,
   type SparkAgentStreamFunction,
+  type SparkRunOutcome,
 } from "../apps/spark-tui/src/host/index.ts";
 import {
+  lowerSparkPromptItem,
   resolveSparkPromptCache,
+  sparkPromptItemFromProviderMessage,
+  sparkRuntimePromptItem,
   splitSparkSystemPrompt,
 } from "../packages/spark-turn/src/agent-loop.ts";
 import { compactToolResultContent } from "../packages/spark-turn/src/tool-result-compaction.ts";
@@ -37,6 +42,57 @@ const TEST_MODEL: Model = {
   contextWindow: 8000,
   maxTokens: 4000,
 };
+
+void test("Spark prompt IR retains runtime authority until provider lowering", () => {
+  const item = sparkRuntimePromptItem({
+    authority: "runtime_data",
+    trust: "untrusted",
+    visibility: "hidden",
+    persistence: "session",
+    content: "page data <not-an-instruction>",
+    customType: "browser-evidence",
+  });
+
+  assert.equal(item.authority, "runtime_data");
+  assert.equal(item.trust, "untrusted");
+  assert.equal(item.visibility, "hidden");
+  const lowered = lowerSparkPromptItem(item);
+  assert.equal(lowered.role, "user");
+  assert.match(String(lowered.content), /<spark_runtime_data trust="untrusted"/u);
+  assert.match(String(lowered.content), /&lt;not-an-instruction&gt;/u);
+  assert.doesNotMatch(String(lowered.content), /page data <not-an-instruction>/u);
+
+  const developer = sparkRuntimePromptItem({
+    authority: "developer",
+    trust: "trusted",
+    visibility: "hidden",
+    persistence: "session",
+    content: "provider-neutral developer policy",
+  });
+  assert.match(String(lowerSparkPromptItem(developer).content), /<spark_developer_context/u);
+  const replayedDeveloper = sparkPromptItemFromProviderMessage({
+    role: "developer",
+    content: "replayed developer policy",
+  });
+  const loweredDeveloper = lowerSparkPromptItem(replayedDeveloper);
+  assert.equal(loweredDeveloper.role, "user");
+  assert.match(String(loweredDeveloper.content), /<spark_developer_context/u);
+
+  const mixedRuntimeData = sparkRuntimePromptItem({
+    authority: "runtime_data",
+    trust: "untrusted",
+    visibility: "hidden",
+    persistence: "session",
+    content: [
+      { type: "text", text: "browser caption" },
+      { type: "image", source: "browser://evidence" },
+    ],
+  });
+  const loweredMixed = String(lowerSparkPromptItem(mixedRuntimeData).content);
+  assert.match(loweredMixed, /browser caption/u);
+  assert.match(loweredMixed, /"type":"image"/u);
+  assert.match(loweredMixed, /browser:\/\/evidence/u);
+});
 
 interface FakeStreamPlan {
   /** Each entry is one round-trip's events. The loop enqueues another round whenever
@@ -91,6 +147,14 @@ function makeFakeStream(plan: FakeStreamPlan): SparkAgentStreamFunction {
     return iterable;
   };
   return fake;
+}
+
+async function waitForCondition(predicate: () => boolean, message: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  assert.fail(message);
 }
 
 void test("compactToolResultContent normalizes status whitespace with details", () => {
@@ -204,7 +268,8 @@ void test("Spark prompt cache splits stable/dynamic prompt sections and honors d
     checkpoint: "manual refresh",
     env: {},
   });
-  assert.match(enabled.promptCacheKey ?? "", /^spark:session:abc:[0-9a-f]{16}:manual-refresh$/);
+  assert.match(enabled.promptCacheKey ?? "", /^spark:[0-9a-f]{16}:[0-9a-f]{16}:manual-refresh$/);
+  assert.ok((enabled.promptCacheKey?.length ?? Infinity) <= 64);
   assert.equal(enabled.disabledReason, undefined);
 
   const disabled = resolveSparkPromptCache({
@@ -214,6 +279,32 @@ void test("Spark prompt cache splits stable/dynamic prompt sections and honors d
   });
   assert.equal(disabled.promptCacheKey, undefined);
   assert.equal(disabled.disabledReason, "env");
+});
+
+void test("Spark prompt cache hashes long session ids without losing the stable fingerprint", () => {
+  const systemPrompt = "Stable Spark operating rules.";
+  const sharedSessionPrefix = `session:${"shared-segment-".repeat(20)}`;
+  const first = resolveSparkPromptCache({
+    systemPrompt,
+    sessionId: `${sharedSessionPrefix}first`,
+    checkpoint: "manual refresh",
+    env: {},
+  });
+  const second = resolveSparkPromptCache({
+    systemPrompt,
+    sessionId: `${sharedSessionPrefix}second`,
+    checkpoint: "manual refresh",
+    env: {},
+  });
+
+  for (const snapshot of [first, second]) {
+    assert.ok((snapshot.promptCacheKey?.length ?? Infinity) <= 64);
+    assert.match(
+      snapshot.promptCacheKey ?? "",
+      new RegExp(`^spark:[0-9a-f]{16}:${snapshot.stableHash.slice(0, 16)}:manual-refresh$`),
+    );
+  }
+  assert.notEqual(first.promptCacheKey, second.promptCacheKey);
 });
 
 void test("SparkAgentLoop passes prompt_cache_key and reports cache usage summaries", async () => {
@@ -226,6 +317,32 @@ void test("SparkAgentLoop passes prompt_cache_key and reports cache usage summar
   finalAssistant.usage.cacheRead = 128;
   finalAssistant.usage.cacheWrite = 32;
   const calls: Array<{ context: Context; options: any }> = [];
+  const loopEvents: SparkAgentLoopEvent[] = [];
+  host.registerTool({
+    name: "read_manifest_probe",
+    description: "read-only manifest probe",
+    parameters: { type: "object" },
+    policy: {
+      effect: "read",
+      executionMode: "parallel",
+      domains: ["files"],
+      phases: ["implement"],
+      approval: "none",
+    },
+    async execute() {
+      return { content: [{ type: "text", text: "unused" }] };
+    },
+  });
+  host.registerTool({
+    name: "inactive_write_probe",
+    description: "inactive write manifest probe",
+    parameters: { type: "object" },
+    policy: { effect: "local_write", executionMode: "sequential", approval: "required" },
+    async execute() {
+      return { content: [{ type: "text", text: "unused" }] };
+    },
+  });
+  host.setActiveTools(["read_manifest_probe"]);
   const streamFunction: SparkAgentStreamFunction = (_model, context, options) => {
     calls.push({ context, options });
     return makeFakeStream({
@@ -241,12 +358,18 @@ void test("SparkAgentLoop passes prompt_cache_key and reports cache usage summar
       "Current date: 2026-07-03\nCurrent working directory: /repo",
     ].join("\n\n"),
     promptCache: { checkpoint: "session-start", env: {} },
+    promptManifest: {
+      promptVersion: "agent-loop-test-v1",
+      getSelectedSkills: () => ["files", "testing", "files"],
+    },
   });
   loop.setViewSessionId("session:cache-test");
+  loop.onEvent((event) => loopEvents.push(event));
 
-  await loop.submit("use cache");
+  const outcome = await loop.submitWithOutcome("use cache");
 
-  assert.match(calls[0]?.context.promptCacheKey ?? "", /session:cache-test/);
+  assert.match(calls[0]?.context.promptCacheKey ?? "", /^spark:[0-9a-f]{16}:[0-9a-f]{16}:/);
+  assert.ok((calls[0]?.context.promptCacheKey?.length ?? Infinity) <= 64);
   assert.equal(calls[0]?.context.systemPromptStable, "Stable Spark operating rules.");
   assert.match(calls[0]?.context.systemPromptDynamic ?? "", /Current date/);
   assert.equal(calls[0]?.options?.prompt_cache_key, calls[0]?.context.promptCacheKey);
@@ -261,6 +384,210 @@ void test("SparkAgentLoop passes prompt_cache_key and reports cache usage summar
     ),
     true,
   );
+  const manifestEvents = loopEvents.filter(
+    (event): event is Extract<SparkAgentLoopEvent, { type: "prompt_manifest" }> =>
+      event.type === "prompt_manifest",
+  );
+  assert.equal(manifestEvents.length, 1);
+  const manifest = manifestEvents[0]!.manifest;
+  assert.equal(loop.getLastPromptManifest(), manifest);
+  assert.equal(manifest.promptVersion, "agent-loop-test-v1");
+  assert.deepEqual(manifest.selectedSkills, ["files", "testing"]);
+  assert.deepEqual(manifest.tools, [
+    {
+      name: "read_manifest_probe",
+      effect: "read",
+      executionMode: "parallel",
+      approval: "none",
+      domains: ["files"],
+      phases: ["implement"],
+    },
+  ]);
+  assert.equal(manifest.roundtrip.index, 1);
+  assert.equal(manifest.roundtrip.remaining, 15);
+  assert.doesNotMatch(
+    JSON.stringify(manifest),
+    /session:cache-test|Stable Spark operating rules|Current date: 2026-07-03/u,
+  );
+  const baseline = evaluateSparkBehavior(
+    {
+      id: "answer-only-runtime-baseline",
+      allowedTools: [],
+      expectedOutcomes: ["completed"],
+      maxToolCalls: 0,
+      maxRoundtrips: 1,
+    },
+    {
+      manifest,
+      toolCalls: [],
+      outcome: outcome.status,
+      roundtrips: outcome.roundtrips,
+    },
+  );
+  assert.equal(baseline.passed, true);
+  assert.equal(outcome.roundtrips, 1);
+});
+
+void test("SparkAgentLoop applies one phase profile to schemas, manifests, and dispatch", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-phase-profile-test" });
+  const lifecycleSources: unknown[] = [];
+  host.on("before_agent_start", (event) => {
+    lifecycleSources.push((event as { source?: unknown }).source);
+  });
+  let implementExecutions = 0;
+  host.registerTool({
+    name: "plan_probe",
+    description: "available only while planning",
+    parameters: { type: "object" },
+    policy: { effect: "read", executionMode: "parallel", phases: ["plan"], approval: "none" },
+    async execute() {
+      return { content: [{ type: "text", text: "plan" }] };
+    },
+  });
+  host.registerTool({
+    name: "implement_action",
+    description: "available only while implementing",
+    parameters: { type: "object" },
+    policy: {
+      effect: "local_write",
+      executionMode: "sequential",
+      phases: ["implement"],
+      approval: "none",
+    },
+    async execute() {
+      implementExecutions += 1;
+      return { content: [{ type: "text", text: "implemented" }] };
+    },
+  });
+  host.registerTool({
+    name: "unphased_probe",
+    description: "available in every phase",
+    parameters: { type: "object" },
+    policy: { effect: "read", executionMode: "parallel", approval: "none" },
+    async execute() {
+      return { content: [{ type: "text", text: "unphased" }] };
+    },
+  });
+
+  const schemaToolNames: string[][] = [];
+  const manifestToolNames: string[][] = [];
+  const forgedPlanCall: ToolCall = {
+    type: "toolCall",
+    id: "tc-phase-forged",
+    name: "implement_action",
+    arguments: {},
+  };
+  const allowedImplementCall: ToolCall = {
+    type: "toolCall",
+    id: "tc-phase-allowed",
+    name: "implement_action",
+    arguments: {},
+  };
+  let modelCall = 0;
+  const streamFunction: SparkAgentStreamFunction = (model, context, options) => {
+    schemaToolNames.push((context.tools ?? []).map((tool: { name: string }) => tool.name));
+    const call = modelCall;
+    modelCall += 1;
+    const message =
+      call === 0
+        ? buildAssistant([forgedPlanCall], "toolUse")
+        : call === 2
+          ? buildAssistant([allowedImplementCall], "toolUse")
+          : buildAssistant([{ type: "text", text: `phase complete ${call}` }]);
+    return makeFakeStream({
+      rounds: [[{ type: "done", reason: message.stopReason, message }]],
+    })(model, context, options);
+  };
+  const loop = new SparkAgentLoop({ host, streamFunction, getModel: () => TEST_MODEL });
+  loop.onEvent((event) => {
+    if (event.type === "prompt_manifest") {
+      manifestToolNames.push(event.manifest.tools.map((tool) => tool.name));
+    }
+  });
+
+  assert.equal(loop.getCurrentPhase(), undefined);
+  loop.setCurrentPhase("plan");
+  assert.equal(loop.getCurrentPhase(), "plan");
+  await loop.submit("plan without writes");
+
+  assert.equal(implementExecutions, 0);
+  assert.deepEqual(schemaToolNames[0], ["plan_probe", "unphased_probe"]);
+  const rejected = loop
+    .getMessages()
+    .find((message) => message.role === "toolResult" && message.toolCallId === "tc-phase-forged");
+  assert.equal(rejected?.isError, true);
+  assert.match(rejected?.content[0]?.text ?? "", /phase-inactive tool: implement_action/u);
+
+  loop.setCurrentPhase("implement");
+  assert.equal(loop.getCurrentPhase(), "implement");
+  await loop.submit("implement now");
+
+  assert.equal(implementExecutions, 1);
+  assert.deepEqual(schemaToolNames[2], ["implement_action", "unphased_probe"]);
+  const allowed = loop
+    .getMessages()
+    .find((message) => message.role === "toolResult" && message.toolCallId === "tc-phase-allowed");
+  assert.equal(allowed?.isError, false);
+  assert.deepEqual(manifestToolNames, schemaToolNames);
+  assert.deepEqual(lifecycleSources, ["agentLoop", "agentLoop", "agentLoop", "agentLoop"]);
+});
+
+void test("SparkAgentLoop rechecks phase availability after async approval", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-phase-approval-test" });
+  let executions = 0;
+  host.registerTool({
+    name: "approved_implement_action",
+    description: "phase may change while approval is pending",
+    parameters: { type: "object" },
+    policy: {
+      effect: "local_write",
+      executionMode: "sequential",
+      phases: ["implement"],
+      approval: "required",
+    },
+    async execute() {
+      executions += 1;
+      return { content: [{ type: "text", text: "must not run" }] };
+    },
+  });
+  const toolCall: ToolCall = {
+    type: "toolCall",
+    id: "tc-phase-after-approval",
+    name: "approved_implement_action",
+    arguments: {},
+  };
+  let loop!: SparkAgentLoop;
+  loop = new SparkAgentLoop({
+    host,
+    streamFunction: makeFakeStream({
+      rounds: [
+        [{ type: "done", reason: "toolUse", message: buildAssistant([toolCall], "toolUse") }],
+        [
+          {
+            type: "done",
+            reason: "stop",
+            message: buildAssistant([{ type: "text", text: "phase changed" }]),
+          },
+        ],
+      ],
+    }),
+    getModel: () => TEST_MODEL,
+    approvalMethod: "auto",
+    reviewToolApproval: async () => {
+      loop.setCurrentPhase("plan");
+      return { outcome: "approved", summary: "approved before phase transition" };
+    },
+  });
+  loop.setCurrentPhase("implement");
+
+  await loop.submit("approve then switch phase");
+
+  assert.equal(executions, 0);
+  const result = loop
+    .getMessages()
+    .find((message) => message.role === "toolResult" && message.toolCallId === toolCall.id);
+  assert.equal(result?.isError, true);
+  assert.match(result?.content[0]?.text ?? "", /phase-inactive tool: approved_implement_action/u);
 });
 
 void test("SparkAgentLoop forwards getReasoning into stream options.reasoning", async () => {
@@ -314,7 +641,7 @@ void test("SparkAgentLoop runs a single-turn stop with one streamed text chunk",
   assert.equal(host.isIdle(), true);
   assert.equal(loop.getMessages().length, 2, "user + assistant");
   const types = events.filter((event) => event.type !== "view_event").map((event) => event.type);
-  assert.deepEqual(types.slice(0, 2), ["user_message", "stream_event"]);
+  assert.deepEqual(types.slice(0, 3), ["user_message", "prompt_manifest", "stream_event"]);
   assert.equal(events.find((event) => event.type === "turn_complete") !== undefined, true);
 });
 
@@ -554,12 +881,31 @@ void test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", as
     streamFunction: SparkAgentStreamFunction;
     maxRoundtrips?: number;
     expectedError?: RegExp;
+    expectedStopReason?: AssistantMessage["stopReason"];
+    expectedStatus: SparkRunOutcome["status"];
   }> = [
     {
       name: "normal stop",
       streamFunction: makeFakeStream({
         rounds: [[{ type: "done", reason: "stop", message: stopAssistant }]],
       }),
+      expectedStatus: "completed",
+    },
+    {
+      name: "provider abort",
+      streamFunction: makeFakeStream({
+        rounds: [
+          [
+            {
+              type: "done",
+              reason: "aborted",
+              message: buildAssistant([], "aborted"),
+            },
+          ],
+        ],
+      }),
+      expectedStatus: "aborted",
+      expectedStopReason: "aborted",
     },
     {
       name: "stream throws",
@@ -575,6 +921,8 @@ void test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", as
           result: async () => stopAssistant,
         }) as ReturnType<SparkAgentStreamFunction>,
       expectedError: /stream boom/,
+      expectedStopReason: "error",
+      expectedStatus: "failed",
     },
     {
       name: "no assistant",
@@ -588,6 +936,8 @@ void test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", as
           result: async () => undefined as AssistantMessage,
         }) as ReturnType<SparkAgentStreamFunction>,
       expectedError: /stream produced no assistant message/,
+      expectedStopReason: "error",
+      expectedStatus: "failed",
     },
     {
       name: "max roundtrips",
@@ -595,12 +945,26 @@ void test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", as
         rounds: [[{ type: "done", reason: "toolUse", message: toolUseAssistant }]],
       }),
       maxRoundtrips: 1,
+      expectedError: /agent loop hit maxRoundtrips=1; stopping/,
+      expectedStopReason: "error",
+      expectedStatus: "budget_exhausted",
+    },
+    {
+      name: "zero max roundtrips",
+      streamFunction: () => {
+        assert.fail("maxRoundtrips=0 must not start a model stream");
+      },
+      maxRoundtrips: 0,
+      expectedError: /agent loop hit maxRoundtrips=0; stopping/,
+      expectedStopReason: "error",
+      expectedStatus: "budget_exhausted",
     },
   ];
 
   for (const entry of cases) {
     const host = new SparkHostRuntime({ cwd: `/tmp/spark-agent-loop-test-${entry.name}` });
     const agentEndEvents: unknown[] = [];
+    const loopEvents: SparkAgentLoopEvent[] = [];
     host.on("agent_end", (event) => agentEndEvents.push(event));
     const loop = new SparkAgentLoop({
       host,
@@ -608,16 +972,56 @@ void test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", as
       getModel: () => TEST_MODEL,
       maxRoundtrips: entry.maxRoundtrips,
     });
+    loop.onEvent((event) => loopEvents.push(event));
 
-    await loop.submit(entry.name);
+    const outcome = await loop.submitWithOutcome(entry.name);
+    const result = outcome.assistant;
 
     assert.equal(agentEndEvents.length, 1, `${entry.name} should emit agent_end exactly once`);
     assert.equal(loop.getState(), "idle", `${entry.name} should leave the loop idle`);
+    assert.equal(outcome.status, entry.expectedStatus, `${entry.name} should classify its outcome`);
+    assert.equal(loop.getLastOutcome()?.status, entry.expectedStatus);
+    assert.equal(
+      loopEvents.filter((event) => event.type === "run_outcome").length,
+      1,
+      `${entry.name} should publish exactly one explicit outcome`,
+    );
+    if (entry.expectedStopReason) {
+      assert.equal(
+        result?.stopReason,
+        entry.expectedStopReason,
+        `${entry.name} should return its terminal stop reason`,
+      );
+      assert.equal(
+        loop.getMessages().at(-1)?.stopReason,
+        entry.expectedStopReason,
+        `${entry.name} should persist its terminal stop reason`,
+      );
+      assert.equal(
+        (agentEndEvents[0] as { messages?: AssistantMessage[] }).messages?.[0]?.stopReason,
+        entry.expectedStopReason,
+        `${entry.name} should expose its terminal stop reason on agent_end`,
+      );
+      if (entry.expectedError) {
+        assert.match(
+          result?.errorMessage ?? "",
+          entry.expectedError,
+          `${entry.name} should return the terminal error detail`,
+        );
+      }
+    }
     if (entry.expectedError) {
       assert.match(
         (agentEndEvents[0] as { errorMessage?: string }).errorMessage ?? "",
         entry.expectedError,
         `${entry.name} should expose the terminal error on agent_end`,
+      );
+      assert.equal(
+        loopEvents.some(
+          (event) => event.type === "error" && entry.expectedError?.test(event.message),
+        ),
+        true,
+        `${entry.name} should publish the terminal error`,
       );
     }
   }
@@ -765,6 +1169,311 @@ void test("SparkAgentLoop dispatches tool calls and feeds tool results back into
     ),
     true,
   );
+});
+
+void test("SparkAgentLoop runs an explicitly safe read batch concurrently and commits results in source order", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-parallel-read-test" });
+  const started: string[] = [];
+  const releases = new Map<string, () => void>();
+  const events: SparkAgentLoopEvent[] = [];
+  for (const name of ["read_alpha", "read_beta"]) {
+    host.registerTool({
+      name,
+      description: name,
+      parameters: { type: "object" },
+      policy: { effect: "read", executionMode: "parallel", approval: "none" },
+      async execute(toolCallId) {
+        started.push(toolCallId);
+        await new Promise<void>((resolve) => releases.set(toolCallId, resolve));
+        return { content: [{ type: "text", text: `result:${toolCallId}` }] };
+      },
+    });
+  }
+  const toolCalls: ToolCall[] = [
+    { type: "toolCall", id: "tc-alpha", name: "read_alpha", arguments: {} },
+    { type: "toolCall", id: "tc-beta", name: "read_beta", arguments: {} },
+  ];
+  const firstAssistant = buildAssistant(toolCalls, "toolUse");
+  const finalAssistant = buildAssistant([{ type: "text", text: "reads complete" }]);
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: makeFakeStream({
+      rounds: [
+        [{ type: "done", reason: "toolUse", message: firstAssistant }],
+        [{ type: "done", reason: "stop", message: finalAssistant }],
+      ],
+    }),
+    getModel: () => TEST_MODEL,
+  });
+  loop.onEvent((event) => events.push(event));
+
+  const run = loop.submit("read two files");
+  await waitForCondition(
+    () => started.length === 2,
+    "both explicitly safe reads should start before either one completes",
+  );
+  releases.get("tc-beta")!();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  releases.get("tc-alpha")!();
+  await run;
+
+  assert.deepEqual(started, ["tc-alpha", "tc-beta"]);
+  const results = loop.getMessages().filter((message) => message.role === "toolResult");
+  assert.deepEqual(
+    results.map((message) => message.toolCallId),
+    ["tc-alpha", "tc-beta"],
+  );
+  assert.deepEqual(
+    results.map((message) => message.content[0]?.text),
+    ["result:tc-alpha", "result:tc-beta"],
+  );
+  assert.deepEqual(
+    events
+      .filter(
+        (event): event is Extract<SparkAgentLoopEvent, { type: "tool_result" }> =>
+          event.type === "tool_result",
+      )
+      .map((event) => event.message.toolCallId),
+    ["tc-alpha", "tc-beta"],
+  );
+});
+
+void test("SparkAgentLoop treats a mixed read/write batch as one sequential barrier", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-mixed-tool-test" });
+  const started: string[] = [];
+  const releases = new Map<string, () => void>();
+  host.registerTool({
+    name: "parallel_read",
+    description: "explicitly safe read",
+    parameters: { type: "object" },
+    effect: "read",
+    executionMode: "parallel",
+    async execute(toolCallId) {
+      started.push(toolCallId);
+      await new Promise<void>((resolve) => releases.set(toolCallId, resolve));
+      return { content: [{ type: "text", text: toolCallId }] };
+    },
+  });
+  host.registerTool({
+    name: "write_barrier",
+    description: "stateful write",
+    parameters: { type: "object" },
+    effect: "local_write",
+    executionMode: "sequential",
+    async execute(toolCallId) {
+      started.push(toolCallId);
+      return { content: [{ type: "text", text: toolCallId }] };
+    },
+  });
+  const toolCalls: ToolCall[] = [
+    { type: "toolCall", id: "tc-read-a", name: "parallel_read", arguments: {} },
+    { type: "toolCall", id: "tc-read-b", name: "parallel_read", arguments: {} },
+    { type: "toolCall", id: "tc-write", name: "write_barrier", arguments: {} },
+  ];
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: makeFakeStream({
+      rounds: [
+        [{ type: "done", reason: "toolUse", message: buildAssistant(toolCalls, "toolUse") }],
+        [
+          {
+            type: "done",
+            reason: "stop",
+            message: buildAssistant([{ type: "text", text: "done" }]),
+          },
+        ],
+      ],
+    }),
+    getModel: () => TEST_MODEL,
+  });
+
+  const run = loop.submit("read then write");
+  await waitForCondition(() => started.length === 1, "the first read should start");
+  assert.deepEqual(started, ["tc-read-a"]);
+  releases.get("tc-read-a")!();
+  await waitForCondition(
+    () => started.length === 2,
+    "the second read should start after the first",
+  );
+  assert.deepEqual(started, ["tc-read-a", "tc-read-b"]);
+  releases.get("tc-read-b")!();
+  await run;
+
+  assert.deepEqual(started, ["tc-read-a", "tc-read-b", "tc-write"]);
+});
+
+void test("SparkAgentLoop keeps tools without explicit execution metadata sequential", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-unknown-policy-test" });
+  const started: string[] = [];
+  const releases = new Map<string, () => void>();
+  for (const name of ["unknown_a", "unknown_b"]) {
+    host.registerTool({
+      name,
+      description: name,
+      parameters: { type: "object" },
+      async execute(toolCallId) {
+        started.push(toolCallId);
+        await new Promise<void>((resolve) => releases.set(toolCallId, resolve));
+        return { content: [{ type: "text", text: toolCallId }] };
+      },
+    });
+  }
+  const toolCalls: ToolCall[] = [
+    { type: "toolCall", id: "tc-unknown-a", name: "unknown_a", arguments: {} },
+    { type: "toolCall", id: "tc-unknown-b", name: "unknown_b", arguments: {} },
+  ];
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: makeFakeStream({
+      rounds: [
+        [{ type: "done", reason: "toolUse", message: buildAssistant(toolCalls, "toolUse") }],
+        [
+          {
+            type: "done",
+            reason: "stop",
+            message: buildAssistant([{ type: "text", text: "done" }]),
+          },
+        ],
+      ],
+    }),
+    getModel: () => TEST_MODEL,
+  });
+
+  const run = loop.submit("call unknown-policy tools");
+  await waitForCondition(() => started.length === 1, "the first unknown-policy tool should start");
+  assert.deepEqual(started, ["tc-unknown-a"]);
+  releases.get("tc-unknown-a")!();
+  await waitForCondition(
+    () => started.length === 2,
+    "the second unknown-policy tool should wait for the first",
+  );
+  releases.get("tc-unknown-b")!();
+  await run;
+
+  assert.deepEqual(started, ["tc-unknown-a", "tc-unknown-b"]);
+});
+
+void test("SparkAgentLoop bounds parallel read batches to four calls by default", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-parallel-bound-test" });
+  const started: string[] = [];
+  const releases = new Map<string, () => void>();
+  let active = 0;
+  let maxActive = 0;
+  host.registerTool({
+    name: "bounded_read",
+    description: "bounded parallel read",
+    parameters: { type: "object" },
+    effect: "read",
+    executionMode: "parallel",
+    async execute(toolCallId) {
+      started.push(toolCallId);
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((resolve) =>
+        releases.set(toolCallId, () => {
+          releases.delete(toolCallId);
+          resolve();
+        }),
+      );
+      active -= 1;
+      return { content: [{ type: "text", text: toolCallId }] };
+    },
+  });
+  const toolCalls: ToolCall[] = Array.from({ length: 6 }, (_, index) => ({
+    type: "toolCall",
+    id: `tc-bounded-${index}`,
+    name: "bounded_read",
+    arguments: {},
+  }));
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: makeFakeStream({
+      rounds: [
+        [{ type: "done", reason: "toolUse", message: buildAssistant(toolCalls, "toolUse") }],
+        [
+          {
+            type: "done",
+            reason: "stop",
+            message: buildAssistant([{ type: "text", text: "done" }]),
+          },
+        ],
+      ],
+    }),
+    getModel: () => TEST_MODEL,
+  });
+
+  const run = loop.submit("run bounded reads");
+  await waitForCondition(() => started.length === 4, "the first four reads should fill the pool");
+  assert.equal(active, 4);
+  assert.equal(maxActive, 4);
+  for (const release of [...releases.values()]) release();
+  await waitForCondition(
+    () => started.length === 6,
+    "the final reads should start after capacity frees",
+  );
+  assert.equal(active, 2);
+  for (const release of [...releases.values()]) release();
+  await run;
+
+  assert.equal(maxActive, 4);
+  assert.deepEqual(
+    loop
+      .getMessages()
+      .filter((message) => message.role === "toolResult")
+      .map((message) => message.toolCallId),
+    toolCalls.map((toolCall) => toolCall.id),
+  );
+});
+
+void test("SparkAgentLoop isolates failures inside a parallel read batch", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-parallel-error-test" });
+  const executed: string[] = [];
+  host.registerTool({
+    name: "fallible_read",
+    description: "read with one failing call",
+    parameters: { type: "object" },
+    effect: "read",
+    executionMode: "parallel",
+    async execute(toolCallId) {
+      executed.push(toolCallId);
+      if (toolCallId === "tc-fail") throw new Error("read failed independently");
+      return { content: [{ type: "text", text: `ok:${toolCallId}` }] };
+    },
+  });
+  const toolCalls: ToolCall[] = [
+    { type: "toolCall", id: "tc-fail", name: "fallible_read", arguments: {} },
+    { type: "toolCall", id: "tc-ok", name: "fallible_read", arguments: {} },
+  ];
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: makeFakeStream({
+      rounds: [
+        [{ type: "done", reason: "toolUse", message: buildAssistant(toolCalls, "toolUse") }],
+        [
+          {
+            type: "done",
+            reason: "stop",
+            message: buildAssistant([{ type: "text", text: "done" }]),
+          },
+        ],
+      ],
+    }),
+    getModel: () => TEST_MODEL,
+  });
+
+  await loop.submit("run fallible reads");
+
+  assert.deepEqual(executed, ["tc-fail", "tc-ok"]);
+  const results = loop.getMessages().filter((message) => message.role === "toolResult");
+  assert.deepEqual(
+    results.map((message) => [message.toolCallId, message.isError]),
+    [
+      ["tc-fail", true],
+      ["tc-ok", false],
+    ],
+  );
+  assert.match(results[0]?.content[0]?.text ?? "", /read failed independently/);
+  assert.equal(results[1]?.content[0]?.text, "ok:tc-ok");
 });
 
 void test("SparkAgentLoop publishes ordered display-safe conversation parts without tool payloads", async () => {
@@ -1136,6 +1845,78 @@ void test("SparkAgentLoop records raw trace artifact for large lossy compacted t
   }
 });
 
+void test(
+  "SparkAgentLoop aborts a hanging raw recovery and keeps the compacted tool result paired",
+  { timeout: 2_000 },
+  async () => {
+    const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-raw-recovery-abort" });
+    let artifactCalls = 0;
+    let artifactStarted = false;
+    let artifactAborted = false;
+    host.registerTool({
+      name: "artifact",
+      description: "raw recovery sink that deliberately never resolves",
+      parameters: { type: "object" },
+      policy: { effect: "local_write", executionMode: "sequential", approval: "none" },
+      async execute(_toolCallId, _args, signal) {
+        artifactCalls += 1;
+        artifactStarted = true;
+        if (signal.aborted) artifactAborted = true;
+        signal.addEventListener(
+          "abort",
+          () => {
+            artifactAborted = true;
+          },
+          { once: true },
+        );
+        return await new Promise<never>(() => undefined);
+      },
+    });
+    const noisyOutput = `alpha${"\n".repeat(4_500)}omega`;
+    host.registerTool({
+      name: "cue_exec",
+      description: "compactable read-like output",
+      parameters: { type: "object" },
+      policy: { effect: "read", executionMode: "parallel", approval: "none" },
+      async execute() {
+        return { content: [{ type: "text", text: noisyOutput }] };
+      },
+    });
+    const toolCall: ToolCall = {
+      type: "toolCall",
+      id: "tc-hanging-raw-recovery",
+      name: "cue_exec",
+      arguments: {},
+    };
+    const loop = new SparkAgentLoop({
+      host,
+      streamFunction: makeFakeStream({
+        rounds: [
+          [{ type: "done", reason: "toolUse", message: buildAssistant([toolCall], "toolUse") }],
+        ],
+      }),
+      getModel: () => TEST_MODEL,
+      toolTimeoutMs: 60_000,
+    });
+
+    const running = loop.submitWithOutcome("produce a large compactable result");
+    await waitForCondition(() => artifactStarted, "raw artifact recovery should start");
+    loop.abort("switch_session");
+    const outcome = await running;
+
+    assert.equal(outcome.status, "aborted");
+    assert.equal(loop.getState(), "idle");
+    assert.equal(artifactCalls, 1, "raw recovery must not recursively persist itself");
+    assert.equal(artifactAborted, true);
+    const results = loop.getMessages().filter((message) => message.role === "toolResult");
+    assert.equal(results.length, 1);
+    assert.equal(results[0]?.toolCallId, toolCall.id);
+    assert.equal(results[0]?.isError, false);
+    assert.match(results[0]?.content[0]?.text ?? "", /\[4497 blank lines collapsed\]/u);
+    assert.doesNotMatch(results[0]?.content[0]?.text ?? "", /\[recovery\]/u);
+  },
+);
+
 void test("SparkAgentLoop preserves exact-content tool results", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-exact-compaction-test" });
   const exactOutput = "line1\n\n\n\n\nline2";
@@ -1295,7 +2076,7 @@ void test("SparkAgentLoop blocks approval-required tools without explicit approv
     name: "dangerous",
     description: "requires approval",
     parameters: { type: "object" },
-    requiresApproval: true,
+    policy: { effect: "destructive", executionMode: "sequential", approval: "required" },
     async execute() {
       toolCalls += 1;
       return { content: [{ type: "text", text: "should not run" }] };
@@ -1667,6 +2448,51 @@ void test("SparkAgentLoop unknown tool returns an isError tool result without th
   assert.match(JSON.stringify(toolResult), /unknown tool: missing/);
 });
 
+void test("SparkAgentLoop refuses a model call to a registered but inactive tool", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-inactive-tool-test" });
+  let executed = false;
+  host.registerTool({
+    name: "inactive_write",
+    description: "must remain behind the active-tool boundary",
+    parameters: { type: "object" },
+    policy: { effect: "local_write", executionMode: "sequential", approval: "none" },
+    async execute() {
+      executed = true;
+      return { content: [{ type: "text", text: "should not execute" }] };
+    },
+  });
+  host.setActiveTools([]);
+  const toolCall: ToolCall = {
+    type: "toolCall",
+    id: "tc-inactive",
+    name: "inactive_write",
+    arguments: {},
+  };
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: makeFakeStream({
+      rounds: [
+        [{ type: "done", reason: "toolUse", message: buildAssistant([toolCall], "toolUse") }],
+        [
+          {
+            type: "done",
+            reason: "stop",
+            message: buildAssistant([{ type: "text", text: "inactive call rejected" }]),
+          },
+        ],
+      ],
+    }),
+    getModel: () => TEST_MODEL,
+  });
+
+  await loop.submit("attempt inactive tool");
+
+  assert.equal(executed, false);
+  const toolResult = loop.getMessages().find((message) => message.role === "toolResult");
+  assert.equal((toolResult as { isError?: boolean } | undefined)?.isError, true);
+  assert.match(JSON.stringify(toolResult), /inactive tool: inactive_write/u);
+});
+
 void test("SparkAgentLoop drainOutboxIntoMessages turns sendUserMessage envelopes into next-turn user messages", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-test" });
   const firstAssistant = buildAssistant([{ type: "text", text: "first turn" }]);
@@ -1731,7 +2557,13 @@ void test("SparkAgentLoop triggerTurn queues hidden custom messages without visi
   });
 
   host.sendMessage(
-    { customType: "spark-goal-request", content: "queued goal instruction", display: false },
+    {
+      customType: "spark-goal-request",
+      content: "queued goal instruction",
+      display: false,
+      authority: "runtime_control",
+      trust: "trusted",
+    },
     { deliverAs: "followUp", triggerTurn: true },
   );
 
@@ -1741,10 +2573,87 @@ void test("SparkAgentLoop triggerTurn queues hidden custom messages without visi
   assert.equal(loop.getState(), "idle");
   assert.equal(contextMessages.length, 1);
   assert.equal(contextMessages[0]?.role, "user");
-  assert.match(String(contextMessages[0]?.content), /\[spark-goal-request\]/);
+  assert.match(String(contextMessages[0]?.content), /<spark_runtime_control trust="trusted"/);
+  assert.match(String(contextMessages[0]?.content), /custom_type="spark-goal-request"/);
   assert.match(String(contextMessages[0]?.content), /queued goal instruction/);
   assert.match(JSON.stringify(loop.getMessages()), /spark-goal-request/);
   assert.equal(eventTypes.includes("user_message"), false);
+});
+
+void test("SparkAgentLoop defaults extension custom messages to untrusted runtime data", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-untrusted-custom-test" });
+  const finalAssistant = buildAssistant([{ type: "text", text: "observed" }]);
+  let contextMessages: Message[] = [];
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: (_model, context) => {
+      contextMessages = [...context.messages];
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "done", reason: "stop", message: finalAssistant };
+        },
+        result: async () => finalAssistant,
+      } as ReturnType<SparkAgentStreamFunction>;
+    },
+    getModel: () => TEST_MODEL,
+  });
+  const completed = new Promise<void>((resolve) => {
+    loop.onEvent((event) => {
+      if (event.type === "turn_complete") resolve();
+    });
+  });
+
+  host.sendMessage(
+    { customType: "spark-role-result", content: "model-authored result", display: false },
+    { deliverAs: "followUp", triggerTurn: true },
+  );
+
+  await completed;
+  assert.match(String(contextMessages[0]?.content), /<spark_runtime_data trust="untrusted"/u);
+  const item = loop.getPromptItems().find((entry) => entry.customType === "spark-role-result");
+  assert.equal(item?.authority, "runtime_data");
+  assert.equal(item?.trust, "untrusted");
+});
+
+void test("SparkAgentLoop retains nextTurn runtime data in its originating session", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-next-turn-test" });
+  const contexts: Message[][] = [];
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: (_model, context) => {
+      contexts.push([...context.messages]);
+      const message = buildAssistant([{ type: "text", text: "ok" }]);
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "done", reason: "stop", message };
+        },
+        result: async () => message,
+      } as ReturnType<SparkAgentStreamFunction>;
+    },
+    getModel: () => TEST_MODEL,
+  });
+
+  loop.setViewSessionId("session-a");
+  host.sendMessage(
+    { customType: "spark-memory-checkpoint", content: "checkpoint payload", display: false },
+    { deliverAs: "nextTurn", triggerTurn: false },
+  );
+  loop.setViewSessionId("session-b");
+  await loop.submit("session b prompt");
+
+  assert.equal(contexts.length, 1);
+  assert.equal(contexts[0]?.length, 1);
+  assert.equal(contexts[0]?.[0]?.content, "session b prompt");
+
+  loop.replaceMessages([]);
+  loop.setViewSessionId("session-a");
+  await loop.submit("session a prompt");
+
+  assert.equal(contexts.length, 2);
+  assert.equal(contexts[1]?.length, 2);
+  assert.match(String(contexts[1]?.[0]?.content), /spark-memory-checkpoint/u);
+  assert.match(String(contexts[1]?.[0]?.content), /checkpoint payload/u);
+  assert.equal(contexts[1]?.[1]?.content, "session a prompt");
 });
 
 void test("SparkAgentLoop triggerTurn uses queued user instruction without duplicate custom", async () => {
@@ -1785,13 +2694,19 @@ void test("SparkAgentLoop triggerTurn runs hidden before_agent_start context wit
   let streamCalls = 0;
   let contextMessages: Message[] = [];
   const eventTypes: string[] = [];
-  host.on("before_agent_start", () => ({
-    message: {
-      customType: "spark-mode-context",
-      content: "hidden context payload",
-      display: false,
-    },
-  }));
+  const lifecycleSources: unknown[] = [];
+  host.on("before_agent_start", (event) => {
+    lifecycleSources.push((event as { source?: unknown }).source);
+    return {
+      message: {
+        customType: "spark-mode-context",
+        content: "hidden context payload",
+        display: false,
+        authority: "runtime_control",
+        trust: "trusted",
+      },
+    };
+  });
   const fake: SparkAgentStreamFunction = (_model, context) => {
     streamCalls += 1;
     contextMessages = [...context.messages];
@@ -1821,10 +2736,19 @@ void test("SparkAgentLoop triggerTurn runs hidden before_agent_start context wit
   assert.equal(loop.getState(), "idle");
   assert.equal(contextMessages.length, 1);
   assert.equal(contextMessages[0]?.role, "user");
-  assert.match(String(contextMessages[0]?.content), /\[spark-mode-context\]/);
+  assert.match(String(contextMessages[0]?.content), /<spark_runtime_control trust="trusted"/);
+  assert.match(String(contextMessages[0]?.content), /custom_type="spark-mode-context"/);
   assert.match(String(contextMessages[0]?.content), /hidden context payload/);
   assert.doesNotMatch(JSON.stringify(loop.getMessages()), /spark-goal-request/);
   assert.equal(eventTypes.includes("user_message"), false);
+  assert.deepEqual(lifecycleSources, ["triggerTurn"]);
+  const runtimeItem = loop
+    .getPromptItems()
+    .find((item) => item.customType === "spark-mode-context");
+  assert.equal(runtimeItem?.authority, "runtime_control");
+  assert.equal(runtimeItem?.trust, "trusted");
+  assert.equal(runtimeItem?.visibility, "hidden");
+  assert.equal(runtimeItem?.persistence, "transient");
 });
 
 void test("SparkAgentLoop abort cancels the in-flight stream and returns to idle", async () => {
@@ -1855,13 +2779,156 @@ void test("SparkAgentLoop abort cancels the in-flight stream and returns to idle
     } as ReturnType<SparkAgentStreamFunction>;
   };
   const loop = new SparkAgentLoop({ host, streamFunction: fake, getModel: () => TEST_MODEL });
-  const promise = loop.submit("hang");
+  const promise = loop.submitWithOutcome("hang");
   // Abort after a microtask to ensure the loop entered streaming
   await new Promise<void>((resolve) => setImmediate(resolve));
   loop.abort("test_abort");
-  await promise;
+  const outcome = await promise;
   assert.equal(aborted, true, "abort signal fired");
+  assert.equal(outcome.status, "aborted");
+  assert.equal(outcome.assistant.stopReason, "aborted");
+  if (outcome.status === "aborted") assert.equal(outcome.reason, "test_abort");
   assert.equal(loop.getState(), "idle");
+});
+
+void test("SparkAgentLoop classifies a provider AbortError caused by user abort as aborted", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-abort-throw-test" });
+  const fake: SparkAgentStreamFunction = (_model, _context, options) =>
+    ({
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => {
+            await new Promise<void>((resolve) => {
+              options?.signal?.addEventListener("abort", () => resolve(), { once: true });
+            });
+            const error = new Error("provider cancelled request");
+            error.name = "AbortError";
+            throw error;
+          },
+        };
+      },
+      result: async () => buildAssistant([], "aborted"),
+    }) as ReturnType<SparkAgentStreamFunction>;
+  const loop = new SparkAgentLoop({ host, streamFunction: fake, getModel: () => TEST_MODEL });
+
+  const running = loop.submitWithOutcome("hang then throw");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  loop.abort("switch_session");
+  const outcome = await running;
+
+  assert.equal(outcome.status, "aborted");
+  if (outcome.status === "aborted") assert.equal(outcome.reason, "switch_session");
+  assert.equal(loop.getState(), "idle");
+});
+
+void test("SparkAgentLoop abort releases a pending human tool approval", async () => {
+  let toolCalls = 0;
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-agent-loop-approval-abort-test",
+    ui: {
+      interaction: async () => await new Promise<never>(() => undefined),
+    },
+  });
+  host.registerTool({
+    name: "approval_wait",
+    description: "wait for human approval",
+    parameters: { type: "object" },
+    policy: { effect: "local_write", approval: "required" },
+    async execute() {
+      toolCalls += 1;
+      return { content: [{ type: "text", text: "must not run" }] };
+    },
+  } as never);
+  const toolCall: ToolCall = {
+    type: "toolCall",
+    id: "tc-approval-abort",
+    name: "approval_wait",
+    arguments: {},
+  };
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: makeFakeStream({
+      rounds: [
+        [{ type: "done", reason: "toolUse", message: buildAssistant([toolCall], "toolUse") }],
+      ],
+    }),
+    getModel: () => TEST_MODEL,
+    approvalMethod: "human",
+    interactionTimeoutMs: 60_000,
+  });
+
+  const running = loop.submitWithOutcome("ask then cancel");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  loop.abort("switch_session");
+  const outcome = await running;
+
+  assert.equal(outcome.status, "aborted");
+  assert.equal(toolCalls, 0);
+  assert.equal(loop.getState(), "idle");
+});
+
+void test("SparkAgentLoop pairs every sequential tool call with an aborted result", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-sequential-abort-test" });
+  let firstStarted = false;
+  let secondExecutions = 0;
+  host.registerTool({
+    name: "slow_sequential_tool",
+    description: "waits until the run is aborted",
+    parameters: { type: "object" },
+    policy: { effect: "local_write", executionMode: "sequential", approval: "none" },
+    async execute(_toolCallId, _params, signal) {
+      firstStarted = true;
+      await new Promise<never>((_resolve, reject) => {
+        if (signal.aborted) {
+          reject(signal.reason);
+          return;
+        }
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+      return { content: [{ type: "text", text: "unreachable" }] };
+    },
+  });
+  host.registerTool({
+    name: "later_sequential_tool",
+    description: "must be paired but not executed after abort",
+    parameters: { type: "object" },
+    policy: { effect: "local_write", executionMode: "sequential", approval: "none" },
+    async execute() {
+      secondExecutions += 1;
+      return { content: [{ type: "text", text: "must not run" }] };
+    },
+  });
+  const toolCalls: ToolCall[] = [
+    { type: "toolCall", id: "tc-abort-first", name: "slow_sequential_tool", arguments: {} },
+    { type: "toolCall", id: "tc-abort-later", name: "later_sequential_tool", arguments: {} },
+  ];
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: makeFakeStream({
+      rounds: [
+        [{ type: "done", reason: "toolUse", message: buildAssistant(toolCalls, "toolUse") }],
+      ],
+    }),
+    getModel: () => TEST_MODEL,
+  });
+
+  const running = loop.submitWithOutcome("start then abort sequential tools");
+  await waitForCondition(() => firstStarted, "the first sequential tool should start");
+  loop.abort("switch_session");
+  const outcome = await running;
+
+  assert.equal(outcome.status, "aborted");
+  assert.equal(secondExecutions, 0);
+  const results = loop.getMessages().filter((message) => message.role === "toolResult");
+  assert.deepEqual(
+    results.map((message) => message.toolCallId),
+    ["tc-abort-first", "tc-abort-later"],
+  );
+  assert.deepEqual(
+    results.map((message) => message.isError),
+    [true, true],
+  );
+  assert.match(results[1]?.content[0]?.text ?? "", /skipped because the agent was aborted/u);
 });
 
 void test("SparkAgentLoop refuses concurrent submit while in flight", async () => {

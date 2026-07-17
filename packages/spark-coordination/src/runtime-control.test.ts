@@ -93,6 +93,13 @@ describe("runtime control command outbox", () => {
       attemptCount: 1,
     });
 
+    recordRuntimeControlCommandAck(h.db, {
+      runtimeId: h.runtimeId,
+      commandId: command.commandId,
+      payload: { accepted: true },
+      acknowledgedAt: "2026-07-15T00:00:01.500Z",
+    });
+    expect(requireRuntimeControlCommand(h.db, command.commandId).status).toBe("accepted");
     expect(
       recoverUnacknowledgedRuntimeControlCommands(h.db, h.runtimeId, "2026-07-15T00:00:02.000Z"),
     ).toBe(1);
@@ -186,6 +193,32 @@ describe("runtime control command outbox", () => {
           idempotencyKey: conflictingKey,
           workspaceId: h.workspaceId,
           payload: { kind: "workspace.snapshot.request", scope: "workspace" },
+        }),
+      "IDEMPOTENCY_CONFLICT",
+    );
+    const sessionKey = createId("idem");
+    const invocationId = createId("inv");
+    submitRuntimeControlCommand(h.db, {
+      runtimeId: h.runtimeId,
+      idempotencyKey: sessionKey,
+      sessionId: createId("sess"),
+      payload: {
+        kind: "turn.cancel.request",
+        scope: "daemon",
+        payload: { invocationId },
+      },
+    });
+    expectRuntimeControlError(
+      () =>
+        submitRuntimeControlCommand(h.db, {
+          runtimeId: h.runtimeId,
+          idempotencyKey: sessionKey,
+          sessionId: createId("sess"),
+          payload: {
+            kind: "turn.cancel.request",
+            scope: "daemon",
+            payload: { invocationId },
+          },
         }),
       "IDEMPOTENCY_CONFLICT",
     );

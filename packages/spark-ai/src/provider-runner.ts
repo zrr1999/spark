@@ -8,6 +8,7 @@ import type {
   ThinkingContent,
   ToolCall,
 } from "@earendil-works/pi-ai";
+import { clampOpenAIPromptCacheKey } from "@earendil-works/pi-ai/api/openai-prompt-cache";
 
 import {
   materializeRouteModel,
@@ -48,6 +49,13 @@ export interface SparkWorkflowModelRunResponse {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * pi-ai exposes an attempt count rather than an unbounded mode. The enclosing
+ * agent-loop signal and stream deadline are the real retry budget, so this
+ * sentinel removes the count limit without permitting an immortal request.
+ */
+export const SPARK_PROVIDER_TRANSPORT_MAX_RETRIES = Number.MAX_SAFE_INTEGER;
+
 export function createProviderRegistryStreamFunction(
   registry: SparkProviderRegistry,
   runnerOptions: ProviderRegistryRunnerOptions = {},
@@ -75,14 +83,29 @@ function createResolverBackedProviderStream(
     ...(options?.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
   });
   const model = materializeRouteModel(profile, decision.route);
-  const streamOptions = withOpenAiCompatiblePromptCacheKey(
-    withResolvedApiKey(options, runnerOptions.resolveApiKey?.(provider, selection)),
+  const streamOptions = withPiAiOpenAiResponsesPromptCacheBridge(
+    model.api,
+    withOpenAiCompatiblePromptCacheKey(
+      withProviderTransportRetries(
+        withResolvedApiKey(options, runnerOptions.resolveApiKey?.(provider, selection)),
+      ),
+    ),
   );
   const stream = normalizeProviderStream(
     provider.streamSimple(model as Model<ProviderConfig["api"]>, context, streamOptions),
     selection.providerName,
   );
   return retagAssistantMessageStream(stream, resolveSparkModelMessageIdentity(profile));
+}
+
+function withProviderTransportRetries(
+  options: StreamOptions | undefined,
+): StreamOptions | undefined {
+  // Only install count-unbounded retries when a caller supplies cancellation.
+  // Workflow/model calls without a signal retain their provider defaults rather
+  // than becoming impossible to stop.
+  if (!options?.signal || options.maxRetries !== undefined) return options;
+  return { ...options, maxRetries: SPARK_PROVIDER_TRANSPORT_MAX_RETRIES } as StreamOptions;
 }
 
 export function createProviderRegistryWorkflowModelRunner(
@@ -172,6 +195,40 @@ export function withOpenAiCompatiblePromptCacheKey(
       prompt_cache_key: key,
     },
   } as StreamOptions;
+}
+
+/**
+ * pi-ai 0.80.x does not read Spark's explicit prompt-cache option. Bridge it at
+ * the payload boundary without overloading `sessionId`, which also controls
+ * provider affinity headers. Keep a caller-supplied session id as the stronger
+ * affinity signal, and never leak this workaround to other APIs.
+ */
+function withPiAiOpenAiResponsesPromptCacheBridge(
+  transportApi: ProviderConfig["api"],
+  options: StreamOptions | undefined,
+): StreamOptions | undefined {
+  if (
+    transportApi !== "openai-responses" ||
+    options?.sessionId !== undefined ||
+    options?.cacheRetention === "none"
+  ) {
+    return options;
+  }
+  const key = clampOpenAIPromptCacheKey(promptCacheKeyFromOptions(options));
+  if (!key) return options;
+  const onPayload = options?.onPayload;
+  return {
+    ...(options ?? {}),
+    onPayload: async (payload, model) => {
+      const payloadWithKey = isRecord(payload) ? { ...payload, prompt_cache_key: key } : payload;
+      const replacement = await onPayload?.(payloadWithKey, model);
+      return replacement ?? payloadWithKey;
+    },
+  } as StreamOptions;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function promptCacheKeyFromOptions(options: StreamOptions | undefined): string | undefined {

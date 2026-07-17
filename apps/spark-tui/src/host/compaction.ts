@@ -1,6 +1,10 @@
 /** Native Spark CLI compaction helpers aligned with current Pi JSONL sessions. */
 
 import { randomUUID } from "node:crypto";
+import {
+  SPARK_PROMPT_ITEM_METADATA_KEY,
+  parseSparkPromptItemMetadata,
+} from "@zendev-lab/spark-turn";
 
 import type {
   SparkBranchSummaryEntry,
@@ -401,12 +405,25 @@ function messageFromEntryForCompaction(entry: SparkSessionEntry): SparkSessionMe
   if (entry.type === "message") return (entry as SparkSessionMessageEntry).message;
   if (entry.type === "custom_message") {
     const custom = entry as SparkCustomMessageEntry;
+    const details = isRecord(custom.details) ? custom.details : {};
+    const metadata = parseSparkPromptItemMetadata(details[SPARK_PROMPT_ITEM_METADATA_KEY]);
+    const authority =
+      metadata?.authority === "system" ||
+      metadata?.authority === "developer" ||
+      metadata?.authority === "runtime_control" ||
+      metadata?.authority === "runtime_data"
+        ? metadata.authority
+        : "runtime_data";
     return {
       role: "custom",
       content: custom.content,
       customType: custom.customType,
       display: custom.display,
-      details: custom.details,
+      details,
+      promptAuthority: authority,
+      promptTrust: metadata?.trust ?? "untrusted",
+      promptVisibility: custom.display === false ? "hidden" : (metadata?.visibility ?? "visible"),
+      promptPersistence: "session",
       timestamp: Date.parse(custom.timestamp),
     };
   }
@@ -476,9 +493,18 @@ function summarizeSparkMessages(messages: readonly SparkSessionMessage[], limit:
     .map((message, index) => {
       const text = extractMessageText(message).replace(/\s+/gu, " ").trim();
       const truncated = text.length > 220 ? `${text.slice(0, 217)}...` : text;
-      return `${index + 1}. ${message.role}: ${truncated || "[non-text content]"}`;
+      const authority = typeof message.promptAuthority === "string" ? message.promptAuthority : "";
+      const trust = typeof message.promptTrust === "string" ? message.promptTrust : "";
+      const promptLabel = authority
+        ? ` [authority=${authority}${trust ? `, trust=${trust}` : ""}]`
+        : "";
+      return `${index + 1}. ${message.role}${promptLabel}: ${truncated || "[non-text content]"}`;
     })
     .join("\n");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function extractMessageText(message: SparkSessionMessage): string {

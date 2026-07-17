@@ -8,7 +8,8 @@ import {
   type SparkSessionRegistryRecord,
   type SparkThinkingLevel,
 } from "@zendev-lab/spark-protocol";
-import { requestSparkDaemonLocalRpc } from "@zendev-lab/spark-system";
+import type { RuntimeEphemeralSecretRequestContext } from "@zendev-lab/spark-coordination/runtime-model-channel-control";
+import { createCockpitRuntimeModelChannelClient } from "./cockpit-runtime-model-channel-client.ts";
 
 export interface CockpitModelControlClient {
   request(method: string, params?: unknown): Promise<unknown>;
@@ -20,8 +21,57 @@ export interface CockpitModelControlState {
   error?: string;
 }
 
+const runtimeClient = createCockpitRuntimeModelChannelClient();
 const daemonModelControlClient: CockpitModelControlClient = {
-  request: async (method, params) => await requestSparkDaemonLocalRpc<unknown>(method, params),
+  request: async (method, params) => {
+    const input = isRecord(params) ? params : {};
+    switch (method) {
+      case "model.catalog":
+        return await runtimeClient.catalog({
+          ...(typeof input.runtimeId === "string" ? { runtimeId: input.runtimeId } : {}),
+          ...(typeof input.sessionId === "string" ? { sessionId: input.sessionId } : {}),
+        });
+      case "model.default.set":
+        return await runtimeClient.setDefault({ model: input.model as SparkModelRef });
+      case "session.model.set":
+        return await runtimeClient.setSessionModel({
+          sessionId: String(input.sessionId ?? ""),
+          model: input.model as SparkModelRef,
+        });
+      case "session.thinking.set":
+        return await runtimeClient.setSessionThinking({
+          sessionId: String(input.sessionId ?? ""),
+          thinkingLevel: input.thinkingLevel as SparkThinkingLevel,
+        });
+      case "provider.auth.api-key.set":
+        return await runtimeClient.setProviderApiKey({
+          providerName: String(input.providerName ?? ""),
+          apiKey: String(input.apiKey ?? ""),
+          context: input.context as RuntimeEphemeralSecretRequestContext,
+        });
+      case "provider.auth.logout":
+        return await runtimeClient.logoutProvider({
+          providerName: String(input.providerName ?? ""),
+        });
+      case "provider.auth.login.start":
+        return await runtimeClient.startOAuth({
+          providerName: String(input.providerName ?? ""),
+        });
+      case "provider.auth.login.status":
+        return await runtimeClient.oauthStatus({ flowId: String(input.flowId ?? "") });
+      case "provider.auth.login.respond":
+        return await runtimeClient.respondOAuth({
+          flowId: String(input.flowId ?? ""),
+          promptId: String(input.promptId ?? ""),
+          value: String(input.value ?? ""),
+          context: input.context as RuntimeEphemeralSecretRequestContext,
+        });
+      case "provider.auth.login.cancel":
+        return await runtimeClient.cancelOAuth({ flowId: String(input.flowId ?? "") });
+      default:
+        throw new Error(`Unsupported Cockpit runtime model control method: ${method}`);
+    }
+  },
 };
 
 const emptySnapshot: SparkModelControlSnapshot = {
@@ -79,10 +129,11 @@ export async function setSessionThinkingLevelForCockpit(
 export async function setProviderApiKeyForCockpit(
   providerName: string,
   apiKey: string,
+  context: RuntimeEphemeralSecretRequestContext,
   client: CockpitModelControlClient = daemonModelControlClient,
 ): Promise<SparkModelControlSnapshot> {
   return parseSparkModelControlSnapshot(
-    await client.request("provider.auth.api-key.set", { providerName, apiKey }),
+    await client.request("provider.auth.api-key.set", { providerName, apiKey, context }),
   );
 }
 
@@ -118,10 +169,11 @@ export async function respondProviderOAuthForCockpit(
   flowId: string,
   promptId: string,
   value: string,
+  context: RuntimeEphemeralSecretRequestContext,
   client: CockpitModelControlClient = daemonModelControlClient,
 ): Promise<SparkAuthFlow> {
   return parseSparkAuthFlow(
-    await client.request("provider.auth.login.respond", { flowId, promptId, value }),
+    await client.request("provider.auth.login.respond", { flowId, promptId, value, context }),
   );
 }
 

@@ -22,6 +22,7 @@ export interface RouteContext {
   humanRequestId?: string | undefined;
   humanResponseId?: string | undefined;
   invocationId?: string | undefined;
+  sessionId?: string | undefined;
   ackOf?: string | undefined;
 }
 
@@ -44,6 +45,7 @@ export function runtimeEnvelope(
     humanRequestId: route.humanRequestId,
     humanResponseId: route.humanResponseId,
     invocationId: route.invocationId,
+    sessionId: route.sessionId,
     ackOf: route.ackOf,
     payload,
   };

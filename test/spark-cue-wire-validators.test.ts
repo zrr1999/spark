@@ -219,6 +219,8 @@ const okCases: SchemaCase[] = [
         protocol_version: 2,
         capabilities: ["cancel-execution"],
         instance_id: "00000000-0000-4000-8000-000000000001",
+        generation_id: "00000000-0000-4000-8000-000000000002",
+        ready: true,
       },
     },
     validateCueOkPayload,
@@ -576,6 +578,30 @@ void test("cue wire output encoding accepts legacy UTF-8 and canonical base64 on
         OutputChunkBinary: { id: "J1", stream: "stdout", base64: "not base64" },
       }),
     /canonical base64/,
+  );
+});
+
+void test("cue wire Pong accepts optional restart generation and readiness compatibly", () => {
+  const legacy = {
+    Pong: { version: "0.1.0", protocol_version: 2, capabilities: ["cancel-execution"] },
+  };
+  assert.doesNotThrow(() => validateCueOkPayload(legacy));
+  assert.doesNotThrow(() =>
+    validateCueOkPayload({
+      Pong: {
+        ...legacy.Pong,
+        generation_id: "00000000-0000-4000-8000-000000000002",
+        ready: false,
+      },
+    }),
+  );
+  assert.throws(
+    () => validateCueOkPayload({ Pong: { ...legacy.Pong, generation_id: 42 } }),
+    /generation_id: expected a string/,
+  );
+  assert.throws(
+    () => validateCueOkPayload({ Pong: { ...legacy.Pong, ready: "yes" } }),
+    /ready: expected a boolean/,
   );
 });
 

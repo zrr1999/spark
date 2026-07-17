@@ -115,7 +115,11 @@ export const sparkSessionCreateRequestSchema = z.preprocess(
   z.union([sparkWorkspaceSessionCreateRequestSchema, sparkDaemonSessionCreateRequestSchema]),
 );
 
-const sparkSessionListRequestBaseSchema = z.object({ includeArchived: z.boolean().optional() });
+const sparkSessionListRequestBaseSchema = z.object({
+  includeArchived: z.boolean().optional(),
+  cursor: z.string().trim().min(1).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+});
 const sparkWorkspaceSessionListRequestSchema = sparkSessionListRequestBaseSchema
   .extend({
     scope: sparkWorkspaceSessionScopeSchema,

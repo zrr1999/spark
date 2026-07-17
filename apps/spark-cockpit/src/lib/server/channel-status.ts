@@ -1,68 +1,60 @@
-import { readFile, mkdir, rename, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
 import { parseChannelsConfig, type ChannelsConfig } from "@zendev-lab/spark-channels";
+import type { RuntimeEphemeralSecretRequestContext } from "@zendev-lab/spark-coordination/runtime-model-channel-control";
 import {
-  requestSparkDaemonLocalRpc,
-  SparkDaemonLocalRpcUnavailableError,
-  touchPrivateFile,
-} from "@zendev-lab/spark-system";
+  parseSparkChannelControlSnapshot,
+  type SparkChannelConfigurationProjection,
+  type SparkChannelControlSnapshot,
+} from "@zendev-lab/spark-protocol";
 import type { MessagePlatformAdapter } from "../message-platform";
+import { createCockpitRuntimeModelChannelClient } from "./cockpit-runtime-model-channel-client.ts";
 
-export interface CockpitChannelStatusSnapshot {
-  workspaceId: string;
-  configPath: string;
-  available: boolean;
-  configured: boolean;
-  ingressEnabled: boolean;
-  state: "unavailable" | "unconfigured" | "running" | "stopped" | "degraded";
-  adapters: Array<{
-    id: string;
-    type: string;
-    running: boolean;
-    state: "stopped" | "connecting" | "connected" | "reconnecting" | "degraded";
-    error?: string;
-  }>;
-  routes: Array<{ name: string; adapter: string; recipient: string }>;
-  observedAt: string;
-  error?: string;
-  text: string;
-}
+export type CockpitChannelStatusSnapshot =
+  | SparkChannelControlSnapshot
+  | {
+      workspaceId: string;
+      available: false;
+      configured: false;
+      ingressEnabled: false;
+      state: "unavailable";
+      adapters: [];
+      routes: [];
+      configuration: SparkChannelConfigurationProjection;
+      observedAt: string;
+      error: string;
+      text: string;
+    };
 
 export interface CockpitChannelDaemonClient {
   status(workspaceId: string): Promise<unknown>;
-  configure(workspaceId: string, config: ChannelsConfig): Promise<unknown>;
+  configure(
+    workspaceId: string,
+    config: ChannelsConfig,
+    context: RuntimeEphemeralSecretRequestContext,
+  ): Promise<unknown>;
+  reload(workspaceId: string): Promise<unknown>;
 }
 
 export interface CockpitChannelEditorValues {
   feishuEnabled: boolean;
   feishuAppId: string;
-  /** Empty in the editor when a secret is already stored; leave blank to keep it. */
   feishuAppSecret: string;
   feishuAppSecretSet: boolean;
   infoflowEnabled: boolean;
   infoflowEndpoint: string;
   infoflowAppKey: string;
+  infoflowAppKeySet: boolean;
   infoflowAppAgentId: string;
-  /** Empty in the editor when a secret is already stored; leave blank to keep it. */
   infoflowAppSecret: string;
   infoflowAppSecretSet: boolean;
-  /** Comma/space-separated private sender allowlist; empty = allow all private. */
   infoflowAllowedUserIds: string;
   infoflowGroupPolicy: "disabled" | "allowlist" | "open";
-  /** Which messages in an allowed group become Spark turns. */
   infoflowGroupTrigger: "mention" | "command" | "all";
-  /** Comma/space-separated group ids when policy is allowlist. */
   infoflowAllowedGroupIds: string;
-  /** Custom Infoflow system-prompt overlay (operator copy). */
   infoflowSystemPrompt: string;
   qqbotEnabled: boolean;
   qqbotAppId: string;
-  /** Empty in the editor when a secret is already stored; leave blank to keep it. */
   qqbotClientSecret: string;
   qqbotClientSecretSet: boolean;
-  /** Prefer QQ Bot sandbox OpenAPI (no IP whitelist). */
   qqbotSandbox: boolean;
   qqbotAllowedUserIds: string;
   qqbotGroupPolicy: "disabled" | "allowlist" | "open";
@@ -76,58 +68,28 @@ export interface CockpitChannelEditorValues {
   onUnbound: "reject" | "create";
 }
 
-/** Baidu Infoflow Open API root used when the form leaves endpoint blank. */
+export type MessagePlatformCredentialPatch = {
+  adapter: MessagePlatformAdapter;
+  feishuAppId?: string;
+  feishuAppSecret?: string;
+  infoflowEndpoint?: string;
+  infoflowAppKey?: string;
+  infoflowAppAgentId?: string;
+  infoflowAppSecret?: string;
+  qqbotAppId?: string;
+  qqbotClientSecret?: string;
+  qqbotSandbox?: boolean;
+};
+
 export const DEFAULT_INFOFLOW_ENDPOINT = "https://api.im.baidu.com";
 
-function sparkHome(): string {
-  return process.env.SPARK_HOME?.trim() || join(homedir(), ".spark");
-}
-
-export function channelsConfigPath(workspaceId: string): string {
-  const id = workspaceId.trim();
-  if (!id) throw new Error("workspaceId is required for channel config");
-  return join(sparkHome(), "workspaces", id, "channels", "config.json");
-}
-
-export function legacyChannelsConfigPath(): string {
-  return join(sparkHome(), "channels", "config.json");
-}
-
-export async function migrateLegacyChannelsConfigForCockpit(workspaceId: string): Promise<boolean> {
-  const dest = channelsConfigPath(workspaceId);
-  if (existsSync(dest)) return false;
-  const legacy = legacyChannelsConfigPath();
-  if (!existsSync(legacy)) return false;
-  const raw = await readFile(legacy, "utf8");
-  parseChannelsConfig(JSON.parse(raw) as unknown);
-  await mkdir(dirname(dest), { recursive: true });
-  await writeFile(dest, raw.endsWith("\n") ? raw : `${raw}\n`, { mode: 0o600 });
-  touchPrivateFile(dest);
-  try {
-    await rename(legacy, `${legacy}.migrated`);
-  } catch {
-    // best-effort
-  }
-  return true;
-}
-
-export async function loadChannelsConfigForCockpit(workspaceId: string): Promise<{
-  path: string;
-  config: ChannelsConfig | null;
-}> {
-  await migrateLegacyChannelsConfigForCockpit(workspaceId);
-  const path = channelsConfigPath(workspaceId);
-  try {
-    if (existsSync(path)) touchPrivateFile(path);
-    const raw = JSON.parse(await readFile(path, "utf8")) as unknown;
-    return { path, config: parseChannelsConfig(raw) };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { path, config: null };
-    }
-    throw error;
-  }
-}
+const runtimeClient = createCockpitRuntimeModelChannelClient();
+const defaultCockpitChannelDaemonClient: CockpitChannelDaemonClient = {
+  status: async (workspaceId) => await runtimeClient.channelStatus(workspaceId),
+  configure: async (workspaceId, config, context) =>
+    await runtimeClient.configureChannel({ workspaceId, config, context }),
+  reload: async (workspaceId) => await runtimeClient.reloadChannel({ workspaceId }),
+};
 
 export function emptyChannelEditorValues(): CockpitChannelEditorValues {
   return {
@@ -138,6 +100,7 @@ export function emptyChannelEditorValues(): CockpitChannelEditorValues {
     infoflowEnabled: false,
     infoflowEndpoint: DEFAULT_INFOFLOW_ENDPOINT,
     infoflowAppKey: "",
+    infoflowAppKeySet: false,
     infoflowAppAgentId: "",
     infoflowAppSecret: "",
     infoflowAppSecretSet: false,
@@ -159,26 +122,53 @@ export function emptyChannelEditorValues(): CockpitChannelEditorValues {
     routeName: "ops",
     routeAdapter: "infoflow",
     routeRecipient: "",
-    // Derived from adapter enable; kept for form/status compatibility.
     ingressEnabled: false,
     onUnbound: "create",
   };
 }
 
-export type MessagePlatformCredentialPatch = {
-  adapter: MessagePlatformAdapter;
-  feishuAppId?: string;
-  feishuAppSecret?: string;
-  infoflowEndpoint?: string;
-  infoflowAppKey?: string;
-  infoflowAppAgentId?: string;
-  infoflowAppSecret?: string;
-  qqbotAppId?: string;
-  qqbotClientSecret?: string;
-  qqbotSandbox?: boolean;
-};
+export function channelEditorValuesFromProjection(
+  projection: SparkChannelConfigurationProjection | null,
+): CockpitChannelEditorValues {
+  const defaults = emptyChannelEditorValues();
+  if (!projection) return defaults;
+  const route = projection.routes[0];
+  const routeAdapter =
+    route?.adapter === "feishu" || route?.adapter === "infoflow" || route?.adapter === "qqbot"
+      ? route.adapter
+      : "infoflow";
+  return {
+    ...defaults,
+    feishuEnabled: Boolean(projection.feishu),
+    feishuAppId: projection.feishu?.appId ?? "",
+    feishuAppSecretSet: projection.feishu?.appSecretSet ?? false,
+    infoflowEnabled: Boolean(projection.infoflow),
+    infoflowEndpoint: projection.infoflow?.endpoint || DEFAULT_INFOFLOW_ENDPOINT,
+    infoflowAppKeySet: projection.infoflow?.appKeySet ?? false,
+    infoflowAppAgentId: projection.infoflow?.appAgentId ?? "",
+    infoflowAppSecretSet: projection.infoflow?.appSecretSet ?? false,
+    infoflowAllowedUserIds: (projection.infoflow?.allowedUserIds ?? []).join(", "),
+    infoflowGroupPolicy: projection.infoflow?.groupPolicy ?? "disabled",
+    infoflowGroupTrigger: projection.infoflow?.groupTrigger ?? "mention",
+    infoflowAllowedGroupIds: (projection.infoflow?.allowedGroupIds ?? []).join(", "),
+    infoflowSystemPrompt: projection.infoflow?.systemPrompt ?? "",
+    qqbotEnabled: Boolean(projection.qqbot),
+    qqbotAppId: projection.qqbot?.appId ?? "",
+    qqbotClientSecretSet: projection.qqbot?.clientSecretSet ?? false,
+    qqbotSandbox: projection.qqbot?.sandbox ?? true,
+    qqbotAllowedUserIds: (projection.qqbot?.allowedUserIds ?? []).join(", "),
+    qqbotGroupPolicy: projection.qqbot?.groupPolicy ?? "disabled",
+    qqbotGroupTrigger: projection.qqbot?.groupTrigger ?? "mention",
+    qqbotAllowedGroupIds: (projection.qqbot?.allowedGroupIds ?? []).join(", "),
+    qqbotSystemPrompt: projection.qqbot?.systemPrompt ?? "",
+    routeName: route?.name ?? defaults.routeName,
+    routeAdapter,
+    routeRecipient: route?.recipient ?? "",
+    ingressEnabled: Boolean(projection.feishu || projection.infoflow || projection.qqbot),
+    onUnbound: projection.onUnbound,
+  };
+}
 
-/** Merge one account connection onto existing editor values without dropping other adapters. */
 export function mergeMessagePlatformCredentials(
   previous: CockpitChannelEditorValues,
   patch: MessagePlatformCredentialPatch,
@@ -188,7 +178,6 @@ export function mergeMessagePlatformCredentials(
     ingressEnabled: true,
     onUnbound: "create",
   };
-
   switch (patch.adapter) {
     case "feishu":
       next.feishuEnabled = true;
@@ -197,9 +186,7 @@ export function mergeMessagePlatformCredentials(
       break;
     case "infoflow":
       next.infoflowEnabled = true;
-      if (patch.infoflowEndpoint?.trim()) {
-        next.infoflowEndpoint = patch.infoflowEndpoint.trim();
-      }
+      if (patch.infoflowEndpoint?.trim()) next.infoflowEndpoint = patch.infoflowEndpoint.trim();
       if (patch.infoflowAppKey?.trim()) next.infoflowAppKey = patch.infoflowAppKey.trim();
       if (patch.infoflowAppAgentId?.trim()) {
         next.infoflowAppAgentId = patch.infoflowAppAgentId.trim();
@@ -216,12 +203,7 @@ export function mergeMessagePlatformCredentials(
       }
       if (patch.qqbotSandbox !== undefined) next.qqbotSandbox = patch.qqbotSandbox;
       break;
-    default: {
-      const _exhaustive: never = patch.adapter;
-      throw new Error(`unsupported message platform adapter: ${String(_exhaustive)}`);
-    }
   }
-
   return next;
 }
 
@@ -237,7 +219,7 @@ export function channelAdapterCredentialsComplete(
     case "infoflow":
       return Boolean(
         (values.infoflowEndpoint.trim() || DEFAULT_INFOFLOW_ENDPOINT) &&
-        values.infoflowAppKey.trim() &&
+        (values.infoflowAppKey.trim() || values.infoflowAppKeySet) &&
         values.infoflowAppAgentId.trim() &&
         (values.infoflowAppSecret.trim() || values.infoflowAppSecretSet),
       );
@@ -246,10 +228,6 @@ export function channelAdapterCredentialsComplete(
         values.qqbotAppId.trim() &&
         (values.qqbotClientSecret.trim() || values.qqbotClientSecretSet),
       );
-    default: {
-      const _exhaustive: never = adapter;
-      throw new Error(`unsupported message platform adapter: ${String(_exhaustive)}`);
-    }
   }
 }
 
@@ -263,252 +241,56 @@ export function channelEditorCredentialsComplete(values: CockpitChannelEditorVal
   return true;
 }
 
-export function isFeishuAdapterReady(config: { app_id?: string; app_secret?: string }): boolean {
-  return Boolean(config.app_id?.trim() && config.app_secret?.trim());
-}
-
-export function isInfoflowAdapterReady(config: {
-  endpoint?: string;
-  app_key?: string;
-  app_agent_id?: string;
-  app_secret?: string;
-}): boolean {
-  return Boolean(
-    config.endpoint?.trim() &&
-    config.app_key?.trim() &&
-    config.app_agent_id?.trim() &&
-    config.app_secret?.trim(),
-  );
-}
-
-export function isQqbotAdapterReady(config: { app_id?: string; client_secret?: string }): boolean {
-  return Boolean(config.app_id?.trim() && config.client_secret?.trim());
-}
-
-export function channelsConfigIsReady(config: ChannelsConfig | null): boolean {
-  if (!config) return false;
-  return Object.values(config.adapters).some((adapter) => {
-    if (adapter.type === "feishu") return isFeishuAdapterReady(adapter);
-    if (adapter.type === "infoflow") return isInfoflowAdapterReady(adapter);
-    if (adapter.type === "qqbot") return isQqbotAdapterReady(adapter);
-    return false;
-  });
-}
-
-export function channelEditorValuesFromConfig(
-  config: ChannelsConfig | null,
-): CockpitChannelEditorValues {
-  const defaults = emptyChannelEditorValues();
-  if (!config) return defaults;
-
-  const feishuEntry = Object.entries(config.adapters).find(
-    ([, adapter]) => adapter.type === "feishu",
-  );
-  const infoflowEntry = Object.entries(config.adapters).find(
-    ([, adapter]) => adapter.type === "infoflow",
-  );
-  const qqbotEntry = Object.entries(config.adapters).find(
-    ([, adapter]) => adapter.type === "qqbot",
-  );
-  const feishuAdapter = feishuEntry?.[1];
-  const infoflowAdapter = infoflowEntry?.[1];
-  const qqbotAdapter = qqbotEntry?.[1];
-  const routeEntry = Object.entries(config.routes)[0];
-  const routeAdapterId = routeEntry?.[1]?.adapter;
-  const routeAdapterConfigured = routeAdapterId ? config.adapters[routeAdapterId]?.type : undefined;
-  const routeAdapterType: CockpitChannelEditorValues["routeAdapter"] =
-    routeAdapterConfigured === "infoflow" ||
-    routeAdapterConfigured === "qqbot" ||
-    routeAdapterConfigured === "feishu"
-      ? routeAdapterConfigured
-      : "feishu";
-
-  const feishuReady = feishuAdapter?.type === "feishu" && isFeishuAdapterReady(feishuAdapter);
-  const infoflowReady =
-    infoflowAdapter?.type === "infoflow" && isInfoflowAdapterReady(infoflowAdapter);
-  const qqbotReady = qqbotAdapter?.type === "qqbot" && isQqbotAdapterReady(qqbotAdapter);
-
-  const feishuSecret =
-    feishuEntry && feishuEntry[1].type === "feishu" ? (feishuEntry[1].app_secret ?? "") : "";
-  const infoflowSecret =
-    infoflowEntry && infoflowEntry[1].type === "infoflow"
-      ? (infoflowEntry[1].app_secret ?? "")
-      : "";
-  const qqbotSecret =
-    qqbotEntry && qqbotEntry[1].type === "qqbot" ? (qqbotEntry[1].client_secret ?? "") : "";
-
-  return {
-    // Incomplete stubs must not force toggles on — that made autosave fail forever.
-    feishuEnabled: feishuReady,
-    feishuAppId:
-      feishuEntry && feishuEntry[1].type === "feishu" ? (feishuEntry[1].app_id ?? "") : "",
-    // Never round-trip secrets into HTML; blank means "keep existing" when *Set is true.
-    feishuAppSecret: "",
-    feishuAppSecretSet: Boolean(feishuSecret.trim()),
-    infoflowEnabled: infoflowReady,
-    infoflowEndpoint:
-      infoflowEntry && infoflowEntry[1].type === "infoflow"
-        ? infoflowEntry[1].endpoint?.trim() || DEFAULT_INFOFLOW_ENDPOINT
-        : DEFAULT_INFOFLOW_ENDPOINT,
-    infoflowAppKey:
-      infoflowEntry && infoflowEntry[1].type === "infoflow" ? (infoflowEntry[1].app_key ?? "") : "",
-    infoflowAppAgentId:
-      infoflowEntry && infoflowEntry[1].type === "infoflow"
-        ? (infoflowEntry[1].app_agent_id ?? "")
-        : "",
-    infoflowAppSecret: "",
-    infoflowAppSecretSet: Boolean(infoflowSecret.trim()),
-    infoflowAllowedUserIds:
-      infoflowEntry && infoflowEntry[1].type === "infoflow"
-        ? (infoflowEntry[1].allowed_user_ids ?? []).join(", ")
-        : "",
-    infoflowGroupPolicy:
-      infoflowEntry && infoflowEntry[1].type === "infoflow"
-        ? (infoflowEntry[1].group_policy ?? "disabled")
-        : "disabled",
-    infoflowGroupTrigger:
-      infoflowEntry && infoflowEntry[1].type === "infoflow"
-        ? (infoflowEntry[1].group_trigger ?? "mention")
-        : "mention",
-    infoflowAllowedGroupIds:
-      infoflowEntry && infoflowEntry[1].type === "infoflow"
-        ? (infoflowEntry[1].allowed_group_ids ?? []).join(", ")
-        : "",
-    infoflowSystemPrompt:
-      infoflowEntry && infoflowEntry[1].type === "infoflow"
-        ? (infoflowEntry[1].system_prompt ?? "")
-        : "",
-    qqbotEnabled: qqbotReady,
-    qqbotAppId: qqbotEntry && qqbotEntry[1].type === "qqbot" ? (qqbotEntry[1].app_id ?? "") : "",
-    qqbotClientSecret: "",
-    qqbotClientSecretSet: Boolean(qqbotSecret.trim()),
-    qqbotSandbox:
-      qqbotEntry && qqbotEntry[1].type === "qqbot"
-        ? qqbotEntry[1].api_environment === "sandbox"
-        : true,
-    qqbotAllowedUserIds:
-      qqbotEntry && qqbotEntry[1].type === "qqbot"
-        ? (qqbotEntry[1].allowed_user_ids ?? []).join(", ")
-        : "",
-    qqbotGroupPolicy:
-      qqbotEntry && qqbotEntry[1].type === "qqbot"
-        ? (qqbotEntry[1].group_policy ?? "disabled")
-        : "disabled",
-    qqbotGroupTrigger:
-      qqbotEntry && qqbotEntry[1].type === "qqbot"
-        ? (qqbotEntry[1].group_trigger ?? "mention")
-        : "mention",
-    qqbotAllowedGroupIds:
-      qqbotEntry && qqbotEntry[1].type === "qqbot"
-        ? (qqbotEntry[1].allowed_group_ids ?? []).join(", ")
-        : "",
-    qqbotSystemPrompt:
-      qqbotEntry && qqbotEntry[1].type === "qqbot" ? (qqbotEntry[1].system_prompt ?? "") : "",
-    routeName: routeEntry?.[0] ?? defaults.routeName,
-    routeAdapter: infoflowReady
-      ? "infoflow"
-      : qqbotReady
-        ? "qqbot"
-        : feishuReady
-          ? "feishu"
-          : routeAdapterType,
-    routeRecipient: routeEntry?.[1]?.recipient ?? "",
-    ingressEnabled: feishuReady || infoflowReady || qqbotReady,
-    onUnbound: config.ingress?.on_unbound === "reject" ? "reject" : "create",
-  };
-}
-
-export function channelsConfigFromEditorValues(
-  values: CockpitChannelEditorValues,
-  previous: ChannelsConfig | null = null,
-): ChannelsConfig {
+export function channelsConfigFromEditorValues(values: CockpitChannelEditorValues): ChannelsConfig {
   const adapters: ChannelsConfig["adapters"] = {};
-  const previousFeishu = previous
-    ? Object.values(previous.adapters).find((adapter) => adapter.type === "feishu")
-    : undefined;
-  const previousInfoflow = previous
-    ? Object.values(previous.adapters).find((adapter) => adapter.type === "infoflow")
-    : undefined;
-  const previousQqbot = previous
-    ? Object.values(previous.adapters).find((adapter) => adapter.type === "qqbot")
-    : undefined;
-
   if (values.feishuEnabled) {
-    const appSecret =
-      values.feishuAppSecret.trim() ||
-      (values.feishuAppSecretSet && previousFeishu?.type === "feishu"
-        ? (previousFeishu.app_secret?.trim() ?? "")
-        : "") ||
-      "";
     adapters.feishu = {
       type: "feishu",
       event_mode: "websocket",
       ...(values.feishuAppId.trim() ? { app_id: values.feishuAppId.trim() } : {}),
-      ...(appSecret ? { app_secret: appSecret } : {}),
+      ...(values.feishuAppSecret.trim() ? { app_secret: values.feishuAppSecret.trim() } : {}),
     };
   }
   if (values.infoflowEnabled) {
-    const endpoint = values.infoflowEndpoint.trim() || DEFAULT_INFOFLOW_ENDPOINT;
-    const appSecret =
-      values.infoflowAppSecret.trim() ||
-      (values.infoflowAppSecretSet && previousInfoflow?.type === "infoflow"
-        ? (previousInfoflow.app_secret?.trim() ?? "")
-        : "") ||
-      "";
     adapters.infoflow = {
       type: "infoflow",
-      endpoint,
+      endpoint: values.infoflowEndpoint.trim() || DEFAULT_INFOFLOW_ENDPOINT,
       ...(values.infoflowAppKey.trim() ? { app_key: values.infoflowAppKey.trim() } : {}),
       ...(values.infoflowAppAgentId.trim()
         ? { app_agent_id: values.infoflowAppAgentId.trim() }
         : {}),
-      ...(appSecret ? { app_secret: appSecret } : {}),
-      ...(previousInfoflow?.type === "infoflow" && previousInfoflow.ws_gateway
-        ? { ws_gateway: previousInfoflow.ws_gateway }
-        : {}),
-      ...(previousInfoflow?.type === "infoflow" && previousInfoflow.connection_mode
-        ? { connection_mode: previousInfoflow.connection_mode }
-        : { connection_mode: "websocket" }),
+      ...(values.infoflowAppSecret.trim() ? { app_secret: values.infoflowAppSecret.trim() } : {}),
+      connection_mode: "websocket",
       ...(parseIdList(values.infoflowAllowedUserIds).length > 0
         ? { allowed_user_ids: parseIdList(values.infoflowAllowedUserIds) }
         : {}),
       group_policy: values.infoflowGroupPolicy,
       group_trigger: values.infoflowGroupTrigger,
-      ...(values.infoflowGroupPolicy === "allowlist" &&
-      parseIdList(values.infoflowAllowedGroupIds).length > 0
+      ...(values.infoflowGroupPolicy === "allowlist"
         ? { allowed_group_ids: parseIdList(values.infoflowAllowedGroupIds) }
-        : values.infoflowGroupPolicy === "allowlist"
-          ? { allowed_group_ids: [] }
-          : {}),
+        : {}),
       ...(values.infoflowSystemPrompt.trim()
         ? { system_prompt: values.infoflowSystemPrompt.trim() }
         : {}),
     };
   }
   if (values.qqbotEnabled) {
-    const clientSecret =
-      values.qqbotClientSecret.trim() ||
-      (values.qqbotClientSecretSet && previousQqbot?.type === "qqbot"
-        ? (previousQqbot.client_secret?.trim() ?? "")
-        : "") ||
-      "";
     adapters.qqbot = {
       type: "qqbot",
       connection_mode: "websocket",
       api_environment: values.qqbotSandbox ? "sandbox" : "production",
       ...(values.qqbotAppId.trim() ? { app_id: values.qqbotAppId.trim() } : {}),
-      ...(clientSecret ? { client_secret: clientSecret } : {}),
+      ...(values.qqbotClientSecret.trim()
+        ? { client_secret: values.qqbotClientSecret.trim() }
+        : {}),
       ...(parseIdList(values.qqbotAllowedUserIds).length > 0
         ? { allowed_user_ids: parseIdList(values.qqbotAllowedUserIds) }
         : {}),
       group_policy: values.qqbotGroupPolicy,
       group_trigger: values.qqbotGroupTrigger,
-      ...(values.qqbotGroupPolicy === "allowlist" &&
-      parseIdList(values.qqbotAllowedGroupIds).length > 0
+      ...(values.qqbotGroupPolicy === "allowlist"
         ? { allowed_group_ids: parseIdList(values.qqbotAllowedGroupIds) }
-        : values.qqbotGroupPolicy === "allowlist"
-          ? { allowed_group_ids: [] }
-          : {}),
+        : {}),
       ...(values.qqbotSystemPrompt.trim()
         ? { system_prompt: values.qqbotSystemPrompt.trim() }
         : {}),
@@ -516,52 +298,34 @@ export function channelsConfigFromEditorValues(
   }
 
   const routes: ChannelsConfig["routes"] = {};
-  const routeName = values.routeName.trim() || "ops";
   const routeRecipient = values.routeRecipient.trim();
-  const routeAdapter =
-    values.routeAdapter === "infoflow" && adapters.infoflow
-      ? "infoflow"
-      : values.routeAdapter === "qqbot" && adapters.qqbot
-        ? "qqbot"
-        : adapters.feishu
-          ? "feishu"
-          : adapters.infoflow
-            ? "infoflow"
-            : adapters.qqbot
-              ? "qqbot"
-              : values.routeAdapter;
-
   if (routeRecipient) {
-    routes[routeName] = {
-      adapter: routeAdapter,
+    routes[values.routeName.trim() || "ops"] = {
+      adapter: preferredRouteAdapter(values, adapters),
       recipient: routeRecipient,
     };
   }
-
-  return {
+  return parseChannelsConfig({
     adapters,
     routes,
     ingress: {
-      // Channel enable/disable is the adapter toggle; inbound follows automatically.
-      enabled: Boolean(adapters.feishu || adapters.infoflow || adapters.qqbot),
+      enabled: Object.keys(adapters).length > 0,
       on_unbound: values.onUnbound,
     },
-  };
+  });
 }
 
 export async function saveChannelsConfigForCockpit(
   workspaceId: string,
   values: CockpitChannelEditorValues,
+  context: RuntimeEphemeralSecretRequestContext,
   client: CockpitChannelDaemonClient = defaultCockpitChannelDaemonClient,
-): Promise<{
-  path: string;
-  config: ChannelsConfig;
-  status: CockpitChannelStatusSnapshot;
-}> {
-  const previous = (await loadChannelsConfigForCockpit(workspaceId)).config;
-  const config = parseChannelsConfig(channelsConfigFromEditorValues(values, previous));
-  const status = channelStatusFromDaemon(await client.configure(workspaceId, config));
-  return { path: status.configPath, config, status };
+): Promise<{ config: ChannelsConfig; status: SparkChannelControlSnapshot }> {
+  const config = channelsConfigFromEditorValues(values);
+  const status = parseSparkChannelControlSnapshot(
+    await client.configure(workspaceId, config, context),
+  );
+  return { config, status };
 }
 
 export async function loadChannelStatusForCockpit(
@@ -569,126 +333,41 @@ export async function loadChannelStatusForCockpit(
   client: CockpitChannelDaemonClient = defaultCockpitChannelDaemonClient,
 ): Promise<CockpitChannelStatusSnapshot> {
   try {
-    return channelStatusFromDaemon(await client.status(workspaceId));
+    return parseSparkChannelControlSnapshot(await client.status(workspaceId));
   } catch (error) {
-    if (!(error instanceof SparkDaemonLocalRpcUnavailableError)) throw error;
+    const message = error instanceof Error ? error.message : String(error);
     return {
       workspaceId,
-      configPath: channelsConfigPath(workspaceId),
       available: false,
       configured: false,
       ingressEnabled: false,
       state: "unavailable",
       adapters: [],
       routes: [],
+      configuration: { routes: [], onUnbound: "create" },
       observedAt: new Date().toISOString(),
-      error: error.message,
-      text: `channel runtime unavailable: ${error.message}`,
+      error: message,
+      text: `channel runtime unavailable: ${message}`,
     };
   }
 }
 
-const defaultCockpitChannelDaemonClient: CockpitChannelDaemonClient = {
-  status: async (workspaceId) =>
-    await requestSparkDaemonLocalRpc("channel.status", { workspaceId }),
-  configure: async (workspaceId, config) =>
-    await requestSparkDaemonLocalRpc("channel.configure", { workspaceId, config }),
-};
-
-function channelStatusFromDaemon(value: unknown): CockpitChannelStatusSnapshot {
-  if (
-    !isRecord(value) ||
-    value.plane !== "daemon" ||
-    value.resource !== "channel" ||
-    value.available !== true ||
-    typeof value.workspaceId !== "string" ||
-    typeof value.configPath !== "string" ||
-    typeof value.configured !== "boolean" ||
-    typeof value.ingressEnabled !== "boolean" ||
-    !isRuntimeState(value.state) ||
-    !Array.isArray(value.adapters) ||
-    !Array.isArray(value.routes) ||
-    typeof value.text !== "string"
-  ) {
-    throw new Error("Invalid Spark daemon channel status response.");
-  }
-  return {
-    workspaceId: value.workspaceId,
-    configPath: value.configPath,
-    available: true,
-    configured: value.configured,
-    ingressEnabled: value.ingressEnabled,
-    state: value.state,
-    adapters: value.adapters.map(channelAdapterStatus),
-    routes: value.routes.map(channelRouteStatus),
-    observedAt: typeof value.observedAt === "string" ? value.observedAt : new Date().toISOString(),
-    ...(typeof value.error === "string" ? { error: value.error } : {}),
-    text: value.text,
-  };
-}
-
-function channelAdapterStatus(value: unknown): CockpitChannelStatusSnapshot["adapters"][number] {
-  if (
-    !isRecord(value) ||
-    typeof value.id !== "string" ||
-    typeof value.type !== "string" ||
-    typeof value.running !== "boolean"
-  ) {
-    throw new Error("Invalid Spark daemon channel adapter status.");
-  }
-  const state = isConnectionState(value.state)
-    ? value.state
-    : value.running
-      ? "connected"
-      : "stopped";
-  return {
-    id: value.id,
-    type: value.type,
-    running: value.running,
-    state,
-    ...(typeof value.error === "string" && value.error.trim() ? { error: value.error } : {}),
-  };
-}
-
-function isConnectionState(
-  value: unknown,
-): value is CockpitChannelStatusSnapshot["adapters"][number]["state"] {
-  return (
-    value === "stopped" ||
-    value === "connecting" ||
-    value === "connected" ||
-    value === "reconnecting" ||
-    value === "degraded"
-  );
-}
-
-function channelRouteStatus(value: unknown): CockpitChannelStatusSnapshot["routes"][number] {
-  if (
-    !isRecord(value) ||
-    typeof value.name !== "string" ||
-    typeof value.adapter !== "string" ||
-    typeof value.recipient !== "string"
-  ) {
-    throw new Error("Invalid Spark daemon channel route status.");
-  }
-  return { name: value.name, adapter: value.adapter, recipient: value.recipient };
-}
-
-function isRuntimeState(
-  value: unknown,
-): value is Exclude<CockpitChannelStatusSnapshot["state"], "unavailable"> {
-  return (
-    value === "unconfigured" || value === "running" || value === "stopped" || value === "degraded"
-  );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function preferredRouteAdapter(
+  values: CockpitChannelEditorValues,
+  adapters: ChannelsConfig["adapters"],
+): "feishu" | "infoflow" | "qqbot" {
+  if (values.routeAdapter === "infoflow" && adapters.infoflow) return "infoflow";
+  if (values.routeAdapter === "qqbot" && adapters.qqbot) return "qqbot";
+  if (values.routeAdapter === "feishu" && adapters.feishu) return "feishu";
+  if (adapters.feishu) return "feishu";
+  if (adapters.infoflow) return "infoflow";
+  if (adapters.qqbot) return "qqbot";
+  return values.routeAdapter;
 }
 
 function parseIdList(raw: string): string[] {
   return raw
-    .split(/[\s,]+/)
+    .split(/[\s,]+/u)
     .map((entry) => entry.trim())
     .filter(Boolean);
 }

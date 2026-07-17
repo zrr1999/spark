@@ -41,6 +41,8 @@ export interface SparkMemoryExtensionApi {
       content: string;
       display?: boolean;
       details?: Record<string, unknown>;
+      authority?: "runtime_control" | "runtime_data";
+      trust?: "trusted" | "untrusted";
     },
     options?: { deliverAs?: "steer" | "followUp" | "nextTurn"; triggerTurn?: boolean },
   ): void;
@@ -316,6 +318,7 @@ function memoryReadTool(options: SparkMemoryToolOptions): ToolConfig {
     label: "Memory Read",
     description:
       "Spark compatibility tool for reading pi-memory style MEMORY.md, SCRATCHPAD.md, daily logs, or daily log list.",
+    policy: readOnlyMemoryToolPolicy(),
     parameters: Type.Object({
       target: Type.String({ description: "long_term | scratchpad | daily | list" }),
       date: Type.Optional(Type.String({ description: "YYYY-MM-DD for daily logs" })),
@@ -413,6 +416,9 @@ function memorySearchTool(options: SparkMemoryToolOptions): ToolConfig {
     label: "Memory Search",
     description:
       "Spark compatibility search across MEMORY.md, SCRATCHPAD.md, and daily logs. Keyword mode is mechanical; semantic/deep modes use one memory-reranker leaf over keyword-recalled candidates when the host provides ctx.runLeaf.",
+    // semantic/deep mode may consume a model leaf. It remains read-only but
+    // sequential until tool policy can express per-call cost/fan-out limits.
+    policy: readOnlyMemoryToolPolicy("sequential"),
     parameters: Type.Object({
       query: Type.String({ description: "Search query" }),
       mode: Type.Optional(Type.String({ description: "keyword | semantic | deep" })),
@@ -482,6 +488,7 @@ function memoryStatusTool(options: SparkMemoryToolOptions): ToolConfig {
     label: "Memory Status",
     description:
       "Report Spark memory replacement health, including Spark JSON memory and pi-memory compatibility Markdown files.",
+    policy: readOnlyMemoryToolPolicy(),
     parameters: Type.Object({
       sourceDir: Type.Optional(Type.String({ description: "Override compatibility memory dir" })),
     }),
@@ -515,6 +522,18 @@ function memoryStatusTool(options: SparkMemoryToolOptions): ToolConfig {
   };
 }
 
+function readOnlyMemoryToolPolicy(
+  executionMode: "parallel" | "sequential" = "parallel",
+): NonNullable<ToolConfig["policy"]> {
+  return {
+    effect: "read",
+    executionMode,
+    domains: ["memory"],
+    phases: ["plan", "implement"],
+    approval: "none",
+  };
+}
+
 export function registerSparkMemoryCheckpointEvents(
   pi: SparkMemoryExtensionApi,
   options: SparkMemoryToolOptions = {},
@@ -527,6 +546,8 @@ export function registerSparkMemoryCheckpointEvents(
         customType: "spark-memory-policy",
         content: renderSparkMemoryPolicy(),
         display: false,
+        authority: "runtime_control",
+        trust: "trusted",
         details: {
           policyOnly: true,
           storePath: defaultSparkMemoryStore(cwd, "workspace", options.storePaths).filePath,

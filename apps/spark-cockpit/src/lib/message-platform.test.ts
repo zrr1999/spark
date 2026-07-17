@@ -39,7 +39,6 @@ describe("workspaceMessagePlatformConnections", () => {
           feishuEnabled: false,
           feishuAppId: "",
           infoflowEnabled: true,
-          infoflowAppKey: "infoflow-key",
           infoflowAppAgentId: "43163",
           qqbotEnabled: true,
           qqbotAppId: "qq-app",
@@ -60,17 +59,16 @@ describe("workspaceMessagePlatformConnections", () => {
     ]);
   });
 
-  it("falls back to the Infoflow app key when no numeric app id is configured", () => {
+  it("does not expose a credential as the Infoflow account label", () => {
     expect(
       workspaceMessagePlatformConnections({
         feishuEnabled: false,
         feishuAppId: "",
         infoflowEnabled: true,
-        infoflowAppKey: "fallback-key",
         infoflowAppAgentId: "",
         qqbotEnabled: false,
         qqbotAppId: "",
       }),
-    ).toEqual([{ adapter: "infoflow", accountId: "fallback-key" }]);
+    ).toEqual([{ adapter: "infoflow", accountId: "" }]);
   });
 });

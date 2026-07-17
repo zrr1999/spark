@@ -9,6 +9,10 @@ spark cockpit - Spark cross-daemon coordination and Web cockpit
 
 Usage:
   spark cockpit
+  spark cockpit web start [--json]
+  spark cockpit web status [--json]
+  spark cockpit web stop [--json]
+  spark cockpit web logs
   spark cockpit status [--json]
   spark cockpit project list [--json]
   spark cockpit task list [--project <project-ref>] [--json]
@@ -17,6 +21,10 @@ Usage:
   spark cockpit review list [--json]
   spark cockpit workflow list [--json]
   spark cockpit assign --session <session-id> --goal <text> [--json]
+  spark cockpit instance status [--json]
+  spark cockpit instance backup [snapshot-path] [--json]
+  spark cockpit instance inspect <snapshot-path> [--json]
+  spark cockpit instance restore <snapshot-path> [--yes] [--json]
   spark cockpit --help
 
 Commands:
@@ -29,6 +37,8 @@ Commands:
   review        Query reviews
   workflow      Query workflow runs
   assign        Queue work through the coordination plane
+  instance      Back up, inspect, restore, or diagnose a Cockpit instance
+  web           Start, inspect, stop, or locate logs for the background Web cockpit
 
 Cockpit coordinates across daemon execution planes; spark tui is the terminal presentation host.
 
@@ -44,7 +54,13 @@ Production start environment:
 
 Examples:
   spark cockpit
+  spark cockpit web start
+  spark cockpit web status --json
+  spark cockpit web logs
   spark cockpit status --json
+  spark cockpit instance backup --json
+  spark cockpit instance inspect ~/.local/share/spark/cockpit/backups/<snapshot> --json
+  spark cockpit instance restore <snapshot-path> --yes --json
   PORT=5174 spark cockpit
   HOST=0.0.0.0 SPARK_COCKPIT_REMOTE_TOKEN=... spark cockpit
   HOST=127.0.0.1 SPARK_COCKPIT_PUBLIC_URL=https://spark.example.com \
@@ -66,7 +82,24 @@ case "$command" in
     cd "$APP_DIR"
     exec pnpm run start:custom -- "$@"
     ;;
-  status|project|task|goal|artifact|review|workflow|assign)
+  web)
+    shift || true
+    web_command="${1:-status}"
+    if [ "$#" -gt 0 ]; then shift; fi
+    case "$web_command" in
+      start|status|stop)
+        exec "$APP_DIR/node_modules/.bin/tsx" "$APP_DIR/src/cli/web-service-entry.ts" "$web_command" "$@"
+        ;;
+      logs)
+        exec "$APP_DIR/node_modules/.bin/tsx" "$APP_DIR/src/cli/web-service-entry.ts" status --json
+        ;;
+      *)
+        printf 'Unknown spark cockpit web command: %s\n' "$web_command" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  status|project|task|goal|artifact|review|workflow|assign|instance)
     exec "$APP_DIR/node_modules/.bin/tsx" "$APP_DIR/src/cli-entry.ts" "$@"
     ;;
   *)

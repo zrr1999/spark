@@ -142,10 +142,10 @@ const messages = {
     ariaNavigation: "Console navigation",
     nav: {
       workspaceDetails: "Basics",
-      registration: "Local connections",
+      registration: "Workspace connection",
     },
     navGroups: {
-      cockpit: "Cockpit",
+      cockpit: "Control plane",
       daemon: "Daemon",
       workspace: "Workspace",
     },
@@ -1170,7 +1170,7 @@ const messages = {
       save: "Save changes",
     },
     enrollment: {
-      title: "Connect a local directory",
+      title: "Workspace connection",
       body: "Authorize a daemon once, then connect any directory on that machine.",
       deviceTitle: "Connect with browser authorization",
       deviceBody:

@@ -43,26 +43,12 @@ export function defaultPiCueSkillsDir(): string {
   return resolve(process.cwd(), "packages", "spark-cue", "skills");
 }
 
-export function defaultPiGraftPromptFile(): string {
-  const hostDir = dirname(fileURLToPath(import.meta.url));
-  const fromWorkspace = resolve(hostDir, "../../../spark-graft/README.md");
-  if (existsSync(fromWorkspace)) return fromWorkspace;
-  try {
-    const extensionPath = fileURLToPath(import.meta.resolve("@zendev-lab/spark-graft/extension"));
-    const fromPackage = resolve(dirname(extensionPath), "../README.md");
-    if (existsSync(fromPackage)) return fromPackage;
-  } catch {
-    // Fall through to the source-tree default below.
-  }
-  return resolve(process.cwd(), "packages", "spark-graft", "README.md");
-}
-
 export function defaultBasePromptDirs(): string[] {
   return [defaultBuiltinSkillsDir(), defaultPiCueSkillsDir()];
 }
 
 export function defaultBasePromptFiles(): string[] {
-  return [defaultPiGraftPromptFile()];
+  return [];
 }
 
 export async function loadBuiltinSkills(
@@ -75,6 +61,28 @@ export async function loadBuiltinSkills(
 
 export function renderBuiltinSkillsForPrompt(skills: SparkBuiltinSkill[]): string {
   return renderBaseSystemPromptFilesForPrompt(skills);
+}
+
+/** Catalog-only prompt for production discovery; skill bodies stay on disk. */
+export function renderBuiltinSkillsCatalogForPrompt(skills: SparkBuiltinSkill[]): string {
+  const visible = skills.filter((skill) => !skill.disabled && !skill.disableModelInvocation);
+  if (visible.length === 0) return "";
+  const lines = [
+    "\n\nThe following skills provide specialized instructions for specific tasks.",
+    "Use the read tool to load a skill's file when the task matches its description.",
+    "Resolve relative references against the skill directory containing the listed file.",
+    "",
+    "<available_skills>",
+  ];
+  for (const skill of visible) {
+    lines.push("  <skill>");
+    lines.push(`    <name>${escapeXml(skill.name)}</name>`);
+    lines.push(`    <description>${escapeXml(skill.description)}</description>`);
+    lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+    lines.push("  </skill>");
+  }
+  lines.push("</available_skills>");
+  return lines.join("\n");
 }
 
 export function renderBaseSystemPromptFilesForPrompt(skills: SparkBuiltinSkill[]): string {
@@ -115,6 +123,24 @@ export async function renderBaseSystemPromptsPrompt(
   const skills = (await Promise.all(dirs.map((dir) => loadBuiltinSkills(dir)))).flat();
   const filePrompts = await Promise.all(files.map((filePath) => loadBasePromptFile(filePath)));
   return renderBaseSystemPromptFilesForPrompt([...skills, ...filePrompts.filter(isDefined)]);
+}
+
+/**
+ * Discover the same builtin/Cue skill sources as the legacy full renderer but
+ * inject metadata only. Kept in pi-extension so the legacy Pi host does not
+ * depend on the native app's resolver.
+ */
+export async function renderBaseSystemPromptsCatalogPrompt(
+  input: {
+    dirs?: string[];
+    files?: string[];
+  } = {},
+): Promise<string> {
+  const dirs = input.dirs ?? defaultBasePromptDirs();
+  const files = input.files ?? defaultBasePromptFiles();
+  const skills = (await Promise.all(dirs.map((dir) => loadBuiltinSkills(dir)))).flat();
+  const filePrompts = await Promise.all(files.map((filePath) => loadBasePromptFile(filePath)));
+  return renderBuiltinSkillsCatalogForPrompt([...skills, ...filePrompts.filter(isDefined)]);
 }
 
 export function parseSkillFrontmatter(markdown: string): {
@@ -210,11 +236,25 @@ function isDefined<T>(value: T | undefined): value is T {
 
 function parseSimpleYaml(raw: string): SparkSkillFrontmatter {
   const out: SparkSkillFrontmatter = {};
-  for (const line of raw.split(/\r?\n/)) {
+  const lines = raw.split(/\r?\n/u);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
     if (!line.trim() || line.trimStart().startsWith("#")) continue;
     const parsedLine = parseYamlLine(line);
     if (!parsedLine) continue;
-    out[parsedLine.key] = parseYamlScalar(parsedLine.rest.trim());
+    const scalar = parsedLine.rest.trim();
+    if (scalar === "|" || scalar === ">") {
+      const block: string[] = [];
+      while (index + 1 < lines.length) {
+        const next = lines[index + 1]!;
+        if (next.trim().length > 0 && !/^\s/u.test(next)) break;
+        index += 1;
+        block.push(next.replace(/^\s+/u, ""));
+      }
+      out[parsedLine.key] = (scalar === ">" ? block.join(" ") : block.join("\n")).trim();
+      continue;
+    }
+    out[parsedLine.key] = parseYamlScalar(scalar);
   }
   return out;
 }

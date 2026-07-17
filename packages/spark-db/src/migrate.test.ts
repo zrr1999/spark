@@ -47,6 +47,13 @@ describe("migrations", () => {
       "runtime_enrollment_tokens",
       "runtime_device_authorizations",
       "runtime_message_receipts",
+      "runtime_control_commands",
+      "runtime_session_projections",
+      "runtime_invocation_projections",
+      "runtime_invocation_event_projections",
+      "runtime_model_control_projections",
+      "runtime_channel_control_projections",
+      "runtime_ephemeral_secret_audit",
       "event_ingest_sequence",
     ]) {
       expect(tableExists(db, table)?.name).toBe(table);
@@ -68,6 +75,11 @@ describe("migrations", () => {
       "runtime_device_authorizations_installation_pending_idx",
       "runtime_message_receipts_runtime_seen_idx",
       "events_created_id_idx",
+      "runtime_session_projections_scope_status_idx",
+      "runtime_invocation_projections_session_status_idx",
+      "runtime_invocation_event_projections_cursor_idx",
+      "runtime_channel_control_projections_workspace_idx",
+      "runtime_ephemeral_secret_audit_runtime_created_idx",
       "events_ingest_sequence_unique",
     ]) {
       expect(indexExists(db, index)?.name).toBe(index);
@@ -89,6 +101,8 @@ describe("migrations", () => {
       "0009",
       "0010",
       "0011",
+      "0012",
+      "0013",
       "0014",
     ]);
 
@@ -111,7 +125,7 @@ describe("migrations", () => {
       count: number;
     };
 
-    expect(migrationCount.count).toBe(12);
+    expect(migrationCount.count).toBe(14);
     db.close();
   });
 

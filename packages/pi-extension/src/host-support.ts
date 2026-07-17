@@ -8,8 +8,11 @@
 export { renderSparkActiveSystemPrompt } from "./extension/spark-active-injection.ts";
 export {
   defaultBuiltinSkillsDir,
+  defaultPiCueSkillsDir,
   parseSkillFrontmatter,
+  renderBaseSystemPromptsCatalogPrompt,
   renderBaseSystemPromptsPrompt,
+  renderBuiltinSkillsCatalogForPrompt,
   type SparkSkillFrontmatter,
 } from "./extension/spark-builtin-skills.ts";
 export { loadSparkMode } from "./extension/session-state.ts";

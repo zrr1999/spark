@@ -18,6 +18,7 @@
     header?: Snippet;
     context?: Snippet;
     feedback?: Snippet;
+    onValueChange?: (value: string) => void;
   };
 
   let {
@@ -36,6 +37,7 @@
     header,
     context,
     feedback,
+    onValueChange,
   }: Props = $props();
 
   let textareaElement = $state<HTMLTextAreaElement | null>(null);
@@ -64,6 +66,12 @@
     if (!form || !submit || submit.disabled) return;
     form.requestSubmit(submit);
   }
+
+  function handleInput(event: Event) {
+    const textarea = event.currentTarget as HTMLTextAreaElement;
+    resizeTextarea(textarea);
+    onValueChange?.(textarea.value);
+  }
 </script>
 
 <div class="conversation-composer-shell">
@@ -78,7 +86,7 @@
     bind:value
     bind:this={textareaElement}
     {disabled}
-    oninput={(event) => resizeTextarea(event.currentTarget)}
+    oninput={handleInput}
     onkeydown={submitOnEnter}
   ></textarea>
   {#if feedback}<div class="composer-feedback">{@render feedback()}</div>{/if}

@@ -409,6 +409,8 @@ export function renderReproTickInstruction(repro: SparkSessionRepro): string {
     "Repro drive requirements:",
     `- Operate in the selected phase (${repro.currentPhase}); use its tool policy for plan or implement work.`,
     "- Advance milestones with the repro tool (satisfy/gate/advance); do not silently self-certify gates.",
+    "- Before ending every repro turn, leave a verifiable checkpoint. If the turn produced a coherent set of repository changes and committing is authorized and safe, create a small git commit promptly. Never include unrelated pre-existing changes.",
+    "- If a safe commit is not appropriate yet, show the work completed in the turn: cite concrete artifact refs or file paths, summarize the relevant diff, report commands/tests and their results, or state the exact blocker. Do not end with only a progress claim.",
     "- If you are blocked on a human decision or an external dependency, report the blocker instead of lowering scope; use /repro stop to end the drive.",
     "- End the turn after one concrete step; the next repro tick is scheduled automatically.",
   );

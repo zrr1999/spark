@@ -32,7 +32,7 @@ import {
   runtimeCommandReceipt,
 } from "./runtime-command-receipts.ts";
 import { openSparkDaemonDatabase } from "./store/schema.ts";
-import { addWorkspace } from "./store/workspaces.ts";
+import { registerWorkspace } from "./store/workspaces.ts";
 
 class CockpitSocket extends EventEmitter implements RuntimeWebSocketConnection {
   readonly sent: string[] = [];
@@ -76,12 +76,7 @@ it("typed runtime control reconnect executes once and stores one terminal result
     migrate(cockpitDb);
     const now = "2026-07-15T00:00:00.000Z";
     const runtimeId = createId("rt");
-    const daemonWorkspace = addWorkspace(daemonDb, {
-      serverUrl: "https://cockpit.example.test/",
-      localWorkspaceKey: "typed-control",
-      displayName: "Typed control",
-      localPath: root,
-    });
+    const bindingId = createId("rtwb");
     cockpitDb
       .prepare(
         `INSERT INTO runtime_connections
@@ -97,12 +92,24 @@ it("typed runtime control reconnect executes once and stores one terminal result
          capabilities_json, diagnostics_json, created_at, updated_at)
        VALUES (?, ?, 'typed-control', ?, 'Typed control', 'available', '{}', '{}', ?, ?)`,
       )
-      .run(daemonWorkspace.id, runtimeId, root, now, now);
+      .run(bindingId, runtimeId, root, now, now);
     const workspace = createWorkspaceWithOwnerBinding(cockpitDb, {
       slug: "typed-control",
       name: "Typed control",
-      runtimeWorkspaceBindingId: daemonWorkspace.id,
+      runtimeWorkspaceBindingId: bindingId,
       createdAt: now,
+    });
+    const daemonWorkspace = registerWorkspace(daemonDb, {
+      serverUrl: "https://cockpit.example.test/",
+      serverBindingId: bindingId,
+      serverWorkspaceId: workspace.id,
+      serverStatus: "available",
+      localWorkspaceKey: "typed-control",
+      displayName: "Typed control",
+      workspaceName: "Typed control",
+      workspaceSlug: "typed-control",
+      localPath: root,
+      now,
     });
     const queued = submitRuntimeControlCommand(cockpitDb, {
       runtimeId,

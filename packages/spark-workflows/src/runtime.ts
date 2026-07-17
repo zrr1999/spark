@@ -302,6 +302,7 @@ export async function runWorkflowScript<T = unknown>(
       label: event.label,
       data: { model: event.model },
     });
+    await flushWorkflowEvents();
     options.onAgentStart?.(event);
     await options.onAgentTelemetry?.({
       ...agentTelemetryBase(event, startedAt),

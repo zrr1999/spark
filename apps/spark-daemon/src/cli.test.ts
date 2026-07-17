@@ -6,7 +6,7 @@ import { PassThrough, Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import { gitCommand, resolveSparkPaths } from "@zendev-lab/spark-system";
-import { main, type CliIo } from "./cli.js";
+import { main, sparkDaemonServiceExitCode, type CliIo } from "./cli.js";
 import { readSparkDaemonConfig, writeSparkDaemonConfig } from "./config.js";
 import { LocalRpcUnavailableError } from "./local-rpc.js";
 import { RegistrationGrantRefusedError } from "./registration.js";
@@ -29,6 +29,7 @@ function createCliIo(
     turnSubmitToService?: CliIo["turnSubmitToService"];
     listWorkspacesFromService?: CliIo["listWorkspacesFromService"];
     registerWorkspaceInService?: CliIo["registerWorkspaceInService"];
+    relocateWorkspaceInService?: CliIo["relocateWorkspaceInService"];
     attachWorkspaceInService?: CliIo["attachWorkspaceInService"];
     stopWorkspaceInService?: CliIo["stopWorkspaceInService"];
     openExternal?: CliIo["openExternal"];
@@ -91,6 +92,9 @@ function createCliIo(
           db.close();
         }
       }),
+    ...(options.relocateWorkspaceInService
+      ? { relocateWorkspaceInService: options.relocateWorkspaceInService }
+      : {}),
     attachWorkspaceInService:
       options.attachWorkspaceInService ??
       (async (paths, id) => {
@@ -152,6 +156,30 @@ const legacyProtocolVocabularyPattern = new RegExp(
 );
 
 describe("Spark daemon CLI", () => {
+  it("uses failure-only supervisor restart semantics for managed lifecycle exits", () => {
+    expect(
+      sparkDaemonServiceExitCode({
+        managed: true,
+        restartRequested: true,
+        stopRequested: false,
+      }),
+    ).toBe(75);
+    expect(
+      sparkDaemonServiceExitCode({
+        managed: true,
+        restartRequested: true,
+        stopRequested: true,
+      }),
+    ).toBe(0);
+    expect(
+      sparkDaemonServiceExitCode({
+        managed: false,
+        restartRequested: true,
+        stopRequested: false,
+      }),
+    ).toBe(0);
+  });
+
   it("accepts pnpm run argument separators before commands", async () => {
     const capture = createCliIo();
 
@@ -179,8 +207,56 @@ describe("Spark daemon CLI", () => {
     await expect(main(["ws", "--help"], capture.io)).resolves.toBe(0);
 
     expect(capture.stdout()).toContain("Usage: spark daemon workspace <command>");
+    expect(capture.stdout()).toContain("relocate --to-server-url <https-origin>");
     expect(capture.stdout()).toContain("Example:");
     expect(capture.stdout()).not.toMatch(legacyProtocolVocabularyPattern);
+    expect(capture.stderr()).toBe("");
+  });
+
+  it("relocates Cockpit through the daemon-local RPC surface with redacted JSON", async () => {
+    const relocateWorkspaceInService = vi.fn(async () => ({
+      instanceId: "cockpit_11111111111111111111111111111111",
+      installationId: "install-relocation",
+      runtimeId: "rt_11111111111111111111111111111111",
+      fromServerUrl: "https://source.example.test/",
+      toServerUrl: "https://target.example.test/",
+      workspaceBindingIds: ["rtwb_11111111111111111111111111111111"],
+      workspaceCount: 1,
+      relocated: true as const,
+      webSocketUrl:
+        "wss://target.example.test/api/v1/runtime/runtimes/rt_11111111111111111111111111111111/ws",
+      relocatedAt: "2026-07-15T00:00:00.000Z",
+    }));
+    const capture = createCliIo({ relocateWorkspaceInService });
+
+    const code = await withTempSparkEnv(
+      async () =>
+        await main(
+          [
+            "workspace",
+            "relocate",
+            "--from-server-url",
+            "https://source.example.test",
+            "--to-server-url",
+            "https://target.example.test",
+            "--yes",
+            "--json",
+          ],
+          capture.io,
+        ),
+    );
+
+    expect(code).toBe(0);
+    expect(relocateWorkspaceInService).toHaveBeenCalledWith(expect.any(Object), {
+      fromServerUrl: "https://source.example.test",
+      toServerUrl: "https://target.example.test",
+    });
+    expect(JSON.parse(capture.stdout())).toMatchObject({
+      instanceId: "cockpit_11111111111111111111111111111111",
+      runtimeId: "rt_11111111111111111111111111111111",
+      workspaceCount: 1,
+    });
+    expect(capture.stdout()).not.toMatch(/token|secret|credential/i);
     expect(capture.stderr()).toBe("");
   });
 
@@ -2317,7 +2393,9 @@ describe("Spark daemon CLI", () => {
 
     await withTempSparkEnv(async () => {
       await expect(main(["ws", "reconcile"], capture.io)).resolves.toBe(1);
-      expect(capture.stderr()).toContain("Usage: spark daemon workspace <register|ls|show|stop>");
+      expect(capture.stderr()).toContain(
+        "Usage: spark daemon workspace <register|relocate|ls|show|stop>",
+      );
     });
   });
 
@@ -2410,6 +2488,38 @@ describe("Spark daemon CLI", () => {
     });
   });
 
+  it("does not signal an unreachable process from an unowned legacy pidfile", async () => {
+    const stalePid = 424_242;
+    const kill = vi.spyOn(process, "kill").mockImplementation(((
+      pid: number,
+      signal?: string | number,
+    ) => {
+      if (pid === stalePid && signal === 0) return true;
+      return true;
+    }) as typeof process.kill);
+    try {
+      await withTempSparkEnv(async () => {
+        const paths = resolveSparkPaths({ app: "daemon" });
+        mkdirSync(paths.runtimeDir, { recursive: true });
+        writeFileSync(paths.pidFile, `${stalePid}\n`);
+        const daemonStopFromService = vi.fn(async () => {
+          throw new LocalRpcUnavailableError("socket refused");
+        });
+        const stopService = vi.fn(() => null);
+        const capture = createCliIo({ daemonStopFromService, stopService });
+
+        await expect(main(["daemon", "stop", "--yes"], capture.io)).resolves.toBe(1);
+
+        expect(daemonStopFromService).toHaveBeenCalledOnce();
+        expect(stopService).toHaveBeenCalledOnce();
+        expect(kill).not.toHaveBeenCalledWith(stalePid, "SIGTERM");
+        expect(capture.stderr()).toContain("ownership could not be verified; no signal was sent");
+      });
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
   it("schedules a drain restart without waiting by default", async () => {
     await withTempSparkEnv(async () => {
       const paths = resolveSparkPaths({ app: "daemon" });
@@ -2465,19 +2575,26 @@ describe("Spark daemon CLI", () => {
           detail: "Started test Spark daemon.",
         };
       });
-      const daemonStatusFromService = vi.fn(async () => ({
-        servers: [],
-        invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
-        invocationHealth: {},
-        lifecycle: { state: "running" as const },
-        observedAt: "2026-07-15T00:00:01.000Z",
-      }));
+      let statusChecks = 0;
+      const daemonStatusFromService = vi.fn(async () => {
+        statusChecks += 1;
+        return {
+          servers: [],
+          invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
+          invocationHealth: {},
+          lifecycle:
+            statusChecks === 1
+              ? ({ state: "starting", phase: "initializing" } as const)
+              : ({ state: "running", phase: "serving" } as const),
+          observedAt: "2026-07-15T00:00:01.000Z",
+        };
+      });
       const capture = createCliIo({ startService, daemonStatusFromService });
 
       await expect(main(["daemon", "restart", "--yes", "--wait"], capture.io)).resolves.toBe(0);
 
       expect(startService).toHaveBeenCalledOnce();
-      expect(daemonStatusFromService).toHaveBeenCalledOnce();
+      expect(daemonStatusFromService).toHaveBeenCalledTimes(2);
       expect(capture.stdout()).toContain(`Spark daemon is ready as process ${process.ppid}.`);
       expect(capture.stderr()).toBe("");
     });
@@ -2526,6 +2643,113 @@ describe("Spark daemon CLI", () => {
       expect(daemonStatusFromService).toHaveBeenCalledOnce();
       expect(capture.stdout()).toContain(`Spark daemon restarted as process ${process.ppid}.`);
       expect(capture.stderr()).toBe("");
+    });
+  });
+
+  it("accepts the exact completed successor when the pidfile projection still names the predecessor", async () => {
+    await withTempSparkEnv(async () => {
+      const paths = resolveSparkPaths({ app: "daemon" });
+      mkdirSync(paths.runtimeDir, { recursive: true });
+      // Reproduce the live handoff race: the exact successor already answers
+      // status, but the pidfile projection observed by this waiter has not
+      // moved away from the still-live predecessor yet.
+      writeFileSync(paths.pidFile, `${process.pid}\n`);
+      const daemonRestartFromService = vi.fn(async () => {
+        writeFileSync(
+          join(paths.runtimeDir, "restart.terminal.restart-projection-race.json"),
+          JSON.stringify({
+            state: "completed",
+            restartId: "restart-projection-race",
+            previousPid: process.pid,
+            previousInstanceId: "old-instance",
+            previousGeneration: "old-generation",
+            previousStartedAt: "2026-07-15T00:00:00.000Z",
+            previousProcessStartToken: "test:old",
+            targetInstanceId: "new-instance",
+            targetGeneration: "new-generation",
+            protocolVersion: 1,
+            requestedAt: "2026-07-15T00:00:00.000Z",
+          }),
+        );
+        return {
+          accepted: true as const,
+          state: "draining" as const,
+          restartId: "restart-projection-race",
+          processInstanceId: "old-instance",
+          processGeneration: "old-generation",
+          targetInstanceId: "new-instance",
+          targetGeneration: "new-generation",
+          requestedAt: "2026-07-15T00:00:00.000Z",
+        };
+      });
+      const daemonStatusFromService = vi.fn(async () => ({
+        servers: [],
+        invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
+        invocationHealth: {},
+        lifecycle: {
+          state: "running" as const,
+          phase: "serving" as const,
+          process: {
+            pid: process.ppid,
+            instanceId: "new-instance",
+            generation: "new-generation",
+            protocolVersion: 1 as const,
+            startedAt: "2026-07-15T00:00:01.000Z",
+            acceptedRestartId: "restart-projection-race",
+          },
+        },
+        observedAt: "2026-07-15T00:00:01.000Z",
+      }));
+      const capture = createCliIo({ daemonRestartFromService, daemonStatusFromService });
+
+      await expect(main(["daemon", "restart", "--yes", "--wait"], capture.io)).resolves.toBe(0);
+
+      expect(daemonStatusFromService).toHaveBeenCalledOnce();
+      expect(capture.stdout()).toContain(`Spark daemon restarted as process ${process.ppid}.`);
+      expect(capture.stderr()).toBe("");
+    });
+  });
+
+  it("stops waiting when the exact restart terminal is cancelled", async () => {
+    await withTempSparkEnv(async () => {
+      const paths = resolveSparkPaths({ app: "daemon" });
+      mkdirSync(paths.runtimeDir, { recursive: true });
+      writeFileSync(paths.pidFile, `${process.pid}\n`);
+      const daemonRestartFromService = vi.fn(async () => {
+        writeFileSync(
+          join(paths.runtimeDir, "restart.terminal.restart-cancelled.json"),
+          JSON.stringify({
+            state: "cancelled",
+            restartId: "restart-cancelled",
+            previousPid: process.pid,
+            previousInstanceId: "old-instance",
+            previousGeneration: "old-generation",
+            previousStartedAt: "2026-07-15T00:00:00.000Z",
+            previousProcessStartToken: "test:old",
+            targetInstanceId: "new-instance",
+            targetGeneration: "new-generation",
+            protocolVersion: 1,
+            requestedAt: "2026-07-15T00:00:00.000Z",
+          }),
+        );
+        return {
+          accepted: true as const,
+          state: "draining" as const,
+          restartId: "restart-cancelled",
+          processInstanceId: "old-instance",
+          processGeneration: "old-generation",
+          targetInstanceId: "new-instance",
+          targetGeneration: "new-generation",
+          requestedAt: "2026-07-15T00:00:00.000Z",
+        };
+      });
+      const daemonStatusFromService = vi.fn();
+      const capture = createCliIo({ daemonRestartFromService, daemonStatusFromService });
+
+      await expect(main(["daemon", "restart", "--yes", "--wait"], capture.io)).resolves.toBe(1);
+
+      expect(daemonStatusFromService).not.toHaveBeenCalled();
+      expect(capture.stderr()).toContain("restart restart-cancelled was cancelled");
     });
   });
 

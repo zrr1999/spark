@@ -693,6 +693,8 @@ describe("Spark daemon workspace store", () => {
         lastKnownStatus: "available",
       });
 
+      expect(listWorkspaces(db)[0]?.serverWorkspaceId).toBe("ws_11111111111141111111111111111111");
+
       const grant = db
         .prepare(
           `SELECT grant_token_hash AS grantTokenHash,

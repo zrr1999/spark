@@ -1323,6 +1323,7 @@ export {
   normalizeProviderStream,
   openAiCompatiblePromptCachePayload,
   resolveWorkflowModelSelection,
+  SPARK_PROVIDER_TRANSPORT_MAX_RETRIES,
   withOpenAiCompatiblePromptCacheKey,
   type ProviderRegistryRunnerOptions,
   type SparkProviderStreamFunction,

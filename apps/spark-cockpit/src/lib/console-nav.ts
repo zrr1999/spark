@@ -36,17 +36,27 @@ export function buildConsoleNavGroups(input: {
   const workspaceRoute = (suffix: string) =>
     input.activeWorkspacePath ? `${input.activeWorkspacePath}${suffix}` : "";
 
+  const cockpitItems: ConsoleNavItem[] = [
+    {
+      href: "/workspaces/new",
+      label: input.nav.createWorkspace,
+      icon: "plus",
+    },
+  ];
+
+  if (input.hasActiveWorkspace && input.activeWorkspacePath) {
+    cockpitItems.push({
+      href: workspaceRoute("/settings/registration"),
+      label: input.nav.registration,
+      icon: "play",
+    });
+  }
+
   const groups: ConsoleNavGroup[] = [
     {
       id: "cockpit",
       label: input.groups.cockpit,
-      items: [
-        {
-          href: "/workspaces/new",
-          label: input.nav.createWorkspace,
-          icon: "plus",
-        },
-      ],
+      items: cockpitItems,
     },
     {
       id: "daemon",
@@ -76,11 +86,6 @@ export function buildConsoleNavGroups(input: {
           href: workspaceRoute("/settings/channels"),
           label: input.nav.channels,
           icon: "activity",
-        },
-        {
-          href: workspaceRoute("/settings/registration"),
-          label: input.nav.registration,
-          icon: "play",
         },
       ],
     });

@@ -15,7 +15,7 @@ import {
 } from "../apps/spark-tui/src/host/index.ts";
 
 void test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin extension set", () => {
-  const expected = [
+  const builtinExpected = [
     "@zendev-lab/spark-ask/extension",
     "@zendev-lab/spark-cue/extension",
     "@zendev-lab/spark-files/extension",
@@ -27,11 +27,28 @@ void test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin 
     "@zendev-lab/spark-graft/extension",
     "@zendev-lab/pi-extension/extension",
   ];
+  const defaultExpected = builtinExpected.filter(
+    (specifier) => specifier !== "@zendev-lab/spark-graft/extension",
+  );
   assert.deepEqual(
     loadBuiltinExtensionFactories().map((entry) => entry.specifier),
-    expected,
+    builtinExpected,
   );
-  assert.deepEqual([...DEFAULT_SPARK_EXTENSION_SPECS], expected);
+  assert.deepEqual([...DEFAULT_SPARK_EXTENSION_SPECS], defaultExpected);
+});
+
+void test("default Spark extension profile leaves Graft available only for explicit opt-in", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-extension-loader-default-no-graft" });
+  const result = await new SparkExtensionLoader({ api: host }).load();
+
+  assert.equal(
+    result.outcomes.some((outcome) => outcome.specifier === "@zendev-lab/spark-graft/extension"),
+    false,
+  );
+  assert.equal(
+    host.getAllTools().some((tool) => tool.name.startsWith("graft_")),
+    false,
+  );
 });
 
 void test("root Pi extension list and native builtins both expose self-extension tools", async () => {
@@ -45,9 +62,19 @@ void test("root Pi extension list and native builtins both expose self-extension
     rootPackage.pi?.extensions?.includes("./packages/spark-session/src/extension-entry.ts"),
   );
   assert.ok(rootPackage.pi?.extensions?.includes("./packages/spark-web/src/extension-entry.ts"));
+  assert.equal(
+    rootPackage.pi?.extensions?.includes("./packages/spark-graft/src/extension-entry.ts"),
+    false,
+  );
   assert.ok([...DEFAULT_SPARK_EXTENSION_SPECS].includes("@zendev-lab/spark-memory/extension"));
   assert.ok([...DEFAULT_SPARK_EXTENSION_SPECS].includes("@zendev-lab/spark-session/extension"));
   assert.ok([...DEFAULT_SPARK_EXTENSION_SPECS].includes("@zendev-lab/spark-web/extension"));
+  assert.equal(
+    (DEFAULT_SPARK_EXTENSION_SPECS as readonly string[]).includes(
+      "@zendev-lab/spark-graft/extension",
+    ),
+    false,
+  );
 });
 
 void test("published Spark TUI resolves builtins through declared package exports", async () => {
@@ -68,6 +95,11 @@ void test("published Spark TUI resolves builtins through declared package export
     assert.match(loaderSource, new RegExp(`from ["']${specifier.replaceAll("/", "\\/")}["']`, "u"));
   }
   assert.doesNotMatch(loaderSource, /packages\/[^/]+\/src\//u);
+  assert.doesNotMatch(
+    loaderSource,
+    /import sparkGraftExtension from ["']@zendev-lab\/spark-graft\/extension["']/u,
+  );
+  assert.match(loaderSource, /await import\("@zendev-lab\/spark-graft\/extension"\)/u);
 });
 
 void test("Spark command policy is owned by pi-extension, not spark-host", async () => {
@@ -106,7 +138,7 @@ void test("SparkExtensionLoader loads builtin factories through explicit imports
     result.outcomes.every((outcome) => outcome.ok && outcome.builtin),
     true,
   );
-  const tools = host.getAllTools().map((tool) => tool.name);
+  const tools = host.getActiveTools();
   assert.ok(tools.includes("ask"));
   assert.ok(!tools.includes("ask_user"));
   assert.ok(!tools.includes("ask_flow"));

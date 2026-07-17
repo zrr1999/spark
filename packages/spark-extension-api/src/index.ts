@@ -36,12 +36,7 @@ export interface ExtensionAPI {
   getAllTools?(): ToolInfo[];
   setActiveTools?(names: string[]): void;
   sendMessage?(
-    message: {
-      customType: string;
-      content: string;
-      display?: boolean;
-      details?: Record<string, unknown>;
-    },
+    message: ExtensionRuntimeMessage,
     options?: { deliverAs?: "steer" | "followUp" | "nextTurn"; triggerTurn?: boolean },
   ): void;
   sendUserMessage?(
@@ -51,6 +46,23 @@ export interface ExtensionAPI {
       streamingBehavior?: "steer" | "followUp";
     },
   ): void;
+}
+
+/**
+ * Authority carried by extension-originated runtime messages. The safe default
+ * is runtime data; only repo-owned control paths should opt into trusted
+ * runtime control explicitly.
+ */
+export type ExtensionRuntimeMessageAuthority = "runtime_control" | "runtime_data";
+export type ExtensionRuntimeMessageTrust = "trusted" | "untrusted";
+
+export interface ExtensionRuntimeMessage {
+  customType: string;
+  content: string;
+  display?: boolean;
+  details?: Record<string, unknown>;
+  authority?: ExtensionRuntimeMessageAuthority;
+  trust?: ExtensionRuntimeMessageTrust;
 }
 
 export type CommandSource = "system" | "extension" | (string & {});
@@ -85,15 +97,64 @@ export interface ShortcutConfig {
   isActive?: (ctx: ExtensionContext) => boolean;
 }
 
+/** Observable side-effect class used by Spark host execution policy. */
+export type ToolEffect = "read" | "local_write" | "external_write" | "destructive";
+
+/** Pi-compatible per-tool sibling-call execution mode. */
+export type ToolExecutionMode = "sequential" | "parallel";
+
+/** Static approval requirement declared by the tool owner. */
+export type ToolApprovalPolicy = "none" | "required";
+
+/**
+ * Declarative tool policy owned by the package that implements the tool.
+ * Domain and phase values are intentionally opaque strings: the shared
+ * extension contract carries policy data but does not own product routing.
+ */
+export interface ToolPolicy {
+  readonly effect?: ToolEffect;
+  readonly executionMode?: ToolExecutionMode;
+  readonly domains?: readonly string[];
+  readonly phases?: readonly string[];
+  readonly approval?: ToolApprovalPolicy;
+}
+
+export type ResolvedToolEffect = ToolEffect | "unknown";
+
+/** Normalized, immutable policy snapshot exposed by Spark hosts. */
+export interface ResolvedToolPolicy {
+  readonly effect: ResolvedToolEffect;
+  readonly executionMode: ToolExecutionMode;
+  readonly domains: readonly string[];
+  readonly phases: readonly string[];
+  readonly approval: ToolApprovalPolicy;
+}
+
 export interface ToolConfig {
   name: string;
   label?: string;
   description: string;
   promptGuidelines?: string[];
   parameters: unknown;
+  /** Canonical composable policy declaration for Spark hosts. */
+  policy?: ToolPolicy;
+  /**
+   * Side-effect classification owned by the tool implementation. Hosts must
+   * treat an omitted value as unknown, never infer it from the tool name.
+   * @deprecated Declare `policy.effect`; retained for Pi and existing tools.
+   */
+  effect?: ToolEffect;
+  /**
+   * Whether sibling calls may execute concurrently. Spark only honors
+   * `parallel` for tools also classified as `effect: "read"`; omitted values
+   * fail closed to sequential execution. This field matches Pi's tool contract.
+   * @deprecated Declare `policy.executionMode`; retained for Pi compatibility.
+   */
+  executionMode?: ToolExecutionMode;
   /**
    * When true, the host turn loop must satisfy the session `approvalMethod`
    * (`skip` | `human` | `auto`) before executing this tool.
+   * @deprecated Declare `policy.approval`; retained for existing hosts.
    */
   requiresApproval?: boolean;
   renderCall?: (
@@ -114,6 +175,130 @@ export interface ToolConfig {
   }>;
 }
 
+/**
+ * Resolve canonical and legacy declarations into one fail-closed snapshot.
+ * Missing legacy approval remains `none` for backwards compatibility, while
+ * malformed values or conflicting declarations never grant concurrency or
+ * suppress approval.
+ */
+export function resolveToolPolicy(config: ToolConfig): ResolvedToolPolicy {
+  const policyValue: unknown = config.policy;
+  const policy = isRecord(policyValue) ? policyValue : undefined;
+  const malformedPolicy =
+    (policyValue !== undefined && !policy) ||
+    !isOptionalToolEffect(policy?.effect) ||
+    !isOptionalToolEffect(config.effect) ||
+    declarationsConflict(policy?.effect, config.effect) ||
+    !isOptionalToolExecutionMode(policy?.executionMode) ||
+    !isOptionalToolExecutionMode(config.executionMode) ||
+    declarationsConflict(policy?.executionMode, config.executionMode) ||
+    !isOptionalToolApproval(policy?.approval) ||
+    (config.requiresApproval !== undefined && typeof config.requiresApproval !== "boolean") ||
+    !isOptionalPolicyLabels(policy?.domains) ||
+    !isOptionalPolicyLabels(policy?.phases);
+
+  const canonicalEffect = policy?.effect;
+  const legacyEffect: unknown = config.effect;
+  const effect = resolveToolEffect(canonicalEffect, legacyEffect, malformedPolicy);
+
+  const approval = resolveToolApproval(policy?.approval, config.requiresApproval, malformedPolicy);
+  const requestedExecutionMode = resolveToolExecutionMode(
+    policy?.executionMode,
+    config.executionMode,
+    malformedPolicy,
+  );
+  const executionMode =
+    requestedExecutionMode === "parallel" && effect === "read" && approval === "none"
+      ? "parallel"
+      : "sequential";
+
+  return Object.freeze({
+    effect,
+    executionMode,
+    domains: Object.freeze(normalizePolicyLabels(policy?.domains)),
+    phases: Object.freeze(normalizePolicyLabels(policy?.phases)),
+    approval,
+  });
+}
+
+function resolveToolEffect(
+  canonical: unknown,
+  legacy: unknown,
+  malformedPolicy: boolean,
+): ResolvedToolEffect {
+  if (malformedPolicy || !isOptionalToolEffect(canonical) || !isOptionalToolEffect(legacy)) {
+    return "unknown";
+  }
+  if (canonical !== undefined && legacy !== undefined && canonical !== legacy) return "unknown";
+  return canonical ?? legacy ?? "unknown";
+}
+
+function resolveToolExecutionMode(
+  canonical: unknown,
+  legacy: unknown,
+  malformedPolicy: boolean,
+): ToolExecutionMode {
+  if (
+    malformedPolicy ||
+    !isOptionalToolExecutionMode(canonical) ||
+    !isOptionalToolExecutionMode(legacy)
+  ) {
+    return "sequential";
+  }
+  if (canonical !== undefined && legacy !== undefined && canonical !== legacy) return "sequential";
+  return canonical ?? legacy ?? "sequential";
+}
+
+function resolveToolApproval(
+  canonical: unknown,
+  legacy: unknown,
+  malformedPolicy: boolean,
+): ToolApprovalPolicy {
+  if (malformedPolicy || (legacy !== undefined && typeof legacy !== "boolean")) return "required";
+  if (legacy === true || canonical === "required") return "required";
+  if (canonical === undefined || canonical === "none") return "none";
+  return "required";
+}
+
+function normalizePolicyLabels(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) return [];
+  return [...new Set(value.map((entry) => entry.trim()).filter(Boolean))];
+}
+
+function isOptionalToolEffect(value: unknown): value is ToolEffect | undefined {
+  return (
+    value === undefined ||
+    value === "read" ||
+    value === "local_write" ||
+    value === "external_write" ||
+    value === "destructive"
+  );
+}
+
+function isOptionalToolExecutionMode(value: unknown): value is ToolExecutionMode | undefined {
+  return value === undefined || value === "sequential" || value === "parallel";
+}
+
+function isOptionalToolApproval(value: unknown): value is ToolApprovalPolicy | undefined {
+  return value === undefined || value === "none" || value === "required";
+}
+
+function isOptionalPolicyLabels(value: unknown): value is readonly string[] | undefined {
+  return (
+    value === undefined ||
+    (Array.isArray(value) && value.every((entry) => typeof entry === "string"))
+  );
+}
+
+function declarationsConflict(canonical: unknown, legacy: unknown): boolean {
+  return canonical !== undefined && legacy !== undefined && canonical !== legacy;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export interface ToolRenderTheme {
   fg?: (color: string, text: string) => string;
   bold?: (text: string) => string;
@@ -125,6 +310,8 @@ export interface ToolRenderComponent {
 
 export interface ToolInfo {
   name: string;
+  /** Resolved policy when the host supports Spark policy normalization. */
+  policy?: ResolvedToolPolicy;
 }
 
 export type ExtensionUiNotifyLevel = "info" | "warning" | "error" | "success";

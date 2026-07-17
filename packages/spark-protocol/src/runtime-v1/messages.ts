@@ -2,10 +2,16 @@ import { z } from "zod";
 import {
   runtimeServerCommandKindOptions,
   runtimeServerCommandSpecification,
+  runtimeServerCommandSupportsScope,
   sparkProtocolJsonObjectSchema,
 } from "../command-events.ts";
+import { sparkAuthFlowSchema } from "../model-control.ts";
 import { isoDateTimeSchema, prefixedIdSchema } from "../refs.ts";
 import { runtimeEnvelopeFor, runtimeFeatureSchema } from "./envelope.ts";
+import {
+  runtimeEphemeralSecretResultEnvelopeSchema,
+  serverEphemeralSecretRequestEnvelopeSchema,
+} from "./ephemeral-secret.ts";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const artifactRefSchema = prefixedIdSchema("art");
@@ -132,6 +138,7 @@ function routedRuntimeEnvelopeFor<TPayload>(payloadSchema: z.ZodType<TPayload>) 
     humanRequestId: prefixedIdSchema("hreq").optional(),
     humanResponseId: prefixedIdSchema("hres").optional(),
     invocationId: prefixedIdSchema("inv").optional(),
+    sessionId: z.string().min(1).optional(),
     ackOf: prefixedIdSchema("msg").optional(),
   });
 }
@@ -186,11 +193,12 @@ export const serverCommandPayloadSchema = z
   })
   .superRefine((command, context) => {
     const specification = runtimeServerCommandSpecification(command.kind);
-    if (!specification || (command.scope && command.scope !== specification.scope)) {
+    const scope = command.scope ?? specification?.scope;
+    if (!specification || !scope || !runtimeServerCommandSupportsScope(specification, scope)) {
       context.addIssue({
         code: "custom",
         path: ["scope"],
-        message: `Command ${command.kind} must use ${specification?.scope ?? "a declared"} scope`,
+        message: `Command ${command.kind} does not support ${scope ?? "an undeclared"} scope`,
       });
     }
     validateBoundedPublicPayload(command.payload ?? {}, maxRuntimeCommandPayloadBytes, context, [
@@ -215,7 +223,11 @@ export const runtimeCommandProjectionKindSchema = z.enum([
   "workspace.snapshot",
   "session.list",
   "session.detail",
+  "session.snapshot",
+  "turn.status",
+  "turn.stream",
   "model.catalog",
+  "provider.auth.flow",
   "channel.status",
 ]);
 
@@ -233,7 +245,19 @@ export const runtimeCommandResultPayloadSchema = z
     replayed: z.boolean().optional(),
   })
   .superRefine((result, context) => {
-    validateBoundedPublicPayload(result, maxRuntimeCommandResultBytes, context, []);
+    const publicCopy =
+      result.projection?.kind === "provider.auth.flow"
+        ? {
+            ...result,
+            projection: { ...result.projection, data: {} },
+            result: {},
+          }
+        : result;
+    validateBoundedPublicPayload(publicCopy, maxRuntimeCommandResultBytes, context, []);
+    if (result.projection?.kind === "provider.auth.flow") {
+      sparkAuthFlowSchema.parse(result.projection.data);
+      sparkAuthFlowSchema.parse(result.result.flow);
+    }
   });
 
 export const humanQuestionOptionSchema = z.object({
@@ -550,9 +574,11 @@ export const runtimeMessageEnvelopeSchema = z.discriminatedUnion("type", [
   runtimeReconcileReportEnvelopeSchema,
   workspaceSnapshotEnvelopeSchema,
   serverCommandEnvelopeSchema,
+  serverEphemeralSecretRequestEnvelopeSchema,
   runtimeCommandAckEnvelopeSchema,
   runtimeCommandRejectEnvelopeSchema,
   runtimeCommandResultEnvelopeSchema,
+  runtimeEphemeralSecretResultEnvelopeSchema,
   humanRequestCreatedEnvelopeSchema,
   humanResponseDeliverEnvelopeSchema,
   humanResponseRecordedEnvelopeSchema,

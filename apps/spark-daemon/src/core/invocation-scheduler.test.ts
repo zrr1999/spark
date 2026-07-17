@@ -288,11 +288,16 @@ describe("SparkInvocationScheduler", () => {
         task: { type: "session.run", sessionId: "timeout", prompt: "timeout" },
       });
       expect(scheduler.processBatch()).toBe(true);
-      await scheduler.wait({ timeoutMs: 500 });
+      await eventually(() => store.require(timedOut.invocationId).status === "failed");
       expect(store.require(timedOut.invocationId)).toMatchObject({
         status: "failed",
         errorCode: "EXECUTOR_TIMEOUT",
       });
+      await expect(scheduler.wait({ timeoutMs: 20 })).rejects.toThrow(
+        "timed out waiting for Spark daemon invocations",
+      );
+      gate.resolve();
+      await scheduler.wait({ timeoutMs: 500 });
     } finally {
       gate.resolve();
       db.close();
@@ -349,13 +354,16 @@ describe("SparkInvocationScheduler", () => {
         task: { type: "session.run", sessionId: "same-session", prompt: "second" },
       });
       expect(scheduler.processBatch()).toBe(true);
-      await scheduler.wait({ timeoutMs: 500 });
+      await eventually(() => store.require(first.invocationId).status === "failed");
       expect(store.require(first.invocationId).status).toBe("failed");
+      await expect(scheduler.wait({ timeoutMs: 20 })).rejects.toThrow(
+        "timed out waiting for Spark daemon invocations",
+      );
       expect(scheduler.processBatch()).toBe(false);
       expect(launched).toEqual(["first"]);
 
       gate.resolve();
-      await delay(0);
+      await scheduler.wait({ timeoutMs: 500 });
       expect(scheduler.processBatch()).toBe(true);
       await scheduler.wait({ timeoutMs: 500 });
       expect(store.require(second.invocationId).status).toBe("succeeded");

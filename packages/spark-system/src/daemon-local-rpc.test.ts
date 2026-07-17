@@ -12,10 +12,11 @@ import {
 
 describe("Spark daemon local RPC transport", () => {
   it("uses the response timeout after connecting instead of retaining the connect timeout", async () => {
+    const connectTimeoutMs = 1_000;
     const fixture = await rpcFixture((request, socket) => {
       setTimeout(() => {
         socket.end(`${JSON.stringify({ id: request.id, ok: true, result: "ready" })}\n`);
-      }, 60);
+      }, connectTimeoutMs + 250);
     });
 
     try {
@@ -24,11 +25,32 @@ describe("Spark daemon local RPC transport", () => {
           { id: "delayed-response", method: "daemon.status" },
           {
             socketPath: fixture.socketPath,
-            connectTimeoutMs: 10,
-            responseTimeoutMs: 500,
+            connectTimeoutMs,
+            responseTimeoutMs: 5_000,
           },
         ),
       ).resolves.toBe("ready");
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("reports response-phase timeouts without reusing the connect-timeout error", async () => {
+    const fixture = await rpcFixture(() => {});
+
+    try {
+      const error = await requestSparkDaemonLocalRpcWire(
+        { id: "response-timeout", method: "daemon.status" },
+        {
+          socketPath: fixture.socketPath,
+          connectTimeoutMs: 1_000,
+          responseTimeoutMs: 20,
+        },
+      ).catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(SparkDaemonLocalRpcUnavailableError);
+      expect(error).toMatchObject({
+        message: `Timed out waiting for daemon RPC response from ${fixture.socketPath}`,
+      });
     } finally {
       await fixture.close();
     }

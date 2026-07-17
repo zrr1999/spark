@@ -3,6 +3,7 @@ import type { Project, ProjectRef, Task, TaskRef } from "@zendev-lab/spark-exten
 import { createId, parseSparkAssignment } from "@zendev-lab/spark-protocol";
 
 import {
+  consoleSparkCliErrorOutput,
   consoleSparkCliOutput,
   parseSparkCliOptions,
   printSparkCliResult,
@@ -11,6 +12,11 @@ import {
   readStringOption,
   type SparkCliOutput,
 } from "./shared.ts";
+import type {
+  CockpitInstanceCliFailure,
+  CockpitInstanceCliOptions,
+  CockpitInstanceCliResult,
+} from "./instance.ts";
 import {
   loadSparkCockpitCoordinationState,
   type SparkCockpitCoordinationState,
@@ -30,7 +36,8 @@ export type SparkCockpitCliResource =
   | "artifact"
   | "review"
   | "workflow"
-  | "assign";
+  | "assign"
+  | "instance";
 
 export interface SparkCockpitCliCommand {
   resource: SparkCockpitCliResource;
@@ -43,6 +50,10 @@ export interface SparkCockpitCliCommand {
   title?: string;
   role?: string;
   workspaceId?: string;
+  snapshotPath?: string;
+  databasePath?: string;
+  rollbackRoot?: string;
+  yes?: boolean;
 }
 
 export interface SparkCockpitCliOptions {
@@ -55,6 +66,7 @@ export interface SparkCockpitCliOptions {
   artifacts?: SparkCockpitArtifactSummary[];
   reviews?: SparkCockpitReviewSummary[];
   workflows?: SparkCockpitWorkflowSummary[];
+  instance?: CockpitInstanceCliOptions;
 }
 
 export type SparkCockpitGoalSource =
@@ -102,7 +114,8 @@ export type SparkCockpitCliResult =
   | { action: "artifact"; result: SparkCockpitArtifactListResult }
   | { action: "review"; result: SparkCockpitReviewListResult }
   | { action: "workflow"; result: SparkCockpitWorkflowListResult }
-  | { action: "assign"; result: SparkCockpitAssignResult };
+  | { action: "assign"; result: SparkCockpitAssignResult }
+  | { action: "instance"; result: CockpitInstanceCliResult };
 
 export interface SparkCockpitAssignResult {
   plane: "cockpit";
@@ -279,6 +292,17 @@ export function parseSparkCockpitCliArgs(argv: string[]): SparkCockpitCliCommand
         workspaceId: readStringOption(parsed.options, "workspace")?.trim(),
       };
     }
+    case "instance":
+      return {
+        resource: "instance",
+        verb,
+        json,
+        snapshotPath:
+          readStringOption(parsed.options, "snapshot")?.trim() || positionalSelector?.trim(),
+        databasePath: readStringOption(parsed.options, "database")?.trim(),
+        rollbackRoot: readStringOption(parsed.options, "rollback-root")?.trim(),
+        yes: readBooleanOption(parsed.options, "yes") || readBooleanOption(parsed.options, "y"),
+      };
     default:
       throw new Error(`unknown spark cockpit resource: ${resourceToken}`);
   }
@@ -289,6 +313,22 @@ export async function handleSparkCockpitCliCommand(
   options: SparkCockpitCliOptions = {},
 ): Promise<SparkCockpitCliResult> {
   if (command.resource === "help") return { action: "help", text: sparkCockpitHelpText() };
+  if (command.resource === "instance") {
+    const { handleCockpitInstanceCliCommand } = await import("./instance.ts");
+    return {
+      action: "instance",
+      result: await handleCockpitInstanceCliCommand(
+        {
+          operation: command.verb ?? "status",
+          snapshotPath: command.snapshotPath,
+          databasePath: command.databasePath,
+          rollbackRoot: command.rollbackRoot,
+          yes: command.yes,
+        },
+        options.instance,
+      ),
+    };
+  }
   const state = await loadCockpitState(options);
   switch (command.resource) {
     case "status":
@@ -314,22 +354,47 @@ export async function runSparkCockpitCliCommand(
   command: SparkCockpitCliCommand,
   output: SparkCliOutput = consoleSparkCliOutput,
   options: SparkCockpitCliOptions = {},
+  errorOutput: SparkCliOutput = consoleSparkCliErrorOutput,
 ): Promise<number> {
-  const result = await handleSparkCockpitCliCommand(command, options);
-  if (result.action === "help") {
-    output.write(result.text);
+  try {
+    const result = await handleSparkCockpitCliCommand(command, options);
+    if (result.action === "help") {
+      output.write(result.text);
+      return 0;
+    }
+    if (!command.json && "text" in result.result) {
+      output.write(result.result.text);
+      return 0;
+    }
+    printSparkCliResult(output, result, { json: command.json });
     return 0;
+  } catch (error) {
+    const instanceFailure = readCockpitInstanceFailure(error);
+    if (!instanceFailure) throw error;
+    const failure = { action: "error", error: instanceFailure } as const;
+    if (command.json) {
+      printSparkCliResult(errorOutput, failure, { json: true });
+    } else {
+      errorOutput.write(`${instanceFailure.code}: ${instanceFailure.message}\n`);
+    }
+    return instanceFailure.exitCode;
   }
-  if (!command.json && "text" in result.result) {
-    output.write(result.result.text);
-    return 0;
-  }
-  printSparkCliResult(output, result, { json: command.json });
-  return 0;
+}
+
+function readCockpitInstanceFailure(error: unknown): CockpitInstanceCliFailure | null {
+  if (!(error instanceof Error) || error.name !== "CockpitInstanceCliError") return null;
+  const failure = (error as Error & { failure?: unknown }).failure;
+  if (!failure || typeof failure !== "object") return null;
+  const candidate = failure as Partial<CockpitInstanceCliFailure>;
+  return typeof candidate.code === "string" &&
+    typeof candidate.message === "string" &&
+    typeof candidate.exitCode === "number"
+    ? (candidate as CockpitInstanceCliFailure)
+    : null;
 }
 
 export function sparkCockpitHelpText(): string {
-  return `spark cockpit - Spark cross-daemon coordination CLI\n\nUsage:\n  spark cockpit status [--json]\n  spark cockpit project list [--json]\n  spark cockpit project status <project-ref> [--json]\n  spark cockpit task list [--project <project-ref>] [--json]\n  spark cockpit task status <task-ref> [--json]\n  spark cockpit goal status [--json]\n  spark cockpit artifact list [--json]\n  spark cockpit review list [--json]\n  spark cockpit workflow list [--json]\n  spark cockpit assign --session <session-id> --goal <text> [--title <text>] [--role <role>] [--workspace <id>] [--json]\n\nThese commands use Cockpit coordination without starting the Web host.\nExecution controls belong under spark daemon run/session/events.\n`;
+  return `spark cockpit - Spark cross-daemon coordination CLI\n\nUsage:\n  spark cockpit status [--json]\n  spark cockpit project list [--json]\n  spark cockpit project status <project-ref> [--json]\n  spark cockpit task list [--project <project-ref>] [--json]\n  spark cockpit task status <task-ref> [--json]\n  spark cockpit goal status [--json]\n  spark cockpit artifact list [--json]\n  spark cockpit review list [--json]\n  spark cockpit workflow list [--json]\n  spark cockpit assign --session <session-id> --goal <text> [--title <text>] [--role <role>] [--workspace <id>] [--json]\n  spark cockpit instance status [--database <path>] [--json]\n  spark cockpit instance backup [snapshot-path] [--database <path>] [--json]\n  spark cockpit instance inspect <snapshot-path> [--json]\n  spark cockpit instance restore <snapshot-path> [--database <path>] [--rollback-root <path>] [--yes] [--json]\n\nThese commands use Cockpit coordination without starting the Web host.\nInstance restore replaces the complete Cockpit database and requires confirmation.\nExecution controls belong under spark daemon run/session/events.\n`;
 }
 
 type LoadedCockpitState = SparkCockpitCoordinationState;
@@ -521,7 +586,9 @@ function statusScope(
 }
 
 function defaultCockpitVerb(resource: string): string {
-  return resource === "status" || resource === "goal" ? "status" : "list";
+  return resource === "status" || resource === "goal" || resource === "instance"
+    ? "status"
+    : "list";
 }
 
 function requireGraph(graph: TaskGraph | null): TaskGraph {

@@ -5,6 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  CURRENT_SPARK_EXTENSION_PROFILE_VERSION,
+  DEFAULT_SPARK_EXTENSION_SPECS,
   DEFAULT_SPARK_CONFIG,
   loadSparkConfig,
   mergeSparkConfigWithDefault,
@@ -20,6 +22,58 @@ void test("default Spark providers include shared Baidu OneAPI and OpenAI Codex 
     DEFAULT_SPARK_CONFIG.providers.includes("@zendev-lab/spark-ai/cursor-provider"),
     false,
   );
+  assert.equal(
+    DEFAULT_SPARK_CONFIG.extensions.includes("@zendev-lab/spark-graft/extension"),
+    false,
+  );
+  assert.deepEqual(DEFAULT_SPARK_CONFIG.extensions, [...DEFAULT_SPARK_EXTENSION_SPECS]);
+  assert.equal(
+    DEFAULT_SPARK_CONFIG.extensionProfileVersion,
+    CURRENT_SPARK_EXTENSION_PROFILE_VERSION,
+  );
+});
+
+void test("legacy bundled extension profiles migrate to current defaults without Graft", () => {
+  const historical = [
+    "@zendev-lab/spark-ask/extension",
+    "@zendev-lab/spark-cue/extension",
+    "@zendev-lab/spark-files/extension",
+    "@zendev-lab/spark-ai/models-extension",
+    "@zendev-lab/spark-roles/extension",
+    "@zendev-lab/spark-graft/extension",
+    "@zendev-lab/spark-extension/extension",
+    "my-extension",
+  ];
+
+  const migrated = mergeSparkConfigWithDefault({ extensions: historical });
+
+  assert.deepEqual(migrated.extensions, [...DEFAULT_SPARK_EXTENSION_SPECS, "my-extension"]);
+  assert.equal(migrated.extensions.includes("@zendev-lab/spark-graft/extension"), false);
+  assert.equal(migrated.extensionProfileVersion, CURRENT_SPARK_EXTENSION_PROFILE_VERSION);
+});
+
+void test("legacy singleton facade recovers the canonical default extension profile", () => {
+  const migrated = mergeSparkConfigWithDefault({
+    extensions: ["@zendev-lab/spark-extension/extension"],
+  });
+
+  assert.deepEqual(migrated.extensions, [...DEFAULT_SPARK_EXTENSION_SPECS]);
+});
+
+void test("legacy facade plus custom extensions restores defaults and preserves custom entries", () => {
+  const migrated = mergeSparkConfigWithDefault({
+    extensions: ["@zendev-lab/spark-extension/extension", "my-extension"],
+  });
+
+  assert.deepEqual(migrated.extensions, [...DEFAULT_SPARK_EXTENSION_SPECS, "my-extension"]);
+});
+
+void test("standalone Graft remains an explicit opt-in across profile migration", () => {
+  const migrated = mergeSparkConfigWithDefault({
+    extensions: ["@zendev-lab/spark-graft/extension"],
+  });
+
+  assert.deepEqual(migrated.extensions, ["@zendev-lab/spark-graft/extension"]);
 });
 
 void test("loadSparkConfig returns default config when file is missing", async () => {

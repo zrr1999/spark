@@ -32,6 +32,7 @@ import { mkdir, readdir, readFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createDaemonSessionRegistry, type DaemonSessionRegistry } from "../session-registry.ts";
 import type { SparkDaemonChannelContext } from "../core/types.ts";
+import type { DaemonChannelTransportFactory } from "./transport-factory.ts";
 
 export const CHANNEL_INGRESS_FAILURE_REPLY = "消息暂时无法处理，请稍后重试。";
 
@@ -52,6 +53,8 @@ export interface ChannelIngressAssignment {
 
 export interface ChannelIngressHooks {
   onAssignment: (input: ChannelIngressAssignment) => Promise<void | "duplicate">;
+  /** Persist normalized ingress before session resolution and task admission. */
+  onInboundReceived?: (input: { workspaceId: string; message: IncomingMessage }) => void;
   onReply?: (input: { externalKey: string; text: string; adapterId: string }) => Promise<void>;
   onInteraction?: (input: {
     workspaceId: string;
@@ -62,6 +65,7 @@ export interface ChannelIngressHooks {
 export interface ChannelIngressController {
   start(): Promise<void>;
   stop(): Promise<void>;
+  admitInbound(message: IncomingMessage): Promise<void>;
   notify(input: ChannelNotifyInput): Promise<ChannelNotifyResult>;
   openReplyStream(
     adapterId: string,
@@ -130,6 +134,7 @@ export interface DaemonChannelIngressStatus {
 export interface DaemonChannelIngressRuntime {
   start(): Promise<DaemonChannelIngressStatus[]>;
   stop(): Promise<void>;
+  admitInbound?(workspaceId: string, message: IncomingMessage): Promise<void>;
   status(workspaceId: string): DaemonChannelIngressStatus;
   configure(workspaceId: string, config: unknown): Promise<DaemonChannelIngressStatus>;
   reload(workspaceId: string): Promise<DaemonChannelIngressStatus>;
@@ -167,6 +172,8 @@ export interface DaemonChannelIngressRuntime {
   ): Promise<void>;
   /** Install the daemon-owned native interaction router after construction. */
   setInteractionHandler?(handler?: ChannelIngressHooks["onInteraction"]): void;
+  /** Install a daemon-owned durable ingress receipt before transports start. */
+  setInboundHandler?(handler?: ChannelIngressHooks["onInboundReceived"]): void;
   listWorkspaceIds(): Promise<string[]>;
 }
 
@@ -262,15 +269,26 @@ export function createChannelIngressController(input: {
     Partial<Pick<DaemonSessionRegistry, "recordTurnQueued" | "recordTurnSettled">>;
   workspaceId: string;
   createTransport?: ChannelRegistryOptions["createTransport"];
+  createWorkspaceTransport?: DaemonChannelTransportFactory;
 }): ChannelIngressController {
   const sessionRegistry = input.sessionRegistry ?? createDaemonSessionRegistry(input.sparkHome);
   const activeHandlers = new Set<Promise<void>>();
-  const trackHandler = (operation: Promise<void>, label: "inbound" | "interaction") => {
-    const tracked = operation.catch((error) => {
-      console.error(`[spark-channels] ${label} failed`, error);
-    });
+  const trackHandler = (
+    operation: Promise<void>,
+    label: "inbound" | "interaction",
+  ): Promise<void> => {
+    // Observe failures for drain/diagnostics without replacing the original
+    // rejecting promise returned to transports. QQ uses that rejection to
+    // avoid advancing its resume sequence before durable settlement.
+    const tracked = operation.then(
+      () => undefined,
+      (error) => {
+        console.error(`[spark-channels] ${label} failed`, error);
+      },
+    );
     activeHandlers.add(tracked);
     void tracked.finally(() => activeHandlers.delete(tracked));
+    return operation;
   };
   const waitForHandlers = async () => {
     while (activeHandlers.size > 0) {
@@ -279,16 +297,32 @@ export function createChannelIngressController(input: {
   };
   const channelRegistry = new ChannelRegistry({
     config: input.config,
-    ...(input.createTransport ? { createTransport: input.createTransport } : {}),
+    ...(input.createTransport || input.createWorkspaceTransport
+      ? {
+          createTransport: (adapterId, config) =>
+            input.createWorkspaceTransport?.({
+              workspaceId: input.workspaceId,
+              adapterId,
+              config,
+            }) ?? input.createTransport?.(adapterId, config),
+        }
+      : {}),
     onMessage: (message) => {
-      trackHandler(handleInbound(message), "inbound");
+      if (Object.keys(input.config.adapters).length === 0 || !message.text.trim()) return;
+      // A daemon persistence hook is intentionally invoked before converting
+      // to a Promise. Synchronous SQLite failures propagate to transports so
+      // an SDK must not ACK an event that never acquired a durable receipt.
+      if (input.hooks.onInboundReceived) {
+        input.hooks.onInboundReceived({ workspaceId: input.workspaceId, message });
+        return;
+      }
+      void trackHandler(handleInbound(message), "inbound");
     },
-    onInteraction: (event) => {
+    onInteraction: (event) =>
       trackHandler(
         input.hooks.onInteraction?.({ workspaceId: input.workspaceId, event }) ?? Promise.resolve(),
         "interaction",
-      );
-    },
+      ),
   });
 
   async function handleInbound(message: IncomingMessage): Promise<void> {
@@ -315,8 +349,7 @@ export function createChannelIngressController(input: {
     });
     const replyRecipient = channelReplyRecipient(message);
     if (!replyRecipient) {
-      console.error("[spark-channels] inbound missing reply recipient", message.externalKey);
-      return;
+      throw new Error(`channel inbound missing reply recipient: ${message.externalKey}`);
     }
     let admission: void | "duplicate";
     try {
@@ -382,6 +415,7 @@ export function createChannelIngressController(input: {
       await waitForHandlers();
       if (stopError) throw stopError;
     },
+    admitInbound: handleInbound,
     notify: async (notifyInput) => await channelRegistry.notify(notifyInput),
     openReplyStream: async (adapterId, target) =>
       await channelRegistry.openReplyStream(adapterId, target),
@@ -502,6 +536,7 @@ export function createDaemonChannelIngressRuntime(input: {
   /** @deprecated Ignored; pass workspaceId to status/configure/reload/notify. */
   workspaceId?: string;
   createTransport?: ChannelRegistryOptions["createTransport"];
+  createWorkspaceTransport?: DaemonChannelTransportFactory;
   now?: () => Date;
 }): DaemonChannelIngressRuntime {
   const now = input.now ?? (() => new Date());
@@ -544,6 +579,9 @@ export function createDaemonChannelIngressRuntime(input: {
       sessionRegistry,
       workspaceId,
       ...(input.createTransport ? { createTransport: input.createTransport } : {}),
+      ...(input.createWorkspaceTransport
+        ? { createWorkspaceTransport: input.createWorkspaceTransport }
+        : {}),
     });
     next.status();
     return next;
@@ -690,6 +728,13 @@ export function createDaemonChannelIngressRuntime(input: {
         });
       }
     },
+    admitInbound: async (workspaceId, message) => {
+      const slot = getSlot(workspaceId);
+      if (!slot.controller) {
+        throw new Error(`channels not configured for workspace ${workspaceId}`);
+      }
+      await slot.controller.admitInbound(message);
+    },
     status: (workspaceId) => statusOf(getSlot(workspaceId)),
     configure: (workspaceId, value) => {
       const parsed = parseChannelsConfig(value);
@@ -741,6 +786,9 @@ export function createDaemonChannelIngressRuntime(input: {
     },
     setInteractionHandler: (handler) => {
       input.hooks.onInteraction = handler;
+    },
+    setInboundHandler: (handler) => {
+      input.hooks.onInboundReceived = handler;
     },
     listWorkspaceIds: async () => await listWorkspaceChannelIds(input.sparkHome),
   };

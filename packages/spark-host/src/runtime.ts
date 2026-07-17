@@ -11,8 +11,9 @@
  * `tool-and-thinking-rendering`); this skeleton intentionally keeps those
  * surfaces minimal:
  *
- *   - `registerTool` / `getAllTools` / `setActiveTools` keep an in-memory tool
- *     registry. Active state defaults to `true` for newly registered tools.
+ *   - `registerTool` / `getAllTools` / `getActiveTools` / `setActiveTools` keep
+ *     an in-memory tool registry. Active state defaults to `true` for newly
+ *     registered tools; registered and active queries remain distinct.
  *   - `registerCommand` keeps an in-memory command registry. The agent turn
  *     loop will read it later; here we only persist the registration.
  *   - `on(event, handler)` keeps a per-event listener list. `emit(event)` is
@@ -32,12 +33,14 @@ import type {
   CommandConfig,
   ExtensionAPI,
   ExtensionContext,
+  ExtensionRuntimeMessage,
   ExtensionUi,
   LeafCapabilityRunner,
   ExtensionRoleRunner,
   ToolConfig,
   ToolInfo,
 } from "@zendev-lab/spark-extension-api";
+import { resolveToolPolicy } from "@zendev-lab/spark-extension-api";
 import {
   SPARK_PROTOCOL_VERSION,
   createBlockedInteractionResponse,
@@ -77,6 +80,10 @@ export interface SparkHostRuntimeOptions {
   sparkStateRoot?: string;
   sessionSurface?: "local" | "channel";
   sessionSource?: "tui" | "web" | "channel" | "daemon" | "session";
+  channelBinding?: {
+    adapter: "feishu" | "infoflow" | "qqbot";
+    externalKey: string;
+  };
   invocationId?: string;
   sessionQuestionChain?: readonly string[];
   /** When present, this host instance must never activate tools outside this allowlist. */
@@ -103,6 +110,9 @@ export class SparkHostRuntime implements ExtensionAPI {
   readonly sparkStateRoot: string | undefined;
   readonly sessionSurface: "local" | "channel" | undefined;
   readonly sessionSource: "tui" | "web" | "channel" | "daemon" | "session" | undefined;
+  readonly channelBinding:
+    | { adapter: "feishu" | "infoflow" | "qqbot"; externalKey: string }
+    | undefined;
   readonly invocationId: string | undefined;
   readonly sessionQuestionChain: readonly string[] | undefined;
   readonly hasUI: boolean;
@@ -129,6 +139,7 @@ export class SparkHostRuntime implements ExtensionAPI {
     this.sparkStateRoot = options.sparkStateRoot;
     this.sessionSurface = options.sessionSurface;
     this.sessionSource = options.sessionSource;
+    this.channelBinding = options.channelBinding;
     this.invocationId = options.invocationId?.trim() || undefined;
     this.sessionQuestionChain = options.sessionQuestionChain
       ?.map((entry) => entry.trim())
@@ -153,6 +164,7 @@ export class SparkHostRuntime implements ExtensionAPI {
     const existing = this.tools.get(config.name);
     const entry: RegisteredTool = {
       config,
+      policy: resolveToolPolicy(config),
       active: this.isToolAllowed(config.name) && (existing?.active ?? true),
     };
     this.tools.set(config.name, entry);
@@ -189,20 +201,18 @@ export class SparkHostRuntime implements ExtensionAPI {
   };
 
   sendMessage = (
-    message: {
-      customType: string;
-      content: string;
-      display?: boolean;
-      details?: Record<string, unknown>;
-    },
+    message: ExtensionRuntimeMessage,
     options?: { deliverAs?: "steer" | "followUp" | "nextTurn"; triggerTurn?: boolean },
   ): void => {
     const envelope: OutboxEnvelope = {
       kind: "custom",
+      sessionId: this.sessionId,
       customType: message.customType,
       content: message.content,
       display: message.display,
       details: message.details,
+      authority: message.authority,
+      trust: message.trust,
       options: { deliverAs: options?.deliverAs, triggerTurn: options?.triggerTurn },
       enqueuedAt: Date.now(),
     };
@@ -212,6 +222,8 @@ export class SparkHostRuntime implements ExtensionAPI {
       content: message.content,
       display: message.display,
       details: message.details,
+      authority: message.authority,
+      trust: message.trust,
     });
     if (options?.triggerTurn) queueMicrotask(() => void this.triggerTurnHandler?.());
   };
@@ -225,6 +237,7 @@ export class SparkHostRuntime implements ExtensionAPI {
   ): void => {
     this.outbox.push({
       kind: "user",
+      sessionId: this.sessionId,
       content,
       options: {
         deliverAs: options?.deliverAs,
@@ -245,7 +258,7 @@ export class SparkHostRuntime implements ExtensionAPI {
   getAllTools = (): ToolInfo[] => {
     const infos: ToolInfo[] = [];
     for (const [name, tool] of Array.from(this.tools)) {
-      if (tool.active) infos.push({ name });
+      infos.push({ name, policy: tool.policy });
     }
     return infos;
   };
@@ -410,6 +423,7 @@ export class SparkHostRuntime implements ExtensionAPI {
       ...(this.sparkStateRoot ? { sparkStateRoot: this.sparkStateRoot } : {}),
       ...(this.sessionSurface ? { sessionSurface: this.sessionSurface } : {}),
       ...(this.sessionSource ? { sessionSource: this.sessionSource } : {}),
+      ...(this.channelBinding ? { channelBinding: this.channelBinding } : {}),
       ...(this.invocationId ? { invocationId: this.invocationId } : {}),
       ...(this.sessionQuestionChain
         ? { sessionQuestionChain: [...this.sessionQuestionChain] }

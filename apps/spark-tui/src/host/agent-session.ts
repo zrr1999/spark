@@ -2,6 +2,16 @@
 
 import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai";
 import { sparkTextPhaseFromSignature } from "@zendev-lab/spark-protocol";
+import {
+  SPARK_PROMPT_ITEM_METADATA_KEY,
+  lowerSparkPromptItems,
+  parseSparkPromptItemMetadata,
+  sparkPromptItemFromProviderMessage,
+  sparkPromptItemMetadata,
+  sparkRuntimePromptItem,
+  type SparkPromptItem,
+  type SparkRunOutcome,
+} from "@zendev-lab/spark-turn";
 
 import type { SparkCliHostServices } from "./bootstrap.ts";
 import type {
@@ -28,6 +38,7 @@ export interface SparkAgentSessionRunResult {
   newMessageCount: number;
   assistantText: string;
   assistant?: AssistantMessage;
+  outcome?: SparkRunOutcome;
   sessionPersistence?: "persistent" | "anonymous";
 }
 
@@ -42,17 +53,35 @@ export class SparkAgentSession {
     const record = await this.loadOrCreateRecord(options);
     this.services.runtime.setSessionId(record.header.id);
     this.services.agentLoop.setViewSessionId(record.header.id);
-    const priorMessages = sessionRecordToAgentMessages(record);
-    this.services.agentLoop.replaceMessages(priorMessages);
-    const beforeCount = this.services.agentLoop.getMessages().length;
-    const assistant = await this.services.agentLoop.submit(options.prompt);
-    if (!assistant) throw new Error("Spark agent produced no assistant response");
+    const priorItems = sessionRecordToPromptItems(record);
+    this.services.agentLoop.replacePromptItems(priorItems);
+    const beforeCount = this.services.agentLoop.getPromptItems().length;
+    const outcome = await this.services.agentLoop.submitWithOutcome(options.prompt);
+    const assistant = outcome.assistant;
 
-    const newMessages = this.services.agentLoop.getMessages().slice(beforeCount);
+    const newItems = this.services.agentLoop.getPromptItems().slice(beforeCount);
     let pendingMessageMetadata = options.messageMetadata;
-    for (const message of newMessages) {
+    let persistedCount = 0;
+    for (const item of newItems) {
+      if (item.persistence !== "session") continue;
+      if (item.content.kind === "runtime") {
+        const details = {
+          ...(item.details ?? {}),
+          [SPARK_PROMPT_ITEM_METADATA_KEY]: sparkPromptItemMetadata(item),
+        };
+        this.services.sessionStore.appendCustomMessage(
+          record,
+          item.customType ?? "spark-runtime-message",
+          item.content.value,
+          item.visibility === "visible",
+          details,
+        );
+        persistedCount += 1;
+        continue;
+      }
+      const message = item.content.message as Message;
       const persisted = agentMessageToSessionMessage(message);
-      if (message.role === "user" && pendingMessageMetadata) {
+      if (item.authority === "user" && pendingMessageMetadata) {
         persisted.metadata = {
           ...recordMetadata(persisted.metadata),
           ...pendingMessageMetadata,
@@ -60,15 +89,17 @@ export class SparkAgentSession {
         pendingMessageMetadata = undefined;
       }
       this.services.sessionStore.appendMessage(record, persisted);
+      persistedCount += 1;
     }
     await this.services.sessionStore.save(record);
 
     return {
       sessionId: record.header.id,
       sessionPath: record.path,
-      newMessageCount: newMessages.length,
+      newMessageCount: persistedCount,
       assistantText: assistantMessageToFinalAnswerText(assistant),
       assistant,
+      outcome,
       sessionPersistence: "persistent",
     };
   }
@@ -76,17 +107,21 @@ export class SparkAgentSession {
   async runAnonymous(options: SparkAgentSessionRunOptions): Promise<SparkAgentSessionRunResult> {
     this.services.runtime.setSessionId(options.sessionId);
     this.services.agentLoop.setViewSessionId(options.sessionId);
-    this.services.agentLoop.replaceMessages([]);
-    const beforeCount = this.services.agentLoop.getMessages().length;
-    const assistant = await this.services.agentLoop.submit(options.prompt);
-    if (!assistant) throw new Error("Spark agent produced no assistant response");
+    this.services.agentLoop.replacePromptItems([]);
+    const beforeCount = this.services.agentLoop.getPromptItems().length;
+    const outcome = await this.services.agentLoop.submitWithOutcome(options.prompt);
+    const assistant = outcome.assistant;
 
     return {
       sessionId: options.sessionId,
       sessionPath: "",
-      newMessageCount: this.services.agentLoop.getMessages().slice(beforeCount).length,
+      newMessageCount: this.services.agentLoop
+        .getPromptItems()
+        .slice(beforeCount)
+        .filter((item) => item.persistence === "session").length,
       assistantText: assistantMessageToFinalAnswerText(assistant),
       assistant,
+      outcome,
       sessionPersistence: "anonymous",
     };
   }
@@ -142,7 +177,11 @@ export function assistantMessageToFinalAnswerText(message: {
 }
 
 export function sessionRecordToAgentMessages(record: SparkSessionRecord): Message[] {
-  return sessionEntriesToAgentMessages(record.entries);
+  return lowerSparkPromptItems(sessionRecordToPromptItems(record)) as Message[];
+}
+
+export function sessionRecordToPromptItems(record: SparkSessionRecord): SparkPromptItem[] {
+  return sessionEntriesToPromptItems(record.entries);
 }
 
 export function sessionMessageToAgentMessage(message: SparkSessionMessage): Message | undefined {
@@ -173,24 +212,28 @@ export function agentMessageToSessionMessage(message: Message): SparkSessionMess
 }
 
 export function sessionEntriesToAgentMessages(entries: SparkSessionEntry[]): Message[] {
+  return lowerSparkPromptItems(sessionEntriesToPromptItems(entries)) as Message[];
+}
+
+export function sessionEntriesToPromptItems(entries: SparkSessionEntry[]): SparkPromptItem[] {
   const pathEntries = branchEntriesForLeaf(entries);
   const latestCompactionIndex = findLastIndex(
     pathEntries,
     (entry): entry is SparkCompactionEntry => entry.type === "compaction",
   );
-  if (latestCompactionIndex < 0) return entriesToAgentMessages(pathEntries);
+  if (latestCompactionIndex < 0) return entriesToPromptItems(pathEntries);
 
   const compaction = pathEntries[latestCompactionIndex] as SparkCompactionEntry;
-  const messages: Message[] = [compactionSummaryToUserMessage(compaction)];
+  const items: SparkPromptItem[] = [compactionSummaryToPromptItem(compaction)];
   let foundFirstKept = false;
   for (let index = 0; index < latestCompactionIndex; index += 1) {
     const entry = pathEntries[index]!;
     if (entry.id === compaction.firstKeptEntryId) foundFirstKept = true;
-    if (foundFirstKept) appendEntryAgentMessage(messages, entry);
+    if (foundFirstKept) appendEntryPromptItem(items, entry);
   }
   for (let index = latestCompactionIndex + 1; index < pathEntries.length; index += 1)
-    appendEntryAgentMessage(messages, pathEntries[index]!);
-  return messages;
+    appendEntryPromptItem(items, pathEntries[index]!);
+  return items;
 }
 
 function branchEntriesForLeaf(entries: SparkSessionEntry[]): SparkSessionEntry[] {
@@ -206,47 +249,77 @@ function branchEntriesForLeaf(entries: SparkSessionEntry[]): SparkSessionEntry[]
   return path;
 }
 
-function entriesToAgentMessages(entries: SparkSessionEntry[]): Message[] {
-  const messages: Message[] = [];
-  for (const entry of entries) appendEntryAgentMessage(messages, entry);
-  return messages;
+function entriesToPromptItems(entries: SparkSessionEntry[]): SparkPromptItem[] {
+  const items: SparkPromptItem[] = [];
+  for (const entry of entries) appendEntryPromptItem(items, entry);
+  return items;
 }
 
-function appendEntryAgentMessage(messages: Message[], entry: SparkSessionEntry): void {
-  const message = entryToAgentMessage(entry);
-  if (message) messages.push(message);
+function appendEntryPromptItem(items: SparkPromptItem[], entry: SparkSessionEntry): void {
+  const item = entryToPromptItem(entry);
+  if (item) items.push(item);
 }
 
-function entryToAgentMessage(entry: SparkSessionEntry): Message | undefined {
-  if (entry.type === "message") return sessionMessageToAgentMessage(entry.message);
-  if (entry.type === "custom_message") return customMessageToUserMessage(entry);
-  if (entry.type === "branch_summary") return branchSummaryToUserMessage(entry);
+function entryToPromptItem(entry: SparkSessionEntry): SparkPromptItem | undefined {
+  if (entry.type === "message") {
+    const message = sessionMessageToAgentMessage(entry.message);
+    return message
+      ? sparkPromptItemFromProviderMessage(
+          message as unknown as Record<string, unknown> & { role: string },
+        )
+      : undefined;
+  }
+  if (entry.type === "custom_message") return customMessageToPromptItem(entry);
+  if (entry.type === "branch_summary") return branchSummaryToPromptItem(entry);
   return undefined;
 }
 
-function customMessageToUserMessage(entry: SparkCustomMessageEntry): UserMessage | undefined {
-  if (entry.display === false || !isKnownContent(entry.content)) return undefined;
-  return {
-    role: "user",
-    content: entry.content as UserMessage["content"],
+function customMessageToPromptItem(entry: SparkCustomMessageEntry): SparkPromptItem {
+  const details = recordMetadata(entry.details);
+  const metadata = parseSparkPromptItemMetadata(details[SPARK_PROMPT_ITEM_METADATA_KEY]);
+  const authority =
+    metadata?.authority === "system" ||
+    metadata?.authority === "developer" ||
+    metadata?.authority === "runtime_control" ||
+    metadata?.authority === "runtime_data"
+      ? metadata.authority
+      : "runtime_data";
+  return sparkRuntimePromptItem({
+    authority,
+    // Legacy custom messages did not carry authority. Treat them as data rather
+    // than silently promoting old transcript text into trusted control.
+    trust: metadata?.trust ?? "untrusted",
+    visibility: entry.display === false ? "hidden" : (metadata?.visibility ?? "visible"),
+    persistence: "session",
+    content: entry.content,
+    customType: entry.customType,
+    details,
     timestamp: normalizeTimestamp(Date.parse(entry.timestamp)),
-  };
+  });
 }
 
-function branchSummaryToUserMessage(entry: SparkBranchSummaryEntry): UserMessage {
-  return {
-    role: "user",
+function branchSummaryToPromptItem(entry: SparkBranchSummaryEntry): SparkPromptItem {
+  return sparkRuntimePromptItem({
+    authority: "runtime_data",
+    trust: "untrusted",
+    visibility: "hidden",
+    persistence: "session",
     content: `The following is a summary of a branch that this conversation came back from:\n\n<summary>\n${entry.summary}\n</summary>`,
+    customType: "spark-branch-summary",
     timestamp: normalizeTimestamp(Date.parse(entry.timestamp)),
-  };
+  });
 }
 
-function compactionSummaryToUserMessage(entry: SparkCompactionEntry): UserMessage {
-  return {
-    role: "user",
+function compactionSummaryToPromptItem(entry: SparkCompactionEntry): SparkPromptItem {
+  return sparkRuntimePromptItem({
+    authority: "runtime_data",
+    trust: "untrusted",
+    visibility: "hidden",
+    persistence: "session",
     content: `The conversation history before this point was compacted into the following summary:\n\n<summary>\n${entry.summary}\n</summary>`,
+    customType: "spark-compaction-summary",
     timestamp: normalizeTimestamp(Date.parse(entry.timestamp)),
-  };
+  });
 }
 
 function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {

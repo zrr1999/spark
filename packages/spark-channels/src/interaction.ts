@@ -19,6 +19,8 @@ export interface ChannelAskRequest {
   /** Prompt body. Adapters may render supported Markdown syntax. */
   prompt: string;
   options: readonly ChannelAskOption[];
+  /** Stable identity reused for every delivery attempt of this logical ask. */
+  idempotencyKey?: string;
   /** Who may operate the native controls. Default: everyone. */
   audience?: ChannelAskAudience;
   /** Original platform message id when the ask is a passive reply. */

@@ -1,7 +1,12 @@
 import { Type } from "typebox";
 import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
 import type { TaskGraph } from "@zendev-lab/spark-tasks";
-import { nowIso, type JsonValue, type RoleRef } from "@zendev-lab/spark-extension-api";
+import {
+  nowIso,
+  type ArtifactRef,
+  type JsonValue,
+  type RoleRef,
+} from "@zendev-lab/spark-extension-api";
 import { currentSparkProject, loadSparkGraph, sparkSessionKey } from "./session-state.ts";
 import {
   requestGoalCompletionReview,
@@ -22,6 +27,7 @@ import {
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 import type {
   GoalReviewInput,
+  GoalReviewRequirement,
   GoalReviewVerdict,
   ReviewerRunResult,
   ReviewerRunner,
@@ -75,6 +81,32 @@ export function registerSparkGoalTool(
           description:
             "For complete: plain-language completion claim covering what works, what still cannot be done, and native/Rust dependencies. Required for edit: explain the description/direction error being corrected. Pause reasons are not accepted for autonomous goal work.",
         }),
+      ),
+      requirements: Type.Optional(
+        Type.Array(
+          Type.Object(
+            {
+              id: Type.String({ description: "Stable completion requirement identifier." }),
+              description: Type.String({ description: "Concrete required outcome." }),
+              status: Type.Union([
+                Type.Literal("verified"),
+                Type.Literal("missing"),
+                Type.Literal("blocked"),
+              ]),
+              evidenceRefs: Type.Array(
+                Type.String({ description: "Artifact refs supporting this requirement." }),
+              ),
+              note: Type.Optional(Type.String()),
+            },
+            { additionalProperties: false },
+          ),
+        ),
+      ),
+      validationRuns: Type.Optional(
+        Type.Array(Type.String({ description: "Validation command and concise result." })),
+      ),
+      unresolved: Type.Optional(
+        Type.Array(Type.String({ description: "Known unresolved completion item." })),
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -131,6 +163,12 @@ export function registerSparkGoalTool(
           {
             trigger: "tool",
             completionClaimPlainLanguage: normalizeOptionalReason(params.reason),
+            requirements: normalizeGoalCompletionRequirements(params.requirements),
+            validationRuns: normalizeGoalCompletionStringArray(
+              params.validationRuns,
+              "validationRuns",
+            ),
+            unresolved: normalizeGoalCompletionStringArray(params.unresolved, "unresolved"),
           },
         );
         await deps.syncAskAutoAnswerPolicy?.(ctx);
@@ -269,6 +307,56 @@ export function normalizeSparkGoalAction(value: unknown): SparkGoalToolAction {
   throw new Error(
     "goal action must be status, set, start, pause, resume, clear, edit, or complete",
   );
+}
+
+function normalizeGoalCompletionRequirements(value: unknown): GoalReviewRequirement[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error("goal requirements must be an array");
+  return value.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item))
+      throw new Error(`goal requirements[${index}] must be an object`);
+    const requirement = item as Record<string, unknown>;
+    const id = normalizeRequiredCompletionString(requirement.id, `requirements[${index}].id`);
+    const description = normalizeRequiredCompletionString(
+      requirement.description,
+      `requirements[${index}].description`,
+    );
+    const status = requirement.status;
+    if (status !== "verified" && status !== "missing" && status !== "blocked")
+      throw new Error(`goal requirements[${index}].status must be verified, missing, or blocked`);
+    const rawEvidenceRefs = normalizeGoalCompletionStringArray(
+      requirement.evidenceRefs,
+      `requirements[${index}].evidenceRefs`,
+    );
+    if (!rawEvidenceRefs)
+      throw new Error(`goal requirements[${index}].evidenceRefs must be an array`);
+    const evidenceRefs = rawEvidenceRefs.map((ref) => {
+      if (!ref.startsWith("artifact:") || ref.length === "artifact:".length)
+        throw new Error(`goal requirements[${index}].evidenceRefs must contain artifact: refs`);
+      return ref as ArtifactRef;
+    });
+    const note =
+      requirement.note === undefined
+        ? undefined
+        : normalizeRequiredCompletionString(requirement.note, `requirements[${index}].note`);
+    return { id, description, status, evidenceRefs, ...(note ? { note } : {}) };
+  });
+}
+
+function normalizeGoalCompletionStringArray(value: unknown, field: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error(`goal ${field} must be an array`);
+  return [
+    ...new Set(
+      value.map((item, index) => normalizeRequiredCompletionString(item, `${field}[${index}]`)),
+    ),
+  ];
+}
+
+function normalizeRequiredCompletionString(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value.trim())
+    throw new Error(`goal ${field} must be a non-empty string`);
+  return value.trim();
 }
 
 export async function startOrInferSessionGoal(

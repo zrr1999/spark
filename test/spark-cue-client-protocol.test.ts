@@ -11,6 +11,7 @@ import {
   CueError,
   __resetPiCueClientForTests,
   cueOperationId,
+  isRetryableCueTransportError,
   type PiCueExtensionApi,
   registerPiCueTools,
   resolveCueTransport,
@@ -130,6 +131,7 @@ async function startCueServer(
     "script-info-recovery",
   ],
   instanceId: string | ((connection: number) => string) = "00000000-0000-4000-8000-000000000001",
+  pong: { generation_id?: string; ready?: boolean } = {},
 ): Promise<{
   socketPath: string;
   requests: CueFrame[];
@@ -176,6 +178,8 @@ async function startCueServer(
                   capabilities,
                   instance_id:
                     typeof instanceId === "function" ? instanceId(connection) : instanceId,
+                  ...(pong.generation_id ? { generation_id: pong.generation_id } : {}),
+                  ...(pong.ready !== undefined ? { ready: pong.ready } : {}),
                 },
               },
             },
@@ -311,10 +315,44 @@ void test("cue exec family tools declare requiresApproval for host approvalMetho
     "cue_schedule",
   ]) {
     assert.equal(tools.get(name)?.requiresApproval, true, `${name} should require approval`);
+    assert.equal(tools.get(name)?.policy?.effect, "external_write", name);
+    assert.equal(tools.get(name)?.effect, "external_write", `${name} legacy effect mirror`);
+    assert.equal(tools.get(name)?.executionMode, "sequential", `${name} execution mode`);
+    assert.equal(tools.get(name)?.policy?.approval, "required", `${name} approval policy`);
   }
   assert.equal(tools.get("cue_resources")?.requiresApproval, undefined);
   assert.equal(tools.get("cue_history")?.requiresApproval, undefined);
   assert.equal(tools.get("cue_scope")?.requiresApproval, undefined);
+  for (const name of ["cue_resources", "cue_history"]) {
+    assert.equal(tools.get(name)?.effect, "read", name);
+    assert.equal(tools.get(name)?.executionMode, "parallel", name);
+    assert.equal(tools.get(name)?.policy?.approval, "none", name);
+  }
+  assert.equal(tools.get("cue_scope")?.effect, "external_write");
+  assert.equal(tools.get("cue_scope")?.executionMode, "sequential");
+});
+
+void test("spark-cue session_start removes bash only from the current active subset", async () => {
+  const eventHandlers = new Map<string, PiCueEventHandler[]>();
+  let activeTools = ["bash", "cue_history", "third_party_read"];
+  const registeredTools: string[] = [];
+  registerPiCueTools({
+    registerTool: (config) => registeredTools.push(config.name),
+    on: (event, handler) => {
+      const handlers = eventHandlers.get(event) ?? [];
+      handlers.push(handler);
+      eventHandlers.set(event, handlers);
+    },
+    getActiveTools: () => [...activeTools],
+    setActiveTools: (names) => {
+      activeTools = [...names];
+    },
+  });
+
+  assert.equal(registeredTools.includes("cue_exec"), true);
+  assert.equal(activeTools.includes("cue_exec"), false, "cue_exec starts inactive in this fixture");
+  await emitCueEvent(eventHandlers, "session_start");
+  assert.deepEqual(activeTools, ["cue_history", "third_party_read"]);
 });
 
 void test("CueClient registers pending responses before a synchronous stream write", async () => {
@@ -486,6 +524,29 @@ void test("CueClient.connect rejects daemons without required Pong protocol fiel
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(dir, { force: true, recursive: true });
+  }
+});
+
+void test("CueClient.connect treats Pong ready=false as a retryable startup race", async () => {
+  const server = await startCueServer(
+    () => undefined,
+    undefined,
+    "00000000-0000-4000-8000-000000000001",
+    {
+      generation_id: "00000000-0000-4000-8000-000000000002",
+      ready: false,
+    },
+  );
+  try {
+    await assert.rejects(
+      CueClient.connect(server.socketPath, { sessionId: "starting-daemon", cwd: "/tmp" }),
+      (error) =>
+        isRetryableCueTransportError(error) &&
+        error.message.includes("daemon is still starting") &&
+        error.message.includes("retry"),
+    );
+  } finally {
+    await server.close();
   }
 });
 

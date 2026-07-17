@@ -65,6 +65,25 @@ export const runtimeTokenRefreshResponseSchema = z.object({
   refreshedAt: isoDateTimeSchema,
 });
 
+export const cockpitInstanceIdSchema = z.string().regex(/^cockpit_[a-f0-9]{32}$/u);
+
+export const cockpitRuntimeRelocationMetadataSchema = z.object({
+  instanceId: cockpitInstanceIdSchema,
+  protocolVersion: runtimeProtocolVersionSchema,
+});
+
+export const runtimeRelocationPreflightRequestSchema = z.object({
+  sourceInstanceId: cockpitInstanceIdSchema,
+  runtimeId: prefixedIdSchema("rt"),
+  installationId: z.string().min(1),
+  refreshToken: z.string().min(32),
+});
+
+export const runtimeRelocationPreflightResponseSchema = runtimeTokenRefreshResponseSchema.extend({
+  instanceId: cockpitInstanceIdSchema,
+  webSocketUrl: z.string().url(),
+});
+
 export const runtimeDeviceAuthorizationRequestSchema = runtimeRegistrationRequestSchema.omit({
   workspaceRegistration: true,
 });
@@ -92,6 +111,15 @@ export type RuntimeWorkspaceRegistrationResponse = z.infer<
 >;
 export type RuntimeTokenRefreshRequest = z.infer<typeof runtimeTokenRefreshRequestSchema>;
 export type RuntimeTokenRefreshResponse = z.infer<typeof runtimeTokenRefreshResponseSchema>;
+export type CockpitRuntimeRelocationMetadata = z.infer<
+  typeof cockpitRuntimeRelocationMetadataSchema
+>;
+export type RuntimeRelocationPreflightRequest = z.infer<
+  typeof runtimeRelocationPreflightRequestSchema
+>;
+export type RuntimeRelocationPreflightResponse = z.infer<
+  typeof runtimeRelocationPreflightResponseSchema
+>;
 export type RuntimeDeviceAuthorizationRequest = z.infer<
   typeof runtimeDeviceAuthorizationRequestSchema
 >;

@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { once } from "node:events";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +23,7 @@ import {
 } from "./daemon.js";
 import { SparkDaemonInvocationRegistry, SparkDaemonLifecycle } from "./core/index.ts";
 import { SparkDaemonHumanWaitRegistry } from "./core/human-waits.ts";
+import type { DaemonChannelIngressRuntime } from "./channels/ingress.ts";
 import type { SparkDaemonModelControl } from "./model-control.ts";
 import type { CancelSparkInvocationFn, RunSparkCommandFn } from "./spark/bridge.js";
 import { SparkInvocationStore } from "./store/invocations.ts";
@@ -36,6 +37,7 @@ import {
   stopWorkspace,
 } from "./store/workspaces.js";
 import { writeSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
+import { completeSparkDaemonRestartSuccessor } from "./service.ts";
 
 type BridgeInput = Parameters<RunSparkCommandFn>[0];
 
@@ -69,9 +71,14 @@ function makeHarness(): TestHarness {
   });
   const db = openSparkDaemonDatabase(paths);
   const sparkHome = join(root, "spark-home");
-  const workspace = addWorkspace(db, {
+  const workspace = registerWorkspace(db, {
+    serverUrl: "https://cockpit.example.test/",
+    serverWorkspaceId: "ws_22222222222222222222222222222222",
+    serverBindingId: "rtwb_11111111111111111111111111111111",
     localWorkspaceKey: "local-default",
     displayName: "Local default",
+    workspaceName: "Local default",
+    workspaceSlug: "local-default",
     localPath: root,
   });
   return {
@@ -327,6 +334,183 @@ describe("Spark daemon handleCommand task.start.request", () => {
 
       expect(existsSync(harness.paths.pidFile)).toBe(false);
     } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("publishes readiness only after startup initialization and cleans up on ready failure", async () => {
+    const harness = makeHarness();
+    mkdirSync(harness.paths.runtimeDir, { recursive: true });
+    writeFileSync(
+      join(harness.paths.runtimeDir, "restart.starting.json"),
+      JSON.stringify({
+        state: "claimed",
+        restartId: "restart-not-ready",
+        previousPid: 999_999,
+        previousInstanceId: "previous-instance",
+        previousGeneration: "previous-generation",
+        previousStartedAt: "2026-07-15T00:00:00.000Z",
+        previousProcessStartToken: "test:previous",
+        targetInstanceId: "target-instance",
+        targetGeneration: "target-generation",
+        protocolVersion: 1,
+        requestedAt: "2026-07-15T00:01:00.000Z",
+      }),
+    );
+    const onReady = vi.fn(() => {
+      throw new Error("local control bind failed");
+    });
+    try {
+      await expect(
+        startSparkDaemon({
+          paths: harness.paths,
+          sparkHome: harness.sparkHome,
+          db: harness.db,
+          config: {
+            installationId: "install-test",
+            displayName: "Test daemon",
+          },
+          once: true,
+          onReady,
+        }),
+      ).rejects.toThrow("local control bind failed");
+      expect(onReady).toHaveBeenCalledOnce();
+      expect(existsSync(harness.paths.pidFile)).toBe(false);
+      expect(existsSync(join(harness.paths.runtimeDir, "restart.starting.json"))).toBe(true);
+      expect(
+        readdirSync(harness.paths.runtimeDir).some((name) => name.startsWith("restart.terminal.")),
+      ).toBe(false);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("keeps production scheduler and channel admission paused when serving fence commit fails", async () => {
+    const harness = makeHarness();
+    const store = new SparkInvocationStore(harness.db);
+    const submitted = store.submit({
+      sessionId: "queued-before-ready",
+      prompt: "must remain queued",
+      task: {
+        type: "session.run",
+        sessionId: "queued-before-ready",
+        prompt: "must remain queued",
+      },
+    });
+    const executeInvocation = vi.fn(async () => ({ text: "must not run" }));
+    const startIngress = vi.fn(async () => []);
+    const stopIngress = vi.fn(async () => undefined);
+    const channelIngress = {
+      start: startIngress,
+      stop: stopIngress,
+      setInteractionHandler: vi.fn(),
+    } as unknown as DaemonChannelIngressRuntime;
+    try {
+      await expect(
+        startSparkDaemon({
+          paths: harness.paths,
+          sparkHome: harness.sparkHome,
+          db: harness.db,
+          config: {
+            installationId: "install-test",
+            displayName: "Test daemon",
+          },
+          channelIngress,
+          executeInvocation,
+          schedulerPollIntervalMs: 1,
+          onReady: () => undefined,
+          onServing: () => {
+            throw new Error("successor fence CAS failed");
+          },
+        }),
+      ).rejects.toThrow("successor fence CAS failed");
+
+      expect(startIngress).toHaveBeenCalledOnce();
+      expect(executeInvocation).not.toHaveBeenCalled();
+      expect(store.require(submitted.invocationId)).toMatchObject({
+        status: "queued",
+        attemptCount: 0,
+      });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("completes a successor fence before channel and scheduler admission open", async () => {
+    const harness = makeHarness();
+    const shutdown = new AbortController();
+    mkdirSync(harness.paths.runtimeDir, { recursive: true });
+    writeFileSync(
+      join(harness.paths.runtimeDir, "restart.starting.json"),
+      JSON.stringify({
+        state: "claimed",
+        restartId: "restart-serving",
+        previousPid: 999_999,
+        previousInstanceId: "previous-instance",
+        previousGeneration: "previous-generation",
+        previousStartedAt: "2026-07-15T00:00:00.000Z",
+        previousProcessStartToken: "test:previous",
+        targetInstanceId: "target-instance",
+        targetGeneration: "target-generation",
+        protocolVersion: 1,
+        requestedAt: "2026-07-15T00:01:00.000Z",
+      }),
+    );
+    const lifecycle = new SparkDaemonLifecycle(
+      {
+        acceptedRestartId: "restart-serving",
+        instanceId: "target-instance",
+        generation: "target-generation",
+      },
+      { initiallyServing: false },
+    );
+    const order: string[] = [];
+    const terminalPublished = () =>
+      readdirSync(harness.paths.runtimeDir).some((name) => name.startsWith("restart.terminal."));
+    const startIngress = vi.fn(async () => {
+      expect(terminalPublished()).toBe(false);
+      expect(lifecycle.snapshot().state).toBe("starting");
+      order.push("channel");
+      return [];
+    });
+    const channelIngress = {
+      start: startIngress,
+      stop: vi.fn(async () => undefined),
+      setInteractionHandler: vi.fn(),
+    } as unknown as DaemonChannelIngressRuntime;
+    try {
+      await startSparkDaemon({
+        paths: harness.paths,
+        sparkHome: harness.sparkHome,
+        db: harness.db,
+        config: {
+          installationId: "install-test",
+          displayName: "Test daemon",
+        },
+        signal: shutdown.signal,
+        channelIngress,
+        onReady: () => {
+          order.push("control");
+          expect(lifecycle.snapshot().state).toBe("starting");
+          expect(terminalPublished()).toBe(false);
+        },
+        onServing: () => {
+          expect(startIngress).toHaveBeenCalledOnce();
+          lifecycle.activate();
+          expect(lifecycle.snapshot().state).toBe("running");
+          expect(
+            completeSparkDaemonRestartSuccessor(harness.paths, lifecycle.processIdentity),
+          ).toBe(true);
+          expect(terminalPublished()).toBe(true);
+          order.push("serving");
+          setTimeout(() => shutdown.abort(), 0);
+        },
+      });
+
+      expect(order).toEqual(["control", "channel", "serving"]);
+      expect(lifecycle.snapshot()).toMatchObject({ state: "running", phase: "serving" });
+    } finally {
+      shutdown.abort();
       harness.cleanup();
     }
   });
@@ -945,6 +1129,33 @@ describe("Spark daemon handleCommand task.start.request", () => {
     }
   });
 
+  it("rejects a workspace id that does not match the registered binding", async () => {
+    const harness = makeHarness();
+    try {
+      const ws = new CapturingSocket();
+      const command = serverCommandEnvelopeSchema.parse({
+        ...buildTaskStartEnvelope(harness.workspace.id),
+        workspaceId: "ws_99999999999999999999999999999999",
+      });
+      const context = makeContext(harness, async () => {
+        throw new Error("workspace route mismatch must not invoke bridge");
+      });
+
+      await handleCommand(ws, command, context);
+
+      expect(ws.sent).toHaveLength(1);
+      expect(ws.sent[0]).toMatchObject({
+        type: "runtime.command.reject",
+        payload: {
+          reasonCode: "WORKSPACE_ROUTE_MISMATCH",
+          retryable: false,
+        },
+      });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("streams ack, running, log chunks, and succeeded updates from the Spark bridge", async () => {
     const harness = makeHarness();
     try {
@@ -1420,6 +1631,44 @@ describe("Spark daemon handleCommand task.start.request", () => {
           }),
         }),
       );
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("keeps a post-relocation human request durable instead of leaking it to the old origin", () => {
+    const harness = makeHarness();
+    try {
+      const ws = new CapturingSocket();
+      const context = makeContext(harness, async () => {
+        throw new Error("task bridge must not execute for a human wait");
+      });
+      context.serverUrl = "https://cockpit.example.test/";
+      harness.db
+        .prepare("UPDATE workspaces SET server_url = ? WHERE id = ?")
+        .run("https://target.example.test/", harness.workspace.id);
+
+      const registration = createDaemonHumanWait(ws, context, {
+        invocationId: "inv_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        workspaceBindingId: harness.workspace.id,
+        workspaceId: "ws_22222222222222222222222222222222",
+        kind: "ask_user",
+        title: "Relocated decision",
+        prompt: "Continue on the target?",
+        questions: [],
+      });
+
+      expect(ws.sent).toEqual([]);
+      expect(context.humanWaits?.listPendingOutbox()).toEqual([
+        expect.objectContaining({
+          kind: "human.request.created",
+          envelope: expect.objectContaining({
+            workspaceBindingId: harness.workspace.id,
+            humanRequestId: registration.wait.humanRequestId,
+            type: "human.request.created",
+          }),
+        }),
+      ]);
     } finally {
       harness.cleanup();
     }
