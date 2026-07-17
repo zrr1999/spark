@@ -1823,12 +1823,14 @@ void test("Spark TUI and headless print attach and release workspace clients", a
     const statusContext = (
       capturedTuiOptions as {
         statusContext?: {
+          activeProvider?: () => string | undefined;
           activeModel?: () => string | undefined;
           thinkingLevel?: () => string | undefined;
         };
       }
     ).statusContext;
-    assert.equal(statusContext?.activeModel?.(), "openai-codex/gpt-5.4");
+    assert.equal(statusContext?.activeProvider?.(), "openai-codex");
+    assert.equal(statusContext?.activeModel?.(), "gpt-5.4");
     assert.equal(statusContext?.thinkingLevel?.(), "medium");
     assert.equal(
       (capturedTuiOptions as { autocompleteBasePath?: string }).autocompleteBasePath,
@@ -2710,6 +2712,12 @@ void test("native TUI model selection and following turn share one managed sessi
         updatedAt: "2026-07-13T00:02:01.000Z",
         finishedAt: "2026-07-13T00:02:01.000Z",
         eventCursor: 0,
+      }),
+      turnStream: async (_paths, { invocationId }) => ({
+        invocationId,
+        events: [],
+        nextCursor: 0,
+        hasMore: false,
       }),
     };
 

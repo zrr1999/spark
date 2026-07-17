@@ -520,6 +520,7 @@ async function startCockpit(
         db,
         runtimeId,
         secureTransport: true,
+        heartbeatIntervalMs: 20,
         remoteAddress: request.socket.remoteAddress,
       });
     });

@@ -61,6 +61,7 @@ export interface RuntimeWebSocketContext {
   runtimeId: string;
   remoteAddress?: string;
   secureTransport?: boolean;
+  heartbeatIntervalMs?: number;
 }
 
 export interface RuntimeWebSocketConnection {
@@ -133,7 +134,7 @@ export function attachRuntimeWebSocket(
           payload: {
             runtimeSessionId,
             acceptedFeatures: hello.data.payload.supportedFeatures,
-            heartbeatIntervalMs: 15_000,
+            heartbeatIntervalMs: context.heartbeatIntervalMs ?? 15_000,
             serverTime: new Date().toISOString(),
           },
         }),
