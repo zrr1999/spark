@@ -24,6 +24,18 @@
   import SessionInspector from "$lib/SessionInspector.svelte";
   import { cancelledTurnIdFromActionResult } from "$lib/session-action-result";
   import {
+    readSessionDraft,
+    readSessionPendingSubmission,
+    readStartConversationPendingSubmission,
+    resolveStartConversationDraftSubmission,
+    startConversationPendingSubmissionMatches,
+    startConversationSubmissionContextKey,
+    writeSessionDraft,
+    writeSessionPendingSubmission,
+    writeStartConversationPendingSubmission,
+    type StartConversationSubmissionContext,
+  } from "$lib/session-draft";
+  import {
     applySessionLiveEvent,
     beginSessionActivityRefresh,
     canStartSessionActivityRefresh,
@@ -54,12 +66,13 @@
     workspaceIdForWorkbenchSession,
   } from "$lib/workbench-session-scope";
   import { workspacePath } from "$lib/workspace-routes";
-  import type {
-    SparkModelCatalogProvider,
-    SparkModelControlSnapshot,
-    SparkModelRef,
-    SparkMessageView,
-    SparkSessionView,
+  import {
+    createId,
+    type SparkModelCatalogProvider,
+    type SparkModelControlSnapshot,
+    type SparkModelRef,
+    type SparkMessageView,
+    type SparkSessionView,
   } from "@zendev-lab/spark-protocol";
   import type { CockpitMessages } from "@zendev-lab/spark-i18n";
   import type { SubmitFunction } from "@sveltejs/kit";
@@ -128,6 +141,7 @@
     message?: string;
     model?: string;
     thinkingLevel?: string;
+    submissionId?: string;
   };
 
   type ModelControlState = {
@@ -144,6 +158,8 @@
     sessions: SessionRecord[];
     workspaces: WorkspaceOption[];
     selectedSessionId: string | null;
+    startSubmissionIdSeed?: string;
+    sendSubmissionIdSeed?: string;
     activeWorkspaceId?: string | null;
     messages: Messages;
     common: Parameters<typeof getStatusLabel>[1];
@@ -163,6 +179,8 @@
     sessions,
     workspaces,
     selectedSessionId,
+    startSubmissionIdSeed = "",
+    sendSubmissionIdSeed = "",
     activeWorkspaceId = null,
     messages,
     common,
@@ -231,12 +249,40 @@
     ),
   );
   let modelReady = $derived(modelControl.available && effectiveModelAvailable);
-  let startModel = $state("");
+  let startModel = $state(
+    untrack(() => (formIntent === "startConversation" ? (formValues?.model ?? "") : "")),
+  );
   let sessionModel = $state("");
-  let startThinkingLevel = $state("medium");
+  let startThinkingLevel = $state(
+    untrack(() =>
+      formIntent === "startConversation" ? (formValues?.thinkingLevel ?? "medium") : "medium",
+    ),
+  );
   let sessionThinkingLevel = $state("medium");
-  let startMessage = $state("");
-  let message = $state("");
+  let startMessage = $state(
+    untrack(() => (formIntent === "startConversation" ? (formValues?.message ?? "") : "")),
+  );
+  let startSubmissionId = $state(
+    untrack(() =>
+      formIntent === "startConversation" && formValues?.submissionId
+        ? formValues.submissionId
+        : startSubmissionIdSeed || createId("idem"),
+    ),
+  );
+  let lastStartSubmittedContextKey = $state("");
+  let startPendingWorkspaceId = $state("");
+  let message = $state(
+    untrack(() => (formIntent === "sendMessage" ? (formValues?.message ?? "") : "")),
+  );
+  let draftSessionId = $state("");
+  let sendSubmissionId = $state(
+    untrack(() =>
+      formIntent === "sendMessage" && formValues?.submissionId
+        ? formValues.submissionId
+        : sendSubmissionIdSeed || createId("idem"),
+    ),
+  );
+  let lastSubmittedMessage = $state("");
   let initialFormValuesApplied = $state(false);
   let startState = $state<SubmissionState>("idle");
   let sendState = $state<SubmissionState>("idle");
@@ -324,6 +370,8 @@
     reasoningStreaming: copy.reasoningStreaming,
     chain: copy.chain,
     chainStreaming: copy.chainStreaming,
+    chainEmpty: copy.chainEmpty,
+    chainFailed: copy.chainFailed,
     tool: copy.tool,
     task: copy.task,
     approval: copy.approval,
@@ -351,6 +399,10 @@
     noMailboxBody: copy.noMailboxBody,
     unassignedProject: copy.unassignedProject,
     progress: copy.progress,
+    todoList: copy.todoList,
+    sessionTodoTitle: copy.sessionTodoTitle,
+    sessionTodoBody: copy.sessionTodoBody,
+    openSessionTodo: copy.openSessionTodo,
     mailFrom: copy.mailFrom,
     mailRequest: copy.mailRequest,
     mailNotification: copy.mailNotification,
@@ -434,6 +486,9 @@
     if (!initialFormValuesApplied) {
       startMessage =
         formIntent === "startConversation" ? (formValues?.message ?? "") : startMessage;
+      if (formIntent === "startConversation" && formValues?.submissionId) {
+        startSubmissionId = formValues.submissionId;
+      }
       startModel = formValues?.model ?? startModel;
       startThinkingLevel = formValues?.thinkingLevel ?? startThinkingLevel;
       message = formIntent === "sendMessage" ? (formValues?.message ?? "") : message;
@@ -448,6 +503,120 @@
     }
     if (!(thinkingLevels as readonly string[]).includes(startThinkingLevel)) {
       startThinkingLevel = effectiveThinkingLevel;
+    }
+  });
+
+  $effect(() => {
+    if (!initialFormValuesApplied) return;
+    const workspaceId = activeWorkspace?.id ?? "";
+    if (!workspaceId || workspaceId === startPendingWorkspaceId) return;
+    startPendingWorkspaceId = workspaceId;
+
+    if (
+      formIntent === "startConversation" &&
+      formValues?.submissionId &&
+      formValues.message?.trim()
+    ) {
+      const context = startConversationContext({
+        workspaceId,
+        message: formValues.message,
+        model: formValues.model ?? startModel,
+        thinkingLevel: formValues.thinkingLevel ?? startThinkingLevel,
+      });
+      startSubmissionId = formValues.submissionId;
+      lastStartSubmittedContextKey = startConversationSubmissionContextKey(context);
+      writeStartConversationPendingSubmission(window.sessionStorage, workspaceId, {
+        ...context,
+        submissionId: startSubmissionId,
+      });
+      return;
+    }
+
+    const pending = readStartConversationPendingSubmission(
+      window.sessionStorage,
+      workspaceId,
+    );
+    if (pending) {
+      startMessage = pending.message;
+      startModel = pending.model;
+      startThinkingLevel = pending.thinkingLevel;
+      startSubmissionId = pending.submissionId;
+      lastStartSubmittedContextKey = startConversationSubmissionContextKey(pending);
+      return;
+    }
+
+    startSubmissionId = startSubmissionIdSeed || createId("idem");
+    lastStartSubmittedContextKey = "";
+  });
+
+  $effect(() => {
+    const workspaceId = activeWorkspace?.id ?? "";
+    if (!workspaceId || workspaceId !== startPendingWorkspaceId) return;
+    const currentContext = startConversationContext({
+      workspaceId,
+      message: startMessage,
+      model: startModel,
+      thinkingLevel: startThinkingLevel,
+    });
+    const currentContextKey = startConversationSubmissionContextKey(currentContext);
+    if (currentContext.message && currentContextKey === lastStartSubmittedContextKey) {
+      return;
+    }
+
+    const pending = readStartConversationPendingSubmission(window.sessionStorage, workspaceId);
+    const next = resolveStartConversationDraftSubmission({
+      context: currentContext,
+      pending,
+      previousContextKey: lastStartSubmittedContextKey,
+      submissionId: startSubmissionId,
+      createSubmissionId: () => createId("idem"),
+    });
+    startSubmissionId = next.submissionId;
+    lastStartSubmittedContextKey = next.contextKey;
+    writeStartConversationPendingSubmission(window.sessionStorage, workspaceId, next.pending);
+  });
+
+  $effect(() => {
+    const nextSessionId = selectedSessionId ?? "";
+    if (nextSessionId === draftSessionId) return;
+    draftSessionId = nextSessionId;
+    const actionMessage =
+      formIntent === "sendMessage" && formValues?.sessionId === nextSessionId
+        ? (formValues.message ?? "")
+        : null;
+    const nextDraft =
+      actionMessage ??
+      (nextSessionId ? readSessionDraft(window.sessionStorage, nextSessionId) : "");
+    let pending = nextSessionId
+      ? readSessionPendingSubmission(window.sessionStorage, nextSessionId)
+      : null;
+    if (nextSessionId && actionMessage?.trim() && formValues?.submissionId) {
+      pending = { message: actionMessage, submissionId: formValues.submissionId };
+      writeSessionDraft(window.sessionStorage, nextSessionId, actionMessage);
+      writeSessionPendingSubmission(window.sessionStorage, nextSessionId, pending);
+    }
+    message = nextDraft;
+    if (pending?.message === nextDraft) {
+      sendSubmissionId = pending.submissionId;
+      lastSubmittedMessage = pending.message;
+    } else {
+      sendSubmissionId = sendSubmissionIdSeed || createId("idem");
+      lastSubmittedMessage = "";
+      if (nextSessionId && pending) {
+        writeSessionPendingSubmission(window.sessionStorage, nextSessionId, null);
+      }
+    }
+  });
+
+  $effect(() => {
+    const sessionId = draftSessionId;
+    const draft = message;
+    if (!sessionId || selectedSessionId !== sessionId) return;
+    writeSessionDraft(window.sessionStorage, sessionId, draft);
+    if (lastSubmittedMessage && draft !== lastSubmittedMessage) {
+      writeSessionPendingSubmission(window.sessionStorage, sessionId, null);
+      sendSubmissionId = createId("idem");
+      lastSubmittedMessage = "";
     }
   });
 
@@ -665,13 +834,14 @@
     }
   }
 
-  async function showEarlierTimeline() {
-    if (historyLoadState === "loading") return;
+  async function showEarlierTimeline(): Promise<boolean> {
+    if (historyLoadState === "loading") return false;
     const sessionId = selectedSessionId;
     const history = liveSessionHistory;
     if (!sessionId || !history || history.hiddenMessages === 0) {
       timelineRenderLimit += SESSION_TIMELINE_PAGE_SIZE;
-      return;
+      historyLoadState = "idle";
+      return true;
     }
 
     historyLoadState = "loading";
@@ -686,15 +856,20 @@
       );
       if (!response.ok) throw new Error(`session history request failed: ${response.status}`);
       const window = parseSessionSnapshotWindow(await response.json());
-      if (window.snapshot.sessionId !== sessionId || selectedSessionId !== sessionId) return;
+      if (window.snapshot.sessionId !== sessionId || selectedSessionId !== sessionId) {
+        historyLoadState = "idle";
+        return false;
+      }
 
       liveSessionView = window.snapshot;
       if (liveEventState?.sessionId === sessionId) liveEventState.view = window.snapshot;
       liveSessionHistory = window.history;
       timelineRenderLimit += SESSION_TIMELINE_PAGE_SIZE;
       historyLoadState = "idle";
+      return true;
     } catch {
       historyLoadState = "error";
+      return false;
     }
   }
 
@@ -751,6 +926,17 @@
     return parts.slice(-2).join("/");
   }
 
+  function startConversationContext(
+    context: StartConversationSubmissionContext,
+  ): StartConversationSubmissionContext {
+    return {
+      workspaceId: context.workspaceId.trim(),
+      message: context.message.trim(),
+      model: context.model.trim(),
+      thinkingLevel: context.thinkingLevel.trim(),
+    };
+  }
+
   function resultMessage(result: unknown, fallback: string) {
     if (!result || typeof result !== "object") return fallback;
 
@@ -800,18 +986,57 @@
     });
   }
 
-  const enhanceStartConversation: SubmitFunction = () => {
+  const enhanceStartConversation: SubmitFunction = ({ formData }) => {
+    const context = startConversationContext({
+      workspaceId: String(formData.get("workspaceId") ?? activeWorkspace?.id ?? ""),
+      message: String(formData.get("message") ?? ""),
+      model: String(formData.get("model") ?? ""),
+      thinkingLevel: String(formData.get("thinkingLevel") ?? ""),
+    });
+    const pending = readStartConversationPendingSubmission(
+      window.sessionStorage,
+      context.workspaceId,
+    );
+    if (startConversationPendingSubmissionMatches(pending, context)) {
+      startSubmissionId = pending.submissionId;
+    } else if (
+      !startSubmissionId ||
+      (lastStartSubmittedContextKey &&
+        startConversationSubmissionContextKey(context) !== lastStartSubmittedContextKey)
+    ) {
+      startSubmissionId = createId("idem");
+    }
+    lastStartSubmittedContextKey = startConversationSubmissionContextKey(context);
+    formData.set("submissionId", startSubmissionId);
+    writeStartConversationPendingSubmission(window.sessionStorage, context.workspaceId, {
+      ...context,
+      submissionId: startSubmissionId,
+    });
     startState = "submitting";
     startFeedback = copy.sending;
 
     return async ({ result, update }) => {
       await update({ reset: false });
-      if (result.type === "redirect") return;
+      if (result.type === "redirect") {
+        writeStartConversationPendingSubmission(
+          window.sessionStorage,
+          context.workspaceId,
+          null,
+        );
+        return;
+      }
 
       if (result.type === "success") {
         startState = "success";
         startFeedback = resultMessage(result, copy.sent);
         startMessage = "";
+        startSubmissionId = createId("idem");
+        lastStartSubmittedContextKey = "";
+        writeStartConversationPendingSubmission(
+          window.sessionStorage,
+          context.workspaceId,
+          null,
+        );
         await invalidateAll();
         return;
       }
@@ -821,7 +1046,18 @@
     };
   };
 
-  const enhanceSendMessage: SubmitFunction = () => {
+  const enhanceSendMessage: SubmitFunction = ({ formData }) => {
+    const submissionSessionId = selectedSessionId ?? "";
+    const submittedMessage = String(formData.get("message") ?? "").trim();
+    if (!sendSubmissionId || (lastSubmittedMessage && submittedMessage !== lastSubmittedMessage)) {
+      sendSubmissionId = createId("idem");
+    }
+    lastSubmittedMessage = submittedMessage;
+    formData.set("submissionId", sendSubmissionId);
+    writeSessionPendingSubmission(window.sessionStorage, submissionSessionId, {
+      message: submittedMessage,
+      submissionId: sendSubmissionId,
+    });
     sendState = "submitting";
     sendFeedback = copy.sending;
 
@@ -832,6 +1068,10 @@
         sendState = "success";
         sendFeedback = null;
         message = "";
+        writeSessionDraft(window.sessionStorage, submissionSessionId, "");
+        writeSessionPendingSubmission(window.sessionStorage, submissionSessionId, null);
+        sendSubmissionId = createId("idem");
+        lastSubmittedMessage = "";
         await invalidateAll();
         return;
       }
@@ -1031,6 +1271,7 @@
             {#if activeWorkspace}
               <input type="hidden" name="workspaceId" value={activeWorkspace.id} />
             {/if}
+            <input type="hidden" name="submissionId" value={startSubmissionId} />
             <Composer
               id="start-conversation-message"
               rows={2}
@@ -1140,6 +1381,10 @@
         followKey={timelineFollowKey}
         announcement={latestAnnouncement}
         jumpToLatestLabel={copy.jumpToLatest}
+        hasEarlier={hiddenTimelineCount > 0}
+        earlierLabel={`${copy.showEarlier} (${hiddenTimelineCount})`}
+        earlierErrorLabel={copy.unavailable}
+        onLoadEarlier={showEarlierTimeline}
       >
         {#if timelineItems.length === 0}
           <div class="conversation-empty">
@@ -1147,19 +1392,6 @@
             <p>{copy.timelineEmpty}</p>
           </div>
         {:else}
-          {#if hiddenTimelineCount > 0}
-            <button
-              class="timeline-history-button"
-              type="button"
-              disabled={historyLoadState === "loading"}
-              onclick={showEarlierTimeline}
-            >
-              {copy.showEarlier} ({hiddenTimelineCount})
-            </button>
-            {#if historyLoadState === "error"}
-              <p class="timeline-history-error">{copy.unavailable}</p>
-            {/if}
-          {/if}
           {#each renderedTimeline.items as item (item.id)}
             <ConversationMessage
               {item}
@@ -1206,6 +1438,7 @@
         use:enhance={enhanceSendMessage}
       >
         <input type="hidden" name="sessionId" value={selected.sessionId} />
+        <input type="hidden" name="submissionId" value={sendSubmissionId} />
         <Composer
           id="conversation-message"
           rows={2}
@@ -1557,42 +1790,6 @@
     font-size: 13px;
     line-height: 1.5;
     max-width: 380px;
-  }
-
-  .timeline-history-button {
-    background: var(--color-surface-soft);
-    border: 1px solid var(--color-border);
-    border-radius: var(--rounded-full);
-    color: var(--color-ink-muted);
-    cursor: pointer;
-    font: inherit;
-    font-size: 12px;
-    font-weight: 600;
-    justify-self: center;
-    min-height: 36px;
-    padding: 0 14px;
-  }
-
-  .timeline-history-button:hover {
-    border-color: var(--color-primary-soft);
-    color: var(--color-primary);
-  }
-
-  .timeline-history-button:disabled {
-    cursor: wait;
-    opacity: 0.6;
-  }
-
-  .timeline-history-button:focus-visible {
-    box-shadow: var(--shadow-focus);
-    outline: none;
-  }
-
-  .timeline-history-error {
-    color: var(--color-danger);
-    font-size: 12px;
-    margin: 0;
-    text-align: center;
   }
 
   .conversation-composer {

@@ -19,6 +19,7 @@ import {
   type ChannelAskSendResult,
   type ChannelInteractionAckStatus,
   type ChannelReplyStream,
+  type ChannelReplyRecovery,
   type ChannelReplyTarget,
   type ChannelRegistryOptions,
   type IncomingMessage,
@@ -26,10 +27,13 @@ import {
 } from "@zendev-lab/spark-channels";
 import { parseSparkAssignment, type SparkAssignment } from "@zendev-lab/spark-protocol";
 import { writePrivateFile } from "@zendev-lab/spark-system";
+import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createDaemonSessionRegistry, type DaemonSessionRegistry } from "../session-registry.ts";
 import type { SparkDaemonChannelContext } from "../core/types.ts";
+
+export const CHANNEL_INGRESS_FAILURE_REPLY = "消息暂时无法处理，请稍后重试。";
 
 export interface ChannelIngressAssignment {
   sessionId: string;
@@ -47,7 +51,7 @@ export interface ChannelIngressAssignment {
 }
 
 export interface ChannelIngressHooks {
-  onAssignment: (input: ChannelIngressAssignment) => Promise<void>;
+  onAssignment: (input: ChannelIngressAssignment) => Promise<void | "duplicate">;
   onReply?: (input: { externalKey: string; text: string; adapterId: string }) => Promise<void>;
   onInteraction?: (input: {
     workspaceId: string;
@@ -64,6 +68,14 @@ export interface ChannelIngressController {
     target: ChannelReplyTarget,
   ): Promise<ChannelReplyStream | undefined>;
   sendReply(adapterId: string, input: ChannelReplyTarget & { text: string }): Promise<void>;
+  recoverReply(
+    adapterId: string,
+    input: ChannelReplyTarget & {
+      text: string;
+      deliveryId: string;
+      recovery: ChannelReplyRecovery;
+    },
+  ): Promise<void>;
   sendAsk(
     adapterId: string,
     recipient: string,
@@ -131,6 +143,15 @@ export interface DaemonChannelIngressRuntime {
     workspaceId: string,
     adapterId: string,
     input: ChannelReplyTarget & { text: string },
+  ): Promise<void>;
+  recoverReply(
+    workspaceId: string,
+    adapterId: string,
+    input: ChannelReplyTarget & {
+      text: string;
+      deliveryId: string;
+      recovery: ChannelReplyRecovery;
+    },
   ): Promise<void>;
   sendAsk(
     workspaceId: string,
@@ -297,9 +318,9 @@ export function createChannelIngressController(input: {
       console.error("[spark-channels] inbound missing reply recipient", message.externalKey);
       return;
     }
-    await sessionRegistry.recordTurnQueued?.(session.sessionId);
+    let admission: void | "duplicate";
     try {
-      await input.hooks.onAssignment({
+      admission = await input.hooks.onAssignment({
         sessionId: session.sessionId,
         goal: assignment.goal,
         assignment,
@@ -320,11 +341,30 @@ export function createChannelIngressController(input: {
       });
     } catch (error) {
       try {
-        await sessionRegistry.recordTurnSettled?.(session.sessionId);
-      } catch (settleError) {
-        console.error("[spark-channels] failed to settle rejected inbound", settleError);
+        await channelRegistry.sendReply(channel, {
+          recipient: replyRecipient,
+          ...(message.senderId?.trim() ? { senderId: message.senderId.trim() } : {}),
+          ...(message.messageId?.trim() ? { messageId: message.messageId.trim() } : {}),
+          ...(rawGoal ? { preview: rawGoal.slice(0, 240) } : {}),
+          text: CHANNEL_INGRESS_FAILURE_REPLY,
+        });
+      } catch (replyError) {
+        console.error("[spark-channels] failed to report rejected inbound", replyError);
       }
       throw error;
+    }
+    if (admission !== "duplicate") {
+      // Update the visible session state only after durable admission. A
+      // platform redelivery may refer to an invocation that is still running;
+      // toggling running -> ready around that duplicate would hide the real
+      // in-flight turn from Cockpit. Registry projection failure is advisory:
+      // the invocation is already durable and must not receive a false failure
+      // reply merely because its visible status could not be updated.
+      try {
+        await sessionRegistry.recordTurnQueued?.(session.sessionId);
+      } catch (error) {
+        console.error("[spark-channels] failed to mark admitted inbound as queued", error);
+      }
     }
   }
 
@@ -347,6 +387,8 @@ export function createChannelIngressController(input: {
       await channelRegistry.openReplyStream(adapterId, target),
     sendReply: async (adapterId, replyInput) =>
       await channelRegistry.sendReply(adapterId, replyInput),
+    recoverReply: async (adapterId, replyInput) =>
+      await channelRegistry.recoverReply(adapterId, replyInput),
     sendAsk: async (adapterId, recipient, request) =>
       await channelRegistry.sendAsk(adapterId, recipient, request),
     ackInteraction: async (adapterId, interactionId, status) =>
@@ -362,6 +404,32 @@ export function createChannelIngressController(input: {
       })),
     }),
   };
+}
+
+/**
+ * Durable platform admission key. Only a platform-issued message id is stable
+ * enough to deduplicate across daemon restarts; message text is intentionally
+ * excluded so identical intentional messages remain distinct.
+ */
+export function channelIngressIdempotencyKey(
+  assignment: ChannelIngressAssignment,
+): string | undefined {
+  const messageId =
+    assignment.source.externalRef?.trim() || assignment.channelContext?.messageId?.trim();
+  if (!messageId) return undefined;
+  const digest = createHash("sha256")
+    .update(
+      JSON.stringify([
+        1,
+        assignment.channelReply.workspaceId,
+        assignment.channelReply.adapterId,
+        assignment.source.channel,
+        assignment.externalKey,
+        messageId,
+      ]),
+    )
+    .digest("hex");
+  return `channel-ingress:${digest}`;
 }
 
 function channelContextFromIncoming(message: IncomingMessage): SparkDaemonChannelContext {
@@ -649,6 +717,13 @@ export function createDaemonChannelIngressRuntime(input: {
         throw new Error(`channels not configured for workspace ${workspaceId}`);
       }
       await slot.controller.sendReply(adapterId, replyInput);
+    },
+    recoverReply: async (workspaceId, adapterId, replyInput) => {
+      const slot = getSlot(workspaceId);
+      if (!slot.controller) {
+        throw new Error(`channels not configured for workspace ${workspaceId}`);
+      }
+      await slot.controller.recoverReply(adapterId, replyInput);
     },
     sendAsk: async (workspaceId, adapterId, recipient, request) => {
       const slot = getSlot(workspaceId);

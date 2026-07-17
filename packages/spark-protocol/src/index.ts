@@ -247,7 +247,7 @@ export const sparkArtifactViewSchema = z.object({
 export const sparkSessionMailMessageViewSchema = z.object({
   id: z.string().min(1),
   fromSessionId: z.string().min(1),
-  kind: z.enum(["request", "notification"]),
+  kind: z.enum(["request", "question", "notification"]),
   intent: z.string().min(1),
   subject: z.string().nullable(),
   body: z.string(),

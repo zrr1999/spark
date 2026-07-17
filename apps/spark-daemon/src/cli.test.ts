@@ -26,6 +26,7 @@ function createCliIo(
     daemonStatusFromService?: CliIo["daemonStatusFromService"];
     daemonStopFromService?: CliIo["daemonStopFromService"];
     daemonRestartFromService?: CliIo["daemonRestartFromService"];
+    turnSubmitToService?: CliIo["turnSubmitToService"];
     listWorkspacesFromService?: CliIo["listWorkspacesFromService"];
     registerWorkspaceInService?: CliIo["registerWorkspaceInService"];
     attachWorkspaceInService?: CliIo["attachWorkspaceInService"];
@@ -54,6 +55,7 @@ function createCliIo(
     ...(options.deviceAuthorizationSleep
       ? { deviceAuthorizationSleep: options.deviceAuthorizationSleep }
       : {}),
+    ...(options.turnSubmitToService ? { turnSubmitToService: options.turnSubmitToService } : {}),
     startService:
       options.startService ??
       (() => ({
@@ -2343,6 +2345,36 @@ describe("Spark daemon CLI", () => {
       expect(capture.stdout()).toContain(`no logs yet: ${paths.logFile}`);
       expect(capture.stderr()).toBe("");
     });
+  });
+
+  it("retries a submit ACK loss once with the same idempotency key", async () => {
+    const submissions: Array<{ sessionId: string; prompt: string; idempotencyKey?: string }> = [];
+    const turnSubmitToService: NonNullable<CliIo["turnSubmitToService"]> = async (
+      _paths,
+      input,
+    ) => {
+      submissions.push(input);
+      if (submissions.length === 1) {
+        throw new LocalRpcUnavailableError("connection closed before ACK");
+      }
+      return {
+        invocationId: "inv_ackloss",
+        status: "queued",
+        acceptedAt: "2026-07-15T00:00:00.000Z",
+      };
+    };
+    const capture = createCliIo({ turnSubmitToService });
+
+    await withTempSparkEnv(async () => {
+      await expect(
+        main(["daemon", "submit", "--session", "session-a", "--prompt", "one prompt"], capture.io),
+      ).resolves.toBe(0);
+    });
+
+    expect(submissions).toHaveLength(2);
+    expect(submissions[0]).toEqual(submissions[1]);
+    expect(submissions[0]?.idempotencyKey).toMatch(/^idem_[a-f0-9]{32}$/u);
+    expect(capture.stdout()).toBe("queued inv_ackloss\n");
   });
 
   it("requires --yes for Spark daemon stop in non-interactive use", async () => {

@@ -71,8 +71,16 @@ export interface SessionWorkbenchTask {
   owner: string | null;
   todoDone: number;
   todoTotal: number;
+  todos: SessionWorkbenchTodo[];
   runRefs: string[];
   artifactRefs: string[];
+}
+
+export interface SessionWorkbenchTodo {
+  id: string;
+  content: string;
+  status: "pending" | "in_progress" | "blocked" | "done" | "cancelled";
+  notes: string[];
 }
 
 export interface SessionWorkbenchArtifact {
@@ -109,7 +117,7 @@ export interface SessionWorkbenchContext {
 export interface SessionWorkbenchMailMessage {
   id: string;
   fromSessionId: string;
-  kind: "request" | "notification";
+  kind: "request" | "question" | "notification";
   intent: string;
   subject: string | null;
   body: string;
@@ -123,6 +131,7 @@ export interface SessionWorkbenchView {
   changes: SessionWorkbenchArtifact[];
   evidence: SessionWorkbenchArtifact[];
   mailbox: SessionWorkbenchMailMessage[];
+  sessionTodoAnchor: string | null;
   context: SessionWorkbenchContext;
 }
 
@@ -141,6 +150,10 @@ export interface SessionInspectorLabels {
   noMailboxBody: string;
   unassignedProject: string;
   progress: string;
+  todoList: string;
+  sessionTodoTitle: string;
+  sessionTodoBody: string;
+  openSessionTodo: string;
   mailFrom: string;
   mailRequest: string;
   mailNotification: string;
@@ -207,8 +220,19 @@ export function buildSessionWorkbenchView(input: {
         createdAt: message.createdAt,
         status: message.ackedAt ? "acknowledged" : message.readAt ? "read" : "unread",
       })),
+    sessionTodoAnchor: latestSessionTodoAnchor(input.session),
     context: sessionContext(input.session),
   };
+}
+
+function latestSessionTodoAnchor(session: SparkSessionView) {
+  const message = session.messages.findLast((candidate) =>
+    candidate.parts?.some(
+      (part) =>
+        (part.type === "tool-call" || part.type === "tool-result") && part.toolName === "todo",
+    ),
+  );
+  return message ? `message:${message.id}` : null;
 }
 
 function sessionRun(run: SparkSessionView["runs"][number]): SessionWorkbenchRun {
@@ -336,6 +360,7 @@ function sessionTask(task: SparkSessionView["tasks"][number]): SessionWorkbenchT
     owner: nonEmpty(task.owner),
     todoDone,
     todoTotal: task.todos.length,
+    todos: task.todos.map((todo) => ({ ...todo, notes: [...todo.notes] })),
     runRefs: [...task.runRefs],
     artifactRefs: [...task.artifactRefs],
   };
@@ -353,6 +378,7 @@ function activityTask(report: SessionWorkbenchActivityReport): SessionWorkbenchT
     owner: null,
     todoDone: 0,
     todoTotal: 0,
+    todos: [],
     runRefs: [],
     artifactRefs: [],
   };

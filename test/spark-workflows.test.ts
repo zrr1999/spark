@@ -527,6 +527,42 @@ return { child: true }`;
   }
 });
 
+void test("spark-workflows serializes asynchronous live event delivery", async () => {
+  const events: WorkflowRunEvent["type"][] = [];
+  let releaseStage!: () => void;
+  let enterStage!: () => void;
+  const stageGate = new Promise<void>((resolve) => {
+    releaseStage = resolve;
+  });
+  const stageEntered = new Promise<void>((resolve) => {
+    enterStage = resolve;
+  });
+  const running = runWorkflowScript(
+    `export const meta = { name: 'ordered-events', description: 'ordered events' }
+stage('Plan')
+return await agent('work', { label: 'worker' })`,
+    {
+      agent: async () => "done",
+      onEvent: async (event) => {
+        if (event.type === "stage_started") {
+          enterStage();
+          await stageGate;
+        }
+        events.push(event.type);
+      },
+    },
+  );
+
+  await stageEntered;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(events.includes("agent_started"), false);
+  releaseStage();
+  await running;
+
+  assert.ok(events.indexOf("stage_started") < events.indexOf("agent_started"));
+  assert.ok(events.indexOf("agent_started") < events.indexOf("agent_succeeded"));
+});
+
 void test("spark-workflows projects failed run and node events", async () => {
   const script = `export const meta = { name: 'failed events', description: 'failed event workflow' }
 stage('Work')
@@ -1900,7 +1936,7 @@ return await agent('wait for update', { label: 'live-child' })`;
 
     for (
       let attempt = 0;
-      attempt < 50 && !updates.some((update) => /agent_started/.test(update));
+      attempt < 200 && !updates.some((update) => /agent_started/.test(update));
       attempt += 1
     ) {
       await new Promise((resolve) => setTimeout(resolve, 5));

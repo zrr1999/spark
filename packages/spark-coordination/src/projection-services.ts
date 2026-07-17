@@ -50,17 +50,30 @@ export interface AppendEventInput {
 }
 
 export function appendEvent(db: DatabaseSync, input: AppendEventInput) {
+  const sequenceRow = db
+    .prepare(
+      `UPDATE event_ingest_sequence
+       SET value = value + 1
+       WHERE singleton = 1
+       RETURNING value`,
+    )
+    .get() as { value: number } | undefined;
+  if (!sequenceRow) {
+    throw new Error("Spark event ingest sequence is not initialized");
+  }
   const event = {
     id: createId("evt"),
     createdAt: input.createdAt ?? nowIso(),
+    sequence: sequenceRow.value,
   };
 
   db.prepare(
     `INSERT INTO events
-      (id, workspace_id, project_id, actor_kind, actor_id, kind, subject_kind, subject_id, payload_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (id, ingest_sequence, workspace_id, project_id, actor_kind, actor_id, kind, subject_kind, subject_id, payload_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     event.id,
+    event.sequence,
     input.workspaceId ?? null,
     input.projectId ?? null,
     input.actorKind,
@@ -1487,18 +1500,22 @@ export function recordInvocationLogChunk(db: DatabaseSync, input: RecordInvocati
       timestamp,
     });
 
-    db.prepare(
-      `INSERT OR IGNORE INTO invocation_log_chunks
+    const inserted = db
+      .prepare(
+        `INSERT INTO invocation_log_chunks
         (id, invocation_id, stream, sequence, content, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(
-      createId("log"),
-      invocationId,
-      input.payload.stream,
-      input.payload.sequence,
-      input.payload.content,
-      timestamp,
-    );
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (invocation_id, stream, sequence) DO NOTHING`,
+      )
+      .run(
+        createId("log"),
+        invocationId,
+        input.payload.stream,
+        input.payload.sequence,
+        input.payload.content,
+        timestamp,
+      );
+    if (inserted.changes === 0) return;
 
     appendEvent(db, {
       workspaceId: input.workspaceId,

@@ -451,6 +451,7 @@ export interface ArtifactCacheBlobsTable {
 
 export interface EventsTable {
   id: string;
+  ingest_sequence: number;
   workspace_id: string | null;
   project_id: string | null;
   actor_kind: "user" | "runtime" | "server";
@@ -460,6 +461,11 @@ export interface EventsTable {
   subject_id: string | null;
   payload_json: string;
   created_at: string;
+}
+
+export interface EventIngestSequenceTable {
+  singleton: 1;
+  value: number;
 }
 
 export interface SparkDatabase {
@@ -500,4 +506,5 @@ export interface SparkDatabase {
   artifact_links: ArtifactLinksTable;
   artifact_cache_blobs: ArtifactCacheBlobsTable;
   events: EventsTable;
+  event_ingest_sequence: EventIngestSequenceTable;
 }

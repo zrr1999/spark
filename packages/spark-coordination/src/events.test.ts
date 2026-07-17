@@ -3,6 +3,7 @@ import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
 import { appendEvent } from "./projection-services";
 import {
   cursorFromEvent,
+  drainEventBatches,
   encodeSseMessage,
   latestEventCursor,
   loadEventBatch,
@@ -37,20 +38,65 @@ describe("event streaming helpers", () => {
     expect(latestEventCursor(db)).toEqual({
       id: next[0]?.id,
       createdAt: "2026-05-22T00:00:01.000Z",
+      sequence: next[0]?.sequence,
     });
     const latestCursorPlan = db
       .prepare(
-        "EXPLAIN QUERY PLAN SELECT id, created_at FROM events ORDER BY created_at DESC, id DESC LIMIT 1",
+        "EXPLAIN QUERY PLAN SELECT id, created_at FROM events ORDER BY ingest_sequence DESC LIMIT 1",
       )
       .all() as Array<{ detail: string }>;
-    expect(latestCursorPlan.some(({ detail }) => detail.includes("events_created_id_idx"))).toBe(
-      true,
-    );
+    expect(
+      latestCursorPlan.some(({ detail }) => detail.includes("events_ingest_sequence_unique")),
+    ).toBe(true);
 
     const encoded = encodeSseMessage("spark-cockpit.event", next[0], next[0]?.id);
     expect(encoded).toContain("event: spark-cockpit.event\n");
     expect(encoded).toContain("data: ");
     expect(encoded.endsWith("\n\n")).toBe(true);
+    db.close();
+  });
+
+  it("resolves legacy cursors onto monotonic ingest order", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    const createdAt = "2026-05-22T00:00:00.000Z";
+    const first = appendEvent(db, {
+      actorKind: "server",
+      kind: "first.event",
+      createdAt,
+    });
+    const legacyCursor = { id: first.id, createdAt };
+
+    db.prepare(
+      `INSERT INTO events
+        (id, workspace_id, project_id, actor_kind, actor_id, kind, subject_kind, subject_id, payload_json, created_at)
+       VALUES ('evt_00000000000000000000000000000000', NULL, NULL, 'server', NULL, 'late.event', NULL, NULL, '{}', ?)`,
+    ).run(createdAt);
+
+    const next = loadEventBatch(db, legacyCursor, 10);
+    expect(next.map((event) => event.kind)).toEqual(["late.event"]);
+    expect(next[0]?.sequence).toBeGreaterThan(first.sequence);
+    db.close();
+  });
+
+  it("drains a burst in bounded batches", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    const watermark = appendEvent(db, { actorKind: "server", kind: "watermark" });
+    for (let index = 0; index < 188; index += 1) {
+      appendEvent(db, { actorKind: "server", kind: "burst.event", payload: { index } });
+    }
+
+    const firstDrain = drainEventBatches(db, watermark, { batchSize: 50, maxBatches: 3 });
+    expect(firstDrain.rows).toHaveLength(150);
+    expect(firstDrain.mayHaveMore).toBe(true);
+    const secondDrain = drainEventBatches(db, firstDrain.cursor, {
+      batchSize: 50,
+      maxBatches: 3,
+    });
+    expect(secondDrain.rows).toHaveLength(38);
+    expect(secondDrain.mayHaveMore).toBe(false);
+    expect(secondDrain.rows.at(-1)?.payloadJson).toContain('"index":187');
     db.close();
   });
 });

@@ -51,6 +51,27 @@ describe("Spark conversation view protocol", () => {
     ]);
   });
 
+  it("parses question messages in the session mailbox projection", () => {
+    const parsed = parseSparkSessionView({
+      sessionId: "sess_target",
+      mailbox: [
+        {
+          id: "mail:question",
+          fromSessionId: "sess_sender",
+          kind: "question",
+          intent: "delegate.question",
+          subject: null,
+          body: "What changed?",
+          createdAt: "2026-07-15T03:00:00.000Z",
+          readAt: null,
+          ackedAt: null,
+        },
+      ],
+    });
+
+    expect(parsed.mailbox?.[0]?.kind).toBe("question");
+  });
+
   it("parses ordered host-neutral conversation parts", () => {
     const parsed = parseSparkSessionView({
       sessionId: "sess_parts",

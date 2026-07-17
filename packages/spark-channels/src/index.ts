@@ -106,7 +106,12 @@ export {
   resolveInfoflowCustomSystemPrompt,
 } from "./infoflow-prompts.ts";
 export type { InfoflowMessageContext, InfoflowPromptScope } from "./infoflow-prompts.ts";
-export type { ChannelReplyCapability, ChannelReplyStream, ChannelReplyTarget } from "./reply.ts";
+export type {
+  ChannelReplyCapability,
+  ChannelReplyRecovery,
+  ChannelReplyStream,
+  ChannelReplyTarget,
+} from "./reply.ts";
 export { ChannelRegistry, ChannelRegistryError, parseChannelsConfig } from "./registry.ts";
 export { FakeChannelTransport } from "./transport.ts";
 export type {

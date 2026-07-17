@@ -1739,7 +1739,12 @@ describe("Spark daemon local RPC", () => {
                 id: `mail:${index}`,
                 toSessionId: "sess_view",
                 fromSessionId: `sess_sender_${index}`,
-                kind: index % 2 === 0 ? ("request" as const) : ("notification" as const),
+                kind:
+                  index === 50
+                    ? ("question" as const)
+                    : index % 2 === 0
+                      ? ("request" as const)
+                      : ("notification" as const),
                 visibility: "user" as const,
                 delivery: "mailbox" as const,
                 deliveries: [],
@@ -1793,6 +1798,7 @@ describe("Spark daemon local RPC", () => {
       });
       expect(emptyResult.mailbox.at(-1)).toMatchObject({
         id: "mail:50",
+        kind: "question",
         subject: "Newest request",
       });
       expect(JSON.stringify(emptyResult.mailbox)).not.toContain("not-for-cockpit");

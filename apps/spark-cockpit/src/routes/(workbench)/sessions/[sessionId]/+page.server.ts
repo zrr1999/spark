@@ -1,4 +1,5 @@
 import { error } from "@sveltejs/kit";
+import { createId } from "@zendev-lab/spark-protocol";
 import {
   getManagedSessionForCockpit,
   getManagedSessionSnapshotForCockpit,
@@ -52,10 +53,15 @@ export const load: PageServerLoad = async ({ params, parent }) => {
     sessions,
     sessionsAvailable: managedSessions.available,
     selectedSessionId: selected.sessionId,
+    sendSubmissionIdSeed: createId("idem"),
     selectedSession: selected,
     sessionSnapshot: snapshotWindow?.snapshot ?? null,
     sessionHistory: snapshotWindow?.history ?? null,
-    sessionEventCursor: eventCursor ? `${eventCursor.createdAt}|${eventCursor.id}` : null,
+    sessionEventCursor: eventCursor
+      ? typeof eventCursor.sequence === "number"
+        ? `${eventCursor.sequence}|${eventCursor.createdAt}|${eventCursor.id}`
+        : `${eventCursor.createdAt}|${eventCursor.id}`
+      : null,
     canAssign: selected.status !== "archived",
     modelControl,
     sessionActivity: loadSessionActivity(db, {

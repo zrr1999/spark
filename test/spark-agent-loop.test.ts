@@ -447,6 +447,102 @@ void test("SparkAgentLoop appends multi-roundtrip assistant messages in order wi
   assert.deepEqual(doneTexts, ["before tool", "after tool"]);
 });
 
+void test("SparkAgentLoop projects thinking deltas on the stable assistant message", async () => {
+  const viewEvents: any[] = [];
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-agent-loop-thinking-stream-test",
+    ui: { publishView: (event) => viewEvents.push(event) },
+  });
+  const started = buildAssistant([]);
+  const thinking = buildAssistant([{ type: "thinking", thinking: "checking constraints" }]);
+  const final = buildAssistant([
+    { type: "thinking", thinking: "checking constraints" },
+    { type: "text", text: "done" },
+  ]);
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: makeFakeStream({
+      rounds: [
+        [
+          { type: "start", partial: started },
+          { type: "thinking_start", contentIndex: 0, partial: thinking },
+          {
+            type: "thinking_delta",
+            contentIndex: 0,
+            delta: "checking constraints",
+            partial: thinking,
+          },
+          {
+            type: "thinking_end",
+            contentIndex: 0,
+            content: "checking constraints",
+            partial: thinking,
+          },
+          { type: "done", reason: "stop", message: final },
+        ],
+      ],
+    }),
+    getModel: () => TEST_MODEL,
+  });
+
+  await loop.submit("think first");
+
+  const assistantMessages = viewEvents.filter(
+    (event) => event.type === "session.message" && event.message.role === "assistant",
+  );
+  const thinkingUpdate = assistantMessages.find(
+    (event) =>
+      event.message.status === "streaming" &&
+      event.message.parts?.some(
+        (part: { type: string; text?: string }) =>
+          part.type === "thinking" && part.text === "checking constraints",
+      ),
+  );
+  assert.ok(thinkingUpdate, "thinking deltas should be projected before the final answer");
+  const doneMessage = assistantMessages.find((event) => event.message.status === "done");
+  assert.equal(doneMessage?.message.id, thinkingUpdate.message.id);
+});
+
+void test("SparkAgentLoop terminalizes a partial assistant bubble when the stream throws", async () => {
+  const viewEvents: any[] = [];
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-agent-loop-partial-error-test",
+    ui: { publishView: (event) => viewEvents.push(event) },
+  });
+  const partial = buildAssistant([{ type: "text", text: "partial answer" }]);
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: () =>
+      ({
+        async *[Symbol.asyncIterator]() {
+          yield { type: "start", partial };
+          yield {
+            type: "text_delta",
+            contentIndex: 0,
+            delta: "partial answer",
+            partial,
+          };
+          throw new Error("provider disconnected");
+        },
+        result: async () => partial,
+      }) as ReturnType<SparkAgentStreamFunction>,
+    getModel: () => TEST_MODEL,
+  });
+
+  await loop.submit("stream then fail");
+
+  const assistantMessages = viewEvents.filter(
+    (event) => event.type === "session.message" && event.message.role === "assistant",
+  );
+  assert.equal(new Set(assistantMessages.map((event) => event.message.id)).size, 1);
+  assert.equal(assistantMessages.at(-1)?.message.status, "error");
+  assert.equal(assistantMessages.at(-1)?.message.text, "partial answer");
+  assert.equal(
+    viewEvents.some((event) => event.type === "run.update" && event.run.status === "failed"),
+    true,
+  );
+});
+
 void test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", async () => {
   const stopAssistant = buildAssistant([{ type: "text", text: "done" }]);
   const toolUseAssistant = buildAssistant(
@@ -539,9 +635,10 @@ void test("SparkAgentLoop dispatches tool calls and feeds tool results back into
     name: "echo",
     description: "echo input",
     parameters: { type: "object" },
-    async execute(_id, params, _signal, _onUpdate, ctx) {
+    async execute(_id, params, _signal, onUpdate, ctx) {
       toolCalls += 1;
       toolSessionId = ctx.sessionId;
+      onUpdate({ content: [{ type: "text", text: "echo is running" }] });
       return {
         content: [{ type: "text", text: `echoed:${(params as { x?: string }).x ?? ""}` }],
         details: {
@@ -612,6 +709,27 @@ void test("SparkAgentLoop dispatches tool calls and feeds tool results back into
         event.type === "session.message" &&
         event.message.role === "tool" &&
         event.message.status === "pending" &&
+        event.message.toolName === "echo",
+    ),
+    true,
+  );
+  const echoToolMessages = viewEvents.filter(
+    (event: any) =>
+      event.type === "session.message" &&
+      event.message.role === "tool" &&
+      event.message.toolCallId === "tc-1",
+  );
+  assert.deepEqual(
+    [...new Set(echoToolMessages.map((event: any) => event.message.id))],
+    ["tool-call:tc-1"],
+  );
+  assert.equal(
+    viewEvents.some(
+      (event: any) =>
+        event.type === "session.message" &&
+        event.message.role === "tool" &&
+        event.message.status === "streaming" &&
+        event.message.text === "echo is running" &&
         event.message.toolName === "echo",
     ),
     true,
@@ -762,12 +880,14 @@ void test("SparkAgentLoop publishes ordered display-safe conversation parts with
 
   const toolResultMessage = viewEvents.find(
     (event) =>
-      event.type === "session.message" && event.message.id === "tool-result:tc-display-safe",
+      event.type === "session.message" &&
+      event.message.id === "tool-call:tc-display-safe" &&
+      event.message.status === "done",
   )?.message;
   assert.equal(toolResultMessage.text, "public-tool-output");
   assert.deepEqual(toolResultMessage.parts, [
     {
-      id: "tool-result:tc-display-safe:part:0",
+      id: "tool-call:tc-display-safe:part:0",
       type: "tool-result",
       toolCallId: "tc-display-safe",
       toolName: "inspect_secret",

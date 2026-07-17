@@ -239,6 +239,7 @@ export class SparkAgentLoop {
   private viewRunCounter = 0;
   private currentViewRunId: string | undefined;
   private currentAssistantMessageId: string | undefined;
+  private currentAssistantPartial?: AssistantMessage;
   private readonly subscribers = new Set<(event: SparkAgentLoopEvent) => void>();
 
   constructor(options: SparkAgentLoopOptions) {
@@ -532,7 +533,14 @@ export class SparkAgentLoop {
       const approval = await this.requestToolApprovalIfNeeded(toolCall, tool.config, signal);
       if (!approval.approved) return errorToolResult(toolCall, approval.message);
 
-      const onUpdate = () => undefined;
+      const onUpdate = (update: { content: Array<{ type: "text"; text: string }> }): void => {
+        this.publishViewEvent({
+          version: SPARK_PROTOCOL_VERSION,
+          type: "session.message",
+          sessionId: this.viewSessionId,
+          message: toolUpdateToMessageView(toolCall, update),
+        });
+      };
       const toolAbort = new AbortController();
       const cleanupAbort = relayAbort(signal, toolAbort);
       try {
@@ -801,6 +809,7 @@ export class SparkAgentLoop {
     const runId = `${this.viewSessionId}:run:${Date.now().toString(36)}:${++this.viewRunCounter}`;
     this.currentViewRunId = runId;
     this.currentAssistantMessageId = undefined;
+    this.currentAssistantPartial = undefined;
     this.publishViewEvent({
       version: SPARK_PROTOCOL_VERSION,
       type: "run.update",
@@ -826,6 +835,7 @@ export class SparkAgentLoop {
   private takeAssistantMessageId(): string {
     const id = this.assistantMessageId();
     this.currentAssistantMessageId = undefined;
+    this.currentAssistantPartial = undefined;
     return id;
   }
 
@@ -880,9 +890,11 @@ export class SparkAgentLoop {
         );
         return;
       case "abort":
+        this.publishCurrentAssistantTerminal(event.reason, "aborted", false);
         this.publishCurrentRunStatus("cancelled", event.reason);
         return;
       case "error":
+        this.publishCurrentAssistantTerminal(event.message, "error", true);
         this.publishViewEvent({
           version: SPARK_PROTOCOL_VERSION,
           type: "session.message",
@@ -907,22 +919,21 @@ export class SparkAgentLoop {
       // multi-roundtrip turns append in chronological order instead of
       // overwriting the first assistant bubble in place.
       this.currentAssistantMessageId = nextViewMessageId(this.viewSessionId, "assistant");
+      this.currentAssistantPartial = undefined;
     }
-    if (event.type === "text_delta" || event.type === "start") {
-      const partial = "partial" in event ? event.partial : undefined;
-      if (partial && typeof partial === "object") {
-        this.publishViewEvent({
-          version: SPARK_PROTOCOL_VERSION,
-          type: "session.message",
-          sessionId: this.viewSessionId,
-          message: assistantToMessageView(
-            partial as AssistantMessage,
-            this.assistantMessageId(),
-            "streaming",
-          ),
-        });
-      }
-      return;
+    const partial = "partial" in event ? event.partial : undefined;
+    if (partial && typeof partial === "object") {
+      this.currentAssistantPartial = partial as AssistantMessage;
+      this.publishViewEvent({
+        version: SPARK_PROTOCOL_VERSION,
+        type: "session.message",
+        sessionId: this.viewSessionId,
+        message: assistantToMessageView(
+          this.currentAssistantPartial,
+          this.assistantMessageId(),
+          "streaming",
+        ),
+      });
     }
     if (event.type === "toolcall_end") {
       const toolCall = "toolCall" in event ? event.toolCall : undefined;
@@ -933,6 +944,30 @@ export class SparkAgentLoop {
         sessionId: this.viewSessionId,
         message: toolCallToMessageView(toolCall),
       });
+    }
+  }
+
+  private publishCurrentAssistantTerminal(
+    message: string,
+    stopReason: "aborted" | "error",
+    release: boolean,
+  ): void {
+    const partial = this.currentAssistantPartial;
+    const id = this.currentAssistantMessageId;
+    if (!partial || !id) return;
+    this.publishViewEvent({
+      version: SPARK_PROTOCOL_VERSION,
+      type: "session.message",
+      sessionId: this.viewSessionId,
+      message: assistantToMessageView(
+        { ...partial, stopReason, errorMessage: message },
+        id,
+        "error",
+      ),
+    });
+    if (release) {
+      this.currentAssistantPartial = undefined;
+      this.currentAssistantMessageId = undefined;
     }
   }
 
@@ -1376,7 +1411,7 @@ function toolCallToMessageView(toolCall: ToolCall): SparkMessageView {
 }
 
 function toolResultToMessageView(message: ToolResultMessage): SparkMessageView {
-  const id = `tool-result:${message.toolCallId}`;
+  const id = `tool-call:${message.toolCallId}`;
   const summary =
     summarizeToolResultContent(message.content) ??
     `${message.toolName} ${message.isError ? "failed" : "completed"}`;
@@ -1401,6 +1436,36 @@ function toolResultToMessageView(message: ToolResultMessage): SparkMessageView {
       },
     ],
     metadata: { kind: "tool_result" },
+  };
+}
+
+function toolUpdateToMessageView(
+  toolCall: ToolCall,
+  update: { content: Array<{ type: "text"; text: string }> },
+): SparkMessageView {
+  const id = `tool-call:${toolCall.id}`;
+  const summary = summarizeToolResultContent(update.content) ?? `${toolCall.name} running`;
+  return {
+    version: SPARK_PROTOCOL_VERSION,
+    id,
+    role: "tool",
+    text: summary,
+    status: "streaming",
+    toolCallId: toolCall.id,
+    toolName: toolCall.name,
+    updatedAt: new Date().toISOString(),
+    parts: [
+      {
+        id: `${id}:part:0`,
+        type: "tool-call",
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        status: "running",
+        summary,
+        metadata: {},
+      },
+    ],
+    metadata: { kind: "tool_progress" },
   };
 }
 

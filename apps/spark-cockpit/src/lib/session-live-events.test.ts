@@ -15,6 +15,7 @@ import {
 import { parseSparkSessionView } from "@zendev-lab/spark-protocol";
 
 const baseEvent = {
+  sequence: null,
   workspaceId: "ws_spore",
   projectId: null,
   subjectId: "sess_current",
@@ -133,6 +134,26 @@ describe("session live events", () => {
       artifacts: [{ ref: "artifact:1", title: "UI diff" }],
     });
     expect(state.cursor).toBe("2026-07-13T08:00:00.000Z|evt_artifact");
+  });
+
+  it("persists the database ingest sequence in reconnect cursors", () => {
+    const state = createSessionLiveEventState({ sessionId: "sess_current" });
+    applySessionLiveEvent(
+      state,
+      event({
+        id: "evt_sequenced",
+        sequence: 42,
+        kind: "daemon.task.lifecycle",
+        payload: {
+          type: "daemon.task.lifecycle",
+          sessionId: "sess_current",
+          taskType: "session.run",
+          status: "running",
+        },
+      }),
+    );
+
+    expect(state.cursor).toBe("42|2026-07-13T08:00:00.000Z|evt_sequenced");
   });
 
   it("reconciles streaming messages by canonical id and ignores other sessions", () => {

@@ -8,9 +8,11 @@ describe("infoflow transport", () => {
   it("delegates ordinary and reply delivery to the SDK outbound boundary", async () => {
     const send = vi.fn(async () => undefined);
     const openReplyStream = vi.fn(async () => undefined);
+    const recoverReply = vi.fn(async () => undefined);
     const outbound: InfoflowSdkOutbound = {
       send,
       openReplyStream,
+      recoverReply,
     };
     const transport = createInfoflowTransport(
       {
@@ -33,6 +35,12 @@ describe("infoflow transport", () => {
       senderId: "zhanrongrui",
       text: "**处理完成**",
     });
+    await transport.reply?.recoverReply?.({
+      recipient: "group:10838226",
+      text: "**处理完成**",
+      deliveryId: "channel.reply:1",
+      recovery: { kind: "infoflow.streaming-card.v1", data: { token: "one" } },
+    });
 
     assert.deepEqual(send.mock.calls, [
       [{ recipient: "alice", content: { type: "text", text: "hello from spark" } }],
@@ -45,6 +53,15 @@ describe("infoflow transport", () => {
       ],
     ]);
     assert.deepEqual(openReplyStream.mock.calls, [["group:10838226"]]);
+    assert.deepEqual(recoverReply.mock.calls, [
+      [
+        {
+          recipient: "group:10838226",
+          text: "**处理完成**",
+          recovery: { kind: "infoflow.streaming-card.v1", data: { token: "one" } },
+        },
+      ],
+    ]);
   });
 
   it("reports live SDK websocket state and connection errors", async () => {

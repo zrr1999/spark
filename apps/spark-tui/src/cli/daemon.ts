@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import type { ChannelNotifySendResult } from "@zendev-lab/spark-channels";
 import {
+  createId,
   parseSparkDaemonEvent,
   parseSparkSessionView,
   sparkCommandKindForLocalRpcMethod,
@@ -33,7 +34,9 @@ import {
 import { sparkDaemonCliStrings } from "@zendev-lab/spark-i18n/cli";
 import {
   requestSparkDaemonLocalRpcWire,
+  SparkDaemonLocalRpcError,
   SparkDaemonLocalRpcRemoteError,
+  SparkDaemonLocalRpcUnavailableError,
 } from "@zendev-lab/spark-system/daemon-local-rpc";
 
 import {
@@ -194,6 +197,7 @@ export interface SparkDaemonLocalStatus {
 export interface SparkDaemonTurnSubmitInput {
   sessionId: string;
   prompt: string;
+  idempotencyKey?: string;
   model?: string;
   reset?: boolean;
   assignment?: SparkAssignment;
@@ -374,6 +378,7 @@ export interface SparkDaemonSubmitCommand extends SparkDaemonCliCommandBase {
   action: "submit";
   sessionId: string;
   prompt: string;
+  idempotencyKey?: string;
   reset?: boolean;
   assignment?: SparkAssignment;
 }
@@ -599,6 +604,7 @@ export function parseSparkDaemonCliArgs(argv: string[]): SparkDaemonCliCommand {
     case "submit": {
       const sessionId = readStringOption(parsed.options, "session")?.trim();
       const prompt = readPrompt(parsed);
+      const idempotencyKey = readStringOption(parsed.options, "idempotency-key")?.trim();
       if (!sessionId) throw new Error(STRINGS.submitRequiresSession);
       if (!prompt) throw new Error(STRINGS.submitRequiresPrompt);
       return {
@@ -606,6 +612,7 @@ export function parseSparkDaemonCliArgs(argv: string[]): SparkDaemonCliCommand {
         json,
         sessionId,
         prompt,
+        ...(idempotencyKey ? { idempotencyKey } : {}),
         reset: readBooleanOption(parsed.options, "reset"),
       };
     }
@@ -943,6 +950,7 @@ export async function handleSparkDaemonCliCommand(
           {
             sessionId: command.sessionId,
             prompt: command.prompt,
+            idempotencyKey: command.idempotencyKey ?? createId("idem"),
             reset: command.reset,
             ...(command.assignment ? { assignment: command.assignment } : {}),
           },
@@ -1045,6 +1053,7 @@ export interface SparkDaemonNativeResponderOptions {
 }
 
 interface SparkDaemonNativeResponderContext {
+  submissionId?: string;
   signal?: AbortSignal;
   appendAssistantChunk?: (chunk: string) => void;
   finishAssistantMessage?: () => void;
@@ -1082,6 +1091,7 @@ export function createSparkDaemonNativeResponder(
       {
         sessionId,
         prompt,
+        idempotencyKey: context?.submissionId ?? createId("idem"),
         messageMetadata: {
           origin: { kind: "user", host: "tui", surface: "local" },
         },
@@ -1874,10 +1884,30 @@ async function clientSubmit(
 ): Promise<LocalTurnSubmitResult> {
   const paths = resolveSparkDaemonClientPaths(client);
   await clientEnsureRunning(client);
-  if (client.turnSubmit) return await client.turnSubmit(paths, input);
-  return await localRpcRequest<LocalTurnSubmitResult>(
-    paths,
-    localRpcWireRequest("turn.submit", input),
+  const stableInput = { ...input, idempotencyKey: input.idempotencyKey ?? createId("idem") };
+  const submit = async () =>
+    client.turnSubmit
+      ? await client.turnSubmit(paths, stableInput)
+      : await localRpcRequest<LocalTurnSubmitResult>(
+          paths,
+          localRpcWireRequest("turn.submit", stableInput),
+        );
+  try {
+    return await submit();
+  } catch (error) {
+    if (!isAmbiguousSubmitTransportError(error)) throw error;
+    // The daemon may have committed the invocation before the local ACK was
+    // lost. A single retry with the same durable key is safe and recovers the
+    // original invocation instead of enqueueing the prompt twice.
+    return await submit();
+  }
+}
+
+function isAmbiguousSubmitTransportError(error: unknown): boolean {
+  return (
+    error instanceof SparkDaemonLocalRpcUnavailableError ||
+    (error instanceof SparkDaemonLocalRpcError &&
+      !(error instanceof SparkDaemonLocalRpcRemoteError))
   );
 }
 

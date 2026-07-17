@@ -104,6 +104,8 @@ export async function runWorkflowScript<T = unknown>(
   let parallelGroupIndex = 0;
   let toolCallIndex = 0;
   let nestedWorkflowIndex = 0;
+  let eventDispatch = Promise.resolve();
+  let eventDispatchError: unknown;
   const nodeContext = new AsyncLocalStorage<{ parentNodeId: string }>();
   const emitWorkflowEvent = (
     type: WorkflowRunEvent["type"],
@@ -111,13 +113,28 @@ export async function runWorkflowScript<T = unknown>(
   ) => {
     if (!options.onEvent) return;
     const sequence = eventSequence++;
-    void options.onEvent({
+    const workflowEvent = {
       id: `event:${sequence}`,
       sequence,
       timestamp: now(),
       type,
       ...event,
+    } as WorkflowRunEvent;
+    // Workflow helpers such as stage() are intentionally synchronous, but the
+    // persistence/projection callback may be asynchronous. Serialize callbacks
+    // so a later agent_started update can never overtake its stage_started
+    // parent in the durable stream or the live UI.
+    eventDispatch = eventDispatch.then(async () => {
+      try {
+        await options.onEvent?.(workflowEvent);
+      } catch (error) {
+        eventDispatchError ??= error;
+      }
     });
+  };
+  const flushWorkflowEvents = async (): Promise<void> => {
+    await eventDispatch;
+    if (eventDispatchError) throw eventDispatchError;
   };
   const stageNodeId = (stageTitle: string | undefined) =>
     stageTitle ? `stage:${stageTitle}` : undefined;
@@ -853,6 +870,7 @@ export async function runWorkflowScript<T = unknown>(
   try {
     const result = (await runTrustedWorkflowScriptInVm<T>(parsed.body, context)) as T;
     emitWorkflowEvent("run_succeeded", { nodeId: "run", nodeKind: "run", result });
+    await flushWorkflowEvents();
     return { meta: parsed.meta, result, stages, phases: stages, agentCount: callIndex, journal };
   } catch (error) {
     emitWorkflowEvent("run_failed", {
@@ -860,6 +878,12 @@ export async function runWorkflowScript<T = unknown>(
       nodeKind: "run",
       errorMessage: errorText(error),
     });
+    try {
+      await flushWorkflowEvents();
+    } catch {
+      // Preserve the workflow/script failure that initiated this path. When
+      // event delivery itself failed, that error is already the active error.
+    }
     throw error;
   }
 }

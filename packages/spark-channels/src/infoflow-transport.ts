@@ -200,6 +200,13 @@ export function createInfoflowTransport(
           ...(mentionUserIds ? { mentionUserIds } : {}),
         });
       },
+      recoverReply: async (target) => {
+        await outbound.recoverReply({
+          recipient: target.recipient,
+          text: target.text,
+          recovery: target.recovery,
+        });
+      },
     },
     status: () => {
       const liveState = wsClient

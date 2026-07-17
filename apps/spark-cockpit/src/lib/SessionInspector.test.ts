@@ -56,6 +56,11 @@ describe("SessionInspector component contract", () => {
     expect(source).toContain("groupTasksByProject(view.tasks)");
     expect(source).toContain("task.projectRef ??");
     expect(source).toContain("labels.unassignedProject");
+    expect(source).toContain("task.todos as todo");
+    expect(source).toContain("todo.content");
+    expect(source).toContain("statusLabel(todo.status)");
+    expect(source).toContain("view.sessionTodoAnchor");
+    expect(source).toContain("href={`#${view.sessionTodoAnchor}`}");
     expect(source).not.toContain("project.title");
     expect(source).not.toContain("project.status");
   });

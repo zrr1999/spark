@@ -5,6 +5,9 @@ function fakeClient() {
   const sendToUser = vi.fn(async () => ({}));
   const sendToGroup = vi.fn(async () => ({}));
   const sendToGroupWithOptions = vi.fn(async () => ({}));
+  const update = vi.fn(
+    async (_input: unknown): Promise<{ ok: boolean; error?: string }> => ({ ok: true }),
+  );
   const start = vi.fn<() => Promise<boolean>>(async () => true);
   const stream = {
     start,
@@ -19,10 +22,18 @@ function fakeClient() {
   const client: InfoflowSdkClientLike = {
     im: {
       message: { sendToUser, sendToGroup, sendToGroupWithOptions },
-      streamingCard: { createSession },
+      streamingCard: { createSession, update },
     },
   };
-  return { client, sendToUser, sendToGroup, sendToGroupWithOptions, createSession, stream };
+  return {
+    client,
+    sendToUser,
+    sendToGroup,
+    sendToGroupWithOptions,
+    createSession,
+    update,
+    stream,
+  };
 }
 
 const config = {
@@ -125,6 +136,86 @@ describe("Infoflow SDK outbound", () => {
     );
   });
 
+  it("recovers an interrupted completion by updating the same streaming card", async () => {
+    const fake = fakeClient();
+    Object.assign(fake.stream, { modifyToken: "modify-token-1", groupVersion: 114 });
+    const outbound = createInfoflowSdkOutbound(config, { createClient: () => fake.client });
+    const stream = await outbound.openReplyStream("group:10838226");
+    expect(stream?.deliveryRecovery).toMatchObject({
+      kind: "infoflow.streaming-card.v1",
+      data: {
+        to: "group:10838226",
+        modifyToken: "modify-token-1",
+        answerFormat: "markdown",
+      },
+    });
+
+    await outbound.recoverReply({
+      recipient: "group:10838226",
+      text: "最终答案",
+      recovery: stream!.deliveryRecovery!,
+    });
+
+    expect(fake.update).toHaveBeenCalledWith({
+      to: "group:10838226",
+      modifyToken: "modify-token-1",
+      contents: expect.objectContaining({
+        ai_markdown: { type: "text", content: "最终答案" },
+        dc_print_end: { type: "text", content: "1" },
+      }),
+      groupVersion: expect.any(Number),
+    });
+  });
+
+  it("rejects recovery when the platform refuses the same-card update", async () => {
+    const fake = fakeClient();
+    Object.assign(fake.stream, { modifyToken: "modify-token-1", groupVersion: 114 });
+    fake.update.mockResolvedValueOnce({ ok: false, error: "stale card version" });
+    const outbound = createInfoflowSdkOutbound(config, { createClient: () => fake.client });
+    const stream = await outbound.openReplyStream("group:10838226");
+
+    await expect(
+      outbound.recoverReply({
+        recipient: "group:10838226",
+        text: "最终答案",
+        recovery: stream!.deliveryRecovery!,
+      }),
+    ).rejects.toThrow("Infoflow stream recovery failed: stale card version");
+  });
+
+  it("does not report completion while the SDK final update has failed", async () => {
+    const fake = fakeClient();
+    const sessionState = fake.stream as typeof fake.stream & {
+      updateFailCount: number;
+    };
+    sessionState.updateFailCount = 0;
+    fake.stream.complete.mockImplementationOnce(async () => {
+      sessionState.updateFailCount = 1;
+    });
+    const outbound = createInfoflowSdkOutbound(config, { createClient: () => fake.client });
+    const stream = await outbound.openReplyStream("zhanrongrui");
+
+    await expect(stream?.complete("已完成")).rejects.toThrow(
+      "Infoflow stream completion update failed",
+    );
+  });
+
+  it("waits for an in-flight SDK update before finalizing the stream", async () => {
+    const fake = fakeClient();
+    const sessionState = fake.stream as typeof fake.stream & { isFlushing: boolean };
+    sessionState.isFlushing = true;
+    fake.stream.complete.mockImplementationOnce(async () => {
+      expect(sessionState.isFlushing).toBe(false);
+    });
+    const outbound = createInfoflowSdkOutbound(config, { createClient: () => fake.client });
+    const stream = await outbound.openReplyStream("zhanrongrui");
+
+    setTimeout(() => {
+      sessionState.isFlushing = false;
+    }, 0);
+    await expect(stream?.complete("已完成")).resolves.toBeUndefined();
+  });
+
   it("opens process details with the outer disclosure and keeps final labels distinct", async () => {
     const buildContents = vi.fn((opts: { final?: boolean; doneLabel?: string; error?: string }) => {
       const label = opts.doneLabel ?? "思考完成";
@@ -158,7 +249,10 @@ describe("Infoflow SDK outbound", () => {
               sendToGroup: vi.fn(),
               sendToGroupWithOptions: vi.fn(),
             },
-            streamingCard: { createSession: () => session },
+            streamingCard: {
+              createSession: () => session,
+              update: vi.fn(async () => ({ ok: true })),
+            },
           },
         }) as InfoflowSdkClientLike,
     });

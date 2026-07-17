@@ -59,6 +59,8 @@ describe("source-derived conversation component boundary", () => {
     expect(workspace).toContain('action="?/selectModel"');
     expect(workspace).toContain('action="?/selectThinking"');
     expect(workspace).toContain("use:enhance={enhanceSendMessage}");
+    expect(workspace).toContain('name="submissionId" value={startSubmissionId}');
+    expect(workspace).toContain('name="submissionId" value={sendSubmissionId}');
     expect(workspace).not.toContain('class="timeline-entry');
     expect(workspace).not.toContain('class="message-block');
   });

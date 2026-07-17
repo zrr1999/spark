@@ -266,6 +266,22 @@ describe("daemon native session execution", () => {
 
   it("uses the final fallback when streaming card completion fails", async () => {
     const sendReply = vi.fn(async () => undefined);
+    const acknowledge = vi.fn();
+    const rerouteToMessage = vi.fn();
+    const stage = vi.fn(() => ({
+      deliveryId: "channel.reply:invocation-1",
+      invocationId: "invocation-1",
+      sessionId: "sess_channel_complete_fallback",
+      workspaceId: "workspace-infoflow",
+      adapterId: "infoflow",
+      target: { recipient: "alice", senderId: "alice", preview: "go" },
+      text: "done",
+      deliveryMode: "inline-stream" as const,
+      status: "sending" as const,
+      attemptCount: 0,
+      createdAt: "2026-07-15T00:00:00.000Z",
+      updatedAt: "2026-07-15T00:00:00.000Z",
+    }));
     const task: SparkDaemonSessionRunTask = {
       type: "session.run",
       sessionId: "sess_channel_complete_fallback",
@@ -293,6 +309,12 @@ describe("daemon native session execution", () => {
         })),
         sendReply,
       },
+      channelReplyDelivery: {
+        stage,
+        acknowledge,
+        defer: vi.fn(),
+        rerouteToMessage,
+      },
     });
 
     try {
@@ -302,9 +324,184 @@ describe("daemon native session execution", () => {
         "infoflow",
         expect.objectContaining({ recipient: "alice", text: "done" }),
       );
+      expect(stage).toHaveBeenCalledWith(
+        expect.objectContaining({ deliveryMode: "inline-stream", text: "done" }),
+      );
+      expect(rerouteToMessage).toHaveBeenCalledWith("channel.reply:invocation-1");
+      expect(rerouteToMessage.mock.invocationCallOrder[0]).toBeLessThan(
+        sendReply.mock.invocationCallOrder[0]!,
+      );
+      expect(acknowledge).toHaveBeenCalledWith("channel.reply:invocation-1");
     } finally {
       error.mockRestore();
     }
+  });
+
+  it("does not duplicate a completed stream when local delivery acknowledgement fails", async () => {
+    const sendReply = vi.fn(async () => undefined);
+    const complete = vi.fn(async () => undefined);
+    const acknowledge = vi.fn(() => {
+      throw new Error("ack write failed");
+    });
+    const defer = vi.fn();
+    const stage = vi.fn(() => ({
+      deliveryId: "channel.reply:invocation-1",
+      invocationId: "invocation-1",
+      sessionId: "sess_channel_ack_failure",
+      workspaceId: "workspace-infoflow",
+      adapterId: "infoflow",
+      target: { recipient: "alice" },
+      text: "done",
+      deliveryMode: "inline-stream" as const,
+      recovery: {
+        kind: "infoflow.streaming-card.v1",
+        data: { modifyToken: "token-1" },
+      },
+      status: "sending" as const,
+      attemptCount: 0,
+      createdAt: "2026-07-15T00:00:00.000Z",
+      updatedAt: "2026-07-15T00:00:00.000Z",
+    }));
+    const recovery = {
+      kind: "infoflow.streaming-card.v1",
+      data: { modifyToken: "token-1" },
+    };
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_channel_ack_failure",
+      prompt: "go",
+      channelReply: {
+        workspaceId: "workspace-infoflow",
+        adapterId: "infoflow",
+        recipient: "alice",
+      },
+      channelContext: { externalKey: "infoflow:user:alice", senderId: "alice" },
+    };
+    const executor = createChannelAwareTaskExecutor({
+      paths,
+      createSparkHeadlessSessionExecutor: () => async () => ({ assistantText: "done" }),
+      channelIngress: {
+        openReplyStream: vi.fn(async () => ({
+          deliveryRecovery: recovery,
+          appendText: vi.fn(),
+          notifyToolStart: vi.fn(),
+          notifyToolResult: vi.fn(),
+          complete,
+          fail: vi.fn(async () => undefined),
+        })),
+        sendReply,
+      },
+      channelReplyDelivery: {
+        stage,
+        acknowledge,
+        defer,
+        rerouteToMessage: vi.fn(),
+      },
+    });
+
+    await expect(executor(task, context(task))).rejects.toMatchObject({
+      code: "CHANNEL_REPLY_DELIVERY_PENDING",
+      deliveryId: "channel.reply:invocation-1",
+    });
+    expect(complete).toHaveBeenCalledOnce();
+    expect(stage).toHaveBeenCalledWith(
+      expect.objectContaining({ deliveryMode: "inline-stream", recovery, text: "done" }),
+    );
+    expect(acknowledge).toHaveBeenCalledOnce();
+    expect(defer).toHaveBeenCalledWith("channel.reply:invocation-1", expect.any(Error));
+    expect(sendReply).not.toHaveBeenCalled();
+  });
+
+  it("uses streamed final text when the host result omits assistantText", async () => {
+    const appendText = vi.fn();
+    const complete = vi.fn(async () => undefined);
+    const fail = vi.fn(async () => undefined);
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_channel_stream_result_fallback",
+      prompt: "go",
+      channelReply: {
+        workspaceId: "workspace-infoflow",
+        adapterId: "infoflow",
+        recipient: "alice",
+      },
+      channelContext: { externalKey: "infoflow:user:alice", senderId: "alice" },
+    };
+    const executor = createChannelAwareTaskExecutor({
+      paths,
+      createSparkHeadlessSessionExecutor: () => async (input) => {
+        await input.onEvent?.({
+          type: "view_event",
+          event: {
+            version: SPARK_PROTOCOL_VERSION,
+            type: "session.message",
+            sessionId: task.sessionId,
+            message: {
+              version: SPARK_PROTOCOL_VERSION,
+              id: "assistant-fallback",
+              role: "assistant",
+              text: "流式最终答案",
+              status: "done",
+              metadata: {},
+            },
+          },
+        });
+        return {};
+      },
+      channelIngress: {
+        openReplyStream: vi.fn(async () => ({
+          appendText,
+          notifyToolStart: vi.fn(),
+          notifyToolResult: vi.fn(),
+          complete,
+          fail,
+        })),
+        sendReply: vi.fn(async () => undefined),
+      },
+    });
+
+    await expect(executor(task, context(task))).resolves.toEqual({});
+    expect(appendText).toHaveBeenCalledWith("流式最终答案");
+    expect(complete).toHaveBeenCalledWith("已完成");
+    expect(fail).not.toHaveBeenCalled();
+  });
+
+  it("fails a channel invocation that produces no deliverable assistant text", async () => {
+    const complete = vi.fn(async () => undefined);
+    const fail = vi.fn(async () => undefined);
+    const sendReply = vi.fn(async () => undefined);
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_channel_empty",
+      prompt: "go",
+      channelReply: {
+        workspaceId: "workspace-infoflow",
+        adapterId: "infoflow",
+        recipient: "alice",
+      },
+      channelContext: { externalKey: "infoflow:user:alice", senderId: "alice" },
+    };
+    const executor = createChannelAwareTaskExecutor({
+      paths,
+      createSparkHeadlessSessionExecutor: () => async () => ({ assistantText: "   " }),
+      channelIngress: {
+        openReplyStream: vi.fn(async () => ({
+          appendText: vi.fn(),
+          notifyToolStart: vi.fn(),
+          notifyToolResult: vi.fn(),
+          complete,
+          fail,
+        })),
+        sendReply,
+      },
+    });
+
+    await expect(executor(task, context(task))).rejects.toMatchObject({
+      code: "CHANNEL_REPLY_EMPTY",
+    });
+    expect(fail).toHaveBeenCalledWith("未生成可发送的回复，请稍后重试");
+    expect(complete).not.toHaveBeenCalled();
+    expect(sendReply).not.toHaveBeenCalled();
   });
 
   it("keeps the Infoflow user message clean and supplies channel facts through prompt layers", async () => {

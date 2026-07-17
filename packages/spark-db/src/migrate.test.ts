@@ -47,6 +47,7 @@ describe("migrations", () => {
       "runtime_enrollment_tokens",
       "runtime_device_authorizations",
       "runtime_message_receipts",
+      "event_ingest_sequence",
     ]) {
       expect(tableExists(db, table)?.name).toBe(table);
     }
@@ -67,6 +68,7 @@ describe("migrations", () => {
       "runtime_device_authorizations_installation_pending_idx",
       "runtime_message_receipts_runtime_seen_idx",
       "events_created_id_idx",
+      "events_ingest_sequence_unique",
     ]) {
       expect(indexExists(db, index)?.name).toBe(index);
     }
@@ -87,6 +89,7 @@ describe("migrations", () => {
       "0009",
       "0010",
       "0011",
+      "0014",
     ]);
 
     const bindingColumns = db
@@ -108,7 +111,7 @@ describe("migrations", () => {
       count: number;
     };
 
-    expect(migrationCount.count).toBe(11);
+    expect(migrationCount.count).toBe(12);
     db.close();
   });
 
@@ -189,6 +192,61 @@ describe("migrations", () => {
       { id: "rttok_custom", scopesJson: '["runtime:connect","custom:scope"]' },
       { id: "rttok_refresh", scopesJson: '["runtime:refresh"]' },
     ]);
+    db.close();
+  });
+
+  it("migrates event cursors and invocation streams without losing existing rows", () => {
+    const db = openMemoryDatabase();
+    const migrations = loadMigrations();
+    migrate(
+      db,
+      migrations.filter((migration) => migration.version <= "0011"),
+    );
+    const createdAt = "2026-07-15T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO events
+        (id, workspace_id, project_id, actor_kind, actor_id, kind, subject_kind, subject_id, payload_json, created_at)
+       VALUES ('evt_legacy', NULL, NULL, 'server', NULL, 'legacy.event', NULL, NULL, '{}', ?)`,
+    ).run(createdAt);
+
+    migrate(db, migrations);
+
+    const legacy = db
+      .prepare("SELECT ingest_sequence AS sequence FROM events WHERE id = 'evt_legacy'")
+      .get() as { sequence: number };
+    expect(legacy.sequence).toBeGreaterThan(0);
+
+    db.prepare(
+      `INSERT INTO events
+        (id, workspace_id, project_id, actor_kind, actor_id, kind, subject_kind, subject_id, payload_json, created_at)
+       VALUES ('evt_direct', NULL, NULL, 'server', NULL, 'direct.event', NULL, NULL, '{}', ?)`,
+    ).run(createdAt);
+    const direct = db
+      .prepare("SELECT ingest_sequence AS sequence FROM events WHERE id = 'evt_direct'")
+      .get() as { sequence: number };
+    expect(direct.sequence).toBeGreaterThan(legacy.sequence);
+
+    const importedSequence = direct.sequence + 10;
+    db.prepare(
+      `INSERT INTO events
+        (id, ingest_sequence, workspace_id, project_id, actor_kind, actor_id, kind, subject_kind, subject_id, payload_json, created_at)
+       VALUES ('evt_imported', ?, NULL, NULL, 'server', NULL, 'imported.event', NULL, NULL, '{}', ?)`,
+    ).run(importedSequence, createdAt);
+    db.prepare(
+      `INSERT INTO events
+        (id, workspace_id, project_id, actor_kind, actor_id, kind, subject_kind, subject_id, payload_json, created_at)
+       VALUES ('evt_after_import', NULL, NULL, 'server', NULL, 'after-import.event', NULL, NULL, '{}', ?)`,
+    ).run(createdAt);
+    const afterImport = db
+      .prepare("SELECT ingest_sequence AS sequence FROM events WHERE id = 'evt_after_import'")
+      .get() as { sequence: number };
+    expect(afterImport.sequence).toBeGreaterThan(importedSequence);
+
+    const logSchema = db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get("invocation_log_chunks") as { sql: string };
+    expect(logSchema.sql).toContain("'assistant'");
+    expect(logSchema.sql).toContain("'tool'");
     db.close();
   });
 });

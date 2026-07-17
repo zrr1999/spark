@@ -65,6 +65,12 @@ export class ChannelReplyEventProjector {
     }
   }
 
+  /** Best locally observed final answer, used when a host result omits assistantText. */
+  finalAnswerText(): string | undefined {
+    const text = this.renderedAnswer.trim();
+    return text || undefined;
+  }
+
   private observeAssistant(message: SparkMessageView): void {
     this.appendProgressDelta(message.id, progressTextFromMessage(message));
     if (this.projectsAnswerText) {

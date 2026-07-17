@@ -48,7 +48,7 @@
 </script>
 
 {#if visibleParts.length > 0}
-  <article class="conversation-message {item.actor}" data-message-id={item.id}>
+  <article id={item.id} class="conversation-message {item.actor}" data-message-id={item.id}>
     <span class="actor-mark" aria-hidden="true">
       {#if item.actor === "spark"}
         <Icon name="spark" size={16} />

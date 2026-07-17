@@ -9,6 +9,18 @@ export interface ChannelReplyTarget {
   preview?: string;
 }
 
+/**
+ * Opaque, JSON-safe handle for resuming the same platform reply artifact.
+ *
+ * The adapter that creates the stream also owns interpreting this value. The
+ * daemon persists it before completing an inline stream so restart recovery
+ * can update that same artifact instead of sending a second message.
+ */
+export interface ChannelReplyRecovery {
+  kind: string;
+  data: Record<string, string | number | boolean>;
+}
+
 /** Streaming reply lifecycle shared by daemon and channel adapters. */
 export interface ChannelReplyStream {
   /**
@@ -19,6 +31,8 @@ export interface ChannelReplyStream {
    * state. This keeps platform presentation policy inside the adapter contract.
    */
   answerMode?: "inline" | "separate";
+  /** Durable handle for retrying this exact inline reply after a daemon crash. */
+  deliveryRecovery?: ChannelReplyRecovery;
   /** Display-safe execution commentary for progress-only platform surfaces. */
   appendProgress?(delta: string): void;
   appendText(delta: string): void;
@@ -34,4 +48,17 @@ export interface ChannelReplyStream {
 export interface ChannelReplyCapability {
   openReplyStream(target: ChannelReplyTarget): Promise<ChannelReplyStream | undefined>;
   sendReply(target: ChannelReplyTarget & { text: string }): Promise<void>;
+  /**
+   * Resume/update the platform artifact identified by `recovery`.
+   *
+   * Implementations must not create a fresh message. A failed or unsupported
+   * recovery throws so the durable outbox remains pending for a later retry.
+   */
+  recoverReply?(
+    input: ChannelReplyTarget & {
+      text: string;
+      deliveryId: string;
+      recovery: ChannelReplyRecovery;
+    },
+  ): Promise<void>;
 }

@@ -222,6 +222,36 @@ void test("Spark native TUI harness submits input and drives exit keys without a
   assert.equal(harness.state.renderRequests.length > 0, true);
 });
 
+void test("Spark native TUI keeps one submission identity across an ACK-loss retry", async () => {
+  const seen: Array<{ input: string; submissionId?: string }> = [];
+  let failFirst = true;
+  const harness = createSparkNativeTuiHarness({
+    responder: (input, context) => {
+      seen.push({ input, submissionId: context.submissionId });
+      if (failFirst) {
+        failFirst = false;
+        throw new Error("daemon ACK lost");
+      }
+      return `ack:${input}`;
+    },
+  });
+
+  assert.equal(await harness.submit("retry-safe prompt"), "started");
+  await harness.flush();
+  assert.equal(await harness.submit("/retry"), "command");
+  await harness.flush();
+  assert.equal(await harness.submit("fresh prompt"), "started");
+  await harness.flush();
+
+  assert.match(seen[0]?.submissionId ?? "", /^idem_[a-f0-9]{32}$/u);
+  assert.equal(seen[1]?.submissionId, seen[0]?.submissionId);
+  assert.notEqual(seen[2]?.submissionId, seen[0]?.submissionId);
+  assert.deepEqual(
+    seen.map(({ input }) => input),
+    ["retry-safe prompt", "retry-safe prompt", "fresh prompt"],
+  );
+});
+
 void test("native TUI defaults to workspace session selector when no session target is provided", () => {
   const harness = createSparkNativeTuiHarness({
     cols: 180,

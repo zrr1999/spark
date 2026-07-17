@@ -125,6 +125,8 @@ export type ConversationPartLabels = {
   reasoningStreaming: string;
   chain: string;
   chainStreaming: string;
+  chainEmpty: string;
+  chainFailed: string;
   tool: string;
   task: string;
   approval: string;

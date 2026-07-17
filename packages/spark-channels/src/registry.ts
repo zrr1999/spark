@@ -18,7 +18,7 @@ import type {
   IncomingMessage,
   ResolvedChannelRoute,
 } from "./types.ts";
-import type { ChannelReplyStream, ChannelReplyTarget } from "./reply.ts";
+import type { ChannelReplyRecovery, ChannelReplyStream, ChannelReplyTarget } from "./reply.ts";
 
 export class ChannelRegistryError extends Error {
   readonly code: string;
@@ -144,6 +144,24 @@ export class ChannelRegistry {
       return;
     }
     await adapter.send({ recipient: input.recipient, text: input.text });
+  }
+
+  async recoverReply(
+    adapterId: string,
+    input: ChannelReplyTarget & {
+      text: string;
+      deliveryId: string;
+      recovery: ChannelReplyRecovery;
+    },
+  ): Promise<void> {
+    const reply = this.requireAdapter(adapterId).reply;
+    if (!reply?.recoverReply) {
+      throw new ChannelRegistryError(
+        "unsupported_operation",
+        `adapter ${adapterId} cannot recover an interrupted streamed reply`,
+      );
+    }
+    await reply.recoverReply(input);
   }
 
   async sendAsk(

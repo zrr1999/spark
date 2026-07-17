@@ -45,6 +45,33 @@ describe("Cockpit conversation control", () => {
     });
   });
 
+  it("forwards a browser submission nonce as a stable daemon idempotency key", async () => {
+    const submit = vi.fn().mockResolvedValue({
+      invocationId: "inv_nonce",
+      status: "queued",
+      acceptedAt: "2026-07-15T00:00:00.000Z",
+    });
+
+    await submitConversationTurnForCockpit(
+      {
+        workspaceId: "ws_demo",
+        sessionId: "sess_demo",
+        prompt: "Run once",
+        title: "Run once",
+        submissionId: "submit_018f",
+      },
+      { submit },
+    );
+
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess_demo",
+        prompt: "Run once",
+        idempotencyKey: "cockpit:sess_demo:submit_018f",
+      }),
+    );
+  });
+
   it("submits daemon-global messages without inventing a workspace target", async () => {
     const submit = vi.fn().mockResolvedValue({
       invocationId: "inv_global",

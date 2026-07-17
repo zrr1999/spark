@@ -3,6 +3,12 @@
   import ReasoningPart from "./ReasoningPart.svelte";
   import ToolCallPart from "./ToolCallPart.svelte";
   import { untrack } from "svelte";
+  import {
+    isVisibleThinkingChain,
+    thinkingChainHasTerminalIssue,
+    thinkingChainNeedsFailureSummary,
+    visibleThinkingChainSteps,
+  } from "./thinking-chain-view";
   import type {
     ConversationChainStep,
     ConversationPartLabels,
@@ -17,73 +23,88 @@
   };
 
   let { state: chainState, steps, labels, statusLabel, active = false }: Props = $props();
-  let hasTerminalIssue = $derived(
-    steps.some(
-      (step) =>
-        step.type === "tool" &&
-        (step.state === "failed" || step.state === "denied" || step.state === "cancelled"),
-    ),
-  );
+  let visibleSteps = $derived(visibleThinkingChainSteps(steps));
+  let hasTerminalIssue = $derived(thinkingChainHasTerminalIssue(steps));
+  let needsFailureSummary = $derived(thinkingChainNeedsFailureSummary(steps));
+  let shouldRender = $derived(isVisibleThinkingChain(chainState, steps));
   let expanded = $state(untrack(() => active && chainState === "streaming"));
   let previousState = $state(untrack(() => chainState));
+  let previousActive = $state(untrack(() => active));
 
   $effect(() => {
     if (active && chainState === "streaming") {
       expanded = true;
-    } else if (!active || (previousState === "streaming" && chainState === "complete")) {
+    } else if (
+      (previousActive && !active) ||
+      (previousState === "streaming" && chainState === "complete")
+    ) {
       expanded = false;
     }
     previousState = chainState;
+    previousActive = active;
   });
+
+  function toggleExpanded(event: MouseEvent) {
+    event.preventDefault();
+    expanded = !expanded;
+  }
 </script>
 
-<details class="thinking-chain {chainState}" bind:open={expanded}>
-  <summary>
-    <span class:streaming={chainState === "streaming"} class="chain-icon">
-      <Icon name="spark" size={11} stroke={2.1} />
-    </span>
-    <span class="chain-label">
-      {chainState === "streaming" ? labels.chainStreaming : labels.chain}
-    </span>
-    {#if hasTerminalIssue}
-      <span class="chain-issue">{statusLabel("failed")}</span>
-    {/if}
-    <span class="disclosure"><Icon name="chevron-down" size={11} /></span>
-  </summary>
-  {#if expanded}
-    <div class="chain-steps">
-      {#each steps as step, index (`${step.type}:${index}:${step.type === "tool" ? step.callId : "r"}`)}
-        {#if step.type === "reasoning" || step.type === "commentary"}
-          <div class="chain-step {step.type}">
-            {#if step.type === "reasoning" && step.redacted}
-              <p class="redacted">{labels.reasoning}</p>
-            {:else if step.summary.trim()}
-              <ReasoningPart
-                summary={step.summary}
+{#if shouldRender}
+  <details class="thinking-chain {chainState}" bind:open={expanded}>
+    <summary onclick={toggleExpanded}>
+      <span class:streaming={chainState === "streaming"} class="chain-icon">
+        <Icon name="spark" size={11} stroke={2.1} />
+      </span>
+      <span class="chain-label">
+        {chainState === "streaming" ? labels.chainStreaming : labels.chain}
+      </span>
+      {#if hasTerminalIssue}
+        <span class="chain-issue">{statusLabel("failed")}</span>
+      {/if}
+      <span class="disclosure"><Icon name="chevron-down" size={11} /></span>
+    </summary>
+    {#if expanded}
+      <div class="chain-steps">
+        {#each visibleSteps as step, index (`${step.type}:${index}:${step.type === "tool" ? step.callId : "r"}`)}
+          {#if step.type === "reasoning" || step.type === "commentary"}
+            <div class="chain-step {step.type}">
+              {#if step.type === "reasoning" && step.redacted}
+                <p class="redacted">{labels.reasoning}</p>
+              {:else}
+                <ReasoningPart
+                  summary={step.summary}
+                  state={step.state}
+                  redacted={step.type === "reasoning" ? step.redacted : false}
+                  labels={labels}
+                  nested
+                />
+              {/if}
+            </div>
+          {:else}
+            <div class="chain-step tool">
+              <ToolCallPart
+                callId={step.callId}
+                name={step.name}
                 state={step.state}
-                redacted={step.type === "reasoning" ? step.redacted : false}
+                summary={step.summary}
                 labels={labels}
+                {statusLabel}
                 nested
               />
-            {/if}
-          </div>
-        {:else}
-          <div class="chain-step tool">
-            <ToolCallPart
-              callId={step.callId}
-              name={step.name}
-              state={step.state}
-              summary={step.summary}
-              labels={labels}
-              {statusLabel}
-              nested
-            />
-          </div>
+            </div>
+          {/if}
+        {/each}
+        {#if chainState === "streaming" && visibleSteps.length === 0}
+          <p class="chain-empty">{labels.chainEmpty}</p>
         {/if}
-      {/each}
-    </div>
-  {/if}
-</details>
+        {#if needsFailureSummary}
+          <p class="chain-failure">{labels.chainFailed}</p>
+        {/if}
+      </div>
+    {/if}
+  </details>
+{/if}
 
 <style>
   .thinking-chain {
@@ -101,7 +122,7 @@
     font-weight: 600;
     gap: 5px;
     list-style: none;
-    margin-inline: auto;
+    margin-inline: 0 auto;
     max-width: min(100%, 320px);
     min-height: 22px;
     padding: 0 3px;
@@ -167,10 +188,16 @@
     padding: 2px 4px 10px 15px;
   }
 
-  .redacted {
+  .redacted,
+  .chain-empty,
+  .chain-failure {
     color: var(--color-ink-subtle);
     font-size: 12px;
     margin: 0;
+  }
+
+  .chain-failure {
+    color: var(--color-danger-strong, var(--color-danger));
   }
 
   @keyframes chain-pulse {
@@ -194,14 +221,12 @@
   @media (hover: hover) and (pointer: fine) {
     .thinking-chain.complete summary {
       opacity: 0;
-      pointer-events: none;
       transform: translateY(2px);
     }
 
     :global(.conversation-message:hover) .thinking-chain.complete summary,
     .thinking-chain.complete:focus-within summary {
       opacity: 1;
-      pointer-events: auto;
       transform: translateY(0);
     }
   }

@@ -22,6 +22,7 @@ import {
 } from "../apps/spark-tui/src/cli/daemon.ts";
 import { loadSparkHeadlessSessionModule } from "../apps/spark-daemon/src/spark/session-run.ts";
 import { CREATE_SPARK_SESSION_SELECTION } from "../apps/spark-tui/src/tui/session-selector.ts";
+import { SparkDaemonLocalRpcUnavailableError } from "@zendev-lab/spark-system/daemon-local-rpc";
 
 void test("Spark daemon loads headless session executor from workspace package source", async () => {
   const module = await loadSparkHeadlessSessionModule();
@@ -900,6 +901,25 @@ void test("parseSparkDaemonCliArgs parses daemon IPC commands", async () => {
       reset: false,
       sessionId: "s1",
       prompt: "trailing prompt",
+    },
+  );
+  assert.deepEqual(
+    parseSparkDaemonCliArgs([
+      "submit",
+      "--session",
+      "s1",
+      "--prompt",
+      "hello",
+      "--idempotency-key",
+      "native-submit-1",
+    ]),
+    {
+      action: "submit",
+      json: false,
+      reset: false,
+      sessionId: "s1",
+      prompt: "hello",
+      idempotencyKey: "native-submit-1",
     },
   );
   assert.deepEqual(parseSparkDaemonCliArgs(["invocation", "status", "inv_1"]), {
@@ -2129,7 +2149,7 @@ void test("native TUI model selection and following turn share one managed sessi
     const controlCalls: Array<{ method: string; params: unknown }> = [];
     const submitted: Array<{
       invocationId: string;
-      input: { sessionId: string; prompt: string };
+      input: { sessionId: string; prompt: string; idempotencyKey?: string };
     }> = [];
     const daemonClient: SparkDaemonClientOptions = {
       ...base.daemonClient,
@@ -2266,8 +2286,9 @@ void test("native TUI model selection and following turn share one managed sessi
         },
       },
     ]);
+    assert.match(submitted[0]?.input.idempotencyKey ?? "", /^idem_[a-f0-9]{32}$/u);
     assert.deepEqual(
-      submitted.map(({ input }) => input),
+      submitted.map(({ input: { idempotencyKey: _, ...input } }) => input),
       [
         {
           sessionId: "same-session",
@@ -2281,6 +2302,38 @@ void test("native TUI model selection and following turn share one managed sessi
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+void test("Spark native responder retries an ACK loss with the same idempotency key", async () => {
+  const submissions: Array<{ sessionId: string; prompt: string; idempotencyKey?: string }> = [];
+  const responder = createSparkDaemonNativeResponder(
+    {
+      startService: () => ({ kind: "detached" as const, alreadyRunning: false, detail: "started" }),
+      daemonStatus: async () => ({
+        observedAt: "2026-06-19T00:00:00.000Z",
+        servers: [],
+        invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
+      }),
+      turnSubmit: async (_paths, input) => {
+        submissions.push(input);
+        if (submissions.length === 1) {
+          throw new SparkDaemonLocalRpcUnavailableError("connection closed before ACK");
+        }
+        return {
+          invocationId: "inv_ackloss",
+          status: "queued" as const,
+          acceptedAt: "2026-06-19T00:00:00.000Z",
+        };
+      },
+    },
+    { sessionId: "native-session", waitForCompletion: false },
+  );
+
+  await responder("one prompt", { submissionId: "idem_native_submit_1" });
+
+  assert.equal(submissions.length, 2);
+  assert.deepEqual(submissions[0], submissions[1]);
+  assert.equal(submissions[0]?.idempotencyKey, "idem_native_submit_1");
 });
 
 void test("Spark native responder streams daemon view events as assistant chunks", async () => {

@@ -26,6 +26,7 @@ import {
 } from "./tui/pi-tui-adapter.ts";
 import {
   SPARK_PROTOCOL_VERSION,
+  createId,
   createBlockedInteractionResponse,
   parseSparkInteractionRequest,
   parseSparkInteractionResponse,
@@ -112,6 +113,8 @@ export interface SparkNativeCustomMessageInput {
 
 export interface SparkNativeResponderContext {
   readonly messages: readonly SparkNativeMessage[];
+  /** Stable identity for one user submit, retained when `/retry` resubmits it. */
+  readonly submissionId?: string;
   readonly signal?: AbortSignal;
   readonly appendAssistantChunk?: (chunk: string) => void;
   readonly finishAssistantMessage?: () => void;
@@ -125,6 +128,12 @@ export type SparkNativeResponder = (
 interface SparkNativeQueuedInput {
   text: string;
   mode: SparkNativeQueueMode;
+  submissionId: string;
+}
+
+interface SparkNativeSubmitOptions {
+  mode?: SparkNativeQueueMode;
+  submissionId?: string;
 }
 
 export interface SparkNativeQueueSummary {
@@ -303,7 +312,7 @@ export class SparkNativeSession {
   readonly messages: SparkNativeMessage[] = [];
   private readonly queuedFollowUps: SparkNativeQueuedInput[] = [];
   private readonly responder: SparkNativeResponder;
-  private lastSubmittedInput: string | undefined;
+  private lastSubmittedInput: { text: string; submissionId: string } | undefined;
   private processing = false;
   private activeTurnId = 0;
   private currentAbort: AbortController | undefined;
@@ -339,15 +348,16 @@ export class SparkNativeSession {
 
   async submit(
     input: string,
-    options: { mode?: SparkNativeQueueMode } = {},
+    options: SparkNativeSubmitOptions = {},
   ): Promise<"started" | "queued" | "ignored"> {
     const text = input.trim();
     if (!text) return "ignored";
-    this.lastSubmittedInput = text;
+    const submissionId = options.submissionId ?? createId("idem");
+    this.lastSubmittedInput = { text, submissionId };
 
     if (this.processing) {
       const mode = options.mode ?? "steer";
-      this.queuedFollowUps.push({ text, mode });
+      this.queuedFollowUps.push({ text, mode, submissionId });
       this.pushMessage({
         role: "user",
         text: displayNativeSubmittedInput(text),
@@ -361,14 +371,15 @@ export class SparkNativeSession {
       return "queued";
     }
 
-    void this.process(text);
+    void this.process(text, submissionId);
     return "started";
   }
 
   async retryLast(): Promise<"started" | "queued" | "ignored"> {
     if (!this.lastSubmittedInput) return "ignored";
-    this.pushMessage({ role: "system", text: `Retrying: ${this.lastSubmittedInput}` });
-    return await this.submit(this.lastSubmittedInput);
+    const { text, submissionId } = this.lastSubmittedInput;
+    this.pushMessage({ role: "system", text: `Retrying: ${text}` });
+    return await this.submit(text, { submissionId });
   }
 
   addSystemMessage(text: string): void {
@@ -569,7 +580,7 @@ export class SparkNativeSession {
     });
   }
 
-  private async process(input: string): Promise<void> {
+  private async process(input: string, submissionId: string): Promise<void> {
     this.processing = true;
     const turnId = ++this.activeTurnId;
     const abortController = new AbortController();
@@ -580,6 +591,7 @@ export class SparkNativeSession {
     try {
       const response = await this.responder(input, {
         messages: this.messages,
+        submissionId,
         signal: abortController.signal,
         appendAssistantChunk: (chunk) => {
           streamedAssistant = true;
@@ -610,7 +622,7 @@ export class SparkNativeSession {
 
     const next = this.nextQueuedSubmission();
     if (next !== undefined) {
-      void this.process(next.text);
+      void this.process(next.text, next.submissionId);
     }
   }
 
@@ -626,6 +638,7 @@ export class SparkNativeSession {
     return {
       mode: "steer",
       text: formatSteeringSubmission(steeringInputs),
+      submissionId: next.submissionId,
     };
   }
 

@@ -1,4 +1,5 @@
 import { fail, redirect } from "@sveltejs/kit";
+import { createId } from "@zendev-lab/spark-protocol";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import { titleFromPrompt } from "$lib/server/agents-product";
 import {
@@ -6,6 +7,7 @@ import {
   submitConversationTurnForCockpit,
 } from "$lib/server/conversation-control";
 import { formText } from "$lib/server/form-data";
+import { conversationStartSessionId } from "../../../lib/server/conversation-submission";
 import {
   archiveManagedSessionForCockpit,
   createManagedSessionForCockpit,
@@ -40,6 +42,7 @@ export const load: PageServerLoad = async ({ parent }) => {
     ),
     sessionsAvailable: managedSessions.available,
     selectedSessionId: null as string | null,
+    startSubmissionIdSeed: createId("idem"),
     sessionActivity: null,
     modelControl,
   };
@@ -56,7 +59,14 @@ export const actions: Actions = {
     const message = formText(formData, "message").trim();
     const model = formText(formData, "model").trim();
     const thinkingLevel = formText(formData, "thinkingLevel").trim();
-    const values = { workspaceId, message, model, thinkingLevel };
+    const submissionId = formText(formData, "submissionId").trim();
+    const values = {
+      workspaceId,
+      message,
+      model,
+      thinkingLevel,
+      ...(submissionId ? { submissionId } : {}),
+    };
 
     if (!workspaceId) {
       return fail(400, {
@@ -78,20 +88,38 @@ export const actions: Actions = {
     }
 
     let session;
+    let deterministicSessionId: string | undefined;
     try {
+      deterministicSessionId = conversationStartSessionId(workspaceId, submissionId);
       session = await createManagedSessionForCockpit({
         scope: { kind: "workspace", workspaceId },
         workspaceId,
+        ...(deterministicSessionId ? { sessionId: deterministicSessionId } : {}),
       });
     } catch (caught) {
-      const error = caught instanceof Error ? caught.message : t.createFailed;
-      return fail(400, {
-        intent: "startConversation",
-        success: false,
-        error,
-        message: error,
-        values,
-      });
+      if (deterministicSessionId) {
+        const existing = await getManagedSessionForCockpit(deterministicSessionId);
+        if (
+          existing &&
+          existing.status !== "archived" &&
+          workspaceIdForWorkbenchSession(existing) === workspaceId
+        ) {
+          session = existing;
+        }
+      }
+      if (session) {
+        // A previous identical HTTP request created this session before its
+        // response was lost. Continue with the same turn idempotency key.
+      } else {
+        const error = caught instanceof Error ? caught.message : t.createFailed;
+        return fail(400, {
+          intent: "startConversation",
+          success: false,
+          error,
+          message: error,
+          values,
+        });
+      }
     }
 
     try {
@@ -106,13 +134,16 @@ export const actions: Actions = {
         workspaceId,
         sessionId: session.sessionId,
         message,
+        ...(submissionId ? { submissionId } : {}),
       });
     } catch (caught) {
-      try {
-        await archiveManagedSessionForCockpit(session.sessionId);
-      } catch {
-        // Preserve the queueing failure. The session remains recoverable in the registry if
-        // best-effort cleanup itself fails.
+      if (!submissionId) {
+        try {
+          await archiveManagedSessionForCockpit(session.sessionId);
+        } catch {
+          // Preserve the queueing failure. The session remains recoverable in the registry if
+          // best-effort cleanup itself fails.
+        }
       }
       const error = caught instanceof Error ? caught.message : t.assignFailed;
       return fail(400, {
@@ -135,7 +166,8 @@ export const actions: Actions = {
     const formData = await request.formData();
     const sessionId = formText(formData, "sessionId").trim();
     const message = formText(formData, "message").trim();
-    const values = { sessionId, message };
+    const submissionId = formText(formData, "submissionId").trim();
+    const values = { sessionId, message, ...(submissionId ? { submissionId } : {}) };
 
     if (!sessionId) {
       return fail(400, {
@@ -203,6 +235,7 @@ export const actions: Actions = {
         workspaceId,
         sessionId,
         message,
+        ...(submissionId ? { submissionId } : {}),
       });
 
       return {
@@ -464,6 +497,7 @@ async function submitConversationMessage(input: {
   workspaceId?: string;
   sessionId: string;
   message: string;
+  submissionId?: string;
 }) {
   const title = titleFromPrompt(input.message);
   return await submitConversationTurnForCockpit({
@@ -471,5 +505,6 @@ async function submitConversationMessage(input: {
     sessionId: input.sessionId,
     prompt: input.message,
     title,
+    ...(input.submissionId ? { submissionId: input.submissionId } : {}),
   });
 }

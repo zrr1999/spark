@@ -108,6 +108,10 @@ describe("session workbench projection", () => {
         source: "session",
         todoDone: 1,
         todoTotal: 2,
+        todos: [
+          { id: "todo-1", content: "Project state", status: "done", notes: [] },
+          { id: "todo-2", content: "Render tabs", status: "in_progress", notes: [] },
+        ],
       },
     ]);
     expect(view.evidence).toMatchObject([
@@ -118,6 +122,34 @@ describe("session workbench projection", () => {
       cwd: "/workspace/spark",
       model: { displayLabel: "GPT-5.5 Codex · OpenAI Codex" },
     });
+  });
+
+  it("links session TODO tool activity to its canonical conversation message", () => {
+    const view = buildSessionWorkbenchView({
+      session: session({
+        messages: [
+          {
+            id: "todo-message",
+            role: "assistant",
+            text: "",
+            status: "done",
+            parts: [
+              {
+                id: "part:todo",
+                type: "tool-call",
+                toolCallId: "call:todo",
+                toolName: "todo",
+                status: "complete",
+                metadata: {},
+              },
+            ],
+            metadata: {},
+          },
+        ],
+      }),
+    });
+
+    expect(view.sessionTodoAnchor).toBe("message:todo-message");
   });
 
   it("projects session mail newest-first with durable read state", () => {

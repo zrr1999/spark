@@ -5,9 +5,13 @@ import {
   type StreamingCardSession,
 } from "@core-workspace/infoflow-sdk-nodejs";
 import type { InfoflowAdapterConfig } from "./types.ts";
-import type { ChannelReplyStream } from "./reply.ts";
+import type { ChannelReplyRecovery, ChannelReplyStream } from "./reply.ts";
 
 const DEFAULT_INFOFLOW_API_HOST = "https://api.im.baidu.com";
+const INFOFLOW_STREAM_RECOVERY_KIND = "infoflow.streaming-card.v1";
+const INFOFLOW_MAX_CARD_TEXT_LENGTH = 6_000;
+const INFOFLOW_STREAM_FINALIZE_TIMEOUT_MS = 30_000;
+const INFOFLOW_STREAM_FINALIZE_POLL_MS = 10;
 
 export type InfoflowOutboundContent =
   | { type: "text"; text: string }
@@ -81,6 +85,12 @@ export interface InfoflowSdkClientLike {
         to: string;
         answerFormat?: "text" | "markdown";
       }): InfoflowStreamingSession;
+      update(input: {
+        to: string;
+        modifyToken: string;
+        contents: Record<string, { type: "text"; content: string }>;
+        groupVersion?: number;
+      }): Promise<{ ok: boolean; error?: string }>;
     };
   };
 }
@@ -91,6 +101,11 @@ export interface InfoflowSdkOutbound {
     recipient: string,
     options?: { answerFormat?: "text" | "markdown" },
   ): Promise<InfoflowReplyStream | undefined>;
+  recoverReply(input: {
+    recipient: string;
+    text: string;
+    recovery: ChannelReplyRecovery;
+  }): Promise<void>;
 }
 
 export interface InfoflowSdkOutboundOptions {
@@ -119,12 +134,48 @@ export function createInfoflowSdkOutbound(
     },
     async openReplyStream(recipient, streamOptions = {}) {
       const to = normalizeRecipient(recipient).platformRecipient;
+      const answerFormat = streamOptions.answerFormat ?? "markdown";
       const session = getClient().im.streamingCard.createSession({
         to,
-        answerFormat: streamOptions.answerFormat ?? "markdown",
+        answerFormat,
       });
       if (!(await session.start())) return undefined;
-      return wrapInfoflowReplyStream(session);
+      return wrapInfoflowReplyStream(session, infoflowStreamRecovery(session, to, answerFormat));
+    },
+    async recoverReply(input) {
+      const recovery = parseInfoflowStreamRecovery(input.recovery);
+      const to = normalizeRecipient(input.recipient).platformRecipient;
+      if (recovery.to !== to) {
+        throw new Error("Infoflow stream recovery recipient does not match reply target");
+      }
+      const answerField = recovery.answerFormat === "text" ? "ai_text" : "ai_markdown";
+      const result = await getClient().im.streamingCard.update({
+        to,
+        modifyToken: recovery.modifyToken,
+        contents: {
+          [answerField]: {
+            type: "text",
+            content: input.text.slice(-INFOFLOW_MAX_CARD_TEXT_LENGTH),
+          },
+          status_info: { type: "text", content: INFOFLOW_STREAM_DETAILS_LABEL },
+          think_status_text: { type: "text", content: INFOFLOW_STREAM_DONE_LABEL },
+          status_info_1_install: { type: "text", content: "1" },
+          flex_item_status_info_1_install: { type: "text", content: "1" },
+          dc_print_end: { type: "text", content: "1" },
+        },
+        ...(to.startsWith("group:")
+          ? {
+              // The API requires a caller-maintained monotonically increasing
+              // version. Epoch seconds remain within signed 32-bit range today,
+              // while the durable retry backoff guarantees a later retry gets a
+              // newer value if the platform update succeeded but local ack did not.
+              groupVersion: Math.max(recovery.nextGroupVersion, Math.floor(Date.now() / 1_000)),
+            }
+          : {}),
+      });
+      if (!result.ok) {
+        throw new Error(`Infoflow stream recovery failed: ${result.error ?? "update failed"}`);
+      }
     },
   };
 }
@@ -134,19 +185,104 @@ export function createInfoflowSdkOutbound(
  * Keep the inner process installed so one outer disclosure click reveals it, and
  * keep the completed outer/inner labels distinct.
  */
-export function wrapInfoflowReplyStream(session: InfoflowStreamingSession): InfoflowReplyStream {
+export function wrapInfoflowReplyStream(
+  session: InfoflowStreamingSession,
+  deliveryRecovery?: ChannelReplyRecovery,
+): InfoflowReplyStream {
   patchStreamingCardPresentation(session);
   return {
+    ...(deliveryRecovery ? { deliveryRecovery } : {}),
     appendText: (delta) => session.appendText(delta),
     appendReasoning: (delta) => session.appendReasoning(delta),
     notifyToolStart: (input) => session.notifyToolStart(input),
     notifyToolResult: (text) => session.notifyToolResult(text),
     complete: async (label) => {
+      await waitForInfoflowStreamIdle(session);
       await session.complete(label?.trim() || INFOFLOW_STREAM_DONE_LABEL);
+      assertInfoflowStreamFinalUpdate(session, "completion");
     },
     fail: async (message) => {
+      await waitForInfoflowStreamIdle(session);
       await session.fail(message);
+      assertInfoflowStreamFinalUpdate(session, "failure");
     },
+  };
+}
+
+async function waitForInfoflowStreamIdle(session: InfoflowStreamingSession): Promise<void> {
+  const state = session as InfoflowStreamingSession & { isFlushing?: unknown };
+  const deadline = Date.now() + INFOFLOW_STREAM_FINALIZE_TIMEOUT_MS;
+  while (state.isFlushing === true) {
+    if (Date.now() >= deadline) {
+      throw new Error("Infoflow stream finalization timed out waiting for an in-flight update");
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, INFOFLOW_STREAM_FINALIZE_POLL_MS));
+  }
+}
+
+function assertInfoflowStreamFinalUpdate(
+  session: InfoflowStreamingSession,
+  operation: "completion" | "failure",
+): void {
+  const state = session as InfoflowStreamingSession & {
+    failed?: unknown;
+    updateFailCount?: unknown;
+  };
+  if (
+    state.failed === true ||
+    (typeof state.updateFailCount === "number" && state.updateFailCount > 0)
+  ) {
+    throw new Error(`Infoflow stream ${operation} update failed`);
+  }
+}
+
+function infoflowStreamRecovery(
+  session: InfoflowStreamingSession,
+  to: string,
+  answerFormat: "text" | "markdown",
+): ChannelReplyRecovery | undefined {
+  const state = session as InfoflowStreamingSession & {
+    modifyToken?: unknown;
+    groupVersion?: unknown;
+  };
+  if (typeof state.modifyToken !== "string" || !state.modifyToken.trim()) return undefined;
+  const groupVersion =
+    typeof state.groupVersion === "number" && Number.isFinite(state.groupVersion)
+      ? Math.floor(state.groupVersion)
+      : 111;
+  return {
+    kind: INFOFLOW_STREAM_RECOVERY_KIND,
+    data: {
+      to,
+      modifyToken: state.modifyToken,
+      answerFormat,
+      nextGroupVersion: Math.max(112, groupVersion + 1),
+    },
+  };
+}
+
+function parseInfoflowStreamRecovery(recovery: ChannelReplyRecovery): {
+  to: string;
+  modifyToken: string;
+  answerFormat: "text" | "markdown";
+  nextGroupVersion: number;
+} {
+  const { data } = recovery;
+  if (
+    recovery.kind !== INFOFLOW_STREAM_RECOVERY_KIND ||
+    typeof data.to !== "string" ||
+    typeof data.modifyToken !== "string" ||
+    (data.answerFormat !== "text" && data.answerFormat !== "markdown") ||
+    typeof data.nextGroupVersion !== "number" ||
+    !Number.isFinite(data.nextGroupVersion)
+  ) {
+    throw new Error("Invalid Infoflow stream recovery handle");
+  }
+  return {
+    to: data.to,
+    modifyToken: data.modifyToken,
+    answerFormat: data.answerFormat,
+    nextGroupVersion: Math.floor(data.nextGroupVersion),
   };
 }
 

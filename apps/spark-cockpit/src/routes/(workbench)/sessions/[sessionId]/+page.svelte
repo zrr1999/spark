@@ -13,6 +13,7 @@
   sessions={data.sessions}
   workspaces={data.workspaces ?? []}
   selectedSessionId={data.selectedSessionId}
+  sendSubmissionIdSeed={data.sendSubmissionIdSeed}
   activeWorkspaceId={data.activeWorkspace?.id ?? null}
   messages={t}
   common={data.messages.common}

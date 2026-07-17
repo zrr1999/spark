@@ -6,6 +6,8 @@ import { FakeChannelTransport, type ChannelTransport } from "@zendev-lab/spark-c
 import { parseChannelsConfig } from "@zendev-lab/spark-channels";
 import { defaultSparkSessionRegistryRoot, SparkSessionRegistry } from "@zendev-lab/spark-session";
 import {
+  CHANNEL_INGRESS_FAILURE_REPLY,
+  channelIngressIdempotencyKey,
   createChannelIngressController,
   createDaemonChannelIngressRuntime,
   loadDaemonChannelsConfig,
@@ -21,6 +23,147 @@ afterEach(async () => {
 });
 
 describe("channel ingress", () => {
+  it("reports admission failures without changing the session turn state", async () => {
+    const sparkHome = await mkdtemp(join(tmpdir(), "spark-channel-rejected-"));
+    roots.push(sparkHome);
+    const recordTurnQueued = vi.fn(async () => undefined);
+    const recordTurnSettled = vi.fn(async () => undefined);
+    const sendReply = vi.fn(async () => undefined);
+    let inbound: ((raw: unknown) => void) | undefined;
+    const transport: ChannelTransport = {
+      start: async (handler) => {
+        inbound = handler;
+      },
+      stop: async () => undefined,
+      send: async () => undefined,
+      reply: {
+        openReplyStream: async () => undefined,
+        sendReply,
+      },
+    };
+    const controller = createChannelIngressController({
+      sparkHome,
+      config: parseChannelsConfig({
+        adapters: { infoflow: { type: "infoflow" } },
+        routes: {},
+        ingress: { enabled: true, on_unbound: "create" },
+      }),
+      hooks: {
+        onAssignment: async () => {
+          throw new Error("provider login expired");
+        },
+      },
+      sessionRegistry: {
+        resolveBinding: async () => ({ sessionId: "sess_rejected" }) as never,
+        recordTurnQueued: recordTurnQueued as never,
+        recordTurnSettled: recordTurnSettled as never,
+      },
+      workspaceId: "ws_rejected",
+      createTransport: () => transport,
+    });
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      await controller.start();
+      inbound?.({
+        user_id: "user-1",
+        text: "请处理",
+        message_id: "message-1",
+      });
+      await controller.stop();
+
+      expect(recordTurnQueued).not.toHaveBeenCalled();
+      expect(recordTurnSettled).not.toHaveBeenCalled();
+      expect(sendReply).toHaveBeenCalledWith({
+        recipient: "user-1",
+        senderId: "user-1",
+        messageId: "message-1",
+        preview: "请处理",
+        text: CHANNEL_INGRESS_FAILURE_REPLY,
+      });
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("derives durable deduplication only from platform message identity", () => {
+    const assignment: ChannelIngressAssignment = {
+      sessionId: "sess_channel",
+      goal: "same text",
+      assignment: {
+        goal: "same text",
+        target: { sessionId: "sess_channel", workspaceId: "workspace-1" },
+        constraints: [],
+        evidence: [],
+        source: { kind: "channel", channel: "infoflow", externalRef: "message-1" },
+      },
+      source: { kind: "channel", channel: "infoflow", externalRef: "message-1" },
+      externalKey: "infoflow:user:user-1",
+      channelReply: {
+        workspaceId: "workspace-1",
+        adapterId: "infoflow",
+        recipient: "user-1",
+      },
+      channelContext: {
+        externalKey: "infoflow:user:user-1",
+        messageId: "message-1",
+      },
+    };
+
+    expect(channelIngressIdempotencyKey(assignment)).toBe(
+      channelIngressIdempotencyKey({ ...assignment, goal: "changed after redelivery" }),
+    );
+    expect(
+      channelIngressIdempotencyKey({
+        ...assignment,
+        source: { ...assignment.source, externalRef: "message-2" },
+        channelContext: { externalKey: assignment.externalKey, messageId: "message-2" },
+      }),
+    ).not.toBe(channelIngressIdempotencyKey(assignment));
+    expect(
+      channelIngressIdempotencyKey({
+        ...assignment,
+        source: { kind: "channel", channel: "infoflow" },
+        channelContext: { externalKey: assignment.externalKey },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("leaves the real turn state unchanged for a durable platform redelivery", async () => {
+    const sparkHome = await mkdtemp(join(tmpdir(), "spark-channel-duplicate-"));
+    roots.push(sparkHome);
+    const recordTurnQueued = vi.fn(async () => undefined);
+    const recordTurnSettled = vi.fn(async () => undefined);
+    const transport = new FakeChannelTransport();
+    const controller = createChannelIngressController({
+      sparkHome,
+      config: parseChannelsConfig({
+        adapters: { infoflow: { type: "infoflow" } },
+        routes: {},
+        ingress: { enabled: true, on_unbound: "create" },
+      }),
+      hooks: { onAssignment: async () => "duplicate" },
+      sessionRegistry: {
+        resolveBinding: async () => ({ sessionId: "sess_duplicate" }) as never,
+        recordTurnQueued: recordTurnQueued as never,
+        recordTurnSettled: recordTurnSettled as never,
+      },
+      workspaceId: "ws_duplicate",
+      createTransport: () => transport,
+    });
+
+    await controller.start();
+    transport.emitInbound({
+      user_id: "user-1",
+      text: "same delivery",
+      message_id: "message-1",
+    });
+    await controller.stop();
+
+    expect(recordTurnQueued).not.toHaveBeenCalled();
+    expect(recordTurnSettled).not.toHaveBeenCalled();
+  });
+
   it("resolves binding and emits assignment for feishu inbound", async () => {
     const sparkHome = await mkdtemp(join(tmpdir(), "spark-channel-ingress-"));
     roots.push(sparkHome);

@@ -251,8 +251,7 @@ export class SparkInvocationScheduler {
       } else {
         this.store.complete(invocation.invocationId, {
           status: "failed",
-          errorCode:
-            reason instanceof InvocationTimeoutError ? "EXECUTOR_TIMEOUT" : "EXECUTION_FAILED",
+          errorCode: executionErrorCode(reason),
           errorMessage: reason.message,
         });
         this.emit(lifecycleEvent(invocation.invocationId, task, "failed", reason.message));
@@ -450,6 +449,14 @@ function abortReason(signal: AbortSignal, fallback: unknown): Error {
     : fallback instanceof Error
       ? fallback
       : new Error(String(fallback));
+}
+
+function executionErrorCode(error: Error): string {
+  if (error instanceof InvocationTimeoutError) return "EXECUTOR_TIMEOUT";
+  const code = (error as Error & { code?: unknown }).code;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(code)
+    ? code
+    : "EXECUTION_FAILED";
 }
 
 export class InvocationTimeoutError extends Error {

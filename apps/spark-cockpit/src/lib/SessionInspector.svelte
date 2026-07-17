@@ -41,8 +41,8 @@
     return status.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
   }
 
-  function mailKindLabel(kind: "request" | "notification") {
-    return kind === "request" ? labels.mailRequest : labels.mailNotification;
+  function mailKindLabel(kind: "request" | "question" | "notification") {
+    return kind === "notification" ? labels.mailNotification : labels.mailRequest;
   }
 
   function mailStatusLabel(status: "unread" | "read" | "acknowledged") {
@@ -196,25 +196,35 @@
         </section>
       {/if}
     {:else if activeTab === "tasks"}
-      {#if view.tasks.length === 0}
+      {#if view.tasks.length === 0 && !view.sessionTodoAnchor}
         <EmptyState title={labels.noTasksTitle} body={labels.noTasksBody} icon="folder" compact />
       {:else}
         <section class="inspector-section" aria-labelledby={headingId("tasks")}>
           <h2 id={headingId("tasks")}>{labels.tasksHeading}</h2>
-          <div class="project-list">
-            {#each taskGroups as group (group.projectRef ?? "unassigned")}
-              <section class="project-group">
-                <header class="project-header">
-                  <Icon name="folder" size={15} />
-                  {#if group.projectRef}
-                    <code>{group.projectRef}</code>
-                  {:else}
-                    <span>{labels.unassignedProject}</span>
-                  {/if}
-                </header>
-                <div class="card-list">
-                  {#each group.tasks as task (task.id)}
-                    <article class="inspector-card">
+          {#if view.sessionTodoAnchor}
+            <aside class="session-todo-callout">
+              <div>
+                <h3>{labels.sessionTodoTitle}</h3>
+                <p>{labels.sessionTodoBody}</p>
+              </div>
+              <a href={`#${view.sessionTodoAnchor}`}>{labels.openSessionTodo}</a>
+            </aside>
+          {/if}
+          {#if view.tasks.length > 0}
+            <div class="project-list">
+              {#each taskGroups as group (group.projectRef ?? "unassigned")}
+                <section class="project-group">
+                  <header class="project-header">
+                    <Icon name="folder" size={15} />
+                    {#if group.projectRef}
+                      <code>{group.projectRef}</code>
+                    {:else}
+                      <span>{labels.unassignedProject}</span>
+                    {/if}
+                  </header>
+                  <div class="card-list">
+                    {#each group.tasks as task (task.id)}
+                      <article class="inspector-card">
                       <header class="card-header">
                         <div class="card-title">
                           <Icon name="check" size={16} />
@@ -241,13 +251,25 @@
                           ></progress>
                           <span>{task.todoDone}/{task.todoTotal}</span>
                         </div>
+                        <ul class="task-todos" aria-label={labels.todoList}>
+                          {#each task.todos as todo (todo.id)}
+                            <li>
+                              <span class={`todo-state ${statusClass(todo.status)}`} aria-hidden="true"></span>
+                              <span class="todo-content">{todo.content}</span>
+                              <span class={`status-pill ${statusClass(todo.status)}`}>
+                                {statusLabel(todo.status)}
+                              </span>
+                            </li>
+                          {/each}
+                        </ul>
                       {/if}
-                    </article>
-                  {/each}
-                </div>
-              </section>
-            {/each}
-          </div>
+                      </article>
+                    {/each}
+                  </div>
+                </section>
+              {/each}
+            </div>
+          {/if}
         </section>
       {/if}
     {:else if activeTab === "mailbox"}
@@ -377,6 +399,41 @@
     gap: var(--spacing-md);
   }
 
+  .session-todo-callout {
+    align-items: center;
+    background: var(--color-primary-weak);
+    border: 1px solid var(--color-primary-soft);
+    border-radius: var(--rounded-lg);
+    display: flex;
+    gap: var(--spacing-sm);
+    justify-content: space-between;
+    padding: var(--spacing-md);
+  }
+
+  .session-todo-callout h3,
+  .session-todo-callout p {
+    margin: 0;
+  }
+
+  .session-todo-callout h3 {
+    color: var(--color-ink);
+    font-size: var(--text-card-title);
+  }
+
+  .session-todo-callout p {
+    color: var(--color-ink-muted);
+    font-size: var(--text-caption);
+    margin-top: var(--spacing-xxs);
+  }
+
+  .session-todo-callout a {
+    color: var(--color-primary);
+    flex: 0 0 auto;
+    font-size: var(--text-caption);
+    font-weight: 650;
+    text-decoration: none;
+  }
+
   .project-group + .project-group {
     border-top: 1px solid var(--color-border-soft);
     padding-top: var(--spacing-md);
@@ -503,6 +560,52 @@
     flex: 1;
     height: 6px;
     min-width: 80px;
+  }
+
+  .task-todos {
+    display: grid;
+    gap: 6px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .task-todos li {
+    align-items: start;
+    display: grid;
+    font-size: var(--text-caption);
+    gap: 7px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    line-height: var(--leading-body);
+  }
+
+  .todo-state {
+    background: var(--color-ink-subtle);
+    border-radius: 999px;
+    height: 7px;
+    margin-top: 5px;
+    width: 7px;
+  }
+
+  .todo-state.in_progress {
+    background: var(--color-primary);
+  }
+
+  .todo-state.blocked {
+    background: var(--color-warning);
+  }
+
+  .todo-state.done {
+    background: var(--color-success);
+  }
+
+  .todo-state.cancelled {
+    background: var(--color-ink-disabled);
+  }
+
+  .todo-content {
+    color: var(--color-ink-muted);
+    overflow-wrap: anywhere;
   }
 
   pre,

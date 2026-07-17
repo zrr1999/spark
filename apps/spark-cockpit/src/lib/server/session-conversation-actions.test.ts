@@ -88,7 +88,8 @@ vi.mock("$lib/server/form-data", () => ({
   },
 }));
 
-import { actions } from "../../routes/(workbench)/sessions/+page.server";
+import { actions, load } from "../../routes/(workbench)/sessions/+page.server";
+import { conversationStartSessionId } from "./conversation-submission";
 
 const session = {
   sessionId: "sess_conversation",
@@ -121,9 +122,21 @@ beforeEach(() => {
     cancelRequested: true,
   });
   mocks.submitConversationTurnForCockpit.mockResolvedValue({ turnId: "turn_conversation" });
+  mocks.listManagedSessionsForCockpit.mockResolvedValue({ available: true, sessions: [] });
 });
 
 describe("session conversation actions", () => {
+  it("preseeds a non-empty first-message nonce for enhanced and plain HTML submits", async () => {
+    const result = await load({
+      parent: async () => ({ activeWorkspace: { id: "ws_demo" } }),
+    } as never);
+
+    expect(result).toMatchObject({
+      selectedSessionId: null,
+      startSubmissionIdSeed: expect.stringMatching(/^idem_/),
+    });
+  });
+
   it("creates an untitled session, keeps the first prompt as assignment title, and redirects", async () => {
     const action = requireAction("startConversation");
 
@@ -145,6 +158,43 @@ describe("session conversation actions", () => {
       title: "Inspect the daemon path.",
     });
     expect(mocks.archiveManagedSessionForCockpit).not.toHaveBeenCalled();
+  });
+
+  it("reuses a deterministic session and turn when the first-message response is retried", async () => {
+    const submissionId = "idem_start_018f";
+    const deterministicSessionId = conversationStartSessionId("ws_demo", submissionId)!;
+    const deterministicSession = { ...session, sessionId: deterministicSessionId };
+    mocks.createManagedSessionForCockpit.mockRejectedValueOnce(
+      new Error(`session already exists: ${deterministicSessionId}`),
+    );
+    mocks.getManagedSessionForCockpit.mockResolvedValueOnce(deterministicSession);
+
+    await expect(
+      requireAction("startConversation")(
+        actionEvent({
+          workspaceId: "ws_demo",
+          message: "Retry this first message once.",
+          submissionId,
+        }),
+      ),
+    ).rejects.toMatchObject({
+      status: 303,
+      location: `/sessions/${deterministicSessionId}`,
+    });
+
+    expect(mocks.createManagedSessionForCockpit).toHaveBeenCalledWith({
+      scope: { kind: "workspace", workspaceId: "ws_demo" },
+      workspaceId: "ws_demo",
+      sessionId: deterministicSessionId,
+    });
+    expect(mocks.getManagedSessionForCockpit).toHaveBeenCalledWith(deterministicSessionId);
+    expect(mocks.submitConversationTurnForCockpit).toHaveBeenCalledWith({
+      workspaceId: "ws_demo",
+      sessionId: deterministicSessionId,
+      prompt: "Retry this first message once.",
+      title: "Retry this first message once.",
+      submissionId,
+    });
   });
 
   it("requires a workspace target and ignores any legacy daemon scope hint", async () => {
@@ -184,6 +234,33 @@ describe("session conversation actions", () => {
     expect(mocks.archiveManagedSessionForCockpit).toHaveBeenCalledWith("sess_conversation");
   });
 
+  it("keeps a deterministic first-message session recoverable when queueing fails", async () => {
+    mocks.submitConversationTurnForCockpit.mockRejectedValue(
+      new Error("workspace owner is offline"),
+    );
+
+    const result = await requireAction("startConversation")(
+      actionEvent({
+        workspaceId: "ws_demo",
+        message: "Retry after reconnect",
+        submissionId: "idem_start_retry",
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 400,
+      data: {
+        intent: "startConversation",
+        values: {
+          workspaceId: "ws_demo",
+          message: "Retry after reconnect",
+          submissionId: "idem_start_retry",
+        },
+      },
+    });
+    expect(mocks.archiveManagedSessionForCockpit).not.toHaveBeenCalled();
+  });
+
   it("does not create a session before both workspace and first message are present", async () => {
     const result = await requireAction("startConversation")(
       actionEvent({ workspaceId: "ws_demo", message: "   " }),
@@ -218,6 +295,29 @@ describe("session conversation actions", () => {
       sessionId: "sess_conversation",
       prompt: "Now run the focused tests.",
       title: "Now run the focused tests.",
+    });
+  });
+
+  it("passes the hidden browser submission nonce through the send action", async () => {
+    const result = await requireAction("sendMessage")(
+      actionEvent({
+        sessionId: "sess_conversation",
+        message: "Retry the same HTTP submit only once.",
+        submissionId: "submit_018f",
+      }),
+    );
+
+    expect(result).toMatchObject({
+      intent: "sendMessage",
+      success: true,
+      values: { sessionId: "sess_conversation", message: "" },
+    });
+    expect(mocks.submitConversationTurnForCockpit).toHaveBeenCalledWith({
+      workspaceId: "ws_demo",
+      sessionId: "sess_conversation",
+      prompt: "Retry the same HTTP submit only once.",
+      title: "Retry the same HTTP submit only once.",
+      submissionId: "submit_018f",
     });
   });
 

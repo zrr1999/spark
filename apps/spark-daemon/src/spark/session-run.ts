@@ -39,7 +39,22 @@ import type {
 import type { SparkDaemonModelControl } from "../model-control.ts";
 import type { DaemonSessionRegistry } from "../session-registry.ts";
 import { ChannelReplyEventProjector } from "../channels/reply-stream.ts";
+import {
+  ChannelReplyDeliveryPendingError,
+  type ChannelReplyDeliveryStore,
+} from "../channels/reply-delivery.ts";
 import { assignCompletedSessionTitle } from "./session-title.ts";
+
+export const CHANNEL_REPLY_EMPTY_ERROR_CODE = "CHANNEL_REPLY_EMPTY";
+
+export class ChannelReplyContentError extends Error {
+  readonly code = CHANNEL_REPLY_EMPTY_ERROR_CODE;
+
+  constructor(invocationId: string) {
+    super(`Channel invocation ${invocationId} completed without a deliverable assistant reply`);
+    this.name = "ChannelReplyContentError";
+  }
+}
 
 export interface SparkDaemonTaskExecutorOptions {
   paths: SparkPaths;
@@ -136,6 +151,10 @@ function modelRefFromValue(value: string): { providerName: string; modelId: stri
 export function createChannelAwareTaskExecutor(
   options: SparkDaemonTaskExecutorOptions & {
     channelIngress?: Pick<DaemonChannelIngressRuntime, "openReplyStream" | "sendReply">;
+    channelReplyDelivery?: Pick<
+      ChannelReplyDeliveryStore,
+      "stage" | "acknowledge" | "defer" | "rerouteToMessage"
+    >;
   },
 ): SparkDaemonTaskExecutor {
   const base = createSparkDaemonTaskExecutor(options);
@@ -181,20 +200,55 @@ export function createChannelAwareTaskExecutor(
       throw error;
     }
 
-    const text = assistantTextFromResult(result);
+    const text = assistantTextFromResult(result) ?? projector?.finalAnswerText();
+    if (!text) {
+      const error = new ChannelReplyContentError(context.invocationId);
+      if (stream) {
+        try {
+          await stream.fail("未生成可发送的回复，请稍后重试");
+        } catch (streamError) {
+          console.error("[spark-daemon] empty channel reply failure update failed", streamError);
+        }
+      }
+      throw error;
+    }
+    const inlineStream = Boolean(stream && projector && stream.answerMode !== "separate");
+    const delivery = options.channelReplyDelivery?.stage({
+      invocationId: context.invocationId,
+      sessionId: task.sessionId,
+      workspaceId: task.channelReply.workspaceId,
+      adapterId: task.channelReply.adapterId,
+      target,
+      text,
+      deliveryMode: inlineStream ? "inline-stream" : "message",
+      ...(inlineStream && stream?.deliveryRecovery ? { recovery: stream.deliveryRecovery } : {}),
+    });
     if (stream && projector) {
-      if (text) projector.appendFinalText(text);
+      projector.appendFinalText(text);
+      let streamCompleted = false;
       try {
         await stream.complete("已完成");
-        if (stream.answerMode !== "separate") return result;
+        streamCompleted = true;
       } catch (error) {
         console.error(
           "[spark-daemon] channel reply stream completion failed; using fallback",
           error,
         );
       }
+      // Once the platform has accepted the completed stream, never fall through
+      // to sendReply merely because the local acknowledgement write failed. The
+      // outbox provides at-least-once recovery; an immediate fallback here would
+      // create a deterministic duplicate on the same successful attempt.
+      if (streamCompleted && stream.answerMode !== "separate") {
+        if (delivery && options.channelReplyDelivery) {
+          acknowledgeChannelReplyDelivery(options.channelReplyDelivery, delivery.deliveryId);
+        }
+        return result;
+      }
+      if (delivery && inlineStream) {
+        options.channelReplyDelivery?.rerouteToMessage(delivery.deliveryId);
+      }
     }
-    if (!text) return result;
     try {
       await options.channelIngress.sendReply(
         task.channelReply.workspaceId,
@@ -202,10 +256,36 @@ export function createChannelAwareTaskExecutor(
         { ...target, text },
       );
     } catch (error) {
-      console.error("[spark-daemon] channel reply failed", error);
+      if (delivery) {
+        options.channelReplyDelivery?.defer(delivery.deliveryId, error);
+        throw new ChannelReplyDeliveryPendingError(delivery.deliveryId, error);
+      }
+      throw error;
+    }
+    if (delivery && options.channelReplyDelivery) {
+      acknowledgeChannelReplyDelivery(options.channelReplyDelivery, delivery.deliveryId);
     }
     return result;
   };
+}
+
+function acknowledgeChannelReplyDelivery(
+  store: Pick<ChannelReplyDeliveryStore, "acknowledge" | "defer">,
+  deliveryId: string,
+): void {
+  try {
+    store.acknowledge(deliveryId);
+  } catch (error) {
+    // The platform side effect has already succeeded. Move the durable row to
+    // retryable state without attempting another immediate send. Inline stream
+    // retries update the same artifact through the adapter recovery handle.
+    try {
+      store.defer(deliveryId, error);
+    } catch (deferError) {
+      console.error("[spark-daemon] channel reply acknowledgement recovery failed", deferError);
+    }
+    throw new ChannelReplyDeliveryPendingError(deliveryId, error);
+  }
 }
 
 function channelReplyTarget(task: SparkDaemonSessionRunTask): ChannelReplyTarget {

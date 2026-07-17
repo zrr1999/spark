@@ -24,6 +24,7 @@ describe("event streaming helpers", () => {
     const initial = loadEventBatch(db, null, 10).map(serializeEventRow);
     expect(initial.map((event) => event.kind)).toEqual(["first.event", "second.event"]);
     expect(initial[0]?.payload).toEqual({ index: 1 });
+    expect(initial[1]?.sequence).toBeGreaterThan(initial[0]?.sequence ?? 0);
 
     const cursor = cursorFromEvent(initial[0]!);
     const next = loadEventBatch(db, cursor, 10).map(serializeEventRow);

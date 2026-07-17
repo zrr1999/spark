@@ -6,6 +6,7 @@ import type {
   ConversationTaskState,
   ConversationToolState,
 } from "./types";
+import { isVisibleThinkingChain } from "./thinking-chain-view";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -81,7 +82,9 @@ export function groupThinkingChainParts(parts: readonly ConversationPart[]): Con
 
 /** Keep the execution chain in history; its component controls expanded/collapsed state. */
 export function visibleConversationParts(parts: readonly ConversationPart[]): ConversationPart[] {
-  return [...parts];
+  return parts.filter(
+    (part) => part.type !== "chain" || isVisibleThinkingChain(part.state, part.steps),
+  );
 }
 
 /** Copy and live-region text intentionally excludes internal execution detail. */

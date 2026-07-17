@@ -6,12 +6,15 @@ import {
   type SparkInvocationStatus,
 } from "@zendev-lab/spark-protocol";
 import { requestSparkDaemonLocalRpc } from "@zendev-lab/spark-system";
+import { conversationTurnIdempotencyKey } from "./conversation-submission";
 
 export interface SubmitCockpitConversationTurnInput {
   workspaceId?: string;
   sessionId: string;
   prompt: string;
   title: string;
+  /** Opaque browser-generated nonce reused only when retrying the same submit. */
+  submissionId?: string;
 }
 
 export interface SubmittedCockpitConversationTurn {
@@ -34,6 +37,7 @@ export interface CockpitConversationControlClient {
   submit(input: {
     sessionId: string;
     prompt: string;
+    idempotencyKey?: string;
     assignment: SparkAssignment;
     messageMetadata?: Record<string, unknown>;
   }): Promise<unknown>;
@@ -69,9 +73,11 @@ export async function submitConversationTurnForCockpit(
     evidence: [],
     source: { kind: "cockpit" },
   });
+  const idempotencyKey = conversationTurnIdempotencyKey(input.sessionId, input.submissionId);
   const result = await client.submit({
     sessionId: input.sessionId,
     prompt: input.prompt,
+    ...(idempotencyKey ? { idempotencyKey } : {}),
     assignment,
     messageMetadata: {
       origin: { kind: "user", host: "web", surface: "local" },

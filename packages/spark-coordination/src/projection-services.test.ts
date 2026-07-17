@@ -175,6 +175,18 @@ describe("projection services", () => {
       createdAt: "2026-05-22T00:00:04.000Z",
     });
 
+    const durableChunks = db
+      .prepare(
+        `SELECT stream, sequence, content
+         FROM invocation_log_chunks
+         ORDER BY sequence`,
+      )
+      .all() as Array<{ stream: string; sequence: number; content: string }>;
+    expect(durableChunks).toEqual([
+      { stream: "assistant", sequence: 1, content: "Hello" },
+      { stream: "assistant", sequence: 2, content: " world" },
+    ]);
+
     const firstBatch = loadEventBatch(db, null, 10).map(serializeEventRow);
     const streamingEvents = firstBatch.filter((event) => event.subjectId === runtimeInvocationId);
     expect(streamingEvents.map((event) => event.kind)).toEqual([
@@ -216,6 +228,46 @@ describe("projection services", () => {
         payload: { stream: "assistant", sequence: 2, content: " world" },
       },
     ]);
+
+    // Replays are idempotent, but unrelated database constraints must still fail.
+    recordInvocationLogChunk(db, {
+      runtimeWorkspaceBindingId,
+      workspaceId: workspace.id,
+      commandId: command.id,
+      payload: {
+        runtimeInvocationId,
+        stream: "assistant",
+        sequence: 2,
+        content: "duplicate",
+      },
+      createdAt: "2026-05-22T00:00:04.000Z",
+    });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM invocation_log_chunks").get()).toEqual({
+      count: 2,
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM events
+           WHERE kind = 'invocation.log_chunk' AND subject_id = ?`,
+        )
+        .get(runtimeInvocationId),
+    ).toEqual({ count: 2 });
+    expect(() =>
+      recordInvocationLogChunk(db, {
+        runtimeWorkspaceBindingId,
+        workspaceId: workspace.id,
+        commandId: command.id,
+        payload: {
+          runtimeInvocationId,
+          stream: "invalid" as never,
+          sequence: 3,
+          content: "must fail",
+        },
+        createdAt: "2026-05-22T00:00:05.000Z",
+      }),
+    ).toThrow(/constraint|CHECK/u);
     db.close();
   });
 

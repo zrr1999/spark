@@ -41,6 +41,10 @@ void test("session registry bind + channel inbound share one sessionId", async (
 
   const transport = new FakeChannelTransport();
   const delivered: string[] = [];
+  let markDelivered: (() => void) | undefined;
+  const delivery = new Promise<void>((resolve) => {
+    markDelivered = resolve;
+  });
   const channels = new ChannelRegistry({
     config: parseChannelsConfig({
       adapters: { infoflow: { type: "infoflow" } },
@@ -51,12 +55,13 @@ void test("session registry bind + channel inbound share one sessionId", async (
     onMessage: (message) => {
       void registry.resolveBinding({ externalKey: message.externalKey }).then((resolved) => {
         delivered.push(`${resolved.sessionId}:${message.text}`);
+        markDelivered?.();
       });
     },
   });
   await channels.startAll();
   transport.emitInbound({ user_id: "alice", text: "from infoflow" });
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await delivery;
   await channels.stopAll();
 
   assert.deepEqual(delivered, [`${session.sessionId}:from infoflow`]);

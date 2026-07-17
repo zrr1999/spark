@@ -6,6 +6,7 @@ import {
 
 export interface SessionSerializedEvent {
   id: string;
+  sequence: number | null;
   workspaceId: string | null;
   projectId: string | null;
   kind: string;
@@ -85,6 +86,10 @@ export function parseSessionSerializedEvent(value: string): SessionSerializedEve
     }
     return {
       id: event.id,
+      sequence:
+        typeof event.sequence === "number" && Number.isSafeInteger(event.sequence)
+          ? event.sequence
+          : null,
       workspaceId: nullableString(event.workspaceId),
       projectId: nullableString(event.projectId),
       kind: event.kind,
@@ -215,9 +220,11 @@ function rememberEventId(eventIds: Set<string>, eventId: string) {
 }
 
 export function sessionEventCursor(
-  event: Pick<SessionSerializedEvent, "createdAt" | "id">,
+  event: Pick<SessionSerializedEvent, "createdAt" | "id" | "sequence">,
 ): string {
-  return `${event.createdAt}|${event.id}`;
+  return event.sequence === null
+    ? `${event.createdAt}|${event.id}`
+    : `${event.sequence}|${event.createdAt}|${event.id}`;
 }
 
 function applyDaemonEvent(

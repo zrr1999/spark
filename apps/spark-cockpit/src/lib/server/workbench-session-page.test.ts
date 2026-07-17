@@ -98,6 +98,7 @@ describe("workbench session page scope", () => {
     expect(result).toMatchObject({
       sessions: [workspaceSession, channelSession],
       selectedSessionId: workspaceSession.sessionId,
+      sendSubmissionIdSeed: expect.stringMatching(/^idem_/),
     });
     expect(mocks.activity).toHaveBeenCalledWith(
       {},

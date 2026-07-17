@@ -15,6 +15,7 @@ import { createInterface } from "node:readline/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { createSparkProviderControl } from "@zendev-lab/spark-ai/control";
+import { createId } from "@zendev-lab/spark-protocol";
 import { ensureSparkPathDirs, gitCommand, resolveSparkPaths } from "@zendev-lab/spark-system";
 import { sparkDaemonCliStrings } from "@zendev-lab/spark-i18n/cli";
 import {
@@ -24,7 +25,10 @@ import {
 } from "./config.js";
 import { sparkDaemonVersion, startSparkDaemon } from "./daemon.js";
 import { createSparkDaemonModelControl } from "./model-control.ts";
-import { createDaemonChannelIngressRuntime } from "./channels/ingress.ts";
+import {
+  channelIngressIdempotencyKey,
+  createDaemonChannelIngressRuntime,
+} from "./channels/ingress.ts";
 import {
   SparkDaemonLifecycle,
   SparkDaemonInvocationRegistry,
@@ -418,6 +422,10 @@ async function start(paths: ReturnType<typeof resolveSparkPaths>): Promise<numbe
     sessionRegistry,
     hooks: {
       onAssignment: async (assignment) => {
+        const idempotencyKey = channelIngressIdempotencyKey(assignment);
+        if (idempotencyKey && invocationStore.findByIdempotencyKey(idempotencyKey)) {
+          return "duplicate";
+        }
         const model = await modelControl.effectiveModel(assignment.sessionId);
         await modelControl.prepareModel(model);
         const session = await sessionRegistry.get(assignment.sessionId);
@@ -450,6 +458,9 @@ async function start(paths: ReturnType<typeof resolveSparkPaths>): Promise<numbe
           sessionId: task.sessionId,
           prompt: task.prompt,
           task,
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+          sourceKind: "channel",
+          sourceRef: assignment.source.externalRef ?? assignment.externalKey,
         });
       },
     },
@@ -952,7 +963,18 @@ async function daemonSubmit(
   const prompt = (flags.prompt ?? positionalArgs(args).join(" ")).trim();
   if (!sessionId) throw new Error(STRINGS.submitRequiresSession);
   if (!prompt) throw new Error(STRINGS.submitRequiresPrompt);
-  const result = await (io.turnSubmitToService ?? requestTurnSubmit)(paths, { sessionId, prompt });
+  const idempotencyKey = flags["idempotency-key"]?.trim() || createId("idem");
+  const submit = io.turnSubmitToService ?? requestTurnSubmit;
+  const input = { sessionId, prompt, idempotencyKey };
+  let result;
+  try {
+    result = await submit(paths, input);
+  } catch (error) {
+    if (!(error instanceof LocalRpcUnavailableError)) throw error;
+    // A lost response is ambiguous: the daemon may already have committed the
+    // invocation. Retrying once with the same key recovers that invocation.
+    result = await submit(paths, input);
+  }
   if (flags.json === "true") {
     io.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return 0;
@@ -2112,7 +2134,7 @@ Commands:
   stop
   restart [--yes] [--wait]
   logs [--follow] [--lines <n>]
-  submit --session <id> --prompt <text> [--json]
+  submit --session <id> --prompt <text> [--idempotency-key <key>] [--json]
 
 Example:
   spark daemon status --json

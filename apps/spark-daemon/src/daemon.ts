@@ -26,11 +26,16 @@ import { SparkSessionMailStore } from "@zendev-lab/spark-session";
 import { writePrivateFile, type SparkPaths } from "@zendev-lab/spark-system";
 import { readSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
 import {
+  channelIngressIdempotencyKey,
   createDaemonChannelIngressRuntime,
   type ChannelIngressHooks,
   type DaemonChannelIngressRuntime,
 } from "./channels/ingress.ts";
 import { projectChannelAsk, settleChannelAskInteraction } from "./channels/human-interactions.ts";
+import {
+  ChannelReplyDeliveryStore,
+  reconcileChannelReplyDeliveries,
+} from "./channels/reply-delivery.ts";
 import {
   SparkDaemonInvocationRegistry,
   SparkDaemonHumanInteractionBroker,
@@ -227,6 +232,8 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
     ]);
   };
   const invocationStore = new SparkInvocationStore(options.db);
+  const channelReplyDeliveryStore = new ChannelReplyDeliveryStore(options.db, invocationStore);
+  channelReplyDeliveryStore.recoverInterrupted();
   recoverInterruptedRuntimeCommandReceipts(options.db);
   if (options.runScheduler !== false) {
     await migrateLegacyQueueHistory({
@@ -258,6 +265,7 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
                   await channelIngress.sendReply(workspaceId, adapterId, input);
                 },
               },
+              channelReplyDelivery: channelReplyDeliveryStore,
               interact: (request, task, context) =>
                 humanInteractions.interact(request, {
                   sessionId: task.sessionId,
@@ -336,10 +344,19 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
       sparkHome: (options.sparkHome ?? process.env.SPARK_HOME?.trim()) || join(homedir(), ".spark"),
     });
   let notificationReconcileLoop: Promise<void> | undefined;
+  let channelReplyReconcileLoop: Promise<void> | undefined;
   if (channelIngress && options.sessionRegistry && !options.once) {
     notificationReconcileLoop = runNotificationReconcileLoop(
       mailStore,
       options.sessionRegistry,
+      channelIngress,
+      runtimeSignal,
+      options.notificationReconcileIntervalMs ?? 1_000,
+    );
+  }
+  if (channelIngress && !options.once) {
+    channelReplyReconcileLoop = runChannelReplyReconcileLoop(
+      channelReplyDeliveryStore,
       channelIngress,
       runtimeSignal,
       options.notificationReconcileIntervalMs ?? 1_000,
@@ -412,9 +429,26 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
     await restartDrain;
     await schedulerLoop;
     await notificationReconcileLoop;
+    await channelReplyReconcileLoop;
     if (existsSync(options.paths.pidFile)) {
       rmSync(options.paths.pidFile, { force: true });
     }
+  }
+}
+
+async function runChannelReplyReconcileLoop(
+  store: ChannelReplyDeliveryStore,
+  channelIngress: DaemonChannelIngressRuntime,
+  signal: AbortSignal,
+  intervalMs: number,
+): Promise<void> {
+  while (!signal.aborted) {
+    try {
+      await reconcileChannelReplyDeliveries({ store, channelIngress });
+    } catch (error) {
+      console.error("[spark-daemon] channel reply reconciliation failed", error);
+    }
+    await delayUnlessAborted(Math.max(250, Math.floor(intervalMs)), signal);
   }
 }
 
@@ -453,6 +487,10 @@ async function maybeStartChannelIngress(
       ...(options.sessionRegistry ? { sessionRegistry: options.sessionRegistry } : {}),
       hooks: {
         onAssignment: async (assignment) => {
+          const idempotencyKey = channelIngressIdempotencyKey(assignment);
+          if (idempotencyKey && invocationStore.findByIdempotencyKey(idempotencyKey)) {
+            return "duplicate";
+          }
           const model = options.modelControl
             ? await options.modelControl.effectiveModel(assignment.sessionId)
             : undefined;
@@ -494,6 +532,9 @@ async function maybeStartChannelIngress(
             sessionId: task.sessionId,
             prompt: task.prompt,
             task,
+            ...(idempotencyKey ? { idempotencyKey } : {}),
+            sourceKind: "channel",
+            sourceRef: assignment.source.externalRef ?? assignment.externalKey,
           });
         },
       },
