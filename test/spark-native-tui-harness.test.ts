@@ -164,7 +164,7 @@ void test("native TUI kernel slash commands are minimal and resource slash is ex
   assert.doesNotMatch(rendered, /\/task — .*\[system\]/);
 });
 
-void test("Spark native TUI /mailto and /inbox use durable session mail store", async () => {
+void test("Spark native TUI /inbox reads durable session mail", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-native-mail-"));
   const sparkHome = join(dir, "spark-home");
   try {
@@ -177,20 +177,20 @@ void test("Spark native TUI /mailto and /inbox use durable session mail store", 
       slashCommands: createSparkPiParitySlashCommands(services),
     });
     const mailStore = new SparkSessionMailStore({ sparkHome });
-
-    assert.equal(await harness.submit("/mailto session-b hello"), "command");
-    let messages = await mailStore.list("session-b");
-    assert.equal(messages.length, 1);
-    assert.equal(messages[0]?.body, "hello");
-    assert.match(stripAnsi(harness.render()), /Sent mail:/);
+    const sent = await mailStore.send({
+      toSessionId: "session-b",
+      fromSessionId: "session-a",
+      kind: "request",
+      body: "hello",
+    });
 
     assert.equal(await harness.submit("/inbox"), "command");
     assert.match(stripAnsi(harness.render()), /hello/);
-    const messageId = messages[0]!.id;
+    const messageId = sent.message.id;
 
     assert.equal(await harness.submit(`/inbox ack ${messageId}`), "command");
     assert.match(stripAnsi(harness.render()), /Acknowledged mail:/);
-    messages = await mailStore.list("session-b");
+    const messages = await mailStore.list("session-b");
     assert.equal(messages.length, 0);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -684,6 +684,40 @@ void test("Spark native TUI surfaces command availability, queued work, stop, an
   );
 });
 
+void test("Spark native TUI shows Working only while a turn is active", async () => {
+  let finishTurn: ((value: string) => void) | undefined;
+  const harness = createSparkNativeTuiHarness({
+    responder: () =>
+      new Promise<string>((resolve) => {
+        finishTurn = resolve;
+      }),
+  });
+
+  assert.doesNotMatch(stripAnsi(harness.render()), /Working\.\.\./);
+
+  assert.equal(await harness.submit("long-running task"), "started");
+  assert.equal(harness.session.isProcessing, true);
+  assert.match(stripAnsi(harness.render()), /⠼ Working\.\.\. • Enter steer/);
+  await waitForNativeCondition(
+    () => /[⠴⠦⠧⠇⠏⠋⠙⠹⠸] Working\.\.\./u.test(stripAnsi(harness.render())),
+    "the Working spinner to advance",
+  );
+
+  finishTurn?.("completed response");
+  await waitForNativeCondition(
+    () => !harness.session.isProcessing,
+    "the deferred Spark turn to finish",
+  );
+
+  const completed = stripAnsi(harness.render());
+  assert.match(completed, /spark> completed response/);
+  assert.doesNotMatch(completed, /Working\.\.\./);
+
+  const renderRequestsAfterCompletion = harness.state.renderRequests.length;
+  await new Promise((resolve) => setTimeout(resolve, 180));
+  assert.equal(harness.state.renderRequests.length, renderRequestsAfterCompletion);
+});
+
 void test("Spark native editor expands @file/image refs and bang commands through real submit path", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-native-editor-input-"));
   try {
@@ -882,7 +916,7 @@ void test("Spark native TUI harness captures resize-safe golden render sections"
   assert.match(wideText, /thinking> hidden chain of implementation notes/);
 });
 
-void test("Spark native TUI labels channel users from platform sender metadata", () => {
+void test("Spark native TUI labels channel users and cross-session agents", () => {
   const harness = createSparkNativeTuiHarness({ cols: 88 });
   harness.app.applyViewModelEvent({
     version: SPARK_PROTOCOL_VERSION,
@@ -892,6 +926,17 @@ void test("Spark native TUI labels channel users from platform sender metadata",
       sessionId: "session:channel-senders",
       status: "idle",
       messages: [
+        {
+          version: SPARK_PROTOCOL_VERSION,
+          id: "session-agent",
+          role: "user",
+          text: "delegated request",
+          status: "done",
+          metadata: {
+            origin: { kind: "session", sessionId: "session:worker-a" },
+            sessionMail: { fromSessionId: "session:worker-a" },
+          },
+        },
         {
           version: SPARK_PROTOCOL_VERSION,
           id: "channel-user",
@@ -932,6 +977,7 @@ void test("Spark native TUI labels channel users from platform sender metadata",
 
   const rendered = stripAnsi(harness.render());
   assert.match(rendered, /徐晓健> 群消息/);
+  assert.match(rendered, /agent:worker-a> delegated request/);
   assert.match(rendered, /you> 网页消息/);
 });
 

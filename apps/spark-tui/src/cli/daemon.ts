@@ -25,6 +25,7 @@ import {
   type SparkSessionListRequest,
   type SparkSessionRegistryRecord,
   type SparkSessionView,
+  type SparkViewModelEvent,
   type SparkTurnCancelResult,
   type SparkTurnResult,
   type SparkTurnStatusResult,
@@ -438,7 +439,6 @@ export interface SparkDaemonSessionsCommand extends SparkDaemonCliCommandBase {
     | "clone"
     | "export"
     | "replay"
-    | "mailto"
     | "inbox"
     | "create"
     | "bind"
@@ -452,10 +452,6 @@ export interface SparkDaemonSessionsCommand extends SparkDaemonCliCommandBase {
   registry?: boolean;
   includeArchived?: boolean;
   newSessionId?: string;
-  toSessionId?: string;
-  fromSessionId?: string;
-  subject?: string;
-  message?: string;
   inboxAction?: "list" | "read" | "ack";
   messageId?: string;
   all?: boolean;
@@ -549,7 +545,6 @@ export interface SparkDaemonSessionsResult {
   result:
     | LocalDaemonSessionListResult
     | LocalDaemonSessionTextResult
-    | LocalDaemonSessionMailtoResult
     | LocalDaemonSessionInboxListResult
     | LocalDaemonSessionMailMessageResult
     | DaemonSessionListResult
@@ -572,14 +567,6 @@ export interface ManagedSessionRegistryResult {
 export interface SparkDaemonChannelResult {
   action: "channel";
   result: ChannelStatusSnapshot | ChannelNotifySendResult;
-}
-
-export interface LocalDaemonSessionMailtoResult {
-  subcommand: "mailto";
-  message: SparkSessionMailMessage;
-  filePath: string;
-  text: string;
-  observedAt: string;
 }
 
 export interface LocalDaemonSessionInboxListResult {
@@ -869,24 +856,6 @@ function parseSparkDaemonSessionsCommand(
     if (!sessionId) throw new Error("spark daemon session archive requires <session-id>");
     return { action: "sessions", subcommand, json, sessionId };
   }
-  if (subcommand === "mailto") {
-    const toSessionId = readStringOption(parsed.options, "to")?.trim();
-    const message =
-      readStringOption(parsed.options, "message")?.trim() ||
-      parsed.positionals.slice(1).join(" ").trim();
-    if (!toSessionId) throw new Error("spark daemon session mailto requires --to <session-id>");
-    if (!message)
-      throw new Error("spark daemon session mailto requires --message <text> or trailing text");
-    return {
-      action: "sessions",
-      subcommand,
-      json,
-      toSessionId,
-      message,
-      fromSessionId: readStringOption(parsed.options, "from")?.trim(),
-      subject: readStringOption(parsed.options, "subject")?.trim(),
-    };
-  }
   if (subcommand === "inbox") {
     const [inboxActionOrMessageId, maybeMessageId] = parsed.positionals.slice(1);
     const inboxAction =
@@ -1101,6 +1070,7 @@ export interface SparkDaemonNativeResponderOptions {
   waitForCompletion?: boolean;
   pollIntervalMs?: number;
   timeoutMs?: number;
+  onViewEvent?: (event: SparkViewModelEvent) => void;
 }
 
 interface SparkDaemonNativeResponderContext {
@@ -1137,7 +1107,7 @@ export function createSparkDaemonNativeResponder(
       });
       await sessionReady;
     }
-    const live = createDaemonLiveAssistantRenderer(context);
+    const live = createDaemonLiveAssistantRenderer(context, options.onViewEvent);
     const result = await clientSubmitStreaming(
       {
         sessionId,
@@ -1172,11 +1142,12 @@ export function createSparkDaemonNativeResponder(
 
 function createDaemonLiveAssistantRenderer(
   context: SparkDaemonNativeResponderContext | undefined,
+  onViewEvent: ((event: SparkViewModelEvent) => void) | undefined,
 ): {
   streamed: boolean;
   onEvent?: (event: SparkDaemonEvent) => void;
 } {
-  if (!context?.appendAssistantChunk) return { streamed: false };
+  if (!context?.appendAssistantChunk && !onViewEvent) return { streamed: false };
   let streamed = false;
   let lastText = "";
   return {
@@ -1184,13 +1155,14 @@ function createDaemonLiveAssistantRenderer(
       return streamed;
     },
     onEvent(event) {
+      if (event.type === "daemon.view_event") onViewEvent?.(event.view);
       const text = assistantTextFromDaemonViewEvent(event);
       if (text === undefined) return;
       const chunk = text.startsWith(lastText) ? text.slice(lastText.length) : text;
       lastText = text;
       if (!chunk) return;
       streamed = true;
-      context.appendAssistantChunk?.(chunk);
+      context?.appendAssistantChunk?.(chunk);
     },
   };
 }
@@ -1352,7 +1324,6 @@ async function clientSessions(
 ): Promise<
   | LocalDaemonSessionListResult
   | LocalDaemonSessionTextResult
-  | LocalDaemonSessionMailtoResult
   | LocalDaemonSessionInboxListResult
   | LocalDaemonSessionMailMessageResult
   | DaemonSessionListResult
@@ -1410,25 +1381,6 @@ async function clientSessions(
       subcommand: "archive",
       session,
       text: renderManagedSession(session),
-      observedAt: observedAt(client),
-    };
-  }
-  if (command.subcommand === "mailto") {
-    const sessionStore = createLocalSessionStore(client);
-    await assertKnownLocalSession(sessionStore, command.toSessionId!);
-    const mailStore = createLocalSessionMailStore(client);
-    const sent = await mailStore.send({
-      toSessionId: command.toSessionId!,
-      fromSessionId: command.fromSessionId,
-      subject: command.subject,
-      body: command.message!,
-      source: "cli",
-    });
-    return {
-      subcommand: "mailto",
-      message: sent.message,
-      filePath: sent.path,
-      text: renderMailtoResult(sent.message, sent.path),
       observedAt: observedAt(client),
     };
   }
@@ -1690,30 +1642,6 @@ function createLocalSessionMailStore(client: SparkDaemonClientOptions): SparkSes
     ...(client.sparkHome ? { sparkHome: client.sparkHome } : {}),
     now: client.now,
   });
-}
-
-async function assertKnownLocalSession(store: SparkSessionStore, sessionId: string): Promise<void> {
-  const normalized = normalizeSessionKey(sessionId);
-  const sessions = await store.listAllPersistentSessions();
-  if (
-    sessions.some(
-      (session) =>
-        session.id === sessionId ||
-        session.id === normalized ||
-        `session:${session.id}` === sessionId,
-    )
-  ) {
-    return;
-  }
-  throw new Error(`Spark session not found: ${sessionId}`);
-}
-
-function normalizeSessionKey(sessionId: string): string {
-  return sessionId.startsWith("session:") ? sessionId.slice("session:".length) : sessionId;
-}
-
-function renderMailtoResult(message: SparkSessionMailMessage, filePath: string): string {
-  return `sent ${message.id} to ${message.toSessionId} (${filePath})\n`;
 }
 
 function renderInboxList(

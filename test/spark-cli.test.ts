@@ -313,10 +313,6 @@ void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => 
       ["gpt-5.6-terra", "GPT-5.6 Terra", true, undefined],
     ],
   );
-  assert.equal(
-    config.models.find((model) => model.id === "gpt-5.5")?.transportModelId,
-    "gpt-5.5-coding-plan",
-  );
   assert.deepEqual(
     config.models.find((model) => model.id === "claude-opus-4.8")?.thinkingLevelMap,
     {

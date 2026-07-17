@@ -5,6 +5,13 @@ export function cancelledTurnIdFromActionResult(result: unknown): string | null 
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+/** Read the daemon-accepted invocation id from a successful send action. */
+export function queuedTurnIdFromActionResult(result: unknown): string | null {
+  if (!isRecord(result) || !isRecord(result.data)) return null;
+  const value = result.data.queuedTurnId;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

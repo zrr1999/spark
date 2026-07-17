@@ -22,7 +22,13 @@ import {
 } from "./types.ts";
 
 export const DEFAULT_INVOCATION_SCHEDULER_CONCURRENCY = 4;
-export const DEFAULT_INVOCATION_TASK_TIMEOUT_MS = 600_000;
+/**
+ * Daemon turns are durable background work, so their default lifetime is
+ * bounded by explicit cancellation rather than an arbitrary wall-clock
+ * deadline. A positive `taskTimeoutMs` remains available to callers that need
+ * a finite execution budget; zero disables the timer.
+ */
+export const DEFAULT_INVOCATION_TASK_TIMEOUT_MS = 0;
 export const DEFAULT_INVOCATION_ABORT_DRAIN_MS = 1_000;
 const MAX_BLOCKING_QUESTION_OVERFLOW = 1;
 

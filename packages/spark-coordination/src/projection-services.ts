@@ -1445,6 +1445,44 @@ export function recordInvocationUpdate(db: DatabaseSync, input: RecordInvocation
       timestamp,
     });
 
+    // Direct session turns are admitted through runtime_control_commands and get
+    // their initial queued row in runtime_invocation_projections. Runtime
+    // lifecycle envelopes arrive later through this legacy-compatible ingest
+    // path, so keep the direct projection in sync without manufacturing rows for
+    // older assignment/task invocations that have no runtime session parent.
+    const sequence = input.payload.sequence ?? null;
+    db.prepare(
+      `UPDATE runtime_invocation_projections
+       SET command_id = COALESCE(command_id, ?),
+           status = ?,
+           event_cursor = MAX(event_cursor, COALESCE(?, event_cursor)),
+           started_at = COALESCE(?, started_at),
+           completed_at = COALESCE(?, completed_at),
+           terminal_reason = COALESCE(?, terminal_reason),
+           payload_json = json_patch(payload_json, ?),
+           updated_at = ?
+       WHERE runtime_id = (
+         SELECT runtime_id
+         FROM runtime_workspace_bindings
+         WHERE id = ?
+       )
+         AND runtime_invocation_id = ?
+         AND (? IS NULL OR ? >= event_cursor)`,
+    ).run(
+      input.commandId ?? null,
+      input.payload.status,
+      sequence,
+      input.payload.startedAt ?? null,
+      input.payload.completedAt ?? null,
+      input.payload.terminalReason ?? null,
+      toJson(input.payload.payload),
+      timestamp,
+      input.runtimeWorkspaceBindingId,
+      input.payload.runtimeInvocationId,
+      sequence,
+      sequence,
+    );
+
     db.prepare(
       `INSERT INTO invocation_events
         (id, invocation_id, runtime_event_id, kind, sequence, payload_json, created_at)

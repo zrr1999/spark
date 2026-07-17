@@ -64,7 +64,7 @@ void test("dispatcher, daemon, Cockpit, and TUI help snapshots expose the three-
   const daemonHelp = sparkDaemonHelpText();
   assert.match(daemonHelp, /spark daemon - daemon execution plane/u);
   assert.match(daemonHelp, /spark daemon session list \[--json\]/u);
-  assert.match(daemonHelp, /spark daemon session mailto --to <session-id>/u);
+  assert.doesNotMatch(daemonHelp, /spark daemon session mailto/u);
   assert.match(daemonHelp, /spark daemon session inbox --session <session-id>/u);
   assert.match(daemonHelp, /spark daemon run list \[--json\]/u);
   assert.match(daemonHelp, /spark daemon events watch \[--json\]/u);

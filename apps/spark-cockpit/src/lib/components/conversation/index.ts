@@ -6,6 +6,7 @@ export { default as ErrorPart } from "./ErrorPart.svelte";
 export { default as Message } from "./Message.svelte";
 export { default as MessageActions } from "./MessageActions.svelte";
 export { default as ReasoningPart } from "./ReasoningPart.svelte";
+export { default as SessionStatusBar } from "./SessionStatusBar.svelte";
 export { default as TaskRunPart } from "./TaskRunPart.svelte";
 export { default as ToolCallPart } from "./ToolCallPart.svelte";
 export {
@@ -27,3 +28,9 @@ export type {
   ConversationToolState,
 } from "./types";
 export { default as ThinkingChainPart } from "./ThinkingChainPart.svelte";
+export { sessionStatusUsage } from "./session-status";
+export type {
+  SessionStatusBarLabels,
+  SessionStatusSnapshot,
+  SessionStatusUsage,
+} from "./session-status";

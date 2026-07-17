@@ -126,18 +126,6 @@ describe("persistent session channel routing", () => {
           acceptedAt: "2026-07-15T00:00:00.000Z",
         };
       }
-      if (method === "session.notification.deliver") {
-        return {
-          deliveries: [
-            {
-              adapter: "qqbot",
-              externalKey: "qqbot:user:42",
-              status: "pending",
-              attemptCount: 0,
-            },
-          ],
-        };
-      }
       throw new Error(`unexpected RPC method: ${method}`);
     });
 
@@ -167,35 +155,26 @@ describe("persistent session channel routing", () => {
       externalKey: "qqbot:user:42",
     });
 
-    await executeSparkSessionAction(
-      {
-        action: "send",
-        toolCallId: "tool-routing-result",
-        params: {
-          replyToMessageId: requestMessage?.id,
-          kind: "notification",
-          message: "Research complete",
+    await expect(
+      executeSparkSessionAction(
+        {
+          action: "send",
+          toolCallId: "tool-routing-result",
+          params: {
+            toSessionId: origin.sessionId,
+            kind: "notification",
+            message: "Research complete",
+          },
+          signal: new AbortController().signal,
+          ctx: {
+            sessionId: worker.sessionId,
+            sessionSurface: "local",
+            sessionSource: "session",
+          },
         },
-        signal: new AbortController().signal,
-        ctx: {
-          sessionId: worker.sessionId,
-          sessionSurface: "local",
-          sessionSource: "session",
-        },
-      },
-      { request: request as never, mailStore: () => mailStore },
-    );
-
-    const [resultMessage] = await mailStore.list(origin.sessionId, { includeAcked: true });
-    expect(resultMessage?.deliveries).toEqual([
-      expect.objectContaining({
-        adapter: "qqbot",
-        externalKey: "qqbot:user:42",
-        status: "pending",
-      }),
-    ]);
-    expect(resultMessage?.deliveries).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ adapter: "infoflow" })]),
-    );
+        { request: request as never, mailStore: () => mailStore },
+      ),
+    ).rejects.toThrow("session kind must be request or question");
+    expect(await mailStore.list(origin.sessionId, { includeAcked: true })).toEqual([]);
   });
 });

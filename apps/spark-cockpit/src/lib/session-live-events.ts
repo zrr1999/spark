@@ -1,6 +1,8 @@
 import {
   parseSparkDaemonEvent,
+  sanitizeSparkDisplayError,
   type SparkDaemonEvent,
+  type SparkMessageView,
   type SparkSessionView,
 } from "@zendev-lab/spark-protocol";
 
@@ -131,16 +133,38 @@ export function createSessionLiveEventState(input: {
   cursor?: string | null;
 }): SessionLiveEventState {
   const view = input.view ? cloneSessionView(input.view) : null;
+  const activeTurnId = queuedTurnId(view);
+  const invocationIds = new Set(input.invocationIds);
+  if (activeTurnId) invocationIds.add(activeTurnId);
   return {
     sessionId: input.sessionId,
     workspaceId: input.workspaceId ?? null,
     view,
-    activeTurnId: queuedTurnId(view),
+    activeTurnId,
     cursor: input.cursor ?? null,
     processedEventIds: new Set(),
     commandIds: new Set(input.commandIds),
-    invocationIds: new Set(input.invocationIds),
+    invocationIds,
   };
+}
+
+/**
+ * Register the durable turn receipt returned by `turn.submit` before the first
+ * runtime event arrives. Direct Cockpit turns do not have a legacy command id,
+ * so their invocation updates can only be scoped safely by this receipt.
+ */
+export function registerQueuedSessionTurn(
+  state: SessionLiveEventState,
+  turnId: string,
+  createdAt = new Date().toISOString(),
+): boolean {
+  const normalized = turnId.trim();
+  if (!normalized) return false;
+  state.invocationIds.add(normalized);
+  state.activeTurnId = normalized;
+  const current = state.view ?? emptySessionView(state.sessionId, createdAt);
+  state.view = { ...current, status: "running", updatedAt: createdAt };
+  return true;
 }
 
 /**
@@ -188,12 +212,13 @@ export function applySessionLiveEvent(
     if (!invocationId) return { changed: false, refreshActivity: false };
     if (commandId && state.commandIds.has(commandId)) {
       state.invocationIds.add(invocationId);
-      return { changed: false, refreshActivity: true };
-    }
-    if (!state.invocationIds.has(invocationId)) {
+    } else if (!state.invocationIds.has(invocationId)) {
       return { changed: false, refreshActivity: false };
     }
-    return { changed: false, refreshActivity: true };
+    return {
+      changed: applyInvocationUpdate(state, event, invocationId),
+      refreshActivity: true,
+    };
   }
 
   if (event.kind === "invocation.log_chunk" || event.kind === "artifact.projected") {
@@ -208,6 +233,82 @@ export function applySessionLiveEvent(
   }
 
   return { changed: false, refreshActivity: false };
+}
+
+function applyInvocationUpdate(
+  state: SessionLiveEventState,
+  event: SessionSerializedEvent,
+  invocationId: string,
+): boolean {
+  const status = stringField(event.payload, "status")?.toLocaleLowerCase();
+  if (!status) return false;
+  const current = state.view ?? emptySessionView(state.sessionId, event.createdAt);
+
+  if (status === "queued" || status === "running" || status === "streaming") {
+    state.activeTurnId = invocationId;
+    state.view = { ...current, status: "running", updatedAt: event.createdAt };
+    return true;
+  }
+
+  if (!isTerminalInvocationStatus(status)) return false;
+  if (state.activeTurnId === invocationId) state.activeTurnId = null;
+  const failure = isFailureInvocationStatus(status);
+  const terminalReason = failure
+    ? sanitizeSparkDisplayError(stringField(event.payload, "terminalReason"), {
+        fallback: invocationFailureFallback(status),
+      })
+    : "";
+  const messages = failure
+    ? upsertById(current.messages, {
+        version: 1,
+        id: `invocation:${invocationId}:failure`,
+        role: "system" as const,
+        text: terminalReason,
+        status: "error" as const,
+        createdAt: event.createdAt,
+        metadata: {
+          source: "daemon.invocation",
+          invocationId,
+          kind: "invocation_failure",
+          terminalStatus: status,
+          errorTitle: invocationFailureTitle(status),
+        },
+      })
+    : current.messages;
+  state.view = { ...current, status: "idle", messages, updatedAt: event.createdAt };
+  return true;
+}
+
+function isTerminalInvocationStatus(status: string): boolean {
+  return [
+    "succeeded",
+    "completed",
+    "done",
+    "failed",
+    "lost",
+    "timeout",
+    "timed_out",
+    "cancelled",
+    "canceled",
+  ].includes(status);
+}
+
+function isFailureInvocationStatus(status: string): boolean {
+  return ["failed", "lost", "timeout", "timed_out"].includes(status);
+}
+
+function invocationFailureTitle(status: string): string {
+  if (status === "lost") return "Session interrupted";
+  if (status === "timeout" || status === "timed_out") return "Session timed out";
+  return "Session failed";
+}
+
+function invocationFailureFallback(status: string): string {
+  if (status === "lost") return "The session was interrupted before it produced a final response.";
+  if (status === "timeout" || status === "timed_out") {
+    return "The session timed out before it produced a final response.";
+  }
+  return "The session failed before it produced a final response.";
 }
 
 function rememberEventId(eventIds: Set<string>, eventId: string) {
@@ -294,11 +395,12 @@ function applyDaemonEvent(
     if (viewEvent.sessionId !== state.sessionId) {
       return { changed: false, refreshActivity: false };
     }
+    const message = sanitizeLiveMessage(viewEvent.message);
     state.view = {
       ...current,
-      status: viewEvent.message.status === "streaming" ? "running" : current.status,
-      messages: upsertById(current.messages, viewEvent.message),
-      updatedAt: viewEvent.message.updatedAt ?? viewEvent.message.createdAt ?? event.createdAt,
+      status: message.status === "streaming" ? "running" : current.status,
+      messages: upsertById(current.messages, message),
+      updatedAt: message.updatedAt ?? message.createdAt ?? event.createdAt,
     };
     return { changed: true, refreshActivity: false };
   }
@@ -311,7 +413,7 @@ function applyDaemonEvent(
       status:
         viewEvent.run.status === "queued" || viewEvent.run.status === "running"
           ? "running"
-          : "idle",
+          : current.status,
       runs: upsertById(current.runs, viewEvent.run),
       updatedAt:
         viewEvent.run.completedAt ??
@@ -340,13 +442,50 @@ function applyDaemonEvent(
 function cloneSessionView(view: SparkSessionView): SparkSessionView {
   return {
     ...view,
-    messages: [...view.messages],
+    messages: view.messages.map(sanitizeLiveMessage),
     tools: [...view.tools],
     runs: [...view.runs],
     tasks: [...view.tasks],
     artifacts: [...view.artifacts],
     ...(view.mailbox ? { mailbox: [...view.mailbox] } : {}),
     metadata: { ...view.metadata },
+  };
+}
+
+function sanitizeLiveMessage(message: SparkMessageView): SparkMessageView {
+  if (message.status !== "error") return message;
+  const metadataError = stringField(message.metadata, "errorMessage");
+  const text = sanitizeSparkDisplayError(metadataError ?? message.text, {
+    fallback: "Spark reported an error without additional details.",
+  });
+  return {
+    ...message,
+    text,
+    ...(message.parts
+      ? {
+          parts: message.parts.map((part) =>
+            part.type === "text"
+              ? {
+                  ...part,
+                  text: sanitizeSparkDisplayError(part.text, { fallback: text }),
+                }
+              : (part.type === "tool-call" || part.type === "tool-result") &&
+                  part.status === "failed" &&
+                  part.summary
+                ? {
+                    ...part,
+                    summary: sanitizeSparkDisplayError(part.summary, {
+                      fallback: `${part.toolName} failed.`,
+                    }),
+                  }
+                : part,
+          ),
+        }
+      : {}),
+    metadata: {
+      ...message.metadata,
+      ...(metadataError ? { errorMessage: text } : {}),
+    },
   };
 }
 

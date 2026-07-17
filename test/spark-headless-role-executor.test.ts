@@ -14,6 +14,7 @@ void test("runSparkHeadlessSession times out a never-resolving agent turn", asyn
         allowedTools?: readonly string[];
         sparkStateRoot?: string;
         approvalMethod?: "skip" | "human" | "auto";
+        streamTimeoutMs?: number;
       }
     | undefined;
   const record = {
@@ -78,6 +79,7 @@ void test("runSparkHeadlessSession times out a never-resolving agent turn", asyn
   assert.deepEqual(capturedServiceOptions?.allowedTools, ["session"]);
   assert.equal(capturedServiceOptions?.sparkStateRoot, "/tmp/control-spark-home");
   assert.equal(capturedServiceOptions?.approvalMethod, "auto");
+  assert.equal(capturedServiceOptions?.streamTimeoutMs, 0);
   assert.deepEqual(unsubscribed.sort(), ["agentLoop", "runtime"]);
 });
 

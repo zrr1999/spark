@@ -7,6 +7,7 @@ import {
   runRuntimeEphemeralSecretRequest,
   runtimeChannelRouteForWorkspace,
   runtimeModelRouteForRuntime,
+  type RuntimeEphemeralSecretDispatchInput,
 } from "./runtime-model-channel-control.ts";
 import { RuntimeControlCommandError } from "./runtime-control.ts";
 
@@ -95,9 +96,9 @@ describe("runtime ephemeral secret control", () => {
     const unregisterDisconnect = registerRuntimeEphemeralSecretDispatcher(
       h.db,
       h.runtimeId,
-      ({ reject }) => {
+      (dispatch: RuntimeEphemeralSecretDispatchInput) => {
         disconnectExecutions += 1;
-        reject(
+        dispatch.reject(
           new RuntimeControlCommandError("runtime disconnected", "SECRET_RUNTIME_DISCONNECTED"),
         );
         return () => {};
@@ -126,9 +127,9 @@ describe("runtime ephemeral secret control", () => {
     const unregisterSuccess = registerRuntimeEphemeralSecretDispatcher(
       h.db,
       h.runtimeId,
-      ({ resolve }) => {
+      (dispatch: RuntimeEphemeralSecretDispatchInput) => {
         replayExecutions += 1;
-        resolve({
+        dispatch.resolve({
           operation: "provider.auth.api_key.set",
           status: "succeeded",
           result: { providers: [], diagnostics: [] },
@@ -175,9 +176,9 @@ describe("runtime ephemeral secret control", () => {
     const unregister = registerRuntimeEphemeralSecretDispatcher(
       h.db,
       h.runtimeId,
-      ({ resolve }) => {
+      (dispatch: RuntimeEphemeralSecretDispatchInput) => {
         executionCount += 1;
-        resolve({
+        dispatch.resolve({
           operation: "channel.configure",
           status: "succeeded",
           result: {

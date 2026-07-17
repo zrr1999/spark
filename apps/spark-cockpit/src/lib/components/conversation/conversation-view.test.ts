@@ -14,6 +14,21 @@ describe("Cockpit conversation view adapter", () => {
     expect(parts).toEqual([{ type: "text", text: "Hello from Spark", streaming: false }]);
   });
 
+  it("turns a terminal message failure into a visible error part", () => {
+    const parts = conversationPartsFromMessage(
+      message({
+        role: "system",
+        text: "provider unavailable",
+        status: "error",
+        metadata: { errorTitle: "Session interrupted", terminalStatus: "lost" },
+      }),
+    );
+
+    expect(parts).toEqual([
+      { type: "error", title: "Session interrupted", message: "provider unavailable" },
+    ]);
+  });
+
   it("maps structured Spark parts without exposing raw tool payload fields", () => {
     const parts = conversationPartsFromMessage(
       message({

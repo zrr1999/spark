@@ -51,8 +51,9 @@ export interface SparkWorkflowModelRunResponse {
 
 /**
  * pi-ai exposes an attempt count rather than an unbounded mode. The enclosing
- * agent-loop signal and stream deadline are the real retry budget, so this
- * sentinel removes the count limit without permitting an immortal request.
+ * agent-loop signal is the lifetime control (and may itself have an explicit
+ * deadline), so this sentinel removes the count limit while preserving
+ * operator cancellation.
  */
 export const SPARK_PROVIDER_TRANSPORT_MAX_RETRIES = Number.MAX_SAFE_INTEGER;
 

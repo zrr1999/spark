@@ -37,13 +37,13 @@ export interface RuntimeEphemeralSecretRequestContext {
   signal?: AbortSignal;
 }
 
-interface EphemeralSecretDispatchInput {
+export interface RuntimeEphemeralSecretDispatchInput {
   envelope: ServerEphemeralSecretRequestEnvelope;
   resolve(result: RuntimeEphemeralSecretResultPayload): void;
   reject(error: unknown): void;
 }
 
-type EphemeralSecretDispatcher = (input: EphemeralSecretDispatchInput) => () => void;
+type EphemeralSecretDispatcher = (input: RuntimeEphemeralSecretDispatchInput) => () => void;
 
 const ephemeralDispatchers = new WeakMap<
   DatabaseSync,

@@ -7,6 +7,7 @@ import {
   createSessionLiveEventState,
   finishSessionActivityRefresh,
   parseSessionSerializedEvent,
+  registerQueuedSessionTurn,
   requestSessionActivityRefresh,
   sessionEventCursorStorageKey,
   sessionViewRevisionKey,
@@ -302,6 +303,160 @@ describe("session live events", () => {
     ).toBe(false);
   });
 
+  it("registers a direct turn receipt and converges a fast terminal failure", () => {
+    const state = createSessionLiveEventState({ sessionId: "sess_current" });
+
+    expect(registerQueuedSessionTurn(state, " inv_direct ", "2026-07-13T08:00:00.000Z")).toBe(true);
+    expect(state.activeTurnId).toBe("inv_direct");
+    expect(state.view?.status).toBe("running");
+
+    const result = applySessionLiveEvent(
+      state,
+      event({
+        id: "evt_direct_failed",
+        kind: "invocation.updated",
+        subjectId: "inv_direct",
+        payload: {
+          runtimeInvocationId: "inv_direct",
+          status: "failed",
+          terminalReason: "provider unavailable",
+        },
+      }),
+    );
+
+    expect(result).toEqual({ changed: true, refreshActivity: true });
+    expect(state.activeTurnId).toBeNull();
+    expect(state.view).toMatchObject({
+      status: "idle",
+      messages: [
+        {
+          id: "invocation:inv_direct:failure",
+          role: "system",
+          text: "provider unavailable",
+          status: "error",
+        },
+      ],
+    });
+  });
+
+  it("settles a lost turn and exposes a bounded interruption instead of an HTML gateway page", () => {
+    const state = createSessionLiveEventState({ sessionId: "sess_current" });
+    registerQueuedSessionTurn(state, "inv_lost", "2026-07-13T08:00:00.000Z");
+    const gatewayPage = `<!doctype html><html><head><title>504 Gateway Time-out</title></head><body><svg>${"noise".repeat(
+      5_000,
+    )}</svg></body></html>`;
+
+    const result = applySessionLiveEvent(
+      state,
+      event({
+        id: "evt_direct_lost",
+        kind: "invocation.updated",
+        subjectId: "inv_lost",
+        payload: {
+          runtimeInvocationId: "inv_lost",
+          status: "lost",
+          terminalReason: gatewayPage,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ changed: true, refreshActivity: true });
+    expect(state.activeTurnId).toBeNull();
+    expect(state.view).toMatchObject({
+      status: "idle",
+      messages: [
+        {
+          id: "invocation:inv_lost:failure",
+          role: "system",
+          status: "error",
+          text: "504 Gateway Time-out",
+          metadata: {
+            terminalStatus: "lost",
+            errorTitle: "Session interrupted",
+          },
+        },
+      ],
+    });
+    expect(JSON.stringify(state.view)).not.toMatch(/<!doctype|<html|<svg|noise/iu);
+  });
+
+  it("keeps a failed tool result structured while sanitizing its live error text", () => {
+    const state = createSessionLiveEventState({ sessionId: "sess_current" });
+    registerQueuedSessionTurn(state, "inv_tool", "2026-07-13T08:00:00.000Z");
+    applySessionLiveEvent(
+      state,
+      event({
+        id: "evt_failed_tool",
+        kind: "daemon.view_event",
+        payload: {
+          type: "daemon.view_event",
+          sessionId: "sess_current",
+          view: {
+            type: "session.message",
+            sessionId: "sess_current",
+            message: {
+              id: "tool-result-failed",
+              role: "tool",
+              text: "503 upstream failure<html><body>unsafe body</body></html>",
+              status: "error",
+              parts: [
+                {
+                  id: "tool-result-failed:part:0",
+                  type: "tool-result",
+                  toolCallId: "call-failed",
+                  toolName: "exec",
+                  summary: "503 tool failed<html><body>unsafe summary</body></html>",
+                  status: "failed",
+                },
+                {
+                  id: "tool-result-failed:part:1",
+                  type: "tool-result",
+                  toolCallId: "call-safe-html",
+                  toolName: "read",
+                  summary: "<html>literal fixture</html>",
+                  status: "complete",
+                },
+              ],
+            },
+          },
+        },
+      }),
+    );
+
+    expect(state.view?.messages[0]).toMatchObject({
+      id: "tool-result-failed",
+      text: "503 upstream failure",
+      status: "error",
+      parts: [
+        {
+          type: "tool-result",
+          toolCallId: "call-failed",
+          status: "failed",
+          summary: "503 tool failed",
+        },
+        {
+          type: "tool-result",
+          toolCallId: "call-safe-html",
+          status: "complete",
+          summary: "<html>literal fixture</html>",
+        },
+      ],
+    });
+    expect(state.view?.status).toBe("running");
+
+    applySessionLiveEvent(
+      state,
+      event({
+        id: "evt_failed_tool_terminal",
+        kind: "invocation.updated",
+        subjectId: "inv_tool",
+        payload: { runtimeInvocationId: "inv_tool", status: "succeeded" },
+      }),
+    );
+    expect(state.view?.status).toBe("idle");
+    expect(state.activeTurnId).toBeNull();
+  });
+
   it("deduplicates replayed cursor events", () => {
     const state = createSessionLiveEventState({ sessionId: "sess_current" });
     const lifecycle = event({
@@ -389,6 +544,50 @@ describe("session live events", () => {
       }),
     );
     expect(state.activeTurnId).toBeNull();
+  });
+
+  it("accepts a terminal update after reloading in the middle of a running turn", () => {
+    const state = createSessionLiveEventState({
+      sessionId: "sess_current",
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        status: "running",
+        messages: [
+          {
+            id: "invocation:inv_reloaded",
+            role: "user",
+            text: "Continue after reload",
+            status: "done",
+            metadata: { source: "daemon.invocation", invocationId: "inv_reloaded" },
+          },
+        ],
+      }),
+    });
+
+    const result = applySessionLiveEvent(
+      state,
+      event({
+        id: "evt_reloaded_lost",
+        kind: "invocation.updated",
+        subjectId: "inv_reloaded",
+        payload: { runtimeInvocationId: "inv_reloaded", status: "lost" },
+      }),
+    );
+
+    expect(result).toEqual({ changed: true, refreshActivity: true });
+    expect(state.activeTurnId).toBeNull();
+    expect(state.view).toMatchObject({
+      status: "idle",
+      messages: [
+        { id: "invocation:inv_reloaded", role: "user" },
+        {
+          id: "invocation:inv_reloaded:failure",
+          role: "system",
+          status: "error",
+          text: "The session was interrupted before it produced a final response.",
+        },
+      ],
+    });
   });
 
   it("does not treat arbitrary message metadata as a cancellable daemon turn", () => {

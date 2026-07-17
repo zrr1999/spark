@@ -60,7 +60,7 @@ export function sessionTimelineWindow(
 
   // Avoid opening a window on an assistant reply when its user prompt is the
   // immediately preceding item. The extra item keeps turn context intact.
-  if (start > 0 && items[start]?.actor === "spark" && items[start - 1]?.actor === "user") {
+  if (start > 0 && items[start]?.actor === "spark" && items[start - 1]?.actor !== "spark") {
     start -= 1;
   }
 
@@ -94,9 +94,14 @@ export function buildSessionTimeline(input: {
   const canonicalMessageIds = new Set<string>();
 
   for (const [messageIndex, message] of input.messages.entries()) {
-    if (message.display === false || message.role === "system") continue;
-    const actor = message.role === "user" ? "user" : "spark";
-    const displayText = actor === "user" ? displayUserMessage(message.text) : message.text;
+    if (
+      message.display === false ||
+      (message.role === "system" && !isFailedTerminalStatus(message.status))
+    ) {
+      continue;
+    }
+    const actor = messageActor(message);
+    const displayText = actor === "spark" ? message.text : displayUserMessage(message.text);
     const parts = conversationPartsFromMessage(message, displayText);
     if (parts.length === 0) continue;
     canonicalMessageIds.add(message.id);
@@ -108,7 +113,12 @@ export function buildSessionTimeline(input: {
       status: message.status === "done" ? null : message.status,
       timestamp: message.createdAt ?? input.fallbackTimestamp,
       meta: message.role === "assistant" || message.role === "user" ? null : message.role,
-      senderLabel: actor === "user" ? channelSenderLabel(message.metadata) : null,
+      senderLabel:
+        actor === "session"
+          ? sessionSenderLabel(message.metadata)
+          : actor === "user"
+            ? channelSenderLabel(message.metadata)
+            : null,
       order: messageIndex,
       parts,
     });
@@ -139,10 +149,20 @@ export function buildSessionTimeline(input: {
   }
 
   for (const [reportIndex, report] of latestStableReports(input.reports).entries()) {
-    if (report.kind === "daemon.task.lifecycle" || report.role === "tool") continue;
+    if (
+      report.kind === "daemon.task.lifecycle" ||
+      report.role === "tool" ||
+      (report.role === "system" && !isFailedTerminalStatus(report.status))
+    ) {
+      continue;
+    }
     const sourceMessageId = sessionMessageId(report);
     if (sourceMessageId && canonicalMessageIds.has(sourceMessageId)) continue;
-    const actor = isUserRole(report.role) ? "user" : "spark";
+    const actor = report.message
+      ? messageActor(report.message)
+      : isUserRole(report.role)
+        ? "user"
+        : "spark";
     if (
       canonicalMessageIds.size === 0 &&
       actor === "user" &&
@@ -153,7 +173,7 @@ export function buildSessionTimeline(input: {
     const parts = report.message
       ? conversationPartsFromMessage(
           report.message,
-          actor === "user" ? displayUserMessage(report.message.text) : report.message.text,
+          actor === "spark" ? report.message.text : displayUserMessage(report.message.text),
         )
       : conversationPartsFromReport(report);
     const hasStructuredReportPart = parts.some(
@@ -167,11 +187,16 @@ export function buildSessionTimeline(input: {
       id: sourceMessageId ? `message:${sourceMessageId}` : `report:${report.id}`,
       actor,
       body: conversationPartText(parts) || report.text,
-      title: actor === "user" || hasStructuredReportPart ? null : report.title,
+      title: actor !== "spark" || hasStructuredReportPart ? null : report.title,
       status: report.status,
       timestamp: report.createdAt,
       meta: report.role && !["assistant", "user"].includes(report.role) ? report.role : null,
-      senderLabel: null,
+      senderLabel:
+        actor === "session" && report.message
+          ? sessionSenderLabel(report.message.metadata)
+          : actor === "user" && report.message
+            ? channelSenderLabel(report.message.metadata)
+            : null,
       order: input.messages.length + input.commands.length + reportIndex,
       parts,
     });
@@ -197,6 +222,22 @@ function channelSenderLabel(metadata: SparkMessageView["metadata"]): string | nu
   if (senderName) return senderName;
   const senderId = nonEmptyString(channel.senderId);
   return senderId ? shortenOpaqueChannelId(senderId) : null;
+}
+
+function messageActor(message: SparkMessageView): ConversationMessageView["actor"] {
+  if (message.role !== "user") return "spark";
+  const origin = isRecord(message.metadata.origin) ? message.metadata.origin : undefined;
+  return origin?.kind === "session" ? "session" : "user";
+}
+
+function sessionSenderLabel(metadata: SparkMessageView["metadata"]): string | null {
+  const mail = isRecord(metadata.sessionMail) ? metadata.sessionMail : undefined;
+  const origin = isRecord(metadata.origin) ? metadata.origin : undefined;
+  const sessionId = nonEmptyString(mail?.fromSessionId) ?? nonEmptyString(origin?.sessionId);
+  if (!sessionId) return null;
+  const compact = sessionId.startsWith("session:") ? sessionId.slice("session:".length) : sessionId;
+  if (/^[0-9a-f]{8}-[0-9a-f-]{27}$/iu.test(compact)) return `${compact.slice(0, 8)}…`;
+  return compact.length > 24 ? `${compact.slice(0, 12)}…` : compact;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

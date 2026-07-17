@@ -31,6 +31,20 @@ export function conversationPartsFromMessage(
     }
   }
 
+  if (message.status === "error" && !parts.some((part) => part.type === "error")) {
+    const detail = stringField(message.metadata, "errorMessage") ?? displayText.trim();
+    if (detail) {
+      parts = [
+        ...parts.filter((part) => !(part.type === "text" && part.text.trim() === detail)),
+        {
+          type: "error",
+          title: stringField(message.metadata, "errorTitle") ?? "Spark",
+          message: detail,
+        },
+      ];
+    }
+  }
+
   if (parts.length === 0) return fallbackParts(message, displayText);
 
   // Keep tools flat here so timeline merge can attach results. Chain grouping

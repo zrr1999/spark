@@ -1,7 +1,8 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   closeSync,
-  existsSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -230,35 +231,43 @@ export async function stopCockpitWebService(
   }
 
   const record = readRecord(servicePaths(env).pidFile);
-  if (record && isRecordRunning(record)) process.kill(record.pid, "SIGKILL");
+  if (record && isRecordRunning(record)) killServiceProcess(record.pid, "SIGKILL");
   await delay(100);
   return { alreadyStopped: false, status: getCockpitWebStatus(env) };
 }
 
 function acquireRunnerLock(paths: WebServicePaths, record: CockpitWebProcessRecord): number {
   ensureServiceDirectories(paths);
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const fd = openSync(paths.lockFile, "wx", 0o600);
-      writeFileSync(fd, `${JSON.stringify(record)}\n`);
-      return fd;
-    } catch (error) {
-      const existing = readRecord(paths.lockFile);
-      if (existing && isRecordRunning(existing)) {
-        throw new Error(`Spark Cockpit is already running (pid ${existing.pid}).`);
+  const temporary = join(paths.runtimeDir, `.cockpit-web.${process.pid}.${randomUUID()}.lock`);
+  writeFileSync(temporary, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        linkSync(temporary, paths.lockFile);
+        return openSync(paths.lockFile, "r");
+      } catch (error) {
+        const existing = readRecord(paths.lockFile);
+        if (existing && isRecordRunning(existing)) {
+          throw new Error(`Spark Cockpit is already running (pid ${existing.pid}).`);
+        }
+        rmSync(paths.lockFile, { force: true });
+        if (attempt === 1) throw error;
       }
-      rmSync(paths.lockFile, { force: true });
-      if (attempt === 1) throw error;
     }
+  } finally {
+    rmSync(temporary, { force: true });
   }
   throw new Error("Unable to acquire the Spark Cockpit service lock.");
 }
 
-function serverCommand(): { command: string; args: string[] } {
-  if (existsSync(join(appDir, "build", "index.js"))) {
-    return { command: process.execPath, args: [join(appDir, "build", "index.js")] };
-  }
+function serverCommand(env: NodeJS.ProcessEnv): { command: string; args: string[] } {
+  const testEntry = env.SPARK_COCKPIT_WEB_TEST_SERVER_ENTRY;
+  if (testEntry) return { command: process.execPath, args: [testEntry] };
   return { command: "pnpm", args: ["exec", "tsx", join(appDir, "server", "index.ts")] };
+}
+
+function killServiceProcess(pid: number, signal: NodeJS.Signals): void {
+  process.kill(process.platform === "win32" ? pid : -pid, signal);
 }
 
 export async function runCockpitWebService(env: NodeJS.ProcessEnv = process.env): Promise<void> {
@@ -281,7 +290,7 @@ export async function runCockpitWebService(env: NodeJS.ProcessEnv = process.env)
   const lockFd = acquireRunnerLock(paths, record);
   writeFileSync(paths.pidFile, `${JSON.stringify(record)}\n`, { mode: 0o600 });
 
-  const command = serverCommand();
+  const command = serverCommand(env);
   const server = spawn(command.command, command.args, { cwd: appDir, env, stdio: "inherit" });
   const forward = (signal: NodeJS.Signals) => {
     if (server.exitCode === null && server.signalCode === null) server.kill(signal);
@@ -302,6 +311,27 @@ export async function runCockpitWebService(env: NodeJS.ProcessEnv = process.env)
     rmSync(paths.lockFile, { force: true });
     closeSync(lockFd);
   }
+}
+
+export function readCockpitWebLogs(
+  env: NodeJS.ProcessEnv = process.env,
+  lineCount = 100,
+): { logFile: string; text: string } {
+  if (!Number.isSafeInteger(lineCount) || lineCount < 0) {
+    throw new Error("Invalid --lines value. Pass a non-negative integer.");
+  }
+  const { logFile } = servicePaths(env);
+  let content = "";
+  try {
+    content = readFileSync(logFile, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const lines = content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
+  return {
+    logFile,
+    text: lineCount === 0 || !content ? "" : `${lines.slice(-lineCount).join("\n")}\n`,
+  };
 }
 
 export function formatCockpitWebStatus(status: CockpitWebStatus, json: boolean): string {

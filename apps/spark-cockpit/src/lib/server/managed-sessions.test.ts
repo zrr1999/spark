@@ -52,6 +52,18 @@ const snapshot = {
   metadata: {},
 };
 
+const snapshotWindow = {
+  snapshot,
+  history: {
+    totalMessages: 1,
+    loadedMessages: 1,
+    hiddenMessages: 0,
+    earlierMessages: 0,
+    laterMessages: 0,
+    hasEarlierMessages: false,
+  },
+};
+
 describe("managed sessions for cockpit", () => {
   it("delegates reads to the daemon-owned session RPC", async () => {
     const client = daemonClient();
@@ -65,11 +77,13 @@ describe("managed sessions for cockpit", () => {
       sessions: [session],
     });
     await expect(getManagedSessionForCockpit("sess_a", client)).resolves.toEqual(session);
-    await expect(getManagedSessionSnapshotForCockpit("sess_a", client)).resolves.toEqual(snapshot);
+    await expect(getManagedSessionSnapshotForCockpit("sess_a", {}, client)).resolves.toEqual(
+      snapshotWindow,
+    );
 
     expect(client.list).toHaveBeenCalledWith(workspaceScope);
     expect(client.get).toHaveBeenCalledWith("sess_a");
-    expect(client.snapshot).toHaveBeenCalledWith("sess_a");
+    expect(client.snapshot).toHaveBeenCalledWith("sess_a", {});
   });
 
   it("keeps daemon-scoped sessions outside every Cockpit read surface", async () => {
@@ -86,7 +100,7 @@ describe("managed sessions for cockpit", () => {
     ).resolves.toEqual({ available: true, sessions: [] });
     await expect(getManagedSessionForCockpit(daemonSession.sessionId, client)).resolves.toBeNull();
     await expect(
-      getManagedSessionSnapshotForCockpit(daemonSession.sessionId, client),
+      getManagedSessionSnapshotForCockpit(daemonSession.sessionId, {}, client),
     ).resolves.toBeNull();
 
     expect(client.list).toHaveBeenCalledTimes(1);
@@ -118,14 +132,16 @@ describe("managed sessions for cockpit", () => {
     await expect(getManagedSessionForCockpit("sess_missing", client)).resolves.toBeNull();
   });
 
-  it("returns null for snapshot when the daemon read fails", async () => {
+  it("returns null for unavailable snapshots and surfaces invalid daemon responses", async () => {
     const client = daemonClient();
     client.snapshot
       .mockRejectedValueOnce(new CockpitRuntimeSessionUnavailableError("daemon offline"))
       .mockRejectedValueOnce(new Error("invalid session view"));
 
-    await expect(getManagedSessionSnapshotForCockpit("sess_a", client)).resolves.toBeNull();
-    await expect(getManagedSessionSnapshotForCockpit("sess_a", client)).resolves.toBeNull();
+    await expect(getManagedSessionSnapshotForCockpit("sess_a", {}, client)).resolves.toBeNull();
+    await expect(getManagedSessionSnapshotForCockpit("sess_a", {}, client)).rejects.toThrow(
+      "invalid session view",
+    );
   });
 
   it("returns mutations only after the daemon acknowledges them", async () => {
@@ -220,7 +236,7 @@ function daemonClient(
   return {
     list: vi.fn(async () => [session]),
     get: vi.fn(async () => session),
-    snapshot: vi.fn(async () => snapshot),
+    snapshot: vi.fn(async () => snapshotWindow),
     create: vi.fn(async () => session),
     bind: vi.fn(async () => options.bindResult ?? session),
     unbind: vi.fn(async () => options.bindResult ?? session),

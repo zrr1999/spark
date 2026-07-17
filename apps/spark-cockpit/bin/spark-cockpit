@@ -87,11 +87,8 @@ case "$command" in
     web_command="${1:-status}"
     if [ "$#" -gt 0 ]; then shift; fi
     case "$web_command" in
-      start|status|stop)
+      start|status|stop|logs)
         exec "$APP_DIR/node_modules/.bin/tsx" "$APP_DIR/src/cli/web-service-entry.ts" "$web_command" "$@"
-        ;;
-      logs)
-        exec "$APP_DIR/node_modules/.bin/tsx" "$APP_DIR/src/cli/web-service-entry.ts" status --json
         ;;
       *)
         printf 'Unknown spark cockpit web command: %s\n' "$web_command" >&2

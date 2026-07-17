@@ -19,6 +19,7 @@
     item: ConversationMessageView;
     userLabel: string;
     assistantLabel: string;
+    sessionLabel: string;
     copyLabel: string;
     copiedLabel: string;
     active?: boolean;
@@ -31,6 +32,7 @@
     item,
     userLabel,
     assistantLabel,
+    sessionLabel,
     copyLabel,
     copiedLabel,
     active = false,
@@ -40,7 +42,11 @@
   }: Props = $props();
 
   let actorLabel = $derived(
-    item.actor === "user" ? (item.senderLabel ?? userLabel) : assistantLabel,
+    item.actor === "spark"
+      ? assistantLabel
+      : item.actor === "session"
+        ? `${sessionLabel} · ${item.senderLabel ?? "?"}`
+        : (item.senderLabel ?? userLabel),
   );
   let visibleParts = $derived(visibleConversationParts(item.parts));
   let copyableText = $derived(visibleConversationPartText(item.parts));
@@ -69,7 +75,7 @@
         {#if item.title && item.title !== item.body}<h2>{item.title}</h2>{/if}
         {#each visibleParts as part, partIndex (`${item.id}:${part.type}:${partIndex}`)}
           {#if part.type === "text"}
-            {#if item.actor === "spark"}
+            {#if item.actor === "spark" || item.actor === "session"}
               <div class="assistant-content">
                 <AgentMdxStream source={part.text} streaming={part.streaming} />
               </div>
@@ -174,6 +180,12 @@
 
   .conversation-message.spark .actor-mark {
     background: var(--color-primary-weak);
+    border-color: var(--color-primary-soft);
+    color: var(--color-primary);
+  }
+
+  .conversation-message.session .actor-mark {
+    background: var(--color-surface-soft);
     border-color: var(--color-primary-soft);
     color: var(--color-primary);
   }

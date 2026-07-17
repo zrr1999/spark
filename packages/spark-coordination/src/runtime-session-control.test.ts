@@ -7,7 +7,7 @@ import {
   type RuntimeCommandResultPayload,
   type SparkSessionRegistryRecord,
 } from "@zendev-lab/spark-protocol";
-import { createWorkspaceWithOwnerBinding } from "./projection-services.ts";
+import { createWorkspaceWithOwnerBinding, recordInvocationUpdate } from "./projection-services.ts";
 import {
   getRuntimeSessionProjection,
   getRuntimeTurnStatusProjection,
@@ -288,6 +288,85 @@ describe("runtime session projections", () => {
         )
         .get(invocationId),
     ).toEqual({ count: 1 });
+    h.db.close();
+  });
+
+  it("keeps direct invocation projections synchronized with runtime lifecycle updates", () => {
+    const h = setup();
+    const session = workspaceSession(h.workspaceId);
+    projectSession(h, session, "workspace");
+    const submit = submitRuntimeControlCommand(h.db, {
+      runtimeId: h.runtimeId,
+      workspaceId: h.workspaceId,
+      sessionId: session.sessionId,
+      payload: {
+        kind: "turn.submit.request",
+        scope: "workspace",
+        payload: { sessionId: session.sessionId, prompt: "fail durably" },
+      },
+      createdAt: now,
+    });
+    const invocationId = createId("inv");
+    recordResult(h, submit.commandId, {
+      status: "succeeded",
+      result: { invocationId, status: "queued", acceptedAt: now },
+      completedAt: "2026-07-15T00:00:01.000Z",
+    });
+
+    recordInvocationUpdate(h.db, {
+      runtimeWorkspaceBindingId: h.bindingId,
+      workspaceId: h.workspaceId,
+      payload: {
+        runtimeInvocationId: invocationId,
+        sequence: 4,
+        status: "failed",
+        completedAt: "2026-07-15T00:00:04.000Z",
+        terminalReason: "Provider connection failed.",
+        payload: { source: "daemon.lifecycle" },
+      },
+      updatedAt: "2026-07-15T00:00:04.000Z",
+    });
+
+    expect(getRuntimeTurnStatusProjection(h.db, invocationId)).toMatchObject({
+      invocationId,
+      sessionId: session.sessionId,
+      status: "failed",
+      eventCursor: 4,
+      finishedAt: "2026-07-15T00:00:04.000Z",
+      cancelReason: "Provider connection failed.",
+    });
+    expect(
+      h.db
+        .prepare(
+          `SELECT command_id AS commandId, payload_json AS payloadJson
+           FROM runtime_invocation_projections
+           WHERE runtime_id = ? AND runtime_invocation_id = ?`,
+        )
+        .get(h.runtimeId, invocationId),
+    ).toEqual({
+      commandId: submit.commandId,
+      payloadJson: JSON.stringify({ source: "daemon.lifecycle" }),
+    });
+
+    recordInvocationUpdate(h.db, {
+      runtimeWorkspaceBindingId: h.bindingId,
+      workspaceId: h.workspaceId,
+      payload: {
+        runtimeInvocationId: invocationId,
+        sequence: 3,
+        status: "running",
+        startedAt: "2026-07-15T00:00:03.000Z",
+        payload: { stale: true },
+      },
+      updatedAt: "2026-07-15T00:00:05.000Z",
+    });
+
+    expect(getRuntimeTurnStatusProjection(h.db, invocationId)).toMatchObject({
+      status: "failed",
+      eventCursor: 4,
+      finishedAt: "2026-07-15T00:00:04.000Z",
+      cancelReason: "Provider connection failed.",
+    });
     h.db.close();
   });
 

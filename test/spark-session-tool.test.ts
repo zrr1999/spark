@@ -29,7 +29,6 @@ void test("session tool exposes persistent lifecycle, calls, classification, and
     "unbind",
     "archive",
     "send",
-    "mailto",
     "inbox",
     "read",
     "ack",
@@ -425,7 +424,6 @@ void test("session request queues the original message with hidden sender metada
             kind: "request",
             intent: "work.request",
             correlationId: requestMail.correlationId,
-            replyToMessageId: null,
             fromSessionId: "session:caller",
             toSessionId: "session:worker",
           },
@@ -472,7 +470,7 @@ void test("session request queues the original message with hidden sender metada
           kind: "inform",
           message: "Invalid legacy kind",
         }),
-      /kind must be request, question, or notification/u,
+      /kind must be request or question/u,
     );
     await assert.rejects(
       () =>
@@ -635,7 +633,6 @@ void test("session question blocks for success and preserves causal invocation m
             intent: "session.question",
             correlationId: (result.details as { message: { correlationId: string } }).message
               .correlationId,
-            replyToMessageId: null,
             fromSessionId: "session:caller",
             toSessionId: "session:worker",
             parentInvocationId: "inv_parent",
@@ -906,468 +903,39 @@ void test("channel sessions may request work only from local sessions in their w
   }
 });
 
-void test("session notification delivers to every message-platform binding", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-session-channel-notification-"));
-  try {
-    const mailStore = new SparkSessionMailStore({ sparkHome: dir });
-    const current = sessionRecord("session:channel-sender");
-    const target: SparkSessionRegistryRecord = {
-      ...sessionRecord("session:channel-target"),
-      bindings: [
-        {
-          kind: "channel",
-          adapter: "infoflow",
-          externalKey: "infoflow:group:group-1",
-          boundAt: NOW,
-        },
-        {
-          kind: "channel",
-          adapter: "qqbot",
-          externalKey: "qqbot:c2c:user-1",
-          boundAt: NOW,
-        },
-      ],
-    };
-    const records = new Map([current, target].map((record) => [record.sessionId, record]));
-    const calls: Array<{ method: string; params: unknown }> = [];
-    const request = async <T>(method: string, params?: unknown): Promise<T> => {
-      calls.push({ method, params });
-      if (method === "session.get") {
-        return records.get(String((params as { sessionId?: string }).sessionId)) as T;
-      }
-      if (method === "session.notification.deliver") {
-        const input = params as { sessionId: string; messageId: string };
-        assert.equal(input.sessionId, target.sessionId);
-        const stored = await mailStore.get(input.sessionId, input.messageId);
-        assert.equal(stored.kind, "notification");
-        assert.equal(stored.visibility, "user");
-        assert.equal(stored.delivery, "channel");
-        assert.deepEqual(
-          stored.deliveries.map(({ adapter, externalKey, status }) => ({
-            adapter,
-            externalKey,
-            status,
-          })),
-          [
-            {
-              adapter: "infoflow",
-              externalKey: "infoflow:group:group-1",
-              status: "pending",
-            },
-            { adapter: "qqbot", externalKey: "qqbot:c2c:user-1", status: "pending" },
-          ],
-        );
-        return {
-          deliveries: [
-            {
-              adapter: "infoflow",
-              externalKey: "infoflow:group:group-1",
-              status: "delivered",
-              attemptCount: 1,
-              receipt: {
-                action: "send",
-                adapter: "infoflow-primary",
-                recipient: "group:group-1",
-              },
-            },
-            {
-              adapter: "qqbot",
-              externalKey: "qqbot:c2c:user-1",
-              status: "delivered",
-              attemptCount: 1,
-              receipt: {
-                action: "send",
-                adapter: "qq-primary",
-                recipient: "c2c:user-1",
-              },
-            },
-          ],
-        } as T;
-      }
-      return assert.fail(`unexpected RPC method: ${method}`);
-    };
-    const tool = registerTestTool({ request, mailStore: () => mailStore });
-    const ctx = { ...context(current.sessionId), sessionSurface: "channel" as const };
+void test("session send rejects the removed notification mode", async () => {
+  const tool = registerTestTool({
+    request: async () => assert.fail("notification rejection must happen before daemon RPC"),
+    mailStore: () => assert.fail("notification rejection must happen before mailbox writes"),
+  });
 
-    const notified = await execute(tool, ctx, {
-      action: "send",
-      kind: "notification",
-      toSessionId: target.sessionId,
-      message: "Deployment completed",
-    });
-    const details = notified.details as {
-      targetActivity: string;
-      channelDeliveries: Array<{
-        adapter: string;
-        externalKey: string;
-        status: string;
-        receipt: { adapter: string; recipient: string };
-      }>;
-    };
-    assert.equal(details.targetActivity, "idle");
-    assert.deepEqual(
-      details.channelDeliveries.map((delivery) => [
-        delivery.adapter,
-        delivery.externalKey,
-        delivery.status,
-        delivery.receipt.adapter,
-        delivery.receipt.recipient,
-      ]),
-      [
-        ["infoflow", "infoflow:group:group-1", "delivered", "infoflow-primary", "group:group-1"],
-        ["qqbot", "qqbot:c2c:user-1", "delivered", "qq-primary", "c2c:user-1"],
-      ],
-    );
-    assert.deepEqual(
-      calls
-        .filter((call) => call.method === "session.notification.deliver")
-        .map((call) => call.params),
-      [
-        {
-          sessionId: target.sessionId,
-          messageId: (notified.details as { message: { id: string } }).message.id,
-        },
-      ],
-    );
-    assert.equal((await mailStore.list(target.sessionId)).length, 1);
-
-    await assert.rejects(
-      () =>
-        execute(tool, ctx, {
-          action: "send",
-          kind: "request",
-          toSessionId: target.sessionId,
-          message: "Channel sessions cannot execute this",
-        }),
-      /request targets must be local sessions/u,
-    );
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
+  await assert.rejects(
+    () =>
+      execute(tool, context("session:caller"), {
+        action: "send",
+        kind: "notification",
+        toSessionId: "session:target",
+        message: "Do not persist this",
+      }),
+    /session kind must be request or question/u,
+  );
 });
-
-void test("channel notification excludes its originating binding and rejects an empty target set", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-session-channel-no-echo-"));
-  try {
-    const mailStore = new SparkSessionMailStore({ sparkHome: dir });
-    const origin = {
-      kind: "channel" as const,
-      adapter: "infoflow" as const,
-      externalKey: "infoflow:group:shared",
-      boundAt: NOW,
-    };
-    const current: SparkSessionRegistryRecord = {
-      ...sessionRecord("session:channel-sender"),
-      bindings: [origin],
-    };
-    const target: SparkSessionRegistryRecord = {
-      ...sessionRecord("session:channel-target"),
-      bindings: [
-        origin,
-        {
-          kind: "channel",
-          adapter: "qqbot",
-          externalKey: "qqbot:c2c:recipient",
-          boundAt: NOW,
-        },
-        {
-          kind: "channel",
-          adapter: "qqbot",
-          externalKey: "qqbot:c2c:recipient",
-          boundAt: NOW,
-        },
-      ],
-    };
-    const echoOnly: SparkSessionRegistryRecord = {
-      ...sessionRecord("session:echo-only"),
-      bindings: [origin],
-    };
-    const records = new Map(
-      [current, target, echoOnly].map((record) => [record.sessionId, record]),
-    );
-    let deliveryCalls = 0;
-    const request = async <T>(method: string, params?: unknown): Promise<T> => {
-      if (method === "session.get") {
-        return records.get(String((params as { sessionId?: string }).sessionId)) as T;
-      }
-      if (method === "session.notification.deliver") {
-        deliveryCalls += 1;
-        const input = params as { sessionId: string; messageId: string };
-        const stored = await mailStore.get(input.sessionId, input.messageId);
-        assert.deepEqual(
-          stored.deliveries.map(({ adapter, externalKey }) => ({ adapter, externalKey })),
-          [{ adapter: "qqbot", externalKey: "qqbot:c2c:recipient" }],
-        );
-        return {
-          deliveries: [
-            {
-              adapter: "qqbot",
-              externalKey: "qqbot:c2c:recipient",
-              status: "delivered",
-              attemptCount: 1,
-            },
-          ],
-        } as T;
-      }
-      return assert.fail(`unexpected RPC method: ${method}`);
-    };
-    const tool = registerTestTool({ request, mailStore: () => mailStore });
-    const ctx = {
-      ...context(current.sessionId),
-      sessionSurface: "channel" as const,
-      channelBinding: {
-        adapter: origin.adapter,
-        externalKey: origin.externalKey,
-      },
-    };
-
-    const delivered = await execute(
-      tool,
-      ctx,
-      {
-        action: "send",
-        kind: "notification",
-        toSessionId: target.sessionId,
-        message: "Do not echo this to the originating group",
-      },
-      "call-channel-no-echo",
-    );
-    assert.deepEqual(
-      (
-        delivered.details as { channelDeliveries: Array<{ externalKey: string }> }
-      ).channelDeliveries.map((entry) => entry.externalKey),
-      ["qqbot:c2c:recipient"],
-    );
-
-    await assert.rejects(
-      () =>
-        execute(
-          tool,
-          ctx,
-          {
-            action: "send",
-            kind: "notification",
-            toSessionId: echoOnly.sessionId,
-            message: "This has nowhere safe to go",
-          },
-          "call-channel-empty-targets",
-        ),
-      /has no deliverable message-platform binding after excluding the originating binding/u,
-    );
-    assert.equal(deliveryCalls, 1);
-    assert.deepEqual(await mailStore.list(echoOnly.sessionId), []);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-void test("session notification follows causal replies without queueing the target", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-session-tool-"));
-  try {
-    const mailStore = new SparkSessionMailStore({ sparkHome: dir, now: () => Date.parse(NOW) });
-    const requestCalls: string[] = [];
-    const request = async <T>(method: string, params?: unknown): Promise<T> => {
-      requestCalls.push(method);
-      if (method === "session.notification.deliver") {
-        const input = params as { sessionId: string; messageId: string };
-        assert.equal(input.sessionId, "session:c");
-        assert.ok(input.messageId.startsWith("mail:"));
-        return {
-          deliveries: [
-            {
-              adapter: "qqbot",
-              externalKey: "qqbot:c2c:c",
-              status: "delivered",
-              attemptCount: 1,
-              receipt: { action: "send", adapter: "qqbot", recipient: "c2c:c" },
-            },
-          ],
-        } as T;
-      }
-      if (method !== "session.get") return assert.fail(`unexpected RPC method: ${method}`);
-      const sessionId = String((params as { sessionId?: string }).sessionId);
-      if (sessionId === "session:c") {
-        return {
-          ...sessionRecord(sessionId),
-          bindings: [
-            {
-              kind: "channel",
-              adapter: "qqbot",
-              externalKey: "qqbot:c2c:c",
-              boundAt: NOW,
-            },
-          ],
-        } as T;
-      }
-      if (sessionId === "session:d") {
-        return {
-          ...sessionRecord(sessionId),
-          scope: { kind: "workspace", workspaceId: "workspace:other" },
-          workspaceId: "workspace:other",
-        } as T;
-      }
-      return sessionRecord(sessionId) as T;
-    };
-    const tool = registerTestTool({ request, mailStore: () => mailStore });
-    const ctx = context("session:a");
-
-    const sent = await execute(
-      tool,
-      ctx,
-      {
-        action: "send",
-        kind: "notification",
-        toSessionId: "session:b",
-        fromSessionId: "session:spoofed",
-        intent: "work.notice",
-        message: "Please inspect the failure",
-      },
-      "call-send-notification",
-    );
-    const sentDetails = sent.details as {
-      created: boolean;
-      executionTriggered: boolean;
-      message: {
-        id: string;
-        fromSessionId: string;
-        toSessionId: string;
-        kind: string;
-        intent: string;
-        payload: Record<string, unknown>;
-      };
-    };
-    assert.equal(sentDetails.created, true);
-    assert.equal(sentDetails.executionTriggered, false);
-    assert.equal(sentDetails.message.fromSessionId, "session:a");
-    assert.equal(sentDetails.message.toSessionId, "session:b");
-    assert.equal(sentDetails.message.kind, "notification");
-    assert.equal(sentDetails.message.intent, "work.notice");
-    assert.deepEqual(sentDetails.message.payload, { body: "Please inspect the failure" });
-    assert.match(toolText(sent), /added to the mailbox without queueing/u);
-
-    const forwarded = await execute(
-      tool,
-      { ...ctx, sessionSurface: "channel" },
-      {
-        action: "send",
-        kind: "notification",
-        toSessionId: "session:b",
-        intent: "work.notice",
-        message: "Store this in the local session",
-      },
-      "call-channel-local-forward",
-    );
-    assert.equal((forwarded.details as { created: boolean }).created, true);
-
-    const retried = await execute(
-      tool,
-      ctx,
-      {
-        action: "send",
-        kind: "notification",
-        toSessionId: "session:b",
-        intent: "work.notice",
-        message: "Please inspect the failure",
-      },
-      "call-send-notification",
-    );
-    assert.equal((retried.details as { created: boolean }).created, false);
-    assert.equal(
-      (retried.details as { message: { id: string } }).message.id,
-      sentDetails.message.id,
-    );
-    await assert.rejects(
-      () =>
-        execute(
-          tool,
-          ctx,
-          {
-            action: "send",
-            kind: "notification",
-            toSessionId: "session:c",
-            intent: "work.notice",
-            message: "Please inspect the failure",
-          },
-          "call-send-notification",
-        ),
-      /idempotency key .* was reused for a different message/u,
-    );
-    assert.equal((await mailStore.list("session:c")).length, 0);
-    const channelNotified = await execute(
-      tool,
-      { ...ctx, sessionSurface: "channel" },
-      {
-        action: "send",
-        kind: "notification",
-        toSessionId: "session:c",
-        intent: "work.notice",
-        message: "Store this elsewhere",
-      },
-      "call-channel-forward",
-    );
-    assert.deepEqual(
-      (
-        channelNotified.details as { channelDeliveries: Array<{ externalKey: string }> }
-      ).channelDeliveries.map((delivery) => delivery.externalKey),
-      ["qqbot:c2c:c"],
-    );
-    await assert.rejects(
-      () =>
-        execute(
-          tool,
-          { ...ctx, sessionSurface: "channel" },
-          {
-            action: "send",
-            kind: "notification",
-            toSessionId: "session:d",
-            intent: "work.notice",
-            message: "Store this in another workspace",
-          },
-          "call-channel-cross-workspace",
-        ),
-      /must be sessions in the current workspace/u,
-    );
-
-    const incoming = await mailStore.send({
-      toSessionId: "session:a",
-      fromSessionId: "session:b",
-      kind: "request",
-      intent: "work.review",
-      payload: { artifact: "artifact:1" },
-      correlationId: "corr:review",
-      body: "Review this artifact",
-      source: "tool",
-    });
-    const replied = await execute(tool, ctx, {
-      action: "send",
-      replyToMessageId: incoming.message.id,
-      intent: "work.review.completed",
-      payload: { accepted: true },
-    });
-    const reply = (replied.details as { message: Record<string, unknown> }).message;
-    assert.equal(reply.toSessionId, "session:b");
-    assert.equal(reply.kind, "notification");
-    assert.equal(reply.correlationId, "corr:review");
-    assert.equal(reply.replyToMessageId, incoming.message.id);
-    assert.equal(
-      requestCalls.every(
-        (method) => method === "session.get" || method === "session.notification.deliver",
-      ),
-      true,
-    );
-    assert.equal(requestCalls.includes("turn.submit"), false);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
 void test("session mail uses the host Spark state root", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-state-root-"));
   try {
     const tool = registerTestTool({
       request: async <T>(method: string, params?: unknown): Promise<T> => {
-        assert.equal(method, "session.get");
-        return sessionRecord(String((params as { sessionId: string }).sessionId)) as T;
+        if (method === "session.get") {
+          return sessionRecord(String((params as { sessionId: string }).sessionId)) as T;
+        }
+        if (method === "turn.submit") {
+          return {
+            invocationId: "inv_stateroot",
+            status: "queued",
+            acceptedAt: NOW,
+          } as T;
+        }
+        return assert.fail(`unexpected RPC method: ${method}`);
       },
     });
     const ctx = { ...context("session:a"), sparkStateRoot: dir };

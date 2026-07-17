@@ -19,13 +19,13 @@ describe("Svelte AI Elements Response boundary", () => {
     const source = readFileSync(responsePath, "utf8");
 
     expect(source).toContain('from "streamdown-svelte"');
-    expect(source).toContain("const richMarkdownPlugins = { cjk, math, mermaid }");
+    expect(source).toContain("createMathPlugin({ singleDollarTextMath: true })");
     expect(source).toContain("githubLightDefault");
     expect(source).toContain("githubDarkDefault");
     expect(source).toContain("{...restProps}");
     expect(source).toContain('[data-streamdown="code-block"]');
     expect(source).toContain('[data-streamdown="table-wrapper"]');
-    expect(source).toContain('[data-streamdown="mermaid"]');
+    expect(source).toContain("[data-streamdown-mermaid]");
   });
 
   it("wires streaming repair only to the active Spark UI block and escapes raw HTML", () => {

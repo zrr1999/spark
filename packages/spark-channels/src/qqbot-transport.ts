@@ -101,6 +101,7 @@ export function createQqbotTransport(
   let reconnectAttempt = 0;
   let connectionGeneration = 0;
   let cancelPendingConnect: ((error: Error) => void) | null = null;
+  let accessTokenForRedaction: string | undefined;
   let sessionId: string | null = null;
   let lastSeq: number | null = null;
   let cursorLoaded = false;
@@ -113,7 +114,9 @@ export function createQqbotTransport(
     if (!appId || !clientSecret) {
       throw new Error("qqbot requires app_id and client_secret");
     }
-    return await api.getAccessToken(appId, clientSecret);
+    const token = await api.getAccessToken(appId, clientSecret);
+    accessTokenForRedaction = token;
+    return token;
   }
 
   async function loadCursorOnce(): Promise<void> {
@@ -272,18 +275,27 @@ export function createQqbotTransport(
       RECONNECT_DELAYS_MS.at(-1)!;
     const delay = reconnectDelayWithJitter(ceiling, reconnectRandom);
     reconnectAttempt += 1;
+    const attempt = reconnectAttempt;
     connectionState = "reconnecting";
+    console.error(
+      `[spark-channels] qqbot supervised reconnect scheduled attempt=${attempt} delayMs=${delay}`,
+    );
     reconnectTimer = setTimeout(() => {
       void connect().catch((error) => {
         if (stopping || !running) return;
         connectionState = "degraded";
-        connectionError = error instanceof Error ? error.message : String(error);
+        connectionError = sanitizeQqbotConnectionError(error, sensitiveLogValues());
+        console.error(
+          `[spark-channels] qqbot supervised reconnect failed attempt=${attempt}` +
+            ` error=${JSON.stringify(connectionError)}`,
+        );
         scheduleReconnect();
       });
     }, delay);
   }
 
   async function connect(): Promise<void> {
+    const reconnectAttemptAtStart = reconnectAttempt;
     const generation = ++connectionGeneration;
     cleanupSocket(new Error("qqbot websocket connection superseded"));
     connectionState = "connecting";
@@ -322,8 +334,10 @@ export function createQqbotTransport(
         const failSocket = (error: Error, label: string) => {
           if (!isCurrentSocket()) return;
           connectionState = "degraded";
-          connectionError = error.message;
-          console.error(`[spark-channels] qqbot ${label} failed`, error);
+          connectionError = sanitizeQqbotConnectionError(error, sensitiveLogValues());
+          console.error(
+            `[spark-channels] qqbot ${label} failed` + ` error=${JSON.stringify(connectionError)}`,
+          );
           const reconnectDirectly = readyConfirmed;
           cleanupSocket(error);
           // Before READY/RESUMED, cleanup rejects this connect attempt and its
@@ -359,6 +373,11 @@ export function createQqbotTransport(
             readyConfirmed = true;
             connectionState = "connected";
             connectionError = undefined;
+            if (reconnectAttemptAtStart > 0) {
+              console.error(
+                `[spark-channels] qqbot supervised reconnect succeeded attempt=${reconnectAttemptAtStart}`,
+              );
+            }
             reconnectAttempt = 0;
             ok();
             return;
@@ -369,6 +388,11 @@ export function createQqbotTransport(
             readyConfirmed = true;
             connectionState = "connected";
             connectionError = undefined;
+            if (reconnectAttemptAtStart > 0) {
+              console.error(
+                `[spark-channels] qqbot supervised reconnect succeeded attempt=${reconnectAttemptAtStart}`,
+              );
+            }
             reconnectAttempt = 0;
             ok();
             return;
@@ -547,6 +571,10 @@ export function createQqbotTransport(
     throw new Error("qqbot websocket connection attempt was cancelled");
   }
 
+  function sensitiveLogValues(): readonly (string | undefined)[] {
+    return [config.client_secret, accessTokenForRedaction];
+  }
+
   return {
     reply,
     interaction,
@@ -561,7 +589,11 @@ export function createQqbotTransport(
       void connect().catch((error) => {
         if (stopping || !running) return;
         connectionState = "degraded";
-        connectionError = error instanceof Error ? error.message : String(error);
+        connectionError = sanitizeQqbotConnectionError(error, sensitiveLogValues());
+        console.error(
+          `[spark-channels] qqbot initial connect failed` +
+            ` error=${JSON.stringify(connectionError)}`,
+        );
         scheduleReconnect();
       });
     },
@@ -721,6 +753,28 @@ function rawDataToText(data: RawData): string {
   if (Buffer.isBuffer(data)) return data.toString("utf8");
   if (Array.isArray(data)) return Buffer.concat(data).toString("utf8");
   return Buffer.from(data).toString("utf8");
+}
+
+function sanitizeQqbotConnectionError(
+  error: unknown,
+  sensitiveValues: readonly (string | undefined)[],
+): string {
+  let message = (error instanceof Error ? error.message : String(error))
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (!message) message = "unknown error";
+  for (const sensitiveValue of sensitiveValues) {
+    if (!sensitiveValue) continue;
+    message = message.replaceAll(sensitiveValue, "[redacted]");
+  }
+  message = message
+    .replace(/\b(Bearer|QQBot)\s+[^\s,;]+/giu, "$1 [redacted]")
+    .replace(
+      /((?:access[_ -]?token|client[_ -]?secret|authorization|token|secret)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/giu,
+      "$1[redacted]",
+    )
+    .replace(/([?&](?:access_token|client_secret|token|secret)=)[^&#\s]+/giu, "$1[redacted]");
+  return message.length > 240 ? `${message.slice(0, 237)}...` : message;
 }
 
 type QqbotPassiveReplyKind = "ask" | "final";

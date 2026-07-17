@@ -32,7 +32,6 @@ const CHANNEL_ALLOWED_ACTIONS: ReadonlySet<SparkSessionAction> = new Set([
   "list",
   "get",
   "send",
-  "mailto",
   "inbox",
   "read",
   "ack",
@@ -57,7 +56,6 @@ export type SparkSessionAction =
   | "unbind"
   | "archive"
   | "send"
-  | "mailto"
   | "inbox"
   | "read"
   | "ack";
@@ -191,41 +189,24 @@ export async function executeSparkSessionAction(
         session,
       });
     }
-    case "send":
-    case "mailto": {
+    case "send": {
       const current = await requireCurrentSessionId(ctx, action);
+      const toSessionId = requiredString(
+        params.toSessionId ?? params.sessionId,
+        "session send requires toSessionId",
+      );
+      if (toSessionId === current) throw new Error("session send must target a different session");
+      const kind = normalizeMailKind(params.kind);
       const store = mailStoreForContext(ctx, deps);
-      const replyToMessageId = optionalString(params.replyToMessageId, "replyToMessageId");
-      const original = replyToMessageId ? await store.get(current, replyToMessageId) : undefined;
-      const requestedTarget = optionalString(params.toSessionId ?? params.sessionId, "toSessionId");
-      const toSessionId = resolveSendTarget({
-        action,
-        currentSessionId: current,
-        requestedTarget,
-        original,
-      });
-      const kind = normalizeMailKind(params.kind, action, Boolean(replyToMessageId));
-      validateCausalSend({ currentSessionId: current, kind, original });
       const questionTimeoutMs =
         kind === "question" ? normalizeQuestionTimeoutMs(params.timeoutMs) : undefined;
-      const triggersExecution = kind === "request" || kind === "question";
       const intent =
         optionalString(params.intent, "intent") ??
-        (action === "mailto"
-          ? "session.notification"
-          : kind === "request"
-            ? "work.request"
-            : kind === "question"
-              ? "session.question"
-              : "session.notification");
+        (kind === "request" ? "work.request" : "session.question");
       if (!intent) throw new Error(`session ${action} requires intent`);
       const rawPayload = normalizePayload(params.payload);
       const message = optionalMessageBody(params.message);
-      if (triggersExecution && !message) {
-        throw new Error(`session ${kind} requires a non-empty message body`);
-      }
-      if (!message && Object.keys(rawPayload).length === 0)
-        throw new Error(`session ${action} requires message or a non-empty payload`);
+      if (!message) throw new Error(`session ${kind} requires a non-empty message body`);
       const payload =
         message && typeof rawPayload.text !== "string" && typeof rawPayload.body !== "string"
           ? { ...rawPayload, body: message }
@@ -234,154 +215,93 @@ export async function executeSparkSessionAction(
       if (channelWorkspaceId) {
         assertChannelWorkspaceTarget(targetSession, channelWorkspaceId, action);
       }
-      if (triggersExecution) {
-        if (targetSession.status === "archived") {
-          throw new Error(`cannot ${kind} archived persistent session: ${toSessionId}`);
-        }
-        if (projectSession(targetSession).surface !== "local") {
-          throw new Error(`session ${kind} targets must be local sessions`);
-        }
-        if (kind === "question" && projectSession(targetSession).activity !== "idle") {
-          throw new Error(
-            `session question target ${toSessionId} is already running; use kind=request for asynchronous delivery`,
-          );
-        }
+      if (targetSession.status === "archived") {
+        throw new Error(`cannot ${kind} archived persistent session: ${toSessionId}`);
+      }
+      if (projectSession(targetSession).surface !== "local") {
+        throw new Error(`session ${kind} targets must be local sessions`);
+      }
+      if (kind === "question" && projectSession(targetSession).activity !== "idle") {
+        throw new Error(
+          `session question target ${toSessionId} is already running; use kind=request for asynchronous delivery`,
+        );
       }
       const questionChain =
         kind === "question" ? sessionQuestionChain(ctx, current, toSessionId) : undefined;
-      const requestedCorrelationId = optionalString(params.correlationId, "correlationId");
-      const correlationId = original?.correlationId ?? requestedCorrelationId;
-      if (original && requestedCorrelationId && requestedCorrelationId !== original.correlationId) {
-        throw new Error(
-          `session send correlationId must match the original request ${original.correlationId}`,
-        );
-      }
       const sent = await store.send({
         toSessionId,
         fromSessionId: current,
         kind,
         intent,
         payload,
-        correlationId,
-        replyToMessageId,
+        correlationId: optionalString(params.correlationId, "correlationId"),
         idempotencyKey: sessionSendIdempotencyKey({
           currentSessionId: current,
           toolCallId: input.toolCallId,
-          kind,
-          intent,
-          payload,
-          replyToMessageId,
         }),
         subject: optionalString(params.subject, "subject"),
         body: message,
-        ...(projectSession(targetSession).surface === "channel"
-          ? {
-              visibility: "user",
-              delivery: "channel",
-              deliveryTargets: original?.originBinding
-                ? [original.originBinding]
-                : channelDeliveryTargets(targetSession, ctx, kind),
-            }
-          : {}),
         ...(kind === "request" && ctx.sessionSurface === "channel" && ctx.channelBinding
           ? { originBinding: ctx.channelBinding }
           : {}),
         source: "tool",
       });
-      if (triggersExecution) {
-        let submitted: SparkTurnSubmitResult;
-        try {
-          submitted = parseTurnSubmitResult(
-            await request<unknown>(
-              "turn.submit",
-              {
-                sessionId: toSessionId,
-                prompt: sent.message.body,
-                idempotencyKey: `session.mail:${sent.message.id}`,
-                messageMetadata: sessionRequestMessageMetadata({
-                  ctx,
-                  message: sent.message,
-                  questionChain,
-                }),
-              },
-              { signal },
-            ),
-          );
-        } catch (error) {
-          throw new Error(
-            `session ${kind} stored ${sent.message.id} for ${toSessionId}, but invocation acceptance was not confirmed: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-        if (kind === "question") {
-          const invocationId = submitted.invocationId;
-          const timeoutMs = questionTimeoutMs!;
-          const completion = await waitForQuestionResult({
-            request,
-            invocationId,
-            timeoutMs,
-            signal,
-            sleep: deps.sleep,
-            now: deps.now,
-          });
-          return questionResult({
-            action,
-            sent,
-            targetSession,
-            submitted,
-            invocationId,
-            timeoutMs,
-            completion,
-          });
-        }
-        return sessionResult(
-          `Sent asynchronous request ${sent.message.id} to ${toSessionId}; invocation ${submitted.invocationId} was accepted.`,
-          {
-            action: action === "mailto" ? "send" : action,
-            compatibilityAction: action === "mailto" ? "mailto" : undefined,
-            message: withMailStatus(sent.message),
-            filePath: sent.path,
-            created: sent.created,
-            executionTriggered: true,
-            blocking: false,
-            target: projectSession(targetSession),
-            targetActivity: "running",
-            submitted,
-          },
+      let submitted: SparkTurnSubmitResult;
+      try {
+        submitted = parseTurnSubmitResult(
+          await request<unknown>(
+            "turn.submit",
+            {
+              sessionId: toSessionId,
+              prompt: sent.message.body,
+              idempotencyKey: `session.mail:${sent.message.id}`,
+              messageMetadata: sessionRequestMessageMetadata({
+                ctx,
+                message: sent.message,
+                questionChain,
+              }),
+            },
+            { signal },
+          ),
+        );
+      } catch (error) {
+        throw new Error(
+          `session ${kind} stored ${sent.message.id} for ${toSessionId}, but invocation acceptance was not confirmed: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
-      let channelDeliveries: ChannelSessionDelivery[] = [];
-      if (projectSession(targetSession).surface === "channel") {
-        try {
-          const delivery = await request<unknown>(
-            "session.notification.deliver",
-            { sessionId: toSessionId, messageId: sent.message.id },
-            { signal },
-          );
-          channelDeliveries = parseChannelSessionDeliveries(delivery);
-        } catch (error) {
-          throw new Error(
-            `session notification stored ${sent.message.id} for ${toSessionId}, but message-platform delivery was not confirmed: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-        const failed = channelDeliveries.filter((delivery) => delivery.status === "failed");
-        if (failed.length > 0) {
-          throw new Error(
-            `session notification stored ${sent.message.id} for ${toSessionId}; ${failed.length} message-platform delivery attempt(s) failed and remain retryable`,
-          );
-        }
+      if (kind === "question") {
+        const invocationId = submitted.invocationId;
+        const timeoutMs = questionTimeoutMs!;
+        const completion = await waitForQuestionResult({
+          request,
+          invocationId,
+          timeoutMs,
+          signal,
+          sleep: deps.sleep,
+          now: deps.now,
+        });
+        return questionResult({
+          action,
+          sent,
+          targetSession,
+          submitted,
+          invocationId,
+          timeoutMs,
+          completion,
+        });
       }
       return sessionResult(
-        `${sent.created ? "Notified" : "Reused"} ${sent.message.id} for ${sent.message.toSessionId}. The notification was added to the mailbox${channelDeliveries.length > 0 ? ` and sent to ${channelDeliveries.length} message-platform binding(s)` : " without queueing the target session"}. Target activity is ${projectSession(targetSession).activity}.`,
+        `Sent asynchronous request ${sent.message.id} to ${toSessionId}; invocation ${submitted.invocationId} was accepted.`,
         {
-          action: action === "mailto" ? "send" : action,
-          compatibilityAction: action === "mailto" ? "mailto" : undefined,
+          action,
           message: withMailStatus(sent.message),
           filePath: sent.path,
           created: sent.created,
-          executionTriggered: false,
+          executionTriggered: true,
+          blocking: false,
           target: projectSession(targetSession),
-          targetActivity: projectSession(targetSession).activity,
-          channelDeliveries,
+          targetActivity: "running",
+          submitted,
         },
       );
     }
@@ -599,7 +519,7 @@ async function currentChannelWorkspaceId(
 function assertChannelWorkspaceTarget(
   target: SparkSessionRegistryRecord,
   workspaceId: string,
-  action: "get" | "send" | "mailto",
+  action: "get" | "send",
 ): void {
   if (target.scope.kind !== "workspace" || target.scope.workspaceId !== workspaceId) {
     throw new Error(
@@ -677,96 +597,12 @@ async function currentSessionId(ctx: SparkSessionToolContext): Promise<string | 
   return match?.[1];
 }
 
-function resolveSendTarget(input: {
-  action: "send" | "mailto";
-  currentSessionId: string;
-  requestedTarget?: string;
-  original?: SparkSessionMailMessage;
-}): string {
-  const causalTarget = input.original?.fromSessionId;
-  if (causalTarget && input.requestedTarget && input.requestedTarget !== causalTarget) {
-    throw new Error(
-      `session ${input.action} target ${input.requestedTarget} does not match original sender ${causalTarget}`,
-    );
-  }
-  const target = causalTarget ?? input.requestedTarget;
-  if (!target)
-    throw new Error(
-      `session ${input.action} requires toSessionId unless replyToMessageId is provided`,
-    );
-  if (target === input.currentSessionId)
-    throw new Error(`session ${input.action} must target a different session`);
-  return target;
-}
-
-function validateCausalSend(input: {
-  currentSessionId: string;
-  kind: SparkSessionMailKind;
-  original?: SparkSessionMailMessage;
-}): void {
-  if (!input.original) return;
-  if (input.original.toSessionId !== input.currentSessionId) {
-    throw new Error(
-      `session mail ${input.original.id} is addressed to ${input.original.toSessionId}, not ${input.currentSessionId}`,
-    );
-  }
-  if (input.original.kind !== "request" && input.original.kind !== "question") {
-    throw new Error(`session mail ${input.original.id} does not accept a causal response`);
-  }
-  if (input.kind !== "notification") {
-    throw new Error("a causal response must use notification");
-  }
-}
-
-function normalizeMailKind(
-  value: unknown,
-  action: "send" | "mailto",
-  hasReplyTo: boolean,
-): SparkSessionMailKind {
-  if (value === undefined || value === null || value === "") return "notification";
-  if (value !== "request" && value !== "question" && value !== "notification") {
-    throw new Error("session kind must be request, question, or notification");
-  }
-  if (action === "mailto" && value !== "notification") {
-    throw new Error("session mailto only supports notification");
-  }
-  if (hasReplyTo && value !== "notification") {
-    throw new Error("a causal response must use notification");
+function normalizeMailKind(value: unknown): Extract<SparkSessionMailKind, "request" | "question"> {
+  if (value === undefined || value === null || value === "") return "request";
+  if (value !== "request" && value !== "question") {
+    throw new Error("session kind must be request or question");
   }
   return value;
-}
-
-function channelDeliveryTargets(
-  targetSession: SparkSessionRegistryRecord,
-  ctx: SparkSessionToolContext,
-  kind: SparkSessionMailKind,
-): Array<{ adapter: SparkChannelAdapter; externalKey: string }> {
-  if (kind !== "notification") {
-    throw new Error(`session ${kind} cannot be delivered to message-platform bindings`);
-  }
-  const origin =
-    ctx.sessionSurface === "channel" && ctx.channelBinding?.externalKey.trim()
-      ? {
-          adapter: ctx.channelBinding.adapter,
-          externalKey: ctx.channelBinding.externalKey.trim(),
-        }
-      : undefined;
-  const targets = new Map<string, { adapter: SparkChannelAdapter; externalKey: string }>();
-  for (const binding of targetSession.bindings) {
-    const externalKey = binding.externalKey.trim();
-    if (!externalKey) continue;
-    if (origin?.adapter === binding.adapter && origin.externalKey === externalKey) continue;
-    targets.set(`${binding.adapter}\u0000${externalKey}`, {
-      adapter: binding.adapter,
-      externalKey,
-    });
-  }
-  if (targets.size === 0) {
-    throw new Error(
-      `session notification target ${targetSession.sessionId} has no deliverable message-platform binding${origin ? " after excluding the originating binding" : ""}`,
-    );
-  }
-  return [...targets.values()];
 }
 
 function normalizePayload(value: unknown): Record<string, unknown> {
@@ -788,20 +624,8 @@ function normalizePayload(value: unknown): Record<string, unknown> {
 function sessionSendIdempotencyKey(input: {
   currentSessionId: string;
   toolCallId: string;
-  kind: SparkSessionMailKind;
-  intent: string;
-  payload: Record<string, unknown>;
-  replyToMessageId?: string;
 }): string {
-  if (!input.replyToMessageId)
-    return `session.tool:${JSON.stringify([input.currentSessionId, input.toolCallId])}`;
-  return `session.causal:${JSON.stringify([
-    input.currentSessionId,
-    input.replyToMessageId,
-    input.kind,
-    input.intent,
-    input.payload,
-  ])}`;
+  return `session.tool:${JSON.stringify([input.currentSessionId, input.toolCallId])}`;
 }
 
 function normalizeSessionSurface(value: unknown): SparkSessionSurface | undefined {
@@ -954,40 +778,6 @@ function renderMailMessage(
   ].join("\n");
 }
 
-type ChannelSessionDelivery = {
-  adapter: SparkChannelAdapter;
-  externalKey: string;
-  status: "pending" | "delivered" | "failed";
-  attemptCount: number;
-  receipt?: unknown;
-  error?: string;
-};
-
-function parseChannelSessionDeliveries(value: unknown): ChannelSessionDelivery[] {
-  if (!isRecord(value) || !Array.isArray(value.deliveries)) {
-    throw new Error("Spark daemon returned invalid session.notification.deliver result");
-  }
-  return value.deliveries.map((entry): ChannelSessionDelivery => {
-    if (
-      !isRecord(entry) ||
-      (entry.adapter !== "feishu" && entry.adapter !== "infoflow" && entry.adapter !== "qqbot") ||
-      typeof entry.externalKey !== "string" ||
-      (entry.status !== "pending" && entry.status !== "delivered" && entry.status !== "failed") ||
-      typeof entry.attemptCount !== "number"
-    ) {
-      throw new Error("Spark daemon returned invalid channel delivery receipt");
-    }
-    return {
-      adapter: entry.adapter,
-      externalKey: entry.externalKey,
-      status: entry.status,
-      attemptCount: entry.attemptCount,
-      ...(entry.receipt !== undefined ? { receipt: entry.receipt } : {}),
-      ...(typeof entry.error === "string" ? { error: entry.error } : {}),
-    };
-  });
-}
-
 function sessionOriginMessageMetadata(
   ctx: SparkSessionToolContext,
   sessionId: string,
@@ -1014,7 +804,6 @@ function sessionRequestMessageMetadata(input: {
       kind: input.message.kind,
       intent: input.message.intent,
       correlationId: input.message.correlationId,
-      replyToMessageId: input.message.replyToMessageId,
       fromSessionId: input.message.fromSessionId,
       toSessionId: input.message.toSessionId,
       ...(input.ctx.invocationId ? { parentInvocationId: input.ctx.invocationId } : {}),
@@ -1107,7 +896,7 @@ async function waitForQuestionResult(input: {
 }
 
 function questionResult(input: {
-  action: "send" | "mailto";
+  action: "send";
   sent: Awaited<ReturnType<SparkSessionMailStore["send"]>>;
   targetSession: SparkSessionRegistryRecord;
   submitted: SparkTurnSubmitResult;
@@ -1116,8 +905,7 @@ function questionResult(input: {
   completion: QuestionCompletion;
 }) {
   const common = {
-    action: input.action === "mailto" ? "send" : input.action,
-    compatibilityAction: input.action === "mailto" ? "mailto" : undefined,
+    action: input.action,
     message: withMailStatus(input.sent.message),
     filePath: input.sent.path,
     created: input.sent.created,

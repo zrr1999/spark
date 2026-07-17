@@ -133,7 +133,7 @@ export async function requestSparkDaemonLocalRpcWire<T>(
       if (!settled) {
         finish({
           ok: false,
-          error: new SparkDaemonLocalRpcError(
+          error: new SparkDaemonLocalRpcUnavailableError(
             "Spark daemon local RPC connection closed before a response.",
           ),
         });

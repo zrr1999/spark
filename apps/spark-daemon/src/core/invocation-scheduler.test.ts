@@ -304,6 +304,40 @@ describe("SparkInvocationScheduler", () => {
     }
   });
 
+  it("does not fail a running invocation on an implicit wall-clock deadline", async () => {
+    const gate = deferred<void>();
+    const { db, store, scheduler } = harness(async (_task, context) => {
+      expect(context.timeoutMs).toBe(0);
+      await gate.promise;
+      return { completed: true };
+    });
+    try {
+      const invocation = store.submit({
+        sessionId: "unbounded-default",
+        prompt: "keep waiting",
+        task: {
+          type: "session.run",
+          sessionId: "unbounded-default",
+          prompt: "keep waiting",
+        },
+      });
+
+      expect(scheduler.processBatch()).toBe(true);
+      await delay(20);
+      expect(store.require(invocation.invocationId)).toMatchObject({ status: "running" });
+
+      gate.resolve();
+      await scheduler.wait({ timeoutMs: 500 });
+      expect(store.require(invocation.invocationId)).toMatchObject({
+        status: "succeeded",
+        result: { completed: true },
+      });
+    } finally {
+      gate.resolve();
+      db.close();
+    }
+  });
+
   it("pauses the invocation timeout while awaiting human input", async () => {
     const { db, store, scheduler } = harness(
       async (_task, context) => {

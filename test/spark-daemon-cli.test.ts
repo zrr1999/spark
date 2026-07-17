@@ -17,6 +17,7 @@ import {
   runSparkCli,
 } from "../apps/spark-tui/src/cli.ts";
 import { SparkHostRuntime } from "../apps/spark-tui/src/host/runtime.ts";
+import { SparkSessionMailStore } from "../apps/spark-tui/src/host/session-mail-store.ts";
 import { SparkSessionStore } from "../apps/spark-tui/src/host/session-store.ts";
 import { createSparkNativeTuiHarness } from "./support/spark-native-tui-harness.ts";
 import {
@@ -87,29 +88,9 @@ void test("parseSparkCliCommand routes daemon and print commands without changin
     kind: "daemon",
     command: { action: "sessions", subcommand: "replay", json: false, sessionId: "s1" },
   });
-  assert.deepEqual(
-    parseSparkCliCommand([
-      "daemon",
-      "session",
-      "mailto",
-      "--to",
-      "session-b",
-      "--message",
-      "hello",
-      "--json",
-    ]),
-    {
-      kind: "daemon",
-      command: {
-        action: "sessions",
-        subcommand: "mailto",
-        json: true,
-        toSessionId: "session-b",
-        message: "hello",
-        fromSessionId: undefined,
-        subject: undefined,
-      },
-    },
+  assert.throws(
+    () => parseSparkCliCommand(["daemon", "session", "mailto"]),
+    /unknown spark daemon session command: mailto/u,
   );
   assert.deepEqual(
     parseSparkCliCommand([
@@ -312,7 +293,7 @@ void test("daemon managed session mutation fails explicitly when daemon RPC is u
   );
 });
 
-void test("spark daemon session mailto and inbox send list read ack without daemon turn execution", async () => {
+void test("spark daemon session inbox lists, reads, and acknowledges durable mail", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-mail-"));
   const sparkHome = join(dir, "spark-home");
   try {
@@ -323,38 +304,13 @@ void test("spark daemon session mailto and inbox send list read ack without daem
     const client = {
       sparkHome,
       now: () => Date.parse("2026-07-08T00:01:00.000Z"),
-      turnSubmit: async () => {
-        throw new Error("turnSubmit must not be called by mailto");
-      },
-      turnStream: async () => {
-        throw new Error("turnStream must not be called by mailto");
-      },
-      turnStatus: async () => {
-        throw new Error("turnStatus must not be called by mailto");
-      },
     } satisfies SparkDaemonClientOptions;
-
-    const sent = await handleSparkDaemonCliCommand(
-      {
-        action: "sessions",
-        subcommand: "mailto",
-        json: true,
-        toSessionId: "session-b",
-        message: "hello",
-      },
-      client,
-    );
-    assert.equal(sent.action, "sessions");
-    const sentResult = sent.result as {
-      subcommand: string;
-      message: { id: string; toSessionId: string; body: string };
-      filePath: string;
-    };
-    assert.equal(sentResult.subcommand, "mailto");
-    assert.match(sentResult.message.id, /^mail:/u);
-    assert.equal(sentResult.message.toSessionId, "session-b");
-    assert.equal(sentResult.message.body, "hello");
-    assert.equal(sentResult.filePath.startsWith(sparkHome), true);
+    const sent = await new SparkSessionMailStore({ sparkHome, now: client.now }).send({
+      toSessionId: "session-b",
+      fromSessionId: "session-a",
+      kind: "request",
+      body: "hello",
+    });
 
     const listed = await handleSparkDaemonCliCommand(
       {
@@ -371,7 +327,7 @@ void test("spark daemon session mailto and inbox send list read ack without daem
       listed as { result: { messages: Array<{ id: string; status: string; preview: string }> } }
     ).result;
     assert.equal(listResult.messages.length, 1);
-    assert.equal(listResult.messages[0]?.id, sentResult.message.id);
+    assert.equal(listResult.messages[0]?.id, sent.message.id);
     assert.equal(listResult.messages[0]?.status, "pending");
     assert.equal(listResult.messages[0]?.preview, "hello");
 
@@ -382,7 +338,7 @@ void test("spark daemon session mailto and inbox send list read ack without daem
         inboxAction: "read",
         json: true,
         sessionId: "session-b",
-        messageId: sentResult.message.id,
+        messageId: sent.message.id,
       },
       client,
     );
@@ -392,7 +348,7 @@ void test("spark daemon session mailto and inbox send list read ack without daem
         result: { message: { id: string; toSessionId: string; body: string; status: string } };
       }
     ).result;
-    assert.equal(readResult.message.id, sentResult.message.id);
+    assert.equal(readResult.message.id, sent.message.id);
     assert.equal(readResult.message.toSessionId, "session-b");
     assert.equal(readResult.message.body, "hello");
     assert.equal(readResult.message.status, "read");
@@ -404,7 +360,7 @@ void test("spark daemon session mailto and inbox send list read ack without daem
         inboxAction: "ack",
         json: true,
         sessionId: "session-b",
-        messageId: sentResult.message.id,
+        messageId: sent.message.id,
       },
       client,
     );
@@ -979,7 +935,7 @@ void test("parseSparkDaemonCliArgs parses daemon IPC commands", async () => {
   );
   assert.throws(
     () => parseSparkDaemonCliArgs(["session", "mailto"]),
-    /spark daemon session mailto requires --to <session-id>/u,
+    /unknown spark daemon session command: mailto/u,
   );
   assert.throws(
     () => parseSparkDaemonCliArgs(["session", "inbox"]),
@@ -2849,6 +2805,7 @@ void test("Spark native responder retries an ACK loss with the same idempotency 
 
 void test("Spark native responder streams daemon view events as assistant chunks", async () => {
   const chunks: string[] = [];
+  const viewEvents: unknown[] = [];
   const responder = createSparkDaemonNativeResponder(
     {
       startService: () => ({ kind: "detached" as const, alreadyRunning: false, detail: "started" }),
@@ -2897,7 +2854,10 @@ void test("Spark native responder streams daemon view events as assistant chunks
         eventCursor: 2,
       }),
     },
-    { sessionId: "native-session" },
+    {
+      sessionId: "native-session",
+      onViewEvent: (event) => viewEvents.push(event),
+    },
   );
 
   const output = await responder("hello", {
@@ -2906,6 +2866,10 @@ void test("Spark native responder streams daemon view events as assistant chunks
 
   assert.equal(output, "");
   assert.deepEqual(chunks, ["hel", "lo"]);
+  assert.deepEqual(
+    viewEvents.map((event: any) => event.message.text),
+    ["hel", "hello"],
+  );
 });
 
 void test("Spark native responder retries completion status transport failures without resubmitting", async () => {

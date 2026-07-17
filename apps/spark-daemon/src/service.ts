@@ -51,6 +51,10 @@ export interface SparkDaemonRestartIntent {
   supervisorManaged?: boolean;
 }
 
+export type SparkDaemonActiveRestart = SparkDaemonRestartIntent & {
+  state: "armed" | "claimed";
+};
+
 interface SparkDaemonRestartRecord extends SparkDaemonRestartIntent {
   state: SparkDaemonRestartRecordState;
 }
@@ -162,6 +166,18 @@ export function clearSparkDaemonRestartFenceForExplicitStart(paths: SparkPaths):
     rmSync(path, { force: true });
   }
   fsyncDirectory(paths.runtimeDir);
+}
+
+/**
+ * Read the exact durable restart operation that still owns the handoff fence.
+ * Matching terminal records suppress the projection, so callers never report
+ * a completed or cancelled operation as active merely because a stale
+ * transient file remains on disk.
+ */
+export function readSparkDaemonActiveRestart(paths: SparkPaths): SparkDaemonActiveRestart | null {
+  const active = readRestartActiveRecord(paths);
+  if (!active || (active.state !== "armed" && active.state !== "claimed")) return null;
+  return { ...active, state: active.state };
 }
 
 /**

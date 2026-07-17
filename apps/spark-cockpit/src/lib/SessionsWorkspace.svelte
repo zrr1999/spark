@@ -5,8 +5,11 @@
     Composer,
     ConversationViewport,
     Message as ConversationMessage,
+    SessionStatusBar,
+    sessionStatusUsage,
     visibleConversationPartText,
   } from "$lib/components/conversation";
+  import type { SessionStatusBarLabels } from "$lib/components/conversation";
   import type { ConversationPartLabels } from "$lib/components/conversation/types";
   import {
     ModelRuntimeControl,
@@ -22,7 +25,10 @@
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
   import SessionInspector from "$lib/SessionInspector.svelte";
-  import { cancelledTurnIdFromActionResult } from "$lib/session-action-result";
+  import {
+    cancelledTurnIdFromActionResult,
+    queuedTurnIdFromActionResult,
+  } from "$lib/session-action-result";
   import {
     readSessionDraft,
     readSessionPendingSubmission,
@@ -43,6 +49,7 @@
     createSessionLiveEventState,
     finishSessionActivityRefresh,
     parseSessionSerializedEvent,
+    registerQueuedSessionTurn,
     requestSessionActivityRefresh,
     sessionEventCursorStorageKey,
     sessionViewRevisionKey,
@@ -55,6 +62,7 @@
     sessionTimelineWindow,
   } from "$lib/session-timeline";
   import {
+    mergeEarlierSessionSnapshotWindow,
     parseSessionSnapshotWindow,
     SESSION_SNAPSHOT_PAGE_SIZE,
     type SessionSnapshotHistory,
@@ -251,6 +259,13 @@
         availableModels.some((entry) => modelValue(entry.model) === effectiveModelValue),
     ),
   );
+  let effectiveModelCatalogEntry = $derived(
+    effectiveModel
+      ? modelProviders
+          .flatMap((provider) => provider.models)
+          .find((entry) => modelValue(entry.model) === effectiveModelValue)
+      : undefined,
+  );
   let modelReady = $derived(modelControl.available && effectiveModelAvailable);
   let startModel = $state(
     untrack(() => (formIntent === "startConversation" ? (formValues?.model ?? "") : "")),
@@ -346,6 +361,24 @@
       xhigh: copy.thinkingXHigh,
     },
   });
+  let statusBarLabels = $derived<SessionStatusBarLabels>({
+    bar: copy.runtimeStatusBar,
+    workingDirectory: copy.workingDirectory,
+    branch: copy.gitBranch,
+    inputTokens: copy.inputTokens,
+    outputTokens: copy.outputTokens,
+    cacheReadTokens: copy.cacheReadTokens,
+    cacheWriteTokens: copy.cacheWriteTokens,
+    cacheHit: copy.cacheHit,
+    cost: copy.cost,
+    context: copy.contextUsage,
+    provider: copy.provider,
+    model: copy.modelLabel,
+    thinking: copy.thinkingLabel,
+  });
+  let runtimeStatusUsage = $derived(
+    sessionStatusUsage(liveSessionView, effectiveModelCatalogEntry?.contextWindow),
+  );
 
   let timelineItems = $derived(
     buildSessionTimeline({
@@ -391,9 +424,12 @@
       mailbox: copy.mailboxTab,
     },
     summaryHeading: copy.summaryHeading,
+    runsHeading: copy.runsHeading,
     tasksHeading: copy.tasksHeading,
     changesHeading: copy.changesHeading,
     mailboxHeading: copy.mailboxHeading,
+    noRunsTitle: copy.noRunsTitle,
+    noRunsBody: copy.noRunsBody,
     noTasksTitle: copy.noTasksTitle,
     noTasksBody: copy.noTasksBody,
     noChangesTitle: copy.noChangesTitle,
@@ -401,6 +437,7 @@
     noMailboxTitle: copy.noMailboxTitle,
     noMailboxBody: copy.noMailboxBody,
     unassignedProject: copy.unassignedProject,
+    latestOutput: copy.latestOutput,
     progress: copy.progress,
     todoList: copy.todoList,
     sessionTodoTitle: copy.sessionTodoTitle,
@@ -408,6 +445,7 @@
     openSessionTodo: copy.openSessionTodo,
     mailFrom: copy.mailFrom,
     mailRequest: copy.mailRequest,
+    mailQuestion: copy.mailQuestion,
     mailNotification: copy.mailNotification,
     mailUnread: copy.mailUnread,
     mailRead: copy.mailRead,
@@ -841,28 +879,50 @@
     if (historyLoadState === "loading") return false;
     const sessionId = selectedSessionId;
     const history = liveSessionHistory;
-    if (!sessionId || !history || history.hiddenMessages === 0) {
+    if (!sessionId || !history || !history.hasEarlierMessages) {
       timelineRenderLimit += SESSION_TIMELINE_PAGE_SIZE;
       historyLoadState = "idle";
       return true;
     }
+    const beforeMessageId = history.nextBeforeMessageId;
+    if (!liveSessionView || !beforeMessageId) {
+      historyLoadState = "error";
+      return false;
+    }
 
     historyLoadState = "loading";
     try {
-      const nextLimit = Math.min(
-        history.totalMessages,
-        history.loadedMessages + SESSION_SNAPSHOT_PAGE_SIZE,
-      );
+      const query = new URLSearchParams({
+        limit: String(SESSION_SNAPSHOT_PAGE_SIZE),
+        before: beforeMessageId,
+      });
       const response = await fetch(
-        `/api/v1/sessions/${encodeURIComponent(sessionId)}/snapshot?limit=${nextLimit}`,
+        `/api/v1/sessions/${encodeURIComponent(sessionId)}/snapshot?${query}`,
         { cache: "no-store" },
       );
       if (!response.ok) throw new Error(`session history request failed: ${response.status}`);
-      const window = parseSessionSnapshotWindow(await response.json());
-      if (window.snapshot.sessionId !== sessionId || selectedSessionId !== sessionId) {
+      const earlierPage = parseSessionSnapshotWindow(await response.json());
+      if (earlierPage.snapshot.sessionId !== sessionId || selectedSessionId !== sessionId) {
         historyLoadState = "idle";
         return false;
       }
+      // A live event may append or settle a message while this request is in
+      // flight. Merge into the latest browser window, never the pre-fetch copy.
+      const currentSnapshot = untrack(() => liveSessionView);
+      const currentHistory = untrack(() => liveSessionHistory);
+      if (
+        !currentSnapshot ||
+        !currentHistory ||
+        currentHistory.nextBeforeMessageId !== beforeMessageId ||
+        selectedSessionId !== sessionId
+      ) {
+        historyLoadState = "idle";
+        return false;
+      }
+      const window = mergeEarlierSessionSnapshotWindow(
+        { snapshot: currentSnapshot, history: currentHistory },
+        earlierPage,
+      );
 
       liveSessionView = window.snapshot;
       if (liveEventState?.sessionId === sessionId) liveEventState.view = window.snapshot;
@@ -958,6 +1018,13 @@
     const data = result.data;
     if (!data || typeof data !== "object" || !("model" in data)) return null;
     return typeof data.model === "string" && data.model.trim() ? data.model : null;
+  }
+
+  function adoptQueuedTurn(result: unknown) {
+    const turnId = queuedTurnIdFromActionResult(result);
+    const state = untrack(() => liveEventState);
+    if (!turnId || !state || state.sessionId !== liveSessionId) return;
+    if (registerQueuedSessionTurn(state, turnId)) liveSessionView = state.view;
   }
 
   function buildModelGroups(providers: SparkModelCatalogProvider[]): ModelPickerGroup[] {
@@ -1065,9 +1132,11 @@
     sendFeedback = copy.sending;
 
     return async ({ result, update }) => {
+      if (result.type === "success") adoptQueuedTurn(result);
       await update({ reset: false });
 
       if (result.type === "success") {
+        adoptQueuedTurn(result);
         sendState = "success";
         sendFeedback = null;
         message = "";
@@ -1339,13 +1408,18 @@
           <p>{sessionScopeLabel(selected)}</p>
         </div>
         <div class="stage-actions">
-          {#if liveSessionView?.cwd}
-            <span class="context-chip" title={liveSessionView.cwd}>
-              <Icon name="folder" size={13} />
-              {compactWorkingDirectory(liveSessionView.cwd)}
+          {#if selected.role}<span class="context-chip">{selected.role}</span>{/if}
+          {#if conversationBusy}
+            <span
+              class="session-working-indicator"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              <span class="session-working-spinner" aria-hidden="true"></span>
+              {copy.working}
             </span>
           {/if}
-          {#if selected.role}<span class="context-chip">{selected.role}</span>{/if}
           <span class="connection-state {liveConnection}" title={connectionLabel()}>
             <span aria-hidden="true"></span>
             {connectionLabel()}
@@ -1365,7 +1439,7 @@
               </Button>
             </form>
           {/if}
-          {#if displayedSessionStatus}
+          {#if displayedSessionStatus && displayedSessionStatus !== "running"}
             <span class="status-pill {displayedSessionStatus}">{statusLabel(displayedSessionStatus)}</span>
           {/if}
         </div>
@@ -1401,6 +1475,7 @@
               active={item.id === activeProcessItemId}
               userLabel={copy.you}
               assistantLabel={copy.spark}
+              sessionLabel={copy.agent}
               copyLabel={copy.copyMessage}
               copiedLabel={copy.copiedMessage}
               partLabels={conversationPartLabels}
@@ -1455,6 +1530,26 @@
           ariaLabel={copy.messageLabel}
           multilineHint={copy.multilineHint}
         >
+          {#snippet header()}
+            {#if liveSessionView?.cwd}
+              <SessionStatusBar
+                labels={statusBarLabels}
+                cwd={compactWorkingDirectory(liveSessionView.cwd)}
+                gitBranch={liveSessionView.gitBranch}
+                inputTokens={runtimeStatusUsage.inputTokens}
+                outputTokens={runtimeStatusUsage.outputTokens}
+                cacheReadTokens={runtimeStatusUsage.cacheReadTokens}
+                cacheWriteTokens={runtimeStatusUsage.cacheWriteTokens}
+                costUsd={runtimeStatusUsage.costUsd}
+                latestCacheHitPercent={runtimeStatusUsage.latestCacheHitPercent}
+                contextTokens={runtimeStatusUsage.contextTokens}
+                contextWindow={runtimeStatusUsage.contextWindow}
+                provider={effectiveModel?.providerName}
+                model={effectiveModel?.modelId}
+                thinkingLevel={sessionThinkingLevel}
+              />
+            {/if}
+          {/snippet}
           {#snippet context()}
             {#if modelProviders.length > 0}
               <ModelRuntimeControl
@@ -1618,6 +1713,37 @@
 
   .connection-state.offline > span {
     background: var(--color-danger);
+  }
+
+  .session-working-indicator {
+    align-items: center;
+    background: var(--color-primary-weak);
+    border: 1px solid color-mix(in srgb, var(--color-primary) 22%, transparent);
+    border-radius: var(--rounded-full);
+    color: var(--color-primary);
+    display: inline-flex;
+    font-size: 11px;
+    font-weight: 650;
+    gap: 7px;
+    min-height: 30px;
+    padding: 0 10px;
+    white-space: nowrap;
+  }
+
+  .session-working-spinner {
+    animation: session-working-spin 760ms linear infinite;
+    border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
+    border-radius: 50%;
+    border-top-color: currentColor;
+    box-sizing: border-box;
+    height: 13px;
+    width: 13px;
+  }
+
+  @keyframes session-working-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .stage-header h1,
@@ -2086,5 +2212,11 @@
       grid-template-columns: 1fr 1fr;
     }
 
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .session-working-spinner {
+      animation: none;
+    }
   }
 </style>

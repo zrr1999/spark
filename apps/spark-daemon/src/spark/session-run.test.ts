@@ -389,13 +389,71 @@ describe("daemon native session execution", () => {
         sendReply: vi.fn(async () => undefined),
       },
     });
+    const emitted: SparkDaemonEvent[] = [];
 
-    await expect(executor(task, context(task))).rejects.toThrow("provider failed");
+    await expect(executor(task, context(task, emitted))).rejects.toThrow("provider failed");
+    expect(emitted).toContainEqual(
+      expect.objectContaining({
+        type: "daemon.view_event",
+        sessionId: task.sessionId,
+        invocationId: "invocation-1",
+        view: expect.objectContaining({
+          type: "session.message",
+          message: expect.objectContaining({
+            id: "invocation:invocation-1:failure",
+            role: "system",
+            text: "provider failed",
+            status: "error",
+          }),
+        }),
+      }),
+    );
     expect(channelReplyDeliveryForCompletion(task, "invocation-1", "failure")).toMatchObject({
       kind: "failure",
       idempotencyKey: "channel.reply:failure:invocation-1",
       text: "处理失败，请稍后重试",
     });
+  });
+
+  it("does not duplicate a failure already projected by the agent loop", async () => {
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_streamed_failure",
+      prompt: "fail after the loop starts",
+    };
+    const executor = createSparkDaemonTaskExecutor({
+      paths,
+      createSparkHeadlessSessionExecutor: () => async (input) => {
+        await input.onEvent?.({
+          type: "view_event",
+          event: {
+            version: SPARK_PROTOCOL_VERSION,
+            type: "session.message",
+            sessionId: task.sessionId,
+            message: {
+              version: SPARK_PROTOCOL_VERSION,
+              id: "loop-error",
+              role: "system",
+              text: "stream failed",
+              status: "error",
+              metadata: {},
+            },
+          },
+        });
+        throw new Error("stream failed");
+      },
+    });
+    const emitted: SparkDaemonEvent[] = [];
+
+    await expect(executor(task, context(task, emitted))).rejects.toThrow("stream failed");
+
+    const failures = emitted.filter(
+      (event) =>
+        event.type === "daemon.view_event" &&
+        event.view.type === "session.message" &&
+        event.view.message.status === "error",
+    );
+    expect(failures).toHaveLength(1);
   });
 
   it("never leaves a successful channel turn without a visible reply", () => {
@@ -712,12 +770,8 @@ describe("daemon native session execution", () => {
       "Message-platform sessions expose only a bounded safe tool surface",
     );
     expect(input?.systemPrompt).toContain('session({ action: "list", scope: "workspace" })');
-    expect(input?.systemPrompt).toContain(
-      'session({ action: "send", kind: "notification", toSessionId',
-    );
-    expect(input?.systemPrompt).toContain(
-      'a local surface=local target with kind="request" for queued work',
-    );
+    expect(input?.systemPrompt).toContain('session({ action: "send", kind: "request", toSessionId');
+    expect(input?.systemPrompt).toContain("a local surface=local target");
     expect(input?.systemPrompt).toContain('senderId: "zhanrongrui"');
     expect(input?.systemPrompt).toContain('groupId: "10838226"');
     expect(input?.systemPrompt).toContain('messageId: "1870319775739153405"');
@@ -879,7 +933,7 @@ describe("daemon native session execution", () => {
         sessionSurface: "channel",
         allowedTools: ["session", "ask", "context", "todo"],
         systemPrompt: expect.stringContaining(
-          'a local surface=local target with kind="request" for queued work',
+          'kind: "request", toSessionId, intent, message }) to queue work on a local surface=local target',
         ),
       }),
     );

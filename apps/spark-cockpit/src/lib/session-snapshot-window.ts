@@ -1,42 +1,14 @@
-import { sparkSessionViewSchema, type SparkSessionView } from "@zendev-lab/spark-protocol";
+import {
+  sparkSessionSnapshotPageSchema,
+  type SparkSessionSnapshotHistory,
+  type SparkSessionSnapshotPage,
+} from "@zendev-lab/spark-protocol";
 
 export const SESSION_SNAPSHOT_PAGE_SIZE = 32;
 export const SESSION_SNAPSHOT_MAX_MESSAGES = 10_000;
 
-export interface SessionSnapshotHistory {
-  totalMessages: number;
-  loadedMessages: number;
-  hiddenMessages: number;
-}
-
-export interface SessionSnapshotWindow {
-  snapshot: SparkSessionView;
-  history: SessionSnapshotHistory;
-}
-
-/**
- * Keep the initial Cockpit payload bounded while preserving a cumulative,
- * newest-first history window that can be expanded on demand.
- */
-export function sessionSnapshotWindow(
-  snapshot: SparkSessionView,
-  requestedLimit = SESSION_SNAPSHOT_PAGE_SIZE,
-): SessionSnapshotWindow {
-  const limit = normalizeSessionSnapshotLimit(requestedLimit);
-  const totalMessages = snapshot.messages.length;
-  const messages = snapshot.messages.slice(Math.max(0, totalMessages - limit));
-  const toolCallIds = referencedToolCallIds(messages);
-  const tools = snapshot.tools.filter((tool) => toolCallIds.has(tool.id));
-
-  return {
-    snapshot: sparkSessionViewSchema.parse({ ...snapshot, messages, tools }),
-    history: {
-      totalMessages,
-      loadedMessages: messages.length,
-      hiddenMessages: Math.max(0, totalMessages - messages.length),
-    },
-  };
-}
+export type SessionSnapshotHistory = SparkSessionSnapshotHistory;
+export type SessionSnapshotWindow = SparkSessionSnapshotPage;
 
 export function normalizeSessionSnapshotLimit(value: unknown): number {
   const parsed = typeof value === "string" && value.trim() ? Number(value) : value;
@@ -50,43 +22,67 @@ export function normalizeSessionSnapshotLimit(value: unknown): number {
 }
 
 export function parseSessionSnapshotWindow(value: unknown): SessionSnapshotWindow {
-  if (!isRecord(value) || !isRecord(value.history)) {
-    throw new Error("invalid session snapshot window");
-  }
-  const totalMessages = nonNegativeInteger(value.history.totalMessages);
-  const loadedMessages = nonNegativeInteger(value.history.loadedMessages);
-  const hiddenMessages = nonNegativeInteger(value.history.hiddenMessages);
-  if (loadedMessages + hiddenMessages !== totalMessages) {
-    throw new Error("invalid session snapshot history counts");
-  }
-  const snapshot = sparkSessionViewSchema.parse(value.snapshot);
-  if (snapshot.messages.length !== loadedMessages) {
-    throw new Error("session snapshot history does not match its message window");
-  }
-  return {
-    snapshot,
-    history: { totalMessages, loadedMessages, hiddenMessages },
-  };
+  return sparkSessionSnapshotPageSchema.parse(value);
 }
 
-function referencedToolCallIds(messages: SparkSessionView["messages"]): Set<string> {
-  const ids = new Set<string>();
-  for (const message of messages) {
-    if (message.toolCallId) ids.add(message.toolCallId);
-    for (const part of message.parts ?? []) {
-      if ("toolCallId" in part) ids.add(part.toolCallId);
-    }
+/** Merge one cursor-addressed older page into the cumulative browser window. */
+export function mergeEarlierSessionSnapshotWindow(
+  current: SessionSnapshotWindow,
+  earlierPage: SessionSnapshotWindow,
+): SessionSnapshotWindow {
+  if (current.snapshot.sessionId !== earlierPage.snapshot.sessionId) {
+    throw new Error("cannot merge session snapshot pages from different sessions");
   }
-  return ids;
+  if (current.history.laterMessages !== 0) {
+    throw new Error("current session snapshot window is not a cumulative latest window");
+  }
+  const pageEnd = earlierPage.history.totalMessages - earlierPage.history.laterMessages;
+  if (pageEnd !== current.history.earlierMessages) {
+    throw new Error("session snapshot pages are not contiguous");
+  }
+  if (earlierPage.snapshot.messages.length === 0) {
+    throw new Error("session snapshot cursor did not advance");
+  }
+  if (
+    earlierPage.history.hasEarlierMessages &&
+    earlierPage.history.nextBeforeMessageId === current.history.nextBeforeMessageId
+  ) {
+    throw new Error("session snapshot continuation cursor did not advance");
+  }
+  const currentNativeSuffixMessages = earlierPage.history.laterMessages;
+  if (current.snapshot.messages.length < currentNativeSuffixMessages) {
+    throw new Error("current session snapshot is missing newer transcript messages");
+  }
+  const overlayMessages = current.snapshot.messages.length - currentNativeSuffixMessages;
+  const messages = uniqueById([...earlierPage.snapshot.messages, ...current.snapshot.messages]);
+  const expectedLoadedMessages =
+    earlierPage.history.loadedMessages + current.snapshot.messages.length;
+  if (messages.length !== expectedLoadedMessages) {
+    throw new Error("session snapshot pages overlap");
+  }
+  const tools = uniqueById([...earlierPage.snapshot.tools, ...current.snapshot.tools]);
+  const earlierMessages = earlierPage.history.earlierMessages;
+  return sparkSessionSnapshotPageSchema.parse({
+    snapshot: { ...current.snapshot, messages, tools },
+    history: {
+      totalMessages: earlierPage.history.totalMessages + overlayMessages,
+      loadedMessages: messages.length,
+      hiddenMessages: earlierMessages,
+      earlierMessages,
+      laterMessages: 0,
+      hasEarlierMessages: earlierMessages > 0,
+      ...(earlierMessages > 0 && earlierPage.history.nextBeforeMessageId
+        ? { nextBeforeMessageId: earlierPage.history.nextBeforeMessageId }
+        : {}),
+    },
+  });
 }
 
-function nonNegativeInteger(value: unknown): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    throw new Error("invalid session snapshot history count");
-  }
-  return value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function uniqueById<T extends { id: string }>(values: readonly T[]): T[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    if (seen.has(value.id)) return false;
+    seen.add(value.id);
+    return true;
+  });
 }

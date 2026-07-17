@@ -12,6 +12,140 @@ afterEach(async () => {
 });
 
 describe("loadSparkSessionSnapshot", () => {
+  it("projects lifetime usage, current context, runtime selection, and daemon-local branch", async () => {
+    const root = await mkdtemp(join(tmpdir(), "spark-session-usage-"));
+    roots.push(root);
+    const transcriptPath = join(root, "session.jsonl");
+    const entries = [
+      {
+        type: "session",
+        version: 3,
+        id: "sess_usage",
+        timestamp: "2026-07-17T01:00:00.000Z",
+        cwd: "/workspace/demo",
+      },
+      {
+        type: "message",
+        id: "user-1",
+        parentId: null,
+        timestamp: "2026-07-17T01:00:01.000Z",
+        message: { role: "user", content: "first" },
+      },
+      {
+        type: "message",
+        id: "assistant-1",
+        parentId: "user-1",
+        timestamp: "2026-07-17T01:00:02.000Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "first response" }],
+          api: "openai-responses",
+          provider: "baidu-oneapi",
+          model: "gpt-5.6-sol",
+          stopReason: "stop",
+          usage: {
+            input: 100,
+            output: 20,
+            cacheRead: 50,
+            cacheWrite: 10,
+            totalTokens: 180,
+            cost: { input: 0.02, output: 0.03, cacheRead: 0.01, cacheWrite: 0.04, total: 0.1 },
+            providerSecret: "must-not-project",
+          },
+          providerSecret: "must-not-project",
+        },
+      },
+      {
+        type: "compaction",
+        id: "compact-1",
+        parentId: "assistant-1",
+        timestamp: "2026-07-17T01:00:03.000Z",
+      },
+      {
+        type: "message",
+        id: "user-2",
+        parentId: "compact-1",
+        timestamp: "2026-07-17T01:00:04.000Z",
+        message: { role: "user", content: "second" },
+      },
+      {
+        type: "message",
+        id: "assistant-2",
+        parentId: "user-2",
+        timestamp: "2026-07-17T01:00:05.000Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "second response" }],
+          api: "openai-responses",
+          provider: "baidu-oneapi",
+          model: "gpt-5.6-sol",
+          stopReason: "stop",
+          usage: {
+            input: 40,
+            output: 10,
+            cacheRead: 160,
+            cacheWrite: 0,
+            totalTokens: 210,
+            cost: { input: 0.04, output: 0.06, cacheRead: 0.1, cacheWrite: 0, total: 0.2 },
+          },
+        },
+      },
+    ];
+    await writeFile(
+      transcriptPath,
+      `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      "utf8",
+    );
+    const session = parseSparkSessionRegistryRecord({
+      sessionId: "sess_usage",
+      scope: { kind: "workspace", workspaceId: "ws_demo" },
+      status: "ready",
+      sessionPath: transcriptPath,
+      model: { providerName: "baidu-oneapi", modelId: "gpt-5.6-sol" },
+      thinkingLevel: "xhigh",
+      bindings: [],
+      createdAt: "2026-07-17T01:00:00.000Z",
+      updatedAt: "2026-07-17T01:00:05.000Z",
+    });
+
+    const snapshot = await loadSparkSessionSnapshot({
+      sessionsRoot: root,
+      session,
+      resolveGitBranch: async (cwd) => (cwd === "/workspace/demo" ? "main" : undefined),
+    });
+
+    expect(snapshot).toMatchObject({
+      cwd: "/workspace/demo",
+      gitBranch: "main",
+      model: { providerName: "baidu-oneapi", modelId: "gpt-5.6-sol" },
+      thinkingLevel: "xhigh",
+      usage: {
+        inputTokens: 140,
+        outputTokens: 30,
+        cacheReadTokens: 210,
+        cacheWriteTokens: 10,
+        costUsd: expect.closeTo(0.3, 10),
+        latestCacheHitPercent: 80,
+        contextTokens: 210,
+      },
+    });
+    expect(snapshot.messages.find((message) => message.id === "assistant-2")?.metadata).toEqual({
+      api: "openai-responses",
+      provider: "baidu-oneapi",
+      model: "gpt-5.6-sol",
+      stopReason: "stop",
+      usage: {
+        input: 40,
+        output: 10,
+        cacheRead: 160,
+        cacheWrite: 0,
+        totalTokens: 210,
+        cost: { input: 0.04, output: 0.06, cacheRead: 0.1, cacheWrite: 0, total: 0.2 },
+      },
+    });
+    expect(JSON.stringify(snapshot)).not.toContain("must-not-project");
+  });
+
   it("projects ordered thinking and tool parts without leaking native tool payloads", async () => {
     const root = await mkdtemp(join(tmpdir(), "spark-session-snapshot-"));
     roots.push(root);
@@ -120,7 +254,12 @@ describe("loadSparkSessionSnapshot", () => {
           role: "toolResult",
           toolCallId: "call-failure",
           toolName: "exec",
-          content: [{ type: "text", text: "safe-error-output" }],
+          content: [
+            {
+              type: "text",
+              text: "503 command failed<html><body><svg>unsafe-tool-error</svg></body></html>",
+            },
+          ],
           details: { stderr: "secret-error-details" },
           isError: true,
           timestamp: 1783904404000,
@@ -241,7 +380,7 @@ describe("loadSparkSessionSnapshot", () => {
       {
         id: "result-failure",
         role: "tool",
-        text: "safe-error-output",
+        text: "503 command failed",
         status: "error",
         parts: [
           {
@@ -249,7 +388,7 @@ describe("loadSparkSessionSnapshot", () => {
             type: "tool-result",
             toolCallId: "call-failure",
             status: "failed",
-            summary: "safe-error-output",
+            summary: "503 command failed",
           },
         ],
       },
@@ -285,7 +424,7 @@ describe("loadSparkSessionSnapshot", () => {
       "call-pending",
     ]);
     expect(JSON.stringify(snapshot)).not.toMatch(
-      /secret-token|secret-details|secret-signature|secret-redacted-thinking|secret-inactive|must-not-project/u,
+      /secret-token|secret-details|secret-signature|secret-redacted-thinking|secret-inactive|must-not-project|unsafe-tool-error/u,
     );
   });
 
@@ -380,5 +519,184 @@ describe("loadSparkSessionSnapshot", () => {
     expect(JSON.stringify(snapshot)).not.toMatch(
       /commentary-signature-secret|final-signature-secret|not-json-signature-secret/u,
     );
+  });
+
+  it("projects an empty-content provider failure as a bounded readable error", async () => {
+    const root = await mkdtemp(join(tmpdir(), "spark-session-provider-error-"));
+    roots.push(root);
+    const transcriptPath = join(root, "session.jsonl");
+    const gatewayPage = [
+      "504 upstream request failed",
+      "<!doctype html><html><head><title>504 Gateway Time-out</title>",
+      `<style>${"unsafe-style".repeat(2_000)}</style></head>`,
+      `<body><svg>${"unsafe-svg".repeat(2_000)}</svg><script>secret()</script></body></html>`,
+    ].join("\n");
+    await writeFile(
+      transcriptPath,
+      `${[
+        {
+          type: "session",
+          version: 3,
+          id: "sess_provider_error",
+          timestamp: "2026-07-13T03:00:00.000Z",
+          cwd: "/workspace/demo",
+        },
+        {
+          type: "message",
+          id: "user-error",
+          parentId: null,
+          timestamp: "2026-07-13T03:00:01.000Z",
+          message: { role: "user", content: "Continue the task" },
+        },
+        {
+          type: "message",
+          id: "assistant-error",
+          parentId: "user-error",
+          timestamp: "2026-07-13T03:00:02.000Z",
+          message: {
+            role: "assistant",
+            content: [],
+            stopReason: "error",
+            errorMessage: gatewayPage,
+          },
+        },
+        {
+          type: "message",
+          id: "assistant-error-without-detail",
+          parentId: "assistant-error",
+          timestamp: "2026-07-13T03:00:03.000Z",
+          message: { role: "assistant", content: [], stopReason: "error" },
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n")}\n`,
+      "utf8",
+    );
+    const session = parseSparkSessionRegistryRecord({
+      sessionId: "sess_provider_error",
+      scope: { kind: "workspace", workspaceId: "ws_demo" },
+      status: "ready",
+      sessionPath: transcriptPath,
+      bindings: [],
+      createdAt: "2026-07-13T03:00:00.000Z",
+      updatedAt: "2026-07-13T03:00:02.000Z",
+    });
+
+    const snapshot = await loadSparkSessionSnapshot({ sessionsRoot: root, session });
+    const failure = snapshot.messages.find((message) => message.id === "assistant-error");
+    const serialized = JSON.stringify(snapshot);
+
+    expect(failure).toMatchObject({
+      id: "assistant-error",
+      role: "assistant",
+      status: "error",
+      text: "504 upstream request failed — 504 Gateway Time-out",
+      metadata: {
+        stopReason: "error",
+        errorMessage: "504 upstream request failed — 504 Gateway Time-out",
+      },
+      parts: [
+        {
+          type: "text",
+          status: "failed",
+          text: "504 upstream request failed — 504 Gateway Time-out",
+        },
+      ],
+    });
+    expect(serialized.length).toBeLessThan(5_000);
+    expect(serialized).not.toMatch(/<!doctype|<html|<svg|<script|unsafe-style|unsafe-svg/iu);
+    expect(snapshot.messages.at(-1)).toMatchObject({
+      id: "assistant-error-without-detail",
+      status: "error",
+      text: "The provider request failed without additional details.",
+    });
+  });
+
+  it("backfills a settled tool-ended branch with an interruption error but leaves a running turn open", async () => {
+    const root = await mkdtemp(join(tmpdir(), "spark-session-missing-final-"));
+    roots.push(root);
+    const transcriptPath = join(root, "session.jsonl");
+    await writeFile(
+      transcriptPath,
+      `${[
+        {
+          type: "session",
+          version: 3,
+          id: "sess_missing_final",
+          timestamp: "2026-07-13T04:00:00.000Z",
+          cwd: "/workspace/demo",
+        },
+        {
+          type: "message",
+          id: "user-missing-final",
+          parentId: null,
+          timestamp: "2026-07-13T04:00:01.000Z",
+          message: { role: "user", content: "Run the check" },
+        },
+        {
+          type: "message",
+          id: "assistant-tool-call",
+          parentId: "user-missing-final",
+          timestamp: "2026-07-13T04:00:02.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-check", name: "exec", arguments: {} }],
+          },
+        },
+        {
+          type: "message",
+          id: "tool-result-final-leaf",
+          parentId: "assistant-tool-call",
+          timestamp: "2026-07-13T04:00:03.000Z",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-check",
+            toolName: "exec",
+            content: [{ type: "text", text: "tests passed" }],
+            isError: false,
+          },
+        },
+        {
+          type: "compaction",
+          id: "compaction-after-tool-result",
+          parentId: "tool-result-final-leaf",
+          timestamp: "2026-07-13T04:00:04.000Z",
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n")}\n`,
+      "utf8",
+    );
+    const record = (status: "ready" | "running") =>
+      parseSparkSessionRegistryRecord({
+        sessionId: "sess_missing_final",
+        scope: { kind: "workspace", workspaceId: "ws_demo" },
+        status,
+        sessionPath: transcriptPath,
+        bindings: [],
+        createdAt: "2026-07-13T04:00:00.000Z",
+        updatedAt: "2026-07-13T04:00:03.000Z",
+      });
+
+    const settled = await loadSparkSessionSnapshot({
+      sessionsRoot: root,
+      session: record("ready"),
+    });
+    const running = await loadSparkSessionSnapshot({
+      sessionsRoot: root,
+      session: record("running"),
+    });
+
+    expect(settled.messages.at(-1)).toMatchObject({
+      id: "tool-result-final-leaf:missing-final-response",
+      role: "system",
+      status: "error",
+      text: expect.stringContaining("before a final response"),
+      metadata: { kind: "missing_final_response", errorTitle: "Session interrupted" },
+    });
+    expect(running.messages.at(-1)).toMatchObject({
+      id: "tool-result-final-leaf",
+      role: "tool",
+    });
   });
 });

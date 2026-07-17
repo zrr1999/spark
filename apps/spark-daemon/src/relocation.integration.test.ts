@@ -13,16 +13,17 @@ import { WebSocketServer, type RawData } from "ws";
 import { expect, test } from "vitest";
 
 import {
-  createId,
   runtimeProtocolVersion,
   type RuntimeRegistrationRequest,
 } from "@zendev-lab/spark-protocol";
 import {
   createCockpitSnapshot,
   ensureCockpitInstanceId,
+  inspectCockpitSnapshot,
   migrate,
   openDatabase,
   openMemoryDatabase,
+  restoreCockpitSnapshot,
 } from "@zendev-lab/spark-db";
 import {
   createRuntimeEnrollmentToken,
@@ -98,11 +99,36 @@ test("live daemon relocates between snapshot-restored HTTPS/WSS Cockpits without
     if (!registered.workspaceBinding) throw new Error("fixture workspace binding is missing");
 
     const snapshotPath = join(root, "snapshot");
-    await createCockpitSnapshot({ sourceDb, destination: snapshotPath });
-    targetDb = openDatabase({ path: join(snapshotPath, "cockpit.sqlite") });
+    const sourceManifest = await createCockpitSnapshot({ sourceDb, destination: snapshotPath });
+    const sourceInspection = inspectCockpitSnapshot(snapshotPath);
+    const targetDatabasePath = join(root, "target-data", "cockpit.sqlite");
+    const targetSeedDb = openDatabase({ path: targetDatabasePath });
+    migrate(targetSeedDb);
+    ensureCockpitInstanceId(targetSeedDb, {
+      instanceId: "cockpit_22222222222222222222222222222222",
+    });
+    seedTargetBusinessData(targetSeedDb);
+    const targetSummaryBefore = cockpitBusinessSummary(targetSeedDb);
+    targetSeedDb.close();
+    const restoreResult = await restoreCockpitSnapshot({
+      snapshotPath,
+      databasePath: targetDatabasePath,
+      rollbackRoot: join(root, "target-backups"),
+    });
+    if (!restoreResult.rollbackSnapshotPath) throw new Error("target rollback snapshot is missing");
+    const targetBackupInspection = inspectCockpitSnapshot(restoreResult.rollbackSnapshotPath);
+    targetDb = openDatabase({ path: targetDatabasePath });
     const tls = createTestCertificate(root);
     source = await startCockpit(sourceDb, tls, false);
     target = await startCockpit(targetDb, tls, true);
+    expect(sourceInspection).toMatchObject({ integrityCheck: "ok", foreignKeyViolations: 0 });
+    expect(targetBackupInspection).toMatchObject({
+      integrityCheck: "ok",
+      foreignKeyViolations: 0,
+      manifest: { instanceId: "cockpit_22222222222222222222222222222222" },
+    });
+    expect(existsSync(join(restoreResult.rollbackSnapshotPath, "manifest.json"))).toBe(true);
+    expect(ensureCockpitInstanceId(targetDb)).toBe(instanceId);
 
     const paths = resolveSparkPaths({
       app: "daemon",
@@ -370,6 +396,40 @@ test("live daemon relocates between snapshot-restored HTTPS/WSS Cockpits without
         daemonSocketUsed: existsSync(join(paths.runtimeDir, "daemon.sock")),
       })}`,
     );
+
+    await target.close();
+    target = undefined;
+    targetDb.close();
+    targetDb = undefined;
+    const rollbackRestore = await restoreCockpitSnapshot({
+      snapshotPath: restoreResult.rollbackSnapshotPath,
+      databasePath: targetDatabasePath,
+      rollbackRoot: join(root, "rollback-backups"),
+    });
+    const rolledBackDb = openDatabase({ path: targetDatabasePath });
+    try {
+      const targetSummaryAfterRollback = cockpitBusinessSummary(rolledBackDb);
+      expect(targetSummaryAfterRollback).toEqual(targetSummaryBefore);
+      expect(ensureCockpitInstanceId(rolledBackDb)).toBe(
+        "cockpit_22222222222222222222222222222222",
+      );
+      console.log(
+        `SPARK_RELOCATION_ROLLBACK_EVIDENCE ${JSON.stringify({
+          sourceSnapshotIntegrity: sourceInspection.integrityCheck,
+          sourceSnapshotSha256: sourceManifest.database.sha256,
+          targetBackupExists: existsSync(join(restoreResult.rollbackSnapshotPath, "manifest.json")),
+          targetBackupIntegrity: targetBackupInspection.integrityCheck,
+          targetBackupSha256: targetBackupInspection.manifest.database.sha256,
+          restoredSourceInstanceId: restoreResult.instanceId,
+          rollbackInstanceId: rollbackRestore.instanceId,
+          targetSummaryBeforeHash: hashJson(targetSummaryBefore),
+          targetSummaryAfterHash: hashJson(targetSummaryAfterRollback),
+          summariesEqual: true,
+        })}`,
+      );
+    } finally {
+      rolledBackDb.close();
+    }
   } finally {
     shutdown.abort();
     releaseInvocation.resolve(undefined);
@@ -504,6 +564,76 @@ async function requestBody(request: IncomingMessage): Promise<string> {
   for await (const chunk of request)
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   return Buffer.concat(chunks).toString("utf8");
+}
+
+function seedTargetBusinessData(db: DatabaseSync): void {
+  const now = "2026-07-14T00:00:00.000Z";
+  db.prepare(
+    `INSERT INTO workspaces
+      (id, slug, name, status, settings_json, created_at, updated_at)
+     VALUES ('ws_target_original', 'target-original', 'Target original', 'active', '{}', ?, ?)`,
+  ).run(now, now);
+  db.prepare(
+    `INSERT INTO projects
+      (id, workspace_id, slug, name, status, metadata_json, created_at, updated_at)
+     VALUES ('proj_target_original', 'ws_target_original', 'target-project',
+             'Target project', 'running', '{}', ?, ?)`,
+  ).run(now, now);
+  db.prepare(
+    `INSERT INTO runtime_connections
+      (id, installation_id, name, status, protocol_version, capabilities_json,
+       labels_json, created_at, updated_at)
+     VALUES ('rt_target_original', 'install-target-original', 'Target runtime', 'offline', ?, '{}', '{}', ?, ?)`,
+  ).run(runtimeProtocolVersion, now, now);
+  db.prepare(
+    `INSERT INTO runtime_workspace_bindings
+      (id, runtime_id, local_workspace_key, display_name, status,
+       capabilities_json, diagnostics_json, created_at, updated_at)
+     VALUES ('rtwb_target_original', 'rt_target_original', 'target-original',
+             'Target original', 'available', '{}', '{}', ?, ?)`,
+  ).run(now, now);
+  db.prepare(
+    `INSERT INTO workspace_owner_bindings
+      (id, workspace_id, runtime_workspace_binding_id, owner_mode, started_at, created_at)
+     VALUES ('wob_target_original', 'ws_target_original', 'rtwb_target_original', 'primary', ?, ?)`,
+  ).run(now, now);
+}
+
+function cockpitBusinessSummary(db: DatabaseSync): Record<string, unknown> {
+  return {
+    instanceId: ensureCockpitInstanceId(db),
+    workspaces: db.prepare("SELECT id, slug, name, status FROM workspaces ORDER BY id").all(),
+    projects: db
+      .prepare(
+        "SELECT id, workspace_id AS workspaceId, slug, name, status FROM projects ORDER BY id",
+      )
+      .all(),
+    runtimes: db
+      .prepare(
+        "SELECT id, installation_id AS installationId, name, status FROM runtime_connections ORDER BY id",
+      )
+      .all(),
+    bindings: db
+      .prepare(
+        `SELECT id, runtime_id AS runtimeId, local_workspace_key AS localWorkspaceKey,
+                display_name AS displayName, status
+         FROM runtime_workspace_bindings ORDER BY id`,
+      )
+      .all(),
+    activeOwners: db
+      .prepare(
+        `SELECT workspace_id AS workspaceId,
+                runtime_workspace_binding_id AS bindingId
+         FROM workspace_owner_bindings
+         WHERE ended_at IS NULL
+         ORDER BY workspace_id`,
+      )
+      .all(),
+  };
+}
+
+function hashJson(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
 function relocationFailureFetch(

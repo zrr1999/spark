@@ -111,10 +111,18 @@ export function createSparkDaemonTaskExecutor(
 
   return async (task, context) => {
     if (task.type === "session.run") {
+      let projectedFailure = false;
+      const trackedContext: SparkDaemonTaskExecutionContext = {
+        ...context,
+        emitEvent: (event) => {
+          if (isProjectedSessionFailure(event, task.sessionId)) projectedFailure = true;
+          return context.emitEvent?.(event);
+        },
+      };
       try {
         await options.sessionRegistry?.recordTurnQueued(task.sessionId);
         const effectiveTask = await withEffectiveTaskModel(task, options.modelControl);
-        const result = await executeSparkDaemonSessionRunTask(effectiveTask, context, {
+        const result = await executeSparkDaemonSessionRunTask(effectiveTask, trackedContext, {
           ...options,
           executeSession: await getSessionExecutor(),
         });
@@ -130,6 +138,9 @@ export function createSparkDaemonTaskExecutor(
         }
         return completed.result;
       } catch (error) {
+        if (!context.signal.aborted && !projectedFailure) {
+          await emitSessionFailure(task, trackedContext, error);
+        }
         await settleFailedSessionRun(task.sessionId, options.sessionRegistry);
         throw error;
       }
@@ -138,6 +149,59 @@ export function createSparkDaemonTaskExecutor(
       `Unsupported Spark daemon invocation task type: ${(task as SparkDaemonTask).type}`,
     );
   };
+}
+
+function isProjectedSessionFailure(event: SparkDaemonEvent, sessionId: string): boolean {
+  return (
+    event.type === "daemon.view_event" &&
+    event.view.type === "session.message" &&
+    event.view.sessionId === sessionId &&
+    event.view.message.status === "error"
+  );
+}
+
+async function emitSessionFailure(
+  task: SparkDaemonSessionRunTask,
+  context: SparkDaemonTaskExecutionContext,
+  error: unknown,
+): Promise<void> {
+  const message = errorMessage(error);
+  const createdAt = new Date().toISOString();
+  try {
+    await context.emitEvent?.({
+      version: SPARK_PROTOCOL_VERSION,
+      type: "daemon.view_event",
+      source: "daemon",
+      emittedAt: createdAt,
+      ...(task.workspaceId ? { workspaceId: task.workspaceId } : {}),
+      ...(task.projectId ? { projectId: task.projectId } : {}),
+      sessionId: task.sessionId,
+      invocationId: context.invocationId,
+      metadata: daemonTaskRouteMetadata(task),
+      view: {
+        version: SPARK_PROTOCOL_VERSION,
+        type: "session.message",
+        sessionId: task.sessionId,
+        message: {
+          version: SPARK_PROTOCOL_VERSION,
+          id: `invocation:${context.invocationId}:failure`,
+          role: "system",
+          text: message,
+          status: "error",
+          createdAt,
+          metadata: {
+            source: "daemon.invocation",
+            invocationId: context.invocationId,
+            kind: "invocation_failure",
+          },
+        },
+      },
+    });
+  } catch (projectionError) {
+    console.error(
+      `[spark-daemon] failed to project session failure ${task.sessionId}: ${errorMessage(projectionError)}`,
+    );
+  }
 }
 
 async function withEffectiveTaskModel(

@@ -156,9 +156,10 @@ export function attachRuntimeWebSocket(
         unregisterEphemeralSecretDispatcher = registerRuntimeEphemeralSecretDispatcher(
           context.db,
           context.runtimeId,
-          ({ envelope, resolve, reject }) => {
+          (dispatch) => {
+            const { envelope } = dispatch;
             if (pendingEphemeralSecrets.has(envelope.ephemeralRequestId)) {
-              reject(
+              dispatch.reject(
                 new RuntimeControlCommandError(
                   "Secret request id is already active.",
                   "SECRET_REPLAY_REJECTED",
@@ -168,14 +169,14 @@ export function attachRuntimeWebSocket(
             }
             pendingEphemeralSecrets.set(envelope.ephemeralRequestId, {
               envelope,
-              resolve,
-              reject,
+              resolve: (result) => dispatch.resolve(result),
+              reject: (error) => dispatch.reject(error),
             });
             try {
               ws.send(JSON.stringify(envelope));
             } catch {
               pendingEphemeralSecrets.delete(envelope.ephemeralRequestId);
-              reject(
+              dispatch.reject(
                 new RuntimeControlCommandError(
                   "Secure runtime connection closed before the secret request was sent.",
                   "SECRET_RUNTIME_DISCONNECTED",

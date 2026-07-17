@@ -1042,6 +1042,9 @@ export async function runSparkCli(
             workspaceId: sessionWorkspaceId,
             cwd: sessionCwd,
             ensureSession: ensureCurrentSession,
+            onViewEvent: (event) => {
+              if (event.type === "run.update") pendingNativeUiTransport?.publishView?.(event);
+            },
           }),
           workspaceSession: workspaceSession.state,
           slashCommands: createSparkNativeSlashCommands(
@@ -1054,11 +1057,20 @@ export async function runSparkCli(
           autocompleteBasePath: sessionCwd,
           keybindings: services.keybindings,
           statusContext: {
+            activeProvider: () => services.modelSelector.getActive()?.providerName,
             activeModel: () => {
               const active = services.modelSelector.getActive();
-              return active ? `${active.providerName}/${active.modelId}` : undefined;
+              return active?.modelId;
             },
             thinkingLevel: () => services.config.activeThinkingLevel ?? "default",
+            contextWindow: () => {
+              const active = services.modelSelector.getActive();
+              return active
+                ? services.providerRegistry
+                    .listModelsFor(active.providerName)
+                    .find((model) => model.id === active.modelId)?.contextWindow
+                : undefined;
+            },
           },
           theme: services.theme,
           messageRenderers: new Map(

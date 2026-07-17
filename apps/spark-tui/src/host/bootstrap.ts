@@ -105,6 +105,8 @@ export interface SparkCliHostServicesOptions {
   modelPicker?: SparkModelPicker;
   systemPrompt?: string;
   noPromptTemplates?: boolean;
+  /** Per-model-stream deadline; <=0 disables it. */
+  streamTimeoutMs?: number;
   /**
    * Session tool-approval method for `requiresApproval` tools.
    * Local TUI defaults to `skip`; channel headless sessions should pass `auto`.
@@ -292,6 +294,7 @@ export async function createSparkCliHostServices(
     },
     getReasoning: () => config.activeThinkingLevel,
     systemPrompt: initialPromptState.systemPrompt,
+    streamTimeoutMs: options.streamTimeoutMs,
     prepareUserSubmit: async (request) => {
       // Selection belongs to exactly one real user request. Clear the prior
       // bodies before resolving so an empty/unmatched request cannot inherit

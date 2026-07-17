@@ -257,3 +257,45 @@ void test("Spark prompt cache key reaches the real pi-ai OpenAI Responses payloa
     globalThis.fetch = originalFetch;
   }
 });
+
+void test("Spark real pi-ai provider retries transient responses inside one invocation", async () => {
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = (async () => {
+    fetchCalls += 1;
+    if (fetchCalls < 3) {
+      return new Response(
+        JSON.stringify({ error: { message: "temporary", type: "server_error" } }),
+        {
+          status: 500,
+          headers: { "content-type": "application/json", "retry-after-ms": "1" },
+        },
+      );
+    }
+    return new Response(
+      JSON.stringify({ error: { message: "permanent", type: "invalid_request_error" } }),
+      { status: 400, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  try {
+    const registry = new SparkProviderRegistry();
+    registerBaiduOneApiProvider(registry);
+    registry.setActive({ providerName: "baidu-oneapi", modelId: "gpt-5.6-sol" });
+
+    const stream = createProviderRegistryStreamFunction(registry, {
+      resolveApiKey: () => "wire-test-key",
+    })(
+      registry.buildActiveModel() as never,
+      { messages: [], tools: [] } as never,
+      { signal: new AbortController().signal } as never,
+    );
+    const result = await stream.result();
+
+    assert.equal(fetchCalls, 3);
+    assert.equal(result.stopReason, "error");
+    assert.match(result.errorMessage ?? "", /permanent/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

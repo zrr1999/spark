@@ -56,6 +56,23 @@ describe("Spark daemon local RPC transport", () => {
     }
   });
 
+  it("reports a connection closed before its response as unavailable", async () => {
+    const fixture = await rpcFixture((_request, socket) => socket.end());
+
+    try {
+      const error = await requestSparkDaemonLocalRpcWire(
+        { id: "closed-response", method: "daemon.status" },
+        { socketPath: fixture.socketPath },
+      ).catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(SparkDaemonLocalRpcUnavailableError);
+      expect(error).toMatchObject({
+        message: "Spark daemon local RPC connection closed before a response.",
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it("preserves caller-owned wire fields and exposes remote error details", async () => {
     const fixture = await rpcFixture((request, socket) => {
       socket.end(

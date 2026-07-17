@@ -27,4 +27,6 @@ build/
 .svelte-kit/
 playwright-report/
 test-results/
+.stryker-tmp/
+**/reports/mutation/
 *.tsbuildinfo

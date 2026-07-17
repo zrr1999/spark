@@ -31,6 +31,7 @@ import {
   sparkSessionCreateRequestSchema,
   sparkSessionGetRequestSchema,
   sparkSessionListRequestSchema,
+  sparkSessionSnapshotRequestSchema,
   sparkSessionUnbindRequestSchema,
   type SparkAssignment,
   type SparkCommand,
@@ -43,6 +44,7 @@ import {
   type SparkSessionBindRequest,
   type SparkSessionCreateRequest,
   type SparkSessionGetRequest,
+  type SparkSessionSnapshotRequest,
   type SparkSessionListRequest,
   type SparkSessionRegistryRecord,
   type SparkSessionView,
@@ -397,7 +399,7 @@ type LocalRpcRequest =
   | {
       id: string;
       method: "session.snapshot";
-      params: SparkSessionGetRequest;
+      params: SparkSessionSnapshotRequest;
       sparkCommand: SparkCommand;
     }
   | {
@@ -1745,7 +1747,7 @@ function parseLocalRpcRequest(line: string): LocalRpcRequest {
     return withSparkCommand({
       id: value.id,
       method: value.method,
-      params: sparkSessionGetRequestSchema.parse(value.params),
+      params: sparkSessionSnapshotRequestSchema.parse(value.params),
     });
   }
   if (value.method === "session.create") {

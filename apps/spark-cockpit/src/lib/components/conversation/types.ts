@@ -109,13 +109,13 @@ export type ConversationApprovalState =
 
 export type ConversationMessageView = {
   id: string;
-  actor: "user" | "spark";
+  actor: "user" | "spark" | "session";
   body: string;
   title: string | null;
   status: string | null;
   timestamp: string;
   meta: string | null;
-  /** Platform-provided sender label for channel messages; null for local user turns. */
+  /** Platform sender or originating session label; null for local user and Spark turns. */
   senderLabel: string | null;
   parts: ConversationPart[];
 };

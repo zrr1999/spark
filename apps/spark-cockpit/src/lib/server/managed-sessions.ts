@@ -1,8 +1,8 @@
 import type {
   SparkSessionBindRequest,
   SparkSessionRegistryRecord,
-  SparkSessionView,
 } from "@zendev-lab/spark-protocol";
+import type { SessionSnapshotWindow } from "../session-snapshot-window";
 
 import {
   CockpitRuntimeSessionUnavailableError,
@@ -10,12 +10,16 @@ import {
   isCockpitRuntimeSessionNotFoundError,
   type CockpitRuntimeSessionCreateRequest,
   type CockpitRuntimeSessionListRequest,
+  type CockpitRuntimeSessionSnapshotRequest,
 } from "./cockpit-runtime-session-client";
 
 export interface CockpitManagedSessionsClient {
   list(options?: CockpitRuntimeSessionListRequest): Promise<SparkSessionRegistryRecord[]>;
   get(sessionId: string): Promise<SparkSessionRegistryRecord>;
-  snapshot(sessionId: string): Promise<SparkSessionView>;
+  snapshot(
+    sessionId: string,
+    options?: CockpitRuntimeSessionSnapshotRequest,
+  ): Promise<SessionSnapshotWindow>;
   create(input: CockpitRuntimeSessionCreateRequest): Promise<SparkSessionRegistryRecord>;
   bind(input: SparkSessionBindRequest): Promise<SparkSessionRegistryRecord>;
   unbind(input: SparkSessionBindRequest): Promise<SparkSessionRegistryRecord>;
@@ -71,18 +75,19 @@ export async function getManagedSessionForCockpit(
 
 export async function getManagedSessionSnapshotForCockpit(
   sessionId: string,
+  options: CockpitRuntimeSessionSnapshotRequest = {},
   client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
-): Promise<SparkSessionView | null> {
+): Promise<SessionSnapshotWindow | null> {
   try {
     const session = await client.get(sessionId);
     if (!isCockpitWorkspaceSession(session)) return null;
-    return await client.snapshot(sessionId);
+    return await client.snapshot(sessionId, options);
   } catch (error) {
     // Snapshot is best-effort for the conversation pane; registry metadata is
     // enough to keep the page reachable while the runtime reconnects.
     if (error instanceof CockpitRuntimeSessionUnavailableError) return null;
     if (isCockpitRuntimeSessionNotFoundError(error)) return null;
-    return null;
+    throw error;
   }
 }
 

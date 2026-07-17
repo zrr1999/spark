@@ -13,7 +13,7 @@ describe("ThinkingChainPart component contract", () => {
     expect(() => compile(source, { filename: componentPath, generate: "server" })).not.toThrow();
   });
 
-  it("keeps execution details during work, then collapses and reveals compact history on hover", () => {
+  it("keeps execution details during work, then collapses into a reusable step timeline", () => {
     const source = readFileSync(componentPath, "utf8");
 
     expect(source).toContain('class="thinking-chain {chainState}"');
@@ -24,14 +24,18 @@ describe("ThinkingChainPart component contract", () => {
     expect(source).toContain('statusLabel("failed")');
     expect(source).toContain("margin-inline: 0 auto");
     expect(source).toContain("min-height: 22px");
+    expect(source).toContain("{statusLabel}");
+    expect(source).toContain('class="chain-step {step.type} {presentationStatus}"');
+    expect(source).toContain("stepStatus(step)");
+    expect(source).toContain("index * 90");
+    expect(source).toContain("grid-template-columns: 18px minmax(0, 1fr)");
+    expect(source).toContain("chain-step-reveal");
     expect(source).toContain("animation: chain-pulse");
     expect(source).toContain('previousState === "streaming" && chainState === "complete"');
     expect(source).toContain("previousActive && !active");
     expect(source).toContain("@media (hover: hover) and (pointer: fine)");
     expect(source).toContain(":global(.conversation-message:hover)");
     expect(source).not.toContain("pointer-events: none");
-    expect(source).not.toContain("background: var(--color-surface-soft)");
-    expect(source).not.toContain("min-height: 40px");
   });
 
   it("suppresses empty completed chains and explains empty streaming or failed chains", () => {

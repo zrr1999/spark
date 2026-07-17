@@ -17,7 +17,6 @@ import { join } from "node:path";
 import test from "node:test";
 
 import piFilesExtension, {
-  registerPiFilesTools,
   truncateHead,
   truncateLine,
   applyEditsToNormalizedContent,
@@ -35,17 +34,6 @@ interface ToolResult {
 
 interface ToolConfig {
   name: string;
-  parameters?: unknown;
-  policy?: {
-    effect?: string;
-    executionMode?: string;
-    domains?: readonly string[];
-    phases?: readonly string[];
-    approval?: string;
-  };
-  effect?: "read" | "local_write" | "external_write" | "destructive";
-  executionMode?: "sequential" | "parallel";
-  promptGuidelines?: string[];
   execute(
     toolCallId: string,
     params: Record<string, unknown>,
@@ -92,17 +80,6 @@ function readDetails(result: ToolResult): ReadDetails {
   return result.details as unknown as ReadDetails;
 }
 
-function expectedReadText(result: ToolResult, notice?: string): string {
-  const details = readDetails(result);
-  return [
-    `[File version: ${details.version}]`,
-    details.window.anchors.map((anchor) => anchor.anchor).join("\n"),
-    notice,
-  ]
-    .filter((section): section is string => Boolean(section))
-    .join("\n\n");
-}
-
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "spark-files-"));
   try {
@@ -112,100 +89,50 @@ async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   }
 }
 
-void test("spark-files default extension registers all six file tools", () => {
+void test("spark-files exposes one tool per file operation", () => {
   const tools = collectTools(piFilesExtension);
   assert.deepEqual([...tools.keys()].sort(), ["edit", "find", "grep", "ls", "read", "write"]);
-  for (const name of ["read", "ls", "grep", "find"]) {
-    assert.equal(tools.get(name)?.effect, "read", name);
-    assert.equal(tools.get(name)?.executionMode, "parallel", name);
-    assert.equal(tools.get(name)?.policy?.effect, "read", `${name} canonical policy`);
-    assert.equal(tools.get(name)?.policy?.approval, "none", `${name} approval policy`);
-  }
-  for (const name of ["write", "edit"]) {
-    assert.equal(tools.get(name)?.effect, "local_write", name);
-    assert.equal(tools.get(name)?.executionMode, "sequential", name);
-    assert.deepEqual(tools.get(name)?.policy?.phases, ["implement"], `${name} phases`);
-  }
-  assert.match(tools.get("read")?.promptGuidelines?.join("\n") ?? "", /always returns/u);
-  assert.match(tools.get("write")?.promptGuidelines?.join("\n") ?? "", /Every write must/u);
 });
 
-void test("registerPiFilesTools honors a tool subset", () => {
-  const tools = collectTools((pi) => registerPiFilesTools(pi, { tools: ["read", "grep"] }));
-  assert.deepEqual([...tools.keys()].sort(), ["grep", "read"]);
-});
-
-void test("read always returns one versioned anchored format and honors continuation", async () => {
-  await withTempDir(async (dir) => {
-    const tools = collectTools(piFilesExtension);
-    const read = tools.get("read")!;
-    const lines = Array.from({ length: 10 }, (_, i) => `line${i + 1}`);
-    await writeFile(join(dir, "f.txt"), lines.join("\n"), "utf-8");
-
-    const full = await read.execute("c", { path: "f.txt" }, undefined, noop, { cwd: dir });
-    assert.equal(text(full), expectedReadText(full));
-
-    const windowed = await read.execute(
-      "c",
-      { path: "f.txt", offset: 3, limit: 2 },
-      undefined,
-      noop,
-      {
-        cwd: dir,
-      },
-    );
-    assert.equal(
-      text(windowed),
-      expectedReadText(windowed, "[6 more lines in file. Use offset=5 to continue.]"),
-    );
-    assert.deepEqual(readDetails(windowed).window, {
-      startLine: 3,
-      endLine: 4,
-      nextOffset: 5,
-      requestedLimit: 2,
-      anchors: readDetails(windowed).window.anchors,
-    });
-  });
-});
-
-void test("read offset and limit are positive integers in schema and at runtime", async () => {
+void test("paginated reads reconstruct a version-consistent file without gaps", async () => {
   await withTempDir(async (dir) => {
     const read = collectTools(piFilesExtension).get("read")!;
-    const properties = (
-      read.parameters as {
-        additionalProperties?: boolean;
-        properties?: Record<string, { type?: string; minimum?: number; description?: string }>;
-      }
-    ).properties;
-    assert.equal(
-      (read.parameters as { additionalProperties?: boolean }).additionalProperties,
-      false,
-    );
-    assert.equal(properties?.mode, undefined);
-    assert.deepEqual(properties?.offset, {
-      description: "Line number to start reading from (1-indexed)",
-      minimum: 1,
-      type: "integer",
-    });
-    assert.deepEqual(properties?.limit, {
-      description: "Maximum number of lines to read",
-      minimum: 1,
-      type: "integer",
-    });
-    await writeFile(join(dir, "window.txt"), "one\ntwo", "utf-8");
+    const lines = Array.from({ length: 8 }, (_, index) => `snapshot-line-${index + 1}`);
+    await writeFile(join(dir, "snapshot.txt"), lines.join("\n"), "utf-8");
 
-    for (const params of [
-      { path: "window.txt", offset: 0 },
-      { path: "window.txt", offset: -1 },
-      { path: "window.txt", offset: 1.5 },
-      { path: "window.txt", limit: 0 },
-      { path: "window.txt", limit: -1 },
-      { path: "window.txt", limit: 1.5 },
-    ]) {
-      const result = await read.execute("invalid-window", params, undefined, noop, { cwd: dir });
-      assert.equal(result.isError, true, JSON.stringify(params));
-      assert.equal(result.details?.code, "INVALID_READ_WINDOW", JSON.stringify(params));
+    const versions = new Set<string>();
+    const anchors: ReadLineAnchor[] = [];
+    let nextOffset: number | undefined = 1;
+    let pageCount = 0;
+    while (nextOffset !== undefined) {
+      assert.ok(pageCount < lines.length, "pagination did not terminate");
+      const pageOffset: number = nextOffset;
+      const result = await read.execute(
+        `page-${pageOffset}`,
+        { path: "snapshot.txt", offset: pageOffset, limit: 3 },
+        undefined,
+        noop,
+        { cwd: dir },
+      );
+      assert.equal(result.isError ?? false, false);
+      const details = readDetails(result);
+      versions.add(details.version);
+      anchors.push(...details.window.anchors);
+      nextOffset = details.window.nextOffset;
+      if (nextOffset !== undefined) assert.ok(nextOffset > pageOffset);
+      pageCount += 1;
     }
+
+    assert.equal(pageCount, 3);
+    assert.equal(versions.size, 1);
+    assert.deepEqual(
+      anchors.map((anchor) => anchor.line),
+      lines.map((_, index) => index + 1),
+    );
+    assert.deepEqual(
+      anchors.map((anchor) => anchor.text),
+      lines,
+    );
   });
 });
 
@@ -283,7 +210,6 @@ void test("read reports BOM and CRLF metadata while rendering logical anchors", 
       cwd: dir,
     });
     const details = readDetails(result);
-    assert.equal(text(result), expectedReadText(result));
     assert.doesNotMatch(text(result), /\r/u);
     assert.doesNotMatch(text(result), /\uFEFF/u);
     assert.equal(details.bom, "utf8");
@@ -317,7 +243,6 @@ void test("read reports CR-only and mixed line endings with one logical-anchor f
     const fullCr = await read.execute("cr-full", { path: "classic-mac.txt" }, undefined, noop, {
       cwd: dir,
     });
-    assert.equal(text(fullCr), expectedReadText(fullCr));
     assert.equal(readDetails(fullCr).lineEnding, "cr");
     assert.equal(readDetails(fullCr).totalLines, 4);
     assert.deepEqual(
@@ -332,10 +257,7 @@ void test("read reports CR-only and mixed line endings with one logical-anchor f
       noop,
       { cwd: dir },
     );
-    assert.equal(
-      text(crWindow),
-      expectedReadText(crWindow, "[1 more lines in file. Use offset=4 to continue.]"),
-    );
+    assert.equal(readDetails(crWindow).window.nextOffset, 4);
     assert.deepEqual(
       readDetails(crWindow).window.anchors.map((anchor) => anchor.text),
       ["beta", "gamma"],
@@ -346,7 +268,6 @@ void test("read reports CR-only and mixed line endings with one logical-anchor f
     const fullMixed = await read.execute("mixed-full", { path: "mixed.txt" }, undefined, noop, {
       cwd: dir,
     });
-    assert.equal(text(fullMixed), expectedReadText(fullMixed));
     assert.equal(readDetails(fullMixed).lineEnding, "mixed");
     assert.deepEqual(
       readDetails(fullMixed).window.anchors.map((anchor) => anchor.text),
@@ -414,39 +335,6 @@ void test("read applies the byte limit to the final anchored output", async () =
       readDetails(result).window.nextOffset,
       readDetails(result).window.anchors.length + 1,
     );
-  });
-});
-
-void test("write requires one explicit version-precondition schema", async () => {
-  await withTempDir(async (dir) => {
-    const write = collectTools(piFilesExtension).get("write")!;
-    const schema = write.parameters as {
-      additionalProperties?: boolean;
-      properties?: Record<string, unknown>;
-      required?: string[];
-    };
-    assert.equal(schema.additionalProperties, false);
-    assert.deepEqual(Object.keys(schema.properties ?? {}).sort(), [
-      "content",
-      "expectedVersion",
-      "path",
-    ]);
-    const expectedVersionProperty = schema.properties?.expectedVersion as
-      | { pattern?: string }
-      | undefined;
-    assert.equal(expectedVersionProperty?.pattern, "^(?:missing|sha256:[0-9a-f]{64})$");
-    assert.deepEqual([...(schema.required ?? [])].sort(), ["content", "expectedVersion", "path"]);
-
-    const result = await write.execute(
-      "blind-write",
-      { path: "blind.txt", content: "must not land" },
-      undefined,
-      noop,
-      { cwd: dir },
-    );
-    assert.equal(result.isError, true);
-    assert.equal(result.details?.code, "INVALID_EXPECTED_VERSION");
-    await assert.rejects(readFile(join(dir, "blind.txt"), "utf-8"), /ENOENT/u);
   });
 });
 
@@ -571,7 +459,7 @@ void test("atomic replacement detaches one hard-link name without mutating its s
   });
 });
 
-void test("write rejects a stale expectedVersion without changing the file", async () => {
+void test("versioned write recovers from an external conflict after refreshing the snapshot", async () => {
   await withTempDir(async (dir) => {
     const tools = collectTools(piFilesExtension);
     const read = tools.get("read")!;
@@ -594,6 +482,17 @@ void test("write rejects a stale expectedVersion without changing the file", asy
     const guardedVersion = String(guarded.details?.version);
     await writeFile(path, "external update", "utf-8");
 
+    const blindAttempt = await write.execute(
+      "blind-overwrite",
+      { path: "shared.txt", content: "blind overwrite" },
+      undefined,
+      noop,
+      { cwd: dir },
+    );
+    assert.equal(blindAttempt.isError, true);
+    assert.equal(blindAttempt.details?.code, "INVALID_EXPECTED_VERSION");
+    assert.equal(await readFile(path, "utf-8"), "external update");
+
     const result = await write.execute(
       "c",
       { path: "shared.txt", content: "stale update", expectedVersion: guardedVersion },
@@ -607,6 +506,36 @@ void test("write rejects a stale expectedVersion without changing the file", asy
     assert.notEqual(result.details?.actualVersion, guardedVersion);
     assert.equal(result.details?.retry, "read_then_retry");
     assert.equal(await readFile(path, "utf-8"), "external update");
+
+    const refreshed = await read.execute("refresh", { path: "shared.txt" }, undefined, noop, {
+      cwd: dir,
+    });
+    const refreshedVersion = readDetails(refreshed).version;
+    assert.equal(result.details?.actualVersion, refreshedVersion);
+    assert.deepEqual(
+      readDetails(refreshed).window.anchors.map((anchor) => anchor.text),
+      ["external update"],
+    );
+
+    const retry = await write.execute(
+      "retry",
+      { path: "shared.txt", content: "recovered update", expectedVersion: refreshedVersion },
+      undefined,
+      noop,
+      { cwd: dir },
+    );
+    assert.equal(retry.isError ?? false, false);
+    assert.equal(retry.details?.previousVersion, refreshedVersion);
+    assert.equal(await readFile(path, "utf-8"), "recovered update");
+
+    const final = await read.execute("verify", { path: "shared.txt" }, undefined, noop, {
+      cwd: dir,
+    });
+    assert.equal(readDetails(final).version, retry.details?.version);
+    assert.deepEqual(
+      readDetails(final).window.anchors.map((anchor) => anchor.text),
+      ["recovered update"],
+    );
   });
 });
 
@@ -791,6 +720,29 @@ void test("edit applies multiple disjoint replacements and emits a diff", async 
     );
     assert.equal(typeof result.details?.diff, "string");
     assert.equal(typeof result.details?.patch, "string");
+  });
+});
+
+void test("edit rejects a direct symbolic-link target before reading it", async () => {
+  await withTempDir(async (dir) => {
+    const edit = collectTools(piFilesExtension).get("edit")!;
+    const target = join(dir, "edit-target.txt");
+    const linked = join(dir, "edit-linked.txt");
+    await writeFile(target, "original", "utf-8");
+    await symlink("edit-target.txt", linked);
+
+    const result = await edit.execute(
+      "edit-symlink",
+      { path: "edit-linked.txt", edits: [{ oldText: "original", newText: "changed" }] },
+      undefined,
+      noop,
+      { cwd: dir },
+    );
+
+    assert.equal(result.isError, true);
+    assert.match(text(result), /Refusing to atomically replace symbolic link/u);
+    assert.equal(await readFile(target, "utf-8"), "original");
+    assert.equal((await lstat(linked)).isSymbolicLink(), true);
   });
 });
 

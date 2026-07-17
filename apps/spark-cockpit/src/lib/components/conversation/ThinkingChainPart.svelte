@@ -31,6 +31,21 @@
   let previousState = $state(untrack(() => chainState));
   let previousActive = $state(untrack(() => active));
 
+  function stepStatus(step: ConversationChainStep): "complete" | "active" | "pending" {
+    if (step.type === "reasoning" || step.type === "commentary") {
+      return step.state === "streaming" ? "active" : "complete";
+    }
+    if (step.state === "pending") return "pending";
+    if (step.state === "running" || step.state === "awaiting-approval") return "active";
+    return "complete";
+  }
+
+  function stepIcon(step: ConversationChainStep) {
+    if (step.type === "tool") return "activity" as const;
+    if (step.type === "commentary") return "message" as const;
+    return "spark" as const;
+  }
+
   $effect(() => {
     if (active && chainState === "streaming") {
       expanded = true;
@@ -53,7 +68,7 @@
 {#if shouldRender}
   <details class="thinking-chain {chainState}" bind:open={expanded}>
     <summary onclick={toggleExpanded}>
-      <span class:streaming={chainState === "streaming"} class="chain-icon">
+      <span class:streaming={chainState === "streaming"} class="chain-icon" aria-hidden="true">
         <Icon name="spark" size={11} stroke={2.1} />
       </span>
       <span class="chain-label">
@@ -62,38 +77,45 @@
       {#if hasTerminalIssue}
         <span class="chain-issue">{statusLabel("failed")}</span>
       {/if}
-      <span class="disclosure"><Icon name="chevron-down" size={11} /></span>
+      <span class="disclosure" aria-hidden="true"><Icon name="chevron-down" size={11} /></span>
     </summary>
     {#if expanded}
       <div class="chain-steps">
         {#each visibleSteps as step, index (`${step.type}:${index}:${step.type === "tool" ? step.callId : "r"}`)}
-          {#if step.type === "reasoning" || step.type === "commentary"}
-            <div class="chain-step {step.type}">
-              {#if step.type === "reasoning" && step.redacted}
-                <p class="redacted">{labels.reasoning}</p>
+          {@const presentationStatus = stepStatus(step)}
+          <div
+            class="chain-step {step.type} {presentationStatus}"
+            style={`--chain-step-delay: ${index * 90}ms`}
+          >
+            <span class="step-rail" aria-hidden="true">
+              <span class="step-icon"><Icon name={stepIcon(step)} size={13} stroke={2} /></span>
+            </span>
+            <div class="step-body">
+              {#if step.type === "reasoning" || step.type === "commentary"}
+                {#if step.type === "reasoning" && step.redacted}
+                  <p class="redacted">{labels.reasoning}</p>
+                {:else if step.summary.trim()}
+                  <ReasoningPart
+                    summary={step.summary}
+                    state={step.state}
+                    redacted={step.type === "reasoning" ? step.redacted : false}
+                    labels={labels}
+                    nested
+                  />
+                {/if}
               {:else}
-                <ReasoningPart
-                  summary={step.summary}
+                <ToolCallPart
+                  callId={step.callId}
+                  name={step.name}
                   state={step.state}
-                  redacted={step.type === "reasoning" ? step.redacted : false}
+                  summary={step.summary}
                   labels={labels}
+                  {statusLabel}
                   nested
                 />
               {/if}
             </div>
-          {:else}
-            <div class="chain-step tool">
-              <ToolCallPart
-                callId={step.callId}
-                name={step.name}
-                state={step.state}
-                summary={step.summary}
-                labels={labels}
-                {statusLabel}
-                nested
-              />
-            </div>
-          {/if}
+          </div>
         {/each}
         {#if chainState === "streaming" && visibleSteps.length === 0}
           <p class="chain-empty">{labels.chainEmpty}</p>
@@ -164,6 +186,7 @@
   }
 
   .chain-label {
+    flex: 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -181,11 +204,72 @@
   }
 
   .chain-steps {
-    border-left: 1px solid var(--color-border);
     display: grid;
-    gap: 8px;
-    margin: 5px 0 0 7px;
-    padding: 2px 4px 10px 15px;
+    gap: 12px;
+    margin-top: 7px;
+    padding: 2px 5px 9px 7px;
+  }
+
+  .chain-step {
+    display: grid;
+    gap: 9px;
+    grid-template-columns: 18px minmax(0, 1fr);
+    min-width: 0;
+  }
+
+  details[open] .chain-step {
+    animation: chain-step-reveal 360ms ease-out both;
+    animation-delay: var(--chain-step-delay);
+  }
+
+  .step-rail {
+    align-items: start;
+    display: flex;
+    justify-content: center;
+    position: relative;
+  }
+
+  .step-rail::after {
+    background: var(--color-border);
+    content: "";
+    position: absolute;
+    bottom: -14px;
+    left: 50%;
+    top: 20px;
+    width: 1px;
+  }
+
+  .chain-step:last-child .step-rail::after {
+    display: none;
+  }
+
+  .step-icon {
+    align-items: center;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-soft);
+    border-radius: 999px;
+    color: var(--color-ink-subtle);
+    display: inline-flex;
+    height: 18px;
+    justify-content: center;
+    position: relative;
+    width: 18px;
+    z-index: 1;
+  }
+
+  .chain-step.active .step-icon {
+    border-color: var(--color-primary-soft);
+    color: var(--color-primary);
+    animation: chain-pulse 1.4s ease-in-out infinite;
+  }
+
+  .chain-step.pending {
+    opacity: 0.52;
+  }
+
+  .step-body {
+    min-width: 0;
+    padding-top: 1px;
   }
 
   .redacted,
@@ -210,9 +294,22 @@
     }
   }
 
+  @keyframes chain-step-reveal {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .chain-icon.streaming,
-    .disclosure {
+    .chain-step.active .step-icon,
+    .disclosure,
+    details[open] .chain-step {
       animation: none;
       transition: none;
     }

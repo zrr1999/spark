@@ -87,6 +87,7 @@ import {
   prepareSparkDaemonRestartAwareStart,
   publishSparkDaemonProcessOwnership,
   readRunningPid,
+  readSparkDaemonActiveRestart,
   readSparkDaemonRestartTerminal,
   releaseSparkDaemonProcessOwnership,
   runSparkDaemonRestartSuccessor,
@@ -751,8 +752,23 @@ async function restart(
     return 0;
   }
 
+  let requested: Awaited<ReturnType<typeof requestDaemonRestart>> | undefined;
   try {
-    const requested = await (io.daemonRestartFromService ?? requestDaemonRestart)(paths);
+    requested = await (io.daemonRestartFromService ?? requestDaemonRestart)(paths);
+  } catch (error) {
+    if (error instanceof LocalRpcUnavailableError) {
+      // The request may have reached the daemon even if its ACK was lost.
+      // Never turn that ambiguity into SIGTERM, which would cancel the very
+      // invocations a drain restart is meant to preserve.
+      throw new Error(
+        "Spark daemon restart acknowledgement is unavailable; active work was not force-stopped. Check `spark daemon status` before retrying.",
+        { cause: error },
+      );
+    }
+    if (!isRestartRpcUnsupported(error)) throw error;
+  }
+
+  if (requested) {
     io.stdout.write(
       `Spark daemon restart requested at ${requested.requestedAt}; draining active invocations.\n`,
     );
@@ -770,17 +786,6 @@ async function restart(
     });
     io.stdout.write(`Spark daemon restarted as process ${replacementPid}.\n`);
     return 0;
-  } catch (error) {
-    if (error instanceof LocalRpcUnavailableError) {
-      // The request may have reached the daemon even if its ACK was lost.
-      // Never turn that ambiguity into SIGTERM, which would cancel the very
-      // invocations a drain restart is meant to preserve.
-      throw new Error(
-        "Spark daemon restart acknowledgement is unavailable; active work was not force-stopped. Check `spark daemon status` before retrying.",
-        { cause: error },
-      );
-    }
-    if (!isRestartRpcUnsupported(error)) throw error;
   }
 
   // Compatibility path for a daemon that predates drain restart or whose
@@ -921,6 +926,8 @@ async function waitForDaemonReady(
     targetGeneration: string;
   },
 ): Promise<number> {
+  const progressIntervalMs = 5_000;
+  let nextProgressAt = Date.now() + progressIntervalMs;
   let replacementDeadline = previousPid === null ? Date.now() + 30_000 : undefined;
   let observedTerminal: ReturnType<typeof readSparkDaemonRestartTerminal> = null;
   while (true) {
@@ -979,8 +986,22 @@ async function waitForDaemonReady(
           );
         }
       } catch (error) {
-        if (!(error instanceof LocalRpcUnavailableError)) throw error;
+        if (!isRetryableDaemonReadinessRpcError(error)) throw error;
       }
+    }
+    if (expectedRestart && Date.now() >= nextProgressAt) {
+      const activeRestart = readSparkDaemonActiveRestart(paths);
+      const restartState =
+        observedTerminal?.state ??
+        (activeRestart?.restartId === expectedRestart.restartId
+          ? activeRestart.state
+          : "awaiting-successor");
+      io.stdout.write(
+        `Spark daemon restart ${expectedRestart.restartId}: ${restartState}; ` +
+          `predecessor pid ${previousPid}; observed pid ${currentPid ?? "none"}; ` +
+          `target generation ${expectedRestart.targetGeneration}.\n`,
+      );
+      nextProgressAt = Date.now() + progressIntervalMs;
     }
     if (
       previousPid === null ||
@@ -998,6 +1019,13 @@ async function waitForDaemonReady(
     }
     await delay(50);
   }
+}
+
+function isRetryableDaemonReadinessRpcError(error: unknown): error is LocalRpcUnavailableError {
+  return (
+    error instanceof LocalRpcUnavailableError &&
+    !/does not support|unknown local RPC method:/iu.test(error.message)
+  );
 }
 
 function isRestartRpcUnsupported(error: unknown): boolean {
@@ -1047,6 +1075,23 @@ async function daemonStatus(
   }
 
   if (!status.running) {
+    if (status.restart) {
+      io.stdout.write(
+        "restarting\n" +
+          `  restart id       ${status.restart.restartId}\n` +
+          `  restart state    ${status.restart.state}\n` +
+          `  requested        ${status.restart.requestedAt}\n` +
+          `  previous pid     ${status.restart.previousPid}\n` +
+          `  target instance  ${status.restart.targetInstanceId}\n` +
+          `  target generation ${status.restart.targetGeneration}\n` +
+          `  socket           ${status.socketPath} (temporarily unavailable)\n` +
+          ("unreachable" in status
+            ? `  observed pid     ${status.pid}\n` + `  error            ${status.error}\n`
+            : "") +
+          "  inspect          spark daemon status --json\n",
+      );
+      return 0;
+    }
     if ("unreachable" in status) {
       io.stdout.write(
         "unreachable\n" +
@@ -1140,8 +1185,19 @@ function daemonServerConnectionLabel(server: {
     : "WS disconnected";
 }
 
+interface DaemonRestartStatus {
+  state: "armed" | "claimed";
+  restartId: string;
+  requestedAt: string;
+  previousPid: number;
+  previousInstanceId: string;
+  previousGeneration: string;
+  targetInstanceId: string;
+  targetGeneration: string;
+}
+
 type DaemonStatus =
-  | { running: false; socketPath: string }
+  | { running: false; socketPath: string; restart?: DaemonRestartStatus }
   | {
       running: false;
       unreachable: true;
@@ -1150,6 +1206,7 @@ type DaemonStatus =
       stateDbPath: string;
       startedAt: string;
       error: string;
+      restart?: DaemonRestartStatus;
     }
   | {
       running: true;
@@ -1197,8 +1254,9 @@ async function buildDaemonStatus(
 ): Promise<DaemonStatus> {
   const socketPath = localRpcSocketPath(paths);
   const pid = readRunningPid(paths);
+  const restart = daemonRestartStatus(paths);
   if (!pid) {
-    return { running: false, socketPath };
+    return { running: false, socketPath, ...(restart ? { restart } : {}) };
   }
 
   try {
@@ -1222,8 +1280,26 @@ async function buildDaemonStatus(
       stateDbPath: paths.databasePath,
       startedAt: statSync(paths.pidFile).mtime.toISOString(),
       error: errorMessage(error),
+      ...(restart ? { restart } : {}),
     };
   }
+}
+
+function daemonRestartStatus(
+  paths: ReturnType<typeof resolveSparkPaths>,
+): DaemonRestartStatus | undefined {
+  const restart = readSparkDaemonActiveRestart(paths);
+  if (!restart) return undefined;
+  return {
+    state: restart.state,
+    restartId: restart.restartId,
+    requestedAt: restart.requestedAt,
+    previousPid: restart.previousPid,
+    previousInstanceId: restart.previousInstanceId,
+    previousGeneration: restart.previousGeneration,
+    targetInstanceId: restart.targetInstanceId,
+    targetGeneration: restart.targetGeneration,
+  };
 }
 
 async function workspace(
@@ -2397,13 +2473,30 @@ async function logs(
 ): Promise<number> {
   const flags = parseFlags(args);
   const lineCount = parseLineCount(flags.lines ?? flags.n);
-  writeLogTail(paths.logFile, lineCount, io);
+  const sources = daemonLogSources(paths);
+  writeLogTail(sources, lineCount, io);
   if (flags.follow !== "true" && flags.f !== "true") {
     return 0;
   }
 
-  await followLogFile(paths.logFile, io);
+  await followLogFiles(sources, io);
   return 0;
+}
+
+interface DaemonLogSource {
+  label: string;
+  path: string;
+}
+
+function daemonLogSources(paths: ReturnType<typeof resolveSparkPaths>): DaemonLogSource[] {
+  return [
+    { label: "service stdout", path: join(paths.logDir, "service.stdout.log") },
+    { label: "service stderr", path: join(paths.logDir, "service.stderr.log") },
+    // Keep the structured log path visible for compatibility with callers or
+    // future sinks that write it, even though service output currently lands
+    // in the supervisor-owned stdout/stderr files above.
+    { label: "daemon events", path: paths.logFile },
+  ];
 }
 
 function parseLineCount(value: string | undefined): number {
@@ -2418,44 +2511,73 @@ function parseLineCount(value: string | undefined): number {
   return parsed;
 }
 
-function writeLogTail(logFile: string, lineCount: number, io: CliIo): void {
-  if (!existsSync(logFile)) {
-    io.stdout.write(`no logs yet: ${logFile}\n`);
+function writeLogTail(sources: readonly DaemonLogSource[], lineCount: number, io: CliIo): void {
+  const existingSources = sources.filter((source) => existsSync(source.path));
+  if (existingSources.length === 0) {
+    io.stdout.write(
+      `no daemon logs yet; checked:\n${sources
+        .map((source) => `  ${source.label}: ${source.path}`)
+        .join("\n")}\n`,
+    );
     return;
   }
 
-  const content = readFileSync(logFile, "utf8");
-  if (!content) {
-    return;
-  }
+  for (const source of existingSources) {
+    const content = readFileSync(source.path, "utf8");
+    if (!content) {
+      continue;
+    }
 
-  const lines = content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
-  const selected = lineCount === 0 ? [] : lines.slice(-lineCount);
-  if (selected.length > 0) {
-    io.stdout.write(`${selected.join("\n")}\n`);
+    const lines = content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
+    const selected = lineCount === 0 ? [] : lines.slice(-lineCount);
+    if (selected.length > 0) {
+      writeLogSource(source, `${selected.join("\n")}\n`, io);
+    }
   }
 }
 
-async function followLogFile(logFile: string, io: CliIo): Promise<void> {
-  let offset = existsSync(logFile) ? readFileSync(logFile, "utf8").length : 0;
-  await new Promise<void>((resolvePromise) => {
-    const listener = () => {
-      if (!existsSync(logFile)) {
-        return;
-      }
+function writeLogSource(source: DaemonLogSource, content: string, io: CliIo): void {
+  io.stdout.write(`==> ${source.label} (${source.path}) <==\n`);
+  io.stdout.write(content);
+  if (!content.endsWith("\n")) {
+    io.stdout.write("\n");
+  }
+}
 
-      const content = readFileSync(logFile, "utf8");
-      if (content.length < offset) {
-        offset = 0;
-      }
-      if (content.length > offset) {
-        io.stdout.write(content.slice(offset));
-        offset = content.length;
-      }
-    };
-    watchFile(logFile, { interval: 500 }, listener);
+async function followLogFiles(sources: readonly DaemonLogSource[], io: CliIo): Promise<void> {
+  const offsets = new Map(
+    sources.map((source) => [
+      source.path,
+      existsSync(source.path) ? readFileSync(source.path, "utf8").length : 0,
+    ]),
+  );
+  const listeners = new Map<string, () => void>();
+
+  await new Promise<void>((resolvePromise) => {
+    for (const source of sources) {
+      const listener = () => {
+        if (!existsSync(source.path)) {
+          return;
+        }
+
+        const content = readFileSync(source.path, "utf8");
+        let offset = offsets.get(source.path) ?? 0;
+        if (content.length < offset) {
+          offset = 0;
+        }
+        if (content.length > offset) {
+          writeLogSource(source, content.slice(offset), io);
+          offsets.set(source.path, content.length);
+        }
+      };
+      listeners.set(source.path, listener);
+      watchFile(source.path, { interval: 500 }, listener);
+    }
+
     process.once("SIGINT", () => {
-      unwatchFile(logFile, listener);
+      for (const source of sources) {
+        unwatchFile(source.path, listeners.get(source.path));
+      }
       resolvePromise();
     });
   });

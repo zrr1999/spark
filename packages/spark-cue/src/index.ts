@@ -429,13 +429,123 @@ async function invalidateManagedClientForRetry(client: CueClient): Promise<void>
 interface CueSideEffectRetryOptions {
   /** False until the daemon exposes enough query state to reconstruct the result. */
   replaySafe?: boolean;
-  /** Execution budget shared by attempts; the initial connection is excluded. */
+  /** Execution budget shared by connection, backoff, and replay attempts. */
   deadlineMs?: number;
+  /** Cancellation budget inherited from the owning tool call. */
+  signal?: AbortSignal;
+  /** Safe, bounded retry telemetry for the active tool surface. */
+  onRetry?: (progress: CueSideEffectRetryProgress) => void;
 }
 
 interface CueSideEffectAttempt {
-  attempt: 1 | 2;
+  attempt: number;
   remainingMs?: number;
+}
+
+interface CueSideEffectRetryProgress {
+  /** Attempt about to run; the initial attempt is 1. */
+  attempt: number;
+  delayMs: number;
+  remainingMs?: number;
+}
+
+const CUE_RETRY_BASE_DELAY_MS = 100;
+const CUE_RETRY_MAX_DELAY_MS = 5_000;
+
+function cueRetryDelayMs(replayIndex: number): number {
+  const exponent = Math.min(16, Math.max(0, replayIndex - 1));
+  const cap = Math.min(CUE_RETRY_MAX_DELAY_MS, CUE_RETRY_BASE_DELAY_MS * 2 ** exponent);
+  // Equal jitter avoids synchronized reconnect storms while retaining a useful
+  // minimum pause when a local daemon or remote SSH gateway is unavailable.
+  return Math.floor(cap / 2 + Math.random() * (cap / 2));
+}
+
+function cueRetryDeadlineError(operationId: string): CueError {
+  return new CueError(
+    "IDEMPOTENT_RETRY_DEADLINE_EXCEEDED",
+    `operation ${operationId} remained transport-ambiguous when its retry deadline expired`,
+  );
+}
+
+async function withinCueRetryBudget<T>(
+  promise: Promise<T>,
+  operationId: string,
+  signal: AbortSignal | undefined,
+  deadlineAt: number | undefined,
+): Promise<T> {
+  signal?.throwIfAborted();
+  if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
+    throw cueRetryDeadlineError(operationId);
+  }
+  if (!signal && deadlineAt === undefined) return promise;
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const settle = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      signal?.removeEventListener("abort", onAbort);
+      callback();
+    };
+    const onAbort = () =>
+      settle(() => reject(signal?.reason ?? new DOMException("Aborted", "AbortError")));
+
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    if (deadlineAt !== undefined) {
+      deadlineTimer = setTimeout(
+        () => settle(() => reject(cueRetryDeadlineError(operationId))),
+        Math.max(0, deadlineAt - Date.now()),
+      );
+    }
+    void promise.then(
+      (value) => settle(() => resolve(value)),
+      (error) => settle(() => reject(error)),
+    );
+  });
+}
+
+function waitForCueRetry(
+  delayMs: number,
+  operationId: string,
+  signal: AbortSignal | undefined,
+  deadlineAt: number | undefined,
+): Promise<void> {
+  return withinCueRetryBudget(
+    new Promise<void>((resolve) => setTimeout(resolve, delayMs)),
+    operationId,
+    signal,
+    deadlineAt,
+  );
+}
+
+function cueRetryProgressUpdate(
+  onUpdate: (update: { content: Array<{ type: "text"; text: string }> }) => void,
+): (progress: CueSideEffectRetryProgress) => void {
+  return ({ attempt, delayMs, remainingMs }) => {
+    const budget = remainingMs === undefined ? "" : `; ${Math.ceil(remainingMs / 1_000)}s left`;
+    onUpdate({
+      content: [
+        {
+          type: "text",
+          text: `cue-shell transport interrupted; retrying attempt ${attempt} in ${delayMs}ms${budget}`,
+        },
+      ],
+    });
+  };
+}
+
+function cueToolRetryOptions(
+  signal: AbortSignal,
+  onUpdate: (update: { content: Array<{ type: "text"; text: string }> }) => void,
+  options: Omit<CueSideEffectRetryOptions, "signal" | "onRetry"> = {},
+): CueSideEffectRetryOptions {
+  return { ...options, signal, onRetry: cueRetryProgressUpdate(onUpdate) };
 }
 
 async function withCueIdempotentRetry<T>(
@@ -445,62 +555,88 @@ async function withCueIdempotentRetry<T>(
   run: (client: CueClient, attempt: CueSideEffectAttempt) => Promise<T>,
   options: CueSideEffectRetryOptions = {},
 ): Promise<T> {
-  const firstClient = await getClient(ctx, owner);
+  const operationId = cueOperationId(operation);
   const deadlineAt =
     options.deadlineMs === undefined ? undefined : Date.now() + Math.max(0, options.deadlineMs);
-  const attemptContext = (attempt: 1 | 2): CueSideEffectAttempt => {
+  const attemptContext = (attempt: number): CueSideEffectAttempt => {
     if (deadlineAt === undefined) return { attempt };
     const remainingMs = Math.max(0, deadlineAt - Date.now());
-    // Even with no wait budget left, attempt two must replay the same key to
-    // recover the authoritative id and immediately observe/cancel it. Refusing
-    // the replay here could strand an accepted foreground execution.
     return { attempt, remainingMs };
   };
+  const firstClient = await withinCueRetryBudget(
+    getClient(ctx, owner),
+    operationId,
+    options.signal,
+    deadlineAt,
+  );
   const firstInstanceId = firstClient.daemonInstanceId;
-  try {
-    return await run(firstClient, attemptContext(1));
-  } catch (error) {
-    if (!isRetryableCueTransportError(error)) throw error;
-    const operationId = cueOperationId(operation);
-    if (ctx?.cueClient) {
-      throw new CueError(
-        "IDEMPOTENT_RETRY_UNAVAILABLE",
-        `operation ${operationId} became transport-ambiguous, and an externally injected CueClient cannot be rebuilt safely: ${cueErrorDetail(error)}`,
-      );
-    }
-
-    // Close the old transport before reconnecting. A late response on the old
-    // request id must not race the replay on the new connection.
-    await invalidateManagedClientForRetry(firstClient);
-    if (options.replaySafe === false) {
-      throw new CueError(
-        "IDEMPOTENT_RECOVERY_UNSUPPORTED",
-        `operation ${operationId} may have executed, but its result cannot yet be reconstructed after reconnect`,
-      );
-    }
-
-    const retryClient = await getClient(ctx, owner);
-    if (
-      firstInstanceId === null ||
-      retryClient.daemonInstanceId === null ||
-      retryClient.daemonInstanceId !== firstInstanceId
-    ) {
-      const retryInstanceId = retryClient.daemonInstanceId;
-      await invalidateManagedClientForRetry(retryClient);
-      throw new CueError(
-        "IDEMPOTENT_DAEMON_CHANGED",
-        `operation ${operationId} cannot be replayed because cued changed from instance ${firstInstanceId ?? "unknown"} to ${retryInstanceId ?? "unknown"}`,
-      );
-    }
+  let client = firstClient;
+  let attempt = 1;
+  for (;;) {
     try {
-      return await run(retryClient, attemptContext(2));
-    } catch (retryError) {
-      if (!isRetryableCueTransportError(retryError)) throw retryError;
-      await invalidateManagedClientForRetry(retryClient);
-      throw new CueError(
-        "IDEMPOTENT_RETRY_EXHAUSTED",
-        `operation ${operationId} remained transport-ambiguous after one same-key replay: ${cueErrorDetail(retryError)}`,
+      return await withinCueRetryBudget(
+        run(client, attemptContext(attempt)),
+        operationId,
+        options.signal,
+        deadlineAt,
       );
+    } catch (error) {
+      if (!isRetryableCueTransportError(error)) throw error;
+      if (ctx?.cueClient) {
+        throw new CueError(
+          "IDEMPOTENT_RETRY_UNAVAILABLE",
+          `operation ${operationId} became transport-ambiguous, and an externally injected CueClient cannot be rebuilt safely: ${cueErrorDetail(error)}`,
+        );
+      }
+      if (options.replaySafe === false) {
+        throw new CueError(
+          "IDEMPOTENT_RECOVERY_UNSUPPORTED",
+          `operation ${operationId} may have executed, but its result cannot yet be reconstructed after reconnect`,
+        );
+      }
+
+      // Close the old transport before reconnecting. A late response on the old
+      // request id must not race the replay on the new connection.
+      await invalidateManagedClientForRetry(client);
+      for (;;) {
+        const nextAttempt = attempt + 1;
+        const delayMs = cueRetryDelayMs(attempt);
+        const remainingMs =
+          deadlineAt === undefined ? undefined : Math.max(0, deadlineAt - Date.now());
+        options.onRetry?.({ attempt: nextAttempt, delayMs, remainingMs });
+        await waitForCueRetry(delayMs, operationId, options.signal, deadlineAt);
+
+        let retryClient: CueClient;
+        try {
+          retryClient = await withinCueRetryBudget(
+            getClient(ctx, owner),
+            operationId,
+            options.signal,
+            deadlineAt,
+          );
+        } catch (reconnectError) {
+          if (reconnectError instanceof CueError && reconnectError.code === "DAEMON_UNREACHABLE") {
+            attempt = nextAttempt;
+            continue;
+          }
+          throw reconnectError;
+        }
+        if (
+          firstInstanceId === null ||
+          retryClient.daemonInstanceId === null ||
+          retryClient.daemonInstanceId !== firstInstanceId
+        ) {
+          const retryInstanceId = retryClient.daemonInstanceId;
+          await invalidateManagedClientForRetry(retryClient);
+          throw new CueError(
+            "IDEMPOTENT_DAEMON_CHANGED",
+            `operation ${operationId} cannot be replayed because cued changed from instance ${firstInstanceId ?? "unknown"} to ${retryInstanceId ?? "unknown"}`,
+          );
+        }
+        client = retryClient;
+        attempt = nextAttempt;
+        break;
+      }
     }
   }
 }
@@ -1570,7 +1706,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       toolCallId: string,
       params: Record<string, unknown>,
       signal: AbortSignal,
-      _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
+      onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: PiCueToolContext,
     ) {
       rejectRemovedCueParam(params, "tail", "tail_bytes", "cue_exec");
@@ -1596,8 +1732,12 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
 
       if (background) {
         const operation = cueToolOperation(ctx, toolCallId, "cue_exec/background");
-        const result = await withCueIdempotentRetry(ctx, clientOwner, operation, (cued) =>
-          cued.startJob(command, { cwd, pty, needs, operation }),
+        const result = await withCueIdempotentRetry(
+          ctx,
+          clientOwner,
+          operation,
+          (cued) => cued.startJob(command, { cwd, pty, needs, operation }),
+          cueToolRetryOptions(signal, onUpdate),
         );
         const lines: string[] = [];
         if (result.kind === "chain" && result.chain) {
@@ -1638,7 +1778,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             signal,
             operation,
           }),
-        { deadlineMs: effectiveTimeout * 1_000 },
+        cueToolRetryOptions(signal, onUpdate, { deadlineMs: effectiveTimeout * 1_000 }),
       );
 
       if (result.timedOut) {
@@ -1758,11 +1898,21 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       toolName: "cue_run" | "cue_script" | "script_run" | "script_eval";
       toolCallId: string;
       signal: AbortSignal;
+      onUpdate: (update: { content: Array<{ type: "text"; text: string }> }) => void;
     },
     ctx: PiCueToolContext,
   ) {
-    const { resolvedPath, body, pathLabel, timeout, tailBytes, toolName, toolCallId, signal } =
-      options;
+    const {
+      resolvedPath,
+      body,
+      pathLabel,
+      timeout,
+      tailBytes,
+      toolName,
+      toolCallId,
+      signal,
+      onUpdate,
+    } = options;
     signal.throwIfAborted();
     if (!body.trim()) {
       throw new Error(`${toolName} body is empty (cue-shell rejects empty scripts)`);
@@ -1780,7 +1930,10 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           signal,
           operation,
         }),
-      { replaySafe: true, deadlineMs: timeout * 1_000 },
+      cueToolRetryOptions(signal, onUpdate, {
+        replaySafe: true,
+        deadlineMs: timeout * 1_000,
+      }),
     );
     const lines = renderCueScriptResult(result, { pathLabel, timeout, tailBytes });
     const summary = result.items.map((item) => ({
@@ -1855,7 +2008,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       toolCallId: string,
       params: Record<string, unknown>,
       signal: AbortSignal,
-      _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
+      onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: PiCueToolContext,
     ) {
       const pathParam = normalizeRequiredCueString(params.path, "cue_run path");
@@ -1888,6 +2041,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           toolName: "cue_run",
           toolCallId,
           signal,
+          onUpdate,
         },
         ctx,
       );
@@ -1952,7 +2106,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       toolCallId: string,
       params: Record<string, unknown>,
       signal: AbortSignal,
-      _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
+      onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: PiCueToolContext,
     ) {
       const scriptParam = normalizeRequiredCueString(params.script, "cue_script script");
@@ -1974,6 +2128,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           toolName: "cue_script",
           toolCallId,
           signal,
+          onUpdate,
         },
         ctx,
       );
@@ -2027,7 +2182,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       toolCallId: string,
       params: Record<string, unknown>,
       signal: AbortSignal,
-      _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
+      onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: PiCueToolContext,
     ) {
       const language = normalizeCueEnum(
@@ -2077,6 +2232,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             toolName: "script_run",
             toolCallId,
             signal,
+            onUpdate,
           },
           ctx,
         );
@@ -2097,7 +2253,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             signal,
             operation,
           }),
-        { deadlineMs: timeout * 1_000 },
+        cueToolRetryOptions(signal, onUpdate, { deadlineMs: timeout * 1_000 }),
       );
     },
   });
@@ -2152,7 +2308,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       toolCallId: string,
       params: Record<string, unknown>,
       signal: AbortSignal,
-      _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
+      onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: PiCueToolContext,
     ) {
       const language = normalizeCueEnum(
@@ -2191,6 +2347,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             toolName: "script_eval",
             toolCallId,
             signal,
+            onUpdate,
           },
           ctx,
         );
@@ -2212,7 +2369,7 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
             signal,
             operation,
           }),
-        { deadlineMs: timeout * 1_000 },
+        cueToolRetryOptions(signal, onUpdate, { deadlineMs: timeout * 1_000 }),
       );
     },
   });
@@ -2275,8 +2432,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     async execute(
       toolCallId: string,
       params: Record<string, unknown>,
-      _signal: AbortSignal,
-      _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
+      signal: AbortSignal,
+      onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: PiCueToolContext,
     ) {
       const action = normalizeCueEnum(params.action, "list", CUE_JOB_ACTIONS, "cue_jobs action");
@@ -2323,8 +2480,12 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
 
       if (action === "stop") {
         const operation = cueToolOperation(ctx, toolCallId, "cue_jobs/stop");
-        await withCueIdempotentRetry(ctx, clientOwner, operation, (client) =>
-          client.stopJob(id, operation),
+        await withCueIdempotentRetry(
+          ctx,
+          clientOwner,
+          operation,
+          (client) => client.stopJob(id, operation),
+          cueToolRetryOptions(signal, onUpdate),
         );
         return {
           content: [{ type: "text" as const, text: `Stopped ${id}.` }],
@@ -2633,8 +2794,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     async execute(
       toolCallId: string,
       params: Record<string, unknown>,
-      _signal: AbortSignal,
-      _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
+      signal: AbortSignal,
+      onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: PiCueToolContext,
     ) {
       const action = normalizeCueEnum(
@@ -2669,8 +2830,12 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
           };
         }
         const operation = cueToolOperation(ctx, toolCallId, "cue_schedule/add");
-        const cronId = await withCueIdempotentRetry(ctx, clientOwner, operation, (client) =>
-          client.addCron(schedule, command, operation),
+        const cronId = await withCueIdempotentRetry(
+          ctx,
+          clientOwner,
+          operation,
+          (client) => client.addCron(schedule, command, operation),
+          cueToolRetryOptions(signal, onUpdate),
         );
         return {
           content: [
@@ -2727,8 +2892,12 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
 
       if (action === "pause") {
         const operation = cueToolOperation(ctx, toolCallId, "cue_schedule/pause");
-        await withCueIdempotentRetry(ctx, clientOwner, operation, (client) =>
-          client.pauseCron(id, operation),
+        await withCueIdempotentRetry(
+          ctx,
+          clientOwner,
+          operation,
+          (client) => client.pauseCron(id, operation),
+          cueToolRetryOptions(signal, onUpdate),
         );
         return {
           content: [
@@ -2742,8 +2911,12 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       }
       if (action === "resume") {
         const operation = cueToolOperation(ctx, toolCallId, "cue_schedule/resume");
-        await withCueIdempotentRetry(ctx, clientOwner, operation, (client) =>
-          client.resumeCron(id, operation),
+        await withCueIdempotentRetry(
+          ctx,
+          clientOwner,
+          operation,
+          (client) => client.resumeCron(id, operation),
+          cueToolRetryOptions(signal, onUpdate),
         );
         return {
           content: [
@@ -2757,8 +2930,12 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       }
       if (action === "remove") {
         const operation = cueToolOperation(ctx, toolCallId, "cue_schedule/remove");
-        await withCueIdempotentRetry(ctx, clientOwner, operation, (client) =>
-          client.removeCron(id, operation),
+        await withCueIdempotentRetry(
+          ctx,
+          clientOwner,
+          operation,
+          (client) => client.removeCron(id, operation),
+          cueToolRetryOptions(signal, onUpdate),
         );
         return {
           content: [
@@ -2834,8 +3011,8 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
     async execute(
       toolCallId: string,
       params: Record<string, unknown>,
-      _signal: AbortSignal,
-      _onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
+      signal: AbortSignal,
+      onUpdate: (u: { content: Array<{ type: "text"; text: string }> }) => void,
       ctx: PiCueToolContext,
     ) {
       rejectRemovedCueParam(params, "env_tail_bytes", "tail_bytes", "cue_scope");
@@ -2853,8 +3030,12 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         const key = normalizeCueEnvKey(params.key, "cue_scope key");
         const value = normalizeCueEnvValue(params.value, "cue_scope value");
         const operation = cueToolOperation(ctx, toolCallId, "cue_scope/env_set");
-        const scope = await withCueIdempotentRetry(ctx, clientOwner, operation, (client) =>
-          client.setEnv({ [key]: value }, operation),
+        const scope = await withCueIdempotentRetry(
+          ctx,
+          clientOwner,
+          operation,
+          (client) => client.setEnv({ [key]: value }, operation),
+          cueToolRetryOptions(signal, onUpdate),
         );
         return {
           content: [
@@ -2870,8 +3051,12 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       if (action === "env_unset") {
         const key = normalizeCueEnvKey(params.key, "cue_scope key");
         const operation = cueToolOperation(ctx, toolCallId, "cue_scope/env_unset");
-        const scope = await withCueIdempotentRetry(ctx, clientOwner, operation, (client) =>
-          client.unsetEnv([key], operation),
+        const scope = await withCueIdempotentRetry(
+          ctx,
+          clientOwner,
+          operation,
+          (client) => client.unsetEnv([key], operation),
+          cueToolRetryOptions(signal, onUpdate),
         );
         return {
           content: [
@@ -2890,8 +3075,12 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
         const currentPath = parseCueEnvValue(envText, "PATH") ?? "";
         const nextPath = currentPath ? `${path}:${currentPath}` : path;
         const operation = cueToolOperation(ctx, toolCallId, "cue_scope/path_prepend");
-        const scope = await withCueIdempotentRetry(ctx, clientOwner, operation, (client) =>
-          client.setEnv({ PATH: nextPath }, operation),
+        const scope = await withCueIdempotentRetry(
+          ctx,
+          clientOwner,
+          operation,
+          (client) => client.setEnv({ PATH: nextPath }, operation),
+          cueToolRetryOptions(signal, onUpdate),
         );
         return {
           content: [
@@ -2907,8 +3096,12 @@ export function registerPiCueTools(pi: PiCueExtensionApi) {
       if (action === "cd") {
         const path = normalizeCueSessionPath(params.path, "cue_scope path");
         const operation = cueToolOperation(ctx, toolCallId, "cue_scope/cd");
-        const scope = await withCueIdempotentRetry(ctx, clientOwner, operation, (client) =>
-          client.changeDirectory(path, operation),
+        const scope = await withCueIdempotentRetry(
+          ctx,
+          clientOwner,
+          operation,
+          (client) => client.changeDirectory(path, operation),
+          cueToolRetryOptions(signal, onUpdate),
         );
         return {
           content: [{ type: "text" as const, text: `Changed cue session cwd.\n${scope.summary}` }],

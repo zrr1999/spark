@@ -23,9 +23,9 @@ import {
 } from "./edit-diff.ts";
 import {
   atomicReplaceTextFile,
-  contentVersion,
   createFileReadMetadata,
   isFileVersionPrecondition,
+  readRegularFileSnapshot,
   type FileVersionState,
 } from "./file-version.ts";
 import { pathExists, resolveReadPath, resolveToCwd } from "./path-utils.ts";
@@ -384,18 +384,14 @@ export function createEditToolConfig(): ToolConfig {
       }
       const absolutePath = resolveToCwd(rawPath, cwd);
 
-      if (!(await pathExists(absolutePath))) {
-        return errorResult(`Could not edit file: ${rawPath}. Error code: ENOENT.`);
-      }
-      throwIfAborted(signal);
-
-      let rawBuffer: Buffer;
+      let snapshot: Awaited<ReturnType<typeof readRegularFileSnapshot>>;
       try {
-        rawBuffer = await readFile(absolutePath);
+        snapshot = await readRegularFileSnapshot(absolutePath);
       } catch (error) {
         return errorResult(`Could not edit file: ${rawPath}. ${errorMessage(error)}.`);
       }
       throwIfAborted(signal);
+      const rawBuffer = snapshot.bytes;
 
       let rawContent: string;
       try {
@@ -425,7 +421,7 @@ export function createEditToolConfig(): ToolConfig {
       let writeResult: Awaited<ReturnType<typeof atomicReplaceTextFile>>;
       try {
         writeResult = await atomicReplaceTextFile(absolutePath, finalContent, {
-          expectedVersion: contentVersion(rawBuffer),
+          expectedVersion: snapshot.version,
           signal,
         });
       } catch (error) {

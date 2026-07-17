@@ -25,6 +25,8 @@ class FakeWebSocket extends EventEmitter {
 }
 
 function createApiMock() {
+  const getAccessToken = vi.fn(async () => "token");
+  const getGatewayUrl = vi.fn(async () => "wss://gateway.example");
   const sendC2CMarkdownMessage = vi.fn(async () => ({ id: "reply-c2c" }));
   const sendGroupMarkdownMessage = vi.fn(async () => ({ id: "reply-group" }));
   const sendC2CMarkdownKeyboardMessage = vi.fn(async () => ({ id: "ask-c2c" }));
@@ -38,8 +40,8 @@ function createApiMock() {
       messageSequence += 1;
       return messageSequence;
     }),
-    getAccessToken: vi.fn(async () => "token"),
-    getGatewayUrl: vi.fn(async () => "wss://gateway.example"),
+    getAccessToken,
+    getGatewayUrl,
     sendC2CMessage: vi.fn(async () => ({ id: "text-c2c" })),
     sendGroupMessage: vi.fn(async () => ({ id: "text-group" })),
     sendC2CMarkdownMessage,
@@ -52,6 +54,8 @@ function createApiMock() {
   };
   return {
     api,
+    getAccessToken,
+    getGatewayUrl,
     sendC2CMarkdownMessage,
     sendGroupMarkdownMessage,
     sendC2CMarkdownKeyboardMessage,
@@ -137,6 +141,66 @@ describe("createQqbotTransport", () => {
     expect(reconnectRandom).toHaveBeenCalled();
     await vi.waitFor(() => expect(transport.status?.()).toEqual({ state: "connected" }));
     await transport.stop();
+  });
+
+  it("reports a sanitized retry lifecycle across initial and supervised failures", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const retryConfig: QqbotAdapterConfig = {
+      ...config,
+      client_secret: "client-secret-value",
+    };
+    const { api, getAccessToken, getGatewayUrl } = createApiMock();
+    getAccessToken.mockResolvedValue("access-token-value");
+    getGatewayUrl
+      .mockRejectedValueOnce(
+        new Error("gateway refused client_secret=client-secret-value token=access-token-value"),
+      )
+      .mockRejectedValueOnce(new Error("gateway refused Bearer access-token-value"))
+      .mockResolvedValue("wss://gateway.example");
+    const transport = createQqbotTransport(retryConfig, {
+      api,
+      reconnectDelaysMs: [1],
+      reconnectRandom: () => 1,
+      webSocketFactory: () => {
+        const socket = new FakeWebSocket();
+        queueMicrotask(() => {
+          socket.emit(
+            "message",
+            Buffer.from(JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } })),
+          );
+          socket.emit(
+            "message",
+            Buffer.from(
+              JSON.stringify({
+                op: 0,
+                s: 1,
+                t: "READY",
+                d: { session_id: "session-1" },
+              }),
+            ),
+          );
+        });
+        return socket as unknown as WebSocket;
+      },
+    });
+
+    try {
+      await transport.start(() => undefined);
+      await vi.waitFor(() => expect(transport.status?.()).toEqual({ state: "connected" }));
+      const logs = consoleError.mock.calls.map(([message]) => String(message));
+      expect(logs).toEqual([
+        expect.stringContaining("qqbot initial connect failed"),
+        expect.stringContaining("qqbot supervised reconnect scheduled attempt=1 delayMs=1"),
+        expect.stringContaining("qqbot supervised reconnect failed attempt=1"),
+        expect.stringContaining("qqbot supervised reconnect scheduled attempt=2 delayMs=1"),
+        expect.stringContaining("qqbot supervised reconnect succeeded attempt=2"),
+      ]);
+      expect(logs.join("\n")).not.toContain("client-secret-value");
+      expect(logs.join("\n")).not.toContain("access-token-value");
+    } finally {
+      await transport.stop();
+      consoleError.mockRestore();
+    }
   });
 
   it("times out after Hello when Identify never reaches READY and reconnects", async () => {

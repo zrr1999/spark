@@ -35,44 +35,48 @@ const daemonModelControlClient: CockpitModelControlClient = {
         return await runtimeClient.setDefault({ model: input.model as SparkModelRef });
       case "session.model.set":
         return await runtimeClient.setSessionModel({
-          sessionId: String(input.sessionId ?? ""),
+          sessionId: stringParam(input.sessionId),
           model: input.model as SparkModelRef,
         });
       case "session.thinking.set":
         return await runtimeClient.setSessionThinking({
-          sessionId: String(input.sessionId ?? ""),
+          sessionId: stringParam(input.sessionId),
           thinkingLevel: input.thinkingLevel as SparkThinkingLevel,
         });
       case "provider.auth.api-key.set":
         return await runtimeClient.setProviderApiKey({
-          providerName: String(input.providerName ?? ""),
-          apiKey: String(input.apiKey ?? ""),
+          providerName: stringParam(input.providerName),
+          apiKey: stringParam(input.apiKey),
           context: input.context as RuntimeEphemeralSecretRequestContext,
         });
       case "provider.auth.logout":
         return await runtimeClient.logoutProvider({
-          providerName: String(input.providerName ?? ""),
+          providerName: stringParam(input.providerName),
         });
       case "provider.auth.login.start":
         return await runtimeClient.startOAuth({
-          providerName: String(input.providerName ?? ""),
+          providerName: stringParam(input.providerName),
         });
       case "provider.auth.login.status":
-        return await runtimeClient.oauthStatus({ flowId: String(input.flowId ?? "") });
+        return await runtimeClient.oauthStatus({ flowId: stringParam(input.flowId) });
       case "provider.auth.login.respond":
         return await runtimeClient.respondOAuth({
-          flowId: String(input.flowId ?? ""),
-          promptId: String(input.promptId ?? ""),
-          value: String(input.value ?? ""),
+          flowId: stringParam(input.flowId),
+          promptId: stringParam(input.promptId),
+          value: stringParam(input.value),
           context: input.context as RuntimeEphemeralSecretRequestContext,
         });
       case "provider.auth.login.cancel":
-        return await runtimeClient.cancelOAuth({ flowId: String(input.flowId ?? "") });
+        return await runtimeClient.cancelOAuth({ flowId: stringParam(input.flowId) });
       default:
         throw new Error(`Unsupported Cockpit runtime model control method: ${method}`);
     }
   },
 };
+
+function stringParam(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
 
 const emptySnapshot: SparkModelControlSnapshot = {
   providers: [],

@@ -3,7 +3,7 @@
   import githubLightDefault from "@shikijs/themes/github-light-default";
   import {
     cjk,
-    math,
+    createMathPlugin,
     mermaid,
     Streamdown,
     type StreamdownProps,
@@ -11,7 +11,11 @@
 
   type Props = StreamdownProps;
 
-  const richMarkdownPlugins = { cjk, math, mermaid };
+  const richMarkdownPlugins = {
+    cjk,
+    math: createMathPlugin({ singleDollarTextMath: true }),
+    mermaid,
+  };
 
   let {
     content,
@@ -159,9 +163,19 @@
     gap: 4px;
   }
 
+  .ai-response :global([data-streamdown="table-toolbar"]),
+  .ai-response :global([data-streamdown="table-fullscreen-toolbar"]) {
+    align-items: center;
+    display: flex;
+    gap: 4px;
+    justify-content: flex-end;
+    margin-bottom: 5px;
+  }
+
   .ai-response :global([data-streamdown="code-block"] button),
-  .ai-response :global([data-streamdown="table"] button),
-  .ai-response :global([data-streamdown="mermaid"] button) {
+  .ai-response :global([data-streamdown="table-toolbar"] button),
+  .ai-response :global([data-streamdown="table-fullscreen-toolbar"] button),
+  .ai-response :global([data-streamdown-mermaid] button) {
     align-items: center;
     background: color-mix(in srgb, var(--color-code-surface-soft) 86%, transparent);
     border: 1px solid color-mix(in srgb, var(--color-code-muted) 24%, transparent);
@@ -175,10 +189,20 @@
   }
 
   .ai-response :global([data-streamdown="code-block"] button:disabled),
-  .ai-response :global([data-streamdown="table"] button:disabled),
-  .ai-response :global([data-streamdown="mermaid"] button:disabled) {
+  .ai-response :global([data-streamdown="table-toolbar"] button:disabled),
+  .ai-response :global([data-streamdown="table-fullscreen-toolbar"] button:disabled),
+  .ai-response :global([data-streamdown-mermaid] button:disabled) {
     cursor: not-allowed;
     opacity: 0.5;
+  }
+
+  .ai-response :global([data-streamdown="code-block"] button svg),
+  .ai-response :global([data-streamdown="table-toolbar"] button svg),
+  .ai-response :global([data-streamdown="table-fullscreen-toolbar"] button svg),
+  .ai-response :global([data-streamdown-mermaid] button svg) {
+    height: 14px;
+    max-width: none;
+    width: 14px;
   }
 
   .ai-response :global([data-streamdown="code-block-body"]) {
@@ -202,6 +226,26 @@
     margin: 0.9rem 0;
     max-width: 100%;
     overflow-x: auto;
+  }
+
+  .ai-response :global([data-streamdown="table-fullscreen"]) {
+    background: var(--color-surface);
+    display: flex;
+    flex-direction: column;
+    inset: 0;
+    overflow: auto;
+    padding: 16px;
+    position: fixed;
+    z-index: 50;
+  }
+
+  .ai-response :global(#table-download-popover) {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 9px;
+    box-shadow: var(--shadow-popover);
+    padding: 4px;
+    z-index: 60;
   }
 
   .ai-response :global(table) {
@@ -233,7 +277,7 @@
   }
 
   .ai-response :global(img),
-  .ai-response :global(svg) {
+  .ai-response :global([data-streamdown-mermaid] > svg) {
     height: auto;
     max-width: 100%;
   }
@@ -244,7 +288,7 @@
     overflow-y: hidden;
   }
 
-  .ai-response :global([data-streamdown="mermaid"]) {
+  .ai-response :global([data-streamdown-mermaid]) {
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: 12px;

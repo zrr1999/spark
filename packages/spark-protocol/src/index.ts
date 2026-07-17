@@ -1,10 +1,11 @@
 import { z } from "zod";
-import { sparkModelRefSchema } from "./model-control.ts";
+import { sparkModelRefSchema, sparkThinkingLevelSchema } from "./model-control.ts";
 
 export * from "./channel-control.ts";
 export * from "./command-delivery.ts";
 export * from "./command-events.ts";
 export * from "./command-sources.ts";
+export * from "./display-error.ts";
 export * from "./errors.ts";
 export * from "./invocation-lifecycle.ts";
 export * from "./model-control.ts";
@@ -258,6 +259,24 @@ export const sparkSessionMailMessageViewSchema = z.object({
   ackedAt: sparkIsoDateTimeSchema.nullable(),
 });
 
+/**
+ * Lifetime, display-safe usage totals for one session.
+ *
+ * Token totals are cumulative across the complete native transcript. Context
+ * tokens describe the latest trustworthy assistant response and may be absent
+ * immediately after compaction or before the first provider response.
+ */
+export const sparkSessionUsageSchema = z.object({
+  inputTokens: z.number().nonnegative().default(0),
+  outputTokens: z.number().nonnegative().default(0),
+  cacheReadTokens: z.number().nonnegative().default(0),
+  cacheWriteTokens: z.number().nonnegative().default(0),
+  costUsd: z.number().nonnegative().default(0),
+  latestCacheHitPercent: z.number().min(0).max(100).optional(),
+  contextTokens: z.number().nonnegative().optional(),
+  contextWindow: z.number().positive().optional(),
+});
+
 export const sparkSessionViewSchema = z.object({
   version: sparkProtocolVersionSchema.default(SPARK_PROTOCOL_VERSION),
   sessionId: z.string().min(1),
@@ -266,6 +285,9 @@ export const sparkSessionViewSchema = z.object({
   activeLeafId: z.string().min(1).optional(),
   status: sparkViewModelStatusSchema.default("idle"),
   model: sparkModelRefSchema.optional(),
+  thinkingLevel: sparkThinkingLevelSchema.optional(),
+  gitBranch: z.string().min(1).optional(),
+  usage: sparkSessionUsageSchema.optional(),
   messages: z.array(sparkMessageViewSchema).default([]),
   tools: z.array(sparkToolCallViewSchema).default([]),
   runs: z.array(sparkRunViewSchema).default([]),
@@ -276,6 +298,75 @@ export const sparkSessionViewSchema = z.object({
   updatedAt: sparkIsoDateTimeSchema.optional(),
   metadata: sparkJsonObjectSchema.default({}),
 });
+
+export const sparkSessionSnapshotHistorySchema = z.object({
+  totalMessages: z.number().int().nonnegative(),
+  loadedMessages: z.number().int().nonnegative(),
+  hiddenMessages: z.number().int().nonnegative(),
+  /** Messages before this page. */
+  earlierMessages: z.number().int().nonnegative(),
+  /** Messages after this page; non-zero for an older cursor page. */
+  laterMessages: z.number().int().nonnegative(),
+  hasEarlierMessages: z.boolean(),
+  /** Exclusive cursor for the next older page. */
+  nextBeforeMessageId: z.string().trim().min(1).optional(),
+});
+
+/** Exact bounded transcript page returned by `session.snapshot.request`. */
+export const sparkSessionSnapshotPageSchema = z
+  .object({
+    snapshot: sparkSessionViewSchema,
+    history: sparkSessionSnapshotHistorySchema,
+  })
+  .superRefine((page, context) => {
+    const { history, snapshot } = page;
+    if (history.loadedMessages + history.hiddenMessages !== history.totalMessages) {
+      context.addIssue({
+        code: "custom",
+        path: ["history"],
+        message: "snapshot history counts do not match its total",
+      });
+    }
+    if (history.earlierMessages + history.laterMessages !== history.hiddenMessages) {
+      context.addIssue({
+        code: "custom",
+        path: ["history"],
+        message: "snapshot page counts do not match hidden messages",
+      });
+    }
+    if (snapshot.messages.length !== history.loadedMessages) {
+      context.addIssue({
+        code: "custom",
+        path: ["snapshot", "messages"],
+        message: "snapshot message window does not match loaded messages",
+      });
+    }
+    if (history.hasEarlierMessages !== history.earlierMessages > 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["history", "hasEarlierMessages"],
+        message: "snapshot continuation flag does not match earlier messages",
+      });
+    }
+    const firstMessageId = snapshot.messages[0]?.id;
+    if (
+      history.hasEarlierMessages &&
+      (!history.nextBeforeMessageId || history.nextBeforeMessageId !== firstMessageId)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["history", "nextBeforeMessageId"],
+        message: "snapshot continuation cursor must match its first message",
+      });
+    }
+    if (!history.hasEarlierMessages && history.nextBeforeMessageId) {
+      context.addIssue({
+        code: "custom",
+        path: ["history", "nextBeforeMessageId"],
+        message: "final snapshot page cannot have a continuation cursor",
+      });
+    }
+  });
 
 export const sparkAskOptionViewSchema = z.object({
   value: z.string().min(1),
@@ -513,7 +604,10 @@ export type SparkTaskTodoView = z.infer<typeof sparkTaskTodoViewSchema>;
 export type SparkTaskView = z.infer<typeof sparkTaskViewSchema>;
 export type SparkArtifactView = z.infer<typeof sparkArtifactViewSchema>;
 export type SparkSessionMailMessageView = z.infer<typeof sparkSessionMailMessageViewSchema>;
+export type SparkSessionUsage = z.infer<typeof sparkSessionUsageSchema>;
 export type SparkSessionView = z.infer<typeof sparkSessionViewSchema>;
+export type SparkSessionSnapshotHistory = z.infer<typeof sparkSessionSnapshotHistorySchema>;
+export type SparkSessionSnapshotPage = z.infer<typeof sparkSessionSnapshotPageSchema>;
 export type SparkAskQuestionView = z.infer<typeof sparkAskQuestionViewSchema>;
 export type SparkInteractionRequest = z.infer<typeof sparkInteractionRequestSchema>;
 export type SparkInteractionResponse = z.infer<typeof sparkInteractionResponseSchema>;

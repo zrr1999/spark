@@ -158,6 +158,11 @@ export async function runSparkHeadlessSession(
     hasUI: false,
     ...(input.interaction ? { ui: { interaction: input.interaction } } : {}),
     ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
+    // The daemon scheduler (or this function's explicit input.timeoutMs) owns
+    // the whole-turn deadline. Do not add a second implicit 10-minute stream
+    // deadline that can fail otherwise healthy durable work while provider
+    // transport retries are still in progress.
+    streamTimeoutMs: 0,
     approvalMethod: input.approvalMethod ?? "auto",
     ...(input.approvalRejectAction ? { approvalRejectAction: input.approvalRejectAction } : {}),
   } satisfies SparkCliHostServicesOptions);

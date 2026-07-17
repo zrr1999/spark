@@ -22,6 +22,7 @@ import {
   matchesSparkDaemonRestartReplacement,
   prepareSparkDaemonRestartAwareStart,
   publishSparkDaemonProcessOwnership,
+  readSparkDaemonActiveRestart,
   readSparkDaemonProcessOwnership,
   readSparkDaemonRestartSuccessorContext,
   releaseSparkDaemonProcessOwnership,
@@ -1097,6 +1098,41 @@ describe("Spark daemon restart successor", () => {
       );
       expect(terminals).toContain("restart.terminal.restart-old.json");
       expect(terminals).toContain("restart.terminal.restart-new.json");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("suppresses stale active restart files once the exact terminal fence exists", () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-restart-projection-fence-"));
+    const fencedPaths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: { runtimeDir: join(root, "run") },
+    });
+    mkdirSync(fencedPaths.runtimeDir, { recursive: true });
+    const record = {
+      restartId: "restart-completed",
+      previousPid: 101,
+      previousInstanceId: "old-instance",
+      previousGeneration: "old-generation",
+      previousStartedAt: "2026-07-17T00:00:00.000Z",
+      previousProcessStartToken: "test:old",
+      targetInstanceId: "new-instance",
+      targetGeneration: "new-generation",
+      protocolVersion: 1,
+      requestedAt: "2026-07-17T00:01:00.000Z",
+    };
+    writeFileSync(
+      join(fencedPaths.runtimeDir, "restart.intent.json"),
+      JSON.stringify({ ...record, state: "armed" }),
+    );
+    writeFileSync(
+      join(fencedPaths.runtimeDir, "restart.terminal.restart-completed.json"),
+      JSON.stringify({ ...record, state: "completed" }),
+    );
+    try {
+      expect(readSparkDaemonActiveRestart(fencedPaths)).toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

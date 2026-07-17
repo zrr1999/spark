@@ -1313,9 +1313,9 @@ async function withResolvedCueServer(socketPath: string, run: () => Promise<void
   );
 }
 
-void test("spark-cue replays an accepted disconnected Eval once with the same operation id", async () => {
-  let executionCount = 0;
+void test("spark-cue keeps replaying disconnected Eval with one operation id", async () => {
   const evalRequests: CueFrame[] = [];
+  const updates: string[] = [];
   const server = await startCueServer((message, socket) => {
     const id = message.id as number;
     const payload = requestPayload(message);
@@ -1325,8 +1325,7 @@ void test("spark-cue replays an accepted disconnected Eval once with the same op
     }
     if ("Eval" in payload) {
       evalRequests.push(message);
-      if (executionCount === 0) {
-        executionCount += 1;
+      if (evalRequests.length <= 3) {
         socket.destroy();
         return;
       }
@@ -1353,16 +1352,80 @@ void test("spark-cue replays an accepted disconnected Eval once with the same op
         "stable-tool-call",
         { command: "sleep 1", background: true },
         new AbortController().signal,
-        () => undefined,
+        (update) => updates.push(update.content[0]?.text ?? ""),
         { cwd: "/work", sessionId: "logical-session" },
       );
       assert.equal(result.details?.jobId, "J-replayed");
     });
-    assert.equal(executionCount, 1);
-    assert.equal(evalRequests.length, 2);
-    assert.equal(evalRequests[0]?.operation_id, evalRequests[1]?.operation_id);
+    assert.equal(evalRequests.length, 4);
+    assert.equal(new Set(evalRequests.map((request) => request.operation_id)).size, 1);
     assert.equal(typeof evalRequests[0]?.operation_id, "string");
-    assert.equal(server.connectionCount(), 2);
+    assert.equal(server.connectionCount(), 4);
+    assert.equal(updates.length, 3);
+    assert.ok(updates.every((update) => update.includes("retrying attempt")));
+    assert.ok(updates.every((update) => !update.includes("sleep 1")));
+  } finally {
+    __resetPiCueClientForTests();
+    await server.close();
+  }
+});
+
+void test("spark-cue stops replay immediately when the tool signal is aborted", async () => {
+  const evalRequests: CueFrame[] = [];
+  const server = await startCueServer((message, socket) => {
+    if ("Eval" in requestPayload(message)) {
+      evalRequests.push(message);
+      socket.destroy();
+    }
+  });
+  try {
+    await withResolvedCueServer(server.socketPath, async () => {
+      const execTool = registerCueToolsForProtocolTest().get("cue_exec");
+      assert.ok(execTool);
+      const controller = new AbortController();
+      const reason = new Error("stop retrying");
+      await assert.rejects(
+        execTool.execute(
+          "abort-replay",
+          { command: "sleep 1", background: true },
+          controller.signal,
+          () => controller.abort(reason),
+          { cwd: "/work", sessionId: "abort-replay-session" },
+        ),
+        (error) => error === reason,
+      );
+    });
+    assert.equal(evalRequests.length, 1);
+  } finally {
+    __resetPiCueClientForTests();
+    await server.close();
+  }
+});
+
+void test("spark-cue stops replay when the foreground deadline expires", async () => {
+  const evalRequests: CueFrame[] = [];
+  const server = await startCueServer((message, socket) => {
+    if ("Eval" in requestPayload(message)) {
+      evalRequests.push(message);
+      socket.destroy();
+    }
+  });
+  try {
+    await withResolvedCueServer(server.socketPath, async () => {
+      const execTool = registerCueToolsForProtocolTest().get("cue_exec");
+      assert.ok(execTool);
+      await assert.rejects(
+        execTool.execute(
+          "deadline-replay",
+          { command: "sleep 1", timeout: 0.02 },
+          new AbortController().signal,
+          () => undefined,
+          { cwd: "/work", sessionId: "deadline-replay-session" },
+        ),
+        (error) => error instanceof CueError && error.code === "IDEMPOTENT_RETRY_DEADLINE_EXCEEDED",
+      );
+    });
+    assert.equal(evalRequests.length, 1);
   } finally {
     __resetPiCueClientForTests();
     await server.close();

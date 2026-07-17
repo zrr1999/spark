@@ -96,6 +96,35 @@ describe("session timeline", () => {
     ]);
   });
 
+  it("shows terminal system failures while keeping ordinary system messages hidden", () => {
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [
+        message("system-hidden", "system", "internal context", "2026-07-10T00:00:01.000Z"),
+        {
+          ...message(
+            "system-failed",
+            "system",
+            "provider unavailable",
+            "2026-07-10T00:00:02.000Z",
+            { errorTitle: "Session interrupted", terminalStatus: "lost" },
+          ),
+          status: "error",
+        },
+      ],
+      commands: [],
+      reports: [],
+    });
+
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0]).toMatchObject({
+      id: "message:system-failed",
+      actor: "spark",
+      status: "error",
+      parts: [{ type: "error", title: "Session interrupted", message: "provider unavailable" }],
+    });
+  });
+
   it("keeps only the latest stable run, task, and artifact projections", () => {
     const reports = [
       ["run.update", "run:one"],
@@ -176,6 +205,38 @@ describe("session timeline", () => {
     });
 
     expect(timeline.map((item) => item.senderLabel)).toEqual(["徐晓健", "zhanrongrui", null]);
+  });
+
+  it("projects cross-session turns as their originating agent instead of the user", () => {
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [
+        message("u-local", "user", "local prompt", "2026-07-10T00:00:01.000Z"),
+        message("a-local", "assistant", "local answer", "2026-07-10T00:00:02.000Z"),
+        message("u-agent", "user", "delegated request", "2026-07-10T00:00:03.000Z", {
+          origin: {
+            kind: "session",
+            sessionId: "session:worker-a",
+            host: "session",
+            surface: "local",
+          },
+          sessionMail: {
+            messageId: "mail:request-1",
+            kind: "request",
+            fromSessionId: "session:worker-a",
+            toSessionId: "session:target",
+          },
+        }),
+      ],
+      commands: [],
+      reports: [],
+    });
+
+    expect(timeline.map((item) => [item.actor, item.senderLabel])).toEqual([
+      ["user", null],
+      ["spark", null],
+      ["session", "worker-a"],
+    ]);
   });
 
   it("shortens opaque QQ openids when senderName is missing", () => {
@@ -729,7 +790,7 @@ describe("session timeline", () => {
   });
 });
 
-function timelineItem(id: string, actor: "user" | "spark"): SessionTimelineItem {
+function timelineItem(id: string, actor: "user" | "spark" | "session"): SessionTimelineItem {
   return {
     id,
     actor,
@@ -746,7 +807,7 @@ function timelineItem(id: string, actor: "user" | "spark"): SessionTimelineItem 
 
 function message(
   id: string,
-  role: "user" | "assistant",
+  role: "user" | "assistant" | "system",
   text: string,
   createdAt: string,
   metadata: SparkJsonObject = {},

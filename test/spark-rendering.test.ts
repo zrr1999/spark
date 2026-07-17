@@ -930,6 +930,25 @@ void test("native UI transport consumes view model events without concrete TUI p
 
   ui.publishView?.({
     version: SPARK_PROTOCOL_VERSION,
+    type: "session.snapshot",
+    session: {
+      version: SPARK_PROTOCOL_VERSION,
+      sessionId: "native-session",
+      cwd: "/workspace/spark",
+      gitBranch: "main",
+      status: "running",
+      model: { providerName: "baidu-oneapi", modelId: "gpt-5.6-sol" },
+      thinkingLevel: "xhigh",
+      messages: [],
+      tools: [],
+      runs: [],
+      tasks: [],
+      artifacts: [],
+      metadata: {},
+    },
+  });
+  ui.publishView?.({
+    version: SPARK_PROTOCOL_VERSION,
     type: "session.message",
     sessionId: "native-session",
     message: {
@@ -951,16 +970,31 @@ void test("native UI transport consumes view model events without concrete TUI p
       status: "running",
       summary: "cache read=64 write=16",
       artifactRefs: [],
-      metadata: { costUsd: 0.42, totalTokens: 4100, contextWindow: 10000 },
+      metadata: {
+        usageTotals: {
+          inputTokens: 19_000_000,
+          outputTokens: 820_000,
+          cacheReadTokens: 230_000_000,
+          cacheWriteTokens: 16,
+          costUsd: 23.509,
+          latestCacheHitPercent: 99.3,
+          contextTokens: 262_632,
+          contextWindow: 372_000,
+        },
+      },
     },
   });
 
-  const rendered = stripAnsi(app.render(100).join("\n"));
+  const rendered = stripAnsi(app.render(120).join("\n"));
   assert.match(rendered, /spark> hello from event/);
   assert.doesNotMatch(rendered, /custom:run-view>/);
-  assert.match(rendered, /session local .*daemon running: cache read=64 write=16/);
-  assert.match(rendered, /session local .*cache read=64 write=16/);
-  assert.match(rendered, /Enter submit .* cache 80% · \$0\.42 · ctx 41%/);
+  assert.match(rendered, /session native-session .*daemon running: cache read=64 write=16/);
+  assert.match(rendered, /session native-session .*cache read=64 write=16/);
+  assert.match(rendered, /\/workspace\/spark \(main\)/);
+  assert.match(
+    rendered,
+    /↑19M ↓820k R230M W16 CH99\.3% \$23\.509 70\.6%\/372k\s+\(baidu-oneapi\) gpt-5\.6-sol • xhigh/,
+  );
 });
 
 void test("native UI transport prints task completion evidence summaries", () => {

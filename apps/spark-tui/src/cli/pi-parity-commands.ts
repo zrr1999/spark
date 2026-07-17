@@ -56,7 +56,6 @@ const PI_COMMANDS = [
   "copy",
   "name",
   "session",
-  "mailto",
   "inbox",
   "changelog",
   "hotkeys",
@@ -121,11 +120,6 @@ export function createSparkPiParitySlashCommands(
         if (args.trim().toLowerCase() === "list") return await handleResumeCommand(services, "");
         return renderNativeSessionInfo(ctx.session.messages);
       },
-    },
-    mailto: {
-      description: "Send durable local mail to another Spark session without running it",
-      argumentHint: "<session-id> <message>",
-      handler: async (args) => handleMailtoCommand(services, args),
     },
     inbox: {
       description: "List, read, or acknowledge durable Spark session mail",
@@ -226,8 +220,6 @@ function piParityCanonicalCliTarget(name: string): string {
   switch (name) {
     case "session":
       return "spark daemon session list";
-    case "mailto":
-      return "spark daemon session mailto --to <session> --message <text>";
     case "inbox":
       return "spark daemon session inbox --session <session>";
     case "fork":
@@ -354,21 +346,6 @@ function renderScopedModels(services: SparkCliHostServices): string {
     .join("\n");
 }
 
-async function handleMailtoCommand(services: SparkCliHostServices, args: string): Promise<string> {
-  const [toSessionId, ...bodyParts] = args.trim().split(/\s+/u).filter(Boolean);
-  const body = bodyParts.join(" ").trim();
-  if (!toSessionId || !body) return "Usage: /mailto <session-id> <message>";
-  await assertKnownMailSession(services, toSessionId);
-  const store = sparkSessionMailStore(services);
-  const sent = await store.send({
-    toSessionId,
-    fromSessionId: (await currentTuiMailSessionId(services)) ?? "session:tui",
-    body,
-    source: "tui",
-  });
-  return `Sent ${sent.message.id} to ${sent.message.toSessionId}.`;
-}
-
 async function handleInboxCommand(services: SparkCliHostServices, args: string): Promise<string> {
   const tokens = args.trim().split(/\s+/u).filter(Boolean);
   const action = tokens[0] === "read" || tokens[0] === "ack" ? tokens[0] : "list";
@@ -397,26 +374,6 @@ async function currentTuiMailSessionId(
   services: SparkCliHostServices,
 ): Promise<string | undefined> {
   return (await services.sessionStore.findMostRecent())?.id;
-}
-
-async function assertKnownMailSession(
-  services: SparkCliHostServices,
-  sessionId: string,
-): Promise<void> {
-  const normalized = sessionId.startsWith("session:")
-    ? sessionId.slice("session:".length)
-    : sessionId;
-  const sessions = await services.sessionStore.listAllPersistentSessions();
-  if (
-    sessions.some(
-      (session) =>
-        session.id === sessionId ||
-        session.id === normalized ||
-        `session:${session.id}` === sessionId,
-    )
-  )
-    return;
-  throw new Error(`Spark session not found: ${sessionId}`);
 }
 
 function renderTuiInboxList(sessionId: string, messages: SparkSessionMailMessage[]): string {

@@ -9,6 +9,8 @@ import {
   recordInvocationLogChunk,
   recordInvocationUpdate,
 } from "./projection-services";
+import { recordRuntimeControlCommandResult, submitRuntimeControlCommand } from "./runtime-control";
+import { recordRuntimeSessionControlProjection } from "./runtime-session-control";
 
 function setupWorkspace() {
   const db = openMemoryDatabase();
@@ -32,7 +34,7 @@ function setupWorkspace() {
     runtimeWorkspaceBindingId,
     createdAt: now,
   });
-  return { db, workspace, runtimeWorkspaceBindingId };
+  return { db, workspace, runtimeId, runtimeWorkspaceBindingId };
 }
 
 describe("session activity projection", () => {
@@ -276,6 +278,126 @@ describe("session activity projection", () => {
         (command) => command.goal?.includes("Selected") || command.id === selected.id,
       ),
     ).toBe(true);
+    db.close();
+  });
+
+  it("reloads direct turn prompts and terminal failures without duplicating daemon failure reports", () => {
+    const { db, workspace, runtimeId, runtimeWorkspaceBindingId } = setupWorkspace();
+    const sessionId = "sess_direct_failure";
+    const createdAt = "2026-07-09T00:01:00.000Z";
+    db.prepare(
+      `INSERT INTO runtime_session_projections
+        (runtime_id, session_id, scope, workspace_id, runtime_workspace_binding_id, status,
+         record_json, projected_at)
+       VALUES (?, ?, 'workspace', ?, ?, 'ready', ?, ?)`,
+    ).run(
+      runtimeId,
+      sessionId,
+      workspace.id,
+      runtimeWorkspaceBindingId,
+      JSON.stringify({
+        sessionId,
+        scope: { kind: "workspace", workspaceId: workspace.id },
+        workspaceId: workspace.id,
+        title: "Direct failure",
+        status: "ready",
+        bindings: [],
+        createdAt,
+        updatedAt: createdAt,
+      }),
+      createdAt,
+    );
+    const command = submitRuntimeControlCommand(db, {
+      runtimeId,
+      workspaceId: workspace.id,
+      sessionId,
+      payload: {
+        kind: "turn.submit.request",
+        scope: "workspace",
+        payload: { sessionId, prompt: "Explain why the provider is unavailable." },
+      },
+      createdAt,
+    });
+    const invocationId = createId("inv");
+    recordRuntimeControlCommandResult(db, {
+      runtimeId,
+      commandId: command.commandId,
+      messageId: createId("msg"),
+      payload: {
+        status: "succeeded",
+        result: { invocationId, status: "queued", acceptedAt: createdAt },
+        completedAt: "2026-07-09T00:01:01.000Z",
+      },
+      project: (persisted, result) => recordRuntimeSessionControlProjection(db, persisted, result),
+    });
+    recordInvocationUpdate(db, {
+      runtimeWorkspaceBindingId,
+      workspaceId: workspace.id,
+      payload: {
+        runtimeInvocationId: invocationId,
+        sequence: 4,
+        status: "failed",
+        completedAt: "2026-07-09T00:01:04.000Z",
+        terminalReason: `503 provider connection failed.<html><head><title>503 Service Unavailable</title></head><body><svg>${"unsafe".repeat(
+          5_000,
+        )}</svg></body></html>`,
+        payload: {},
+      },
+      updatedAt: "2026-07-09T00:01:04.000Z",
+    });
+
+    const activity = loadSessionActivity(db, { workspaceId: workspace.id, sessionId });
+    expect(activity.reports).toEqual([
+      expect.objectContaining({
+        id: `message:invocation:${invocationId}:failure`,
+        kind: "session.message",
+        role: "system",
+        status: "failed",
+        text: "503 provider connection failed. — 503 Service Unavailable",
+      }),
+      expect.objectContaining({
+        id: `turn-submit:${command.commandId}:prompt`,
+        kind: "turn.submit.prompt",
+        role: "user",
+        text: "Explain why the provider is unavailable.",
+      }),
+    ]);
+
+    appendEvent(db, {
+      workspaceId: workspace.id,
+      actorKind: "runtime",
+      actorId: runtimeWorkspaceBindingId,
+      kind: "daemon.view_event",
+      subjectKind: "view_model",
+      subjectId: sessionId,
+      payload: {
+        type: "daemon.view_event",
+        sessionId,
+        invocationId,
+        view: {
+          type: "session.message",
+          sessionId,
+          message: {
+            id: `invocation:${invocationId}:failure`,
+            role: "system",
+            text: "Provider connection failed.",
+            status: "error",
+          },
+        },
+      },
+      createdAt: "2026-07-09T00:01:05.000Z",
+    });
+
+    const reloaded = loadSessionActivity(db, { workspaceId: workspace.id, sessionId });
+    const failures = reloaded.reports.filter(
+      (report) => report.id === `message:invocation:${invocationId}:failure`,
+    );
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({
+      status: "error",
+      message: { id: `invocation:${invocationId}:failure`, status: "error" },
+    });
+    expect(JSON.stringify(activity)).not.toMatch(/<html|<svg|unsafe/iu);
     db.close();
   });
 

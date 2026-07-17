@@ -335,6 +335,7 @@ export class SparkAgentLoop {
   private viewSessionId = "spark-agent";
   private viewRunCounter = 0;
   private currentViewRunId: string | undefined;
+  private currentViewRunUsage: SparkRunUsageTotals | undefined;
   private currentAssistantMessageId: string | undefined;
   private currentAssistantPartial?: AssistantMessage;
   private readonly subscribers = new Set<(event: SparkAgentLoopEvent) => void>();
@@ -713,6 +714,18 @@ export class SparkAgentLoop {
           return fail("failed", message);
         }
 
+        const toolCalls = collectToolCalls(assistant);
+        if (
+          assistant.stopReason !== "error" &&
+          assistant.stopReason !== "aborted" &&
+          toolCalls.length === 0 &&
+          !displaySafeAssistantText(assistant.content).trim()
+        ) {
+          const message = "model completed without a displayable response";
+          this.publish({ type: "error", message });
+          return fail("failed", message);
+        }
+
         this.promptItems.push(sparkPromptItemFromProviderMessage(assistant));
         lastAssistant = assistant;
         this.publish({ type: "turn_complete", assistant, reason: assistant.stopReason });
@@ -736,7 +749,6 @@ export class SparkAgentLoop {
         }
 
         // Tool calls require execution and another stream pass.
-        const toolCalls = collectToolCalls(assistant);
         if (toolCalls.length === 0) {
           this.drainOutboxIntoMessages();
           // If the outbox didn't add anything beyond the assistant we just
@@ -1232,6 +1244,7 @@ export class SparkAgentLoop {
   private startViewRun(summary: string): void {
     const runId = `${this.viewSessionId}:run:${Date.now().toString(36)}:${++this.viewRunCounter}`;
     this.currentViewRunId = runId;
+    this.currentViewRunUsage = undefined;
     this.currentAssistantMessageId = undefined;
     this.currentAssistantPartial = undefined;
     this.publishViewEvent({
@@ -1323,6 +1336,10 @@ export class SparkAgentLoop {
         });
         return;
       case "turn_complete":
+        this.currentViewRunUsage = mergeRunUsageTotals(
+          this.currentViewRunUsage,
+          assistantRunUsage(event.assistant, safeGetModel(this.getModel)),
+        );
         this.publishViewEvent({
           version: SPARK_PROTOCOL_VERSION,
           type: "session.message",
@@ -1463,10 +1480,16 @@ export class SparkAgentLoop {
         completedAt:
           status === "running" || status === "queued" ? undefined : new Date().toISOString(),
         artifactRefs: [],
-        metadata: { source: "SparkAgentLoop" },
+        metadata: jsonMetadata({
+          source: "SparkAgentLoop",
+          ...(this.currentViewRunUsage ? { usageTotals: this.currentViewRunUsage } : {}),
+        }),
       },
     });
-    if (status !== "running" && status !== "queued") this.currentViewRunId = undefined;
+    if (status !== "running" && status !== "queued") {
+      this.currentViewRunId = undefined;
+      this.currentViewRunUsage = undefined;
+    }
   }
 
   private publishViewEvent(event: SparkViewModelEvent): void {
@@ -1814,6 +1837,95 @@ function boundedPromptCacheKeyPart(value: string, maxChars: number): string {
   return `${value.slice(0, headChars)}-${suffix}`;
 }
 
+interface SparkRunUsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+  latestCacheHitPercent?: number;
+  contextTokens?: number;
+  contextWindow?: number;
+}
+
+function assistantRunUsage(
+  assistant: AssistantMessage,
+  model: Model<string>,
+): SparkRunUsageTotals | undefined {
+  const usage = (assistant as { usage?: unknown }).usage;
+  if (!usage || typeof usage !== "object") return undefined;
+  const inputTokens = numberField(usage, "input") ?? numberField(usage, "inputTokens") ?? 0;
+  const outputTokens = numberField(usage, "output") ?? numberField(usage, "outputTokens") ?? 0;
+  const cacheReadTokens =
+    numberField(usage, "cacheRead") ?? numberField(usage, "cacheReadTokens") ?? 0;
+  const cacheWriteTokens =
+    numberField(usage, "cacheWrite") ?? numberField(usage, "cacheWriteTokens") ?? 0;
+  const cost = isPlainRecord((usage as Record<string, unknown>).cost)
+    ? ((usage as Record<string, unknown>).cost as Record<string, unknown>)
+    : {};
+  const costUsd =
+    numberField(usage, "costUsd") ??
+    numberField(cost, "total") ??
+    (numberField(cost, "input") ?? 0) +
+      (numberField(cost, "output") ?? 0) +
+      (numberField(cost, "cacheRead") ?? 0) +
+      (numberField(cost, "cacheWrite") ?? 0);
+  const contextTokens =
+    numberField(usage, "totalTokens") ||
+    inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
+  const promptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
+  const contextWindow = numberField(model, "contextWindow");
+  if (
+    inputTokens === 0 &&
+    outputTokens === 0 &&
+    cacheReadTokens === 0 &&
+    cacheWriteTokens === 0 &&
+    costUsd === 0 &&
+    contextTokens === 0
+  ) {
+    return undefined;
+  }
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    costUsd,
+    ...(promptTokens > 0 ? { latestCacheHitPercent: (cacheReadTokens / promptTokens) * 100 } : {}),
+    ...(contextTokens > 0 ? { contextTokens } : {}),
+    ...(contextWindow ? { contextWindow } : {}),
+  };
+}
+
+function mergeRunUsageTotals(
+  current: SparkRunUsageTotals | undefined,
+  next: SparkRunUsageTotals | undefined,
+): SparkRunUsageTotals | undefined {
+  if (!next) return current;
+  return {
+    inputTokens: (current?.inputTokens ?? 0) + next.inputTokens,
+    outputTokens: (current?.outputTokens ?? 0) + next.outputTokens,
+    cacheReadTokens: (current?.cacheReadTokens ?? 0) + next.cacheReadTokens,
+    cacheWriteTokens: (current?.cacheWriteTokens ?? 0) + next.cacheWriteTokens,
+    costUsd: (current?.costUsd ?? 0) + next.costUsd,
+    ...(next.latestCacheHitPercent !== undefined
+      ? { latestCacheHitPercent: next.latestCacheHitPercent }
+      : current?.latestCacheHitPercent !== undefined
+        ? { latestCacheHitPercent: current.latestCacheHitPercent }
+        : {}),
+    ...(next.contextTokens !== undefined
+      ? { contextTokens: next.contextTokens }
+      : current?.contextTokens !== undefined
+        ? { contextTokens: current.contextTokens }
+        : {}),
+    ...(next.contextWindow !== undefined
+      ? { contextWindow: next.contextWindow }
+      : current?.contextWindow !== undefined
+        ? { contextWindow: current.contextWindow }
+        : {}),
+  };
+}
+
 function formatAssistantUsageSummary(assistant: AssistantMessage): string | undefined {
   const usage = (assistant as { usage?: unknown }).usage;
   if (!usage || typeof usage !== "object") return undefined;
@@ -1967,11 +2079,16 @@ function assistantToMessageView(
   id: string,
   status: SparkMessageView["status"],
 ): SparkMessageView {
+  const displayText = displaySafeAssistantText(assistant.content);
+  const errorMessage =
+    status === "error" && typeof assistant.errorMessage === "string"
+      ? assistant.errorMessage.trim()
+      : "";
   return {
     version: SPARK_PROTOCOL_VERSION,
     id,
     role: "assistant",
-    text: displaySafeAssistantText(assistant.content),
+    text: displayText || errorMessage,
     status,
     createdAt: timestampToIso((assistant as { timestamp?: unknown }).timestamp),
     parts: assistantConversationParts(assistant.content, id, status),
@@ -1980,6 +2097,7 @@ function assistantToMessageView(
       provider: (assistant as { provider?: unknown }).provider,
       model: (assistant as { model?: unknown }).model,
       stopReason: assistant.stopReason,
+      ...(errorMessage ? { errorMessage } : {}),
       usage: (assistant as { usage?: unknown }).usage,
     }),
   };

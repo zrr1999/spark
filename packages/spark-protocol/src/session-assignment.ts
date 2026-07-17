@@ -153,6 +153,16 @@ export const sparkSessionGetRequestSchema = z.object({
   sessionId: z.string().trim().min(1),
 });
 
+/**
+ * Read one bounded transcript page. `beforeMessageId` is an exclusive cursor:
+ * callers pass the first message id from the current window to load the page
+ * immediately before it.
+ */
+export const sparkSessionSnapshotRequestSchema = sparkSessionGetRequestSchema.extend({
+  messageLimit: z.number().int().min(1).max(10_000).optional(),
+  beforeMessageId: z.string().trim().min(1).optional(),
+});
+
 export const sparkSessionBindRequestSchema = z.object({
   sessionId: z.string().trim().min(1),
   externalKey: z.string().trim().min(1),
@@ -212,6 +222,7 @@ export type SparkSessionListRequest =
   | z.infer<typeof sparkSessionListRequestSchema>
   | { scope?: undefined; workspaceId?: string; includeArchived?: boolean };
 export type SparkSessionGetRequest = z.infer<typeof sparkSessionGetRequestSchema>;
+export type SparkSessionSnapshotRequest = z.infer<typeof sparkSessionSnapshotRequestSchema>;
 export type SparkSessionBindRequest = z.infer<typeof sparkSessionBindRequestSchema>;
 export type SparkSessionUnbindRequest = z.infer<typeof sparkSessionUnbindRequestSchema>;
 export type SparkSessionArchiveRequest = z.infer<typeof sparkSessionArchiveRequestSchema>;

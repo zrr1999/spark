@@ -33,7 +33,7 @@ Direct role/session calls do not create task attribution.
 
 - `role` manages reusable definitions/model settings and fresh anonymous calls. It does not accept session lifecycle, mail, `resource=session`, or `sessionId`.
 - `session` manages persistent lifecycle, bindings, calls, classification, and mail. List/get expose surface, activity, lifecycle, adapters, and external keys.
-- `send kind=request` asynchronously submits the exact body to an unarchived local session; `send kind=question` requires an idle local target and waits for a bounded terminal result without cancelling execution on wait timeout; `send kind=notification` persists without triggering and may deliver through channel bindings.
+- `send kind=request` asynchronously submits the exact body to an unarchived local session; `send kind=question` requires an idle local target and waits for a bounded terminal result without cancelling execution on wait timeout.
 
 Both call paths share one headless host and `SparkAgentSession`. Full policy is in [`sessions-and-channels.md`](./sessions-and-channels.md).
 

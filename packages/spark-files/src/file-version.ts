@@ -47,6 +47,12 @@ export interface AtomicReplaceConflict {
   actualVersion: FileVersionState;
 }
 
+export interface RegularFileSnapshot {
+  bytes: Buffer;
+  version: FileContentVersion;
+  mode: number;
+}
+
 const CONTENT_VERSION_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 // Serializes the snapshot/check/commit sequence for cooperative writers in this
 // process. Filesystem actors outside Spark still require the version recheck.
@@ -233,35 +239,49 @@ function detectFileLineEnding(content: string): FileLineEnding {
   return cr > 0 ? "cr" : "lf";
 }
 
-async function readFileSnapshot(
-  filePath: string,
-): Promise<{ version: FileVersionState; mode?: number }> {
+export async function readRegularFileSnapshot(filePath: string): Promise<RegularFileSnapshot> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     // O_NOFOLLOW closes the final-component lstat/open race; O_NONBLOCK lets
     // us inspect and reject FIFOs/devices without waiting on another process.
-    handle = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+    const nonBlock = typeof constants.O_NONBLOCK === "number" ? constants.O_NONBLOCK : 0;
+    if (noFollow === 0 || nonBlock === 0) await assertTargetIsRegularFile(filePath);
+    handle = await open(filePath, constants.O_RDONLY | noFollow | nonBlock);
     const info = await handle.stat();
     if (!info.isFile()) {
-      const error = new Error(
-        `Refusing to replace non-regular file: ${filePath}`,
-      ) as NodeJS.ErrnoException;
-      error.code = info.isDirectory() ? "EISDIR" : "EINVAL";
-      throw error;
+      throw nonRegularFileError(filePath, info.isDirectory());
     }
     const bytes = await handle.readFile();
-    return { version: contentVersion(bytes), mode: info.mode & 0o777 };
+    return { bytes, version: contentVersion(bytes), mode: info.mode & 0o777 };
   } catch (error) {
     if (isNodeError(error) && error.code === "ELOOP") {
       throw symbolicLinkError(filePath);
-    }
-    if (isNodeError(error) && error.code === "ENOENT") {
-      return { version: MISSING_FILE_VERSION };
     }
     throw error;
   } finally {
     if (handle !== undefined) await handle.close().catch(() => undefined);
   }
+}
+
+async function readFileSnapshot(
+  filePath: string,
+): Promise<{ version: FileVersionState; mode?: number }> {
+  try {
+    const snapshot = await readRegularFileSnapshot(filePath);
+    return { version: snapshot.version, mode: snapshot.mode };
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return { version: MISSING_FILE_VERSION };
+    }
+    throw error;
+  }
+}
+
+async function assertTargetIsRegularFile(filePath: string): Promise<void> {
+  const info = await lstat(filePath);
+  if (info.isSymbolicLink()) throw symbolicLinkError(filePath);
+  if (!info.isFile()) throw nonRegularFileError(filePath, info.isDirectory());
 }
 
 async function assertTargetIsNotSymlink(filePath: string): Promise<void> {
@@ -281,6 +301,14 @@ function symbolicLinkError(filePath: string): NodeJS.ErrnoException {
     `Refusing to atomically replace symbolic link: ${filePath}`,
   ) as NodeJS.ErrnoException;
   error.code = "ELOOP";
+  return error;
+}
+
+function nonRegularFileError(filePath: string, isDirectory: boolean): NodeJS.ErrnoException {
+  const error = new Error(
+    `Refusing to replace non-regular file: ${filePath}`,
+  ) as NodeJS.ErrnoException;
+  error.code = isDirectory ? "EISDIR" : "EINVAL";
   return error;
 }
 

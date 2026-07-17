@@ -8,4 +8,5 @@ These files are current contracts or operator procedures. Product and package im
 - [`specs/turn.md`](./specs/turn.md): daemon command and event vocabulary.
 - [`specs/spark-runtime-integration.md`](./specs/spark-runtime-integration.md): `spark run --json` integration.
 - [`specs/spark-cockpit-remote-access.md`](./specs/spark-cockpit-remote-access.md): remote Cockpit operation.
+- [`operations/cockpit-relocation.md`](./operations/cockpit-relocation.md): feature-only Cockpit snapshot relocation, HTTPS/WSS cutover, validation, and rollback.
 - [`operations/zellij-harness.md`](./operations/zellij-harness.md): real TUI validation and pane capture.

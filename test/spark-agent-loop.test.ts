@@ -314,8 +314,12 @@ void test("SparkAgentLoop passes prompt_cache_key and reports cache usage summar
     ui: { publishView: (event) => viewEvents.push(event) },
   });
   const finalAssistant = buildAssistant([{ type: "text", text: "cached" }]);
+  finalAssistant.usage.input = 40;
+  finalAssistant.usage.output = 8;
   finalAssistant.usage.cacheRead = 128;
   finalAssistant.usage.cacheWrite = 32;
+  finalAssistant.usage.totalTokens = 208;
+  finalAssistant.usage.cost.total = 0.125;
   const calls: Array<{ context: Context; options: any }> = [];
   const loopEvents: SparkAgentLoopEvent[] = [];
   host.registerTool({
@@ -384,6 +388,19 @@ void test("SparkAgentLoop passes prompt_cache_key and reports cache usage summar
     ),
     true,
   );
+  const completedRun = viewEvents.find(
+    (event: any) => event.type === "run.update" && event.run.status === "succeeded",
+  ) as any;
+  assert.deepEqual(completedRun.run.metadata.usageTotals, {
+    inputTokens: 40,
+    outputTokens: 8,
+    cacheReadTokens: 128,
+    cacheWriteTokens: 32,
+    costUsd: 0.125,
+    latestCacheHitPercent: 64,
+    contextTokens: 208,
+    contextWindow: 8000,
+  });
   const manifestEvents = loopEvents.filter(
     (event): event is Extract<SparkAgentLoopEvent, { type: "prompt_manifest" }> =>
       event.type === "prompt_manifest",
@@ -721,6 +738,40 @@ void test("SparkAgentLoop projects user, streaming, final, and run updates to vi
   );
 });
 
+void test("SparkAgentLoop projects an empty provider error as a visible terminal message", async () => {
+  const viewEvents: any[] = [];
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-agent-loop-visible-error-test",
+    ui: { publishView: (event) => viewEvents.push(event) },
+  });
+  const errorAssistant = {
+    ...buildAssistant([], "error"),
+    errorMessage: "provider unavailable",
+  };
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: makeFakeStream({
+      rounds: [[{ type: "done", reason: "error", message: errorAssistant }]],
+    }),
+    getModel: () => TEST_MODEL,
+  });
+  loop.setViewSessionId("session-visible-error");
+
+  await loop.submit("hello");
+
+  assert.equal(
+    viewEvents.some(
+      (event) =>
+        event.type === "session.message" &&
+        event.message.role === "assistant" &&
+        event.message.status === "error" &&
+        event.message.text === "provider unavailable" &&
+        event.message.metadata.errorMessage === "provider unavailable",
+    ),
+    true,
+  );
+});
+
 void test("SparkAgentLoop appends multi-roundtrip assistant messages in order without overwriting", async () => {
   const viewEvents: any[] = [];
   const host = new SparkHostRuntime({
@@ -936,6 +987,15 @@ void test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", as
           result: async () => undefined as AssistantMessage,
         }) as ReturnType<SparkAgentStreamFunction>,
       expectedError: /stream produced no assistant message/,
+      expectedStopReason: "error",
+      expectedStatus: "failed",
+    },
+    {
+      name: "empty response",
+      streamFunction: makeFakeStream({
+        rounds: [[{ type: "done", reason: "stop", message: buildAssistant([]) }]],
+      }),
+      expectedError: /model completed without a displayable response/,
       expectedStopReason: "error",
       expectedStatus: "failed",
     },

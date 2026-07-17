@@ -358,6 +358,9 @@ describe("runtime registration", () => {
     insertPendingCommandDelivery(db, ownerBinding.workspaceId, ownerBinding.bindingId);
     const originalOwner = ownerBindingState(db, ownerBinding.workspaceId);
     const originalDelivery = pendingDeliveryState(db);
+    if (!originalOwner || !originalDelivery) throw new Error("Expected original owner state.");
+    const originalOwnerBindingId = originalOwner.bindingId;
+    const originalDeliveryBindingId = originalDelivery.bindingId;
     const conflictErrors: RuntimeWorkspaceOwnerConflictError[] = [];
 
     const directGrant = createRuntimeEnrollmentToken(db, {
@@ -518,6 +521,19 @@ describe("runtime registration", () => {
     ]) {
       expect(auditableText).not.toContain(secret);
     }
+    console.log(
+      `SPARK_WORKSPACE_OWNER_CONFLICT_EVIDENCE ${JSON.stringify({
+        conflictCode: conflictErrors[0]?.reasonCode,
+        attemptedRuntimeCount: conflictErrors.length,
+        activeOwnerCount: 1,
+        activeBindingId: originalOwnerBindingId,
+        expectedBindingId: ownerBinding.bindingId,
+        totalOwnerBindingCount: 1,
+        pendingDeliveryPreserved: pendingDeliveryState(db)?.bindingId === originalDeliveryBindingId,
+        registrationTokensConsumed: 0,
+        secretMarkerPersisted: auditableText.includes(tokenMarker),
+      })}`,
+    );
     db.close();
   });
 
@@ -1287,7 +1303,10 @@ function insertPendingCommandDelivery(
   ).run(bindingId, now, now);
 }
 
-function ownerBindingState(db: ReturnType<typeof openMemoryDatabase>, workspaceId: string) {
+function ownerBindingState(
+  db: ReturnType<typeof openMemoryDatabase>,
+  workspaceId: string,
+): { id: string; bindingId: string; startedAt: string; endedAt: string | null } | undefined {
   return db
     .prepare(
       `SELECT id, runtime_workspace_binding_id AS bindingId,
@@ -1295,17 +1314,21 @@ function ownerBindingState(db: ReturnType<typeof openMemoryDatabase>, workspaceI
        FROM workspace_owner_bindings
        WHERE workspace_id = ?`,
     )
-    .get(workspaceId);
+    .get(workspaceId) as
+    | { id: string; bindingId: string; startedAt: string; endedAt: string | null }
+    | undefined;
 }
 
-function pendingDeliveryState(db: ReturnType<typeof openMemoryDatabase>) {
+function pendingDeliveryState(
+  db: ReturnType<typeof openMemoryDatabase>,
+): { bindingId: string; status: string; attemptCount: number } | undefined {
   return db
     .prepare(
       `SELECT runtime_workspace_binding_id AS bindingId, status, attempt_count AS attemptCount
        FROM command_deliveries
        WHERE id = 'delivery_owner_guard'`,
     )
-    .get();
+    .get() as { bindingId: string; status: string; attemptCount: number } | undefined;
 }
 
 function enrollmentConsumption(db: ReturnType<typeof openMemoryDatabase>, tokenId: string) {

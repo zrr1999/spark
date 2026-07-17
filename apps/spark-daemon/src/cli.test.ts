@@ -2248,6 +2248,89 @@ describe("Spark daemon CLI", () => {
     });
   });
 
+  it("projects an armed durable restart while the daemon pid is temporarily absent", async () => {
+    await withTempSparkEnv(async () => {
+      const paths = resolveSparkPaths({ app: "daemon" });
+      mkdirSync(paths.runtimeDir, { recursive: true });
+      writeFileSync(
+        join(paths.runtimeDir, "restart.intent.json"),
+        JSON.stringify({
+          state: "armed",
+          restartId: "restart-pid-gap",
+          previousPid: process.pid,
+          previousInstanceId: "old-instance",
+          previousGeneration: "old-generation",
+          previousStartedAt: "2026-07-17T00:00:00.000Z",
+          previousProcessStartToken: "test:old",
+          targetInstanceId: "new-instance",
+          targetGeneration: "new-generation",
+          protocolVersion: 1,
+          requestedAt: "2026-07-17T00:01:00.000Z",
+        }),
+      );
+
+      const jsonCapture = createCliIo();
+      await expect(main(["daemon", "status", "--json"], jsonCapture.io)).resolves.toBe(0);
+      expect(JSON.parse(jsonCapture.stdout())).toMatchObject({
+        running: false,
+        restart: {
+          state: "armed",
+          restartId: "restart-pid-gap",
+          requestedAt: "2026-07-17T00:01:00.000Z",
+          previousPid: process.pid,
+          targetGeneration: "new-generation",
+        },
+      });
+
+      const textCapture = createCliIo();
+      await expect(main(["daemon", "status"], textCapture.io)).resolves.toBe(0);
+      expect(textCapture.stdout()).toContain("restarting");
+      expect(textCapture.stdout()).toContain("restart-pid-gap");
+      expect(textCapture.stdout()).not.toContain("not running");
+    });
+  });
+
+  it("projects a claimed durable restart while the old daemon socket is unreachable", async () => {
+    await withTempSparkEnv(async () => {
+      const paths = resolveSparkPaths({ app: "daemon" });
+      mkdirSync(paths.runtimeDir, { recursive: true });
+      writeFileSync(paths.pidFile, `${process.pid}\n`);
+      writeFileSync(
+        join(paths.runtimeDir, "restart.starting.json"),
+        JSON.stringify({
+          state: "claimed",
+          restartId: "restart-socket-gap",
+          previousPid: process.pid,
+          previousInstanceId: "old-instance",
+          previousGeneration: "old-generation",
+          previousStartedAt: "2026-07-17T00:00:00.000Z",
+          previousProcessStartToken: "test:old",
+          targetInstanceId: "new-instance",
+          targetGeneration: "new-generation",
+          protocolVersion: 1,
+          requestedAt: "2026-07-17T00:01:00.000Z",
+        }),
+      );
+      const daemonStatusFromService = vi.fn(async () => {
+        throw new LocalRpcUnavailableError("socket handoff in progress");
+      });
+      const capture = createCliIo({ daemonStatusFromService });
+
+      await expect(main(["daemon", "status", "--json"], capture.io)).resolves.toBe(0);
+
+      expect(JSON.parse(capture.stdout())).toMatchObject({
+        running: false,
+        unreachable: true,
+        restart: {
+          state: "claimed",
+          restartId: "restart-socket-gap",
+          previousPid: process.pid,
+          targetGeneration: "new-generation",
+        },
+      });
+    });
+  });
+
   it("emits running daemon status from the local daemon service", async () => {
     await withTempSparkEnv(async (root) => {
       const workspacePath = join(root, "workspace");
@@ -2399,16 +2482,36 @@ describe("Spark daemon CLI", () => {
     });
   });
 
-  it("tails daemon logs with the requested line count", async () => {
+  it("tails and labels daemon service logs with the requested line count", async () => {
     const capture = createCliIo();
 
     await withTempSparkEnv(async () => {
       const paths = resolveSparkPaths({ app: "daemon" });
       mkdirSync(paths.logDir, { recursive: true });
-      writeFileSync(paths.logFile, "one\ntwo\nthree\nfour\n");
+      const stdoutPath = join(paths.logDir, "service.stdout.log");
+      const stderrPath = join(paths.logDir, "service.stderr.log");
+      writeFileSync(stdoutPath, "stdout one\nstdout two\nstdout three\n");
+      writeFileSync(stderrPath, "stderr one\nstderr two\nstderr three\n");
 
       await expect(main(["daemon", "logs", "--lines", "2"], capture.io)).resolves.toBe(0);
-      expect(capture.stdout()).toBe("three\nfour\n");
+      expect(capture.stdout()).toBe(
+        `==> service stdout (${stdoutPath}) <==\nstdout two\nstdout three\n` +
+          `==> service stderr (${stderrPath}) <==\nstderr two\nstderr three\n`,
+      );
+      expect(capture.stderr()).toBe("");
+    });
+  });
+
+  it("includes and labels the legacy daemon event log when present", async () => {
+    const capture = createCliIo();
+
+    await withTempSparkEnv(async () => {
+      const paths = resolveSparkPaths({ app: "daemon" });
+      mkdirSync(paths.logDir, { recursive: true });
+      writeFileSync(paths.logFile, "event one\nevent two\n");
+
+      await expect(main(["daemon", "logs", "--lines", "1"], capture.io)).resolves.toBe(0);
+      expect(capture.stdout()).toBe(`==> daemon events (${paths.logFile}) <==\nevent two\n`);
       expect(capture.stderr()).toBe("");
     });
   });
@@ -2420,7 +2523,14 @@ describe("Spark daemon CLI", () => {
       const paths = resolveSparkPaths({ app: "daemon" });
 
       await expect(main(["daemon", "logs"], capture.io)).resolves.toBe(0);
-      expect(capture.stdout()).toContain(`no logs yet: ${paths.logFile}`);
+      expect(capture.stdout()).toContain("no daemon logs yet; checked:");
+      expect(capture.stdout()).toContain(
+        `service stdout: ${join(paths.logDir, "service.stdout.log")}`,
+      );
+      expect(capture.stdout()).toContain(
+        `service stderr: ${join(paths.logDir, "service.stderr.log")}`,
+      );
+      expect(capture.stdout()).toContain(`daemon events: ${paths.logFile}`);
       expect(capture.stderr()).toBe("");
     });
   });
@@ -2643,6 +2753,143 @@ describe("Spark daemon CLI", () => {
       expect(daemonStatusFromService).toHaveBeenCalledOnce();
       expect(capture.stdout()).toContain(`Spark daemon restarted as process ${process.ppid}.`);
       expect(capture.stderr()).toBe("");
+    });
+  });
+
+  it("keeps waiting when the restart handoff closes a status connection", async () => {
+    await withTempSparkEnv(async () => {
+      const paths = resolveSparkPaths({ app: "daemon" });
+      mkdirSync(paths.runtimeDir, { recursive: true });
+      writeFileSync(paths.pidFile, `${process.pid}\n`);
+      const daemonRestartFromService = vi.fn(async () => ({
+        accepted: true as const,
+        state: "draining" as const,
+        restartId: "restart-socket-handoff",
+        processInstanceId: "old-instance",
+        processGeneration: "old-generation",
+        targetInstanceId: "new-instance",
+        targetGeneration: "new-generation",
+        requestedAt: "2026-07-15T00:00:00.000Z",
+      }));
+      let statusChecks = 0;
+      const daemonStatusFromService = vi.fn(async () => {
+        statusChecks += 1;
+        if (statusChecks === 1) {
+          throw new LocalRpcUnavailableError(
+            "Spark daemon local RPC connection closed before a response.",
+          );
+        }
+        return {
+          servers: [],
+          invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
+          invocationHealth: {},
+          lifecycle: {
+            state: "running" as const,
+            phase: "serving" as const,
+            process: {
+              pid: process.ppid,
+              instanceId: "new-instance",
+              generation: "new-generation",
+              protocolVersion: 1 as const,
+              startedAt: "2026-07-15T00:00:01.000Z",
+              acceptedRestartId: "restart-socket-handoff",
+            },
+          },
+          observedAt: "2026-07-15T00:00:01.000Z",
+        };
+      });
+      const capture = createCliIo({ daemonRestartFromService, daemonStatusFromService });
+
+      await expect(main(["daemon", "restart", "--yes", "--wait"], capture.io)).resolves.toBe(0);
+
+      expect(daemonStatusFromService).toHaveBeenCalledTimes(2);
+      expect(capture.stdout()).toContain(`Spark daemon restarted as process ${process.ppid}.`);
+      expect(capture.stderr()).toBe("");
+    });
+  });
+
+  it("reports periodic identity-fenced progress while restart --wait is pending", async () => {
+    await withTempSparkEnv(async () => {
+      const paths = resolveSparkPaths({ app: "daemon" });
+      mkdirSync(paths.runtimeDir, { recursive: true });
+      writeFileSync(paths.pidFile, `${process.pid}\n`);
+      const daemonRestartFromService = vi.fn(async () => ({
+        accepted: true as const,
+        state: "draining" as const,
+        restartId: "restart-progress",
+        processInstanceId: "old-instance",
+        processGeneration: "old-generation",
+        targetInstanceId: "new-instance",
+        targetGeneration: "new-generation",
+        requestedAt: "2026-07-17T00:00:00.000Z",
+      }));
+      let statusChecks = 0;
+      const daemonStatusFromService = vi.fn(async () => {
+        statusChecks += 1;
+        if (statusChecks === 1) {
+          throw new LocalRpcUnavailableError("socket handoff in progress");
+        }
+        return {
+          servers: [],
+          invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
+          invocationHealth: {},
+          lifecycle: {
+            state: "running" as const,
+            phase: "serving" as const,
+            process: {
+              pid: process.ppid,
+              instanceId: "new-instance",
+              generation: "new-generation",
+              protocolVersion: 1 as const,
+              startedAt: "2026-07-17T00:00:01.000Z",
+              acceptedRestartId: "restart-progress",
+            },
+          },
+          observedAt: "2026-07-17T00:00:01.000Z",
+        };
+      });
+      const capture = createCliIo({ daemonRestartFromService, daemonStatusFromService });
+      const now = vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(6_000);
+      try {
+        await expect(main(["daemon", "restart", "--yes", "--wait"], capture.io)).resolves.toBe(0);
+      } finally {
+        now.mockRestore();
+      }
+
+      expect(capture.stdout()).toContain(
+        "Spark daemon restart restart-progress: awaiting-successor;",
+      );
+      expect(capture.stdout()).toContain("target generation new-generation");
+      expect(capture.stdout()).toContain(`Spark daemon restarted as process ${process.ppid}.`);
+    });
+  });
+
+  it("fails readiness immediately when the daemon does not support the status RPC", async () => {
+    await withTempSparkEnv(async () => {
+      const paths = resolveSparkPaths({ app: "daemon" });
+      mkdirSync(paths.runtimeDir, { recursive: true });
+      writeFileSync(paths.pidFile, `${process.pid}\n`);
+      const daemonRestartFromService = vi.fn(async () => ({
+        accepted: true as const,
+        state: "draining" as const,
+        restartId: "restart-status-unsupported",
+        processInstanceId: "old-instance",
+        processGeneration: "old-generation",
+        targetInstanceId: "new-instance",
+        targetGeneration: "new-generation",
+        requestedAt: "2026-07-15T00:00:00.000Z",
+      }));
+      const daemonStatusFromService = vi.fn(async () => {
+        throw new LocalRpcUnavailableError(
+          "The running Spark daemon does not support daemon.status; restart or upgrade it. Unknown local RPC method: daemon.status",
+        );
+      });
+      const capture = createCliIo({ daemonRestartFromService, daemonStatusFromService });
+
+      await expect(main(["daemon", "restart", "--yes", "--wait"], capture.io)).resolves.toBe(2);
+
+      expect(daemonStatusFromService).toHaveBeenCalledOnce();
+      expect(capture.stderr()).toContain("does not support daemon.status");
     });
   });
 

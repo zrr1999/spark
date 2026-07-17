@@ -16,7 +16,7 @@ import {
   parseSparkSessionRegistryRecords,
   sparkSessionCreateRequestSchema,
   sparkSessionListRequestSchema,
-  sparkSessionViewSchema,
+  sparkSessionSnapshotRequestSchema,
   sparkProtocolJsonObjectSchema,
   sparkTurnCancelResultSchema,
   sparkTurnStatusResultSchema,
@@ -27,12 +27,16 @@ import {
   type SparkSessionCreateRequest,
   type SparkSessionListRequest,
   type SparkSessionRegistryRecord,
-  type SparkSessionView,
+  type SparkSessionSnapshotRequest,
   type SparkTurnCancelResult,
   type SparkTurnStatusResult,
   type SparkTurnStreamPage,
   type SparkTurnSubmitResult,
 } from "@zendev-lab/spark-protocol";
+import {
+  parseSessionSnapshotWindow,
+  type SessionSnapshotWindow,
+} from "../session-snapshot-window.ts";
 
 import { getDatabase } from "./db.ts";
 
@@ -45,10 +49,15 @@ export type CockpitRuntimeSessionCreateRequest = SparkSessionCreateRequest & {
   idempotencyKey?: string;
 };
 
+export type CockpitRuntimeSessionSnapshotRequest = Omit<SparkSessionSnapshotRequest, "sessionId">;
+
 export interface CockpitRuntimeSessionClient {
   list(options?: CockpitRuntimeSessionListRequest): Promise<SparkSessionRegistryRecord[]>;
   get(sessionId: string): Promise<SparkSessionRegistryRecord>;
-  snapshot(sessionId: string): Promise<SparkSessionView>;
+  snapshot(
+    sessionId: string,
+    options?: CockpitRuntimeSessionSnapshotRequest,
+  ): Promise<SessionSnapshotWindow>;
   create(input: CockpitRuntimeSessionCreateRequest): Promise<SparkSessionRegistryRecord>;
   bind(input: SparkSessionBindRequest): Promise<SparkSessionRegistryRecord>;
   unbind(input: SparkSessionBindRequest): Promise<SparkSessionRegistryRecord>;
@@ -95,7 +104,8 @@ export function createCockpitRuntimeSessionClient(
   return {
     list: async (options) => await listSessions(database(), options),
     get: async (sessionId) => await getSession(database(), sessionId),
-    snapshot: async (sessionId) => await getSessionSnapshot(database(), sessionId),
+    snapshot: async (sessionId, options) =>
+      await getSessionSnapshot(database(), sessionId, options),
     create: async (input) => await createSession(database(), input),
     bind: async (input) => await bindSession(database(), input),
     unbind: async (input) => await unbindSession(database(), input),
@@ -217,15 +227,22 @@ async function getSession(
   return requireProjectedSession(db, sessionId).session;
 }
 
-async function getSessionSnapshot(db: DatabaseSync, sessionId: string): Promise<SparkSessionView> {
+async function getSessionSnapshot(
+  db: DatabaseSync,
+  sessionId: string,
+  options: CockpitRuntimeSessionSnapshotRequest = {},
+): Promise<SessionSnapshotWindow> {
+  const request = sparkSessionSnapshotRequestSchema.parse({ sessionId, ...options });
   const route = requireOnlineRoute(db, runtimeSessionRouteForSession(db, sessionId));
   const result = await runRuntimeSessionControlCommand(db, {
     route,
     sessionId,
-    payload: { kind: "session.snapshot.request", payload: { sessionId } },
+    payload: { kind: "session.snapshot.request", payload: publicJsonObject(request) },
   });
-  const snapshot = requireProjectedSession(db, sessionId).snapshot;
-  return snapshot ?? sparkSessionViewSchema.parse(result.snapshot);
+  // The projection table intentionally stores only the display snapshot. Page
+  // counts and cursors live in the exact command result and must not be rebuilt
+  // from an already bounded view.
+  return parseSessionSnapshotWindow(result);
 }
 
 async function createSession(

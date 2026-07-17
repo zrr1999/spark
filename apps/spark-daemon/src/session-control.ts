@@ -11,6 +11,8 @@ import {
   sparkSessionCreateRequestSchema,
   sparkSessionGetRequestSchema,
   sparkSessionListRequestSchema,
+  sparkSessionSnapshotPageSchema,
+  sparkSessionSnapshotRequestSchema,
   sparkSessionUnbindRequestSchema,
   sparkTurnCancelRequestSchema,
   sparkTurnCancelResultSchema,
@@ -40,7 +42,7 @@ import { resolveWorkspaceLocalPath } from "./store/workspaces.ts";
 // room for the other copy and terminal envelope metadata under the 64 KiB wire cap.
 const maxSessionControlProjectionBytes = 24 * 1024;
 const maxSessionListRecords = 100;
-const maxSessionSnapshotMessages = 32;
+const defaultSessionSnapshotMessages = 32;
 const maxTurnStreamEvents = 100;
 
 export interface SparkDaemonSessionControlOptions {
@@ -113,7 +115,7 @@ export async function executeSparkDaemonSessionControl(
       return { result: data, projection: { kind: "session.detail", data } };
     }
     case "session.snapshot.request": {
-      const parsed = sparkSessionGetRequestSchema.parse({
+      const parsed = sparkSessionSnapshotRequestSchema.parse({
         ...request.payload,
         sessionId: request.sessionId ?? request.payload.sessionId,
       });
@@ -128,7 +130,7 @@ export async function executeSparkDaemonSessionControl(
           session,
         }),
       );
-      const window = boundedSessionSnapshot(snapshot);
+      const window = boundedSessionSnapshot(snapshot, parsed);
       const data = publicObject(window);
       return { result: data, projection: { kind: "session.snapshot", data } };
     }
@@ -570,11 +572,24 @@ function boundedTurnStreamPage(
   throw new Error("Invocation event exceeds the bounded runtime projection limit.");
 }
 
-function boundedSessionSnapshot(snapshot: SparkSessionView) {
+function boundedSessionSnapshot(
+  snapshot: SparkSessionView,
+  request: { messageLimit?: number; beforeMessageId?: string },
+) {
   const totalMessages = snapshot.messages.length;
-  let limit = Math.min(maxSessionSnapshotMessages, totalMessages);
-  while (limit >= 0) {
-    const messages = snapshot.messages.slice(Math.max(0, totalMessages - limit));
+  const end = request.beforeMessageId
+    ? snapshot.messages.findIndex((message) => message.id === request.beforeMessageId)
+    : totalMessages;
+  if (end < 0) {
+    throw new SparkSessionRegistryError(
+      "session_snapshot_cursor_not_found",
+      `session snapshot cursor is no longer available: ${request.beforeMessageId}`,
+    );
+  }
+  let limit = Math.min(request.messageLimit ?? defaultSessionSnapshotMessages, end);
+  while (limit > 0 || end === 0) {
+    const start = Math.max(0, end - limit);
+    const messages = snapshot.messages.slice(start, end);
     const toolCallIds = new Set(
       messages.flatMap((message) =>
         [
@@ -590,19 +605,23 @@ function boundedSessionSnapshot(snapshot: SparkSessionView) {
       messages,
       tools: snapshot.tools.filter((tool) => toolCallIds.has(tool.id)),
     });
-    const result = {
+    const result = sparkSessionSnapshotPageSchema.parse({
       snapshot: projected,
       history: {
         totalMessages,
         loadedMessages: messages.length,
         hiddenMessages: totalMessages - messages.length,
+        earlierMessages: start,
+        laterMessages: totalMessages - end,
+        hasEarlierMessages: start > 0,
+        ...(start > 0 && messages[0] ? { nextBeforeMessageId: messages[0].id } : {}),
       },
-    };
+    });
     if (encodedBytes(result) <= maxSessionControlProjectionBytes) return result;
-    if (limit === 0) break;
+    if (limit === 1) break;
     limit = Math.floor(limit / 2);
   }
-  throw new Error("Session metadata exceeds the bounded runtime projection limit.");
+  throw new Error("Session snapshot page exceeds the bounded runtime projection limit.");
 }
 
 function projectPendingSessionTurns(

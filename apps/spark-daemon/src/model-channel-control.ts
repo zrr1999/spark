@@ -226,7 +226,7 @@ export async function executeSparkDaemonEphemeralSecretControl(
         };
       }
     }
-  } catch (error) {
+  } catch {
     return {
       operation: request.operation,
       status: "failed",

@@ -19,9 +19,6 @@ vi.mock("$lib/server/managed-sessions", () => ({
 vi.mock("$lib/server/db", () => ({ getDatabase: () => ({}) }));
 vi.mock("$lib/server/events", () => ({ latestEventCursor: () => null }));
 vi.mock("$lib/server/session-activity", () => ({ loadSessionActivity: mocks.activity }));
-vi.mock("$lib/session-snapshot-window", () => ({
-  sessionSnapshotWindow: (snapshot: unknown) => ({ snapshot, history: null }),
-}));
 vi.mock("$lib/server/model-control", () => ({
   loadModelControlForCockpit: mocks.modelControl,
   modelValue: vi.fn(),

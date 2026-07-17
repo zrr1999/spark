@@ -17,6 +17,10 @@
 - `src/lib/components/ai-elements/message/actions/message-action.svelte`
 - `src/lib/components/ai-elements/reasoning/reasoning.svelte`
 - `src/lib/components/ai-elements/reasoning/reasoning-trigger.svelte`
+- `src/lib/components/ai-elements/chain-of-thought/chain-of-thought.svelte`
+- `src/lib/components/ai-elements/chain-of-thought/chain-of-thought-header.svelte`
+- `src/lib/components/ai-elements/chain-of-thought/chain-of-thought-content.svelte`
+- `src/lib/components/ai-elements/chain-of-thought/chain-of-thought-step.svelte`
 - `src/lib/components/ai-elements/tool/tool.svelte`
 - `src/lib/components/ai-elements/tool/tool-header.svelte`
 - `src/lib/components/ai-elements/task/task.svelte`
@@ -43,6 +47,9 @@ ideas above were translated to Svelte 5 components that use Cockpit's scoped CSS
   blocks now use the Response/Streamdown implementation instead of the legacy block parser.
 - Replaced upstream tool-state vocabulary with Spark states and expose only display-safe tool name,
   status, summary, and reference fields.
+- Ported Chain of Thought's full-width collapsible header, status-aware step rail, staggered reveal,
+  and streaming auto-open behavior into `ThinkingChainPart`. Search-result and image primitives stay
+  out until the daemon exposes canonical display-safe data for them.
 - Added a bounded live region, keyboard composer submission, IME-safe Enter handling, jump-to-latest,
   message copy, reduced-motion behavior, and Spark i18n labels supplied by the route shell.
 - Approval actions are an optional snippet. Cockpit must provide it only when a canonical daemon

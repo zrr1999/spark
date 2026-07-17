@@ -305,11 +305,11 @@ test("remote Cockpit controls both session scopes without a daemon socket", asyn
       client.snapshot(daemonSessionId),
     ]);
     assert.deepEqual(
-      workspaceSnapshot.messages.map(({ text }) => text),
+      workspaceSnapshot.snapshot.messages.map(({ text }) => text),
       ["Workspace round one", "Workspace round one complete"],
     );
     assert.deepEqual(
-      daemonSnapshot.messages.map(({ text }) => text),
+      daemonSnapshot.snapshot.messages.map(({ text }) => text),
       ["Daemon round two", "Daemon round two complete"],
     );
 
@@ -358,7 +358,8 @@ test("remote Cockpit controls both session scopes without a daemon socket", asyn
         cursor: stream.nextCursor,
         projectedTerminalCount: terminalProjectionCount.count,
         daemonInvocationCounts: invocationRows,
-        transcriptMessages: workspaceSnapshot.messages.length + daemonSnapshot.messages.length,
+        transcriptMessages:
+          workspaceSnapshot.snapshot.messages.length + daemonSnapshot.snapshot.messages.length,
         pagedDaemonSessionCount: pagedDaemonSessions.length,
         maxPayloadBytes,
         daemonSocketUsed: existsSync(nonexistentSocket),

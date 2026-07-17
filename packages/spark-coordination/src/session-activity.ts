@@ -1,5 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
-import { sparkMessageViewSchema, type SparkMessageView } from "@zendev-lab/spark-protocol";
+import {
+  sanitizeSparkDisplayError,
+  sparkMessageViewSchema,
+  type SparkMessageView,
+} from "@zendev-lab/spark-protocol";
 
 export interface SessionActivityCommand {
   id: string;
@@ -91,6 +95,28 @@ interface ArtifactReportRow {
   createdAt: string;
 }
 
+interface DirectTurnCommandRow {
+  id: string;
+  payloadJson: string;
+  status: string;
+  rejectCode: string | null;
+  rejectMessage: string | null;
+  resultJson: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface DirectTurnInvocationRow {
+  commandId: string;
+  runtimeInvocationId: string;
+  status: string;
+  terminalReason: string | null;
+  payloadJson: string;
+  completedAt: string | null;
+  updatedAt: string;
+}
+
 export function loadSessionActivity(
   db: DatabaseSync,
   input: {
@@ -162,10 +188,17 @@ export function loadSessionActivity(
     };
   });
 
+  const sessionReports = loadSessionReports(db, { ...input, limit });
+  const sessionReportIds = new Set(sessionReports.map((report) => report.id));
+  const directTurnReports = loadDirectTurnReports(db, { ...input, limit }).filter(
+    (report) => !sessionReportIds.has(report.id),
+  );
+
   return {
     commands,
     reports: [
-      ...loadSessionReports(db, { ...input, limit }),
+      ...sessionReports,
+      ...directTurnReports,
       ...loadArtifactReportsByCommand(db, commandIds, limit),
     ].sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
   };
@@ -209,6 +242,131 @@ function latestLogsByCommand(db: DatabaseSync, commandIds: string[]) {
     if (!map.has(row.commandId)) map.set(row.commandId, row);
   }
   return map;
+}
+
+function loadDirectTurnReports(
+  db: DatabaseSync,
+  input: { workspaceId: string; sessionId: string; limit: number },
+): SessionActivityReport[] {
+  const commands = db
+    .prepare(
+      `SELECT id,
+              payload_json AS payloadJson,
+              status,
+              reject_code AS rejectCode,
+              reject_message AS rejectMessage,
+              result_json AS resultJson,
+              completed_at AS completedAt,
+              created_at AS createdAt,
+              updated_at AS updatedAt
+       FROM runtime_control_commands
+       WHERE workspace_id = ?
+         AND session_id = ?
+         AND kind = 'turn.submit.request'
+       ORDER BY created_at DESC
+       LIMIT ?`,
+    )
+    .all(input.workspaceId, input.sessionId, input.limit) as unknown as DirectTurnCommandRow[];
+  if (commands.length === 0) return [];
+
+  const commandIds = commands.map((command) => command.id);
+  const invocationRows = db
+    .prepare(
+      `SELECT command_id AS commandId,
+              runtime_invocation_id AS runtimeInvocationId,
+              status,
+              terminal_reason AS terminalReason,
+              payload_json AS payloadJson,
+              completed_at AS completedAt,
+              updated_at AS updatedAt
+       FROM runtime_invocation_projections
+       WHERE command_id IN (${placeholders(commandIds)})
+       ORDER BY updated_at DESC, runtime_invocation_id DESC`,
+    )
+    .all(...commandIds) as unknown as DirectTurnInvocationRow[];
+  const invocations = new Map<string, DirectTurnInvocationRow>();
+  for (const invocation of invocationRows) {
+    if (!invocations.has(invocation.commandId)) invocations.set(invocation.commandId, invocation);
+  }
+
+  return commands.flatMap((command) => {
+    const reports: SessionActivityReport[] = [];
+    const prompt = directTurnPrompt(command.payloadJson);
+    if (prompt) {
+      reports.push({
+        id: `turn-submit:${command.id}:prompt`,
+        kind: "turn.submit.prompt",
+        title: "User message",
+        text: prompt,
+        role: "user",
+        status: null,
+        createdAt: command.createdAt,
+      });
+    }
+
+    const invocation = invocations.get(command.id) ?? null;
+    const failure = directTurnFailure(command, invocation);
+    if (failure) reports.push(failure);
+    return reports;
+  });
+}
+
+function directTurnPrompt(payloadJson: string): string | null {
+  return stringValue(recordValue(parseJson(payloadJson), "payload"), "prompt");
+}
+
+function directTurnFailure(
+  command: DirectTurnCommandRow,
+  invocation: DirectTurnInvocationRow | null,
+): SessionActivityReport | null {
+  const invocationFailed =
+    invocation !== null && ["failed", "timeout", "timed_out", "lost"].includes(invocation.status);
+  const commandFailed = ["failed", "rejected"].includes(command.status);
+  if (!invocationFailed && !commandFailed) return null;
+
+  const status = invocationFailed ? invocation.status : command.status;
+  const invocationError = recordValue(parseJson(invocation?.payloadJson ?? ""), "error");
+  const commandResult = recordValue(parseJson(command.resultJson ?? ""), "result");
+  const fallback = directTurnFailureFallback(status, command.rejectCode);
+  const rawText =
+    (invocationFailed ? invocation.terminalReason : null) ||
+    stringValue(invocationError, "message") ||
+    command.rejectMessage ||
+    stringValue(commandResult, "message") ||
+    fallback;
+  const text = sanitizeSparkDisplayError(rawText, { fallback });
+  const invocationId = invocationFailed ? invocation.runtimeInvocationId : null;
+
+  return {
+    id: invocationId
+      ? `message:invocation:${invocationId}:failure`
+      : `turn-submit:${command.id}:failure`,
+    kind: invocationId ? "session.message" : "turn.submit.failure",
+    title: directTurnFailureTitle(status),
+    text,
+    role: "system",
+    status,
+    createdAt:
+      (invocationFailed ? invocation.completedAt || invocation.updatedAt : command.completedAt) ||
+      command.updatedAt,
+  };
+}
+
+function directTurnFailureTitle(status: string): string {
+  if (status === "rejected") return "Turn rejected";
+  if (status === "timeout" || status === "timed_out") return "Turn timed out";
+  if (status === "lost") return "Turn lost";
+  return "Turn failed";
+}
+
+function directTurnFailureFallback(status: string, rejectCode: string | null): string {
+  const suffix = rejectCode ? ` (${rejectCode})` : "";
+  if (status === "rejected") return `Spark rejected the turn before it started${suffix}.`;
+  if (status === "timeout" || status === "timed_out") {
+    return "The turn timed out before Spark produced a reply.";
+  }
+  if (status === "lost") return "Spark lost the turn before it produced a reply.";
+  return `The turn failed before Spark produced a reply${suffix}.`;
 }
 
 function loadSessionReports(

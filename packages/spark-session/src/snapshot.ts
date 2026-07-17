@@ -1,8 +1,10 @@
+import { execFile } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
   SPARK_PROTOCOL_VERSION,
   parseSparkSessionView,
+  sanitizeSparkDisplayError,
   sparkTextPhaseFromSignature,
   summarizeToolCallArguments,
   summarizeToolResultContent,
@@ -10,9 +12,11 @@ import {
   type SparkJsonObject,
   type SparkMessageView,
   type SparkSessionRegistryRecord,
+  type SparkSessionUsage,
   type SparkSessionView,
   type SparkToolCallView,
 } from "@zendev-lab/spark-protocol";
+import { gitCommand } from "@zendev-lab/spark-system";
 import { SparkSessionRegistryError } from "./registry.ts";
 
 interface NativeSessionHeader {
@@ -44,9 +48,12 @@ interface NativeToolOutcome {
   completedAt?: string;
 }
 
+const providerFailureFallback = "The provider request failed without additional details.";
+
 export interface LoadSparkSessionSnapshotInput {
   sessionsRoot: string;
   session: SparkSessionRegistryRecord;
+  resolveGitBranch?: (cwd: string) => Promise<string | undefined>;
 }
 
 /** Read the daemon-owned native JSONL transcript and project its active branch. */
@@ -57,15 +64,20 @@ export async function loadSparkSessionSnapshot(
     input.session.sessionPath ??
     (await findNativeSessionPath(input.sessionsRoot, input.session.sessionId));
   if (!path) {
-    return emptySessionSnapshot(input.session);
+    const gitBranch = input.session.cwd
+      ? await (input.resolveGitBranch ?? resolveNativeSessionGitBranch)(input.session.cwd)
+      : undefined;
+    return emptySessionSnapshot(input.session, gitBranch);
   }
   const record = await loadNativeSessionRecord(path, input.session.sessionId);
   const activeEntries = activeBranchEntries(record.entries);
   const toolOutcomes = collectToolOutcomes(activeEntries);
-  const messages = activeEntries.flatMap((entry) => {
+  const projectedMessages = activeEntries.flatMap((entry) => {
     const message = messageView(entry, toolOutcomes);
     return message ? [message] : [];
   });
+  const interrupted = interruptedTurnMessage(activeEntries, input.session);
+  const messages = interrupted ? [...projectedMessages, interrupted] : projectedMessages;
   const tools = toolCallViews(activeEntries, toolOutcomes);
   const metadata: SparkJsonObject = {
     sessionScope: input.session.scope,
@@ -74,15 +86,21 @@ export async function loadSparkSessionSnapshot(
       : {}),
     registryStatus: input.session.status,
   };
+  const cwd = record.header.cwd ?? input.session.cwd;
+  const gitBranch = cwd
+    ? await (input.resolveGitBranch ?? resolveNativeSessionGitBranch)(cwd)
+    : undefined;
+  const usage = sessionUsage(record.entries, activeEntries);
   return parseSparkSessionView({
     sessionId: input.session.sessionId,
     ...(input.session.title ? { title: input.session.title } : {}),
-    ...(record.header.cwd || input.session.cwd
-      ? { cwd: record.header.cwd ?? input.session.cwd }
-      : {}),
+    ...(cwd ? { cwd } : {}),
     ...(activeEntries.at(-1)?.id ? { activeLeafId: activeEntries.at(-1)!.id } : {}),
     status: input.session.status === "running" ? "running" : "idle",
     ...(input.session.model ? { model: input.session.model } : {}),
+    ...(input.session.thinkingLevel ? { thinkingLevel: input.session.thinkingLevel } : {}),
+    ...(gitBranch ? { gitBranch } : {}),
+    ...(usage ? { usage } : {}),
     messages,
     tools,
     createdAt: record.header.timestamp,
@@ -92,13 +110,18 @@ export async function loadSparkSessionSnapshot(
   });
 }
 
-function emptySessionSnapshot(session: SparkSessionRegistryRecord): SparkSessionView {
+function emptySessionSnapshot(
+  session: SparkSessionRegistryRecord,
+  gitBranch: string | undefined,
+): SparkSessionView {
   return parseSparkSessionView({
     sessionId: session.sessionId,
     ...(session.title ? { title: session.title } : {}),
     ...(session.cwd ? { cwd: session.cwd } : {}),
     status: session.status === "running" ? "running" : "idle",
     ...(session.model ? { model: session.model } : {}),
+    ...(session.thinkingLevel ? { thinkingLevel: session.thinkingLevel } : {}),
+    ...(gitBranch ? { gitBranch } : {}),
     messages: [],
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
@@ -253,8 +276,226 @@ function messageView(
     ...(createdAt ? { createdAt } : {}),
     ...(entry.parentId ? { parentId: entry.parentId } : {}),
     parts,
-    metadata: role === "user" ? displayMessageMetadata(entry.message.metadata) : {},
+    metadata:
+      role === "user"
+        ? displayMessageMetadata(entry.message.metadata)
+        : role === "assistant"
+          ? assistantDisplayMetadata(entry.message)
+          : {},
   };
+}
+
+function interruptedTurnMessage(
+  activeEntries: readonly NativeSessionEntry[],
+  session: SparkSessionRegistryRecord,
+): SparkMessageView | undefined {
+  if (session.status === "running") return undefined;
+  const lastEntry = activeEntries.findLast(
+    (entry) => entry.type === "message" && Boolean(entry.message),
+  );
+  const toolResultWithoutReply = lastEntry?.message?.role === "toolResult";
+  const stopReason =
+    typeof lastEntry?.message?.stopReason === "string"
+      ? lastEntry.message.stopReason.trim().toLocaleLowerCase()
+      : "";
+  const toolCallWithoutResult =
+    lastEntry?.message?.role === "assistant" && ["tooluse", "tool_use"].includes(stopReason);
+  if (!lastEntry || (!toolResultWithoutReply && !toolCallWithoutResult)) return undefined;
+  const text = "Turn ended before a final response. The last recorded step was a tool result.";
+  const createdAt = entryTimestamp(lastEntry);
+  return {
+    version: SPARK_PROTOCOL_VERSION,
+    id: `${lastEntry.id}:missing-final-response`,
+    role: "system",
+    text,
+    status: "error",
+    ...(createdAt ? { createdAt } : {}),
+    parentId: lastEntry.id,
+    parts: [
+      {
+        id: `${lastEntry.id}:missing-final-response:part:0`,
+        type: "text",
+        text,
+        status: "failed",
+        metadata: {},
+      },
+    ],
+    metadata: {
+      source: "session.snapshot",
+      kind: "missing_final_response",
+      errorTitle: "Session interrupted",
+    },
+  };
+}
+
+function assistantDisplayMetadata(message: Record<string, unknown>): SparkJsonObject {
+  const usage = normalizedAssistantUsage(message.usage);
+  const errorMessage = sanitizeSparkDisplayError(message.errorMessage, {
+    ...(message.stopReason === "error" ? { fallback: providerFailureFallback } : {}),
+  });
+  return {
+    ...(typeof message.api === "string" && message.api.trim() ? { api: message.api.trim() } : {}),
+    ...(typeof message.provider === "string" && message.provider.trim()
+      ? { provider: message.provider.trim() }
+      : {}),
+    ...(typeof message.model === "string" && message.model.trim()
+      ? { model: message.model.trim() }
+      : {}),
+    ...(typeof message.stopReason === "string" && message.stopReason.trim()
+      ? { stopReason: message.stopReason.trim() }
+      : {}),
+    ...(errorMessage ? { errorMessage } : {}),
+    ...(usage ? { usage } : {}),
+  };
+}
+
+function sessionUsage(
+  entries: readonly NativeSessionEntry[],
+  activeEntries: readonly NativeSessionEntry[],
+): SparkSessionUsage | undefined {
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
+  let costUsd = 0;
+  let latestCacheHitPercent: number | undefined;
+  let hasUsage = false;
+
+  for (const entry of entries) {
+    if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
+    const usage = normalizedAssistantUsage(entry.message.usage);
+    if (!usage) continue;
+    hasUsage = true;
+    inputTokens += usage.input;
+    outputTokens += usage.output;
+    cacheReadTokens += usage.cacheRead;
+    cacheWriteTokens += usage.cacheWrite;
+    costUsd += usage.cost.total;
+    const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+    latestCacheHitPercent = promptTokens > 0 ? (usage.cacheRead / promptTokens) * 100 : undefined;
+  }
+
+  if (!hasUsage) return undefined;
+  const latestCompactionIndex = findLastIndex(
+    activeEntries,
+    (entry) => entry.type === "compaction",
+  );
+  let contextTokens: number | undefined;
+  for (let index = activeEntries.length - 1; index > latestCompactionIndex; index -= 1) {
+    const entry = activeEntries[index];
+    if (
+      entry?.type !== "message" ||
+      entry.message?.role !== "assistant" ||
+      entry.message.stopReason === "aborted" ||
+      entry.message.stopReason === "error"
+    ) {
+      continue;
+    }
+    const usage = normalizedAssistantUsage(entry.message.usage);
+    if (!usage) continue;
+    const candidate =
+      usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+    if (candidate > 0) {
+      contextTokens = candidate;
+      break;
+    }
+  }
+
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    costUsd,
+    ...(latestCacheHitPercent !== undefined ? { latestCacheHitPercent } : {}),
+    ...(contextTokens !== undefined ? { contextTokens } : {}),
+  };
+}
+
+type NormalizedAssistantUsage = SparkJsonObject & {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: SparkJsonObject & {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+};
+
+function normalizedAssistantUsage(value: unknown): NormalizedAssistantUsage | undefined {
+  if (!isRecord(value)) return undefined;
+  const input = nonnegativeNumber(value.input ?? value.inputTokens) ?? 0;
+  const output = nonnegativeNumber(value.output ?? value.outputTokens) ?? 0;
+  const cacheRead = nonnegativeNumber(value.cacheRead ?? value.cacheReadTokens) ?? 0;
+  const cacheWrite = nonnegativeNumber(value.cacheWrite ?? value.cacheWriteTokens) ?? 0;
+  const totalTokens = nonnegativeNumber(value.totalTokens) ?? 0;
+  const costValue = isRecord(value.cost) ? value.cost : {};
+  const cost = {
+    input: nonnegativeNumber(costValue.input) ?? 0,
+    output: nonnegativeNumber(costValue.output) ?? 0,
+    cacheRead: nonnegativeNumber(costValue.cacheRead) ?? 0,
+    cacheWrite: nonnegativeNumber(costValue.cacheWrite) ?? 0,
+    total: nonnegativeNumber(costValue.total) ?? 0,
+  };
+  if (!cost.total) cost.total = cost.input + cost.output + cost.cacheRead + cost.cacheWrite;
+  if (
+    input === 0 &&
+    output === 0 &&
+    cacheRead === 0 &&
+    cacheWrite === 0 &&
+    totalTokens === 0 &&
+    cost.total === 0
+  ) {
+    return undefined;
+  }
+  return { input, output, cacheRead, cacheWrite, totalTokens, cost };
+}
+
+function nonnegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function findLastIndex<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index]!)) return index;
+  }
+  return -1;
+}
+
+async function resolveNativeSessionGitBranch(cwd: string): Promise<string | undefined> {
+  try {
+    const cwdStat = await stat(cwd);
+    if (!cwdStat.isDirectory()) return undefined;
+  } catch {
+    return undefined;
+  }
+  return await new Promise((resolve) => {
+    let command: string;
+    try {
+      command = gitCommand();
+    } catch {
+      resolve(undefined);
+      return;
+    }
+    execFile(
+      command,
+      ["-C", cwd, "branch", "--show-current"],
+      { encoding: "utf8", timeout: 1_000 },
+      (error, stdout) => {
+        if (error || typeof stdout !== "string") {
+          resolve(undefined);
+          return;
+        }
+        const branch = stdout.trim();
+        resolve(branch || undefined);
+      },
+    );
+  });
 }
 
 function displayMessageMetadata(value: unknown): SparkJsonObject {
@@ -311,14 +552,20 @@ function conversationParts(
     const toolCallId = stringField(message, "toolCallId");
     const toolName = stringField(message, "toolName");
     if (!toolCallId || !toolName) return [];
-    const summary = summarizeToolResultContent(message.content);
+    const failed = message.isError === true;
+    const rawSummary = summarizeToolResultContent(message.content);
+    const summary = failed
+      ? sanitizeSparkDisplayError(rawSummary, {
+          fallback: "The tool failed without additional details.",
+        })
+      : rawSummary;
     return [
       {
         id: conversationPartId(entry.id, 0),
         type: "tool-result",
         toolCallId,
         toolName,
-        status: message.isError === true ? "failed" : "complete",
+        status: failed ? "failed" : "complete",
         ...(summary ? { summary } : {}),
         metadata: {},
       },
@@ -327,7 +574,7 @@ function conversationParts(
 
   const content = message.content;
   if (typeof content === "string") {
-    return content
+    const parts: SparkConversationPart[] = content
       ? [
           {
             id: conversationPartId(entry.id, 0),
@@ -338,10 +585,11 @@ function conversationParts(
           },
         ]
       : [];
+    return parts.length > 0 ? parts : providerErrorParts(entry);
   }
-  if (!Array.isArray(content)) return [];
+  if (!Array.isArray(content)) return providerErrorParts(entry);
 
-  return content.flatMap((value, index): SparkConversationPart[] => {
+  const parts = content.flatMap((value, index): SparkConversationPart[] => {
     if (!isRecord(value)) return [];
     if (value.type === "text" && typeof value.text === "string" && value.text) {
       const phase = sparkTextPhaseFromSignature(value.textSignature);
@@ -387,6 +635,29 @@ function conversationParts(
       },
     ];
   });
+  return parts.length > 0 ? parts : providerErrorParts(entry);
+}
+
+/**
+ * Provider failures commonly carry an empty assistant content array, so the
+ * normal part projection has nothing to render. Preserve the failure as a
+ * bounded text part without copying an upstream HTML error page into Cockpit.
+ */
+function providerErrorParts(entry: NativeSessionEntry): SparkConversationPart[] {
+  const message = entry.message;
+  if (message?.role !== "assistant" || message.stopReason !== "error") return [];
+  const summary = sanitizeSparkDisplayError(message.errorMessage, {
+    fallback: providerFailureFallback,
+  });
+  return [
+    {
+      id: conversationPartId(entry.id, 0),
+      type: "text",
+      text: summary,
+      status: "failed",
+      metadata: {},
+    },
+  ];
 }
 
 function collectToolOutcomes(entries: NativeSessionEntry[]): Map<string, NativeToolOutcome> {

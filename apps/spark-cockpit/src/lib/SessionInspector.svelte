@@ -41,8 +41,14 @@
     return status.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
   }
 
+  function progressValue(progress: number) {
+    return Math.min(1, Math.max(0, progress));
+  }
+
   function mailKindLabel(kind: "request" | "question" | "notification") {
-    return kind === "notification" ? labels.mailNotification : labels.mailRequest;
+    if (kind === "request") return labels.mailRequest;
+    if (kind === "question") return labels.mailQuestion;
+    return labels.mailNotification;
   }
 
   function mailStatusLabel(status: "unread" | "read" | "acknowledged") {
@@ -63,7 +69,7 @@
     return `${instanceId}-${tab}-panel`;
   }
 
-  function headingId(section: SessionInspectorTab) {
+  function headingId(section: SessionInspectorTab | "runs") {
     return `${instanceId}-${section}-heading`;
   }
 
@@ -163,6 +169,50 @@
         </dl>
       </section>
 
+      {#if view.runs.length === 0}
+        <EmptyState title={labels.noRunsTitle} body={labels.noRunsBody} icon="activity" compact />
+      {:else}
+        <section class="inspector-section" aria-labelledby={headingId("runs")}>
+          <h2 id={headingId("runs")}>{labels.runsHeading}</h2>
+          <div class="card-list">
+            {#each view.runs as run (run.id)}
+              <article class="inspector-card">
+                <header class="card-header">
+                  <div class="card-title">
+                    <Icon name="play" size={16} />
+                    <div>
+                      <h3>{run.title}</h3>
+                      <p>{run.runtimeName ?? run.kind}</p>
+                    </div>
+                  </div>
+                  <span class={`status-pill ${statusClass(run.status)}`}>
+                    {statusLabel(run.status)}
+                  </span>
+                </header>
+                {#if run.summary}
+                  <p class="card-summary">{run.summary}</p>
+                {/if}
+                {#if run.progress !== null}
+                  <div class="progress-row">
+                    <progress
+                      max="1"
+                      value={progressValue(run.progress)}
+                      aria-label={labels.progress}
+                    ></progress>
+                    <span>{Math.round(progressValue(run.progress) * 100)}%</span>
+                  </div>
+                {/if}
+                {#if run.latestOutput}
+                  <details class="output-details">
+                    <summary>{labels.latestOutput}</summary>
+                    <pre>{run.latestOutput}</pre>
+                  </details>
+                {/if}
+              </article>
+            {/each}
+          </div>
+        </section>
+      {/if}
     {:else if activeTab === "changes"}
       {#if view.changes.length === 0}
         <EmptyState title={labels.noChangesTitle} body={labels.noChangesBody} icon="repos" compact />
@@ -225,44 +275,44 @@
                   <div class="card-list">
                     {#each group.tasks as task (task.id)}
                       <article class="inspector-card">
-                      <header class="card-header">
-                        <div class="card-title">
-                          <Icon name="check" size={16} />
-                          <div>
-                            <h3>{task.title}</h3>
-                            {#if task.owner}
-                              <p>{task.owner}</p>
-                            {/if}
+                        <header class="card-header">
+                          <div class="card-title">
+                            <Icon name="check" size={16} />
+                            <div>
+                              <h3>{task.title}</h3>
+                              {#if task.owner}
+                                <p>{task.owner}</p>
+                              {/if}
+                            </div>
                           </div>
-                        </div>
-                        <span class={`status-pill ${statusClass(task.status)}`}>
-                          {statusLabel(task.status)}
-                        </span>
-                      </header>
-                      {#if task.description}
-                        <p class="card-summary">{task.description}</p>
-                      {/if}
-                      {#if task.todoTotal > 0}
-                        <div class="progress-row">
-                          <progress
-                            max={task.todoTotal}
-                            value={task.todoDone}
-                            aria-label={labels.progress}
-                          ></progress>
-                          <span>{task.todoDone}/{task.todoTotal}</span>
-                        </div>
-                        <ul class="task-todos" aria-label={labels.todoList}>
-                          {#each task.todos as todo (todo.id)}
-                            <li>
-                              <span class={`todo-state ${statusClass(todo.status)}`} aria-hidden="true"></span>
-                              <span class="todo-content">{todo.content}</span>
-                              <span class={`status-pill ${statusClass(todo.status)}`}>
-                                {statusLabel(todo.status)}
-                              </span>
-                            </li>
-                          {/each}
-                        </ul>
-                      {/if}
+                          <span class={`status-pill ${statusClass(task.status)}`}>
+                            {statusLabel(task.status)}
+                          </span>
+                        </header>
+                        {#if task.description}
+                          <p class="card-summary">{task.description}</p>
+                        {/if}
+                        {#if task.todoTotal > 0}
+                          <div class="progress-row">
+                            <progress
+                              max={task.todoTotal}
+                              value={task.todoDone}
+                              aria-label={labels.progress}
+                            ></progress>
+                            <span>{task.todoDone}/{task.todoTotal}</span>
+                          </div>
+                          <ul class="task-todos" aria-label={labels.todoList}>
+                            {#each task.todos as todo (todo.id)}
+                              <li>
+                                <span class={`todo-state ${statusClass(todo.status)}`} aria-hidden="true"></span>
+                                <span class="todo-content">{todo.content}</span>
+                                <span class={`status-pill ${statusClass(todo.status)}`}>
+                                  {statusLabel(todo.status)}
+                                </span>
+                              </li>
+                            {/each}
+                          </ul>
+                        {/if}
                       </article>
                     {/each}
                   </div>
@@ -560,6 +610,32 @@
     flex: 1;
     height: 6px;
     min-width: 80px;
+  }
+
+  .output-details {
+    border-top: 1px solid var(--color-border-soft);
+    padding-top: var(--spacing-sm);
+  }
+
+  .output-details summary {
+    color: var(--color-ink-subtle);
+    cursor: pointer;
+    font-size: var(--text-caption);
+    font-weight: var(--weight-caption-medium);
+  }
+
+  .output-details pre {
+    background: var(--color-canvas);
+    border: 1px solid var(--color-border);
+    border-radius: var(--rounded-md);
+    color: var(--color-ink);
+    font-family: var(--font-mono);
+    font-size: var(--text-caption);
+    margin: var(--spacing-sm) 0 0;
+    max-height: 12rem;
+    overflow: auto;
+    padding: var(--spacing-sm);
+    white-space: pre-wrap;
   }
 
   .task-todos {

@@ -16,7 +16,6 @@ import {
   parseSparkChannelControlSnapshot,
   parseSparkModelControlSnapshot,
   parseSparkSessionRegistryRecord,
-  type RuntimeEphemeralSecretRequestPayload,
   type ServerCommandPayload,
   type SparkAuthFlow,
   type SparkChannelControlSnapshot,

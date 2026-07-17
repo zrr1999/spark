@@ -1,6 +1,7 @@
 import {
   formatCockpitWebStatus,
   getCockpitWebStatus,
+  readCockpitWebLogs,
   runCockpitWebService,
   startCockpitWebService,
   stopCockpitWebService,
@@ -24,6 +25,15 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
     case "stop": {
       const result = await stopCockpitWebService();
       process.stdout.write(`${formatCockpitWebStatus(result.status, json)}\n`);
+      return 0;
+    }
+    case "logs": {
+      const linesIndex = argv.findIndex((arg) => arg === "--lines" || arg === "-n");
+      const lines = linesIndex < 0 ? 100 : Number(argv[linesIndex + 1]);
+      const result = readCockpitWebLogs(process.env, lines);
+      if (json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      else if (result.text) process.stdout.write(result.text);
+      else process.stdout.write(`no logs yet: ${result.logFile}\n`);
       return 0;
     }
     default:

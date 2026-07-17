@@ -23,21 +23,19 @@ export function registerPiSessionTool(
     name: "session",
     label: "Session",
     description:
-      "Canonical persistent session capability. List and classify local/message-platform sessions, manage lifecycle and bindings, submit persistent calls, or send durable requests and notifications.",
+      "Canonical persistent session capability. List and classify local/message-platform sessions, manage lifecycle and bindings, submit persistent calls, or send durable requests and questions.",
     promptGuidelines: [
       "Use role for reusable role definitions and anonymous calls; use session for persistent conversation continuity.",
       "session list is paginated and labels each surface as local or channel plus activity as idle or running; use surface, activity, and adapter filters, then continue with offset when total exceeds the returned page.",
-      "session send kind=notification persists and optionally delivers through channel bindings without triggering the target session.",
       "session send kind=request persists and immediately submits one asynchronous turn to an idle or running local target.",
       "session send kind=question persists, immediately submits to an idle local target, and waits up to timeoutMs for its terminal answer; timeout stops waiting but does not cancel the target invocation.",
-      "mailto is a compatibility alias for a notification. Replies use kind=notification with replyToMessageId.",
-      "Message-platform sessions may use only list/get/send/mailto/inbox/read/ack. Their list/get/send targets are restricted to the current workspace; requests require local targets, while notifications may target local or channel sessions.",
+      "Message-platform sessions may use only list/get/send/inbox/read/ack. Their list/get/send targets are restricted to the current workspace, and sends require local targets.",
       "inbox/read/ack are current-session-only; inbox supports offset/limit pagination.",
     ],
     parameters: Type.Object({
       action: Type.String({
         description:
-          "list | get | create | call | bind | unbind | archive | send | mailto | inbox | read | ack",
+          "list | get | create | call | bind | unbind | archive | send | inbox | read | ack",
       }),
       sessionId: Type.Optional(
         Type.String({
@@ -71,13 +69,11 @@ export function registerPiSessionTool(
       role: Type.Optional(Type.String({ description: "Optional role metadata for create." })),
       cwd: Type.Optional(Type.String({ description: "Optional working directory for create." })),
       externalKey: Type.Optional(Type.String()),
-      toSessionId: Type.Optional(
-        Type.String({ description: "Target session for send or mailto." }),
-      ),
+      toSessionId: Type.Optional(Type.String({ description: "Target session for send." })),
       kind: Type.Optional(
         Type.String({
           description:
-            "request | question | notification. Request triggers asynchronously, question waits for a terminal answer, notification does not trigger. Defaults to notification.",
+            "request | question. Request triggers asynchronously and is the default; question waits for a terminal answer.",
         }),
       ),
       timeoutMs: Type.Optional(
@@ -86,11 +82,8 @@ export function registerPiSessionTool(
       intent: Type.Optional(Type.String()),
       payload: Type.Optional(Type.Any()),
       correlationId: Type.Optional(Type.String()),
-      replyToMessageId: Type.Optional(Type.String()),
       subject: Type.Optional(Type.String()),
-      message: Type.Optional(
-        Type.String({ description: "Durable message body for send or mailto." }),
-      ),
+      message: Type.Optional(Type.String({ description: "Durable message body for send." })),
       messageId: Type.Optional(Type.String()),
       includeAcked: Type.Optional(Type.Boolean()),
     }),
@@ -155,14 +148,13 @@ function normalizeSessionAction(value: unknown): SparkSessionAction {
     value === "unbind" ||
     value === "archive" ||
     value === "send" ||
-    value === "mailto" ||
     value === "inbox" ||
     value === "read" ||
     value === "ack"
   )
     return value;
   throw new Error(
-    "session.action must be list, get, create, call, bind, unbind, archive, send, mailto, inbox, read, or ack",
+    "session.action must be list, get, create, call, bind, unbind, archive, send, inbox, read, or ack",
   );
 }
 
