@@ -9,6 +9,7 @@ import {
   isReservedWorkbenchPathSegment,
   loadArtifactDetailPage,
   loadInboxDetailPage,
+  loadInboxPage,
   loadWorkbenchLayout,
   loadWorkspaceRegistrationPage,
   resolvePendingWorkspaceBinding,
@@ -226,28 +227,16 @@ describe("artifact conversation provenance", () => {
 });
 
 describe("inbox conversation provenance", () => {
-  it("links a runtime human request back to its owning conversation", () => {
+  it("uses the Ask session id without command provenance and preserves command fallback", () => {
     const { db, workspace, bindingId } = setupWorkspace("spore");
     const sessionId = "sess_inbox_context";
-    const command = queueCommandForWorkspaceOwner(db, {
-      workspaceId: workspace.id,
-      payload: {
-        kind: "assignment.create.request",
-        title: "Ask for scope",
-        payload: {
-          goal: "Ask for scope",
-          target: { sessionId, workspaceId: workspace.id },
-          source: { kind: "cockpit" },
-        },
-      },
-    });
     const request = recordHumanRequestFromRuntime(db, {
       runtimeWorkspaceBindingId: bindingId,
       workspaceId: workspace.id,
-      commandId: command.id,
       runtimeRequestId: "runtime-request-inbox-context",
       payload: {
         kind: "ask_user",
+        sessionId,
         title: "Choose scope",
         prompt: "Which scope should Spark use?",
         questions: [],
@@ -256,9 +245,48 @@ describe("inbox conversation provenance", () => {
       },
     });
 
+    const inboxPage = loadInboxPage(db, "spore");
     const page = loadInboxDetailPage(db, "spore", request.inboxItemId);
 
+    expect(inboxPage?.inboxItems[0]?.sessionId).toBe(sessionId);
     expect(page?.detail.sessionId).toBe(sessionId);
+    expect(JSON.parse(page!.detail.contextJson)).not.toHaveProperty("commandId");
+
+    const fallbackSessionId = "sess_inbox_command_fallback";
+    const fallbackCommand = queueCommandForWorkspaceOwner(db, {
+      workspaceId: workspace.id,
+      payload: {
+        kind: "assignment.create.request",
+        title: "Ask from command",
+        payload: {
+          goal: "Ask from command",
+          target: { sessionId: fallbackSessionId, workspaceId: workspace.id },
+          source: { kind: "cockpit" },
+        },
+      },
+    });
+    const fallbackRequest = recordHumanRequestFromRuntime(db, {
+      runtimeWorkspaceBindingId: bindingId,
+      workspaceId: workspace.id,
+      commandId: fallbackCommand.id,
+      runtimeRequestId: "runtime-request-command-fallback",
+      payload: {
+        kind: "ask_user",
+        title: "Choose fallback",
+        prompt: "Use command provenance?",
+        questions: [],
+        context: {},
+        contextArtifactRefs: [],
+      },
+    });
+
+    expect(
+      loadInboxPage(db, "spore")?.inboxItems.find((item) => item.id === fallbackRequest.inboxItemId)
+        ?.sessionId,
+    ).toBe(fallbackSessionId);
+    expect(loadInboxDetailPage(db, "spore", fallbackRequest.inboxItemId)?.detail.sessionId).toBe(
+      fallbackSessionId,
+    );
     db.close();
   });
 });

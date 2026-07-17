@@ -20,9 +20,8 @@
     latestCacheHitPercent?: number;
     contextTokens?: number;
     contextWindow?: number;
-    provider?: string;
-    model?: string;
-    thinkingLevel?: string;
+    /** Runtime capability metadata accepted for compatibility; it is intentionally not presented. */
+    autoCompactionEnabled?: boolean;
   };
 
   let {
@@ -37,9 +36,6 @@
     latestCacheHitPercent,
     contextTokens,
     contextWindow,
-    provider,
-    model,
-    thinkingLevel,
   }: Props = $props();
 
   let input = $derived(formatCompactTokenCount(inputTokens && inputTokens > 0 ? inputTokens : undefined));
@@ -54,7 +50,6 @@
   let cost = $derived(formatSessionCost(costUsd && costUsd > 0 ? costUsd : undefined));
   let context = $derived(formatContextUsage(contextTokens, contextWindow));
   let hasUsage = $derived(Boolean(input || output || cacheRead || cacheWrite || cacheHit || cost || context));
-  let hasRuntime = $derived(Boolean(provider?.trim() || model?.trim() || thinkingLevel?.trim()));
   let statusDescription = $derived(
     describeSessionStatus(labels, {
       cwd,
@@ -67,16 +62,16 @@
       latestCacheHitPercent,
       contextTokens,
       contextWindow,
-      provider,
-      model,
-      thinkingLevel,
     }),
   );
 </script>
 
+<!-- svelte-ignore a11y_no_noninteractive_tabindex (slash actions move focus to this live status surface) -->
 <section
   class="session-status-bar"
   role="group"
+  tabindex="-1"
+  data-session-status-bar
   aria-label={labels.bar}
   title={statusDescription}
 >
@@ -158,36 +153,13 @@
     </div>
   {/if}
 
-  {#if hasRuntime}
-    <div class:has-core={Boolean(model?.trim())} class="runtime-context">
-      {#if provider?.trim()}
-        <span
-          class="provider"
-          data-priority="low"
-          title={`${labels.provider}: ${provider.trim()}`}
-        >({provider.trim()})</span>
-      {/if}
-      {#if model?.trim()}
-        <span class="model" data-priority="high" title={`${labels.model}: ${model.trim()}`}
-          >{model.trim()}</span
-        >
-      {/if}
-      {#if thinkingLevel?.trim()}
-        <span class="thinking" data-priority="medium" title={`${labels.thinking}: ${thinkingLevel.trim()}`}>
-          <span class="separator" aria-hidden="true">•</span>
-          {thinkingLevel.trim()}
-        </span>
-      {/if}
-    </div>
-  {/if}
 </section>
 
 <style>
   .session-status-bar {
     align-items: center;
-    background: color-mix(in srgb, var(--color-surface-soft) 78%, transparent);
-    border: 1px solid var(--color-border-soft);
-    border-radius: var(--rounded-md);
+    background: transparent;
+    border: 0;
     color: var(--color-ink-subtle);
     container: session-status / inline-size;
     display: flex;
@@ -195,17 +167,22 @@
     font-size: 10px;
     font-variant-numeric: tabular-nums;
     gap: 0;
-    line-height: 1;
-    min-height: 28px;
+    line-height: 1.25;
+    min-height: 24px;
     min-width: 0;
     overflow: hidden;
-    padding: 0 9px;
+    padding: 0 2px;
     white-space: nowrap;
   }
 
+  .session-status-bar:focus-visible {
+    border-radius: var(--rounded-sm);
+    box-shadow: var(--shadow-focus);
+    outline: none;
+  }
+
   .workspace-context,
-  .usage-context,
-  .runtime-context {
+  .usage-context {
     align-items: center;
     display: flex;
     gap: 8px;
@@ -224,23 +201,19 @@
     text-overflow: ellipsis;
   }
 
-  .branch,
-  .provider,
-  .thinking {
+  .branch {
     color: var(--color-ink-subtle);
     flex: 0 0 auto;
   }
 
-  .usage-context,
-  .runtime-context {
+  .usage-context {
     border-left: 1px solid var(--color-border-soft);
     flex: 0 0 auto;
     margin-left: 9px;
     padding-left: 9px;
   }
 
-  .metric,
-  .model {
+  .metric {
     color: var(--color-ink-muted);
     flex: 0 0 auto;
     font-weight: 650;
@@ -248,11 +221,6 @@
 
   .context {
     color: var(--color-primary);
-  }
-
-  .separator {
-    color: var(--color-border-strong);
-    margin-right: 5px;
   }
 
   .sr-only {
@@ -279,14 +247,7 @@
       display: none;
     }
 
-    .usage-context:not(.has-core),
-    .runtime-context:not(.has-core) {
-      display: none;
-    }
-  }
-
-  @container session-status (max-width: 380px) {
-    .runtime-context {
+    .usage-context:not(.has-core) {
       display: none;
     }
   }

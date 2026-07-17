@@ -118,6 +118,7 @@ export {
   saveSparkConfig,
 } from "./config.ts";
 export {
+  CURRENT_SPARK_COMPACTION_SUMMARY_VERSION,
   DEFAULT_SPARK_COMPACTION_SETTINGS,
   appendSparkBranchSummary,
   collectSparkBranchEntriesToSummarize,
@@ -130,6 +131,7 @@ export {
   findSparkCompactionCutPoint,
   findSparkTurnStartIndex,
   navigateSparkSessionBranchWithSummary,
+  normalizeSparkCompactionOutcomeMetadata,
   prepareSparkCompaction,
   shouldSparkCompact,
 } from "./compaction.ts";
@@ -198,6 +200,7 @@ export type {
 } from "./bootstrap.ts";
 export type { SparkConfig } from "./config.ts";
 export type {
+  SparkCompactionOutcomeMetadata,
   SparkCompactionPreparation,
   SparkCompactionSettings,
   SparkCompactionSummarizer,

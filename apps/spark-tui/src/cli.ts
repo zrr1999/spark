@@ -24,6 +24,7 @@ import {
   createSparkDaemonNativeCommands,
   createSparkDaemonNativeResponder,
   ensureSparkDaemonWorkspaceSession,
+  handleSparkDaemonHumanInteractionRequest,
   handleSparkDaemonCliCommand,
   parseSparkDaemonCliArgs,
   runSparkDaemonCliCommand,
@@ -411,6 +412,7 @@ interface SparkCliSelectedSession {
   resolution: SparkCliSessionAttachResolution;
   session?: SparkSessionRegistryRecord;
   snapshot?: SparkSessionView;
+  created?: boolean;
   cancelled?: boolean;
 }
 
@@ -498,18 +500,19 @@ async function selectSparkCliWorkspaceSession(
   });
   if (!selection) return { ...initial, cancelled: true };
 
-  const selected =
-    selection === CREATE_SPARK_SESSION_SELECTION
-      ? await clientCreateManagedSession(
-          {
-            scope: { kind: "workspace", workspaceId: lease.workspace.id },
-            workspaceId: lease.workspace.id,
-            cwd: services.cwd,
-          },
-          daemonClient,
-        )
-      : requireSelectedManagedSession(selectableSessions, selection);
+  const created = selection === CREATE_SPARK_SESSION_SELECTION;
+  const selected = created
+    ? await clientCreateManagedSession(
+        {
+          scope: { kind: "workspace", workspaceId: lease.workspace.id },
+          workspaceId: lease.workspace.id,
+          cwd: services.cwd,
+        },
+        daemonClient,
+      )
+    : requireSelectedManagedSession(selectableSessions, selection);
   const baseState = initial.resolution.state;
+  const snapshot = await managedSessionSnapshotIfAvailable(selected.sessionId, daemonClient);
   return {
     resolution: attachResolutionForManagedSession(
       baseState,
@@ -518,9 +521,8 @@ async function selectSparkCliWorkspaceSession(
       lease.workspace.id,
     ),
     session: selected,
-    ...(selection === CREATE_SPARK_SESSION_SELECTION
-      ? {}
-      : { snapshot: await managedSessionSnapshotIfAvailable(selected.sessionId, daemonClient) }),
+    ...(created ? { created: true } : {}),
+    ...(snapshot ? { snapshot } : {}),
   };
 }
 
@@ -579,6 +581,27 @@ function requestedSparkCliSessionTarget(
     options?.sparkSessionKey?.trim() ||
     undefined
   );
+}
+
+function runtimeOptionsWithoutSparkSessionTarget(
+  options: SparkCliRuntimeOptions | undefined,
+): SparkCliRuntimeOptions | undefined {
+  if (!options) return undefined;
+  const result = { ...options };
+  delete result.session;
+  delete result.sessionId;
+  delete result.sparkSessionKey;
+  return result;
+}
+
+function runtimeOptionsForSparkSession(
+  options: SparkCliRuntimeOptions | undefined,
+  sessionId: string,
+): SparkCliRuntimeOptions {
+  return {
+    ...runtimeOptionsWithoutSparkSessionTarget(options),
+    sessionId,
+  };
 }
 
 async function resolveSparkCliSessionTarget(
@@ -977,48 +1000,6 @@ export async function runSparkCli(
                 )(state, ctx)
               : undefined,
         });
-        const selectedSession = await selectSparkCliWorkspaceSession(
-          services,
-          lease,
-          command.options,
-          daemonClient,
-          options.selectSession ?? runNativeSparkSessionSelector,
-        );
-        if (selectedSession.cancelled) return 0;
-        const workspaceSession = selectedSession.resolution;
-        const currentSessionId = workspaceSession.state.attachTarget;
-        if (!currentSessionId) {
-          throw new Error("Spark TUI requires a selected daemon-managed session.");
-        }
-        const selectedManagedSession = selectedSession.session;
-        const sessionWorkspaceId =
-          selectedManagedSession?.scope.kind === "workspace"
-            ? selectedManagedSession.scope.workspaceId
-            : lease.workspace.id;
-        const sessionCwd = selectedManagedSession?.cwd ?? services.cwd;
-        let currentSessionReady: Promise<void> | undefined;
-        const ensureCurrentSession = () => {
-          currentSessionReady ??= (
-            selectedManagedSession
-              ? Promise.resolve()
-              : ensureSparkDaemonWorkspaceSession(
-                  {
-                    sessionId: currentSessionId,
-                    workspaceId: sessionWorkspaceId,
-                    cwd: sessionCwd,
-                  },
-                  daemonClient,
-                )
-          ).catch((error) => {
-            currentSessionReady = undefined;
-            throw error;
-          });
-          return currentSessionReady;
-        };
-        const firstRunOnboarding =
-          command.initialMessage || selectedSession.snapshot
-            ? undefined
-            : renderSparkFirstRunOnboarding(services);
         registerSparkSessionsCommand(services.runtime, {
           store: services.sessionStore,
           getNavigationState: () => undefined,
@@ -1028,89 +1009,195 @@ export async function runSparkCli(
               workspaceLabel: `${lease.workspace.displayName} • ${services.cwd}`,
             }),
         });
-        const modelControl = createSparkDaemonModelAuthClient(daemonClient, {
-          sessionId: currentSessionId,
-          ensureSession: ensureCurrentSession,
-        });
+        let activeModelControl: SparkDaemonModelAuthClient | undefined;
+        const modelControl = createDelegatingSparkDaemonModelAuthClient(() => activeModelControl);
         registerSparkNativeModelCommand(services, modelControl);
         registerSparkDaemonModelKeybindings(services, modelControl);
+        const selectSession = options.selectSession ?? runNativeSparkSessionSelector;
         const runTui = options.runTui ?? runNativeSparkTui;
-        await runTui({
-          initialMessage: command.initialMessage,
-          responder: createSparkDaemonNativeResponder(daemonClient, {
-            sessionId: currentSessionId,
-            workspaceId: sessionWorkspaceId,
-            cwd: sessionCwd,
-            ensureSession: ensureCurrentSession,
-            onViewEvent: (event) => {
-              if (event.type === "run.update") pendingNativeUiTransport?.publishView?.(event);
-            },
-          }),
-          workspaceSession: workspaceSession.state,
-          slashCommands: createSparkNativeSlashCommands(
+        let selectionOptions = command.options;
+        let currentSessionOptions: SparkCliRuntimeOptions | undefined;
+        let initialMessage = command.initialMessage;
+        let hasLaunchedTui = false;
+
+        while (true) {
+          const selectedSession = await selectSparkCliWorkspaceSession(
             services,
+            lease,
+            selectionOptions,
             daemonClient,
-            modelControl,
-            currentSessionId,
-            ensureCurrentSession,
-          ),
-          autocompleteBasePath: sessionCwd,
-          keybindings: services.keybindings,
-          statusContext: {
-            activeProvider: () => services.modelSelector.getActive()?.providerName,
-            activeModel: () => {
-              const active = services.modelSelector.getActive();
-              return active?.modelId;
+            selectSession,
+          );
+          if (selectedSession.cancelled) {
+            if (!currentSessionOptions) return 0;
+            selectionOptions = currentSessionOptions;
+            continue;
+          }
+
+          const workspaceSession = selectedSession.resolution;
+          const currentSessionId = workspaceSession.state.attachTarget;
+          if (!currentSessionId) {
+            throw new Error("Spark TUI requires a selected daemon-managed session.");
+          }
+          currentSessionOptions = runtimeOptionsForSparkSession(command.options, currentSessionId);
+          services.runtime.setSessionId(currentSessionId);
+
+          const selectedManagedSession = selectedSession.session;
+          const sessionWorkspaceId =
+            selectedManagedSession?.scope.kind === "workspace"
+              ? selectedManagedSession.scope.workspaceId
+              : lease.workspace.id;
+          const sessionCwd = selectedManagedSession?.cwd ?? services.cwd;
+          let currentSessionReady: Promise<void> | undefined;
+          const ensureCurrentSession = () => {
+            currentSessionReady ??= (
+              selectedManagedSession
+                ? Promise.resolve()
+                : ensureSparkDaemonWorkspaceSession(
+                    {
+                      sessionId: currentSessionId,
+                      workspaceId: sessionWorkspaceId,
+                      cwd: sessionCwd,
+                    },
+                    daemonClient,
+                  )
+            ).catch((error) => {
+              currentSessionReady = undefined;
+              throw error;
+            });
+            return currentSessionReady;
+          };
+          const firstRunOnboarding =
+            hasLaunchedTui || initialMessage || (!selectedSession.created && selectedManagedSession)
+              ? undefined
+              : renderSparkFirstRunOnboarding(services);
+          let sessionStatusModel =
+            modelRefToSelection(selectedSession.snapshot?.model) ??
+            services.modelSelector.getActive();
+          let sessionStatusThinkingLevel =
+            selectedSession.snapshot?.thinkingLevel ?? services.config.activeThinkingLevel;
+          const daemonModelControl = createSparkDaemonModelAuthClient(daemonClient, {
+            sessionId: currentSessionId,
+            ensureSession: ensureCurrentSession,
+          });
+          activeModelControl = {
+            ...daemonModelControl,
+            snapshot: async () => {
+              const snapshot = await daemonModelControl.snapshot();
+              sessionStatusModel =
+                modelRefToSelection(snapshot.session?.model ?? snapshot.defaultModel) ??
+                sessionStatusModel;
+              sessionStatusThinkingLevel =
+                snapshot.session?.thinkingLevel ?? sessionStatusThinkingLevel;
+              return snapshot;
             },
-            thinkingLevel: () => services.config.activeThinkingLevel ?? "default",
-            contextWindow: () => {
-              const active = services.modelSelector.getActive();
-              return active
-                ? services.providerRegistry
-                    .listModelsFor(active.providerName)
-                    .find((model) => model.id === active.modelId)?.contextWindow
-                : undefined;
+            setSessionModel: async (model) => {
+              const session = await daemonModelControl.setSessionModel(model);
+              sessionStatusModel = modelRefToSelection(session.model ?? model);
+              return session;
             },
-          },
-          theme: services.theme,
-          messageRenderers: new Map(
-            services.runtime
-              .listMessageRenderers()
-              .map(({ customType, renderer }) => [customType, renderer]),
-          ),
-          configureApp: async (app, session) => {
-            pendingNativeUiTransport = createSparkNativeUiTransport(app, session);
-            services.runtime.setUiTransport(pendingNativeUiTransport);
-            app.setWorkspaceSession(workspaceSession.state);
-            if (selectedSession.snapshot) {
-              app.applyViewModelEvent({
-                version: SPARK_PROTOCOL_VERSION,
-                type: "session.snapshot",
-                session: selectedSession.snapshot,
-              });
-            }
-            if (workspaceSession.attachMatchesControlPlane) {
-              await hydrateNativeCockpitFromTaskRead(services, app, workspaceSession.state);
-            }
-            if (workspaceSession.shouldEmitSessionStart) {
-              await services.runtime.emit("session_start", {
-                source: "native-tui",
-                workspaceDir: workspaceSession.state.workspaceDir,
-                workspaceHash: workspaceSession.state.workspaceHash,
-                controlPlaneSessionId: workspaceSession.state.controlPlaneSessionId,
-                attachTarget: workspaceSession.target,
-              });
-            }
-            if (firstRunOnboarding) {
-              session.addCustomMessage({
-                customType: "first-run-onboarding",
-                content: firstRunOnboarding,
-                display: true,
-              });
-            }
-          },
-        });
-        return 0;
+            setSessionThinkingLevel: async (thinkingLevel) => {
+              const session = await daemonModelControl.setSessionThinkingLevel(thinkingLevel);
+              sessionStatusThinkingLevel = session.thinkingLevel ?? thinkingLevel;
+              return session;
+            },
+          };
+          let sessionSelectorRequested = false;
+          await runTui({
+            initialMessage,
+            responder: createSparkDaemonNativeResponder(daemonClient, {
+              sessionId: currentSessionId,
+              workspaceId: sessionWorkspaceId,
+              cwd: sessionCwd,
+              ensureSession: ensureCurrentSession,
+              onViewEvent: (event) => {
+                if (event.type === "run.update") pendingNativeUiTransport?.publishView?.(event);
+              },
+              onInteractionRequest: async (request, event, interactionContext) => {
+                const interaction = pendingNativeUiTransport?.interaction;
+                if (!interaction) {
+                  throw new Error("Spark TUI interaction surface is not ready for this request.");
+                }
+                await handleSparkDaemonHumanInteractionRequest(request, event, {
+                  currentSessionId,
+                  client: daemonClient,
+                  ...(interactionContext.signal ? { signal: interactionContext.signal } : {}),
+                  interaction,
+                  notify: (message, level) => pendingNativeUiTransport?.notify?.(message, level),
+                });
+              },
+            }),
+            workspaceSession: workspaceSession.state,
+            slashCommands: createSparkNativeSlashCommands(
+              services,
+              daemonClient,
+              modelControl,
+              currentSessionId,
+              ensureCurrentSession,
+              () => {
+                sessionSelectorRequested = true;
+              },
+            ),
+            autocompleteBasePath: sessionCwd,
+            keybindings: services.keybindings,
+            statusContext: {
+              activeProvider: () => sessionStatusModel?.providerName,
+              activeModel: () => sessionStatusModel?.modelId,
+              thinkingLevel: () => sessionStatusThinkingLevel ?? "default",
+              autoCompactionEnabled: () => true,
+              contextWindow: () => {
+                const active = sessionStatusModel;
+                return active
+                  ? services.providerRegistry
+                      .listModelsFor(active.providerName)
+                      .find((model) => model.id === active.modelId)?.contextWindow
+                  : undefined;
+              },
+            },
+            theme: services.theme,
+            messageRenderers: new Map(
+              services.runtime
+                .listMessageRenderers()
+                .map(({ customType, renderer }) => [customType, renderer]),
+            ),
+            configureApp: async (app, session) => {
+              pendingNativeUiTransport = createSparkNativeUiTransport(app, session);
+              services.runtime.setUiTransport(pendingNativeUiTransport);
+              app.setWorkspaceSession(workspaceSession.state);
+              if (selectedSession.snapshot) {
+                app.applyViewModelEvent({
+                  version: SPARK_PROTOCOL_VERSION,
+                  type: "session.snapshot",
+                  session: selectedSession.snapshot,
+                });
+              }
+              if (workspaceSession.attachMatchesControlPlane) {
+                await hydrateNativeCockpitFromTaskRead(services, app, workspaceSession.state);
+              }
+              if (workspaceSession.shouldEmitSessionStart) {
+                await services.runtime.emit("session_start", {
+                  source: "native-tui",
+                  workspaceDir: workspaceSession.state.workspaceDir,
+                  workspaceHash: workspaceSession.state.workspaceHash,
+                  controlPlaneSessionId: workspaceSession.state.controlPlaneSessionId,
+                  attachTarget: workspaceSession.target,
+                });
+              }
+              if (firstRunOnboarding) {
+                session.addCustomMessage({
+                  customType: "first-run-onboarding",
+                  content: firstRunOnboarding,
+                  display: true,
+                });
+              }
+            },
+          });
+          initialMessage = undefined;
+          hasLaunchedTui = true;
+          pendingNativeUiTransport = undefined;
+          if (!sessionSelectorRequested) return 0;
+          selectionOptions = runtimeOptionsWithoutSparkSessionTarget(command.options);
+        }
       } finally {
         await lease.release();
       }
@@ -1247,9 +1334,10 @@ function registerSparkDaemonModelKeybindings(
     defaultKey: "shift+tab",
     description: "Cycle the assistant thinking level (off/minimal/low/medium/high/xhigh)",
     handler: async () => {
-      const next = cycleThinkingLevel(services.config.activeThinkingLevel);
-      services.config.activeThinkingLevel = next;
-      await services.saveConfig?.(services.config);
+      const snapshot = await modelControl.snapshot();
+      const next = cycleThinkingLevel(
+        snapshot.session?.thinkingLevel ?? services.config.activeThinkingLevel,
+      );
       await modelControl.setSessionThinkingLevel(next);
       services.runtime
         .makeContext()
@@ -1319,6 +1407,28 @@ function modelRefToSelection(
   return model ? { providerName: model.providerName, modelId: model.modelId } : undefined;
 }
 
+function createDelegatingSparkDaemonModelAuthClient(
+  getCurrent: () => SparkDaemonModelAuthClient | undefined,
+): SparkDaemonModelAuthClient {
+  const current = (): SparkDaemonModelAuthClient => {
+    const client = getCurrent();
+    if (!client) throw new Error("No active Spark session is selected.");
+    return client;
+  };
+  return {
+    snapshot: () => current().snapshot(),
+    setSessionModel: (model) => current().setSessionModel(model),
+    setSessionThinkingLevel: (thinkingLevel) => current().setSessionThinkingLevel(thinkingLevel),
+    setDefaultModel: (model) => current().setDefaultModel(model),
+    setApiKey: (providerName, apiKey) => current().setApiKey(providerName, apiKey),
+    logout: (providerName) => current().logout(providerName),
+    startOAuth: (providerName) => current().startOAuth(providerName),
+    oauthStatus: (flowId) => current().oauthStatus(flowId),
+    respondOAuth: (flowId, promptId, value) => current().respondOAuth(flowId, promptId, value),
+    cancelOAuth: (flowId) => current().cancelOAuth(flowId),
+  };
+}
+
 function resolveSparkModelArgument(
   services: SparkCliHostServices,
   query: string,
@@ -1356,8 +1466,8 @@ function createSparkNativeSlashCommands(
   modelControl: SparkDaemonModelAuthClient,
   currentSessionId: string,
   ensureCurrentSession: () => Promise<void>,
+  requestSessionSelector: () => void,
 ): SparkNativeSlashCommandMap {
-  registerSparkNativeModelCommand(services, modelControl);
   const daemonCommands = createSparkDaemonNativeCommands(daemonClient);
   const localControlCommands = createSparkNativeLocalControlSlashCommands();
   const piParityCommands = createSparkPiParitySlashCommands(services, modelControl);
@@ -1368,21 +1478,28 @@ function createSparkNativeSlashCommands(
       ...Object.keys(localControlCommands),
       ...PI_PARITY_COMMAND_NAMES,
     ],
-    sendUserMessage: async (content) => {
+    sendUserMessage: async (content, context) => {
       const prompt = content.trim();
       if (!prompt) return;
       await ensureCurrentSession();
-      await handleSparkDaemonCliCommand(
-        {
-          action: "submit",
-          json: true,
-          sessionId: currentSessionId,
-          prompt,
-        },
-        daemonClient,
-      );
+      await context.session.submit(prompt);
     },
   });
+  const sessionsCommand = runtimeCommands.sessions;
+  if (sessionsCommand) {
+    runtimeCommands.sessions = {
+      ...sessionsCommand,
+      description: "Open the session selector or run an explicit session subcommand",
+      handler: async (args, context) => {
+        if (args.trim()) {
+          await sessionsCommand.handler(args, context);
+          return;
+        }
+        requestSessionSelector();
+        context.exit();
+      },
+    };
+  }
   const promptTemplateCommands = createSparkPromptTemplateSlashCommands(services, {
     reservedNames: [
       ...NATIVE_SLASH_COMMAND_EXCLUSIONS,

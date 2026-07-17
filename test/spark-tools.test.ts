@@ -658,6 +658,7 @@ void test("Spark tool normalizer groups reject invalid explicit parameters inste
 
 type TestSparkContext = {
   cwd: string;
+  sendUserMessage?: (content: string) => Promise<void>;
   sessionManager: {
     getSessionFile: () => string | undefined;
     getLeafId: () => string | undefined;
@@ -949,6 +950,59 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
     await rm(existingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
     await rm(initializedDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
     await rm(emptyDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("/plan dispatches through an externally owned command turn bridge", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-plan-command-turn-bridge-"));
+  try {
+    await mkdir(join(dir, ".git"));
+    await writeFile(join(dir, "README.md"), "# Existing project\n", "utf8");
+    const ctx = testSparkContext(dir, "main");
+    const forwarded: string[] = [];
+    ctx.sendUserMessage = async (content) => {
+      await Promise.resolve();
+      forwarded.push(content);
+    };
+    const run = registerSparkToolsForTest();
+    const planCommand = run.commands.get("plan");
+    assert.ok(planCommand, "missing /plan command");
+
+    await planCommand.handler("Trace the visible turn path", ctx);
+
+    assert.equal(forwarded.length, 1);
+    assert.match(forwarded[0] ?? "", /## Planning focus\nTrace the visible turn path/u);
+    assert.equal(run.customMessages.length, 0);
+    assert.deepEqual(ctx.sparkActiveLens, { phase: "plan", drive: "assist" });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("/goal dispatches through an externally owned command turn bridge", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-goal-command-turn-bridge-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const forwarded: string[] = [];
+    ctx.sendUserMessage = async (content) => {
+      await Promise.resolve();
+      forwarded.push(content);
+    };
+    const run = registerSparkToolsForTest();
+    const goalCommand = run.commands.get("goal");
+    assert.ok(goalCommand, "missing /goal command");
+
+    await goalCommand.handler("Trace the daemon goal bridge", ctx);
+
+    assert.equal(forwarded.length, 1);
+    assert.match(forwarded[0] ?? "", /Trace the daemon goal bridge/u);
+    assert.equal(run.customMessages.length, 0);
+    const goal = await loadSessionGoal(dir, ctx);
+    assert.equal(goal?.objective, "Trace the daemon goal bridge");
+    assert.equal(goal?.status, "active");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });
 

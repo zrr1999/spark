@@ -1,9 +1,10 @@
 /**
  * Resolve the visible run state for the selected conversation.
  *
- * A live session view is newer than the registry row rendered with the page,
- * so its terminal state must win while the next server refresh is still in
- * flight. When no live view is available, the registry remains the fallback.
+ * A submission receipt proves only that a turn was admitted. It may still be
+ * waiting for a worker, so it must not make the conversation look active.
+ * Prefer the live daemon view over the registry row rendered with the page,
+ * and fall back to that registry row only when no live view is available.
  */
 export function sessionIsWorking(input: {
   registryStatus?: string | null;

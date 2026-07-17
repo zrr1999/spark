@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   list: vi.fn(),
+  projectedModelControl: vi.fn(),
+  projectedSnapshot: vi.fn(),
   snapshot: vi.fn(),
   modelControl: vi.fn(),
   activity: vi.fn(),
@@ -13,6 +15,7 @@ vi.mock("$lib/server/managed-sessions", () => ({
   createManagedSessionForCockpit: vi.fn(),
   getManagedSessionForCockpit: mocks.get,
   getManagedSessionSnapshotForCockpit: mocks.snapshot,
+  getProjectedManagedSessionSnapshotForCockpit: mocks.projectedSnapshot,
   listManagedSessionsForCockpit: mocks.list,
 }));
 
@@ -21,6 +24,7 @@ vi.mock("$lib/server/events", () => ({ latestEventCursor: () => null }));
 vi.mock("$lib/server/session-activity", () => ({ loadSessionActivity: mocks.activity }));
 vi.mock("$lib/server/model-control", () => ({
   loadModelControlForCockpit: mocks.modelControl,
+  loadProjectedModelControlForCockpit: mocks.projectedModelControl,
   modelValue: vi.fn(),
   parseModelValue: vi.fn(),
   parseThinkingLevelValue: vi.fn(),
@@ -78,7 +82,9 @@ beforeEach(() => {
     sessions: [workspaceSession, channelSession, daemonSession, otherWorkspaceSession],
   });
   mocks.snapshot.mockResolvedValue(null);
+  mocks.projectedSnapshot.mockReturnValue(null);
   mocks.modelControl.mockResolvedValue({ available: true, snapshot: null });
+  mocks.projectedModelControl.mockResolvedValue({ available: true, snapshot: null });
   mocks.activity.mockReturnValue({ commands: [], reports: [] });
 });
 
@@ -88,6 +94,7 @@ describe("workbench session page scope", () => {
       sessions: [workspaceSession, channelSession],
       sessionsAvailable: true,
       activeWorkspace: { id: "ws_current" },
+      sessionControlAvailable: true,
     });
 
     const result = await load({
@@ -103,7 +110,9 @@ describe("workbench session page scope", () => {
     expect(parent).toHaveBeenCalledOnce();
     expect(mocks.list).not.toHaveBeenCalled();
     expect(mocks.get).not.toHaveBeenCalled();
-    expect(mocks.snapshot).toHaveBeenCalledWith(workspaceSession.sessionId);
+    expect(mocks.snapshot).toHaveBeenCalledWith(workspaceSession.sessionId, {
+      messageLimit: 32,
+    });
     expect(mocks.modelControl).toHaveBeenCalledWith(workspaceSession.sessionId);
     expect(mocks.activity).toHaveBeenCalledWith(
       {},
@@ -116,6 +125,7 @@ describe("workbench session page scope", () => {
       sessions: [workspaceSession, channelSession, daemonSession],
       sessionsAvailable: true,
       activeWorkspace: { id: "ws_current" },
+      sessionControlAvailable: true,
     });
 
     await expect(
@@ -131,6 +141,7 @@ describe("workbench session page scope", () => {
       sessions: [workspaceSession, channelSession, otherWorkspaceSession],
       sessionsAvailable: true,
       activeWorkspace: { id: "ws_current" },
+      sessionControlAvailable: true,
     });
 
     await expect(
@@ -139,5 +150,29 @@ describe("workbench session page scope", () => {
     expect(mocks.snapshot).not.toHaveBeenCalled();
     expect(mocks.modelControl).not.toHaveBeenCalled();
     expect(mocks.activity).not.toHaveBeenCalled();
+  });
+
+  it("keeps an offline cached session readable while disabling assignment", async () => {
+    const parent = vi.fn().mockResolvedValue({
+      sessions: [workspaceSession],
+      sessionsAvailable: true,
+      activeWorkspace: { id: "ws_current" },
+      sessionControlAvailable: false,
+    });
+
+    const result = await load({
+      params: { sessionId: workspaceSession.sessionId },
+      parent,
+    } as never);
+
+    expect(result).toMatchObject({
+      selectedSession: workspaceSession,
+      sessionControlAvailable: false,
+      canAssign: false,
+    });
+    expect(mocks.snapshot).not.toHaveBeenCalled();
+    expect(mocks.modelControl).not.toHaveBeenCalled();
+    expect(mocks.projectedSnapshot).toHaveBeenCalledWith(workspaceSession.sessionId);
+    expect(mocks.projectedModelControl).toHaveBeenCalledWith(workspaceSession.sessionId);
   });
 });

@@ -381,7 +381,7 @@ describe("loadSparkSessionSnapshot", () => {
         id: "result-failure",
         role: "tool",
         text: "503 command failed",
-        status: "error",
+        status: "done",
         parts: [
           {
             id: "result-failure:part:0",

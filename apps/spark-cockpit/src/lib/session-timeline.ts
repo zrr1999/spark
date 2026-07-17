@@ -70,6 +70,75 @@ export function sessionTimelineWindow(
   };
 }
 
+export type SessionRetryCandidate = {
+  prompt: string;
+  failureMessageId: string;
+};
+
+/**
+ * Select retry from the canonical daemon transcript. Activity reports are
+ * deliberately excluded: a failed run projection is not necessarily a failed
+ * conversation turn, and a later task/artifact report must not hide a genuine
+ * turn failure.
+ */
+export function latestSessionRetryCandidate(
+  messages: readonly SparkMessageView[],
+): SessionRetryCandidate | null {
+  const promptsByInvocation = new Map<string, string>();
+  let latestUserPrompt: string | null = null;
+  let candidate: SessionRetryCandidate | null = null;
+
+  for (const message of messages) {
+    if (
+      message.display === false ||
+      (message.role === "system" && !conversationSystemMessageVisible(message))
+    ) {
+      continue;
+    }
+
+    const invocationId = nonEmptyString(message.metadata.invocationId);
+    if (message.role === "user") {
+      const prompt = displayUserMessage(message.text).trim();
+      if (prompt) {
+        latestUserPrompt = prompt;
+        if (invocationId) promptsByInvocation.set(invocationId, prompt);
+      }
+      candidate = null;
+      continue;
+    }
+
+    // Tool failures are execution detail. A retry becomes available only when
+    // the turn itself ends in a visible assistant/system failure.
+    if (message.role === "tool") continue;
+
+    const parts = conversationPartsFromMessage(message);
+    if (
+      isFailedTerminalStatus(message.status) &&
+      parts.some((part) => part.type === "error" || part.type === "notice")
+    ) {
+      const prompt =
+        (invocationId ? promptsByInvocation.get(invocationId) : null) ?? latestUserPrompt;
+      candidate = prompt ? { prompt, failureMessageId: message.id } : null;
+      continue;
+    }
+
+    // A displayable final assistant response closes the latest turn. Process-
+    // only assistant messages do not, because their final outcome may follow.
+    if (
+      message.role === "assistant" &&
+      parts.some((part) => part.type === "text" && part.text.trim())
+    ) {
+      candidate = null;
+    }
+  }
+
+  return candidate;
+}
+
+export function latestSessionRetryPrompt(messages: readonly SparkMessageView[]): string | null {
+  return latestSessionRetryCandidate(messages)?.prompt ?? null;
+}
+
 export function activeSessionTimelineProcessItemId(
   items: readonly SessionTimelineItem[],
   hasActiveTurn: boolean,
@@ -93,11 +162,10 @@ export function buildSessionTimeline(input: {
   const items: SessionTimelineItem[] = [];
   const canonicalMessageIds = new Set<string>();
   const canonicalFallbackMatches = new Map<string, number>();
-
   for (const [messageIndex, message] of input.messages.entries()) {
     if (
       message.display === false ||
-      (message.role === "system" && !isFailedTerminalStatus(message.status))
+      (message.role === "system" && !conversationSystemMessageVisible(message))
     ) {
       continue;
     }
@@ -112,9 +180,9 @@ export function buildSessionTimeline(input: {
     items.push({
       id: `message:${message.id}`,
       actor,
-      body: conversationPartText(parts) || displayText,
+      body: conversationItemBody(parts, displayText),
       title: null,
-      status: message.status === "done" ? null : message.status,
+      status: conversationItemStatus(message.status, message.role, parts),
       timestamp: message.createdAt ?? input.fallbackTimestamp,
       meta: message.role === "assistant" || message.role === "user" ? null : message.role,
       senderLabel:
@@ -156,7 +224,7 @@ export function buildSessionTimeline(input: {
     if (
       report.kind === "daemon.task.lifecycle" ||
       report.role === "tool" ||
-      (report.role === "system" && !isFailedTerminalStatus(report.status))
+      (report.role === "system" && report.message?.metadata.conversationVisible !== true)
     ) {
       continue;
     }
@@ -197,9 +265,9 @@ export function buildSessionTimeline(input: {
     items.push({
       id: sourceMessageId ? `message:${sourceMessageId}` : `report:${report.id}`,
       actor,
-      body: conversationPartText(parts) || report.text,
+      body: conversationItemBody(parts, report.text),
       title: actor !== "spark" || hasStructuredReportPart ? null : report.title,
-      status: report.status,
+      status: conversationItemStatus(report.status, report.message?.role, parts),
       timestamp: report.createdAt,
       meta: report.role && !["assistant", "user"].includes(report.role) ? report.role : null,
       senderLabel:
@@ -224,6 +292,29 @@ export function buildSessionTimeline(input: {
       mergeTimelineInteractionParts(mergeTimelineToolParts(sortedItems)),
     ),
   );
+}
+
+function conversationSystemMessageVisible(message: SparkMessageView): boolean {
+  return message.metadata.conversationVisible === true;
+}
+
+function conversationItemStatus(
+  status: string | null | undefined,
+  role: SparkMessageView["role"] | undefined,
+  parts: readonly ConversationPart[],
+): string | null {
+  if (!status || status === "done" || role === "tool") return null;
+  // These parts already communicate the outcome. Repeating an Error badge in
+  // the message header adds no information and mislabels incomplete work.
+  if (parts.some((part) => part.type === "error" || part.type === "notice")) return null;
+  return status;
+}
+
+function conversationItemBody(parts: readonly ConversationPart[], fallback: string): string {
+  // Notice copy is localized at render time. Never leak the provider/internal
+  // diagnostic used to classify that notice into copy, announcements, or keys.
+  if (parts.some((part) => part.type === "notice")) return "";
+  return conversationPartText(parts) || fallback;
 }
 
 function channelSenderLabel(metadata: SparkMessageView["metadata"]): string | null {

@@ -29,6 +29,7 @@
   let tabs = $derived<{ id: SessionInspectorTab; label: string; icon: IconName }[]>([
     { id: "summary", label: labels.tabs.summary, icon: "activity" },
     { id: "changes", label: labels.tabs.changes, icon: "repos" },
+    { id: "todos", label: labels.tabs.todos, icon: "check" },
     { id: "tasks", label: labels.tabs.tasks, icon: "folder" },
     { id: "mailbox", label: labels.tabs.mailbox, icon: "inbox" },
   ]);
@@ -39,10 +40,6 @@
 
   function statusClass(status: string) {
     return status.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
-  }
-
-  function progressValue(progress: number) {
-    return Math.min(1, Math.max(0, progress));
   }
 
   function mailKindLabel(kind: "request" | "question" | "notification") {
@@ -69,7 +66,7 @@
     return `${instanceId}-${tab}-panel`;
   }
 
-  function headingId(section: SessionInspectorTab | "runs") {
+  function headingId(section: SessionInspectorTab) {
     return `${instanceId}-${section}-heading`;
   }
 
@@ -169,50 +166,6 @@
         </dl>
       </section>
 
-      {#if view.runs.length === 0}
-        <EmptyState title={labels.noRunsTitle} body={labels.noRunsBody} icon="activity" compact />
-      {:else}
-        <section class="inspector-section" aria-labelledby={headingId("runs")}>
-          <h2 id={headingId("runs")}>{labels.runsHeading}</h2>
-          <div class="card-list">
-            {#each view.runs as run (run.id)}
-              <article class="inspector-card">
-                <header class="card-header">
-                  <div class="card-title">
-                    <Icon name="play" size={16} />
-                    <div>
-                      <h3>{run.title}</h3>
-                      <p>{run.runtimeName ?? run.kind}</p>
-                    </div>
-                  </div>
-                  <span class={`status-pill ${statusClass(run.status)}`}>
-                    {statusLabel(run.status)}
-                  </span>
-                </header>
-                {#if run.summary}
-                  <p class="card-summary">{run.summary}</p>
-                {/if}
-                {#if run.progress !== null}
-                  <div class="progress-row">
-                    <progress
-                      max="1"
-                      value={progressValue(run.progress)}
-                      aria-label={labels.progress}
-                    ></progress>
-                    <span>{Math.round(progressValue(run.progress) * 100)}%</span>
-                  </div>
-                {/if}
-                {#if run.latestOutput}
-                  <details class="output-details">
-                    <summary>{labels.latestOutput}</summary>
-                    <pre>{run.latestOutput}</pre>
-                  </details>
-                {/if}
-              </article>
-            {/each}
-          </div>
-        </section>
-      {/if}
     {:else if activeTab === "changes"}
       {#if view.changes.length === 0}
         <EmptyState title={labels.noChangesTitle} body={labels.noChangesBody} icon="repos" compact />
@@ -245,21 +198,46 @@
           </div>
         </section>
       {/if}
+    {:else if activeTab === "todos"}
+      {#if view.sessionTodo === null}
+        <EmptyState
+          title={labels.noSessionTodoTitle}
+          body={labels.noSessionTodoBody}
+          icon="check"
+          compact
+        />
+      {:else}
+        <section class="inspector-section" aria-labelledby={headingId("todos")}>
+          <header class="session-todo-header">
+            <div>
+              <h2 id={headingId("todos")}>{labels.sessionTodoHeading}</h2>
+              <p>{view.sessionTodo.summary}</p>
+            </div>
+            <a href={`#${view.sessionTodo.anchor}`}>{labels.openSessionTodo}</a>
+          </header>
+          {#if view.sessionTodo.items.length > 0}
+            <ul class="session-todo-list" aria-label={labels.todoList}>
+              {#each view.sessionTodo.items as todo (todo.id)}
+                <li>
+                  <span class={`todo-state ${statusClass(todo.status)}`} aria-hidden="true"></span>
+                  <span class="todo-content">{todo.content}</span>
+                  <span class={`status-pill ${statusClass(todo.status)}`}>
+                    {statusLabel(todo.status)}
+                  </span>
+                </li>
+              {/each}
+            </ul>
+          {:else}
+            <p class="session-todo-empty">{labels.noActiveSessionTodo}</p>
+          {/if}
+        </section>
+      {/if}
     {:else if activeTab === "tasks"}
-      {#if view.tasks.length === 0 && !view.sessionTodoAnchor}
+      {#if view.tasks.length === 0}
         <EmptyState title={labels.noTasksTitle} body={labels.noTasksBody} icon="folder" compact />
       {:else}
         <section class="inspector-section" aria-labelledby={headingId("tasks")}>
           <h2 id={headingId("tasks")}>{labels.tasksHeading}</h2>
-          {#if view.sessionTodoAnchor}
-            <aside class="session-todo-callout">
-              <div>
-                <h3>{labels.sessionTodoTitle}</h3>
-                <p>{labels.sessionTodoBody}</p>
-              </div>
-              <a href={`#${view.sessionTodoAnchor}`}>{labels.openSessionTodo}</a>
-            </aside>
-          {/if}
           {#if view.tasks.length > 0}
             <div class="project-list">
               {#each taskGroups as group (group.projectRef ?? "unassigned")}
@@ -449,39 +427,78 @@
     gap: var(--spacing-md);
   }
 
-  .session-todo-callout {
-    align-items: center;
-    background: var(--color-primary-weak);
-    border: 1px solid var(--color-primary-soft);
-    border-radius: var(--rounded-lg);
+  .session-todo-header {
+    align-items: start;
     display: flex;
-    gap: var(--spacing-sm);
+    gap: var(--spacing-md);
     justify-content: space-between;
-    padding: var(--spacing-md);
+    min-width: 0;
   }
 
-  .session-todo-callout h3,
-  .session-todo-callout p {
+  .session-todo-header > div {
+    min-width: 0;
+  }
+
+  .session-todo-header h2,
+  .session-todo-header p {
     margin: 0;
   }
 
-  .session-todo-callout h3 {
+  .session-todo-header h2 {
     color: var(--color-ink);
-    font-size: var(--text-card-title);
+    font-size: var(--text-section-title);
+    font-weight: var(--weight-section-title);
   }
 
-  .session-todo-callout p {
-    color: var(--color-ink-muted);
+  .session-todo-header p {
+    color: var(--color-ink-subtle);
     font-size: var(--text-caption);
+    line-height: var(--leading-body);
     margin-top: var(--spacing-xxs);
+    overflow-wrap: anywhere;
   }
 
-  .session-todo-callout a {
+  .session-todo-header a {
     color: var(--color-primary);
     flex: 0 0 auto;
     font-size: var(--text-caption);
     font-weight: 650;
     text-decoration: none;
+  }
+
+  .session-todo-header a:hover {
+    text-decoration: underline;
+  }
+
+  .session-todo-list {
+    display: grid;
+    gap: 0;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .session-todo-list li {
+    align-items: start;
+    border-top: 1px solid var(--color-border-soft);
+    display: grid;
+    font-size: var(--text-body);
+    gap: var(--spacing-sm);
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    line-height: var(--leading-body);
+    padding: var(--spacing-md) 0;
+  }
+
+  .session-todo-list li:last-child {
+    padding-bottom: 0;
+  }
+
+  .session-todo-empty {
+    border-top: 1px solid var(--color-border-soft);
+    color: var(--color-ink-subtle);
+    font-size: var(--text-body);
+    margin: 0;
+    padding-top: var(--spacing-md);
   }
 
   .project-group + .project-group {

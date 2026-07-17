@@ -10,18 +10,23 @@ import {
   SparkDaemonLocalRpcRemoteError,
   SparkDaemonLocalRpcUnavailableError,
 } from "@zendev-lab/spark-system/daemon-local-rpc";
+import { parseSparkDaemonEvent, parseSparkInteractionRequest } from "@zendev-lab/spark-protocol";
 
 import {
   handleSparkRpcLine,
   parseSparkCliCommand,
   runSparkCli,
 } from "../apps/spark-tui/src/cli.ts";
+import { SparkKeybindings } from "../apps/spark-tui/src/host/keybindings.ts";
+import type { SparkCliHostServices } from "../apps/spark-tui/src/host/bootstrap.ts";
 import { SparkHostRuntime } from "../apps/spark-tui/src/host/runtime.ts";
 import { SparkSessionMailStore } from "../apps/spark-tui/src/host/session-mail-store.ts";
 import { SparkSessionStore } from "../apps/spark-tui/src/host/session-store.ts";
 import { createSparkNativeTuiHarness } from "./support/spark-native-tui-harness.ts";
 import {
+  clientRespondHumanInteraction,
   createSparkDaemonNativeResponder,
+  handleSparkDaemonHumanInteractionRequest,
   handleSparkDaemonCliCommand,
   parseSparkDaemonCliArgs,
   runSparkDaemonCliCommand,
@@ -30,11 +35,188 @@ import {
 } from "../apps/spark-tui/src/cli/daemon.ts";
 import { loadSparkHeadlessSessionModule } from "../apps/spark-daemon/src/spark/session-run.ts";
 import { CREATE_SPARK_SESSION_SELECTION } from "../apps/spark-tui/src/tui/session-selector.ts";
-import { SparkDaemonLocalRpcUnavailableError } from "@zendev-lab/spark-system/daemon-local-rpc";
 
 void test("Spark daemon loads headless session executor from workspace package source", async () => {
   const module = await loadSparkHeadlessSessionModule();
   assert.equal(typeof module.createSparkHeadlessSessionExecutor, "function");
+});
+
+void test("native TUI client delivers daemon-owned human interaction responses", async () => {
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const result = await clientRespondHumanInteraction(
+    {
+      interactionRequestId: "interaction-1",
+      sessionId: "session-1",
+      invocationId: "invocation-1",
+      humanResponseId: `hres_${"1".repeat(32)}`,
+      status: "answered",
+      answers: { approval: true },
+      responseArtifactRefs: ["artifact-1"],
+    },
+    {
+      daemonStatus: async () => runningDaemonStatus(),
+      controlRequest: async (method, params) => {
+        requests.push({ method, params });
+        return {
+          outcome: "accepted",
+          retryable: false,
+          returnedToTool: true,
+          message: "Response accepted.",
+        };
+      },
+    },
+  );
+
+  assert.deepEqual(requests, [
+    {
+      method: "human.interaction.respond",
+      params: {
+        interactionRequestId: "interaction-1",
+        sessionId: "session-1",
+        invocationId: "invocation-1",
+        humanResponseId: `hres_${"1".repeat(32)}`,
+        status: "answered",
+        answers: { approval: true },
+        responseArtifactRefs: ["artifact-1"],
+      },
+    },
+  ]);
+  assert.equal(result.outcome, "accepted");
+  assert.equal(result.returnedToTool, true);
+});
+
+void test("a not-found Ask race retries the same answer without reopening the interaction", async () => {
+  const request = parseSparkInteractionRequest({
+    requestId: "interaction-race",
+    kind: "askFlow",
+    title: "Continue?",
+    questions: [{ id: "decision", prompt: "Continue?", options: [] }],
+  });
+  const event = parseSparkDaemonEvent({
+    type: "daemon.interaction.request",
+    source: "daemon",
+    sessionId: "session-race",
+    invocationId: "invocation-race",
+    request,
+    metadata: {},
+  });
+  if (event.type !== "daemon.interaction.request") throw new Error("expected interaction event");
+  let presentations = 0;
+  let rpcAttempts = 0;
+  const sleeps: number[] = [];
+  const responseIds: string[] = [];
+
+  await handleSparkDaemonHumanInteractionRequest(request, event, {
+    currentSessionId: "session-race",
+    interaction: async () => {
+      presentations += 1;
+      return {
+        version: 1,
+        kind: "askFlow",
+        requestId: request.requestId,
+        status: "answered",
+        answers: { decision: "continue" },
+        nextAction: "resume",
+        metadata: {},
+      };
+    },
+    notify: () => undefined,
+    client: {
+      daemonStatus: async () => runningDaemonStatus(),
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      controlRequest: async (_method, params) => {
+        rpcAttempts += 1;
+        responseIds.push((params as { humanResponseId: string }).humanResponseId);
+        if (rpcAttempts === 1) {
+          throw Object.assign(
+            new Error("No pending daemon-owned human interaction matched interaction-race."),
+            { code: "human_interaction_not_found" },
+          );
+        }
+        return {
+          outcome: "accepted",
+          retryable: false,
+          returnedToTool: true,
+          message: "Response accepted.",
+        };
+      },
+    },
+  });
+
+  assert.equal(presentations, 1);
+  assert.equal(rpcAttempts, 2);
+  assert.deepEqual(sleeps, [50]);
+  assert.equal(new Set(responseIds).size, 1);
+});
+
+void test("a persistently undelivered Ask stays visible and reopens after bounded retries", async () => {
+  const request = parseSparkInteractionRequest({
+    requestId: "interaction-reopen",
+    kind: "askFlow",
+    title: "Continue?",
+    questions: [{ id: "decision", prompt: "Continue?", options: [] }],
+  });
+  const event = parseSparkDaemonEvent({
+    type: "daemon.interaction.request",
+    source: "daemon",
+    sessionId: "session-reopen",
+    invocationId: "invocation-reopen",
+    request,
+    metadata: {},
+  });
+  if (event.type !== "daemon.interaction.request") throw new Error("expected interaction event");
+  let presentations = 0;
+  let rpcAttempts = 0;
+  const sleeps: number[] = [];
+  const notifications: string[] = [];
+  const responseIds: string[] = [];
+
+  await handleSparkDaemonHumanInteractionRequest(request, event, {
+    currentSessionId: "session-reopen",
+    interaction: async () => {
+      presentations += 1;
+      return {
+        version: 1,
+        kind: "askFlow",
+        requestId: request.requestId,
+        status: "answered",
+        answers: { decision: "continue" },
+        nextAction: "resume",
+        metadata: {},
+      };
+    },
+    notify: (message) => notifications.push(message),
+    client: {
+      daemonStatus: async () => runningDaemonStatus(),
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      controlRequest: async (_method, params) => {
+        rpcAttempts += 1;
+        responseIds.push((params as { humanResponseId: string }).humanResponseId);
+        if (rpcAttempts <= 4) {
+          throw Object.assign(
+            new Error("No pending daemon-owned human interaction matched interaction-reopen."),
+            { code: "human_interaction_not_found" },
+          );
+        }
+        return {
+          outcome: "accepted",
+          retryable: false,
+          returnedToTool: true,
+          message: "Response accepted.",
+        };
+      },
+    },
+  });
+
+  assert.equal(presentations, 2);
+  assert.equal(rpcAttempts, 5);
+  assert.deepEqual(sleeps, [50, 100, 200, 250]);
+  assert.equal(new Set(responseIds).size, 1);
+  assert.match(notifications[0] ?? "", /keeping it open for retry/u);
 });
 
 void test("parseSparkCliCommand routes daemon and print commands without changing default TUI parsing", () => {
@@ -128,6 +310,18 @@ void test("parseSparkCliCommand routes daemon and print commands without changin
       },
     },
   );
+  assert.deepEqual(
+    parseSparkCliCommand(["daemon", "channel", "reload", "--workspace", "ws_demo", "--json"]),
+    {
+      kind: "daemon",
+      command: {
+        action: "channel",
+        subcommand: "reload",
+        json: true,
+        workspaceId: "ws_demo",
+      },
+    },
+  );
 });
 
 void test("daemon channel status is read from daemon local RPC client", async () => {
@@ -160,6 +354,37 @@ void test("daemon channel status is read from daemon local RPC client", async ()
   assert.ok("adapters" in result.result);
   assert.equal(result.result.adapters[0]?.running, true);
   assert.match(result.result.text, /channels workspace=ws_demo running/u);
+});
+
+void test("daemon channel reload is an explicit daemon local RPC operation", async () => {
+  let workspaceId = "";
+  const result = await handleSparkDaemonCliCommand(
+    { action: "channel", subcommand: "reload", json: true, workspaceId: "ws_demo" },
+    {
+      channelReload: async (_paths, requestedWorkspaceId) => {
+        workspaceId = requestedWorkspaceId;
+        return {
+          plane: "daemon",
+          resource: "channel",
+          workspaceId: requestedWorkspaceId,
+          configPath: "/tmp/spark/workspaces/ws_demo/channels/config.json",
+          available: true,
+          configured: true,
+          ingressEnabled: true,
+          state: "running",
+          adapters: [{ id: "infoflow", type: "infoflow", running: true }],
+          routes: [],
+          observedAt: "2026-07-17T00:00:00.000Z",
+          text: "channels workspace=ws_demo running connected=1/1 routes=0 ingress=on\n",
+        };
+      },
+    },
+  );
+
+  assert.equal(workspaceId, "ws_demo");
+  assert.equal(result.action, "channel");
+  assert.ok("state" in result.result);
+  assert.equal(result.result.state, "running");
 });
 
 void test("daemon managed session commands wait for the daemon-owned RPC client", async () => {
@@ -1692,6 +1917,25 @@ void test("Spark TUI and headless print attach and release workspace clients", a
           throw new Error("not used");
         },
       },
+      controlRequest: async (method, params) => {
+        assert.equal(method, "session.snapshot");
+        assert.deepEqual(params, { sessionId: "generated-3" });
+        return {
+          version: 1,
+          sessionId: "generated-3",
+          status: "idle",
+          cwd: dir,
+          gitBranch: "main",
+          model: { providerName: "daemon-provider", modelId: "daemon-model" },
+          thinkingLevel: "high",
+          messages: [],
+          tools: [],
+          runs: [],
+          tasks: [],
+          artifacts: [],
+          metadata: {},
+        };
+      },
       turnSubmit: async (_paths, input) => {
         submitted.push(input);
         return {
@@ -1700,6 +1944,47 @@ void test("Spark TUI and headless print attach and release workspace clients", a
           acceptedAt: "2026-06-19T00:00:00.000Z",
         };
       },
+      turnStream: async () => ({
+        invocationId: "inv_turn",
+        events: [
+          {
+            invocationId: "inv_turn",
+            sequence: 1,
+            kind: "daemon.view_event",
+            payload: {
+              version: 1,
+              type: "daemon.view_event",
+              source: "daemon",
+              emittedAt: "2026-06-19T00:00:01.000Z",
+              sessionId: "generated-3",
+              invocationId: "inv_turn",
+              view: {
+                version: 1,
+                type: "session.message",
+                sessionId: "generated-3",
+                message: {
+                  id: "assistant-plan",
+                  role: "assistant",
+                  text: "daemon-visible-plan-response",
+                  status: "streaming",
+                },
+              },
+            },
+            createdAt: "2026-06-19T00:00:01.000Z",
+          },
+        ],
+        nextCursor: 1,
+        hasMore: false,
+      }),
+      turnStatus: async () => ({
+        invocationId: "inv_turn",
+        sessionId: "generated-3",
+        status: "succeeded" as const,
+        createdAt: "2026-06-19T00:00:00.000Z",
+        updatedAt: "2026-06-19T00:00:01.000Z",
+        finishedAt: "2026-06-19T00:00:01.000Z",
+        eventCursor: 1,
+      }),
     };
 
     const originalLog = console.log;
@@ -1726,18 +2011,22 @@ void test("Spark TUI and headless print attach and release workspace clients", a
     const runtime = new SparkHostRuntime({ cwd: dir, hasUI: true });
     runtime.registerCommand("plan", {
       description: "Enter Spark plan mode",
-      handler: () => undefined,
+      handler: async (_args, ctx) => {
+        await ctx.sendUserMessage?.("runtime-plan-instruction");
+      },
     });
     let capturedTuiOptions: unknown;
+    let capturedTuiRendered = "";
     assert.equal(
-      await runSparkCli(["hello tui"], {
+      await runSparkCli([], {
         daemonClient,
+        terminal: { stdinIsTTY: true, stdoutIsTTY: true },
         createHostServices: async () =>
           ({
             cwd: dir,
             runtime,
             config: { extensions: [], providers: [], activeThinkingLevel: "medium" },
-            providerRegistry: { listProviders: () => [] },
+            providerRegistry: { listProviders: () => [], listModelsFor: () => [] },
             modelSelector: {
               getActive: () => ({ providerName: "openai-codex", modelId: "gpt-5.4" }),
               openPicker: async () => undefined,
@@ -1780,6 +2069,20 @@ void test("Spark TUI and headless print attach and release workspace clients", a
         },
         runTui: async (input) => {
           capturedTuiOptions = input;
+          assert.equal(typeof input, "object");
+          assert.notEqual(input, null);
+          const options = input as Exclude<typeof input, string | undefined>;
+          const harness = createSparkNativeTuiHarness({
+            autocompleteBasePath: options.autocompleteBasePath,
+            responder: options.responder,
+            slashCommands: options.slashCommands,
+            statusContext: options.statusContext,
+            workspaceSession: options.workspaceSession,
+          });
+          await options.configureApp?.(harness.app, harness.session);
+          await harness.submit("/plan");
+          await harness.flush();
+          capturedTuiRendered = harness.render(140);
         },
       }),
       0,
@@ -1829,9 +2132,11 @@ void test("Spark TUI and headless print attach and release workspace clients", a
         };
       }
     ).statusContext;
-    assert.equal(statusContext?.activeProvider?.(), "openai-codex");
-    assert.equal(statusContext?.activeModel?.(), "gpt-5.4");
-    assert.equal(statusContext?.thinkingLevel?.(), "medium");
+    assert.equal(statusContext?.activeProvider?.(), "daemon-provider");
+    assert.equal(statusContext?.activeModel?.(), "daemon-model");
+    assert.equal(statusContext?.thinkingLevel?.(), "high");
+    assert.match(capturedTuiRendered, /\(main\)/u);
+    assert.match(capturedTuiRendered, /daemon-visible-plan-response/u);
     assert.equal(
       (capturedTuiOptions as { autocompleteBasePath?: string }).autocompleteBasePath,
       dir,
@@ -1860,6 +2165,7 @@ void test("Spark TUI and headless print attach and release workspace clients", a
       ],
     );
     assert.equal(submitted[0]?.prompt, "headless prompt");
+    assert.equal(submitted.at(-1)?.prompt, "runtime-plan-instruction");
     assert.match(logs.join("\n"), /inv_turn/u);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -1950,6 +2256,10 @@ void test("native TUI selects an existing daemon session and restores its snapsh
           sessionId: existing.sessionId,
           title: existing.title,
           status: "idle",
+          cwd: dir,
+          gitBranch: "main",
+          model: { providerName: "session-provider", modelId: "session-model" },
+          thinkingLevel: "xhigh",
           messages: [
             {
               version: 1,
@@ -1986,6 +2296,9 @@ void test("native TUI selects an existing daemon session and restores its snapsh
           assert.notEqual(input, null);
           const options = input as Exclude<typeof input, string | undefined>;
           assert.equal(options.workspaceSession?.attachTarget, existing.sessionId);
+          assert.equal(options.statusContext?.activeProvider?.(), "session-provider");
+          assert.equal(options.statusContext?.activeModel?.(), "session-model");
+          assert.equal(options.statusContext?.thinkingLevel?.(), "xhigh");
           const harness = createSparkNativeTuiHarness({
             workspaceSession: options.workspaceSession,
           });
@@ -2002,6 +2315,123 @@ void test("native TUI selects an existing daemon session and restores its snapsh
     );
     assert.match(rendered, /Restored from daemon/u);
     assert.match(rendered, /Existing conversation/u);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("native /sessions reopens the startup selector and attaches the selected session", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-session-reselect-"));
+  try {
+    const base = createWorkspaceAttachTestDeps(dir, { existingSessionIds: new Set() });
+    const now = "2026-07-13T00:00:00.000Z";
+    const sessions = [
+      {
+        sessionId: "session-first",
+        title: "First conversation",
+        scope: { kind: "workspace" as const, workspaceId: "workspace-current" },
+        workspaceId: "workspace-current",
+        cwd: dir,
+        status: "ready" as const,
+        bindings: [],
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        sessionId: "session-second",
+        title: "Second conversation",
+        scope: { kind: "workspace" as const, workspaceId: "workspace-current" },
+        workspaceId: "workspace-current",
+        cwd: dir,
+        status: "ready" as const,
+        bindings: [],
+        createdAt: now,
+        updatedAt: now,
+      },
+    ];
+    const daemonClient: SparkDaemonClientOptions = {
+      ...base.daemonClient,
+      managedSessions: {
+        list: async () => sessions,
+        create: async () => {
+          throw new Error("existing selection must not create a session");
+        },
+        get: async (sessionId) => {
+          const selected = sessions.find((session) => session.sessionId === sessionId);
+          if (!selected) throw new Error(`unknown session: ${sessionId}`);
+          return selected;
+        },
+        bind: async () => sessions[0]!,
+        unbind: async () => sessions[0]!,
+        archive: async () => ({ ...sessions[0]!, status: "archived" as const }),
+      },
+      controlRequest: async (method, params) => {
+        assert.equal(method, "session.snapshot");
+        const sessionId = (params as { sessionId?: string } | undefined)?.sessionId;
+        const selected = sessions.find((session) => session.sessionId === sessionId);
+        assert.ok(selected, `snapshot requested for an unknown session: ${sessionId}`);
+        return {
+          version: 1,
+          sessionId: selected.sessionId,
+          title: selected.title,
+          status: "idle",
+          cwd: selected.cwd,
+          messages: [],
+          tools: [],
+          runs: [],
+          tasks: [],
+          artifacts: [],
+          metadata: {},
+        };
+      },
+    };
+    const selectorCalls: Array<{
+      workspaceId: string;
+      workspaceLabel: string;
+      sessionIds: string[];
+    }> = [];
+    const attachedSessionIds: string[] = [];
+
+    assert.equal(
+      await runSparkCli([], {
+        daemonClient,
+        createHostServices: base.createHostServices,
+        terminal: { stdinIsTTY: true, stdoutIsTTY: true },
+        selectSession: async (options) => {
+          selectorCalls.push({
+            workspaceId: options.workspaceId,
+            workspaceLabel: options.workspaceLabel,
+            sessionIds: options.sessions.map((session) => session.sessionId),
+          });
+          return selectorCalls.length === 1 ? sessions[0]!.sessionId : sessions[1]!.sessionId;
+        },
+        runTui: async (input) => {
+          assert.equal(typeof input, "object");
+          assert.notEqual(input, null);
+          const options = input as Exclude<typeof input, string | undefined>;
+          attachedSessionIds.push(options.workspaceSession?.attachTarget ?? "missing");
+          if (attachedSessionIds.length > 1) return;
+
+          const harness = createSparkNativeTuiHarness({
+            slashCommands: options.slashCommands,
+            workspaceSession: options.workspaceSession,
+          });
+          await options.configureApp?.(harness.app, harness.session);
+          assert.equal(await harness.submit("/sessions"), "command");
+          assert.equal(harness.app.actionBarSnapshot()?.selectedActionId, "select-session");
+          const focused = harness.state.focused as { handleInput?: (input: string) => void };
+          assert.equal(typeof focused.handleInput, "function");
+          focused.handleInput?.("\r");
+          await harness.flush();
+          assert.equal(harness.state.exited, true);
+        },
+      }),
+      0,
+    );
+
+    assert.deepEqual(attachedSessionIds, [sessions[0]!.sessionId, sessions[1]!.sessionId]);
+    assert.equal(selectorCalls.length, 2);
+    assert.deepEqual(selectorCalls[1], selectorCalls[0]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -2245,7 +2675,7 @@ void test("native TUI accepts durable session-dir session id and hydrates projec
           await options.configureApp?.(harness.app, harness.session);
           assert.equal(harness.app.cockpitSnapshot().tasks, 2);
           harness.app.toggleCockpitPanel("tasks");
-          await harness.submit("/sessions");
+          await harness.submit("/sessions list");
           capturedRender = harness.render(180);
         },
       }),
@@ -2811,6 +3241,127 @@ void test("Spark native responder retries an ACK loss with the same idempotency 
   assert.equal(submissions[0]?.idempotencyKey, "idem_native_submit_1");
 });
 
+void test("production TUI Shift+Tab overrides extension shortcut and updates session thinking", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-cli-session-thinking-"));
+  try {
+    const base = createWorkspaceAttachTestDeps(dir, { existingSessionIds: new Set() });
+    const sessionId = "thinking-session";
+    let thinkingLevel: "high" | "xhigh" = "high";
+    const managedSession = {
+      sessionId,
+      scope: { kind: "workspace" as const, workspaceId: "workspace-current" },
+      workspaceId: "workspace-current",
+      cwd: dir,
+      status: "ready" as const,
+      bindings: [],
+      createdAt: "2026-07-17T00:00:00.000Z",
+      updatedAt: "2026-07-17T00:00:00.000Z",
+      thinkingLevel: thinkingLevel as "high" | "xhigh",
+    };
+    const controlCalls: Array<{ method: string; params: unknown }> = [];
+    const daemonClient: SparkDaemonClientOptions = {
+      ...base.daemonClient,
+      managedSessions: {
+        list: async () => [managedSession],
+        create: async () => {
+          throw new Error("existing selection must not create a session");
+        },
+        get: async (requestedSessionId) => {
+          assert.equal(requestedSessionId, sessionId);
+          return managedSession;
+        },
+        bind: async () => managedSession,
+        unbind: async () => managedSession,
+        archive: async () => ({ ...managedSession, status: "archived" as const }),
+      },
+      controlRequest: async (method, params) => {
+        controlCalls.push({ method, params });
+        if (method === "session.snapshot") {
+          return {
+            version: 1,
+            sessionId,
+            status: "idle",
+            cwd: dir,
+            thinkingLevel,
+            messages: [],
+            tools: [],
+            runs: [],
+            tasks: [],
+            artifacts: [],
+            metadata: {},
+          };
+        }
+        if (method === "model.catalog") {
+          return {
+            providers: [],
+            session: { sessionId, thinkingLevel },
+            diagnostics: [],
+          };
+        }
+        if (method === "session.thinking.set") {
+          const request = params as { sessionId: string; thinkingLevel: "xhigh" };
+          assert.deepEqual(request, { sessionId, thinkingLevel: "xhigh" });
+          thinkingLevel = request.thinkingLevel;
+          managedSession.thinkingLevel = thinkingLevel;
+          return managedSession;
+        }
+        throw new Error(`unexpected thinking control method: ${method}`);
+      },
+    };
+    const keybindings = new SparkKeybindings();
+    let extensionShortcutCalls = 0;
+    const createHostServices = async () => {
+      const services = (await base.createHostServices()) as unknown as SparkCliHostServices;
+      const runtime = new SparkHostRuntime({ cwd: dir, hasUI: true, keybindings });
+      runtime.registerShortcut("shift+tab", {
+        description: "Extension shortcut competing with session thinking",
+        handler: () => {
+          extensionShortcutCalls += 1;
+        },
+      });
+      return { ...services, runtime, keybindings };
+    };
+
+    assert.equal(
+      await runSparkCli([], {
+        daemonClient,
+        createHostServices,
+        terminal: { stdinIsTTY: true, stdoutIsTTY: true },
+        selectSession: async () => sessionId,
+        runTui: async (input) => {
+          assert.equal(typeof input, "object");
+          assert.notEqual(input, null);
+          const options = input as Exclude<typeof input, string | undefined>;
+          const harness = createSparkNativeTuiHarness({
+            keybindings: options.keybindings,
+            statusContext: options.statusContext,
+            workspaceSession: options.workspaceSession,
+          });
+          await options.configureApp?.(harness.app, harness.session);
+          assert.equal(options.statusContext?.thinkingLevel?.(), "high");
+
+          await harness.press("\x1b[Z");
+
+          assert.equal(options.statusContext?.thinkingLevel?.(), "xhigh");
+        },
+      }),
+      0,
+    );
+
+    assert.equal(extensionShortcutCalls, 0);
+    assert.deepEqual(controlCalls, [
+      { method: "session.snapshot", params: { sessionId } },
+      { method: "model.catalog", params: { sessionId } },
+      {
+        method: "session.thinking.set",
+        params: { sessionId, thinkingLevel: "xhigh" },
+      },
+    ]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("Spark native responder streams daemon view events as assistant chunks", async () => {
   const chunks: string[] = [];
   const viewEvents: unknown[] = [];
@@ -2878,6 +3429,83 @@ void test("Spark native responder streams daemon view events as assistant chunks
     viewEvents.map((event: any) => event.message.text),
     ["hel", "hello"],
   );
+});
+
+void test("Spark native responder pauses event polling for a visible interaction handler", async () => {
+  const requests: string[] = [];
+  let interactionFinished = false;
+  const responder = createSparkDaemonNativeResponder(
+    {
+      turnSubmit: async () => ({
+        invocationId: "inv_interaction",
+        status: "queued" as const,
+        acceptedAt: "2026-07-17T00:00:00.000Z",
+      }),
+      turnStream: async () => ({
+        invocationId: "inv_interaction",
+        events: [
+          {
+            invocationId: "inv_interaction",
+            sequence: 1,
+            kind: "daemon.interaction.request",
+            payload: {
+              version: 1,
+              type: "daemon.interaction.request",
+              source: "daemon",
+              sessionId: "native-interaction-session",
+              invocationId: "inv_interaction",
+              request: {
+                version: 1,
+                requestId: "ask-visible",
+                kind: "askFlow",
+                title: "Choose a path",
+                mode: "decision",
+                questions: [
+                  {
+                    id: "path",
+                    prompt: "Which path?",
+                    type: "single",
+                    required: true,
+                    defaultValues: [],
+                    options: [
+                      { value: "a", label: "Path A" },
+                      { value: "b", label: "Path B" },
+                    ],
+                  },
+                ],
+                metadata: {},
+              },
+              metadata: {},
+            },
+            createdAt: "2026-07-17T00:00:00.000Z",
+          },
+        ],
+        nextCursor: 1,
+        hasMore: false,
+      }),
+      turnStatus: async () => ({
+        invocationId: "inv_interaction",
+        sessionId: "native-interaction-session",
+        status: "succeeded" as const,
+        createdAt: "2026-07-17T00:00:00.000Z",
+        updatedAt: "2026-07-17T00:00:01.000Z",
+        finishedAt: "2026-07-17T00:00:01.000Z",
+        eventCursor: 1,
+      }),
+    },
+    {
+      sessionId: "native-interaction-session",
+      onInteractionRequest: async (request) => {
+        requests.push(request.requestId);
+        await Promise.resolve();
+        interactionFinished = true;
+      },
+    },
+  );
+
+  await responder("ask me");
+  assert.deepEqual(requests, ["ask-visible"]);
+  assert.equal(interactionFinished, true);
 });
 
 void test("Spark native responder retries completion status transport failures without resubmitting", async () => {

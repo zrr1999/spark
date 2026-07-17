@@ -5,6 +5,7 @@
   import ArtifactPart from "./ArtifactPart.svelte";
   import ErrorPart from "./ErrorPart.svelte";
   import MessageActions from "./MessageActions.svelte";
+  import NoticePart from "./NoticePart.svelte";
   import ReasoningPart from "./ReasoningPart.svelte";
   import TaskRunPart from "./TaskRunPart.svelte";
   import ThinkingChainPart from "./ThinkingChainPart.svelte";
@@ -137,7 +138,16 @@
               {statusLabel}
             />
           {:else if part.type === "error"}
-            <ErrorPart title={part.title} message={part.message} code={part.code} />
+            <ErrorPart
+              title={part.title}
+              message={part.message}
+              code={part.code}
+            />
+          {:else if part.type === "notice"}
+            <NoticePart
+              title={partLabels.budgetExhausted}
+              message={partLabels.budgetExhaustedHint}
+            />
           {:else}
             <p class="unknown-part">{partLabels.unknown}: {part.label}</p>
           {/if}

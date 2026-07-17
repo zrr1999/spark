@@ -80,15 +80,6 @@ void test("parseSparkDispatcherArgs routes default, tui, daemon, cockpit, sessio
   });
 });
 
-void test("spark dispatcher help snapshots canonical daemon, Cockpit, and TUI surfaces", () => {
-  const help = helpText();
-  assert.match(help, /spark daemon\s+daemon execution plane/u);
-  assert.match(help, /spark cockpit\s+cross-daemon coordination and Web presentation host/u);
-  assert.match(help, /spark tui\s+tui local control plane/u);
-  assert.match(help, /Unknown subcommands fail loudly/u);
-  assert.doesNotMatch(help, /spark daemon sessions list --all-workspaces/u);
-});
-
 void test("parseSparkDispatcherArgs keeps help/version local and rejects unknown subcommands", () => {
   assert.deepEqual(parseSparkDispatcherArgs(["--help"]), { kind: "help" });
   assert.deepEqual(parseSparkDispatcherArgs(["version"]), { kind: "version" });

@@ -3,6 +3,9 @@
  *
  * Inspired by cue-shell's single-daemon truth model: execution state lives in the
  * runtime/daemon; web/TUI clients observe and submit commands through protocol envelopes.
+ *
+ * These helpers are used by coordination projection writers so ownership is enforced
+ * at write time, not only documented in tests.
  */
 
 export const SPARK_STATE_OWNERS = {
@@ -39,4 +42,27 @@ export function isDaemonOwnedScope(scope: string): scope is DaemonOwnedScope {
 
 export function isCockpitOutboxScope(scope: string): scope is CockpitOutboxScope {
   return (COCKPIT_OUTBOX_SCOPES as readonly string[]).includes(scope);
+}
+
+/**
+ * Guard for Cockpit-side writers. Daemon-owned scopes must arrive via projection
+ * from the daemon; Cockpit may only enqueue outbox scopes (`commands`,
+ * `human_responses`).
+ */
+export function assertCockpitMayWriteScope(scope: string): asserts scope is CockpitOutboxScope {
+  if (isCockpitOutboxScope(scope)) return;
+  if (isDaemonOwnedScope(scope)) {
+    throw new Error(
+      `Cockpit cannot write daemon-owned scope "${scope}"; project from the daemon instead.`,
+    );
+  }
+  throw new Error(`Unknown Spark state scope "${scope}".`);
+}
+
+/**
+ * Guard for daemon-side writers of canonical execution state.
+ */
+export function assertDaemonOwnsScope(scope: string): asserts scope is DaemonOwnedScope {
+  if (isDaemonOwnedScope(scope)) return;
+  throw new Error(`Daemon cannot claim ownership of Cockpit outbox scope "${scope}".`);
 }

@@ -19,6 +19,6 @@
     "check": "tsc -p ../../tsconfig.json --noEmit"
   },
   "dependencies": {
-    "typebox": "^1.2.13"
+    "typebox": "catalog:"
   }
 }

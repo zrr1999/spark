@@ -128,4 +128,27 @@ Use {literal} braces in prose.
       { code: "incomplete_component", severity: "warning" },
     ]);
   });
+
+  it("keeps Spark UI-looking source inert inside fenced and indented Markdown code", () => {
+    const source = [
+      "```svelte",
+      '<ArtifactCard artifactRef="artifact:abc" />',
+      '<Callout type="warning">',
+      "literal body",
+      "</Callout>",
+      "```",
+      "",
+      '    <TaskStatus taskRef="task:xyz" />',
+      "",
+      "~~~ts",
+      'import X from "./x"',
+      "<script>literal source</script>",
+      "~~~~",
+    ].join("\n");
+
+    const result = parseSparkUiSource(source);
+
+    expect(result.blocks).toEqual([{ type: "markdown", text: source }]);
+    expect(result.diagnostics).toEqual([]);
+  });
 });

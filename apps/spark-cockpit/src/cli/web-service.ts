@@ -208,7 +208,7 @@ export async function startCockpitWebService(
   const status = getCockpitWebStatus(env);
   if (status.running && status.pid) {
     try {
-      process.kill(status.pid, "SIGTERM");
+      killServiceProcess(status.pid, "SIGTERM");
     } catch {
       // The runner may already have exited.
     }
@@ -222,7 +222,7 @@ export async function stopCockpitWebService(
   const current = getCockpitWebStatus(env);
   if (!current.running || !current.pid) return { alreadyStopped: true, status: current };
 
-  process.kill(current.pid, "SIGTERM");
+  killServiceProcess(current.pid, "SIGTERM");
   const deadline = Date.now() + stopTimeoutMs;
   while (Date.now() < deadline) {
     const status = getCockpitWebStatus(env);

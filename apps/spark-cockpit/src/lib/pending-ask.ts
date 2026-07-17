@@ -1,4 +1,9 @@
 import type { HumanQuestion } from "@zendev-lab/spark-coordination/cockpit-queries";
+import {
+  hasSparkAskAnswerContent,
+  parseSparkAskChoice,
+  type SparkAskOptionLike,
+} from "@zendev-lab/spark-protocol";
 
 export interface PendingWorkbenchAsk {
   id: string;
@@ -9,6 +14,15 @@ export interface PendingWorkbenchAsk {
   questions: HumanQuestion[];
   detailHref: string;
   createdAt: string;
+  pendingCount?: number;
+}
+
+export const cockpitCustomAnswerValue = "__spark_cockpit_custom_answer__";
+
+export interface HumanAskAnswer {
+  values: string[];
+  labels?: string[];
+  customText?: string;
 }
 
 export interface PendingAskEvent {
@@ -69,6 +83,81 @@ export function pendingAskEventCursor(event: Pick<PendingAskEvent, "createdAt" |
   return `${event.createdAt}|${event.id}`;
 }
 
+export function humanSingleAnswerWithCustomFallback(
+  question: HumanQuestion,
+  selected: string,
+  customAnswer: string,
+): HumanAskAnswer {
+  const value = selected.trim();
+  if (
+    value === cockpitCustomAnswerValue ||
+    question.type === "freeform" ||
+    !question.options?.length
+  ) {
+    const customText = (value === cockpitCustomAnswerValue ? customAnswer : selected).trim();
+    return {
+      values: [],
+      ...(customText ? { customText } : {}),
+    };
+  }
+
+  if (!value) return { values: [] };
+  return answerFromParsedChoice(question, value);
+}
+
+export function humanMultiAnswerWithCustomFallback(
+  question: HumanQuestion,
+  selected: readonly string[],
+  customAnswer: string,
+): HumanAskAnswer {
+  if (!question.options?.length) {
+    const customText = selected
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .join("\n");
+    return {
+      values: [],
+      ...(customText ? { customText } : {}),
+    };
+  }
+
+  const values = [
+    ...new Set(
+      selected
+        .map((value) => value.trim())
+        .filter((value) => value && value !== cockpitCustomAnswerValue),
+    ),
+  ];
+  const answer = answerFromParsedChoice(question, values.join(","));
+  const customText = selected.includes(cockpitCustomAnswerValue) ? customAnswer.trim() : "";
+  return {
+    ...answer,
+    ...(customText ? { customText } : {}),
+  };
+}
+
+export function humanAskAnswerHasValue(answer: HumanAskAnswer): boolean {
+  return hasSparkAskAnswerContent(answer);
+}
+
+function answerFromParsedChoice(question: HumanQuestion, choice: string): HumanAskAnswer {
+  const parsed = parseSparkAskChoice(toSparkAskOptions(question), choice, question.type);
+  return {
+    values: parsed.values,
+    ...(parsed.labels.length > 0 ? { labels: parsed.labels } : {}),
+    ...(parsed.customText ? { customText: parsed.customText } : {}),
+  };
+}
+
+function toSparkAskOptions(question: HumanQuestion): SparkAskOptionLike[] {
+  return (question.options ?? []).map((option) => ({
+    value: option.value,
+    label: option.label,
+    ...(option.description ? { description: option.description } : {}),
+    ...(option.preview ? { preview: option.preview } : {}),
+  }));
+}
+
 function normalizeHumanQuestion(value: unknown): HumanQuestion | null {
   if (!value || typeof value !== "object") return null;
   const candidate = value as Record<string, unknown>;
@@ -93,15 +182,24 @@ function normalizeHumanQuestion(value: unknown): HumanQuestion | null {
     question.options = candidate.options.flatMap((option) => {
       if (!option || typeof option !== "object") return [];
       const candidateOption = option as Record<string, unknown>;
-      if (typeof candidateOption.id !== "string" || typeof candidateOption.label !== "string") {
+      const optionValue =
+        typeof candidateOption.value === "string"
+          ? candidateOption.value
+          : typeof candidateOption.id === "string"
+            ? candidateOption.id
+            : null;
+      if (!optionValue || typeof candidateOption.label !== "string") {
         return [];
       }
       return [
         {
-          id: candidateOption.id,
+          value: optionValue,
           label: candidateOption.label,
           ...(typeof candidateOption.description === "string"
             ? { description: candidateOption.description }
+            : {}),
+          ...(typeof candidateOption.preview === "string"
+            ? { preview: candidateOption.preview }
             : {}),
         },
       ];

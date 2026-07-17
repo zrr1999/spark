@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "exactOptionalPropertyTypes": true,
+    "isolatedModules": true,
+    "noUncheckedIndexedAccess": true,
+    "rootDir": "src"
+  },
+  "include": ["src/**/*.ts"]
+}

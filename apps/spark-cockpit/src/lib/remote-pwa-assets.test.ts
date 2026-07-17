@@ -42,12 +42,14 @@ describe("remote PWA assets", () => {
     const inboxDetail = readAppFile(
       "src/routes/(workbench)/[workspaceId]/inbox/[inboxItemId]/+page.svelte",
     );
+    const askQuestionField = readAppFile("src/lib/AskQuestionField.svelte");
     const conversationDetail = readAppFile("src/lib/SessionsWorkspace.svelte");
     const workbenchLayout = readAppFile("src/routes/(workbench)/+layout.svelte");
     const cockpitTopbar = readAppFile("src/lib/shell/CockpitTopbar.svelte");
 
     expect(inboxDetail).toContain("@media (max-width: 640px)");
-    expect(inboxDetail).toContain(".question-block");
+    expect(inboxDetail).toContain("<AskQuestionField");
+    expect(askQuestionField).toContain(".question-block");
     expect(inboxDetail).toContain("flex-direction: column");
     expect(conversationDetail).toContain(".mobile-details");
     expect(conversationDetail).toMatch(/@media \(max-width: (640|960)px\)/);

@@ -32,7 +32,7 @@
   },
   "devDependencies": {
     "@inlang/paraglide-js": "^2.20.2",
-    "typescript": "^6.0.3",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   },
   "engines": {

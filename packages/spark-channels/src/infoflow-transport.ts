@@ -7,7 +7,7 @@ import {
 } from "@core-workspace/infoflow-sdk-nodejs";
 import { normalizeInfoflowContent, type InfoflowAttachment } from "./infoflow-content.ts";
 import { createInfoflowSdkOutbound, type InfoflowSdkOutbound } from "./infoflow-sdk-outbound.ts";
-import { reconnectDelayWithJitter } from "./reconnect-delay.ts";
+import { scheduledReconnectDelayWithJitter } from "./reconnect-delay.ts";
 import type { ChannelConnectionState, ChannelTransport, InfoflowAdapterConfig } from "./types.ts";
 
 export const DEFAULT_INFOFLOW_API_HOST = "https://api.im.baidu.com";
@@ -76,6 +76,9 @@ export function createInfoflowTransport(
   let groupHandler: ((event: EventMessage<NormalizedEventData>) => void) | null = null;
   let anyHandler: ((event: EventMessage<NormalizedEventData>) => void) | null = null;
   let heartbeatHandler: ((event: EventMessage<unknown>) => void) | null = null;
+  let connectedHandler: ((event: EventMessage<unknown>) => void) | null = null;
+  let disconnectedHandler: ((event: EventMessage<unknown>) => void) | null = null;
+  let errorHandler: ((event: EventMessage<unknown>) => void) | null = null;
   let pongTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempt = 0;
@@ -132,13 +135,19 @@ export function createInfoflowTransport(
     pongTimer = null;
   }
 
-  function scheduleReconnect(generation: number): void {
+  /**
+   * Spark is the sole retry-policy owner. The SDK's server-provided finite
+   * reconnect count cannot satisfy the daemon's always-on contract, so every
+   * retryable connection episode is normalized into this infinite supervisor.
+   */
+  function scheduleWrapperReconnect(generation: number): void {
     if (!running || !wsClient || generation !== connectionGeneration) return;
     clearReconnect();
-    const ceiling =
-      reconnectDelays[Math.min(reconnectAttempt, reconnectDelays.length - 1)] ??
-      INFOFLOW_RECONNECT_DELAYS_MS.at(-1)!;
-    const delay = reconnectDelayWithJitter(ceiling, reconnectRandom);
+    const delay = scheduledReconnectDelayWithJitter(
+      reconnectAttempt + 1,
+      reconnectDelays,
+      reconnectRandom,
+    );
     reconnectAttempt += 1;
     connectionState = "reconnecting";
     reconnectTimer = setTimeout(() => {
@@ -157,7 +166,7 @@ export function createInfoflowTransport(
           }
           const state = infoflowConnectionState(client.getState(), running);
           if (state !== "connected") {
-            scheduleReconnect(generation);
+            scheduleWrapperReconnect(generation);
             return;
           }
           connectionState = state;
@@ -170,7 +179,7 @@ export function createInfoflowTransport(
           connectionState = "degraded";
           connectionError = error instanceof Error ? error.message : String(error);
           console.error("[spark-channels] infoflow supervised reconnect failed", error);
-          scheduleReconnect(generation);
+          scheduleWrapperReconnect(generation);
         });
     }, delay);
   }
@@ -215,7 +224,7 @@ export function createInfoflowTransport(
     } catch (disconnectError) {
       console.error("[spark-channels] infoflow receipt disconnect failed", disconnectError);
     }
-    scheduleReconnect(connectionGeneration);
+    scheduleWrapperReconnect(connectionGeneration);
   }
 
   async function start(handler: (raw: unknown) => void): Promise<void> {
@@ -245,7 +254,11 @@ export function createInfoflowTransport(
         endpointTimeout: 30_000,
         maxReconnectAttempts: -1,
       });
+    const client = wsClient;
+    const isCurrentClient = () => client === wsClient && generation === connectionGeneration;
+    const isActiveClient = () => running && isCurrentClient();
     privateHandler = (event) => {
+      if (!isActiveClient()) return;
       try {
         handleSdkEvent(event);
       } catch (error) {
@@ -255,6 +268,7 @@ export function createInfoflowTransport(
       }
     };
     groupHandler = (event) => {
+      if (!isActiveClient()) return;
       try {
         handleSdkEvent(event);
       } catch (error) {
@@ -264,6 +278,7 @@ export function createInfoflowTransport(
       }
     };
     anyHandler = (event: EventMessage<NormalizedEventData>) => {
+      if (!isActiveClient()) return;
       const data = ((event as { data?: unknown }).data ?? event) as Record<string, unknown>;
       const raw = ((data.raw as unknown) ?? data) as Record<string, unknown>;
       const keys =
@@ -276,6 +291,7 @@ export function createInfoflowTransport(
       );
     };
     heartbeatHandler = (event: EventMessage<unknown>) => {
+      if (!isActiveClient()) return;
       const data =
         event.data && typeof event.data === "object" && !Array.isArray(event.data)
           ? (event.data as Record<string, unknown>)
@@ -288,6 +304,7 @@ export function createInfoflowTransport(
       clearPongDeadline();
       pongTimer = setTimeout(() => {
         pongTimer = null;
+        if (!isActiveClient()) return;
         const error = new Error(`infoflow websocket pong timed out after ${pongTimeoutMs}ms`);
         console.error(`[spark-channels] ${error.message}`);
         rejectDurableReceipt(error);
@@ -298,26 +315,40 @@ export function createInfoflowTransport(
     wsClient.on("group.*", groupHandler);
     wsClient.on("*", anyHandler);
     wsClient.on("heartbeat", heartbeatHandler);
-    wsClient.on("connected", () => {
+    connectedHandler = () => {
+      if (!isActiveClient()) return;
       clearPongDeadline();
       clearReconnect();
       reconnectAttempt = 0;
       connectionState = "connected";
       connectionError = undefined;
       console.error("[spark-channels] infoflow websocket connected");
-    });
-    wsClient.on("disconnected", () => {
+    };
+    disconnectedHandler = () => {
+      if (!isCurrentClient()) return;
       clearPongDeadline();
       connectionState = running ? "reconnecting" : "stopped";
       console.error("[spark-channels] infoflow websocket disconnected");
-      if (running) scheduleReconnect(connectionGeneration);
-    });
-    wsClient.on("error", (event) => {
+      if (!running) return;
+      // The SDK dispatches this event synchronously before starting its own
+      // reconnect loop. Marking the disconnect as manual here prevents that
+      // finite, server-configured loop from racing Spark's durable supervisor.
+      try {
+        client.disconnect();
+      } catch (error) {
+        console.error("[spark-channels] infoflow reconnect handoff failed", error);
+      }
+      scheduleWrapperReconnect(generation);
+    };
+    errorHandler = (event) => {
+      if (!isActiveClient()) return;
       connectionState = "degraded";
       connectionError = infoflowEventError(event);
       console.error("[spark-channels] infoflow websocket error", event);
-    });
-    const client = wsClient;
+    };
+    wsClient.on("connected", connectedHandler);
+    wsClient.on("disconnected", disconnectedHandler);
+    wsClient.on("error", errorHandler);
     // Arming the supervised connector is the startup boundary. A third-party
     // handshake cannot delay core daemon admission or successor readiness.
     void connectWithDeadline(client)
@@ -338,7 +369,7 @@ export function createInfoflowTransport(
         connectionState = "degraded";
         connectionError = error instanceof Error ? error.message : String(error);
         console.error("[spark-channels] infoflow initial connect failed", error);
-        scheduleReconnect(generation);
+        scheduleWrapperReconnect(generation);
       });
   }
 
@@ -356,10 +387,16 @@ export function createInfoflowTransport(
       if (groupHandler) wsClient.off("group.*", groupHandler);
       if (anyHandler) wsClient.off("*", anyHandler);
       if (heartbeatHandler) wsClient.off("heartbeat", heartbeatHandler);
+      if (connectedHandler) wsClient.off("connected", connectedHandler);
+      if (disconnectedHandler) wsClient.off("disconnected", disconnectedHandler);
+      if (errorHandler) wsClient.off("error", errorHandler);
       privateHandler = null;
       groupHandler = null;
       anyHandler = null;
       heartbeatHandler = null;
+      connectedHandler = null;
+      disconnectedHandler = null;
+      errorHandler = null;
       try {
         wsClient.disconnect();
       } catch {

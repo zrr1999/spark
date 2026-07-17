@@ -4,11 +4,13 @@ import {
   parseSparkInteractionRequest,
   type SparkInteractionRequest,
 } from "@zendev-lab/spark-protocol";
+import { SparkHostRuntime } from "@zendev-lab/spark-host";
 import { describe, expect, it, vi } from "vitest";
 import { migrateSparkDaemonDatabase } from "../store/schema.ts";
 import {
   SparkDaemonHumanInteractionBroker,
   type SparkDaemonHumanInteractionOpened,
+  type SparkDaemonHumanInteractionRoute,
 } from "./human-interactions.ts";
 import { SparkDaemonHumanWaitRegistry } from "./human-waits.ts";
 
@@ -19,41 +21,48 @@ const WORKSPACE_ID = `ws_${"4".repeat(32)}`;
 const PROJECT_ID = `proj_${"5".repeat(32)}`;
 const WORKSPACE_PATH = "/workspace/spark";
 const NOW = "2026-07-14T00:00:00.000Z";
+const SERVER_URL = "http://127.0.0.1:5173/";
 
-function seedHumanRoute(db: DatabaseSync): void {
+interface SeedHumanRouteOptions {
+  serverId?: string;
+  serverUrl?: string;
+  workspaceBindingId?: string;
+  workspaceId?: string;
+  workspacePath?: string;
+  localWorkspaceKey?: string;
+  displayName?: string;
+  slug?: string;
+}
+
+function seedHumanRoute(db: DatabaseSync, options: SeedHumanRouteOptions = {}): void {
+  const serverId = options.serverId ?? "rnsrv-test";
+  const serverUrl = options.serverUrl ?? SERVER_URL;
+  const workspaceBindingId = options.workspaceBindingId ?? WORKSPACE_BINDING_ID;
+  const workspaceId = options.workspaceId ?? WORKSPACE_ID;
+  const workspacePath = options.workspacePath ?? WORKSPACE_PATH;
+  const localWorkspaceKey = options.localWorkspaceKey ?? "server-spark";
+  const displayName = options.displayName ?? "Spark";
+  const slug = options.slug ?? "spark";
   db.prepare(
     `INSERT INTO daemon_servers (id, server_url, first_registered_at)
      VALUES (?, ?, ?)`,
-  ).run("rnsrv-test", "http://127.0.0.1:5173/", NOW);
+  ).run(serverId, serverUrl, NOW);
   db.prepare(
     `INSERT INTO workspaces
       (id, server_url, local_workspace_key, display_name, local_path, status,
        capabilities_json, diagnostics_json, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, 'available', '{}', '{}', ?, ?)`,
-  ).run(
-    WORKSPACE_BINDING_ID,
-    "http://127.0.0.1:5173/",
-    "server-spark",
-    "Spark",
-    WORKSPACE_PATH,
-    NOW,
-    NOW,
-  );
+  ).run(workspaceBindingId, serverUrl, localWorkspaceKey, displayName, workspacePath, NOW, NOW);
   db.prepare(
     `INSERT INTO daemon_workspaces
       (id, server_id, server_workspace_id, name, slug, local_path, registered_at,
        last_known_status, last_status_changed_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, 'available', ?)`,
-  ).run(
-    WORKSPACE_BINDING_ID,
-    "rnsrv-test",
-    WORKSPACE_ID,
-    "Spark",
-    "spark",
-    WORKSPACE_PATH,
-    NOW,
-    NOW,
-  );
+  ).run(workspaceBindingId, serverId, workspaceId, displayName, slug, workspacePath, NOW, NOW);
+}
+
+function primaryRuntimeId(route: SparkDaemonHumanInteractionRoute): string | undefined {
+  return route.serverUrl === SERVER_URL ? RUNTIME_ID : undefined;
 }
 
 function askRequest(requestId: string, delivery: "blocking" | "async"): SparkInteractionRequest {
@@ -72,7 +81,12 @@ function askRequest(requestId: string, delivery: "blocking" | "async"): SparkInt
         type: "single",
         required: true,
         options: [
-          { value: "yes", label: "Continue", description: "Resume execution" },
+          {
+            value: "yes",
+            label: "Continue",
+            description: "Resume execution",
+            preview: "Proceed with the current plan.",
+          },
           { value: "no", label: "Stop" },
         ],
       },
@@ -110,7 +124,7 @@ describe("SparkDaemonHumanInteractionBroker", () => {
     const broker = new SparkDaemonHumanInteractionBroker({
       db,
       waits,
-      getRuntimeId: () => RUNTIME_ID,
+      getRuntimeId: primaryRuntimeId,
       onOutboxReady,
       onRequestOpened: async (input) => {
         opened.push(input);
@@ -165,6 +179,9 @@ describe("SparkDaemonHumanInteractionBroker", () => {
       expect(envelope).toBeDefined();
       const parsedEnvelope = humanRequestCreatedEnvelopeSchema.parse(envelope);
       expect(parsedEnvelope.invocationId).toMatch(/^inv_[a-f0-9]{32}$/u);
+      expect(parsedEnvelope.payload.questions[0]?.options?.[0]?.preview).toBe(
+        "Proceed with the current plan.",
+      );
 
       expect(opened).toHaveLength(1);
       expect(opened[0]).toMatchObject({
@@ -195,15 +212,15 @@ describe("SparkDaemonHumanInteractionBroker", () => {
     const broker = new SparkDaemonHumanInteractionBroker({
       db,
       waits,
-      getRuntimeId: () => RUNTIME_ID,
+      getRuntimeId: primaryRuntimeId,
     });
 
     try {
       let settled = false;
-      const pendingResponse = broker.interact(
-        askRequest("interaction-blocking", "blocking"),
-        interactionContext(),
-      );
+      const pendingResponse = broker.interact(askRequest("interaction-blocking", "blocking"), {
+        ...interactionContext(),
+        sessionSource: "tui",
+      });
       void pendingResponse.then(() => {
         settled = true;
       });
@@ -219,10 +236,8 @@ describe("SparkDaemonHumanInteractionBroker", () => {
       });
       expect(waits.hasActive(wait!.humanRequestId)).toBe(true);
 
-      expect(
-        waits.deliver({
-          humanRequestId: wait!.humanRequestId,
-          humanResponseId: "response-blocking",
+      await expect(
+        broker.respond(wait!, {
           status: "answered",
           answers: {
             decision: {
@@ -230,11 +245,12 @@ describe("SparkDaemonHumanInteractionBroker", () => {
               labels: ["Continue"],
             },
           },
+          responseArtifactRefs: [],
         }),
-      ).toMatchObject({
+      ).resolves.toMatchObject({
         outcome: "accepted",
         returnedToTool: true,
-        winnerResponseId: "response-blocking",
+        winnerResponseId: expect.stringMatching(/^hres_/u),
       });
 
       await expect(pendingResponse).resolves.toMatchObject({
@@ -251,10 +267,197 @@ describe("SparkDaemonHumanInteractionBroker", () => {
         nextAction: "resume",
         metadata: {
           delivery: "blocking",
-          humanResponseId: "response-blocking",
+          humanResponseId: expect.stringMatching(/^hres_/u),
         },
       });
       expect(waits.hasActive(wait!.humanRequestId)).toBe(false);
+      expect(waits.listPendingOutbox()).toEqual([
+        expect.objectContaining({ kind: "human.request.created" }),
+        expect.objectContaining({
+          kind: "human.response.recorded",
+          envelope: expect.objectContaining({
+            type: "human.response.recorded",
+            runtimeId: RUNTIME_ID,
+            workspaceBindingId: WORKSPACE_BINDING_ID,
+            workspaceId: WORKSPACE_ID,
+            payload: expect.objectContaining({
+              source: "daemon",
+              status: "answered",
+            }),
+          }),
+        }),
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps a route-less TUI blocking ask locally answerable without a Cockpit outbox", async () => {
+    const db = new DatabaseSync(":memory:");
+    migrateSparkDaemonDatabase(db);
+    const waits = new SparkDaemonHumanWaitRegistry(db);
+    const onOutboxReady = vi.fn();
+    const broker = new SparkDaemonHumanInteractionBroker({
+      db,
+      waits,
+      getRuntimeId: () => undefined,
+      onOutboxReady,
+    });
+
+    try {
+      const pendingResponse = broker.interact(askRequest("interaction-local-tui", "blocking"), {
+        sessionId: "session-local-tui",
+        invocationId: "invocation-local-tui",
+        sessionSource: "tui",
+      });
+      await vi.waitFor(() => expect(waits.listPending()).toHaveLength(1));
+      const wait = waits.listPending()[0]!;
+
+      expect(wait.context).toMatchObject({
+        sessionSource: "tui",
+        cockpitProjected: false,
+      });
+      expect(waits.listPendingOutbox()).toEqual([]);
+      expect(onOutboxReady).not.toHaveBeenCalled();
+
+      await expect(
+        broker.respond(wait, {
+          status: "answered",
+          answers: { decision: "yes" },
+          responseArtifactRefs: [],
+        }),
+      ).resolves.toMatchObject({ outcome: "accepted", returnedToTool: true });
+      await expect(pendingResponse).resolves.toMatchObject({
+        kind: "askFlow",
+        requestId: "interaction-local-tui",
+        status: "answered",
+        answers: { decision: "yes" },
+      });
+      expect(waits.listPendingOutbox()).toEqual([]);
+      expect(onOutboxReady).not.toHaveBeenCalled();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("settles a blocking wait from the daemon interaction event seen by the local TUI", async () => {
+    const db = new DatabaseSync(":memory:");
+    migrateSparkDaemonDatabase(db);
+    const waits = new SparkDaemonHumanWaitRegistry(db);
+    const broker = new SparkDaemonHumanInteractionBroker({
+      db,
+      waits,
+      getRuntimeId: () => undefined,
+    });
+    const request = askRequest("interaction-event-to-local-answer", "blocking");
+    let observedRequests = 0;
+    let localAnswer: Promise<void> | undefined;
+    const runtime = new SparkHostRuntime({
+      cwd: WORKSPACE_PATH,
+      hasUI: true,
+      sessionSource: "tui",
+      invocationId: "invocation-event-to-local-answer",
+      ui: {
+        interaction: async (interactionRequest) =>
+          await broker.interact(parseSparkInteractionRequest(interactionRequest), {
+            sessionId: "session-event-to-local-answer",
+            invocationId: "invocation-event-to-local-answer",
+            sessionSource: "tui",
+          }),
+      },
+    });
+    runtime.setSessionId("session-event-to-local-answer");
+    runtime.onDaemonEvent((event) => {
+      if (event.type !== "daemon.interaction.request") return;
+      observedRequests += 1;
+      localAnswer = Promise.resolve().then(async () => {
+        const wait = waits.requireUniquePendingInteraction({
+          interactionRequestId: event.request.requestId,
+          sessionId: event.sessionId,
+          invocationId: event.invocationId,
+        });
+        await broker.respond(wait, {
+          status: "answered",
+          answers: { decision: "yes" },
+          responseArtifactRefs: [],
+        });
+      });
+    });
+
+    try {
+      const response = await runtime.requestInteraction(request);
+      await localAnswer;
+      expect(observedRequests).toBe(1);
+      expect(response).toMatchObject({
+        kind: "askFlow",
+        requestId: "interaction-event-to-local-answer",
+        status: "answered",
+        answers: { decision: "yes" },
+      });
+      expect(waits.listPending()).toEqual([]);
+      expect(waits.listPendingOutbox()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("still blocks a route-less non-TUI ask instead of creating an unanswerable wait", async () => {
+    const db = new DatabaseSync(":memory:");
+    migrateSparkDaemonDatabase(db);
+    const waits = new SparkDaemonHumanWaitRegistry(db);
+    const broker = new SparkDaemonHumanInteractionBroker({
+      db,
+      waits,
+      getRuntimeId: () => undefined,
+    });
+
+    try {
+      await expect(
+        broker.interact(askRequest("interaction-route-less-web", "blocking"), {
+          sessionId: "session-route-less-web",
+          invocationId: "invocation-route-less-web",
+          sessionSource: "web",
+        }),
+      ).resolves.toMatchObject({
+        kind: "askFlow",
+        requestId: "interaction-route-less-web",
+        status: "blocked",
+      });
+      expect(waits.listPending()).toEqual([]);
+      expect(waits.listPendingOutbox()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("cancels a route-less TUI blocking ask without inventing a Cockpit settlement", async () => {
+    const db = new DatabaseSync(":memory:");
+    migrateSparkDaemonDatabase(db);
+    const waits = new SparkDaemonHumanWaitRegistry(db);
+    const broker = new SparkDaemonHumanInteractionBroker({
+      db,
+      waits,
+      getRuntimeId: () => undefined,
+    });
+    const abort = new AbortController();
+
+    try {
+      const pendingResponse = broker.interact(askRequest("interaction-local-abort", "blocking"), {
+        sessionId: "session-local-abort",
+        invocationId: "invocation-local-abort",
+        sessionSource: "tui",
+        signal: abort.signal,
+      });
+      await vi.waitFor(() => expect(waits.listPending()).toHaveLength(1));
+      abort.abort();
+
+      await expect(pendingResponse).resolves.toMatchObject({
+        requestId: "interaction-local-abort",
+        status: "cancelled",
+        nextAction: "cancel",
+      });
+      expect(waits.listPending()).toEqual([]);
+      expect(waits.listPendingOutbox()).toEqual([]);
     } finally {
       db.close();
     }
@@ -268,7 +471,7 @@ describe("SparkDaemonHumanInteractionBroker", () => {
     const broker = new SparkDaemonHumanInteractionBroker({
       db,
       waits,
-      getRuntimeId: () => RUNTIME_ID,
+      getRuntimeId: primaryRuntimeId,
     });
     const abort = new AbortController();
 
@@ -315,7 +518,7 @@ describe("SparkDaemonHumanInteractionBroker", () => {
     const broker = new SparkDaemonHumanInteractionBroker({
       db,
       waits,
-      getRuntimeId: () => RUNTIME_ID,
+      getRuntimeId: primaryRuntimeId,
     });
 
     try {
@@ -338,6 +541,79 @@ describe("SparkDaemonHumanInteractionBroker", () => {
         workspaceId: WORKSPACE_ID,
       });
       humanRequestCreatedEnvelopeSchema.parse(waits.listPendingOutbox()[0]?.envelope);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("selects the runtime identity from each workspace's Cockpit server route", async () => {
+    const db = new DatabaseSync(":memory:");
+    migrateSparkDaemonDatabase(db);
+    seedHumanRoute(db);
+    const secondRuntimeId = `rt_${"6".repeat(32)}`;
+    const secondBindingId = `rtwb_${"7".repeat(32)}`;
+    const secondWorkspaceId = `ws_${"8".repeat(32)}`;
+    const secondServerUrl = "https://cockpit.example.test/";
+    seedHumanRoute(db, {
+      serverId: "rnsrv-second",
+      serverUrl: secondServerUrl,
+      workspaceBindingId: secondBindingId,
+      workspaceId: secondWorkspaceId,
+      workspacePath: "/workspace/second",
+      localWorkspaceKey: "server-second",
+      displayName: "Second",
+      slug: "second",
+    });
+    const waits = new SparkDaemonHumanWaitRegistry(db);
+    const getRuntimeId = vi.fn((route: SparkDaemonHumanInteractionRoute) => {
+      if (route.serverUrl === SERVER_URL) return RUNTIME_ID;
+      if (route.serverUrl === secondServerUrl) return secondRuntimeId;
+      return undefined;
+    });
+    const broker = new SparkDaemonHumanInteractionBroker({ db, waits, getRuntimeId });
+
+    try {
+      await broker.interact(askRequest("interaction-primary-server", "async"), {
+        sessionId: "session-primary-server",
+        invocationId: "invocation-primary-server",
+        workspaceBindingId: WORKSPACE_BINDING_ID,
+        workspaceId: WORKSPACE_ID,
+      });
+      await broker.interact(askRequest("interaction-second-server", "async"), {
+        sessionId: "session-second-server",
+        invocationId: "invocation-second-server",
+        workspaceBindingId: secondBindingId,
+        workspaceId: secondWorkspaceId,
+      });
+
+      expect(getRuntimeId).toHaveBeenNthCalledWith(1, {
+        workspaceBindingId: WORKSPACE_BINDING_ID,
+        workspaceId: WORKSPACE_ID,
+        serverUrl: SERVER_URL,
+      });
+      expect(getRuntimeId).toHaveBeenNthCalledWith(2, {
+        workspaceBindingId: secondBindingId,
+        workspaceId: secondWorkspaceId,
+        serverUrl: secondServerUrl,
+      });
+      expect(
+        waits.listPendingOutbox().map(({ envelope }) => ({
+          runtimeId: envelope.runtimeId,
+          workspaceBindingId: envelope.workspaceBindingId,
+          workspaceId: envelope.workspaceId,
+        })),
+      ).toEqual([
+        {
+          runtimeId: RUNTIME_ID,
+          workspaceBindingId: WORKSPACE_BINDING_ID,
+          workspaceId: WORKSPACE_ID,
+        },
+        {
+          runtimeId: secondRuntimeId,
+          workspaceBindingId: secondBindingId,
+          workspaceId: secondWorkspaceId,
+        },
+      ]);
     } finally {
       db.close();
     }

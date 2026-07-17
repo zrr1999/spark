@@ -123,7 +123,7 @@ describe("Infoflow SDK outbound", () => {
 
     const stream = await outbound.openReplyStream("group:10838226");
     expect(stream).toBeTruthy();
-    expect(stream?.answerMode).toBe("separate");
+    expect(stream?.answerMode).toBe("inline");
     expect(fake.createSession).toHaveBeenCalledWith({
       to: "group:10838226",
       answerFormat: "markdown",

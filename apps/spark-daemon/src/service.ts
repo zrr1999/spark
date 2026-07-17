@@ -22,6 +22,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { launchctlCommand, type SparkPaths } from "@zendev-lab/spark-system";
 import { requestSparkDaemonLocalRpcWire } from "@zendev-lab/spark-system/daemon-local-rpc";
 import { SPARK_PROTOCOL_VERSION } from "@zendev-lab/spark-protocol";
+import { cappedExponentialCeiling } from "@zendev-lab/spark-retry";
 
 const launchdLabel = "dev.spark.daemon";
 const restartIntentFileName = "restart.intent.json";
@@ -703,8 +704,7 @@ function restartStartRetryDelayMs(
 ): number {
   const baseMs = Math.max(0, Math.floor(configuredBaseMs ?? restartStartRetryBaseMs));
   const maxMs = Math.max(baseMs, Math.floor(configuredMaxMs ?? restartStartRetryMaxMs));
-  const exponent = Math.min(16, Math.max(0, failedAttempts - 1));
-  return Math.min(maxMs, baseMs * 2 ** exponent);
+  return cappedExponentialCeiling(failedAttempts, baseMs, maxMs, { exponentCap: 16 });
 }
 
 async function probeSparkDaemonReady(

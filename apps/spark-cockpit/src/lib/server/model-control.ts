@@ -1,7 +1,9 @@
 import {
-  parseSparkAuthFlow,
+  createSparkModelControlClient,
   parseSparkModelControlSnapshot,
-  parseSparkSessionRegistryRecord,
+  parseSparkModelValue,
+  parseSparkThinkingLevelValue,
+  sparkModelValue,
   type SparkAuthFlow,
   type SparkModelControlSnapshot,
   type SparkModelRef,
@@ -13,7 +15,12 @@ import { createCockpitRuntimeModelChannelClient } from "./cockpit-runtime-model-
 
 export interface CockpitModelControlClient {
   request(method: string, params?: unknown): Promise<unknown>;
+  projectedCatalog?(params?: unknown): unknown;
 }
+
+export type CockpitModelControlRoute =
+  | string
+  | { runtimeId?: string; sessionId?: string; workspaceId?: string };
 
 export interface CockpitModelControlState {
   available: boolean;
@@ -23,6 +30,14 @@ export interface CockpitModelControlState {
 
 const runtimeClient = createCockpitRuntimeModelChannelClient();
 const daemonModelControlClient: CockpitModelControlClient = {
+  projectedCatalog: (params) => {
+    const input = isRecord(params) ? params : {};
+    return runtimeClient.projectedCatalog({
+      ...(typeof input.runtimeId === "string" ? { runtimeId: input.runtimeId } : {}),
+      ...(typeof input.sessionId === "string" ? { sessionId: input.sessionId } : {}),
+      ...(typeof input.workspaceId === "string" ? { workspaceId: input.workspaceId } : {}),
+    });
+  },
   request: async (method, params) => {
     const input = isRecord(params) ? params : {};
     switch (method) {
@@ -30,6 +45,7 @@ const daemonModelControlClient: CockpitModelControlClient = {
         return await runtimeClient.catalog({
           ...(typeof input.runtimeId === "string" ? { runtimeId: input.runtimeId } : {}),
           ...(typeof input.sessionId === "string" ? { sessionId: input.sessionId } : {}),
+          ...(typeof input.workspaceId === "string" ? { workspaceId: input.workspaceId } : {}),
         });
       case "model.default.set":
         return await runtimeClient.setDefault({ model: input.model as SparkModelRef });
@@ -84,13 +100,12 @@ const emptySnapshot: SparkModelControlSnapshot = {
 };
 
 export async function loadModelControlForCockpit(
-  sessionId?: string,
+  route: CockpitModelControlRoute = {},
   client: CockpitModelControlClient = daemonModelControlClient,
 ): Promise<CockpitModelControlState> {
+  const params = modelCatalogParams(route);
   try {
-    const snapshot = parseSparkModelControlSnapshot(
-      await client.request("model.catalog", sessionId ? { sessionId } : {}),
-    );
+    const snapshot = parseSparkModelControlSnapshot(await client.request("model.catalog", params));
     return { available: true, snapshot };
   } catch (error) {
     // Model picker is optional chrome on the session page; never 500 the route
@@ -103,11 +118,39 @@ export async function loadModelControlForCockpit(
   }
 }
 
+export async function loadProjectedModelControlForCockpit(
+  route: CockpitModelControlRoute,
+  client: CockpitModelControlClient = daemonModelControlClient,
+): Promise<CockpitModelControlState> {
+  try {
+    const projection = client.projectedCatalog?.(modelCatalogParams(route));
+    if (!projection) return unavailableModelControlState("No cached model catalog is available.");
+    return { available: true, snapshot: parseSparkModelControlSnapshot(projection) };
+  } catch (error) {
+    return unavailableModelControlState(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function modelCatalogParams(route: CockpitModelControlRoute): Record<string, string> {
+  if (typeof route === "string") return route.trim() ? { sessionId: route.trim() } : {};
+  return {
+    ...(route.runtimeId?.trim() ? { runtimeId: route.runtimeId.trim() } : {}),
+    ...(route.sessionId?.trim() ? { sessionId: route.sessionId.trim() } : {}),
+    ...(route.workspaceId?.trim() ? { workspaceId: route.workspaceId.trim() } : {}),
+  };
+}
+
+function unavailableModelControlState(error: string): CockpitModelControlState {
+  return { available: false, snapshot: emptySnapshot, error };
+}
+
 export async function setDefaultModelForCockpit(
   model: SparkModelRef,
   client: CockpitModelControlClient = daemonModelControlClient,
 ): Promise<SparkModelControlSnapshot> {
-  return parseSparkModelControlSnapshot(await client.request("model.default.set", { model }));
+  return createSparkModelControlClient((method, params) =>
+    client.request(method, params),
+  ).setDefaultModel(model);
 }
 
 export async function setSessionModelForCockpit(
@@ -115,9 +158,9 @@ export async function setSessionModelForCockpit(
   model: SparkModelRef,
   client: CockpitModelControlClient = daemonModelControlClient,
 ): Promise<SparkSessionRegistryRecord> {
-  return parseSparkSessionRegistryRecord(
-    await client.request("session.model.set", { sessionId, model }),
-  );
+  return createSparkModelControlClient((method, params) => client.request(method, params), {
+    sessionId,
+  }).setSessionModel(model);
 }
 
 export async function setSessionThinkingLevelForCockpit(
@@ -125,9 +168,9 @@ export async function setSessionThinkingLevelForCockpit(
   thinkingLevel: SparkThinkingLevel,
   client: CockpitModelControlClient = daemonModelControlClient,
 ): Promise<SparkSessionRegistryRecord> {
-  return parseSparkSessionRegistryRecord(
-    await client.request("session.thinking.set", { sessionId, thinkingLevel }),
-  );
+  return createSparkModelControlClient((method, params) => client.request(method, params), {
+    sessionId,
+  }).setSessionThinkingLevel(thinkingLevel);
 }
 
 export async function setProviderApiKeyForCockpit(
@@ -136,22 +179,21 @@ export async function setProviderApiKeyForCockpit(
   context: RuntimeEphemeralSecretRequestContext,
   client: CockpitModelControlClient = daemonModelControlClient,
 ): Promise<SparkModelControlSnapshot> {
-  return parseSparkModelControlSnapshot(
-    await client.request("provider.auth.api-key.set", { providerName, apiKey, context }),
-  );
+  return createSparkModelControlClient((method, params) =>
+    client.request(method, params),
+  ).setApiKey(providerName, apiKey, { context });
 }
 
 export async function logoutProviderForCockpit(
   providerName: string,
   client: CockpitModelControlClient = daemonModelControlClient,
 ): Promise<{ removed: boolean; snapshot: SparkModelControlSnapshot }> {
-  const value = await client.request("provider.auth.logout", { providerName });
-  if (!isRecord(value) || typeof value.removed !== "boolean") {
-    throw new Error("Invalid Spark daemon provider logout response.");
-  }
+  const result = await createSparkModelControlClient((method, params) =>
+    client.request(method, params),
+  ).logout(providerName);
   return {
-    removed: value.removed,
-    snapshot: parseSparkModelControlSnapshot(value.snapshot),
+    removed: result.removed,
+    snapshot: parseSparkModelControlSnapshot(result.snapshot),
   };
 }
 
@@ -159,14 +201,18 @@ export async function startProviderOAuthForCockpit(
   providerName: string,
   client: CockpitModelControlClient = daemonModelControlClient,
 ): Promise<SparkAuthFlow> {
-  return parseSparkAuthFlow(await client.request("provider.auth.login.start", { providerName }));
+  return createSparkModelControlClient((method, params) =>
+    client.request(method, params),
+  ).startOAuth(providerName);
 }
 
 export async function getProviderOAuthFlowForCockpit(
   flowId: string,
   client: CockpitModelControlClient = daemonModelControlClient,
 ): Promise<SparkAuthFlow> {
-  return parseSparkAuthFlow(await client.request("provider.auth.login.status", { flowId }));
+  return createSparkModelControlClient((method, params) =>
+    client.request(method, params),
+  ).oauthStatus(flowId);
 }
 
 export async function respondProviderOAuthForCockpit(
@@ -176,40 +222,23 @@ export async function respondProviderOAuthForCockpit(
   context: RuntimeEphemeralSecretRequestContext,
   client: CockpitModelControlClient = daemonModelControlClient,
 ): Promise<SparkAuthFlow> {
-  return parseSparkAuthFlow(
-    await client.request("provider.auth.login.respond", { flowId, promptId, value, context }),
-  );
+  return createSparkModelControlClient((method, params) =>
+    client.request(method, params),
+  ).respondOAuth(flowId, promptId, value, { context });
 }
 
 export async function cancelProviderOAuthForCockpit(
   flowId: string,
   client: CockpitModelControlClient = daemonModelControlClient,
 ): Promise<SparkAuthFlow> {
-  return parseSparkAuthFlow(await client.request("provider.auth.login.cancel", { flowId }));
+  return createSparkModelControlClient((method, params) =>
+    client.request(method, params),
+  ).cancelOAuth(flowId);
 }
 
-export function parseModelValue(value: string): SparkModelRef {
-  const trimmed = value.trim();
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash === trimmed.length - 1) {
-    throw new Error("Select a valid provider/model.");
-  }
-  return { providerName: trimmed.slice(0, slash), modelId: trimmed.slice(slash + 1) };
-}
-
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
-
-export function parseThinkingLevelValue(value: string): SparkThinkingLevel {
-  const trimmed = value.trim().toLowerCase();
-  if (!(THINKING_LEVELS as readonly string[]).includes(trimmed)) {
-    throw new Error("Select a valid thinking level.");
-  }
-  return trimmed as SparkThinkingLevel;
-}
-
-export function modelValue(model: SparkModelRef): string {
-  return `${model.providerName}/${model.modelId}`;
-}
+export const parseModelValue = parseSparkModelValue;
+export const parseThinkingLevelValue = parseSparkThinkingLevelValue;
+export const modelValue = sparkModelValue;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

@@ -43,8 +43,19 @@ export interface SessionActivityReport {
   };
 }
 
+export interface SessionActivityQueuedTurn {
+  commandId: string;
+  invocationId: string;
+  prompt: string;
+  status: "queued" | "running";
+  createdAt: string;
+  startedAt: string | null;
+}
+
 export interface SessionActivityProjection {
   commands: SessionActivityCommand[];
+  /** Canonical queued and running direct turns, ordered by submission time. */
+  queuedTurns: SessionActivityQueuedTurn[];
   reports: SessionActivityReport[];
 }
 
@@ -115,6 +126,15 @@ interface DirectTurnInvocationRow {
   payloadJson: string;
   completedAt: string | null;
   updatedAt: string;
+}
+
+interface QueuedTurnRow {
+  commandId: string;
+  payloadJson: string;
+  runtimeInvocationId: string;
+  status: "queued" | "running";
+  createdAt: string;
+  startedAt: string | null;
 }
 
 export function loadSessionActivity(
@@ -196,12 +216,76 @@ export function loadSessionActivity(
 
   return {
     commands,
+    queuedTurns: loadQueuedTurns(db, { ...input, limit }),
     reports: [
       ...sessionReports,
       ...directTurnReports,
       ...loadArtifactReportsByCommand(db, commandIds, limit),
     ].sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
   };
+}
+
+function loadQueuedTurns(
+  db: DatabaseSync,
+  input: { workspaceId: string; sessionId: string; limit: number },
+): SessionActivityQueuedTurn[] {
+  const rows = db
+    .prepare(
+      `WITH latest_invocations AS (
+         SELECT runtime_id AS runtimeId,
+                command_id AS commandId,
+                runtime_invocation_id AS runtimeInvocationId,
+                status,
+                started_at AS startedAt,
+                ROW_NUMBER() OVER (
+                  PARTITION BY runtime_id, command_id
+                  ORDER BY updated_at DESC, runtime_invocation_id DESC
+                ) AS rowNumber
+         FROM runtime_invocation_projections
+         WHERE workspace_id = ?
+           AND session_id = ?
+           AND command_id IS NOT NULL
+       )
+       SELECT c.id AS commandId,
+              c.payload_json AS payloadJson,
+              invocation.runtimeInvocationId,
+              invocation.status,
+              c.created_at AS createdAt,
+              invocation.startedAt
+       FROM runtime_control_commands c
+       JOIN latest_invocations invocation
+         ON invocation.runtimeId = c.runtime_id
+        AND invocation.commandId = c.id
+        AND invocation.rowNumber = 1
+       WHERE c.workspace_id = ?
+         AND c.session_id = ?
+         AND c.kind = 'turn.submit.request'
+         AND invocation.status IN ('queued', 'running')
+       ORDER BY c.created_at ASC, c.id ASC
+       LIMIT ?`,
+    )
+    .all(
+      input.workspaceId,
+      input.sessionId,
+      input.workspaceId,
+      input.sessionId,
+      input.limit,
+    ) as unknown as QueuedTurnRow[];
+
+  return rows.flatMap((row): SessionActivityQueuedTurn[] => {
+    const prompt = directTurnPrompt(row.payloadJson);
+    if (!prompt) return [];
+    return [
+      {
+        commandId: row.commandId,
+        invocationId: row.runtimeInvocationId,
+        prompt,
+        status: row.status,
+        createdAt: row.createdAt,
+        startedAt: row.startedAt,
+      },
+    ];
+  });
 }
 
 function latestInvocationsByCommand(db: DatabaseSync, commandIds: string[]) {

@@ -1,3 +1,5 @@
+import type { SparkModelRef, SparkSessionView } from "@zendev-lab/spark-protocol";
+
 export interface SessionStatusBarLabels {
   bar: string;
   workingDirectory: string;
@@ -9,9 +11,7 @@ export interface SessionStatusBarLabels {
   cacheHit: string;
   cost: string;
   context: string;
-  provider: string;
-  model: string;
-  thinking: string;
+  autoCompaction: string;
 }
 
 export interface SessionStatusSnapshot {
@@ -25,9 +25,7 @@ export interface SessionStatusSnapshot {
   latestCacheHitPercent?: number;
   contextTokens?: number;
   contextWindow?: number;
-  provider?: string;
-  model?: string;
-  thinkingLevel?: string;
+  autoCompactionEnabled?: boolean;
 }
 
 export interface SessionStatusUsage {
@@ -39,6 +37,31 @@ export interface SessionStatusUsage {
   latestCacheHitPercent?: number;
   contextTokens?: number;
   contextWindow?: number;
+}
+
+export interface SessionStatusIdentityInput {
+  sessionModel?: SparkModelRef;
+  defaultModel?: SparkModelRef;
+  sessionThinkingLevel?: string;
+}
+
+/** Prefer session-scoped control truth, then the canonical session snapshot, over global defaults. */
+export function sessionStatusIdentity(
+  session: SparkSessionView | null,
+  control: SessionStatusIdentityInput,
+): { model?: SparkModelRef; thinkingLevel?: string } {
+  const model = control.sessionModel ?? session?.model ?? control.defaultModel;
+  const thinkingLevel = control.sessionThinkingLevel ?? session?.thinkingLevel;
+  return {
+    ...(model ? { model } : {}),
+    ...(thinkingLevel ? { thinkingLevel } : {}),
+  };
+}
+
+/** Native Spark sessions compact automatically unless the snapshot explicitly disables it. */
+export function sessionAutoCompactionEnabled(session: SparkSessionView | null): boolean {
+  const value = session?.metadata.autoCompactionEnabled;
+  return typeof value === "boolean" ? value : true;
 }
 
 /** Merge the daemon snapshot baseline with run updates received after that snapshot. */
@@ -154,11 +177,8 @@ export function describeSessionStatus(
     detail(labels.cacheHit, formatSessionStatusPercent(status.latestCacheHitPercent)),
     detail(labels.cost, formatSessionCost(status.costUsd)),
     detail(labels.context, context),
-    detail(labels.provider, status.provider?.trim()),
-    detail(labels.model, status.model?.trim()),
-    detail(labels.thinking, status.thinkingLevel?.trim()),
+    context && status.autoCompactionEnabled ? labels.autoCompaction : undefined,
   ]
     .filter((value): value is string => Boolean(value))
     .join(" · ");
 }
-import type { SparkSessionView } from "@zendev-lab/spark-protocol";

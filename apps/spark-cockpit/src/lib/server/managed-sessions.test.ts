@@ -74,6 +74,7 @@ describe("managed sessions for cockpit", () => {
     };
     await expect(listManagedSessionsForCockpit(workspaceScope, client)).resolves.toEqual({
       available: true,
+      controlAvailable: true,
       sessions: [session],
     });
     await expect(getManagedSessionForCockpit("sess_a", client)).resolves.toEqual(session);
@@ -82,6 +83,7 @@ describe("managed sessions for cockpit", () => {
     );
 
     expect(client.list).toHaveBeenCalledWith(workspaceScope);
+    expect(client.controlAvailable).toHaveBeenCalledWith(workspaceScope);
     expect(client.get).toHaveBeenCalledWith("sess_a");
     expect(client.snapshot).toHaveBeenCalledWith("sess_a", {});
   });
@@ -93,11 +95,12 @@ describe("managed sessions for cockpit", () => {
 
     await expect(listManagedSessionsForCockpit({}, client)).resolves.toEqual({
       available: true,
+      controlAvailable: true,
       sessions: [session],
     });
     await expect(
       listManagedSessionsForCockpit({ scope: { kind: "daemon" } }, client),
-    ).resolves.toEqual({ available: true, sessions: [] });
+    ).resolves.toEqual({ available: true, controlAvailable: false, sessions: [] });
     await expect(getManagedSessionForCockpit(daemonSession.sessionId, client)).resolves.toBeNull();
     await expect(
       getManagedSessionSnapshotForCockpit(daemonSession.sessionId, {}, client),
@@ -115,9 +118,56 @@ describe("managed sessions for cockpit", () => {
 
     await expect(listManagedSessionsForCockpit({}, client)).resolves.toEqual({
       available: false,
+      controlAvailable: false,
       sessions: [],
       error: "restart or upgrade the daemon",
     });
+  });
+
+  it("keeps cached conversations readable when workspace control is offline", async () => {
+    const client = daemonClient();
+    client.controlAvailable.mockReturnValueOnce(false);
+
+    await expect(
+      listManagedSessionsForCockpit(
+        {
+          scope: { kind: "workspace", workspaceId: "ws_a" },
+          workspaceId: "ws_a",
+        },
+        client,
+      ),
+    ).resolves.toEqual({
+      available: true,
+      controlAvailable: false,
+      sessions: [session],
+    });
+  });
+
+  it("uses the current list attempt instead of a stale route availability hint", async () => {
+    const baseClient = daemonClient();
+    const client = {
+      ...baseClient,
+      listWithControlState: vi.fn(async () => ({
+        sessions: [session],
+        controlAvailable: false,
+      })),
+    };
+
+    await expect(
+      listManagedSessionsForCockpit(
+        {
+          scope: { kind: "workspace", workspaceId: "ws_a" },
+          workspaceId: "ws_a",
+        },
+        client,
+      ),
+    ).resolves.toEqual({
+      available: true,
+      controlAvailable: false,
+      sessions: [session],
+    });
+    expect(baseClient.list).not.toHaveBeenCalled();
+    expect(baseClient.controlAvailable).not.toHaveBeenCalled();
   });
 
   it("returns null for get when the daemon is unavailable or the session is missing", async () => {
@@ -234,6 +284,7 @@ function daemonClient(
   } = {},
 ) {
   return {
+    controlAvailable: vi.fn(() => true),
     list: vi.fn(async () => [session]),
     get: vi.fn(async () => session),
     snapshot: vi.fn(async () => snapshotWindow),

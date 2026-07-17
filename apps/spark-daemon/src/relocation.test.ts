@@ -10,6 +10,11 @@ import { runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import { readSparkDaemonConfig, writeSparkDaemonConfig } from "./config.ts";
 import { relocateSparkDaemonCockpit } from "./relocation.ts";
+import {
+  getSparkDaemonServerProfile,
+  listSparkDaemonServerProfiles,
+  upsertSparkDaemonServerProfile,
+} from "./server-profiles.ts";
 import { openSparkDaemonDatabase } from "./store/schema.ts";
 import { ensureLocalWorkspace, registerWorkspace } from "./store/workspaces.ts";
 
@@ -28,6 +33,11 @@ interface Harness {
   localBindingId: string;
   thirdBindingId: string;
   cleanup(): Promise<void>;
+}
+
+interface SetupOptions {
+  sourceCredentials?: "profile" | "legacy";
+  includeThirdProfile?: boolean;
 }
 
 describe("daemon Cockpit relocation", () => {
@@ -53,13 +63,23 @@ describe("daemon Cockpit relocation", () => {
         workspaceCount: 1,
       });
       expect(reconnect).toHaveBeenCalledOnce();
-      expect(readSparkDaemonConfig(h.paths)).toMatchObject({
+      expect(reconnect).toHaveBeenCalledWith(sourceUrl);
+      expect(readSparkDaemonConfig(h.paths)).toEqual({
         installationId: "install-relocation",
+        displayName: "Relocation daemon",
+      });
+      expect(getSparkDaemonServerProfile(h.paths, targetUrl)).toMatchObject({
         runtimeId,
         serverUrl: targetUrl,
         runtimeToken: "runtime-token-rotated-00000000000000000000",
         refreshToken: "refresh-token-rotated-00000000000000000000",
         webSocketUrl: `wss://target.example.test/api/v1/runtime/runtimes/${runtimeId}/ws`,
+      });
+      expect(getSparkDaemonServerProfile(h.paths, sourceUrl)).toBeUndefined();
+      expect(getSparkDaemonServerProfile(h.paths, thirdUrl)).toMatchObject({
+        serverUrl: thirdUrl,
+        runtimeId: "rt_33333333333333333333333333333333",
+        runtimeToken: "runtime-token-third-0000000000000000000000",
       });
       const routes = workspaceRoutes(h.db);
       expect(routes).toHaveLength(3);
@@ -105,7 +125,7 @@ describe("daemon Cockpit relocation", () => {
         relocateSparkDaemonCockpit(
           h.paths,
           h.db,
-          { toServerUrl: targetUrl },
+          { fromServerUrl: sourceUrl, toServerUrl: targetUrl },
           { fetchFn: relocationFetch(scenario), onUplinkReconfigure: reconnect },
         ),
       ).rejects.toThrow();
@@ -134,7 +154,12 @@ describe("daemon Cockpit relocation", () => {
       const before = localDigest(h);
       const fetchFn = vi.fn<typeof fetch>();
       await expect(
-        relocateSparkDaemonCockpit(h.paths, h.db, { toServerUrl: targetUrl }, { fetchFn }),
+        relocateSparkDaemonCockpit(
+          h.paths,
+          h.db,
+          { fromServerUrl: sourceUrl, toServerUrl: targetUrl },
+          { fetchFn },
+        ),
       ).rejects.toMatchObject({ code: "RELOCATION_TARGET_COLLISION" });
       expect(fetchFn).not.toHaveBeenCalled();
       expect(localDigest(h)).toBe(before);
@@ -145,6 +170,13 @@ describe("daemon Cockpit relocation", () => {
 
   it("rolls back SQLite and config when the local commit fails", async () => {
     const h = await setup();
+    await upsertSparkDaemonServerProfile(h.paths, {
+      serverUrl: targetUrl,
+      runtimeId: "rt_22222222222222222222222222222222",
+      runtimeToken: "runtime-token-target-before-000000000000000000",
+      refreshToken: "refresh-token-target-before-000000000000000000",
+      webSocketUrl: "wss://target.example.test/runtime-before",
+    });
     const before = localDigest(h);
     const reconnect = vi.fn();
     try {
@@ -152,7 +184,7 @@ describe("daemon Cockpit relocation", () => {
         relocateSparkDaemonCockpit(
           h.paths,
           h.db,
-          { toServerUrl: targetUrl },
+          { fromServerUrl: sourceUrl, toServerUrl: targetUrl },
           {
             fetchFn: relocationFetch(),
             beforeCommit: () => {
@@ -163,8 +195,67 @@ describe("daemon Cockpit relocation", () => {
         ),
       ).rejects.toThrow("injected local transaction failure");
       expect(localDigest(h)).toBe(before);
+      expect(getSparkDaemonServerProfile(h.paths, targetUrl)).toMatchObject({
+        runtimeId: "rt_22222222222222222222222222222222",
+        runtimeToken: "runtime-token-target-before-000000000000000000",
+      });
       expect(reconnect).not.toHaveBeenCalled();
       expect(auditRows(h.db)).toEqual([]);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it("infers the only workspace-bound source profile when fromServerUrl is omitted", async () => {
+    const h = await setup({ includeThirdProfile: false });
+    try {
+      const result = await relocateSparkDaemonCockpit(
+        h.paths,
+        h.db,
+        { toServerUrl: targetUrl },
+        { fetchFn: relocationFetch(), now: () => now },
+      );
+
+      expect(result.fromServerUrl).toBe(sourceUrl);
+      expect(getSparkDaemonServerProfile(h.paths, sourceUrl)).toBeUndefined();
+      expect(getSparkDaemonServerProfile(h.paths, targetUrl)?.runtimeId).toBe(runtimeId);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it("requires fromServerUrl when multiple workspace-bound profiles exist", async () => {
+    const h = await setup();
+    const fetchFn = vi.fn<typeof fetch>();
+    try {
+      await expect(
+        relocateSparkDaemonCockpit(h.paths, h.db, { toServerUrl: targetUrl }, { fetchFn }),
+      ).rejects.toMatchObject({ code: "RELOCATION_SOURCE_REQUIRED" });
+      expect(fetchFn).not.toHaveBeenCalled();
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it("migrates a legacy source tuple and leaves daemon.toml identity-only", async () => {
+    const h = await setup({ sourceCredentials: "legacy" });
+    try {
+      await relocateSparkDaemonCockpit(
+        h.paths,
+        h.db,
+        { fromServerUrl: sourceUrl, toServerUrl: targetUrl },
+        { fetchFn: relocationFetch(), now: () => now },
+      );
+
+      expect(readSparkDaemonConfig(h.paths)).toEqual({
+        installationId: "install-relocation",
+        displayName: "Relocation daemon",
+      });
+      expect(getSparkDaemonServerProfile(h.paths, sourceUrl)).toBeUndefined();
+      expect(getSparkDaemonServerProfile(h.paths, targetUrl)?.runtimeId).toBe(runtimeId);
+      expect(getSparkDaemonServerProfile(h.paths, thirdUrl)?.runtimeId).toBe(
+        "rt_33333333333333333333333333333333",
+      );
     } finally {
       await h.cleanup();
     }
@@ -224,7 +315,7 @@ function relocationFetch(scenario: RelocationFetchScenario = {}): typeof fetch {
   }) as typeof fetch;
 }
 
-async function setup(): Promise<Harness> {
+async function setup(options: SetupOptions = {}): Promise<Harness> {
   const root = await mkdtemp(join(tmpdir(), "spark-daemon-relocation-"));
   const paths = resolveSparkPaths({
     app: "daemon",
@@ -238,9 +329,21 @@ async function setup(): Promise<Harness> {
     },
   });
   const db = openSparkDaemonDatabase(paths);
-  writeSparkDaemonConfig(paths, {
+  const identity = {
     installationId: "install-relocation",
     displayName: "Relocation daemon",
+  };
+  writeSparkDaemonConfig(paths, identity);
+  if (options.includeThirdProfile !== false) {
+    await upsertSparkDaemonServerProfile(paths, {
+      serverUrl: thirdUrl,
+      runtimeId: "rt_33333333333333333333333333333333",
+      runtimeToken: "runtime-token-third-0000000000000000000000",
+      refreshToken: "refresh-token-third-0000000000000000000000",
+      webSocketUrl: "wss://third.example.test/runtime",
+    });
+  }
+  const sourceCredentials = {
     serverUrl: sourceUrl,
     runtimeId,
     runtimeToken: "runtime-token-source-000000000000000000000",
@@ -248,7 +351,12 @@ async function setup(): Promise<Harness> {
     refreshToken: "refresh-token-source-000000000000000000000",
     refreshTokenExpiresAt: "2026-08-15T00:00:00.000Z",
     webSocketUrl: `ws://127.0.0.1:4173/api/v1/runtime/runtimes/${runtimeId}/ws`,
-  });
+  };
+  if (options.sourceCredentials === "legacy") {
+    writeSparkDaemonConfig(paths, { ...identity, ...sourceCredentials });
+  } else {
+    await upsertSparkDaemonServerProfile(paths, sourceCredentials);
+  }
   const source = registerWorkspace(db, {
     serverUrl: sourceUrl,
     serverBindingId: "rtwb_11111111111111111111111111111111",
@@ -306,6 +414,7 @@ function localDigest(h: Harness): string {
   ];
   const state = {
     config: readFileSync(h.paths.configFile, "utf8"),
+    profiles: listSparkDaemonServerProfiles(h.paths),
     tables: tables.map((table) => ({
       table,
       rows: h.db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all(),

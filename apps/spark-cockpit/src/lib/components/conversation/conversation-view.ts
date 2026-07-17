@@ -31,7 +31,15 @@ export function conversationPartsFromMessage(
     }
   }
 
-  if (message.status === "error" && !parts.some((part) => part.type === "error")) {
+  if (message.status === "error" && isBudgetExhaustedMessage(message)) {
+    return [{ type: "notice", kind: "budget_exhausted" }];
+  }
+
+  if (
+    message.status === "error" &&
+    (message.role === "assistant" || message.role === "system") &&
+    !parts.some((part) => part.type === "error")
+  ) {
     const detail = stringField(message.metadata, "errorMessage") ?? displayText.trim();
     if (detail) {
       parts = [
@@ -50,6 +58,12 @@ export function conversationPartsFromMessage(
   // Keep tools flat here so timeline merge can attach results. Chain grouping
   // happens after cross-message merges in buildSessionTimeline.
   return parts;
+}
+
+function isBudgetExhaustedMessage(message: SparkMessageView): boolean {
+  if (stringField(message.metadata, "outcomeStatus") === "budget_exhausted") return true;
+  const detail = stringField(message.metadata, "errorMessage") ?? message.text;
+  return /^agent loop hit maxRoundtrips=\d+; stopping$/u.test(detail.trim());
 }
 
 /**

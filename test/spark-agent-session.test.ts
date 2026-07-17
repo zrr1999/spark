@@ -25,6 +25,11 @@ import type { TUI } from "../apps/spark-tui/src/tui/pi-tui-adapter.ts";
 type FakeStreamSimple = (context: {
   messages?: unknown[];
 }) => AssistantMessage | Promise<AssistantMessage>;
+type FakeProviderOptions = {
+  streamSimple?: FakeStreamSimple;
+  contextWindow?: number;
+  maxTokens?: number;
+};
 type AssistantMessage = {
   role: "assistant";
   content: Array<{ type: "text"; text: string }>;
@@ -220,6 +225,117 @@ void test("SparkAgentSession persists and resumes JSONL sessions", async () => {
         (event: any) => event.type === "run.update" && event.run.status === "succeeded",
       ),
       true,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("SparkAgentSession compacts persisted history and retries a context overflow once", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-overflow-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(cwd, { recursive: true });
+    let providerCalls = 0;
+    const services = await makeFakeServices(
+      { cwd, sparkHome },
+      {
+        contextWindow: 1_000_000,
+        maxTokens: 4_096,
+        streamSimple: ({ messages }) => {
+          providerCalls += 1;
+          if (providerCalls === 1) {
+            throw new Error(
+              "Your input exceeds the context window of this model. Please adjust your input and try again.",
+            );
+          }
+          return assistant(`recovered:${messages?.length ?? 0}`);
+        },
+      },
+    );
+    const record = services.sessionStore.createSession({ id: "overflow-session" });
+    for (let index = 0; index < 8; index += 1) {
+      services.sessionStore.appendMessage(record, {
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `${index}:${"history ".repeat(100)}`,
+      });
+    }
+    await services.sessionStore.save(record);
+
+    const result = await new SparkAgentSession(services).run({
+      sessionId: record.header.id,
+      prompt: "continue after overflow",
+    });
+
+    assert.equal(providerCalls, 2);
+    assert.equal(result.outcome?.status, "completed");
+    assert.match(result.assistantText, /^recovered:/u);
+    const saved = await services.sessionStore.load(record.path);
+    assert.equal(saved.entries.filter((entry) => entry.type === "compaction").length, 1);
+    const persistedMessages = saved.entries.filter((entry) => entry.type === "message");
+    assert.equal(
+      persistedMessages.filter(
+        (entry) =>
+          entry.message.role === "user" && entry.message.content === "continue after overflow",
+      ).length,
+      1,
+    );
+    assert.equal(
+      persistedMessages.some((entry) =>
+        JSON.stringify(entry.message).includes("exceeds the context window"),
+      ),
+      false,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("SparkAgentSession compacts an over-budget persisted session before its provider call", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-preflight-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(cwd, { recursive: true });
+    let providerCalls = 0;
+    const services = await makeFakeServices(
+      { cwd, sparkHome },
+      {
+        contextWindow: 40_000,
+        maxTokens: 4_096,
+        streamSimple: () => {
+          providerCalls += 1;
+          return assistant("continued after preflight compaction");
+        },
+      },
+    );
+    const record = services.sessionStore.createSession({ id: "preflight-session" });
+    for (let index = 0; index < 40; index += 1) {
+      services.sessionStore.appendMessage(record, {
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `${index}:${"history ".repeat(400)}`,
+      });
+    }
+    await services.sessionStore.save(record);
+
+    const result = await new SparkAgentSession(services).run({
+      sessionId: record.header.id,
+      prompt: "continue near the context limit",
+    });
+
+    assert.equal(providerCalls, 1);
+    assert.equal(result.outcome?.status, "completed");
+    const saved = await services.sessionStore.load(record.path);
+    assert.equal(saved.entries.filter((entry) => entry.type === "compaction").length, 1);
+    assert.equal(
+      saved.entries.filter(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message.role === "user" &&
+          entry.message.content === "continue near the context limit",
+      ).length,
+      1,
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -610,7 +726,7 @@ async function listSessionFileNames(sessionDir: string): Promise<string[]> {
 
 async function makeFakeServices(
   options: SparkCliHostServicesOptions,
-  fake: { streamSimple?: FakeStreamSimple } = {},
+  fake: FakeProviderOptions = {},
 ) {
   const config: SparkConfig = {
     extensions: [],
@@ -629,7 +745,7 @@ async function makeFakeServices(
   });
 }
 
-function fakeProviderModule(fake: { streamSimple?: FakeStreamSimple } = {}) {
+function fakeProviderModule(fake: FakeProviderOptions = {}) {
   return {
     default(api: { registerProvider(name: string, config: unknown): void }) {
       api.registerProvider("fake-provider", {
@@ -659,8 +775,8 @@ function fakeProviderModule(fake: { streamSimple?: FakeStreamSimple } = {}) {
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 8192,
-            maxTokens: 4096,
+            contextWindow: fake.contextWindow ?? 8192,
+            maxTokens: fake.maxTokens ?? 4096,
           },
         ],
       });

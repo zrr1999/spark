@@ -34,12 +34,13 @@ import {
   attachRuntimeWebSocket,
   authenticateRuntimeToken,
 } from "@zendev-lab/spark-coordination/runtime-ws";
-import { resolveSparkPaths } from "@zendev-lab/spark-system";
+import { resolveSparkPaths, type SparkPaths } from "@zendev-lab/spark-system";
 
 import { createSparkDaemonUplinkControl, startSparkDaemon } from "./daemon.ts";
 import type { DaemonChannelIngressRuntime } from "./channels/ingress.ts";
-import { writeSparkDaemonConfig } from "./config.ts";
+import { readSparkDaemonConfig, writeSparkDaemonConfig } from "./config.ts";
 import { relocateSparkDaemonCockpit } from "./relocation.ts";
+import { getSparkDaemonServerProfile, listSparkDaemonServerProfiles } from "./server-profiles.ts";
 import { SparkInvocationStore } from "./store/invocations.ts";
 import { openSparkDaemonDatabase } from "./store/schema.ts";
 import {
@@ -235,7 +236,7 @@ test("live daemon relocates between snapshot-restored HTTPS/WSS Cockpits without
       "target-unreachable",
       "local-transaction-fault",
     ] as const) {
-      const before = localStateDigest(paths.configFile, daemonDb);
+      const before = localStateDigest(paths, daemonDb);
       let reconfigureCount = 0;
       await expect(
         relocateSparkDaemonCockpit(
@@ -261,7 +262,7 @@ test("live daemon relocates between snapshot-restored HTTPS/WSS Cockpits without
           },
         ),
       ).rejects.toThrow();
-      const after = localStateDigest(paths.configFile, daemonDb);
+      const after = localStateDigest(paths, daemonDb);
       expect(after).toBe(before);
       expect(reconfigureCount).toBe(0);
       expect(source.wss.clients.size).toBe(1);
@@ -282,7 +283,7 @@ test("live daemon relocates between snapshot-restored HTTPS/WSS Cockpits without
          VALUES ('rnsv_collision', ?, ?, ?)`,
       )
       .run(target.origin, new Date().toISOString(), runtimeProtocolVersion);
-    const collisionDigest = localStateDigest(paths.configFile, daemonDb);
+    const collisionDigest = localStateDigest(paths, daemonDb);
     await expect(
       relocateSparkDaemonCockpit(
         paths,
@@ -291,7 +292,7 @@ test("live daemon relocates between snapshot-restored HTTPS/WSS Cockpits without
         { fetchFn: (() => Promise.reject(new Error("network must not run"))) as typeof fetch },
       ),
     ).rejects.toMatchObject({ code: "RELOCATION_TARGET_COLLISION" });
-    const collisionAfter = localStateDigest(paths.configFile, daemonDb);
+    const collisionAfter = localStateDigest(paths, daemonDb);
     expect(collisionAfter).toBe(collisionDigest);
     expect(source.wss.clients.size).toBe(1);
     expect(sourceServerConnected(daemonDb, source.origin)).toBe(true);
@@ -313,8 +314,17 @@ test("live daemon relocates between snapshot-restored HTTPS/WSS Cockpits without
       paths,
       daemonDb,
       { fromServerUrl: source.origin, toServerUrl: target.origin },
-      { onUplinkReconfigure: () => uplinkControl.requestReconfigure() },
+      { onUplinkReconfigure: (serverUrl) => uplinkControl.requestReconfigure(serverUrl) },
     );
+    expect(readSparkDaemonConfig(paths)).toEqual({
+      installationId,
+      displayName: "Live relocation daemon",
+    });
+    expect(getSparkDaemonServerProfile(paths, source.origin)).toBeUndefined();
+    expect(getSparkDaemonServerProfile(paths, target.origin)).toMatchObject({
+      runtimeId: registered.runtimeId,
+      webSocketUrl: `${target.origin.replace(/^https:/u, "wss:")}runtime`,
+    });
     await waitForFrame(target.frames, "runtime.heartbeat");
     await waitForFrame(target.frames, "runtime.reconcile.report");
     const daemonPidAfter = Number(readFileSync(paths.pidFile, "utf8").trim());
@@ -360,9 +370,9 @@ test("live daemon relocates between snapshot-restored HTTPS/WSS Cockpits without
     let previousSourceHeartbeats = frameCount(source.frames, "runtime.heartbeat");
     let previousTargetHeartbeats = frameCount(target.frames, "runtime.heartbeat");
     for (let window = 1; window <= 2; window += 1) {
+      uplinkControl.requestReconfigure();
       await waitUntil(
         () => frameCount(target!.frames, "runtime.heartbeat") > previousTargetHeartbeats,
-        20_000,
       );
       const sourceHeartbeats = frameCount(source.frames, "runtime.heartbeat");
       const targetHeartbeats = frameCount(target.frames, "runtime.heartbeat");
@@ -520,7 +530,6 @@ async function startCockpit(
         db,
         runtimeId,
         secureTransport: true,
-        heartbeatIntervalMs: 20,
         remoteAddress: request.socket.remoteAddress,
       });
     });
@@ -742,7 +751,7 @@ function relocationFailureFetch(
   }) as typeof fetch;
 }
 
-function localStateDigest(configFile: string, db: DatabaseSync): string {
+function localStateDigest(paths: SparkPaths, db: DatabaseSync): string {
   const tables = [
     "workspaces",
     "daemon_servers",
@@ -754,7 +763,8 @@ function localStateDigest(configFile: string, db: DatabaseSync): string {
     .update(
       JSON.stringify(
         {
-          config: readFileSync(configFile, "utf8"),
+          config: readFileSync(paths.configFile, "utf8"),
+          profiles: listSparkDaemonServerProfiles(paths),
           tables: tables.map((table) => ({
             table,
             rows: db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all(),

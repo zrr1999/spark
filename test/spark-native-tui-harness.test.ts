@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { SPARK_PROTOCOL_VERSION } from "../packages/spark-protocol/src/index.ts";
+import {
+  SPARK_PROTOCOL_VERSION,
+  sparkSlashActionBarForInput,
+  type SparkInteractionRequest,
+  type SparkThinkingLevel,
+} from "../packages/spark-protocol/src/index.ts";
 import {
   SparkHostRuntime,
   SparkKeybindings,
@@ -13,6 +18,7 @@ import {
   SparkSessionStore,
   type ProviderConfig,
   type ProviderModelDefinition,
+  type SparkCliHostServices,
 } from "../apps/spark-tui/src/host/index.ts";
 import {
   SPARK_NATIVE_KERNEL_SLASH_COMMANDS,
@@ -20,7 +26,10 @@ import {
   createSparkNativeRuntimeSlashCommands,
 } from "../apps/spark-tui/src/native-tui.ts";
 import { createSparkPiParitySlashCommands } from "../apps/spark-tui/src/cli/pi-parity-commands.ts";
+import type { SparkDaemonModelAuthClient } from "../apps/spark-tui/src/cli/model-control.ts";
 import { SparkSessionMailStore } from "../apps/spark-tui/src/host/session-mail-store.ts";
+import { createSparkTuiActionBarComponent } from "../apps/spark-tui/src/tui/action-bar.ts";
+import sparkExtension from "../packages/pi-extension/src/extension/index.ts";
 import { createSparkNativeTuiHarness } from "./support/spark-native-tui-harness.ts";
 
 const ESC = String.fromCharCode(27);
@@ -143,7 +152,7 @@ void test("native TUI kernel slash commands are minimal and resource slash is ex
   }
 
   const harness = createSparkNativeTuiHarness({ slashCommands: { ...runtime, ...local } });
-  assert.equal(await harness.submit("/help"), "command");
+  assert.equal(await harness.submit("/help commands"), "command");
   const rendered = stripAnsi(harness.render());
   assert.match(rendered, /System\s+\/help/);
   assert.match(rendered, /\/reload — reload extension-owned slash command state/);
@@ -383,6 +392,134 @@ void test("Spark native TUI renders theme color and live widget animation frames
   assert.match(stripAnsi(harness.render()), /frame:1/);
 });
 
+void test("native TUI renders daemon ask flow and every question has a custom reply fallback", async () => {
+  const harness = createSparkNativeTuiHarness({ withOverlay: true });
+  const responsePromise = harness.app.handleInteractionRequest({
+    version: SPARK_PROTOCOL_VERSION,
+    requestId: "ask-native-custom",
+    kind: "askFlow",
+    title: "Choose an implementation path",
+    prompt: "The turn remains paused until this is answered.",
+    mode: "decision",
+    questions: [
+      {
+        id: "path",
+        prompt: "Which path should Spark take?",
+        type: "single",
+        required: true,
+        defaultValues: [],
+        options: [
+          { value: "safe", label: "Safe path" },
+          { value: "fast", label: "Fast path" },
+        ],
+      },
+    ],
+    metadata: {},
+  });
+  await harness.flush();
+
+  const overlay = harness.state.overlays.at(-1);
+  assert.ok(overlay);
+  assert.equal(overlay.visible, true);
+  assert.match(stripAnsi(overlay.component.render(88).join("\n")), /Type your own|输入自定义/);
+
+  overlay.component.handleInput?.("\x1b[B");
+  overlay.component.handleInput?.("\x1b[B");
+  for (const character of "use a guarded migration") overlay.component.handleInput?.(character);
+  overlay.component.handleInput?.("\r");
+  overlay.component.handleInput?.("\r");
+
+  const response = await responsePromise;
+  assert.equal(response.kind, "askFlow");
+  assert.equal(response.status, "answered");
+  assert.deepEqual(response.answers.path, {
+    values: [],
+    customText: "use a guarded migration",
+  });
+  assert.equal(overlay.visible, false);
+  assert.equal(harness.state.focused, harness.app);
+  assert.equal(harness.app.cockpitSnapshot().interactions, 0);
+});
+
+void test("native TUI falls back to a custom reply when a choice question has no options", async () => {
+  const harness = createSparkNativeTuiHarness({ withOverlay: true });
+  const responsePromise = harness.app.handleInteractionRequest({
+    version: SPARK_PROTOCOL_VERSION,
+    requestId: "ask-native-custom-only",
+    kind: "askFlow",
+    title: "Describe the preview choice",
+    mode: "decision",
+    questions: [
+      {
+        id: "preview-only",
+        prompt: "What should replace the generated preview?",
+        type: "preview",
+        required: true,
+        defaultValues: [],
+        options: [],
+      },
+    ],
+    metadata: {},
+  });
+  await harness.flush();
+
+  const overlay = harness.state.overlays.at(-1);
+  assert.ok(overlay);
+  assert.match(stripAnsi(overlay.component.render(88).join("\n")), /Type your own|输入自定义/);
+
+  for (const character of "show the migration diff") overlay.component.handleInput?.(character);
+  overlay.component.handleInput?.("\r");
+  overlay.component.handleInput?.("\r");
+
+  const response = await responsePromise;
+  assert.equal(response.kind, "askFlow");
+  assert.equal(response.status, "answered");
+  assert.equal(response.nextAction, "resume");
+  assert.deepEqual(response.answers["preview-only"], {
+    values: [],
+    customText: "show the migration diff",
+  });
+});
+
+void test("native TUI reopens a daemon ask without duplicating its transcript entry", async () => {
+  const harness = createSparkNativeTuiHarness({ withOverlay: true });
+  const request: Extract<SparkInteractionRequest, { kind: "askFlow" }> = {
+    version: SPARK_PROTOCOL_VERSION,
+    requestId: "ask-native-reopen",
+    kind: "askFlow",
+    title: "Retry this answer",
+    mode: "decision",
+    questions: [
+      {
+        id: "retry-answer",
+        prompt: "What should Spark do?",
+        type: "freeform",
+        required: true,
+        defaultValues: [],
+        options: [],
+      },
+    ],
+    metadata: {},
+  };
+
+  for (const answer of ["first attempt", "second attempt"]) {
+    const responsePromise = harness.app.handleInteractionRequest(request);
+    await harness.flush();
+    const overlay = harness.state.overlays.at(-1);
+    assert.ok(overlay);
+    for (const character of answer) overlay.component.handleInput?.(character);
+    overlay.component.handleInput?.("\r");
+    overlay.component.handleInput?.("\r");
+    assert.equal((await responsePromise).status, "answered");
+  }
+
+  assert.equal(
+    harness.session.messages.filter((message) => message.customType === "interaction-request")
+      .length,
+    1,
+  );
+});
+
 void test("Spark native TUI editor path submits slash commands from real keystrokes", async () => {
   const invoked: Array<{ name: string; args: string }> = [];
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-native-slash-test", hasUI: true });
@@ -399,6 +536,7 @@ void test("Spark native TUI editor path submits slash commands from real keystro
   });
 
   const harness = createSparkNativeTuiHarness({
+    withOverlay: true,
     slashCommands: createSparkNativeRuntimeSlashCommands(host),
   });
   host.setUiTransport({
@@ -412,7 +550,7 @@ void test("Spark native TUI editor path submits slash commands from real keystro
   assert.match(stripAnsi(harness.render()), /goal\s+Set or inspect the current Spark goal/);
   harness.app.setEditorText("");
 
-  await submitEditorText(harness, "/help");
+  await submitEditorText(harness, "/help commands");
   assert.match(
     stripAnsi(harness.render()),
     /\/plan — Enter Spark plan mode for the current project/,
@@ -422,6 +560,81 @@ void test("Spark native TUI editor path submits slash commands from real keystro
   await submitEditorText(harness, "/plan close slash gap");
   assert.deepEqual(invoked, [{ name: "plan", args: "close slash gap" }]);
   assert.match(stripAnsi(harness.render()), /system> info:planned:close slash gap/);
+});
+
+void test("working native TUI executes local slash commands instead of queueing them", async () => {
+  let finishTurn: ((result: string) => void) | undefined;
+  const invoked: Array<{ name: string; args: string }> = [];
+  const command = (name: string) => ({
+    description: `${name} command`,
+    handler: (args: string) => {
+      invoked.push({ name, args });
+    },
+  });
+  const harness = createSparkNativeTuiHarness({
+    withOverlay: true,
+    slashCommands: {
+      model: command("model"),
+      plan: command("plan"),
+    },
+    responder: () =>
+      new Promise<string>((resolve) => {
+        finishTurn = resolve;
+      }),
+  });
+
+  assert.equal(await harness.submit("long-running turn"), "started");
+  await harness.flush();
+  assert.equal(harness.session.isProcessing, true);
+
+  await submitEditorText(harness, "/model");
+  assert.deepEqual(harness.app.actionBarSnapshot(), {
+    id: "model",
+    selectedActionId: "select-model",
+    focused: false,
+  });
+  assert.equal(harness.session.queuedCount, 0);
+  const modelOverlay = harness.state.overlays.at(-1);
+  assert.ok(modelOverlay);
+  modelOverlay.component.handleInput?.("\r");
+  await harness.flush();
+  assert.deepEqual(invoked.at(-1), { name: "model", args: "" });
+  assert.equal(harness.session.isProcessing, true);
+  assert.equal(harness.session.queuedCount, 0);
+
+  await submitEditorText(harness, "/plan keep control local");
+  assert.deepEqual(invoked.at(-1), { name: "plan", args: "keep control local" });
+  assert.equal(harness.session.isProcessing, true);
+  assert.equal(harness.session.queuedCount, 0);
+
+  finishTurn?.("turn complete");
+  await harness.flush();
+  assert.equal(harness.session.isProcessing, false);
+});
+
+void test("native TUI Shift+Tab cycles thinking effort with visible feedback", async () => {
+  const keybindings = new SparkKeybindings();
+  const levels: SparkThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+  let current: SparkThinkingLevel = "high";
+  let harness: ReturnType<typeof createSparkNativeTuiHarness>;
+  keybindings.register({
+    id: "app.thinking.cycle",
+    defaultKey: "shift+tab",
+    description: "Cycle thinking effort",
+    handler: () => {
+      current = levels[(levels.indexOf(current) + 1) % levels.length]!;
+      harness.session.addSystemMessage(`Thinking effort: ${current}`);
+    },
+  });
+  harness = createSparkNativeTuiHarness({ keybindings });
+
+  await harness.press("\x1b[Z");
+  assert.equal(current, "xhigh");
+  assert.match(stripAnsi(harness.render()), /Thinking effort: xhigh/);
+
+  await harness.press("\x1b[Z");
+  assert.equal(current, "off");
+  assert.match(stripAnsi(harness.render()), /Thinking effort: off/);
 });
 
 void test("Spark native TUI routes /model through native slash command and model selector overlay", async () => {
@@ -469,6 +682,7 @@ void test("Spark native TUI routes /model through native slash command and model
     },
   });
   const harness = createSparkNativeTuiHarness({
+    withOverlay: true,
     slashCommands: createSparkNativeRuntimeSlashCommands(host),
   });
   host.setUiTransport({
@@ -484,6 +698,8 @@ void test("Spark native TUI routes /model through native slash command and model
   harness.app.setEditorText("");
 
   await submitEditorText(harness, "/model");
+  (harness.state.focused as { handleInput?: (input: string) => void }).handleInput?.("\r");
+  await harness.flush();
   assert.deepEqual(registry.getActive(), { providerName: "fake", modelId: "model-b" });
   assert.match(stripAnsi(harness.render()), /system> info:Model: fake\/model-b/);
 
@@ -531,7 +747,7 @@ void test("Spark native Pi parity slash commands are discoverable and route repr
   assert.match(stripAnsi(harness.render()), /settings\s+\[set thinking/);
   harness.app.setEditorText("");
 
-  await submitEditorText(harness, "/help");
+  await submitEditorText(harness, "/help commands");
   for (const command of [
     "settings",
     "scoped-models",
@@ -562,14 +778,14 @@ void test("Spark native Pi parity slash commands are discoverable and route repr
   );
   assert.match(stripAnsi(harness.render()), /\/resume \[session-id\|path\] —/u);
 
-  await submitEditorText(harness, "/settings");
+  await submitEditorText(harness, "/settings inspect");
   assert.match(stripAnsi(harness.render()), /Spark settings:/);
   assert.match(stripAnsi(harness.render()), /active model: fake\/model-a/);
 
   await submitEditorText(harness, "/settings set thinking high");
   assert.match(stripAnsi(harness.render()), /thinking level set.*high/i);
 
-  await submitEditorText(harness, "/scoped-models");
+  await submitEditorText(harness, "/scoped-models inspect");
   assert.match(stripAnsi(harness.render()), /fake/);
   assert.match(stripAnsi(harness.render()), /model-a/);
 
@@ -579,10 +795,10 @@ void test("Spark native Pi parity slash commands are discoverable and route repr
   await submitEditorText(harness, "/copy");
   assert.match(stripAnsi(harness.render()), /assistant reply to copy/);
 
-  await submitEditorText(harness, "/hotkeys");
+  await submitEditorText(harness, "/hotkeys inspect");
   assert.match(stripAnsi(harness.render()), /app.exit/);
 
-  await submitEditorText(harness, "/new");
+  await submitEditorText(harness, "/new transcript");
   assert.match(stripAnsi(harness.render()), /Started a new Spark native transcript/);
   assert.doesNotMatch(stripAnsi(harness.render()), /Unknown command: \/settings/);
 });
@@ -628,6 +844,391 @@ void test("Spark native runtime slash bridge preserves editor helpers and determ
   assert.match(stripAnsi(harness.render()), /Command \/explode failed: boom/);
 });
 
+void test("native /plan reaches the daemon-managed responder instead of the local runtime loop", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "spark-native-plan-daemon-bridge-"));
+  try {
+    await mkdir(join(cwd, ".git"));
+    await writeFile(join(cwd, "README.md"), "# Existing project\n", "utf8");
+    const host = new SparkHostRuntime({ cwd, hasUI: true });
+    sparkExtension(host as never);
+    const forwarded: string[] = [];
+    const responderInputs: string[] = [];
+    const slashCommands = createSparkNativeRuntimeSlashCommands(host, {
+      sendUserMessage: async (content, context) => {
+        forwarded.push(content);
+        await context.session.submit(content);
+      },
+    });
+    const harness = createSparkNativeTuiHarness({
+      slashCommands,
+      responder: (input) => {
+        responderInputs.push(input);
+        return "daemon-visible-plan-response";
+      },
+    });
+    host.setUiTransport({
+      notify: (message, level) => harness.session.addSystemMessage(`${level}:${message}`),
+    });
+
+    await submitEditorText(harness, "/plan Trace the daemon turn bridge");
+    await waitForNativeCondition(
+      () => forwarded.length === 1,
+      "the native /plan command to reach the daemon-managed responder",
+    );
+    await harness.flush();
+
+    assert.equal(forwarded.length, 1);
+    assert.deepEqual(responderInputs, forwarded);
+    assert.match(forwarded[0] ?? "", /## Planning focus\nTrace the daemon turn bridge/u);
+    assert.equal(host.peekOutbox().length, 0);
+    assert.match(stripAnsi(harness.render()), /daemon-visible-plan-response/u);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+void test("native /goal reaches the daemon-managed responder instead of the local runtime outbox", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "spark-native-goal-daemon-bridge-"));
+  try {
+    await mkdir(join(cwd, ".git"));
+    await writeFile(join(cwd, "README.md"), "# Existing project\n", "utf8");
+    const host = new SparkHostRuntime({ cwd, hasUI: true });
+    host.setSessionId("sess_goal_bridge");
+    sparkExtension(host as never);
+    const forwarded: string[] = [];
+    const responderInputs: string[] = [];
+    const slashCommands = createSparkNativeRuntimeSlashCommands(host, {
+      sendUserMessage: async (content, context) => {
+        forwarded.push(content);
+        await context.session.submit(content);
+      },
+    });
+    const harness = createSparkNativeTuiHarness({
+      slashCommands,
+      responder: (input) => {
+        responderInputs.push(input);
+        return "daemon-visible-goal-response";
+      },
+    });
+    host.setUiTransport({
+      notify: (message, level) => harness.session.addSystemMessage(`${level}:${message}`),
+    });
+
+    await submitEditorText(harness, "/goal Ship the daemon goal bridge");
+    await waitForNativeCondition(
+      () => forwarded.length === 1,
+      "the native /goal command to reach the daemon-managed responder",
+    );
+    await harness.flush();
+
+    assert.equal(forwarded.length, 1);
+    assert.deepEqual(responderInputs, forwarded);
+    assert.match(forwarded[0] ?? "", /Ship the daemon goal bridge/u);
+    assert.equal(host.peekOutbox().length, 0);
+    assert.match(stripAnsi(harness.render()), /daemon-visible-goal-response/u);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+void test("TUI action bar renders disabled and danger states and confirms danger actions", () => {
+  const view = sparkSlashActionBarForInput("/queue");
+  assert.ok(view);
+  const actions: string[] = [];
+  let cancelled = 0;
+  const component = createSparkTuiActionBarComponent({
+    view,
+    theme: {
+      fg: (color, text) => `<${color}>${text}</${color}>`,
+    },
+    resolveAvailability: (action) =>
+      action.intent === "turn.retry"
+        ? { disabled: true, reason: "no previous prompt to retry" }
+        : { disabled: false },
+    onAction: (action) => {
+      actions.push(action.id);
+    },
+    onCancel: () => {
+      cancelled += 1;
+    },
+  });
+
+  component.handleInput("\x1b[C");
+  assert.equal(component.selectedAction?.id, "retry-turn");
+  assert.equal(component.selectedAvailability.disabled, true);
+  component.handleInput("\r");
+  assert.deepEqual(actions, []);
+  assert.match(component.render(200).join("\n"), /Retry unavailable/);
+  assert.match(component.render(200).join("\n"), /Unavailable: no previous prompt to retry/);
+
+  component.handleInput("\x1b[C");
+  assert.equal(component.selectedAction?.id, "stop-turn");
+  assert.match(component.render(200).join("\n"), /<error>\[Stop and restore\]<\/error>/);
+  component.handleInput("\r");
+  assert.equal(component.pendingDangerActionId, "stop-turn");
+  assert.deepEqual(actions, []);
+  assert.match(component.render(200).join("\n"), /Confirm Stop and restore/);
+
+  component.handleInput("\x1b[D");
+  assert.equal(component.pendingDangerActionId, undefined);
+  component.handleInput("\x1b[C");
+  component.handleInput("\r");
+  component.handleInput(ESC);
+  assert.equal(cancelled, 1);
+  assert.equal(component.pendingDangerActionId, undefined);
+  assert.deepEqual(actions, []);
+
+  component.handleInput("\r");
+  component.handleInput("\r");
+  assert.deepEqual(actions, ["stop-turn"]);
+});
+
+void test("bare catalog slash opens a focused bottom action bar without writing transcript", async () => {
+  const harness = createSparkNativeTuiHarness({
+    withOverlay: true,
+    slashCommands: {
+      settings: { description: "Settings", handler: () => "legacy settings output" },
+    },
+  });
+  const messageCount = harness.session.messages.length;
+
+  assert.equal(await harness.submit("/settings"), "command");
+  assert.equal(harness.session.messages.length, messageCount);
+  assert.deepEqual(harness.app.actionBarSnapshot(), {
+    id: "settings",
+    selectedActionId: "inspect-settings",
+    focused: false,
+  });
+
+  const overlay = harness.state.overlays.at(-1);
+  assert.ok(overlay);
+  assert.equal(overlay.visible, true);
+  assert.equal(overlay.options?.anchor, "bottom-center");
+  assert.equal(harness.state.focused, overlay.component);
+  assert.match(stripAnsi(overlay.component.render(72).join("\n")), /\[Overview\]/);
+
+  overlay.component.handleInput?.("\x1b[C");
+  assert.equal(harness.app.actionBarSnapshot()?.selectedActionId, "inspect-providers");
+  overlay.component.handleInput?.(ESC);
+  assert.equal(overlay.visible, false);
+  assert.equal(harness.app.actionBarSnapshot(), undefined);
+  assert.equal(harness.state.focused, harness.app);
+  assert.equal(harness.session.messages.length, messageCount);
+});
+
+void test("TUI host disables unavailable action-bar operations and enables them from live state", async () => {
+  const harness = createSparkNativeTuiHarness({
+    withOverlay: true,
+    responder: (input) => `ack:${input}`,
+  });
+  let messageCount = harness.session.messages.length;
+
+  await harness.submit("/queue");
+  let overlay = harness.state.overlays.at(-1);
+  assert.ok(overlay);
+  let rendered = stripAnsi(overlay.component.render(100).join("\n"));
+  assert.match(rendered, /Retry unavailable/);
+  assert.match(rendered, /Stop and restore unavailable/);
+  overlay.component.handleInput?.("\x1b[C");
+  overlay.component.handleInput?.("\r");
+  await harness.flush();
+  assert.equal(overlay.visible, true);
+  assert.equal(harness.session.messages.length, messageCount);
+  overlay.component.handleInput?.(ESC);
+
+  await harness.submit("retryable prompt");
+  await harness.flush();
+  await harness.submit("/queue");
+  overlay = harness.state.overlays.at(-1);
+  assert.ok(overlay);
+  overlay.component.handleInput?.("\x1b[C");
+  rendered = stripAnsi(overlay.component.render(100).join("\n"));
+  assert.match(rendered, /\[Retry\]/);
+  assert.doesNotMatch(rendered, /Retry unavailable/);
+  overlay.component.handleInput?.("\r");
+  await harness.flush();
+  assert.match(stripAnsi(harness.render()), /Retrying: retryable prompt/);
+
+  messageCount = harness.session.messages.length;
+  await harness.submit("/workflow-runs");
+  overlay = harness.state.overlays.at(-1);
+  assert.ok(overlay);
+  overlay.component.handleInput?.("\x1b[C");
+  rendered = stripAnsi(overlay.component.render(100).join("\n"));
+  assert.match(rendered, /Inspect selected unavailable/);
+  assert.match(rendered, /\/workflow-inspect is not registered/);
+  overlay.component.handleInput?.("\r");
+  await harness.flush();
+  assert.equal(overlay.visible, true);
+  assert.equal(harness.session.messages.length, messageCount);
+  overlay.component.handleInput?.(ESC);
+
+  await harness.submit("/settings");
+  overlay = harness.state.overlays.at(-1);
+  assert.ok(overlay);
+  rendered = stripAnsi(overlay.component.render(100).join("\n"));
+  assert.match(rendered, /Overview unavailable/);
+  assert.match(rendered, /\/settings is not registered/);
+  overlay.component.handleInput?.("\r");
+  await harness.flush();
+  assert.equal(overlay.visible, true);
+  assert.equal(harness.session.messages.length, messageCount);
+  overlay.component.handleInput?.(ESC);
+
+  let finishTurn: ((result: string) => void) | undefined;
+  const busyHarness = createSparkNativeTuiHarness({
+    withOverlay: true,
+    responder: () =>
+      new Promise<string>((resolve) => {
+        finishTurn = resolve;
+      }),
+  });
+  await busyHarness.submit("long turn");
+  await busyHarness.submit("/queue");
+  const busyOverlay = busyHarness.state.overlays.at(-1);
+  assert.ok(busyOverlay);
+  busyOverlay.component.handleInput?.("\x1b[C");
+  busyOverlay.component.handleInput?.("\x1b[C");
+  rendered = stripAnsi(busyOverlay.component.render(100).join("\n"));
+  assert.doesNotMatch(rendered, /Stop and restore unavailable/);
+  busyOverlay.component.handleInput?.("\r");
+  assert.equal(busyHarness.session.isProcessing, true);
+  assert.equal(busyOverlay.visible, true);
+  assert.match(stripAnsi(busyOverlay.component.render(100).join("\n")), /Confirm Stop and restore/);
+  busyOverlay.component.handleInput?.("\r");
+  await busyHarness.flush();
+  assert.equal(busyHarness.session.isProcessing, false);
+  assert.equal(busyOverlay.visible, false);
+  finishTurn?.("late response");
+  await busyHarness.flush();
+  assert.doesNotMatch(stripAnsi(busyHarness.render()), /late response/);
+});
+
+void test("action bar executes semantic actions and only explicit inspection emits legacy text", async () => {
+  const calls: Array<{ name: string; args: string }> = [];
+  const command = (name: string) => ({
+    description: name,
+    handler: (args: string) => {
+      calls.push({ name, args });
+      return `legacy:${name}:${args || "empty"}`;
+    },
+  });
+  const harness = createSparkNativeTuiHarness({
+    withOverlay: true,
+    slashCommands: {
+      settings: command("settings"),
+      model: command("model"),
+      goal: command("goal"),
+      hotkeys: command("hotkeys"),
+      session: command("session"),
+      sessions: command("sessions"),
+      new: command("new"),
+    },
+  });
+  const pressFocused = async (data: string) => {
+    const focused = harness.state.focused as { handleInput?: (input: string) => void };
+    assert.equal(typeof focused.handleInput, "function");
+    focused.handleInput?.(data);
+    await harness.flush();
+  };
+
+  let messageCount = harness.session.messages.length;
+  await harness.submit("/thinking");
+  await pressFocused("\x1b[C");
+  await pressFocused("\r");
+  assert.deepEqual(calls.at(-1), { name: "settings", args: "set thinking minimal" });
+  assert.equal(harness.session.messages.length, messageCount);
+
+  await harness.submit("/scoped-models");
+  await pressFocused("\r");
+  assert.deepEqual(calls.at(-1), { name: "model", args: "" });
+  assert.equal(harness.session.messages.length, messageCount);
+
+  await harness.submit("/settings");
+  await pressFocused("\r");
+  assert.deepEqual(calls.at(-1), { name: "settings", args: "inspect" });
+  assert.equal(harness.session.messages.length, messageCount + 1);
+  assert.match(harness.session.messages.at(-1)?.text ?? "", /legacy:settings:inspect/);
+
+  messageCount = harness.session.messages.length;
+  await harness.submit("/goal");
+  await pressFocused("\x1b[C");
+  await pressFocused("\r");
+  assert.deepEqual(calls.at(-1), { name: "goal", args: "start" });
+  assert.equal(harness.session.messages.length, messageCount);
+
+  await harness.submit("/goal");
+  await pressFocused("\r");
+  assert.deepEqual(calls.at(-1), { name: "goal", args: "status" });
+  assert.equal(harness.session.messages.length, messageCount + 1);
+  assert.match(harness.session.messages.at(-1)?.text ?? "", /legacy:goal:status/);
+
+  const transcriptBeforeNewSession = harness.session.messages.map(({ role, text }) => ({
+    role,
+    text,
+  }));
+  await harness.submit("/session");
+  await pressFocused("\x1b[C");
+  await pressFocused("\r");
+  assert.deepEqual(calls.at(-1), { name: "sessions", args: "" });
+  assert.equal(
+    calls.some(({ name }) => name === "new"),
+    false,
+  );
+  assert.deepEqual(
+    harness.session.messages.map(({ role, text }) => ({ role, text })),
+    transcriptBeforeNewSession,
+  );
+
+  messageCount = harness.session.messages.length;
+  await harness.submit("/workflow-runs");
+  await pressFocused("\r");
+  assert.equal(harness.app.cockpitSnapshot().activePanel, "runs");
+  assert.equal(harness.session.messages.length, messageCount);
+
+  await harness.submit("/cockpit runs");
+  assert.equal(harness.app.cockpitSnapshot().activePanel, "runs");
+  assert.equal(harness.session.messages.length, messageCount);
+});
+
+void test("thinking action updates a daemon-managed session without changing the global default", async () => {
+  const config: SparkCliHostServices["config"] = {
+    extensions: [],
+    providers: [],
+    activeThinkingLevel: "low",
+  };
+  let savedDefaults = 0;
+  const sessionLevels: SparkThinkingLevel[] = [];
+  const services = {
+    config,
+    saveConfig: async () => {
+      savedDefaults += 1;
+    },
+  } as unknown as SparkCliHostServices;
+  const modelControl = {
+    sessionId: "session:thinking-action",
+    setSessionThinkingLevel: async (thinkingLevel: SparkThinkingLevel) => {
+      sessionLevels.push(thinkingLevel);
+      return { thinkingLevel } as never;
+    },
+  } as unknown as SparkDaemonModelAuthClient;
+  const harness = createSparkNativeTuiHarness({
+    withOverlay: true,
+    slashCommands: createSparkPiParitySlashCommands(services, modelControl),
+  });
+
+  await harness.submit("/thinking");
+  const overlay = harness.state.overlays.at(-1);
+  assert.ok(overlay);
+  overlay.component.handleInput?.("\x1b[C");
+  overlay.component.handleInput?.("\r");
+  await harness.flush();
+
+  assert.deepEqual(sessionLevels, ["minimal"]);
+  assert.equal(config.activeThinkingLevel, "low");
+  assert.equal(savedDefaults, 0);
+});
+
 void test("Spark native TUI surfaces command availability, queued work, stop, and turn errors", async () => {
   let releaseFirst: ((value: string) => void) | undefined;
   const harness = createSparkNativeTuiHarness({
@@ -648,7 +1249,7 @@ void test("Spark native TUI surfaces command availability, queued work, stop, an
   });
 
   assert.match(stripAnsi(harness.render()), /session local • state idle • 2 registered commands/);
-  assert.equal(await harness.submit("/help"), "command");
+  assert.equal(await harness.submit("/help commands"), "command");
   assert.match(
     stripAnsi(harness.render()),
     /\d+ extension commands? available|\d+ additional registered host\/daemon commands? available/,
@@ -662,10 +1263,9 @@ void test("Spark native TUI surfaces command availability, queued work, stop, an
     stripAnsi(harness.render()),
     /session local • state running • queue steer=1 follow-up=0/,
   );
-  assert.match(
-    stripAnsi(harness.render()),
-    /Queued steering message #1\. Use \/stop to clear queued work/,
-  );
+  assert.match(stripAnsi(harness.render()), /◆ Input queue · 1/);
+  assert.match(stripAnsi(harness.render()), /└─ 1\. steer · second/);
+  assert.doesNotMatch(stripAnsi(harness.render()), /Queued steering message/);
 
   assert.equal(await harness.submit("/stop dogfood"), "command");
   assert.match(
@@ -822,7 +1422,10 @@ void test("Spark native editor supports multiline and Pi-style busy queue restor
   harness.app.setEditorText("follow-up text");
   await harness.press("\u001b\r");
   await harness.flush();
-  assert.match(stripAnsi(harness.render()), /Queued follow-up #1/);
+  assert.match(
+    stripAnsi(harness.render()),
+    /◆ Input queue · 1[\s\S]*└─ 1\. follow-up · follow-up text/,
+  );
 
   await harness.press("\u001bp");
   await harness.flush();
@@ -832,7 +1435,10 @@ void test("Spark native editor supports multiline and Pi-style busy queue restor
   harness.app.setEditorText("steer then escape");
   await harness.press("\r");
   await harness.flush();
-  assert.match(stripAnsi(harness.render()), /Queued steering message #1/);
+  assert.match(
+    stripAnsi(harness.render()),
+    /◆ Input queue · 1[\s\S]*└─ 1\. steer · steer then escape/,
+  );
   await harness.press("\u001b");
   await harness.flush();
   assert.match(
@@ -846,6 +1452,7 @@ void test("Spark native editor supports multiline and Pi-style busy queue restor
 
 void test("Spark native busy queue delivers steering separately from follow-up turns", async () => {
   let releaseFirst: ((value: string) => void) | undefined;
+  let releaseSteer: ((value: string) => void) | undefined;
   const submitted: string[] = [];
   const harness = createSparkNativeTuiHarness({
     responder: (input) => {
@@ -853,6 +1460,11 @@ void test("Spark native busy queue delivers steering separately from follow-up t
       if (input === "first") {
         return new Promise<string>((resolve) => {
           releaseFirst = resolve;
+        });
+      }
+      if (input.startsWith("Steering update for the previous Spark turn.")) {
+        return new Promise<string>((resolve) => {
+          releaseSteer = resolve;
         });
       }
       return `ack:${input}`;
@@ -866,16 +1478,31 @@ void test("Spark native busy queue delivers steering separately from follow-up t
   harness.app.setEditorText("follow next");
   await harness.press("\u001b\r");
   await harness.flush();
+  assert.match(
+    stripAnsi(harness.render()),
+    /◆ Input queue · 2[\s\S]*1\. steer · steer one[\s\S]*2\. follow-up · follow next/,
+  );
 
   releaseFirst?.("done");
-  await waitForNativeTimers();
-  await waitForNativeTimers();
+  await waitForNativeCondition(() => submitted.length >= 2, "the steering queue item to start");
   await harness.flush();
 
   assert.equal(submitted[0], "first");
   assert.match(submitted[1] ?? "", /^Steering update for the previous Spark turn\./);
   assert.match(submitted[1] ?? "", /Steering 1:\nsteer one/);
+  assert.match(
+    stripAnsi(harness.render()),
+    /◆ Input queue · 1[\s\S]*└─ 1\. follow-up · follow next/,
+  );
+  assert.doesNotMatch(stripAnsi(harness.render()), /steer · steer one/);
+
+  releaseSteer?.("steered");
+  await waitForNativeCondition(() => submitted.length >= 3, "the follow-up queue item to start");
+  await waitForNativeCondition(() => !harness.session.isProcessing, "the follow-up turn to finish");
+  await harness.flush();
+
   assert.equal(submitted[2], "follow next");
+  assert.doesNotMatch(stripAnsi(harness.render()), /◆ Input queue/);
 });
 
 void test("Spark native TUI harness captures resize-safe golden render sections", () => {
@@ -1099,7 +1726,7 @@ void test("Spark cockpit renders shared workflow, run, task, artifact, review, a
   );
   assert.match(stripAnsi(harness.render()), /Role-run board: 1 role run\(s\), 0 interaction\(s\)/);
 
-  assert.equal(await harness.submit("/runs"), "command");
+  assert.equal(await harness.submit("/cockpit runs"), "command");
   assert.equal(harness.app.cockpitSnapshot().activePanel, "runs");
   assert.match(
     stripAnsi(harness.render()),
@@ -1203,7 +1830,7 @@ void test("Spark cockpit supports selectable workflow run keyboard controls", as
     },
   });
 
-  assert.equal(await harness.submit("/runs"), "command");
+  assert.equal(await harness.submit("/cockpit runs"), "command");
   assert.match(stripAnsi(harness.render()), /▸─ workflow run:first \[running\] 25% First workflow/);
   assert.match(stripAnsi(harness.render()), /Keys: ↑\/↓ or j\/k select workflow run/);
 
@@ -1285,7 +1912,7 @@ void test("Spark cockpit records workflow picker requests and exposes slash comm
     interactions: 1,
   });
 
-  assert.equal(await harness.submit("/workflows"), "command");
+  assert.equal(await harness.submit("/cockpit workflows"), "command");
   assert.equal(harness.app.cockpitSnapshot().activePanel, "workflows");
   const workflows = harness.render();
   assert.match(workflows, /picker pick-workflow: Choose a Spark workflow \(2 option\(s\)\)/);
@@ -1301,7 +1928,7 @@ void test("Spark cockpit records workflow picker requests and exposes slash comm
   assert.equal(await harness.submit("/cockpit off"), "command");
   assert.equal(harness.app.cockpitSnapshot().activePanel, undefined);
 
-  assert.equal(await harness.submit("/help"), "command");
+  assert.equal(await harness.submit("/help commands"), "command");
   assert.match(
     stripAnsi(harness.render()),
     /\/cockpit \[overview\|workflows\|runs\|tasks\|artifacts\|reviews\|graft\|off\]/,

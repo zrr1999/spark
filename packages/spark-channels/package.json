@@ -22,11 +22,12 @@
   "dependencies": {
     "@core-workspace/infoflow-sdk-nodejs": "2026.6.12-beta.1",
     "@zendev-lab/spark-protocol": "workspace:^",
-    "ws": "^8.18.0"
+    "@zendev-lab/spark-retry": "workspace:^",
+    "ws": "catalog:"
   },
   "devDependencies": {
-    "@types/ws": "^8.5.0",
-    "typescript": "^6.0.3",
+    "@types/ws": "catalog:",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import AskQuestionField from "$lib/AskQuestionField.svelte";
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
   import { Button, Field, Panel, Textarea } from "$lib/ui";
@@ -75,46 +76,13 @@
               />
             </Field>
           {:else}
-            {#each data.item.questions as question}
-              <fieldset class="question-block">
-                <legend>{question.prompt}{question.required ? t.response.requiredMark : ""}</legend>
-
-                {#if question.type === "single" && question.options?.length}
-                  <div class="option-list">
-                    {#each question.options as option}
-                      <label class="option-row">
-                        <input name={`answer:${question.id}`} type="radio" value={option.id} required={question.required} />
-                        <span>
-                          <strong>{option.label}</strong>
-                          {#if option.description}<small>{option.description}</small>{/if}
-                        </span>
-                      </label>
-                    {/each}
-                  </div>
-                {:else if question.type === "multi" && question.options?.length}
-                  <div class="option-list">
-                    {#each question.options as option}
-                      <label class="option-row">
-                        <input name={`answer:${question.id}`} type="checkbox" value={option.id} />
-                        <span>
-                          <strong>{option.label}</strong>
-                          {#if option.description}<small>{option.description}</small>{/if}
-                        </span>
-                      </label>
-                    {/each}
-                  </div>
-                {:else if question.type === "preview"}
-                  <p class="preview-copy">{t.response.previewOnly}</p>
-                {:else}
-                  <Textarea
-                    id={`answer-${question.id}`}
-                    name={`answer:${question.id}`}
-                    rows={5}
-                    required={question.required}
-                    aria-label={question.prompt}
-                  />
-                {/if}
-              </fieldset>
+            {#each data.item.questions as question, questionIndex (question.id)}
+              <AskQuestionField
+                {question}
+                {questionIndex}
+                messages={t.response}
+                idPrefix="inbox-ask-question"
+              />
             {/each}
           {/if}
 
@@ -148,7 +116,9 @@
             <p>{t.response.statusPrefix} {statusLabel(latestResponse.status)}{latestResponse.ackedAt ? ` · ${t.response.runnerAcked}` : ` · ${t.response.waitingAck}`}</p>
           </div>
         </div>
-        <pre>{formatJson(latestResponse.answer)}</pre>
+        <div class="response-output">
+          <pre>{formatJson(latestResponse.answer)}</pre>
+        </div>
       {:else}
         <div class="answered-state">
           <div class="empty-icon"><Icon name="archive" size={26} /></div>
@@ -257,9 +227,7 @@
   }
 
   .lede,
-  .answered-state p,
-  .preview-copy,
-  .option-row small {
+  .answered-state p {
     color: var(--color-ink-subtle);
     line-height: var(--leading-body);
   }
@@ -319,42 +287,6 @@
     margin: 0 0 var(--spacing-sm);
   }
 
-  .question-block {
-    border: 0;
-    display: grid;
-    gap: 10px;
-    margin: 0;
-    min-width: 0;
-    padding: 0;
-  }
-
-  legend {
-    color: var(--color-ink);
-    font-size: var(--text-body);
-    font-weight: 700;
-    padding: 0;
-  }
-
-  .option-list {
-    display: grid;
-    gap: var(--spacing-xs);
-  }
-
-  .option-row {
-    align-items: flex-start;
-    background: var(--color-canvas);
-    border: 1px solid var(--color-border);
-    border-radius: var(--rounded-md);
-    display: flex;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-sm);
-  }
-
-  .option-row span {
-    display: grid;
-    gap: var(--spacing-xxs);
-  }
-
   .form-actions {
     display: flex;
     flex-wrap: wrap;
@@ -374,6 +306,15 @@
     display: flex;
     gap: var(--spacing-md);
     padding: var(--spacing-xl);
+  }
+
+  .response-output {
+    min-width: 0;
+    padding: 0 var(--spacing-xl) var(--spacing-xl);
+  }
+
+  .response-output pre {
+    margin: 0;
   }
 
   .empty-icon {
@@ -436,6 +377,14 @@
       align-items: flex-start;
       flex-direction: column;
       gap: var(--spacing-sm);
+    }
+
+    .answered-state {
+      padding: var(--spacing-lg);
+    }
+
+    .response-output {
+      padding: 0 var(--spacing-lg) var(--spacing-lg);
     }
 
   }

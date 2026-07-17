@@ -1483,7 +1483,7 @@ describe("runtime WebSocket handling", () => {
             type: "single",
             prompt: "Scope?",
             required: true,
-            options: [{ id: "mvp", label: "MVP" }],
+            options: [{ value: "mvp", label: "MVP" }],
           },
         ],
         contextArtifactRefs: [],

@@ -1,12 +1,14 @@
 <script lang="ts">
   import { enhance } from "$app/forms";
   import { invalidateAll } from "$app/navigation";
+  import AskQuestionField from "$lib/AskQuestionField.svelte";
   import Icon from "$lib/Icon.svelte";
   import type { AppMessages } from "$lib/i18n";
   import type { PendingWorkbenchAsk } from "$lib/pending-ask";
   import { Button, Dialog as DialogShell, Textarea } from "$lib/ui";
   import type { SubmitFunction } from "@sveltejs/kit";
   import { Dialog } from "bits-ui";
+  import { tick } from "svelte";
 
   let {
     ask,
@@ -19,6 +21,58 @@
   let open = $state(true);
   let submitting = $state(false);
   let errorMessage = $state<string | null>(null);
+  let pendingCount = $derived(Math.max(1, ask.pendingCount ?? 1));
+  let formElement = $state<HTMLFormElement>();
+  let formDraft: Array<[string, string]> = [];
+
+  function captureFormDraft() {
+    if (!formElement) return;
+    formDraft = [...new FormData(formElement).entries()].flatMap(([name, value]) =>
+      typeof value === "string" ? [[name, value] as [string, string]] : [],
+    );
+  }
+
+  function restoreFormDraft() {
+    if (!formElement || formDraft.length === 0) return;
+    const valuesByName = new Map<string, string[]>();
+    for (const [name, value] of formDraft) {
+      const values = valuesByName.get(name) ?? [];
+      values.push(value);
+      valuesByName.set(name, values);
+    }
+
+    for (const control of formElement.elements) {
+      if (
+        !(control instanceof HTMLInputElement) &&
+        !(control instanceof HTMLTextAreaElement) &&
+        !(control instanceof HTMLSelectElement)
+      ) {
+        continue;
+      }
+      if (!control.name) continue;
+      const values = valuesByName.get(control.name) ?? [];
+      if (control instanceof HTMLInputElement && (control.type === "radio" || control.type === "checkbox")) {
+        control.checked = values.includes(control.value);
+        continue;
+      }
+      if (control instanceof HTMLSelectElement && control.multiple) {
+        for (const option of control.options) option.selected = values.includes(option.value);
+        continue;
+      }
+      control.value = values[0] ?? "";
+    }
+  }
+
+  function minimizeRequest() {
+    captureFormDraft();
+    open = false;
+  }
+
+  async function resumeRequest() {
+    open = true;
+    await tick();
+    restoreFormDraft();
+  }
 
   const enhanceAnswer: SubmitFunction = ({ cancel }) => {
     if (submitting) {
@@ -65,14 +119,22 @@
     <Dialog.Close
       class="global-ask-close"
       type="button"
-      aria-label={messages.response.closeDialog}
+      aria-label={messages.response.minimizeDialog}
       disabled={submitting}
+      onclick={minimizeRequest}
     >
       <Icon name="close" size={18} />
     </Dialog.Close>
   </header>
 
-  <form method="POST" action={`${ask.detailHref}?/respond`} use:enhance={enhanceAnswer}>
+  <form
+    bind:this={formElement}
+    method="POST"
+    action={`${ask.detailHref}?/respond`}
+    use:enhance={enhanceAnswer}
+    oninput={captureFormDraft}
+    onchange={captureFormDraft}
+  >
     <div class="questions">
       {#if ask.questions.length === 0}
         <label class="freeform-question" for="global-ask-message">
@@ -88,59 +150,13 @@
         </label>
       {:else}
         {#each ask.questions as question, questionIndex (question.id)}
-          <fieldset class="question-block">
-            <legend>
-              {question.prompt}{question.required ? messages.response.requiredMark : ""}
-            </legend>
-
-            {#if question.type === "single" && question.options?.length}
-              <div class="option-list">
-                {#each question.options as option (option.id)}
-                  <label class="option-row">
-                    <input
-                      name={`answer:${question.id}`}
-                      type="radio"
-                      value={option.id}
-                      required={question.required}
-                      disabled={submitting}
-                    />
-                    <span>
-                      <strong>{option.label}</strong>
-                      {#if option.description}<small>{option.description}</small>{/if}
-                    </span>
-                  </label>
-                {/each}
-              </div>
-            {:else if question.type === "multi" && question.options?.length}
-              <div class="option-list">
-                {#each question.options as option (option.id)}
-                  <label class="option-row">
-                    <input
-                      name={`answer:${question.id}`}
-                      type="checkbox"
-                      value={option.id}
-                      disabled={submitting}
-                    />
-                    <span>
-                      <strong>{option.label}</strong>
-                      {#if option.description}<small>{option.description}</small>{/if}
-                    </span>
-                  </label>
-                {/each}
-              </div>
-            {:else if question.type === "preview"}
-              <p class="preview-copy">{messages.response.previewOnly}</p>
-            {:else}
-              <Textarea
-                id={`global-ask-question-${questionIndex}`}
-                name={`answer:${question.id}`}
-                rows={4}
-                required={question.required}
-                aria-label={question.prompt}
-                disabled={submitting}
-              />
-            {/if}
-          </fieldset>
+          <AskQuestionField
+            {question}
+            {questionIndex}
+            messages={messages.response}
+            disabled={submitting}
+            idPrefix="global-ask-question"
+          />
         {/each}
       {/if}
     </div>
@@ -151,7 +167,12 @@
 
     <footer class="dialog-actions">
       <div class="secondary-actions">
-        <Dialog.Close class="global-ask-later" type="button" disabled={submitting}>
+        <Dialog.Close
+          class="global-ask-later"
+          type="button"
+          disabled={submitting}
+          onclick={minimizeRequest}
+        >
           {messages.response.answerLater}
         </Dialog.Close>
         <Button
@@ -168,6 +189,23 @@
     </footer>
   </form>
 </DialogShell>
+
+{#if !open}
+  <aside class="ask-recovery" aria-live="polite">
+    <button
+      type="button"
+      onclick={resumeRequest}
+      aria-label={`${messages.response.resumeRequest}: ${ask.title} · ${pendingCount} ${messages.response.pendingRequests}`}
+    >
+      <span class="recovery-icon"><Icon name="inbox" size={18} /></span>
+      <span class="recovery-copy">
+        <strong>{messages.response.resumeRequest}</strong>
+        <small>{ask.title}</small>
+      </span>
+      <span class="pending-count" aria-hidden="true">{pendingCount}</span>
+    </button>
+  </aside>
+{/if}
 
 <style>
   .dialog-heading {
@@ -258,78 +296,15 @@
     padding: var(--spacing-xl);
   }
 
-  .freeform-question,
-  .question-block {
+  .freeform-question {
     display: grid;
     gap: var(--spacing-sm);
   }
 
-  .freeform-question > span,
-  .question-block legend {
+  .freeform-question > span {
     color: var(--color-ink);
     font-size: var(--text-body);
     font-weight: 700;
-  }
-
-  .question-block {
-    border: 0;
-    margin: 0;
-    min-width: 0;
-    padding: 0;
-  }
-
-  .question-block legend {
-    margin-bottom: var(--spacing-sm);
-    padding: 0;
-  }
-
-  .option-list {
-    display: grid;
-    gap: var(--spacing-xs);
-  }
-
-  .option-row {
-    align-items: start;
-    background: var(--color-surface-soft);
-    border: 1px solid var(--color-border-soft);
-    border-radius: var(--rounded-md);
-    cursor: pointer;
-    display: grid;
-    gap: var(--spacing-sm);
-    grid-template-columns: auto minmax(0, 1fr);
-    padding: 11px 12px;
-  }
-
-  .option-row:has(input:checked) {
-    background: var(--color-primary-weak);
-    border-color: var(--color-primary-soft);
-  }
-
-  .option-row input {
-    margin: 3px 0 0;
-  }
-
-  .option-row span {
-    display: grid;
-    gap: 2px;
-  }
-
-  .option-row strong {
-    color: var(--color-ink);
-    font-size: var(--text-body);
-  }
-
-  .option-row small,
-  .preview-copy {
-    color: var(--color-ink-muted);
-    line-height: 1.45;
-  }
-
-  .preview-copy {
-    background: var(--color-surface-soft);
-    border-radius: var(--rounded-md);
-    margin: 0;
-    padding: 11px 12px;
   }
 
   .form-error {
@@ -362,6 +337,86 @@
     padding: 8px 12px;
   }
 
+  .ask-recovery {
+    bottom: 20px;
+    max-width: min(360px, calc(100vw - 32px));
+    position: fixed;
+    right: 20px;
+    z-index: 90;
+  }
+
+  .ask-recovery button {
+    align-items: center;
+    background: var(--color-surface);
+    border: 1px solid var(--color-primary-soft);
+    border-radius: 14px;
+    box-shadow: 0 16px 42px rgb(15 23 42 / 18%);
+    color: var(--color-ink);
+    cursor: pointer;
+    display: grid;
+    font: inherit;
+    gap: 10px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    min-height: 58px;
+    padding: 9px 11px;
+    text-align: left;
+    width: 100%;
+  }
+
+  .ask-recovery button:hover {
+    background: var(--color-surface-soft);
+    border-color: var(--color-primary);
+  }
+
+  .ask-recovery button:focus-visible {
+    box-shadow:
+      var(--shadow-focus),
+      0 16px 42px rgb(15 23 42 / 18%);
+    outline: none;
+  }
+
+  .recovery-icon {
+    align-items: center;
+    background: var(--color-primary-weak);
+    border-radius: 10px;
+    color: var(--color-primary);
+    display: inline-flex;
+    height: 36px;
+    justify-content: center;
+    width: 36px;
+  }
+
+  .recovery-copy {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .recovery-copy strong {
+    font-size: 12px;
+  }
+
+  .recovery-copy small {
+    color: var(--color-ink-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .pending-count {
+    align-items: center;
+    background: var(--color-primary);
+    border-radius: 999px;
+    color: white;
+    display: inline-flex;
+    font-size: 11px;
+    font-weight: 750;
+    height: 24px;
+    justify-content: center;
+    min-width: 24px;
+    padding: 0 6px;
+  }
+
   @media (max-width: 640px) {
     .dialog-heading,
     .questions {
@@ -379,6 +434,13 @@
     .secondary-actions :global(.ui-button),
     :global(.global-ask-later) {
       width: 100%;
+    }
+
+    .ask-recovery {
+      bottom: 12px;
+      left: 12px;
+      max-width: none;
+      right: 12px;
     }
   }
 </style>

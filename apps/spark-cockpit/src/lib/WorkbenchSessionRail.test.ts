@@ -67,4 +67,19 @@ describe("WorkbenchSessionRail component contract", () => {
       source.indexOf('class="new-session"'),
     );
   });
+
+  it("keeps cached conversations searchable while workspace control is offline", () => {
+    const source = readFileSync(componentPath, "utf8");
+
+    expect(source).toContain("{#if activeWorkspaceId && !sessionControlAvailable}");
+    expect(source).toContain("{#if filteredSessions.length === 0}");
+    expect(source).not.toContain("disabled={!sessionsAvailable}");
+  });
+
+  it("gates mutations on workspace-scoped control availability", () => {
+    const source = readFileSync(componentPath, "utf8");
+
+    expect(source).toContain("{#if sessionControlAvailable}");
+    expect(source).toContain("{@const canArchive = sessionControlAvailable");
+  });
 });

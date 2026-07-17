@@ -6,6 +6,7 @@ import type { SparkDaemonHumanInteractionOpened } from "../core/human-interactio
 import {
   SparkDaemonHumanWaitRegistry,
   type SparkDaemonHumanWaitDeliveryOutcome,
+  type SparkDaemonHumanWaitRecord,
 } from "../core/human-waits.ts";
 import type { ChannelIngressHooks, DaemonChannelIngressRuntime } from "./ingress.ts";
 import type { DaemonChannelDeliveryOutbox } from "./delivery-outbox.ts";
@@ -63,7 +64,10 @@ export async function settleChannelAskInteraction(
   waits: SparkDaemonHumanWaitRegistry,
   input: Parameters<NonNullable<ChannelIngressHooks["onInteraction"]>>[0],
   options: {
-    runtimeId: string;
+    /** Legacy single-Cockpit override retained for focused callers/tests. */
+    runtimeId?: string;
+    /** Resolve the runtime that owns the callback's workspace route. */
+    getRuntimeId?: (wait: SparkDaemonHumanWaitRecord) => string | undefined;
     deliveryOutbox?: Pick<DaemonChannelDeliveryOutbox, "enqueueInteractionAck">;
   },
 ): Promise<void> {
@@ -91,6 +95,10 @@ export async function settleChannelAskInteraction(
 
   let outcome: SparkDaemonHumanWaitDeliveryOutcome;
   try {
+    const runtimeId = options.getRuntimeId?.(callback.wait)?.trim() || options.runtimeId?.trim();
+    if (!runtimeId) {
+      throw new Error("daemon runtimeId is unavailable for channel response routing");
+    }
     const humanResponseId = channelInteractionResponseId(event.adapterId, event.interactionId);
     const messageId = createId("msg");
     const payload = {
@@ -113,7 +121,7 @@ export async function settleChannelAskInteraction(
           "human.response.recorded",
           payload,
           {
-            runtimeId: options.runtimeId,
+            runtimeId,
             workspaceBindingId: callback.wait.workspaceBindingId || undefined,
             workspaceId: callback.wait.workspaceId || undefined,
             projectId: callback.wait.projectId || undefined,

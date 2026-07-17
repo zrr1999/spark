@@ -140,6 +140,7 @@ describe("session workbench projection", () => {
                 toolCallId: "call:todo",
                 toolName: "todo",
                 status: "complete",
+                summary: "Session todos\n- [pending] First item",
                 metadata: {},
               },
             ],
@@ -149,7 +150,7 @@ describe("session workbench projection", () => {
       }),
     });
 
-    expect(view.sessionTodoAnchor).toBe("message:todo-message");
+    expect(view.sessionTodo?.anchor).toBe("message:todo-message");
   });
 
   it("projects session mail newest-first with durable read state", () => {

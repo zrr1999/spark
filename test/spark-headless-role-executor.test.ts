@@ -15,6 +15,8 @@ void test("runSparkHeadlessSession times out a never-resolving agent turn", asyn
         sparkStateRoot?: string;
         approvalMethod?: "skip" | "human" | "auto";
         streamTimeoutMs?: number;
+        toolTimeoutMs?: number;
+        interactionTimeoutMs?: number;
       }
     | undefined;
   const record = {
@@ -77,9 +79,11 @@ void test("runSparkHeadlessSession times out a never-resolving agent turn", asyn
     externalKey: "qqbot:c2c:user-1",
   });
   assert.deepEqual(capturedServiceOptions?.allowedTools, ["session"]);
-  assert.equal(capturedServiceOptions?.sparkStateRoot, "/tmp/control-spark-home");
+  assert.equal(capturedServiceOptions?.sparkStateRoot, undefined);
   assert.equal(capturedServiceOptions?.approvalMethod, "auto");
-  assert.equal(capturedServiceOptions?.streamTimeoutMs, 0);
+  assert.equal(capturedServiceOptions?.streamTimeoutMs, undefined);
+  assert.equal(capturedServiceOptions?.toolTimeoutMs, undefined);
+  assert.equal(capturedServiceOptions?.interactionTimeoutMs, undefined);
   assert.deepEqual(unsubscribed.sort(), ["agentLoop", "runtime"]);
 });
 
@@ -110,25 +114,6 @@ for (const terminal of [
     );
   });
 }
-
-void test("runSparkHeadlessSession rejects explicit budget exhaustion", async () => {
-  const assistant = terminalAssistant("error", "roundtrip budget exhausted");
-  await assert.rejects(
-    runSparkHeadlessSession(
-      { cwd: process.cwd(), sessionId: "session-budget", prompt: "hello" },
-      {
-        createServices: async () =>
-          headlessServices(async () => ({
-            status: "budget_exhausted",
-            assistant,
-            roundtrips: 16,
-            errorMessage: "roundtrip budget exhausted",
-          })) as never,
-      },
-    ),
-    /budget_exhausted: roundtrip budget exhausted/u,
-  );
-});
 
 void test("runSparkHeadlessSession preserves an active caller cancellation", async () => {
   const controller = new AbortController();

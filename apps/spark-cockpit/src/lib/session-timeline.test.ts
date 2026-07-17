@@ -3,6 +3,8 @@ import type { SparkJsonObject } from "@zendev-lab/spark-protocol";
 import {
   activeSessionTimelineProcessItemId,
   buildSessionTimeline,
+  latestSessionRetryCandidate,
+  latestSessionRetryPrompt,
   sessionTimelineWindow,
   type SessionTimelineItem,
 } from "./session-timeline";
@@ -107,7 +109,11 @@ describe("session timeline", () => {
             "system",
             "provider unavailable",
             "2026-07-10T00:00:02.000Z",
-            { errorTitle: "Session interrupted", terminalStatus: "lost" },
+            {
+              conversationVisible: true,
+              errorTitle: "Session interrupted",
+              terminalStatus: "lost",
+            },
           ),
           status: "error",
         },
@@ -120,9 +126,226 @@ describe("session timeline", () => {
     expect(timeline[0]).toMatchObject({
       id: "message:system-failed",
       actor: "spark",
-      status: "error",
+      status: null,
       parts: [{ type: "error", title: "Session interrupted", message: "provider unavailable" }],
     });
+  });
+
+  it("selects the latest canonical failed turn for session-level retry", () => {
+    const messages = [
+      message(
+        "user-empty-response",
+        "user",
+        "Finish the Cockpit retry flow",
+        "2026-07-10T00:00:01.000Z",
+        { source: "daemon.invocation", invocationId: "inv_empty_response" },
+      ),
+      {
+        ...message(
+          "empty-response-error",
+          "system",
+          "model completed without a displayable response",
+          "2026-07-10T00:00:02.000Z",
+          {
+            source: "daemon.invocation",
+            invocationId: "inv_empty_response",
+            conversationVisible: true,
+            errorTitle: "Spark",
+          },
+        ),
+        status: "error" as const,
+      },
+    ];
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages,
+      commands: [],
+      reports: [],
+    });
+
+    expect(timeline.at(-1)).toMatchObject({
+      id: "message:empty-response-error",
+      parts: [
+        {
+          type: "error",
+          title: "Spark",
+          message: "model completed without a displayable response",
+        },
+      ],
+    });
+    expect(latestSessionRetryCandidate(messages)).toEqual({
+      prompt: "Finish the Cockpit retry flow",
+      failureMessageId: "empty-response-error",
+    });
+    expect(latestSessionRetryPrompt(messages)).toBe("Finish the Cockpit retry flow");
+  });
+
+  it("invalidates retry after a newer user turn or final answer", () => {
+    const failedTurn = retryableFailure("first", "Retry this request", 1);
+    const newerUser = message(
+      "newer-user",
+      "user",
+      "Use a different approach",
+      "2026-07-10T00:00:03.000Z",
+      { invocationId: "inv_newer" },
+    );
+    const newerAnswer = message(
+      "newer-answer",
+      "assistant",
+      "Done with the different approach.",
+      "2026-07-10T00:00:04.000Z",
+      { invocationId: "inv_newer" },
+    );
+
+    expect(latestSessionRetryPrompt(failedTurn)).toBe("Retry this request");
+    expect(latestSessionRetryPrompt([...failedTurn, newerUser])).toBeNull();
+    expect(latestSessionRetryPrompt([...failedTurn, newerAnswer])).toBeNull();
+  });
+
+  it("chooses the newest failed turn and ignores non-conversation reports", () => {
+    const first = retryableFailure("first", "First prompt", 1);
+    const second = retryableFailure("second", "Second prompt", 3);
+    const messages = [...first, ...second];
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages,
+      commands: [],
+      reports: [
+        {
+          id: "task-after-failure",
+          kind: "task.update",
+          title: "Background task",
+          text: "Task projection arrived later.",
+          role: null,
+          status: "completed",
+          createdAt: "2026-07-10T00:00:05.000Z",
+        },
+      ],
+    });
+
+    expect(timeline.at(-1)?.id).toBe("report:task-after-failure");
+    expect(latestSessionRetryCandidate(messages)).toEqual({
+      prompt: "Second prompt",
+      failureMessageId: "second-failure",
+    });
+  });
+
+  it("does not turn hidden diagnostics or tool failures into session retry", () => {
+    const user = message("u", "user", "Run the tool", "2026-07-10T00:00:01.000Z", {
+      invocationId: "inv_tool",
+    });
+    const hiddenDiagnostic = {
+      ...message("hidden", "system", "internal transport detail", "2026-07-10T00:00:02.000Z", {
+        invocationId: "inv_tool",
+      }),
+      status: "error" as const,
+    };
+    const toolFailure = {
+      version: 1 as const,
+      id: "tool-failure",
+      role: "tool" as const,
+      text: "tool failed",
+      status: "error" as const,
+      toolCallId: "call-1",
+      toolName: "read",
+      createdAt: "2026-07-10T00:00:03.000Z",
+      metadata: { invocationId: "inv_tool" },
+    };
+
+    expect(latestSessionRetryCandidate([user, hiddenDiagnostic])).toBeNull();
+    expect(latestSessionRetryCandidate([user, toolFailure])).toBeNull();
+  });
+
+  it("keeps tool failures in the execution chain and presents budget exhaustion as a notice", () => {
+    const transportError =
+      "cue-shell error [TRANSPORT_RESOLVE_FAILED]: failed to resolve cue-shell client transport";
+    const budgetError = "agent loop hit maxRoundtrips=16; stopping";
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [
+        message("u1", "user", "检查 delegated session", "2026-07-10T00:00:01.000Z"),
+        {
+          ...message("a-call", "assistant", "", "2026-07-10T00:00:02.000Z"),
+          parts: [
+            {
+              id: "a-call:tool",
+              type: "tool-call" as const,
+              status: "complete" as const,
+              toolCallId: "call-cue",
+              toolName: "cue_exec",
+              summary: "检查 delegated session",
+              metadata: {},
+            },
+          ],
+        },
+        {
+          version: 1 as const,
+          id: "tool-result:call-cue",
+          role: "tool" as const,
+          text: transportError,
+          status: "error" as const,
+          toolCallId: "call-cue",
+          toolName: "cue_exec",
+          createdAt: "2026-07-10T00:00:03.000Z",
+          parts: [
+            {
+              id: "tool-result:call-cue:part",
+              type: "tool-result" as const,
+              status: "failed" as const,
+              toolCallId: "call-cue",
+              toolName: "cue_exec",
+              summary: transportError,
+              metadata: {},
+            },
+          ],
+          metadata: {},
+        },
+        message("a-final", "assistant", "已改用本地回退。", "2026-07-10T00:00:04.000Z"),
+        {
+          ...message(
+            "internal-system-error",
+            "system",
+            "internal transport diagnostic",
+            "2026-07-10T00:00:05.000Z",
+          ),
+          status: "error" as const,
+        },
+        message("u2", "user", "继续", "2026-07-10T00:00:06.000Z"),
+        {
+          ...message("budget-exhausted", "assistant", budgetError, "2026-07-10T00:00:07.000Z", {
+            outcomeStatus: "budget_exhausted",
+          }),
+          status: "error" as const,
+        },
+      ],
+      commands: [],
+      reports: [],
+    });
+
+    const processTurn = timeline.find((item) => item.id === "message:a-call");
+    expect(processTurn).toMatchObject({ status: null });
+    expect(processTurn?.parts.some((part) => part.type === "error")).toBe(false);
+    expect(processTurn?.parts).toContainEqual(
+      expect.objectContaining({
+        type: "chain",
+        state: "complete",
+        steps: [
+          expect.objectContaining({
+            type: "tool",
+            callId: "call-cue",
+            state: "failed",
+          }),
+        ],
+      }),
+    );
+
+    expect(timeline.some((item) => item.id === "message:internal-system-error")).toBe(false);
+    const budgetNotice = timeline.find((item) => item.id === "message:budget-exhausted");
+    expect(budgetNotice).toMatchObject({
+      status: null,
+      parts: [{ type: "notice", kind: "budget_exhausted" }],
+    });
+    expect(timeline.every((item) => item.status !== "error")).toBe(true);
   });
 
   it("keeps only the latest stable run, task, and artifact projections", () => {
@@ -854,4 +1077,21 @@ function message(
     createdAt,
     metadata,
   };
+}
+
+function retryableFailure(prefix: string, prompt: string, second: number) {
+  const invocationId = `inv_${prefix}`;
+  return [
+    message(`${prefix}-user`, "user", prompt, `2026-07-10T00:00:0${second}.000Z`, { invocationId }),
+    {
+      ...message(
+        `${prefix}-failure`,
+        "system",
+        `${prefix} failed`,
+        `2026-07-10T00:00:0${second + 1}.000Z`,
+        { invocationId, conversationVisible: true, errorTitle: "Spark" },
+      ),
+      status: "error" as const,
+    },
+  ];
 }

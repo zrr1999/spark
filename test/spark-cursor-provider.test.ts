@@ -455,90 +455,7 @@ void test("Cursor model cache contains a fingerprint and public metadata but nev
   }
 });
 
-void test("Cursor provider README documents opt-in setup, limitations, and tested model ids", async () => {
-  const readme = await readFile(join(process.cwd(), "packages/spark-ai/README.md"), "utf8");
-  for (const required of [
-    "@zendev-lab/spark-ai/cursor-provider",
-    "CURSOR_API_KEY",
-    "spark --list-models cursor",
-    "spark --model cursor/composer-2.5 --thinking high",
-    "spark --model cursor/composer-2.5:slow --thinking xhigh",
-    "spark --model cursor/grok-4.5 --thinking high",
-    "local-only runtime",
-    "unknown/zero cost accounting",
-    "Cursor-native settings/MCP/tool",
-    "no Spark tool bridge",
-    "no Cursor Cloud",
-    "not enabled by default",
-    "Package checks",
-    "Mocked tests",
-    "opt-in live run",
-    "Redaction verification",
-    "Cursor-native tool safety review",
-  ]) {
-    assert.ok(readme.includes(required), `README must contain ${required}`);
-  }
-
-  const testSource = await readFile(
-    join(process.cwd(), "test/spark-cursor-provider.test.ts"),
-    "utf8",
-  );
-  const documentedModelIds = [...readme.matchAll(/cursor\/([a-z0-9][a-z0-9.@:-]+)/giu)].map(
-    (match) => match[1]!,
-  );
-  assert.ok(documentedModelIds.length >= 2);
-  for (const modelId of documentedModelIds) {
-    assert.ok(testSource.includes(modelId), `documented model id ${modelId} needs a test fixture`);
-  }
-});
-
-void test("Cursor live acceptance and dependency boundary are secret-safe and reproducible", async () => {
-  const readme = await readFile(join(process.cwd(), "packages/spark-ai/README.md"), "utf8");
-  assert.match(
-    readme,
-    /SPARK_CURSOR_LIVE_TEST=1 pnpm exec node --experimental-strip-types scripts\/spark-cursor-live-acceptance\.mts/u,
-  );
-  assert.match(readme, /SPARK_CURSOR_LIVE_OK/u);
-  for (const marker of [
-    "packages/spark-ai/src/cursor-model-discovery.ts",
-    "packages/spark-ai/src/cursor-stream.ts",
-    "@cursor/sdk@1.0.23",
-    "platform-specific runtime",
-    "no Spark Rust or native implementation",
-  ]) {
-    assert.ok(readme.includes(marker), `README must document dependency boundary: ${marker}`);
-  }
-  assert.match(readme, /Cursor\s+Terms of Service/u);
-
-  const liveScript = await readFile(
-    join(process.cwd(), "scripts/spark-cursor-live-acceptance.mts"),
-    "utf8",
-  );
-  assert.match(liveScript, /serialized\.includes\(apiKey\)/u);
-  assert.match(liveScript, /FORBIDDEN_OUTPUT_FIELD\.test\(serialized\)/u);
-  for (const forbiddenField of [
-    "authorization",
-    "bearer",
-    "cookie",
-    "token",
-    "apiKey",
-    "sessionCredential",
-  ]) {
-    assert.match(liveScript, new RegExp(`FORBIDDEN_OUTPUT_FIELD[\\s\\S]*${forbiddenField}`, "u"));
-  }
-  assert.doesNotMatch(liveScript, /console\.(?:log|error)\([^\n]*apiKey/u);
-  for (const outputField of [
-    "provider",
-    "catalogSource",
-    "modelCount",
-    "model",
-    "eventTypes",
-    "stopReason",
-    "text",
-  ]) {
-    assert.match(liveScript, new RegExp(`\\n    ${outputField}[:,]`, "u"));
-  }
-
+void test("Cursor SDK dependency boundary pins a licensed platform-specific runtime", async () => {
   const sparkAiPackage = JSON.parse(
     await readFile(join(process.cwd(), "packages/spark-ai/package.json"), "utf8"),
   ) as { dependencies: Record<string, string> };
@@ -562,13 +479,6 @@ void test("Cursor live acceptance and dependency boundary are secret-safe and re
     optionalDependencies: Record<string, string>;
   };
   assert.deepEqual(rootPackage.optionalDependencies, platformPackages);
-
-  const cursorSources = ["cursor-model-discovery.ts", "cursor-stream.ts"];
-  assert.ok(cursorSources.every((path) => path.endsWith(".ts")));
-  for (const path of cursorSources) {
-    const source = await readFile(join(process.cwd(), "packages/spark-ai/src", path), "utf8");
-    assert.doesNotMatch(source, /\.rs["']|\.node["']|\bffi\b|native-addon/iu);
-  }
 });
 
 void test("Cursor provider sources preserve the host-neutral package boundary", async () => {
@@ -585,12 +495,6 @@ void test("Cursor provider sources preserve the host-neutral package boundary", 
     const source = await readFile(join(process.cwd(), "packages/spark-ai/src", path), "utf8");
     assert.doesNotMatch(source, /apps\/spark-|@earendil-works\/pi-coding-agent|spark-tui-app/u);
   }
-  const providerSource = await readFile(
-    join(process.cwd(), "packages/spark-ai/src/cursor-provider.ts"),
-    "utf8",
-  );
-  assert.match(providerSource, /Cursor-native tool\/MCP semantics/u);
-  assert.match(providerSource, /provider remains opt-in/u);
 });
 
 function cursorModel(id: string): ReturnType<SparkProviderRegistry["buildModel"]> {

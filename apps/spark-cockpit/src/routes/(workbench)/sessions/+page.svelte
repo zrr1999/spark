@@ -22,6 +22,7 @@
   formMessage={form?.message ?? null}
   formIntent={form?.intent ?? null}
   formValues={form?.values ?? null}
+  canAssign={data.sessionControlAvailable}
   modelControl={data.modelControl}
   initialSubmissionId={data.submissionId}
 />

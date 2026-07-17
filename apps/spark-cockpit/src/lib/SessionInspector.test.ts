@@ -83,7 +83,9 @@ describe("SessionInspector component contract", () => {
   it("derives busy presentation from an active invocation instead of stale session flags", () => {
     const workspace = readFileSync(workspacePath, "utf8");
 
-    expect(workspace).toContain("let conversationBusy = $derived(Boolean(activeTurnId))");
+    expect(workspace).toContain(
+      'let conversationBusy = $derived(sessionActivityState.phase === "running")',
+    );
     expect(workspace).not.toContain('selected?.status === "running" ||');
     expect(workspace).toContain(
       'const effectiveStatus: "running" | "idle" = conversationBusy ? "running" : "idle"',

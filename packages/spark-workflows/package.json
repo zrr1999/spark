@@ -22,7 +22,7 @@
   "dependencies": {
     "@zendev-lab/spark-extension-api": "workspace:^",
     "@zendev-lab/spark-tasks": "workspace:^",
-    "typebox": "^1.2.13"
+    "typebox": "catalog:"
   },
   "pi": {
     "extensions": [

@@ -161,8 +161,52 @@ void test("SparkNativeTuiApp renders session, model, thinking, run, and queue st
     /session Fix renderer • model openai-codex\/gpt-5\.4 • thinking high • state running • queue steer=1 follow-up=1/,
   );
   assert.match(rendered, /Enter steer • Alt\+Enter follow-up • Esc stop • Alt\+Up restore queue/);
-  assert.match(rendered, /you steer queued> steer now/);
-  assert.match(rendered, /you follow-up queued> then summarize/);
+  assert.match(rendered, /◆ Input queue · 2/);
+  assert.match(rendered, /├─ 1\. steer · steer now/);
+  assert.match(rendered, /└─ 2\. follow-up · then summarize/);
+  assert.match(rendered, /Alt\+Up restore all/);
+  assert.doesNotMatch(rendered, /you (?:steer|follow-up) queued>/);
+  assert.doesNotMatch(rendered, /Queued (?:steering message|follow-up)/);
+
+  const queueSnapshot = session.queuedInputs;
+  assert.deepEqual(queueSnapshot, [
+    { text: "steer now", mode: "steer" },
+    { text: "then summarize", mode: "followUp" },
+  ]);
+  assert.equal(Object.isFrozen(queueSnapshot), true);
+  assert.equal(
+    queueSnapshot.every((input) => Object.isFrozen(input)),
+    true,
+  );
+
+  session.abort("test cleanup");
+});
+
+void test("SparkNativeTuiApp bounds queue rows and sanitizes inline image previews", async () => {
+  const session = new SparkNativeSession(async () => await new Promise<string>(() => undefined));
+  const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
+
+  assert.equal(await session.submit("start"), "started");
+  assert.equal(
+    await session.submit(
+      '<image name="preview.png">data:image/png;base64,SECRET_IMAGE_BYTES</image> inspect',
+      { mode: "steer" },
+    ),
+    "queued",
+  );
+  for (const prompt of ["second", "third", "fourth", "fifth"]) {
+    assert.equal(await session.submit(prompt, { mode: "followUp" }), "queued");
+  }
+
+  const rendered = stripAnsi(app.render(100).join("\n"));
+  assert.match(rendered, /◆ Input queue · 5/);
+  assert.match(
+    rendered,
+    /1\. steer · <image name="preview\.png">\[inline image data omitted\]<\/image> inspect/,
+  );
+  assert.match(rendered, /4\. follow-up · fourth/);
+  assert.match(rendered, /└─ … \+1 more/);
+  assert.doesNotMatch(rendered, /SECRET_IMAGE_BYTES|5\. follow-up · fifth/);
 
   session.abort("test cleanup");
 });
@@ -360,13 +404,13 @@ void test("SparkNativeTuiApp records protocol cockpit state and renders Spark pa
   assert.match(rendered, /Role-run board: 1 role run\(s\), 1 interaction\(s\)/);
   assert.match(rendered, /Graft provenance\/patch status: 1 item\(s\)/);
 
-  assert.equal(await app.submitInput("/workflows"), "command");
+  assert.equal(await app.submitInput("/cockpit workflows"), "command");
   rendered = app.render(120).join("\n");
   assert.match(rendered, /Spark cockpit: workflows/);
   assert.match(rendered, /picker workflow-picker-1: Pick a workflow/);
   assert.match(rendered, /builtin:release-readiness: Release readiness/);
 
-  assert.equal(await app.submitInput("/runs"), "command");
+  assert.equal(await app.submitInput("/cockpit runs"), "command");
   rendered = app.render(120).join("\n");
   assert.match(rendered, /Spark cockpit: role\/run board/);
   assert.match(rendered, /role role-run-reviewer \[running\] 50% artifacts=1 reviewer audit/);
@@ -520,8 +564,8 @@ void test("SparkNativeTuiApp handles local slash commands without submitting to 
     },
   });
 
-  assert.equal(await app.submitInput("/help"), "command");
-  assert.equal(await app.submitInput("/status"), "command");
+  assert.equal(await app.submitInput("/help commands"), "command");
+  assert.equal(await app.submitInput("/status inspect"), "command");
 
   const rendered = app.render(100).join("\n");
   assert.equal(responderCalls, 0);
@@ -993,7 +1037,7 @@ void test("native UI transport consumes view model events without concrete TUI p
   assert.match(rendered, /\/workspace\/spark \(main\)/);
   assert.match(
     rendered,
-    /↑19M ↓820k R230M W16 CH99\.3% \$23\.509 70\.6%\/372k\s+\(baidu-oneapi\) gpt-5\.6-sol • xhigh/,
+    /↑19M ↓820k R230M W16 CH99\.3% \$23\.509 70\.6%\/372k \(auto\)\s+\(baidu-oneapi\) gpt-5\.6-sol • xhigh/,
   );
 
   const narrow = stripAnsi(app.render(60).join("\n"));
@@ -1105,7 +1149,7 @@ void test("Spark daemon native slash commands render invocation status and start
   });
 
   assert.equal(await app.submitInput("/start"), "command");
-  assert.equal(await app.submitInput("/status"), "command");
+  assert.equal(await app.submitInput("/status inspect"), "command");
 
   const rendered = app.render(100).join("\n");
   assert.equal(started, true);

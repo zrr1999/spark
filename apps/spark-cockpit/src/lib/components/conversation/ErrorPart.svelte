@@ -7,7 +7,11 @@
     code?: string;
   };
 
-  let { title, message, code }: Props = $props();
+  let {
+    title,
+    message,
+    code,
+  }: Props = $props();
 </script>
 
 <article class="error-part">

@@ -9,6 +9,7 @@ import {
   type SparkNativeInteractionHandler,
   type SparkNativeResponder,
   type SparkNativeSlashCommandMap,
+  type SparkNativeStatusContext,
   type SparkNativeWorkspaceSessionState,
 } from "../../apps/spark-tui/src/native-tui.ts";
 import type { SparkKeybindings } from "../../apps/spark-tui/src/host/keybindings.ts";
@@ -44,6 +45,7 @@ export interface SparkNativeTuiHarnessOptions {
   autocompleteFdPath?: string | null;
   interactionHandler?: SparkNativeInteractionHandler;
   keybindings?: SparkKeybindings;
+  statusContext?: SparkNativeStatusContext;
   theme?: SparkTheme;
   withOverlay?: boolean;
   workspaceSession?: SparkNativeWorkspaceSessionState;
@@ -61,7 +63,7 @@ export function createSparkNativeTuiHarness(
     exited: false,
   };
   const fakeTui = {
-    terminal: { rows: options.rows ?? 30, cols: width },
+    terminal: { rows: options.rows ?? 30, columns: width },
     requestRender(force?: boolean) {
       state.renderRequests.push(force === true);
     },

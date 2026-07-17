@@ -8,6 +8,7 @@ import { Type } from "typebox";
 import { summarizeAskResult } from "./summary.ts";
 import {
   defaultAskChoice,
+  hasAskAnswerContent,
   inferAskSubmitStatus,
   nextActionForAskSubmit,
   parseAskChoice,
@@ -151,7 +152,7 @@ export async function askUser(request: PiAskRequest, ui?: PiAskUi): Promise<PiAs
   }
 
   const interactionResult = await askUserViaInteraction(normalized, ui);
-  if (interactionResult) return interactionResult;
+  if (interactionResult) return normalizeAskUserResult(normalized, interactionResult);
   if (normalized.delivery === "async") return unavailableAskUserResult(normalized);
 
   const answers: Record<string, PiAskAnswerEntry> = {};
@@ -165,7 +166,7 @@ export async function askUser(request: PiAskRequest, ui?: PiAskUi): Promise<PiAs
     answers[question.id] = resolved.answer;
     if (
       requiresExplicitAskUserSelection(normalized, question) &&
-      resolved.answer.values.length === 0
+      !hasAskAnswerContent(resolved.answer)
     ) {
       return createNoSelectionAskUserResult(normalized, answers);
     }
@@ -537,6 +538,16 @@ function createNoSelectionAskUserResult(
     status,
     nextAction: nextActionForAskSubmit(request, answers, status),
   });
+}
+
+function normalizeAskUserResult(request: PiAskRequest, result: PiAskResult): PiAskResult {
+  if (result.status === "pending" || result.status === "cancelled") return result;
+  const status = inferAskSubmitStatus(request, result.answers);
+  return {
+    ...result,
+    status,
+    nextAction: nextActionForAskSubmit(request, result.answers, status),
+  };
 }
 
 function requiresExplicitAskUserSelection(request: PiAskRequest, question: PiAskQuestion): boolean {

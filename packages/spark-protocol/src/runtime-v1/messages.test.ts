@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { createId } from "../refs.ts";
 import { runtimeProtocolVersion } from "./envelope.ts";
 import {
+  humanQuestionOptionSchema,
+  humanRequestCreatedPayloadSchema,
   humanResponseRecordedEnvelopeSchema,
   maxRuntimeCommandPayloadBytes,
   runtimeCommandResultEnvelopeSchema,
@@ -249,5 +251,33 @@ describe("runtime human response messages", () => {
         payload: { ...envelope.payload, source: "cockpit" },
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("human question option identity", () => {
+  it("normalizes canonical value and legacy id to the ask option value field", () => {
+    expect(humanQuestionOptionSchema.parse({ value: "mvp", label: "MVP" })).toEqual({
+      value: "mvp",
+      label: "MVP",
+    });
+    expect(humanQuestionOptionSchema.parse({ id: "legacy", label: "Legacy" })).toEqual({
+      value: "legacy",
+      label: "Legacy",
+    });
+    expect(
+      humanRequestCreatedPayloadSchema.parse({
+        kind: "ask_user",
+        title: "Scope",
+        prompt: "Pick a scope",
+        questions: [
+          {
+            id: "scope",
+            type: "single",
+            prompt: "Scope?",
+            options: [{ id: "mvp", label: "MVP" }],
+          },
+        ],
+      }).questions[0]?.options,
+    ).toEqual([{ value: "mvp", label: "MVP" }]);
   });
 });

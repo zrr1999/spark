@@ -1,8 +1,30 @@
 import { randomUUID } from "node:crypto";
 import { SPARK_PROTOCOL_VERSION } from "@zendev-lab/spark-protocol";
 
-export type SparkDaemonLifecycleState = "starting" | "running" | "draining";
-export type SparkDaemonLifecyclePhase = "initializing" | "serving" | "draining-active-work";
+export type SparkDaemonLifecycleState = "starting" | "running" | "draining" | "stopping";
+export type SparkDaemonLifecyclePhase =
+  | "initializing"
+  | "serving"
+  | "draining-active-work"
+  | "draining-channel-ingress"
+  | "stopping";
+
+export type SparkDaemonDrainStage = "active-work" | "channel-ingress";
+
+export interface SparkDaemonDrainWork {
+  invocationId: string;
+  kind: string;
+  startedAt: string;
+  sessionId?: string;
+}
+
+/** Process-local execution fences that must settle before a restart can hand off ownership. */
+export interface SparkDaemonDrainProgress {
+  observedAt: string;
+  stage: SparkDaemonDrainStage;
+  scheduler: SparkDaemonDrainWork[];
+  direct: SparkDaemonDrainWork[];
+}
 
 export interface SparkDaemonProcessIdentity {
   pid: number;
@@ -25,6 +47,9 @@ export interface SparkDaemonLifecycleSnapshot {
   targetInstanceId?: string;
   targetGeneration?: string;
   restartRequestedAt?: string;
+  drain?: SparkDaemonDrainProgress;
+  stopRequestedAt?: string;
+  stopReason?: string;
 }
 
 export interface SparkDaemonRestartRequestResult {
@@ -58,6 +83,8 @@ export class SparkDaemonLifecycle {
   private targetInstanceId: string | undefined;
   private targetGeneration: string | undefined;
   private restartRequestedAt: string | undefined;
+  private stopRequestedAt: string | undefined;
+  private stopReason: string | undefined;
   private serving: boolean;
 
   constructor(
@@ -112,7 +139,7 @@ export class SparkDaemonLifecycle {
   }
 
   get isServing(): boolean {
-    return this.serving && !this.restartRequestedAt;
+    return this.serving && !this.restartRequestedAt && !this.stopRequestedAt;
   }
 
   get processGeneration(): string {
@@ -124,6 +151,15 @@ export class SparkDaemonLifecycle {
   }
 
   snapshot(): SparkDaemonLifecycleSnapshot {
+    if (this.stopRequestedAt) {
+      return {
+        state: "stopping",
+        phase: "stopping",
+        process: this.identity,
+        stopRequestedAt: this.stopRequestedAt,
+        ...(this.stopReason ? { stopReason: this.stopReason } : {}),
+      };
+    }
     if (this.restartRequestedAt) {
       return {
         state: "draining",
@@ -140,6 +176,15 @@ export class SparkDaemonLifecycle {
       : { state: "starting", phase: "initializing", process: this.identity };
   }
 
+  /** Close readiness synchronously before asynchronous stop teardown begins. */
+  requestStop(reason: string, now = new Date().toISOString()): void {
+    if (this.stopRequestedAt) return;
+    this.stopRequestedAt = now;
+    this.stopReason = reason.trim() || "stop-requested";
+    this.serving = false;
+    this.drainController.abort(new Error(`Spark daemon stopping: ${this.stopReason}`));
+  }
+
   requestRestart(
     now = new Date().toISOString(),
     restartId: string = randomUUID(),
@@ -148,6 +193,9 @@ export class SparkDaemonLifecycle {
       generation: randomUUID(),
     },
   ): SparkDaemonRestartRequestResult {
+    if (this.stopRequestedAt) {
+      throw new Error("Spark daemon is stopping and cannot restart.");
+    }
     if (!this.restartRequestedAt) {
       this.restartRequestedAt = now;
       this.restartId = restartId;

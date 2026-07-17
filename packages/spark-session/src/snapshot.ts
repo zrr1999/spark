@@ -268,11 +268,9 @@ function messageView(
     id: entry.id,
     role,
     text,
-    status:
-      entry.message.stopReason === "error" ||
-      (role === "tool" && parts.some((part) => part.status === "failed"))
-        ? "error"
-        : "done",
+    // A failed tool still completed its process message. Keep that failure on
+    // the tool-result part instead of promoting it to a terminal turn error.
+    status: entry.message.stopReason === "error" ? "error" : "done",
     ...(createdAt ? { createdAt } : {}),
     ...(entry.parentId ? { parentId: entry.parentId } : {}),
     parts,
@@ -324,6 +322,7 @@ function interruptedTurnMessage(
       source: "session.snapshot",
       kind: "missing_final_response",
       errorTitle: "Session interrupted",
+      conversationVisible: true,
     },
   };
 }
@@ -344,9 +343,14 @@ function assistantDisplayMetadata(message: Record<string, unknown>): SparkJsonOb
     ...(typeof message.stopReason === "string" && message.stopReason.trim()
       ? { stopReason: message.stopReason.trim() }
       : {}),
+    ...(isRoundtripBudgetError(errorMessage) ? { outcomeStatus: "budget_exhausted" } : {}),
     ...(errorMessage ? { errorMessage } : {}),
     ...(usage ? { usage } : {}),
   };
+}
+
+function isRoundtripBudgetError(message: string | undefined): boolean {
+  return Boolean(message && /^agent loop hit maxRoundtrips=\d+; stopping$/u.test(message));
 }
 
 function sessionUsage(

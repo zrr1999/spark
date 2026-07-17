@@ -454,6 +454,17 @@ export class SparkInvocationStore {
     return new Set(rows.map((row) => row.session_id));
   }
 
+  runningSessionIds(): Set<string> {
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT session_id
+         FROM invocations
+         WHERE session_id IS NOT NULL AND status = 'running'`,
+      )
+      .all() as unknown as Array<{ session_id: string }>;
+    return new Set(rows.map((row) => row.session_id));
+  }
+
   /** Hydration hot path: filter in SQLite so terminal result payloads are never materialized. */
   listPendingForSession(sessionId: string): SparkInvocationRecord[] {
     const normalizedSessionId = sessionId.trim();
@@ -731,8 +742,59 @@ export class SparkInvocationStore {
       ? [...new Set(workspaceBindingIds.map((value) => value.trim()).filter(Boolean))]
       : undefined;
     if (normalizedBindings?.length === 0) return [];
+    const bindingPlaceholders = normalizedBindings?.map(() => "?").join(", ");
     const bindingFilter = normalizedBindings
-      ? ` AND i.workspace_binding_id IN (${normalizedBindings.map(() => "?").join(", ")})`
+      ? ` AND (
+            i.workspace_binding_id IN (${bindingPlaceholders})
+            OR (
+              i.workspace_binding_id IS NULL
+              AND (
+                SELECT COUNT(*)
+                FROM daemon_workspaces unique_dw
+                WHERE unique_dw.server_workspace_id = json_extract(i.task_json, '$.workspaceId')
+              ) = 1
+              AND EXISTS (
+                SELECT 1
+                FROM daemon_workspaces dw
+                WHERE dw.id IN (${bindingPlaceholders})
+                  AND dw.server_workspace_id = json_extract(i.task_json, '$.workspaceId')
+              )
+            )
+          )`
+      : "";
+    // Pre-fix workspace turns may have a NULL binding and a very large event
+    // backlog. Recover only one checkpoint without flooding a reconnected
+    // Cockpit with obsolete stream deltas. A terminal invocation row is newer
+    // truth than its event stream: the daemon persists completion before it
+    // appends the terminal lifecycle event, so a crash can leave the latest
+    // lifecycle at `running`. In that case select the latest event sequence and
+    // synthesize terminal lifecycle truth below; acknowledging that sequence
+    // compactly advances the durable cursor. Newly admitted turns always carry
+    // workspace_binding_id and retain the full live event stream.
+    const legacyRecoveryFilter = normalizedBindings
+      ? ` AND (
+            i.workspace_binding_id IS NOT NULL
+            OR e.sequence = CASE
+              WHEN i.status IN ('succeeded', 'failed', 'cancelled') THEN (
+                SELECT MAX(latest.sequence)
+                FROM invocation_events latest
+                WHERE latest.invocation_id = i.id
+              )
+              ELSE COALESCE(
+                (
+                  SELECT MAX(lifecycle.sequence)
+                  FROM invocation_events lifecycle
+                  WHERE lifecycle.invocation_id = i.id
+                    AND lifecycle.kind = 'daemon.task.lifecycle'
+                ),
+                (
+                  SELECT MAX(latest.sequence)
+                  FROM invocation_events latest
+                  WHERE latest.invocation_id = i.id
+                )
+              )
+            END
+          )`
       : "";
     const rows = this.db
       .prepare(
@@ -746,24 +808,30 @@ export class SparkInvocationStore {
          JOIN invocations i ON i.id = e.invocation_id
          LEFT JOIN invocation_event_deliveries d
            ON d.destination = ? AND d.invocation_id = e.invocation_id
-         WHERE e.sequence > COALESCE(d.sequence, 0)${bindingFilter}
+         WHERE e.sequence > COALESCE(d.sequence, 0)${bindingFilter}${legacyRecoveryFilter}
          ORDER BY e.created_at, e.invocation_id, e.sequence
          LIMIT ?`,
       )
       .all(
         normalizedDestination,
         ...(normalizedBindings ?? []),
+        ...(normalizedBindings ?? []),
         normalizedLimit,
       ) as unknown as PendingDeliveryRow[];
     return rows.map((row) => ({
       invocation: invocationRecord(row),
-      event: invocationEvent({
-        invocation_id: row.event_invocation_id,
-        sequence: row.event_sequence,
-        kind: row.event_kind,
-        payload_json: row.event_payload_json,
-        created_at: row.event_created_at,
-      }),
+      event:
+        normalizedBindings &&
+        row.workspace_binding_id === null &&
+        isTerminalInvocationStatus(row.status)
+          ? recoveredTerminalLifecycleEvent(row)
+          : invocationEvent({
+              invocation_id: row.event_invocation_id,
+              sequence: row.event_sequence,
+              kind: row.event_kind,
+              payload_json: row.event_payload_json,
+              created_at: row.event_created_at,
+            }),
     }));
   }
 
@@ -1050,6 +1118,53 @@ function invocationEvent(row: InvocationEventRow): SparkInvocationEvent {
   };
 }
 
+function recoveredTerminalLifecycleEvent(row: PendingDeliveryRow): SparkInvocationEvent {
+  if (!isTerminalInvocationStatus(row.status)) {
+    throw new Error(`Cannot recover nonterminal invocation lifecycle: ${row.id}`);
+  }
+  const task = jsonObject(row.task_json === null ? undefined : parseJson(row.task_json));
+  const taskType = jsonString(task, "type") ?? row.source_kind ?? "legacy.invocation";
+  const workspaceId = jsonString(task, "workspaceId");
+  const projectId = jsonString(task, "projectId");
+  const sessionId = row.session_id ?? jsonString(task, "sessionId");
+  const summary =
+    row.status === "failed"
+      ? (row.error_message ?? row.error_code)
+      : row.status === "cancelled"
+        ? row.cancel_reason
+        : null;
+  return {
+    invocationId: row.event_invocation_id,
+    sequence: Number(row.event_sequence),
+    kind: "daemon.task.lifecycle",
+    payload: {
+      type: "daemon.task.lifecycle",
+      source: "daemon",
+      emittedAt: row.finished_at ?? row.updated_at,
+      invocationId: row.id,
+      taskType,
+      status: row.status,
+      ...(workspaceId ? { workspaceId } : {}),
+      ...(projectId ? { projectId } : {}),
+      ...(sessionId ? { sessionId } : {}),
+      ...(summary ? { summary } : {}),
+      metadata: { recoveredFromInvocationRow: true },
+    },
+    createdAt: row.event_created_at,
+  };
+}
+
+function jsonObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function jsonString(value: Record<string, unknown> | undefined, key: string): string | undefined {
+  const candidate = value?.[key];
+  return typeof candidate === "string" && candidate.trim() ? candidate : undefined;
+}
+
 function serializeJson(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }
@@ -1091,4 +1206,8 @@ export function isRetryableInvocationError(errorCode: string | undefined): boole
 
 function isInvocationStatus(value: string): value is SparkInvocationStatus {
   return sparkInvocationStatuses.includes(value as SparkInvocationStatus);
+}
+
+function isTerminalInvocationStatus(value: string): value is SparkInvocationTerminalStatus {
+  return value === "succeeded" || value === "failed" || value === "cancelled";
 }

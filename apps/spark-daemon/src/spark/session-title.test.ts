@@ -89,6 +89,45 @@ describe("completed session title assignment", () => {
     expect(logError).toHaveBeenCalledWith(expect.stringContaining("using fallback"));
   });
 
+  it("does not persist a fallback title after the owning invocation is cancelled", async () => {
+    const session = localSession("sess_cancelled_title");
+    const controller = new AbortController();
+    const setTitleIfMissing = vi.fn(async () => session);
+    const logError = vi.fn();
+    const generateSessionTitle = vi.fn(
+      async ({ signal }: { signal?: AbortSignal }) =>
+        await new Promise<string>((_resolve, reject) => {
+          const rejectWithReason = () => reject(signal?.reason ?? new Error("cancelled"));
+          if (signal?.aborted) {
+            rejectWithReason();
+            return;
+          }
+          signal?.addEventListener("abort", rejectWithReason, { once: true });
+        }),
+    );
+
+    const assignment = assignCompletedSessionTitle(
+      {
+        sessionId: session.sessionId,
+        prompt: "Do not name this cancelled invocation.",
+        model,
+        signal: controller.signal,
+      },
+      {
+        modelControl: { generateSessionTitle },
+        sessionRegistry: { get: async () => session, setTitleIfMissing },
+        logError,
+      },
+    );
+    await vi.waitFor(() => expect(generateSessionTitle).toHaveBeenCalledOnce());
+
+    controller.abort(new Error("invocation cancelled"));
+
+    await expect(assignment).resolves.toBeUndefined();
+    expect(setTitleIfMissing).not.toHaveBeenCalled();
+    expect(logError).not.toHaveBeenCalled();
+  });
+
   it("skips existing, channel-bound, and archived sessions before calling the model", async () => {
     const generateSessionTitle = vi.fn(async () => "Unused");
     const setTitleIfMissing = vi.fn(async (sessionId: string) => localSession(sessionId));

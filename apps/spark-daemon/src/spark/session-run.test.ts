@@ -17,10 +17,11 @@ const paths = resolveSparkPaths({
 function context(
   _task: SparkDaemonSessionRunTask,
   emitted: SparkDaemonEvent[] = [],
+  signal: AbortSignal = new AbortController().signal,
 ): SparkDaemonTaskExecutionContext {
   return {
     invocationId: "invocation-1",
-    signal: new AbortController().signal,
+    signal,
     emitEvent: (event) => {
       emitted.push(event);
     },
@@ -133,13 +134,17 @@ describe("daemon native session execution", () => {
       },
     });
 
-    await executor(task, context(task));
+    const result = await executor(task, context(task));
 
     expect(appendText.mock.calls).toEqual([["你"], ["好"]]);
     expect(notifyToolStart).toHaveBeenCalledWith({ name: "cue_exec", phase: "执行中" });
     expect(notifyToolResult).not.toHaveBeenCalled();
     expect(complete).toHaveBeenCalledWith("已完成");
     expect(sendReply).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ assistantText: "你好", channelReplyDelivered: true });
+    expect(
+      channelReplyDeliveryForCompletion(task, "invocation-1", "final", result),
+    ).toBeUndefined();
   });
 
   it("completes a separate execution stream before sending the final channel reply", async () => {
@@ -226,18 +231,67 @@ describe("daemon native session execution", () => {
       },
     });
 
-    await executor(task, context(task));
+    const result = await executor(task, context(task));
 
     expect(appendProgress).toHaveBeenCalledWith("先检查目录");
     expect(notifyToolStart).toHaveBeenCalledWith({ name: "cue_exec", phase: "执行中" });
     expect(appendText).not.toHaveBeenCalled();
     expect(complete).toHaveBeenCalledWith("已完成");
     expect(sendReply).not.toHaveBeenCalled();
+    expect(result).toEqual({ assistantText: "检查完成" });
     expect(
       channelReplyDeliveryForCompletion(task, "invocation-1", "final", {
         assistantText: "检查完成",
       }),
     ).toMatchObject({ text: "检查完成", idempotencyKey: "channel.reply:final:invocation-1" });
+  });
+
+  it("falls back to durable sendReply when an inline stream fails to complete", async () => {
+    const appendText = vi.fn();
+    const complete = vi.fn(async () => {
+      throw new Error("stream dead");
+    });
+    const sendReply = vi.fn(async () => undefined);
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_inline_fallback",
+      prompt: "请回复",
+      channelReply: {
+        workspaceId: "workspace-infoflow",
+        adapterId: "infoflow",
+        recipient: "alice",
+      },
+      channelContext: {
+        externalKey: "infoflow:user:alice",
+        senderId: "alice",
+        messageId: "message-1",
+      },
+    };
+    const executeSession = vi.fn(async () => ({ assistantText: "你好" }));
+    const executor = createChannelAwareTaskExecutor({
+      paths,
+      createSparkHeadlessSessionExecutor: () => executeSession,
+      channelIngress: {
+        openReplyStream: vi.fn(async () => ({
+          answerMode: "inline" as const,
+          appendText,
+          notifyToolStart: vi.fn(),
+          notifyToolResult: vi.fn(),
+          complete,
+          fail: vi.fn(async () => undefined),
+        })),
+        sendReply,
+      },
+    });
+
+    const result = await executor(task, context(task));
+
+    expect(complete).toHaveBeenCalledWith("已完成");
+    expect(result).toEqual({ assistantText: "你好" });
+    expect(channelReplyDeliveryForCompletion(task, "invocation-1", "final", result)).toMatchObject({
+      text: "你好",
+      idempotencyKey: "channel.reply:final:invocation-1",
+    });
   });
 
   it("leaves final delivery to the scheduler transaction when a stream is unavailable", async () => {
@@ -460,6 +514,92 @@ describe("daemon native session execution", () => {
         message: {
           id: "invocation:invocation-1:failure",
           metadata: { source: "daemon.invocation", invocationId: "invocation-1" },
+        },
+      },
+    });
+  });
+
+  it("does not mistake a failed tool projection for the terminal invocation failure", async () => {
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_tool_error_then_terminal_failure",
+      prompt: "run a tool, then fail the turn",
+    };
+    const executor = createSparkDaemonTaskExecutor({
+      paths,
+      createSparkHeadlessSessionExecutor: () => async (input) => {
+        await input.onEvent?.({
+          type: "view_event",
+          event: {
+            version: SPARK_PROTOCOL_VERSION,
+            type: "session.message",
+            sessionId: task.sessionId,
+            message: {
+              version: SPARK_PROTOCOL_VERSION,
+              id: "tool-result:legacy-failure",
+              role: "tool",
+              text: "cue transport failed",
+              status: "error",
+              toolCallId: "legacy-failure",
+              toolName: "cue_exec",
+              parts: [
+                {
+                  id: "tool-result:legacy-failure:part:0",
+                  type: "tool-result",
+                  toolCallId: "legacy-failure",
+                  toolName: "cue_exec",
+                  status: "failed",
+                  summary: "cue transport failed",
+                  metadata: {},
+                },
+              ],
+              metadata: { kind: "tool_result" },
+            },
+          },
+        });
+        throw new Error("provider disconnected after tool failure");
+      },
+    });
+    const emitted: SparkDaemonEvent[] = [];
+
+    await expect(executor(task, context(task, emitted))).rejects.toThrow(
+      "provider disconnected after tool failure",
+    );
+
+    const projectedMessages = emitted.filter(
+      (event) => event.type === "daemon.view_event" && event.view.type === "session.message",
+    );
+    expect(projectedMessages).toContainEqual(
+      expect.objectContaining({
+        invocationId: "invocation-1",
+        view: expect.objectContaining({
+          message: expect.objectContaining({
+            id: "tool-result:legacy-failure",
+            role: "tool",
+            status: "error",
+            metadata: { kind: "tool_result" },
+          }),
+        }),
+      }),
+    );
+    const terminalFailures = projectedMessages.filter(
+      (event) =>
+        event.type === "daemon.view_event" &&
+        event.view.type === "session.message" &&
+        event.view.message.id === "invocation:invocation-1:failure",
+    );
+    expect(terminalFailures).toHaveLength(1);
+    expect(terminalFailures[0]).toMatchObject({
+      view: {
+        message: {
+          role: "system",
+          text: "provider disconnected after tool failure",
+          status: "error",
+          metadata: {
+            source: "daemon.invocation",
+            invocationId: "invocation-1",
+            kind: "invocation_failure",
+          },
         },
       },
     });
@@ -1104,6 +1244,70 @@ describe("daemon native session execution", () => {
     expect(recordRun.mock.invocationCallOrder[0]).toBeLessThan(
       generateSessionTitle.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it("propagates invocation cancellation into the detached title projection", async () => {
+    const controller = new AbortController();
+    const setTitleIfMissing = vi.fn(async () => ({}) as never);
+    let titleSignal: AbortSignal | undefined;
+    const generateSessionTitle = vi.fn(
+      async (input: { signal?: AbortSignal }) =>
+        await new Promise<string>((_resolve, reject) => {
+          titleSignal = input.signal;
+          const rejectWithReason = () => reject(input.signal?.reason ?? new Error("cancelled"));
+          if (input.signal?.aborted) {
+            rejectWithReason();
+            return;
+          }
+          input.signal?.addEventListener("abort", rejectWithReason, { once: true });
+        }),
+    );
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_cancelled_title_projection",
+      prompt: "Do not keep naming after cancellation.",
+      model: "baidu-oneapi/gpt-5.6-sol",
+    };
+    const executor = createSparkDaemonTaskExecutor({
+      paths,
+      modelControl: {
+        effectiveModel: vi.fn(async () => ({
+          providerName: "baidu-oneapi",
+          modelId: "gpt-5.6-sol",
+        })),
+        prepareModel: vi.fn(async () => undefined),
+        generateSessionTitle,
+      },
+      sessionRegistry: {
+        get: vi.fn(async () => ({
+          sessionId: task.sessionId,
+          scope: { kind: "workspace" as const, workspaceId: "workspace-title" },
+          workspaceId: "workspace-title",
+          status: "ready" as const,
+          bindings: [],
+          createdAt: "2026-07-10T00:00:00.000Z",
+          updatedAt: "2026-07-10T00:01:00.000Z",
+          sessionPath: "/daemon/sessions/sess_cancelled_title_projection.jsonl",
+        })),
+        setTitleIfMissing,
+        recordTurnQueued: vi.fn(async () => ({}) as never),
+        recordTurnSettled: vi.fn(async () => ({}) as never),
+        recordRun: vi.fn(async () => ({}) as never),
+      },
+      createSparkHeadlessSessionExecutor: () => async () => ({
+        sessionId: task.sessionId,
+        sessionPath: "/daemon/sessions/sess_cancelled_title_projection.jsonl",
+        assistantText: "done",
+      }),
+    });
+
+    await executor(task, context(task, [], controller.signal));
+    await vi.waitFor(() => expect(titleSignal).toBeInstanceOf(AbortSignal));
+    controller.abort(new Error("invocation cancelled"));
+    await vi.waitFor(() => expect(titleSignal?.aborted).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(setTitleIfMissing).not.toHaveBeenCalled();
   });
 
   it("does not name a session when transcript indexing fails", async () => {

@@ -30,6 +30,7 @@ import {
   mergeSparkProviderSpecs,
 } from "@zendev-lab/spark-ai/control";
 import { DEFAULT_SPARK_EXTENSION_SPECS } from "./extension-specs.ts";
+import { DEFAULT_SPARK_COMPACTION_SETTINGS, type SparkCompactionSettings } from "./compaction.ts";
 
 export interface SparkConfig {
   extensions: string[];
@@ -47,6 +48,7 @@ export interface SparkConfig {
   activeProvider?: string;
   /** @deprecated Use activeModelId. */
   activeModel?: string;
+  compact?: SparkCompactionSettings;
   activeThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 }
 
@@ -71,6 +73,7 @@ export const DEFAULT_SPARK_CONFIG: SparkConfig = {
   themes: [],
   contextFiles: [],
   trustedWorkspaces: [],
+  compact: { ...DEFAULT_SPARK_COMPACTION_SETTINGS },
 };
 
 export function defaultSparkConfigPath(): string {
@@ -132,7 +135,58 @@ export function mergeWithDefault(raw: unknown): SparkConfig {
     activeModelId: parseActiveModelId(fields),
     activeProvider: typeof fields.activeProvider === "string" ? fields.activeProvider : undefined,
     activeModel: typeof fields.activeModel === "string" ? fields.activeModel : undefined,
+    compact: parseSparkCompactionSettings(fields.compact),
     activeThinkingLevel: parseThinkingLevel(fields.activeThinkingLevel),
+  };
+}
+
+function parseSparkCompactionSettings(value: unknown): SparkCompactionSettings {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ...DEFAULT_SPARK_COMPACTION_SETTINGS };
+  }
+  const raw = value as Partial<Record<keyof SparkCompactionSettings, unknown>>;
+  const numberOrDefault = (candidate: unknown, fallback: number): number =>
+    typeof candidate === "number" && Number.isFinite(candidate) ? candidate : fallback;
+  const ratioOrDefault = (candidate: unknown, fallback: number): number => {
+    const parsed = numberOrDefault(candidate, fallback);
+    return parsed >= 0 && parsed <= 1 ? parsed : fallback;
+  };
+  return {
+    ...DEFAULT_SPARK_COMPACTION_SETTINGS,
+    enabled:
+      typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_SPARK_COMPACTION_SETTINGS.enabled,
+    microThreshold: ratioOrDefault(
+      raw.microThreshold,
+      DEFAULT_SPARK_COMPACTION_SETTINGS.microThreshold,
+    ),
+    fullThreshold: ratioOrDefault(
+      raw.fullThreshold,
+      DEFAULT_SPARK_COMPACTION_SETTINGS.fullThreshold,
+    ),
+    targetReduction: ratioOrDefault(
+      raw.targetReduction,
+      DEFAULT_SPARK_COMPACTION_SETTINGS.targetReduction,
+    ),
+    minUsefulReduction: ratioOrDefault(
+      raw.minUsefulReduction,
+      DEFAULT_SPARK_COMPACTION_SETTINGS.minUsefulReduction,
+    ),
+    compactModel:
+      typeof raw.compactModel === "string" && raw.compactModel.trim()
+        ? raw.compactModel
+        : DEFAULT_SPARK_COMPACTION_SETTINGS.compactModel,
+    reserveTokens: Math.max(
+      0,
+      Math.floor(
+        numberOrDefault(raw.reserveTokens, DEFAULT_SPARK_COMPACTION_SETTINGS.reserveTokens),
+      ),
+    ),
+    keepRecentTokens: Math.max(
+      0,
+      Math.floor(
+        numberOrDefault(raw.keepRecentTokens, DEFAULT_SPARK_COMPACTION_SETTINGS.keepRecentTokens),
+      ),
+    ),
   };
 }
 
@@ -146,6 +200,7 @@ function cloneDefault(): SparkConfig {
     themes: [...(DEFAULT_SPARK_CONFIG.themes ?? [])],
     contextFiles: [...(DEFAULT_SPARK_CONFIG.contextFiles ?? [])],
     trustedWorkspaces: [...(DEFAULT_SPARK_CONFIG.trustedWorkspaces ?? [])],
+    compact: DEFAULT_SPARK_CONFIG.compact ? { ...DEFAULT_SPARK_CONFIG.compact } : undefined,
   };
 }
 

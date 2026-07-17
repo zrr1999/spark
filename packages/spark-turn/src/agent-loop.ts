@@ -192,12 +192,6 @@ export type SparkRunOutcome =
       reason: string;
     }
   | {
-      status: "budget_exhausted";
-      assistant: AssistantMessage;
-      roundtrips: number;
-      errorMessage: string;
-    }
-  | {
       status: "failed";
       assistant: AssistantMessage;
       roundtrips: number;
@@ -249,8 +243,6 @@ export interface SparkAgentLoopOptions {
   promptCache?: SparkPromptCacheOptions;
   /** Privacy-safe per-round prompt/tool diagnostics. Enabled by default. */
   promptManifest?: SparkPromptManifestOptions;
-  /** Maximum number of model roundtrips per submit. Defaults to 16. */
-  maxRoundtrips?: number;
   /** Wall-clock timeout for one model stream pass. Defaults to 10 minutes; <=0 disables. */
   streamTimeoutMs?: number;
   /** Wall-clock timeout for one tool execution. Defaults to 5 minutes; <=0 disables. */
@@ -301,7 +293,6 @@ export class SparkAgentLoop {
   readonly host: SparkTurnHost;
   private readonly streamFunction: SparkAgentStreamFunction;
   private readonly getModel: () => Model<string>;
-  private readonly maxRoundtrips: number;
   private readonly streamTimeoutMs: number;
   private readonly toolTimeoutMs: number;
   private readonly interactionTimeoutMs: number;
@@ -347,7 +338,6 @@ export class SparkAgentLoop {
     this.systemPrompt = options.systemPrompt ?? "";
     this.promptCacheOptions = options.promptCache ?? {};
     this.promptManifestOptions = options.promptManifest ?? {};
-    this.maxRoundtrips = options.maxRoundtrips ?? 16;
     this.streamTimeoutMs = normalizeTimeoutMs(
       options.streamTimeoutMs,
       DEFAULT_SPARK_AGENT_LOOP_STREAM_TIMEOUT_MS,
@@ -572,10 +562,7 @@ export class SparkAgentLoop {
     const finishAgentTurn = (outcome: SparkRunOutcome): SparkRunOutcome => {
       this.lastOutcome = outcome;
       this.publish({ type: "run_outcome", outcome });
-      const errorMessage =
-        outcome.status === "failed" || outcome.status === "budget_exhausted"
-          ? outcome.errorMessage
-          : undefined;
+      const errorMessage = outcome.status === "failed" ? outcome.errorMessage : undefined;
       agentEndPayload ??= {
         messages: [outcome.assistant],
         ...(errorMessage ? { errorMessage } : {}),
@@ -583,7 +570,7 @@ export class SparkAgentLoop {
       };
       return outcome;
     };
-    const fail = (status: "failed" | "budget_exhausted", message: string): SparkRunOutcome => {
+    const fail = (message: string): SparkRunOutcome => {
       const terminalAssistant = loopTerminalAssistant(
         lastAssistant,
         safeGetModel(this.getModel),
@@ -592,7 +579,7 @@ export class SparkAgentLoop {
       );
       this.promptItems.push(sparkPromptItemFromProviderMessage(terminalAssistant));
       return finishAgentTurn({
-        status,
+        status: "failed",
         assistant: terminalAssistant,
         roundtrips,
         errorMessage: message,
@@ -617,7 +604,7 @@ export class SparkAgentLoop {
     try {
       let skipLifecycle = options.skipInitialLifecycle ?? false;
       const lifecycleSource = options.lifecycleSource ?? "agentLoop";
-      while (roundtrips < this.maxRoundtrips) {
+      while (true) {
         if (this.state === "aborting") break;
         if (!skipLifecycle) {
           await this.host.emit("turn_start", { source: lifecycleSource });
@@ -679,7 +666,6 @@ export class SparkAgentLoop {
             }),
             selectedSkills: safeSelectedSkills(this.promptManifestOptions.getSelectedSkills),
             roundtripIndex: roundtrips,
-            maxRoundtrips: this.maxRoundtrips,
             maxParallelToolCalls: this.maxParallelToolCalls,
           });
           this.lastPromptManifest = manifest;
@@ -705,13 +691,13 @@ export class SparkAgentLoop {
             return abort(this.currentAbortReason ?? message);
           }
           this.publish({ type: "error", message });
-          return fail("failed", message);
+          return fail(message);
         }
 
         if (!assistant) {
           const message = "stream produced no assistant message";
           this.publish({ type: "error", message });
-          return fail("failed", message);
+          return fail(message);
         }
 
         const toolCalls = collectToolCalls(assistant);
@@ -723,7 +709,7 @@ export class SparkAgentLoop {
         ) {
           const message = "model completed without a displayable response";
           this.publish({ type: "error", message });
-          return fail("failed", message);
+          return fail(message);
         }
 
         this.promptItems.push(sparkPromptItemFromProviderMessage(assistant));
@@ -776,25 +762,16 @@ export class SparkAgentLoop {
         return abort(this.currentAbortReason ?? "user_abort");
       }
 
-      if (roundtrips >= this.maxRoundtrips) {
-        const message = `agent loop hit maxRoundtrips=${this.maxRoundtrips}; stopping`;
-        this.publish({
-          type: "error",
-          message,
-        });
-        return fail("budget_exhausted", message);
-      }
-
       const message = "agent loop stopped without a terminal outcome";
       this.publish({ type: "error", message });
-      return fail("failed", message);
+      return fail(message);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (this.state === "aborting" || this.currentAbortReason) {
         return abort(this.currentAbortReason ?? message);
       }
       this.publish({ type: "error", message });
-      return fail("failed", message);
+      return fail(message);
     } finally {
       this.currentAbort = undefined;
       this.currentAbortReason = undefined;
@@ -2139,7 +2116,9 @@ function toolResultToMessageView(message: ToolResultMessage): SparkMessageView {
     id,
     role: "tool",
     text: summary,
-    status: message.isError ? "error" : "done",
+    // Tool failure is process state, not a terminal conversation failure.
+    // The tool-result part retains status=failed for the execution chain.
+    status: "done",
     toolCallId: message.toolCallId,
     toolName: message.toolName,
     createdAt: timestampToIso((message as { timestamp?: unknown }).timestamp),

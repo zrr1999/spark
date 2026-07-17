@@ -35,6 +35,8 @@ export interface SparkSessionModelRef {
 
 export interface SparkToolContext {
   cwd: string;
+  /** Command-host bridge for dispatching a turn through an externally owned session runtime. */
+  sendUserMessage?: (content: string) => Promise<void>;
   model?: SparkSessionModelRef;
   runRole?: ExtensionRoleRunner;
   sparkActiveLens?: {

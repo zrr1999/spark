@@ -13,6 +13,7 @@ import {
 } from "../packages/pi-extension/src/extension/session-state.ts";
 import {
   sparkSessionKey,
+  sparkSessionOwnerKey,
   sparkStateCwd,
 } from "../packages/pi-extension/src/extension/session-identity.ts";
 import {
@@ -27,6 +28,26 @@ import {
   sparkStateRootPath as sparkLoopStateRootPath,
 } from "../packages/spark-loop/src/index.ts";
 
+void test("sparkSessionKey prefers host sessionId over sessionManager stubs", () => {
+  assert.equal(
+    sparkSessionKey({
+      sessionId: "sess_daemon_1",
+      sessionManager: {
+        getSessionFile: () => "/tmp/local.jsonl",
+        getLeafId: () => "leaf:ignored",
+      },
+    }),
+    "session:sess_daemon_1",
+  );
+  assert.equal(
+    sparkSessionOwnerKey({
+      sessionId: "session:already-qualified",
+      sessionManager: { getSessionFile: () => "/tmp/local.jsonl" },
+    }),
+    "session:already-qualified",
+  );
+});
+
 void test("sparkSessionKey accepts fully-qualified session manager leaf keys", () => {
   assert.equal(
     sparkSessionKey({ sessionManager: { getLeafId: () => "session:5ad35e499eafe941" } }),
@@ -36,6 +57,19 @@ void test("sparkSessionKey accepts fully-qualified session manager leaf keys", (
   assert.equal(
     sparkSessionKey({ sessionManager: { getLeafId: () => "raw-leaf" } }),
     "leaf:raw-leaf",
+  );
+});
+
+void test("spark-loop session identity prefers host sessionId over sessionManager stubs", () => {
+  assert.equal(
+    sparkLoopSessionKey({
+      sessionId: "sess_loop_1",
+      sessionManager: {
+        getSessionFile: () => "/tmp/local.jsonl",
+        getLeafId: () => "leaf:ignored",
+      },
+    }),
+    "session:sess_loop_1",
   );
 });
 

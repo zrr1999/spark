@@ -247,6 +247,19 @@ function makeContext(
   };
 }
 
+function registerSecondCockpitWorkspace(harness: TestHarness) {
+  return registerWorkspace(harness.db, {
+    serverUrl: "https://other-cockpit.example.test/",
+    serverWorkspaceId: "ws_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    serverBindingId: "rtwb_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    localWorkspaceKey: "other-cockpit-workspace",
+    displayName: "Other Cockpit workspace",
+    workspaceName: "Other Cockpit workspace",
+    workspaceSlug: "other-cockpit-workspace",
+    localPath: harness.workspace.localPath,
+  });
+}
+
 function buildTaskStartEnvelope(workspaceBindingId: string) {
   return serverCommandEnvelopeSchema.parse({
     protocolVersion: runtimeProtocolVersion,
@@ -431,6 +444,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
         status: "queued",
         attemptCount: 0,
       });
+      expect(stopIngress).toHaveBeenCalledOnce();
     } finally {
       harness.cleanup();
     }
@@ -489,8 +503,9 @@ describe("Spark daemon handleCommand task.start.request", () => {
         },
         signal: shutdown.signal,
         channelIngress,
-        onReady: () => {
+        onReady: (runtime) => {
           order.push("control");
+          expect(runtime.channelIngress).toBe(channelIngress);
           expect(lifecycle.snapshot().state).toBe("starting");
           expect(terminalPublished()).toBe(false);
         },
@@ -663,8 +678,15 @@ describe("Spark daemon handleCommand task.start.request", () => {
     const harness = makeHarness();
     const shutdown = new AbortController();
     const lifecycle = new SparkDaemonLifecycle();
+    const invocationRegistry = new SparkDaemonInvocationRegistry();
+    let directHandle: ReturnType<SparkDaemonInvocationRegistry["start"]> | undefined;
     const activeStarted = deferred<void>();
     const releaseActive = deferred<void>();
+    const drainProgress: Array<{
+      stage: "active-work" | "channel-ingress";
+      scheduler: Array<{ invocationId: string }>;
+      direct: Array<{ invocationId: string }>;
+    }> = [];
     let running: Promise<void> | undefined;
     try {
       const store = new SparkInvocationStore(harness.db);
@@ -689,6 +711,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
         signal: shutdown.signal,
         drainSignal: lifecycle.drainSignal,
         restartSignal: lifecycle.restartSignal,
+        invocationRegistry,
         schedulerConcurrency: 1,
         schedulerPollIntervalMs: 5,
         executeInvocation: async (task) => {
@@ -697,6 +720,14 @@ describe("Spark daemon handleCommand task.start.request", () => {
           await releaseActive.promise;
           return { text: "finished by old daemon" };
         },
+        onServing: () => {
+          directHandle = invocationRegistry.start({
+            invocationId: "inv_direct_restart_blocker",
+            kind: "session.run",
+            sessionId: "restart-direct",
+          });
+        },
+        onDrainProgress: (progress) => drainProgress.push(progress),
       });
 
       await activeStarted.promise;
@@ -714,9 +745,21 @@ describe("Spark daemon handleCommand task.start.request", () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(store.require(queued.invocationId).status).toBe("queued");
       expect(executed).toEqual(["restart-active"]);
+      expect(drainProgress.at(-1)).toMatchObject({
+        stage: "active-work",
+        scheduler: [{ invocationId: active.invocationId }],
+        direct: [{ invocationId: "inv_direct_restart_blocker" }],
+      });
 
       releaseActive.resolve(undefined);
+      directHandle?.finish();
       await running;
+
+      expect(drainProgress.at(-1)).toMatchObject({
+        stage: "channel-ingress",
+        scheduler: [],
+        direct: [],
+      });
 
       expect(store.require(active.invocationId)).toMatchObject({
         status: "succeeded",
@@ -1151,6 +1194,86 @@ describe("Spark daemon handleCommand task.start.request", () => {
           retryable: false,
         },
       });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("rejects another Cockpit's workspace command before claiming a durable receipt", async () => {
+    const harness = makeHarness();
+    try {
+      const otherWorkspace = registerSecondCockpitWorkspace(harness);
+      const ws = new CapturingSocket();
+      const command = serverCommandEnvelopeSchema.parse({
+        ...buildTaskStartEnvelope(otherWorkspace.id),
+        workspaceId: "ws_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      });
+      const runSparkCommand = vi.fn<RunSparkCommandFn>();
+      const context = makeContext(harness, runSparkCommand);
+      context.serverUrl = "https://cockpit.example.test/";
+
+      await handleCommand(ws, command, context);
+
+      expect(runSparkCommand).not.toHaveBeenCalled();
+      expect(ws.sent).toEqual([
+        expect.objectContaining({
+          type: "runtime.command.reject",
+          payload: expect.objectContaining({
+            reasonCode: "WORKSPACE_ROUTE_MISMATCH",
+            retryable: false,
+          }),
+        }),
+      ]);
+      expect(
+        harness.db
+          .prepare("SELECT COUNT(*) AS count FROM runtime_command_receipts WHERE command_id = ?")
+          .get(command.commandId!),
+      ).toEqual({ count: 0 });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("rejects another Cockpit's workspace-scoped ephemeral secret request", async () => {
+    const harness = makeHarness();
+    try {
+      const otherWorkspace = registerSecondCockpitWorkspace(harness);
+      const ws = new CapturingSocket();
+      const context = makeContext(harness, vi.fn<RunSparkCommandFn>());
+      context.serverUrl = "https://cockpit.example.test/";
+      const request = {
+        protocolVersion: runtimeProtocolVersion,
+        messageId: createId("msg"),
+        type: "server.ephemeral_secret.request",
+        sentAt: new Date().toISOString(),
+        runtimeId: context.runtimeId,
+        workspaceBindingId: otherWorkspace.id,
+        workspaceId: "ws_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ephemeralRequestId: createId("eph"),
+        actorUserId: "usr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        browserRequestId: createId("msg"),
+        csrfVerified: true,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        payload: {
+          operation: "channel.configure",
+          workspaceId: "ws_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          config: { adapter: "qqbot", appSecret: "must-not-cross-uplinks" },
+        },
+      };
+
+      await handleServerMessage(ws, JSON.stringify(request), context);
+
+      expect(ws.sent).toEqual([
+        expect.objectContaining({
+          type: "runtime.ephemeral_secret.result",
+          workspaceBindingId: otherWorkspace.id,
+          payload: expect.objectContaining({
+            operation: "channel.configure",
+            status: "failed",
+            reasonCode: "SECRET_ROUTE_INVALID",
+          }),
+        }),
+      ]);
     } finally {
       harness.cleanup();
     }
@@ -1681,6 +1804,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
       const context = makeContext(harness, async () => {
         throw new Error("task bridge must not be invoked for human response delivery");
       });
+      context.serverUrl = "https://cockpit.example.test/";
       const registration = createDaemonHumanWait(ws, context, {
         invocationId: "inv_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         workspaceBindingId: harness.workspace.id,
@@ -1695,7 +1819,7 @@ describe("Spark daemon handleCommand task.start.request", () => {
             type: "single",
             prompt: "Continue?",
             required: true,
-            options: [{ id: "yes", label: "Yes" }],
+            options: [{ value: "yes", label: "Yes" }],
           },
         ],
       });
@@ -1746,6 +1870,132 @@ describe("Spark daemon handleCommand task.start.request", () => {
         .get(registration.wait.humanRequestId) as { status: string; responseJson: string };
       expect(row.status).toBe("answered");
       expect(JSON.parse(row.responseJson)).toMatchObject({ status: "answered" });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("keeps a human wait pending across wrong runtime, wrong Cockpit, and mismatched ids", async () => {
+    const harness = makeHarness();
+    try {
+      registerSecondCockpitWorkspace(harness);
+      const wsA = new CapturingSocket();
+      const wsB = new CapturingSocket();
+      const contextA = makeContext(harness, vi.fn<RunSparkCommandFn>());
+      contextA.serverUrl = "https://cockpit.example.test/";
+      const contextB = makeContext(harness, vi.fn<RunSparkCommandFn>());
+      contextB.runtimeId = "rt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+      contextB.serverUrl = "https://other-cockpit.example.test/";
+      const registration = createDaemonHumanWait(wsA, contextA, {
+        invocationId: "inv_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        workspaceBindingId: harness.workspace.id,
+        workspaceId: "ws_22222222222222222222222222222222",
+        projectId: "proj_33333333333333333333333333333333",
+        kind: "ask_user",
+        title: "Route-bound decision",
+        prompt: "Continue?",
+        questions: [],
+      });
+      const response = {
+        protocolVersion: runtimeProtocolVersion,
+        messageId: createId("msg"),
+        type: "human.response.deliver",
+        sentAt: new Date().toISOString(),
+        runtimeId: contextA.runtimeId,
+        workspaceBindingId: harness.workspace.id,
+        workspaceId: "ws_22222222222222222222222222222222",
+        projectId: "proj_33333333333333333333333333333333",
+        humanRequestId: registration.wait.humanRequestId,
+        payload: { status: "answered", answers: { decision: "yes" }, responseArtifactRefs: [] },
+      };
+
+      await handleServerMessage(
+        wsA,
+        JSON.stringify({
+          ...response,
+          messageId: createId("msg"),
+          runtimeId: contextB.runtimeId,
+        }),
+        contextA,
+      );
+      await handleServerMessage(
+        wsB,
+        JSON.stringify({
+          ...response,
+          messageId: createId("msg"),
+          runtimeId: contextB.runtimeId,
+        }),
+        contextB,
+      );
+      await handleServerMessage(
+        wsA,
+        JSON.stringify({
+          ...response,
+          messageId: createId("msg"),
+          workspaceId: "ws_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        }),
+        contextA,
+      );
+
+      expect(contextA.humanWaits?.get(registration.wait.humanRequestId)).toMatchObject({
+        status: "pending",
+      });
+      expect(contextA.humanWaits?.hasActive(registration.wait.humanRequestId)).toBe(true);
+      expect(wsA.sent.slice(1)).toEqual([
+        expect.objectContaining({
+          type: "human.response.ack",
+          payload: expect.objectContaining({ outcome: "unknown_request", returnedToTool: false }),
+        }),
+        expect.objectContaining({
+          type: "human.response.ack",
+          payload: expect.objectContaining({ outcome: "unknown_request", returnedToTool: false }),
+        }),
+      ]);
+      expect(wsB.sent).toEqual([
+        expect.objectContaining({
+          type: "human.response.ack",
+          payload: expect.objectContaining({ outcome: "unknown_request", returnedToTool: false }),
+        }),
+      ]);
+
+      await handleServerMessage(wsA, JSON.stringify(response), contextA);
+      await expect(registration.response).resolves.toMatchObject({ status: "answered" });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("does not let one Cockpit acknowledge another Cockpit's human outbox entry", async () => {
+    const harness = makeHarness();
+    try {
+      registerSecondCockpitWorkspace(harness);
+      const ws = new CapturingSocket();
+      const contextA = makeContext(harness, vi.fn<RunSparkCommandFn>());
+      contextA.serverUrl = "https://cockpit.example.test/";
+      const contextB = makeContext(harness, vi.fn<RunSparkCommandFn>());
+      contextB.runtimeId = "rt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+      contextB.serverUrl = "https://other-cockpit.example.test/";
+      createDaemonHumanWait(ws, contextA, {
+        delivery: "async",
+        workspaceBindingId: harness.workspace.id,
+        workspaceId: "ws_22222222222222222222222222222222",
+        kind: "ask_user",
+        title: "Durable decision",
+        prompt: "Continue?",
+        questions: [],
+      });
+      const outbound = ws.sent[0] as { messageId: string };
+      const ack = JSON.stringify({ type: "server.ingest_ack", ackOf: outbound.messageId });
+
+      await handleServerMessage(ws, ack, contextB);
+      expect(
+        harness.db.prepare("SELECT status FROM outbox WHERE id = ?").get(outbound.messageId),
+      ).toEqual({ status: "pending" });
+
+      await handleServerMessage(ws, ack, contextA);
+      expect(
+        harness.db.prepare("SELECT status FROM outbox WHERE id = ?").get(outbound.messageId),
+      ).toEqual({ status: "acked" });
     } finally {
       harness.cleanup();
     }

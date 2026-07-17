@@ -7,8 +7,10 @@ import {
 import { openMemoryDatabase } from "@zendev-lab/spark-db";
 import {
   acknowledgeRuntimeCommandTerminal,
+  acknowledgeRuntimeCommandTerminalForRoute,
   claimRuntimeCommandReceipt,
   pendingRuntimeCommandTerminals,
+  pendingRuntimeCommandTerminalsForRoute,
   recordRuntimeCommandAck,
   recordRuntimeCommandTerminal,
   recoverInterruptedRuntimeCommandReceipts,
@@ -16,6 +18,7 @@ import {
 } from "./runtime-command-receipts.ts";
 import { SparkInvocationStore } from "./store/invocations.ts";
 import { migrateSparkDaemonDatabase } from "./store/schema.ts";
+import { addWorkspace } from "./store/workspaces.ts";
 
 const receiptCommandId = "cmd_10000000000000000000000000000000";
 
@@ -44,7 +47,140 @@ function turnSubmitCommand() {
   });
 }
 
+function seedTerminal(
+  db: ReturnType<typeof openMemoryDatabase>,
+  input: {
+    commandId: string;
+    messageId: string;
+    runtimeId: string;
+    workspaceBindingId?: string;
+  },
+): Record<string, unknown> {
+  const now = "2026-07-15T00:00:02.000Z";
+  const terminal = {
+    messageId: input.messageId,
+    type: "runtime.command.result",
+    runtimeId: input.runtimeId,
+    ...(input.workspaceBindingId ? { workspaceBindingId: input.workspaceBindingId } : {}),
+    commandId: input.commandId,
+    payload: { status: "succeeded" },
+  };
+  db.prepare(
+    `INSERT INTO runtime_command_receipts
+      (command_id, runtime_id, scope, workspace_binding_id, kind, payload_hash, status,
+       delivery_count, terminal_message_id, terminal_json, first_seen_at, last_seen_at,
+       completed_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'test.command', ?, 'succeeded', 1, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    input.commandId,
+    input.runtimeId,
+    input.workspaceBindingId ? "workspace" : "daemon",
+    input.workspaceBindingId ?? null,
+    `hash-${input.commandId}`,
+    input.messageId,
+    JSON.stringify(terminal),
+    now,
+    now,
+    now,
+    now,
+    now,
+  );
+  return terminal;
+}
+
 describe("runtime command receipts", () => {
+  it("filters terminals before limiting and rejects cross-Cockpit acknowledgements", () => {
+    const db = openMemoryDatabase();
+    migrateSparkDaemonDatabase(db);
+    const serverA = "https://a.example.test/";
+    const serverB = "https://b.example.test/";
+    const runtimeA = "rt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const runtimeB = "rt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const bindingA = "rtwb_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const bindingB = "rtwb_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    addWorkspace(db, {
+      id: bindingA,
+      serverUrl: serverA,
+      localWorkspaceKey: "workspace-a",
+      displayName: "Workspace A",
+      localPath: "/workspace-a",
+    });
+    addWorkspace(db, {
+      id: bindingB,
+      serverUrl: serverB,
+      localWorkspaceKey: "workspace-b",
+      displayName: "Workspace B",
+      localPath: "/workspace-b",
+    });
+    for (let index = 0; index < 100; index += 1) {
+      const suffix = index.toString().padStart(3, "0");
+      seedTerminal(db, {
+        commandId: `command-a-${suffix}`,
+        messageId: `message-a-${suffix}`,
+        runtimeId: runtimeA,
+        workspaceBindingId: bindingA,
+      });
+    }
+    const terminalB = seedTerminal(db, {
+      commandId: "command-b",
+      messageId: "message-b",
+      runtimeId: runtimeB,
+      workspaceBindingId: bindingB,
+    });
+
+    expect(
+      pendingRuntimeCommandTerminalsForRoute(db, { runtimeId: runtimeB, serverUrl: serverB }),
+    ).toEqual([terminalB]);
+    expect(
+      acknowledgeRuntimeCommandTerminalForRoute(db, "message-b", {
+        runtimeId: runtimeA,
+        serverUrl: serverA,
+      }),
+    ).toBe(false);
+    expect(
+      acknowledgeRuntimeCommandTerminalForRoute(db, "message-b", {
+        runtimeId: runtimeB,
+        serverUrl: serverB,
+      }),
+    ).toBe(true);
+    db.close();
+  });
+
+  it("routes daemon-scoped terminals by runtime id", () => {
+    const db = openMemoryDatabase();
+    migrateSparkDaemonDatabase(db);
+    const terminalA = seedTerminal(db, {
+      commandId: "command-daemon-a",
+      messageId: "message-daemon-a",
+      runtimeId: "rt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    });
+    seedTerminal(db, {
+      commandId: "command-daemon-b",
+      messageId: "message-daemon-b",
+      runtimeId: "rt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    });
+
+    expect(
+      pendingRuntimeCommandTerminalsForRoute(db, {
+        runtimeId: "rt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        serverUrl: null,
+      }),
+    ).toEqual([terminalA]);
+    expect(
+      acknowledgeRuntimeCommandTerminalForRoute(db, "message-daemon-a", {
+        runtimeId: "rt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        serverUrl: null,
+      }),
+    ).toBe(false);
+    expect(
+      acknowledgeRuntimeCommandTerminalForRoute(db, "message-daemon-a", {
+        runtimeId: "rt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        serverUrl: null,
+      }),
+    ).toBe(true);
+    db.close();
+  });
+
   it("claims once, replays persisted terminal state, and rejects payload conflicts", () => {
     const db = openMemoryDatabase();
     migrateSparkDaemonDatabase(db);

@@ -20,6 +20,7 @@ import {
 } from "./summary.ts";
 import {
   defaultAskChoice,
+  hasAskAnswerContent,
   hasRequiredAskSelections,
   hasSubmittedRequiredAskAnswers,
   inferAskSubmitStatus,
@@ -110,7 +111,7 @@ export async function runPiAskFlow(
 ): Promise<PiAskFlowResult> {
   const request = createPiAskFlowRequest(input);
   const interactionRun = await runPiAskFlowInteraction(request, ui as PiAskFlowToolContext["ui"]);
-  if (interactionRun) return interactionRun.result;
+  if (interactionRun) return normalizePiAskFlowResult(interactionRun.result, request);
   if (request.delivery === "async") return createNoSelectionPiAskFlowResult(request, {});
   if (!ui?.select && !ui?.selectWithCustom && !ui?.input) return defaultPiAskFlowResult(request);
 
@@ -144,7 +145,7 @@ export async function runPiAskFlow(
         parseAskChoice(question.options, choice.customText ?? choice.value ?? "", question.type),
       );
       answers[question.id] = answer;
-      if (requiresExplicitSelection(request, question) && answer.values.length === 0) {
+      if (requiresExplicitSelection(request, question) && !hasAskAnswerContent(answer)) {
         return createNoSelectionPiAskFlowResult(request, answers);
       }
     }

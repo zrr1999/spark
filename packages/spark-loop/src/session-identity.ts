@@ -4,6 +4,8 @@ import { stableId } from "@zendev-lab/spark-extension-api";
 
 export interface SparkSessionContext {
   cwd?: string;
+  /** Host-bound Spark session identity; preferred over sessionManager stubs. */
+  sessionId?: string;
   /** Optional absolute path to the Spark state root directory (`.../.spark`). */
   sparkStateRoot?: string;
   sessionManager?: {
@@ -13,6 +15,11 @@ export interface SparkSessionContext {
 }
 
 export function sparkSessionKey(ctx?: SparkSessionContext): string {
+  const sessionId = ctx?.sessionId?.trim();
+  if (sessionId) {
+    if (sessionId.startsWith("session:") || sessionId.startsWith("leaf:")) return sessionId;
+    return `session:${sessionId}`;
+  }
   const sessionFile = ctx?.sessionManager?.getSessionFile?.();
   if (sessionFile) return `session:${stableId(sessionFile)}`;
   const leaf = ctx?.sessionManager?.getLeafId?.();
@@ -24,8 +31,6 @@ export function sparkSessionKey(ctx?: SparkSessionContext): string {
 }
 
 export function sparkSessionOwnerKey(ctx?: SparkSessionContext): string {
-  const sessionFile = ctx?.sessionManager?.getSessionFile?.();
-  if (sessionFile) return `session:${stableId(sessionFile)}`;
   return sparkSessionKey(ctx);
 }
 

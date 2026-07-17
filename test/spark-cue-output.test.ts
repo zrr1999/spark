@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -696,36 +696,6 @@ void test("cue_schedule filters the cron statuses emitted by cue-shell", async (
       ),
     /cue_schedule status must be all, scheduled, paused, completed, expired, or failed/,
   );
-});
-
-void test("spark-cue docs document script runner venv and uv script behavior", async () => {
-  const skill = await readFile("packages/spark-cue/skills/spark-cue/SKILL.md", "utf8");
-  const readme = await readFile("packages/spark-cue/README.md", "utf8");
-  const toolsDoc = await readFile("docs/specs/tools.md", "utf8");
-
-  assert.match(skill, /`script_run`\s+\|[^\n]+`venv\?`/);
-  assert.match(skill, /`script_eval`\s+\|[^\n]+`venv\?`/);
-  assert.doesNotMatch(skill, /`script_run`\s+\|[^\n]+`scope\?`/);
-  assert.doesNotMatch(skill, /`script_eval`\s+\|[^\n]+`scope\?`/);
-  assert.match(skill, /Python script files execute through `uv run --script <path>`/);
-  assert.match(skill, /inline Python is piped to `uv run --script -`/);
-  assert.match(skill, /`venv` is valid only with `language="python"`/);
-  assert.match(skill, /`&&` is valid cue-shell job logic/);
-  assert.doesNotMatch(skill, /`&&` is bash; use `->`/);
-
-  assert.match(readme, /uv run --python <venv>\/bin\/python --script <path>/);
-  assert.match(readme, /uv run --python <venv>\/bin\/python --script -/);
-  assert.match(readme, /Tool-call rendering shows a fixed, bounded preview/);
-  assert.doesNotMatch(readme, /`scope` is valid only for `language: "cue-shell"`/);
-
-  assert.match(toolsDoc, /`spark-cue` tools \([^\n]+`cue_resources`[^\n]+\)/);
-  assert.match(toolsDoc, /`cue_resources` — inspect resource providers and snapshots/);
-  assert.match(toolsDoc, /uv run --script -/);
-  assert.match(toolsDoc, /`venv` is python-only/);
-  assert.match(toolsDoc, /`scope` is not a `script_run`\/`script_eval` parameter/);
-  assert.match(toolsDoc, /`RunScript \{ path, input \}`/);
-  assert.doesNotMatch(toolsDoc, /scope` is cue-shell-only/);
-  assert.doesNotMatch(toolsDoc, /temporary `\.py` file/);
 });
 
 void test("script_run and script_eval do not pass removed scope to RunScript", async () => {

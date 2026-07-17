@@ -1,11 +1,6 @@
 import type { SparkPromptManifest, SparkPromptManifestToolEffect } from "./prompt-manifest.ts";
 
-export type SparkBehaviorEvalOutcome =
-  | "completed"
-  | "blocked"
-  | "aborted"
-  | "budget_exhausted"
-  | "failed";
+export type SparkBehaviorEvalOutcome = "completed" | "blocked" | "aborted" | "failed";
 
 export interface SparkBehaviorEvalToolCall {
   name: string;
@@ -29,7 +24,6 @@ export interface SparkBehaviorEvalExpectation {
   allowedEffects?: readonly SparkPromptManifestToolEffect[];
   expectedOutcomes?: readonly SparkBehaviorEvalOutcome[];
   maxToolCalls?: number;
-  maxRoundtrips?: number;
   requireEvidence?: boolean;
 }
 
@@ -103,15 +97,6 @@ export function evaluateSparkBehavior(
         "tool_budget",
         calls.length <= expectation.maxToolCalls,
         `observed=${calls.length} maximum=${expectation.maxToolCalls}`,
-      ),
-    );
-  }
-  if (expectation.maxRoundtrips !== undefined) {
-    checks.push(
-      check(
-        "roundtrip_budget",
-        observation.roundtrips <= expectation.maxRoundtrips,
-        `observed=${observation.roundtrips} maximum=${expectation.maxRoundtrips}`,
       ),
     );
   }

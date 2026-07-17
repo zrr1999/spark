@@ -1,91 +1,73 @@
 ---
-description: "spark：面向 Pi 的 Spark 工作流套件"
+description: "spark：以 Pi SDK 为内核，统一 TUI / Cockpit / 消息平台的本地智能开发编排"
 owner: zrr1999
 created: 2026-05-18
-updated: 2026-06-15
+updated: 2026-07-17
 inspired_by:
-   - pi
-   - cue-shell
-   - spark-ask
-   - spark-roles
+  - pi-sdk
+  - cue-shell
+  - spark-ask
+  - spark-roles
 ---
 
 # `spark` 项目意图
 
 ## 起源
 
-`spark` 是面向 Pi 的 Spark 工作流套件。它通过意图明确的用户命令与规范化工具，将项目意图、项目与任务有向无环图、结构化提问、审查、证据制品、角色执行以及 `cue-shell` 执行能力组织为可追溯的本地工作流。早期 `SPARK.md` 由占位意图生成；当前文件依据已经落地的包边界、历史任务审查和实现状态重新整理。
+`spark` 最初作为面向 Pi 产品的工作流套件起步，通过意图明确的用户命令与规范化工具，将项目意图、任务有向无环图、结构化提问、审查、证据制品、角色执行以及 `cue-shell` 执行能力组织为可追溯的本地工作流。仓库落地后，执行与会话中枢已迁移到 Spark daemon，产品面扩展为原生 TUI、Cockpit Web 与消息通道；**Pi SDK**（`@earendil-works/pi-ai`、`@earendil-works/pi-tui` 及与之对齐的流式/会话形状）仍是模型与终端呈现内核，**Pi 产品宿主**（`pi-coding-agent` 扩展加载路径）则降为待冻结的兼容面。
 
 ## 当前工作标题
 
-- Spark 工作流套件
-- 面向 Pi 的本地智能开发编排
+- Spark 本地智能开发编排
+- 统一 TUI / Cockpit / 消息平台，Pi SDK 为内核
 
 ## 目标
 
-- 让 Spark 在没有 `.spark/` 或 `SPARK.md` 预置状态时也能默认进行轻量调查，并让 project-bound 命令在需要项目绑定状态时从用户意图创建或恢复本地 Spark 状态，而不是依赖聊天上下文记忆。
-- 用持久化的项目与任务有向无环图表达工作分解、依赖、认领、待办事项、运行记录和完成状态。
-- 用类型化证据制品记录结构化提问答案、角色执行输出、审查结果、运行轨迹和后续证据。
-- 将结构化提问作为工作流原语：在项目、任务、路线图或审查流程需要真实澄清或决策时调用，而不是展示宽泛的录入表单。
-- 将可复用角色定义和单次子 Pi 执行下沉到 `spark-roles`；Spark 仅负责有向无环图、任务、证据制品、审查和结构化提问的编排。
-- 将 `cue-shell` 执行能力作为 `spark-cue` 的可复用底座；默认输出应适合上下文阅读，并保留按需展开完整输出的方式。
-- 将任务计划、就绪性和证据要求作为完成状态约束，避免失败、未启动或空输出的运行被误判为完成。
+- 以 daemon 为持久会话与调用调度真源；TUI、Cockpit、消息通道、本地 RPC 共用一套 registry 与 invocation，不维护并行会话状态机。
+- 在 `spark-protocol` 中沉淀跨表面交互协议（ask 判定、slash/action catalog、session status / pending turns、可展示错误），各表面只保留呈现与执行胶水。
+- 保持 Pi SDK 为内核：模型流、provider、终端 UI 原语继续建立在 `pi-ai` / `pi-tui`（经 `spark-ai` / `spark-tui` 边界）之上，不把“退场 Pi 产品”误解为剥离 SDK。
+- 冻结并规划退场 Pi 产品宿主兼容：`pi-extension`、`package.json#pi` 发现、`pi-coding-agent` 加载路径只保留窄读与必要磁盘格式兼容，新能力只进入 Spark 宿主家族。
+- 让 Spark 在没有 `.spark/` 或 `SPARK.md` 预置状态时也能默认进行轻量调查，并让 project-bound 命令在需要时从用户意图创建或恢复本地 Spark 状态。
+- 用持久化的项目与任务有向无环图、类型化证据制品、结构化提问与角色执行组织可追溯工作流；`cue-shell` 能力经 `spark-cue` 复用。
 
 ## 当前包边界
 
-Spark 现在支持 Pi 扩展宿主和 Spark 原生宿主家族：Pi 中的 `packages/pi-extension/src/extension/` 是意图命令和门面策略的 Pi 扩展入口；Spark 原生 TUI/headless/daemon 共享 `packages/spark-host` 的 `SparkHostRuntime` 与 `packages/spark-turn` 的 `SparkAgentLoop` / `SparkTurnRunner`，`apps/spark-tui` 只保留原生 `pi-tui` 表现层、启动 glue、会话存储、提供方注册表、模型选择器和兼容重导出。`apps/spark-cli` 只发布根 `spark` dispatcher，把 `spark <name>` 转发给 `spark-<name>` 可执行 app。共享扩展包通过 `spark-extension-api` 在两个宿主中运行，不应依赖具体的 Pi SDK 运行时。
+- **内核（Pi SDK）**：`spark-ai`（`pi-ai`）、`spark-tui` / `spark-text`（`pi-tui`）、以及与 pi-ai 流形状对齐的 `spark-turn`。
+- **执行宿主**：`spark-host` + `spark-turn` 服务 TUI / headless / daemon；`apps/spark-daemon` 拥有会话、通道与 SQLite；`apps/spark-tui` 与 `apps/spark-cockpit` 是一等产品面。
+- **跨表面契约**：`spark-protocol`（含 ask 语义、action-bar、session view、human-interaction 生命周期）；`spark-extension-api` 是 Spark 原生扩展宿主契约（历史命名含 Pi，语义上已是 host-neutral）。
+- **能力包**：`spark-ask`、`spark-artifacts`、`spark-tasks`、`spark-roles`、`spark-cue`、`spark-channels`、`spark-coordination` 等；工具表面使用规范化 `tool({ action })`。
+- **Pi 产品兼容（冻结）**：`packages/pi-extension`（legacy facade，slated for retirement）、`packages/pi-btw`、以及各包上的 `"pi": { "extensions": ... }` 发现元数据。Spark 原生宿主通过显式 specifier 加载门面，不重新引入 Pi SDK package discovery。
 
-- `packages/pi-extension`：Pi 扩展门面、默认轻量 research 行为、`/plan`、`/implement`、`/goal`、`/loop`、`/workflow`、Spark 小组件、模式与策略、内置 Spark 角色以及活动上下文提供方。
-- `packages/spark-runtime`：单个 Spark 任务到角色执行的适配层，负责调用 `spark-roles` 并回写证据制品、运行记录和状态。
-- `packages/spark-host`：可复用的 Spark ExtensionAPI 宿主运行时，包含工具/命令注册、事件总线、交互/outbox、keybindings 和宿主内部类型；TUI、headless 和 daemon 共享它。
-- `packages/spark-turn`：可复用的模型/工具 turn loop，包含模型流、工具回合、approval、abort、outbox drain 和 view 事件投影。
-- `packages/spark-extension-api`：共享扩展宿主与工具契约、引用、错误类型以及轻量 JSON、文件系统和时间辅助能力。
-- `packages/spark-artifacts`：证据制品元数据与二进制对象存储、来源、谱系，以及规范化 `artifact({ action })` 工具。
-- `packages/spark-tasks`：通用项目、任务、待办事项与运行图；负责依赖、认领租约、任务计划就绪性、任务状态、运行状态以及规范化 `task({ action })` 工具。
-- `packages/spark-learnings`：基于证据的可复用经验存储、`.learnings/` 本地与用户作用域、导出导入、生命周期管理以及规范化 `learning({ action })` 工具。
-- `packages/spark-loop`：通用 loop 生命周期/tick 原语，以及 goal 状态和延续提示原语；Spark 只保留项目绑定的 `/loop`、`/goal` 门面，历史序列化标记保持兼容。
-- `packages/spark-workflows`：已保存工作流的发现与运行时原语，以及 `.spark/workflow-runs.json` 工作流运行存储。
-- `packages/spark-ask`：通用规范化 `ask({ action })` 协议、内部聚焦与全屏流程状态机、TUI 渲染和结果语义；具体问题由调用处根据实际上下文生成，不提供制式表单。
-- `packages/spark-roles`：`RoleSpec`、项目/用户/内置角色存储、`RoleRun` 全新或分叉子 Pi 执行，以及角色工具；不拥有任务有向无环图。
-- `packages/spark-cue`：`cue-shell` IPC 与工具适配层；不依赖 Spark 状态。
-- `packages/spark-context`：有界注册上下文提供方。
-- `packages/spark-recall`：显式作用域的召回候选，与 `.learnings/` 在语义上相互独立。
-- `apps/spark-cli`：根 `spark` 薄 dispatcher；不拥有 TUI、daemon 或 host/runtime 逻辑。
-- `apps/spark-tui`：以 Spark 为中心的原生 TUI app；`src/host/` 中的 turn/host 文件是面向历史导入路径的薄兼容层，核心实现位于 `packages/spark-host` 和 `packages/spark-turn`；`pi-tui` 包装位于 `src/tui/`，不嵌入 `@earendil-works/pi-coding-agent`。
-- `apps/spark-daemon`：Spark daemon app；`session.run` 通过 Spark headless session executor 进入 `spark-host`/`spark-turn`，不创建 `pi-coding-agent` session。
-
-已退场的工作区包包括 `spark-core`、`spark-tasks`、`spark-learnings`、`spark-goal` 和 `spark-workflows`。`pi-* -> spark-*` 反向依赖由 `pnpm run check` 内置的边界检查、`prek` 和 CI 静态检查守门。`.spark/` 目录、`.spark/projects.json`、`.spark/workflow-runs.json` 和历史目标标记属于磁盘格式兼容数据，不因包名迁移而改名。
+已退场的工作区包包括历史 `spark-core` 与 `spark-goal`。`spark-tasks`、`spark-learnings`、`spark-workflows` 仍是当前包。`pi-* -> spark-*` 反向依赖由边界检查守门。`.spark/` 磁盘格式不因包名迁移而改名。
 
 ## 非目标
 
 - 不将本仓库泛化为公开模板或通用项目管理产品。
-- 不复制 OpenSpec/OpenArc 的完整文件树、变更目录或重型流程。
-- 不在 `spark-roles` 中引入 Spark 有向无环图、任务认领、证据制品或调度器语义。
-- 不保留旧 `spark-agents` / `pi-agent-run` 公开兼容包；只对必要的历史持久化状态保留窄读兼容。
-- 不保留长期 `spark_*` 工具别名或双重公开/默认工具表面；外部工具表面使用规范化 `task_read`、`task_write`、`assign`、`learning`、`artifact`、`ask`、`goal` 等工具，动作工具渲染为 `tool action=<value> ...`。
-- 不让结构化提问成为用户必须直接操作的独立产品面；它应服务具体的项目、任务、路线图或审查流程。
-- 不默认隐藏或丢弃执行证据；输出可以精简，但完整证据应能通过证据制品、完整读取或尾部读取参数取回。
+- 不剥离或重写 Pi SDK 内核去“去 Pi 化”；退场对象是 Pi **产品**宿主，不是 `pi-ai` / `pi-tui`。
+- 不为 Pi 产品宿主新增一等能力；不长期保留双重公开工具表面。
+- 不把 TUI 进程内 follow-up 队列与 daemon `pendingTurns` 盲目合并；不把 Cockpit 专用 notice/error part 未经设计提升进协议。
+- 不复制 OpenSpec/OpenArc 的完整文件树或重型流程。
+- 不让结构化提问成为用户必须直接操作的独立产品面。
 
 ## 成功信号
 
-- Project-bound 命令初始化或恢复不会覆盖既有状态，不会生成占位任务，也不会要求用户先填写宽泛表单。
-- `task_read({ action: "project_status" })`、`task_read({ action: "workspace_status" })` 和 Spark 小组件能以低噪声方式展示当前项目、活动任务、待办事项、工作流运行状态和就绪性问题。
-- `task_write({ action: "plan" })`、`task_write({ action: "claim" })` 和 `assign({ dryRun: true })` 能区分规划、认领、实现和完成；角色执行失败或未启动不会被错误标记为任务完成。
-- `ask({ action: "ask" | "flow" })` 的聚焦与全屏流程结果语义一致：自定义输入是一等结果，决策或审批没有有效选项时会阻塞，用户界面不泄漏原始标识符。
-- `spark-roles` 角色规范与运行工具同 Spark 工作流运行边界清晰，直接 `role({ action: "call" })` 不冒充任务执行。
-- `spark-cue` 工具默认输出有界且适合上下文阅读，同时保留获取完整输出的显式方式。
-- 关键行为有测试、类型检查和 `vp check` 覆盖，并通过 `prek` 或 CI 验证。
+- 同一 ask 的“算不算有效回答 / gate 是否满足”在 TUI、Cockpit、通道结算路径上共用 `spark-protocol` 语义，表面只做 UI。
+- Slash / action catalog 继续以协议为源；Cockpit 与 TUI 只做 i18n 与执行。
+- 新功能默认可在 TUI 或 Cockpit 验证，消息通道按 channel policy 收窄；无需先在 Pi 产品里跑通。
+- Pi 产品加载路径可冻结：无新 `registerPi*` / `"pi.extensions"` 扩张；文档与边界检查区分 SDK 内核与产品兼容。
+- Project-bound 命令、任务图、ask、roles、cue 的既有成功信号仍成立，并通过测试与 `vp check` / `prek` 守门。
 
 ## 当前开放问题
 
-- 路线图已经作为每个项目内嵌的唯一规划层落在 `projects.json`；后续是否抽成独立 `pi-planning` 能力仍待观察。
+- `registerPi*` 与 `spark-extension-api` 中残留 Pi 命名的重命名节奏（是否与 pi-extension 退场同批）。
 - 完成证据门禁应严格到什么程度：对人工任务、审查/设计任务和角色执行/工作流任务是否采用不同要求。
 - 历史任务中被完成摘要覆盖的原始意图是否需要进一步从聊天记录、每日记忆或 Git 历史中恢复。
 
 ## 近期收尾任务
 
-- 完成当前包边界迁移后的最终文档同步。
-- 后续可单独拆分仍偏大的实现文件，例如部分任务或运行时内部模块；该拆分不阻塞当前边界迁移。
+- 继续对齐跨表面 ask / gate / submit 语义；Cockpit 已改用协议 option `value` 与 `parseSparkAskChoice`。
+- 文档与 AGENTS 边界语言改为“Pi SDK 内核 + Pi 产品冻结”。
+- 后续可单独收缩 `pi-extension` 表面与 `"pi.extensions"` 元数据；该收缩不阻塞协议对齐。
 
 ## 修订记录
 
@@ -94,3 +76,4 @@ Spark 现在支持 Pi 扩展宿主和 Spark 原生宿主家族：Pi 中的 `pack
 - 2026-06-05：根据门面切换、实现下沉和 `spark-core`、`spark-tasks`、`spark-learnings`、`spark-goal`、`spark-workflows` 退场更新当前边界。
 - 2026-06-15：统一正式中文表述，保留必要代码标识符和兼容性术语。
 - 2026-06-16：更新默认研究模式、`/implement` 模式命名以及 Spark 组合 Pi 扩展能力的边界表述。
+- 2026-07-17：方向调整为以 Pi SDK 为内核、TUI/Cockpit/消息平台一等；Pi 产品宿主冻结并规划退场；跨表面交互协议以 `spark-protocol` 为源。

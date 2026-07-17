@@ -11,11 +11,11 @@ Target package topology follows type-first names:
 - `apps/spark-daemon` — Spark daemon service package that owns local workspace state, IPC, and background execution.
 - `apps/spark-cockpit` — Spark Cockpit SvelteKit local web cockpit/projection app. Keep SvelteKit/browser-specific checks isolated from the non-Svelte Spark package checks.
 - `packages/spark-*` — Spark-owned capability/runtime packages. Core capability primitives include `spark-extension-api`, `spark-artifacts`, `spark-tasks`, `spark-workflows`, `spark-loop`, and `spark-modes`.
-- `packages/pi-*` — retained Pi-compatible adapters or capabilities not yet renamed (`spark-ask`, `spark-cue`, `spark-files`, `spark-graft`, `spark-roles`, `pi-btw`, …). These must not depend on Spark product packages; only renamed Spark foundation packages and the `@zendev-lab/spark-tui` presentation boundary are allowed.
-- `packages/pi-extension` — legacy Pi-compatible extension facade (slated for retirement). It owns Spark command/tool policy and depends on `spark-extension-api` instead of concrete host runtimes.
-- `packages/spark-runtime`, `packages/spark-protocol`, `packages/spark-tui`, `packages/spark-db`, and `packages/spark-system` — Spark shared runtime, protocol/schema, reusable TUI boundary, SQLite/migration, and local-system helper packages.
+- **Pi SDK kernel (keep)** — `@earendil-works/pi-ai` via `spark-ai`, `@earendil-works/pi-tui` via `spark-tui` / `spark-text`. Model streams, providers, and terminal UI primitives stay on this kernel; do not “de-Pi” by removing these deps.
+- **Pi product host (freeze / retire)** — `packages/pi-extension` (legacy facade) and `packages/pi-btw` (loads `pi-coding-agent`). New features target TUI / Cockpit / channels, not the Pi product extension loader. Retained `pi-*` packages must not depend on Spark product/Cockpit packages; only Spark foundation packages and the `@zendev-lab/spark-tui` presentation boundary are allowed.
+- `packages/spark-runtime`, `packages/spark-protocol`, `packages/spark-tui`, `packages/spark-db`, and `packages/spark-system` — Spark shared runtime, protocol/schema, reusable TUI boundary, SQLite/migration, and local-system helper packages. Cross-surface ask / slash / session-view semantics belong in `spark-protocol`.
 - `packages/spark-cockpit-*` — reserved for Cockpit-private implementation packages; do not put daemon/shared helpers behind Cockpit-private names.
-- `docs/` — current docs are split into `architecture/`, `specs/`, and `operations/`; keep `docs/README.md` as the concise map.
+- `docs/` — current docs are split into `specs/` and `operations/`; keep `docs/README.md` as the concise map (including the three “runtime” meanings).
 
 ## Tooling
 
@@ -35,6 +35,7 @@ Target package topology follows type-first names:
 | `pnpm run check:daemon-readiness`        | Emit the Spark daemon readiness audit report                     |
 | `pnpm run check:zellij-harness`          | Emit the native TUI/zellij harness capability audit report       |
 | `pnpm test`                              | Root Node tests only (`test/*.test.ts`)                          |
+| `pnpm run test:mutation`                 | Opt-in Stryker pilot for `@zendev-lab/spark-retry`               |
 | `pnpm run build`                         | Build the Spark daemon CLI and Spark Cockpit web app             |
 | `pnpm run preview`                       | Start the local Spark Cockpit dev server                         |
 | `spark cockpit`                          | Start the built Spark Cockpit production server through the CLI   |
@@ -48,14 +49,14 @@ Target package topology follows type-first names:
 - `.github/workflows/ci-pr-checks.yml` — PR title validation (zendev).
 - `.github/workflows/ci-typos.yml` — spellcheck with `_typos.toml`.
 
-## Dual-host Spark extension boundary
+## Extension boundary (Spark-first; Pi product frozen)
 
-- `spark-extension-api` is the host-neutral TypeScript contract for Spark extension hosts and retained Pi-compatible adapters. Do not merge it into Spark product code; Spark extension packages depend on this contract instead.
-- `packages/pi-extension/src/extension/` is the legacy Pi extension facade path. It must remain loadable by Pi as a normal extension until Pi support is retired.
+- First-class surfaces are TUI, Cockpit, and messaging channels on the Spark daemon. `spark-extension-api` is the host-neutral TypeScript contract for Spark extension hosts; retained Pi **product** adapters may still speak it until retired. Do not merge this contract into Cockpit/daemon app code.
+- `packages/pi-extension/src/extension/` remains loadable by the Pi product as a normal extension until that product path is retired; do not expand its surface for new Spark features.
 - Spark extension/shared packages must not import concrete app host internals from `apps/spark-cli`, `apps/spark-tui`, `@zendev-lab/spark-tui-app`, or `@earendil-works/pi-coding-agent` runtime code.
-- Shared Spark host/turn code belongs in `packages/spark-host` and `packages/spark-turn`; executable apps keep only bootstrap, UI, daemon, and compatibility-adapter glue. pi-tui-specific wrappers should stay behind the reusable `packages/spark-tui` boundary.
-- When adding or changing a host-touching extension capability, update `spark-extension-api` only if both hosts need the contract, and add/adjust dual-host tests such as `test/spark-ext-host-contract.test.ts`, `test/spark-host-runtime-cross.test.ts`, and the relevant Spark host test.
-- Keep builtin extension loading explicit for Spark native hosts; do not reintroduce Pi SDK package discovery or `loadPiSdk` into Spark apps.
+- Shared Spark host/turn code belongs in `packages/spark-host` and `packages/spark-turn`; executable apps keep only bootstrap, UI, daemon, and compatibility-adapter glue. `pi-tui` wrappers stay behind `packages/spark-tui`.
+- Prefer Spark-native host tests when changing extension behavior. Keep dual-host contract tests (`test/spark-ext-host-contract.test.ts`, `test/spark-host-runtime-cross.test.ts`) only while the Pi product path remains loadable; do not grow new Pi-product-only APIs.
+- Keep builtin extension loading explicit for Spark native hosts; do not reintroduce Pi **product** package discovery or `loadPiSdk` into Spark apps. Direct `@earendil-works/pi-ai` / `pi-tui` use must stay behind the existing Spark package boundaries.
 
 ## Notes for agents
 

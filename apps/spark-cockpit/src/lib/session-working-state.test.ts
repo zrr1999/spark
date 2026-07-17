@@ -8,7 +8,7 @@ import {
 import { sessionIsWorking } from "./session-working-state";
 
 describe("session working state", () => {
-  it("follows a turn from its queue receipt through a terminal event without waiting for registry refresh", () => {
+  it("does not present an admitted turn as running before the daemon starts it", () => {
     const state = createSessionLiveEventState({
       sessionId: "sess_current",
       workspaceId: "ws_spore",
@@ -28,10 +28,13 @@ describe("session working state", () => {
         registryStatus: "idle",
         liveStatus: state.view?.status,
       }),
-    ).toBe(true);
+    ).toBe(false);
+    expect(state.activeTurnId).toBeNull();
+    expect(state.view?.status).toBe("idle");
 
     const terminal = applySessionLiveEvent(state, {
       id: "evt_terminal",
+      sequence: null,
       workspaceId: "ws_spore",
       projectId: null,
       kind: "invocation.updated",
@@ -44,15 +47,22 @@ describe("session working state", () => {
       createdAt: "2026-07-17T03:00:03.000Z",
     });
 
-    expect(terminal.changed).toBe(true);
+    expect(terminal).toEqual({ changed: false, refreshActivity: true });
+    expect(state.activeTurnId).toBeNull();
     expect(state.view?.status).toBe("idle");
     expect(
       sessionIsWorking({
         // The server-rendered registry row can remain stale until invalidateAll
-        // completes; the terminal live view must hide the indicator immediately.
+        // completes; the live daemon view remains authoritative.
         registryStatus: "running",
         liveStatus: state.view?.status,
       }),
     ).toBe(false);
+  });
+
+  it("shows running only from daemon status truth", () => {
+    expect(sessionIsWorking({ registryStatus: "running" })).toBe(true);
+    expect(sessionIsWorking({ registryStatus: "idle", liveStatus: "running" })).toBe(true);
+    expect(sessionIsWorking({ registryStatus: "running", liveStatus: "idle" })).toBe(false);
   });
 });

@@ -10,6 +10,8 @@ export function loadPendingWorkbenchAsk(
   const inboxPage = loadInboxPage(db, workspaceRouteId);
   if (!inboxPage) return null;
 
+  let firstAsk: Omit<PendingWorkbenchAsk, "pendingCount"> | null = null;
+  let pendingCount = 0;
   for (const item of inboxPage.inboxItems) {
     if (
       item.kind !== "ask" ||
@@ -40,7 +42,8 @@ export function loadPendingWorkbenchAsk(
       continue;
     }
 
-    return {
+    pendingCount += 1;
+    firstAsk ??= {
       id: detail.id,
       workspaceId: detail.workspaceId,
       workspaceSlug: detail.workspaceSlug,
@@ -55,5 +58,5 @@ export function loadPendingWorkbenchAsk(
     };
   }
 
-  return null;
+  return firstAsk ? { ...firstAsk, pendingCount } : null;
 }

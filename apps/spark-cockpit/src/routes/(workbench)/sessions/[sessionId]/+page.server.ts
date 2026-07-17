@@ -1,12 +1,19 @@
 import { error } from "@sveltejs/kit";
 import { createId } from "@zendev-lab/spark-protocol";
-import { getManagedSessionSnapshotForCockpit } from "$lib/server/managed-sessions";
+import {
+  getManagedSessionSnapshotForCockpit,
+  getProjectedManagedSessionSnapshotForCockpit,
+} from "$lib/server/managed-sessions";
 import { getDatabase } from "$lib/server/db";
 import { latestEventCursor } from "$lib/server/events";
 import { loadSessionActivity } from "$lib/server/session-activity";
-import { loadModelControlForCockpit } from "$lib/server/model-control";
+import {
+  loadModelControlForCockpit,
+  loadProjectedModelControlForCockpit,
+} from "$lib/server/model-control";
 import { createCockpitSubmissionId } from "$lib/server/submission-idempotency";
 import type { PageServerLoad } from "./$types";
+import { SESSION_SNAPSHOT_PAGE_SIZE } from "../../../../lib/session-snapshot-window";
 import { workspaceIdForWorkbenchSession } from "../../../../lib/workbench-session-scope";
 import { actions as sessionsActions } from "../+page.server";
 
@@ -29,13 +36,21 @@ export const load: PageServerLoad = async ({ params, parent }) => {
     // detached registry record re-enter the rail through a direct URL.
     throw error(404, "Session not found");
   }
-  const [snapshotWindow, modelControl] = await Promise.all([
-    getManagedSessionSnapshotForCockpit(params.sessionId),
-    loadModelControlForCockpit(params.sessionId),
-  ]);
+  const [snapshotWindow, modelControl] = parentData.sessionControlAvailable
+    ? await Promise.all([
+        getManagedSessionSnapshotForCockpit(params.sessionId, {
+          messageLimit: SESSION_SNAPSHOT_PAGE_SIZE,
+        }),
+        loadModelControlForCockpit(params.sessionId),
+      ])
+    : await Promise.all([
+        Promise.resolve(getProjectedManagedSessionSnapshotForCockpit(params.sessionId)),
+        loadProjectedModelControlForCockpit(params.sessionId),
+      ]);
   return {
     sessions: parentData.sessions,
     sessionsAvailable: parentData.sessionsAvailable,
+    sessionControlAvailable: parentData.sessionControlAvailable,
     selectedSessionId: selected.sessionId,
     sendSubmissionIdSeed: createId("idem"),
     selectedSession: selected,
@@ -46,7 +61,7 @@ export const load: PageServerLoad = async ({ params, parent }) => {
         ? `${eventCursor.sequence}|${eventCursor.createdAt}|${eventCursor.id}`
         : `${eventCursor.createdAt}|${eventCursor.id}`
       : null,
-    canAssign: selected.status !== "archived",
+    canAssign: parentData.sessionControlAvailable && selected.status !== "archived",
     modelControl,
     submissionId: createCockpitSubmissionId(),
     sessionActivity: loadSessionActivity(db, {

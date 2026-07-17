@@ -40,7 +40,7 @@ hooks = [{ id = "typos", args = ["--force-exclude"], stages = ["pre-commit"] }]
 
 [[repos]]
 repo = "https://github.com/zrr1999/zendev"
-rev = "v0.0.6"
+rev = "v0.0.7"
 hooks = [{ id = "zendev-commit-msg", stages = ["commit-msg"] }]
 
 [[repos]]

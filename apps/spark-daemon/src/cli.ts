@@ -29,17 +29,23 @@ import {
   writeSparkDaemonConfig,
 } from "./config.js";
 import { createSparkDaemonUplinkControl, sparkDaemonVersion, startSparkDaemon } from "./daemon.js";
-import { createSparkDaemonModelControl } from "./model-control.ts";
 import {
-  channelInboundInvocationIdempotencyKey,
-  submitChannelInboundInvocation,
-} from "./channels/admission.ts";
-import { createDaemonChannelIngressRuntime } from "./channels/ingress.ts";
+  getSparkDaemonServerProfile,
+  listSparkDaemonServerProfiles,
+  sparkDaemonConfigForServerProfile,
+  type SparkDaemonServerProfile,
+} from "./server-profiles.js";
+import { createSparkDaemonModelControl } from "./model-control.ts";
+import type { DaemonChannelIngressRuntime } from "./channels/ingress.ts";
+import { SparkDaemonHumanWaitRegistry } from "./core/human-waits.ts";
 import {
   SparkDaemonLifecycle,
   SparkDaemonInvocationRegistry,
   acquireSparkDaemonLock,
   legacySparkDaemonQueueRoot,
+  type SparkDaemonDrainProgress,
+  type SparkDaemonHumanInteractionResponder,
+  type SparkDaemonLifecycleSnapshot,
 } from "./core/index.ts";
 import {
   LocalRpcUnavailableError,
@@ -67,7 +73,6 @@ import {
   validateRegistrationServerUrl,
 } from "./registration.js";
 import { migrateLegacyQueueHistory } from "./store/legacy-queue-migration.ts";
-import { SparkInvocationStore } from "./store/invocations.ts";
 import { openSparkDaemonDatabase } from "./store/schema.js";
 import {
   isUserDetachedWorkspace,
@@ -161,8 +166,7 @@ export async function main(argv = process.argv.slice(2), io: CliIo = defaultIo):
       case "status":
         return await status(paths, io);
       case "logs":
-        io.stdout.write(`${paths.logFile}\n`);
-        return 0;
+        return await logs(paths, args.slice(1), io);
       case "login":
         return await login(paths, args.slice(1), io);
       case "start": {
@@ -230,7 +234,10 @@ async function login(
   prepareSparkDaemonState(paths);
   const flags = parseFlags(args);
   const current = readSparkDaemonConfig(paths);
-  const serverUrl = await resolveRegistrationServerUrl(flags, current, io);
+  const profiles = listSparkDaemonServerProfiles(paths);
+  const registrationDefault =
+    profiles.length === 1 ? sparkDaemonConfigForServerProfile(current, profiles[0]!) : current;
+  const serverUrl = await resolveRegistrationServerUrl(flags, registrationDefault, io);
   const deviceIdentity = {
     serverUrl,
     installationId: current.installationId,
@@ -282,15 +289,40 @@ function install(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): number
   return 0;
 }
 
+function configForCockpitServer(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  identity: ReturnType<typeof readSparkDaemonConfig>,
+  serverUrl: string,
+) {
+  const profile = getSparkDaemonServerProfile(paths, serverUrl);
+  return profile ? sparkDaemonConfigForServerProfile(identity, profile) : identity;
+}
+
+function serverProfileStatus(
+  identity: ReturnType<typeof readSparkDaemonConfig>,
+  profile: SparkDaemonServerProfile,
+) {
+  const config = sparkDaemonConfigForServerProfile(identity, profile);
+  return {
+    serverUrl: profile.serverUrl,
+    runtimeId: profile.runtimeId,
+    enrolled: Boolean(profile.runtimeId && profile.runtimeToken),
+    runnable: hasRunnableSparkDaemonCredentialsForServer(config, profile.serverUrl),
+    runtimeTokenExpiresAt: profile.runtimeTokenExpiresAt,
+    refreshTokenExpiresAt: profile.refreshTokenExpiresAt,
+  };
+}
+
 async function doctor(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): Promise<number> {
   prepareSparkDaemonState(paths);
   const config = readSparkDaemonConfig(paths);
+  const profiles = listSparkDaemonServerProfiles(paths);
   const daemon = await buildDaemonStatus(paths, io);
   const workspace = await buildDoctorWorkspaceStatus(paths, io, daemon);
-  const serverUrl = configuredServerUrl(config);
-  const credentialsOk = serverUrl
-    ? hasRunnableSparkDaemonCredentialsForServer(config, serverUrl)
-    : false;
+  const credentialServers = profiles.map((profile) => serverProfileStatus(config, profile));
+  const credentialsOk =
+    credentialServers.length > 0 && credentialServers.every((server) => server.runnable);
+  const primary = profiles[0];
   const cockpit = buildDoctorCockpitStatus();
   io.stdout.write(
     JSON.stringify(
@@ -308,10 +340,8 @@ async function doctor(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): P
           },
           credentials: {
             ok: credentialsOk,
-            enrolled: Boolean(config.runtimeId && config.runtimeToken),
-            serverUrl: serverUrl ?? null,
-            runtimeTokenExpiresAt: config.runtimeTokenExpiresAt,
-            refreshTokenExpiresAt: config.refreshTokenExpiresAt,
+            enrolled: credentialServers.some((server) => server.enrolled),
+            servers: credentialServers,
           },
           workspace,
           cockpit,
@@ -320,11 +350,14 @@ async function doctor(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): P
         config: {
           installationId: config.installationId,
           displayName: config.displayName,
-          serverUrl: config.serverUrl,
-          runtimeId: config.runtimeId,
-          runtimeTokenExpiresAt: config.runtimeTokenExpiresAt,
-          refreshTokenExpiresAt: config.refreshTokenExpiresAt,
-          enrolled: Boolean(config.runtimeId && config.runtimeToken),
+          // Retain the single-server fields as a compatibility projection when
+          // exactly one profile exists; `servers` is authoritative.
+          serverUrl: profiles.length === 1 ? primary?.serverUrl : undefined,
+          runtimeId: profiles.length === 1 ? primary?.runtimeId : undefined,
+          runtimeTokenExpiresAt: profiles.length === 1 ? primary?.runtimeTokenExpiresAt : undefined,
+          refreshTokenExpiresAt: profiles.length === 1 ? primary?.refreshTokenExpiresAt : undefined,
+          enrolled: credentialServers.some((server) => server.enrolled),
+          servers: credentialServers,
         },
       },
       null,
@@ -387,6 +420,9 @@ function buildDoctorCockpitStatus(): Record<string, unknown> {
 async function status(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): Promise<number> {
   prepareSparkDaemonState(paths);
   const config = readSparkDaemonConfig(paths);
+  const profiles = listSparkDaemonServerProfiles(paths);
+  const credentialServers = profiles.map((profile) => serverProfileStatus(config, profile));
+  const primary = profiles[0];
   const daemon = await buildDaemonStatus(paths, io);
   const workspaceCount = daemon.running
     ? daemon.servers.reduce((sum, server) => sum + server.workspaceCount, 0)
@@ -394,11 +430,20 @@ async function status(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): P
   io.stdout.write(
     JSON.stringify(
       {
-        enrolled: Boolean(config.runtimeId && config.runtimeToken),
-        runtimeId: config.runtimeId,
-        serverUrl: config.serverUrl,
-        runtimeTokenExpiresAt: config.runtimeTokenExpiresAt,
-        refreshTokenExpiresAt: config.refreshTokenExpiresAt,
+        enrolled: credentialServers.some((server) => server.enrolled),
+        runtimeId: profiles.length === 1 ? primary?.runtimeId : undefined,
+        serverUrl: profiles.length === 1 ? primary?.serverUrl : undefined,
+        runtimeTokenExpiresAt: profiles.length === 1 ? primary?.runtimeTokenExpiresAt : undefined,
+        refreshTokenExpiresAt: profiles.length === 1 ? primary?.refreshTokenExpiresAt : undefined,
+        servers: credentialServers.map((server) => ({
+          ...server,
+          ...(daemon.running
+            ? {
+                connection:
+                  daemon.servers.find((current) => current.url === server.serverUrl) ?? null,
+              }
+            : {}),
+        })),
         workspaceCount,
         daemonRunning: daemon.running,
         invocations: daemon.running ? daemon.invocations : undefined,
@@ -442,18 +487,20 @@ async function start(
   publishSparkDaemonProcessOwnership(paths, lifecycle.processIdentity);
   writePrivateFile(paths.pidFile, `${process.pid}\n`);
   let stopRequested = false;
-  const onShutdownSignal = () => {
+  const onShutdownSignal = (signal: "SIGINT" | "SIGTERM") => {
+    lifecycle.requestStop(`signal:${signal}`);
     stopRequested = true;
     stopIntent.abort(new Error("Spark daemon stop signal won restart handoff."));
     cancelSparkDaemonRestartSuccessor(paths);
-    shutdown.abort();
+    shutdown.abort(new Error(`Spark daemon received ${signal}.`));
   };
-  process.once("SIGINT", onShutdownSignal);
-  process.once("SIGTERM", onShutdownSignal);
+  const onSigint = () => onShutdownSignal("SIGINT");
+  const onSigterm = () => onShutdownSignal("SIGTERM");
+  process.once("SIGINT", onSigint);
+  process.once("SIGTERM", onSigterm);
   const localEventBus = createSparkDaemonLocalEventBus();
   const invocationRegistry = new SparkDaemonInvocationRegistry();
   await migrateLegacyQueueHistory({ db, queueRoot: legacySparkDaemonQueueRoot({ paths }) });
-  const invocationStore = new SparkInvocationStore(db);
   const sparkHome = process.env.SPARK_HOME?.trim() || join(homedir(), ".spark");
   const config = existsSync(paths.configFile)
     ? readSparkDaemonConfig(paths)
@@ -469,47 +516,14 @@ async function start(
     providerControl: createSparkProviderControl({ sparkHome }),
     sessionRegistry,
   });
-  const channelIngress = createDaemonChannelIngressRuntime({
-    sparkHome,
-    sessionRegistry,
-    hooks: {
-      onAssignment: async (assignment) => {
-        const idempotencyKey = channelInboundInvocationIdempotencyKey(assignment);
-        if (idempotencyKey && invocationStore.findByIdempotencyKey(idempotencyKey)) {
-          return "duplicate";
-        }
-        const model = await modelControl.effectiveModel(assignment.sessionId);
-        await modelControl.prepareModel(model);
-        const session = await sessionRegistry.get(assignment.sessionId);
-        if (!session || session.scope.kind !== "workspace") {
-          throw new Error(`channel session ${assignment.sessionId} has no workspace owner`);
-        }
-        const workspaceId = session.scope.workspaceId;
-        const cwdCandidate =
-          session.cwd?.trim() && session.cwd.trim() !== "/"
-            ? session.cwd.trim()
-            : resolveWorkspaceLocalPath(db, workspaceId);
-        const cwd = cwdCandidate?.trim();
-        if (!cwd || cwd === "/") {
-          throw new Error(
-            `channel session ${assignment.sessionId} has no daemon-local execution directory`,
-          );
-        }
-        const task = {
-          type: "session.run" as const,
-          sessionId: assignment.sessionId,
-          prompt: assignment.goal,
-          model: `${model.providerName}/${model.modelId}`,
-          assignment: assignment.assignment,
-          workspaceId,
-          cwd,
-          channelReply: assignment.channelReply,
-          ...(assignment.channelContext ? { channelContext: assignment.channelContext } : {}),
-        };
-        submitChannelInboundInvocation(invocationStore, assignment, task);
-      },
-    },
-  });
+  const humanWaits = new SparkDaemonHumanWaitRegistry(db);
+  // startSparkDaemon is the single bootstrap owner for channel transports,
+  // durable cursor wiring, and assignment admission (including inbound
+  // idempotency). Local RPC receives that exact runtime through onReady
+  // instead of constructing a second variant.
+  let channelIngress: DaemonChannelIngressRuntime | null = null;
+  let respondHumanInteraction: SparkDaemonHumanInteractionResponder | null = null;
+  let drainProgress: SparkDaemonDrainProgress | undefined;
   const uplinkControl = createSparkDaemonUplinkControl();
   let armedRestart: Awaited<ReturnType<typeof scheduleSparkDaemonRestartSuccessor>> | undefined;
   let restartArming: ReturnType<typeof scheduleSparkDaemonRestartSuccessor> | undefined;
@@ -520,12 +534,13 @@ async function start(
       sparkHome,
       db,
       onStopRequested: () => {
+        lifecycle.requestStop("local-rpc-stop");
         stopRequested = true;
         stopIntent.abort(new Error("Spark daemon stop request won restart handoff."));
         cancelSparkDaemonRestartSuccessor(paths);
       },
-      onStop: () => shutdown.abort(),
-      onUplinkReconfigure: () => uplinkControl.requestReconfigure(),
+      onStop: () => shutdown.abort(new Error("Spark daemon local RPC stop requested.")),
+      onUplinkReconfigure: (serverUrl) => uplinkControl.requestReconfigure(serverUrl),
       onRestart: async () => {
         if (stopRequested || shutdown.signal.aborted) {
           throw new Error("Spark daemon is already stopping; restart was not armed.");
@@ -569,12 +584,26 @@ async function start(
           generation: armed.targetGeneration,
         });
       },
-      getLifecycle: () => lifecycle.snapshot(),
+      getLifecycle: () => {
+        const snapshot = lifecycle.snapshot();
+        return snapshot.state === "draining" && drainProgress
+          ? {
+              ...snapshot,
+              phase:
+                drainProgress.stage === "channel-ingress"
+                  ? "draining-channel-ingress"
+                  : "draining-active-work",
+              drain: drainProgress,
+            }
+          : snapshot;
+      },
       isReady: () => lifecycle.isServing,
       eventBus: localEventBus,
-      channelIngress,
+      ...(channelIngress ? { channelIngress } : {}),
       sessionRegistry,
       modelControl,
+      humanWaits,
+      ...(respondHumanInteraction ? { respondHumanInteraction } : {}),
     });
   try {
     await startSparkDaemon({
@@ -587,12 +616,17 @@ async function start(
       restartSignal: lifecycle.restartSignal,
       localEventSink: (event) => localEventBus.publish(event),
       invocationRegistry,
-      channelIngress,
+      humanWaits,
       sessionRegistry,
       modelControl,
       uplinkControl,
       managePidFile: false,
-      onReady: async () => {
+      onDrainProgress: (progress) => {
+        drainProgress = progress;
+      },
+      onReady: async (runtime) => {
+        channelIngress = runtime.channelIngress;
+        respondHumanInteraction = runtime.respondHumanInteraction;
         // Bind status/stop while startup admission remains closed. Binding a
         // socket is not successor readiness: the Claimed fence remains active
         // until every daemon admission loop is live below.
@@ -620,8 +654,8 @@ async function start(
   } finally {
     await localRpc?.close();
     db.close();
-    process.off("SIGINT", onShutdownSignal);
-    process.off("SIGTERM", onShutdownSignal);
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
     await releaseSparkDaemonProcessOwnership(paths, lifecycle.processIdentity, () =>
       lock.release(),
     );
@@ -930,6 +964,7 @@ async function waitForDaemonReady(
   let nextProgressAt = Date.now() + progressIntervalMs;
   let replacementDeadline = previousPid === null ? Date.now() + 30_000 : undefined;
   let observedTerminal: ReturnType<typeof readSparkDaemonRestartTerminal> = null;
+  let observedLifecycle: SparkDaemonLifecycleSnapshot | undefined;
   while (true) {
     const currentPid = readRunningPid(paths);
     if (expectedRestart && previousPid !== null && !observedTerminal) {
@@ -950,6 +985,7 @@ async function waitForDaemonReady(
     if (expectedRestart || (currentPid && currentPid !== previousPid)) {
       try {
         const status = await (io.daemonStatusFromService ?? requestDaemonStatus)(paths);
+        observedLifecycle = status.lifecycle;
         const identity = status.lifecycle.process;
         const targetInstanceId =
           observedTerminal?.state === "completed"
@@ -999,7 +1035,8 @@ async function waitForDaemonReady(
       io.stdout.write(
         `Spark daemon restart ${expectedRestart.restartId}: ${restartState}; ` +
           `predecessor pid ${previousPid}; observed pid ${currentPid ?? "none"}; ` +
-          `target generation ${expectedRestart.targetGeneration}.\n`,
+          `target generation ${expectedRestart.targetGeneration}` +
+          `${formatRestartDrainBlockers(observedLifecycle)}.\n`,
       );
       nextProgressAt = Date.now() + progressIntervalMs;
     }
@@ -1019,6 +1056,23 @@ async function waitForDaemonReady(
     }
     await delay(50);
   }
+}
+
+function formatRestartDrainBlockers(lifecycle: SparkDaemonLifecycleSnapshot | undefined): string {
+  if (lifecycle?.state !== "draining" || !lifecycle.drain) return "";
+  const scheduled = lifecycle.drain.scheduler;
+  const direct = lifecycle.drain.direct;
+  const blockers = [...scheduled, ...direct];
+  const stage = lifecycle.drain.stage;
+  if (blockers.length === 0) return `; drain stage ${stage}; blockers 0`;
+  const ids = blockers
+    .slice(0, 3)
+    .map((entry) => entry.invocationId)
+    .join(",");
+  return (
+    `; drain stage ${stage}; blockers scheduler=${scheduled.length} direct=${direct.length}` +
+    ` ids=${ids}${blockers.length > 3 ? ",…" : ""}`
+  );
 }
 
 function isRetryableDaemonReadinessRpcError(error: unknown): error is LocalRpcUnavailableError {
@@ -1125,6 +1179,11 @@ async function daemonStatus(
           `  protocol         ${processIdentity.protocolVersion}\n`
         : "") +
       (status.lifecycle.restartId ? `  restart id       ${status.lifecycle.restartId}\n` : "") +
+      (status.lifecycle.drain
+        ? `  drain stage      ${status.lifecycle.drain.stage}\n` +
+          `  drain blockers   ${status.lifecycle.drain.scheduler.length} scheduler · ${status.lifecycle.drain.direct.length} direct\n`
+        : "") +
+      (status.lifecycle.stopReason ? `  stop reason      ${status.lifecycle.stopReason}\n` : "") +
       `  socket           ${status.socketPath}\n` +
       `  state db         ${status.stateDbPath}\n` +
       `  started          ${status.startedAt}\n` +
@@ -1228,24 +1287,7 @@ type DaemonStatus =
         failed: number;
         cancelled: number;
       };
-      lifecycle: {
-        state: "starting" | "running" | "draining";
-        phase?: "initializing" | "serving" | "draining-active-work";
-        process?: {
-          pid: number;
-          instanceId: string;
-          generation: string;
-          protocolVersion: number;
-          startedAt: string;
-          acceptedRestartId?: string;
-          predecessorInstanceId?: string;
-          predecessorGeneration?: string;
-        };
-        restartId?: string;
-        targetInstanceId?: string;
-        targetGeneration?: string;
-        restartRequestedAt?: string;
-      };
+      lifecycle: SparkDaemonLifecycleSnapshot;
     };
 
 async function buildDaemonStatus(
@@ -1363,8 +1405,14 @@ async function registerWorkspaceCommand(
   assertDirectory(localPath);
 
   const config = readSparkDaemonConfig(paths);
-  const serverUrl = await resolveRegistrationServerUrl(flags, config, io, { interactive });
-  const hasMachineCredentials = hasRunnableSparkDaemonCredentialsForServer(config, serverUrl);
+  const profiles = listSparkDaemonServerProfiles(paths);
+  const registrationDefault =
+    profiles.length === 1 ? sparkDaemonConfigForServerProfile(config, profiles[0]!) : config;
+  const serverUrl = await resolveRegistrationServerUrl(flags, registrationDefault, io, {
+    interactive,
+  });
+  const serverConfig = configForCockpitServer(paths, config, serverUrl);
+  const hasMachineCredentials = hasRunnableSparkDaemonCredentialsForServer(serverConfig, serverUrl);
   const registrationToken = await resolveRegistrationToken(flags, io, {
     interactive: interactive && !hasMachineCredentials,
   });
@@ -1476,7 +1524,8 @@ async function defaultWorkspace(
 
   assertDirectory(workspace.localPath);
   const config = readSparkDaemonConfig(paths);
-  if (!hasRunnableSparkDaemonCredentialsForServer(config, workspace.serverUrl)) {
+  const serverConfig = configForCockpitServer(paths, config, workspace.serverUrl);
+  if (!hasRunnableSparkDaemonCredentialsForServer(serverConfig, workspace.serverUrl)) {
     throw new Error(
       `Workspace '${workspace.displayName}' is registered locally, but daemon credentials for ${workspace.serverUrl} are missing. Run spark daemon login --server-url ${shellQuote(workspace.serverUrl)}, then retry.`,
     );
@@ -2234,7 +2283,13 @@ function startSparkDaemonProcess(
 
 function syncSparkDaemonIfConfigured(paths: ReturnType<typeof resolveSparkPaths>, io: CliIo): void {
   const config = readSparkDaemonConfig(paths);
-  if (!config.serverUrl || !hasRunnableSparkDaemonCredentialsForServer(config, config.serverUrl)) {
+  const connectedProfile = listSparkDaemonServerProfiles(paths).some((profile) =>
+    hasRunnableSparkDaemonCredentialsForServer(
+      sparkDaemonConfigForServerProfile(config, profile),
+      profile.serverUrl,
+    ),
+  );
+  if (!connectedProfile) {
     io.stdout.write(
       "  sync     local only; run spark daemon login --server-url <url> to connect this machine to Spark Cockpit.\n",
     );

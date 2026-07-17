@@ -31,6 +31,23 @@
 - `src/lib/components/ai-elements/prompt-input/layout/toolbar.svelte`
 - `src/lib/components/ai-elements/prompt-input/controls/textarea.svelte`
 - `src/lib/components/ai-elements/prompt-input/controls/submit.svelte`
+- `src/lib/components/ai-elements/queue/queue.svelte`
+- `src/lib/components/ai-elements/queue/queue-section.svelte`
+- `src/lib/components/ai-elements/queue/queue-section-trigger.svelte`
+- `src/lib/components/ai-elements/queue/queue-section-label.svelte`
+- `src/lib/components/ai-elements/queue/queue-section-content.svelte`
+- `src/lib/components/ai-elements/queue/queue-list.svelte`
+- `src/lib/components/ai-elements/queue/queue-item.svelte`
+- `src/lib/components/ai-elements/queue/queue-item-indicator.svelte`
+- `src/lib/components/ai-elements/queue/queue-item-content.svelte`
+- `src/lib/components/ai-elements/queue/queue-item-description.svelte`
+- `src/lib/components/ai-elements/queue/queue-item-actions.svelte`
+- `src/lib/components/ai-elements/queue/queue-item-action.svelte`
+- `src/lib/components/ai-elements/queue/queue-item-attachment.svelte`
+- `src/lib/components/ai-elements/queue/queue-item-image.svelte`
+- `src/lib/components/ai-elements/queue/queue-item-file.svelte`
+- `src/lib/components/ai-elements/queue/types.ts`
+- `src/lib/components/ai-elements/queue/index.ts`
 
 ## Local changes
 
@@ -50,10 +67,15 @@ ideas above were translated to Svelte 5 components that use Cockpit's scoped CSS
 - Ported Chain of Thought's full-width collapsible header, status-aware step rail, staggered reveal,
   and streaming auto-open behavior into `ThinkingChainPart`. Search-result and image primitives stay
   out until the daemon exposes canonical display-safe data for them.
-- Added a bounded live region, keyboard composer submission, IME-safe Enter handling, jump-to-latest,
-  message copy, reduced-motion behavior, and Spark i18n labels supplied by the route shell.
+- Added a bounded live region, keyboard composer submission, IME-safe Enter handling, an accessible
+  slash-command listbox, jump-to-latest, message copy, reduced-motion behavior, and Spark i18n labels
+  supplied by the route shell. The composer keeps a Header/Body/command-surface/Footer split while
+  leaving command semantics and form submission in their existing Spark owners.
 - Approval actions are an optional snippet. Cockpit must provide it only when a canonical daemon
   interaction action exists; this directory does not create browser-local approval semantics.
+- Ported Queue's collapsible count, bounded list, long-message treatment, and hover/focus action
+  affordance into `SessionQueue`. The component receives daemon-projected items and an optional
+  action snippet; it owns disclosure only and never creates, mutates, or submits a browser-local queue.
 
 ## Update procedure
 

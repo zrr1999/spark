@@ -3,6 +3,7 @@ export type ModelPickerOption = {
   label: string;
   description?: string;
   keywords?: string[];
+  reasoning?: boolean;
   disabled?: boolean;
 };
 

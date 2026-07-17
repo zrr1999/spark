@@ -158,6 +158,7 @@ export function parseSparkUiSource(
   const blocks: SparkUiBlock[] = [];
   const markdownBuffer: string[] = [];
   const lines = source.split(/\r?\n/);
+  let markdownFence: MarkdownFence | null = null;
 
   function flushMarkdown(): void {
     const text = trimMarkdownBuffer(markdownBuffer);
@@ -169,6 +170,25 @@ export function parseSparkUiSource(
     const line = lines[index] ?? "";
     const lineNumber = index + 1;
     const trimmed = line.trim();
+
+    if (markdownFence) {
+      markdownBuffer.push(line);
+      if (closesMarkdownFence(line, markdownFence)) markdownFence = null;
+      continue;
+    }
+
+    const openingFence = markdownFenceFromLine(line);
+    if (openingFence) {
+      markdownFence = openingFence;
+      markdownBuffer.push(line);
+      continue;
+    }
+
+    // Four-space and tab-indented lines are Markdown code, not Spark UI.
+    if (/^(?: {4}|\t)/u.test(line)) {
+      markdownBuffer.push(line);
+      continue;
+    }
 
     const unsupportedStatement = unsupportedStatementDiagnostic(trimmed, lineNumber);
     if (unsupportedStatement) {
@@ -545,6 +565,24 @@ function collectClosingTag(
     bodyLines.push(line);
   }
   return null;
+}
+
+interface MarkdownFence {
+  marker: "`" | "~";
+  length: number;
+}
+
+function markdownFenceFromLine(line: string): MarkdownFence | null {
+  const match = /^ {0,3}(`{3,}|~{3,})/u.exec(line);
+  const fence = match?.[1];
+  if (!fence) return null;
+  return { marker: fence[0] as MarkdownFence["marker"], length: fence.length };
+}
+
+function closesMarkdownFence(line: string, fence: MarkdownFence): boolean {
+  const match = /^ {0,3}(`+|~+)[ \t]*$/u.exec(line);
+  const candidate = match?.[1];
+  return Boolean(candidate && candidate[0] === fence.marker && candidate.length >= fence.length);
 }
 
 function unsupportedStatementDiagnostic(trimmed: string, line: number): SparkUiDiagnostic | null {

@@ -11,13 +11,14 @@ import {
   type QqbotNormalizedInteraction,
 } from "./qqbot-interaction.ts";
 import type { ChannelReplyCapability } from "./reply.ts";
+import { tryCreateQqbotC2CReplyStream } from "./qqbot-reply-stream.ts";
 import type { ChannelConnectionState, ChannelTransport, QqbotAdapterConfig } from "./types.ts";
 import {
   parseQqbotRecipient,
   type QqbotKeyboardPermission,
   type QqbotMessageKeyboard,
 } from "./qqbot-types.ts";
-import { reconnectDelayWithJitter } from "./reconnect-delay.ts";
+import { scheduledReconnectDelayWithJitter } from "./reconnect-delay.ts";
 
 const INTENTS = {
   PUBLIC_GUILD_MESSAGES: 1 << 30,
@@ -67,7 +68,8 @@ type QqbotGatewayPayload = { op?: number; s?: number | null; t?: string; d?: unk
  * QQ Bot transport:
  * - inbound via official WebSocket gateway (Identify + heartbeat + dispatch)
  * - outbound via Open Platform HTTP message APIs
- * - final replies only; execution lifecycle stays out of QQ chat
+ * - C2C replies use native stream_messages (one message, in-place updates)
+ * - group/channel replies stay one final markdown/text message (no stream API)
  */
 export function createQqbotTransport(
   config: QqbotAdapterConfig,
@@ -185,11 +187,25 @@ export function createQqbotTransport(
   }
 
   const reply: ChannelReplyCapability = {
-    async openReplyStream() {
-      // QQ exposes no native collapsible execution surface. Returning no
-      // stream keeps commentary, reasoning, and tool lifecycle off the chat
-      // while the daemon still delivers the final assistant reply below.
-      return undefined;
+    async openReplyStream(target) {
+      // Native in-place streaming exists only for C2C. Group/channel fall back
+      // to a single durable sendReply from the daemon outbox.
+      return tryCreateQqbotC2CReplyStream({
+        target,
+        api,
+        resolveToken,
+        reserveFinalSeq: (messageId) => {
+          const parsed = parseQqbotRecipient(target.recipient);
+          if (parsed.kind !== "c2c") return undefined;
+          const reservation = reservePassiveReplyForTarget(
+            passiveReplyBudget,
+            parsed,
+            messageId,
+            "final",
+          );
+          return reservation?.msgSeq;
+        },
+      });
     },
     async sendReply(input) {
       await sendFinalReply(input.recipient, input.text, input.messageId);
@@ -270,10 +286,11 @@ export function createQqbotTransport(
   function scheduleReconnect(): void {
     if (stopping || !running) return;
     clearReconnect();
-    const ceiling =
-      reconnectDelays[Math.min(reconnectAttempt, reconnectDelays.length - 1)] ??
-      RECONNECT_DELAYS_MS.at(-1)!;
-    const delay = reconnectDelayWithJitter(ceiling, reconnectRandom);
+    const delay = scheduledReconnectDelayWithJitter(
+      reconnectAttempt + 1,
+      reconnectDelays,
+      reconnectRandom,
+    );
     reconnectAttempt += 1;
     const attempt = reconnectAttempt;
     connectionState = "reconnecting";

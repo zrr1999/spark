@@ -10,6 +10,7 @@ import {
   SparkSessionStore,
   compactSparkSessionRecord,
   compactSparkVisibleTranscript,
+  deterministicSparkCompactionSummary,
   entriesToMessages,
   estimateSparkContextTokens,
   estimateSparkTokens,
@@ -119,6 +120,31 @@ void test("compactSparkSessionRecord appends Pi-compatible compaction entry", as
     assert.deepEqual(entry.details, { readFiles: ["a.ts"], modifiedFiles: ["b.ts"] });
     assert.equal(record.entries.at(-1), entry);
     assert.equal(prepareSparkCompaction(record, undefined, tinyKeepSettings), undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("deterministic compaction preserves signals across the whole summarized history", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-compaction-coverage-"));
+  try {
+    const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
+    const record = store.createSession({ id: "coverage" });
+    for (let index = 0; index < 40; index += 1) {
+      const marker = String(index).padStart(2, "0");
+      store.appendMessage(record, { role: "user", content: `request-${marker}` });
+      store.appendMessage(record, { role: "assistant", content: `decision-${marker}` });
+    }
+    store.appendMessage(record, { role: "user", content: "recent request" });
+    store.appendMessage(record, { role: "assistant", content: "recent answer" });
+    const preparation = prepareSparkCompaction(record, undefined, tinyKeepSettings)!;
+
+    const summary = deterministicSparkCompactionSummary(preparation).summary;
+
+    assert.match(summary, /request-00/u);
+    assert.match(summary, /decision-20/u);
+    assert.match(summary, /request-39/u);
+    assert.match(summary, /Turn Context \(split turn\):/u);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

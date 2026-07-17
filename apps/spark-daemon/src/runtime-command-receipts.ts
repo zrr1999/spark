@@ -19,6 +19,11 @@ export type RuntimeCommandReceiptClaim =
 
 export const DEFAULT_RUNTIME_COMMAND_RECEIPT_LEASE_MS = 30_000;
 
+export interface RuntimeCommandReceiptRoute {
+  runtimeId: string;
+  serverUrl: string | null;
+}
+
 export function claimRuntimeCommandReceipt(
   db: DatabaseSync,
   command: ServerCommandEnvelope,
@@ -236,6 +241,45 @@ export function acknowledgeRuntimeCommandTerminal(
   );
 }
 
+export function acknowledgeRuntimeCommandTerminalForRoute(
+  db: DatabaseSync,
+  messageId: string,
+  route: RuntimeCommandReceiptRoute,
+  acknowledgedAt = new Date().toISOString(),
+): boolean {
+  return (
+    Number(
+      db
+        .prepare(
+          `UPDATE runtime_command_receipts AS r
+           SET terminal_acked_at = COALESCE(terminal_acked_at, ?), updated_at = ?
+           WHERE r.terminal_message_id = ?
+             AND r.runtime_id = ?
+             AND (
+               COALESCE(r.workspace_binding_id, '') = ''
+               OR (
+                 ? IS NOT NULL
+                 AND EXISTS (
+                   SELECT 1
+                   FROM workspaces w
+                   WHERE w.id = r.workspace_binding_id
+                     AND w.server_url = ?
+                 )
+               )
+             )`,
+        )
+        .run(
+          acknowledgedAt,
+          acknowledgedAt,
+          messageId,
+          route.runtimeId,
+          route.serverUrl,
+          route.serverUrl,
+        ).changes,
+    ) > 0
+  );
+}
+
 export function recoverInterruptedRuntimeCommandReceipts(
   db: DatabaseSync,
   recoveredAt = new Date().toISOString(),
@@ -409,6 +453,42 @@ export function pendingRuntimeCommandTerminals(db: DatabaseSync, limit = 100): u
        ORDER BY completed_at, command_id LIMIT ?`,
     )
     .all(Math.max(1, Math.min(100, Math.floor(limit)))) as Array<{ terminalJson: string }>;
+  return rows.map((row) => JSON.parse(row.terminalJson) as unknown);
+}
+
+export function pendingRuntimeCommandTerminalsForRoute(
+  db: DatabaseSync,
+  route: RuntimeCommandReceiptRoute,
+  limit = 100,
+): unknown[] {
+  const rows = db
+    .prepare(
+      `SELECT r.terminal_json AS terminalJson
+       FROM runtime_command_receipts r
+       WHERE r.terminal_json IS NOT NULL
+         AND r.terminal_acked_at IS NULL
+         AND r.runtime_id = ?
+         AND (
+           COALESCE(r.workspace_binding_id, '') = ''
+           OR (
+             ? IS NOT NULL
+             AND EXISTS (
+               SELECT 1
+               FROM workspaces w
+               WHERE w.id = r.workspace_binding_id
+                 AND w.server_url = ?
+             )
+           )
+         )
+       ORDER BY r.completed_at, r.command_id
+       LIMIT ?`,
+    )
+    .all(
+      route.runtimeId,
+      route.serverUrl,
+      route.serverUrl,
+      Math.max(1, Math.min(100, Math.floor(limit))),
+    ) as Array<{ terminalJson: string }>;
   return rows.map((row) => JSON.parse(row.terminalJson) as unknown);
 }
 

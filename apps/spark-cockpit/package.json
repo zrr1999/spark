@@ -39,15 +39,15 @@
     "svelte": "^5.38.8",
     "vite": "catalog:",
     "web-push": "^3.6.7",
-    "ws": "^8.18.3"
+    "ws": "catalog:"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^6.2.1",
     "@types/web-push": "^3.6.4",
-    "@types/ws": "^8.18.1",
+    "@types/ws": "catalog:",
     "svelte-check": "^4.3.1",
     "tsx": "^4.20.5",
-    "typescript": "^6.0.3",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   },
   "engines": {

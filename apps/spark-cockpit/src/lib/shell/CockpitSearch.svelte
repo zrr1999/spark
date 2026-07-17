@@ -3,6 +3,7 @@
   import { onMount } from "svelte";
   import Icon from "$lib/Icon.svelte";
   import type { AppMessages } from "$lib/i18n";
+  import { cockpitOpenSearchEvent } from "$lib/slash-actions";
   import {
     buildCockpitSearchResults,
     type CockpitSearchResult,
@@ -70,6 +71,9 @@
 
   onMount(() => {
     shortcutLabel = /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? "⌘K" : "Ctrl K";
+    const handleOpenSearch = () => openSearch();
+    window.addEventListener(cockpitOpenSearchEvent, handleOpenSearch);
+    return () => window.removeEventListener(cockpitOpenSearchEvent, handleOpenSearch);
   });
 
   $effect(() => {

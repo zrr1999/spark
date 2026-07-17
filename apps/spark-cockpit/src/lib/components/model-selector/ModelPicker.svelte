@@ -9,6 +9,7 @@
     name = "model",
     form,
     value = $bindable(""),
+    open = $bindable(false),
     groups,
     disabled = false,
     required = false,
@@ -25,11 +26,13 @@
     settingsHref,
     settingsLabel,
     onValueChange,
+    onCommit,
   }: {
     id: string;
     name?: string;
     form?: string;
     value?: string;
+    open?: boolean;
     groups: ModelPickerGroup[];
     disabled?: boolean;
     required?: boolean;
@@ -46,9 +49,9 @@
     settingsHref?: string;
     settingsLabel?: string;
     onValueChange?: (value: string) => void;
+    onCommit?: (model: string) => void;
   } = $props();
 
-  let open = $state(false);
   let search = $state("");
   let commandValue = $state("");
   let selectedOption = $derived(
@@ -57,24 +60,31 @@
   let selectedGroup = $derived(
     groups.find((group) => group.options.some((option) => option.value === value)),
   );
+  let triggerLabel = $derived(selectedOption?.label ?? selectedLabel ?? placeholder);
 
   function select(nextValue: string) {
     const option = groups
       .flatMap((group) => group.options)
       .find((candidate) => candidate.value === nextValue);
     if (!option || option.disabled) return;
+    const changed = nextValue !== value;
     value = nextValue;
+    commandValue = nextValue;
     open = false;
     onValueChange?.(nextValue);
+    if (changed) onCommit?.(nextValue);
   }
 
   function resetSearch(nextOpen: boolean) {
-    if (nextOpen) commandValue = value;
-    else search = "";
+    if (nextOpen) {
+      commandValue = value;
+      return;
+    }
+    search = "";
   }
 
-  function monogram(label: string) {
-    return label.trim().slice(0, 1).toUpperCase() || "M";
+  function monogram(labelText: string) {
+    return labelText.trim().slice(0, 1).toUpperCase() || "M";
   }
 </script>
 
@@ -97,12 +107,13 @@
       {disabled}
       aria-label={label}
       aria-required={required}
-      title={selectedOption?.label ?? selectedLabel ?? placeholder}
+      title={triggerLabel}
       data-model-picker-trigger
+      onclick={() => resetSearch(true)}
     >
       <span class="trigger-icon"><Icon name="spark" size={compact ? 14 : 15} /></span>
       <span class="trigger-copy">
-        <strong>{selectedOption?.label ?? selectedLabel ?? placeholder}</strong>
+        <strong>{triggerLabel}</strong>
         {#if !compact && selectedGroup}<small>{selectedGroup.label}</small>{/if}
       </span>
       <Icon name="chevron-down" size={14} />
@@ -115,6 +126,12 @@
       <Dialog.Description id={`${id}-description`} class="model-picker-description">
         {description}
       </Dialog.Description>
+      {#if settingsHref && settingsLabel}
+        <a class="model-picker-settings" href={settingsHref}>
+          <Icon name="settings" size={14} />
+          {settingsLabel}
+        </a>
+      {/if}
     </div>
     <Dialog.Close class="model-picker-close" aria-label={closeLabel}>
       <Icon name="close" size={17} />
@@ -124,9 +141,19 @@
   <Command.Root class="model-picker-command" label={title} loop bind:value={commandValue}>
     <div class="command-search">
       <Icon name="search" size={17} />
-      <Command.Input bind:value={search} placeholder={searchPlaceholder} autocomplete="off" autofocus />
+      <Command.Input
+        bind:value={search}
+        placeholder={searchPlaceholder}
+        autocomplete="off"
+        autofocus
+      />
       {#if search}
-        <button type="button" class="clear-search" aria-label={clearSearchLabel} onclick={() => (search = "")}>
+        <button
+          type="button"
+          class="clear-search"
+          aria-label={clearSearchLabel}
+          onclick={() => (search = "")}
+        >
           <Icon name="close" size={14} />
         </button>
       {/if}
@@ -147,7 +174,12 @@
             {#each group.options as option (option.value)}
               <Command.Item
                 value={option.value}
-                keywords={[option.label, group.label, option.description ?? "", ...(option.keywords ?? [])]}
+                keywords={[
+                  option.label,
+                  group.label,
+                  option.description ?? "",
+                  ...(option.keywords ?? []),
+                ]}
                 disabled={option.disabled}
                 class="model-picker-item"
                 onSelect={() => select(option.value)}
@@ -164,15 +196,6 @@
       {/each}
     </Command.List>
   </Command.Root>
-
-  {#if settingsHref && settingsLabel}
-    <footer class="model-picker-footer">
-      <a class="model-picker-settings" href={settingsHref}>
-        <Icon name="settings" size={14} />
-        {settingsLabel}
-      </a>
-    </footer>
-  {/if}
 </DialogShell>
 
 <style>
@@ -254,13 +277,6 @@
     color: var(--color-ink-subtle);
     font-size: 10px;
     line-height: 1.3;
-  }
-
-  :global(.model-picker-overlay) {
-    background: color-mix(in srgb, var(--color-ink) 32%, transparent);
-    inset: 0;
-    position: fixed;
-    z-index: 100;
   }
 
   :global(.model-picker-dialog) {
@@ -368,7 +384,7 @@
   }
 
   :global(.model-picker-list) {
-    max-height: min(460px, calc(100dvh - 190px));
+    max-height: min(420px, calc(100dvh - 220px));
     overflow-y: auto;
     overscroll-behavior: contain;
     padding: var(--spacing-xs);
@@ -477,11 +493,6 @@
     text-align: center;
   }
 
-  .model-picker-footer {
-    border-top: 1px solid var(--color-border);
-    padding: var(--spacing-sm) var(--spacing-md);
-  }
-
   .model-picker-settings {
     align-items: center;
     border-radius: var(--rounded-md);
@@ -490,13 +501,13 @@
     font-size: 12px;
     font-weight: 600;
     gap: 6px;
-    min-height: 34px;
-    padding: 0 8px;
+    margin-top: var(--spacing-sm);
+    min-height: 28px;
+    padding: 0;
     text-decoration: none;
   }
 
   .model-picker-settings:hover {
-    background: var(--color-surface-soft);
     color: var(--color-ink);
   }
 
@@ -508,14 +519,13 @@
     }
 
     .dialog-heading,
-    .command-search,
-    .model-picker-footer {
+    .command-search {
       padding-left: var(--spacing-md);
       padding-right: var(--spacing-md);
     }
 
     :global(.model-picker-list) {
-      max-height: min(60dvh, 520px);
+      max-height: min(55dvh, 480px);
     }
   }
 </style>

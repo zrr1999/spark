@@ -497,16 +497,60 @@ function upsertRuntimeInvocationFromSubmit(
   submitted: SparkTurnSubmitResult,
 ): void {
   const sessionId = requireCommandSessionId(command);
+  const observed = command.runtimeWorkspaceBindingId
+    ? (db
+        .prepare(
+          `SELECT invocation.status,
+                  invocation.started_at AS startedAt,
+                  invocation.completed_at AS completedAt,
+                  invocation.terminal_reason AS terminalReason,
+                  invocation.payload_json AS payloadJson,
+                  invocation.updated_at AS updatedAt,
+                  COALESCE((
+                    SELECT MAX(event.sequence)
+                    FROM invocation_events event
+                    WHERE event.invocation_id = invocation.id
+                  ), 0) AS eventCursor
+           FROM mirrored_invocations invocation
+           WHERE invocation.runtime_workspace_binding_id = ?
+             AND invocation.runtime_invocation_id = ?
+           LIMIT 1`,
+        )
+        .get(command.runtimeWorkspaceBindingId, submitted.invocationId) as
+        | {
+            status: string;
+            startedAt: string | null;
+            completedAt: string | null;
+            terminalReason: string | null;
+            payloadJson: string;
+            updatedAt: string;
+            eventCursor: number;
+          }
+        | undefined)
+    : undefined;
   db.prepare(
     `INSERT INTO runtime_invocation_projections
       (runtime_id, runtime_invocation_id, session_id, scope, workspace_id,
-       runtime_workspace_binding_id, command_id, status, event_cursor, payload_json,
-       created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '{}', ?, ?)
+       runtime_workspace_binding_id, command_id, status, event_cursor, started_at,
+       completed_at, terminal_reason, payload_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(runtime_id, runtime_invocation_id) DO UPDATE SET
        command_id = COALESCE(runtime_invocation_projections.command_id, excluded.command_id),
-       status = excluded.status,
-       updated_at = excluded.updated_at`,
+       status = CASE
+         WHEN runtime_invocation_projections.event_cursor > 0
+           THEN runtime_invocation_projections.status
+         ELSE excluded.status
+       END,
+       event_cursor = MAX(runtime_invocation_projections.event_cursor, excluded.event_cursor),
+       started_at = COALESCE(runtime_invocation_projections.started_at, excluded.started_at),
+       completed_at = COALESCE(runtime_invocation_projections.completed_at, excluded.completed_at),
+       terminal_reason = COALESCE(runtime_invocation_projections.terminal_reason, excluded.terminal_reason),
+       payload_json = CASE
+         WHEN excluded.event_cursor >= runtime_invocation_projections.event_cursor
+           THEN json_patch(runtime_invocation_projections.payload_json, excluded.payload_json)
+         ELSE runtime_invocation_projections.payload_json
+       END,
+       updated_at = MAX(runtime_invocation_projections.updated_at, excluded.updated_at)`,
   ).run(
     command.runtimeId,
     submitted.invocationId,
@@ -515,9 +559,14 @@ function upsertRuntimeInvocationFromSubmit(
     command.workspaceId ?? null,
     command.runtimeWorkspaceBindingId ?? null,
     command.commandId,
-    submitted.status,
+    observed?.status ?? submitted.status,
+    observed?.eventCursor ?? 0,
+    observed?.startedAt ?? null,
+    observed?.completedAt ?? null,
+    observed?.terminalReason ?? null,
+    observed?.payloadJson ?? "{}",
     submitted.acceptedAt,
-    submitted.acceptedAt,
+    observed?.updatedAt ?? submitted.acceptedAt,
   );
 }
 

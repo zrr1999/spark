@@ -148,7 +148,9 @@ export async function runSparkHeadlessSession(
     cwd: input.cwd,
     sparkHome: options.sparkHome ?? input.sparkHome,
     ...controlPlaneServicePaths(options.controlSparkHome),
-    ...(options.controlSparkHome ? { sparkStateRoot: options.controlSparkHome } : {}),
+    // Keep workspace business state under cwd/.spark so TUI slash commands and
+    // daemon-owned tool turns share projects/goals/phases. controlSparkHome only
+    // supplies shared config/auth paths via controlPlaneServicePaths.
     sessionSurface: input.sessionSurface,
     sessionSource: input.sessionSource,
     channelBinding: input.channelBinding,
@@ -158,11 +160,10 @@ export async function runSparkHeadlessSession(
     hasUI: false,
     ...(input.interaction ? { ui: { interaction: input.interaction } } : {}),
     ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
-    // The daemon scheduler (or this function's explicit input.timeoutMs) owns
-    // the whole-turn deadline. Do not add a second implicit 10-minute stream
-    // deadline that can fail otherwise healthy durable work while provider
-    // transport retries are still in progress.
-    streamTimeoutMs: 0,
+    // A daemon-owned human interaction may wait until the user responds. Model
+    // streams and tool calls keep their normal per-operation deadlines so a
+    // genuinely wedged provider or tool cannot occupy the session forever.
+    ...(input.interaction ? { interactionTimeoutMs: 0 } : {}),
     approvalMethod: input.approvalMethod ?? "auto",
     ...(input.approvalRejectAction ? { approvalRejectAction: input.approvalRejectAction } : {}),
   } satisfies SparkCliHostServicesOptions);

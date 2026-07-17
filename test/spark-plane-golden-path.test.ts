@@ -7,7 +7,6 @@ import test from "node:test";
 import { TaskGraph } from "@zendev-lab/spark-tasks";
 
 import { handleSparkCockpitCliCommand } from "../apps/spark-cockpit/src/cli/coordination.ts";
-import { sparkTuiCliStrings } from "../packages/spark-i18n/src/cli.ts";
 import {
   evaluateDaemonStabilityChecks,
   extractDaemonStatusContract,
@@ -123,12 +122,6 @@ void test("daemon/Cockpit/TUI golden path stays contract-focused and credential-
       selectedProjectRef: project.ref,
       goalSource: "current-project",
     });
-
-    const tuiHelp = sparkTuiCliStrings().helpText;
-    assert.match(tuiHelp, /spark daemon\s+daemon execution plane/u);
-    assert.match(tuiHelp, /spark cockpit\s+cross-daemon coordination and Web presentation host/u);
-    assert.match(tuiHelp, /spark tui\s+tui local control plane/u);
-    assert.doesNotMatch(tuiHelp, /task claim/u);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

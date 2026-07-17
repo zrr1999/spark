@@ -1,27 +1,38 @@
 <script lang="ts">
   import { enhance } from "$app/forms";
-  import { invalidateAll } from "$app/navigation";
+  import { goto, invalidateAll } from "$app/navigation";
   import {
     Composer,
     ConversationViewport,
     Message as ConversationMessage,
+    SessionQueue,
+    SessionRetryAction,
     SessionStatusBar,
+    SlashActionBar,
+    SlashCommandMenu,
+    sessionAutoCompactionEnabled,
+    sessionStatusIdentity,
     sessionStatusUsage,
     visibleConversationPartText,
   } from "$lib/components/conversation";
-  import type { SessionStatusBarLabels } from "$lib/components/conversation";
+  import type {
+    SessionQueueItem,
+    SessionQueueLabels,
+    SessionStatusBarLabels,
+    SlashActionAvailability,
+  } from "$lib/components/conversation";
   import type { ConversationPartLabels } from "$lib/components/conversation/types";
   import {
     ModelRuntimeControl,
     type ModelPickerGroup,
     type ModelRuntimeControlLabels,
   } from "$lib/components/model-selector";
-  import { THINKING_LEVELS } from "$lib/components/ThinkingLevelSlider.svelte";
   import ChannelSessionIcon from "$lib/ChannelSessionIcon.svelte";
   import {
     channelSessionPresentation,
     sessionHasChannelBinding,
   } from "$lib/channel-session-title";
+  import { visibleSessionStatus } from "$lib/conversation-status";
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
   import SessionInspector from "$lib/SessionInspector.svelte";
@@ -42,6 +53,14 @@
     type StartConversationSubmissionContext,
   } from "$lib/session-draft";
   import {
+    cockpitComposerFeedbackAfterInput,
+    cockpitOpenSearchEvent,
+    cockpitSlashSubmissionError,
+    cockpitSlashSuggestionsForInput,
+    localizeCockpitSlashActionBar,
+    scheduleCockpitActionAfterCurrentEvent,
+  } from "$lib/slash-actions";
+  import {
     applySessionLiveEvent,
     beginSessionActivityRefresh,
     canStartSessionActivityRefresh,
@@ -55,17 +74,23 @@
     sessionViewRevisionKey,
     type SessionLiveEventState,
   } from "$lib/session-live-events";
+  import { resolveSessionActivityState } from "$lib/session-activity-state";
   import {
     activeSessionTimelineProcessItemId,
     buildSessionTimeline,
+    latestSessionRetryPrompt,
     SESSION_TIMELINE_PAGE_SIZE,
     sessionTimelineWindow,
   } from "$lib/session-timeline";
   import {
+    hydrateSessionConversationWindow,
     mergeEarlierSessionSnapshotWindow,
     parseSessionSnapshotWindow,
+    SESSION_CONVERSATION_ANCHOR_BATCH,
     SESSION_SNAPSHOT_PAGE_SIZE,
+    sessionConversationAnchorCount,
     type SessionSnapshotHistory,
+    type SessionSnapshotWindow,
   } from "$lib/session-snapshot-window";
   import { buildSessionWorkbenchView, type SessionInspectorLabels } from "$lib/session-workbench";
   import { Button } from "$lib/ui";
@@ -76,11 +101,15 @@
   import { workspacePath } from "$lib/workspace-routes";
   import {
     createId,
+    sparkSlashActionBarForInput,
+    sparkThinkingLevelOptions,
+    type SparkActionView,
     type SparkModelCatalogProvider,
     type SparkModelControlSnapshot,
     type SparkModelRef,
     type SparkMessageView,
     type SparkSessionView,
+    type SparkThinkingLevel,
   } from "@zendev-lab/spark-protocol";
   import type { CockpitMessages } from "@zendev-lab/spark-i18n";
   import type { SubmitFunction } from "@sveltejs/kit";
@@ -138,8 +167,18 @@
     message?: SparkMessageView;
   };
 
+  type SessionActivityQueuedTurn = {
+    commandId: string;
+    invocationId: string;
+    prompt: string;
+    status: "queued" | "running";
+    createdAt: string;
+    startedAt: string | null;
+  };
+
   type SessionActivity = {
     commands: SessionActivityCommand[];
+    queuedTurns?: SessionActivityQueuedTurn[];
     reports: SessionActivityReport[];
   };
 
@@ -159,6 +198,8 @@
   };
 
   type SubmissionState = "idle" | "submitting" | "success" | "error";
+
+  type ComposerSurface = "start" | "session";
 
   type Messages = CockpitMessages["sessions"];
 
@@ -233,6 +274,15 @@
   let activityCommands = $derived(activity?.commands ?? []);
   let activityReports = $derived(activity?.reports ?? []);
   let sessionMessages = $derived(liveSessionView?.messages ?? []);
+  let sessionActivityState = $derived(
+    resolveSessionActivityState({
+      registryStatus: selected?.status,
+      session: liveSessionView,
+      projectedTurns: activity?.queuedTurns ?? [],
+      liveActiveTurnId: liveEventState?.activeTurnId,
+    }),
+  );
+  let queuedTurns = $derived(sessionActivityState.pendingTurns);
   let modelProviders = $derived(
     modelControl.snapshot.providers.filter((provider) => provider.models.length > 0),
   );
@@ -245,14 +295,17 @@
       provider.models.filter((entry) => entry.available),
     ),
   );
-  let effectiveModel = $derived(
-    modelControl.snapshot.session?.model ?? modelControl.snapshot.defaultModel ?? null,
+  let statusIdentity = $derived(
+    sessionStatusIdentity(liveSessionView, {
+      sessionModel: modelControl.snapshot.session?.model,
+      defaultModel: modelControl.snapshot.defaultModel,
+      sessionThinkingLevel: modelControl.snapshot.session?.thinkingLevel,
+    }),
   );
+  let effectiveModel = $derived(statusIdentity.model ?? null);
   let effectiveModelValue = $derived(effectiveModel ? modelValue(effectiveModel) : "");
-  let effectiveThinkingLevel = $derived(
-    modelControl.snapshot.session?.thinkingLevel ?? "medium",
-  );
-  let thinkingLevels = THINKING_LEVELS;
+  let effectiveThinkingLevel = $derived(statusIdentity.thinkingLevel ?? "medium");
+  let thinkingLevels = sparkThinkingLevelOptions;
   let effectiveModelAvailable = $derived(
     Boolean(
       effectiveModelValue &&
@@ -270,6 +323,12 @@
   let startModel = $state(
     untrack(() => (formIntent === "startConversation" ? (formValues?.model ?? "") : "")),
   );
+  let startSlashActiveIndex = $state(0);
+  let sessionSlashActiveIndex = $state(0);
+  let startSlashDismissedInput = $state<string | null>(null);
+  let sessionSlashDismissedInput = $state<string | null>(null);
+  let startModelPickerOpen = $state(false);
+  let sessionModelPickerOpen = $state(false);
   let sessionModel = $state("");
   let startThinkingLevel = $state(
     untrack(() =>
@@ -304,10 +363,12 @@
   let initialFormValuesApplied = $state(false);
   let startState = $state<SubmissionState>("idle");
   let sendState = $state<SubmissionState>("idle");
+  let retryState = $state<SubmissionState>("idle");
   let modelState = $state<SubmissionState>("idle");
   let thinkingState = $state<SubmissionState>("idle");
   let startFeedback = $state<string | null>(null);
   let sendFeedback = $state<string | null>(null);
+  let retryFeedback = $state<string | null>(null);
   let modelFeedback = $state<string | null>(null);
   let thinkingFeedback = $state<string | null>(null);
   let modelFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
@@ -316,22 +377,25 @@
   const activityRefreshState = createSessionActivityRefreshState();
   let sessionModelForm = $state<HTMLFormElement | null>(null);
   let sessionThinkingForm = $state<HTMLFormElement | null>(null);
+  let retryMessageForm = $state<HTMLFormElement | null>(null);
+  let retryPrompt = $state("");
+  let retrySubmissionId = $state("");
   let startModelReady = $derived(
     modelControl.available &&
       availableModels.some((entry) => modelValue(entry.model) === startModel),
   );
-  let activeTurnId = $derived(liveEventState?.activeTurnId ?? null);
-  // A session registry flag can survive a daemon restart. Only a durable
-  // active invocation makes the conversation busy in the UI.
-  let conversationBusy = $derived(Boolean(activeTurnId));
-  let displayedSessionStatus = $derived<"running" | "archived" | null>(
-    selected?.status === "archived" ? "archived" : conversationBusy ? "running" : null,
-  );
+  // Activity state folds live turn + pending queue; registry "running" alone is not enough.
+  let conversationBusy = $derived(sessionActivityState.phase === "running");
+  let activeTurnId = $derived(sessionActivityState.runningTurnId);
   let cancelState = $state<SubmissionState>("idle");
   let cancelFeedback = $state<string | null>(null);
   let cancelledTurnId = $state<string | null>(null);
+  let dequeueState = $state<SubmissionState>("idle");
+  let dequeueFeedback = $state<string | null>(null);
+  let dequeuingTurnId = $state<string | null>(null);
   let timelineRenderLimit = $state(SESSION_TIMELINE_PAGE_SIZE);
   let timelineRenderSessionId = $state("");
+  let automaticHistorySessionId = $state("");
   let effectiveTimelineRenderLimit = $derived(
     selectedSessionId === timelineRenderSessionId
       ? timelineRenderLimit
@@ -339,6 +403,80 @@
   );
 
   let copy = $derived(messages.workbench);
+  const startSlashListboxId = "start-conversation-slash-commands";
+  const sessionSlashListboxId = "conversation-slash-commands";
+  let startSlashActionBar = $derived.by(() => {
+    const view = sparkSlashActionBarForInput(startMessage);
+    return view ? localizeCockpitSlashActionBar(view, copy.slashActions) : undefined;
+  });
+  let sessionSlashActionBar = $derived.by(() => {
+    const view = sparkSlashActionBarForInput(message);
+    return view ? localizeCockpitSlashActionBar(view, copy.slashActions) : undefined;
+  });
+  let startSlashSuggestions = $derived.by(() =>
+    startSlashDismissedInput === startMessage
+      ? []
+      : cockpitSlashSuggestionsForInput(startMessage, copy.slashActions),
+  );
+  let sessionSlashSuggestions = $derived.by(() =>
+    sessionSlashDismissedInput === message
+      ? []
+      : cockpitSlashSuggestionsForInput(message, copy.slashActions),
+  );
+  let startSlashActiveOptionId = $derived(
+    startSlashSuggestions.length > 0
+      ? `${startSlashListboxId}-option-${Math.min(
+          startSlashActiveIndex,
+          startSlashSuggestions.length - 1,
+        )}`
+      : undefined,
+  );
+  let sessionSlashActiveOptionId = $derived(
+    sessionSlashSuggestions.length > 0
+      ? `${sessionSlashListboxId}-option-${Math.min(
+          sessionSlashActiveIndex,
+          sessionSlashSuggestions.length - 1,
+        )}`
+      : undefined,
+  );
+
+  let queueItems = $derived<SessionQueueItem[]>(
+    queuedTurns
+      .filter((turn) => turn.status === "queued")
+      .map((turn) => ({
+        id: turn.invocationId,
+        text: turn.prompt,
+        description: relative(turn.createdAt),
+      })),
+  );
+  let queueLabels = $derived<SessionQueueLabels>({
+    region: copy.queueRegion,
+    queued: copy.queueLabel,
+    next: copy.queueNext,
+  });
+  let queuedInvocationIds = $derived(
+    new Set(
+      queuedTurns
+        .filter((turn) => turn.status === "queued")
+        .map((turn) => turn.invocationId),
+    ),
+  );
+  let queuedPromptReportIds = $derived(
+    new Set(
+      queuedTurns
+        .filter((turn) => turn.status === "queued")
+        .map((turn) => `turn-submit:${turn.commandId}:prompt`),
+    ),
+  );
+  let timelineSessionMessages = $derived(
+    sessionMessages.filter((entry) => {
+      const invocationId = sessionMessageInvocationId(entry);
+      return !invocationId || !queuedInvocationIds.has(invocationId);
+    }),
+  );
+  let timelineActivityReports = $derived(
+    activityReports.filter((report) => !queuedPromptReportIds.has(report.id)),
+  );
 
   let modelRuntimeLabels = $derived<ModelRuntimeControlLabels>({
     aria: copy.modelRuntimeAria,
@@ -372,9 +510,7 @@
     cacheHit: copy.cacheHit,
     cost: copy.cost,
     context: copy.contextUsage,
-    provider: copy.provider,
-    model: copy.modelLabel,
-    thinking: copy.thinkingLabel,
+    autoCompaction: copy.autoCompaction,
   });
   let runtimeStatusUsage = $derived(
     sessionStatusUsage(liveSessionView, effectiveModelCatalogEntry?.contextWindow),
@@ -382,15 +518,20 @@
 
   let timelineItems = $derived(
     buildSessionTimeline({
-      messages: sessionMessages,
+      messages: timelineSessionMessages,
       commands: activityCommands,
-      reports: activityReports,
+      reports: timelineActivityReports,
       fallbackTimestamp:
         sessionView?.updatedAt ?? selected?.updatedAt ?? new Date(0).toISOString(),
     }),
   );
   let renderedTimeline = $derived(
     sessionTimelineWindow(timelineItems, effectiveTimelineRenderLimit),
+  );
+  let latestRetryPrompt = $derived(
+    conversationBusy || queuedTurns.length > 0
+      ? null
+      : latestSessionRetryPrompt(sessionMessages),
   );
   let hiddenTimelineCount = $derived(
     renderedTimeline.hiddenCount + (liveSessionHistory?.hiddenMessages ?? 0),
@@ -414,34 +555,35 @@
     unknown: copy.unknownPart,
     collapse: copy.collapse,
     expand: copy.expand,
+    budgetExhausted: copy.budgetExhausted,
+    budgetExhaustedHint: copy.budgetExhaustedHint,
   });
   let inspectorLabels = $derived<SessionInspectorLabels>({
     ariaLabel: copy.inspectorAria,
     tabs: {
       summary: copy.summaryTab,
       changes: copy.changesTab,
+      todos: copy.todosTab,
       tasks: copy.tasksTab,
       mailbox: copy.mailboxTab,
     },
     summaryHeading: copy.summaryHeading,
-    runsHeading: copy.runsHeading,
     tasksHeading: copy.tasksHeading,
     changesHeading: copy.changesHeading,
     mailboxHeading: copy.mailboxHeading,
-    noRunsTitle: copy.noRunsTitle,
-    noRunsBody: copy.noRunsBody,
     noTasksTitle: copy.noTasksTitle,
     noTasksBody: copy.noTasksBody,
     noChangesTitle: copy.noChangesTitle,
     noChangesBody: copy.noChangesBody,
     noMailboxTitle: copy.noMailboxTitle,
     noMailboxBody: copy.noMailboxBody,
+    noSessionTodoTitle: copy.noSessionTodoTitle,
+    noSessionTodoBody: copy.noSessionTodoBody,
+    noActiveSessionTodo: copy.noActiveSessionTodo,
     unassignedProject: copy.unassignedProject,
-    latestOutput: copy.latestOutput,
     progress: copy.progress,
     todoList: copy.todoList,
-    sessionTodoTitle: copy.sessionTodoTitle,
-    sessionTodoBody: copy.sessionTodoBody,
+    sessionTodoHeading: copy.sessionTodoHeading,
     openSessionTodo: copy.openSessionTodo,
     mailFrom: copy.mailFrom,
     mailRequest: copy.mailRequest,
@@ -490,6 +632,11 @@
 
     const nextServerViewKey = sessionViewRevisionKey(sessionView);
     if (sessionId !== liveSessionId || nextServerViewKey !== lastServerViewKey) {
+      if (sessionId !== liveSessionId) {
+        dequeueState = "idle";
+        dequeueFeedback = null;
+        dequeuingTurnId = null;
+      }
       const cursor =
         sessionId === liveSessionId ? liveEventState?.cursor : initialEventCursor;
       liveSessionId = sessionId;
@@ -679,6 +826,33 @@
     timelineRenderLimit = SESSION_TIMELINE_PAGE_SIZE;
   });
 
+  // Keep route navigation responsive: render the latest daemon page first,
+  // then fill in enough older raw pages for several real conversation turns.
+  // This avoids blocking a session switch on a long sequence of snapshot RPCs.
+  $effect(() => {
+    const sessionId = selectedSessionId;
+    const snapshot = liveSessionView;
+    const history = liveSessionHistory;
+    if (
+      !sessionId ||
+      sessionId !== liveSessionId ||
+      !snapshot ||
+      !history ||
+      automaticHistorySessionId === sessionId
+    ) {
+      return;
+    }
+
+    const window: SessionSnapshotWindow = { snapshot, history };
+    automaticHistorySessionId = sessionId;
+    if (
+      history.hasEarlierMessages &&
+      sessionConversationAnchorCount(window) < SESSION_CONVERSATION_ANCHOR_BATCH
+    ) {
+      void loadEarlierTimeline(SESSION_CONVERSATION_ANCHOR_BATCH);
+    }
+  });
+
   $effect(() => {
     if (formIntent === "startConversation" && formMessage && startState === "idle") {
       startFeedback = formMessage;
@@ -686,8 +860,8 @@
     if (formIntent === "sendMessage" && formMessage && sendState === "idle") {
       sendFeedback = formMessage;
     }
-    if (formIntent === "cancelTurn" && formMessage && cancelState === "idle") {
-      cancelFeedback = formMessage;
+    if (formIntent === "removeQueuedTurn" && formMessage && dequeueState === "idle") {
+      dequeueFeedback = formMessage;
     }
   });
 
@@ -733,7 +907,10 @@
         if (storageKey && state.cursor) {
           window.sessionStorage.setItem(storageKey, state.cursor);
         }
-        if (result.changed) liveSessionView = state.view;
+        if (result.changed) {
+          liveSessionView = state.view;
+          liveEventState = state;
+        }
         if (result.refreshActivity) scheduleActivityRefresh();
       });
       eventSource.onerror = () => {
@@ -875,37 +1052,63 @@
     }
   }
 
-  async function showEarlierTimeline(): Promise<boolean> {
+  async function showEarlierTimeline() {
     if (historyLoadState === "loading") return false;
-    const sessionId = selectedSessionId;
     const history = liveSessionHistory;
-    if (!sessionId || !history || !history.hasEarlierMessages) {
+    const snapshot = liveSessionView;
+    if (!history || !snapshot || !history.hasEarlierMessages) {
       timelineRenderLimit += SESSION_TIMELINE_PAGE_SIZE;
       historyLoadState = "idle";
       return true;
     }
+
+    const window: SessionSnapshotWindow = { snapshot, history };
+    return await loadEarlierTimeline(
+      sessionConversationAnchorCount(window) + SESSION_CONVERSATION_ANCHOR_BATCH,
+    );
+  }
+
+  async function loadEarlierTimeline(minimumAnchors: number): Promise<boolean> {
+    if (historyLoadState === "loading") return false;
+    const sessionId = selectedSessionId;
+    const history = liveSessionHistory;
+    const initialSnapshot = liveSessionView;
+    if (!sessionId || !history || !initialSnapshot || !history.hasEarlierMessages) return false;
     const beforeMessageId = history.nextBeforeMessageId;
-    if (!liveSessionView || !beforeMessageId) {
+    if (!beforeMessageId) {
       historyLoadState = "error";
       return false;
     }
 
     historyLoadState = "loading";
     try {
-      const query = new URLSearchParams({
-        limit: String(SESSION_SNAPSHOT_PAGE_SIZE),
-        before: beforeMessageId,
+      const initialWindow: SessionSnapshotWindow = {
+        snapshot: initialSnapshot,
+        history,
+      };
+      const loadedPages: SessionSnapshotWindow[] = [];
+      await hydrateSessionConversationWindow(initialWindow, {
+        minimumAnchors,
+        loadEarlier: async (cursor) => {
+          const query = new URLSearchParams({
+            limit: String(SESSION_SNAPSHOT_PAGE_SIZE),
+            before: cursor,
+          });
+          const response = await fetch(
+            `/api/v1/sessions/${encodeURIComponent(sessionId)}/snapshot?${query}`,
+            { cache: "no-store" },
+          );
+          if (!response.ok) {
+            throw new Error(`session history request failed: ${response.status}`);
+          }
+          const earlierPage = parseSessionSnapshotWindow(await response.json());
+          if (earlierPage.snapshot.sessionId !== sessionId || selectedSessionId !== sessionId) {
+            throw new Error("session changed while loading history");
+          }
+          loadedPages.push(earlierPage);
+          return earlierPage;
+        },
       });
-      const response = await fetch(
-        `/api/v1/sessions/${encodeURIComponent(sessionId)}/snapshot?${query}`,
-        { cache: "no-store" },
-      );
-      if (!response.ok) throw new Error(`session history request failed: ${response.status}`);
-      const earlierPage = parseSessionSnapshotWindow(await response.json());
-      if (earlierPage.snapshot.sessionId !== sessionId || selectedSessionId !== sessionId) {
-        historyLoadState = "idle";
-        return false;
-      }
       // A live event may append or settle a message while this request is in
       // flight. Merge into the latest browser window, never the pre-fetch copy.
       const currentSnapshot = untrack(() => liveSessionView);
@@ -919,10 +1122,10 @@
         historyLoadState = "idle";
         return false;
       }
-      const window = mergeEarlierSessionSnapshotWindow(
-        { snapshot: currentSnapshot, history: currentHistory },
-        earlierPage,
-      );
+      let window: SessionSnapshotWindow = { snapshot: currentSnapshot, history: currentHistory };
+      for (const earlierPage of loadedPages) {
+        window = mergeEarlierSessionSnapshotWindow(window, earlierPage);
+      }
 
       liveSessionView = window.snapshot;
       if (liveEventState?.sessionId === sessionId) liveEventState.view = window.snapshot;
@@ -931,7 +1134,7 @@
       historyLoadState = "idle";
       return true;
     } catch {
-      historyLoadState = "error";
+      historyLoadState = selectedSessionId === sessionId ? "error" : "idle";
       return false;
     }
   }
@@ -976,6 +1179,15 @@
     return formatRelativeTime(value, locale as "en" | "zh-CN", common);
   }
 
+  function sessionMessageInvocationId(entry: SparkMessageView) {
+    const metadata = entry.metadata;
+    if (!metadata || metadata.source !== "daemon.invocation") return null;
+    const invocationId = metadata.invocationId;
+    return typeof invocationId === "string" && invocationId.trim()
+      ? invocationId.trim()
+      : null;
+  }
+
   function connectionLabel() {
     if (liveConnection === "live") return copy.live;
     if (liveConnection === "connecting") return copy.connecting;
@@ -999,6 +1211,10 @@
       model: context.model.trim(),
       thinkingLevel: context.thinkingLevel.trim(),
     };
+  }
+
+  function queueRemoveFormId(turnId: string) {
+    return `queue-remove-${turnId.replace(/[^a-zA-Z0-9_-]/gu, "-")}`;
   }
 
   function resultMessage(result: unknown, fallback: string) {
@@ -1025,7 +1241,9 @@
     const turnId = queuedTurnIdFromActionResult(result);
     const state = untrack(() => liveEventState);
     if (!turnId || !state || state.sessionId !== liveSessionId) return;
-    if (registerQueuedSessionTurn(state, turnId)) liveSessionView = state.view;
+    if (!registerQueuedSessionTurn(state, turnId)) return;
+    liveEventState = state;
+    liveSessionView = state.view;
   }
 
   function buildModelGroups(providers: SparkModelCatalogProvider[]): ModelPickerGroup[] {
@@ -1045,6 +1263,7 @@
                     ? entry.model.modelId
                     : undefined,
                 keywords: [entry.model.modelId, provider.providerName],
+                reasoning: entry.reasoning,
               }))
             : [
                 {
@@ -1057,7 +1276,260 @@
     });
   }
 
-  const enhanceStartConversation: SubmitFunction = ({ formData }) => {
+  function unavailable(reason: string): SlashActionAvailability {
+    return { enabled: false, reason };
+  }
+
+  function slashActionAvailability(
+    action: SparkActionView,
+    surface: ComposerSurface,
+  ): SlashActionAvailability {
+    const hasSelectedSession = surface === "session" && Boolean(selected);
+
+    switch (action.intent) {
+      case "model.select":
+        if (!canAssign) return unavailable(copy.slashActions.reasons.ownerOffline);
+        if (modelProviders.length === 0) return unavailable(copy.slashActions.reasons.noModel);
+        if (surface === "session" && modelState === "submitting") {
+          return unavailable(copy.slashActions.reasons.modelUpdating);
+        }
+        return { enabled: true };
+      case "thinking.select":
+        if (!canAssign) return unavailable(copy.slashActions.reasons.ownerOffline);
+        if (modelProviders.length === 0) return unavailable(copy.slashActions.reasons.noModel);
+        if (surface === "session" && thinkingState === "submitting") {
+          return unavailable(copy.slashActions.reasons.thinkingUpdating);
+        }
+        return { enabled: true };
+      case "settings.inspect":
+      case "settings.providers":
+        return { enabled: true };
+      case "status.inspect":
+      case "session.inspect":
+        return hasSelectedSession
+          ? { enabled: true }
+          : unavailable(copy.slashActions.reasons.sessionRequired);
+      case "session.select":
+        return sessions.length > 0
+          ? { enabled: true }
+          : unavailable(copy.slashActions.reasons.noSessions);
+      case "session.create":
+        if (!activeWorkspace) return unavailable(copy.slashActions.reasons.workspaceRequired);
+        return canAssign
+          ? { enabled: true }
+          : unavailable(copy.slashActions.reasons.ownerOffline);
+      case "queue.inspect":
+        if (!hasSelectedSession) return unavailable(copy.slashActions.reasons.sessionRequired);
+        return queueItems.length > 0
+          ? { enabled: true }
+          : unavailable(copy.slashActions.reasons.queueEmpty);
+      case "turn.stop":
+        if (!hasSelectedSession) return unavailable(copy.slashActions.reasons.sessionRequired);
+        return conversationBusy && Boolean(activeTurnId) && cancelState !== "submitting"
+          ? { enabled: true }
+          : unavailable(copy.slashActions.reasons.noActiveTurn);
+      case "turn.retry":
+        if (!hasSelectedSession) return unavailable(copy.slashActions.reasons.sessionRequired);
+        if (!canAssign) return unavailable(copy.slashActions.reasons.ownerOffline);
+        if (!latestRetryPrompt) return unavailable(copy.slashActions.reasons.retryUnavailable);
+        if (!modelReady) return unavailable(copy.slashActions.reasons.noModel);
+        return retryState === "submitting"
+          ? unavailable(copy.slashActions.reasons.retryInProgress)
+          : { enabled: true };
+      case "help.commands":
+        return { enabled: true };
+      case "help.hotkeys":
+        return unavailable(copy.slashActions.reasons.hotkeysUnavailable);
+      default:
+        return unavailable(copy.slashActions.reasons.daemonExecutorUnavailable);
+    }
+  }
+
+  function clearSlashInput(surface: ComposerSurface) {
+    if (surface === "start") {
+      startMessage = "";
+      startFeedback = null;
+    } else {
+      message = "";
+      sendFeedback = null;
+    }
+    renewSubmissionId(surface);
+  }
+
+  function thinkingLevelFromAction(action: SparkActionView): SparkThinkingLevel | null {
+    const candidate = action.payload.thinkingLevel;
+    return typeof candidate === "string" &&
+      (sparkThinkingLevelOptions as readonly string[]).includes(candidate)
+      ? (candidate as SparkThinkingLevel)
+      : null;
+  }
+
+  function openModelPickerAfterSlashAction(surface: ComposerSurface) {
+    scheduleCockpitActionAfterCurrentEvent(() => {
+      if (surface === "start") startModelPickerOpen = true;
+      else sessionModelPickerOpen = true;
+    });
+  }
+
+  function firstVisibleElement(selector: string): HTMLElement | null {
+    const elements = [...document.querySelectorAll<HTMLElement>(selector)];
+    return elements.find((element) => element.getClientRects().length > 0) ?? elements[0] ?? null;
+  }
+
+  function focusSurface(selector: string): boolean {
+    const target = firstVisibleElement(selector);
+    if (!target) return false;
+    target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    target.focus({ preventScroll: true });
+    return true;
+  }
+
+  function showQueueSurface(): boolean {
+    const queue = firstVisibleElement("[data-session-queue]");
+    if (!queue) return false;
+    const details = queue.querySelector("details");
+    if (details) details.open = true;
+    const target = queue.querySelector<HTMLElement>(".queue-scroll") ?? queue;
+    target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    target.focus({ preventScroll: true });
+    return true;
+  }
+
+  function showSessionInspector(): boolean {
+    const mobileDetails = firstVisibleElement("details.mobile-details");
+    if (mobileDetails instanceof HTMLDetailsElement) mobileDetails.open = true;
+    return focusSurface("[data-session-inspector-surface]");
+  }
+
+  async function handleSlashAction(action: SparkActionView, surface: ComposerSurface) {
+    if (!slashActionAvailability(action, surface).enabled) return;
+
+    if (action.intent === "model.select") {
+      clearSlashInput(surface);
+      await tick();
+      openModelPickerAfterSlashAction(surface);
+      return;
+    }
+
+    if (action.intent === "thinking.select") {
+      const thinkingLevel = thinkingLevelFromAction(action);
+      clearSlashInput(surface);
+      if (!thinkingLevel) {
+        await tick();
+        openModelPickerAfterSlashAction(surface);
+        return;
+      }
+      if (surface === "start") {
+        startThinkingLevel = thinkingLevel;
+        return;
+      }
+      sessionThinkingLevel = thinkingLevel;
+      await submitThinkingSelection();
+      return;
+    }
+
+    if (action.intent === "settings.inspect" || action.intent === "settings.providers") {
+      clearSlashInput(surface);
+      await goto(action.intent === "settings.providers" ? "/settings/models" : "/settings");
+      return;
+    }
+
+    if (action.intent === "session.create") {
+      clearSlashInput(surface);
+      await goto("/sessions?new=workspace");
+      return;
+    }
+
+    if (action.intent === "session.select") {
+      clearSlashInput(surface);
+      await tick();
+      if (!focusSurface("[data-session-filter]")) await goto("/sessions");
+      return;
+    }
+
+    if (action.intent === "help.commands") {
+      clearSlashInput(surface);
+      window.dispatchEvent(new CustomEvent(cockpitOpenSearchEvent));
+      return;
+    }
+
+    if (action.intent === "status.inspect") {
+      clearSlashInput(surface);
+      await invalidateAll();
+      await tick();
+      if (!focusSurface("[data-session-status-bar]")) showSessionInspector();
+      return;
+    }
+
+    if (action.intent === "session.inspect") {
+      clearSlashInput(surface);
+      await tick();
+      showSessionInspector();
+      return;
+    }
+
+    if (action.intent === "queue.inspect") {
+      clearSlashInput(surface);
+      await tick();
+      showQueueSurface();
+      return;
+    }
+
+    if (action.intent === "turn.stop") {
+      clearSlashInput(surface);
+      await tick();
+      document.querySelector<HTMLFormElement>("#session-cancel-turn-form")?.requestSubmit();
+      return;
+    }
+
+    if (action.intent === "turn.retry" && latestRetryPrompt) {
+      clearSlashInput(surface);
+      retryConversationTurn(latestRetryPrompt);
+    }
+  }
+
+  function retryConversationTurn(prompt: string) {
+    if (!selected || !canAssign || !modelReady || retryState === "submitting") return;
+    retryPrompt = prompt;
+    retrySubmissionId = createClientSubmissionId();
+    retryFeedback = null;
+    retryState = "idle";
+    void tick().then(() => retryMessageForm?.requestSubmit());
+  }
+
+  const enhanceRetryMessage: SubmitFunction = () => {
+    retryState = "submitting";
+    retryFeedback = null;
+
+    return async ({ result, update }) => {
+      await update({ reset: false });
+
+      if (result.type === "success") {
+        adoptQueuedTurn(result);
+        retryState = "success";
+        retryFeedback = null;
+        retrySubmissionId = createClientSubmissionId();
+        await invalidateAll();
+        return;
+      }
+
+      if (result.type === "redirect") return;
+      retryState = "error";
+      retryFeedback = resultMessage(result, copy.sendFailed);
+    };
+  };
+
+  const enhanceStartConversation: SubmitFunction = ({ formData, cancel }) => {
+    const slashError = cockpitSlashSubmissionError(
+      String(formData.get("message") ?? ""),
+      copy.slashActions,
+    );
+    if (slashError) {
+      cancel();
+      startState = "error";
+      startFeedback = slashError;
+      return;
+    }
     const context = startConversationContext({
       workspaceId: String(formData.get("workspaceId") ?? activeWorkspace?.id ?? ""),
       message: String(formData.get("message") ?? ""),
@@ -1117,7 +1589,17 @@
     };
   };
 
-  const enhanceSendMessage: SubmitFunction = ({ formData }) => {
+  const enhanceSendMessage: SubmitFunction = ({ formData, cancel }) => {
+    const slashError = cockpitSlashSubmissionError(
+      String(formData.get("message") ?? ""),
+      copy.slashActions,
+    );
+    if (slashError) {
+      cancel();
+      sendState = "error";
+      sendFeedback = slashError;
+      return;
+    }
     const submissionSessionId = selectedSessionId ?? "";
     const submittedMessage = String(formData.get("message") ?? "").trim();
     if (!sendSubmissionId || (lastSubmittedMessage && submittedMessage !== lastSubmittedMessage)) {
@@ -1133,7 +1615,6 @@
     sendFeedback = copy.sending;
 
     return async ({ result, update }) => {
-      if (result.type === "success") adoptQueuedTurn(result);
       await update({ reset: false });
 
       if (result.type === "success") {
@@ -1157,7 +1638,7 @@
 
   const enhanceCancelTurn: SubmitFunction = () => {
     cancelState = "submitting";
-    cancelFeedback = copy.stopping;
+    cancelFeedback = null;
 
     return async ({ result, update }) => {
       const confirmedCancelledTurnId = cancelledTurnIdFromActionResult(result);
@@ -1166,7 +1647,7 @@
       if (result.type === "success") {
         cancelState = "success";
         cancelledTurnId = confirmedCancelledTurnId;
-        cancelFeedback = resultMessage(result, copy.stopped);
+        cancelFeedback = null;
         await invalidateAll();
         return;
       }
@@ -1174,6 +1655,29 @@
       if (result.type === "redirect") return;
       cancelState = "error";
       cancelFeedback = resultMessage(result, copy.stopFailed);
+    };
+  };
+
+  const enhanceRemoveQueuedTurn: SubmitFunction = ({ formData }) => {
+    const requestedTurnId = String(formData.get("turnId") ?? "").trim();
+    dequeuingTurnId = requestedTurnId || null;
+    dequeueState = "submitting";
+    dequeueFeedback = null;
+
+    return async ({ result, update }) => {
+      await update({ reset: false });
+
+      if (result.type === "success") {
+        dequeueState = "success";
+        dequeueFeedback = resultMessage(result, copy.removeQueued);
+        await invalidateAll();
+        return;
+      }
+
+      if (result.type === "redirect") return;
+      dequeueState = "error";
+      dequeueFeedback = resultMessage(result, copy.removeQueuedFailed);
+      await invalidateAll();
     };
   };
 
@@ -1241,11 +1745,97 @@
     await tick();
     sessionThinkingForm?.requestSubmit();
   }
+
+  function renewSubmissionId(surface?: "start" | "session") {
+    if (startState === "submitting" || sendState === "submitting" || retryState === "submitting") {
+      return;
+    }
+    if (surface !== "session") startSubmissionId = createId("idem");
+    if (surface !== "start") sendSubmissionId = createId("idem");
+  }
+
+  function handleStartMessageChange(value: string) {
+    startSlashActiveIndex = 0;
+    if (startSlashDismissedInput !== value) startSlashDismissedInput = null;
+    const transition = cockpitComposerFeedbackAfterInput(startState);
+    startState = transition.state;
+    if (transition.clearFeedback) startFeedback = null;
+    renewSubmissionId("start");
+  }
+
+  function handleSessionMessageChange(value: string) {
+    sessionSlashActiveIndex = 0;
+    if (sessionSlashDismissedInput !== value) sessionSlashDismissedInput = null;
+    const transition = cockpitComposerFeedbackAfterInput(sendState);
+    sendState = transition.state;
+    if (transition.clearFeedback) sendFeedback = null;
+    renewSubmissionId("session");
+  }
+
+  function selectSlashSuggestion(
+    suggestion: Readonly<{ command: string }>,
+    surface: ComposerSurface,
+  ) {
+    const nextValue = `/${suggestion.command}`;
+    if (surface === "start") {
+      startMessage = nextValue;
+      startSlashDismissedInput = null;
+      handleStartMessageChange(nextValue);
+      return;
+    }
+
+    message = nextValue;
+    sessionSlashDismissedInput = null;
+    handleSessionMessageChange(nextValue);
+  }
+
+  function handleSlashCompletionKeydown(event: KeyboardEvent, surface: ComposerSurface) {
+    if (event.isComposing) return;
+    const suggestions = surface === "start" ? startSlashSuggestions : sessionSlashSuggestions;
+    if (suggestions.length === 0) return;
+
+    const activeIndex = surface === "start" ? startSlashActiveIndex : sessionSlashActiveIndex;
+    const setActiveIndex = (index: number) => {
+      if (surface === "start") startSlashActiveIndex = index;
+      else sessionSlashActiveIndex = index;
+    };
+
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      setActiveIndex((activeIndex + direction + suggestions.length) % suggestions.length);
+      return;
+    }
+
+    if (event.key === "Enter" || event.key === "Tab") {
+      event.preventDefault();
+      const suggestion = suggestions[Math.min(activeIndex, suggestions.length - 1)];
+      if (suggestion) selectSlashSuggestion(suggestion, surface);
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setActiveIndex(0);
+      if (surface === "start") startSlashDismissedInput = startMessage;
+      else sessionSlashDismissedInput = message;
+    }
+  }
+
+  function createClientSubmissionId(): string {
+    return createId("idem");
+  }
 </script>
 
 {#snippet sessionDetails(compact = false)}
   {#if selected}
-    <div class:compact-details={compact} class="details-content">
+    {@const displayedSessionStatus = visibleSessionStatus(selected.status)}
+    <div
+      class:compact-details={compact}
+      class="details-content"
+      data-session-inspector-surface
+      tabindex="-1"
+    >
       <dl class="details-grid">
         {#if displayedSessionStatus}
           <div>
@@ -1350,24 +1940,57 @@
               rows={2}
               placeholder={copy.startPlaceholder}
               bind:value={startMessage}
-              disabled={startState === "submitting"}
-              submitDisabled={startState === "submitting" || !startModelReady || !startMessage.trim()}
+              disabled={!canAssign || startState === "submitting"}
+              submitDisabled={!canAssign ||
+                startState === "submitting" ||
+                !startModelReady ||
+                !startMessage.trim() ||
+                Boolean(startSlashActionBar) ||
+                startSlashSuggestions.length > 0}
               submitting={startState === "submitting"}
               submitLabel={copy.startSubmit}
               submittingLabel={copy.sending}
               ariaLabel={copy.messageLabel}
               multilineHint={copy.multilineHint}
-            >
+              onValueChange={handleStartMessageChange}
+              onKeydown={(event) => handleSlashCompletionKeydown(event, "start")}
+              completion={{
+                expanded: startSlashSuggestions.length > 0,
+                listboxId: startSlashListboxId,
+                activeOptionId: startSlashActiveOptionId,
+              }}            >
+              {#snippet actions()}
+                {#if startSlashSuggestions.length > 0}
+                  <SlashCommandMenu
+                    id={startSlashListboxId}
+                    suggestions={startSlashSuggestions}
+                    activeIndex={startSlashActiveIndex}
+                    ariaLabel={copy.slashActions.completionLabel}
+                    hint={copy.slashActions.completionHint}
+                    onActiveIndexChange={(index) => (startSlashActiveIndex = index)}
+                    onSelect={(suggestion) => selectSlashSuggestion(suggestion, "start")}
+                  />
+                {/if}
+                {#if startSlashActionBar}
+                  <SlashActionBar
+                    view={startSlashActionBar}
+                    resolveAction={(action) => slashActionAvailability(action, "start")}
+                    onAction={(action) => handleSlashAction(action, "start")}
+                  />
+                {/if}
+              {/snippet}
               {#snippet context()}
                 {#if modelProviders.length > 0}
                   <ModelRuntimeControl
                     id="start-conversation"
                     required
+                    bind:open={startModelPickerOpen}
                     bind:modelValue={startModel}
                     bind:thinkingValue={startThinkingLevel}
                     groups={modelGroups}
                     labels={modelRuntimeLabels}
-                    modelDisabled={availableModels.length === 0}
+                    modelDisabled={!canAssign || availableModels.length === 0}
+                    thinkingDisabled={!canAssign}
                     settingsHref="/settings/models"
                   />
                 {:else}
@@ -1392,6 +2015,7 @@
         {/if}
       </div>
     {:else}
+      {@const displayedSessionStatus = visibleSessionStatus(selected.status)}
       {@const selectedPresentation = sessionPresentation(selected)}
       <header class="stage-header">
         <div class="stage-title">
@@ -1426,7 +2050,12 @@
             {connectionLabel()}
           </span>
           {#if conversationBusy && activeTurnId}
-            <form method="POST" action="?/cancelTurn" use:enhance={enhanceCancelTurn}>
+            <form
+              id="session-cancel-turn-form"
+              method="POST"
+              action="?/cancelTurn"
+              use:enhance={enhanceCancelTurn}
+            >
               <input type="hidden" name="sessionId" value={selected.sessionId} />
               <input type="hidden" name="turnId" value={activeTurnId} />
               <Button
@@ -1470,7 +2099,19 @@
             <p>{copy.timelineEmpty}</p>
           </div>
         {:else}
-          {#each renderedTimeline.items as item (item.id)}
+          {#if hiddenTimelineCount > 0}
+            <button
+              class="timeline-history-button"
+              type="button"
+              disabled={historyLoadState === "loading"}
+              onclick={showEarlierTimeline}
+            >
+              {copy.showEarlier}
+            </button>
+            {#if historyLoadState === "error"}
+              <p class="timeline-history-error">{copy.unavailable}</p>
+            {/if}
+          {/if}          {#each renderedTimeline.items as item (item.id)}
             <ConversationMessage
               {item}
               active={item.id === activeProcessItemId}
@@ -1509,6 +2150,32 @@
         value={selected.sessionId}
       />
 
+      {#each queueItems as item (item.id)}
+        <form
+          id={queueRemoveFormId(item.id)}
+          method="POST"
+          action="?/cancelTurn"
+          hidden
+          use:enhance={enhanceRemoveQueuedTurn}
+        >
+          <input type="hidden" name="sessionId" value={selected.sessionId} />
+          <input type="hidden" name="turnId" value={item.id} />
+          <input type="hidden" name="cancelIntent" value="dequeue" />
+        </form>
+      {/each}
+
+      <form
+        bind:this={retryMessageForm}
+        method="POST"
+        action="?/sendMessage"
+        hidden
+        use:enhance={enhanceRetryMessage}
+      >
+        <input type="hidden" name="sessionId" value={selected.sessionId} />
+        <input type="hidden" name="submissionId" value={retrySubmissionId} />
+        <input type="hidden" name="message" value={retryPrompt} />
+      </form>
+
       <form
         method="POST"
         action="?/sendMessage"
@@ -1524,45 +2191,102 @@
           placeholder={conversationBusy ? copy.queuePlaceholder : copy.messagePlaceholder}
           bind:value={message}
           disabled={!canAssign || sendState === "submitting"}
-          submitDisabled={!canAssign || !modelReady || modelState === "submitting" || thinkingState === "submitting" || sendState === "submitting" || !message.trim()}
+          submitDisabled={!canAssign ||
+            !modelReady ||
+            modelState === "submitting" ||
+            thinkingState === "submitting" ||
+            sendState === "submitting" ||
+            !message.trim() ||
+            Boolean(sessionSlashActionBar) ||
+            sessionSlashSuggestions.length > 0}
           submitting={sendState === "submitting"}
           submitLabel={conversationBusy ? copy.queueSubmit : copy.sendSubmit}
           submittingLabel={copy.sending}
           ariaLabel={copy.messageLabel}
           multilineHint={copy.multilineHint}
-        >
-          {#snippet header()}
-            {#if liveSessionView?.cwd}
-              <SessionStatusBar
-                labels={statusBarLabels}
-                cwd={compactWorkingDirectory(liveSessionView.cwd)}
-                gitBranch={liveSessionView.gitBranch}
-                inputTokens={runtimeStatusUsage.inputTokens}
-                outputTokens={runtimeStatusUsage.outputTokens}
-                cacheReadTokens={runtimeStatusUsage.cacheReadTokens}
-                cacheWriteTokens={runtimeStatusUsage.cacheWriteTokens}
-                costUsd={runtimeStatusUsage.costUsd}
-                latestCacheHitPercent={runtimeStatusUsage.latestCacheHitPercent}
-                contextTokens={runtimeStatusUsage.contextTokens}
-                contextWindow={runtimeStatusUsage.contextWindow}
-                provider={effectiveModel?.providerName}
-                model={effectiveModel?.modelId}
-                thinkingLevel={sessionThinkingLevel}
+          onValueChange={handleSessionMessageChange}
+          onKeydown={(event) => handleSlashCompletionKeydown(event, "session")}
+          completion={{
+            expanded: sessionSlashSuggestions.length > 0,
+            listboxId: sessionSlashListboxId,
+            activeOptionId: sessionSlashActiveOptionId,
+          }}        >
+          {#snippet actions()}
+            {#if sessionSlashSuggestions.length > 0}
+              <SlashCommandMenu
+                id={sessionSlashListboxId}
+                suggestions={sessionSlashSuggestions}
+                activeIndex={sessionSlashActiveIndex}
+                ariaLabel={copy.slashActions.completionLabel}
+                hint={copy.slashActions.completionHint}
+                onActiveIndexChange={(index) => (sessionSlashActiveIndex = index)}
+                onSelect={(suggestion) => selectSlashSuggestion(suggestion, "session")}
               />
             {/if}
+            {#if sessionSlashActionBar}
+              <SlashActionBar
+                view={sessionSlashActionBar}
+                resolveAction={(action) => slashActionAvailability(action, "session")}
+                onAction={(action) => handleSlashAction(action, "session")}
+              />
+            {/if}
+          {/snippet}
+          {#snippet header()}
+            <div class="composer-runtime-header">
+              {#if liveSessionView?.cwd}
+                <SessionStatusBar
+                  labels={statusBarLabels}
+                  cwd={compactWorkingDirectory(liveSessionView.cwd)}
+                  gitBranch={liveSessionView.gitBranch}
+                  inputTokens={runtimeStatusUsage.inputTokens}
+                  outputTokens={runtimeStatusUsage.outputTokens}
+                  cacheReadTokens={runtimeStatusUsage.cacheReadTokens}
+                  cacheWriteTokens={runtimeStatusUsage.cacheWriteTokens}
+                  costUsd={runtimeStatusUsage.costUsd}
+                  latestCacheHitPercent={runtimeStatusUsage.latestCacheHitPercent}
+                  contextTokens={runtimeStatusUsage.contextTokens}
+                  contextWindow={runtimeStatusUsage.contextWindow}
+                  autoCompactionEnabled={sessionAutoCompactionEnabled(liveSessionView)}
+                />
+              {/if}
+              <SessionQueue
+                items={queueItems}
+                labels={queueLabels}
+                hasRunningTurn={conversationBusy}
+              >
+                {#snippet actions(item)}
+                  <button
+                    class="queue-remove-button"
+                    type="submit"
+                    form={queueRemoveFormId(item.id)}
+                    disabled={dequeueState === "submitting"}
+                    aria-label={`${copy.removeQueued}: ${item.text}`}
+                    title={copy.removeQueued}
+                  >
+                    <Icon name="close" size={13} stroke={2.2} />
+                    <span>
+                      {dequeuingTurnId === item.id && dequeueState === "submitting"
+                        ? copy.removingQueued
+                        : copy.removeQueued}
+                    </span>
+                  </button>
+                {/snippet}
+              </SessionQueue>
+            </div>
           {/snippet}
           {#snippet context()}
             {#if modelProviders.length > 0}
               <ModelRuntimeControl
                 id="conversation"
+                bind:open={sessionModelPickerOpen}
                 modelForm="session-model-form"
                 thinkingForm="session-thinking-form"
                 bind:modelValue={sessionModel}
                 bind:thinkingValue={sessionThinkingLevel}
                 groups={modelGroups}
                 labels={modelRuntimeLabels}
-                modelDisabled={modelState === "submitting" || availableModels.length === 0}
-                thinkingDisabled={thinkingState === "submitting"}
+                modelDisabled={!canAssign || modelState === "submitting" || availableModels.length === 0}
+                thinkingDisabled={!canAssign || thinkingState === "submitting"}
                 selectedLabel={!effectiveModelAvailable ? copy.currentModelUnavailable : undefined}
                 settingsHref="/settings/models"
                 onModelChange={submitModelSelection}
@@ -1574,6 +2298,18 @@
               </a>
             {/if}
           {/snippet}
+          {#snippet toolbarActions()}
+            {#if latestRetryPrompt}
+              <SessionRetryAction
+                label={copy.retryTurn}
+                submittingLabel={copy.retryingTurn}
+                unavailableLabel={copy.retryUnavailable}
+                submitting={retryState === "submitting"}
+                disabled={!canAssign || !modelReady}
+                onRetry={() => latestRetryPrompt && retryConversationTurn(latestRetryPrompt)}
+              />
+            {/if}
+          {/snippet}
           {#snippet feedback()}
             {#if sendFeedback}
               <p
@@ -1582,6 +2318,11 @@
                 aria-live="polite"
               >
                 {sendFeedback}
+              </p>
+            {/if}
+            {#if retryFeedback}
+              <p class="form-feedback error" role="alert" aria-live="polite">
+                {retryFeedback}
               </p>
             {/if}
             {#if modelFeedback}
@@ -1611,6 +2352,15 @@
                 aria-live="polite"
               >
                 {cancelFeedback}
+              </p>
+            {/if}
+            {#if dequeueFeedback}
+              <p
+                class="form-feedback {dequeueState}"
+                role={dequeueState === "error" ? "alert" : "status"}
+                aria-live="polite"
+              >
+                {dequeueFeedback}
               </p>
             {/if}
           {/snippet}
@@ -1928,6 +2678,45 @@
     max-width: 800px;
     min-width: 0;
     width: 100%;
+  }
+
+  .composer-runtime-header {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .queue-remove-button {
+    align-items: center;
+    background: transparent;
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--rounded-sm);
+    color: var(--color-ink-subtle);
+    cursor: pointer;
+    display: inline-flex;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    gap: 4px;
+    min-height: 26px;
+    padding: 3px 7px;
+    white-space: nowrap;
+  }
+
+  .queue-remove-button:hover:not(:disabled) {
+    background: var(--color-surface);
+    border-color: var(--color-danger-soft, var(--color-border));
+    color: var(--color-danger);
+  }
+
+  .queue-remove-button:focus-visible {
+    box-shadow: var(--shadow-focus);
+    outline: none;
+  }
+
+  .queue-remove-button:disabled {
+    cursor: wait;
+    opacity: 0.55;
   }
 
   .context-chip {

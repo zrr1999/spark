@@ -57,12 +57,24 @@ export interface SparkModelChangeEntry extends SparkSessionEntryBase {
   modelId: string;
 }
 
+export interface SparkCompactionOutcomeMetadata {
+  summaryVersion: number;
+  tokenSource: "reported" | "tokenizer" | "estimated";
+  measuredReductionRatio: number;
+  fallbackReason?:
+    | "model_unavailable"
+    | "model_error"
+    | "invalid_summary"
+    | "deterministic_requested";
+}
+
 export interface SparkCompactionEntry<T = unknown> extends SparkSessionEntryBase {
   type: "compaction";
   summary: string;
   firstKeptEntryId: string;
   tokensBefore: number;
   details?: T;
+  metadata?: SparkCompactionOutcomeMetadata;
   fromHook?: boolean;
 }
 

@@ -22,17 +22,67 @@ import {
   switchSparkSessionLeaf,
 } from "./session-navigation.ts";
 
+export type SparkCompactionTokenSource = "reported" | "tokenizer" | "estimated";
+
+export type SparkCompactionFallbackReason =
+  | "model_unavailable"
+  | "model_error"
+  | "invalid_summary"
+  | "deterministic_requested";
+
+export type SparkCompactModelSelection = string;
+
 export interface SparkCompactionSettings {
   enabled: boolean;
+  /** Context-window ratio that triggers one stateless micro-compaction pass. */
+  microThreshold: number;
+  /** Context-window ratio that triggers full semantic compaction after micro-compaction. */
+  fullThreshold: number;
+  /** Fraction of the current compactable context that micro-compaction attempts to remove. */
+  targetReduction: number;
+  /** Stop a micro-compaction pass when it cannot remove this fraction of its input. */
+  minUsefulReduction: number;
+  /** `current` selects the active session model; any other value is an explicit model id. */
+  compactModel: SparkCompactModelSelection;
+  /** Legacy full-compaction trigger retained while V2 runtime scheduling is adopted. */
   reserveTokens: number;
+  /** Recent context protected from full compaction. */
   keepRecentTokens: number;
 }
 
+export interface SparkCompactionOutcomeMetadata {
+  summaryVersion: number;
+  tokenSource: SparkCompactionTokenSource;
+  measuredReductionRatio: number;
+  fallbackReason?: SparkCompactionFallbackReason;
+}
+
+export const CURRENT_SPARK_COMPACTION_SUMMARY_VERSION = 2;
+
 export const DEFAULT_SPARK_COMPACTION_SETTINGS: SparkCompactionSettings = {
   enabled: true,
+  microThreshold: 0.75,
+  fullThreshold: 0.9,
+  targetReduction: 0.4,
+  minUsefulReduction: 0.05,
+  compactModel: "current",
   reserveTokens: 16_384,
   keepRecentTokens: 20_000,
 };
+
+export function normalizeSparkCompactionOutcomeMetadata(
+  input: Partial<SparkCompactionOutcomeMetadata> &
+    Pick<SparkCompactionOutcomeMetadata, "tokenSource">,
+): SparkCompactionOutcomeMetadata {
+  return {
+    summaryVersion: positiveInteger(input.summaryVersion, CURRENT_SPARK_COMPACTION_SUMMARY_VERSION),
+    tokenSource: input.tokenSource,
+    measuredReductionRatio: unitRatio(input.measuredReductionRatio, 0),
+    ...(input.fallbackReason ? { fallbackReason: input.fallbackReason } : {}),
+  };
+}
+
+const MAX_DETERMINISTIC_COMPACTION_SUMMARY_CHARS = 48_000;
 
 export interface SparkContextUsageEstimate {
   tokens: number;
@@ -92,7 +142,11 @@ export function shouldSparkCompact(
   settings: SparkCompactionSettings = DEFAULT_SPARK_COMPACTION_SETTINGS,
 ): boolean {
   if (!settings.enabled) return false;
-  return contextTokens > contextWindow - settings.reserveTokens;
+  const reserveTokens = Math.min(
+    settings.reserveTokens,
+    Math.max(1, Math.floor(contextWindow * 0.2)),
+  );
+  return contextTokens > contextWindow - reserveTokens;
 }
 
 export function estimateSparkTokens(message: SparkSessionMessage): number {
@@ -316,7 +370,10 @@ export function deterministicSparkCompactionSummary(
   if (customInstructions?.trim()) {
     sections.push(`Custom focus: ${customInstructions.trim()}`);
   }
-  const summarized = summarizeSparkMessages(preparation.messagesToSummarize, 16);
+  const summarized = summarizeSparkMessagesWithinBudget(
+    preparation.messagesToSummarize,
+    MAX_DETERMINISTIC_COMPACTION_SUMMARY_CHARS,
+  );
   sections.push(
     summarized.length > 0
       ? `Conversation summary:\n${summarized}`
@@ -501,6 +558,56 @@ function summarizeSparkMessages(messages: readonly SparkSessionMessage[], limit:
       return `${index + 1}. ${message.role}${promptLabel}: ${truncated || "[non-text content]"}`;
     })
     .join("\n");
+}
+
+function summarizeSparkMessagesWithinBudget(
+  messages: readonly SparkSessionMessage[],
+  maxChars: number,
+): string {
+  if (messages.length === 0 || maxChars <= 0) return "";
+  const weights = messages.map(messageSummaryWeight);
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+  const prefixBudget = messages.reduce(
+    (sum, message, index) => sum + `${index + 1}. ${message.role}: `.length + 1,
+    0,
+  );
+  const contentBudget = Math.max(messages.length * 24, maxChars - prefixBudget);
+
+  const lines = messages.map((message, index) => {
+    const text = extractMessageText(message).replace(/\s+/gu, " ").trim();
+    const authority = typeof message.promptAuthority === "string" ? message.promptAuthority : "";
+    const trust = typeof message.promptTrust === "string" ? message.promptTrust : "";
+    const promptLabel = authority
+      ? ` [authority=${authority}${trust ? `, trust=${trust}` : ""}]`
+      : "";
+    const allowance = Math.max(
+      24,
+      Math.floor((contentBudget * (weights[index] ?? 1)) / Math.max(1, totalWeight)),
+    );
+    const summary = text || "[non-text content]";
+    const truncated =
+      summary.length > allowance ? `${summary.slice(0, Math.max(1, allowance - 1))}…` : summary;
+    return `${index + 1}. ${message.role}${promptLabel}: ${truncated}`;
+  });
+  const summary = lines.join("\n");
+  return summary.length <= maxChars ? summary : `${summary.slice(0, maxChars - 1)}…`;
+}
+
+function messageSummaryWeight(message: SparkSessionMessage): number {
+  if (message.role === "user") return 4;
+  if (message.role === "assistant" || message.role === "custom") return 3;
+  if (message.role === "toolResult") return 1;
+  return 2;
+}
+
+function positiveInteger(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function unitRatio(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1
+    ? value
+    : fallback;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

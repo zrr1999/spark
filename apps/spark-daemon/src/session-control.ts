@@ -36,7 +36,7 @@ import type { SparkDaemonModelControl } from "./model-control.ts";
 import type { DaemonSessionRegistry } from "./session-registry.ts";
 import { validateSparkDaemonTask, type SparkDaemonTask } from "./core/index.ts";
 import { SparkInvocationStore, type SparkInvocationRecord } from "./store/invocations.ts";
-import { resolveWorkspaceLocalPath } from "./store/workspaces.ts";
+import { getWorkspaceById, listWorkspaces, resolveWorkspaceLocalPath } from "./store/workspaces.ts";
 
 // Result and projection carry the same public page, so each copy must leave
 // room for the other copy and terminal envelope metadata under the 64 KiB wire cap.
@@ -95,7 +95,7 @@ export async function executeSparkDaemonSessionControl(
       assertScopeInput(request, parsed.scope);
       const sessions = projectSessionInvocationActivity(
         new SparkInvocationStore(options.db),
-        await requireSessionRegistry(options).list(parsed),
+        await listSessionsForRequest(options, request, parsed),
       );
       const records = parseSparkSessionRegistryRecords(sessions);
       const page =
@@ -110,7 +110,9 @@ export async function executeSparkDaemonSessionControl(
         ...request.payload,
         sessionId: request.sessionId ?? request.payload.sessionId,
       });
-      const session = await requireSession(options, parsed.sessionId, request);
+      const owned = await requireSession(options, parsed.sessionId, request);
+      const session =
+        projectSessionInvocationActivity(new SparkInvocationStore(options.db), [owned])[0] ?? owned;
       const data = publicObject({ session });
       return { result: data, projection: { kind: "session.detail", data } };
     }
@@ -147,7 +149,11 @@ export async function executeSparkDaemonSessionControl(
       }
       assertScopeInput(request, parsed.scope);
       const session = parseSparkSessionRegistryRecord(
-        await requireSessionRegistry(options).create(parsed),
+        projectSessionForRequest(
+          options.db,
+          await requireSessionRegistry(options).create(parsed),
+          request,
+        ),
       );
       const data = publicObject({ session });
       return { result: data, projection: { kind: "session.detail", data } };
@@ -159,7 +165,11 @@ export async function executeSparkDaemonSessionControl(
       });
       await requireSession(options, parsed.sessionId, request);
       const session = parseSparkSessionRegistryRecord(
-        await requireSessionRegistry(options).bind(parsed),
+        projectSessionForRequest(
+          options.db,
+          await requireSessionRegistry(options).bind(parsed),
+          request,
+        ),
       );
       const data = publicObject({ session });
       return { result: data, projection: { kind: "session.detail", data } };
@@ -171,7 +181,11 @@ export async function executeSparkDaemonSessionControl(
       });
       await requireSession(options, parsed.sessionId, request);
       const session = parseSparkSessionRegistryRecord(
-        await requireSessionRegistry(options).unbind(parsed.sessionId, parsed.externalKey),
+        projectSessionForRequest(
+          options.db,
+          await requireSessionRegistry(options).unbind(parsed.sessionId, parsed.externalKey),
+          request,
+        ),
       );
       const data = publicObject({ session });
       return { result: data, projection: { kind: "session.detail", data } };
@@ -183,7 +197,11 @@ export async function executeSparkDaemonSessionControl(
       });
       await requireSession(options, parsed.sessionId, request);
       const session = parseSparkSessionRegistryRecord(
-        await requireSessionRegistry(options).archive(parsed.sessionId),
+        projectSessionForRequest(
+          options.db,
+          await requireSessionRegistry(options).archive(parsed.sessionId),
+          request,
+        ),
       );
       const data = publicObject({ session });
       return { result: data, projection: { kind: "session.detail", data } };
@@ -232,6 +250,9 @@ export async function executeSparkDaemonSessionControl(
             ...(thinkingLevel ? { thinkingLevel } : {}),
             ...(parsed.reset !== undefined ? { reset: parsed.reset } : {}),
             ...(route.cwd ? { cwd: route.cwd } : {}),
+            ...(request.workspaceBindingId
+              ? { workspaceBindingId: request.workspaceBindingId }
+              : {}),
             ...(route.workspaceId ? { workspaceId: route.workspaceId } : {}),
             ...(parsed.assignment ? { assignment: parsed.assignment } : {}),
             ...(parsed.messageMetadata ? { messageMetadata: parsed.messageMetadata } : {}),
@@ -349,6 +370,27 @@ function requireSessionRegistry(options: SparkDaemonSessionControlOptions): Daem
   return options.sessionRegistry;
 }
 
+async function listSessionsForRequest(
+  options: SparkDaemonSessionControlOptions,
+  request: SparkDaemonSessionControlRequest,
+  parsed: ReturnType<typeof sparkSessionListRequestSchema.parse>,
+): Promise<SparkSessionRegistryRecord[]> {
+  const registry = requireSessionRegistry(options);
+  if (request.scope !== "workspace") return await registry.list(parsed);
+
+  const sessions = await registry.list({ includeArchived: parsed.includeArchived });
+  return sessions.flatMap((session) => {
+    try {
+      return [projectSessionForRequest(options.db, session, request)];
+    } catch (error) {
+      if (error instanceof SparkSessionRegistryError && error.code === "session_scope_mismatch") {
+        return [];
+      }
+      throw error;
+    }
+  });
+}
+
 async function requireSession(
   options: SparkDaemonSessionControlOptions,
   sessionId: string,
@@ -358,8 +400,7 @@ async function requireSession(
   if (!session) {
     throw new SparkSessionRegistryError("session_not_found", `unknown session: ${sessionId}`);
   }
-  assertSessionScope(session, request);
-  return session;
+  return projectSessionForRequest(options.db, session, request);
 }
 
 function assertScopeInput(
@@ -383,26 +424,61 @@ function assertScopeInput(
   }
 }
 
-function assertSessionScope(
+function projectSessionForRequest(
+  db: DatabaseSync,
   session: SparkSessionRegistryRecord,
-  request: Pick<SparkDaemonSessionControlRequest, "scope" | "workspaceId">,
-): void {
-  if (request.scope === "any") return;
-  if (request.scope === "daemon" && session.scope.kind !== "daemon") {
+  request: Pick<SparkDaemonSessionControlRequest, "scope" | "workspaceId" | "workspaceBindingId">,
+): SparkSessionRegistryRecord {
+  if (request.scope === "any") return session;
+  if (request.scope === "daemon") {
+    if (session.scope.kind === "daemon") return session;
     throw new SparkSessionRegistryError(
       "session_scope_mismatch",
       `session ${session.sessionId} is not daemon-global`,
     );
   }
-  if (
-    request.scope === "workspace" &&
-    (session.scope.kind !== "workspace" || session.scope.workspaceId !== request.workspaceId)
-  ) {
-    throw new SparkSessionRegistryError(
-      "session_scope_mismatch",
-      `session ${session.sessionId} does not belong to workspace ${request.workspaceId ?? "unknown"}`,
-    );
+
+  const workspaceId = request.workspaceId?.trim();
+  if (session.scope.kind === "workspace" && workspaceId) {
+    const sessionPath = sessionLocalWorkspacePath(db, session);
+    const targetPath = requestWorkspacePath(db, request);
+    if (
+      session.scope.workspaceId === workspaceId ||
+      (sessionPath !== undefined && targetPath !== undefined && sessionPath === targetPath)
+    ) {
+      return parseSparkSessionRegistryRecord({
+        ...session,
+        scope: { kind: "workspace", workspaceId },
+        workspaceId,
+      });
+    }
   }
+  throw new SparkSessionRegistryError(
+    "session_scope_mismatch",
+    `session ${session.sessionId} does not belong to workspace ${workspaceId ?? "unknown"}`,
+  );
+}
+
+function requestWorkspacePath(
+  db: DatabaseSync,
+  request: Pick<SparkDaemonSessionControlRequest, "workspaceId" | "workspaceBindingId">,
+): string | undefined {
+  return resolveWorkspaceLocalPath(db, request.workspaceBindingId ?? request.workspaceId ?? "");
+}
+
+function sessionLocalWorkspacePath(
+  db: DatabaseSync,
+  session: SparkSessionRegistryRecord,
+): string | undefined {
+  if (session.scope.kind !== "workspace") return undefined;
+  const workspaceId = session.scope.workspaceId;
+  const direct = getWorkspaceById(db, workspaceId);
+  if (direct) return direct.serverUrl === "" ? direct.localPath : undefined;
+
+  const legacyMatches = listWorkspaces(db).filter(
+    (workspace) => workspace.serverUrl === "" && workspace.localWorkspaceKey === workspaceId,
+  );
+  return legacyMatches.length === 1 ? legacyMatches[0]!.localPath : undefined;
 }
 
 async function assertInvocationScope(
@@ -629,20 +705,44 @@ function projectPendingSessionTurns(
   snapshot: SparkSessionView,
 ): SparkSessionView {
   const pending = new SparkInvocationStore(db).listPendingForSession(snapshot.sessionId);
-  if (pending.length === 0) return snapshot;
+  const hasRunningTurn = pending.some((invocation) => invocation.status === "running");
+  const hasQueuedTurn = pending.some((invocation) => invocation.status === "queued");
   const messages = pending.map((invocation) => ({
     id: `invocation:${invocation.invocationId}`,
     role: "user" as const,
     text: validateSparkDaemonTask(invocation.task).prompt,
     status: "done" as const,
     createdAt: invocation.createdAt,
-    metadata: { source: "daemon.invocation", invocationId: invocation.invocationId },
+    metadata: {
+      source: "daemon.invocation",
+      invocationId: invocation.invocationId,
+      invocationStatus: invocation.status,
+    },
   }));
   return parseSparkSessionView({
     ...snapshot,
-    status: "running",
+    pendingTurns: pending.map((invocation) => ({
+      invocationId: invocation.invocationId,
+      prompt: validateSparkDaemonTask(invocation.task).prompt,
+      status: invocation.status,
+      createdAt: invocation.createdAt,
+      ...(invocation.startedAt ? { startedAt: invocation.startedAt } : {}),
+    })),
+    status: hasRunningTurn
+      ? "running"
+      : hasQueuedTurn
+        ? "queued"
+        : snapshot.status === "running" ||
+            snapshot.status === "streaming" ||
+            snapshot.status === "queued"
+          ? "idle"
+          : snapshot.status,
     messages: [...snapshot.messages, ...messages],
-    updatedAt: messages.at(-1)?.createdAt ?? snapshot.updatedAt,
+    ...(messages.at(-1)?.createdAt
+      ? { updatedAt: messages.at(-1)?.createdAt }
+      : snapshot.updatedAt
+        ? { updatedAt: snapshot.updatedAt }
+        : {}),
   });
 }
 
@@ -650,11 +750,14 @@ function projectSessionInvocationActivity(
   store: SparkInvocationStore,
   sessions: SparkSessionRegistryRecord[],
 ): SparkSessionRegistryRecord[] {
-  const pendingSessionIds = store.pendingSessionIds();
+  const runningSessionIds = store.runningSessionIds();
   return sessions.map((session) =>
-    session.status !== "archived" && pendingSessionIds.has(session.sessionId)
-      ? { ...session, status: "running" as const }
-      : session,
+    session.status === "archived"
+      ? session
+      : {
+          ...session,
+          status: runningSessionIds.has(session.sessionId) ? "running" : "ready",
+        },
   );
 }
 

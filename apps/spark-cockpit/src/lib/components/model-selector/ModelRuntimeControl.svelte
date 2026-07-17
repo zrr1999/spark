@@ -1,12 +1,15 @@
 <script lang="ts">
-  import ThinkingLevelSlider, {
-    type ThinkingLevel,
-  } from "$lib/components/ThinkingLevelSlider.svelte";
+  import {
+    sparkThinkingLevelOptions,
+    type SparkThinkingLevel,
+  } from "@zendev-lab/spark-protocol";
+  import { Select } from "$lib/ui";
   import ModelPicker from "./ModelPicker.svelte";
   import type { ModelPickerGroup, ModelRuntimeControlLabels } from "./types";
 
   type Props = {
     id: string;
+    open?: boolean;
     modelValue?: string;
     thinkingValue?: string;
     groups: ModelPickerGroup[];
@@ -22,11 +25,12 @@
     selectedLabel?: string;
     settingsHref?: string;
     onModelChange?: (value: string) => void;
-    onThinkingCommit?: (value: ThinkingLevel) => void;
+    onThinkingCommit?: (value: SparkThinkingLevel) => void;
   };
 
   let {
     id,
+    open = $bindable(false),
     modelValue = $bindable(""),
     thinkingValue = $bindable("medium"),
     groups,
@@ -44,11 +48,35 @@
     onModelChange,
     onThinkingCommit,
   }: Props = $props();
+
+  let selectedOption = $derived(
+    groups.flatMap((group) => group.options).find((option) => option.value === modelValue),
+  );
+  let reasoningSupported = $derived(selectedOption?.reasoning !== false);
+  let thinkingGroups = $derived([
+    {
+      id: "thinking",
+      label: labels.thinking,
+      options: sparkThinkingLevelOptions.map((level) => ({
+        value: level,
+        label: labels.thinkingLevels?.[level] ?? level,
+      })),
+    },
+  ]);
+
+  function commitThinking(next: string) {
+    const level = (sparkThinkingLevelOptions as readonly string[]).includes(next)
+      ? (next as SparkThinkingLevel)
+      : "medium";
+    thinkingValue = level;
+    onThinkingCommit?.(level);
+  }
 </script>
 
 <div class="model-runtime-control" role="group" aria-label={labels.aria}>
   <ModelPicker
     id={`${id}-model`}
+    bind:open
     name={modelName}
     form={modelForm}
     bind:value={modelValue}
@@ -67,18 +95,37 @@
     compact
     {settingsHref}
     settingsLabel={labels.configureModels}
-    onValueChange={onModelChange}
+    onCommit={(nextModel) => onModelChange?.(nextModel)}
   />
-  <ThinkingLevelSlider
-    bind:value={thinkingValue}
-    name={thinkingName}
-    form={thinkingForm}
-    label={labels.thinking}
-    valueLabels={labels.thinkingLevels}
-    compact
-    disabled={disabled || thinkingDisabled}
-    onValueCommit={onThinkingCommit}
-  />
+
+  {#if reasoningSupported}
+    <div class="thinking-control">
+      <input
+        type="hidden"
+        name={thinkingName}
+        form={thinkingForm}
+        disabled={disabled || thinkingDisabled}
+        value={thinkingValue}
+      />
+      <Select
+        id={`${id}-thinking`}
+        bind:value={thinkingValue}
+        groups={thinkingGroups}
+        label={labels.thinking}
+        disabled={disabled || thinkingDisabled}
+        compact
+        onValueChange={commitThinking}
+      />
+    </div>
+  {:else}
+    <input
+      type="hidden"
+      name={thinkingName}
+      form={thinkingForm}
+      disabled={disabled || thinkingDisabled}
+      value={thinkingValue}
+    />
+  {/if}
 </div>
 
 <style>
@@ -88,8 +135,8 @@
     border: 1px solid var(--color-border-strong);
     border-radius: var(--rounded-md);
     display: flex;
-    flex: 1 1 22rem;
-    max-width: 100%;
+    flex: 0 1 24rem;
+    max-width: min(24rem, 100%);
     min-width: 0;
     overflow: hidden;
     transition:
@@ -107,7 +154,7 @@
     border: 0;
     border-radius: 0;
     box-shadow: none;
-    flex: 1 1 58%;
+    flex: 1 1 auto;
     max-width: none;
     min-height: 38px;
     min-width: 0;
@@ -123,30 +170,31 @@
     box-shadow: none;
   }
 
-  .model-runtime-control :global(.thinking-slider) {
-    border-left: 1px solid var(--color-border-soft);
-    flex: 1 1 42%;
-    min-width: 120px;
+  .thinking-control {
+    border-left: 1px solid var(--color-border);
+    display: flex;
+    flex: 0 0 auto;
+    max-width: 7.5rem;
+    min-width: 5.5rem;
   }
 
-  .model-runtime-control :global(.thinking-trigger) {
+  .thinking-control :global(.ui-select-trigger) {
     background: transparent;
     border: 0;
     border-radius: 0;
     box-shadow: none;
+    height: 100%;
     min-height: 38px;
-    justify-content: center;
+    min-width: 0;
+    padding-inline: 10px;
     width: 100%;
   }
 
-  .model-runtime-control :global(.thinking-trigger:focus-visible) {
-    box-shadow: none;
+  .thinking-control :global(.ui-select-trigger:hover:not(:disabled)) {
+    background: var(--color-surface-soft);
   }
 
-  @media (max-width: 520px) {
-    .model-runtime-control {
-      flex-basis: 100%;
-      max-width: 100%;
-    }
+  .thinking-control :global(.ui-select-trigger:focus-visible) {
+    box-shadow: none;
   }
 </style>

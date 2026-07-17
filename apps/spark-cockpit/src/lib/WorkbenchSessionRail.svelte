@@ -44,6 +44,7 @@
     activeWorkspaceId = null,
     selectedSessionId = null,
     sessionsAvailable = true,
+    sessionControlAvailable = sessionsAvailable,
     locale,
     common,
     messages,
@@ -53,6 +54,7 @@
     activeWorkspaceId?: string | null;
     selectedSessionId?: string | null;
     sessionsAvailable?: boolean;
+    sessionControlAvailable?: boolean;
     locale: string;
     common: Parameters<typeof getStatusLabel>[1];
     messages: {
@@ -141,14 +143,41 @@
 
 <div class="session-rail">
   <div class="session-toolbar">
+    <div class="new-session-actions">
+      {#if activeWorkspaceId}
+        {#if sessionControlAvailable}
+          <a
+            class="new-session"
+            href="/sessions?new=workspace"
+            aria-label={messages.workspaceConversation}
+            title={messages.workspaceConversation}
+          >
+            <Icon name="workspace" size={16} stroke={2.2} />
+            <span class="sr-only">{messages.workspaceConversation}</span>
+          </a>
+        {:else}
+          <span
+            class="new-session disabled"
+            role="link"
+            aria-disabled="true"
+            aria-label={messages.workspaceConversation}
+            title={messages.workspaceConversation}
+          >
+            <Icon name="workspace" size={16} stroke={2.2} />
+            <span class="sr-only">{messages.workspaceConversation}</span>
+          </span>
+        {/if}
+      {/if}
+    </div>
+
     <label class="session-filter">
       <Icon name="search" size={15} stroke={2.1} />
       <input
         bind:value={filter}
+        data-session-filter
         type="search"
         aria-label={messages.searchPlaceholder}
         placeholder={messages.searchPlaceholder}
-        disabled={!sessionsAvailable}
       />
     </label>
 
@@ -178,7 +207,7 @@
     {/if}
   </div>
 
-  {#if !sessionsAvailable}
+  {#if activeWorkspaceId && !sessionControlAvailable}
     <div class="session-unavailable" role="status">
       <Icon name="warning" size={15} stroke={2.1} />
       <div>
@@ -186,8 +215,12 @@
         <p>{messages.daemonUnavailableBody}</p>
       </div>
     </div>
-  {:else if filteredSessions.length === 0}
-    <p class="session-empty">{messages.emptyTitle}</p>
+  {/if}
+
+  {#if filteredSessions.length === 0}
+    {#if sessionsAvailable}
+      <p class="session-empty">{messages.emptyTitle}</p>
+    {/if}
   {:else}
     <div class="session-groups" aria-label={messages.listLabel}>
       {#each grouped as group (group.key)}
@@ -206,7 +239,7 @@
               {@const displayedStatus = displayedActivityStatus(session)}
               {@const isSelected = session.sessionId === selectedSessionId}
               {@const presentation = sessionPresentation(session)}
-              {@const canArchive = isSelected && session.status !== "archived" && !sessionHasChannelBinding(session)}
+              {@const canArchive = sessionControlAvailable && isSelected && session.status !== "archived" && !sessionHasChannelBinding(session)}
               <div class="session-item-row">
                 <a
                   class="session-item"

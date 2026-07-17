@@ -1,8 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { migrateSparkDaemonDatabase } from "../store/schema.ts";
+import { addWorkspace } from "../store/workspaces.ts";
 import {
   SparkDaemonHumanWaitRegistry,
+  SparkDaemonHumanWaitLookupError,
   type SparkDaemonHumanWaitDelivery,
   type SparkDaemonHumanWaitInput,
 } from "./human-waits.ts";
@@ -36,6 +38,189 @@ function waitInput(
 }
 
 describe("SparkDaemonHumanWaitRegistry", () => {
+  it("requires a unique pending interaction and supports session or invocation disambiguation", () => {
+    const { db, waits } = createHarness();
+    try {
+      waits.register({
+        ...waitInput("hreq-interaction-a"),
+        interactionRequestId: "interaction-shared",
+        sessionId: "session-a",
+        invocationId: "invocation-a",
+      });
+      waits.register({
+        ...waitInput("hreq-interaction-b"),
+        interactionRequestId: "interaction-shared",
+        sessionId: "session-b",
+        invocationId: "invocation-b",
+      });
+
+      expect(() =>
+        waits.requireUniquePendingInteraction({ interactionRequestId: "interaction-shared" }),
+      ).toThrowError(
+        new SparkDaemonHumanWaitLookupError(
+          "human_interaction_ambiguous",
+          "Multiple pending daemon-owned human interactions matched interaction-shared; include sessionId or invocationId.",
+        ),
+      );
+      expect(
+        waits.requireUniquePendingInteraction({
+          interactionRequestId: "interaction-shared",
+          sessionId: "session-a",
+        }).humanRequestId,
+      ).toBe("hreq-interaction-a");
+      expect(
+        waits.requireUniquePendingInteraction({
+          interactionRequestId: "interaction-shared",
+          invocationId: "invocation-b",
+        }).humanRequestId,
+      ).toBe("hreq-interaction-b");
+
+      waits.deliver({
+        humanRequestId: "hreq-interaction-a",
+        status: "answered",
+        answers: { decision: "continue" },
+      });
+      expect(
+        waits.requireUniquePendingInteraction({ interactionRequestId: "interaction-shared" })
+          .humanRequestId,
+      ).toBe("hreq-interaction-b");
+
+      expect(() =>
+        waits.requireUniquePendingInteraction({ interactionRequestId: "interaction-missing" }),
+      ).toThrowError(/No pending daemon-owned human interaction matched interaction-missing/u);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("filters before limiting so one Cockpit cannot starve another Cockpit's outbox", () => {
+    const { db, waits } = createHarness();
+    const runtimeA = "rt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const runtimeB = "rt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const bindingA = "rtwb_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const bindingB = "rtwb_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const serverA = "https://a.example.test/";
+    const serverB = "https://b.example.test/";
+    try {
+      addWorkspace(db, {
+        id: bindingA,
+        serverUrl: serverA,
+        localWorkspaceKey: "workspace-a",
+        displayName: "Workspace A",
+        localPath: "/workspace-a",
+      });
+      addWorkspace(db, {
+        id: bindingB,
+        serverUrl: serverB,
+        localWorkspaceKey: "workspace-b",
+        displayName: "Workspace B",
+        localPath: "/workspace-b",
+      });
+      for (let index = 0; index < 100; index += 1) {
+        const suffix = index.toString().padStart(3, "0");
+        waits.register(
+          {
+            ...waitInput(`hreq-a-${suffix}`),
+            workspaceBindingId: bindingA,
+            workspaceId: "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          },
+          {
+            messageId: `message-a-${suffix}`,
+            kind: "human.request.created",
+            envelope: {
+              type: "human.request.created",
+              runtimeId: runtimeA,
+              workspaceBindingId: bindingA,
+              workspaceId: "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              humanRequestId: `hreq-a-${suffix}`,
+            },
+          },
+        );
+      }
+      waits.register(
+        {
+          ...waitInput("hreq-b"),
+          workspaceBindingId: bindingB,
+          workspaceId: "ws_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        },
+        {
+          messageId: "message-b",
+          kind: "human.request.created",
+          envelope: {
+            type: "human.request.created",
+            runtimeId: runtimeB,
+            workspaceBindingId: bindingB,
+            workspaceId: "ws_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            humanRequestId: "hreq-b",
+          },
+        },
+      );
+
+      expect(waits.listPendingOutboxForRoute({ runtimeId: runtimeB, serverUrl: serverB })).toEqual([
+        expect.objectContaining({ messageId: "message-b" }),
+      ]);
+      expect(
+        waits.acknowledgeOutboxForRoute("message-b", {
+          runtimeId: runtimeA,
+          serverUrl: serverA,
+        }),
+      ).toBe(false);
+      expect(
+        waits.acknowledgeOutboxForRoute("message-b", {
+          runtimeId: runtimeB,
+          serverUrl: serverB,
+        }),
+      ).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("routes daemon-scoped outbox entries by runtime id", () => {
+    const { db, waits } = createHarness();
+    try {
+      waits.register(
+        { ...waitInput("hreq-daemon"), workspaceBindingId: "", workspaceId: "" },
+        {
+          messageId: "message-daemon",
+          kind: "human.request.created",
+          envelope: {
+            type: "human.request.created",
+            runtimeId: "rt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            humanRequestId: "hreq-daemon",
+          },
+        },
+      );
+
+      expect(
+        waits.listPendingOutboxForRoute({
+          runtimeId: "rt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          serverUrl: "https://b.example.test/",
+        }),
+      ).toEqual([]);
+      expect(
+        waits.listPendingOutboxForRoute({
+          runtimeId: "rt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          serverUrl: null,
+        }),
+      ).toEqual([expect.objectContaining({ messageId: "message-daemon" })]);
+      expect(
+        waits.acknowledgeOutboxForRoute("message-daemon", {
+          runtimeId: "rt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          serverUrl: null,
+        }),
+      ).toBe(false);
+      expect(
+        waits.acknowledgeOutboxForRoute("message-daemon", {
+          runtimeId: "rt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          serverUrl: null,
+        }),
+      ).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
   it("registers async asks without a suspended Promise and persists a pending outbox", () => {
     const { db, waits } = createHarness();
     try {

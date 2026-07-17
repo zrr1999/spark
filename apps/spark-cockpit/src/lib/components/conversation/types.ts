@@ -79,6 +79,10 @@ export type ConversationPart =
       code?: string;
     }
   | {
+      type: "notice";
+      kind: "budget_exhausted";
+    }
+  | {
       type: "unknown";
       label: string;
     };
@@ -133,4 +137,6 @@ export type ConversationPartLabels = {
   unknown: string;
   collapse: string;
   expand: string;
+  budgetExhausted: string;
+  budgetExhaustedHint: string;
 };

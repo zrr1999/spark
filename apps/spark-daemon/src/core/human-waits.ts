@@ -1,10 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
-import { createId, type HumanRequestCreatedPayload } from "@zendev-lab/spark-protocol";
+import {
+  createId,
+  type HumanRequestCreatedPayload,
+  type SparkHumanInteractionStatus,
+} from "@zendev-lab/spark-protocol";
 
 type JsonObject = Record<string, unknown>;
 type HumanQuestion = HumanRequestCreatedPayload["questions"][number];
 type HumanRequestKind = HumanRequestCreatedPayload["kind"];
-type HumanWaitStatus = "pending" | "answered" | "cancelled" | "archived";
+type HumanWaitStatus = SparkHumanInteractionStatus;
 
 export type SparkDaemonHumanWaitDelivery = "blocking" | "async";
 
@@ -82,6 +86,28 @@ export interface SparkDaemonHumanWaitOutboxInput {
 }
 
 export type SparkDaemonHumanWaitOutboxEntry = SparkDaemonHumanWaitOutboxInput;
+
+export interface SparkDaemonHumanWaitOutboxRoute {
+  runtimeId: string;
+  serverUrl: string | null;
+}
+
+export interface SparkDaemonHumanWaitInteractionLookup {
+  interactionRequestId: string;
+  sessionId?: string;
+  invocationId?: string;
+}
+
+export class SparkDaemonHumanWaitLookupError extends Error {
+  override readonly name = "SparkDaemonHumanWaitLookupError";
+
+  constructor(
+    readonly code: "human_interaction_not_found" | "human_interaction_ambiguous",
+    message: string,
+  ) {
+    super(message);
+  }
+}
 
 interface ActiveHumanWait {
   wait: SparkDaemonHumanWaitRecord;
@@ -328,6 +354,31 @@ export class SparkDaemonHumanWaitRegistry {
     return rows.map((row) => parseHumanWaitRow(row).wait);
   }
 
+  requireUniquePendingInteraction(
+    input: SparkDaemonHumanWaitInteractionLookup,
+  ): SparkDaemonHumanWaitRecord {
+    return requireUniqueInteractionMatch(this.listPending(), input, "pending ");
+  }
+
+  /** Resolve a stable response retry after the wait may already have settled. */
+  requireUniqueInteraction(
+    input: SparkDaemonHumanWaitInteractionLookup,
+  ): SparkDaemonHumanWaitRecord {
+    const rows = this.db
+      .prepare(
+        `SELECT request_json AS requestJson, response_json AS responseJson,
+                accepted_response_id AS acceptedResponseId, status, updated_at AS updatedAt
+         FROM daemon_human_waits
+         ORDER BY created_at`,
+      )
+      .all() as unknown as HumanWaitRow[];
+    return requireUniqueInteractionMatch(
+      rows.map((row) => parseHumanWaitRow(row).wait),
+      input,
+      "",
+    );
+  }
+
   hasActive(humanRequestId: string): boolean {
     return this.active.has(humanRequestId);
   }
@@ -379,6 +430,56 @@ export class SparkDaemonHumanWaitRegistry {
     }));
   }
 
+  /**
+   * Return only outbox entries owned by one runtime uplink. Route filtering is
+   * part of the SQL query so a busy Cockpit cannot consume the shared LIMIT and
+   * starve another Cockpit's pending entries.
+   */
+  listPendingOutboxForRoute(
+    route: SparkDaemonHumanWaitOutboxRoute,
+    limit = 100,
+  ): SparkDaemonHumanWaitOutboxEntry[] {
+    const rows = this.db
+      .prepare(
+        `SELECT o.id AS messageId, o.kind, o.payload_json AS payloadJson
+         FROM outbox o
+         WHERE o.kind IN ('human.request.created', 'human.response.recorded')
+           AND o.status != 'acked'
+           AND CAST(json_extract(o.payload_json, '$.runtimeId') AS TEXT) = ?
+           AND (
+             (
+               COALESCE(CAST(json_extract(o.payload_json, '$.workspaceBindingId') AS TEXT), '') = ''
+             )
+             OR (
+               ? IS NOT NULL
+               AND EXISTS (
+                 SELECT 1
+                 FROM workspaces w
+                 WHERE w.id = CAST(json_extract(o.payload_json, '$.workspaceBindingId') AS TEXT)
+                   AND w.server_url = ?
+               )
+             )
+           )
+         ORDER BY o.created_at, o.id
+         LIMIT ?`,
+      )
+      .all(
+        route.runtimeId,
+        route.serverUrl,
+        route.serverUrl,
+        Math.max(1, Math.floor(limit)),
+      ) as Array<{
+      messageId: string;
+      kind: "human.request.created" | "human.response.recorded";
+      payloadJson: string;
+    }>;
+    return rows.map((row) => ({
+      messageId: row.messageId,
+      kind: row.kind,
+      envelope: JSON.parse(row.payloadJson) as JsonObject,
+    }));
+  }
+
   acknowledgeOutbox(messageId: string): boolean {
     const now = new Date().toISOString();
     return (
@@ -390,6 +491,36 @@ export class SparkDaemonHumanWaitRegistry {
              AND status != 'acked'`,
         )
         .run(now, messageId).changes === 1
+    );
+  }
+
+  acknowledgeOutboxForRoute(messageId: string, route: SparkDaemonHumanWaitOutboxRoute): boolean {
+    const now = new Date().toISOString();
+    return (
+      this.db
+        .prepare(
+          `UPDATE outbox AS o
+           SET status = 'acked', updated_at = ?
+           WHERE o.id = ?
+             AND o.kind IN ('human.request.created', 'human.response.recorded')
+             AND o.status != 'acked'
+             AND CAST(json_extract(o.payload_json, '$.runtimeId') AS TEXT) = ?
+             AND (
+               (
+                 COALESCE(CAST(json_extract(o.payload_json, '$.workspaceBindingId') AS TEXT), '') = ''
+               )
+               OR (
+                 ? IS NOT NULL
+                 AND EXISTS (
+                   SELECT 1
+                   FROM workspaces w
+                   WHERE w.id = CAST(json_extract(o.payload_json, '$.workspaceBindingId') AS TEXT)
+                     AND w.server_url = ?
+                 )
+               )
+             )`,
+        )
+        .run(now, messageId, route.runtimeId, route.serverUrl, route.serverUrl).changes === 1
     );
   }
 
@@ -408,6 +539,35 @@ export class SparkDaemonHumanWaitRegistry {
       .get(humanRequestId) as HumanWaitRow | undefined;
     return row ? parseHumanWaitRow(row) : null;
   }
+}
+
+function requireUniqueInteractionMatch(
+  waits: SparkDaemonHumanWaitRecord[],
+  input: SparkDaemonHumanWaitInteractionLookup,
+  statusLabel: string,
+): SparkDaemonHumanWaitRecord {
+  const interactionRequestId = input.interactionRequestId.trim();
+  const sessionId = input.sessionId?.trim();
+  const invocationId = input.invocationId?.trim();
+  const matches = waits.filter(
+    (wait) =>
+      wait.interactionRequestId === interactionRequestId &&
+      (!sessionId || wait.sessionId === sessionId) &&
+      (!invocationId || wait.invocationId === invocationId),
+  );
+  if (matches.length === 0) {
+    throw new SparkDaemonHumanWaitLookupError(
+      "human_interaction_not_found",
+      `No ${statusLabel}daemon-owned human interaction matched ${interactionRequestId || "(empty)"}.`,
+    );
+  }
+  if (matches.length > 1) {
+    throw new SparkDaemonHumanWaitLookupError(
+      "human_interaction_ambiguous",
+      `Multiple ${statusLabel}daemon-owned human interactions matched ${interactionRequestId}; include sessionId or invocationId.`,
+    );
+  }
+  return matches[0]!;
 }
 
 function parseHumanWaitRow(row: HumanWaitRow): {

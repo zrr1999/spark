@@ -370,6 +370,60 @@ describe("runtime session projections", () => {
     h.db.close();
   });
 
+  it("does not regress a lifecycle update when the queued admission result arrives late", () => {
+    const h = setup();
+    const session = workspaceSession(h.workspaceId);
+    projectSession(h, session, "workspace");
+    const submit = submitRuntimeControlCommand(h.db, {
+      runtimeId: h.runtimeId,
+      workspaceId: h.workspaceId,
+      sessionId: session.sessionId,
+      payload: {
+        kind: "turn.submit.request",
+        scope: "workspace",
+        payload: { sessionId: session.sessionId, prompt: "finish before admission ack" },
+      },
+      createdAt: now,
+    });
+    const invocationId = createId("inv");
+
+    recordInvocationUpdate(h.db, {
+      runtimeWorkspaceBindingId: h.bindingId,
+      workspaceId: h.workspaceId,
+      payload: {
+        runtimeInvocationId: invocationId,
+        sequence: 4,
+        status: "succeeded",
+        startedAt: "2026-07-15T00:00:02.000Z",
+        completedAt: "2026-07-15T00:00:04.000Z",
+        payload: { source: "daemon.lifecycle" },
+      },
+      updatedAt: "2026-07-15T00:00:04.000Z",
+    });
+    recordResult(h, submit.commandId, {
+      status: "succeeded",
+      result: { invocationId, status: "queued", acceptedAt: now },
+      completedAt: "2026-07-15T00:00:05.000Z",
+    });
+
+    expect(getRuntimeTurnStatusProjection(h.db, invocationId)).toMatchObject({
+      status: "succeeded",
+      eventCursor: 4,
+      startedAt: "2026-07-15T00:00:02.000Z",
+      finishedAt: "2026-07-15T00:00:04.000Z",
+    });
+    expect(
+      h.db
+        .prepare(
+          `SELECT command_id AS commandId
+           FROM runtime_invocation_projections
+           WHERE runtime_id = ? AND runtime_invocation_id = ?`,
+        )
+        .get(h.runtimeId, invocationId),
+    ).toEqual({ commandId: submit.commandId });
+    h.db.close();
+  });
+
   it("retries an ambiguous turn submit with one durable command and idempotency key", async () => {
     const h = setup();
     const invocationId = createId("inv");

@@ -37,6 +37,98 @@ function setupWorkspace() {
   return { db, workspace, runtimeId, runtimeWorkspaceBindingId };
 }
 
+function projectRuntimeSession(
+  db: ReturnType<typeof openMemoryDatabase>,
+  input: {
+    runtimeId: string;
+    runtimeWorkspaceBindingId: string;
+    workspaceId: string;
+    sessionId: string;
+    createdAt: string;
+  },
+) {
+  db.prepare(
+    `INSERT OR IGNORE INTO runtime_session_projections
+      (runtime_id, session_id, scope, workspace_id, runtime_workspace_binding_id, status,
+       record_json, projected_at)
+     VALUES (?, ?, 'workspace', ?, ?, 'ready', ?, ?)`,
+  ).run(
+    input.runtimeId,
+    input.sessionId,
+    input.workspaceId,
+    input.runtimeWorkspaceBindingId,
+    JSON.stringify({
+      sessionId: input.sessionId,
+      scope: { kind: "workspace", workspaceId: input.workspaceId },
+      workspaceId: input.workspaceId,
+      title: input.sessionId,
+      status: "ready",
+      bindings: [],
+      createdAt: input.createdAt,
+      updatedAt: input.createdAt,
+    }),
+    input.createdAt,
+  );
+}
+
+function submitProjectedTurn(
+  db: ReturnType<typeof openMemoryDatabase>,
+  input: {
+    runtimeId: string;
+    runtimeWorkspaceBindingId: string;
+    workspaceId: string;
+    sessionId: string;
+    invocationId: string;
+    prompt: string;
+    status: "queued" | "running";
+    createdAt: string;
+    startedAt?: string;
+  },
+) {
+  projectRuntimeSession(db, input);
+  const command = submitRuntimeControlCommand(db, {
+    runtimeId: input.runtimeId,
+    workspaceId: input.workspaceId,
+    sessionId: input.sessionId,
+    payload: {
+      kind: "turn.submit.request",
+      scope: "workspace",
+      payload: { sessionId: input.sessionId, prompt: input.prompt },
+    },
+    createdAt: input.createdAt,
+  });
+  recordRuntimeControlCommandResult(db, {
+    runtimeId: input.runtimeId,
+    commandId: command.commandId,
+    messageId: createId("msg"),
+    payload: {
+      status: "succeeded",
+      result: {
+        invocationId: input.invocationId,
+        status: "queued",
+        acceptedAt: input.createdAt,
+      },
+      completedAt: input.createdAt,
+    },
+    project: (persisted, result) => recordRuntimeSessionControlProjection(db, persisted, result),
+  });
+  if (input.status === "running") {
+    recordInvocationUpdate(db, {
+      runtimeWorkspaceBindingId: input.runtimeWorkspaceBindingId,
+      workspaceId: input.workspaceId,
+      payload: {
+        runtimeInvocationId: input.invocationId,
+        sequence: 1,
+        status: "running",
+        startedAt: input.startedAt ?? input.createdAt,
+        payload: {},
+      },
+      updatedAt: input.startedAt ?? input.createdAt,
+    });
+  }
+  return command;
+}
+
 describe("session activity projection", () => {
   it("shows assigned work and daemon reports for one session", () => {
     const { db, workspace, runtimeWorkspaceBindingId } = setupWorkspace();
@@ -278,6 +370,140 @@ describe("session activity projection", () => {
         (command) => command.goal?.includes("Selected") || command.id === selected.id,
       ),
     ).toBe(true);
+    db.close();
+  });
+
+  it("projects queued and running direct turns in FIFO order with workspace and session isolation", () => {
+    const { db, workspace, runtimeId, runtimeWorkspaceBindingId } = setupWorkspace();
+    const sessionId = "sess_queue";
+    const running = submitProjectedTurn(db, {
+      runtimeId,
+      runtimeWorkspaceBindingId,
+      workspaceId: workspace.id,
+      sessionId,
+      invocationId: "inv_queuerunning",
+      prompt: "Inspect the current running turn.",
+      status: "running",
+      createdAt: "2026-07-09T00:01:00.000Z",
+      startedAt: "2026-07-09T00:01:30.000Z",
+    });
+    const queued = submitProjectedTurn(db, {
+      runtimeId,
+      runtimeWorkspaceBindingId,
+      workspaceId: workspace.id,
+      sessionId,
+      invocationId: "inv_queuefollowup",
+      prompt: "Then run the queued follow-up.",
+      status: "queued",
+      createdAt: "2026-07-09T00:02:00.000Z",
+    });
+
+    const terminal = submitProjectedTurn(db, {
+      runtimeId,
+      runtimeWorkspaceBindingId,
+      workspaceId: workspace.id,
+      sessionId,
+      invocationId: "inv_queuestale",
+      prompt: "Do not retain a command whose latest invocation is terminal.",
+      status: "queued",
+      createdAt: "2026-07-09T00:03:00.000Z",
+    });
+    db.prepare(
+      `INSERT INTO runtime_invocation_projections
+        (runtime_id, runtime_invocation_id, session_id, scope, workspace_id,
+         runtime_workspace_binding_id, command_id, status, event_cursor, completed_at,
+         payload_json, created_at, updated_at)
+       VALUES (?, ?, ?, 'workspace', ?, ?, ?, 'succeeded', 2, ?, '{}', ?, ?)`,
+    ).run(
+      runtimeId,
+      "inv_queueterminal",
+      sessionId,
+      workspace.id,
+      runtimeWorkspaceBindingId,
+      terminal.commandId,
+      "2026-07-09T00:04:00.000Z",
+      "2026-07-09T00:03:30.000Z",
+      "2026-07-09T00:04:00.000Z",
+    );
+
+    submitProjectedTurn(db, {
+      runtimeId,
+      runtimeWorkspaceBindingId,
+      workspaceId: workspace.id,
+      sessionId: "sess_queue_other",
+      invocationId: "inv_othersession",
+      prompt: "Do not include another session.",
+      status: "queued",
+      createdAt: "2026-07-09T00:00:30.000Z",
+    });
+
+    const otherRuntimeId = createId("rt");
+    const otherRuntimeWorkspaceBindingId = createId("rtwb");
+    db.prepare(
+      `INSERT INTO runtime_connections
+        (id, installation_id, name, status, protocol_version, capabilities_json, labels_json,
+         created_at, updated_at)
+       VALUES (?, ?, 'Other runtime', 'online', ?, '{}', '{}', ?, ?)`,
+    ).run(
+      otherRuntimeId,
+      "other-install",
+      runtimeProtocolVersion,
+      "2026-07-09T00:00:00.000Z",
+      "2026-07-09T00:00:00.000Z",
+    );
+    db.prepare(
+      `INSERT INTO runtime_workspace_bindings
+        (id, runtime_id, local_workspace_key, display_name, status, capabilities_json,
+         diagnostics_json, created_at, updated_at)
+       VALUES (?, ?, 'other', 'Other workspace', 'available', '{}', '{}', ?, ?)`,
+    ).run(
+      otherRuntimeWorkspaceBindingId,
+      otherRuntimeId,
+      "2026-07-09T00:00:00.000Z",
+      "2026-07-09T00:00:00.000Z",
+    );
+    const otherWorkspace = createWorkspaceWithOwnerBinding(db, {
+      slug: "other",
+      name: "other",
+      runtimeWorkspaceBindingId: otherRuntimeWorkspaceBindingId,
+      createdAt: "2026-07-09T00:00:00.000Z",
+    });
+    submitProjectedTurn(db, {
+      runtimeId: otherRuntimeId,
+      runtimeWorkspaceBindingId: otherRuntimeWorkspaceBindingId,
+      workspaceId: otherWorkspace.id,
+      sessionId,
+      invocationId: "inv_otherworkspace",
+      prompt: "Do not include another workspace.",
+      status: "queued",
+      createdAt: "2026-07-09T00:00:15.000Z",
+    });
+
+    const activity = loadSessionActivity(db, { workspaceId: workspace.id, sessionId });
+
+    expect(activity.queuedTurns).toEqual([
+      {
+        commandId: running.commandId,
+        invocationId: "inv_queuerunning",
+        prompt: "Inspect the current running turn.",
+        status: "running",
+        createdAt: "2026-07-09T00:01:00.000Z",
+        startedAt: "2026-07-09T00:01:30.000Z",
+      },
+      {
+        commandId: queued.commandId,
+        invocationId: "inv_queuefollowup",
+        prompt: "Then run the queued follow-up.",
+        status: "queued",
+        createdAt: "2026-07-09T00:02:00.000Z",
+        startedAt: null,
+      },
+    ]);
+    expect(activity.queuedTurns.map((turn) => turn.invocationId)).not.toContain("inv_queuestale");
+    expect(activity.queuedTurns.map((turn) => turn.invocationId)).not.toContain("inv_othersession");
+    expect(activity.queuedTurns.map((turn) => turn.invocationId)).not.toContain(
+      "inv_otherworkspace",
+    );
     db.close();
   });
 

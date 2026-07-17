@@ -297,10 +297,11 @@ async function handleSettingsCommand(
     if (!isThinkingLevel(level)) {
       return STRINGS.settingsUsageThinking(THINKING_LEVELS);
     }
-    services.config.activeThinkingLevel = level;
-    await services.saveConfig?.(services.config);
     if (modelAuthClient?.sessionId) {
       await modelAuthClient.setSessionThinkingLevel(level);
+    } else {
+      services.config.activeThinkingLevel = level;
+      await services.saveConfig?.(services.config);
     }
     return STRINGS.thinkingLevelSet(level);
   }

@@ -13,6 +13,12 @@ import WebSocket from "ws";
 import { readSparkDaemonConfig, writeSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
 import { sparkDaemonSupportedFeatures, sparkDaemonVersion } from "./daemon.js";
 import { fetchRegistrationEndpoint } from "./registration-http.js";
+import {
+  getSparkDaemonServerProfile,
+  normalizeSparkDaemonServerUrl,
+  sparkDaemonConfigForServerProfile,
+  upsertSparkDaemonServerProfile,
+} from "./server-profiles.js";
 import { refreshSparkDaemonCredentials, shouldRefreshSparkDaemonToken } from "./token-refresh.js";
 
 export class RegistrationGrantRefusedError extends Error {}
@@ -83,7 +89,7 @@ export async function registerSparkDaemonWithToken(
     installationId,
     ...(input.workspaceRegistration ? { workspaceRegistration: input.workspaceRegistration } : {}),
   });
-  persistSparkDaemonCredentials(paths, current, {
+  await persistSparkDaemonCredentials(paths, {
     serverUrl,
     displayName,
     installationId,
@@ -186,7 +192,7 @@ export async function completeSparkDaemonDeviceAuthorization(
     }
 
     const registered = runtimeRegistrationResponseSchema.parse(await response.json());
-    persistSparkDaemonCredentials(paths, current, {
+    await persistSparkDaemonCredentials(paths, {
       serverUrl,
       displayName,
       installationId,
@@ -205,10 +211,14 @@ export async function ensureSparkDaemonRegistrationForWorkspace(
   paths: SparkPaths,
   input: SparkDaemonRegistrationInput,
 ): Promise<SparkDaemonRegistrationResult> {
-  let current = readSparkDaemonConfig(paths);
+  const identity = readSparkDaemonConfig(paths);
   const serverUrl = validateRegistrationServerUrl(input.serverUrl, {
     allowInsecureHttp: input.allowInsecureHttp,
   });
+  const existingProfile = getSparkDaemonServerProfile(paths, serverUrl);
+  let current = existingProfile
+    ? sparkDaemonConfigForServerProfile(identity, existingProfile)
+    : identity;
   if (hasRunnableSparkDaemonCredentialsForServer(current, serverUrl)) {
     current = shouldRefreshSparkDaemonToken(current)
       ? await refreshSparkDaemonCredentials({ paths, config: current })
@@ -241,7 +251,7 @@ export async function ensureSparkDaemonRegistrationForWorkspace(
     registrationToken: input.registrationToken,
   });
   return {
-    config: readSparkDaemonConfig(paths),
+    config: configForRegisteredServer(paths, serverUrl),
     ...(registered.workspaceBinding ? { workspaceBinding: registered.workspaceBinding } : {}),
   };
 }
@@ -315,7 +325,7 @@ export function validateRegistrationServerUrl(
 }
 
 function normalizeConfiguredServerUrl(serverUrl: string): string {
-  return validateRegistrationServerUrl(serverUrl, { allowInsecureHttp: true });
+  return normalizeSparkDaemonServerUrl(serverUrl);
 }
 
 function isLoopbackHostname(hostname: string): boolean {
@@ -556,21 +566,17 @@ async function registerWorkspaceWithRuntime(input: {
   return runtimeWorkspaceRegistrationResponseSchema.parse(await response.json());
 }
 
-function persistSparkDaemonCredentials(
+async function persistSparkDaemonCredentials(
   paths: SparkPaths,
-  current: SparkDaemonConfig,
   input: {
     serverUrl: string;
     displayName: string;
     installationId: string;
     registered: RuntimeRegistrationResponse;
   },
-): void {
+): Promise<void> {
   const webSocketUrl = validateRuntimeWebSocketUrl(input.serverUrl, input.registered.webSocketUrl);
-  writeSparkDaemonConfig(paths, {
-    ...current,
-    installationId: input.installationId,
-    displayName: input.displayName,
+  await upsertSparkDaemonServerProfile(paths, {
     serverUrl: input.serverUrl,
     runtimeId: input.registered.runtimeId,
     runtimeToken: input.registered.runtimeToken,
@@ -579,6 +585,20 @@ function persistSparkDaemonCredentials(
     refreshTokenExpiresAt: input.registered.refreshTokenExpiresAt,
     webSocketUrl,
   });
+  // The upsert migrates any legacy tuple before daemon.toml is reduced to the
+  // stable daemon identity. Do not select the newly registered Cockpit globally.
+  writeSparkDaemonConfig(paths, {
+    installationId: input.installationId,
+    displayName: input.displayName,
+  });
+}
+
+function configForRegisteredServer(paths: SparkPaths, serverUrl: string): SparkDaemonConfig {
+  const profile = getSparkDaemonServerProfile(paths, serverUrl);
+  if (!profile) {
+    throw new Error(`Spark daemon credentials were not persisted for ${serverUrl}.`);
+  }
+  return sparkDaemonConfigForServerProfile(readSparkDaemonConfig(paths), profile);
 }
 
 async function readHttpFailure(response: Response): Promise<{ code: string; message: string }> {

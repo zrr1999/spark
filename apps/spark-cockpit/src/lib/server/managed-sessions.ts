@@ -1,19 +1,27 @@
+import type { DatabaseSync } from "node:sqlite";
 import type {
   SparkSessionBindRequest,
   SparkSessionRegistryRecord,
 } from "@zendev-lab/spark-protocol";
-import type { SessionSnapshotWindow } from "../session-snapshot-window";
+import { getRuntimeSessionProjection } from "@zendev-lab/spark-coordination/runtime-session-control";
+import { parseSessionSnapshotWindow, type SessionSnapshotWindow } from "../session-snapshot-window";
 
 import {
   CockpitRuntimeSessionUnavailableError,
   createCockpitRuntimeSessionClient,
   isCockpitRuntimeSessionNotFoundError,
   type CockpitRuntimeSessionCreateRequest,
+  type CockpitRuntimeSessionListResult,
   type CockpitRuntimeSessionListRequest,
   type CockpitRuntimeSessionSnapshotRequest,
 } from "./cockpit-runtime-session-client";
+import { getDatabase } from "./db";
 
 export interface CockpitManagedSessionsClient {
+  controlAvailable?(options?: CockpitRuntimeSessionListRequest): boolean;
+  listWithControlState?(
+    options?: CockpitRuntimeSessionListRequest,
+  ): Promise<CockpitRuntimeSessionListResult>;
   list(options?: CockpitRuntimeSessionListRequest): Promise<SparkSessionRegistryRecord[]>;
   get(sessionId: string): Promise<SparkSessionRegistryRecord>;
   snapshot(
@@ -30,6 +38,7 @@ const runtimeManagedSessionsClient = createCockpitRuntimeSessionClient();
 
 export type CockpitManagedSessionsList = {
   available: boolean;
+  controlAvailable: boolean;
   sessions: SparkSessionRegistryRecord[];
   error?: string;
 };
@@ -38,17 +47,26 @@ export async function listManagedSessionsForCockpit(
   options: CockpitRuntimeSessionListRequest = {},
   client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
 ): Promise<CockpitManagedSessionsList> {
-  if (options.scope?.kind === "daemon") return { available: true, sessions: [] };
+  if (options.scope?.kind === "daemon") {
+    return { available: true, controlAvailable: false, sessions: [] };
+  }
   try {
-    const sessions = await client.list(options);
+    const listed = client.listWithControlState
+      ? await client.listWithControlState(options)
+      : {
+          sessions: await client.list(options),
+          controlAvailable: client.controlAvailable?.(options) ?? true,
+        };
     return {
       available: true,
-      sessions: sessions.filter(isCockpitWorkspaceSession),
+      controlAvailable: listed.controlAvailable,
+      sessions: listed.sessions.filter(isCockpitWorkspaceSession),
     };
   } catch (error) {
     if (error instanceof CockpitRuntimeSessionUnavailableError) {
       return {
         available: false,
+        controlAvailable: false,
         sessions: [],
         error: error.message,
       };
@@ -71,6 +89,51 @@ export async function getManagedSessionForCockpit(
     if (isCockpitRuntimeSessionNotFoundError(error)) return null;
     throw error;
   }
+}
+
+/**
+ * Resolve an already projected conversation without requiring its owner to be
+ * connected. Layout routing uses this only to recover the workspace scope for
+ * a direct conversation URL; mutations continue through the runtime client.
+ */
+export function getProjectedManagedSessionForCockpit(
+  sessionId: string,
+  database: DatabaseSync = getDatabase(),
+): SparkSessionRegistryRecord | null {
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedSessionId) return null;
+  const session = getRuntimeSessionProjection(database, normalizedSessionId)?.session ?? null;
+  return session && isCockpitWorkspaceSession(session) ? session : null;
+}
+
+/** Read the last projected conversation view without contacting its owner. */
+export function getProjectedManagedSessionSnapshotForCockpit(
+  sessionId: string,
+  database: DatabaseSync = getDatabase(),
+): SessionSnapshotWindow | null {
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedSessionId) return null;
+  const projection = getRuntimeSessionProjection(database, normalizedSessionId);
+  if (
+    !projection?.snapshot ||
+    !projection.history ||
+    !isCockpitWorkspaceSession(projection.session)
+  ) {
+    return null;
+  }
+  const earlierMessages = projection.history.hiddenMessages;
+  const nextBeforeMessageId = projection.snapshot.messages[0]?.id;
+  if (earlierMessages > 0 && !nextBeforeMessageId) return null;
+  return parseSessionSnapshotWindow({
+    snapshot: projection.snapshot,
+    history: {
+      ...projection.history,
+      earlierMessages,
+      laterMessages: 0,
+      hasEarlierMessages: earlierMessages > 0,
+      ...(earlierMessages > 0 ? { nextBeforeMessageId } : {}),
+    },
+  });
 }
 
 export async function getManagedSessionSnapshotForCockpit(

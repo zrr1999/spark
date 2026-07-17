@@ -10,6 +10,7 @@ import { main, sparkDaemonServiceExitCode, type CliIo } from "./cli.js";
 import { readSparkDaemonConfig, writeSparkDaemonConfig } from "./config.js";
 import { LocalRpcUnavailableError } from "./local-rpc.js";
 import { RegistrationGrantRefusedError } from "./registration.js";
+import { getSparkDaemonServerProfile, upsertSparkDaemonServerProfile } from "./server-profiles.js";
 import { openSparkDaemonDatabase } from "./store/schema.js";
 import {
   attachWorkspace,
@@ -504,8 +505,10 @@ describe("Spark daemon CLI", () => {
         expect(capture.stdout()).toContain("Waiting for daemon authorization");
         expect(capture.stdout()).not.toContain("spark_device_code");
         expect(capture.stdout()).not.toContain("spark_rt_device_token");
-        const config = readSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }));
-        expect(config).toMatchObject({
+        const paths = resolveSparkPaths({ app: "daemon" });
+        const config = readSparkDaemonConfig(paths);
+        expect(config).not.toHaveProperty("serverUrl");
+        expect(getSparkDaemonServerProfile(paths, "http://127.0.0.1:5173")).toMatchObject({
           serverUrl: "http://127.0.0.1:5173/",
           runtimeId: "rt_11111111111141111111111111111111",
           runtimeToken: "spark_rt_device_token_0000000000000000000000000000",
@@ -2471,6 +2474,63 @@ describe("Spark daemon CLI", () => {
     });
   });
 
+  it("reports every Cockpit credential and connection without selecting a global server", async () => {
+    await withTempSparkEnv(async () => {
+      const paths = resolveSparkPaths({ app: "daemon" });
+      writeSparkDaemonConfig(paths, {
+        installationId: "install-multi-status",
+        displayName: "Multi status daemon",
+      });
+      mkdirSync(paths.runtimeDir, { recursive: true });
+      writeFileSync(paths.pidFile, `${process.pid}\n`);
+      for (const [index, port] of [5173, 5174].entries()) {
+        await upsertSparkDaemonServerProfile(paths, {
+          serverUrl: `http://127.0.0.1:${port}`,
+          runtimeId: `rt_status_${index}`,
+          runtimeToken: `runtime-token-${index}`,
+          refreshToken: `refresh-token-${index}`,
+          webSocketUrl: `ws://127.0.0.1:${port}/runtime`,
+        });
+      }
+      const daemonStatusFromService = vi.fn(async () => ({
+        observedAt: "2026-07-17T00:00:00.000Z",
+        servers: [
+          { url: "http://127.0.0.1:5173/", workspaceCount: 1, wsConnected: true },
+          { url: "http://127.0.0.1:5174/", workspaceCount: 2, wsConnected: false },
+        ],
+        invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
+        invocationHealth: {},
+        lifecycle: { state: "running" as const },
+      }));
+
+      const capture = createCliIo({ daemonStatusFromService });
+      await expect(main(["status"], capture.io)).resolves.toBe(0);
+
+      const status = JSON.parse(capture.stdout()) as Record<string, unknown>;
+      expect(status).not.toHaveProperty("runtimeId");
+      expect(status).not.toHaveProperty("serverUrl");
+      expect(status).toMatchObject({
+        enrolled: true,
+        daemonRunning: true,
+        workspaceCount: 3,
+        servers: [
+          {
+            serverUrl: "http://127.0.0.1:5173/",
+            runtimeId: "rt_status_0",
+            runnable: true,
+            connection: { wsConnected: true, workspaceCount: 1 },
+          },
+          {
+            serverUrl: "http://127.0.0.1:5174/",
+            runtimeId: "rt_status_1",
+            runnable: true,
+            connection: { wsConnected: false, workspaceCount: 2 },
+          },
+        ],
+      });
+    });
+  });
+
   it("does not expose the legacy workspace reconcile command", async () => {
     const capture = createCliIo();
 
@@ -2497,6 +2557,26 @@ describe("Spark daemon CLI", () => {
       expect(capture.stdout()).toBe(
         `==> service stdout (${stdoutPath}) <==\nstdout two\nstdout three\n` +
           `==> service stderr (${stderrPath}) <==\nstderr two\nstderr three\n`,
+      );
+      expect(capture.stderr()).toBe("");
+    });
+  });
+
+  it("routes the direct spark-daemon logs surface through the same log reader", async () => {
+    const capture = createCliIo();
+
+    await withTempSparkEnv(async () => {
+      const paths = resolveSparkPaths({ app: "daemon" });
+      mkdirSync(paths.logDir, { recursive: true });
+      const stdoutPath = join(paths.logDir, "service.stdout.log");
+      const stderrPath = join(paths.logDir, "service.stderr.log");
+      writeFileSync(stdoutPath, "old stdout\nlatest stdout\n");
+      writeFileSync(stderrPath, "old stderr\nlatest stderr\n");
+
+      await expect(main(["logs", "--lines", "1"], capture.io)).resolves.toBe(0);
+      expect(capture.stdout()).toBe(
+        `==> service stdout (${stdoutPath}) <==\nlatest stdout\n` +
+          `==> service stderr (${stderrPath}) <==\nlatest stderr\n`,
       );
       expect(capture.stderr()).toBe("");
     });

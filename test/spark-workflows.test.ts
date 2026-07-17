@@ -2224,6 +2224,9 @@ return await agent('restart me', { label: 'restart-child' })`,
       ),
       "expected restart to record control_applied action",
     );
+    await manager.wait(runRef);
+    await manager.wait(stopRunRef);
+    await manager.wait(restartRunRef);
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }

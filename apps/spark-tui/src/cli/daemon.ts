@@ -11,6 +11,7 @@ import type { ChannelNotifySendResult } from "@zendev-lab/spark-channels";
 import {
   createId,
   parseSparkDaemonEvent,
+  parseSparkInteractionResponse,
   parseSparkSessionView,
   sparkCommandKindForLocalRpcMethod,
   sparkProtocolJsonObjectSchema,
@@ -21,6 +22,7 @@ import {
   type SparkInvocationRetentionPreviewResult,
   type SparkInvocationRetryResult,
   type SparkInvocationStatus,
+  type SparkInteractionRequest,
   type SparkSessionCreateRequest,
   type SparkSessionListRequest,
   type SparkSessionRegistryRecord,
@@ -33,6 +35,7 @@ import {
   type SparkTurnSubmitResult,
 } from "@zendev-lab/spark-protocol";
 import { sparkDaemonCliStrings } from "@zendev-lab/spark-i18n/cli";
+import { cappedExponentialCeiling, equalJitter } from "@zendev-lab/spark-retry";
 import {
   requestSparkDaemonLocalRpcWire,
   SparkDaemonLocalRpcError,
@@ -107,6 +110,8 @@ const DEFAULT_NATIVE_TURN_WAIT_TIMEOUT_MS = Number.POSITIVE_INFINITY;
 const TURN_TRANSPORT_RETRY_BASE_MS = 100;
 const TURN_TRANSPORT_RETRY_MAX_MS = 5_000;
 const TURN_TRANSPORT_RECOVERY_INTERVAL = 4;
+const HUMAN_INTERACTION_RESPONSE_MAX_ATTEMPTS = 4;
+const HUMAN_INTERACTION_RESPONSE_RETRY_BASE_MS = 50;
 
 export interface SparkDaemonClientPaths {
   runtimeDir: string;
@@ -129,6 +134,10 @@ export interface SparkDaemonClientOptions {
   startService?: (paths: SparkDaemonClientPaths) => unknown;
   daemonStatus?: (paths: SparkDaemonClientPaths) => Promise<SparkDaemonLocalStatus>;
   channelStatus?: (paths: SparkDaemonClientPaths) => Promise<ChannelStatusSnapshot>;
+  channelReload?: (
+    paths: SparkDaemonClientPaths,
+    workspaceId: string,
+  ) => Promise<ChannelStatusSnapshot>;
   turnSubmit?: (
     paths: SparkDaemonClientPaths,
     input: SparkDaemonTurnSubmitInput,
@@ -220,8 +229,22 @@ export interface SparkDaemonLocalStatus {
     lastErrorAt?: string;
   };
   lifecycle?: {
-    state: "starting" | "running" | "draining";
+    state: "starting" | "running" | "draining" | "stopping";
+    phase?:
+      | "initializing"
+      | "serving"
+      | "draining-active-work"
+      | "draining-channel-ingress"
+      | "stopping";
     restartRequestedAt?: string;
+    stopRequestedAt?: string;
+    stopReason?: string;
+    drain?: {
+      observedAt: string;
+      stage: "active-work" | "channel-ingress";
+      scheduler: Array<{ invocationId: string }>;
+      direct: Array<{ invocationId: string }>;
+    };
   };
 }
 
@@ -463,7 +486,7 @@ export interface SparkDaemonSessionsCommand extends SparkDaemonCliCommandBase {
 
 export interface SparkDaemonChannelCommand extends SparkDaemonCliCommandBase {
   action: "channel";
-  subcommand: "list" | "status" | "notify";
+  subcommand: "list" | "status" | "reload" | "notify";
   workspaceId: string;
   notifyAction?: "test" | "send";
   route?: string;
@@ -697,10 +720,10 @@ export function parseSparkDaemonCliArgs(argv: string[]): SparkDaemonCliCommand {
     case "channel":
     case "channels": {
       const [subcommand = "status"] = parsed.positionals;
-      if (subcommand === "list" || subcommand === "status") {
+      if (subcommand === "list" || subcommand === "status" || subcommand === "reload") {
         const workspaceId = readStringOption(parsed.options, "workspace");
         if (!workspaceId?.trim()) {
-          throw new Error("spark daemon channel status requires --workspace <workspaceId>");
+          throw new Error(`spark daemon channel ${subcommand} requires --workspace <workspaceId>`);
         }
         return { action: "channel", subcommand, json, workspaceId: workspaceId.trim() };
       }
@@ -988,6 +1011,9 @@ export async function handleSparkDaemonCliCommand(
           result: await clientChannelNotify(command, client),
         };
       }
+      if (command.subcommand === "reload") {
+        return { action: "channel", result: await clientChannelReload(command, client) };
+      }
       return { action: "channel", result: await clientChannelStatus(command, client) };
     case "runs":
       return { action: "runs", result: await clientRuns(command, client) };
@@ -1071,6 +1097,11 @@ export interface SparkDaemonNativeResponderOptions {
   pollIntervalMs?: number;
   timeoutMs?: number;
   onViewEvent?: (event: SparkViewModelEvent) => void;
+  onInteractionRequest?: (
+    request: SparkInteractionRequest,
+    event: Extract<SparkDaemonEvent, { type: "daemon.interaction.request" }>,
+    context: { signal?: AbortSignal },
+  ) => void | Promise<void>;
 }
 
 interface SparkDaemonNativeResponderContext {
@@ -1107,7 +1138,11 @@ export function createSparkDaemonNativeResponder(
       });
       await sessionReady;
     }
-    const live = createDaemonLiveAssistantRenderer(context, options.onViewEvent);
+    const live = createDaemonLiveAssistantRenderer(
+      context,
+      options.onViewEvent,
+      options.onInteractionRequest,
+    );
     const result = await clientSubmitStreaming(
       {
         sessionId,
@@ -1143,19 +1178,33 @@ export function createSparkDaemonNativeResponder(
 function createDaemonLiveAssistantRenderer(
   context: SparkDaemonNativeResponderContext | undefined,
   onViewEvent: ((event: SparkViewModelEvent) => void) | undefined,
+  onInteractionRequest:
+    | ((
+        request: SparkInteractionRequest,
+        event: Extract<SparkDaemonEvent, { type: "daemon.interaction.request" }>,
+        context: { signal?: AbortSignal },
+      ) => void | Promise<void>)
+    | undefined,
 ): {
   streamed: boolean;
-  onEvent?: (event: SparkDaemonEvent) => void;
+  onEvent?: (event: SparkDaemonEvent) => void | Promise<void>;
 } {
-  if (!context?.appendAssistantChunk && !onViewEvent) return { streamed: false };
+  if (!context?.appendAssistantChunk && !onViewEvent && !onInteractionRequest) {
+    return { streamed: false };
+  }
   let streamed = false;
   let lastText = "";
   return {
     get streamed() {
       return streamed;
     },
-    onEvent(event) {
+    async onEvent(event) {
       if (event.type === "daemon.view_event") onViewEvent?.(event.view);
+      if (event.type === "daemon.interaction.request") {
+        await onInteractionRequest?.(event.request, event, {
+          ...(context?.signal ? { signal: context.signal } : {}),
+        });
+      }
       const text = assistantTextFromDaemonViewEvent(event);
       if (text === undefined) return;
       const chunk = text.startsWith(lastText) ? text.slice(lastText.length) : text;
@@ -1703,7 +1752,9 @@ function localRpcWireRequest(
   if (!kind) throw new Error(`Unknown Spark daemon local RPC method: ${method}`);
   const payload = sparkProtocolJsonObjectSchema.safeParse(params ?? {});
   const commandPayload =
-    method === "provider.auth.api-key.set" || method === "provider.auth.login.respond"
+    method === "provider.auth.api-key.set" ||
+    method === "provider.auth.login.respond" ||
+    method === "human.interaction.respond"
       ? {}
       : payload.success
         ? payload.data
@@ -1730,6 +1781,12 @@ function localRpcCommandRoute(method: string, params: unknown): SparkCommand["ro
   }
   if (method === "turn.cancel" && typeof params.invocationId === "string") {
     return { invocationId: params.invocationId };
+  }
+  if (method === "human.interaction.respond") {
+    return {
+      ...(typeof params.sessionId === "string" ? { sessionId: params.sessionId } : {}),
+      ...(typeof params.invocationId === "string" ? { invocationId: params.invocationId } : {}),
+    };
   }
   if (method === "workspace.ensure-local" && typeof params.localPath === "string") {
     return { workspaceLocalPath: params.localPath };
@@ -1794,6 +1851,19 @@ async function clientChannelStatus(
   return await localRpcRequest<ChannelStatusSnapshot>(
     paths,
     localRpcWireRequest("channel.status", { workspaceId: command.workspaceId }),
+  );
+}
+
+async function clientChannelReload(
+  command: SparkDaemonChannelCommand,
+  client: SparkDaemonClientOptions,
+): Promise<ChannelStatusSnapshot> {
+  const paths = resolveSparkDaemonClientPaths(client);
+  if (client.channelReload) return await client.channelReload(paths, command.workspaceId);
+  await clientEnsureRunning(client);
+  return await localRpcRequest<ChannelStatusSnapshot>(
+    paths,
+    localRpcWireRequest("channel.reload", { workspaceId: command.workspaceId }),
   );
 }
 
@@ -1940,13 +2010,13 @@ function isDaemonStartingRemoteError(error: SparkDaemonLocalRpcRemoteError): boo
 }
 
 function turnTransportRetryDelayMs(failureCount: number, random: () => number): number {
-  const exponent = Math.min(16, Math.max(0, failureCount - 1));
-  const ceiling = Math.min(
+  const ceiling = cappedExponentialCeiling(
+    failureCount,
+    TURN_TRANSPORT_RETRY_BASE_MS,
     TURN_TRANSPORT_RETRY_MAX_MS,
-    TURN_TRANSPORT_RETRY_BASE_MS * 2 ** exponent,
+    { exponentCap: 16 },
   );
-  const jitter = Math.max(0, Math.min(1, random()));
-  return Math.floor(ceiling / 2 + (ceiling / 2) * jitter);
+  return equalJitter(ceiling, random);
 }
 
 async function recoverTurnTransportIfDue(
@@ -2100,6 +2170,171 @@ export async function requestSparkDaemonControl<T>(
   return await localRpcRequest<T>(paths, localRpcWireRequest(method, params));
 }
 
+export interface SparkDaemonHumanInteractionRespondInput {
+  interactionRequestId: string;
+  sessionId?: string;
+  invocationId?: string;
+  humanResponseId?: string;
+  status: "answered" | "cancelled";
+  answers?: Record<string, unknown>;
+  responseArtifactRefs?: string[];
+}
+
+export interface SparkDaemonHumanInteractionRespondResult {
+  outcome:
+    | "accepted"
+    | "replayed"
+    | "already_resolved"
+    | "orphaned"
+    | "unknown_request"
+    | "transient";
+  retryable: boolean;
+  returnedToTool: boolean;
+  message: string;
+  winnerResponseId?: string;
+}
+
+/** Deliver a native TUI answer to the daemon-owned interaction continuation. */
+export async function clientRespondHumanInteraction(
+  input: SparkDaemonHumanInteractionRespondInput,
+  client: SparkDaemonClientOptions = {},
+  options: { signal?: AbortSignal } = {},
+): Promise<SparkDaemonHumanInteractionRespondResult> {
+  const humanResponseId = input.humanResponseId ?? createId("hres");
+  const params = {
+    interactionRequestId: input.interactionRequestId,
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    ...(input.invocationId ? { invocationId: input.invocationId } : {}),
+    humanResponseId,
+    status: input.status,
+    answers: input.answers ?? {},
+    responseArtifactRefs: input.responseArtifactRefs ?? [],
+  };
+  for (let attempt = 1; attempt <= HUMAN_INTERACTION_RESPONSE_MAX_ATTEMPTS; attempt += 1) {
+    throwIfAborted(options.signal);
+    try {
+      const result = await requestSparkDaemonControl<SparkDaemonHumanInteractionRespondResult>(
+        "human.interaction.respond",
+        params,
+        client,
+      );
+      if (result.outcome !== "transient" || attempt === HUMAN_INTERACTION_RESPONSE_MAX_ATTEMPTS) {
+        return result;
+      }
+    } catch (error) {
+      if (
+        options.signal?.aborted ||
+        attempt === HUMAN_INTERACTION_RESPONSE_MAX_ATTEMPTS ||
+        !isRetryableHumanInteractionResponseError(error)
+      ) {
+        if (options.signal?.aborted) throwIfAborted(options.signal);
+        throw error;
+      }
+    }
+    await waitBeforeTurnTransportRetry(
+      HUMAN_INTERACTION_RESPONSE_RETRY_BASE_MS * 2 ** (attempt - 1),
+      client,
+      options.signal,
+    );
+  }
+  throw new Error("Spark daemon human interaction response retry exhausted unexpectedly.");
+}
+
+export interface SparkDaemonHumanInteractionRequestHandlerOptions {
+  currentSessionId: string;
+  client?: SparkDaemonClientOptions;
+  signal?: AbortSignal;
+  reopenDelayMs?: number;
+  interaction(request: SparkInteractionRequest): Promise<unknown>;
+  notify(message: string, level: "success" | "warning"): void;
+}
+
+/** Keep a daemon-owned Ask visible until its answer reaches the owning wait. */
+export async function handleSparkDaemonHumanInteractionRequest(
+  request: SparkInteractionRequest,
+  event: Extract<SparkDaemonEvent, { type: "daemon.interaction.request" }>,
+  options: SparkDaemonHumanInteractionRequestHandlerOptions,
+): Promise<void> {
+  const client = options.client ?? {};
+  const humanResponseId = createId("hres");
+  while (!options.signal?.aborted) {
+    const response = parseSparkInteractionResponse(await options.interaction(request));
+    if (
+      request.kind !== "askFlow" ||
+      response.kind !== "askFlow" ||
+      response.status === "pending" ||
+      response.status === "blocked" ||
+      response.status === "error"
+    ) {
+      return;
+    }
+
+    let delivered: SparkDaemonHumanInteractionRespondResult | undefined;
+    let failure: unknown;
+    try {
+      delivered = await clientRespondHumanInteraction(
+        {
+          interactionRequestId: request.requestId,
+          sessionId: event.sessionId ?? options.currentSessionId,
+          ...(event.invocationId ? { invocationId: event.invocationId } : {}),
+          humanResponseId,
+          status: response.status === "answered" ? "answered" : "cancelled",
+          answers: response.answers,
+        },
+        client,
+        { signal: options.signal },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    if (options.signal?.aborted) return;
+    if (delivered && isTerminalHumanInteractionDelivery(delivered.outcome)) {
+      options.notify(
+        delivered.message || `Ask response: ${delivered.outcome}`,
+        delivered.outcome === "accepted" || delivered.outcome === "replayed"
+          ? "success"
+          : "warning",
+      );
+      return;
+    }
+
+    const reason =
+      delivered?.message ?? (failure === undefined ? "" : turnTransportErrorMessage(failure));
+    options.notify(
+      `Ask response was not delivered; keeping it open for retry${reason ? `: ${reason}` : "."}`,
+      "warning",
+    );
+    try {
+      await waitBeforeTurnTransportRetry(options.reopenDelayMs ?? 250, client, options.signal);
+    } catch (error) {
+      if (options.signal?.aborted) return;
+      throw error;
+    }
+  }
+}
+
+function isTerminalHumanInteractionDelivery(
+  outcome: SparkDaemonHumanInteractionRespondResult["outcome"],
+): boolean {
+  return (
+    outcome === "accepted" ||
+    outcome === "replayed" ||
+    outcome === "already_resolved" ||
+    outcome === "orphaned"
+  );
+}
+
+function isRetryableHumanInteractionResponseError(error: unknown): boolean {
+  if (isRetryableTurnTransportError(error)) return true;
+  const code = isRecord(error) && typeof error.code === "string" ? error.code : undefined;
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    code === "human_interaction_not_found" ||
+    /No pending daemon-owned human interaction matched/iu.test(message)
+  );
+}
+
 export async function clientTurnStatus(
   input: { invocationId: string },
   client: SparkDaemonClientOptions,
@@ -2151,7 +2386,7 @@ async function clientSubmitStreaming(
   input: SparkDaemonTurnSubmitInput,
   client: SparkDaemonClientOptions,
   handlers: {
-    onEvent?: (event: SparkDaemonEvent) => void;
+    onEvent?: (event: SparkDaemonEvent) => void | Promise<void>;
     signal?: AbortSignal;
     timeoutMs?: number;
   } = {},
@@ -2167,7 +2402,7 @@ async function pollInvocationEvents(
   invocationId: string,
   client: SparkDaemonClientOptions,
   handlers: {
-    onEvent?: (event: SparkDaemonEvent) => void;
+    onEvent?: (event: SparkDaemonEvent) => void | Promise<void>;
     signal?: AbortSignal;
     timeoutMs?: number;
   },
@@ -2193,11 +2428,14 @@ async function pollInvocationEvents(
         { signal: handlers.signal, deadline, deadlineError },
       );
       for (const event of page.events) {
+        let parsed: SparkDaemonEvent;
         try {
-          handlers.onEvent?.(parseSparkDaemonEvent(event.payload));
+          parsed = parseSparkDaemonEvent(event.payload);
         } catch {
           // Invocation event storage can also contain non-daemon diagnostic payloads.
+          continue;
         }
+        await handlers.onEvent?.(parsed);
       }
       cursor = page.nextCursor;
       if (now() >= deadline) throw deadlineError;
@@ -2509,12 +2747,14 @@ function readRunState(raw: string): SparkDaemonRunState {
 
 function formatNativeDaemonStatus(status: SparkDaemonClientStatus): string {
   const lifecycle = status.lifecycle;
+  const lifecycleStatus =
+    typeof lifecycle === "object" && lifecycle !== null
+      ? (lifecycle as NonNullable<SparkDaemonLocalStatus["lifecycle"]>)
+      : undefined;
   const daemonState =
     status.running &&
-    typeof lifecycle === "object" &&
-    lifecycle !== null &&
-    (lifecycle as { state?: unknown }).state === "draining"
-      ? "draining"
+    (lifecycleStatus?.state === "draining" || lifecycleStatus?.state === "stopping")
+      ? lifecycleStatus.state
       : status.running
         ? "running"
         : "stopped";
@@ -2522,6 +2762,13 @@ function formatNativeDaemonStatus(status: SparkDaemonClientStatus): string {
   if (typeof status.pid === "number") lines.push(`pid: ${status.pid}`);
   if (typeof status.socketPath === "string") lines.push(`socket: ${status.socketPath}`);
   if (typeof status.error === "string") lines.push(`error: ${status.error}`);
+  if (lifecycleStatus?.drain) {
+    lines.push(`drain-stage: ${lifecycleStatus.drain.stage}`);
+    lines.push(
+      `drain-blockers: scheduler=${lifecycleStatus.drain.scheduler.length} direct=${lifecycleStatus.drain.direct.length}`,
+    );
+  }
+  if (lifecycleStatus?.stopReason) lines.push(`stop-reason: ${lifecycleStatus.stopReason}`);
   const invocations = status.invocations;
   if (isInvocationCounts(invocations)) {
     lines.push(

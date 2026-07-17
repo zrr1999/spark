@@ -1,5 +1,5 @@
 import {
-  getManagedSessionForCockpit,
+  getProjectedManagedSessionForCockpit,
   listManagedSessionsForCockpit,
 } from "$lib/server/managed-sessions";
 import { loadConversationSummaries } from "$lib/server/conversation-summaries";
@@ -13,19 +13,30 @@ import {
 import type { LayoutServerLoad } from "./$types";
 
 export const load: LayoutServerLoad = async ({ cookies, url }) => {
-  const managedSessions = await listManagedSessionsForCockpit();
   const selectedSessionId = sessionIdFromPath(url.pathname);
-  const selectedSession = selectedSessionId
-    ? (managedSessions.sessions.find((session) => session.sessionId === selectedSessionId) ??
-      (await getManagedSessionForCockpit(selectedSessionId)))
+  const projectedSelectedSession = selectedSessionId
+    ? getProjectedManagedSessionForCockpit(selectedSessionId)
     : null;
   const layout = loadShellWorkspaceLayout({
     cookies,
     pathname: url.pathname,
     protocol: url.protocol,
-    preferredWorkspaceId: selectedSession ? workspaceIdForWorkbenchSession(selectedSession) : null,
+    preferredWorkspaceId: projectedSelectedSession
+      ? workspaceIdForWorkbenchSession(projectedSelectedSession)
+      : null,
     preferredWorkspaceSlug: url.searchParams.get("workspace"),
   });
+  const activeWorkspaceId = layout.activeWorkspace?.id ?? null;
+  const managedSessions = activeWorkspaceId
+    ? await listManagedSessionsForCockpit({
+        scope: { kind: "workspace", workspaceId: activeWorkspaceId },
+        workspaceId: activeWorkspaceId,
+      })
+    : { available: true, controlAvailable: false, sessions: [] };
+  const selectedSession = selectedSessionId
+    ? (managedSessions.sessions.find((session) => session.sessionId === selectedSessionId) ??
+      projectedSelectedSession)
+    : null;
   const db = getDatabase();
   const projectedSessions = workspaceSessionsForWorkbench(
     managedSessions.sessions,
@@ -33,7 +44,7 @@ export const load: LayoutServerLoad = async ({ cookies, url }) => {
   );
   if (
     selectedSession &&
-    workspaceIdForWorkbenchSession(selectedSession) === layout.activeWorkspace?.id &&
+    workspaceIdForWorkbenchSession(selectedSession) === activeWorkspaceId &&
     !projectedSessions.some((session) => session.sessionId === selectedSession.sessionId)
   ) {
     projectedSessions.unshift(selectedSession);
@@ -49,6 +60,7 @@ export const load: LayoutServerLoad = async ({ cookies, url }) => {
     pendingAsk,
     sessions,
     sessionsAvailable: managedSessions.available,
+    sessionControlAvailable: managedSessions.controlAvailable,
   };
 };
 

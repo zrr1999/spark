@@ -532,9 +532,27 @@ export function loadInboxPage(db: DatabaseSync, workspaceRouteId: string) {
               rc.name AS runtimeName,
               latest_response.id AS latestResponseId,
               latest_response.status AS latestResponseStatus,
-              latest_response.acked_at AS latestResponseAckedAt
+              latest_response.acked_at AS latestResponseAckedAt,
+              COALESCE(
+                CASE
+                  WHEN json_valid(hr.context_json)
+                  THEN CAST(json_extract(hr.context_json, '$.sessionId') AS TEXT)
+                  ELSE NULL
+                END,
+                CASE
+                  WHEN json_valid(c.payload_json)
+                  THEN CAST(json_extract(c.payload_json, '$.payload.target.sessionId') AS TEXT)
+                  ELSE NULL
+                END
+              ) AS sessionId
        FROM inbox_items ii
        LEFT JOIN human_requests hr ON hr.id = ii.human_request_id
+       LEFT JOIN commands c
+         ON c.id = CASE
+           WHEN json_valid(hr.context_json)
+           THEN CAST(json_extract(hr.context_json, '$.commandId') AS TEXT)
+           ELSE NULL
+         END
        LEFT JOIN projects p ON p.id = ii.project_id
        LEFT JOIN runtime_workspace_bindings rb ON rb.id = hr.runtime_workspace_binding_id
        LEFT JOIN runtime_connections rc ON rc.id = rb.runtime_id
@@ -569,6 +587,7 @@ export function loadInboxPage(db: DatabaseSync, workspaceRouteId: string) {
     latestResponseId: string | null;
     latestResponseStatus: string | null;
     latestResponseAckedAt: string | null;
+    sessionId: string | null;
   }>;
   const counts = inboxItems.reduce(
     (acc, item) => {
@@ -587,7 +606,8 @@ export type HumanQuestion = {
   type: "single" | "multi" | "freeform" | "preview";
   prompt: string;
   required?: boolean;
-  options?: Array<{ id: string; label: string; description?: string }>;
+  /** Option identity matches `spark-protocol` ask option `value`. */
+  options?: Array<{ value: string; label: string; description?: string; preview?: string }>;
 };
 
 export type InboxDetailRow = {
@@ -645,11 +665,18 @@ export function loadInboxDetail(db: DatabaseSync, inboxItemId: string) {
               rb.id AS runtimeWorkspaceBindingId,
               rb.display_name AS runtimeWorkspaceName,
               rc.name AS runtimeName,
-              CASE
-                WHEN json_valid(c.payload_json)
-                THEN CAST(json_extract(c.payload_json, '$.payload.target.sessionId') AS TEXT)
-                ELSE NULL
-              END AS sessionId
+              COALESCE(
+                CASE
+                  WHEN json_valid(hr.context_json)
+                  THEN CAST(json_extract(hr.context_json, '$.sessionId') AS TEXT)
+                  ELSE NULL
+                END,
+                CASE
+                  WHEN json_valid(c.payload_json)
+                  THEN CAST(json_extract(c.payload_json, '$.payload.target.sessionId') AS TEXT)
+                  ELSE NULL
+                END
+              ) AS sessionId
        FROM inbox_items ii
        JOIN workspaces w ON w.id = ii.workspace_id
        JOIN human_requests hr ON hr.id = ii.human_request_id

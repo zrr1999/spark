@@ -1,7 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
+import { parseSparkDaemonEvent } from "@zendev-lab/spark-protocol";
 import { describe, expect, it } from "vitest";
 import { migrateSparkDaemonDatabase } from "./schema.ts";
 import { MAX_INVOCATION_EVENT_PAGE_LIMIT, SparkInvocationStore } from "./invocations.ts";
+import { registerWorkspace } from "./workspaces.ts";
 
 function createStore(): { db: DatabaseSync; store: SparkInvocationStore } {
   const db = new DatabaseSync(":memory:");
@@ -168,6 +170,216 @@ describe("SparkInvocationStore", () => {
       expect(
         store.pendingDeliveries("cockpit:runtime-a").map(({ event }) => event.sequence),
       ).toEqual([3]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("routes legacy unbound invocation events through their unique server workspace", () => {
+    const { db, store } = createStore();
+    try {
+      const workspace = registerWorkspace(db, {
+        serverUrl: "https://cockpit.example",
+        serverBindingId: "rtwb_legacy_delivery",
+        serverWorkspaceId: "ws_legacy_delivery",
+        localWorkspaceKey: "legacy-delivery",
+        displayName: "Legacy delivery",
+        localPath: process.cwd(),
+      });
+      const invocation = store.submit({
+        sessionId: "session-legacy-delivery",
+        prompt: "deliver legacy lifecycle",
+        task: {
+          type: "session.run",
+          sessionId: "session-legacy-delivery",
+          prompt: "deliver legacy lifecycle",
+          workspaceId: "ws_legacy_delivery",
+        },
+      });
+      store.claimNext("worker-legacy-delivery");
+      store.appendEvent(invocation.invocationId, "daemon.task.lifecycle", {
+        status: "running",
+      });
+      store.appendEvent(invocation.invocationId, "daemon.view_event", {
+        text: "historical streaming output must not flood recovery",
+      });
+      store.complete(invocation.invocationId, { status: "succeeded" });
+      const terminal = store.appendEvent(invocation.invocationId, "daemon.task.lifecycle", {
+        status: "succeeded",
+      });
+
+      expect(invocation.workspaceBindingId).toBeUndefined();
+      expect(
+        store
+          .pendingDeliveries("cockpit:runtime-legacy", 10, [workspace.id])
+          .map(({ event }) => ({ invocationId: event.invocationId, sequence: event.sequence })),
+      ).toEqual([{ invocationId: invocation.invocationId, sequence: terminal.sequence }]);
+      store.acknowledgeDelivery(
+        "cockpit:runtime-legacy",
+        invocation.invocationId,
+        terminal.sequence,
+      );
+      expect(store.pendingDeliveries("cockpit:runtime-legacy", 10, [workspace.id])).toEqual([]);
+      expect(store.pendingDeliveries("cockpit:runtime-other", 10, ["rtwb_other_delivery"])).toEqual(
+        [],
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not guess a route for legacy invocations when a workspace id is globally ambiguous", () => {
+    const { db, store } = createStore();
+    try {
+      const first = registerWorkspace(db, {
+        serverUrl: "https://first-cockpit.example",
+        serverBindingId: "rtwb_ambiguous_first",
+        serverWorkspaceId: "ws_shared_legacy_id",
+        localWorkspaceKey: "ambiguous-first",
+        displayName: "Ambiguous first",
+        localPath: process.cwd(),
+      });
+      const second = registerWorkspace(db, {
+        serverUrl: "https://second-cockpit.example",
+        serverBindingId: "rtwb_ambiguous_second",
+        serverWorkspaceId: "ws_shared_legacy_id",
+        localWorkspaceKey: "ambiguous-second",
+        displayName: "Ambiguous second",
+        localPath: process.cwd(),
+      });
+      const invocation = store.submit({
+        sessionId: "session-ambiguous-legacy",
+        prompt: "do not cross server boundaries",
+        task: {
+          type: "session.run",
+          sessionId: "session-ambiguous-legacy",
+          prompt: "do not cross server boundaries",
+          workspaceId: "ws_shared_legacy_id",
+        },
+      });
+      store.appendEvent(invocation.invocationId, "daemon.task.lifecycle", {
+        status: "running",
+      });
+
+      expect(store.pendingDeliveries("cockpit:first", 10, [first.id])).toEqual([]);
+      expect(store.pendingDeliveries("cockpit:second", 10, [second.id])).toEqual([]);
+      expect(store.pendingDeliveries("cockpit:both", 10, [first.id, second.id])).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("recovers terminal row truth when a crash precedes the terminal lifecycle event", () => {
+    const { db, store } = createStore();
+    try {
+      const workspace = registerWorkspace(db, {
+        serverUrl: "https://cockpit.example",
+        serverBindingId: "rtwb_crash_recovery",
+        serverWorkspaceId: "ws_crash_recovery",
+        localWorkspaceKey: "crash-recovery",
+        displayName: "Crash recovery",
+        localPath: process.cwd(),
+      });
+      const invocation = store.submit({
+        sessionId: "session-crash-recovery",
+        prompt: "recover terminal truth",
+        task: {
+          type: "session.run",
+          sessionId: "session-crash-recovery",
+          prompt: "recover terminal truth",
+          workspaceId: "ws_crash_recovery",
+        },
+      });
+      store.claimNext("worker-crash-recovery", "2026-07-17T08:00:00.000Z");
+      store.appendEvent(
+        invocation.invocationId,
+        "daemon.task.lifecycle",
+        {
+          type: "daemon.task.lifecycle",
+          taskType: "session.run",
+          status: "running",
+        },
+        "2026-07-17T08:00:01.000Z",
+      );
+      const latestPersisted = store.appendEvent(
+        invocation.invocationId,
+        "daemon.view_event",
+        { obsolete: "stream delta" },
+        "2026-07-17T08:00:02.000Z",
+      );
+      store.complete(invocation.invocationId, {
+        status: "succeeded",
+        now: "2026-07-17T08:00:03.000Z",
+      });
+
+      const deliveries = store.pendingDeliveries("cockpit:crash-recovery", 10, [workspace.id]);
+      expect(deliveries).toHaveLength(1);
+      expect(deliveries[0]?.event).toMatchObject({
+        invocationId: invocation.invocationId,
+        sequence: latestPersisted.sequence,
+        kind: "daemon.task.lifecycle",
+      });
+      expect(parseSparkDaemonEvent(deliveries[0]?.event.payload)).toMatchObject({
+        type: "daemon.task.lifecycle",
+        invocationId: invocation.invocationId,
+        sessionId: "session-crash-recovery",
+        workspaceId: "ws_crash_recovery",
+        taskType: "session.run",
+        status: "succeeded",
+        emittedAt: "2026-07-17T08:00:03.000Z",
+        metadata: { recoveredFromInvocationRow: true },
+      });
+      expect(store.eventPage(invocation.invocationId).events.at(-1)?.kind).toBe(
+        "daemon.view_event",
+      );
+
+      store.acknowledgeDelivery(
+        "cockpit:crash-recovery",
+        invocation.invocationId,
+        latestPersisted.sequence,
+      );
+      expect(store.pendingDeliveries("cockpit:crash-recovery", 10, [workspace.id])).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserves the complete event stream for explicitly bound invocations", () => {
+    const { db, store } = createStore();
+    try {
+      const workspace = registerWorkspace(db, {
+        serverUrl: "https://cockpit.example",
+        serverBindingId: "rtwb_bound_delivery",
+        serverWorkspaceId: "ws_bound_delivery",
+        localWorkspaceKey: "bound-delivery",
+        displayName: "Bound delivery",
+        localPath: process.cwd(),
+      });
+      const invocation = store.submit({
+        workspaceBindingId: workspace.id,
+        sessionId: "session-bound-delivery",
+        prompt: "preserve every event",
+        task: {
+          type: "session.run",
+          sessionId: "session-bound-delivery",
+          prompt: "preserve every event",
+          workspaceBindingId: workspace.id,
+          workspaceId: "ws_bound_delivery",
+        },
+      });
+      store.claimNext("worker-bound-delivery");
+      store.appendEvent(invocation.invocationId, "daemon.task.lifecycle", { status: "running" });
+      store.appendEvent(invocation.invocationId, "daemon.view_event", { text: "live delta" });
+      store.complete(invocation.invocationId, { status: "succeeded" });
+      store.appendEvent(invocation.invocationId, "daemon.task.lifecycle", {
+        status: "succeeded",
+      });
+
+      expect(
+        store
+          .pendingDeliveries("cockpit:bound-delivery", 10, [workspace.id])
+          .map(({ event }) => event.sequence),
+      ).toEqual([1, 2, 3]);
     } finally {
       db.close();
     }
@@ -408,6 +620,7 @@ describe("SparkInvocationStore", () => {
         { invocationId: queued.invocationId, status: "queued" },
       ]);
       expect(store.listPendingForSession(" ")).toEqual([]);
+      expect(store.runningSessionIds()).toEqual(new Set(["session-selected"]));
     } finally {
       db.close();
     }

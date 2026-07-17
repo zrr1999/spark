@@ -16,9 +16,17 @@
     ariaLabel: string;
     multilineHint: string;
     header?: Snippet;
+    actions?: Snippet;
     context?: Snippet;
+    toolbarActions?: Snippet;
     feedback?: Snippet;
     onValueChange?: (value: string) => void;
+    onKeydown?: (event: KeyboardEvent) => void;
+    completion?: Readonly<{
+      expanded: boolean;
+      listboxId: string;
+      activeOptionId?: string;
+    }>;
   };
 
   let {
@@ -35,9 +43,13 @@
     ariaLabel,
     multilineHint,
     header,
+    actions,
     context,
+    toolbarActions,
     feedback,
     onValueChange,
+    onKeydown,
+    completion,
   }: Props = $props();
 
   let textareaElement = $state<HTMLTextAreaElement | null>(null);
@@ -67,6 +79,12 @@
     form.requestSubmit(submit);
   }
 
+  function handleKeydown(event: KeyboardEvent) {
+    onKeydown?.(event);
+    if (event.defaultPrevented) return;
+    submitOnEnter(event);
+  }
+
   function handleInput(event: Event) {
     const textarea = event.currentTarget as HTMLTextAreaElement;
     resizeTextarea(textarea);
@@ -76,35 +94,46 @@
 
 <div class="conversation-composer-shell">
   {#if header}<div class="composer-header">{@render header()}</div>{/if}
-  <label class="sr-only" for={id}>{ariaLabel}</label>
-  <textarea
-    {id}
-    {name}
-    {rows}
-    required
-    {placeholder}
-    bind:value
-    bind:this={textareaElement}
-    {disabled}
-    oninput={handleInput}
-    onkeydown={submitOnEnter}
-  ></textarea>
+  <div class="composer-body">
+    <label class="sr-only" for={id}>{ariaLabel}</label>
+    <textarea
+      {id}
+      {name}
+      {rows}
+      required
+      {placeholder}
+      bind:value
+      bind:this={textareaElement}
+      {disabled}
+      role={completion ? "combobox" : undefined}
+      aria-autocomplete={completion ? "list" : undefined}
+      aria-expanded={completion?.expanded}
+      aria-controls={completion?.expanded ? completion.listboxId : undefined}
+      aria-activedescendant={completion?.expanded ? completion.activeOptionId : undefined}
+      oninput={handleInput}
+      onkeydown={handleKeydown}
+    ></textarea>
+  </div>
+  {#if actions}<div class="composer-actions">{@render actions()}</div>{/if}
   {#if feedback}<div class="composer-feedback">{@render feedback()}</div>{/if}
-  <div class="composer-toolbar">
+  <footer class="composer-toolbar">
     <div class="composer-context">
       {#if context}{@render context()}{/if}
       <span class="keyboard-hint">{multilineHint}</span>
     </div>
-    <button
-      class="composer-submit"
-      type="submit"
-      data-conversation-submit
-      disabled={disabled || submitDisabled}
-    >
-      <Icon name="play" size={15} />
-      {submitting ? submittingLabel : submitLabel}
-    </button>
-  </div>
+    <div class="composer-submit-actions">
+      {#if toolbarActions}{@render toolbarActions()}{/if}
+      <button
+        class="composer-submit"
+        type="submit"
+        data-conversation-submit
+        disabled={disabled || submitDisabled}
+      >
+        <Icon name="play" size={15} />
+        <span class="submit-label">{submitting ? submittingLabel : submitLabel}</span>
+      </button>
+    </div>
+  </footer>
 </div>
 
 <style>
@@ -114,21 +143,53 @@
     border-radius: 14px;
     box-shadow:
       0 1px 2px rgb(15 23 42 / 5%),
-      0 12px 30px rgb(15 23 42 / 7%);
+      0 14px 32px rgb(15 23 42 / 7%);
     container-name: conversation-composer;
     container-type: inline-size;
     display: grid;
-    gap: 10px;
+    gap: 0;
     min-width: 0;
-    padding: 12px;
+    overflow: visible;
+    padding: 0;
+    transition:
+      border-color 120ms ease,
+      box-shadow 120ms ease;
+  }
+
+  .conversation-composer-shell:focus-within {
+    border-color: var(--color-border-strong);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--color-primary) 14%, transparent),
+      0 16px 38px rgb(15 23 42 / 9%);
   }
 
   .composer-header {
     min-width: 0;
+    padding: 8px 12px 0;
+  }
+
+  .composer-body {
+    min-width: 0;
+    padding: 10px 12px 8px;
+  }
+
+  .composer-header + .composer-body {
+    padding-top: 6px;
+  }
+
+  .composer-actions {
+    min-width: 0;
+    padding: 0 10px 10px;
+  }
+
+  .composer-actions:empty {
+    display: none;
   }
 
   .composer-feedback {
-    display: contents;
+    display: grid;
+    gap: 6px;
+    padding: 0 12px 8px;
   }
 
   textarea {
@@ -141,7 +202,7 @@
     max-height: 192px;
     min-height: 48px;
     outline: none;
-    padding: 3px;
+    padding: 2px;
     resize: none;
     width: 100%;
   }
@@ -157,22 +218,21 @@
 
   .composer-toolbar {
     align-items: center;
+    background: var(--color-surface-soft);
     border-top: 1px solid var(--color-border-soft);
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px 12px;
-    justify-content: space-between;
+    display: grid;
+    gap: 8px;
+    grid-template-columns: minmax(0, 1fr) auto;
     min-height: 40px;
     min-width: 0;
-    padding-top: 10px;
+    padding: 8px;
   }
 
   .composer-context {
     align-items: center;
     color: var(--color-ink-subtle);
     display: flex;
-    flex: 1 1 12rem;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     font-size: 11px;
     gap: 8px;
     min-width: 0;
@@ -185,6 +245,14 @@
     text-align: right;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .composer-submit-actions {
+    align-items: center;
+    display: flex;
+    flex: 0 0 auto;
+    gap: 6px;
+    min-width: 0;
   }
 
   .composer-submit {
@@ -201,7 +269,6 @@
     font-weight: 600;
     gap: 6px;
     justify-content: center;
-    margin-left: auto;
     min-height: 40px;
     padding: 0 13px;
   }
@@ -240,24 +307,39 @@
   }
 
   @container conversation-composer (max-width: 480px) {
-    .composer-toolbar {
-      align-items: stretch;
-    }
-
     .composer-context {
-      flex: 1 1 100%;
+      overflow: hidden;
     }
 
     .composer-submit {
-      margin-left: 0;
-      width: 100%;
+      padding-inline: 12px;
+    }
+  }
+
+  @container conversation-composer (max-width: 360px) {
+    .composer-submit {
+      aspect-ratio: 1;
+      padding: 0;
+      width: 40px;
+    }
+
+    .submit-label {
+      border: 0;
+      clip: rect(0 0 0 0);
+      clip-path: inset(50%);
+      height: 1px;
+      margin: -1px;
+      overflow: hidden;
+      padding: 0;
+      position: absolute;
+      white-space: nowrap;
+      width: 1px;
     }
   }
 
   @media (max-width: 640px) {
     .conversation-composer-shell {
       border-radius: 12px;
-      padding: 10px;
     }
 
     textarea {

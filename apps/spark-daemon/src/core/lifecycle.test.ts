@@ -102,4 +102,56 @@ describe("SparkDaemonLifecycle", () => {
     expect(lifecycle.restartSignal.aborted).toBe(true);
     expect(lifecycle.restartSignal.reason).toBeInstanceOf(SparkDaemonRestartRequestedError);
   });
+
+  it("closes readiness synchronously and exposes the owner of stop teardown", () => {
+    const lifecycle = new SparkDaemonLifecycle({
+      pid: 202,
+      instanceId: "instance-stop",
+      generation: "generation-stop",
+      startedAt: "2026-07-17T00:00:00.000Z",
+    });
+
+    lifecycle.requestStop("local-rpc-stop", "2026-07-17T00:01:00.000Z");
+    lifecycle.requestStop("signal:SIGTERM", "2026-07-17T00:02:00.000Z");
+
+    expect(lifecycle.isServing).toBe(false);
+    expect(lifecycle.drainSignal.aborted).toBe(true);
+    expect(lifecycle.restartSignal.aborted).toBe(false);
+    expect(lifecycle.snapshot()).toEqual({
+      state: "stopping",
+      phase: "stopping",
+      process: {
+        pid: 202,
+        instanceId: "instance-stop",
+        generation: "generation-stop",
+        protocolVersion: 1,
+        startedAt: "2026-07-17T00:00:00.000Z",
+      },
+      stopRequestedAt: "2026-07-17T00:01:00.000Z",
+      stopReason: "local-rpc-stop",
+    });
+    expect(() => lifecycle.requestRestart()).toThrow(
+      "Spark daemon is stopping and cannot restart.",
+    );
+  });
+
+  it("lets an explicit stop supersede an already-requested restart", () => {
+    const lifecycle = new SparkDaemonLifecycle({
+      pid: 303,
+      instanceId: "instance-restart-then-stop",
+      generation: "generation-restart-then-stop",
+      startedAt: "2026-07-17T00:00:00.000Z",
+    });
+
+    lifecycle.requestRestart("2026-07-17T00:01:00.000Z", "restart-before-stop");
+    lifecycle.requestStop("signal:SIGTERM", "2026-07-17T00:02:00.000Z");
+
+    expect(lifecycle.isServing).toBe(false);
+    expect(lifecycle.snapshot()).toMatchObject({
+      state: "stopping",
+      phase: "stopping",
+      stopRequestedAt: "2026-07-17T00:02:00.000Z",
+      stopReason: "signal:SIGTERM",
+    });
+  });
 });

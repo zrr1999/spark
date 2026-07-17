@@ -47,13 +47,17 @@ export interface SparkModeEntryDeps {
   ensureWorkflowRunManager: (cwd: string, ctx: SparkToolContext) => void;
 }
 
-export function dispatchSparkAgentInstruction(
+export async function dispatchSparkAgentInstruction(
   piApi: SparkModeMessageApi,
   _deps: Pick<SparkModeEntryDeps, "queueSparkAgentInstruction">,
-  _ctx: SparkToolContext,
+  ctx: SparkToolContext,
   instruction: string,
   visibleMessage: string,
-): void {
+): Promise<void> {
+  if (ctx.sendUserMessage) {
+    await ctx.sendUserMessage(instruction);
+    return;
+  }
   const idle = piApi.isIdle?.() ?? false;
   piApi.sendMessage(
     {
@@ -90,7 +94,7 @@ export async function enterSparkPlanningMode(
     "Spark plan phase: investigate, answer, and plan durable work when needed.",
     "info",
   );
-  dispatchSparkAgentInstruction(
+  await dispatchSparkAgentInstruction(
     piApi,
     deps,
     ctx,
@@ -115,7 +119,7 @@ export async function enterSparkImplementationMode(
   }
   await deps.refreshSparkWidget(ctx.cwd, ctx);
   ctx.ui?.notify?.("Spark implement phase: work until the next blocker.", "info");
-  dispatchSparkAgentInstruction(
+  await dispatchSparkAgentInstruction(
     piApi,
     deps,
     ctx,

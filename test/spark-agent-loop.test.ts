@@ -420,8 +420,7 @@ void test("SparkAgentLoop passes prompt_cache_key and reports cache usage summar
       phases: ["implement"],
     },
   ]);
-  assert.equal(manifest.roundtrip.index, 1);
-  assert.equal(manifest.roundtrip.remaining, 15);
+  assert.deepEqual(manifest.roundtrip, { index: 1 });
   assert.doesNotMatch(
     JSON.stringify(manifest),
     /session:cache-test|Stable Spark operating rules|Current date: 2026-07-03/u,
@@ -432,7 +431,6 @@ void test("SparkAgentLoop passes prompt_cache_key and reports cache usage summar
       allowedTools: [],
       expectedOutcomes: ["completed"],
       maxToolCalls: 0,
-      maxRoundtrips: 1,
     },
     {
       manifest,
@@ -923,14 +921,9 @@ void test("SparkAgentLoop terminalizes a partial assistant bubble when the strea
 
 void test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", async () => {
   const stopAssistant = buildAssistant([{ type: "text", text: "done" }]);
-  const toolUseAssistant = buildAssistant(
-    [{ type: "toolCall", id: "tc-max", name: "missing", arguments: {} }],
-    "toolUse",
-  );
   const cases: Array<{
     name: string;
     streamFunction: SparkAgentStreamFunction;
-    maxRoundtrips?: number;
     expectedError?: RegExp;
     expectedStopReason?: AssistantMessage["stopReason"];
     expectedStatus: SparkRunOutcome["status"];
@@ -999,26 +992,6 @@ void test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", as
       expectedStopReason: "error",
       expectedStatus: "failed",
     },
-    {
-      name: "max roundtrips",
-      streamFunction: makeFakeStream({
-        rounds: [[{ type: "done", reason: "toolUse", message: toolUseAssistant }]],
-      }),
-      maxRoundtrips: 1,
-      expectedError: /agent loop hit maxRoundtrips=1; stopping/,
-      expectedStopReason: "error",
-      expectedStatus: "budget_exhausted",
-    },
-    {
-      name: "zero max roundtrips",
-      streamFunction: () => {
-        assert.fail("maxRoundtrips=0 must not start a model stream");
-      },
-      maxRoundtrips: 0,
-      expectedError: /agent loop hit maxRoundtrips=0; stopping/,
-      expectedStopReason: "error",
-      expectedStatus: "budget_exhausted",
-    },
   ];
 
   for (const entry of cases) {
@@ -1030,7 +1003,6 @@ void test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", as
       host,
       streamFunction: entry.streamFunction,
       getModel: () => TEST_MODEL,
-      maxRoundtrips: entry.maxRoundtrips,
     });
     loop.onEvent((event) => loopEvents.push(event));
 
@@ -1085,6 +1057,46 @@ void test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", as
       );
     }
   }
+});
+
+void test("SparkAgentLoop continues through more than sixteen tool rounds by default", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-long-tool-run-test" });
+  const toolRounds = Array.from({ length: 16 }, (_, index) => [
+    {
+      type: "done" as const,
+      reason: "toolUse" as const,
+      message: buildAssistant(
+        [
+          {
+            type: "toolCall",
+            id: `tc-unbounded-${index}`,
+            name: "missing",
+            arguments: {},
+          },
+        ],
+        "toolUse",
+      ),
+    },
+  ]);
+  const finalAssistant = buildAssistant([{ type: "text", text: "completed after round 16" }]);
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: makeFakeStream({
+      rounds: [...toolRounds, [{ type: "done", reason: "stop", message: finalAssistant }]],
+    }),
+    getModel: () => TEST_MODEL,
+  });
+  const errors: string[] = [];
+  loop.onEvent((event) => {
+    if (event.type === "error") errors.push(event.message);
+  });
+
+  const outcome = await loop.submitWithOutcome("continue until the work is complete");
+
+  assert.equal(outcome.status, "completed");
+  assert.equal(outcome.roundtrips, 17);
+  assert.deepEqual(loop.getLastPromptManifest()?.roundtrip, { index: 17 });
+  assert.deepEqual(errors, []);
 });
 
 void test("SparkAgentLoop dispatches tool calls and feeds tool results back into the next turn", async () => {
@@ -1226,6 +1238,80 @@ void test("SparkAgentLoop dispatches tool calls and feeds tool results back into
         event.artifact.ref === "artifact:echo-1" &&
         event.artifact.kind === "record" &&
         event.artifact.metadata.sourceTool === "echo",
+    ),
+    true,
+  );
+});
+
+void test("SparkAgentLoop keeps a thrown tool error inside the execution chain and completes the turn", async () => {
+  const viewEvents: any[] = [];
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-agent-loop-tool-error-projection-test",
+    ui: { publishView: (event) => viewEvents.push(event) },
+  });
+  host.registerTool({
+    name: "unstable_read",
+    description: "fails while reading",
+    parameters: { type: "object" },
+    async execute() {
+      throw new Error("cue transport failed");
+    },
+  });
+  const toolCall: ToolCall = {
+    type: "toolCall",
+    id: "tc-tool-error-projection",
+    name: "unstable_read",
+    arguments: {},
+  };
+  const finalAssistant = buildAssistant([
+    { type: "text", text: "I recovered and finished normally." },
+  ]);
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: makeFakeStream({
+      rounds: [
+        [{ type: "done", reason: "toolUse", message: buildAssistant([toolCall], "toolUse") }],
+        [{ type: "done", reason: "stop", message: finalAssistant }],
+      ],
+    }),
+    getModel: () => TEST_MODEL,
+  });
+
+  await loop.submit("recover after a tool error");
+
+  const transcript = loop.getMessages();
+  const toolResult = transcript.find(
+    (message) => message.role === "toolResult" && message.toolCallId === toolCall.id,
+  );
+  assert.equal(toolResult?.isError, true);
+  assert.match(toolResult?.content[0]?.text ?? "", /cue transport failed/u);
+  assert.equal(transcript.at(-1)?.role, "assistant");
+  assert.equal(
+    (transcript.at(-1)?.content[0] as { text?: string } | undefined)?.text,
+    finalAssistant.content[0].text,
+  );
+
+  const toolView = viewEvents.find(
+    (event) =>
+      event.type === "session.message" && event.message.id === `tool-result:${toolCall.id}`,
+  );
+  assert.equal(toolView?.message.role, "tool");
+  assert.equal(toolView?.message.status, "done");
+  assert.equal(toolView?.message.parts?.[0]?.type, "tool-result");
+  assert.equal(toolView?.message.parts?.[0]?.status, "failed");
+  assert.equal(
+    viewEvents.some(
+      (event) => event.type === "session.message" && event.message.status === "error",
+    ),
+    false,
+  );
+  assert.equal(
+    viewEvents.some(
+      (event) =>
+        event.type === "session.message" &&
+        event.message.role === "assistant" &&
+        event.message.status === "done" &&
+        event.message.text === "I recovered and finished normally.",
     ),
     true,
   );
@@ -2581,7 +2667,6 @@ void test("SparkAgentLoop drainOutboxIntoMessages turns sendUserMessage envelope
     host,
     streamFunction: fake,
     getModel: () => TEST_MODEL,
-    maxRoundtrips: 4,
   });
   await loop.submit("start");
   // Expected message log: user("start"), asst1, user("follow up"), asst2

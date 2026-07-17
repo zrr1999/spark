@@ -498,35 +498,53 @@ describe("createQqbotTransport", () => {
     await transport.stop();
   });
 
-  it("sends only the original C2C final reply body", async () => {
+  it("streams the C2C final answer in place through stream_messages", async () => {
     const { api, sendC2CMarkdownMessage, sendC2CStreamMessage } = createApiMock();
+    sendC2CStreamMessage.mockResolvedValue({ id: "stream-1" });
     const transport = createQqbotTransport(config, { api });
     const stream = await transport.reply?.openReplyStream({
       recipient: "c2c:user-1",
       messageId: "source-message",
     });
 
-    expect(stream).toBeUndefined();
+    expect(stream?.answerMode).toBe("inline");
+    stream?.appendText("最终");
+    stream?.appendText("答案");
+    await stream!.complete();
 
-    await transport.reply?.sendReply({
-      recipient: "c2c:user-1",
-      messageId: "source-message",
-      text: "\n  最终答案  \n",
+    expect(sendC2CStreamMessage).toHaveBeenCalledTimes(1);
+    const streamCalls = sendC2CStreamMessage.mock.calls as unknown as Array<
+      [string, string, Record<string, unknown>]
+    >;
+    expect(streamCalls[0]?.[2]).toMatchObject({
+      input_mode: "replace",
+      input_state: 10,
+      content_type: "markdown",
+      content_raw: "最终答案\n",
+      event_id: "source-message",
+      msg_id: "source-message",
+      msg_seq: 4,
+      index: 0,
     });
-    expect(sendC2CStreamMessage).not.toHaveBeenCalled();
-    expect(sendC2CMarkdownMessage).toHaveBeenCalledWith(
-      "token",
-      "user-1",
-      "最终答案",
-      "source-message",
-      4,
-    );
+    expect(sendC2CMarkdownMessage).not.toHaveBeenCalled();
   });
 
-  it("does not expose a QQ reply stream", async () => {
+  it("does not open a reply stream for QQ group or channel recipients", async () => {
     const { api } = createApiMock();
     const transport = createQqbotTransport(config, { api });
 
+    await expect(
+      transport.reply?.openReplyStream({
+        recipient: "group:group-1",
+        messageId: "source-group",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      transport.reply?.openReplyStream({
+        recipient: "channel:channel-1",
+        messageId: "source-channel",
+      }),
+    ).resolves.toBeUndefined();
     await expect(
       transport.reply?.openReplyStream({ recipient: "c2c:user-1" }),
     ).resolves.toBeUndefined();

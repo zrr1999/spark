@@ -5,6 +5,7 @@ import {
   runtimeServerCommandSupportsScope,
   sparkProtocolJsonObjectSchema,
 } from "../command-events.ts";
+import { sparkHumanResponseStatusSchema } from "../human-interaction.ts";
 import { sparkAuthFlowSchema } from "../model-control.ts";
 import { isoDateTimeSchema, prefixedIdSchema } from "../refs.ts";
 import { runtimeEnvelopeFor, runtimeFeatureSchema } from "./envelope.ts";
@@ -260,11 +261,28 @@ export const runtimeCommandResultPayloadSchema = z
     }
   });
 
-export const humanQuestionOptionSchema = z.object({
-  id: z.string().min(1),
-  label: z.string().min(1),
-  description: z.string().optional(),
-});
+/**
+ * Same identity field as `sparkAskOptionViewSchema.value`. Legacy Cockpit /
+ * outbox payloads used `id`; accept both on read and normalize to `value`.
+ */
+export const humanQuestionOptionSchema = z.preprocess(
+  (input) => {
+    if (!input || typeof input !== "object") return input;
+    const record = input as Record<string, unknown>;
+    if (typeof record.value === "string") return record;
+    if (typeof record.id === "string") {
+      const { id, ...rest } = record;
+      return { ...rest, value: id };
+    }
+    return input;
+  },
+  z.object({
+    value: z.string().min(1),
+    label: z.string().min(1),
+    description: z.string().optional(),
+    preview: z.string().optional(),
+  }),
+);
 
 export const humanQuestionSchema = z.object({
   id: z.string().min(1),
@@ -290,7 +308,7 @@ export const humanRequestCreatedPayloadSchema = z.object({
 });
 
 export const humanResponseDeliverPayloadSchema = z.object({
-  status: z.enum(["answered", "cancelled", "archived"]),
+  status: sparkHumanResponseStatusSchema,
   answers: jsonObjectSchema.default({}),
   responseArtifactRefs: z.array(artifactRefSchema).default([]),
 });

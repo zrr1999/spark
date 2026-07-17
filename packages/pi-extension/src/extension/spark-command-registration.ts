@@ -620,12 +620,13 @@ export function registerSparkCommands(
       ]
         .filter((line): line is string => Boolean(line))
         .join("\n");
-      sendSparkRuntimeInstruction(
+      await sendSparkRuntimeInstruction(
         piApi,
         "spark-goal-request",
         instruction,
         notifications.inferDispatched,
         { purpose: "empty-goal-infer" },
+        runtimeInstructionDelivery(ctx),
       );
       return;
     }
@@ -755,10 +756,17 @@ export function registerSparkCommands(
     ]
       .filter((line): line is string => Boolean(line))
       .join("\n");
-    sendSparkRuntimeInstruction(piApi, "spark-goal-request", instruction, visible, {
-      goalId: goal.goalId,
-      purpose: "foreground-goal-start",
-    });
+    await sendSparkRuntimeInstruction(
+      piApi,
+      "spark-goal-request",
+      instruction,
+      visible,
+      {
+        goalId: goal.goalId,
+        purpose: "foreground-goal-start",
+      },
+      runtimeInstructionDelivery(ctx),
+    );
     markForegroundGoalAwaitingTurn(piApi, ctx, goal.goalId);
     if (!piApi.on)
       scheduleForegroundGoalLoop(piApi, ctx, FOREGROUND_GOAL_IDLE_DELAY_MS, {
@@ -1162,10 +1170,17 @@ export function registerSparkCommands(
       language,
       loopTick.loop,
     );
-    sendSparkRuntimeInstruction(piApi, "spark-goal-request", instruction, visible, {
-      goalId: goal.goalId,
-      purpose: "foreground-goal-tick",
-    });
+    await sendSparkRuntimeInstruction(
+      piApi,
+      "spark-goal-request",
+      instruction,
+      visible,
+      {
+        goalId: goal.goalId,
+        purpose: "foreground-goal-tick",
+      },
+      runtimeInstructionDelivery(ctx),
+    );
     markForegroundGoalAwaitingTurn(piApi, ctx, goal.goalId);
   }
 
@@ -1236,10 +1251,17 @@ export function registerSparkCommands(
       project,
       tick.loop,
     );
-    sendSparkRuntimeInstruction(piApi, "spark-loop-request", instruction, visible, {
-      loopId: loop.loopId,
-      purpose: "foreground-loop-tick",
-    });
+    await sendSparkRuntimeInstruction(
+      piApi,
+      "spark-loop-request",
+      instruction,
+      visible,
+      {
+        loopId: loop.loopId,
+        purpose: "foreground-loop-tick",
+      },
+      runtimeInstructionDelivery(ctx),
+    );
     markForegroundLoopAwaitingTurn(piApi, ctx, loop.loopId);
   }
 
@@ -1300,7 +1322,7 @@ export function registerSparkCommands(
     const objectivePrefix = repro.objective ? `${compactInline(repro.objective)} · ` : "";
     const visible = `Spark repro tick: ${objectivePrefix}${stage.title} (${repro.currentStageIndex + 1}/${repro.stages.length}), phase=${repro.currentPhase}${projectLabel}`;
     ctx.sparkActiveLens = sparkActiveLens(repro.currentPhase, "repro");
-    sendSparkRuntimeInstruction(
+    await sendSparkRuntimeInstruction(
       piApi,
       "spark-repro-request",
       renderReproTickInstruction(repro),
@@ -1310,6 +1332,7 @@ export function registerSparkCommands(
         purpose: "foreground-repro-tick",
         selectedPhase: repro.currentPhase,
       },
+      runtimeInstructionDelivery(ctx),
     );
     markForegroundReproAwaitingTurn(piApi, ctx, repro.reproId);
   }
@@ -2040,6 +2063,12 @@ export function registerSparkCommands(
     return language === "zh"
       ? '当前 goal 尚未绑定项目。下一步：用 task_write({ action: "project_use", title, description }) 基于目标创建或选择项目，然后用 task_write({ action: "plan" }) 规划初始具体任务。不要等待用户手动建项目，除非目标意图确实不明确。'
       : 'No current project is selected for this goal. Next: create or select a project with task_write({ action: "project_use", title, description }) using the goal objective as project intent, then plan initial concrete tasks with task_write({ action: "plan" }). Do not wait for the user to create the project manually unless the goal intent is genuinely ambiguous.';
+  }
+
+  function runtimeInstructionDelivery(
+    ctx: SparkGoalLoopContext,
+  ): { sendUserMessage: (content: string) => Promise<void> } | undefined {
+    return ctx.sendUserMessage ? { sendUserMessage: ctx.sendUserMessage } : undefined;
   }
 
   function foregroundGoalLoopKey(cwd: string, ctx: SparkToolContext): string {

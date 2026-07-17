@@ -26,9 +26,12 @@ export interface ChannelReplyStream {
   /**
    * Where the final assistant answer is delivered. Defaults to `inline`.
    *
-   * `separate` streams are execution/progress surfaces only; the daemon sends
-   * the final answer through `sendReply` after the stream reaches a terminal
-   * state. This keeps platform presentation policy inside the adapter contract.
+   * `inline` (default): the stream is the user-visible answer surface. The
+   * daemon awaits `complete`/`fail` and skips durable `sendReply` when the
+   * stream finishes successfully (falling back to `sendReply` only on failure).
+   *
+   * `separate`: progress-only surface. The daemon still enqueues durable
+   * `sendReply` for the final answer after the stream reaches a terminal state.
    */
   answerMode?: "inline" | "separate";
   /** Durable handle for retrying this exact inline reply after a daemon crash. */

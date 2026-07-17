@@ -12,10 +12,10 @@ import {
   archiveManagedSessionForCockpit,
   createManagedSessionForCockpit,
   getManagedSessionForCockpit,
-  listManagedSessionsForCockpit,
 } from "$lib/server/managed-sessions";
 import {
   loadModelControlForCockpit,
+  loadProjectedModelControlForCockpit,
   modelValue,
   parseModelValue,
   parseThinkingLevelValue,
@@ -26,25 +26,23 @@ import {
   cockpitSubmissionIdempotencyKey,
   createCockpitSubmissionId,
 } from "$lib/server/submission-idempotency";
-import {
-  workspaceSessionsForWorkbench,
-  workspaceIdForWorkbenchSession,
-} from "../../../lib/workbench-session-scope";
+import { workspaceIdForWorkbenchSession } from "../../../lib/workbench-session-scope";
 import { sessionHasChannelBinding } from "../../../lib/channel-session-title";
+import { cockpitSlashSubmissionError } from "../../../lib/slash-actions";
 import type { Actions, PageServerLoad } from "./$types";
 
 export const load: PageServerLoad = async ({ parent }) => {
   const parentData = await parent();
-  const [managedSessions, modelControl] = await Promise.all([
-    listManagedSessionsForCockpit(),
-    loadModelControlForCockpit(),
-  ]);
+  const workspaceId = parentData.activeWorkspace?.id ?? null;
+  const modelControl = workspaceId
+    ? parentData.sessionControlAvailable
+      ? await loadModelControlForCockpit({ workspaceId })
+      : await loadProjectedModelControlForCockpit({ workspaceId })
+    : { available: false, snapshot: { providers: [], diagnostics: [] } };
   return {
-    sessions: workspaceSessionsForWorkbench(
-      managedSessions.sessions,
-      parentData.activeWorkspace?.id,
-    ),
-    sessionsAvailable: managedSessions.available,
+    sessions: parentData.sessions,
+    sessionsAvailable: parentData.sessionsAvailable,
+    sessionControlAvailable: parentData.sessionControlAvailable,
     selectedSessionId: null as string | null,
     startSubmissionIdSeed: createId("idem"),
     sessionActivity: null,
@@ -83,6 +81,16 @@ export const actions: Actions = {
         success: false,
         error: t.assignGoalRequired,
         message: t.assignGoalRequired,
+        values,
+      });
+    }
+    const slashActionError = cockpitSlashSubmissionError(message, t.workbench.slashActions);
+    if (slashActionError) {
+      return fail(400, {
+        intent: "startConversation",
+        success: false,
+        error: slashActionError,
+        message: slashActionError,
         values,
       });
     }
@@ -190,6 +198,16 @@ export const actions: Actions = {
         values,
       });
     }
+    const slashActionError = cockpitSlashSubmissionError(message, t.workbench.slashActions);
+    if (slashActionError) {
+      return fail(400, {
+        intent: "sendMessage",
+        success: false,
+        error: slashActionError,
+        message: slashActionError,
+        values,
+      });
+    }
 
     let session;
     try {
@@ -268,11 +286,13 @@ export const actions: Actions = {
     const formData = await request.formData();
     const sessionId = formText(formData, "sessionId").trim();
     const turnId = formText(formData, "turnId").trim();
+    const dequeue = formText(formData, "cancelIntent").trim() === "dequeue";
+    const intent = dequeue ? "removeQueuedTurn" : "cancelTurn";
     const values = { sessionId, turnId };
 
     if (!sessionId) {
       return fail(400, {
-        intent: "cancelTurn",
+        intent,
         success: false,
         error: t.cancelSessionRequired,
         message: t.cancelSessionRequired,
@@ -281,7 +301,7 @@ export const actions: Actions = {
     }
     if (!turnId) {
       return fail(400, {
-        intent: "cancelTurn",
+        intent,
         success: false,
         error: t.cancelTurnRequired,
         message: t.cancelTurnRequired,
@@ -295,7 +315,7 @@ export const actions: Actions = {
     } catch (caught) {
       const error = caught instanceof Error ? caught.message : t.cancelTurnFailed;
       return fail(400, {
-        intent: "cancelTurn",
+        intent,
         success: false,
         error,
         message: error,
@@ -304,7 +324,7 @@ export const actions: Actions = {
     }
     if (!session) {
       return fail(400, {
-        intent: "cancelTurn",
+        intent,
         success: false,
         error: t.cancelSessionRequired,
         message: t.cancelSessionRequired,
@@ -313,7 +333,7 @@ export const actions: Actions = {
     }
     if (!workspaceIdForWorkbenchSession(session)) {
       return fail(400, {
-        intent: "cancelTurn",
+        intent,
         success: false,
         error: t.cancelSessionRequired,
         message: t.cancelSessionRequired,
@@ -322,7 +342,7 @@ export const actions: Actions = {
     }
     if (session.status === "archived") {
       return fail(400, {
-        intent: "cancelTurn",
+        intent,
         success: false,
         error: t.cancelTurnArchived,
         message: t.cancelTurnArchived,
@@ -333,21 +353,25 @@ export const actions: Actions = {
     try {
       const result = await cancelConversationTurnForCockpit({ sessionId, turnId });
       if (!result.cancelRequested && result.status !== "cancelled") {
-        return fail(409, {
-          intent: "cancelTurn",
-          success: false,
+        // Stop is idempotent at the conversation surface. If daemon truth has
+        // already converged, silently accept the stale click and let the page
+        // refresh clear its optimistic run state.
+        return {
+          intent,
+          success: true,
           cancelled: false,
-          error: t.cancelTurnUnavailable,
-          message: t.cancelTurnUnavailable,
+          converged: true,
           invocationStatus: result.status,
+          cancelledTurnId: result.turnId,
           values,
-        });
+        };
       }
       return {
-        intent: "cancelTurn",
+        intent,
         success: true,
         cancelled: true,
-        message: t.cancelTurnSucceeded,
+        message:
+          dequeue && result.status === "cancelled" ? t.cancelTurnDequeued : t.cancelTurnSucceeded,
         invocationStatus: result.status,
         cancelledTurnId: result.turnId,
         values: { sessionId, turnId: result.turnId },
@@ -355,7 +379,7 @@ export const actions: Actions = {
     } catch (caught) {
       const error = caught instanceof Error ? caught.message : t.cancelTurnFailed;
       return fail(400, {
-        intent: "cancelTurn",
+        intent,
         success: false,
         cancelled: false,
         error,

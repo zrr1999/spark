@@ -52,7 +52,7 @@ export async function enterSparkUltracodeDriver(
   await deps.refreshSparkWidget(ctx.cwd, ctx);
   const savedWorkflows = await discoverSparkSavedWorkflows(ctx.cwd);
   ctx.ui?.notify?.("Spark ultracode workflow driver selected.", "info");
-  dispatchSparkAgentInstruction(
+  await dispatchSparkAgentInstruction(
     piApi,
     deps,
     ctx,
@@ -89,7 +89,7 @@ export async function enterSparkWorkflowDriver(
   if (workflow.descriptor?.mode === "plan") {
     ctx.sparkActiveLens = sparkActiveLens("plan", "workflow");
     ctx.ui?.notify?.("Builtin workflow selected.", "info");
-    dispatchSparkAgentInstruction(
+    await dispatchSparkAgentInstruction(
       piApi,
       deps,
       ctx,
@@ -100,7 +100,7 @@ export async function enterSparkWorkflowDriver(
   }
   ctx.ui?.notify?.("Spark workflow driver selected.", "info");
   const savedWorkflows = await discoverSparkSavedWorkflows(ctx.cwd);
-  dispatchSparkAgentInstruction(
+  await dispatchSparkAgentInstruction(
     piApi,
     deps,
     ctx,

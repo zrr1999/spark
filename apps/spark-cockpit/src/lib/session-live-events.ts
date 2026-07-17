@@ -120,6 +120,7 @@ export function sessionViewRevisionKey(view: SparkSessionView | null): string {
     view.usage?.costUsd ?? "",
     view.usage?.contextTokens ?? "",
     view.usage?.contextWindow ?? "",
+    JSON.stringify(view.pendingTurns ?? null),
     view.messages.length,
     latest?.id ?? "",
     latest?.status ?? "",
@@ -145,6 +146,9 @@ export function createSessionLiveEventState(input: {
   const view = input.view ? cloneSessionView(input.view) : null;
   const activeTurnId = queuedTurnId(view);
   const invocationIds = new Set(input.invocationIds);
+  for (const pending of view?.pendingTurns ?? []) {
+    invocationIds.add(pending.invocationId);
+  }
   if (activeTurnId) invocationIds.add(activeTurnId);
   return {
     sessionId: input.sessionId,
@@ -162,18 +166,19 @@ export function createSessionLiveEventState(input: {
  * Register the durable turn receipt returned by `turn.submit` before the first
  * runtime event arrives. Direct Cockpit turns do not have a legacy command id,
  * so their invocation updates can only be scoped safely by this receipt.
+ *
+ * This only records invocation ownership. Admission is not execution, so a
+ * queued receipt must not create a Stop target or a running indicator.
+ * Structural session fields stay owned by daemon snapshots / `daemon.view_event`.
  */
 export function registerQueuedSessionTurn(
   state: SessionLiveEventState,
   turnId: string,
-  createdAt = new Date().toISOString(),
+  _createdAt = new Date().toISOString(),
 ): boolean {
   const normalized = turnId.trim();
   if (!normalized) return false;
   state.invocationIds.add(normalized);
-  state.activeTurnId = normalized;
-  const current = state.view ?? emptySessionView(state.sessionId, createdAt);
-  state.view = { ...current, status: "running", updatedAt: createdAt };
   return true;
 }
 
@@ -225,8 +230,16 @@ export function applySessionLiveEvent(
     } else if (!state.invocationIds.has(invocationId)) {
       return { changed: false, refreshActivity: false };
     }
+    const previousActiveTurnId = state.activeTurnId;
+    applyInvocationCancellationTarget(
+      state,
+      invocationId,
+      stringField(event.payload, "status")?.toLocaleLowerCase(),
+    );
+    // Projection events never rewrite structural view fields; they only refresh
+    // activity and may update the local cancellation target.
     return {
-      changed: applyInvocationUpdate(state, event, invocationId),
+      changed: state.activeTurnId !== previousActiveTurnId,
       refreshActivity: true,
     };
   }
@@ -245,48 +258,26 @@ export function applySessionLiveEvent(
   return { changed: false, refreshActivity: false };
 }
 
-function applyInvocationUpdate(
+function applyInvocationCancellationTarget(
   state: SessionLiveEventState,
-  event: SessionSerializedEvent,
   invocationId: string,
-): boolean {
-  const status = stringField(event.payload, "status")?.toLocaleLowerCase();
-  if (!status) return false;
-  const current = state.view ?? emptySessionView(state.sessionId, event.createdAt);
-
-  if (status === "queued" || status === "running" || status === "streaming") {
+  status: string | null | undefined,
+): void {
+  if (!status) return;
+  if (status === "queued") return;
+  if (status === "running" || status === "streaming") {
     state.activeTurnId = invocationId;
-    state.view = { ...current, status: "running", updatedAt: event.createdAt };
-    return true;
+    return;
   }
-
-  if (!isTerminalInvocationStatus(status)) return false;
-  if (state.activeTurnId === invocationId) state.activeTurnId = null;
-  const failure = isFailureInvocationStatus(status);
-  const terminalReason = failure
-    ? sanitizeSparkDisplayError(stringField(event.payload, "terminalReason"), {
-        fallback: invocationFailureFallback(status),
-      })
-    : "";
-  const messages = failure
-    ? upsertById(current.messages, {
-        version: 1,
-        id: `invocation:${invocationId}:failure`,
-        role: "system" as const,
-        text: terminalReason,
-        status: "error" as const,
-        createdAt: event.createdAt,
-        metadata: {
-          source: "daemon.invocation",
-          invocationId,
-          kind: "invocation_failure",
-          terminalStatus: status,
-          errorTitle: invocationFailureTitle(status),
-        },
-      })
-    : current.messages;
-  state.view = { ...current, status: "idle", messages, updatedAt: event.createdAt };
-  return true;
+  if (!isTerminalInvocationStatus(status)) return;
+  const remaining = state.view?.pendingTurns?.filter((turn) => turn.invocationId !== invocationId);
+  if (remaining && remaining.length !== (state.view?.pendingTurns?.length ?? 0)) {
+    state.activeTurnId = nextPendingTurnId(remaining);
+    return;
+  }
+  if (state.activeTurnId === invocationId) {
+    state.activeTurnId = null;
+  }
 }
 
 function isTerminalInvocationStatus(status: string): boolean {
@@ -301,24 +292,6 @@ function isTerminalInvocationStatus(status: string): boolean {
     "cancelled",
     "canceled",
   ].includes(status);
-}
-
-function isFailureInvocationStatus(status: string): boolean {
-  return ["failed", "lost", "timeout", "timed_out"].includes(status);
-}
-
-function invocationFailureTitle(status: string): string {
-  if (status === "lost") return "Session interrupted";
-  if (status === "timeout" || status === "timed_out") return "Session timed out";
-  return "Session failed";
-}
-
-function invocationFailureFallback(status: string): string {
-  if (status === "lost") return "The session was interrupted before it produced a final response.";
-  if (status === "timeout" || status === "timed_out") {
-    return "The session timed out before it produced a final response.";
-  }
-  return "The session failed before it produced a final response.";
 }
 
 function rememberEventId(eventIds: Set<string>, eventId: string) {
@@ -367,23 +340,30 @@ function applyDaemonEvent(
   if (daemonEvent.type !== "daemon.view_event") {
     if (daemonEvent.type === "daemon.task.lifecycle") {
       const turnId = daemonEvent.invocationId ?? null;
-      if (daemonEvent.status === "queued" || daemonEvent.status === "running") {
+      const previousActiveTurnId = state.activeTurnId;
+      const viewChanged = turnId
+        ? applyDaemonInvocationPhaseToView(
+            state,
+            turnId,
+            daemonEvent.status,
+            daemonEvent.emittedAt ?? event.createdAt,
+          )
+        : false;
+      if (daemonEvent.status === "running") {
         state.activeTurnId = turnId ?? state.activeTurnId;
-      } else if (!turnId || turnId === state.activeTurnId) {
+      } else if (turnId) {
+        applyInvocationCancellationTarget(state, turnId, daemonEvent.status);
+      } else if (state.activeTurnId) {
         state.activeTurnId = null;
       }
-      if (state.view) {
-        state.view = {
-          ...state.view,
-          status:
-            daemonEvent.status === "queued" || daemonEvent.status === "running"
-              ? "running"
-              : "idle",
-          updatedAt: daemonEvent.emittedAt ?? event.createdAt,
-        };
-      }
+      return {
+        changed: viewChanged || state.activeTurnId !== previousActiveTurnId,
+        refreshActivity: true,
+      };
     }
-    return { changed: daemonEvent.type === "daemon.task.lifecycle", refreshActivity: true };
+    // Lifecycle / session meta events never rewrite pendingTurns or status;
+    // those come from `session.snapshot` / incremental view events.
+    return { changed: false, refreshActivity: true };
   }
 
   const viewEvent = daemonEvent.view;
@@ -396,6 +376,9 @@ function applyDaemonEvent(
       ...viewEvent.session,
       ...(mailbox ? { mailbox } : {}),
     });
+    for (const pending of state.view.pendingTurns ?? []) {
+      state.invocationIds.add(pending.invocationId);
+    }
     state.activeTurnId = queuedTurnId(state.view);
     return { changed: true, refreshActivity: false };
   }
@@ -420,10 +403,10 @@ function applyDaemonEvent(
     }
     state.view = {
       ...current,
-      status:
-        viewEvent.run.status === "queued" || viewEvent.run.status === "running"
-          ? "running"
-          : current.status,
+      // A run card may describe a nested workflow, role or task. It is useful
+      // inspector data, but it does not own the conversation execution state.
+      // Only daemon lifecycle / pending-turn truth may drive the header spinner
+      // and Stop target.
       runs: upsertById(current.runs, viewEvent.run),
       updatedAt:
         viewEvent.run.completedAt ??
@@ -449,9 +432,62 @@ function applyDaemonEvent(
   return { changed: true, refreshActivity: false };
 }
 
+function applyDaemonInvocationPhaseToView(
+  state: SessionLiveEventState,
+  invocationId: string,
+  status: string,
+  emittedAt: string,
+): boolean {
+  const current = state.view;
+  if (!current) return false;
+
+  const normalized = status.toLocaleLowerCase();
+  let pendingTurns = current.pendingTurns;
+  if (pendingTurns !== undefined) {
+    pendingTurns = isTerminalInvocationStatus(normalized)
+      ? pendingTurns.filter((turn) => turn.invocationId !== invocationId)
+      : pendingTurns.map((turn) =>
+          turn.invocationId === invocationId &&
+          (normalized === "queued" || normalized === "running")
+            ? {
+                ...turn,
+                status: normalized,
+                ...(normalized === "running" && !turn.startedAt ? { startedAt: emittedAt } : {}),
+              }
+            : turn,
+        );
+  }
+
+  const hasRunning = pendingTurns?.some((turn) => turn.status === "running") ?? false;
+  const hasQueued = pendingTurns?.some((turn) => turn.status === "queued") ?? false;
+  const nextStatus =
+    normalized === "running"
+      ? "running"
+      : normalized === "queued"
+        ? hasRunning
+          ? "running"
+          : "queued"
+        : isTerminalInvocationStatus(normalized)
+          ? hasRunning
+            ? "running"
+            : hasQueued
+              ? "queued"
+              : "idle"
+          : current.status;
+
+  state.view = {
+    ...current,
+    status: nextStatus,
+    ...(pendingTurns !== undefined ? { pendingTurns } : {}),
+    updatedAt: emittedAt,
+  };
+  return true;
+}
+
 function cloneSessionView(view: SparkSessionView): SparkSessionView {
   return {
     ...view,
+    ...(view.pendingTurns ? { pendingTurns: view.pendingTurns.map((turn) => ({ ...turn })) } : {}),
     messages: view.messages.map(sanitizeLiveMessage),
     tools: [...view.tools],
     runs: [...view.runs],
@@ -546,12 +582,25 @@ function stringField(value: unknown, key: string): string | null {
 
 function queuedTurnId(view: SparkSessionView | null): string | null {
   if (!view) return null;
-  for (const message of view.messages) {
+  const pending = view.pendingTurns;
+  if (pending !== undefined) {
+    return pending.find((turn) => turn.status === "running")?.invocationId ?? null;
+  }
+  for (let index = view.messages.length - 1; index >= 0; index -= 1) {
+    const message = view.messages[index];
+    if (!message) continue;
     if (stringField(message.metadata, "source") !== "daemon.invocation") continue;
+    const status = stringField(message.metadata, "invocationStatus")?.toLocaleLowerCase();
+    if (status !== "running" && status !== "streaming") continue;
     const invocationId = stringField(message.metadata, "invocationId");
     if (invocationId) return invocationId;
   }
   return null;
+}
+
+function nextPendingTurnId(pendingTurns: SparkSessionView["pendingTurns"]): string | null {
+  if (!pendingTurns?.length) return null;
+  return pendingTurns.find((turn) => turn.status === "running")?.invocationId ?? null;
 }
 
 function nullableString(value: unknown): string | null {

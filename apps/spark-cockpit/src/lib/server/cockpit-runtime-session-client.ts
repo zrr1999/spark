@@ -51,7 +51,16 @@ export type CockpitRuntimeSessionCreateRequest = SparkSessionCreateRequest & {
 
 export type CockpitRuntimeSessionSnapshotRequest = Omit<SparkSessionSnapshotRequest, "sessionId">;
 
+export interface CockpitRuntimeSessionListResult {
+  sessions: SparkSessionRegistryRecord[];
+  /** True only when this list request completed against a live owner route. */
+  controlAvailable: boolean;
+}
+
 export interface CockpitRuntimeSessionClient {
+  listWithControlState(
+    options?: CockpitRuntimeSessionListRequest,
+  ): Promise<CockpitRuntimeSessionListResult>;
   list(options?: CockpitRuntimeSessionListRequest): Promise<SparkSessionRegistryRecord[]>;
   get(sessionId: string): Promise<SparkSessionRegistryRecord>;
   snapshot(
@@ -102,7 +111,9 @@ export function createCockpitRuntimeSessionClient(
 ): CockpitRuntimeSessionClient {
   const database = () => injectedDatabase ?? getDatabase();
   return {
-    list: async (options) => await listSessions(database(), options),
+    listWithControlState: async (options) =>
+      await listSessionsWithControlState(database(), options),
+    list: async (options) => (await listSessionsWithControlState(database(), options)).sessions,
     get: async (sessionId) => await getSession(database(), sessionId),
     snapshot: async (sessionId, options) =>
       await getSessionSnapshot(database(), sessionId, options),
@@ -117,16 +128,23 @@ export function createCockpitRuntimeSessionClient(
   };
 }
 
-async function listSessions(
+async function listSessionsWithControlState(
   db: DatabaseSync,
   options: CockpitRuntimeSessionListRequest = {},
-): Promise<SparkSessionRegistryRecord[]> {
+): Promise<CockpitRuntimeSessionListResult> {
   const { runtimeId, ...request } = options;
   const parsed = sparkSessionListRequestSchema.parse(request);
-  const routes = routesForList(db, parsed, runtimeId);
+  let routes: RuntimeSessionRoute[];
+  try {
+    routes = routesForList(db, parsed, runtimeId);
+  } catch (error) {
+    const stale = projectedSessions(db, parsed, runtimeId);
+    if (stale.length > 0) return { sessions: stale, controlAvailable: false };
+    throw unavailableFrom(error);
+  }
   if (routes.length === 0) {
     const stale = projectedSessions(db, parsed, runtimeId);
-    if (stale.length > 0) return stale;
+    if (stale.length > 0) return { sessions: stale, controlAvailable: false };
     throw new CockpitRuntimeSessionUnavailableError(
       "No connected Spark daemon runtime is available for session control.",
     );
@@ -137,10 +155,13 @@ async function listSessions(
   );
   if (results.every((result) => result.status === "rejected")) {
     const stale = projectedSessions(db, parsed, runtimeId);
-    if (stale.length > 0) return stale;
+    if (stale.length > 0) return { sessions: stale, controlAvailable: false };
     throw unavailableFrom(results[0]!.reason);
   }
-  return projectedSessions(db, parsed, runtimeId);
+  return {
+    sessions: projectedSessions(db, parsed, runtimeId),
+    controlAvailable: results.some((result) => result.status === "fulfilled"),
+  };
 }
 
 async function listRouteSessions(
@@ -212,7 +233,7 @@ async function getSession(
 ): Promise<SparkSessionRegistryRecord> {
   let projection = getRuntimeSessionProjection(db, sessionId);
   if (!projection) {
-    await listSessions(db, { includeArchived: true });
+    await listSessionsWithControlState(db, { includeArchived: true });
     projection = getRuntimeSessionProjection(db, sessionId);
   }
   if (!projection) {

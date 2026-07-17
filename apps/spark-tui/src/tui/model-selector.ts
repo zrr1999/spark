@@ -39,6 +39,7 @@ export interface SparkModelSelectorTheme {
 }
 
 export interface SparkModelSelectorTuiLike {
+  terminal?: { columns?: number };
   requestRender(): void;
 }
 

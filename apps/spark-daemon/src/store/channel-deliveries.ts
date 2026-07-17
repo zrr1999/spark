@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { cappedExponentialCeiling, equalJitter } from "@zendev-lab/spark-retry";
 
 export const sparkChannelDeliveryKinds = [
   "reply",
@@ -332,13 +333,13 @@ export function channelDeliveryRetryDelayMs(
   attemptCount: number,
   random: () => number = Math.random,
 ): number {
-  const exponent = Math.min(30, Math.max(0, Math.floor(attemptCount) - 1));
-  const ceiling = Math.min(
+  const ceiling = cappedExponentialCeiling(
+    attemptCount,
+    BASE_CHANNEL_DELIVERY_RETRY_MS,
     MAX_CHANNEL_DELIVERY_RETRY_MS,
-    BASE_CHANNEL_DELIVERY_RETRY_MS * 2 ** exponent,
+    { exponentCap: 30 },
   );
-  const sample = Math.max(0, Math.min(1, random()));
-  return Math.min(MAX_CHANNEL_DELIVERY_RETRY_MS, Math.floor(ceiling * (0.5 + sample * 0.5)));
+  return Math.min(MAX_CHANNEL_DELIVERY_RETRY_MS, equalJitter(ceiling, random));
 }
 
 function channelDeliveryRecord(row: ChannelDeliveryRow): SparkChannelDeliveryRecord {

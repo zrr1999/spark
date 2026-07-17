@@ -1,5 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
+  assertCockpitMayWriteScope,
+  assertDaemonOwnsScope,
   createId,
   type ArtifactProjectionPayload,
   type HumanRequestCreatedPayload,
@@ -427,6 +429,7 @@ export interface CockpitWorkspaceControlProjection {
  */
 export function queueCommandForWorkspaceOwner(db: DatabaseSync, input: QueueCommandInput) {
   return withTransaction(db, () => {
+    assertCockpitMayWriteScope("commands");
     assertWorkspaceServerMutationAllowed(db, input.workspaceId, input.payload);
 
     const owner = db
@@ -715,6 +718,7 @@ export interface RecordHumanRequestInput {
 
 export function recordHumanRequestFromRuntime(db: DatabaseSync, input: RecordHumanRequestInput) {
   return withTransaction(db, () => {
+    assertDaemonOwnsScope("human_requests");
     const existing = db
       .prepare(
         `SELECT hr.id AS humanRequestId, ii.id AS inboxItemId
@@ -753,6 +757,7 @@ export function recordHumanRequestFromRuntime(db: DatabaseSync, input: RecordHum
       JSON.stringify(input.payload.questions),
       toJson({
         ...input.payload.context,
+        ...(input.payload.sessionId ? { sessionId: input.payload.sessionId } : {}),
         toolCallId: input.payload.toolCallId,
         commandId: input.commandId,
         invocationId: input.invocationId,
@@ -827,6 +832,7 @@ export interface RecordHumanResponseInput {
 
 export function recordHumanResponse(db: DatabaseSync, input: RecordHumanResponseInput) {
   return withTransaction(db, () => {
+    assertCockpitMayWriteScope("human_responses");
     const timestamp = input.createdAt ?? nowIso();
     const humanResponseId = input.humanResponseId ?? createId("hres");
     const request = db

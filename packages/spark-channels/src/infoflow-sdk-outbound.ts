@@ -184,6 +184,10 @@ export function createInfoflowSdkOutbound(
  * Infoflow's streaming template nests process details under the outer status row.
  * Keep the inner process installed so one outer disclosure click reveals it, and
  * keep the completed outer/inner labels distinct.
+ *
+ * The card is the single user-visible reply: progress, tools, reasoning, and the
+ * final answer all update in place. The daemon skips a second sendReply when
+ * this stream completes successfully.
  */
 export function wrapInfoflowReplyStream(
   session: InfoflowStreamingSession,
@@ -192,10 +196,7 @@ export function wrapInfoflowReplyStream(
   patchStreamingCardPresentation(session);
   return {
     ...(deliveryRecovery ? { deliveryRecovery } : {}),
-    // The card is an execution/progress surface. The daemon always delivers the
-    // final assistant answer through sendReply, whose durable delivery lifecycle
-    // is independent from the SDK's best-effort streaming-card updates.
-    answerMode: "separate",
+    answerMode: "inline",
     appendProgress: (delta) => session.appendText(delta),
     appendText: (delta) => session.appendText(delta),
     appendReasoning: (delta) => session.appendReasoning(delta),

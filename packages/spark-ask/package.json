@@ -21,8 +21,9 @@
   },
   "dependencies": {
     "@zendev-lab/spark-extension-api": "workspace:^",
+    "@zendev-lab/spark-protocol": "workspace:^",
     "@zendev-lab/spark-tui": "workspace:^",
-    "typebox": "^1.2.13"
+    "typebox": "catalog:"
   },
   "pi": {
     "extensions": [

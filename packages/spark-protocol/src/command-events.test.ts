@@ -77,6 +77,7 @@ describe("SparkCommand vocabulary", () => {
       "provider.auth.login.status",
       "provider.auth.login.respond",
       "provider.auth.login.cancel",
+      "human.interaction.respond",
     ]);
     expect(sparkCommandKindForLocalRpcMethod("turn.submit")).toBe("turn.submit.request");
     expect(sparkCommandKindForLocalRpcMethod("daemon.restart")).toBe("daemon.restart.request");
@@ -101,6 +102,9 @@ describe("SparkCommand vocabulary", () => {
       "session.thinking.set.request",
     );
     expect(sparkCommandKindForLocalRpcMethod("model.catalog")).toBe("model.catalog.request");
+    expect(sparkCommandKindForLocalRpcMethod("human.interaction.respond")).toBe(
+      "human.response.deliver.request",
+    );
     expect(sparkCommandKindForLocalRpcMethod("unknown.method")).toBeNull();
   });
 

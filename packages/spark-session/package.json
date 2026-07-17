@@ -24,10 +24,10 @@
     "@zendev-lab/spark-extension-api": "workspace:^",
     "@zendev-lab/spark-protocol": "workspace:^",
     "@zendev-lab/spark-system": "workspace:^",
-    "typebox": "^1.2.13"
+    "typebox": "catalog:"
   },
   "devDependencies": {
-    "typescript": "^6.0.3",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   },
   "pi": {

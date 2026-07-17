@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { compile } from "svelte/compiler";
 import { describe, expect, it } from "vitest";
 
 const modelSelectorRoot = dirname(fileURLToPath(import.meta.url));
-const appRoot = resolve(modelSelectorRoot, "../../../..");
 const pinnedCommit = "fa4bc217f84bc571378bc371332a154106772614";
 
 describe("source-derived model selector boundary", () => {
@@ -30,18 +30,30 @@ describe("source-derived model selector boundary", () => {
     expect(source).not.toContain("FileUIPart");
   });
 
-  it("keeps model changes on the existing SvelteKit form path", () => {
-    const workspace = readFileSync(join(appRoot, "src/lib/SessionsWorkspace.svelte"), "utf8");
+  it("compiles the unified model and reasoning control", () => {
+    const picker = readFileSync(join(modelSelectorRoot, "ModelPicker.svelte"), "utf8");
     const runtimeControl = readFileSync(
       join(modelSelectorRoot, "ModelRuntimeControl.svelte"),
       "utf8",
     );
 
-    expect(workspace).toContain("<ModelRuntimeControl");
-    expect(runtimeControl).toContain("<ModelPicker");
-    expect(runtimeControl).toContain("<ThinkingLevelSlider");
-    expect(workspace).toContain('action="?/selectModel"');
-    expect(workspace).toContain("use:enhance={enhanceSelectModel}");
-    expect(workspace).toContain("sessionModelForm?.requestSubmit()");
+    expect(() =>
+      compile(picker, {
+        filename: join(modelSelectorRoot, "ModelPicker.svelte"),
+        generate: "server",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      compile(runtimeControl, {
+        filename: join(modelSelectorRoot, "ModelRuntimeControl.svelte"),
+        generate: "server",
+      }),
+    ).not.toThrow();
+    expect(picker).toContain("open = $bindable(false)");
+    expect(picker).not.toContain("primary-action");
+    expect(picker).not.toContain("thinking-section");
+    expect(runtimeControl).toContain("bind:open");
+    expect(runtimeControl).toContain("thinking-control");
+    expect(runtimeControl).toContain("reasoningSupported");
   });
 });

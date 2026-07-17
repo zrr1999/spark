@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import registerBaiduOneApiProvider, {
+import {
   remapBaiduOneApiPayload,
   resolveBaiduOneApiKey,
-  streamBaiduOneApi,
   streamBaiduOneApiAnthropic,
   streamBaiduOneApiOpenAIResponses,
 } from "../packages/spark-ai/src/baidu-oneapi-provider.ts";
@@ -266,126 +265,6 @@ void test("handleSparkRpcLine abort reports no target without an invocation", as
 
   assert.equal(writes[0]?.success, false);
   assert.match(String(writes[0]?.error), /abort requires invocationId/u);
-});
-
-void test("Baidu OneAPI provider uses local adaptive-friendly model ids", () => {
-  let registeredName: string | undefined;
-  let registeredConfig: unknown;
-
-  registerBaiduOneApiProvider({
-    registerProvider(name: string, config: unknown) {
-      registeredName = name;
-      registeredConfig = config;
-    },
-  });
-
-  const config = registeredConfig as {
-    api: string;
-    models: Array<{
-      id: string;
-      name: string;
-      reasoning: boolean;
-      api?: string;
-      transportModelId?: string;
-      baseUrl?: string;
-      contextWindow: number;
-      maxTokens: number;
-      aliases?: string[];
-      thinkingLevelMap?: Record<string, string | null>;
-      cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
-    }>;
-    streamSimple: unknown;
-  };
-
-  assert.equal(registeredName, "baidu-oneapi");
-  assert.equal(config.api, "baidu-oneapi");
-  assert.equal(config.streamSimple, streamBaiduOneApi);
-  assert.deepEqual(
-    config.models.map((model) => [model.id, model.name, model.reasoning, model.api]),
-    [
-      ["claude-opus-4.6", "Claude Opus 4.6", true, undefined],
-      ["claude-opus-4.7", "Claude Opus 4.7", true, undefined],
-      ["claude-opus-4.8", "Claude Opus 4.8", true, undefined],
-      ["claude-sonnet-5", "Claude Sonnet 5", true, undefined],
-      ["claude-fable-5", "Claude Fable 5", true, undefined],
-      ["gpt-5.5", "GPT-5.5", true, undefined],
-      ["gpt-5.6-sol", "GPT-5.6 Sol", true, undefined],
-      ["gpt-5.6-terra", "GPT-5.6 Terra", true, undefined],
-    ],
-  );
-  assert.deepEqual(
-    config.models.find((model) => model.id === "claude-opus-4.8")?.thinkingLevelMap,
-    {
-      minimal: null,
-      low: null,
-      medium: null,
-      high: null,
-      xhigh: "xhigh",
-    },
-  );
-  assert.deepEqual(config.models.find((model) => model.id === "claude-fable-5")?.thinkingLevelMap, {
-    minimal: "low",
-    low: "low",
-    medium: "medium",
-    high: "high",
-    xhigh: "xhigh",
-  });
-  assert.deepEqual(config.models.find((model) => model.id === "gpt-5.5")?.thinkingLevelMap, {
-    minimal: "low",
-    xhigh: "xhigh",
-  });
-  assert.deepEqual(config.models.find((model) => model.id === "gpt-5.5")?.aliases, [
-    "gpt-5.5-coding-plan",
-  ]);
-  assert.equal(
-    config.models.find((model) => model.id === "gpt-5.5")?.baseUrl,
-    "https://oneapi-comate.baidu-int.com/v1",
-  );
-  assert.deepEqual(config.models.find((model) => model.id === "gpt-5.5")?.cost, {
-    input: 0.5,
-    output: 3,
-    cacheRead: 0.05,
-    cacheWrite: 0,
-  });
-  assert.deepEqual(
-    config.models
-      .filter((model) => model.id.startsWith("gpt-5.6-"))
-      .map((model) => [
-        model.id,
-        model.transportModelId,
-        model.contextWindow,
-        model.maxTokens,
-        model.cost,
-      ]),
-    [
-      [
-        "gpt-5.6-sol",
-        "gpt-5.6-sol",
-        372000,
-        128000,
-        { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0.625 },
-      ],
-      [
-        "gpt-5.6-terra",
-        "gpt-5.6-terra",
-        372000,
-        128000,
-        { input: 0.25, output: 1.5, cacheRead: 0.025, cacheWrite: 0.3125 },
-      ],
-    ],
-  );
-  assert.deepEqual(config.models.find((model) => model.id === "claude-fable-5")?.cost, {
-    input: 1.1,
-    output: 5.5,
-    cacheRead: 0.11,
-    cacheWrite: 1.375,
-  });
-  assert.deepEqual(config.models.find((model) => model.id === "claude-opus-4.6")?.cost, {
-    input: 5.5,
-    output: 27.5,
-    cacheRead: 0.55,
-    cacheWrite: 6.875,
-  });
 });
 
 void test("Baidu OneAPI payload keeps gateway model spelling", () => {

@@ -38,12 +38,12 @@
     "@zendev-lab/spark-protocol": "workspace:*",
     "@zendev-lab/spark-system": "workspace:*",
     "@zendev-lab/spark-tasks": "workspace:*",
-    "ws": "^8.18.3"
+    "ws": "catalog:"
   },
   "devDependencies": {
-    "@types/ws": "^8.18.1",
+    "@types/ws": "catalog:",
     "@zendev-lab/spark-db": "workspace:*",
-    "typescript": "^6.0.3",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   },
   "engines": {

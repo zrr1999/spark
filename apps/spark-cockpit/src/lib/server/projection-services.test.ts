@@ -478,7 +478,7 @@ describe("projection services", () => {
             type: "single",
             prompt: "Scope?",
             required: true,
-            options: [{ id: "mvp", label: "MVP", description: "Proceed to MVP." }],
+            options: [{ value: "mvp", label: "MVP", description: "Proceed to MVP." }],
           },
         ],
         context: {},

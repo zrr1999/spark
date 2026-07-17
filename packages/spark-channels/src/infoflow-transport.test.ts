@@ -106,6 +106,123 @@ describe("infoflow transport", () => {
     assert.deepEqual(transport.status?.(), { state: "stopped" });
   });
 
+  it("claims established disconnects from the SDK and supervises every reconnect episode", async () => {
+    vi.useFakeTimers();
+    let state = "disconnected";
+    let attempts = 0;
+    let disconnects = 0;
+    const handlers = new Map<string, (event: unknown) => void>();
+    const client = {
+      on(pattern: string, handler: (event: unknown) => void) {
+        handlers.set(pattern, handler);
+      },
+      off(pattern: string) {
+        handlers.delete(pattern);
+      },
+      async connect() {
+        attempts += 1;
+        state = "connected";
+        handlers.get("connected")?.({ type: "connected" });
+      },
+      disconnect() {
+        disconnects += 1;
+        state = "disconnected";
+      },
+      getState() {
+        return state;
+      },
+    } as unknown as WSClient;
+    const reconnectRandom = vi.fn(() => 1);
+    const transport = createInfoflowTransport(
+      { type: "infoflow", app_key: "key", app_secret: "secret", app_agent_id: "19690" },
+      { wsClientFactory: () => client, reconnectDelaysMs: [1], reconnectRandom },
+    );
+
+    try {
+      await transport.start(() => undefined);
+      expect(attempts).toBe(1);
+
+      // A real WSClient publishes this event synchronously before starting its
+      // finite server-configured reconnect loop. Spark claims the handoff by
+      // marking it as a manual disconnect, then runs the infinite supervisor.
+      state = "disconnected";
+      handlers.get("disconnected")?.({ type: "disconnected" });
+      expect(transport.status?.()).toEqual({ state: "reconnecting" });
+      expect(disconnects).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(attempts).toBe(2);
+      expect(reconnectRandom).toHaveBeenCalledOnce();
+      expect(transport.status?.()).toEqual({ state: "connected" });
+
+      state = "disconnected";
+      handlers.get("disconnected")?.({ type: "disconnected" });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(attempts).toBe(3);
+      expect(disconnects).toBe(2);
+      expect(reconnectRandom).toHaveBeenCalledTimes(2);
+      expect(transport.status?.()).toEqual({ state: "connected" });
+    } finally {
+      await transport.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores lifecycle events from a stopped or replaced SDK client", async () => {
+    function fakeClient() {
+      let state = "disconnected";
+      const handlers = new Map<string, (event: unknown) => void>();
+      const disconnect = vi.fn(() => {
+        state = "disconnected";
+      });
+      const client = {
+        on(pattern: string, handler: (event: unknown) => void) {
+          handlers.set(pattern, handler);
+        },
+        off(pattern: string) {
+          handlers.delete(pattern);
+        },
+        async connect() {
+          state = "connected";
+          handlers.get("connected")?.({ type: "connected" });
+        },
+        disconnect,
+        getState() {
+          return state;
+        },
+      } as unknown as WSClient;
+      return { client, disconnect, handlers };
+    }
+
+    const first = fakeClient();
+    const second = fakeClient();
+    const clients = [first.client, second.client];
+    const reconnectRandom = vi.fn(() => 1);
+    const transport = createInfoflowTransport(
+      { type: "infoflow", app_key: "key", app_secret: "secret", app_agent_id: "19690" },
+      {
+        wsClientFactory: () => clients.shift()!,
+        reconnectDelaysMs: [1],
+        reconnectRandom,
+      },
+    );
+
+    await transport.start(() => undefined);
+    const staleConnected = first.handlers.get("connected")!;
+    const staleDisconnected = first.handlers.get("disconnected")!;
+    await transport.stop();
+    staleConnected({ type: "connected" });
+    expect(transport.status?.()).toEqual({ state: "stopped" });
+
+    await transport.start(() => undefined);
+    expect(transport.status?.()).toEqual({ state: "connected" });
+    staleDisconnected({ type: "disconnected" });
+    expect(second.disconnect).not.toHaveBeenCalled();
+    expect(reconnectRandom).not.toHaveBeenCalled();
+    expect(transport.status?.()).toEqual({ state: "connected" });
+
+    await transport.stop();
+  });
+
   it("keeps retrying an initial SDK connection failure until it succeeds", async () => {
     let state = "disconnected";
     let attempts = 0;

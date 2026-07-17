@@ -17,24 +17,28 @@ import {
   printableAskText,
 } from "@zendev-lab/spark-ask";
 
-void test("spark ask fullscreen option model includes only the direct custom input sentinel", () => {
-  const options = buildExtendedOptions(
-    {
-      id: "target-user",
-      prompt: "Who is this for?",
-      type: "single",
-      options: [
-        { value: "self", label: "Myself" },
-        { value: "team", label: "My team" },
-      ],
-    },
-    new Map(),
-  );
-  assert.deepEqual(
-    options.map((option) => option.kind),
-    ["option", "option", "other"],
-  );
-  assert.equal(options[2]?.label, SENTINEL_LABELS.other);
+void test("spark ask automatically adds one custom fallback to every question type", () => {
+  const businessOptions = [
+    { value: "self", label: "Myself" },
+    { value: "team", label: "My team" },
+  ];
+  const questions = [
+    { id: "single", prompt: "Single?", type: "single" as const, options: businessOptions },
+    { id: "multi", prompt: "Multi?", type: "multi" as const, options: businessOptions },
+    { id: "preview", prompt: "Preview?", type: "preview" as const, options: businessOptions },
+    { id: "freeform", prompt: "Freeform?", type: "freeform" as const },
+  ];
+
+  for (const question of questions) {
+    const options = buildExtendedOptions(question, new Map());
+    assert.equal(options.filter((option) => option.kind === "other").length, 1, question.type);
+    assert.equal(options.at(-1)?.label, SENTINEL_LABELS.other, question.type);
+    assert.equal(
+      options.filter((option) => option.kind === "option").length,
+      question.type === "freeform" ? 0 : businessOptions.length,
+      question.type,
+    );
+  }
 });
 
 void test("ask flow render keeps all lines within terminal width", () => {
@@ -396,7 +400,7 @@ void test("spark ask plain select path receives only business options", async ()
   });
 });
 
-void test("single-question ask_flow submit preserves custom answers but blocks decision gates", () => {
+void test("single-question ask_flow custom answer resumes a required decision gate", () => {
   const request = createPiAskFlowRequest({
     flow: "custom",
     mode: "decision",
@@ -437,7 +441,7 @@ void test("single-question ask_flow submit preserves custom answers but blocks d
   assert.equal(controller.handleKey("enter", {}), true);
 
   assert.equal(result?.status, "answered");
-  assert.equal(result?.nextAction, "block");
+  assert.equal(result?.nextAction, "resume");
   assert.deepEqual(result?.answers.answer, {
     questionId: "answer",
     kind: "custom",
@@ -967,7 +971,7 @@ void test("spark ask selectWithCustom keeps custom affordance out of business op
   });
 });
 
-void test("decision gates preserve unmatched custom text as answered but blocked", async () => {
+void test("decision gates accept unmatched custom text as a resumable answer", async () => {
   const request = createPiAskFlowRequest({
     flow: "custom",
     mode: "decision",
@@ -987,14 +991,88 @@ void test("decision gates preserve unmatched custom text as answered but blocked
   });
   const result = await runPiAskFlow(request, { select: async () => "maybe later" });
   assert.equal(result.status, "answered");
-  assert.equal(result.nextAction, "block");
+  assert.equal(result.nextAction, "resume");
   assert.deepEqual(result.answers.answer, {
     questionId: "answer",
     kind: "custom",
     values: [],
     customText: "maybe later",
   });
-  assert.equal(isPiAskFlowGateBlocked(result, request), true);
+  assert.equal(isPiAskFlowGateBlocked(result, request), false);
+});
+
+void test("required decision and approval gates accept custom replies for all question types", async () => {
+  const businessOptions = [
+    { value: "yes", label: "Yes" },
+    { value: "no", label: "No" },
+  ];
+  const cases = [
+    { type: "single" as const, mode: "decision" as const },
+    { type: "multi" as const, mode: "approval" as const },
+    { type: "preview" as const, mode: "decision" as const },
+    { type: "freeform" as const, mode: "approval" as const },
+  ];
+
+  for (const item of cases) {
+    const request = createPiAskFlowRequest({
+      mode: item.mode,
+      questions: [
+        {
+          id: item.type,
+          prompt: `Answer ${item.type}`,
+          type: item.type,
+          required: true,
+          ...(item.type === "freeform" ? {} : { options: businessOptions }),
+        },
+      ],
+    });
+    const customText = `custom ${item.type} answer`;
+    const result = await runPiAskFlow(
+      request,
+      item.type === "freeform"
+        ? { input: async () => customText }
+        : { selectWithCustom: async () => ({ customText }) },
+    );
+
+    assert.equal(result.status, "answered", item.type);
+    assert.equal(result.nextAction, "resume", item.type);
+    assert.deepEqual(result.answers[item.type]?.values, [], item.type);
+    assert.equal(result.answers[item.type]?.customText, customText, item.type);
+    assert.equal(isPiAskFlowGateBlocked(result, request), false, item.type);
+  }
+});
+
+void test("interaction custom answer overrides a stale blocked gate nextAction", async () => {
+  const request = createPiAskFlowRequest({
+    mode: "approval",
+    questions: [
+      {
+        id: "approval",
+        prompt: "Approve the custom route?",
+        type: "single",
+        required: true,
+        options: [
+          { value: "approve", label: "Approve" },
+          { value: "reject", label: "Reject" },
+        ],
+      },
+    ],
+  });
+  const result = await runPiAskFlow(request, {
+    interaction: async (interactionRequest) => ({
+      kind: "askFlow",
+      requestId: interactionRequest.requestId,
+      status: "answered",
+      answers: {
+        approval: { values: [], customText: "Approve after the migration check" },
+      },
+      nextAction: "block",
+    }),
+  });
+
+  assert.equal(result.status, "answered");
+  assert.equal(result.nextAction, "resume");
+  assert.equal(isPiAskFlowGateBlocked(result, request), false);
 });
 
 void test("multi-select decision select path blocks empty selections", async () => {

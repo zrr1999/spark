@@ -8,6 +8,7 @@ import {
   runtimeChannelRouteForWorkspace,
   runtimeModelRouteForRuntime,
   runtimeModelRouteForSession,
+  runtimeModelRouteForWorkspace,
   type RuntimeEphemeralSecretRequestContext,
 } from "@zendev-lab/spark-coordination/runtime-model-channel-control";
 import { RuntimeControlCommandError } from "@zendev-lab/spark-coordination/runtime-control";
@@ -28,7 +29,8 @@ import type { ChannelsConfig } from "@zendev-lab/spark-channels";
 import { getDatabase } from "./db.ts";
 
 export interface CockpitRuntimeModelChannelClient {
-  catalog(input?: { runtimeId?: string; sessionId?: string }): Promise<SparkModelControlSnapshot>;
+  catalog(input?: CockpitRuntimeModelCatalogInput): Promise<SparkModelControlSnapshot>;
+  projectedCatalog(input?: CockpitRuntimeModelCatalogInput): SparkModelControlSnapshot | null;
   setDefault(input: {
     runtimeId?: string;
     model: SparkModelRef;
@@ -88,12 +90,19 @@ export interface CockpitRuntimeModelChannelClient {
   }): Promise<SparkChannelControlSnapshot>;
 }
 
+export interface CockpitRuntimeModelCatalogInput {
+  runtimeId?: string;
+  sessionId?: string;
+  workspaceId?: string;
+}
+
 export function createCockpitRuntimeModelChannelClient(
   injectedDatabase?: DatabaseSync,
 ): CockpitRuntimeModelChannelClient {
   const database = () => injectedDatabase ?? getDatabase();
   return {
     catalog: async (input = {}) => await catalog(database(), input),
+    projectedCatalog: (input = {}) => projectedCatalog(database(), input),
     setDefault: async (input) => await setDefault(database(), input),
     setSessionModel: async (input) => await setSessionModel(database(), input),
     setSessionThinking: async (input) => await setSessionThinking(database(), input),
@@ -111,11 +120,9 @@ export function createCockpitRuntimeModelChannelClient(
 
 async function catalog(
   db: DatabaseSync,
-  input: { runtimeId?: string; sessionId?: string },
+  input: CockpitRuntimeModelCatalogInput,
 ): Promise<SparkModelControlSnapshot> {
-  const route = input.sessionId
-    ? runtimeModelRouteForSession(db, input.sessionId)
-    : runtimeModelRouteForRuntime(resolveRuntimeId(db, input.runtimeId));
+  const route = modelCatalogRoute(db, input);
   const result = await runRuntimeModelChannelControlCommand(db, {
     route,
     sessionId: input.sessionId,
@@ -128,6 +135,19 @@ async function catalog(
     getRuntimeModelControlProjection(db, route.runtimeId) ??
     parseSparkModelControlSnapshot(result.snapshot)
   );
+}
+
+function projectedCatalog(
+  db: DatabaseSync,
+  input: CockpitRuntimeModelCatalogInput,
+): SparkModelControlSnapshot | null {
+  return getRuntimeModelControlProjection(db, modelCatalogRoute(db, input).runtimeId);
+}
+
+function modelCatalogRoute(db: DatabaseSync, input: CockpitRuntimeModelCatalogInput) {
+  if (input.sessionId?.trim()) return runtimeModelRouteForSession(db, input.sessionId);
+  if (input.workspaceId?.trim()) return runtimeModelRouteForWorkspace(db, input.workspaceId);
+  return runtimeModelRouteForRuntime(resolveRuntimeId(db, input.runtimeId));
 }
 
 async function setDefault(

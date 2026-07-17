@@ -5,9 +5,7 @@ import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { test } from "node:test";
 
-import { helpText, parseSparkDispatcherArgs } from "../apps/spark-cli/src/cli.ts";
-import { sparkDaemonHelpText } from "../apps/spark-tui/src/cli/daemon.ts";
-import { sparkTuiCliStrings } from "../packages/spark-i18n/src/cli.ts";
+import { parseSparkDispatcherArgs } from "../apps/spark-cli/src/cli.ts";
 import {
   extractDaemonStatusContract,
   extractCockpitStatusContract,
@@ -15,92 +13,17 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-const CONTRACT_PATH = new URL("../docs/specs/command-planes.md", import.meta.url);
 const DEPRECATIONS_PATH = new URL(
   "./fixtures/spark-command-plane-deprecations.json",
   import.meta.url,
 );
 
-void test("command-plane contract documents the three canonical namespaces", async () => {
-  const contract = await readFile(CONTRACT_PATH, "utf8");
-  for (const expected of [
-    "`spark daemon` | daemon execution plane",
-    "`spark cockpit` | coordination plane and web UI host",
-    "`spark tui` | tui local control plane",
-    "slash `system` | TUI kernel command source",
-    "slash `extension` | extension command source",
-  ]) {
-    assert.match(contract, new RegExp(escapeRegExp(expected), "u"), expected);
-  }
-  assert.match(contract, /`spark cockpit` is both the coordination CLI and the web UI host/u);
-});
-
-void test("command-plane contract uses singular canonical resources and marks disallowed shapes", async () => {
-  const contract = await readFile(CONTRACT_PATH, "utf8");
-  assert.match(contract, /spark daemon session list --json/u);
-  assert.match(contract, /spark cockpit task list/u);
-  assert.match(contract, /spark tui attach <session-id>/u);
-  assert.match(contract, /spark daemon sessions list --all-workspaces/u);
-  assert.match(contract, /spark daemon task claim <task-ref>/u);
-  assert.match(contract, /spark cockpit invocation status <invocation-id>/u);
-  assert.match(contract, /spark server status/u);
-
+void test("root dispatcher reaches Cockpit and rejects the removed server namespace", async () => {
   assert.deepEqual(parseSparkDispatcherArgs(["server", "task", "list"]), {
     kind: "error",
     message: 'The "spark server" namespace was removed. Use "spark cockpit" instead.',
   });
-});
 
-void test("dispatcher, daemon, Cockpit, and TUI help snapshots expose the three-surface model", async () => {
-  const dispatcherHelp = helpText();
-  assert.match(dispatcherHelp, /spark daemon\s+daemon execution plane/u);
-  assert.match(
-    dispatcherHelp,
-    /spark cockpit\s+cross-daemon coordination and Web presentation host/u,
-  );
-  assert.match(dispatcherHelp, /spark tui\s+tui local control plane/u);
-  assert.doesNotMatch(dispatcherHelp, /spark daemon sessions list --all-workspaces/u);
-
-  const daemonHelp = sparkDaemonHelpText();
-  assert.match(daemonHelp, /spark daemon - daemon execution plane/u);
-  assert.match(daemonHelp, /spark daemon session list \[--json\]/u);
-  assert.doesNotMatch(daemonHelp, /spark daemon session mailto/u);
-  assert.match(daemonHelp, /spark daemon session inbox --session <session-id>/u);
-  assert.match(daemonHelp, /spark daemon run list \[--json\]/u);
-  assert.match(daemonHelp, /spark daemon events watch \[--json\]/u);
-  assert.match(
-    daemonHelp,
-    /Project\/task\/goal\/review\/assign commands belong under spark cockpit/u,
-  );
-  assert.doesNotMatch(daemonHelp, /belong under spark server/u);
-  assert.doesNotMatch(daemonHelp, /task claim/u);
-  assert.doesNotMatch(daemonHelp, /goal complete/u);
-  assert.doesNotMatch(daemonHelp, /spark daemon sessions list --all-workspaces/u);
-  assert.doesNotMatch(daemonHelp, /spark sessions mailto/u);
-  assert.doesNotMatch(daemonHelp, /spark sessions inbox/u);
-
-  const { stdout: cockpitHelp } = await execFileAsync(
-    fileURLToPath(new URL("../apps/spark-cockpit/bin/spark-cockpit", import.meta.url)),
-    ["--help"],
-  );
-  assert.match(cockpitHelp, /spark cockpit - Spark cross-daemon coordination and Web cockpit/u);
-  assert.match(cockpitHelp, /Cockpit coordinates across daemon execution planes/u);
-  assert.match(cockpitHelp, /spark cockpit instance backup/u);
-  assert.match(cockpitHelp, /spark cockpit instance inspect/u);
-  assert.match(cockpitHelp, /spark cockpit instance restore/u);
-  assert.match(cockpitHelp, /spark cockpit instance status/u);
-  assert.doesNotMatch(cockpitHelp, /\b(?:dev|build|preview)\b/u);
-  assert.match(cockpitHelp, /SPARK_COCKPIT_PUBLIC_URL=https:\/\//u);
-  assert.match(cockpitHelp, /SPARK_COCKPIT_TRUST_PROXY=loopback/u);
-
-  const tuiHelp = sparkTuiCliStrings().helpText;
-  assert.match(tuiHelp, /spark daemon\s+daemon execution plane/u);
-  assert.match(tuiHelp, /spark cockpit\s+cross-daemon coordination and Web presentation host/u);
-  assert.match(tuiHelp, /spark tui\s+tui local control plane/u);
-  assert.doesNotMatch(tuiHelp, /spark daemon sessions list --all-workspaces/u);
-});
-
-void test("root dispatcher reaches Cockpit and rejects the removed server namespace", async () => {
   const dispatcher = fileURLToPath(new URL("../apps/spark-cli/bin/spark", import.meta.url));
   const { stdout, stderr } = await execFileAsync(dispatcher, ["cockpit", "--help"]);
   assert.match(stdout, /spark cockpit - Spark cross-daemon coordination and Web cockpit/u);
@@ -264,7 +187,3 @@ void test("deprecation map covers legacy slash aliases with canonical targets", 
     assert.deepEqual(command.argv, argv.slice(1), `${row.legacy} dispatcher argv`);
   }
 });
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-}

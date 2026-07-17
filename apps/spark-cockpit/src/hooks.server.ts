@@ -1,7 +1,9 @@
 import { createId } from "@zendev-lab/spark-protocol";
-import type { Handle, RequestEvent } from "@sveltejs/kit";
+import type { Handle, HandleServerError, RequestEvent } from "@sveltejs/kit";
 import { getCurrentUserId, sessionCookieName } from "$lib/server/auth";
 import { getDatabase } from "$lib/server/db";
+import { presentCockpitServerError } from "$lib/server/error-presentation";
+import { INVOCATION_ROUTE_UNAVAILABLE_ERROR_CODE } from "$lib/error-codes";
 import { localeCookieName, resolveRequestLocale } from "$lib/i18n";
 import {
   bearerRemoteAccessToken,
@@ -29,6 +31,26 @@ export const handle: Handle = async ({ event, resolve }) => {
   return resolve(event, {
     transformPageChunk: ({ html }) => html.replace("%spark.locale%", locale),
   });
+};
+
+export const handleError: HandleServerError = ({ error, event, status, message }) => {
+  const presented = presentCockpitServerError({
+    error,
+    status,
+    fallbackMessage: message,
+    requestId: event.locals.requestId,
+  });
+  if (presented.code === INVOCATION_ROUTE_UNAVAILABLE_ERROR_CODE) {
+    console.warn(
+      `[spark-cockpit] ${presented.requestId} invocation belongs to another Spark service (${event.url.pathname})`,
+    );
+  } else {
+    console.error(
+      `[spark-cockpit] ${presented.requestId} ${status} ${event.request.method} ${event.url.pathname}`,
+      error,
+    );
+  }
+  return presented;
 };
 
 function isRemoteRequestAuthenticated(event: RequestEvent, clientAddress: string | null): boolean {

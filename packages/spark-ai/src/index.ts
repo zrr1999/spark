@@ -7,6 +7,7 @@ import type {
   ProviderId,
   ThinkingLevelMap,
 } from "@earendil-works/pi-ai";
+import { cappedExponentialCeiling } from "@zendev-lab/spark-retry";
 export type {
   Api,
   AssistantMessage,
@@ -579,8 +580,7 @@ export class SparkAuthSlotPool {
   }
 
   #cooldownMs(consecutiveFailures: number): number {
-    const exponent = Math.max(0, consecutiveFailures - 1);
-    return Math.min(this.#baseCooldownMs * 2 ** exponent, this.#maxCooldownMs);
+    return cappedExponentialCeiling(consecutiveFailures, this.#baseCooldownMs, this.#maxCooldownMs);
   }
 
   #slotHealth(

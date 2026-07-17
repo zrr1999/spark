@@ -1,6 +1,7 @@
 /** Persisted Spark agent session facade shared by TUI/daemon-style callers. */
 
 import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai";
+import { classifyProviderFailure } from "@zendev-lab/spark-ai";
 import { sparkTextPhaseFromSignature } from "@zendev-lab/spark-protocol";
 import {
   SPARK_PROMPT_ITEM_METADATA_KEY,
@@ -14,6 +15,14 @@ import {
 } from "@zendev-lab/spark-turn";
 
 import type { SparkCliHostServices } from "./bootstrap.ts";
+import {
+  DEFAULT_SPARK_COMPACTION_SETTINGS,
+  compactSparkSessionRecord,
+  deterministicSparkCompactionSummary,
+  prepareSparkCompaction,
+  shouldSparkCompact,
+  type SparkCompactionPreparation,
+} from "./compaction.ts";
 import type {
   SparkBranchSummaryEntry,
   SparkCompactionEntry,
@@ -53,10 +62,21 @@ export class SparkAgentSession {
     const record = await this.loadOrCreateRecord(options);
     this.services.runtime.setSessionId(record.header.id);
     this.services.agentLoop.setViewSessionId(record.header.id);
-    const priorItems = sessionRecordToPromptItems(record);
-    this.services.agentLoop.replacePromptItems(priorItems);
-    const beforeCount = this.services.agentLoop.getPromptItems().length;
-    const outcome = await this.services.agentLoop.submitWithOutcome(options.prompt);
+    await this.tryPreflightCompaction(record, options.prompt);
+    let beforeCount = this.loadPromptItems(record);
+    let outcome = await this.services.agentLoop.submitWithOutcome(options.prompt);
+
+    if (
+      outcome.status === "failed" &&
+      classifyProviderFailure(outcome.errorMessage).failureClass === "context_overflow" &&
+      (await this.tryCompact(record, "context_overflow", true, true))
+    ) {
+      // The failed attempt only exists in the loop's transient prompt state.
+      // Reload from the persisted compacted record so the user prompt and
+      // provider error are neither duplicated nor written into session history.
+      beforeCount = this.loadPromptItems(record);
+      outcome = await this.services.agentLoop.submitWithOutcome(options.prompt);
+    }
     const assistant = outcome.assistant;
 
     const newItems = this.services.agentLoop.getPromptItems().slice(beforeCount);
@@ -137,6 +157,128 @@ export class SparkAgentSession {
     const existing = await this.services.sessionStore.findById(options.sessionId);
     return existing ?? this.services.sessionStore.createSession({ id: options.sessionId });
   }
+
+  private loadPromptItems(record: SparkSessionRecord): number {
+    this.services.agentLoop.replacePromptItems(sessionRecordToPromptItems(record));
+    return this.services.agentLoop.getPromptItems().length;
+  }
+
+  private async tryPreflightCompaction(record: SparkSessionRecord, prompt: string): Promise<void> {
+    const preparation = prepareForAutomaticCompaction(record, false);
+    if (!preparation || preparation.messagesToSummarize.length === 0) return;
+
+    let model: ReturnType<SparkCliHostServices["providerRegistry"]["buildActiveModel"]>;
+    try {
+      model = this.services.providerRegistry.buildActiveModel();
+    } catch {
+      return;
+    }
+    if (!model) return;
+    const contextWindow = positiveNumber(model.contextWindow);
+    if (!contextWindow) return;
+    const requestedOutput = positiveNumber(model.maxTokens) ?? 0;
+    const estimatedPromptTokens = Math.ceil(prompt.length / 4);
+    const estimatedRequestTokens =
+      preparation.tokensBefore + estimatedPromptTokens + requestedOutput;
+    if (!shouldSparkCompact(estimatedRequestTokens, contextWindow)) return;
+    await this.tryCompact(record, "auto", false, false);
+  }
+
+  private async tryCompact(
+    record: SparkSessionRecord,
+    reason: "auto" | "context_overflow",
+    willRetry: boolean,
+    force: boolean,
+  ): Promise<boolean> {
+    try {
+      return await this.compact(record, reason, willRetry, force);
+    } catch {
+      // Keep the original provider outcome if compaction itself cannot be
+      // completed. The user still receives the actionable overflow error.
+      return false;
+    }
+  }
+
+  private async compact(
+    record: SparkSessionRecord,
+    reason: "auto" | "context_overflow",
+    willRetry: boolean,
+    force: boolean,
+  ): Promise<boolean> {
+    const initialPreparation = prepareForAutomaticCompaction(record, force);
+    if (!initialPreparation || initialPreparation.messagesToSummarize.length === 0) return false;
+
+    let compactionEntry: SparkCompactionEntry | undefined;
+    let lifecycleStarted = false;
+    try {
+      lifecycleStarted = true;
+      const results = await this.services.runtime.emit("session_before_compact", {
+        reason,
+        willRetry,
+        consumeMessage: true,
+      });
+      appendCompactionCheckpointMessages(this.services, record, results);
+      const preparation = prepareForAutomaticCompaction(record, force);
+      if (!preparation || preparation.messagesToSummarize.length === 0) return false;
+      compactionEntry = await compactSparkSessionRecord(
+        record,
+        preparation,
+        deterministicSparkCompactionSummary,
+      );
+      await this.services.sessionStore.save(record);
+      return true;
+    } finally {
+      if (lifecycleStarted) {
+        try {
+          await this.services.runtime.emit("session_compact", {
+            reason,
+            willRetry,
+            sessionId: record.header.id,
+            ...(compactionEntry ? { compactionEntryId: compactionEntry.id } : {}),
+          });
+        } catch {
+          // The durable compaction already succeeded. A projection listener
+          // must not make the caller resend the same prompt or duplicate it.
+        }
+      }
+    }
+  }
+}
+
+function prepareForAutomaticCompaction(
+  record: SparkSessionRecord,
+  force: boolean,
+): SparkCompactionPreparation | undefined {
+  const preparation = prepareSparkCompaction(record);
+  if (!force || !preparation || preparation.messagesToSummarize.length > 0) return preparation;
+  return prepareSparkCompaction(record, undefined, {
+    ...DEFAULT_SPARK_COMPACTION_SETTINGS,
+    keepRecentTokens: Math.max(1, Math.min(10_000, Math.floor(preparation.tokensBefore / 2))),
+  });
+}
+
+function appendCompactionCheckpointMessages(
+  services: SparkCliHostServices,
+  record: SparkSessionRecord,
+  results: unknown[],
+): void {
+  for (const result of results) {
+    const message = recordMetadata(recordMetadata(result).message);
+    const customType = typeof message.customType === "string" ? message.customType : "";
+    const content = typeof message.content === "string" ? message.content : "";
+    if (!customType || !content) continue;
+    services.sessionStore.appendCustomMessage(
+      record,
+      customType,
+      content,
+      message.display === true,
+      recordMetadata(message.details),
+    );
+  }
+}
+
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 /**

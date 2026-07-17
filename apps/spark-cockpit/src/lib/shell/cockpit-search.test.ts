@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getCockpitDictionary } from "@zendev-lab/spark-i18n";
 import { buildCockpitSearchResults } from "./cockpit-search";
 
@@ -25,6 +28,19 @@ const baseInput = {
 };
 
 describe("cockpit search", () => {
+  it("can be opened by a semantic slash action without synthesizing a keyboard event", () => {
+    const source = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "CockpitSearch.svelte"),
+      "utf8",
+    );
+
+    expect(source).toContain("cockpitOpenSearchEvent");
+    expect(source).toContain("window.addEventListener(cockpitOpenSearchEvent, handleOpenSearch)");
+    expect(source).toContain(
+      "window.removeEventListener(cockpitOpenSearchEvent, handleOpenSearch)",
+    );
+  });
+
   it("finds workspace conversations and uses their activity status", () => {
     expect(buildCockpitSearchResults({ ...baseInput, query: "effect" })).toEqual([
       expect.objectContaining({

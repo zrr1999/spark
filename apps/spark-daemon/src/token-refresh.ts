@@ -2,6 +2,13 @@ import { runtimeTokenRefreshResponseSchema } from "@zendev-lab/spark-protocol";
 import type { SparkPaths } from "@zendev-lab/spark-system";
 import { readSparkDaemonConfig, writeSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
 import { fetchRegistrationEndpoint } from "./registration-http.js";
+import {
+  compareAndSwapSparkDaemonServerProfile,
+  getSparkDaemonServerProfile,
+  normalizeSparkDaemonServerUrl,
+  replaceSparkDaemonConfigServerProfile,
+  sparkDaemonConfigForServerProfile,
+} from "./server-profiles.js";
 
 const refreshLeadMs = 5 * 60 * 1000;
 const refreshRetryMs = 60 * 1000;
@@ -46,22 +53,35 @@ export async function refreshSparkDaemonCredentials(options: {
   paths: SparkPaths;
   config: SparkDaemonConfig;
   fetchFn?: typeof fetch;
+  signal?: AbortSignal;
 }): Promise<SparkDaemonConfig> {
-  const runtimeId = requireConfig(options.config.runtimeId, "runtimeId");
-  const refreshToken = requireConfig(options.config.refreshToken, "refreshToken");
-  const url = new URL(
-    `/api/v1/runtime/runtimes/${runtimeId}/token/refresh`,
-    resolveServerUrl(options.config),
-  );
-  const response = await fetchRegistrationEndpoint(
-    url,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ refreshToken }),
-    },
-    options.fetchFn,
-  );
+  throwIfRefreshAborted(options.signal);
+  const serverUrl = normalizeSparkDaemonServerUrl(resolveServerUrl(options.config));
+  const storedProfile = getSparkDaemonServerProfile(options.paths, serverUrl);
+  const source = storedProfile
+    ? sparkDaemonConfigForServerProfile(options.config, storedProfile)
+    : options.config;
+  const runtimeId = requireConfig(source.runtimeId, "runtimeId");
+  const refreshToken = requireConfig(source.refreshToken, "refreshToken");
+  const url = new URL(`/api/v1/runtime/runtimes/${runtimeId}/token/refresh`, serverUrl);
+  let response: Response;
+  try {
+    response = await fetchRegistrationEndpoint(
+      url,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ refreshToken }),
+        ...(options.signal ? { signal: options.signal } : {}),
+      },
+      options.fetchFn,
+    );
+  } catch (error) {
+    if (options.signal?.aborted) {
+      throw refreshAbortError(options.signal, error);
+    }
+    throw error;
+  }
 
   if (!response.ok) {
     throw new Error(
@@ -70,19 +90,35 @@ export async function refreshSparkDaemonCredentials(options: {
   }
 
   const refreshed = runtimeTokenRefreshResponseSchema.parse(await response.json());
-  const current = readSparkDaemonConfig(options.paths);
-  const next = {
-    ...current,
-    runtimeId: refreshed.runtimeId,
-    runtimeToken: refreshed.runtimeToken,
-    runtimeTokenExpiresAt: refreshed.runtimeTokenExpiresAt,
-    refreshToken: refreshed.refreshToken,
-    refreshTokenExpiresAt: refreshed.refreshTokenExpiresAt,
-  };
+  throwIfRefreshAborted(options.signal);
+  const rotated = await compareAndSwapSparkDaemonServerProfile(
+    options.paths,
+    serverUrl,
+    { runtimeId, refreshToken },
+    (current) => ({
+      ...current,
+      runtimeId: refreshed.runtimeId,
+      runtimeToken: refreshed.runtimeToken,
+      runtimeTokenExpiresAt: refreshed.runtimeTokenExpiresAt,
+      refreshToken: refreshed.refreshToken,
+      refreshTokenExpiresAt: refreshed.refreshTokenExpiresAt,
+    }),
+    { signal: options.signal },
+  );
+  if (!rotated.current) {
+    throw new Error(
+      `Spark daemon credentials for ${serverUrl} changed while its token was refreshing and no current profile remains.`,
+    );
+  }
+  if (rotated.applied) {
+    const identity = readSparkDaemonConfig(options.paths);
+    writeSparkDaemonConfig(options.paths, {
+      installationId: identity.installationId,
+      displayName: identity.displayName,
+    });
+  }
 
-  writeSparkDaemonConfig(options.paths, next);
-  Object.assign(options.config, next);
-  return next;
+  return replaceSparkDaemonConfigServerProfile(options.config, rotated.current);
 }
 
 export function tokenRefreshRetryDelayMs(): number {
@@ -114,4 +150,22 @@ function requireConfig(value: string | undefined, name: string): string {
   }
 
   return value;
+}
+
+function throwIfRefreshAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw refreshAbortError(signal);
+  }
+}
+
+function refreshAbortError(signal: AbortSignal, cause?: unknown): Error {
+  if (signal.reason instanceof Error && signal.reason.name === "AbortError") {
+    return signal.reason;
+  }
+  const reason = signal.reason ?? cause;
+  const message =
+    reason instanceof Error ? reason.message : String(reason ?? "Token refresh aborted.");
+  const error = new Error(message, reason instanceof Error ? { cause: reason } : undefined);
+  error.name = "AbortError";
+  return error;
 }

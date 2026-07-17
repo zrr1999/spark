@@ -27,6 +27,13 @@ describe("Message component contract", () => {
     expect(source).toContain("{active}");
   });
 
+  it("keeps retry out of historical message parts", () => {
+    const messageSource = readFileSync(componentPath, "utf8");
+
+    expect(messageSource).not.toContain("onRetry");
+    expect(messageSource).not.toContain("retryPrompt={item.retryPrompt}");
+  });
+
   it("uses the compact source-derived message action instead of visible copy text", () => {
     const source = readFileSync(actionsPath, "utf8");
 

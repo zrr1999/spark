@@ -49,6 +49,7 @@ const borrowedWorkspaceAllowedKinds = new Set<SparkCommandKind>([
 const secretBearingLocalRpcMethods = new Set([
   "provider.auth.api-key.set",
   "provider.auth.login.respond",
+  "human.interaction.respond",
 ]);
 
 export function sparkCommandFromLocalRpcRequest(request: LocalRpcCommandRequestLike): SparkCommand {
@@ -206,6 +207,12 @@ function localRpcRoute(method: string, params: unknown): Partial<SparkCommand["r
   if (!isRecord(params)) return {};
   if (method === "turn.submit" && typeof params.sessionId === "string") {
     return { sessionId: params.sessionId };
+  }
+  if (method === "human.interaction.respond") {
+    return {
+      ...(typeof params.sessionId === "string" ? { sessionId: params.sessionId } : {}),
+      ...(typeof params.invocationId === "string" ? { invocationId: params.invocationId } : {}),
+    };
   }
   if (
     (method === "turn.status" ||

@@ -46,8 +46,9 @@ export async function assignCompletedSessionTitle(
   input: AssignCompletedSessionTitleInput,
   dependencies: CompletedSessionTitleDependencies,
 ): Promise<SparkSessionRegistryRecord | undefined> {
+  if (input.signal?.aborted) return undefined;
   const session = await safelyGetSession(input.sessionId, dependencies);
-  if (!session || !isUntitledLocalSession(session)) return undefined;
+  if (input.signal?.aborted || !session || !isUntitledLocalSession(session)) return undefined;
 
   let title: string | undefined;
   try {
@@ -58,11 +59,16 @@ export async function assignCompletedSessionTitle(
     });
     title = normalizeGeneratedSessionTitle(generated);
   } catch {
+    // Cancellation is an ownership transition, not model degradation. Falling
+    // back here would still mutate session state after the daemon invocation
+    // has been cancelled or drained.
+    if (input.signal?.aborted) return undefined;
     logError(
       dependencies,
       `[spark-daemon] session title generation failed for ${input.sessionId}; using fallback`,
     );
   }
+  if (input.signal?.aborted) return undefined;
   title ??= fallbackSessionTitle(input.prompt);
   if (!title) return undefined;
 

@@ -8,9 +8,18 @@ import {
 } from "@zendev-lab/spark-protocol";
 import type { SparkPaths } from "@zendev-lab/spark-system";
 
-import { configuredServerUrl, validateRegistrationServerUrl } from "./registration.ts";
+import { validateRegistrationServerUrl } from "./registration.ts";
 import { fetchRegistrationEndpoint } from "./registration-http.ts";
 import { readSparkDaemonConfig, writeSparkDaemonConfig, type SparkDaemonConfig } from "./config.ts";
+import {
+  getSparkDaemonServerProfile,
+  listSparkDaemonServerProfiles,
+  normalizeSparkDaemonServerUrl,
+  removeSparkDaemonServerProfile,
+  sparkDaemonServerProfileFromConfig,
+  upsertSparkDaemonServerProfile,
+  type SparkDaemonServerProfile,
+} from "./server-profiles.ts";
 
 export interface SparkDaemonRelocationRequest {
   fromServerUrl?: string;
@@ -44,7 +53,7 @@ export interface SparkDaemonRelocationOptions {
   now?: () => string;
   writeConfig?: typeof writeSparkDaemonConfig;
   beforeCommit?: () => void;
-  onUplinkReconfigure?: () => void;
+  onUplinkReconfigure?: (serverUrl?: string) => void;
 }
 
 export async function relocateSparkDaemonCockpit(
@@ -54,7 +63,8 @@ export async function relocateSparkDaemonCockpit(
   options: SparkDaemonRelocationOptions = {},
 ): Promise<SparkDaemonRelocationResult> {
   const current = readSparkDaemonConfig(paths);
-  const fromServerUrl = requireCurrentServerUrl(current, request.fromServerUrl);
+  const fromServerUrl = resolveRelocationSourceServerUrl(paths, db, current, request.fromServerUrl);
+  const sourceProfile = requireSourceProfile(paths, fromServerUrl);
   const toServerUrl = validateRelocationTarget(request.toServerUrl);
   if (fromServerUrl === toServerUrl) {
     throw new SparkDaemonRelocationError(
@@ -63,8 +73,8 @@ export async function relocateSparkDaemonCockpit(
     );
   }
   assertNoLocalTargetCollision(db, fromServerUrl, toServerUrl);
-  const runtimeId = requireConfig(current.runtimeId, "runtimeId");
-  const refreshToken = requireConfig(current.refreshToken, "refreshToken");
+  const runtimeId = requireConfig(sourceProfile.runtimeId, "runtimeId");
+  const refreshToken = requireConfig(sourceProfile.refreshToken, "refreshToken");
 
   const [sourceMetadata, targetMetadata] = await Promise.all([
     fetchRelocationMetadata(fromServerUrl, options.fetchFn),
@@ -100,10 +110,15 @@ export async function relocateSparkDaemonCockpit(
     );
   }
   const webSocketUrl = validateTargetWebSocketUrl(toServerUrl, preflight.webSocketUrl);
-  assertConfigUnchanged(current, readSparkDaemonConfig(paths));
+  assertRelocationSourceUnchanged(
+    current,
+    sourceProfile,
+    readSparkDaemonConfig(paths),
+    getSparkDaemonServerProfile(paths, fromServerUrl),
+  );
 
   const relocatedAt = options.now?.() ?? new Date().toISOString();
-  const result = applyLocalRelocation(paths, db, current, preflight, {
+  const result = await applyLocalRelocation(paths, db, current, preflight, {
     fromServerUrl,
     toServerUrl,
     webSocketUrl,
@@ -146,7 +161,7 @@ async function fetchTargetPreflight(
   return runtimeRelocationPreflightResponseSchema.parse(await response.json());
 }
 
-function applyLocalRelocation(
+async function applyLocalRelocation(
   paths: SparkPaths,
   db: DatabaseSync,
   current: SparkDaemonConfig,
@@ -159,9 +174,9 @@ function applyLocalRelocation(
     relocatedAt: string;
     writeConfig: typeof writeSparkDaemonConfig;
     beforeCommit?: () => void;
-    onUplinkReconfigure?: () => void;
+    onUplinkReconfigure?: (serverUrl?: string) => void;
   },
-): SparkDaemonRelocationResult {
+): Promise<SparkDaemonRelocationResult> {
   const sourceServer = db
     .prepare("SELECT id FROM daemon_servers WHERE server_url = ?")
     .get(input.fromServerUrl) as { id: string } | undefined;
@@ -180,8 +195,7 @@ function applyLocalRelocation(
        ORDER BY w.id`,
     )
     .all(input.fromServerUrl, sourceServer.id) as Array<{ bindingId: string }>;
-  const nextConfig: SparkDaemonConfig = {
-    ...current,
+  const targetProfile: SparkDaemonServerProfile = {
     serverUrl: input.toServerUrl,
     runtimeId: preflight.runtimeId,
     runtimeToken: preflight.runtimeToken,
@@ -190,9 +204,22 @@ function applyLocalRelocation(
     refreshTokenExpiresAt: preflight.refreshTokenExpiresAt,
     webSocketUrl: input.webSocketUrl,
   };
+  const previousTargetProfile = getSparkDaemonServerProfile(paths, input.toServerUrl);
+  const identityConfig: SparkDaemonConfig = {
+    installationId: current.installationId,
+    displayName: current.displayName,
+  };
+  let targetProfileWritten = false;
   let configWritten = false;
-  db.exec("BEGIN IMMEDIATE");
+  let transactionStarted = false;
   try {
+    // Make the target credentials durable before opening the synchronous
+    // SQLite transaction. Awaiting a profile lock inside BEGIN/COMMIT would let
+    // unrelated async daemon work enter the same connection transaction.
+    await upsertSparkDaemonServerProfile(paths, targetProfile);
+    targetProfileWritten = true;
+    db.exec("BEGIN IMMEDIATE");
+    transactionStarted = true;
     assertNoLocalTargetCollision(db, input.fromServerUrl, input.toServerUrl);
     db.prepare(
       `UPDATE daemon_servers
@@ -232,7 +259,7 @@ function applyLocalRelocation(
       existingCredential?.createdAt ?? input.relocatedAt,
       input.relocatedAt,
     );
-    input.writeConfig(paths, nextConfig);
+    input.writeConfig(paths, identityConfig);
     configWritten = true;
     input.beforeCommit?.();
     db.prepare(
@@ -249,16 +276,62 @@ function applyLocalRelocation(
       input.relocatedAt,
     );
     db.exec("COMMIT");
+    transactionStarted = false;
   } catch (error) {
-    try {
-      db.exec("ROLLBACK");
-    } finally {
-      if (configWritten) input.writeConfig(paths, current);
+    const rollbackErrors: unknown[] = [];
+    if (transactionStarted) {
+      try {
+        db.exec("ROLLBACK");
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+    }
+    if (targetProfileWritten) {
+      try {
+        if (previousTargetProfile) {
+          await upsertSparkDaemonServerProfile(paths, previousTargetProfile);
+        } else {
+          await removeSparkDaemonServerProfile(paths, input.toServerUrl);
+        }
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+    }
+    if (configWritten) {
+      try {
+        input.writeConfig(paths, current);
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new AggregateError(
+        [error, ...rollbackErrors],
+        `${message}; local relocation rollback was incomplete.`,
+      );
     }
     throw error;
   }
-  Object.assign(current, nextConfig);
-  input.onUplinkReconfigure?.();
+
+  const remainingSourceWorkspaces = db
+    .prepare("SELECT COUNT(*) AS count FROM workspaces WHERE server_url = ?")
+    .get(input.fromServerUrl) as { count: number };
+  if (remainingSourceWorkspaces.count === 0) {
+    try {
+      await removeSparkDaemonServerProfile(paths, input.fromServerUrl);
+    } catch (error) {
+      // The target profile and target workspace routes are already durable. A
+      // stale, unreferenced source profile is safer than reporting a failed
+      // relocation after commit; keep the cleanup failure observable.
+      console.error(
+        `[spark-daemon] Relocation committed but stale source profile cleanup failed for ${input.fromServerUrl}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  // Force the old origin only. The supervisor's resulting full reconcile stops
+  // source and starts target without disturbing unrelated Cockpit uplinks.
+  input.onUplinkReconfigure?.(input.fromServerUrl);
   return {
     relocated: true,
     instanceId: input.instanceId,
@@ -289,24 +362,57 @@ function assertNoLocalTargetCollision(
   }
 }
 
-function requireCurrentServerUrl(config: SparkDaemonConfig, requested?: string): string {
-  const configured = configuredServerUrl(config);
-  if (!configured) {
+function resolveRelocationSourceServerUrl(
+  paths: SparkPaths,
+  db: DatabaseSync,
+  config: SparkDaemonConfig,
+  requested?: string,
+): string {
+  if (requested) {
+    return normalizeSparkDaemonServerUrl(requested);
+  }
+
+  const legacyProfile = sparkDaemonServerProfileFromConfig(config);
+  if (legacyProfile) {
+    return legacyProfile.serverUrl;
+  }
+
+  const profileUrls = new Set(
+    listSparkDaemonServerProfiles(paths).map((profile) => profile.serverUrl),
+  );
+  const candidates = (
+    db
+      .prepare(
+        "SELECT DISTINCT server_url AS serverUrl FROM workspaces WHERE server_url <> '' ORDER BY server_url",
+      )
+      .all() as Array<{ serverUrl: string }>
+  )
+    .map(({ serverUrl }) => normalizeSparkDaemonServerUrl(serverUrl))
+    .filter((serverUrl) => profileUrls.has(serverUrl));
+  if (candidates.length === 1) {
+    return candidates[0]!;
+  }
+  if (candidates.length === 0) {
     throw new SparkDaemonRelocationError(
-      "Spark daemon has no configured Cockpit origin.",
+      "Spark daemon has no workspace-bound Cockpit profile to relocate.",
       "RELOCATION_SOURCE_NOT_CONFIGURED",
     );
   }
-  if (requested) {
-    const normalized = validateRegistrationServerUrl(requested, { allowInsecureHttp: true });
-    if (normalized !== configured) {
-      throw new SparkDaemonRelocationError(
-        "Requested source origin does not match daemon config.",
-        "RELOCATION_SOURCE_MISMATCH",
-      );
-    }
+  throw new SparkDaemonRelocationError(
+    "Multiple workspace-bound Cockpit profiles are available; pass --from-server-url.",
+    "RELOCATION_SOURCE_REQUIRED",
+  );
+}
+
+function requireSourceProfile(paths: SparkPaths, serverUrl: string): SparkDaemonServerProfile {
+  const profile = getSparkDaemonServerProfile(paths, serverUrl);
+  if (!profile) {
+    throw new SparkDaemonRelocationError(
+      `Spark daemon has no credential profile for source Cockpit ${serverUrl}.`,
+      "RELOCATION_SOURCE_NOT_CONFIGURED",
+    );
   }
-  return configured;
+  return profile;
 }
 
 function validateRelocationTarget(serverUrl: string): string {
@@ -356,17 +462,33 @@ async function relocationHttpError(
   return new SparkDaemonRelocationError(`${message} (${url.origin})`, code.toUpperCase());
 }
 
-function assertConfigUnchanged(before: SparkDaemonConfig, after: SparkDaemonConfig): void {
-  if (configDigest(before) !== configDigest(after)) {
+function assertRelocationSourceUnchanged(
+  beforeConfig: SparkDaemonConfig,
+  beforeProfile: SparkDaemonServerProfile,
+  afterConfig: SparkDaemonConfig,
+  afterProfile: SparkDaemonServerProfile | undefined,
+): void {
+  if (
+    identityDigest(beforeConfig) !== identityDigest(afterConfig) ||
+    profileDigest(beforeProfile) !== profileDigest(afterProfile)
+  ) {
     throw new SparkDaemonRelocationError(
-      "Daemon config changed while relocation preflight was running.",
+      "Daemon identity or source Cockpit profile changed while relocation preflight was running.",
       "RELOCATION_CONFIG_CHANGED",
     );
   }
 }
 
-function configDigest(config: SparkDaemonConfig): string {
-  return createHash("sha256").update(JSON.stringify(config)).digest("hex");
+function identityDigest(config: SparkDaemonConfig): string {
+  return createHash("sha256")
+    .update(JSON.stringify([config.installationId, config.displayName]))
+    .digest("hex");
+}
+
+function profileDigest(profile: SparkDaemonServerProfile | undefined): string {
+  return createHash("sha256")
+    .update(JSON.stringify(profile ?? null))
+    .digest("hex");
 }
 
 function hashSecret(secret: string): string {

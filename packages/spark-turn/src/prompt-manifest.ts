@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const SPARK_PROMPT_MANIFEST_VERSION = 1 as const;
+export const SPARK_PROMPT_MANIFEST_VERSION = 2 as const;
 
 export type SparkPromptManifestToolEffect =
   | "read"
@@ -30,6 +30,10 @@ export interface SparkPromptManifestTool {
   phases: string[];
 }
 
+export interface SparkPromptManifestRoundtrip {
+  index: number;
+}
+
 export interface SparkPromptManifest {
   schemaVersion: typeof SPARK_PROMPT_MANIFEST_VERSION;
   promptVersion: string;
@@ -55,11 +59,7 @@ export interface SparkPromptManifest {
   tools: SparkPromptManifestTool[];
   toolProfileFingerprint: string;
   selectedSkills: string[];
-  roundtrip: {
-    index: number;
-    maximum: number;
-    remaining: number;
-  };
+  roundtrip: SparkPromptManifestRoundtrip;
   limits: {
     maxParallelToolCalls: number;
   };
@@ -83,7 +83,6 @@ export interface BuildSparkPromptManifestInput {
   tools: readonly SparkPromptManifestToolInput[];
   selectedSkills?: readonly string[];
   roundtripIndex: number;
-  maxRoundtrips: number;
   maxParallelToolCalls: number;
 }
 
@@ -99,7 +98,6 @@ export function buildSparkPromptManifest(
   const tools = input.tools
     .filter((tool) => tool.active !== false)
     .map((tool) => normalizeTool(tool));
-  const maximum = nonNegativeInteger(input.maxRoundtrips);
   const index = nonNegativeInteger(input.roundtripIndex);
 
   return {
@@ -131,11 +129,7 @@ export function buildSparkPromptManifest(
     tools,
     toolProfileFingerprint: hashText(JSON.stringify(tools)).slice(0, 16),
     selectedSkills: uniqueLabels(input.selectedSkills ?? []),
-    roundtrip: {
-      index,
-      maximum,
-      remaining: Math.max(0, maximum - index),
-    },
+    roundtrip: { index },
     limits: {
       maxParallelToolCalls: Math.max(1, nonNegativeInteger(input.maxParallelToolCalls)),
     },

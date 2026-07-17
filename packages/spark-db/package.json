@@ -25,7 +25,7 @@
     "kysely": "^0.28.7"
   },
   "devDependencies": {
-    "typescript": "^6.0.3",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   },
   "engines": {

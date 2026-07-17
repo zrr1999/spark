@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   loadModelControlForCockpit,
+  loadProjectedModelControlForCockpit,
   modelValue,
   parseModelValue,
   setSessionModelForCockpit,
@@ -79,5 +80,27 @@ describe("Cockpit model control adapter", () => {
       snapshot: { providers: [], diagnostics: [] },
       error: "catalog unavailable",
     });
+  });
+
+  it("routes the root catalog through the active workspace owner and reads cache offline", async () => {
+    const calls: unknown[] = [];
+    const client: CockpitModelControlClient = {
+      request: async (_method, params) => {
+        calls.push(params);
+        return { providers: [], diagnostics: [] };
+      },
+      projectedCatalog: (params) => {
+        calls.push(params);
+        return { providers: [], diagnostics: [], defaultModel: model };
+      },
+    };
+
+    await expect(
+      loadModelControlForCockpit({ workspaceId: "ws_active" }, client),
+    ).resolves.toMatchObject({ available: true });
+    await expect(
+      loadProjectedModelControlForCockpit({ workspaceId: "ws_active" }, client),
+    ).resolves.toMatchObject({ available: true, snapshot: { defaultModel: model } });
+    expect(calls).toEqual([{ workspaceId: "ws_active" }, { workspaceId: "ws_active" }]);
   });
 });

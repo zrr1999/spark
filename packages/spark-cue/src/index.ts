@@ -33,6 +33,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as nodePath from "node:path";
 import { truncateToWidth } from "@zendev-lab/spark-tui/text";
+import { cappedExponentialCeiling, equalJitter } from "@zendev-lab/spark-retry";
 import { Type } from "typebox";
 import { cueShellProcessEnvironment } from "./executable-environment.ts";
 
@@ -453,11 +454,15 @@ const CUE_RETRY_BASE_DELAY_MS = 100;
 const CUE_RETRY_MAX_DELAY_MS = 5_000;
 
 function cueRetryDelayMs(replayIndex: number): number {
-  const exponent = Math.min(16, Math.max(0, replayIndex - 1));
-  const cap = Math.min(CUE_RETRY_MAX_DELAY_MS, CUE_RETRY_BASE_DELAY_MS * 2 ** exponent);
+  const cap = cappedExponentialCeiling(
+    replayIndex,
+    CUE_RETRY_BASE_DELAY_MS,
+    CUE_RETRY_MAX_DELAY_MS,
+    { exponentCap: 16 },
+  );
   // Equal jitter avoids synchronized reconnect storms while retaining a useful
   // minimum pause when a local daemon or remote SSH gateway is unavailable.
-  return Math.floor(cap / 2 + Math.random() * (cap / 2));
+  return equalJitter(cap);
 }
 
 function cueRetryDeadlineError(operationId: string): CueError {

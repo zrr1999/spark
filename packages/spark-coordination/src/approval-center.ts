@@ -2,6 +2,7 @@ import {
   sparkProtocolJsonObjectSchema,
   type HumanResponseDeliverPayload,
   type ServerCommandPayload,
+  type SparkHumanResponseStatus,
 } from "@zendev-lab/spark-protocol";
 
 export type ApprovalCenterKind = "ask" | "workflow_risk" | "goal_review" | "approval";
@@ -44,8 +45,9 @@ export function buildApprovalDecisionPayload(input: {
   operatorNote?: string;
 }): HumanResponseDeliverPayload {
   const approved = input.decision === "approve";
+  const status = "answered" satisfies SparkHumanResponseStatus;
   return {
-    status: "answered",
+    status,
     answers: {
       decision: input.decision,
       approved,

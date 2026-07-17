@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { sparkSlashActionBarCatalog } from "@zendev-lab/spark-protocol";
 
 const mocks = vi.hoisted(() => ({
   archiveManagedSessionForCockpit: vi.fn(),
@@ -7,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   getManagedSessionForCockpit: vi.fn(),
   listManagedSessionsForCockpit: vi.fn(),
   loadModelControlForCockpit: vi.fn(),
+  loadProjectedModelControlForCockpit: vi.fn(),
   setSessionModelForCockpit: vi.fn(),
   setSessionThinkingLevelForCockpit: vi.fn(),
   submitConversationTurnForCockpit: vi.fn(),
@@ -39,7 +41,6 @@ vi.mock("$lib/i18n", () => ({
       cancelTurnRequired: "Select an active turn to stop.",
       cancelTurnSucceeded: "Cancellation requested for the active turn.",
       cancelTurnDequeued: "Queued turn removed from the queue.",
-      cancelTurnUnavailable: "This turn is no longer active and could not be stopped.",
       createFailed: "Could not create the session.",
       createWorkspaceRequired: "Choose a workspace.",
       effectiveModelMissing: "The Spark daemon did not return an effective conversation model.",
@@ -48,6 +49,18 @@ vi.mock("$lib/i18n", () => ({
       workbench: {
         modelFailed: "Could not switch models.",
         modelUpdated: "Model updated. It will be used for future messages.",
+        slashActions: {
+          fallbackTitle: "Spark controls",
+          fallbackAction: "Unavailable action",
+          serverRejected:
+            "Use the {title} controls shown above the composer. This slash command was not sent to the model.",
+          unsupportedRejected:
+            "Slash command /{command} is unknown or not supported in Cockpit. It was not sent to the model; prefix it with an extra slash (//) to send it as text.",
+          titles: { model: "Model controls" },
+          descriptions: {},
+          actions: {},
+          reasons: {},
+        },
         thinkingFailed: "Could not update the thinking level.",
         thinkingUpdated: "Thinking level updated. It will be used for future messages.",
       },
@@ -57,6 +70,7 @@ vi.mock("$lib/i18n", () => ({
 
 vi.mock("$lib/server/model-control", () => ({
   loadModelControlForCockpit: mocks.loadModelControlForCockpit,
+  loadProjectedModelControlForCockpit: mocks.loadProjectedModelControlForCockpit,
   modelValue: (model: { providerName: string; modelId: string }) =>
     `${model.providerName}/${model.modelId}`,
   parseModelValue: (value: string) => {
@@ -120,6 +134,10 @@ beforeEach(() => {
     available: true,
     snapshot: { providers: [], diagnostics: [] },
   });
+  mocks.loadProjectedModelControlForCockpit.mockResolvedValue({
+    available: true,
+    snapshot: { providers: [], diagnostics: [] },
+  });
   mocks.setSessionModelForCockpit.mockResolvedValue(session);
   mocks.setSessionThinkingLevelForCockpit.mockResolvedValue(session);
   mocks.cancelConversationTurnForCockpit.mockResolvedValue({
@@ -134,12 +152,48 @@ beforeEach(() => {
 describe("session conversation actions", () => {
   it("preseeds a non-empty first-message nonce for enhanced and plain HTML submits", async () => {
     const result = await load({
-      parent: async () => ({ activeWorkspace: { id: "ws_demo" } }),
+      parent: async () => ({
+        activeWorkspace: { id: "ws_demo" },
+        sessions: [],
+        sessionsAvailable: true,
+        sessionControlAvailable: true,
+      }),
     } as never);
 
     expect(result).toMatchObject({
       selectedSessionId: null,
       startSubmissionIdSeed: expect.stringMatching(/^idem_/),
+    });
+  });
+
+  it("loads the model catalog through the active workspace owner", async () => {
+    const parent = vi.fn().mockResolvedValue({
+      activeWorkspace: { id: "ws_demo", slug: "demo", name: "Demo" },
+      sessions: [session],
+      sessionsAvailable: true,
+      sessionControlAvailable: true,
+    });
+
+    await expect(load({ parent } as never)).resolves.toMatchObject({
+      sessions: [session],
+      sessionControlAvailable: true,
+    });
+    expect(mocks.loadModelControlForCockpit).toHaveBeenCalledWith({ workspaceId: "ws_demo" });
+    expect(mocks.loadProjectedModelControlForCockpit).not.toHaveBeenCalled();
+  });
+
+  it("uses the active workspace model projection while its owner is offline", async () => {
+    const parent = vi.fn().mockResolvedValue({
+      activeWorkspace: { id: "ws_demo", slug: "demo", name: "Demo" },
+      sessions: [session],
+      sessionsAvailable: true,
+      sessionControlAvailable: false,
+    });
+
+    await load({ parent } as never);
+    expect(mocks.loadModelControlForCockpit).not.toHaveBeenCalled();
+    expect(mocks.loadProjectedModelControlForCockpit).toHaveBeenCalledWith({
+      workspaceId: "ws_demo",
     });
   });
 
@@ -156,6 +210,7 @@ describe("session conversation actions", () => {
     expect(mocks.createManagedSessionForCockpit).toHaveBeenCalledWith({
       scope: { kind: "workspace", workspaceId: "ws_demo" },
       workspaceId: "ws_demo",
+      sessionId: expect.stringMatching(/^sess_/),
       idempotencyKey: expect.stringMatching(/^idem_[a-f0-9]{32}$/u),
     });
     expect(mocks.submitConversationTurnForCockpit).toHaveBeenCalledWith({
@@ -287,6 +342,69 @@ describe("session conversation actions", () => {
     expect(mocks.submitConversationTurnForCockpit).not.toHaveBeenCalled();
   });
 
+  it("keeps known Cockpit slash commands out of new and existing model turns", async () => {
+    const rejectedInputs = [
+      ...Object.keys(sparkSlashActionBarCatalog).map((command) => `/${command}`),
+      "/model baidu-oneapi/gpt-5.6-sol",
+      "/goal status",
+      "/clear",
+      "/compact",
+      "/new",
+      "/runs",
+    ];
+    for (const slashInput of rejectedInputs) {
+      const startResult = await requireAction("startConversation")(
+        actionEvent({ workspaceId: "ws_demo", message: slashInput }),
+      );
+
+      expect(startResult).toMatchObject({
+        status: 400,
+        data: {
+          intent: "startConversation",
+          success: false,
+          message: expect.stringContaining("was not sent to the model"),
+          values: { workspaceId: "ws_demo", message: slashInput },
+        },
+      });
+    }
+
+    const sendResult = await requireAction("sendMessage")(
+      actionEvent({ sessionId: "sess_conversation", message: "/goal restart" }),
+    );
+
+    expect(sendResult).toMatchObject({
+      status: 400,
+      data: {
+        intent: "sendMessage",
+        success: false,
+        message: expect.stringContaining("was not sent to the model"),
+        values: { sessionId: "sess_conversation", message: "/goal restart" },
+      },
+    });
+    expect(mocks.createManagedSessionForCockpit).not.toHaveBeenCalled();
+    expect(mocks.getManagedSessionForCockpit).not.toHaveBeenCalled();
+    expect(mocks.submitConversationTurnForCockpit).not.toHaveBeenCalled();
+  });
+
+  it("allows an explicitly escaped slash message to reach the model", async () => {
+    const result = await requireAction("sendMessage")(
+      actionEvent({ sessionId: "sess_conversation", message: "//clear" }),
+    );
+
+    expect(result).toMatchObject({
+      intent: "sendMessage",
+      success: true,
+      values: { sessionId: "sess_conversation", message: "" },
+    });
+    expect(mocks.submitConversationTurnForCockpit).toHaveBeenCalledWith({
+      workspaceId: "ws_demo",
+      sessionId: "sess_conversation",
+      prompt: "//clear",
+      title: "//clear",
+      submissionId: expect.any(String),
+    });
+  });
+
   it("queues each later message against the existing session", async () => {
     const result = await requireAction("sendMessage")(
       actionEvent({ sessionId: "sess_conversation", message: "Now run the focused tests." }),
@@ -386,7 +504,6 @@ describe("session conversation actions", () => {
     expect(mocks.setSessionThinkingLevelForCockpit).not.toHaveBeenCalled();
     expect(mocks.archiveManagedSessionForCockpit).not.toHaveBeenCalled();
   });
-
 
   it("keeps both start phases stable when the same browser form is delivered twice", async () => {
     const action = requireAction("startConversation");
@@ -495,6 +612,59 @@ describe("session conversation actions", () => {
     });
   });
 
+  it("removes a queued turn through the same daemon cancellation contract", async () => {
+    mocks.cancelConversationTurnForCockpit.mockResolvedValueOnce({
+      turnId: "inv_queued",
+      status: "cancelled",
+      cancelRequested: true,
+    });
+
+    const result = await requireAction("cancelTurn")(
+      actionEvent({
+        sessionId: "sess_conversation",
+        turnId: "inv_queued",
+        cancelIntent: "dequeue",
+      }),
+    );
+
+    expect(result).toEqual({
+      intent: "removeQueuedTurn",
+      success: true,
+      cancelled: true,
+      message: "Queued turn removed from the queue.",
+      invocationStatus: "cancelled",
+      cancelledTurnId: "inv_queued",
+      values: { sessionId: "sess_conversation", turnId: "inv_queued" },
+    });
+    expect(mocks.cancelConversationTurnForCockpit).toHaveBeenCalledWith({
+      sessionId: "sess_conversation",
+      turnId: "inv_queued",
+    });
+  });
+
+  it("reports a cancellation request when a queued turn starts during removal", async () => {
+    mocks.cancelConversationTurnForCockpit.mockResolvedValueOnce({
+      turnId: "inv_raced",
+      status: "running",
+      cancelRequested: true,
+    });
+
+    const result = await requireAction("cancelTurn")(
+      actionEvent({
+        sessionId: "sess_conversation",
+        turnId: "inv_raced",
+        cancelIntent: "dequeue",
+      }),
+    );
+
+    expect(result).toMatchObject({
+      intent: "removeQueuedTurn",
+      success: true,
+      message: "Cancellation requested for the active turn.",
+      invocationStatus: "running",
+    });
+  });
+
   it("accepts an invocation that has already converged to cancelled", async () => {
     mocks.cancelConversationTurnForCockpit.mockResolvedValueOnce({
       turnId: "inv_cancelled",
@@ -514,7 +684,7 @@ describe("session conversation actions", () => {
     });
   });
 
-  it("returns a conflict when the invocation is already terminal", async () => {
+  it("treats a terminal invocation as an idempotent stop convergence", async () => {
     mocks.cancelConversationTurnForCockpit.mockResolvedValueOnce({
       turnId: "inv_stale",
       status: "succeeded",
@@ -525,17 +695,14 @@ describe("session conversation actions", () => {
       actionEvent({ sessionId: "sess_conversation", turnId: "inv_stale" }),
     );
 
-    expect(result).toMatchObject({
-      status: 409,
-      data: {
-        intent: "cancelTurn",
-        success: false,
-        cancelled: false,
-        error: "This turn is no longer active and could not be stopped.",
-        message: "This turn is no longer active and could not be stopped.",
-        invocationStatus: "succeeded",
-        values: { sessionId: "sess_conversation", turnId: "inv_stale" },
-      },
+    expect(result).toEqual({
+      intent: "cancelTurn",
+      success: true,
+      cancelled: false,
+      converged: true,
+      invocationStatus: "succeeded",
+      cancelledTurnId: "inv_stale",
+      values: { sessionId: "sess_conversation", turnId: "inv_stale" },
     });
   });
 

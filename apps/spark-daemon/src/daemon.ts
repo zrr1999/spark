@@ -28,6 +28,14 @@ import { SparkSessionMailStore } from "@zendev-lab/spark-session";
 import { writePrivateFile, type SparkPaths } from "@zendev-lab/spark-system";
 import { readSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
 import {
+  getSparkDaemonServerProfile,
+  listSparkDaemonServerProfiles,
+  normalizeSparkDaemonServerUrl,
+  sparkDaemonConfigForServerProfile,
+  sparkDaemonServerProfileFromConfig,
+  type SparkDaemonServerProfile,
+} from "./server-profiles.js";
+import {
   createDaemonChannelIngressRuntime,
   type ChannelIngressHooks,
   type DaemonChannelIngressRuntime,
@@ -52,13 +60,16 @@ import {
   SparkDaemonInvocationRegistry,
   SparkDaemonHumanInteractionBroker,
   legacySparkDaemonQueueRoot,
+  type SparkDaemonDrainProgress,
   type SparkDaemonEventSink,
+  type SparkDaemonHumanInteractionResponder,
   type SparkDaemonTaskExecutor,
 } from "./core/index.ts";
 import {
   SparkDaemonHumanWaitRegistry,
   type SparkDaemonHumanWaitDeliveryResult,
   type SparkDaemonHumanWaitInput,
+  type SparkDaemonHumanWaitRecord,
   type SparkDaemonHumanWaitRegistration,
 } from "./core/human-waits.ts";
 import { sparkCommandFromServerCommandEnvelope } from "./command-dispatcher.ts";
@@ -83,9 +94,9 @@ import {
 } from "./protocol/outbound.js";
 import { SparkInvocationScheduler } from "./core/invocation-scheduler.ts";
 import {
-  acknowledgeRuntimeCommandTerminal,
+  acknowledgeRuntimeCommandTerminalForRoute,
   claimRuntimeCommandReceipt,
-  pendingRuntimeCommandTerminals,
+  pendingRuntimeCommandTerminalsForRoute,
   recordRuntimeCommandAck,
   recordRuntimeCommandTerminal,
   recoverInterruptedRuntimeCommandReceipts,
@@ -119,7 +130,7 @@ import {
   type RunSparkCommandFn,
   type CancelSparkInvocationFn,
 } from "./spark/bridge.js";
-import { createChannelAwareTaskExecutor } from "./spark/session-run.js";
+import { createChannelAwareTaskExecutor, sessionSourceForTask } from "./spark/session-run.js";
 import { reconcileSessionNotificationDeliveries } from "./session-notification-delivery.ts";
 import { executeSparkDaemonSessionControl } from "./session-control.ts";
 import {
@@ -154,15 +165,15 @@ export interface ServerSocket {
 }
 
 export interface SparkDaemonUplinkControl {
-  requestReconfigure(): void;
-  subscribe(listener: () => void): () => void;
+  requestReconfigure(serverUrl?: string): void;
+  subscribe(listener: (serverUrl?: string) => void): () => void;
 }
 
 export function createSparkDaemonUplinkControl(): SparkDaemonUplinkControl {
-  const listeners = new Set<() => void>();
+  const listeners = new Set<(serverUrl?: string) => void>();
   return {
-    requestReconfigure() {
-      for (const listener of listeners) listener();
+    requestReconfigure(serverUrl) {
+      for (const listener of listeners) listener(serverUrl);
     },
     subscribe(listener) {
       listeners.add(listener);
@@ -210,7 +221,12 @@ export interface StartSparkDaemonOptions {
   notificationReconcileIntervalMs?: number;
   channelDeliveryReconcileIntervalMs?: number;
   /** Bind readiness transport while externally observable work admission is still closed. */
-  onReady?: () => void | Promise<void>;
+  onReady?: (runtime: {
+    channelIngress: DaemonChannelIngressRuntime | null;
+    respondHumanInteraction: SparkDaemonHumanInteractionResponder;
+  }) => void | Promise<void>;
+  /** Publish process-local execution fences while a restart is draining. */
+  onDrainProgress?: (progress: SparkDaemonDrainProgress) => void;
   /** Commit the serving/restart fence after all synchronous admission gates and loops are ready. */
   onServing?: () => void;
   /** Production CLI owns pid publication through lock release. */
@@ -237,6 +253,18 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
   const channelDeliveryStore = new SparkChannelDeliveryStore(options.db);
   const channelDeliveryOutbox = createDaemonChannelDeliveryOutbox(channelDeliveryStore);
   const channelIngress: DaemonChannelIngressRuntime | null = prepareChannelIngress(options);
+  let channelShutdown: Promise<void> | undefined;
+  const shutdownChannelIngress = (
+    reason: "restart-drain" | "runtime-abort" | "daemon-finally",
+  ): Promise<void> => {
+    if (!channelIngress) return Promise.resolve();
+    if (channelShutdown) return channelShutdown;
+    console.error(`[spark-daemon] channel ingress stopping reason=${reason}`);
+    channelShutdown = channelIngress.stop().catch((error: unknown) => {
+      logDaemonError(options.config.runtimeId ?? "unknown", error);
+    });
+    return channelShutdown;
+  };
   let channelAdmissionOpen = false;
   channelIngress?.setInboundHandler?.(({ workspaceId, message }) => {
     if (!channelAdmissionOpen) {
@@ -244,36 +272,49 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
     }
     channelDeliveryOutbox.enqueueInbound({ workspaceId, message });
   });
-  let flushHumanRequestOutbox: (() => void) | null = null;
-  const getRuntimeId = () => {
-    try {
-      return readSparkDaemonConfig(options.paths).runtimeId ?? options.config.runtimeId;
-    } catch {
-      return options.config.runtimeId;
-    }
+  const humanRequestOutboxTargets = new Set<() => void>();
+  const flushHumanRequestOutbox = () => {
+    for (const flush of humanRequestOutboxTargets) flush();
   };
+  const getRuntimeIdForServer = (serverUrl: string) => {
+    try {
+      const runtimeId = getSparkDaemonServerProfile(options.paths, serverUrl)?.runtimeId;
+      if (runtimeId) return runtimeId;
+    } catch {
+      // Fall through to the already-loaded compatibility config.
+    }
+    const fallback = sparkDaemonServerProfileFromConfig(options.config);
+    return fallback?.serverUrl === normalizeSparkDaemonServerUrl(serverUrl)
+      ? fallback.runtimeId
+      : undefined;
+  };
+  const getRuntimeId = (route: { serverUrl: string }) => getRuntimeIdForServer(route.serverUrl);
   const onChannelInteraction: NonNullable<ChannelIngressHooks["onInteraction"]> = async (input) => {
     if (!channelIngress) return;
-    const runtimeId = getRuntimeId();
-    if (!runtimeId) throw new Error("daemon runtimeId is unavailable for channel response routing");
     try {
       await settleChannelAskInteraction(channelIngress, humanWaits, input, {
-        runtimeId,
+        getRuntimeId(wait) {
+          const workspace = wait.workspaceBindingId
+            ? getWorkspaceById(options.db, wait.workspaceBindingId)
+            : null;
+          return workspace?.serverUrl ? getRuntimeIdForServer(workspace.serverUrl) : undefined;
+        },
         deliveryOutbox: channelDeliveryOutbox,
       });
     } finally {
-      flushHumanRequestOutbox?.();
+      flushHumanRequestOutbox();
     }
   };
   channelIngress?.setInteractionHandler?.(onChannelInteraction);
-  const setHumanRequestOutboxTarget = (flush?: () => void) => {
-    flushHumanRequestOutbox = flush ?? null;
+  const registerHumanRequestOutboxTarget = (flush: () => void) => {
+    humanRequestOutboxTargets.add(flush);
+    return () => humanRequestOutboxTargets.delete(flush);
   };
   const humanInteractions = new SparkDaemonHumanInteractionBroker({
     db: options.db,
     waits: humanWaits,
     getRuntimeId,
-    onOutboxReady: () => flushHumanRequestOutbox?.(),
+    onOutboxReady: flushHumanRequestOutbox,
     onRequestOpened: (input) => {
       if (!channelIngress) return;
       void projectChannelAsk(channelIngress, input, channelDeliveryOutbox).catch(
@@ -286,17 +327,17 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
       );
     },
   });
-  let emitInvocationEventToServer: ((event: SparkInvocationEvent) => void | Promise<void>) | null =
-    null;
-  const setInvocationEventTarget = (
-    sink?: (event: SparkInvocationEvent) => void | Promise<void>,
+  const invocationEventTargets = new Set<(event: SparkInvocationEvent) => void | Promise<void>>();
+  const registerInvocationEventTarget = (
+    sink: (event: SparkInvocationEvent) => void | Promise<void>,
   ) => {
-    emitInvocationEventToServer = sink ?? null;
+    invocationEventTargets.add(sink);
+    return () => invocationEventTargets.delete(sink);
   };
   const emitInvocationEvent = async (event: SparkInvocationEvent) => {
     await Promise.all([
       options.localEventSink?.(parseSparkDaemonEvent(event.payload)),
-      emitInvocationEventToServer?.(event),
+      ...[...invocationEventTargets].map(async (sink) => await sink(event)),
     ]);
   };
   const invocationStore = new SparkInvocationStore(options.db);
@@ -338,6 +379,7 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
                 humanInteractions.interact(request, {
                   sessionId: task.sessionId,
                   invocationId: context.invocationId,
+                  sessionSource: sessionSourceForTask(task),
                   workspaceBindingId: task.workspaceBindingId,
                   workspaceId: task.workspaceId,
                   projectId: task.projectId,
@@ -394,8 +436,39 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
   if (options.drainSignal?.aborted) closeRestartAdmission();
   else options.drainSignal?.addEventListener("abort", closeRestartAdmission, { once: true });
   let restartDrain: Promise<void> | undefined;
+  let drainProgressTimer: ReturnType<typeof setInterval> | undefined;
+  let drainStage: SparkDaemonDrainProgress["stage"] = "active-work";
+  const publishDrainProgress = () => {
+    if (!options.onDrainProgress) return;
+    const progress: SparkDaemonDrainProgress = {
+      observedAt: new Date().toISOString(),
+      stage: drainStage,
+      scheduler: (scheduler?.snapshot() ?? []).map((invocation) => ({
+        invocationId: invocation.invocationId,
+        kind: invocation.sourceKind ?? "scheduled",
+        startedAt: invocation.startedAt ?? invocation.claimedAt ?? invocation.createdAt,
+        ...(invocation.sessionId ? { sessionId: invocation.sessionId } : {}),
+      })),
+      direct: invocationRegistry.snapshot().map((invocation) => ({
+        invocationId: invocation.invocationId,
+        kind: invocation.kind,
+        startedAt: invocation.startedAt,
+        ...(invocation.sessionId ? { sessionId: invocation.sessionId } : {}),
+      })),
+    };
+    try {
+      options.onDrainProgress(progress);
+    } catch (error) {
+      logDaemonError(options.config.runtimeId ?? "unknown", error);
+    }
+  };
   const beginRestartDrain = () => {
     closeRestartAdmission();
+    publishDrainProgress();
+    if (options.onDrainProgress && !drainProgressTimer) {
+      drainProgressTimer = setInterval(publishDrainProgress, 1_000);
+      drainProgressTimer.unref();
+    }
     restartDrain ??= Promise.all([
       scheduler ? scheduler.wait({ timeoutMs: Number.POSITIVE_INFINITY }) : Promise.resolve(),
       invocationRegistry.waitForIdle(),
@@ -404,10 +477,12 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
       // response. Once execution is idle, stop transports and flush already-
       // received async admissions before the database is closed.
       try {
-        await channelIngress?.stop();
-      } catch (error) {
-        logDaemonError(options.config.runtimeId ?? "unknown", error);
+        drainStage = "channel-ingress";
+        publishDrainProgress();
+        await shutdownChannelIngress("restart-drain");
       } finally {
+        if (drainProgressTimer) clearInterval(drainProgressTimer);
+        drainProgressTimer = undefined;
         runtimeShutdown.abort(options.restartSignal?.reason);
       }
     });
@@ -433,15 +508,16 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
     servingLoopGateSettled = true;
     resolveServingLoopGate(committed);
   };
-  const stopChannelIngress = () => {
-    void channelIngress?.stop().catch((error: unknown) => {
-      logDaemonError(options.config.runtimeId ?? "unknown", error);
-    });
-  };
+  const stopChannelIngress = () => void shutdownChannelIngress("runtime-abort");
   runtimeSignal.addEventListener("abort", stopChannelIngress, { once: true });
 
   try {
-    if (!runtimeSignal.aborted) await options.onReady?.();
+    if (!runtimeSignal.aborted) {
+      await options.onReady?.({
+        channelIngress,
+        respondHumanInteraction: (wait, input) => humanInteractions.respond(wait, input),
+      });
+    }
     // Prepare channel transports while their synchronous inbound gate remains
     // closed. A message delivered during start is rejected for platform replay
     // and cannot create a durable invocation before the final successor CAS.
@@ -529,45 +605,27 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
           { limit: 100 },
         );
       }
-      if (!runtimeSignal.aborted && canAttemptServerConnection(options.config)) {
-        await runSparkDaemonServerConnection({
-          ...options,
-          signal: runtimeSignal,
-          invocationRegistry,
-          humanWaits,
-          channelIngress: channelIngress ?? undefined,
-          setInvocationEventTarget,
-          setHumanRequestOutboxTarget,
-        });
-      }
+      await runSparkDaemonServerConnectionsOnce({
+        ...options,
+        signal: runtimeSignal,
+        invocationRegistry,
+        humanWaits,
+        channelIngress: channelIngress ?? undefined,
+        registerInvocationEventTarget,
+        registerHumanRequestOutboxTarget,
+      });
       return;
     }
 
-    while (!runtimeSignal.aborted) {
-      const config = readSparkDaemonConfig(options.paths);
-      if (!canAttemptServerConnection(config)) {
-        await delayUnlessAborted(500, runtimeSignal);
-        continue;
-      }
-
-      try {
-        await runSparkDaemonServerConnection({
-          ...options,
-          signal: runtimeSignal,
-          config,
-          invocationRegistry,
-          humanWaits,
-          channelIngress: channelIngress ?? undefined,
-          setInvocationEventTarget,
-          setHumanRequestOutboxTarget,
-        });
-      } catch {
-        // Cockpit is an optional projection surface. Connection failures are
-        // represented by daemon_servers.last_disconnect_reason and must not
-        // become permanent business-outbox entries or stop local execution.
-        await delayUnlessAborted(options.serverReconnectDelayMs ?? 1_000, runtimeSignal);
-      }
-    }
+    await runSparkDaemonUplinkSupervisor({
+      ...options,
+      signal: runtimeSignal,
+      invocationRegistry,
+      humanWaits,
+      channelIngress: channelIngress ?? undefined,
+      registerInvocationEventTarget,
+      registerHumanRequestOutboxTarget,
+    });
   } finally {
     settleServingLoopGate(false);
     options.signal?.removeEventListener("abort", forwardShutdown);
@@ -576,11 +634,8 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
     runtimeSignal.removeEventListener("abort", stopScheduler);
     runtimeSignal.removeEventListener("abort", stopDirectInvocations);
     runtimeSignal.removeEventListener("abort", stopChannelIngress);
-    try {
-      await channelIngress?.stop();
-    } catch (error) {
-      logDaemonError(options.config.runtimeId ?? "unknown", error);
-    }
+    if (drainProgressTimer) clearInterval(drainProgressTimer);
+    await shutdownChannelIngress("daemon-finally");
     scheduler?.stop();
     await scheduler?.wait();
     await restartDrain;
@@ -734,15 +789,196 @@ interface SparkDaemonServerConnectionOptions extends StartSparkDaemonOptions {
   invocationRegistry: SparkDaemonInvocationRegistry;
   humanWaits: SparkDaemonHumanWaitRegistry;
   channelIngress?: DaemonChannelIngressRuntime;
-  setInvocationEventTarget?: (sink?: (event: SparkInvocationEvent) => void | Promise<void>) => void;
-  setHumanRequestOutboxTarget?: (flush?: () => void) => void;
+  registerInvocationEventTarget?: (
+    sink: (event: SparkInvocationEvent) => void | Promise<void>,
+  ) => () => void;
+  registerHumanRequestOutboxTarget?: (flush: () => void) => () => void;
+}
+
+interface DesiredSparkDaemonUplink {
+  serverUrl: string;
+  config: SparkDaemonConfig;
+  fingerprint: string;
+}
+
+interface ActiveSparkDaemonUplink {
+  controller: AbortController;
+  fingerprint: string;
+  done: Promise<void>;
+}
+
+/**
+ * Keep one independently reconnecting projection uplink per Cockpit origin.
+ * Workspace rows choose the Cockpit; daemon.toml only supplies daemon identity
+ * and the private profile store supplies that origin's runtime credentials.
+ */
+async function runSparkDaemonUplinkSupervisor(
+  options: SparkDaemonServerConnectionOptions,
+): Promise<void> {
+  const signal = options.signal;
+  if (!signal || signal.aborted) return;
+
+  const active = new Map<string, ActiveSparkDaemonUplink>();
+  let stopped = false;
+  let lastReconcileError: string | undefined;
+  const reconcile = (forceServerUrl?: string) => {
+    if (stopped || signal.aborted) return;
+    let desired: Map<string, DesiredSparkDaemonUplink>;
+    try {
+      desired = desiredSparkDaemonUplinks(options);
+      lastReconcileError = undefined;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message !== lastReconcileError) {
+        lastReconcileError = message;
+        console.error(`[spark-daemon] Cockpit uplink configuration is invalid: ${message}`);
+      }
+      return;
+    }
+
+    for (const [serverUrl, current] of active) {
+      const next = desired.get(serverUrl);
+      if (
+        !next ||
+        next.fingerprint !== current.fingerprint ||
+        (forceServerUrl !== undefined &&
+          (forceServerUrl === "" || normalizeSparkDaemonServerUrl(forceServerUrl) === serverUrl))
+      ) {
+        current.controller.abort(new Error(`Spark Cockpit uplink reconfigured for ${serverUrl}`));
+      }
+    }
+
+    for (const [serverUrl, next] of desired) {
+      if (active.has(serverUrl)) continue;
+      const controller = new AbortController();
+      let entry!: ActiveSparkDaemonUplink;
+      const done = runSparkDaemonServerReconnectLoop(options, next.config, controller.signal)
+        .catch((error: unknown) => {
+          if (!controller.signal.aborted && !signal.aborted) {
+            logDaemonError(next.config.runtimeId ?? serverUrl, error);
+          }
+        })
+        .finally(() => {
+          if (active.get(serverUrl) !== entry) return;
+          active.delete(serverUrl);
+          if (!stopped && !signal.aborted) queueMicrotask(() => reconcile());
+        });
+      entry = { controller, fingerprint: next.fingerprint, done };
+      active.set(serverUrl, entry);
+    }
+  };
+
+  const unsubscribeReconfigure = options.uplinkControl?.subscribe((serverUrl) =>
+    reconcile(serverUrl ?? ""),
+  );
+  const poll = setInterval(() => reconcile(), 500);
+  const aborted = new Promise<void>((resolve) => {
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+  reconcile();
+  await aborted;
+
+  stopped = true;
+  clearInterval(poll);
+  unsubscribeReconfigure?.();
+  for (const uplink of active.values()) {
+    uplink.controller.abort(signal.reason);
+  }
+  await Promise.allSettled([...active.values()].map((uplink) => uplink.done));
+}
+
+async function runSparkDaemonServerConnectionsOnce(
+  options: SparkDaemonServerConnectionOptions,
+): Promise<void> {
+  if (options.signal?.aborted) return;
+  await Promise.allSettled(
+    [...desiredSparkDaemonUplinks(options).values()].map(async ({ config }) => {
+      await runSparkDaemonServerConnection({ ...options, config });
+    }),
+  );
+}
+
+async function runSparkDaemonServerReconnectLoop(
+  options: SparkDaemonServerConnectionOptions,
+  config: SparkDaemonConfig,
+  signal: AbortSignal,
+): Promise<void> {
+  while (!signal.aborted) {
+    try {
+      await runSparkDaemonServerConnection({ ...options, config, signal });
+    } catch {
+      // Cockpit is an optional projection. A failure on one origin must neither
+      // stop local execution nor disturb another origin's healthy uplink.
+    }
+    if (!signal.aborted) {
+      await delayUnlessAborted(options.serverReconnectDelayMs ?? 1_000, signal);
+    }
+  }
+}
+
+function desiredSparkDaemonUplinks(
+  options: Pick<SparkDaemonServerConnectionOptions, "paths" | "config" | "db">,
+): Map<string, DesiredSparkDaemonUplink> {
+  const profiles = new Map<string, SparkDaemonServerProfile>();
+  for (const profile of listSparkDaemonServerProfiles(options.paths)) {
+    profiles.set(profile.serverUrl, profile);
+  }
+  const providedProfile = sparkDaemonServerProfileFromConfig(options.config);
+  if (providedProfile && !profiles.has(providedProfile.serverUrl)) {
+    profiles.set(providedProfile.serverUrl, providedProfile);
+  }
+
+  let identity = options.config;
+  try {
+    const persistedIdentity = readSparkDaemonConfig(options.paths);
+    identity = {
+      ...options.config,
+      installationId: persistedIdentity.installationId,
+      displayName: persistedIdentity.displayName,
+    };
+  } catch {
+    // The already-loaded daemon identity remains usable for this process.
+  }
+
+  const desired = new Map<string, DesiredSparkDaemonUplink>();
+  for (const workspace of listWorkspaces(options.db)) {
+    if (!workspace.serverUrl || isUserDetachedWorkspace(workspace)) continue;
+    const serverUrl = normalizeSparkDaemonServerUrl(workspace.serverUrl);
+    if (desired.has(serverUrl)) continue;
+    const profile = profiles.get(serverUrl);
+    if (!profile) continue;
+    const config = sparkDaemonConfigForServerProfile(identity, profile);
+    if (!canAttemptServerConnection(config)) continue;
+    desired.set(serverUrl, {
+      serverUrl,
+      config,
+      fingerprint: sparkDaemonServerProfileFingerprint(profile),
+    });
+  }
+  return desired;
+}
+
+function sparkDaemonServerProfileFingerprint(profile: SparkDaemonServerProfile): string {
+  return JSON.stringify([
+    profile.serverUrl,
+    profile.runtimeId ?? null,
+    profile.runtimeToken ?? null,
+    profile.runtimeTokenExpiresAt ?? null,
+    profile.refreshToken ?? null,
+    profile.refreshTokenExpiresAt ?? null,
+    profile.webSocketUrl ?? null,
+  ]);
 }
 
 async function runSparkDaemonServerConnection(
   options: SparkDaemonServerConnectionOptions,
 ): Promise<void> {
   let config = shouldRefreshSparkDaemonToken(options.config)
-    ? await refreshSparkDaemonCredentials({ paths: options.paths, config: options.config })
+    ? await refreshSparkDaemonCredentials({
+        paths: options.paths,
+        config: options.config,
+        ...(options.signal ? { signal: options.signal } : {}),
+      })
     : options.config;
   const runtimeId = requireConfig(config.runtimeId, "runtimeId");
   const runtimeToken = requireConfig(config.runtimeToken, "runtimeToken");
@@ -756,8 +992,8 @@ async function runSparkDaemonServerConnection(
     let tokenRefresh: NodeJS.Timeout | undefined;
     let intentionalClose = false;
     let settled = false;
-    let invocationEventTargetAttached = false;
-    let humanRequestOutboxTargetAttached = false;
+    let unregisterInvocationEventTarget: (() => void) | undefined;
+    let unregisterHumanRequestOutboxTarget: (() => void) | undefined;
     let runtimeReady = false;
     let inFlightInvocationEvent:
       | { messageId: string; invocationId: string; sequence: number }
@@ -770,7 +1006,7 @@ async function runSparkDaemonServerConnection(
         : [];
     const activeHandlers = new Set<Promise<void>>();
     const scheduleTokenRefresh = (delayMs = nextSparkDaemonTokenRefreshDelayMs(config)) => {
-      if (delayMs === undefined) {
+      if (options.signal?.aborted || delayMs === undefined) {
         return;
       }
       tokenRefresh = setTimeout(() => {
@@ -779,9 +1015,15 @@ async function runSparkDaemonServerConnection(
     };
     const refreshAndRescheduleToken = async () => {
       try {
-        config = await refreshSparkDaemonCredentials({ paths: options.paths, config });
+        config = await refreshSparkDaemonCredentials({
+          paths: options.paths,
+          config,
+          ...(options.signal ? { signal: options.signal } : {}),
+        });
+        if (options.signal?.aborted) return;
         scheduleTokenRefresh();
       } catch (error) {
+        if (options.signal?.aborted) return;
         logDaemonError(runtimeId, error);
         scheduleTokenRefresh(tokenRefreshRetryDelayMs());
       }
@@ -789,15 +1031,13 @@ async function runSparkDaemonServerConnection(
     scheduleTokenRefresh();
 
     const detachInvocationEventTarget = () => {
-      if (!invocationEventTargetAttached) return;
-      invocationEventTargetAttached = false;
-      options.setInvocationEventTarget?.(undefined);
+      unregisterInvocationEventTarget?.();
+      unregisterInvocationEventTarget = undefined;
     };
 
     const detachHumanRequestOutboxTarget = () => {
-      if (!humanRequestOutboxTargetAttached) return;
-      humanRequestOutboxTargetAttached = false;
-      options.setHumanRequestOutboxTarget?.(undefined);
+      unregisterHumanRequestOutboxTarget?.();
+      unregisterHumanRequestOutboxTarget = undefined;
     };
 
     const settle = (error?: unknown) => {
@@ -808,7 +1048,6 @@ async function runSparkDaemonServerConnection(
       detachInvocationEventTarget();
       detachHumanRequestOutboxTarget();
       options.signal?.removeEventListener("abort", requestShutdown);
-      unsubscribeReconfigure?.();
       if (error) {
         reject(error);
         return;
@@ -861,19 +1100,6 @@ async function runSparkDaemonServerConnection(
     const ws = new WebSocket(webSocketUrl, {
       headers: { Authorization: `Bearer ${runtimeToken}` },
     });
-    const requestReconfigure = () => {
-      intentionalClose = true;
-      clearRuntimeTimers();
-      void drainActiveHandlers()
-        .catch((error: unknown) => logDaemonError(runtimeId, error))
-        .finally(() => {
-          ws.close(1012, "Cockpit relocation");
-          if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
-            settle();
-          }
-        });
-    };
-    const unsubscribeReconfigure = options.uplinkControl?.subscribe(requestReconfigure);
     const flushNextInvocationEvent = () => {
       if (!runtimeReady || inFlightInvocationEvent || ws.readyState !== WebSocket.OPEN) {
         return;
@@ -916,8 +1142,9 @@ async function runSparkDaemonServerConnection(
       if (serverUrl) {
         markSparkDaemonServerConnected(options.db, serverUrl);
       }
-      invocationEventTargetAttached = true;
-      options.setInvocationEventTarget?.(() => flushNextInvocationEvent());
+      unregisterInvocationEventTarget = options.registerInvocationEventTarget?.(() =>
+        flushNextInvocationEvent(),
+      );
       sendJson(ws, {
         protocolVersion: runtimeProtocolVersion,
         messageId: createId("msg"),
@@ -954,11 +1181,10 @@ async function runSparkDaemonServerConnection(
         humanWaits: options.humanWaits,
         onRuntimeReady() {
           runtimeReady = true;
-          flushPendingRuntimeCommandTerminals(ws, options.db, serverUrl);
+          flushPendingRuntimeCommandTerminals(ws, options.db, runtimeId, serverUrl);
           flushNextInvocationEvent();
         },
         onIngestAck(ackOf) {
-          acknowledgeRuntimeCommandTerminal(options.db, ackOf);
           const inFlight = inFlightInvocationEvent;
           if (!inFlight || inFlight.messageId !== ackOf) return;
           invocationStore.acknowledgeDelivery(
@@ -976,19 +1202,18 @@ async function runSparkDaemonServerConnection(
           runtimeSessionId = value;
         },
         ensureHeartbeat(intervalMs) {
-          if (!humanRequestOutboxTargetAttached) {
-            humanRequestOutboxTargetAttached = true;
-            options.setHumanRequestOutboxTarget?.(() =>
-              flushPendingHumanRequests(ws, options.humanWaits, options.db, serverUrl),
+          if (!unregisterHumanRequestOutboxTarget) {
+            unregisterHumanRequestOutboxTarget = options.registerHumanRequestOutboxTarget?.(() =>
+              flushPendingHumanRequests(ws, options.humanWaits, runtimeId, serverUrl),
             );
           }
-          flushPendingHumanRequests(ws, options.humanWaits, options.db, serverUrl);
+          flushPendingHumanRequests(ws, options.humanWaits, runtimeId, serverUrl);
           if (heartbeat) {
             return;
           }
           heartbeat = setInterval(() => {
             sendHeartbeat(ws, options.db, runtimeId, runtimeSessionId, serverUrl);
-            flushPendingHumanRequests(ws, options.humanWaits, options.db, serverUrl);
+            flushPendingHumanRequests(ws, options.humanWaits, runtimeId, serverUrl);
           }, intervalMs);
           sendHeartbeat(ws, options.db, runtimeId, runtimeSessionId, serverUrl);
         },
@@ -1130,7 +1355,9 @@ export async function handleServerMessage(
   }
 
   if (isServerIngestAck(value)) {
-    context.humanWaits?.acknowledgeOutbox(value.ackOf);
+    const route = { runtimeId: context.runtimeId, serverUrl: context.serverUrl ?? null };
+    context.humanWaits?.acknowledgeOutboxForRoute(value.ackOf, route);
+    acknowledgeRuntimeCommandTerminalForRoute(context.db, value.ackOf, route);
     context.onIngestAck?.(value.ackOf);
     return;
   }
@@ -1149,18 +1376,31 @@ export async function handleServerMessage(
 
   const humanResponse = humanResponseDeliverEnvelopeSchema.safeParse(value);
   if (humanResponse.success) {
-    const delivery: SparkDaemonHumanWaitDeliveryResult = context.humanWaits?.deliver({
-      humanRequestId: humanResponse.data.humanRequestId,
-      humanResponseId: humanResponse.data.humanResponseId,
-      status: humanResponse.data.payload.status,
-      answers: humanResponse.data.payload.answers,
-      responseArtifactRefs: humanResponse.data.payload.responseArtifactRefs,
-    }) ?? {
-      outcome: "unknown_request",
-      retryable: false,
-      returnedToTool: false,
-      message: "No daemon-owned human wait registry is attached in this Spark daemon slice.",
-    };
+    const wait = humanResponse.data.humanRequestId
+      ? context.humanWaits?.get(humanResponse.data.humanRequestId)
+      : null;
+    const routeFailure = wait
+      ? humanResponseRouteFailure(humanResponse.data, wait, context)
+      : undefined;
+    const delivery: SparkDaemonHumanWaitDeliveryResult = routeFailure
+      ? {
+          outcome: "unknown_request",
+          retryable: false,
+          returnedToTool: false,
+          message: routeFailure,
+        }
+      : (context.humanWaits?.deliver({
+          humanRequestId: humanResponse.data.humanRequestId,
+          humanResponseId: humanResponse.data.humanResponseId,
+          status: humanResponse.data.payload.status,
+          answers: humanResponse.data.payload.answers,
+          responseArtifactRefs: humanResponse.data.payload.responseArtifactRefs,
+        }) ?? {
+          outcome: "unknown_request",
+          retryable: false,
+          returnedToTool: false,
+          message: "No daemon-owned human wait registry is attached in this Spark daemon slice.",
+        });
     sendJson(
       ws,
       runtimeEnvelope(
@@ -1193,6 +1433,38 @@ export async function handleServerMessage(
   }
 }
 
+function humanResponseRouteFailure(
+  response: ReturnType<typeof humanResponseDeliverEnvelopeSchema.parse>,
+  wait: SparkDaemonHumanWaitRecord,
+  context: Pick<MessageContext, "db" | "runtimeId" | "serverUrl">,
+): string | undefined {
+  if (response.runtimeId !== context.runtimeId) {
+    return "Human response runtime does not match this daemon uplink.";
+  }
+  if (
+    wait.workspaceBindingId &&
+    (!context.serverUrl ||
+      !workspaceBindingBelongsToServer(context.db, wait.workspaceBindingId, context.serverUrl) ||
+      !daemonWorkspaceRouteMatches(
+        context.db,
+        wait.workspaceBindingId,
+        wait.workspaceId,
+        wait.workspaceBindingId,
+      ))
+  ) {
+    return "Human response was delivered through a Cockpit that does not own this wait.";
+  }
+  if (
+    (response.workspaceBindingId ?? "") !== wait.workspaceBindingId ||
+    (response.workspaceId ?? "") !== wait.workspaceId ||
+    (response.projectId ?? "") !== wait.projectId ||
+    (response.invocationId !== undefined && response.invocationId !== wait.invocationId)
+  ) {
+    return "Human response route does not match the daemon-owned wait.";
+  }
+  return undefined;
+}
+
 async function handleEphemeralSecretRequest(
   ws: ServerSocket,
   request: ReturnType<typeof serverEphemeralSecretRequestEnvelopeSchema.parse>,
@@ -1216,6 +1488,8 @@ async function handleEphemeralSecretRequest(
       : null;
     if (
       !workspace ||
+      !context.serverUrl ||
+      !workspaceBindingBelongsToServer(context.db, workspace.id, context.serverUrl) ||
       !daemonWorkspaceRouteMatches(
         context.db,
         workspace.id,
@@ -1326,6 +1600,24 @@ export async function handleCommand(
         {
           reasonCode: "COMMAND_ID_REQUIRED",
           message: "Runtime command requires a command id.",
+          retryable: false,
+        },
+        commandRoute(context.runtimeId, command),
+      ),
+    );
+    return;
+  }
+  if (
+    command.workspaceBindingId &&
+    context.serverUrl &&
+    !workspaceBindingBelongsToServer(context.db, command.workspaceBindingId, context.serverUrl)
+  ) {
+    sendJson(
+      ws,
+      commandReject(
+        {
+          reasonCode: "WORKSPACE_ROUTE_MISMATCH",
+          message: "Command workspace route does not belong to this Cockpit uplink.",
           retryable: false,
         },
         commandRoute(context.runtimeId, command),
@@ -2059,12 +2351,11 @@ function stringMetadata(metadata: Record<string, unknown>, key: string): string 
 function flushPendingHumanRequests(
   ws: WebSocket,
   waits: SparkDaemonHumanWaitRegistry,
-  db: DatabaseSync,
+  runtimeId: string,
   serverUrl: string | null,
 ): void {
   if (ws.readyState !== WebSocket.OPEN) return;
-  for (const entry of waits.listPendingOutbox()) {
-    if (!outboundEnvelopeMatchesServer(db, entry.envelope, serverUrl)) continue;
+  for (const entry of waits.listPendingOutboxForRoute({ runtimeId, serverUrl })) {
     sendJson(ws, entry.envelope);
   }
 }
@@ -2095,10 +2386,10 @@ function isServerIngestAck(value: unknown): value is { type: "server.ingest_ack"
 function flushPendingRuntimeCommandTerminals(
   ws: ServerSocket,
   db: DatabaseSync,
+  runtimeId: string,
   serverUrl: string | null,
 ): void {
-  for (const terminal of pendingRuntimeCommandTerminals(db)) {
-    if (!outboundEnvelopeMatchesServer(db, terminal, serverUrl)) continue;
+  for (const terminal of pendingRuntimeCommandTerminalsForRoute(db, { runtimeId, serverUrl })) {
     sendJson(ws, markCommandResultReplayed(terminal));
   }
 }

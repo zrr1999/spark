@@ -5,6 +5,8 @@ import {
   formatContextUsage,
   formatSessionCost,
   formatSessionStatusPercent,
+  sessionAutoCompactionEnabled,
+  sessionStatusIdentity,
   sessionStatusUsage,
   type SessionStatusBarLabels,
 } from "./session-status";
@@ -20,9 +22,7 @@ const labels: SessionStatusBarLabels = {
   cacheHit: "Latest cache hit",
   cost: "Cost",
   context: "Context",
-  provider: "Provider",
-  model: "Model",
-  thinking: "Thinking level",
+  autoCompaction: "Automatic compaction enabled",
 };
 
 describe("session status formatting", () => {
@@ -55,15 +55,44 @@ describe("session status formatting", () => {
       costUsd: 23.509,
       contextTokens: 262_632,
       contextWindow: 372_000,
-      provider: "baidu-oneapi",
-      model: "gpt-5.6-sol",
-      thinkingLevel: "xhigh",
+      autoCompactionEnabled: true,
     });
 
     expect(description).toContain("Working directory: ~/workspace/zrr1999/spark");
     expect(description).toContain("Input tokens: 19000000");
     expect(description).toContain("Context: 70.6%/372k");
-    expect(description).toContain("Model: gpt-5.6-sol");
+    expect(description).toContain("Automatic compaction enabled");
+    expect(description).not.toContain("gpt-5.6-sol");
+  });
+
+  it("defaults native sessions to automatic compaction and honors an explicit override", () => {
+    expect(sessionAutoCompactionEnabled(null)).toBe(true);
+    expect(
+      sessionAutoCompactionEnabled({
+        version: 1,
+        sessionId: "session-auto-default",
+        status: "idle",
+        messages: [],
+        tools: [],
+        runs: [],
+        tasks: [],
+        artifacts: [],
+        metadata: {},
+      }),
+    ).toBe(true);
+    expect(
+      sessionAutoCompactionEnabled({
+        version: 1,
+        sessionId: "session-auto-disabled",
+        status: "idle",
+        messages: [],
+        tools: [],
+        runs: [],
+        tasks: [],
+        artifacts: [],
+        metadata: { autoCompactionEnabled: false },
+      }),
+    ).toBe(false);
   });
 
   it("adds live run totals to the full-transcript snapshot baseline", () => {
@@ -119,6 +148,30 @@ describe("session status formatting", () => {
       latestCacheHitPercent: 80,
       contextTokens: 208,
       contextWindow: 372_000,
+    });
+  });
+
+  it("keeps canonical session identity when control has no session state", () => {
+    expect(
+      sessionStatusIdentity(
+        {
+          version: 1,
+          sessionId: "session-identity",
+          status: "idle",
+          model: { providerName: "baidu-oneapi", modelId: "gpt-5.6-sol" },
+          thinkingLevel: "xhigh",
+          messages: [],
+          tools: [],
+          runs: [],
+          tasks: [],
+          artifacts: [],
+          metadata: {},
+        },
+        { defaultModel: { providerName: "fallback", modelId: "default" } },
+      ),
+    ).toEqual({
+      model: { providerName: "baidu-oneapi", modelId: "gpt-5.6-sol" },
+      thinkingLevel: "xhigh",
     });
   });
 });

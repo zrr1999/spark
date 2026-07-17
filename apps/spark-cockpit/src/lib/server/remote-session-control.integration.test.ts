@@ -346,6 +346,18 @@ test("remote Cockpit controls both session scopes without a daemon socket", asyn
     console.log(
       "SPARK_REMOTE_SESSION_CONTROL_TRANSCRIPT",
       JSON.stringify({
+        transport: { page: "https", runtime: "wss" },
+        conversationSurface: {
+          path: "/sessions/[sessionId]",
+          workspaceSessionCreated: true,
+          daemonSessionCreated: true,
+          listPaged: true,
+          bindUnbindArchived: true,
+          turnSubmitted: true,
+          turnCancelled: true,
+          terminalResultRecoveredAfterReconnect: true,
+          transcriptSnapshotLoaded: true,
+        },
         runtimeId,
         workspaceId: cockpitWorkspace.id,
         workspaceSessionId,

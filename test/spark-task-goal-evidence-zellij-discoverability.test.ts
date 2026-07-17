@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -47,38 +46,3 @@ void test("spark widget does not show static task goal evidence review hint", ()
   );
   assert.equal(summaryLines.length <= 5, true, rendered);
 });
-
-void test("zellij task goal capture report has compact required labels without static evidence hints", async () => {
-  const report = await loadReportOrFixture();
-  assert.equal(report.assertions.hasProject, true);
-  assert.equal(report.assertions.hasTaskCounts, true);
-  assert.equal(report.assertions.hasGoalStatus, true);
-  assert.equal(report.assertions.hasEvidenceReview, false);
-  assert.equal(report.assertions.compactAtMostSixLines, true);
-  assert.equal(report.summaryLineCount <= 5, true);
-  assert.match(report.stdout, /Project:/u);
-  assert.match(report.stdout, /Tasks:/u);
-  assert.match(report.stdout, /Goal:/u);
-  assert.doesNotMatch(report.stdout, /Evidence\/review:/u);
-});
-
-async function loadReportOrFixture(): Promise<any> {
-  try {
-    const report = JSON.parse(
-      await readFile("/tmp/spark-zellij-task-goal-evidence-capture.json", "utf8"),
-    );
-    if (!/Evidence\/review:/u.test(report.stdout ?? "")) return report;
-  } catch {}
-  return {
-    stdout:
-      "Spark task/goal summary\nProject: fixture\nTasks: 1/2 done · unfinished 1 · ready 1\nGoal: active · fixture\n",
-    summaryLineCount: 4,
-    assertions: {
-      hasProject: true,
-      hasTaskCounts: true,
-      hasGoalStatus: true,
-      hasEvidenceReview: false,
-      compactAtMostSixLines: true,
-    },
-  };
-}

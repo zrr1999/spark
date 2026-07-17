@@ -312,6 +312,13 @@ export function runtimeModelRouteForSession(
   return runtimeSessionRouteForSession(db, sessionId);
 }
 
+export function runtimeModelRouteForWorkspace(
+  db: DatabaseSync,
+  workspaceId: string,
+): RuntimeSessionRoute {
+  return runtimeSessionRouteForWorkspace(db, workspaceId);
+}
+
 export function runtimeChannelRouteForWorkspace(
   db: DatabaseSync,
   workspaceId: string,

@@ -6,6 +6,8 @@ import {
 
 export const SESSION_SNAPSHOT_PAGE_SIZE = 32;
 export const SESSION_SNAPSHOT_MAX_MESSAGES = 10_000;
+export const SESSION_CONVERSATION_ANCHOR_BATCH = 3;
+export const SESSION_CONVERSATION_PAGE_BUDGET = 8;
 
 export type SessionSnapshotHistory = SparkSessionSnapshotHistory;
 export type SessionSnapshotWindow = SparkSessionSnapshotPage;
@@ -23,6 +25,44 @@ export function normalizeSessionSnapshotLimit(value: unknown): number {
 
 export function parseSessionSnapshotWindow(value: unknown): SessionSnapshotWindow {
   return sparkSessionSnapshotPageSchema.parse(value);
+}
+
+/**
+ * Expand raw transcript pages until Cockpit has several complete conversation
+ * turns. A single model turn can contain dozens of assistant/tool records, so
+ * fixed raw-message pagination is not a useful initial UI boundary.
+ */
+export async function hydrateSessionConversationWindow(
+  initial: SessionSnapshotWindow,
+  options: {
+    minimumAnchors: number;
+    loadEarlier: (beforeMessageId: string) => Promise<SessionSnapshotWindow>;
+    pageBudget?: number;
+  },
+): Promise<SessionSnapshotWindow> {
+  let window = initial;
+  const minimumAnchors = Math.max(1, Math.floor(options.minimumAnchors));
+  const pageBudget = Math.max(
+    1,
+    Math.floor(options.pageBudget ?? SESSION_CONVERSATION_PAGE_BUDGET),
+  );
+
+  for (
+    let page = 0;
+    page < pageBudget &&
+    window.history.hasEarlierMessages &&
+    sessionConversationAnchorCount(window) < minimumAnchors;
+    page += 1
+  ) {
+    const cursor = window.history.nextBeforeMessageId;
+    if (!cursor) break;
+    window = mergeEarlierSessionSnapshotWindow(window, await options.loadEarlier(cursor));
+  }
+  return window;
+}
+
+export function sessionConversationAnchorCount(window: SessionSnapshotWindow): number {
+  return window.snapshot.messages.filter((message) => message.role === "user").length;
 }
 
 /** Merge one cursor-addressed older page into the cumulative browser window. */

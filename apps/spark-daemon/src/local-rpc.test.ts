@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import { parseSparkInteractionRequest } from "@zendev-lab/spark-protocol";
 import type { ChannelNotifyInput, ChannelNotifyResult } from "@zendev-lab/spark-channels";
 import { SparkSessionMailStore } from "@zendev-lab/spark-session";
 import { resolveSparkPaths } from "@zendev-lab/spark-system";
@@ -12,6 +13,7 @@ import { requestSparkDaemonLocalRpcWire } from "@zendev-lab/spark-system/daemon-
 import {
   createDaemonSessionRegistry,
   handleLocalRpcLine,
+  parseSparkDaemonLifecycleSnapshot,
   requestDaemonRestart,
   requestWorkspaceEnsureLocal,
   startLocalRpcServer,
@@ -26,12 +28,73 @@ import {
 } from "./store/workspaces.js";
 import type { SparkDaemonModelControl } from "./model-control.ts";
 import { SparkDaemonLifecycle } from "./core/lifecycle.ts";
+import { SparkDaemonHumanWaitRegistry } from "./core/human-waits.ts";
+import { SparkDaemonHumanInteractionBroker } from "./core/human-interactions.ts";
 import type {
   DaemonChannelIngressRuntime,
   DaemonChannelIngressStatus,
 } from "./channels/ingress.ts";
 
 describe("Spark daemon local RPC", () => {
+  it("parses drain progress strictly without inventing malformed status", () => {
+    expect(
+      parseSparkDaemonLifecycleSnapshot({
+        state: "draining",
+        phase: "draining-channel-ingress",
+        drain: {
+          observedAt: "2026-07-17T00:00:00.000Z",
+          stage: "channel-ingress",
+          scheduler: [],
+          direct: [
+            {
+              invocationId: "inv_direct",
+              kind: "session.run",
+              startedAt: "2026-07-17T00:00:00.000Z",
+              sessionId: "session-direct",
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      phase: "draining-channel-ingress",
+      drain: { stage: "channel-ingress", direct: [{ invocationId: "inv_direct" }] },
+    });
+
+    expect(
+      parseSparkDaemonLifecycleSnapshot({
+        state: "draining",
+        drain: {
+          observedAt: "2026-07-17T00:00:00.000Z",
+          scheduler: [],
+          direct: [],
+        },
+      }).drain?.stage,
+    ).toBe("active-work");
+
+    expect(() =>
+      parseSparkDaemonLifecycleSnapshot({
+        state: "draining",
+        drain: {
+          observedAt: "2026-07-17T00:00:00.000Z",
+          stage: "unknown",
+          scheduler: [],
+          direct: [],
+        },
+      }),
+    ).toThrow("Invalid local RPC daemon drain progress.");
+    expect(() =>
+      parseSparkDaemonLifecycleSnapshot({
+        state: "draining",
+        drain: {
+          observedAt: "2026-07-17T00:00:00.000Z",
+          stage: "active-work",
+          scheduler: [{ invocationId: "", kind: "session.run", startedAt: "now" }],
+          direct: [],
+        },
+      }),
+    ).toThrow("Invalid local RPC daemon drain work item.");
+  });
+
   it("keeps turn observation and cancellation available while admission is closed", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-starting-"));
     const paths = resolveSparkPaths({
@@ -170,6 +233,157 @@ describe("Spark daemon local RPC", () => {
     }
   });
 
+  it("delivers a local RPC response through the same blocking human wait registry", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-human-response-"));
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const humanWaits = new SparkDaemonHumanWaitRegistry(db);
+    const runtimeId = `rt_${"1".repeat(32)}`;
+    const workspaceBindingId = `rtwb_${"2".repeat(32)}`;
+    const workspaceId = `ws_${"3".repeat(32)}`;
+    const invocationId = `inv_${"4".repeat(32)}`;
+    const humanResponseId = `hres_${"5".repeat(32)}`;
+    const now = "2026-07-17T00:00:00.000Z";
+    db.prepare(
+      "INSERT INTO daemon_servers (id, server_url, first_registered_at) VALUES (?, ?, ?)",
+    ).run("server-local-rpc", "http://127.0.0.1:5173/", now);
+    db.prepare(
+      `INSERT INTO workspaces
+        (id, server_url, local_workspace_key, display_name, local_path, status,
+         capabilities_json, diagnostics_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'available', '{}', '{}', ?, ?)`,
+    ).run(workspaceBindingId, "http://127.0.0.1:5173/", "local-rpc", "Local RPC", root, now, now);
+    db.prepare(
+      `INSERT INTO daemon_workspaces
+        (id, server_id, server_workspace_id, name, slug, local_path, registered_at,
+         last_known_status, last_status_changed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'available', ?)`,
+    ).run(
+      workspaceBindingId,
+      "server-local-rpc",
+      workspaceId,
+      "Local RPC",
+      "local-rpc",
+      root,
+      now,
+      now,
+    );
+    const humanInteractions = new SparkDaemonHumanInteractionBroker({
+      db,
+      waits: humanWaits,
+      getRuntimeId: () => runtimeId,
+    });
+    const pendingInteraction = humanInteractions.interact(
+      parseSparkInteractionRequest({
+        requestId: "interaction-local-rpc",
+        kind: "askFlow",
+        title: "Continue?",
+        delivery: "blocking",
+        questions: [
+          {
+            id: "decision",
+            type: "single",
+            prompt: "Choose whether to continue.",
+            options: [{ value: "continue", label: "Continue" }],
+          },
+        ],
+      }),
+      {
+        sessionId: "session-local-rpc",
+        invocationId,
+        workspaceBindingId,
+        workspaceId,
+        sessionSource: "tui",
+      },
+    );
+    await vi.waitFor(() => expect(humanWaits.listPending()).toHaveLength(1));
+    const server = await startLocalRpcServer({
+      paths,
+      sparkHome: join(root, ".spark"),
+      db,
+      humanWaits,
+      respondHumanInteraction: (wait, input) => humanInteractions.respond(wait, input),
+      isReady: () => false,
+    });
+
+    try {
+      const delivered = await requestSparkDaemonLocalRpcWire<{
+        outcome: string;
+        returnedToTool: boolean;
+      }>(
+        {
+          id: "respond-local-rpc",
+          method: "human.interaction.respond",
+          params: {
+            interactionRequestId: "interaction-local-rpc",
+            sessionId: "session-local-rpc",
+            invocationId,
+            humanResponseId,
+            status: "answered",
+            answers: { decision: "continue" },
+          },
+        },
+        { paths },
+      );
+      expect(delivered).toMatchObject({ outcome: "accepted", returnedToTool: true });
+      const replayed = await requestSparkDaemonLocalRpcWire<{
+        outcome: string;
+        winnerResponseId?: string;
+      }>(
+        {
+          id: "replay-local-rpc",
+          method: "human.interaction.respond",
+          params: {
+            interactionRequestId: "interaction-local-rpc",
+            sessionId: "session-local-rpc",
+            invocationId,
+            humanResponseId,
+            status: "answered",
+            answers: { decision: "continue" },
+          },
+        },
+        { paths },
+      );
+      expect(replayed).toMatchObject({ outcome: "replayed", winnerResponseId: humanResponseId });
+      await expect(pendingInteraction).resolves.toMatchObject({
+        requestId: "interaction-local-rpc",
+        status: "answered",
+        answers: { decision: "continue" },
+      });
+      expect(humanWaits.listPending()).toEqual([]);
+      expect(humanWaits.listPendingOutbox()).toEqual([
+        expect.objectContaining({ kind: "human.request.created" }),
+        expect.objectContaining({
+          kind: "human.response.recorded",
+          envelope: expect.objectContaining({
+            type: "human.response.recorded",
+            runtimeId,
+            workspaceBindingId,
+            workspaceId,
+            payload: expect.objectContaining({
+              source: "daemon",
+              status: "answered",
+              answers: { decision: "continue" },
+            }),
+          }),
+        }),
+      ]);
+    } finally {
+      await server.close();
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps Cockpit relocation on the daemon-local RPC owner surface", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-relocate-"));
     const paths = resolveSparkPaths({
@@ -277,6 +491,7 @@ describe("Spark daemon local RPC", () => {
       const verifyConnection = vi.fn(async () => {
         expect(listWorkspaces(db)).toHaveLength(0);
       });
+      const onUplinkReconfigure = vi.fn();
 
       const response = await handleLocalRpcLine(
         JSON.stringify({
@@ -297,6 +512,7 @@ describe("Spark daemon local RPC", () => {
         {
           ensureSparkDaemonRegistrationForWorkspace: ensureRegistration,
           verifySparkDaemonWorkspaceConnection: verifyConnection,
+          onUplinkReconfigure,
         },
       );
 
@@ -348,6 +564,8 @@ describe("Spark daemon local RPC", () => {
         lastKnownStatus: "indexing",
       });
       expect(JSON.stringify(listWorkspaces(db))).not.toContain("spark_wsreg_local_rpc");
+      expect(onUplinkReconfigure).toHaveBeenCalledOnce();
+      expect(onUplinkReconfigure).toHaveBeenCalledWith("http://127.0.0.1:5173/");
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });

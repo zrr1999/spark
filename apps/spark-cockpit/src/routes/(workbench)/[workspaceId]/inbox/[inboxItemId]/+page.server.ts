@@ -10,7 +10,12 @@ import {
   getCurrentUserIdBySessionToken,
   loadInboxDetailPage,
 } from "@zendev-lab/spark-coordination/cockpit-queries";
-import { parseHumanQuestions } from "$lib/pending-ask";
+import {
+  humanAskAnswerHasValue,
+  humanMultiAnswerWithCustomFallback,
+  humanSingleAnswerWithCustomFallback,
+  parseHumanQuestions,
+} from "$lib/pending-ask";
 import { submitServerCommand } from "$lib/server/command-submission";
 import { getDatabase } from "$lib/server/db";
 import { formText, formTextList } from "$lib/server/form-data";
@@ -132,25 +137,30 @@ export const actions: Actions = {
     const missingRequired = [];
 
     for (const question of questions) {
-      if (question.type === "preview") {
-        continue;
-      }
-
       const key = `answer:${question.id}`;
+      const customAnswer = formText(formData, `custom-answer:${question.id}`);
       if (question.type === "multi") {
-        const values = formTextList(formData, key).filter(Boolean);
-        if (question.required && values.length === 0) {
+        const answer = humanMultiAnswerWithCustomFallback(
+          question,
+          formTextList(formData, key),
+          customAnswer,
+        );
+        if (question.required && !humanAskAnswerHasValue(answer)) {
           missingRequired.push(question.prompt);
         }
-        answers[question.id] = values;
+        answers[question.id] = answer;
         continue;
       }
 
-      const value = formText(formData, key).trim();
-      if (question.required && !value) {
+      const answer = humanSingleAnswerWithCustomFallback(
+        question,
+        formText(formData, key),
+        customAnswer,
+      );
+      if (question.required && !humanAskAnswerHasValue(answer)) {
         missingRequired.push(question.prompt);
       }
-      answers[question.id] = value;
+      answers[question.id] = answer;
     }
 
     if (questions.length === 0) {

@@ -51,6 +51,22 @@ describe("Spark daemon command dispatcher", () => {
       kind: "provider.auth.api_key.set.request",
       payload: {},
     });
+
+    const humanResponse = sparkCommandFromLocalRpcRequest({
+      id: "human_response",
+      method: "human.interaction.respond",
+      params: {
+        interactionRequestId: "interaction-a",
+        sessionId: "session-a",
+        invocationId: "invocation-a",
+        answers: { credential: "must-not-enter-command-traces" },
+      },
+    });
+    expect(humanResponse).toMatchObject({
+      kind: "human.response.deliver.request",
+      route: { sessionId: "session-a", invocationId: "invocation-a" },
+      payload: {},
+    });
   });
 
   it("adapts runtime server.command envelopes into SparkCommand intents", () => {

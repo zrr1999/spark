@@ -12,6 +12,9 @@ export type {
   SparkDaemonLifecycleSnapshot,
   SparkDaemonLifecyclePhase,
   SparkDaemonLifecycleState,
+  SparkDaemonDrainProgress,
+  SparkDaemonDrainStage,
+  SparkDaemonDrainWork,
   SparkDaemonProcessIdentity,
   SparkDaemonRestartRequestResult,
 } from "./lifecycle.ts";
@@ -22,6 +25,8 @@ export type {
   SparkDaemonHumanInteractionBrokerOptions,
   SparkDaemonHumanInteractionContext,
   SparkDaemonHumanInteractionOpened,
+  SparkDaemonHumanInteractionResponder,
+  SparkDaemonHumanInteractionResponseInput,
 } from "./human-interactions.ts";
 export { acquireSparkDaemonLock, readSparkDaemonLock } from "./lock.ts";
 export type {

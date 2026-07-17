@@ -6,6 +6,10 @@ coverage/
 .pnpm-store/
 .test-tmp/
 
+# mutation testing
+.stryker-tmp/
+**/reports/mutation/
+
 # logs
 npm-debug.log*
 yarn-debug.log*
@@ -27,6 +31,4 @@ build/
 .svelte-kit/
 playwright-report/
 test-results/
-.stryker-tmp/
-**/reports/mutation/
 *.tsbuildinfo

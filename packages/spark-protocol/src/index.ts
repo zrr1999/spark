@@ -1,14 +1,18 @@
 import { z } from "zod";
 import { sparkModelRefSchema, sparkThinkingLevelSchema } from "./model-control.ts";
 
+export * from "./action-bars.ts";
+export * from "./ask-semantics.ts";
 export * from "./channel-control.ts";
 export * from "./command-delivery.ts";
 export * from "./command-events.ts";
 export * from "./command-sources.ts";
 export * from "./display-error.ts";
 export * from "./errors.ts";
+export * from "./human-interaction.ts";
 export * from "./invocation-lifecycle.ts";
 export * from "./model-control.ts";
+export * from "./model-control-client.ts";
 export * from "./refs.ts";
 export * from "./runtime-v1/envelope.ts";
 export * from "./runtime-v1/ephemeral-secret.ts";
@@ -277,6 +281,20 @@ export const sparkSessionUsageSchema = z.object({
   contextWindow: z.number().positive().optional(),
 });
 
+/**
+ * Daemon-owned admission state for turns that have not reached a terminal
+ * invocation status yet. The field on `SparkSessionView` is optional so a
+ * Cockpit-only fallback projection can be distinguished from an authoritative
+ * daemon snapshot with an empty pending set.
+ */
+export const sparkSessionPendingTurnSchema = z.object({
+  invocationId: z.string().min(1),
+  prompt: z.string(),
+  status: z.enum(["queued", "running"]),
+  createdAt: sparkIsoDateTimeSchema,
+  startedAt: sparkIsoDateTimeSchema.optional(),
+});
+
 export const sparkSessionViewSchema = z.object({
   version: sparkProtocolVersionSchema.default(SPARK_PROTOCOL_VERSION),
   sessionId: z.string().min(1),
@@ -288,6 +306,7 @@ export const sparkSessionViewSchema = z.object({
   thinkingLevel: sparkThinkingLevelSchema.optional(),
   gitBranch: z.string().min(1).optional(),
   usage: sparkSessionUsageSchema.optional(),
+  pendingTurns: z.array(sparkSessionPendingTurnSchema).optional(),
   messages: z.array(sparkMessageViewSchema).default([]),
   tools: z.array(sparkToolCallViewSchema).default([]),
   runs: z.array(sparkRunViewSchema).default([]),
@@ -605,6 +624,7 @@ export type SparkTaskView = z.infer<typeof sparkTaskViewSchema>;
 export type SparkArtifactView = z.infer<typeof sparkArtifactViewSchema>;
 export type SparkSessionMailMessageView = z.infer<typeof sparkSessionMailMessageViewSchema>;
 export type SparkSessionUsage = z.infer<typeof sparkSessionUsageSchema>;
+export type SparkSessionPendingTurn = z.infer<typeof sparkSessionPendingTurnSchema>;
 export type SparkSessionView = z.infer<typeof sparkSessionViewSchema>;
 export type SparkSessionSnapshotHistory = z.infer<typeof sparkSessionSnapshotHistorySchema>;
 export type SparkSessionSnapshotPage = z.infer<typeof sparkSessionSnapshotPageSchema>;

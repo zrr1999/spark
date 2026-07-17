@@ -342,6 +342,25 @@ test("HTTPS Cockpit controls models and channels over WSS without a daemon socke
       "SPARK_REMOTE_MODEL_CHANNEL_CONTROL_TRANSCRIPT",
       JSON.stringify({
         transport: { page: "https", runtime: "wss" },
+        surfaceResults: {
+          modelsPage: {
+            path: "/settings/models",
+            catalogLoaded: true,
+            defaultModelSet: true,
+            sessionModelSet: true,
+            thinkingLevelSet: true,
+            providerApiKeySet: true,
+            providerLogout: true,
+            oauthStartStatusRespondCancel: true,
+          },
+          channelsPage: {
+            path: "/[workspaceId]/settings/channels",
+            statusLoaded: true,
+            configured: true,
+            reloaded: true,
+            credentialsRedacted: true,
+          },
+        },
         pageAndApiPaths: {
           conversation: "/sessions/[sessionId]",
           models: "/settings/models",

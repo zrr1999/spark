@@ -3,7 +3,7 @@ import type { SparkJsonObject, SparkSessionView } from "@zendev-lab/spark-protoc
 const MAX_OUTPUT_CHARS = 4_000;
 const MAX_PREVIEW_CHARS = 8_000;
 
-export type SessionInspectorTab = "summary" | "changes" | "tasks" | "mailbox";
+export type SessionInspectorTab = "summary" | "changes" | "todos" | "tasks" | "mailbox";
 
 export interface SessionWorkbenchActivityCommand {
   id: string;
@@ -83,6 +83,13 @@ export interface SessionWorkbenchTodo {
   notes: string[];
 }
 
+export interface SessionWorkbenchSessionTodo {
+  anchor: string;
+  summary: string;
+  items: SessionWorkbenchTodo[];
+  updatedAt: string | null;
+}
+
 export interface SessionWorkbenchArtifact {
   id: string;
   ref: string;
@@ -131,7 +138,7 @@ export interface SessionWorkbenchView {
   changes: SessionWorkbenchArtifact[];
   evidence: SessionWorkbenchArtifact[];
   mailbox: SessionWorkbenchMailMessage[];
-  sessionTodoAnchor: string | null;
+  sessionTodo: SessionWorkbenchSessionTodo | null;
   context: SessionWorkbenchContext;
 }
 
@@ -139,24 +146,22 @@ export interface SessionInspectorLabels {
   ariaLabel: string;
   tabs: Record<SessionInspectorTab, string>;
   summaryHeading: string;
-  runsHeading: string;
   tasksHeading: string;
   changesHeading: string;
   mailboxHeading: string;
-  noRunsTitle: string;
-  noRunsBody: string;
   noTasksTitle: string;
   noTasksBody: string;
   noChangesTitle: string;
   noChangesBody: string;
   noMailboxTitle: string;
   noMailboxBody: string;
+  noSessionTodoTitle: string;
+  noSessionTodoBody: string;
+  noActiveSessionTodo: string;
   unassignedProject: string;
-  latestOutput: string;
   progress: string;
   todoList: string;
-  sessionTodoTitle: string;
-  sessionTodoBody: string;
+  sessionTodoHeading: string;
   openSessionTodo: string;
   mailFrom: string;
   mailRequest: string;
@@ -225,19 +230,51 @@ export function buildSessionWorkbenchView(input: {
         createdAt: message.createdAt,
         status: message.ackedAt ? "acknowledged" : message.readAt ? "read" : "unread",
       })),
-    sessionTodoAnchor: latestSessionTodoAnchor(input.session),
+    sessionTodo: latestSessionTodo(input.session),
     context: sessionContext(input.session),
   };
 }
 
-function latestSessionTodoAnchor(session: SparkSessionView) {
-  const message = session.messages.findLast((candidate) =>
-    candidate.parts?.some(
+function latestSessionTodo(session: SparkSessionView): SessionWorkbenchSessionTodo | null {
+  for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+    const message = session.messages[index];
+    const result = message.parts?.findLast(
       (part) =>
-        (part.type === "tool-call" || part.type === "tool-result") && part.toolName === "todo",
-    ),
-  );
-  return message ? `message:${message.id}` : null;
+        (part.type === "tool-result" || part.type === "tool-call") &&
+        part.toolName === "todo" &&
+        part.status === "complete",
+    );
+    if (!result || (result.type !== "tool-result" && result.type !== "tool-call")) continue;
+
+    const content = nonEmpty(result.summary) ?? nonEmpty(message.text);
+    if (!content) continue;
+    const lines = content.split(/\r?\n/).map((line) => line.trim());
+    const summary = lines.find((line) => line && !line.startsWith("- [")) ?? content;
+    return {
+      anchor: `message:${message.id}`,
+      summary,
+      items: lines.flatMap((line, itemIndex) => parseSessionTodoLine(line, itemIndex)),
+      updatedAt: message.updatedAt ?? message.createdAt ?? null,
+    };
+  }
+  return null;
+}
+
+function parseSessionTodoLine(line: string, index: number): SessionWorkbenchTodo[] {
+  const match = line.match(/^[-*]\s+\[(pending|in_progress|blocked|done|cancelled)]\s+(.+)$/);
+  if (!match) return [];
+  const status = match[1] as SessionWorkbenchTodo["status"];
+  const rawContent = match[2].trim();
+  const [candidateId, ...remainder] = rawContent.split(/\s+/);
+  const hasProjectedId = /^todo-[a-z0-9_-]+$/i.test(candidateId) && remainder.length > 0;
+  return [
+    {
+      id: hasProjectedId ? candidateId : `session-todo-${index + 1}`,
+      content: hasProjectedId ? remainder.join(" ") : rawContent,
+      status,
+      notes: [],
+    },
+  ];
 }
 
 function sessionRun(run: SparkSessionView["runs"][number]): SessionWorkbenchRun {

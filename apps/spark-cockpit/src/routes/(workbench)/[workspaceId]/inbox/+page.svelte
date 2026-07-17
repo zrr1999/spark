@@ -69,18 +69,32 @@
       {:else}
         <div class="inbox-list">
           {#each visibleItems as item}
-            <a class="inbox-row" class:pending={item.status === "pending"} href={`${workspaceUrl}/inbox/${item.id}`}>
-              <div class="row-icon"><Icon name="inbox" size={22} /></div>
-              <div>
-                <div class="row-title">
-                  <h3>{item.title}</h3>
-                  <span class="urgency {item.urgency}">{urgencyLabel(item.urgency)}</span>
+            <div class="inbox-row" class:pending={item.status === "pending"}>
+              <a class="inbox-main" href={`${workspaceUrl}/inbox/${item.id}`}>
+                <div class="row-icon"><Icon name="inbox" size={22} /></div>
+                <div>
+                  <div class="row-title">
+                    <h3>{item.title}</h3>
+                    <span class="urgency {item.urgency}">{urgencyLabel(item.urgency)}</span>
+                  </div>
+                  <p>{item.summary}</p>
+                  <small>{formatRelative(item.createdAt)}</small>
                 </div>
-                <p>{item.summary}</p>
-                <small>{formatRelative(item.createdAt)}</small>
+              </a>
+              <div class="row-actions">
+                <span class="status-pill {item.status}">{statusLabel(item.status)}</span>
+                {#if item.sessionId}
+                  <a
+                    class="session-link"
+                    href={`/sessions/${encodeURIComponent(item.sessionId)}`}
+                    aria-label={`${t.list.conversation}: ${item.title}`}
+                    title={t.list.conversation}
+                  >
+                    <Icon name="message" size={17} />
+                  </a>
+                {/if}
               </div>
-              <span class="status-pill {item.status}">{statusLabel(item.status)}</span>
-            </a>
+            </div>
           {/each}
         </div>
       {/if}
@@ -146,8 +160,16 @@
     border-radius: var(--rounded-md);
     color: inherit;
     display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .inbox-main {
+    align-items: center;
+    color: inherit;
+    display: grid;
     gap: var(--spacing-md);
-    grid-template-columns: 48px minmax(0, 1fr) auto;
+    grid-template-columns: 48px minmax(0, 1fr);
+    min-width: 0;
     padding: var(--spacing-md);
     text-decoration: none;
   }
@@ -160,6 +182,30 @@
   .inbox-row:hover {
     border-color: var(--color-border);
     background: var(--color-surface-soft);
+  }
+
+  .row-actions {
+    align-items: center;
+    display: flex;
+    gap: var(--spacing-xs);
+    padding-right: var(--spacing-md);
+  }
+
+  .session-link {
+    align-items: center;
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--rounded-full);
+    color: var(--color-ink-subtle);
+    display: inline-flex;
+    height: 36px;
+    justify-content: center;
+    width: 36px;
+  }
+
+  .session-link:hover {
+    background: var(--color-surface);
+    border-color: var(--color-border);
+    color: var(--color-primary);
   }
 
   .row-icon {
@@ -226,6 +272,15 @@
   @media (max-width: 900px) {
     .inbox-row {
       grid-template-columns: 1fr;
+    }
+
+    .inbox-main {
+      grid-template-columns: 48px minmax(0, 1fr);
+    }
+
+    .row-actions {
+      justify-content: flex-end;
+      padding: 0 var(--spacing-md) var(--spacing-md);
     }
   }
 </style>

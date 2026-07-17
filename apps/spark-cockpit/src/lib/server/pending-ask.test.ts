@@ -46,7 +46,7 @@ describe("pending Workbench ask projection", () => {
             type: "single",
             prompt: "Scope?",
             required: true,
-            options: [{ id: "mvp", label: "MVP" }],
+            options: [{ value: "mvp", label: "MVP" }],
           },
           {
             id: "targets",
@@ -54,8 +54,8 @@ describe("pending Workbench ask projection", () => {
             prompt: "Targets?",
             required: true,
             options: [
-              { id: "web", label: "Web" },
-              { id: "chat", label: "Chat" },
+              { value: "web", label: "Web" },
+              { value: "chat", label: "Chat" },
             ],
           },
           {
@@ -69,6 +69,21 @@ describe("pending Workbench ask projection", () => {
         contextArtifactRefs: [],
       },
       createdAt: now,
+    });
+    const olderRequest = recordHumanRequestFromRuntime(db, {
+      runtimeWorkspaceBindingId,
+      workspaceId: workspace.id,
+      runtimeRequestId: "ask-global-dialog-older",
+      payload: {
+        kind: "ask_user",
+        delivery: "blocking",
+        title: "Choose fallback",
+        prompt: "What should Spark do if the first choice is unavailable?",
+        questions: [],
+        context: {},
+        contextArtifactRefs: [],
+      },
+      createdAt: "2026-07-13T23:59:00.000Z",
     });
     recordHumanRequestFromRuntime(db, {
       runtimeWorkspaceBindingId,
@@ -96,6 +111,7 @@ describe("pending Workbench ask projection", () => {
       title: "Choose scope",
       prompt: "How should Spark proceed?",
       detailHref: `/local-default/inbox/${request.inboxItemId}`,
+      pendingCount: 2,
       questions: [
         { id: "scope", type: "single" },
         { id: "targets", type: "multi" },
@@ -112,6 +128,21 @@ describe("pending Workbench ask projection", () => {
         responseArtifactRefs: [],
       },
       createdAt: "2026-07-14T00:02:00.000Z",
+    });
+
+    expect(loadPendingWorkbenchAsk(db, workspace.id)).toMatchObject({
+      id: olderRequest.inboxItemId,
+      pendingCount: 1,
+    });
+
+    recordHumanResponse(db, {
+      humanRequestId: olderRequest.humanRequestId,
+      payload: {
+        status: "answered",
+        answers: { message: "Continue without it" },
+        responseArtifactRefs: [],
+      },
+      createdAt: "2026-07-14T00:03:00.000Z",
     });
 
     expect(loadPendingWorkbenchAsk(db, workspace.id)).toBeNull();

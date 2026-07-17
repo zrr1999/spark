@@ -18,15 +18,15 @@
     "access": "public"
   },
   "scripts": {
-    "check": "tsc -p ../../tsconfig.json --noEmit && vitest run",
-    "test": "vitest run"
+    "check": "tsc -p ../../tsconfig.json --noEmit && vp test run",
+    "test": "vp test run"
   },
   "dependencies": {
     "@zendev-lab/spark-extension-api": "workspace:^",
-    "typebox": "^1.2.13"
+    "typebox": "catalog:"
   },
   "devDependencies": {
-    "typescript": "^6.0.3",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   },
   "pi": {

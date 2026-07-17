@@ -1,12 +1,24 @@
 import type { SparkCommandApi } from "./spark-command-types.ts";
 
-export function sendSparkRuntimeInstruction(
+/**
+ * Dispatch a trusted runtime-control instruction for /goal, /loop, and /repro.
+ *
+ * Daemon-managed TUI hosts wire `ctx.sendUserMessage` to `session.submit` so the
+ * instruction reaches the daemon turn bridge. Local agent-loop hosts keep the
+ * outbox `sendMessage` + `triggerTurn` path.
+ */
+export async function sendSparkRuntimeInstruction(
   piApi: SparkCommandApi,
   customType: "spark-goal-request" | "spark-loop-request" | "spark-repro-request",
   instruction: string,
   visible: string,
   details: Record<string, unknown> = {},
-): void {
+  options?: { sendUserMessage?: (content: string) => Promise<void> },
+): Promise<void> {
+  if (options?.sendUserMessage) {
+    await options.sendUserMessage(instruction);
+    return;
+  }
   piApi.sendMessage(
     {
       customType,

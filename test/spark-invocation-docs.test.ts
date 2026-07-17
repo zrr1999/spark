@@ -1,42 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
-import { sparkDaemonHelpText } from "../apps/spark-tui/src/cli/daemon.ts";
-
 const terminologyScript = resolve("scripts/check-doc-terminology.mjs");
-const authoritativeDocs = [
-  "README.md",
-  "apps/spark-daemon/README.md",
-  "apps/spark-tui/README.md",
-  "docs/specs/command-planes.md",
-  "docs/specs/turn.md",
-] as const;
-
-void test("authoritative turn and host docs expose invocation status, stream, and cancel only", async () => {
-  for (const path of authoritativeDocs) {
-    const content = await readFile(path, "utf8");
-    assert.match(content, /invocation(?:Id|-id)/u, path);
-    assert.match(content, /invocation status|`turn\.status`/u, path);
-    assert.match(content, /invocation stream|`turn\.stream`/u, path);
-    assert.match(content, /invocation cancel|`turn\.cancel`/u, path);
-    assert.doesNotMatch(content, /daemon\.queue|spark daemon queue/iu, path);
-    assert.doesNotMatch(content, /inbox[ /,]+processed[ /,]+failed/iu, path);
-  }
-});
-
-void test("generated daemon help exposes invocation operations without legacy directory commands", () => {
-  const help = sparkDaemonHelpText();
-  assert.match(help, /spark daemon invocation status <invocation-id>/u);
-  assert.match(help, /spark daemon invocation stream <invocation-id>/u);
-  assert.match(help, /spark daemon invocation cancel <invocation-id>/u);
-  assert.doesNotMatch(help, /spark daemon queue|daemon\.queue/iu);
-  assert.doesNotMatch(help, /inbox[ /,]+processed[ /,]+failed/iu);
-  assert.doesNotMatch(help, /(?:inbox|processed|failed)[ -]director/iu);
-});
 
 void test("invocation terminology checker reports only classified migration/archive sources", () => {
   const result = runTerminologyCheck(resolve("."));

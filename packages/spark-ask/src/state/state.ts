@@ -101,6 +101,8 @@ export function buildExtendedOptions(
     }
   }
 
+  // Custom reply is a shared UI invariant for every question type; callers do
+  // not opt in and reserved business options cannot duplicate this affordance.
   opts.push({ kind: "other", label: SENTINEL_LABELS.other });
 
   return opts;

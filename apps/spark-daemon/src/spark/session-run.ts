@@ -137,8 +137,9 @@ export function createSparkDaemonTaskExecutor(
           options.sessionRegistry,
         );
         if (completed.indexed) {
-          // Naming is a post-commit projection. It must not keep the successful
-          // invocation open or inherit its cancel/timeout lifecycle.
+          // Naming is a detached post-commit projection, so it must not keep a
+          // successful invocation open. It still observes cancellation/drain
+          // to avoid writing new projection state after ownership ends.
           void assignTitleAfterCompletedSessionRun(effectiveTask, context, options);
         }
         return completed.result;
@@ -161,7 +162,7 @@ function isProjectedSessionFailure(event: SparkDaemonEvent, sessionId: string): 
     event.type === "daemon.view_event" &&
     event.view.type === "session.message" &&
     event.view.sessionId === sessionId &&
-    event.view.message.status === "error"
+    isTerminalSessionFailureMessage(event.view.message)
   );
 }
 
@@ -174,7 +175,7 @@ function canonicalSessionFailureEvent(
     event.type !== "daemon.view_event" ||
     event.view.type !== "session.message" ||
     event.view.sessionId !== sessionId ||
-    event.view.message.status !== "error"
+    !isTerminalSessionFailureMessage(event.view.message)
   ) {
     return event;
   }
@@ -195,6 +196,10 @@ function canonicalSessionFailureEvent(
       },
     },
   };
+}
+
+function isTerminalSessionFailureMessage(message: { role: string; status: string }): boolean {
+  return message.status === "error" && (message.role === "assistant" || message.role === "system");
 }
 
 async function emitSessionFailure(
@@ -314,7 +319,9 @@ export function createChannelAwareTaskExecutor(
     }
 
     const text = assistantTextFromResult(result) ?? projector?.finalAnswerText();
-    if (!text) {
+    const inlineStream = Boolean(stream && projector && stream.answerMode !== "separate");
+    const deliveryText = text ?? (inlineStream ? CHANNEL_EMPTY_REPLY_TEXT : undefined);
+    if (!deliveryText) {
       const error = new ChannelReplyContentError(context.invocationId);
       if (stream) {
         try {
@@ -325,48 +332,63 @@ export function createChannelAwareTaskExecutor(
       }
       throw error;
     }
-    const inlineStream = Boolean(stream && projector && stream.answerMode !== "separate");
     const delivery = options.channelReplyDelivery?.stage({
       invocationId: context.invocationId,
       sessionId: task.sessionId,
       workspaceId: task.channelReply.workspaceId,
       adapterId: task.channelReply.adapterId,
       target,
-      text,
+      text: deliveryText,
       deliveryMode: inlineStream ? "inline-stream" : "message",
       ...(inlineStream && stream?.deliveryRecovery ? { recovery: stream.deliveryRecovery } : {}),
     });
     if (stream && projector) {
-      projector.appendFinalText(text);
-      let streamCompleted = false;
-      try {
-        await stream.complete("已完成");
-        streamCompleted = true;
-      } catch (error) {
-        console.error(
-          "[spark-daemon] channel reply stream completion failed; durable answer remains queued",
-          error,
-        );
-      }
-      // Once the platform has accepted the completed stream, never fall through
-      // to sendReply merely because the local acknowledgement write failed. The
-      // outbox provides at-least-once recovery; an immediate fallback here would
-      // create a deterministic duplicate on the same successful attempt.
-      if (streamCompleted && stream.answerMode !== "separate") {
-        if (delivery && options.channelReplyDelivery) {
-          acknowledgeChannelReplyDelivery(options.channelReplyDelivery, delivery.deliveryId);
+      projector.appendFinalText(deliveryText);
+      if (inlineStream) {
+        // Inline streams are the durable user-visible answer. Await completion
+        // so a failed card/stream can fall back to outbox sendReply.
+        let streamCompleted = false;
+        try {
+          await stream.complete("已完成");
+          streamCompleted = true;
+        } catch (error) {
+          console.error(
+            "[spark-daemon] inline channel reply stream completion failed; durable answer remains queued",
+            error,
+          );
         }
-        return result;
-      }
-      if (delivery && inlineStream) {
-        options.channelReplyDelivery?.rerouteToMessage(delivery.deliveryId);
+        // Once the platform has accepted the completed stream, never fall through
+        // to sendReply merely because the local acknowledgement write failed. The
+        // outbox provides at-least-once recovery; an immediate fallback here would
+        // create a deterministic duplicate on the same successful attempt.
+        if (streamCompleted) {
+          if (delivery && options.channelReplyDelivery) {
+            acknowledgeChannelReplyDelivery(options.channelReplyDelivery, delivery.deliveryId);
+          }
+          if (result && typeof result === "object" && !Array.isArray(result)) {
+            return { ...(result as Record<string, unknown>), channelReplyDelivered: true };
+          }
+          return result;
+        }
+        if (delivery) {
+          options.channelReplyDelivery?.rerouteToMessage(delivery.deliveryId);
+        }
+      } else {
+        // Separate progress cards must not hold the invocation open on SDK
+        // retries; the outbox still delivers the final answer.
+        void stream.complete("已完成").catch((error) => {
+          console.error(
+            "[spark-daemon] channel reply stream completion failed; durable answer remains queued",
+            error,
+          );
+        });
       }
     }
     try {
       await options.channelIngress.sendReply(
         task.channelReply.workspaceId,
         task.channelReply.adapterId,
-        { ...target, text },
+        { ...target, text: deliveryText },
       );
     } catch (error) {
       if (delivery) {
@@ -413,6 +435,8 @@ export function channelReplyDeliveryForCompletion(
 ): SparkDaemonChannelReplyDeliveryInput | undefined {
   const channelReply = task.channelReply;
   if (!channelReply) return undefined;
+  // Inline streams already presented the answer; do not enqueue a second message.
+  if (kind === "final" && channelReplyDeliveredFromResult(result)) return undefined;
   const text =
     kind === "failure"
       ? CHANNEL_FAILURE_REPLY_TEXT
@@ -443,6 +467,11 @@ function assistantTextFromResult(result: unknown): string | undefined {
   if (!result || typeof result !== "object" || Array.isArray(result)) return undefined;
   const text = (result as { assistantText?: unknown }).assistantText;
   return typeof text === "string" && text.trim() ? text.trim() : undefined;
+}
+
+function channelReplyDeliveredFromResult(result: unknown): boolean {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return false;
+  return (result as { channelReplyDelivered?: unknown }).channelReplyDelivered === true;
 }
 
 export async function executeSparkDaemonSessionRunTask(
@@ -560,7 +589,7 @@ function sessionChannelAdapter(adapterId: string): "feishu" | "infoflow" | "qqbo
   throw new Error(`Unsupported session channel adapter: ${adapterId}`);
 }
 
-function sessionSourceForTask(
+export function sessionSourceForTask(
   task: SparkDaemonSessionRunTask,
 ): "tui" | "web" | "channel" | "daemon" | "session" {
   if (task.channelReply || task.channelContext) return "channel";
@@ -806,7 +835,9 @@ async function assignTitleAfterCompletedSessionRun(
         sessionId: task.sessionId,
         prompt: task.prompt,
         model: modelRefFromValue(task.model),
-        signal: AbortSignal.timeout(5_000),
+        // Title generation is auxiliary work: stop it when either its small
+        // local budget expires or the owning invocation is cancelled/drained.
+        signal: AbortSignal.any([context.signal, AbortSignal.timeout(5_000)]),
       },
       {
         modelControl: {

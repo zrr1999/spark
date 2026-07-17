@@ -8,6 +8,8 @@ import {
 import {
   DAEMON_OWNED_SCOPES,
   COCKPIT_OUTBOX_SCOPES,
+  assertCockpitMayWriteScope,
+  assertDaemonOwnsScope,
   isDaemonOwnedScope,
 } from "./state-ownership.ts";
 import {
@@ -160,5 +162,13 @@ describe("state ownership", () => {
     expect(COCKPIT_OUTBOX_SCOPES).toContain("commands");
     expect(isDaemonOwnedScope("artifacts")).toBe(true);
     expect(isDaemonOwnedScope("commands")).toBe(false);
+  });
+
+  it("guards Cockpit writers against daemon-owned scopes", () => {
+    expect(() => assertCockpitMayWriteScope("commands")).not.toThrow();
+    expect(() => assertCockpitMayWriteScope("human_responses")).not.toThrow();
+    expect(() => assertCockpitMayWriteScope("human_requests")).toThrow(/daemon-owned/u);
+    expect(() => assertDaemonOwnsScope("invocations")).not.toThrow();
+    expect(() => assertDaemonOwnsScope("commands")).toThrow(/outbox/u);
   });
 });

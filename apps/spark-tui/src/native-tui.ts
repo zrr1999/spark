@@ -5,6 +5,12 @@ import { extname, isAbsolute, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { sparkNativeTuiStrings } from "@zendev-lab/spark-i18n/cli";
+import {
+  PiAskFlowController,
+  type PiAskFlowRequest,
+  type PiAskFlowResult,
+  type RenderTheme as AskRenderTheme,
+} from "@zendev-lab/spark-ask";
 
 import {
   CombinedAutocompleteProvider,
@@ -32,6 +38,9 @@ import {
   parseSparkInteractionRequest,
   parseSparkInteractionResponse,
   parseSparkViewModelEvent,
+  sparkSlashActionBarForInput,
+  type SparkActionBarView,
+  type SparkActionView,
   type SparkArtifactView,
   type SparkConversationPartStatus,
   type SparkInteractionRequest,
@@ -63,6 +72,11 @@ import type {
   SparkHostUiTransport,
 } from "./host/types.ts";
 import type { SparkModelSelectorTheme, SparkModelSelectorTuiLike } from "./tui/model-selector.ts";
+import {
+  createSparkTuiActionBarComponent,
+  type SparkTuiActionAvailability,
+  type SparkTuiActionBarComponent,
+} from "./tui/action-bar.ts";
 
 const nativeTuiStrings = sparkNativeTuiStrings();
 
@@ -129,10 +143,10 @@ export type SparkNativeResponder = (
   context: SparkNativeResponderContext,
 ) => string | Promise<string>;
 
-interface SparkNativeQueuedInput {
-  text: string;
-  mode: SparkNativeQueueMode;
-  submissionId: string;
+export interface SparkNativeQueuedInput {
+  readonly text: string;
+  readonly mode: SparkNativeQueueMode;
+  readonly submissionId: string;
 }
 
 interface SparkNativeSubmitOptions {
@@ -204,7 +218,10 @@ export interface SparkNativeRuntimeCommandHost {
 export interface SparkNativeRuntimeSlashCommandOptions {
   exclude?: Iterable<string>;
   waitForIdle?: () => Promise<void>;
-  sendUserMessage?: (content: string) => void | Promise<void>;
+  sendUserMessage?: (
+    content: string,
+    context: SparkNativeSlashCommandContext,
+  ) => void | Promise<void>;
   setEditorText?: (text: string) => void;
 }
 
@@ -298,6 +315,7 @@ const SPARK_COCKPIT_PANELS: readonly SparkNativeCockpitPanel[] = [
   "graft",
 ];
 const MAX_COCKPIT_PANEL_ROWS = 6;
+const MAX_NATIVE_QUEUE_ITEMS = 4;
 const SPARK_NATIVE_LOCAL_CONTROL_EXTENSION_ID = "spark-tui-local-control";
 
 function isSparkNativeCockpitPanel(value: string): value is SparkNativeCockpitPanel {
@@ -342,8 +360,25 @@ export class SparkNativeSession {
     return this.processing;
   }
 
+  get canRetry(): boolean {
+    return !this.processing && this.lastSubmittedInput !== undefined;
+  }
+
+  get canStopOrRestore(): boolean {
+    return this.processing || this.queuedFollowUps.length > 0;
+  }
+
   get queuedCount(): number {
     return this.queuedFollowUps.length;
+  }
+
+  /** Ordered, detached queue state suitable for rendering without mutation authority. */
+  get queuedInputs(): readonly SparkNativeQueuedInput[] {
+    return Object.freeze(
+      this.queuedFollowUps.map((input) =>
+        Object.freeze({ text: input.text, mode: input.mode, submissionId: input.submissionId }),
+      ),
+    );
   }
 
   get queueSummary(): SparkNativeQueueSummary {
@@ -512,6 +547,7 @@ export class SparkNativeSession {
     if (this.queuedFollowUps.length === 0) return undefined;
     const restored = this.queuedFollowUps.map((entry) => entry.text).join("\n\n");
     this.queuedFollowUps.splice(0, this.queuedFollowUps.length);
+    this.emitChange();
     return restored;
   }
 
@@ -681,6 +717,7 @@ export function defaultSparkNativeResponder(input: string): string {
 
 const DEFAULT_NATIVE_THEME = BUILTIN_SPARK_THEMES.find((theme) => theme.id === "dark")!;
 const SPARK_APP_KEYS = new Set([
+  "shift+tab",
   "ctrl+k",
   "shift+ctrl+k",
   "ctrl+l",
@@ -1053,7 +1090,10 @@ function addFooterMetrics(
   };
 }
 
-function formatFooterMetrics(metrics: SparkNativeFooterMetrics): string | undefined {
+function formatFooterMetrics(
+  metrics: SparkNativeFooterMetrics,
+  autoCompactionEnabled: boolean,
+): string | undefined {
   const hasMetric = Object.values(metrics).some((value) => value !== undefined);
   if (!hasMetric) return undefined;
   const parts: string[] = [];
@@ -1070,7 +1110,8 @@ function formatFooterMetrics(metrics: SparkNativeFooterMetrics): string | undefi
       metrics.contextTokens !== undefined
         ? `${((metrics.contextTokens / metrics.contextWindow) * 100).toFixed(1)}%`
         : "?";
-    parts.push(`${contextPercent}/${formatFooterTokens(metrics.contextWindow)}`);
+    const autoIndicator = autoCompactionEnabled ? " (auto)" : "";
+    parts.push(`${contextPercent}/${formatFooterTokens(metrics.contextWindow)}${autoIndicator}`);
   }
   return parts.join(" ") || undefined;
 }
@@ -1234,6 +1275,54 @@ export function createSparkNativeLocalControlSlashCommands(): SparkNativeSlashCo
         void ctx.session.retryLast();
       },
     },
+    thinking: {
+      description: "choose or set the active thinking level",
+      argumentHint: "[off|minimal|low|medium|high|xhigh]",
+      metadata: {
+        source: "extension",
+        extensionId: SPARK_NATIVE_LOCAL_CONTROL_EXTENSION_ID,
+        plane: "tui",
+        resource: "thinking",
+        verbs: ["select", "set"],
+        canonicalCliTarget: "spark tui settings set thinking <level>",
+      },
+      getArgumentCompletions: (prefix) =>
+        ["off", "minimal", "low", "medium", "high", "xhigh"]
+          .filter((value) => value.startsWith(prefix.trim().toLowerCase()))
+          .map((value) => ({ value, label: value })),
+      handler: async (args, ctx) => {
+        const level = args.trim().toLowerCase();
+        if (!level) return;
+        await ctx.app.executeSlashCommand(`/settings set thinking ${level}`);
+      },
+    },
+    queue: {
+      description: "inspect or restore queued turn input",
+      argumentHint: "[inspect|restore]",
+      metadata: {
+        source: "extension",
+        extensionId: SPARK_NATIVE_LOCAL_CONTROL_EXTENSION_ID,
+        plane: "tui",
+        resource: "queue",
+        verbs: ["inspect", "restore"],
+        canonicalCliTarget: "spark tui queue",
+      },
+      getArgumentCompletions: (prefix) =>
+        ["inspect", "restore"]
+          .filter((value) => value.startsWith(prefix.trim().toLowerCase()))
+          .map((value) => ({ value, label: value })),
+      handler: (args, ctx) => {
+        const action = args.trim().toLowerCase();
+        if (!action || action === "inspect") return ctx.app.renderQueueInspection();
+        if (action === "restore") {
+          const restored = ctx.session.restoreQueuedText();
+          if (!restored) return nativeTuiStrings.noQueuedInputToRestore;
+          ctx.app.setEditorText(restored);
+          return;
+        }
+        return "Usage: /queue [inspect|restore]";
+      },
+    },
     cockpit: {
       description: "show Spark cockpit panels",
       argumentHint: "[overview|workflows|runs|tasks|artifacts|reviews|graft|off]",
@@ -1282,9 +1371,13 @@ export function createSparkNativeRuntimeSlashCommands(
       handler: async (args, context) => {
         const commandContext = runtime.makeContext({
           waitForIdle: options.waitForIdle ?? (async () => undefined),
-          sendUserMessage: async (content: string) => {
-            await options.sendUserMessage?.(content);
-          },
+          ...(options.sendUserMessage
+            ? {
+                sendUserMessage: async (content: string) => {
+                  await options.sendUserMessage?.(content, context);
+                },
+              }
+            : {}),
           setEditorText:
             options.setEditorText ?? ((text: string) => context.app.setEditorText(text)),
         });
@@ -1454,6 +1547,10 @@ function displayNativeSubmittedInput(input: string): string {
     /<image\b([^>]*)>data:[^<]+<\/image>/gu,
     (_match, attrs: string) => `<image${attrs}>[inline image data omitted]</image>`,
   );
+}
+
+function compactNativeQueuePreview(input: string): string {
+  return displayNativeSubmittedInput(input).replace(/\s+/gu, " ").trim() || "(empty)";
 }
 
 function parseBangCommand(input: string): { command: string; hidden: boolean } | undefined {
@@ -1642,6 +1739,7 @@ export interface SparkNativeStatusContext {
   activeModel?: () => string | undefined;
   thinkingLevel?: () => string | undefined;
   contextWindow?: () => number | undefined;
+  autoCompactionEnabled?: () => boolean;
 }
 
 export interface SparkNativeTuiAppOptions {
@@ -1678,7 +1776,11 @@ export class SparkNativeTuiApp implements Component, Focusable {
   private readonly widgets = new Map<string, SparkNativeWidget>();
   private readonly cockpit = createSparkNativeCockpitState();
   private readonly completedTaskSummaryKeys = new Set<string>();
+  private readonly presentedAskRequestIds = new Set<string>();
   private activeCockpitPanel: SparkNativeCockpitPanel | undefined;
+  private activeActionBarView: SparkActionBarView | undefined;
+  private activeActionBar: SparkTuiActionBarComponent | undefined;
+  private actionBarHandle: { hide(): void } | undefined;
   private sessionFooterMetrics: SparkNativeFooterMetrics = {};
   private readonly runFooterMetrics = new Map<string, SparkNativeFooterMetrics>();
   private focusedValue = false;
@@ -1734,6 +1836,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
   }
 
   dispose(): void {
+    this.closeActionBar();
     if (this.session.onChange === this.handleSessionChange) this.session.onChange = undefined;
     this.stopWorkingSpinner();
   }
@@ -1743,6 +1846,31 @@ export class SparkNativeTuiApp implements Component, Focusable {
     this.editor.setText(text);
     this.invalidate();
     this.tui.requestRender();
+  }
+
+  async executeSlashCommand(input: string): Promise<void> {
+    await this.runSlashCommand(input);
+  }
+
+  actionBarSnapshot(): { id: string; selectedActionId?: string; focused: boolean } | undefined {
+    if (!this.activeActionBarView || !this.activeActionBar) return undefined;
+    return {
+      id: this.activeActionBarView.id,
+      selectedActionId: this.activeActionBar.selectedAction?.id,
+      focused: this.activeActionBar.focused,
+    };
+  }
+
+  renderQueueInspection(): string {
+    const queued = this.session.queuedInputs;
+    if (queued.length === 0) return "Turn queue is empty.";
+    return [
+      `Turn queue: ${queued.length} pending input${queued.length === 1 ? "" : "s"}`,
+      ...queued.map(
+        (input, index) =>
+          `${index + 1}. ${input.mode === "followUp" ? "follow-up" : "steer"} — ${compactNativeQueuePreview(input.text)}`,
+      ),
+    ].join("\n");
   }
 
   isShowingAutocomplete(): boolean {
@@ -1771,6 +1899,8 @@ export class SparkNativeTuiApp implements Component, Focusable {
   ): Promise<"started" | "queued" | "ignored" | "command"> {
     const text = input.trim();
     if (!text) return await this.session.submit(input, options);
+    // Host controls must bypass SparkNativeSession.submit: an active turn may queue prompts,
+    // but it must never queue or swallow slash commands such as /model and /plan.
     if (text.startsWith("/") && !text.startsWith("//")) {
       await this.runSlashCommand(text);
       this.invalidate();
@@ -2002,6 +2132,212 @@ export class SparkNativeTuiApp implements Component, Focusable {
     });
   }
 
+  private openActionBar(view: SparkActionBarView): void {
+    this.closeActionBar();
+    const component = createSparkTuiActionBarComponent({
+      view,
+      theme: this.renderTheme,
+      resolveAvailability: (action) => this.resolveActionAvailability(action),
+      requestRender: () => this.tui.requestRender(),
+      onCancel: () => this.closeActionBar(),
+      onAction: async (action) => {
+        this.closeActionBar();
+        await this.executeActionBarAction(action);
+      },
+    });
+    this.activeActionBarView = view;
+    this.activeActionBar = component;
+    if (typeof this.tui.showOverlay === "function") {
+      this.actionBarHandle = this.tui.showOverlay(component, {
+        width: "72%",
+        minWidth: 44,
+        maxHeight: 6,
+        anchor: "bottom-center",
+        margin: { bottom: 3, left: 1, right: 1 },
+      });
+    } else {
+      this.tui.addChild(component);
+      this.tui.setFocus(component);
+    }
+    this.invalidate();
+    this.tui.requestRender();
+  }
+
+  private resolveActionAvailability(action: SparkActionView): SparkTuiActionAvailability {
+    const requiredCommand = this.requiredActionCommand(action);
+    if (requiredCommand && !this.slashCommands[requiredCommand]) {
+      return {
+        disabled: true,
+        reason: `/${requiredCommand} is not registered in this host`,
+      };
+    }
+
+    if (action.intent === "turn.retry" && !this.session.canRetry) {
+      return {
+        disabled: true,
+        reason: this.session.isProcessing
+          ? "wait for the active turn to finish"
+          : "no previous prompt to retry",
+      };
+    }
+    if (action.intent === "turn.stop" && !this.session.canStopOrRestore) {
+      return { disabled: true, reason: "no active turn or queued input" };
+    }
+    if (action.intent === "workflow.inspect") {
+      const selected = this.selectedWorkflowRun();
+      if (!selected) return { disabled: true, reason: "no workflow run is selected" };
+      if (!/^run:[a-zA-Z0-9-]+$/u.test(selected.id)) {
+        return { disabled: true, reason: `selected workflow ${selected.id} is not live` };
+      }
+    }
+    return { disabled: false };
+  }
+
+  private requiredActionCommand(action: SparkActionView): string | undefined {
+    switch (action.intent) {
+      case "model.select":
+        return "model";
+      case "thinking.select":
+      case "settings.inspect":
+        return "settings";
+      case "settings.providers":
+        return "login";
+      case "status.inspect":
+        return "status";
+      case "session.select":
+      case "session.create":
+        return "sessions";
+      case "session.inspect":
+        return "session";
+      case "turn.stop":
+        return "stop";
+      case "turn.retry":
+        return "retry";
+      case "goal.status":
+      case "goal.start":
+      case "goal.restart":
+      case "goal.stop":
+        return "goal";
+      case "loop.status":
+      case "loop.start":
+      case "loop.restart":
+      case "loop.stop":
+        return "loop";
+      case "repro.status":
+      case "repro.start":
+      case "repro.restart":
+      case "repro.stop":
+        return "repro";
+      case "workflow.inspect":
+        return "workflow-inspect";
+      case "help.hotkeys":
+        return "hotkeys";
+      case "queue.inspect":
+      case "workflow.open":
+      case "help.commands":
+        return undefined;
+    }
+  }
+
+  private closeActionBar(): void {
+    const component = this.activeActionBar;
+    if (!component) return;
+    if (this.actionBarHandle) this.actionBarHandle.hide();
+    else this.tui.removeChild(component);
+    this.actionBarHandle = undefined;
+    this.activeActionBar = undefined;
+    this.activeActionBarView = undefined;
+    this.tui.setFocus(this);
+    this.invalidate();
+    this.tui.requestRender();
+  }
+
+  private async executeActionBarAction(action: SparkActionView): Promise<void> {
+    try {
+      switch (action.intent) {
+        case "model.select":
+          await this.invokeRegisteredSlashCommand("model", "", false);
+          return;
+        case "thinking.select": {
+          const thinkingLevel = stringFromRecord(action.payload, "thinkingLevel");
+          if (thinkingLevel) {
+            await this.invokeRegisteredSlashCommand(
+              "settings",
+              `set thinking ${thinkingLevel}`,
+              false,
+            );
+          } else {
+            const thinkingBar = sparkSlashActionBarForInput("/thinking");
+            if (thinkingBar) this.openActionBar(thinkingBar);
+          }
+          return;
+        }
+        case "settings.inspect":
+          await this.invokeRegisteredSlashCommand("settings", "inspect", true);
+          return;
+        case "settings.providers":
+          await this.invokeRegisteredSlashCommand("login", "", true);
+          return;
+        case "status.inspect":
+          await this.invokeRegisteredSlashCommand("status", "", true);
+          return;
+        case "session.select":
+          await this.invokeRegisteredSlashCommand("sessions", "", false);
+          return;
+        case "session.create":
+          await this.invokeRegisteredSlashCommand("sessions", "", false);
+          return;
+        case "session.inspect":
+          await this.invokeRegisteredSlashCommand("session", "inspect", true);
+          return;
+        case "queue.inspect":
+          this.session.addSystemMessage(this.renderQueueInspection());
+          return;
+        case "turn.stop":
+          await this.invokeRegisteredSlashCommand("stop", "", false);
+          return;
+        case "turn.retry":
+          await this.invokeRegisteredSlashCommand("retry", "", false);
+          return;
+        case "goal.status":
+        case "goal.start":
+        case "goal.restart":
+        case "goal.stop":
+        case "loop.status":
+        case "loop.start":
+        case "loop.restart":
+        case "loop.stop":
+        case "repro.status":
+        case "repro.start":
+        case "repro.restart":
+        case "repro.stop": {
+          const [command, operation] = action.intent.split(".", 2) as [string, string];
+          await this.invokeRegisteredSlashCommand(command, operation, operation === "status");
+          return;
+        }
+        case "workflow.open":
+          this.openCockpitPanel("runs");
+          return;
+        case "workflow.inspect":
+          this.runSelectedWorkflowCommand("inspect");
+          return;
+        case "help.commands":
+          this.session.addSystemMessage(this.renderCommandHelp());
+          return;
+        case "help.hotkeys":
+          await this.invokeRegisteredSlashCommand("hotkeys", "", true);
+          return;
+      }
+    } catch (error) {
+      this.session.addSystemMessage(
+        nativeTuiStrings.commandFailed(
+          action.intent,
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+    }
+  }
+
   custom<T>(
     factory: (
       tui: SparkModelSelectorTuiLike,
@@ -2018,10 +2354,15 @@ export class SparkNativeTuiApp implements Component, Focusable {
         if (settled) return;
         settled = true;
         handle?.hide();
+        this.tui.setFocus(this);
+        this.tui.requestRender();
         resolve(value);
       };
       const component = factory(
-        { requestRender: () => this.tui.requestRender() },
+        {
+          terminal: { columns: this.tui.terminal.columns },
+          requestRender: () => this.tui.requestRender(),
+        },
         this.renderTheme,
         this.keybindings,
         done,
@@ -2052,7 +2393,14 @@ export class SparkNativeTuiApp implements Component, Focusable {
     this.recordInteractionRequest(request);
     if (this.interactionHandler) {
       const response = await this.interactionHandler(request, { app: this, session: this.session });
-      return parseSparkInteractionResponse(response);
+      const parsed = parseSparkInteractionResponse(response);
+      this.completeInteractionRequest(parsed);
+      return parsed;
+    }
+    if (request.kind === "askFlow") {
+      const response = await this.presentAskFlow(request);
+      this.completeInteractionRequest(response);
+      return response;
     }
     this.session.addCustomMessage({
       customType: request.kind === "workflowPicker" ? "workflow-picker" : "interaction-request",
@@ -2063,6 +2411,54 @@ export class SparkNativeTuiApp implements Component, Focusable {
     this.invalidate();
     this.tui.requestRender();
     return createBlockedInteractionResponse(request, nativeTuiStrings.noInteractionHandler);
+  }
+
+  private async presentAskFlow(
+    request: Extract<SparkInteractionRequest, { kind: "askFlow" }>,
+  ): Promise<Extract<SparkInteractionResponse, { kind: "askFlow" }>> {
+    if (!this.presentedAskRequestIds.has(request.requestId)) {
+      this.presentedAskRequestIds.add(request.requestId);
+      this.session.addCustomMessage({
+        customType: "interaction-request",
+        content: `${request.title}${request.prompt ? `\n${request.prompt}` : ""}`,
+        display: true,
+        details: { request },
+      });
+    }
+    const flowRequest = nativeAskFlowRequest(request);
+    const controller = new PiAskFlowController({
+      request: flowRequest,
+      language: nativeAskLanguage(),
+    });
+    const result = await this.custom<PiAskFlowResult>(
+      (tui, theme, _keybindings, done) => controller.run(tui, theme as AskRenderTheme, done),
+      {
+        overlay: true,
+        overlayOptions: { width: "78%", minWidth: 56, maxHeight: "88%" },
+      },
+    );
+    const cancelled = result.cancelled || result.status === "cancelled";
+    return {
+      version: SPARK_PROTOCOL_VERSION,
+      kind: "askFlow",
+      requestId: request.requestId,
+      status: cancelled ? "cancelled" : "answered",
+      answers: nativeAskAnswers(result),
+      nextAction: cancelled
+        ? "cancel"
+        : result.nextAction === "block" || result.nextAction === "clarify_then_reask"
+          ? "block"
+          : "resume",
+      metadata: { surface: "native-tui" },
+    };
+  }
+
+  private completeInteractionRequest(response: SparkInteractionResponse): void {
+    if (response.status !== "pending") {
+      this.cockpit.interactions.delete(response.requestId);
+      this.invalidate();
+      this.tui.requestRender();
+    }
   }
 
   hydrateCockpit(input: {
@@ -2355,6 +2751,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
       lines.push(...this.renderMessage(message, width));
     }
 
+    lines.push(...this.renderInputQueue(width));
     lines.push(this.separatorLine(width));
     lines.push(...this.editor.render(width));
     lines.push(...this.renderWidgets("belowEditor", width));
@@ -2387,6 +2784,26 @@ export class SparkNativeTuiApp implements Component, Focusable {
       ...(state.mismatchDiagnostic ? [`diagnostic: ${state.mismatchDiagnostic}`] : []),
     ];
     return [truncateToWidth(this.renderTheme.fg("muted", details.join(" • ")), width)];
+  }
+
+  private renderInputQueue(width: number): string[] {
+    const queued = this.session.queuedInputs;
+    if (queued.length === 0) return [];
+
+    const visible = queued.slice(0, MAX_NATIVE_QUEUE_ITEMS);
+    const hidden = queued.length - visible.length;
+    const lines = [
+      this.renderTheme.bold(this.renderTheme.fg("accent", `◆ Input queue · ${queued.length}`)),
+      this.renderTheme.fg("muted", "│ Enter steer · Alt+Enter follow-up · Alt+Up restore all"),
+    ];
+    for (const [index, input] of visible.entries()) {
+      const isLast = index === visible.length - 1 && hidden === 0;
+      const marker = isLast ? "└─" : "├─";
+      const mode = input.mode === "followUp" ? "follow-up" : "steer";
+      lines.push(`${marker} ${index + 1}. ${mode} · ${compactNativeQueuePreview(input.text)}`);
+    }
+    if (hidden > 0) lines.push(`└─ … +${hidden} more`);
+    return lines.map((line) => truncateToWidth(line, width));
   }
 
   private renderMessage(message: SparkNativeMessage, width: number): string[] {
@@ -2827,7 +3244,10 @@ export class SparkNativeTuiApp implements Component, Focusable {
       cwd === home ? "~" : cwd.startsWith(`${home}/`) ? `~${cwd.slice(home.length)}` : cwd;
     const branch = this.cockpit.gitBranch?.trim();
     const pathLine = branch ? `${compactCwd} (${branch})` : compactCwd;
-    const metrics = formatFooterMetrics(this.currentFooterMetrics());
+    const metrics = formatFooterMetrics(
+      this.currentFooterMetrics(),
+      this.statusContext?.autoCompactionEnabled?.() ?? true,
+    );
     const identity = this.runtimeModelIdentity();
     const lines = [truncateToWidth(this.renderTheme.fg("muted", pathLine), width)];
     if (!metrics && !identity.full) return lines;
@@ -2932,29 +3352,43 @@ export class SparkNativeTuiApp implements Component, Focusable {
       return;
     }
 
+    const actionBar = sparkSlashActionBarForInput(input);
+    if (actionBar) {
+      this.openActionBar(actionBar);
+      return;
+    }
+
     const builtIn = this.builtInSlashCommand(parsed.name, parsed.args);
     if (builtIn !== undefined) {
       if (builtIn) this.session.addSystemMessage(builtIn);
       return;
     }
 
-    const command = this.slashCommands[parsed.name];
+    await this.invokeRegisteredSlashCommand(parsed.name, parsed.args, true);
+  }
+
+  private async invokeRegisteredSlashCommand(
+    name: string,
+    args: string,
+    emitResult: boolean,
+  ): Promise<void> {
+    const command = this.slashCommands[name];
     if (!command) {
-      this.session.addSystemMessage(nativeTuiStrings.unknownCommand(parsed.name));
+      this.session.addSystemMessage(nativeTuiStrings.unknownCommand(name));
       return;
     }
 
     try {
-      const result = await command.handler(parsed.args, {
+      const result = await command.handler(args, {
         app: this,
         session: this.session,
         exit: this.onExit,
       });
-      if (result?.trim()) this.session.addSystemMessage(result.trim());
+      if (emitResult && result?.trim()) this.session.addSystemMessage(result.trim());
     } catch (error) {
       this.session.addSystemMessage(
         nativeTuiStrings.commandFailed(
-          parsed.name,
+          name,
           error instanceof Error ? error.message : String(error),
         ),
       );
@@ -3028,14 +3462,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
     if (panel === "runs" || panel === "workflows") this.ensureWorkflowRunSelection();
     this.invalidate();
     this.tui.requestRender();
-    const snapshot = this.cockpitSnapshot();
-    return nativeTuiStrings.cockpitPanelOpen(
-      panel,
-      [
-        `workflows=${snapshot.workflows}, runs=${snapshot.workflowRuns + snapshot.roleRuns}, tasks=${snapshot.tasks}, artifacts=${snapshot.artifacts}, reviews=${snapshot.reviews}, graft=${snapshot.graftItems}`,
-        "Use /cockpit off to hide it; Ctrl+K toggles overview and Shift+Ctrl+K cycles panels.",
-      ].join(" "),
-    );
+    return false;
   }
 
   private renderCommandHelp(): string {
@@ -3141,6 +3568,62 @@ function compactSessionSenderId(sessionId: string): string {
   const compact = safe.startsWith("session:") ? safe.slice("session:".length) : safe;
   if (/^[0-9a-f]{8}-[0-9a-f-]{27}$/iu.test(compact)) return `${compact.slice(0, 8)}…`;
   return compact.length > 24 ? `${compact.slice(0, 12)}…` : compact;
+}
+
+function nativeAskFlowRequest(
+  request: Extract<SparkInteractionRequest, { kind: "askFlow" }>,
+): PiAskFlowRequest {
+  return {
+    title: request.title,
+    ...(request.prompt ? { context: request.prompt } : {}),
+    ...(request.flow ? { flow: request.flow } : {}),
+    ...(request.delivery ? { delivery: request.delivery } : {}),
+    mode: request.mode,
+    questions: request.questions.map((question) => {
+      // The protocol permits choice-shaped questions with no business options.
+      // The native Ask controller always owns a custom reply affordance, so
+      // normalize those questions to freeform instead of rejecting the whole
+      // interaction before the user can answer it.
+      const customOnly = question.type !== "freeform" && question.options.length === 0;
+      return {
+        id: question.id,
+        prompt: question.prompt,
+        ...(question.header ? { header: question.header } : {}),
+        type: customOnly ? "freeform" : question.type,
+        required: question.required,
+        defaultValues: customOnly ? [] : [...question.defaultValues],
+        options: question.options.map((option) => ({
+          value: option.value,
+          label: option.label,
+          ...(option.description ? { description: option.description } : {}),
+          ...(option.preview ? { preview: option.preview } : {}),
+        })),
+      };
+    }),
+    ...(request.allowElaborate === undefined
+      ? {}
+      : { behaviour: { allowElaborate: request.allowElaborate } }),
+  };
+}
+
+function nativeAskAnswers(result: PiAskFlowResult): SparkJsonObject {
+  return Object.fromEntries(
+    Object.entries(result.answers).map(([questionId, answer]) => [
+      questionId,
+      {
+        values: [...answer.values],
+        ...(answer.labels ? { labels: [...answer.labels] } : {}),
+        ...(answer.customText !== undefined ? { customText: answer.customText } : {}),
+        ...(answer.notes !== undefined ? { notes: answer.notes } : {}),
+        ...(answer.preview !== undefined ? { preview: answer.preview } : {}),
+      },
+    ]),
+  );
+}
+
+function nativeAskLanguage(): "zh" | "en" {
+  const locale = `${process.env.LC_ALL ?? ""} ${process.env.LC_MESSAGES ?? ""} ${process.env.LANG ?? ""}`;
+  return /(?:^|[._\s-])zh(?:[._\s-]|$)/iu.test(locale) ? "zh" : "en";
 }
 
 export function createSparkNativeUiTransport(

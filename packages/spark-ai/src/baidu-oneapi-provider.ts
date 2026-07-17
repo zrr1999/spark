@@ -22,14 +22,12 @@ const GATEWAY_MODEL_BY_ID: Record<string, string> = {
   "claude-opus-4.8": "Opus 4.8 Coding Plan",
   "claude-sonnet-5": "Claude Sonnet 5",
   "claude-fable-5": "Fable 5",
-  "gpt-5.5": "gpt-5.5-coding-plan",
-  "gpt-5.5-coding-plan": "gpt-5.5-coding-plan",
+  "gpt-5.6-luna": "gpt-5.6-luna",
   "gpt-5.6-sol": "gpt-5.6-sol",
   "gpt-5.6-terra": "gpt-5.6-terra",
 };
 const BAIDU_ONEAPI_OPENAI_RESPONSES_MODEL_IDS = new Set([
-  "gpt-5.5",
-  "gpt-5.5-coding-plan",
+  "gpt-5.6-luna",
   "gpt-5.6-sol",
   "gpt-5.6-terra",
 ]);
@@ -60,9 +58,9 @@ const baiduOneApiOpenAIResponsesApi =
     import("@earendil-works/pi-ai/api/openai-responses").then(asTransportStreams),
   );
 
-const GPT_5_5_COST = { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 };
-const GPT_5_6_SOL_COST = { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0.625 };
+const GPT_5_6_LUNA_COST = { input: 0.1, output: 0.6, cacheRead: 0.01, cacheWrite: 0.125 };
 const GPT_5_6_TERRA_COST = { input: 0.25, output: 1.5, cacheRead: 0.025, cacheWrite: 0.3125 };
+const GPT_5_6_SOL_COST = { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0.625 };
 const GPT_THINKING_LEVEL_MAP = { minimal: "low", xhigh: "xhigh" };
 const CLAUDE_FABLE_5_COST = { input: 1.1, output: 5.5, cacheRead: 0.11, cacheWrite: 1.375 };
 const CLAUDE_SONNET_5_COST = { input: 1.1, output: 5.5, cacheRead: 0.11, cacheWrite: 1.375 };
@@ -416,20 +414,6 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
         maxTokens: 32000,
       },
       {
-        id: "gpt-5.5",
-        aliases: ["gpt-5.5-coding-plan"],
-        name: "GPT-5.5",
-        baseUrl: process.env.BAIDU_ONEAPI_OPENAI_BASE_URL ?? BAIDU_ONEAPI_OPENAI_BASE_URL,
-        transportApi: "openai-responses",
-        transportModelId: "gpt-5.5-coding-plan",
-        reasoning: true,
-        thinkingLevelMap: GPT_THINKING_LEVEL_MAP,
-        input: ["text", "image"],
-        cost: GPT_5_5_COST,
-        contextWindow: 258000,
-        maxTokens: 32768,
-      },
-      {
         id: "gpt-5.6-sol",
         name: "GPT-5.6 Sol",
         baseUrl: process.env.BAIDU_ONEAPI_OPENAI_BASE_URL ?? BAIDU_ONEAPI_OPENAI_BASE_URL,
@@ -439,8 +423,21 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
         thinkingLevelMap: GPT_THINKING_LEVEL_MAP,
         input: ["text", "image"],
         cost: GPT_5_6_SOL_COST,
-        contextWindow: 372000,
-        maxTokens: 128000,
+        contextWindow: 258000,
+        maxTokens: 32768,
+      },
+      {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        baseUrl: process.env.BAIDU_ONEAPI_OPENAI_BASE_URL ?? BAIDU_ONEAPI_OPENAI_BASE_URL,
+        transportApi: "openai-responses",
+        transportModelId: "gpt-5.6-luna",
+        reasoning: true,
+        thinkingLevelMap: GPT_THINKING_LEVEL_MAP,
+        input: ["text", "image"],
+        cost: GPT_5_6_LUNA_COST,
+        contextWindow: 258000,
+        maxTokens: 32768,
       },
       {
         id: "gpt-5.6-terra",
@@ -452,8 +449,8 @@ export default function registerBaiduOneApiProvider(pi: ProviderRegistrationAPI)
         thinkingLevelMap: GPT_THINKING_LEVEL_MAP,
         input: ["text", "image"],
         cost: GPT_5_6_TERRA_COST,
-        contextWindow: 372000,
-        maxTokens: 128000,
+        contextWindow: 258000,
+        maxTokens: 32768,
       },
     ],
   });

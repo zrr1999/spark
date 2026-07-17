@@ -29,6 +29,54 @@ describe("Cockpit conversation view adapter", () => {
     ]);
   });
 
+  it("keeps a failed tool inside execution state without synthesizing a conversation error", () => {
+    const parts = conversationPartsFromMessage(
+      message({
+        role: "tool",
+        text: "cue-shell transport failed",
+        status: "error",
+        parts: [
+          {
+            id: "tool-failure",
+            type: "tool-result",
+            status: "failed",
+            toolCallId: "call-cue",
+            toolName: "cue_exec",
+            summary: "cue_exec failed",
+            metadata: {},
+          },
+        ],
+      }),
+    );
+
+    expect(parts).toEqual([
+      {
+        type: "tool",
+        callId: "call-cue",
+        name: "cue_exec",
+        state: "failed",
+        summary: "cue_exec failed",
+      },
+    ]);
+  });
+
+  it("presents a roundtrip budget stop as incomplete work without exposing the guard text", () => {
+    const parts = conversationPartsFromMessage(
+      message({
+        role: "assistant",
+        text: "agent loop hit maxRoundtrips=16; stopping",
+        status: "error",
+        metadata: {
+          errorMessage: "agent loop hit maxRoundtrips=16; stopping",
+          outcomeStatus: "budget_exhausted",
+        },
+      }),
+    );
+
+    expect(parts).toEqual([{ type: "notice", kind: "budget_exhausted" }]);
+    expect(visibleConversationPartText(parts)).toBe("");
+  });
+
   it("maps structured Spark parts without exposing raw tool payload fields", () => {
     const parts = conversationPartsFromMessage(
       message({

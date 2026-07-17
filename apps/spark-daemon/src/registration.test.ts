@@ -6,6 +6,11 @@ import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import { readSparkDaemonConfig, writeSparkDaemonConfig } from "./config.js";
 import {
+  getSparkDaemonServerProfile,
+  listSparkDaemonServerProfiles,
+  upsertSparkDaemonServerProfile,
+} from "./server-profiles.js";
+import {
   completeSparkDaemonDeviceAuthorization,
   ensureSparkDaemonRegistrationForWorkspace,
   registerSparkDaemonWithToken,
@@ -79,7 +84,7 @@ describe("Spark daemon workspace registration", () => {
 
       expect(registered.runtimeId).toBe("rt_11111111111141111111111111111111");
       expect(sleep).toHaveBeenCalledTimes(2);
-      expect(readSparkDaemonConfig(paths)).toMatchObject({
+      expect(getSparkDaemonServerProfile(paths, "https://cockpit.example.test")).toMatchObject({
         serverUrl: "https://cockpit.example.test/",
         runtimeId: "rt_11111111111141111111111111111111",
         runtimeToken: "spark_rt_device_token_0000000000000000000000000000",
@@ -330,9 +335,69 @@ describe("Spark daemon workspace registration", () => {
         bindingId: "rtwb_33333333333341113333333333333333",
         status: "indexing",
       });
-      expect(readSparkDaemonConfig(paths)).toMatchObject({
+      expect(readSparkDaemonConfig(paths)).toEqual({
+        installationId: "install-test",
+        displayName: "Test daemon",
+      });
+      expect(getSparkDaemonServerProfile(paths, "http://127.0.0.1:5173")).toMatchObject({
         runtimeToken: "spark_rt_new_token_0000000000000000000000000000000",
         refreshToken: "spark_rt_refresh_new_000000000000000000000000000",
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("registers a new Cockpit without overwriting another server profile", async () => {
+    const { root, paths } = tempSparkPaths();
+    writeSparkDaemonConfig(paths, {
+      installationId: "install-test",
+      displayName: "Test daemon",
+    });
+    await upsertSparkDaemonServerProfile(paths, {
+      serverUrl: "https://first.example.test",
+      runtimeId: "rt_first",
+      runtimeToken: "spark_rt_first",
+      refreshToken: "spark_refresh_first",
+      webSocketUrl: "wss://first.example.test/runtime/ws",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse(
+          {
+            ...runtimeRegistrationResponse(),
+            runtimeId: "rt_22222222222242222222222222222222",
+            runtimeToken: "spark_rt_second_00000000000000000000000000000000",
+            refreshToken: "spark_refresh_second_0000000000000000000000000000",
+            webSocketUrl: "wss://second.example.test/runtime/ws",
+          },
+          201,
+        ),
+      ),
+    );
+
+    try {
+      await registerSparkDaemonWithToken(paths, {
+        serverUrl: "https://second.example.test",
+        registrationToken: "spark_wsreg_second",
+      });
+
+      expect(listSparkDaemonServerProfiles(paths)).toEqual([
+        expect.objectContaining({
+          serverUrl: "https://first.example.test/",
+          runtimeId: "rt_first",
+          runtimeToken: "spark_rt_first",
+        }),
+        expect.objectContaining({
+          serverUrl: "https://second.example.test/",
+          runtimeId: "rt_22222222222242222222222222222222",
+          runtimeToken: "spark_rt_second_00000000000000000000000000000000",
+        }),
+      ]);
+      expect(readSparkDaemonConfig(paths)).toEqual({
+        installationId: "install-test",
+        displayName: "Test daemon",
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

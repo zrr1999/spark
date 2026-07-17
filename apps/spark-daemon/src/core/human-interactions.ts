@@ -10,11 +10,16 @@ import {
   type SparkInteractionResponse,
 } from "@zendev-lab/spark-protocol";
 import { runtimeEnvelope } from "../protocol/outbound.ts";
-import { SparkDaemonHumanWaitRegistry, type SparkDaemonHumanWaitRecord } from "./human-waits.ts";
+import {
+  SparkDaemonHumanWaitRegistry,
+  type SparkDaemonHumanWaitDeliveryResult,
+  type SparkDaemonHumanWaitRecord,
+} from "./human-waits.ts";
 
 export interface SparkDaemonHumanInteractionContext {
   sessionId: string;
   invocationId: string;
+  sessionSource?: "tui" | "web" | "channel" | "daemon" | "session";
   workspaceBindingId?: string;
   workspaceId?: string;
   projectId?: string;
@@ -42,10 +47,29 @@ export interface SparkDaemonHumanInteractionOpened {
   }>;
 }
 
+export interface SparkDaemonHumanInteractionRoute {
+  workspaceBindingId: string;
+  workspaceId: string;
+  serverUrl: string;
+}
+
+export interface SparkDaemonHumanInteractionResponseInput {
+  /** Stable across client retries so an accepted response can be replayed safely. */
+  humanResponseId?: string;
+  status: "answered" | "cancelled";
+  answers: Record<string, unknown>;
+  responseArtifactRefs: string[];
+}
+
+export type SparkDaemonHumanInteractionResponder = (
+  wait: SparkDaemonHumanWaitRecord,
+  input: SparkDaemonHumanInteractionResponseInput,
+) => Promise<SparkDaemonHumanWaitDeliveryResult>;
+
 export interface SparkDaemonHumanInteractionBrokerOptions {
   db: DatabaseSync;
   waits: SparkDaemonHumanWaitRegistry;
-  getRuntimeId(): string | undefined;
+  getRuntimeId(route: SparkDaemonHumanInteractionRoute): string | undefined;
   /** Wake/flush the durable request outbox after the registration commits. */
   onOutboxReady?: () => void | Promise<void>;
   /** Optional channel projection (QQ keyboard); failure must not lose the Cockpit request. */
@@ -57,6 +81,67 @@ export class SparkDaemonHumanInteractionBroker {
 
   constructor(options: SparkDaemonHumanInteractionBrokerOptions) {
     this.options = options;
+  }
+
+  /**
+   * Settle a response accepted directly by this daemon and durably project the
+   * committed fact so the owning Cockpit closes its pending interaction.
+   */
+  async respond(
+    wait: SparkDaemonHumanWaitRecord,
+    input: SparkDaemonHumanInteractionResponseInput,
+  ): Promise<SparkDaemonHumanWaitDeliveryResult> {
+    const route = resolveHumanInteractionRoute(this.options.db, {
+      sessionId: wait.sessionId,
+      invocationId: wait.invocationId,
+      ...(wait.workspaceBindingId ? { workspaceBindingId: wait.workspaceBindingId } : {}),
+      ...(wait.workspaceId ? { workspaceId: wait.workspaceId } : {}),
+    });
+    const runtimeId = route ? this.options.getRuntimeId(route)?.trim() : undefined;
+    const wasProjectedToCockpit = wait.context.cockpitProjected === true;
+    const humanResponseId = input.humanResponseId ?? createId("hres");
+    const deliveryInput = {
+      humanRequestId: wait.humanRequestId,
+      humanResponseId,
+      status: input.status,
+      answers: input.answers,
+      responseArtifactRefs: input.responseArtifactRefs,
+    };
+    if (!wasProjectedToCockpit || wait.status !== "pending") {
+      return this.options.waits.deliver(deliveryInput);
+    }
+    if (!runtimeId || !route) {
+      throw new Error(
+        `Daemon could not resolve the Cockpit route for human interaction ${wait.interactionRequestId}.`,
+      );
+    }
+
+    const messageId = createId("msg");
+    const result = this.options.waits.deliver(deliveryInput, {
+      messageId,
+      kind: "human.response.recorded",
+      envelope: runtimeEnvelope(
+        "human.response.recorded",
+        {
+          source: "daemon",
+          status: input.status,
+          answers: input.answers,
+          responseArtifactRefs: input.responseArtifactRefs,
+        },
+        {
+          runtimeId,
+          workspaceBindingId: route.workspaceBindingId,
+          workspaceId: route.workspaceId,
+          projectId: wait.projectId || undefined,
+          humanRequestId: wait.humanRequestId,
+          humanResponseId,
+          invocationId: wait.invocationId || undefined,
+        },
+        { messageId },
+      ),
+    });
+    await Promise.resolve(this.options.onOutboxReady?.());
+    return result;
   }
 
   async interact(
@@ -71,9 +156,11 @@ export class SparkDaemonHumanInteractionBroker {
       );
     }
 
-    const runtimeId = this.options.getRuntimeId()?.trim();
     const route = resolveHumanInteractionRoute(this.options.db, context);
-    if (!runtimeId || !route) {
+    const runtimeId = route ? this.options.getRuntimeId(route)?.trim() : undefined;
+    const localTui = context.sessionSource === "tui";
+    const cockpitProjected = Boolean(runtimeId && route);
+    if (!cockpitProjected && !localTui) {
       return createBlockedInteractionResponse(
         request,
         "Daemon could not resolve a Cockpit runtime/workspace route for this ask.",
@@ -93,6 +180,8 @@ export class SparkDaemonHumanInteractionBroker {
       interactionSource: request.source,
       interactionMetadata: request.metadata,
       sessionId: context.sessionId,
+      ...(context.sessionSource ? { sessionSource: context.sessionSource } : {}),
+      cockpitProjected,
       delivery,
       ...(context.channel ? { channel: context.channel } : {}),
       ...(callbackOptions.length > 0
@@ -126,9 +215,10 @@ export class SparkDaemonHumanInteractionBroker {
         ...(question.options.length > 0
           ? {
               options: question.options.map((option) => ({
-                id: option.value,
+                value: option.value,
                 label: option.label,
                 ...(option.description ? { description: option.description } : {}),
+                ...(option.preview ? { preview: option.preview } : {}),
               })),
             }
           : {}),
@@ -136,27 +226,30 @@ export class SparkDaemonHumanInteractionBroker {
       context: contextPayload,
       contextArtifactRefs: [],
     };
-    const envelope = runtimeEnvelope(
-      "human.request.created",
-      payload,
-      {
-        runtimeId,
-        workspaceBindingId: route.workspaceBindingId,
-        workspaceId: route.workspaceId,
-        projectId: context.projectId,
-        humanRequestId,
-        invocationId,
-      },
-      { messageId },
-    );
+    const envelope =
+      cockpitProjected && runtimeId && route
+        ? runtimeEnvelope(
+            "human.request.created",
+            payload,
+            {
+              runtimeId,
+              workspaceBindingId: route.workspaceBindingId,
+              workspaceId: route.workspaceId,
+              projectId: context.projectId,
+              humanRequestId,
+              invocationId,
+            },
+            { messageId },
+          )
+        : undefined;
     const registration = this.options.waits.register(
       {
         humanRequestId,
         interactionRequestId: request.requestId,
         sessionId: context.sessionId,
         invocationId,
-        workspaceBindingId: route.workspaceBindingId,
-        workspaceId: route.workspaceId,
+        workspaceBindingId: route?.workspaceBindingId ?? context.workspaceBindingId,
+        workspaceId: route?.workspaceId ?? context.workspaceId,
         projectId: context.projectId,
         toolCallId: context.toolCallId,
         delivery,
@@ -167,10 +260,10 @@ export class SparkDaemonHumanInteractionBroker {
         context: contextPayload,
         contextArtifactRefs: [],
       },
-      { messageId, kind: "human.request.created", envelope },
+      envelope ? { messageId, kind: "human.request.created", envelope } : undefined,
     );
 
-    await Promise.resolve(this.options.onOutboxReady?.());
+    if (envelope) await Promise.resolve(this.options.onOutboxReady?.());
     if (this.options.onRequestOpened) {
       try {
         await this.options.onRequestOpened({
@@ -207,40 +300,13 @@ export class SparkDaemonHumanInteractionBroker {
       );
     }
     const response = await awaitHumanResponse(registration.response, context.signal, () => {
-      const humanResponseId = createId("hres");
-      const responseMessageId = createId("msg");
-      this.options.waits.deliver(
-        {
-          humanRequestId,
-          humanResponseId,
-          status: "cancelled",
-          answers: {},
-        },
-        {
-          messageId: responseMessageId,
-          kind: "human.response.recorded",
-          envelope: runtimeEnvelope(
-            "human.response.recorded",
-            {
-              source: "daemon",
-              status: "cancelled",
-              answers: {},
-              responseArtifactRefs: [],
-            },
-            {
-              runtimeId,
-              workspaceBindingId: route.workspaceBindingId,
-              workspaceId: route.workspaceId,
-              projectId: context.projectId,
-              humanRequestId,
-              humanResponseId,
-              invocationId,
-            },
-            { messageId: responseMessageId },
-          ),
-        },
-      );
-      void Promise.resolve(this.options.onOutboxReady?.());
+      void this.respond(registration.wait, {
+        status: "cancelled",
+        answers: {},
+        responseArtifactRefs: [],
+      }).catch((error: unknown) => {
+        console.error("[spark-daemon] failed to cancel daemon-owned human interaction", error);
+      });
     });
     return {
       version: SPARK_PROTOCOL_VERSION,
@@ -276,7 +342,7 @@ function createCallbackOptions(
 function resolveHumanInteractionRoute(
   db: DatabaseSync,
   context: SparkDaemonHumanInteractionContext,
-): { workspaceBindingId: string; workspaceId: string } | null {
+): SparkDaemonHumanInteractionRoute | null {
   // Channel ingress already carries the authoritative server workspace id.
   // Do not let a daemon-local task workspace reference shadow that route.
   if (context.channel?.workspaceId) {
@@ -290,6 +356,7 @@ function resolveHumanInteractionRoute(
     return {
       workspaceBindingId: localRoute.workspaceBindingId,
       workspaceId: localRoute.workspaceId,
+      serverUrl: localRoute.serverUrl,
     };
   }
 
@@ -310,23 +377,36 @@ function resolveHumanInteractionRoute(
 function findLocalWorkspaceRoute(
   db: DatabaseSync,
   workspaceReference: string,
-): { workspaceBindingId: string; workspaceId?: string; localPath: string } | null {
+): {
+  workspaceBindingId: string;
+  workspaceId?: string;
+  serverUrl: string;
+  localPath: string;
+} | null {
   const row = db
     .prepare(
       `SELECT w.id AS workspaceBindingId,
               dw.server_workspace_id AS workspaceId,
+              COALESCE(ds.server_url, w.server_url) AS serverUrl,
               w.local_path AS localPath
        FROM workspaces w
        LEFT JOIN daemon_workspaces dw ON dw.id = w.id
+       LEFT JOIN daemon_servers ds ON ds.id = dw.server_id
        WHERE w.id = ?
        LIMIT 1`,
     )
     .get(workspaceReference) as
-    | { workspaceBindingId: string; workspaceId: string | null; localPath: string }
+    | {
+        workspaceBindingId: string;
+        workspaceId: string | null;
+        serverUrl: string;
+        localPath: string;
+      }
     | undefined;
   if (!row) return null;
   return {
     workspaceBindingId: row.workspaceBindingId,
+    serverUrl: row.serverUrl,
     localPath: row.localPath,
     ...(row.workspaceId ? { workspaceId: row.workspaceId } : {}),
   };
@@ -335,12 +415,15 @@ function findLocalWorkspaceRoute(
 function findUniqueServerRoute(
   db: DatabaseSync,
   filters: { serverWorkspaceId?: string; localPath?: string },
-): { workspaceBindingId: string; workspaceId: string } | null {
+): SparkDaemonHumanInteractionRoute | null {
   const rows = db
     .prepare(
-      `SELECT w.id AS workspaceBindingId, dw.server_workspace_id AS workspaceId
+      `SELECT w.id AS workspaceBindingId,
+              dw.server_workspace_id AS workspaceId,
+              ds.server_url AS serverUrl
        FROM workspaces w
        JOIN daemon_workspaces dw ON dw.id = w.id
+       JOIN daemon_servers ds ON ds.id = dw.server_id
        WHERE dw.server_workspace_id IS NOT NULL
          AND (? IS NULL OR dw.server_workspace_id = ?)
          AND (? IS NULL OR w.local_path = ?)
@@ -352,7 +435,7 @@ function findUniqueServerRoute(
       filters.serverWorkspaceId ?? null,
       filters.localPath ?? null,
       filters.localPath ?? null,
-    ) as Array<{ workspaceBindingId: string; workspaceId: string }>;
+    ) as unknown as SparkDaemonHumanInteractionRoute[];
   return rows.length === 1 ? rows[0]! : null;
 }
 

@@ -197,6 +197,7 @@
         activeWorkspaceId={data.activeWorkspace?.id ?? null}
         selectedSessionId={selectedSessionId}
         sessionsAvailable={data.sessionsAvailable}
+        sessionControlAvailable={data.sessionControlAvailable}
         locale={data.locale}
         {common}
         messages={{

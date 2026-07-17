@@ -7,6 +7,7 @@ import {
   runRuntimeEphemeralSecretRequest,
   runtimeChannelRouteForWorkspace,
   runtimeModelRouteForRuntime,
+  runtimeModelRouteForWorkspace,
   type RuntimeEphemeralSecretDispatchInput,
 } from "./runtime-model-channel-control.ts";
 import { RuntimeControlCommandError } from "./runtime-control.ts";
@@ -15,6 +16,20 @@ const now = "2026-07-15T00:00:00.000Z";
 const marker = "SPARK_SECRET_MARKER_runtime_control";
 
 describe("runtime ephemeral secret control", () => {
+  it("routes a workspace model catalog through its active owner", () => {
+    const h = setup();
+    try {
+      expect(runtimeModelRouteForWorkspace(h.db, h.workspaceId)).toEqual({
+        runtimeId: h.runtimeId,
+        runtimeWorkspaceBindingId: h.bindingId,
+        scope: "workspace",
+        workspaceId: h.workspaceId,
+      });
+    } finally {
+      h.db.close();
+    }
+  });
+
   it.each([
     ["http", { pageProtocol: "http:" }],
     ["missing-owner", { actorUserId: "" }],
@@ -42,7 +57,13 @@ describe("runtime ephemeral secret control", () => {
       );
       expect(executionCount).toBe(0);
       expect(auditRows(h.db)).toHaveLength(0);
-      rejectionTranscript(_name, requestId, reasonCode, executionCount);
+      rejectionTranscript(
+        _name,
+        requestId,
+        reasonCode,
+        executionCount,
+        databaseText(h.db).includes(marker) ? 1 : 0,
+      );
     } finally {
       unregister();
       h.db.close();
@@ -243,6 +264,7 @@ function rejectionTranscript(
   requestId: string,
   reasonCode: string,
   daemonExecutionCount: number,
+  persistenceMatchCount = 0,
 ): void {
   console.log(
     "SPARK_EPHEMERAL_SECRET_REJECTION",
@@ -252,6 +274,7 @@ function rejectionTranscript(
       status: reasonCode,
       daemonExecutionCount,
       retryCount: 0,
+      persistenceMatchCount,
     }),
   );
 }

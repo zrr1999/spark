@@ -27,6 +27,7 @@
     "@cursor/sdk": "1.0.23",
     "@earendil-works/pi-ai": "^0.80.6",
     "@zendev-lab/spark-extension-api": "workspace:^",
-    "typebox": "^1.2.13"
+    "@zendev-lab/spark-retry": "workspace:^",
+    "typebox": "catalog:"
   }
 }
