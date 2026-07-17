@@ -409,10 +409,6 @@ export class SparkNativeSession {
         queued: true,
         details: { queueMode: mode },
       });
-      this.pushMessage({
-        role: "system",
-        text: nativeTuiStrings.queuedInput(mode, this.queuedFollowUps.length),
-      });
       return "queued";
     }
 

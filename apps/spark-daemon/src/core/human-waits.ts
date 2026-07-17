@@ -100,12 +100,14 @@ export interface SparkDaemonHumanWaitInteractionLookup {
 
 export class SparkDaemonHumanWaitLookupError extends Error {
   override readonly name = "SparkDaemonHumanWaitLookupError";
+  readonly code: "human_interaction_not_found" | "human_interaction_ambiguous";
 
   constructor(
-    readonly code: "human_interaction_not_found" | "human_interaction_ambiguous",
+    code: "human_interaction_not_found" | "human_interaction_ambiguous",
     message: string,
   ) {
     super(message);
+    this.code = code;
   }
 }
 

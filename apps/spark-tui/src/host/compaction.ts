@@ -9,6 +9,7 @@ import {
 import type {
   SparkBranchSummaryEntry,
   SparkCompactionEntry,
+  SparkCompactionOutcomeMetadata,
   SparkCustomMessageEntry,
   SparkSessionEntry,
   SparkSessionMessage,
@@ -50,13 +51,6 @@ export interface SparkCompactionSettings {
   keepRecentTokens: number;
 }
 
-export interface SparkCompactionOutcomeMetadata {
-  summaryVersion: number;
-  tokenSource: SparkCompactionTokenSource;
-  measuredReductionRatio: number;
-  fallbackReason?: SparkCompactionFallbackReason;
-}
-
 export const CURRENT_SPARK_COMPACTION_SUMMARY_VERSION = 2;
 
 export const DEFAULT_SPARK_COMPACTION_SETTINGS: SparkCompactionSettings = {
@@ -74,11 +68,12 @@ export function normalizeSparkCompactionOutcomeMetadata(
   input: Partial<SparkCompactionOutcomeMetadata> &
     Pick<SparkCompactionOutcomeMetadata, "tokenSource">,
 ): SparkCompactionOutcomeMetadata {
+  const fallbackReason = validFallbackReason(input.fallbackReason);
   return {
     summaryVersion: positiveInteger(input.summaryVersion, CURRENT_SPARK_COMPACTION_SUMMARY_VERSION),
-    tokenSource: input.tokenSource,
+    tokenSource: validTokenSource(input.tokenSource),
     measuredReductionRatio: unitRatio(input.measuredReductionRatio, 0),
-    ...(input.fallbackReason ? { fallbackReason: input.fallbackReason } : {}),
+    ...(fallbackReason ? { fallbackReason } : {}),
   };
 }
 
@@ -307,6 +302,8 @@ export async function compactSparkSessionRecord<T = unknown>(
   record: SparkSessionRecord,
   preparation: SparkCompactionPreparation,
   summarizer: SparkCompactionSummarizer<T>,
+  metadata?: Partial<SparkCompactionOutcomeMetadata> &
+    Pick<SparkCompactionOutcomeMetadata, "tokenSource">,
 ): Promise<SparkCompactionEntry<T>> {
   const result = await summarizer(preparation);
   const entry: SparkCompactionEntry<T> = {
@@ -318,6 +315,7 @@ export async function compactSparkSessionRecord<T = unknown>(
     firstKeptEntryId: preparation.firstKeptEntryId,
     tokensBefore: preparation.tokensBefore,
     details: result.details,
+    ...(metadata ? { metadata: normalizeSparkCompactionOutcomeMetadata(metadata) } : {}),
   };
   record.entries.push(entry);
   return entry;
@@ -598,6 +596,21 @@ function messageSummaryWeight(message: SparkSessionMessage): number {
   if (message.role === "assistant" || message.role === "custom") return 3;
   if (message.role === "toolResult") return 1;
   return 2;
+}
+
+function validTokenSource(value: unknown): SparkCompactionTokenSource {
+  return value === "reported" || value === "tokenizer" || value === "estimated"
+    ? value
+    : "estimated";
+}
+
+function validFallbackReason(value: unknown): SparkCompactionFallbackReason | undefined {
+  return value === "model_unavailable" ||
+    value === "model_error" ||
+    value === "invalid_summary" ||
+    value === "deterministic_requested"
+    ? value
+    : undefined;
 }
 
 function positiveInteger(value: unknown, fallback: number): number {

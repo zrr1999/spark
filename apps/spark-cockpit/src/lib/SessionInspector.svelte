@@ -25,11 +25,12 @@
     initialTab?: SessionInspectorTab;
   } = $props();
 
-  let activeTab = $state<SessionInspectorTab>(untrack(() => initialTab));
+  let activeTab = $state<SessionInspectorTab>(
+    untrack(() => (initialTab === "todos" ? "summary" : initialTab)),
+  );
   let tabs = $derived<{ id: SessionInspectorTab; label: string; icon: IconName }[]>([
     { id: "summary", label: labels.tabs.summary, icon: "activity" },
     { id: "changes", label: labels.tabs.changes, icon: "repos" },
-    { id: "todos", label: labels.tabs.todos, icon: "check" },
     { id: "tasks", label: labels.tabs.tasks, icon: "folder" },
     { id: "mailbox", label: labels.tabs.mailbox, icon: "inbox" },
   ]);
@@ -97,6 +98,42 @@
 </script>
 
 <section class="session-inspector" aria-label={labels.ariaLabel}>
+  <div class="session-todo-rail" aria-label={labels.tabs.todos}>
+    {#if view.sessionTodo === null}
+      <EmptyState
+        title={labels.noSessionTodoTitle}
+        body={labels.noSessionTodoBody}
+        icon="check"
+        compact
+      />
+    {:else}
+      <section class="inspector-section session-todo-section" aria-labelledby={headingId("todos")}>
+        <header class="session-todo-header">
+          <div>
+            <h2 id={headingId("todos")}>{labels.sessionTodoHeading}</h2>
+            <p>{view.sessionTodo.summary}</p>
+          </div>
+          <a href={`#${view.sessionTodo.anchor}`}>{labels.openSessionTodo}</a>
+        </header>
+        {#if view.sessionTodo.items.length > 0}
+          <ul class="session-todo-list" aria-label={labels.todoList}>
+            {#each view.sessionTodo.items as todo (todo.id)}
+              <li>
+                <span class={`todo-state ${statusClass(todo.status)}`} aria-hidden="true"></span>
+                <span class="todo-content">{todo.content}</span>
+                <span class={`status-pill ${statusClass(todo.status)}`}>
+                  {statusLabel(todo.status)}
+                </span>
+              </li>
+            {/each}
+          </ul>
+        {:else}
+          <p class="session-todo-empty">{labels.noActiveSessionTodo}</p>
+        {/if}
+      </section>
+    {/if}
+  </div>
+
   <div class="inspector-tabs" role="tablist" aria-label={labels.ariaLabel}>
     {#each tabs as tab, index}
       <button
@@ -196,40 +233,6 @@
               </article>
             {/each}
           </div>
-        </section>
-      {/if}
-    {:else if activeTab === "todos"}
-      {#if view.sessionTodo === null}
-        <EmptyState
-          title={labels.noSessionTodoTitle}
-          body={labels.noSessionTodoBody}
-          icon="check"
-          compact
-        />
-      {:else}
-        <section class="inspector-section" aria-labelledby={headingId("todos")}>
-          <header class="session-todo-header">
-            <div>
-              <h2 id={headingId("todos")}>{labels.sessionTodoHeading}</h2>
-              <p>{view.sessionTodo.summary}</p>
-            </div>
-            <a href={`#${view.sessionTodo.anchor}`}>{labels.openSessionTodo}</a>
-          </header>
-          {#if view.sessionTodo.items.length > 0}
-            <ul class="session-todo-list" aria-label={labels.todoList}>
-              {#each view.sessionTodo.items as todo (todo.id)}
-                <li>
-                  <span class={`todo-state ${statusClass(todo.status)}`} aria-hidden="true"></span>
-                  <span class="todo-content">{todo.content}</span>
-                  <span class={`status-pill ${statusClass(todo.status)}`}>
-                    {statusLabel(todo.status)}
-                  </span>
-                </li>
-              {/each}
-            </ul>
-          {:else}
-            <p class="session-todo-empty">{labels.noActiveSessionTodo}</p>
-          {/if}
         </section>
       {/if}
     {:else if activeTab === "tasks"}
@@ -348,6 +351,16 @@
     container-type: inline-size;
     min-width: 0;
     overflow: hidden;
+  }
+
+  .session-todo-rail {
+    border-bottom: 1px solid var(--color-border);
+    min-width: 0;
+    padding: var(--spacing-sm) var(--spacing-md) var(--spacing-md);
+  }
+
+  .session-todo-section {
+    margin: 0;
   }
 
   .inspector-tabs {
@@ -632,27 +645,6 @@
   .output-details {
     border-top: 1px solid var(--color-border-soft);
     padding-top: var(--spacing-sm);
-  }
-
-  .output-details summary {
-    color: var(--color-ink-subtle);
-    cursor: pointer;
-    font-size: var(--text-caption);
-    font-weight: var(--weight-caption-medium);
-  }
-
-  .output-details pre {
-    background: var(--color-canvas);
-    border: 1px solid var(--color-border);
-    border-radius: var(--rounded-md);
-    color: var(--color-ink);
-    font-family: var(--font-mono);
-    font-size: var(--text-caption);
-    margin: var(--spacing-sm) 0 0;
-    max-height: 12rem;
-    overflow: auto;
-    padding: var(--spacing-sm);
-    white-space: pre-wrap;
   }
 
   .task-todos {

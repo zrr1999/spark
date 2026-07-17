@@ -5,7 +5,10 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  CURRENT_SPARK_COMPACTION_SUMMARY_VERSION,
   DEFAULT_SPARK_COMPACTION_SETTINGS,
+  type SparkCompactionOutcomeMetadata,
+  normalizeSparkCompactionOutcomeMetadata,
   SparkHostRuntime,
   SparkSessionStore,
   compactSparkSessionRecord,
@@ -46,9 +49,44 @@ const tinyKeepSettings: SparkCompactionSettings = {
   keepRecentTokens: 1,
 };
 
+void test("Spark Compact V2 defaults and outcome metadata are stable", () => {
+  assert.equal(DEFAULT_SPARK_COMPACTION_SETTINGS.targetReduction, 0.4);
+  assert.equal(DEFAULT_SPARK_COMPACTION_SETTINGS.compactModel, "current");
+  assert.equal(
+    DEFAULT_SPARK_COMPACTION_SETTINGS.microThreshold <
+      DEFAULT_SPARK_COMPACTION_SETTINGS.fullThreshold,
+    true,
+  );
+
+  const metadata: SparkCompactionOutcomeMetadata = normalizeSparkCompactionOutcomeMetadata({
+    tokenSource: "reported",
+    measuredReductionRatio: 0.4,
+    fallbackReason: "model_error",
+  });
+  assert.deepEqual(metadata, {
+    summaryVersion: CURRENT_SPARK_COMPACTION_SUMMARY_VERSION,
+    tokenSource: "reported",
+    measuredReductionRatio: 0.4,
+    fallbackReason: "model_error",
+  });
+  assert.equal(
+    normalizeSparkCompactionOutcomeMetadata({
+      tokenSource: "bogus" as never,
+      measuredReductionRatio: 9,
+      fallbackReason: "bogus" as never,
+    }).tokenSource,
+    "estimated",
+  );
+});
+
 void test("Spark compaction uses Pi default trigger settings", () => {
   assert.deepEqual(DEFAULT_SPARK_COMPACTION_SETTINGS, {
     enabled: true,
+    microThreshold: 0.75,
+    fullThreshold: 0.9,
+    targetReduction: 0.4,
+    minUsefulReduction: 0.05,
+    compactModel: "current",
     reserveTokens: 16_384,
     keepRecentTokens: 20_000,
   });
@@ -107,10 +145,18 @@ void test("compactSparkSessionRecord appends Pi-compatible compaction entry", as
     const preparation = prepareSparkCompaction(record, undefined, tinyKeepSettings)!;
     const previousLeafId = record.entries.at(-1)!.id;
 
-    const entry = await compactSparkSessionRecord(record, preparation, async (input) => ({
-      summary: `summary:${input.messagesToSummarize.length}:${input.turnPrefixMessages.length}`,
-      details: { readFiles: ["a.ts"], modifiedFiles: ["b.ts"] },
-    }));
+    const entry = await compactSparkSessionRecord(
+      record,
+      preparation,
+      async (input) => ({
+        summary: `summary:${input.messagesToSummarize.length}:${input.turnPrefixMessages.length}`,
+        details: { readFiles: ["a.ts"], modifiedFiles: ["b.ts"] },
+      }),
+      {
+        tokenSource: "reported",
+        measuredReductionRatio: 0.4,
+      },
+    );
 
     assert.equal(entry.type, "compaction");
     assert.equal(entry.parentId, previousLeafId);
@@ -118,7 +164,20 @@ void test("compactSparkSessionRecord appends Pi-compatible compaction entry", as
     assert.equal(entry.tokensBefore, preparation.tokensBefore);
     assert.equal(entry.summary, "summary:2:1");
     assert.deepEqual(entry.details, { readFiles: ["a.ts"], modifiedFiles: ["b.ts"] });
+    assert.deepEqual(entry.metadata, {
+      summaryVersion: CURRENT_SPARK_COMPACTION_SUMMARY_VERSION,
+      tokenSource: "reported",
+      measuredReductionRatio: 0.4,
+    });
     assert.equal(record.entries.at(-1), entry);
+    await store.save(record);
+    const reloaded = await store.loadByRef(record.header.id);
+    const persisted = reloaded.entries.at(-1);
+    assert.equal(persisted?.type, "compaction");
+    assert.deepEqual(
+      persisted?.type === "compaction" ? persisted.metadata : undefined,
+      entry.metadata,
+    );
     assert.equal(prepareSparkCompaction(record, undefined, tinyKeepSettings), undefined);
   } finally {
     await rm(dir, { recursive: true, force: true });

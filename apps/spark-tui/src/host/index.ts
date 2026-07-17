@@ -200,10 +200,11 @@ export type {
 } from "./bootstrap.ts";
 export type { SparkConfig } from "./config.ts";
 export type {
-  SparkCompactionOutcomeMetadata,
+  SparkCompactionFallbackReason,
   SparkCompactionPreparation,
   SparkCompactionSettings,
   SparkCompactionSummarizer,
+  SparkCompactionTokenSource,
   SparkBranchNavigationSummaryResult,
   SparkCompactionSummaryResult,
   SparkContextUsageEstimate,
@@ -269,6 +270,7 @@ export type {
   NewSparkSessionOptions,
   SparkBranchSummaryEntry,
   SparkCompactionEntry,
+  SparkCompactionOutcomeMetadata,
   SparkCustomEntry,
   SparkCustomMessageEntry,
   SparkLabelEntry,

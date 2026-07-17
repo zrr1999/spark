@@ -3191,7 +3191,7 @@ void test("native TUI model selection and following turn share one managed sessi
         },
       },
     ]);
-    assert.match(submitted[0]?.input.idempotencyKey ?? "", /^idem_[a-f0-9]{32}$/u);
+    assert.match(submitted[0]?.input.idempotencyKey ?? "", /^turn\.submit:spark_cli_/u);
     assert.deepEqual(
       submitted.map(({ input: { idempotencyKey: _, ...input } }) => input),
       [

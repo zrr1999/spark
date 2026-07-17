@@ -12,7 +12,6 @@ vi.mock("$lib/server/managed-sessions", () => ({
 
 vi.mock("$lib/session-snapshot-window", () => ({
   normalizeSessionSnapshotLimit: () => 80,
-  sessionSnapshotWindow: (snapshot: unknown, limit: number) => ({ snapshot, limit }),
 }));
 
 vi.mock("$lib/workbench-session-scope", () => ({
@@ -38,8 +37,24 @@ function requestEvent(sessionId: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.snapshot.mockResolvedValue({
-    sessionId: workspaceSession.sessionId,
-    messages: [],
+    snapshot: {
+      sessionId: workspaceSession.sessionId,
+      status: "idle",
+      messages: [],
+      tools: [],
+      artifacts: [],
+      tasks: [],
+      runs: [],
+      mailbox: [],
+    },
+    history: {
+      totalMessages: 0,
+      loadedMessages: 0,
+      hiddenMessages: 0,
+      earlierMessages: 0,
+      laterMessages: 0,
+      hasEarlierMessages: false,
+    },
   });
 });
 
@@ -51,10 +66,26 @@ describe("session snapshot route scope", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      snapshot: { sessionId: workspaceSession.sessionId, messages: [] },
-      limit: 80,
+      snapshot: {
+        sessionId: workspaceSession.sessionId,
+        status: "idle",
+        messages: [],
+        tools: [],
+        artifacts: [],
+        tasks: [],
+        runs: [],
+        mailbox: [],
+      },
+      history: {
+        totalMessages: 0,
+        loadedMessages: 0,
+        hiddenMessages: 0,
+        earlierMessages: 0,
+        laterMessages: 0,
+        hasEarlierMessages: false,
+      },
     });
-    expect(mocks.snapshot).toHaveBeenCalledWith(workspaceSession.sessionId);
+    expect(mocks.snapshot).toHaveBeenCalledWith(workspaceSession.sessionId, { messageLimit: 80 });
   });
 
   it("does not expose a daemon-global session snapshot", async () => {

@@ -113,7 +113,7 @@ describe("workbench session page scope", () => {
     expect(mocks.snapshot).toHaveBeenCalledWith(workspaceSession.sessionId, {
       messageLimit: 32,
     });
-    expect(mocks.modelControl).toHaveBeenCalledWith(workspaceSession.sessionId);
+    expect(mocks.modelControl).toHaveBeenCalledWith({ workspaceId: "ws_current" });
     expect(mocks.activity).toHaveBeenCalledWith(
       {},
       expect.objectContaining({ workspaceId: "ws_current" }),
@@ -173,6 +173,6 @@ describe("workbench session page scope", () => {
     expect(mocks.snapshot).not.toHaveBeenCalled();
     expect(mocks.modelControl).not.toHaveBeenCalled();
     expect(mocks.projectedSnapshot).toHaveBeenCalledWith(workspaceSession.sessionId);
-    expect(mocks.projectedModelControl).toHaveBeenCalledWith(workspaceSession.sessionId);
+    expect(mocks.projectedModelControl).toHaveBeenCalledWith({ workspaceId: "ws_current" });
   });
 });

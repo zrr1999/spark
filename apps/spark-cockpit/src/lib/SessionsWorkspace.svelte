@@ -1052,7 +1052,7 @@
     }
   }
 
-  async function showEarlierTimeline() {
+  async function showEarlierTimeline(): Promise<boolean> {
     if (historyLoadState === "loading") return false;
     const history = liveSessionHistory;
     const snapshot = liveSessionView;
@@ -1995,7 +1995,8 @@
                   />
                 {:else}
                   <a class="model-settings-link" href="/settings/models">
-                    <Icon name="settings" size={14} />{copy.configureModels}
+                    <Icon name={modelControl.available ? "settings" : "warning"} size={14} />
+                    {modelControl.available ? copy.configureModels : copy.modelControlUnavailable}
                   </a>
                 {/if}
               {/snippet}
@@ -2294,7 +2295,8 @@
               />
             {:else}
               <a class="model-settings-link compact" href="/settings/models">
-                <Icon name="warning" size={13} />{copy.modelUnavailable}
+                <Icon name="warning" size={13} />
+                {modelControl.available ? copy.modelUnavailable : copy.modelControlUnavailable}
               </a>
             {/if}
           {/snippet}

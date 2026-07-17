@@ -424,6 +424,7 @@ const messages = {
     title: "Conversations",
     lede: "Continue a conversation in this workspace.",
     newSession: "New conversation",
+    workspaceConversation: "New workspace conversation",
     searchPlaceholder: "Filter conversations",
     emptyTitle: "No conversations yet",
     emptyBody:
@@ -579,6 +580,8 @@ const messages = {
       closeModelPicker: "Close model picker",
       clearModelSearch: "Clear search",
       modelUnavailable: "No authenticated model is available",
+      modelControlUnavailable:
+        "Model catalog temporarily unavailable — check the daemon connection",
       currentModelUnavailable: "Current model unavailable — choose another model",
       configureModels: "Configure providers",
       applyModelRuntime: "Apply",

@@ -143,33 +143,6 @@
 
 <div class="session-rail">
   <div class="session-toolbar">
-    <div class="new-session-actions">
-      {#if activeWorkspaceId}
-        {#if sessionControlAvailable}
-          <a
-            class="new-session"
-            href="/sessions?new=workspace"
-            aria-label={messages.workspaceConversation}
-            title={messages.workspaceConversation}
-          >
-            <Icon name="workspace" size={16} stroke={2.2} />
-            <span class="sr-only">{messages.workspaceConversation}</span>
-          </a>
-        {:else}
-          <span
-            class="new-session disabled"
-            role="link"
-            aria-disabled="true"
-            aria-label={messages.workspaceConversation}
-            title={messages.workspaceConversation}
-          >
-            <Icon name="workspace" size={16} stroke={2.2} />
-            <span class="sr-only">{messages.workspaceConversation}</span>
-          </span>
-        {/if}
-      {/if}
-    </div>
-
     <label class="session-filter">
       <Icon name="search" size={15} stroke={2.1} />
       <input
@@ -182,10 +155,10 @@
     </label>
 
     {#if activeWorkspaceId}
-      {#if sessionsAvailable}
+      {#if sessionControlAvailable}
         <a
           class="new-session"
-          href="/sessions"
+          href="/sessions?new=workspace"
           aria-label={messages.newSession}
           title={messages.newSession}
         >

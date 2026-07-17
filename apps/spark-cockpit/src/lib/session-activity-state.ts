@@ -18,15 +18,29 @@ export function resolveSessionActivityState(input: {
   liveActiveTurnId?: string | null;
 }): SessionActivityState {
   const pendingTurns = resolveSessionPendingTurns(input.projectedTurns, input.session);
+  const authoritativePendingTurns = input.session?.pendingTurns !== undefined;
+  const runningTurnId =
+    pendingTurns.find((turn) => turn.status === "running")?.invocationId ?? null;
+
+  // Once the daemon supplies pendingTurns, that list is the execution truth.
+  // A stale session status or locally remembered cancellation target must not
+  // resurrect a spinner/Stop control after the invocation has settled.
+  if (authoritativePendingTurns) {
+    return {
+      phase: runningTurnId
+        ? "running"
+        : pendingTurns.some((turn) => turn.status === "queued")
+          ? "queued"
+          : "idle",
+      pendingTurns,
+      runningTurnId,
+    };
+  }
+
   const working = sessionIsWorking({
     registryStatus: input.registryStatus,
     liveStatus: input.session?.status,
   });
-  const runningTurnId = working
-    ? (pendingTurns.find((turn) => turn.status === "running")?.invocationId ??
-      input.liveActiveTurnId ??
-      null)
-    : null;
   return {
     phase: working
       ? "running"
@@ -34,6 +48,6 @@ export function resolveSessionActivityState(input: {
         ? "queued"
         : "idle",
     pendingTurns,
-    runningTurnId,
+    runningTurnId: working ? (runningTurnId ?? input.liveActiveTurnId ?? null) : null,
   };
 }

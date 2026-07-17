@@ -2,10 +2,81 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { compile } from "svelte/compiler";
+import { render } from "svelte/server";
 import { describe, expect, it } from "vitest";
+
+import SessionInspector from "./SessionInspector.svelte";
+import type {
+  SessionInspectorLabels,
+  SessionWorkbenchSessionTodo,
+  SessionWorkbenchView,
+} from "./session-workbench";
 
 const componentPath = resolve(dirname(fileURLToPath(import.meta.url)), "SessionInspector.svelte");
 const workspacePath = resolve(dirname(fileURLToPath(import.meta.url)), "SessionsWorkspace.svelte");
+
+const labels: SessionInspectorLabels = {
+  ariaLabel: "SESSION_INSPECTOR",
+  tabs: {
+    summary: "SUMMARY_TAB",
+    changes: "CHANGES_TAB",
+    todos: "TODO_TAB",
+    tasks: "TASKS_TAB",
+    mailbox: "MAILBOX_TAB",
+  },
+  summaryHeading: "SUMMARY_HEADING",
+  tasksHeading: "TASKS_HEADING",
+  changesHeading: "CHANGES_HEADING",
+  mailboxHeading: "MAILBOX_HEADING",
+  noTasksTitle: "NO_TASKS",
+  noTasksBody: "NO_TASKS_BODY",
+  noChangesTitle: "NO_CHANGES",
+  noChangesBody: "NO_CHANGES_BODY",
+  noMailboxTitle: "NO_MAILBOX",
+  noMailboxBody: "NO_MAILBOX_BODY",
+  noSessionTodoTitle: "NO_SESSION_TODO",
+  noSessionTodoBody: "NO_SESSION_TODO_BODY",
+  noActiveSessionTodo: "NO_ACTIVE_SESSION_TODO",
+  unassignedProject: "UNASSIGNED_PROJECT",
+  progress: "PROGRESS",
+  todoList: "SESSION_TODO_LIST",
+  sessionTodoHeading: "SESSION_TODO_HEADING",
+  openSessionTodo: "OPEN_SESSION_TODO",
+  mailFrom: "FROM",
+  mailRequest: "REQUEST",
+  mailQuestion: "QUESTION",
+  mailNotification: "NOTIFICATION",
+  mailUnread: "UNREAD",
+  mailRead: "READ",
+  mailAcknowledged: "ACKNOWLEDGED",
+  sessionId: "SESSION_ID",
+  sessionStatus: "SESSION_STATUS",
+  workingDirectory: "WORKING_DIRECTORY",
+  model: "MODEL",
+  createdAt: "CREATED_AT",
+  updatedAt: "UPDATED_AT",
+  unavailable: "UNAVAILABLE",
+};
+
+function workbenchView(sessionTodo: SessionWorkbenchSessionTodo | null): SessionWorkbenchView {
+  return {
+    runs: [],
+    tasks: [],
+    changes: [],
+    evidence: [],
+    mailbox: [],
+    sessionTodo,
+    context: {
+      sessionId: "sess-inspector",
+      title: "Inspector test",
+      status: "idle",
+      cwd: "/workspace/spark",
+      model: null,
+      createdAt: null,
+      updatedAt: null,
+    },
+  };
+}
 
 describe("SessionInspector component contract", () => {
   it("compiles as a Svelte component", () => {
@@ -14,15 +85,17 @@ describe("SessionInspector component contract", () => {
     expect(() => compile(source, { filename: componentPath, generate: "server" })).not.toThrow();
   });
 
-  it("renders the four focused coding-session views with explicit empty states", () => {
+  it("renders the four focused coding-session tabs with TODO pinned above", () => {
     const source = readFileSync(componentPath, "utf8");
 
     expect(source).toContain('role="tablist"');
     expect(source).toContain('role="tab"');
     expect(source).toContain('id: "summary"');
     expect(source).toContain('id: "changes"');
+    expect(source).not.toContain('id: "todos"');
     expect(source).toContain('id: "tasks"');
     expect(source).toContain('id: "mailbox"');
+    expect(source).toContain('class="session-todo-rail"');
     expect(source).not.toContain('id: "evidence"');
     expect(source).not.toContain('id: "context"');
     expect(source).not.toContain("view.runs");
@@ -31,6 +104,7 @@ describe("SessionInspector component contract", () => {
     expect(source).not.toContain("labels.runsHeading");
     expect(source).toContain("view.tasks");
     expect(source).toContain("view.changes");
+    expect(source).toContain("view.sessionTodo");
     expect(source).toContain("view.mailbox");
     expect(source).toContain("view.context");
     expect(source).toContain("labels.noTasksTitle");
@@ -59,10 +133,57 @@ describe("SessionInspector component contract", () => {
     expect(source).toContain("task.todos as todo");
     expect(source).toContain("todo.content");
     expect(source).toContain("statusLabel(todo.status)");
-    expect(source).toContain("view.sessionTodoAnchor");
-    expect(source).toContain("href={`#${view.sessionTodoAnchor}`}");
     expect(source).not.toContain("project.title");
     expect(source).not.toContain("project.status");
+  });
+
+  it("renders the latest session TODO snapshot above the inspector tabs", () => {
+    const body = render(SessionInspector, {
+      props: {
+        view: workbenchView({
+          anchor: "message:todo-message",
+          summary: "Session TODOs: 2 active.",
+          items: [
+            { id: "todo-a", content: "Inspect projection", status: "done", notes: [] },
+            {
+              id: "todo-b",
+              content: "Render session TODO",
+              status: "in_progress",
+              notes: [],
+            },
+          ],
+          updatedAt: "2026-07-13T08:04:00.000Z",
+        }),
+        labels,
+        instanceId: "inspector-test",
+        statusLabel: (status: string) => `STATUS_${status}`,
+      },
+    }).body;
+
+    expect(body).toContain('class="session-todo-rail');
+    expect(body).not.toContain('id="inspector-test-todos-tab"');
+    expect(body).toContain("SESSION_TODO_HEADING");
+    expect(body).toContain("Session TODOs: 2 active.");
+    expect(body).toContain("Inspect projection");
+    expect(body).toContain("Render session TODO");
+    expect(body).toContain("STATUS_in_progress");
+    expect(body).toContain('href="#message:todo-message"');
+    expect(body).not.toContain("NO_SESSION_TODO");
+  });
+
+  it("renders a restrained TODO empty state without an invented execution link", () => {
+    const body = render(SessionInspector, {
+      props: {
+        view: workbenchView(null),
+        labels,
+        instanceId: "inspector-empty",
+      },
+    }).body;
+
+    expect(body).toContain("NO_SESSION_TODO");
+    expect(body).toContain("NO_SESSION_TODO_BODY");
+    expect(body).not.toContain("OPEN_SESSION_TODO");
+    expect(body).not.toContain('href="#message:');
   });
 
   it("names tabs, panels, and headings from the inspector instance", () => {

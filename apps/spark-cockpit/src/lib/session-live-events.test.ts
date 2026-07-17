@@ -129,7 +129,7 @@ describe("session live events", () => {
     expect(task.changed).toBe(true);
     expect(artifact.changed).toBe(true);
     expect(state.view).toMatchObject({
-      status: "running",
+      status: "idle",
       messages: [{ id: "msg_1", text: "Working" }],
       tasks: [{ ref: "task:1", title: "Inspect UI" }],
       artifacts: [{ ref: "artifact:1", title: "UI diff" }],
@@ -367,6 +367,47 @@ describe("session live events", () => {
       status: "idle",
       pendingTurns: [],
       runs: [{ id: "run_nested", status: "running" }],
+    });
+    expect(state.activeTurnId).toBeNull();
+  });
+
+  it("does not promote a settled conversation from a late streaming message", () => {
+    const state = createSessionLiveEventState({
+      sessionId: "sess_current",
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        status: "idle",
+        pendingTurns: [],
+      }),
+    });
+
+    const result = applySessionLiveEvent(
+      state,
+      event({
+        id: "evt_late_stream",
+        kind: "daemon.view_event",
+        payload: {
+          type: "daemon.view_event",
+          sessionId: "sess_current",
+          view: {
+            type: "session.message",
+            sessionId: "sess_current",
+            message: {
+              id: "msg_late_stream",
+              role: "assistant",
+              text: "Late chunk",
+              status: "streaming",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result).toEqual({ changed: true, refreshActivity: false });
+    expect(state.view).toMatchObject({
+      status: "idle",
+      pendingTurns: [],
+      messages: [{ id: "msg_late_stream", status: "streaming" }],
     });
     expect(state.activeTurnId).toBeNull();
   });
@@ -735,9 +776,7 @@ describe("session live events", () => {
       }),
     );
     expect(state.activeTurnId).toBeNull();
-    expect(state.view?.pendingTurns).toMatchObject([
-      { invocationId: "inv_next", status: "running" },
-    ]);
+    expect(state.view).toMatchObject({ status: "idle", pendingTurns: [] });
 
     applySessionLiveEvent(
       state,
@@ -760,6 +799,137 @@ describe("session live events", () => {
     );
     expect(state.activeTurnId).toBeNull();
     expect(state.view).toMatchObject({ status: "idle", pendingTurns: [] });
+  });
+
+  it("ignores unknown and regressive running lifecycle events", () => {
+    const state = createSessionLiveEventState({
+      sessionId: "sess_current",
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        status: "queued",
+        pendingTurns: [
+          {
+            invocationId: "inv_known",
+            prompt: "Known pending work",
+            status: "queued",
+            createdAt: "2026-07-13T08:00:00.000Z",
+          },
+        ],
+      }),
+    });
+
+    const unknown = applySessionLiveEvent(
+      state,
+      event({
+        id: "evt_unknown_running",
+        kind: "daemon.task.lifecycle",
+        payload: {
+          type: "daemon.task.lifecycle",
+          sessionId: "sess_current",
+          taskType: "session.run",
+          invocationId: "inv_historical",
+          status: "running",
+        },
+      }),
+    );
+    expect(unknown).toEqual({ changed: false, refreshActivity: true });
+    expect(state.view).toMatchObject({
+      status: "queued",
+      pendingTurns: [{ invocationId: "inv_known", status: "queued" }],
+    });
+    expect(state.activeTurnId).toBeNull();
+
+    for (const [id, status] of [
+      ["evt_known_running", "running"],
+      ["evt_known_done", "succeeded"],
+      ["evt_late_running", "running"],
+    ] as const) {
+      applySessionLiveEvent(
+        state,
+        event({
+          id,
+          kind: "daemon.task.lifecycle",
+          payload: {
+            type: "daemon.task.lifecycle",
+            sessionId: "sess_current",
+            taskType: "session.run",
+            invocationId: "inv_known",
+            status,
+          },
+        }),
+      );
+    }
+
+    expect(state.view).toMatchObject({ status: "idle", pendingTurns: [] });
+    expect(state.activeTurnId).toBeNull();
+    expect(state.invocationPhases.get("inv_known")).toBe("succeeded");
+  });
+
+  it("does not regress a running invocation when a stale queued snapshot arrives later", () => {
+    const state = createSessionLiveEventState({
+      sessionId: "sess_current",
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        status: "queued",
+        pendingTurns: [
+          {
+            invocationId: "inv_running",
+            prompt: "Keep running",
+            status: "queued",
+            createdAt: "2026-07-13T08:00:00.000Z",
+          },
+        ],
+      }),
+    });
+    applySessionLiveEvent(
+      state,
+      event({
+        id: "evt_running_before_snapshot",
+        kind: "daemon.task.lifecycle",
+        payload: {
+          type: "daemon.task.lifecycle",
+          sessionId: "sess_current",
+          taskType: "session.run",
+          invocationId: "inv_running",
+          status: "running",
+          emittedAt: "2026-07-13T08:00:02.000Z",
+        },
+      }),
+    );
+
+    applySessionLiveEvent(
+      state,
+      event({
+        id: "evt_stale_queued_snapshot",
+        kind: "daemon.view_event",
+        payload: {
+          type: "daemon.view_event",
+          sessionId: "sess_current",
+          view: {
+            type: "session.snapshot",
+            session: parseSparkSessionView({
+              sessionId: "sess_current",
+              status: "queued",
+              pendingTurns: [
+                {
+                  invocationId: "inv_running",
+                  prompt: "Keep running",
+                  status: "queued",
+                  createdAt: "2026-07-13T08:00:00.000Z",
+                },
+              ],
+            }),
+          },
+        },
+      }),
+    );
+
+    expect(state.view).toMatchObject({
+      status: "running",
+      pendingTurns: [{ invocationId: "inv_running", status: "running" }],
+    });
+    expect(state.invocationPhases.get("inv_running")).toBe("running");
+    expect(state.activeTurnId).toBe("inv_running");
   });
 
   it("does not resurrect a terminal Stop target from historical invocation messages", () => {
@@ -835,7 +1005,7 @@ describe("session live events", () => {
     expect(result).toEqual({ changed: true, refreshActivity: true });
     expect(state.activeTurnId).toBeNull();
     expect(state.view).toMatchObject({
-      status: "running",
+      status: "idle",
       messages: [{ id: "invocation:inv_reloaded", role: "user" }],
     });
   });

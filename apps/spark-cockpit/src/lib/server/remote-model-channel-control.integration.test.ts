@@ -155,6 +155,7 @@ test("HTTPS Cockpit controls models and channels over WSS without a daemon socke
       config: { installationId, displayName: "Remote model daemon", runtimeId },
       db: daemonDb,
       runtimeId,
+      serverUrl: "https://127.0.0.1/",
       sparkHome: daemonHome,
       runtimeSessionId: undefined,
       setRuntimeSessionId(value) {

@@ -137,7 +137,11 @@ export function hasRequiredSparkAskGateSelections(
 ): boolean {
   const required = requiredGateQuestions(mode, questions);
   if (required.length === 0) return Object.keys(answers).length > 0;
-  return required.every((question) => hasSparkAskAnswerContent(answers[question.id]));
+  return required.every((question) => {
+    const answer = answers[question.id];
+    if (question.type === "freeform") return hasSparkAskAnswerContent(answer);
+    return Boolean(answer?.values.some((value) => value.trim().length > 0));
+  });
 }
 
 export function hasRequiredSparkAskSelections(

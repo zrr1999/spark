@@ -48,6 +48,36 @@ describe("session activity presentation", () => {
     });
     expect(terminal).toEqual({ phase: "idle", pendingTurns: [], runningTurnId: null });
   });
+
+  it("lets authoritative pending turns override stale running status and Stop state", () => {
+    const settled = resolveSessionActivityState({
+      registryStatus: "running",
+      session: parseSparkSessionView({
+        sessionId: "sess_settled",
+        status: "running",
+        pendingTurns: [],
+      }),
+      projectedTurns: [projectedQueuedTurn()],
+      liveActiveTurnId: "inv_stale",
+    });
+
+    expect(settled).toEqual({ phase: "idle", pendingTurns: [], runningTurnId: null });
+  });
+
+  it("retains the legacy status fallback only when daemon pending truth is unavailable", () => {
+    const legacy = resolveSessionActivityState({
+      registryStatus: "ready",
+      session: parseSparkSessionView({ sessionId: "sess_legacy", status: "running" }),
+      projectedTurns: [],
+      liveActiveTurnId: "inv_legacy",
+    });
+
+    expect(legacy).toEqual({
+      phase: "running",
+      pendingTurns: [],
+      runningTurnId: "inv_legacy",
+    });
+  });
 });
 
 function pendingTurn(invocationId: string, status: "queued" | "running") {

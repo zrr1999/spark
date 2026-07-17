@@ -31,7 +31,6 @@ describe("Cockpit conversation control", () => {
     expect(client.submit).toHaveBeenCalledWith({
       sessionId: "sess_demo",
       prompt: "Continue the same conversation.",
-      idempotencyKey: expect.stringMatching(/^idem_[a-f0-9]{32}$/u),
       assignment: {
         goal: "Continue the same conversation.",
         title: "Continue the same conversation.",
@@ -94,7 +93,6 @@ describe("Cockpit conversation control", () => {
     expect(submit).toHaveBeenCalledWith({
       sessionId: "sess_global",
       prompt: "Inspect daemon health",
-      idempotencyKey: expect.stringMatching(/^idem_[a-f0-9]{32}$/u),
       assignment: expect.objectContaining({
         target: { sessionId: "sess_global" },
       }),
@@ -121,7 +119,7 @@ describe("Cockpit conversation control", () => {
     await submitConversationTurnForCockpit(input, { submit });
 
     const firstKey = submit.mock.calls[0]?.[0].idempotencyKey;
-    expect(firstKey).toMatch(/^idem_[a-f0-9]{32}$/u);
+    expect(firstKey).toBe("cockpit:sess_stable:browser-submission-1");
     expect(submit.mock.calls[1]?.[0].idempotencyKey).toBe(firstKey);
   });
 

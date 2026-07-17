@@ -1292,8 +1292,7 @@ void test("SparkAgentLoop keeps a thrown tool error inside the execution chain a
   );
 
   const toolView = viewEvents.find(
-    (event) =>
-      event.type === "session.message" && event.message.id === `tool-result:${toolCall.id}`,
+    (event) => event.type === "session.message" && event.message.id === `tool-call:${toolCall.id}`,
   );
   assert.equal(toolView?.message.role, "tool");
   assert.equal(toolView?.message.status, "done");

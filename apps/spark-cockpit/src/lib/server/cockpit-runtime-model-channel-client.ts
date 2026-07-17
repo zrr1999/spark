@@ -131,10 +131,11 @@ async function catalog(
       payload: input.sessionId ? { sessionId: input.sessionId } : {},
     },
   });
-  return (
-    getRuntimeModelControlProjection(db, route.runtimeId) ??
-    parseSparkModelControlSnapshot(result.snapshot)
-  );
+  // Prefer the live command result. Cached projection is offline fallback only;
+  // a truthy empty projection must not hide a successful catalog response.
+  const live = parseSparkModelControlSnapshot(result.snapshot);
+  if (live.providers.length > 0) return live;
+  return getRuntimeModelControlProjection(db, route.runtimeId) ?? live;
 }
 
 function projectedCatalog(

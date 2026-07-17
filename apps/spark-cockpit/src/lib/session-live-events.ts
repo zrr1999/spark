@@ -27,6 +27,8 @@ export interface SessionLiveEventState {
   processedEventIds: Set<string>;
   commandIds: Set<string>;
   invocationIds: Set<string>;
+  /** Monotonic phase fence for invocations that are currently pending or have settled. */
+  invocationPhases: Map<string, string>;
 }
 
 export interface SessionLiveEventResult {
@@ -146,10 +148,15 @@ export function createSessionLiveEventState(input: {
   const view = input.view ? cloneSessionView(input.view) : null;
   const activeTurnId = queuedTurnId(view);
   const invocationIds = new Set(input.invocationIds);
+  const invocationPhases = new Map<string, string>();
   for (const pending of view?.pendingTurns ?? []) {
     invocationIds.add(pending.invocationId);
+    invocationPhases.set(pending.invocationId, pending.status);
   }
-  if (activeTurnId) invocationIds.add(activeTurnId);
+  if (activeTurnId) {
+    invocationIds.add(activeTurnId);
+    invocationPhases.set(activeTurnId, "running");
+  }
   return {
     sessionId: input.sessionId,
     workspaceId: input.workspaceId ?? null,
@@ -159,6 +166,7 @@ export function createSessionLiveEventState(input: {
     processedEventIds: new Set(),
     commandIds: new Set(input.commandIds),
     invocationIds,
+    invocationPhases,
   };
 }
 
@@ -179,6 +187,7 @@ export function registerQueuedSessionTurn(
   const normalized = turnId.trim();
   if (!normalized) return false;
   state.invocationIds.add(normalized);
+  acceptInvocationPhase(state, normalized, "queued");
   return true;
 }
 
@@ -230,16 +239,22 @@ export function applySessionLiveEvent(
     } else if (!state.invocationIds.has(invocationId)) {
       return { changed: false, refreshActivity: false };
     }
+    const status = stringField(event.payload, "status")?.toLocaleLowerCase();
+    if (!status || !acceptInvocationPhase(state, invocationId, status)) {
+      return { changed: false, refreshActivity: true };
+    }
     const previousActiveTurnId = state.activeTurnId;
-    applyInvocationCancellationTarget(
+    const viewChanged = applyDaemonInvocationPhaseToView(
       state,
       invocationId,
-      stringField(event.payload, "status")?.toLocaleLowerCase(),
+      status,
+      event.createdAt,
     );
-    // Projection events never rewrite structural view fields; they only refresh
-    // activity and may update the local cancellation target.
+    applyInvocationCancellationTarget(state, invocationId, status);
+    // Invocation lifecycle converges the selected view immediately; the server
+    // refresh remains necessary for sidebar/activity projections.
     return {
-      changed: state.activeTurnId !== previousActiveTurnId,
+      changed: viewChanged || state.activeTurnId !== previousActiveTurnId,
       refreshActivity: true,
     };
   }
@@ -340,22 +355,22 @@ function applyDaemonEvent(
   if (daemonEvent.type !== "daemon.view_event") {
     if (daemonEvent.type === "daemon.task.lifecycle") {
       const turnId = daemonEvent.invocationId ?? null;
-      const previousActiveTurnId = state.activeTurnId;
-      const viewChanged = turnId
-        ? applyDaemonInvocationPhaseToView(
-            state,
-            turnId,
-            daemonEvent.status,
-            daemonEvent.emittedAt ?? event.createdAt,
-          )
-        : false;
-      if (daemonEvent.status === "running") {
-        state.activeTurnId = turnId ?? state.activeTurnId;
-      } else if (turnId) {
-        applyInvocationCancellationTarget(state, turnId, daemonEvent.status);
-      } else if (state.activeTurnId) {
-        state.activeTurnId = null;
+      const status = daemonEvent.status.toLocaleLowerCase();
+      if (
+        !turnId ||
+        !isKnownPendingInvocation(state, turnId) ||
+        !acceptInvocationPhase(state, turnId, status)
+      ) {
+        return { changed: false, refreshActivity: true };
       }
+      const previousActiveTurnId = state.activeTurnId;
+      const viewChanged = applyDaemonInvocationPhaseToView(
+        state,
+        turnId,
+        status,
+        daemonEvent.emittedAt ?? event.createdAt,
+      );
+      applyInvocationCancellationTarget(state, turnId, status);
       return {
         changed: viewChanged || state.activeTurnId !== previousActiveTurnId,
         refreshActivity: true,
@@ -372,12 +387,24 @@ function applyDaemonEvent(
       return { changed: false, refreshActivity: false };
     }
     const mailbox = viewEvent.session.mailbox ?? state.view?.mailbox;
-    state.view = cloneSessionView({
-      ...viewEvent.session,
-      ...(mailbox ? { mailbox } : {}),
-    });
+    state.view = normalizeSnapshotAgainstInvocationPhases(
+      cloneSessionView({
+        ...viewEvent.session,
+        ...(mailbox ? { mailbox } : {}),
+      }),
+      state.invocationPhases,
+    );
+    const pendingInvocationIds = new Set(
+      (state.view.pendingTurns ?? []).map((turn) => turn.invocationId),
+    );
+    for (const [invocationId, phase] of state.invocationPhases) {
+      if (!isTerminalInvocationStatus(phase) && !pendingInvocationIds.has(invocationId)) {
+        state.invocationPhases.delete(invocationId);
+      }
+    }
     for (const pending of state.view.pendingTurns ?? []) {
       state.invocationIds.add(pending.invocationId);
+      acceptInvocationPhase(state, pending.invocationId, pending.status);
     }
     state.activeTurnId = queuedTurnId(state.view);
     return { changed: true, refreshActivity: false };
@@ -391,7 +418,6 @@ function applyDaemonEvent(
     const message = sanitizeLiveMessage(viewEvent.message);
     state.view = {
       ...current,
-      status: message.status === "streaming" ? "running" : current.status,
       messages: upsertById(current.messages, message),
       updatedAt: message.updatedAt ?? message.createdAt ?? event.createdAt,
     };
@@ -443,37 +469,51 @@ function applyDaemonInvocationPhaseToView(
 
   const normalized = status.toLocaleLowerCase();
   let pendingTurns = current.pendingTurns;
+  let pendingTurnsChanged = false;
   if (pendingTurns !== undefined) {
-    pendingTurns = isTerminalInvocationStatus(normalized)
-      ? pendingTurns.filter((turn) => turn.invocationId !== invocationId)
-      : pendingTurns.map((turn) =>
-          turn.invocationId === invocationId &&
-          (normalized === "queued" || normalized === "running")
-            ? {
-                ...turn,
-                status: normalized,
-                ...(normalized === "running" && !turn.startedAt ? { startedAt: emittedAt } : {}),
-              }
-            : turn,
-        );
+    if (isTerminalInvocationStatus(normalized)) {
+      const remaining = pendingTurns.filter((turn) => turn.invocationId !== invocationId);
+      pendingTurnsChanged = remaining.length !== pendingTurns.length;
+      pendingTurns = remaining;
+    } else {
+      pendingTurns = pendingTurns.map((turn) => {
+        if (
+          turn.invocationId !== invocationId ||
+          (normalized !== "queued" && normalized !== "running") ||
+          (turn.status === normalized && (normalized !== "running" || Boolean(turn.startedAt)))
+        ) {
+          return turn;
+        }
+        pendingTurnsChanged = true;
+        return {
+          ...turn,
+          status: normalized,
+          ...(normalized === "running" && !turn.startedAt ? { startedAt: emittedAt } : {}),
+        };
+      });
+    }
   }
 
   const hasRunning = pendingTurns?.some((turn) => turn.status === "running") ?? false;
   const hasQueued = pendingTurns?.some((turn) => turn.status === "queued") ?? false;
   const nextStatus =
-    normalized === "running"
-      ? "running"
-      : normalized === "queued"
-        ? hasRunning
-          ? "running"
-          : "queued"
-        : isTerminalInvocationStatus(normalized)
-          ? hasRunning
-            ? "running"
-            : hasQueued
-              ? "queued"
-              : "idle"
-          : current.status;
+    pendingTurns !== undefined
+      ? hasRunning
+        ? "running"
+        : hasQueued
+          ? "queued"
+          : isActiveSessionStatus(current.status)
+            ? "idle"
+            : current.status
+      : normalized === "running"
+        ? "running"
+        : normalized === "queued"
+          ? "queued"
+          : isTerminalInvocationStatus(normalized)
+            ? "idle"
+            : current.status;
+
+  if (!pendingTurnsChanged && nextStatus === current.status) return false;
 
   state.view = {
     ...current,
@@ -482,6 +522,58 @@ function applyDaemonInvocationPhaseToView(
     updatedAt: emittedAt,
   };
   return true;
+}
+
+function acceptInvocationPhase(
+  state: SessionLiveEventState,
+  invocationId: string,
+  status: string,
+): boolean {
+  const normalized = status.toLocaleLowerCase();
+  const previous = state.invocationPhases.get(invocationId);
+  if (previous && isTerminalInvocationStatus(previous)) return false;
+  if (previous === "running" && normalized === "queued") return false;
+  if (previous === normalized) return false;
+  state.invocationPhases.set(invocationId, normalized);
+  return true;
+}
+
+function isKnownPendingInvocation(state: SessionLiveEventState, invocationId: string): boolean {
+  const phase = state.invocationPhases.get(invocationId);
+  return phase === "queued" || phase === "running";
+}
+
+function normalizeSnapshotAgainstInvocationPhases(
+  view: SparkSessionView,
+  invocationPhases: ReadonlyMap<string, string>,
+): SparkSessionView {
+  if (view.pendingTurns === undefined) return view;
+  const pendingTurns = view.pendingTurns.flatMap((turn) => {
+    const knownPhase = invocationPhases.get(turn.invocationId);
+    if (isTerminalInvocationStatus(knownPhase ?? "")) return [];
+    if (knownPhase === "running" && turn.status === "queued") {
+      return [{ ...turn, status: "running" as const }];
+    }
+    return [turn];
+  });
+  const hasRunning = pendingTurns.some((turn) => turn.status === "running");
+  const hasQueued = pendingTurns.some((turn) => turn.status === "queued");
+  return {
+    ...view,
+    pendingTurns,
+    status: hasRunning
+      ? "running"
+      : hasQueued
+        ? "queued"
+        : isActiveSessionStatus(view.status)
+          ? "idle"
+          : view.status,
+  };
+}
+
+function isActiveSessionStatus(status: string): boolean {
+  const normalized = status.toLocaleLowerCase();
+  return normalized === "running" || normalized === "streaming" || normalized === "queued";
 }
 
 function cloneSessionView(view: SparkSessionView): SparkSessionView {

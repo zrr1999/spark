@@ -140,6 +140,10 @@ export function mergeWithDefault(raw: unknown): SparkConfig {
   };
 }
 
+function validUnitRatio(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
 function parseSparkCompactionSettings(value: unknown): SparkCompactionSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { ...DEFAULT_SPARK_COMPACTION_SETTINGS };
@@ -147,22 +151,37 @@ function parseSparkCompactionSettings(value: unknown): SparkCompactionSettings {
   const raw = value as Partial<Record<keyof SparkCompactionSettings, unknown>>;
   const numberOrDefault = (candidate: unknown, fallback: number): number =>
     typeof candidate === "number" && Number.isFinite(candidate) ? candidate : fallback;
-  const ratioOrDefault = (candidate: unknown, fallback: number): number => {
-    const parsed = numberOrDefault(candidate, fallback);
-    return parsed >= 0 && parsed <= 1 ? parsed : fallback;
-  };
+  const ratioOrDefault = (candidate: unknown, fallback: number): number =>
+    validUnitRatio(candidate) ? candidate : fallback;
+  const microThreshold = ratioOrDefault(
+    raw.microThreshold,
+    DEFAULT_SPARK_COMPACTION_SETTINGS.microThreshold,
+  );
+  const requestedFullThreshold = ratioOrDefault(
+    raw.fullThreshold,
+    DEFAULT_SPARK_COMPACTION_SETTINGS.fullThreshold,
+  );
+  const thresholdsAreOrdered = requestedFullThreshold > microThreshold;
+  const hasExplicitMicroThreshold = validUnitRatio(raw.microThreshold);
+  const hasExplicitFullThreshold = validUnitRatio(raw.fullThreshold);
+  const normalizedMicroThreshold = thresholdsAreOrdered
+    ? microThreshold
+    : hasExplicitFullThreshold && !hasExplicitMicroThreshold
+      ? DEFAULT_SPARK_COMPACTION_SETTINGS.microThreshold
+      : microThreshold;
+  const normalizedFullThreshold = thresholdsAreOrdered
+    ? requestedFullThreshold
+    : hasExplicitMicroThreshold &&
+        !hasExplicitFullThreshold &&
+        microThreshold >= DEFAULT_SPARK_COMPACTION_SETTINGS.fullThreshold
+      ? 1
+      : DEFAULT_SPARK_COMPACTION_SETTINGS.fullThreshold;
   return {
     ...DEFAULT_SPARK_COMPACTION_SETTINGS,
     enabled:
       typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_SPARK_COMPACTION_SETTINGS.enabled,
-    microThreshold: ratioOrDefault(
-      raw.microThreshold,
-      DEFAULT_SPARK_COMPACTION_SETTINGS.microThreshold,
-    ),
-    fullThreshold: ratioOrDefault(
-      raw.fullThreshold,
-      DEFAULT_SPARK_COMPACTION_SETTINGS.fullThreshold,
-    ),
+    microThreshold: normalizedMicroThreshold,
+    fullThreshold: normalizedFullThreshold,
     targetReduction: ratioOrDefault(
       raw.targetReduction,
       DEFAULT_SPARK_COMPACTION_SETTINGS.targetReduction,
@@ -173,7 +192,7 @@ function parseSparkCompactionSettings(value: unknown): SparkCompactionSettings {
     ),
     compactModel:
       typeof raw.compactModel === "string" && raw.compactModel.trim()
-        ? raw.compactModel
+        ? raw.compactModel.trim()
         : DEFAULT_SPARK_COMPACTION_SETTINGS.compactModel,
     reserveTokens: Math.max(
       0,

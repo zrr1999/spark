@@ -993,7 +993,7 @@ export async function handleSparkDaemonCliCommand(
           {
             sessionId: command.sessionId,
             prompt: command.prompt,
-            idempotencyKey: command.idempotencyKey ?? createId("idem"),
+            idempotencyKey: command.idempotencyKey,
             reset: command.reset,
             ...(command.assignment ? { assignment: command.assignment } : {}),
           },
@@ -1147,7 +1147,7 @@ export function createSparkDaemonNativeResponder(
       {
         sessionId,
         prompt,
-        idempotencyKey: context?.submissionId ?? createId("idem"),
+        idempotencyKey: context?.submissionId,
         messageMetadata: {
           origin: { kind: "user", host: "tui", surface: "local" },
         },

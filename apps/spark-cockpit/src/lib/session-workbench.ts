@@ -240,11 +240,9 @@ function latestSessionTodo(session: SparkSessionView): SessionWorkbenchSessionTo
     const message = session.messages[index];
     const result = message.parts?.findLast(
       (part) =>
-        (part.type === "tool-result" || part.type === "tool-call") &&
-        part.toolName === "todo" &&
-        part.status === "complete",
+        part.type === "tool-result" && part.toolName === "todo" && part.status === "complete",
     );
-    if (!result || (result.type !== "tool-result" && result.type !== "tool-call")) continue;
+    if (!result || result.type !== "tool-result") continue;
 
     const content = nonEmpty(result.summary) ?? nonEmpty(message.text);
     if (!content) continue;

@@ -33,6 +33,30 @@ void test("default Spark providers include shared Baidu OneAPI and OpenAI Codex 
   );
 });
 
+void test("Compact V2 config defaults to 40% reduction and current session model", () => {
+  const compact = DEFAULT_SPARK_CONFIG.compact;
+  assert.ok(compact);
+  assert.equal(compact.targetReduction, 0.4);
+  assert.equal(compact.compactModel, "current");
+
+  const merged = mergeSparkConfigWithDefault({
+    compact: {
+      targetReduction: 0.25,
+      compactModel: " openai/gpt-5-mini ",
+      microThreshold: 3,
+      fullThreshold: 0.2,
+    },
+  });
+  assert.equal(merged.compact?.targetReduction, 0.25);
+  assert.equal(merged.compact?.compactModel, "openai/gpt-5-mini");
+  assert.equal(merged.compact?.microThreshold, DEFAULT_SPARK_CONFIG.compact?.microThreshold);
+  assert.equal(merged.compact?.fullThreshold, DEFAULT_SPARK_CONFIG.compact?.fullThreshold);
+
+  const oneSided = mergeSparkConfigWithDefault({ compact: { microThreshold: 0.8 } });
+  assert.equal(oneSided.compact?.microThreshold, 0.8);
+  assert.equal(oneSided.compact?.fullThreshold, DEFAULT_SPARK_CONFIG.compact?.fullThreshold);
+});
+
 void test("legacy bundled extension profiles migrate to current defaults without Graft", () => {
   const historical = [
     "@zendev-lab/spark-ask/extension",
@@ -112,6 +136,16 @@ void test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", 
         providers: ["@zendev-lab/spark-ai/baidu-oneapi-provider", "my-provider"],
         activeModelId: "baidu-oneapi/claude-opus-4.7",
         activeThinkingLevel: "medium",
+        compact: {
+          enabled: false,
+          microThreshold: 0.7,
+          fullThreshold: 0.95,
+          targetReduction: 0.4,
+          minUsefulReduction: 0.05,
+          compactModel: " openai/gpt-5-mini ",
+          reserveTokens: 12_000,
+          keepRecentTokens: 8_000,
+        },
       },
       path,
     );
@@ -130,6 +164,16 @@ void test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", 
     assert.equal(config.activeProvider, undefined);
     assert.equal(config.activeModel, undefined);
     assert.equal(config.activeThinkingLevel, "medium");
+    assert.deepEqual(config.compact, {
+      enabled: false,
+      microThreshold: 0.7,
+      fullThreshold: 0.95,
+      targetReduction: 0.4,
+      minUsefulReduction: 0.05,
+      compactModel: "openai/gpt-5-mini",
+      reserveTokens: 12_000,
+      keepRecentTokens: 8_000,
+    });
     assert.equal("fusion" in config, false);
 
     // Saved file is JSON with trailing newline

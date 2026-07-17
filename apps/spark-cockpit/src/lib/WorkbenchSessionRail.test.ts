@@ -35,10 +35,13 @@ describe("WorkbenchSessionRail component contract", () => {
   it("offers only workspace-scoped conversation creation", () => {
     const source = readFileSync(componentPath, "utf8");
 
-    expect(source).toContain('href="/sessions"');
+    expect(source).toContain('href="/sessions?new=workspace"');
+    expect(source).not.toContain('href="/sessions"');
     expect(source).not.toContain("new=daemon");
     expect(source).not.toContain("daemonConversation");
     expect(source).not.toContain("daemonGroup");
+    expect(source).not.toContain("workspaceConversation");
+    expect(source).not.toContain("new-session-actions");
   });
 
   it("groups conversations by session type in collapsible sections", () => {
@@ -64,7 +67,7 @@ describe("WorkbenchSessionRail component contract", () => {
     expect(source).toContain('<Icon name="new-message"');
     expect(source).toContain('<span class="sr-only">{messages.newSession}</span>');
     expect(source.indexOf('<label class="session-filter">')).toBeLessThan(
-      source.indexOf('class="new-session"'),
+      source.indexOf('<Icon name="new-message"'),
     );
   });
 

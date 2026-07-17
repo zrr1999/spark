@@ -124,23 +124,25 @@ describe("session workbench projection", () => {
     });
   });
 
-  it("links session TODO tool activity to its canonical conversation message", () => {
+  it("projects the latest successful session TODO snapshot and its conversation anchor", () => {
     const view = buildSessionWorkbenchView({
       session: session({
         messages: [
           {
             id: "todo-message",
-            role: "assistant",
-            text: "",
+            role: "tool",
+            text: "Session TODOs: 3 active.",
             status: "done",
+            createdAt: "2026-07-13T08:04:00.000Z",
             parts: [
               {
                 id: "part:todo",
-                type: "tool-call",
+                type: "tool-result",
                 toolCallId: "call:todo",
                 toolName: "todo",
                 status: "complete",
-                summary: "Session todos\n- [pending] First item",
+                summary:
+                  "Session TODOs: 3 active.\n- [done] todo-alpha Inspect projection\n- [in_progress] todo-beta Render session TODO\n- [blocked] Imported item",
                 metadata: {},
               },
             ],
@@ -150,7 +152,77 @@ describe("session workbench projection", () => {
       }),
     });
 
-    expect(view.sessionTodo?.anchor).toBe("message:todo-message");
+    expect(view.sessionTodo).toEqual({
+      anchor: "message:todo-message",
+      summary: "Session TODOs: 3 active.",
+      updatedAt: "2026-07-13T08:04:00.000Z",
+      items: [
+        {
+          id: "todo-alpha",
+          content: "Inspect projection",
+          status: "done",
+          notes: [],
+        },
+        {
+          id: "todo-beta",
+          content: "Render session TODO",
+          status: "in_progress",
+          notes: [],
+        },
+        {
+          id: "session-todo-4",
+          content: "Imported item",
+          status: "blocked",
+          notes: [],
+        },
+      ],
+    });
+  });
+
+  it("does not fabricate session TODO state from calls or failed results", () => {
+    const view = buildSessionWorkbenchView({
+      session: session({
+        messages: [
+          {
+            id: "todo-call",
+            role: "tool",
+            text: "action=list",
+            status: "done",
+            parts: [
+              {
+                id: "part:call",
+                type: "tool-call",
+                toolCallId: "call:todo",
+                toolName: "todo",
+                status: "complete",
+                metadata: {},
+              },
+            ],
+            metadata: {},
+          },
+          {
+            id: "todo-failure",
+            role: "tool",
+            text: "TODO store unavailable",
+            status: "done",
+            parts: [
+              {
+                id: "part:failure",
+                type: "tool-result",
+                toolCallId: "call:todo",
+                toolName: "todo",
+                status: "failed",
+                summary: "TODO store unavailable",
+                metadata: {},
+              },
+            ],
+            metadata: {},
+          },
+        ],
+      }),
+    });
+
+    expect(view.sessionTodo).toBeNull();
   });
 
   it("projects session mail newest-first with durable read state", () => {

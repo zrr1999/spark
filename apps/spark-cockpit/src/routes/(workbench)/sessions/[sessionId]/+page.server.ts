@@ -41,11 +41,14 @@ export const load: PageServerLoad = async ({ params, parent }) => {
         getManagedSessionSnapshotForCockpit(params.sessionId, {
           messageLimit: SESSION_SNAPSHOT_PAGE_SIZE,
         }),
-        loadModelControlForCockpit(params.sessionId),
+        // Catalog is daemon-global. Route it by workspace so a stale session
+        // registry entry cannot blank the model picker (settings/models works
+        // for the same reason). Session selection still comes from the snapshot.
+        loadModelControlForCockpit({ workspaceId }),
       ])
     : await Promise.all([
         Promise.resolve(getProjectedManagedSessionSnapshotForCockpit(params.sessionId)),
-        loadProjectedModelControlForCockpit(params.sessionId),
+        loadProjectedModelControlForCockpit({ workspaceId }),
       ]);
   return {
     sessions: parentData.sessions,
