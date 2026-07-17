@@ -2839,20 +2839,20 @@ export class SparkNativeTuiApp implements Component, Focusable {
   private currentFooterMetrics(): SparkNativeFooterMetrics {
     let metrics = { ...this.sessionFooterMetrics };
     for (const run of this.runFooterMetrics.values()) metrics = addFooterMetrics(metrics, run);
-    const contextWindow = metrics.contextWindow ?? this.statusContext?.contextWindow?.();
+    const contextWindow = this.statusContext?.contextWindow?.() ?? metrics.contextWindow;
     return contextWindow ? { ...metrics, contextWindow } : metrics;
   }
 
   private runtimeModelIdentity(): { full?: string; compact?: string } {
     let provider =
-      this.cockpit.model?.providerName ?? this.statusContext?.activeProvider?.()?.trim();
-    let model = this.cockpit.model?.modelId ?? this.statusContext?.activeModel?.()?.trim();
+      this.statusContext?.activeProvider?.()?.trim() ?? this.cockpit.model?.providerName;
+    let model = this.statusContext?.activeModel?.()?.trim() ?? this.cockpit.model?.modelId;
     if (!provider && model?.includes("/")) {
       const separator = model.indexOf("/");
       provider = model.slice(0, separator);
       model = model.slice(separator + 1);
     }
-    const thinking = this.cockpit.thinkingLevel ?? this.statusContext?.thinkingLevel?.()?.trim();
+    const thinking = this.statusContext?.thinkingLevel?.()?.trim() ?? this.cockpit.thinkingLevel;
     if (!model) return {};
     const compact = thinking ? `${model} • ${thinking}` : model;
     return { full: provider ? `(${provider}) ${compact}` : compact, compact };

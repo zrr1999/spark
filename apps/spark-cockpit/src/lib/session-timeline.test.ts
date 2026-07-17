@@ -188,6 +188,39 @@ describe("session timeline", () => {
     ]);
   });
 
+  it("count-matches durable direct-turn prompts against canonical transcript messages", () => {
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [message("u1", "user", "Try again", "2026-07-10T00:00:01.000Z")],
+      commands: [],
+      reports: [
+        {
+          id: "turn-submit:one:prompt",
+          kind: "turn.submit.prompt",
+          title: "User message",
+          text: "Try again",
+          role: "user",
+          status: null,
+          createdAt: "2026-07-10T00:00:01.000Z",
+        },
+        {
+          id: "turn-submit:two:prompt",
+          kind: "turn.submit.prompt",
+          title: "User message",
+          text: "Try again",
+          role: "user",
+          status: null,
+          createdAt: "2026-07-10T00:00:02.000Z",
+        },
+      ],
+    });
+
+    expect(timeline.map((item) => [item.id, item.body])).toEqual([
+      ["message:u1", "Try again"],
+      ["report:turn-submit:two:prompt", "Try again"],
+    ]);
+  });
+
   it("labels channel users from platform metadata and leaves local turns unlabeled", () => {
     const timeline = buildSessionTimeline({
       fallbackTimestamp: "2026-07-10T00:00:00.000Z",

@@ -115,8 +115,13 @@ export function createSparkDaemonTaskExecutor(
       const trackedContext: SparkDaemonTaskExecutionContext = {
         ...context,
         emitEvent: (event) => {
-          if (isProjectedSessionFailure(event, task.sessionId)) projectedFailure = true;
-          return context.emitEvent?.(event);
+          const projected = canonicalSessionFailureEvent(
+            event,
+            task.sessionId,
+            context.invocationId,
+          );
+          if (isProjectedSessionFailure(projected, task.sessionId)) projectedFailure = true;
+          return context.emitEvent?.(projected);
         },
       };
       try {
@@ -158,6 +163,38 @@ function isProjectedSessionFailure(event: SparkDaemonEvent, sessionId: string): 
     event.view.sessionId === sessionId &&
     event.view.message.status === "error"
   );
+}
+
+function canonicalSessionFailureEvent(
+  event: SparkDaemonEvent,
+  sessionId: string,
+  invocationId: string,
+): SparkDaemonEvent {
+  if (
+    event.type !== "daemon.view_event" ||
+    event.view.type !== "session.message" ||
+    event.view.sessionId !== sessionId ||
+    event.view.message.status !== "error"
+  ) {
+    return event;
+  }
+  return {
+    ...event,
+    invocationId,
+    view: {
+      ...event.view,
+      message: {
+        ...event.view.message,
+        id: `invocation:${invocationId}:failure`,
+        metadata: {
+          ...event.view.message.metadata,
+          source: "daemon.invocation",
+          invocationId,
+          kind: "invocation_failure",
+        },
+      },
+    },
+  };
 }
 
 async function emitSessionFailure(

@@ -1373,7 +1373,13 @@ void test("spark-cue keeps replaying disconnected Eval with one operation id", a
 void test("spark-cue stops replay immediately when the tool signal is aborted", async () => {
   const evalRequests: CueFrame[] = [];
   const server = await startCueServer((message, socket) => {
-    if ("Eval" in requestPayload(message)) {
+    const id = message.id as number;
+    const payload = requestPayload(message);
+    if ("Subscribe" in payload || "Unsubscribe" in payload) {
+      sendFrame(socket, { type: "response", id, payload: { Ok: { Ack: {} } } });
+      return;
+    }
+    if ("Eval" in payload) {
       evalRequests.push(message);
       socket.destroy();
     }
@@ -1403,17 +1409,58 @@ void test("spark-cue stops replay immediately when the tool signal is aborted", 
 });
 
 void test("spark-cue stops replay when the foreground deadline expires", async () => {
-  const evalRequests: CueFrame[] = [];
+  let warmed = false;
+  const deadlineEvalRequests: CueFrame[] = [];
   const server = await startCueServer((message, socket) => {
-    if ("Eval" in requestPayload(message)) {
-      evalRequests.push(message);
-      socket.destroy();
+    const id = message.id as number;
+    const payload = requestPayload(message);
+    if ("Subscribe" in payload || "Unsubscribe" in payload) {
+      sendFrame(socket, { type: "response", id, payload: { Ok: { Ack: {} } } });
+      return;
+    }
+    if ("Eval" in payload) {
+      if (!warmed) {
+        warmed = true;
+        sendFrame(socket, {
+          type: "response",
+          id,
+          payload: { Ok: { JobCreated: wireJobCreated({ job_id: "J-deadline-warm" }) } },
+        });
+        return;
+      }
+      deadlineEvalRequests.push(message);
+      return;
+    }
+    if ("ListJobs" in payload) {
+      sendFrame(socket, {
+        type: "response",
+        id,
+        payload: {
+          Ok: {
+            JobList: [
+              wireJob({
+                id: "J-deadline-warm",
+                status: "Running",
+                pipeline: "sleep 1",
+                exit_code: null,
+              }),
+            ],
+          },
+        },
+      });
     }
   });
   try {
     await withResolvedCueServer(server.socketPath, async () => {
       const execTool = registerCueToolsForProtocolTest().get("cue_exec");
       assert.ok(execTool);
+      await execTool.execute(
+        "deadline-warm",
+        { command: "sleep 1", background: true },
+        new AbortController().signal,
+        () => undefined,
+        { cwd: "/work", sessionId: "deadline-replay-session" },
+      );
       await assert.rejects(
         execTool.execute(
           "deadline-replay",
@@ -1425,7 +1472,7 @@ void test("spark-cue stops replay when the foreground deadline expires", async (
         (error) => error instanceof CueError && error.code === "IDEMPOTENT_RETRY_DEADLINE_EXCEEDED",
       );
     });
-    assert.equal(evalRequests.length, 1);
+    assert.equal(deadlineEvalRequests.length, 1);
   } finally {
     __resetPiCueClientForTests();
     await server.close();

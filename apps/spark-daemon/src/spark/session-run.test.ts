@@ -454,6 +454,15 @@ describe("daemon native session execution", () => {
         event.view.message.status === "error",
     );
     expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({
+      invocationId: "invocation-1",
+      view: {
+        message: {
+          id: "invocation:invocation-1:failure",
+          metadata: { source: "daemon.invocation", invocationId: "invocation-1" },
+        },
+      },
+    });
   });
 
   it("never leaves a successful channel turn without a visible reply", () => {

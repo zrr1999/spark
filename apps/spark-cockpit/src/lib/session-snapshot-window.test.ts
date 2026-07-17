@@ -77,6 +77,32 @@ describe("session snapshot cursor pages", () => {
     });
   });
 
+  it("keeps latest lifetime telemetry while older transcript pages are merged", () => {
+    const latest = page({ total: 70, start: 38, end: 70 });
+    latest.snapshot.usage = {
+      inputTokens: 19_000_000,
+      outputTokens: 820_000,
+      cacheReadTokens: 230_000_000,
+      cacheWriteTokens: 16,
+      costUsd: 23.509,
+      contextTokens: 262_632,
+    };
+    latest.snapshot.gitBranch = "main";
+    const older = page({ total: 70, start: 6, end: 38 });
+    older.snapshot.usage = {
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      costUsd: 0,
+    };
+
+    const merged = mergeEarlierSessionSnapshotWindow(latest, older);
+
+    expect(merged.snapshot.gitBranch).toBe("main");
+    expect(merged.snapshot.usage).toEqual(latest.snapshot.usage);
+  });
+
   it("rejects a cursor page from a changed branch instead of silently dropping a gap", () => {
     const latest = page({ total: 70, start: 38, end: 70 });
     const changedBranch = page({ total: 71, start: 7, end: 39 });

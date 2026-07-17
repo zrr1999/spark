@@ -56,7 +56,7 @@ export function sessionStatusUsage(
       numberValue(totals.latestCacheHitPercent) ?? usage.latestCacheHitPercent;
     const latestContextTokens = numberValue(totals.contextTokens) ?? usage.contextTokens;
     const latestContextWindow =
-      numberValue(totals.contextWindow) ?? usage.contextWindow ?? contextWindow;
+      contextWindow ?? numberValue(totals.contextWindow) ?? usage.contextWindow;
     usage = {
       inputTokens: (usage.inputTokens ?? 0) + (numberValue(totals.inputTokens) ?? 0),
       outputTokens: (usage.outputTokens ?? 0) + (numberValue(totals.outputTokens) ?? 0),
@@ -68,7 +68,7 @@ export function sessionStatusUsage(
       ...(latestContextWindow !== undefined ? { contextWindow: latestContextWindow } : {}),
     };
   }
-  if (!usage.contextWindow && contextWindow) usage = { ...usage, contextWindow };
+  if (contextWindow) usage = { ...usage, contextWindow };
   return usage;
 }
 

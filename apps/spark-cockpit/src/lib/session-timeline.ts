@@ -92,6 +92,7 @@ export function buildSessionTimeline(input: {
 }): SessionTimelineItem[] {
   const items: SessionTimelineItem[] = [];
   const canonicalMessageIds = new Set<string>();
+  const canonicalFallbackMatches = new Map<string, number>();
 
   for (const [messageIndex, message] of input.messages.entries()) {
     if (
@@ -105,6 +106,9 @@ export function buildSessionTimeline(input: {
     const parts = conversationPartsFromMessage(message, displayText);
     if (parts.length === 0) continue;
     canonicalMessageIds.add(message.id);
+    if (message.role === "user" || isFailedTerminalStatus(message.status)) {
+      incrementCount(canonicalFallbackMatches, fallbackMatchKey(actor, displayText));
+    }
     items.push({
       id: `message:${message.id}`,
       actor,
@@ -128,11 +132,11 @@ export function buildSessionTimeline(input: {
   // carry a canonical message ID, so they cannot be reconciled safely once a
   // session snapshot exists. Keep them only as an empty-snapshot compatibility
   // fallback; the activity panel still exposes them as internal run details.
-  const legacySubmittedMessages = new Set<string>();
+  const legacySubmittedMessages = new Map<string, number>();
   if (canonicalMessageIds.size === 0) {
     for (const [commandIndex, command] of input.commands.entries()) {
       const body = command.goal?.trim() || command.title?.trim() || command.id;
-      legacySubmittedMessages.add(normalizeMessage(body));
+      incrementCount(legacySubmittedMessages, normalizeMessage(body));
       items.push({
         id: `command:${command.id}`,
         actor: "user",
@@ -164,9 +168,16 @@ export function buildSessionTimeline(input: {
         ? "user"
         : "spark";
     if (
+      isDirectTurnFallback(report) &&
+      consumeCount(canonicalFallbackMatches, fallbackMatchKey(actor, report.text))
+    ) {
+      continue;
+    }
+    if (
       canonicalMessageIds.size === 0 &&
       actor === "user" &&
-      legacySubmittedMessages.has(normalizeMessage(report.text))
+      isDirectTurnFallback(report) &&
+      consumeCount(legacySubmittedMessages, normalizeMessage(report.text))
     ) {
       continue;
     }
@@ -453,6 +464,26 @@ function sessionMessageId(report: SessionTimelineReport) {
 
 function normalizeMessage(value: string) {
   return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function isDirectTurnFallback(report: SessionTimelineReport): boolean {
+  return report.kind === "turn.submit.prompt" || report.kind === "turn.submit.failure";
+}
+
+function fallbackMatchKey(actor: ConversationMessageView["actor"], text: string): string {
+  return `${actor}:${normalizeMessage(text)}`;
+}
+
+function incrementCount(counts: Map<string, number>, key: string): void {
+  counts.set(key, (counts.get(key) ?? 0) + 1);
+}
+
+function consumeCount(counts: Map<string, number>, key: string): boolean {
+  const count = counts.get(key) ?? 0;
+  if (count <= 0) return false;
+  if (count === 1) counts.delete(key);
+  else counts.set(key, count - 1);
+  return true;
 }
 
 function isUserRole(role: string | null) {

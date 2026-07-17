@@ -995,6 +995,14 @@ void test("native UI transport consumes view model events without concrete TUI p
     rendered,
     /↑19M ↓820k R230M W16 CH99\.3% \$23\.509 70\.6%\/372k\s+\(baidu-oneapi\) gpt-5\.6-sol • xhigh/,
   );
+
+  const narrow = stripAnsi(app.render(60).join("\n"));
+  assert.equal(
+    narrow.split("\n").every((line) => Array.from(line).length <= 60),
+    true,
+  );
+  assert.match(narrow, /gpt-5\.6-sol • xhigh/);
+  assert.doesNotMatch(narrow, /\(baidu-oneapi\)/);
 });
 
 void test("native UI transport prints task completion evidence summaries", () => {

@@ -984,9 +984,10 @@
   }
 
   function compactWorkingDirectory(value: string | undefined) {
-    const parts = value?.split("/").filter(Boolean) ?? [];
-    if (parts.length === 0) return value ?? "";
-    return parts.slice(-2).join("/");
+    const path = value?.trim() ?? "";
+    if (!path) return "";
+    const home = /^\/(?:Users|home)\/[^/]+(?=\/|$)|^\/root(?=\/|$)/u.exec(path)?.[0];
+    return home ? `~${path.slice(home.length)}` : path;
   }
 
   function startConversationContext(
