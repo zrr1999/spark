@@ -1,5 +1,15 @@
 import WebSocket, { type RawData } from "ws";
-import { createQqbotApiClient, resolveQqbotApiBase, type QqbotApiClient } from "./qqbot-api.ts";
+import {
+  materializeChannelImages,
+  type ChannelImage,
+  type ChannelImageSource,
+} from "./channel-images.ts";
+import {
+  createQqbotApiClient,
+  resolveQqbotApiBase,
+  type QqbotApiClient,
+  type QqbotMessageResponse,
+} from "./qqbot-api.ts";
 import type {
   ChannelAskRequest,
   ChannelInteractionAckStatus,
@@ -10,7 +20,15 @@ import {
   normalizeQqbotInteractionEvent,
   type QqbotNormalizedInteraction,
 } from "./qqbot-interaction.ts";
-import type { ChannelReplyCapability } from "./reply.ts";
+import {
+  channelDeliveryNotSent,
+  type ChannelDeliveryFacts,
+  type ChannelDeliveryReceipt,
+  type ChannelDeliveryResult,
+  type ChannelReplyCapability,
+  type ChannelReplyTarget,
+} from "./reply.ts";
+import { QQBOT_MARKDOWN_MAX_BYTES, chunkQqbotMarkdownText } from "./qqbot-markdown.ts";
 import { tryCreateQqbotC2CReplyStream } from "./qqbot-reply-stream.ts";
 import type { ChannelConnectionState, ChannelTransport, QqbotAdapterConfig } from "./types.ts";
 import {
@@ -44,6 +62,8 @@ const QQBOT_GROUP_PASSIVE_REPLY_LIMIT = 5;
 
 export interface QqbotTransportOptions {
   api?: QqbotApiClient;
+  /** Test seam for downloading platform-issued inbound image URLs. */
+  fetchImpl?: typeof fetch;
   webSocketFactory?: (url: string) => WebSocket;
   /** Deadline through Identify/Resume until READY or RESUMED is received. */
   connectTimeoutMs?: number;
@@ -121,6 +141,23 @@ export function createQqbotTransport(
     return token;
   }
 
+  async function deliveryToken(): Promise<string> {
+    try {
+      return await resolveToken();
+    } catch (error) {
+      // Credential validation/token acquisition cannot have emitted a message.
+      throw channelDeliveryNotSent(error);
+    }
+  }
+
+  function deliveryTarget(recipient: string): ReturnType<typeof parseQqbotRecipient> {
+    try {
+      return parseQqbotRecipient(recipient);
+    } catch (error) {
+      throw channelDeliveryNotSent(error);
+    }
+  }
+
   async function loadCursorOnce(): Promise<void> {
     if (cursorLoaded) return;
     const cursor = (await options.loadCursor?.()) ?? null;
@@ -135,50 +172,50 @@ export function createQqbotTransport(
     cursorLoaded = true;
   }
 
-  async function sendText(recipient: string, text: string, msgId?: string): Promise<void> {
-    const token = await resolveToken();
-    const target = parseQqbotRecipient(recipient);
+  async function sendText(recipient: string, text: string): Promise<ChannelDeliveryResult> {
+    const target = deliveryTarget(recipient);
+    const token = await deliveryToken();
+    let response: QqbotMessageResponse;
     switch (target.kind) {
       case "c2c":
-        await api.sendC2CMessage(token, target.openid, text, msgId);
-        return;
+        response = await api.sendC2CMessage(token, target.openid, text);
+        break;
       case "group":
-        await api.sendGroupMessage(token, target.groupOpenid, text, msgId);
-        return;
+        response = await api.sendGroupMessage(token, target.groupOpenid, text);
+        break;
       case "channel":
-        await api.sendChannelMessage(token, target.channelId, text, msgId);
-        return;
+        response = await api.sendChannelMessage(token, target.channelId, text);
+        break;
       default: {
         const unexpected: never = target;
         throw new Error(`unsupported qqbot recipient: ${String(unexpected)}`);
       }
     }
+    return qqbotDeliveryResult({ replaySafety: "unsafe" }, response);
   }
 
-  async function sendFinalReply(recipient: string, text: string, msgId?: string): Promise<void> {
-    const target = parseQqbotRecipient(recipient);
-    const content = text.trim();
-    const token = await resolveToken();
-    const reservation = reservePassiveReplyForTarget(passiveReplyBudget, target, msgId, "final");
-    if (!reservation) throw new Error("qqbot passive reply budget exhausted before final reply");
+  async function sendMarkdownChunk(
+    token: string,
+    target: ReturnType<typeof parseQqbotRecipient>,
+    content: string,
+    msgId: string | undefined,
+    msgSeq: number | undefined,
+  ): Promise<QqbotMessageResponse> {
     switch (target.kind) {
       case "c2c":
-        await api.sendC2CMarkdownMessage(token, target.openid, content, msgId, reservation.msgSeq);
-        return;
+        return await api.sendC2CMarkdownMessage(token, target.openid, content, msgId, msgSeq);
       case "group":
-        await api.sendGroupMarkdownMessage(
+        return await api.sendGroupMarkdownMessage(
           token,
           target.groupOpenid,
           content,
           msgId,
-          reservation.msgSeq,
+          msgSeq,
         );
-        return;
       case "channel":
         // Channel custom Markdown remains invitation-gated. Preserve the
         // assistant's original reply body through the supported text API.
-        await api.sendChannelMessage(token, target.channelId, content, msgId);
-        return;
+        return await api.sendChannelMessage(token, target.channelId, content, msgId);
       default: {
         const unexpected: never = target;
         throw new Error(`unsupported qqbot recipient: ${String(unexpected)}`);
@@ -186,16 +223,46 @@ export function createQqbotTransport(
     }
   }
 
+  async function sendFinalReply(
+    recipient: string,
+    text: string,
+    msgId?: string,
+  ): Promise<ChannelDeliveryResult> {
+    let target: ReturnType<typeof parseQqbotRecipient>;
+    let chunks: string[];
+    let sequences: Array<number | undefined>;
+    try {
+      target = parseQqbotRecipient(recipient);
+      chunks = chunkQqbotMarkdownText(text, QQBOT_MARKDOWN_MAX_BYTES);
+      if (chunks.length === 0) throw new Error("qqbot final reply requires non-empty content");
+      const reservation = reservePassiveReplyForTarget(passiveReplyBudget, target, msgId, "final");
+      if (!reservation) throw new Error("qqbot passive reply budget exhausted before final reply");
+      sequences = stableFinalReplySequences(target, msgId, chunks.length, reservation.msgSeq);
+    } catch (error) {
+      throw channelDeliveryNotSent(error);
+    }
+    const token = await deliveryToken();
+    let response: QqbotMessageResponse | undefined;
+    for (const [index, chunk] of chunks.entries()) {
+      response = await sendMarkdownChunk(token, target, chunk, msgId, sequences[index]);
+    }
+    return qqbotDeliveryResult(
+      qqbotReplyDeliveryFacts({ recipient, messageId: msgId }),
+      response ?? {},
+    );
+  }
+
   const reply: ChannelReplyCapability = {
+    deliveryFacts: qqbotReplyDeliveryFacts,
     async openReplyStream(target) {
       // Native in-place streaming exists only for C2C. Group/channel fall back
       // to a single durable sendReply from the daemon outbox.
+      const parsed = parseQqbotRecipient(target.recipient);
       return tryCreateQqbotC2CReplyStream({
         target,
         api,
         resolveToken,
         reserveFinalSeq: (messageId) => {
-          const parsed = parseQqbotRecipient(target.recipient);
           if (parsed.kind !== "c2c") return undefined;
           const reservation = reservePassiveReplyForTarget(
             passiveReplyBudget,
@@ -205,10 +272,27 @@ export function createQqbotTransport(
           );
           return reservation?.msgSeq;
         },
+        sendFollowUpMarkdown:
+          parsed.kind === "c2c"
+            ? async (content) => {
+                const messageId = target.messageId?.trim();
+                const overflow = reservePassiveReplyForTarget(
+                  passiveReplyBudget,
+                  parsed,
+                  messageId,
+                  "overflow",
+                );
+                if (!overflow) {
+                  throw new Error("qqbot passive reply budget exhausted before stream follow-up");
+                }
+                const token = await deliveryToken();
+                await sendMarkdownChunk(token, parsed, content, messageId, overflow.msgSeq);
+              }
+            : undefined,
       });
     },
     async sendReply(input) {
-      await sendFinalReply(input.recipient, input.text, input.messageId);
+      return await sendFinalReply(input.recipient, input.text, input.messageId);
     },
   };
 
@@ -247,6 +331,73 @@ export function createQqbotTransport(
     async ackInteraction(interactionId, status = "success") {
       const token = await resolveToken();
       await api.acknowledgeInteraction(token, interactionId, qqbotAckCode(status));
+    },
+  };
+
+  const image: NonNullable<ChannelTransport["image"]> = {
+    async sendImage(input) {
+      let target: ReturnType<typeof parseQqbotRecipient>;
+      let source: { url: string } | { data: string };
+      try {
+        target = parseQqbotRecipient(input.recipient);
+        if (target.kind === "channel") {
+          throw new Error("qqbot image messages currently support c2c and group recipients only");
+        }
+        const url = input.image.url?.trim();
+        if (url) {
+          const parsed = new URL(url);
+          if (parsed.protocol !== "https:") throw new Error("qqbot image URL must use HTTPS");
+          source = { url: parsed.toString() };
+        } else {
+          const [materialized] = await materializeChannelImages([input.image]);
+          if (!materialized) throw new Error("qqbot image could not be materialized");
+          source = { data: materialized.data };
+        }
+      } catch (error) {
+        throw channelDeliveryNotSent(error);
+      }
+
+      const token = await deliveryToken();
+      let upload: Awaited<ReturnType<QqbotApiClient["uploadC2CImage"]>>;
+      try {
+        upload =
+          target.kind === "c2c"
+            ? await api.uploadC2CImage(token, target.openid, source)
+            : await api.uploadGroupImage(token, target.groupOpenid, source);
+        if (!upload.file_info?.trim()) throw new Error("QQ Bot image upload omitted file_info");
+      } catch (error) {
+        // srv_send_msg=false: upload failure cannot have emitted a chat message.
+        throw channelDeliveryNotSent(error);
+      }
+
+      const msgSeq = input.messageId ? api.nextMessageSequence(input.messageId) : undefined;
+      const response =
+        target.kind === "c2c"
+          ? await api.sendC2CImageMessage(
+              token,
+              target.openid,
+              upload.file_info,
+              input.caption,
+              input.messageId,
+              msgSeq,
+            )
+          : await api.sendGroupImageMessage(
+              token,
+              target.groupOpenid,
+              upload.file_info,
+              input.caption,
+              input.messageId,
+              msgSeq,
+            );
+      return qqbotDeliveryResult(
+        input.messageId
+          ? qqbotReplyDeliveryFacts({
+              recipient: input.recipient,
+              messageId: input.messageId,
+            })
+          : { replaySafety: "unsafe" },
+        response,
+      );
     },
   };
 
@@ -433,7 +584,11 @@ export function createQqbotTransport(
             eventType === "AT_MESSAGE_CREATE" ||
             eventType === "MESSAGE_CREATE"
           ) {
-            onMessage?.({ event_type: eventType, d: payload.d });
+            const images = await materializeQqbotInboundImages(payload.d, options.fetchImpl);
+            onMessage?.({
+              event_type: eventType,
+              d: appendQqbotMaterializedImages(payload.d, images),
+            });
           }
           if (isCurrentSocket()) await commitDurableSequence(payload);
         };
@@ -595,6 +750,8 @@ export function createQqbotTransport(
   return {
     reply,
     interaction,
+    image,
+    messageDeliveryFacts: () => ({ replaySafety: "unsafe" }),
     async start(handler, interactionHandler) {
       if (running) return;
       running = true;
@@ -626,7 +783,7 @@ export function createQqbotTransport(
       connectionError = undefined;
     },
     async send(recipient, text) {
-      await sendText(recipient, text);
+      return await sendText(recipient, text);
     },
     status() {
       return {
@@ -635,6 +792,111 @@ export function createQqbotTransport(
       };
     },
   };
+}
+
+/** QQ events expose temporary attachment URLs; materialize them before cursor commit. */
+export async function materializeQqbotInboundImages(
+  value: unknown,
+  fetchImpl?: typeof fetch,
+): Promise<ChannelImage[]> {
+  const sources = qqbotImageSources(value);
+  if (sources.length === 0) return [];
+  return await materializeChannelImages(sources, {
+    fetchImpl,
+    onError: (error) => {
+      console.error(`[spark-channels] qqbot image skipped: ${error.message}`);
+    },
+  });
+}
+
+function qqbotImageSources(value: unknown): ChannelImageSource[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  const attachments = (value as Record<string, unknown>).attachments;
+  if (!Array.isArray(attachments)) return [];
+  return attachments.flatMap((entry): ChannelImageSource[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const record = entry as Record<string, unknown>;
+    const mediaType = typeof record.content_type === "string" ? record.content_type.trim() : "";
+    const url = typeof record.url === "string" ? record.url.trim() : "";
+    if (!mediaType.toLowerCase().startsWith("image/") || !url) return [];
+    const size =
+      typeof record.size === "number" && Number.isFinite(record.size) && record.size >= 0
+        ? record.size
+        : undefined;
+    return [
+      {
+        url,
+        mediaType,
+        ...(typeof record.filename === "string" && record.filename.trim()
+          ? { name: record.filename.trim() }
+          : {}),
+        ...(size !== undefined ? { size } : {}),
+      },
+    ];
+  });
+}
+
+function appendQqbotMaterializedImages(value: unknown, images: ChannelImage[]): unknown {
+  if (images.length === 0 || !value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  return { ...(value as Record<string, unknown>), spark_images: images };
+}
+
+function qqbotReplyDeliveryFacts(target: ChannelReplyTarget): ChannelDeliveryFacts {
+  let recipient: ReturnType<typeof parseQqbotRecipient>;
+  try {
+    recipient = parseQqbotRecipient(target.recipient);
+  } catch (error) {
+    throw channelDeliveryNotSent(error);
+  }
+  const messageId = target.messageId?.trim();
+  // QQ passive replies deduplicate a reused source msg_id + msg_seq pair. The
+  // fixed sequences below survive daemon/transport recreation. Proactive and
+  // channel sends expose no equivalent server idempotency key.
+  return {
+    replaySafety:
+      messageId && (recipient.kind === "c2c" || recipient.kind === "group")
+        ? "deduplicated"
+        : "unsafe",
+  };
+}
+
+function qqbotDeliveryResult(
+  facts: ChannelDeliveryFacts,
+  response: QqbotMessageResponse,
+): ChannelDeliveryResult {
+  const receipt = qqbotDeliveryReceipt(response);
+  return { ...facts, ...(receipt ? { receipt } : {}) };
+}
+
+function qqbotDeliveryReceipt(response: QqbotMessageResponse): ChannelDeliveryReceipt | undefined {
+  const messageId = response.id?.trim();
+  const timestamp = response.timestamp === undefined ? undefined : String(response.timestamp);
+  if (!messageId && !timestamp) return undefined;
+  return {
+    ...(messageId ? { messageId } : {}),
+    ...(timestamp ? { timestamp } : {}),
+  };
+}
+
+function stableFinalReplySequences(
+  target: ReturnType<typeof parseQqbotRecipient>,
+  messageId: string | undefined,
+  chunkCount: number,
+  finalSequence: number | undefined,
+): Array<number | undefined> {
+  if (!messageId || (target.kind !== "c2c" && target.kind !== "group")) {
+    return Array.from({ length: chunkCount }, () => undefined);
+  }
+  const overflow = target.kind === "c2c" ? [1, 3] : [2, 3, 4];
+  const sequences = [finalSequence, ...overflow];
+  if (chunkCount > sequences.length) {
+    throw new Error(
+      `qqbot final reply needs ${chunkCount} passive message slots; only ${sequences.length} are available`,
+    );
+  }
+  return sequences.slice(0, chunkCount);
 }
 
 const DEFAULT_UNSUPPORTED_BUTTON_TEXT = "当前 QQ 版本不支持此操作，请升级后重试";
@@ -794,7 +1056,7 @@ function sanitizeQqbotConnectionError(
   return message.length > 240 ? `${message.slice(0, 237)}...` : message;
 }
 
-type QqbotPassiveReplyKind = "ask" | "final";
+type QqbotPassiveReplyKind = "ask" | "final" | "overflow";
 
 interface QqbotPassiveReplyReservation {
   msgSeq?: number;
@@ -817,7 +1079,9 @@ function createQqbotPassiveReplyBudget(): QqbotPassiveReplyBudget {
       askCount: number;
       askIdempotencyKey?: string;
       finalReserved: boolean;
+      usedSeqs: Set<number>;
       touchedAt: number;
+      limit: number;
     }
   >();
   return {
@@ -827,15 +1091,17 @@ function createQqbotPassiveReplyBudget(): QqbotPassiveReplyBudget {
       for (const [key, entry] of entries) {
         if (now - entry.touchedAt >= 60 * 60 * 1000) entries.delete(key);
       }
+      const limit =
+        scope === "c2c" ? QQBOT_C2C_PASSIVE_REPLY_LIMIT : QQBOT_GROUP_PASSIVE_REPLY_LIMIT;
       const key = `${scope}\0${recipient}\0${messageId}`;
       const entry = entries.get(key) ?? {
         askCount: 0,
         finalReserved: false,
+        usedSeqs: new Set<number>(),
         touchedAt: now,
+        limit,
       };
-      const limit =
-        scope === "c2c" ? QQBOT_C2C_PASSIVE_REPLY_LIMIT : QQBOT_GROUP_PASSIVE_REPLY_LIMIT;
-      if (kind !== "final" && entry.finalReserved) return undefined;
+      if (kind !== "final" && kind !== "overflow" && entry.finalReserved) return undefined;
       let msgSeq: number;
       if (kind === "ask") {
         if (idempotencyKey && entry.askIdempotencyKey === idempotencyKey) {
@@ -848,15 +1114,27 @@ function createQqbotPassiveReplyBudget(): QqbotPassiveReplyBudget {
         entry.askCount += 1;
         if (idempotencyKey) entry.askIdempotencyKey = idempotencyKey;
         msgSeq = scope === "c2c" ? 2 : 1;
-      } else {
+      } else if (kind === "final") {
         entry.finalReserved = true;
         msgSeq = limit;
+      } else {
+        const availableSeq = allocateUnusedPassiveSeq(entry.usedSeqs, limit);
+        if (availableSeq === undefined) return undefined;
+        msgSeq = availableSeq;
       }
+      entry.usedSeqs.add(msgSeq);
       entry.touchedAt = now;
       entries.set(key, entry);
       return { msgSeq };
     },
   };
+}
+
+function allocateUnusedPassiveSeq(usedSeqs: Set<number>, limit: number): number | undefined {
+  for (let seq = 1; seq <= limit; seq += 1) {
+    if (!usedSeqs.has(seq)) return seq;
+  }
+  return undefined;
 }
 
 function reservePassiveReplyForTarget(

@@ -168,6 +168,7 @@ describe("loadSparkSessionSnapshot", () => {
           content: "Inspect the repository",
           timestamp: 1783904401000,
           metadata: {
+            invocationId: "inv_user_1",
             channel: {
               adapter: "infoflow",
               externalKey: "infoflow:group:10838226",
@@ -321,6 +322,7 @@ describe("loadSparkSessionSnapshot", () => {
         role: "user",
         text: "Inspect the repository",
         metadata: {
+          invocationId: "inv_user_1",
           channel: {
             adapter: "infoflow",
             externalKey: "infoflow:group:10838226",

@@ -1,15 +1,25 @@
 import type { SparkChannelAdapter } from "@zendev-lab/spark-protocol/session-assignment";
+import type { ChannelImage, ChannelImageSource } from "./channel-images.ts";
 import type { InfoflowAttachment } from "./infoflow-content.ts";
 import type {
   ChannelInteractionCapability,
   ChannelInteractionEvent,
   RoutedChannelInteractionEvent,
 } from "./interaction.ts";
-import type { ChannelReplyCapability } from "./reply.ts";
+import type {
+  ChannelDeliveryFacts,
+  ChannelDeliveryResult,
+  ChannelMessageTarget,
+  ChannelReplyCapability,
+} from "./reply.ts";
 
 export type ChannelAdapterType = SparkChannelAdapter;
 
 export interface IncomingMessage {
+  /** Configured adapter instance that received this message. */
+  adapterId?: string;
+  /** Opaque provider-account identity that survives local adapter renames. */
+  adapterAccountIdentity?: string;
   adapter: ChannelAdapterType;
   externalKey: string;
   senderId?: string;
@@ -23,6 +33,8 @@ export interface IncomingMessage {
   contentType?: string;
   /** Display-safe attachment facts; never raw bytes or signed download URLs. */
   attachments?: InfoflowAttachment[];
+  /** Provider-ready images; source URLs are discarded before this boundary. */
+  images?: ChannelImage[];
   /** Display names / ids extracted from AT body parts (Infoflow). */
   mentions?: string[];
   /** True when an AT targeted this bot (when detectable). */
@@ -33,11 +45,22 @@ export interface IncomingMessage {
 export interface ChannelAdapter {
   readonly id: string;
   readonly type: ChannelAdapterType;
+  /** Whether this adapter has a concrete runtime transport in this process. */
+  readonly runtimeCapable?: boolean;
   start(): Promise<void>;
   stop(): Promise<void>;
-  send(input: { recipient: string; text: string }): Promise<void>;
+  /** Replay policy for an ordinary proactive message. Missing means unsafe. */
+  messageDeliveryFacts?(target: ChannelMessageTarget): ChannelDeliveryFacts;
+  send(input: {
+    recipient: string;
+    text: string;
+    /** Optional only for compatibility callers; durable sends use the registry. */
+    deliveryId?: string;
+  }): Promise<ChannelDeliveryResult | void>;
   /** Optional richer reply lifecycle used by daemon-owned channel conversations. */
   readonly reply?: ChannelReplyCapability;
+  /** Optional image-message capability. */
+  readonly image?: ChannelImageCapability;
   /** Optional native ask/button capability. */
   readonly interaction?: ChannelInteractionCapability;
   /** Runtime connection health; process lifecycle alone is not transport liveness. */
@@ -59,6 +82,7 @@ export interface ChannelTransportStatus {
 export interface ChannelAdapterStatus extends ChannelTransportStatus {
   id: string;
   type: ChannelAdapterType;
+  adapterAccountIdentity?: string;
   running: boolean;
 }
 
@@ -188,6 +212,10 @@ export interface ChannelNotifyInput {
   route?: string;
   recipient?: string;
   text?: string;
+  /** Image-only message. `text`, when present, is a provider-supported caption. */
+  image?: ChannelImageSource;
+  /** Stable for this explicit one-shot request. */
+  deliveryId?: string;
 }
 
 export interface ChannelNotifyListResult {
@@ -201,6 +229,12 @@ export interface ChannelNotifySendResult {
   adapter: string;
   recipient: string;
   text: string;
+  image?: { source: "url" | "data"; mediaType?: string; name?: string };
+  /** Present for registry-owned sends; omitted by legacy test/adaptor shims. */
+  deliveryId?: string;
+  delivery?: ChannelDeliveryResult;
+  /** channel.notify is an operator/test side effect, not a durable retry queue. */
+  deliverySemantics?: "one-shot";
 }
 
 export type ChannelNotifyResult = ChannelNotifyListResult | ChannelNotifySendResult;
@@ -223,12 +257,34 @@ export interface ChannelTransport {
     onInteraction?: (event: ChannelInteractionEvent) => void | Promise<void>,
   ): Promise<void>;
   stop(): Promise<void>;
-  send(recipient: string, text: string): Promise<void>;
+  /** Replay policy for an ordinary proactive message. Missing means unsafe. */
+  messageDeliveryFacts?(target: ChannelMessageTarget): ChannelDeliveryFacts;
+  send(
+    recipient: string,
+    text: string,
+    /** Optional only for compatibility callers; durable sends use the registry. */
+    deliveryId?: string,
+  ): Promise<ChannelDeliveryResult | void>;
   /** Optional richer reply lifecycle; platform SDK objects remain behind this boundary. */
   readonly reply?: ChannelReplyCapability;
+  /** Optional image-message capability. */
+  readonly image?: ChannelImageCapability;
   /** Optional native ask/button lifecycle. */
   readonly interaction?: ChannelInteractionCapability;
   status?(): ChannelTransportStatus;
+}
+
+export interface ChannelImageSendInput {
+  recipient: string;
+  image: ChannelImageSource;
+  caption?: string;
+  deliveryId?: string;
+  /** Original platform message id for a passive reply when supported. */
+  messageId?: string;
+}
+
+export interface ChannelImageCapability {
+  sendImage(input: ChannelImageSendInput): Promise<ChannelDeliveryResult | void>;
 }
 
 export interface FeishuInboundRaw {
@@ -247,6 +303,7 @@ export interface InfoflowInboundRaw {
   event_type?: string;
   content_type?: string;
   attachments?: InfoflowAttachment[];
+  images?: ChannelImage[];
   sender_name?: string;
   mentions?: string[];
   /** Transport-detected self mention after platform ids are still available. */

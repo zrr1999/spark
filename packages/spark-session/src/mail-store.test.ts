@@ -87,7 +87,7 @@ describe("SparkSessionMailStore channel delivery receipts", () => {
         idempotencyKey: "notify:release",
         source: "tool",
       }),
-    ).rejects.toThrow(/reused for a different message/u);
+    ).rejects.toThrow(/channel delivery requires explicit user visibility/u);
     await expect(
       store.send({
         toSessionId: "session:channel",
@@ -102,6 +102,7 @@ describe("SparkSessionMailStore channel delivery receipts", () => {
     const store = await createStore(() => now);
     const sent = await store.send({
       toSessionId: "session:channel",
+      visibility: "user",
       delivery: "channel",
       deliveryTargets: [{ adapter: "infoflow", externalKey: "user:1" }],
       body: "build finished",
@@ -154,5 +155,141 @@ describe("SparkSessionMailStore channel delivery receipts", () => {
     expect((await store.get("session:channel", sent.message.id)).deliveries).toEqual(
       delivered.deliveries,
     );
+  });
+
+  it("preserves provider account identity and keeps same-recipient accounts distinct", async () => {
+    const store = await createStore();
+    const sent = await store.send({
+      toSessionId: "session:multi-account",
+      visibility: "user",
+      deliveryTargets: [
+        {
+          adapter: " infoflow ",
+          externalKey: " infoflow:user:shared ",
+          adapterId: " info-a ",
+          adapterAccountIdentity: " channel-account:infoflow:a ",
+        },
+        {
+          adapter: "infoflow",
+          externalKey: "infoflow:user:shared",
+          adapterId: "info-b",
+          adapterAccountIdentity: "channel-account:infoflow:b",
+        },
+      ],
+      originBinding: {
+        adapter: "infoflow",
+        externalKey: "infoflow:user:origin",
+        adapterId: "info-a",
+        adapterAccountIdentity: "channel-account:infoflow:a",
+      },
+      body: "account-scoped notice",
+      idempotencyKey: "notify:multi-account",
+    });
+
+    expect(sent.message.originBinding).toEqual({
+      adapter: "infoflow",
+      externalKey: "infoflow:user:origin",
+      adapterId: "info-a",
+      adapterAccountIdentity: "channel-account:infoflow:a",
+    });
+    expect(sent.message.deliveries).toHaveLength(2);
+    expect(sent.message.deliveries.map((target) => target.adapterAccountIdentity)).toEqual([
+      "channel-account:infoflow:a",
+      "channel-account:infoflow:b",
+    ]);
+
+    const delivered = await store.recordChannelDelivery(
+      sent.message.toSessionId,
+      sent.message.id,
+      {
+        adapter: "infoflow",
+        externalKey: "infoflow:user:shared",
+        // Adapter ids may be renamed; stable provider identity owns routing.
+        adapterId: "info-a-renamed",
+        adapterAccountIdentity: "channel-account:infoflow:a",
+      },
+      { ok: true, receipt: { platformMessageId: "message-a" } },
+    );
+    expect(delivered.deliveries).toMatchObject([
+      {
+        adapterId: "info-a",
+        adapterAccountIdentity: "channel-account:infoflow:a",
+        status: "delivered",
+      },
+      {
+        adapterId: "info-b",
+        adapterAccountIdentity: "channel-account:infoflow:b",
+        status: "pending",
+      },
+    ]);
+    expect(await store.get(sent.message.toSessionId, sent.message.id)).toEqual(delivered);
+
+    const replay = await store.send({
+      toSessionId: "session:multi-account",
+      visibility: "user",
+      deliveryTargets: [
+        {
+          adapter: "infoflow",
+          externalKey: "infoflow:user:shared",
+          adapterId: "info-a-renamed",
+          adapterAccountIdentity: "channel-account:infoflow:a",
+        },
+        {
+          adapter: "infoflow",
+          externalKey: "infoflow:user:shared",
+          adapterId: "info-b",
+          adapterAccountIdentity: "channel-account:infoflow:b",
+        },
+      ],
+      originBinding: {
+        adapter: "infoflow",
+        externalKey: "infoflow:user:origin",
+        adapterId: "info-a-renamed",
+        adapterAccountIdentity: "channel-account:infoflow:a",
+      },
+      body: "account-scoped notice",
+      idempotencyKey: "notify:multi-account",
+    });
+    expect(replay.created).toBe(false);
+    expect(replay.message.id).toBe(sent.message.id);
+  });
+
+  it("persists uncertain channel outcomes as terminal mailbox receipts", async () => {
+    const store = await createStore();
+    const target = {
+      adapter: "infoflow",
+      externalKey: "infoflow:user:user-1",
+      adapterAccountIdentity: "channel-account:infoflow:primary",
+    };
+    const sent = await store.send({
+      toSessionId: "session:uncertain",
+      visibility: "user",
+      deliveryTargets: [target],
+      body: "may already be visible",
+    });
+
+    const uncertain = await store.recordChannelDelivery(
+      sent.message.toSessionId,
+      sent.message.id,
+      target,
+      { ok: false, status: "uncertain", error: "provider response was lost" },
+    );
+    expect(uncertain.deliveries).toMatchObject([
+      {
+        status: "uncertain",
+        attemptCount: 1,
+        lastError: "provider response was lost",
+      },
+    ]);
+    expect(await store.pendingChannelDeliveries()).toEqual([]);
+
+    const lateRetry = await store.recordChannelDelivery(
+      sent.message.toSessionId,
+      sent.message.id,
+      target,
+      { ok: false, error: "must not reopen" },
+    );
+    expect(lateRetry).toEqual(uncertain);
+    expect(await store.get(sent.message.toSessionId, sent.message.id)).toEqual(uncertain);
   });
 });

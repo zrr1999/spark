@@ -2418,11 +2418,8 @@ void test("native /sessions reopens the startup selector and attaches the select
           });
           await options.configureApp?.(harness.app, harness.session);
           assert.equal(await harness.submit("/sessions"), "command");
-          assert.equal(harness.app.actionBarSnapshot()?.selectedActionId, "select-session");
-          const focused = harness.state.focused as { handleInput?: (input: string) => void };
-          assert.equal(typeof focused.handleInput, "function");
-          focused.handleInput?.("\r");
           await harness.flush();
+          assert.equal(harness.app.actionBarSnapshot(), undefined);
           assert.equal(harness.state.exited, true);
         },
       }),

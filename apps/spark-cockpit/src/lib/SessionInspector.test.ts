@@ -20,7 +20,6 @@ const labels: SessionInspectorLabels = {
   tabs: {
     summary: "SUMMARY_TAB",
     changes: "CHANGES_TAB",
-    todos: "TODO_TAB",
     tasks: "TASKS_TAB",
     mailbox: "MAILBOX_TAB",
   },
@@ -49,6 +48,10 @@ const labels: SessionInspectorLabels = {
   mailUnread: "UNREAD",
   mailRead: "READ",
   mailAcknowledged: "ACKNOWLEDGED",
+  mailDeliveryPending: "DELIVERY_PENDING",
+  mailDeliveryDelivered: "DELIVERY_DELIVERED",
+  mailDeliveryFailed: "DELIVERY_FAILED",
+  mailDeliveryUncertain: "DELIVERY_UNCERTAIN",
   sessionId: "SESSION_ID",
   sessionStatus: "SESSION_STATUS",
   workingDirectory: "WORKING_DIRECTORY",
@@ -162,6 +165,7 @@ describe("SessionInspector component contract", () => {
 
     expect(body).toContain('class="session-todo-rail');
     expect(body).not.toContain('id="inspector-test-todos-tab"');
+    expect(body).toContain('aria-labelledby="inspector-test-session-todo-heading"');
     expect(body).toContain("SESSION_TODO_HEADING");
     expect(body).toContain("Session TODOs: 2 active.");
     expect(body).toContain("Inspect projection");
@@ -186,6 +190,44 @@ describe("SessionInspector component contract", () => {
     expect(body).not.toContain('href="#message:');
   });
 
+  it("renders channel delivery separately from mailbox read state", () => {
+    const view = workbenchView(null);
+    view.mailbox = [
+      {
+        id: "mail:uncertain",
+        fromSessionId: "sess-worker",
+        kind: "notification",
+        intent: "research.complete",
+        subject: "Research result",
+        body: "The provider did not confirm delivery.",
+        createdAt: "2026-07-20T03:00:00.000Z",
+        status: "unread",
+        channelDelivery: {
+          status: "uncertain",
+          total: 1,
+          pending: 0,
+          delivered: 0,
+          failed: 0,
+          uncertain: 1,
+        },
+      },
+    ];
+
+    const body = render(SessionInspector, {
+      props: {
+        view,
+        labels,
+        instanceId: "inspector-mail-delivery",
+        initialTab: "mailbox",
+      },
+    }).body;
+
+    expect(body).toContain("DELIVERY_UNCERTAIN");
+    expect(body).toContain("UNREAD");
+    expect(body).toContain("mail-delivery-status uncertain");
+    expect(body).toContain("mail-read-status unread");
+  });
+
   it("names tabs, panels, and headings from the inspector instance", () => {
     const source = readFileSync(componentPath, "utf8");
 
@@ -193,6 +235,7 @@ describe("SessionInspector component contract", () => {
     expect(source).toContain("`${instanceId}-${tab}-tab`");
     expect(source).toContain("`${instanceId}-${tab}-panel`");
     expect(source).toContain("`${instanceId}-${section}-heading`");
+    expect(source).toContain("`${instanceId}-session-todo-heading`");
     expect(source).not.toContain('id="session-inspector-runs-heading"');
 
     const workspace = readFileSync(workspacePath, "utf8");

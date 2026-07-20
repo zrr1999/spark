@@ -19,10 +19,12 @@ import {
   DEFAULT_SPARK_COMPACTION_SETTINGS,
   compactSparkSessionRecord,
   deterministicSparkCompactionSummary,
+  meterSparkContextTokens,
   prepareSparkCompaction,
   shouldSparkCompact,
   type SparkCompactionPreparation,
 } from "./compaction.ts";
+import { getSparkSessionBranch } from "./session-navigation.ts";
 import type {
   SparkBranchSummaryEntry,
   SparkCompactionEntry,
@@ -34,7 +36,7 @@ import type {
 
 export interface SparkAgentSessionRunOptions {
   sessionId: string;
-  prompt: string;
+  prompt: UserMessage["content"];
   reset?: boolean;
   forkFromSession?: string;
   /** Display-safe metadata persisted on this turn's submitted user message only. */
@@ -163,7 +165,10 @@ export class SparkAgentSession {
     return this.services.agentLoop.getPromptItems().length;
   }
 
-  private async tryPreflightCompaction(record: SparkSessionRecord, prompt: string): Promise<void> {
+  private async tryPreflightCompaction(
+    record: SparkSessionRecord,
+    prompt: UserMessage["content"],
+  ): Promise<void> {
     const preparation = prepareForAutomaticCompaction(record, false);
     if (!preparation || preparation.messagesToSummarize.length === 0) return;
 
@@ -177,9 +182,13 @@ export class SparkAgentSession {
     const contextWindow = positiveNumber(model.contextWindow);
     if (!contextWindow) return;
     const requestedOutput = positiveNumber(model.maxTokens) ?? 0;
-    const estimatedPromptTokens = Math.ceil(prompt.length / 4);
-    const estimatedRequestTokens =
-      preparation.tokensBefore + estimatedPromptTokens + requestedOutput;
+    const replayMessages = activeSessionReplayMessages(record);
+    const contextMeter = meterSparkContextTokens({
+      messages: replayMessages,
+      reportedTokens: latestReportedContextTokens(record),
+    });
+    const promptMeter = meterSparkContextTokens({ messages: [{ role: "user", content: prompt }] });
+    const estimatedRequestTokens = contextMeter.tokens + promptMeter.tokens + requestedOutput;
     if (!shouldSparkCompact(estimatedRequestTokens, contextWindow)) return;
     await this.tryCompact(record, "auto", false, false);
   }
@@ -220,11 +229,34 @@ export class SparkAgentSession {
       appendCompactionCheckpointMessages(this.services, record, results);
       const preparation = prepareForAutomaticCompaction(record, force);
       if (!preparation || preparation.messagesToSummarize.length === 0) return false;
+      const replayBefore = activeSessionReplayMessages(record);
+      const beforeMeter = meterSparkContextTokens({
+        messages: replayBefore,
+        reportedTokens: latestReportedContextTokens(record),
+      });
+      // Reduction must compare the same meter on both sides. Provider usage
+      // describes the request before compaction and cannot be compared with a
+      // newly estimated compacted replay.
+      const estimatedTokensBefore = meterSparkContextTokens({ messages: replayBefore }).tokens;
       compactionEntry = await compactSparkSessionRecord(
         record,
         preparation,
         deterministicSparkCompactionSummary,
+        {
+          tokenSource: beforeMeter.tokenSource,
+          measuredReductionRatio: 0,
+          fallbackReason: "deterministic_requested",
+        },
       );
+      const estimatedTokensAfter = meterSparkContextTokens({
+        messages: activeSessionReplayMessages(record),
+      }).tokens;
+      if (compactionEntry.metadata) {
+        compactionEntry.metadata.measuredReductionRatio = measuredReductionRatio(
+          estimatedTokensBefore,
+          estimatedTokensAfter,
+        );
+      }
       await this.services.sessionStore.save(record);
       return true;
     } finally {
@@ -275,6 +307,34 @@ function appendCompactionCheckpointMessages(
       recordMetadata(message.details),
     );
   }
+}
+
+function latestReportedContextTokens(record: SparkSessionRecord): number | undefined {
+  const branch = getSparkSessionBranch(record);
+  const latestCompactionIndex = findLastIndex(branch, (entry) => entry.type === "compaction");
+  for (let index = branch.length - 1; index > latestCompactionIndex; index -= 1) {
+    const entry = branch[index];
+    if (entry?.type !== "message" || entry.message.role !== "assistant") continue;
+    const usage = recordMetadata(entry.message.usage);
+    const input = nonNegativeNumber(usage.input);
+    const cacheRead = nonNegativeNumber(usage.cacheRead) ?? 0;
+    const cacheWrite = nonNegativeNumber(usage.cacheWrite) ?? 0;
+    if (input !== undefined) return input + cacheRead + cacheWrite;
+  }
+  return undefined;
+}
+
+function activeSessionReplayMessages(record: SparkSessionRecord): SparkSessionMessage[] {
+  return sessionRecordToAgentMessages(record).map(agentMessageToSessionMessage);
+}
+
+function measuredReductionRatio(tokensBefore: number, tokensAfter: number): number {
+  if (tokensBefore <= 0) return 0;
+  return Math.max(0, Math.min(1, (tokensBefore - tokensAfter) / tokensBefore));
+}
+
+function nonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function positiveNumber(value: unknown): number | undefined {

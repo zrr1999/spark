@@ -5,7 +5,14 @@ import {
   type SparkAssignment,
   type SparkDaemonEvent,
 } from "@zendev-lab/spark-protocol";
-import type { InfoflowAttachment } from "@zendev-lab/spark-channels";
+import {
+  CHANNEL_IMAGE_MAX_COUNT,
+  CHANNEL_IMAGE_MAX_TOTAL_BYTES,
+  normalizeChannelImage,
+  type ChannelAdapterType,
+  type ChannelImage,
+  type InfoflowAttachment,
+} from "@zendev-lab/spark-channels";
 
 export type SparkDaemonTask = SparkDaemonSessionRunTask;
 
@@ -20,6 +27,8 @@ export interface SparkDaemonChannelContext {
   eventType?: string;
   contentType?: string;
   attachments?: InfoflowAttachment[];
+  /** Provider-ready image blocks captured before temporary platform URLs expire. */
+  images?: ChannelImage[];
   mentions?: string[];
   mentionedSelf?: boolean;
 }
@@ -47,7 +56,11 @@ export interface SparkDaemonSessionRunTask {
   /** When set, daemon sends the assistant reply back through channel notify. */
   channelReply?: {
     workspaceId: string;
+    /** Platform semantics. Optional only for tasks persisted before adapter instances existed. */
+    adapter?: ChannelAdapterType;
     adapterId: string;
+    /** Rename-stable provider account identity frozen with the inbound turn. */
+    adapterAccountIdentity?: string;
     recipient: string;
   };
   /** Inbound platform facts for this turn; never part of the persisted user message body. */
@@ -119,10 +132,22 @@ function parseChannelReply(value: unknown): SparkDaemonSessionRunTask["channelRe
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   const workspaceId = nonEmptyString(record.workspaceId);
+  const adapter = channelAdapterType(record.adapter);
   const adapterId = nonEmptyString(record.adapterId);
+  const adapterAccountIdentity = nonEmptyString(record.adapterAccountIdentity);
   const recipient = nonEmptyString(record.recipient);
   if (!workspaceId || !adapterId || !recipient) return undefined;
-  return { workspaceId, adapterId, recipient };
+  return {
+    workspaceId,
+    ...(adapter ? { adapter } : {}),
+    adapterId,
+    ...(adapterAccountIdentity ? { adapterAccountIdentity } : {}),
+    recipient,
+  };
+}
+
+function channelAdapterType(value: unknown): ChannelAdapterType | undefined {
+  return value === "feishu" || value === "infoflow" || value === "qqbot" ? value : undefined;
 }
 
 function parseChannelContext(value: unknown): SparkDaemonChannelContext | undefined {
@@ -136,6 +161,7 @@ function parseChannelContext(value: unknown): SparkDaemonChannelContext | undefi
         .filter((entry): entry is string => Boolean(entry))
     : undefined;
   const attachments = parseInfoflowAttachments(record.attachments);
+  const images = parseChannelImages(record.images);
   return {
     externalKey,
     senderId: nonEmptyString(record.senderId)?.trim(),
@@ -145,9 +171,26 @@ function parseChannelContext(value: unknown): SparkDaemonChannelContext | undefi
     eventType: nonEmptyString(record.eventType)?.trim(),
     contentType: nonEmptyString(record.contentType)?.trim(),
     ...(attachments.length ? { attachments } : {}),
+    ...(images.length ? { images } : {}),
     ...(mentions?.length ? { mentions } : {}),
     ...(typeof record.mentionedSelf === "boolean" ? { mentionedSelf: record.mentionedSelf } : {}),
   };
+}
+
+function parseChannelImages(value: unknown): ChannelImage[] {
+  if (!Array.isArray(value)) return [];
+  const images: ChannelImage[] = [];
+  let totalBytes = 0;
+  for (const entry of value.slice(0, CHANNEL_IMAGE_MAX_COUNT)) {
+    const image = normalizeChannelImage(entry);
+    if (!image) continue;
+    const padding = image.data.endsWith("==") ? 2 : image.data.endsWith("=") ? 1 : 0;
+    const bytes = Math.floor((image.data.length * 3) / 4) - padding;
+    if (totalBytes + bytes > CHANNEL_IMAGE_MAX_TOTAL_BYTES) break;
+    totalBytes += bytes;
+    images.push(image);
+  }
+  return images;
 }
 
 function parseInfoflowAttachments(value: unknown): InfoflowAttachment[] {

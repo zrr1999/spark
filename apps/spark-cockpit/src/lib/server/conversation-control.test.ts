@@ -67,7 +67,7 @@ describe("Cockpit conversation control", () => {
       expect.objectContaining({
         sessionId: "sess_demo",
         prompt: "Run once",
-        idempotencyKey: "cockpit:sess_demo:submit_018f",
+        idempotencyKey: expect.stringMatching(/^idem_[a-f0-9]{32}$/),
       }),
     );
   });
@@ -119,7 +119,7 @@ describe("Cockpit conversation control", () => {
     await submitConversationTurnForCockpit(input, { submit });
 
     const firstKey = submit.mock.calls[0]?.[0].idempotencyKey;
-    expect(firstKey).toBe("cockpit:sess_stable:browser-submission-1");
+    expect(firstKey).toMatch(/^idem_[a-f0-9]{32}$/);
     expect(submit.mock.calls[1]?.[0].idempotencyKey).toBe(firstKey);
   });
 

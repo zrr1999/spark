@@ -10,24 +10,31 @@
  */
 
 import {
+  channelDeliveryNotSent,
   ChannelRegistry,
   parseChannelsConfig,
-  type ChannelsConfig,
-  type ChannelNotifyInput,
-  type ChannelNotifyResult,
+  type ChannelAdapterType,
   type ChannelAskRequest,
   type ChannelAskSendResult,
+  type ChannelDeliveryFacts,
+  type ChannelDeliveryResult,
   type ChannelInteractionAckStatus,
-  type ChannelReplyStream,
-  type ChannelReplyRecovery,
-  type ChannelReplyTarget,
+  type ChannelMessageSendInput,
+  type ChannelMessageTarget,
+  type ChannelNotifyInput,
+  type ChannelNotifyResult,
   type ChannelRegistryOptions,
+  type ChannelReplyRecovery,
+  type ChannelReplySendInput,
+  type ChannelReplyStream,
+  type ChannelReplyTarget,
+  type ChannelsConfig,
   type IncomingMessage,
   type RoutedChannelInteractionEvent,
 } from "@zendev-lab/spark-channels";
 import { parseSparkAssignment, type SparkAssignment } from "@zendev-lab/spark-protocol";
 import { writePrivateFile } from "@zendev-lab/spark-system";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createDaemonSessionRegistry, type DaemonSessionRegistry } from "../session-registry.ts";
@@ -42,8 +49,12 @@ export interface ChannelIngressAssignment {
   assignment: SparkAssignment;
   source: { kind: "channel"; channel: "feishu" | "infoflow" | "qqbot"; externalRef?: string };
   externalKey: string;
+  /** Rename-stable provider account identity; never a local adapter routing label. */
+  adapterAccountIdentity?: string;
   channelReply: {
     workspaceId: string;
+    /** Platform semantics; adapterId remains the configured instance route. */
+    adapter?: ChannelAdapterType;
     adapterId: string;
     recipient: string;
   };
@@ -53,6 +64,8 @@ export interface ChannelIngressAssignment {
 
 export interface ChannelIngressHooks {
   onAssignment: (input: ChannelIngressAssignment) => Promise<void | "duplicate">;
+  /** Persist an admission-failure reply before considering the inbound handled. */
+  onRejectedReply?: (input: ChannelIngressRejectedReply) => Promise<void>;
   /** Persist normalized ingress before session resolution and task admission. */
   onInboundReceived?: (input: { workspaceId: string; message: IncomingMessage }) => void;
   onReply?: (input: { externalKey: string; text: string; adapterId: string }) => Promise<void>;
@@ -60,6 +73,29 @@ export interface ChannelIngressHooks {
     workspaceId: string;
     event: RoutedChannelInteractionEvent;
   }) => Promise<void>;
+  /**
+   * Optional text-ask settlement for adapters without native interaction events.
+   * Return "settled" to suppress ordinary turn admission for this inbound.
+   */
+  onTextAskReply?: (input: {
+    workspaceId: string;
+    message: IncomingMessage;
+    recipient: string;
+  }) => Promise<"settled" | "continue">;
+}
+
+export interface ChannelIngressRejectedReply {
+  sessionId: string;
+  workspaceId: string;
+  externalKey: string;
+  adapterAccountIdentity: string;
+  adapterId: string;
+  target: ChannelReplyTarget;
+  text: string;
+  /** Stable for platform redelivery when the inbound message has an id. */
+  deliveryIdentity: string;
+  deliveryFacts: ChannelDeliveryFacts;
+  send(deliveryId: string): Promise<ChannelDeliveryResult>;
 }
 
 export interface ChannelIngressController {
@@ -70,8 +106,13 @@ export interface ChannelIngressController {
   openReplyStream(
     adapterId: string,
     target: ChannelReplyTarget,
+    options?: { onCreated?: (stream: ChannelReplyStream) => void | Promise<void> },
   ): Promise<ChannelReplyStream | undefined>;
-  sendReply(adapterId: string, input: ChannelReplyTarget & { text: string }): Promise<void>;
+  messageDeliveryFacts(adapterId: string, target: ChannelMessageTarget): ChannelDeliveryFacts;
+  sendMessage(adapterId: string, input: ChannelMessageSendInput): Promise<ChannelDeliveryResult>;
+  sendReply(adapterId: string, input: ChannelReplySendInput): Promise<ChannelDeliveryResult | void>;
+  resolveAdapterId(adapterId: string, adapterAccountIdentity?: string): string;
+  replyDeliveryFacts(adapterId: string, target: ChannelReplyTarget): ChannelDeliveryFacts;
   recoverReply(
     adapterId: string,
     input: ChannelReplyTarget & {
@@ -96,6 +137,7 @@ export interface ChannelIngressController {
     adapters: Array<{
       id: string;
       type: string;
+      adapterAccountIdentity?: string;
       running: boolean;
       state: "stopped" | "connecting" | "connected" | "reconnecting" | "degraded";
       error?: string;
@@ -116,6 +158,7 @@ export interface DaemonChannelIngressStatus {
   adapters: Array<{
     id: string;
     type: string;
+    adapterAccountIdentity?: string;
     running: boolean;
     state: "stopped" | "connecting" | "connected" | "reconnecting" | "degraded";
     error?: string;
@@ -143,12 +186,29 @@ export interface DaemonChannelIngressRuntime {
     workspaceId: string,
     adapterId: string,
     target: ChannelReplyTarget,
+    options?: { onCreated?: (stream: ChannelReplyStream) => void | Promise<void> },
   ): Promise<ChannelReplyStream | undefined>;
+  sendMessage(
+    workspaceId: string,
+    adapterId: string,
+    input: ChannelMessageSendInput,
+  ): Promise<ChannelDeliveryResult>;
   sendReply(
     workspaceId: string,
     adapterId: string,
-    input: ChannelReplyTarget & { text: string },
-  ): Promise<void>;
+    input: ChannelReplySendInput,
+  ): Promise<ChannelDeliveryResult | void>;
+  resolveAdapterId(workspaceId: string, adapterId: string, adapterAccountIdentity?: string): string;
+  replyDeliveryFacts(
+    workspaceId: string,
+    adapterId: string,
+    target: ChannelReplyTarget,
+  ): ChannelDeliveryFacts;
+  messageDeliveryFacts(
+    workspaceId: string,
+    adapterId: string,
+    target: ChannelMessageTarget,
+  ): ChannelDeliveryFacts;
   recoverReply(
     workspaceId: string,
     adapterId: string,
@@ -172,6 +232,8 @@ export interface DaemonChannelIngressRuntime {
   ): Promise<void>;
   /** Install the daemon-owned native interaction router after construction. */
   setInteractionHandler?(handler?: ChannelIngressHooks["onInteraction"]): void;
+  /** Install the text-ask settlement path for adapters without native controls. */
+  setTextAskHandler?(handler?: ChannelIngressHooks["onTextAskReply"]): void;
   /** Install a daemon-owned durable ingress receipt before transports start. */
   setInboundHandler?(handler?: ChannelIngressHooks["onInboundReceived"]): void;
   listWorkspaceIds(): Promise<string[]>;
@@ -328,8 +390,28 @@ export function createChannelIngressController(input: {
   async function handleInbound(message: IncomingMessage): Promise<void> {
     if (Object.keys(input.config.adapters).length === 0) return;
     if (!message.text.trim()) return;
+    const replyRecipient = channelReplyRecipient(message);
+    if (!replyRecipient) {
+      throw new Error(`channel inbound missing reply recipient: ${message.externalKey}`);
+    }
+    if (input.hooks.onTextAskReply) {
+      const textAsk = await input.hooks.onTextAskReply({
+        workspaceId: input.workspaceId,
+        message,
+        recipient: replyRecipient,
+      });
+      if (textAsk === "settled") return;
+    }
+    const incomingAdapter = resolveIncomingAdapter(message, channelRegistry.listAdapters());
     const session = await sessionRegistry.resolveBinding({
       externalKey: message.externalKey,
+      ...(message.adapterId || message.adapterAccountIdentity
+        ? {
+            adapterId: incomingAdapter.adapterId,
+            adapterAccountIdentity: incomingAdapter.adapterAccountIdentity,
+            allowLegacyAccountClaim: incomingAdapter.sameTypeAccountCount === 1,
+          }
+        : {}),
       onUnbound: input.config.ingress?.on_unbound ?? "create",
       create: {
         workspaceId: input.workspaceId,
@@ -347,10 +429,6 @@ export function createChannelIngressController(input: {
         ...(message.messageId ? { externalRef: message.messageId } : {}),
       },
     });
-    const replyRecipient = channelReplyRecipient(message);
-    if (!replyRecipient) {
-      throw new Error(`channel inbound missing reply recipient: ${message.externalKey}`);
-    }
     let admission: void | "duplicate";
     try {
       admission = await input.hooks.onAssignment({
@@ -363,9 +441,11 @@ export function createChannelIngressController(input: {
           ...(message.messageId ? { externalRef: message.messageId } : {}),
         },
         externalKey: message.externalKey,
+        adapterAccountIdentity: incomingAdapter.adapterAccountIdentity,
         channelReply: {
           workspaceId: input.workspaceId,
-          adapterId: channel,
+          adapter: channel,
+          adapterId: incomingAdapter.adapterId,
           recipient: replyRecipient,
         },
         ...(channel === "infoflow" || channel === "qqbot"
@@ -374,13 +454,45 @@ export function createChannelIngressController(input: {
       });
     } catch (error) {
       try {
-        await channelRegistry.sendReply(channel, {
+        const target: ChannelReplyTarget = {
           recipient: replyRecipient,
           ...(message.senderId?.trim() ? { senderId: message.senderId.trim() } : {}),
           ...(message.messageId?.trim() ? { messageId: message.messageId.trim() } : {}),
           ...(rawGoal ? { preview: rawGoal.slice(0, 240) } : {}),
+        };
+        const deliveryIdentity = channelFailureReplyDeliveryId(
+          {
+            ...message,
+            adapterId: incomingAdapter.adapterId,
+            adapterAccountIdentity: incomingAdapter.adapterAccountIdentity,
+          },
+          input.workspaceId,
+        );
+        const rejectedReply: ChannelIngressRejectedReply = {
+          sessionId: session.sessionId,
+          workspaceId: input.workspaceId,
+          externalKey: message.externalKey,
+          adapterAccountIdentity: incomingAdapter.adapterAccountIdentity,
+          adapterId: incomingAdapter.adapterId,
+          target,
           text: CHANNEL_INGRESS_FAILURE_REPLY,
-        });
+          deliveryIdentity,
+          deliveryFacts: channelRegistry.replyDeliveryFacts(incomingAdapter.adapterId, target),
+          send: async (deliveryId) =>
+            await channelRegistry.sendReply(incomingAdapter.adapterId, {
+              ...target,
+              text: CHANNEL_INGRESS_FAILURE_REPLY,
+              deliveryId,
+            }),
+        };
+        if (input.hooks.onRejectedReply) {
+          // Production persists this intent in the generic channel outbox.
+          // Once durable, this inbound is handled and must not be retried.
+          await input.hooks.onRejectedReply(rejectedReply);
+        } else {
+          await rejectedReply.send(deliveryIdentity);
+        }
+        return;
       } catch (replyError) {
         console.error("[spark-channels] failed to report rejected inbound", replyError);
       }
@@ -417,10 +529,18 @@ export function createChannelIngressController(input: {
     },
     admitInbound: handleInbound,
     notify: async (notifyInput) => await channelRegistry.notify(notifyInput),
-    openReplyStream: async (adapterId, target) =>
-      await channelRegistry.openReplyStream(adapterId, target),
+    openReplyStream: async (adapterId, target, options) =>
+      await channelRegistry.openReplyStream(adapterId, target, options),
+    messageDeliveryFacts: (adapterId, target) =>
+      channelRegistry.messageDeliveryFacts(adapterId, target),
+    sendMessage: async (adapterId, messageInput) =>
+      await channelRegistry.sendMessage(adapterId, messageInput),
     sendReply: async (adapterId, replyInput) =>
       await channelRegistry.sendReply(adapterId, replyInput),
+    resolveAdapterId: (adapterId, adapterAccountIdentity) =>
+      resolveControllerAdapterId(channelRegistry, adapterId, adapterAccountIdentity),
+    replyDeliveryFacts: (adapterId, target) =>
+      channelRegistry.replyDeliveryFacts(adapterId, target),
     recoverReply: async (adapterId, replyInput) =>
       await channelRegistry.recoverReply(adapterId, replyInput),
     sendAsk: async (adapterId, recipient, request) =>
@@ -448,8 +568,28 @@ export function createChannelIngressController(input: {
 export function channelIngressIdempotencyKey(
   assignment: ChannelIngressAssignment,
 ): string | undefined {
-  const messageId =
-    assignment.source.externalRef?.trim() || assignment.channelContext?.messageId?.trim();
+  const messageId = channelIngressMessageId(assignment);
+  if (!messageId) return undefined;
+  const digest = createHash("sha256")
+    .update(
+      JSON.stringify([
+        2,
+        assignment.channelReply.workspaceId,
+        assignment.source.channel,
+        assignment.adapterAccountIdentity,
+        assignment.externalKey,
+        messageId,
+      ]),
+    )
+    .digest("hex");
+  return `channel-ingress:${digest}`;
+}
+
+/** Read-only key for invocations admitted before stable account identities. */
+export function channelIngressLegacyIdempotencyKey(
+  assignment: ChannelIngressAssignment,
+): string | undefined {
+  const messageId = channelIngressMessageId(assignment);
   if (!messageId) return undefined;
   const digest = createHash("sha256")
     .update(
@@ -466,6 +606,145 @@ export function channelIngressIdempotencyKey(
   return `channel-ingress:${digest}`;
 }
 
+function channelIngressMessageId(assignment: ChannelIngressAssignment): string | undefined {
+  return assignment.source.externalRef?.trim() || assignment.channelContext?.messageId?.trim();
+}
+
+export function channelFailureReplyDeliveryId(
+  message: IncomingMessage,
+  workspaceId: string,
+): string {
+  const messageId = message.messageId?.trim();
+  if (!messageId) return `channel-ingress-failure:${randomUUID()}`;
+  const workspace = workspaceId.trim();
+  const adapterAccountIdentity = message.adapterAccountIdentity?.trim();
+  if (!workspace || !adapterAccountIdentity) {
+    throw new Error(
+      "workspaceId and adapterAccountIdentity are required for channel failure delivery identity",
+    );
+  }
+  const digest = createHash("sha256")
+    .update(
+      JSON.stringify([
+        2,
+        "rejected",
+        workspace,
+        message.adapter,
+        adapterAccountIdentity,
+        message.externalKey,
+        messageId,
+      ]),
+    )
+    .digest("hex");
+  return `channel-ingress-failure:${digest}`;
+}
+
+type IngressAdapterStatus = ReturnType<ChannelRegistry["listAdapters"]>[number];
+
+function resolveIncomingAdapter(
+  message: IncomingMessage,
+  adapters: IngressAdapterStatus[],
+): {
+  adapterId: string;
+  adapterAccountIdentity: string;
+  sameTypeAccountCount: number;
+} {
+  const sameType = adapters.filter((adapter) => adapter.type === message.adapter);
+  const requestedId = message.adapterId?.trim();
+  const requestedIdentity = message.adapterAccountIdentity?.trim();
+  let selected: IngressAdapterStatus | undefined;
+
+  if (requestedIdentity) {
+    const matches = sameType.filter(
+      (adapter) => adapter.adapterAccountIdentity === requestedIdentity,
+    );
+    if (matches.length !== 1) {
+      throw channelDeliveryNotSent(
+        new Error(
+          matches.length === 0
+            ? `channel provider account is not configured (previous adapter ${requestedId || message.adapter})`
+            : `channel provider account is ambiguous: ${matches
+                .map((adapter) => adapter.id)
+                .sort()
+                .join(", ")}`,
+        ),
+      );
+    }
+    selected = matches[0];
+  } else if (requestedId) {
+    selected = sameType.find((adapter) => adapter.id === requestedId);
+  } else if (sameType.length === 1) {
+    // Compatibility for inbound rows persisted before adapter instance facts.
+    selected = sameType[0];
+  }
+
+  if (!selected && !requestedIdentity && requestedId === message.adapter && sameType.length === 1) {
+    selected = sameType[0];
+  }
+  if (!selected) {
+    throw channelDeliveryNotSent(
+      new Error(
+        sameType.length > 1
+          ? `legacy ${message.adapter} inbound is ambiguous across adapters: ${sameType
+              .map((adapter) => adapter.id)
+              .sort()
+              .join(", ")}`
+          : `channel adapter is not configured: ${requestedId || message.adapter}`,
+      ),
+    );
+  }
+  const adapterAccountIdentity = selected.adapterAccountIdentity?.trim();
+  if (!adapterAccountIdentity) {
+    throw channelDeliveryNotSent(
+      new Error(`channel adapter ${selected.id} has no stable provider account identity`),
+    );
+  }
+  return {
+    adapterId: selected.id,
+    adapterAccountIdentity,
+    sameTypeAccountCount: sameType.length,
+  };
+}
+
+function resolveControllerAdapterId(
+  registry: Pick<ChannelRegistry, "listAdapters">,
+  legacyAdapterId: string,
+  adapterAccountIdentity?: string,
+): string {
+  const adapters = registry.listAdapters();
+  const fallbackId = legacyAdapterId.trim();
+  if (!fallbackId) throw channelDeliveryNotSent(new Error("channel adapter id is required"));
+  const stableIdentity = adapterAccountIdentity?.trim();
+  if (stableIdentity) {
+    const matches = adapters.filter((adapter) => adapter.adapterAccountIdentity === stableIdentity);
+    if (matches.length === 1) return matches[0]!.id;
+    throw channelDeliveryNotSent(
+      new Error(
+        matches.length === 0
+          ? `channel provider account is not configured (previous adapter ${fallbackId})`
+          : `channel provider account is ambiguous: ${matches
+              .map((adapter) => adapter.id)
+              .sort()
+              .join(", ")}`,
+      ),
+    );
+  }
+
+  if (adapters.some((adapter) => adapter.id === fallbackId)) return fallbackId;
+  const sameType = adapters.filter((adapter) => adapter.type === fallbackId);
+  if (sameType.length === 1) return sameType[0]!.id;
+  throw channelDeliveryNotSent(
+    new Error(
+      sameType.length > 1
+        ? `legacy channel adapter ${fallbackId} is ambiguous: ${sameType
+            .map((adapter) => adapter.id)
+            .sort()
+            .join(", ")}`
+        : `channel adapter is not configured: ${fallbackId}`,
+    ),
+  );
+}
+
 function channelContextFromIncoming(message: IncomingMessage): SparkDaemonChannelContext {
   return {
     externalKey: message.externalKey,
@@ -476,6 +755,7 @@ function channelContextFromIncoming(message: IncomingMessage): SparkDaemonChanne
     ...(message.eventType?.trim() ? { eventType: message.eventType.trim() } : {}),
     ...(message.contentType?.trim() ? { contentType: message.contentType.trim() } : {}),
     ...(message.attachments?.length ? { attachments: message.attachments } : {}),
+    ...(message.images?.length ? { images: message.images } : {}),
     ...(message.mentions?.length
       ? { mentions: message.mentions.map((entry) => entry.trim()).filter(Boolean) }
       : {}),
@@ -510,7 +790,7 @@ function channelReplyRecipient(message: IncomingMessage): string | undefined {
   }
 }
 
-/** Prefer a human label in the stored title while keeping the channel key shape. */
+/** Platform-owned identity; Cockpit renders the technical key with adapter/scope labels. */
 function channelSessionTitle(message: IncomingMessage): string {
   if (message.adapter === "qqbot" && message.externalKey.startsWith("qqbot:c2c:")) {
     const label = message.senderName?.trim();
@@ -749,19 +1029,67 @@ export function createDaemonChannelIngressRuntime(input: {
       }
       return await slot.controller.notify(notifyInput);
     },
-    openReplyStream: async (workspaceId, adapterId, target) => {
+    openReplyStream: async (workspaceId, adapterId, target, options) => {
       const slot = getSlot(workspaceId);
       if (!slot.controller) {
-        throw new Error(`channels not configured for workspace ${workspaceId}`);
+        throw channelDeliveryNotSent(
+          new Error(`channels not configured for workspace ${workspaceId}`),
+        );
       }
-      return await slot.controller.openReplyStream(adapterId, target);
+      return await slot.controller.openReplyStream(adapterId, target, options);
+    },
+    sendMessage: async (workspaceId, adapterId, messageInput) => {
+      const slot = getSlot(workspaceId);
+      if (!slot.controller) {
+        throw channelDeliveryNotSent(
+          new Error(`channels not configured for workspace ${workspaceId}`),
+        );
+      }
+      return await slot.controller.sendMessage(adapterId, messageInput);
     },
     sendReply: async (workspaceId, adapterId, replyInput) => {
       const slot = getSlot(workspaceId);
       if (!slot.controller) {
-        throw new Error(`channels not configured for workspace ${workspaceId}`);
+        throw channelDeliveryNotSent(
+          new Error(`channels not configured for workspace ${workspaceId}`),
+        );
       }
-      await slot.controller.sendReply(adapterId, replyInput);
+      return await slot.controller.sendReply(adapterId, replyInput);
+    },
+    resolveAdapterId: (workspaceId, adapterId, adapterAccountIdentity) => {
+      const slot = getSlot(workspaceId);
+      if (!slot.controller) {
+        throw channelDeliveryNotSent(
+          new Error(`channels not configured for workspace ${workspaceId}`),
+        );
+      }
+      return slot.controller.resolveAdapterId(adapterId, adapterAccountIdentity);
+    },
+    replyDeliveryFacts: (workspaceId, adapterId, target) => {
+      const slot = getSlot(workspaceId);
+      if (!slot.controller) {
+        throw channelDeliveryNotSent(
+          new Error(`channels not configured for workspace ${workspaceId}`),
+        );
+      }
+      try {
+        return slot.controller.replyDeliveryFacts(adapterId, target);
+      } catch (error) {
+        throw channelDeliveryNotSent(error);
+      }
+    },
+    messageDeliveryFacts: (workspaceId, adapterId, target) => {
+      const slot = getSlot(workspaceId);
+      if (!slot.controller) {
+        throw channelDeliveryNotSent(
+          new Error(`channels not configured for workspace ${workspaceId}`),
+        );
+      }
+      try {
+        return slot.controller.messageDeliveryFacts(adapterId, target);
+      } catch (error) {
+        throw channelDeliveryNotSent(error);
+      }
     },
     recoverReply: async (workspaceId, adapterId, replyInput) => {
       const slot = getSlot(workspaceId);
@@ -786,6 +1114,9 @@ export function createDaemonChannelIngressRuntime(input: {
     },
     setInteractionHandler: (handler) => {
       input.hooks.onInteraction = handler;
+    },
+    setTextAskHandler: (handler) => {
+      input.hooks.onTextAskReply = handler;
     },
     setInboundHandler: (handler) => {
       input.hooks.onInboundReceived = handler;

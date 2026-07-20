@@ -23,12 +23,13 @@ export function registerPiSessionTool(
     name: "session",
     label: "Session",
     description:
-      "Canonical persistent session capability. List and classify local/message-platform sessions, manage lifecycle and bindings, submit persistent calls, or send durable requests and questions.",
+      "Canonical persistent session capability for long-lived staff roles. Reuse sessions by stable division of labour, manage lifecycle and bindings, submit tasks, or send durable requests and notifications.",
     promptGuidelines: [
-      "Use role for reusable role definitions and anonymous calls; use session for persistent conversation continuity.",
+      "A persistent session represents a long-lived division of labour, never one task. List and reuse the matching role session before creating another.",
+      "session create requires role and names the session from that stable responsibility. Put the concrete task only in session call/send; never create or name a session after a task or deliverable.",
       "session list is paginated and labels each surface as local or channel plus activity as idle or running; use surface, activity, and adapter filters, then continue with offset when total exceeds the returned page.",
-      "session send kind=request persists and immediately submits one asynchronous turn to an idle or running local target.",
-      "session send kind=question persists, immediately submits to an idle local target, and waits up to timeoutMs for its terminal answer; timeout stops waiting but does not cancel the target invocation.",
+      "session send kind=notification persists without triggering the target session; it is the default and cannot wait for completion.",
+      "session send kind=request persists and submits one turn to an idle or running local target. wait=accepted is asynchronous and is the default; wait=completed polls the durable invocation through restart and returns its terminal response.",
       "Message-platform sessions may use only list/get/send/inbox/read/ack. Their list/get/send targets are restricted to the current workspace, and sends require local targets.",
       "inbox/read/ack are current-session-only; inbox supports offset/limit pagination.",
     ],
@@ -65,19 +66,31 @@ export function registerPiSessionTool(
       ),
       limit: Type.Optional(Type.Number({ description: "Maximum rows. Defaults to 20." })),
       offset: Type.Optional(Type.Number({ description: "List offset. Defaults to 0." })),
-      title: Type.Optional(Type.String()),
-      role: Type.Optional(Type.String({ description: "Optional role metadata for create." })),
+      role: Type.Optional(
+        Type.String({
+          description:
+            "Required for create: concise, reusable division of labour such as administrator, frontend, runtime-ops, or verifier.",
+        }),
+      ),
       cwd: Type.Optional(Type.String({ description: "Optional working directory for create." })),
       externalKey: Type.Optional(Type.String()),
       toSessionId: Type.Optional(Type.String({ description: "Target session for send." })),
       kind: Type.Optional(
         Type.String({
           description:
-            "request | question. Request triggers asynchronously and is the default; question waits for a terminal answer.",
+            "request | notification. Defaults to notification; only request triggers target execution.",
+        }),
+      ),
+      wait: Type.Optional(
+        Type.String({
+          description:
+            "accepted | completed. Defaults to accepted; completed is valid only for request.",
         }),
       ),
       timeoutMs: Type.Optional(
-        Type.Number({ description: "Question wait timeout in milliseconds (1000-300000)." }),
+        Type.Number({
+          description: "Completed request wait timeout in milliseconds (1000-300000).",
+        }),
       ),
       intent: Type.Optional(Type.String()),
       payload: Type.Optional(Type.Any()),
@@ -98,6 +111,7 @@ export function registerPiSessionTool(
               ? args.sessionId
               : undefined,
           typeof args.kind === "string" ? `kind=${args.kind}` : undefined,
+          typeof args.wait === "string" ? `wait=${args.wait}` : undefined,
           typeof args.surface === "string" ? `surface=${args.surface}` : undefined,
           typeof args.activity === "string" ? `activity=${args.activity}` : undefined,
         ]

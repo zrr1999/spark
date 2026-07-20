@@ -14,7 +14,10 @@ describe("conversation submission identity", () => {
   });
 
   it("uses the same normalized nonce for later-turn idempotency", () => {
-    expect(conversationTurnIdempotencyKey("sess_one", " idem_1 ")).toBe("cockpit:sess_one:idem_1");
+    const key = conversationTurnIdempotencyKey("sess_one", " idem_1 ");
+    expect(key).toMatch(/^idem_[a-f0-9]{32}$/);
+    expect(conversationTurnIdempotencyKey("sess_one", "idem_1")).toBe(key);
+    expect(conversationTurnIdempotencyKey("sess_two", "idem_1")).not.toBe(key);
     expect(conversationTurnIdempotencyKey("sess_one", " ")).toBeUndefined();
   });
 

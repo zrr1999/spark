@@ -251,6 +251,15 @@ export const sparkArtifactViewSchema = z.object({
   metadata: sparkJsonObjectSchema.default({}),
 });
 
+export const sparkSessionMailChannelDeliveryViewSchema = z.object({
+  status: z.enum(["pending", "delivered", "failed", "uncertain"]),
+  total: z.number().int().positive(),
+  pending: z.number().int().nonnegative(),
+  delivered: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  uncertain: z.number().int().nonnegative(),
+});
+
 export const sparkSessionMailMessageViewSchema = z.object({
   id: z.string().min(1),
   fromSessionId: z.string().min(1),
@@ -261,6 +270,8 @@ export const sparkSessionMailMessageViewSchema = z.object({
   createdAt: sparkIsoDateTimeSchema,
   readAt: sparkIsoDateTimeSchema.nullable(),
   ackedAt: sparkIsoDateTimeSchema.nullable(),
+  /** Display-safe channel delivery aggregate; provider targets and receipts stay daemon-private. */
+  channelDelivery: sparkSessionMailChannelDeliveryViewSchema.optional(),
 });
 
 /**
@@ -278,6 +289,7 @@ export const sparkSessionUsageSchema = z.object({
   costUsd: z.number().nonnegative().default(0),
   latestCacheHitPercent: z.number().min(0).max(100).optional(),
   contextTokens: z.number().nonnegative().optional(),
+  contextTokenSource: z.enum(["reported", "tokenizer", "estimated"]).optional(),
   contextWindow: z.number().positive().optional(),
 });
 
@@ -622,6 +634,9 @@ export type SparkRunView = z.infer<typeof sparkRunViewSchema>;
 export type SparkTaskTodoView = z.infer<typeof sparkTaskTodoViewSchema>;
 export type SparkTaskView = z.infer<typeof sparkTaskViewSchema>;
 export type SparkArtifactView = z.infer<typeof sparkArtifactViewSchema>;
+export type SparkSessionMailChannelDeliveryView = z.infer<
+  typeof sparkSessionMailChannelDeliveryViewSchema
+>;
 export type SparkSessionMailMessageView = z.infer<typeof sparkSessionMailMessageViewSchema>;
 export type SparkSessionUsage = z.infer<typeof sparkSessionUsageSchema>;
 export type SparkSessionPendingTurn = z.infer<typeof sparkSessionPendingTurnSchema>;

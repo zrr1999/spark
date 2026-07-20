@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   SparkSessionMailStore,
   SparkSessionRegistryError,
+  type SparkSessionMailChannelTarget,
   type SparkSessionMailDeliveryReceipt,
 } from "@zendev-lab/spark-session";
 import type {
@@ -21,6 +22,8 @@ import type {
 export interface SessionNotificationDeliveryReceipt {
   adapter: string;
   externalKey: string;
+  adapterId?: string;
+  adapterAccountIdentity?: string;
   status: SparkSessionMailDeliveryReceipt["status"];
   attemptCount: number;
   receipt?: unknown;
@@ -86,18 +89,40 @@ async function deliverSelectedSessionNotificationTargets(
 
   const deliveries: SessionNotificationDeliveryReceipt[] = [];
   for (const target of message.deliveries) {
-    if (target.status === "delivered" || !isSelectedTarget(target, selectedTargets)) {
+    if (
+      target.status === "delivered" ||
+      target.status === "uncertain" ||
+      !isSelectedTarget(target, selectedTargets)
+    ) {
       deliveries.push(projectDelivery(target));
       continue;
     }
     if (deps.deliveryQueue) {
+      const status = deps.channelIngress.status(session.scope.workspaceId);
+      const resolvedAdapter = resolveNotificationAdapter(status, target);
       const idempotencyKey = sessionNotificationDeliveryIdempotencyKey({
         sessionId: input.sessionId,
         messageId: input.messageId,
+        correlationId: message.correlationId,
         adapter: target.adapter,
         externalKey: target.externalKey,
+        adapterAccountIdentity: resolvedAdapter.adapterAccountIdentity,
       });
-      const existing = deps.deliveryQueue.store.findByIdempotencyKey(idempotencyKey);
+      const legacyIdempotencyKeys = accountlessCompatibilityKeys({
+        sessionId: input.sessionId,
+        messageId: input.messageId,
+        correlationId: message.correlationId,
+        target,
+        status,
+        idempotencyKey,
+      });
+      // Older daemons keyed each mailbox row by message id. Reuse such a row
+      // only for an account-less target that still resolves to one configured
+      // account. Explicit account identities must not consume another
+      // account's legacy row.
+      const existing = [idempotencyKey, ...legacyIdempotencyKeys]
+        .map((key) => deps.deliveryQueue!.store.findByIdempotencyKey(key))
+        .find((delivery) => delivery !== undefined);
       if (existing?.status === "delivered") {
         try {
           const updated = await deps.mailStore.recordChannelDelivery(
@@ -126,6 +151,22 @@ async function deliverSelectedSessionNotificationTargets(
         }
         continue;
       }
+      if (existing?.status === "uncertain") {
+        const updated = await deps.mailStore.recordChannelDelivery(
+          input.sessionId,
+          input.messageId,
+          target,
+          {
+            ok: false,
+            status: "uncertain",
+            error:
+              existing.lastError ??
+              "channel delivery outcome is uncertain; automatic retry stopped",
+          },
+        );
+        deliveries.push(projectDelivery(findRecordedDelivery(updated.deliveries, target)));
+        continue;
+      }
       if (existing) {
         deliveries.push(projectQueuedDelivery(target, existing));
         continue;
@@ -139,7 +180,7 @@ async function deliverSelectedSessionNotificationTargets(
             body: message.body,
             target,
           },
-          deps.channelIngress.status(session.scope.workspaceId),
+          resolvedAdapter,
           idempotencyKey,
         );
         await deps.deliveryQueue.outbox.enqueueNotification(queued);
@@ -161,7 +202,7 @@ async function deliverSelectedSessionNotificationTargets(
     let receipt: unknown;
     try {
       const status = deps.channelIngress.status(session.scope.workspaceId);
-      const adapterId = resolveNotificationAdapterId(status, target.adapter);
+      const { adapterId } = resolveNotificationAdapter(status, target);
       const recipient = notificationRecipient(target.externalKey, target.adapter);
       receipt = await deps.channelIngress.notify(session.scope.workspaceId, {
         action: "send",
@@ -232,7 +273,9 @@ export async function reconcileSessionNotificationDeliveries(
         (target) => selectedTargets.has(deliveryTargetKey(target)) && target.status === "delivered",
       ).length;
       failed += result.deliveries.filter(
-        (target) => selectedTargets.has(deliveryTargetKey(target)) && target.status === "failed",
+        (target) =>
+          selectedTargets.has(deliveryTargetKey(target)) &&
+          (target.status === "failed" || target.status === "uncertain"),
       ).length;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -262,6 +305,28 @@ export async function reconcileSessionNotificationDeliveries(
 export function sessionNotificationDeliveryIdempotencyKey(input: {
   sessionId: string;
   messageId: string;
+  correlationId?: string;
+  adapter: string;
+  externalKey: string;
+  adapterAccountIdentity?: string;
+}): string {
+  const correlation = input.correlationId?.trim() || input.messageId;
+  const adapterAccountIdentity = input.adapterAccountIdentity?.trim();
+  const digest = createHash("sha256")
+    .update(
+      JSON.stringify(
+        adapterAccountIdentity
+          ? [input.sessionId, correlation, input.adapter, input.externalKey, adapterAccountIdentity]
+          : [input.sessionId, correlation, input.adapter, input.externalKey],
+      ),
+    )
+    .digest("hex");
+  return `session.notification:${digest}`;
+}
+
+export function sessionNotificationLegacyDeliveryIdempotencyKey(input: {
+  sessionId: string;
+  messageId: string;
   adapter: string;
   externalKey: string;
 }): string {
@@ -277,9 +342,9 @@ function notificationOutboxInput(
     messageId: string;
     workspaceId: string;
     body: string;
-    target: Pick<SparkSessionMailDeliveryReceipt, "adapter" | "externalKey">;
+    target: SparkSessionMailChannelTarget;
   },
-  status: DaemonChannelIngressStatus,
+  resolvedAdapter: ResolvedNotificationAdapter,
   idempotencyKey: string,
 ): DaemonChannelNotificationDeliveryInput {
   return {
@@ -287,7 +352,10 @@ function notificationOutboxInput(
     sessionId: input.sessionId,
     messageId: input.messageId,
     workspaceId: input.workspaceId,
-    adapterId: resolveNotificationAdapterId(status, input.target.adapter),
+    adapterId: resolvedAdapter.adapterId,
+    ...(resolvedAdapter.adapterAccountIdentity
+      ? { adapterAccountIdentity: resolvedAdapter.adapterAccountIdentity }
+      : {}),
     externalKey: input.target.externalKey,
     recipient: notificationRecipient(input.target.externalKey, input.target.adapter),
     text: input.body,
@@ -299,18 +367,27 @@ function projectQueuedDelivery(
   delivery: SparkChannelDeliveryRecord,
   projectionError?: string,
 ): SessionNotificationDeliveryReceipt {
+  if (delivery.status === "uncertain") {
+    return {
+      ...projectTargetIdentity(target),
+      status: "uncertain",
+      attemptCount: delivery.attemptCount,
+      error:
+        projectionError ??
+        delivery.lastError ??
+        "channel delivery outcome is uncertain; automatic retry stopped",
+    };
+  }
   if (projectionError || delivery.status === "retry_wait") {
     return {
-      adapter: target.adapter,
-      externalKey: target.externalKey,
+      ...projectTargetIdentity(target),
       status: "failed",
       attemptCount: delivery.attemptCount,
       error: projectionError ?? delivery.lastError ?? "channel delivery is waiting to retry",
     };
   }
   return {
-    adapter: target.adapter,
-    externalKey: target.externalKey,
+    ...projectTargetIdentity(target),
     status: delivery.status === "delivered" ? "delivered" : "pending",
     attemptCount: delivery.attemptCount,
     ...(delivery.receipt !== undefined ? { receipt: delivery.receipt } : {}),
@@ -318,25 +395,30 @@ function projectQueuedDelivery(
 }
 
 function isSelectedTarget(
-  target: Pick<SparkSessionMailDeliveryReceipt, "adapter" | "externalKey">,
+  target: SparkSessionMailChannelTarget,
   selectedTargets: ReadonlySet<string> | undefined,
 ): boolean {
   return !selectedTargets || selectedTargets.has(deliveryTargetKey(target));
 }
 
-function deliveryTargetKey(
-  target: Pick<SparkSessionMailDeliveryReceipt, "adapter" | "externalKey">,
-): string {
-  return `${target.adapter}\u0000${target.externalKey}`;
+function deliveryTargetKey(target: SparkSessionMailChannelTarget): string {
+  const accountSelector = target.adapterAccountIdentity
+    ? `account:${target.adapterAccountIdentity}`
+    : target.adapterId
+      ? `adapter:${target.adapterId}`
+      : "legacy";
+  return `${target.adapter}\u0000${target.externalKey}\u0000${accountSelector}`;
 }
 
 function findRecordedDelivery(
   deliveries: SparkSessionMailDeliveryReceipt[],
-  target: Pick<SparkSessionMailDeliveryReceipt, "adapter" | "externalKey">,
+  target: SparkSessionMailChannelTarget,
 ): SparkSessionMailDeliveryReceipt {
-  const recorded = deliveries.find(
+  const exact = deliveries.find((entry) => deliveryTargetKey(entry) === deliveryTargetKey(target));
+  const compatible = deliveries.filter(
     (entry) => entry.adapter === target.adapter && entry.externalKey === target.externalKey,
   );
+  const recorded = exact ?? (compatible.length === 1 ? compatible[0] : undefined);
   if (!recorded) {
     throw new Error(
       `session mail delivery receipt disappeared for ${target.adapter}:${target.externalKey}`,
@@ -349,8 +431,7 @@ function projectDelivery(
   delivery: SparkSessionMailDeliveryReceipt,
 ): SessionNotificationDeliveryReceipt {
   return {
-    adapter: delivery.adapter,
-    externalKey: delivery.externalKey,
+    ...projectTargetIdentity(delivery),
     status: delivery.status,
     attemptCount: delivery.attemptCount,
     ...(delivery.receipt !== null ? { receipt: delivery.receipt } : {}),
@@ -358,13 +439,92 @@ function projectDelivery(
   };
 }
 
-function resolveNotificationAdapterId(status: DaemonChannelIngressStatus, adapter: string): string {
-  const matching = status.adapters.filter((entry) => entry.type === adapter);
-  if (matching.length === 1) return matching[0]!.id;
-  const exact = matching.find((entry) => entry.id === adapter);
-  if (exact) return exact.id;
-  if (matching.length === 0) throw new Error(`no configured channel adapter for type ${adapter}`);
-  throw new Error(`multiple channel adapters use type ${adapter}`);
+function projectTargetIdentity(
+  target: SparkSessionMailChannelTarget,
+): SparkSessionMailChannelTarget {
+  return {
+    adapter: target.adapter,
+    externalKey: target.externalKey,
+    ...(target.adapterId ? { adapterId: target.adapterId } : {}),
+    ...(target.adapterAccountIdentity
+      ? { adapterAccountIdentity: target.adapterAccountIdentity }
+      : {}),
+  };
+}
+
+interface ResolvedNotificationAdapter {
+  adapterId: string;
+  adapterAccountIdentity?: string;
+}
+
+function resolveNotificationAdapter(
+  status: DaemonChannelIngressStatus,
+  target: SparkSessionMailChannelTarget,
+): ResolvedNotificationAdapter {
+  const matching = status.adapters.filter((entry) => entry.type === target.adapter);
+  const stableIdentity = target.adapterAccountIdentity?.trim();
+  let selected: (typeof matching)[number] | undefined;
+  if (stableIdentity) {
+    const stableMatches = matching.filter(
+      (entry) => entry.adapterAccountIdentity === stableIdentity,
+    );
+    if (stableMatches.length !== 1) {
+      throw new Error(
+        stableMatches.length === 0
+          ? `channel provider account is not configured for ${target.adapter}`
+          : `multiple channel adapters use provider account ${stableIdentity}`,
+      );
+    }
+    selected = stableMatches[0];
+  } else if (target.adapterId?.trim()) {
+    selected = matching.find((entry) => entry.id === target.adapterId);
+    if (!selected) throw new Error(`channel adapter is not configured: ${target.adapterId}`);
+  } else {
+    selected = matching.find((entry) => entry.id === target.adapter);
+    if (!selected && matching.length === 1) selected = matching[0];
+  }
+  if (!selected) {
+    if (matching.length === 0) {
+      throw new Error(`no configured channel adapter for type ${target.adapter}`);
+    }
+    throw new Error(`multiple channel adapters use type ${target.adapter}`);
+  }
+  const adapterAccountIdentity = selected.adapterAccountIdentity?.trim();
+  return {
+    adapterId: selected.id,
+    ...(adapterAccountIdentity ? { adapterAccountIdentity } : {}),
+  };
+}
+
+function accountlessCompatibilityKeys(input: {
+  sessionId: string;
+  messageId: string;
+  correlationId?: string;
+  target: SparkSessionMailChannelTarget;
+  status: DaemonChannelIngressStatus;
+  idempotencyKey: string;
+}): string[] {
+  if (
+    input.target.adapterAccountIdentity ||
+    input.target.adapterId ||
+    input.status.adapters.filter((entry) => entry.type === input.target.adapter).length !== 1
+  ) {
+    return [];
+  }
+  const correlationKey = sessionNotificationDeliveryIdempotencyKey({
+    sessionId: input.sessionId,
+    messageId: input.messageId,
+    correlationId: input.correlationId,
+    adapter: input.target.adapter,
+    externalKey: input.target.externalKey,
+  });
+  const messageKey = sessionNotificationLegacyDeliveryIdempotencyKey({
+    sessionId: input.sessionId,
+    messageId: input.messageId,
+    adapter: input.target.adapter,
+    externalKey: input.target.externalKey,
+  });
+  return [...new Set([correlationKey, messageKey])].filter((key) => key !== input.idempotencyKey);
 }
 
 function notificationRecipient(externalKey: string, adapter: string): string {

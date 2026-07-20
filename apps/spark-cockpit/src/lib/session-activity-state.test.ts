@@ -1,7 +1,10 @@
 import { parseSparkSessionView } from "@zendev-lab/spark-protocol";
 import { describe, expect, it } from "vitest";
 
-import { resolveSessionActivityState } from "./session-activity-state";
+import {
+  resolveSessionActivityState,
+  sessionActivityNeedsStatusProbe,
+} from "./session-activity-state";
 
 describe("session activity presentation", () => {
   it("keeps waiting, running and terminal UI states mutually consistent", () => {
@@ -20,6 +23,7 @@ describe("session activity presentation", () => {
       runningTurnId: null,
       pendingTurns: [{ invocationId: "inv_truth", status: "queued" }],
     });
+    expect(sessionActivityNeedsStatusProbe(queued)).toBe(true);
 
     const running = resolveSessionActivityState({
       registryStatus: "ready",
@@ -35,6 +39,7 @@ describe("session activity presentation", () => {
       runningTurnId: "inv_truth",
       pendingTurns: [{ invocationId: "inv_truth", status: "running" }],
     });
+    expect(sessionActivityNeedsStatusProbe(running)).toBe(true);
 
     const terminal = resolveSessionActivityState({
       registryStatus: "running",
@@ -47,6 +52,7 @@ describe("session activity presentation", () => {
       liveActiveTurnId: "inv_truth",
     });
     expect(terminal).toEqual({ phase: "idle", pendingTurns: [], runningTurnId: null });
+    expect(sessionActivityNeedsStatusProbe(terminal)).toBe(false);
   });
 
   it("lets authoritative pending turns override stale running status and Stop state", () => {

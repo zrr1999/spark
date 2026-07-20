@@ -144,7 +144,7 @@ describe("SparkChannelDeliveryStore", () => {
     }
   });
 
-  it("retries forever with injected deterministic exponential backoff capped at 60 seconds", () => {
+  it("retries confirmed-not-sent failures with deterministic backoff capped at 60 seconds", () => {
     let now = "2026-07-15T00:00:00.000Z";
     let random = 0;
     const { db, store } = createStore({
@@ -160,7 +160,10 @@ describe("SparkChannelDeliveryStore", () => {
       });
       const first = store.claimDue("worker-a", { leaseMs: 10_000 });
       expect(
-        store.recordFailure("delivery-retry", first!.leaseToken!, "channel unavailable"),
+        store.recordFailure("delivery-retry", first!.leaseToken!, "channel unavailable", {
+          outcome: "not_sent",
+          replaySafety: "unsafe",
+        }),
       ).toMatchObject({
         status: "retry_wait",
         attemptCount: 1,
@@ -172,6 +175,7 @@ describe("SparkChannelDeliveryStore", () => {
         retrying: 1,
         inFlight: 0,
         delivered: 0,
+        uncertain: 0,
         oldestPendingAt: "2026-07-15T00:00:00.000Z",
         lastError: "channel unavailable",
         lastErrorAt: "2026-07-15T00:00:00.000Z",
@@ -184,7 +188,10 @@ describe("SparkChannelDeliveryStore", () => {
       const second = store.claimDue("worker-b", { leaseMs: 10_000 });
       expect(second).toMatchObject({ attemptCount: 2, leaseOwner: "worker-b" });
       expect(
-        store.recordFailure("delivery-retry", second!.leaseToken!, "still unavailable"),
+        store.recordFailure("delivery-retry", second!.leaseToken!, "still unavailable", {
+          outcome: "not_sent",
+          replaySafety: "unsafe",
+        }),
       ).toMatchObject({
         attemptCount: 2,
         nextAttemptAt: "2026-07-15T00:00:02.500Z",
@@ -207,13 +214,100 @@ describe("SparkChannelDeliveryStore", () => {
       const thousandth = store.claimDue("worker-c", { leaseMs: 10_000 });
       expect(thousandth).toMatchObject({ deliveryId: "delivery-unbounded", attemptCount: 1_000 });
       expect(
-        store.recordFailure("delivery-unbounded", thousandth!.leaseToken!, "attempt 1000"),
+        store.recordFailure("delivery-unbounded", thousandth!.leaseToken!, "attempt 1000", {
+          outcome: "not_sent",
+          replaySafety: "unsafe",
+        }),
       ).toMatchObject({
         status: "retry_wait",
         attemptCount: 1_000,
         nextAttemptAt: "2026-07-15T01:01:00.000Z",
       });
       expect(channelDeliveryRetryDelayMs(1_000, () => 1)).toBe(MAX_CHANNEL_DELIVERY_RETRY_MS);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("retries an unknown outcome when the durable identity is provider-deduplicated", () => {
+    let now = "2026-07-15T00:00:00.000Z";
+    const { db, store } = createStore({ now: () => now, random: () => 1 });
+    try {
+      store.enqueue({
+        deliveryId: "delivery-deduplicated",
+        kind: "reply",
+        idempotencyKey: "provider-deduplicated",
+        payload: { text: "send once" },
+      });
+      const claimed = store.claimDue("worker-a", { leaseMs: 10_000 });
+      store.markDispatchStarted("delivery-deduplicated", claimed!.leaseToken!);
+
+      expect(
+        store.recordFailure(
+          "delivery-deduplicated",
+          claimed!.leaseToken!,
+          "provider outcome unavailable",
+          { outcome: "unknown", replaySafety: "deduplicated" },
+        ),
+      ).toMatchObject({
+        status: "retry_wait",
+        attemptCount: 1,
+        nextAttemptAt: "2026-07-15T00:00:01.000Z",
+        lastError: "provider outcome unavailable",
+      });
+      expect(store.require("delivery-deduplicated").dispatchedAt).toBeUndefined();
+
+      now = "2026-07-15T00:00:01.000Z";
+      expect(store.claimDue("worker-b", { leaseMs: 10_000 })).toMatchObject({
+        deliveryId: "delivery-deduplicated",
+        attemptCount: 2,
+        leaseOwner: "worker-b",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("quarantines an unknown unsafe outcome and never leases it again", () => {
+    let now = "2026-07-15T00:00:00.000Z";
+    const { db, store } = createStore({ now: () => now });
+    try {
+      store.enqueue({
+        deliveryId: "delivery-uncertain",
+        kind: "notification",
+        idempotencyKey: "unsafe-side-effect",
+        payload: { text: "possibly delivered" },
+      });
+      const claimed = store.claimDue("worker-a", { leaseMs: 10_000 });
+      expect(store.markDispatchStarted("delivery-uncertain", claimed!.leaseToken!)).toMatchObject({
+        dispatchedAt: now,
+      });
+
+      expect(
+        store.recordFailure(
+          "delivery-uncertain",
+          claimed!.leaseToken!,
+          "connection closed after request write",
+          { outcome: "unknown", replaySafety: "unsafe" },
+        ),
+      ).toMatchObject({
+        status: "uncertain",
+        attemptCount: 1,
+        dispatchedAt: now,
+        lastError: "connection closed after request write",
+      });
+      expect(store.summary()).toEqual({
+        pending: 0,
+        retrying: 0,
+        inFlight: 0,
+        delivered: 0,
+        uncertain: 1,
+        lastError: "connection closed after request write",
+        lastErrorAt: now,
+      });
+
+      now = "2026-07-16T00:00:00.000Z";
+      expect(store.claimDue("worker-b")).toBeUndefined();
     } finally {
       db.close();
     }

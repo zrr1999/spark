@@ -11,8 +11,8 @@ import {
 } from "@zendev-lab/spark-protocol/session-assignment";
 import type { SparkModelRef } from "@zendev-lab/spark-protocol/model-control";
 
-const LEGACY_REGISTRY_VERSION = 1 as const;
-const REGISTRY_VERSION = 2 as const;
+const LEGACY_REGISTRY_VERSIONS = new Set([1, 2]);
+const REGISTRY_VERSION = 3 as const;
 
 export type SparkSessionUnboundPolicy = "reject" | "create";
 
@@ -43,6 +43,12 @@ export interface CreateSparkSessionInput {
 export interface BindSparkSessionInput {
   sessionId: string;
   externalKey: string;
+  /** Configured adapter instance that owns this binding. */
+  adapterId?: string;
+  /** Rename-stable provider account that owns this binding. */
+  adapterAccountIdentity?: string;
+  /** Internal compatibility gate for claiming a fully unscoped legacy binding. */
+  allowLegacyAccountClaim?: boolean;
   now?: Date;
 }
 
@@ -54,6 +60,12 @@ export interface RecordSparkSessionRunInput {
 
 export interface ResolveBindingInput {
   externalKey: string;
+  /** Configured adapter instance that observed this inbound message. */
+  adapterId?: string;
+  /** Rename-stable provider account that observed this inbound message. */
+  adapterAccountIdentity?: string;
+  /** Allow exactly one pre-account binding to be claimed by this account. */
+  allowLegacyAccountClaim?: boolean;
   onUnbound?: SparkSessionUnboundPolicy;
   create?: Omit<CreateSparkSessionInput, "sessionId">;
   now?: Date;
@@ -86,6 +98,8 @@ export class SparkSessionRegistry {
       throw new SparkSessionRegistryError("session_exists", `session already exists: ${sessionId}`);
     }
     const scope = createScope(input);
+    const role = normalizeSessionRole(input.role);
+    const legacyTitle = normalizeSessionRole(input.title);
     const ownership =
       scope.kind === "workspace" ? { scope, workspaceId: scope.workspaceId } : { scope };
     const record: SparkSessionRegistryRecord = {
@@ -95,8 +109,10 @@ export class SparkSessionRegistry {
       bindings: [],
       createdAt: now,
       updatedAt: now,
-      ...(input.title ? { title: input.title } : {}),
-      ...(input.role ? { role: input.role } : {}),
+      // Local role-managed sessions mirror role into title for compatibility.
+      // Platform-owned channel creation may still provide a technical title
+      // without enrolling that session in generic role management.
+      ...(role ? { title: role, role } : legacyTitle ? { title: legacyTitle } : {}),
       ...(input.cwd ? { cwd: input.cwd } : {}),
       ...(input.sessionPath ? { sessionPath: input.sessionPath } : {}),
     };
@@ -140,14 +156,22 @@ export class SparkSessionRegistry {
     const file = await this.loadFile();
     const externalKey = normalizeChannelExternalKey(input.externalKey);
     const adapter = channelAdapterFromExternalKey(externalKey);
+    const adapterId = input.adapterId?.trim() || undefined;
+    const adapterAccountIdentity = input.adapterAccountIdentity?.trim() || undefined;
     const now = (input.now ?? new Date()).toISOString();
-    const existingOwner = file.sessions.find((session) =>
-      session.bindings.some((binding) => binding.externalKey === externalKey),
-    );
+    const existingMatch = selectChannelBinding(file.sessions, {
+      externalKey,
+      adapterId,
+      adapterAccountIdentity,
+      // bind() is an explicit ownership operation, so it may upgrade the one
+      // legacy unscoped binding selected by the caller's session id.
+      allowLegacyAccountClaim: input.allowLegacyAccountClaim !== false,
+    });
+    const existingOwner = existingMatch?.session;
     if (existingOwner && existingOwner.sessionId !== input.sessionId) {
       throw new SparkSessionRegistryError(
         "binding_conflict",
-        `externalKey ${externalKey} already bound to ${existingOwner.sessionId}`,
+        `channel binding ${bindingIdentityLabel({ externalKey, adapterAccountIdentity })} already bound to ${existingOwner.sessionId}`,
       );
     }
     const index = file.sessions.findIndex((session) => session.sessionId === input.sessionId);
@@ -164,12 +188,49 @@ export class SparkSessionRegistry {
         `cannot bind archived session: ${input.sessionId}`,
       );
     }
-    if (current.bindings.some((binding) => binding.externalKey === externalKey)) {
-      return current;
+    const existingBindingIndex = existingMatch
+      ? current.bindings.indexOf(existingMatch.binding)
+      : -1;
+    if (existingBindingIndex >= 0) {
+      const existingBinding = current.bindings[existingBindingIndex]!;
+      if (
+        !adapterAccountIdentity &&
+        adapterId &&
+        existingBinding.adapterId &&
+        existingBinding.adapterId !== adapterId
+      ) {
+        throw new SparkSessionRegistryError(
+          "binding_conflict",
+          `externalKey ${externalKey} is bound through adapter ${existingBinding.adapterId}, not ${adapterId}`,
+        );
+      }
+      const nextBinding: SparkSessionChannelBinding = {
+        ...existingBinding,
+        ...(adapterId ? { adapterId } : {}),
+        ...(adapterAccountIdentity ? { adapterAccountIdentity } : {}),
+      };
+      if (
+        nextBinding.adapterId === existingBinding.adapterId &&
+        nextBinding.adapterAccountIdentity === existingBinding.adapterAccountIdentity
+      ) {
+        return current;
+      }
+      const bindings = [...current.bindings];
+      bindings[existingBindingIndex] = nextBinding;
+      const updated: SparkSessionRegistryRecord = {
+        ...current,
+        bindings,
+        updatedAt: now,
+      };
+      file.sessions[index] = updated;
+      await this.saveFile(file);
+      return updated;
     }
     const binding: SparkSessionChannelBinding = {
       kind: "channel",
       adapter,
+      ...(adapterId ? { adapterId } : {}),
+      ...(adapterAccountIdentity ? { adapterAccountIdentity } : {}),
       externalKey,
       boundAt: now,
     };
@@ -183,7 +244,11 @@ export class SparkSessionRegistry {
     return updated;
   }
 
-  async unbind(sessionId: string, externalKey: string): Promise<SparkSessionRegistryRecord> {
+  async unbind(
+    sessionId: string,
+    externalKey: string,
+    adapterAccountIdentity?: string,
+  ): Promise<SparkSessionRegistryRecord> {
     const file = await this.loadFile();
     const normalized = normalizeChannelExternalKey(externalKey);
     const index = file.sessions.findIndex((session) => session.sessionId === sessionId);
@@ -191,13 +256,32 @@ export class SparkSessionRegistry {
       throw new SparkSessionRegistryError("session_not_found", `unknown session: ${sessionId}`);
     }
     const current = file.sessions[index]!;
-    const nextBindings = current.bindings.filter((binding) => binding.externalKey !== normalized);
-    if (nextBindings.length === current.bindings.length) {
+    const normalizedAccountIdentity = adapterAccountIdentity?.trim() || undefined;
+    const externalMatches = current.bindings.filter(
+      (binding) => binding.externalKey === normalized,
+    );
+    const matchingBindings = normalizedAccountIdentity
+      ? externalMatches.filter(
+          (binding) => binding.adapterAccountIdentity === normalizedAccountIdentity,
+        )
+      : externalMatches;
+    if (matchingBindings.length === 0) {
       throw new SparkSessionRegistryError(
         "binding_not_found",
-        `session ${sessionId} has no binding ${normalized}`,
+        `session ${sessionId} has no binding ${bindingIdentityLabel({
+          externalKey: normalized,
+          adapterAccountIdentity: normalizedAccountIdentity,
+        })}`,
       );
     }
+    if (matchingBindings.length > 1) {
+      throw new SparkSessionRegistryError(
+        "binding_ambiguous",
+        `session ${sessionId} has multiple provider accounts bound to ${normalized}`,
+      );
+    }
+    const bindingToRemove = matchingBindings[0]!;
+    const nextBindings = current.bindings.filter((binding) => binding !== bindingToRemove);
     const updated: SparkSessionRegistryRecord = {
       ...current,
       bindings: nextBindings,
@@ -232,16 +316,16 @@ export class SparkSessionRegistry {
   }
 
   /**
-   * Assign the generated title for an otherwise untitled local session.
+   * Assign the generated division of labour for an unassigned user session.
    *
    * This compare-and-set transition deliberately becomes a no-op when another
    * writer has already titled, channel-bound, or archived the session. The
    * daemon serializes this complete read-modify-write operation, so a slow
-   * advisory title model can never overwrite newer user/channel state.
+   * advisory role model can never overwrite newer user/channel state.
    */
-  async setTitleIfMissing(
+  async setRoleIfMissing(
     sessionId: string,
-    title: string,
+    role: string,
     now = new Date(),
   ): Promise<SparkSessionRegistryRecord> {
     const file = await this.loadFile();
@@ -251,28 +335,39 @@ export class SparkSessionRegistry {
     }
     const current = file.sessions[index]!;
     if (
+      current.role?.trim() ||
       current.title?.trim() ||
       current.bindings.some((binding) => binding.kind === "channel") ||
       current.status === "archived"
     ) {
       return current;
     }
-    const normalizedTitle = title.trim();
-    if (!normalizedTitle) {
+    const normalizedRole = normalizeSessionRole(role);
+    if (!normalizedRole) {
       throw new SparkSessionRegistryError(
-        "invalid_session_title",
-        `session title must not be blank: ${sessionId}`,
+        "invalid_session_role",
+        `session role must not be blank: ${sessionId}`,
       );
     }
     const observedAt = now.toISOString();
     const updated: SparkSessionRegistryRecord = {
       ...current,
-      title: normalizedTitle,
+      title: normalizedRole,
+      role: normalizedRole,
       updatedAt: observedAt > current.updatedAt ? observedAt : current.updatedAt,
     };
     file.sessions[index] = updated;
     await this.saveFile(file);
     return updated;
+  }
+
+  /** @deprecated Compatibility alias; session identity is role-owned. */
+  async setTitleIfMissing(
+    sessionId: string,
+    title: string,
+    now = new Date(),
+  ): Promise<SparkSessionRegistryRecord> {
+    return await this.setRoleIfMissing(sessionId, title, now);
   }
 
   async setModel(
@@ -376,10 +471,16 @@ export class SparkSessionRegistry {
 
   async resolveBinding(input: ResolveBindingInput): Promise<SparkSessionRegistryRecord> {
     const externalKey = normalizeChannelExternalKey(input.externalKey);
+    const adapterId = input.adapterId?.trim() || undefined;
+    const adapterAccountIdentity = input.adapterAccountIdentity?.trim() || undefined;
     const file = await this.loadFile();
-    const existing = file.sessions.find((session) =>
-      session.bindings.some((binding) => binding.externalKey === externalKey),
-    );
+    const existingMatch = selectChannelBinding(file.sessions, {
+      externalKey,
+      adapterId,
+      adapterAccountIdentity,
+      allowLegacyAccountClaim: input.allowLegacyAccountClaim === true,
+    });
+    const existing = existingMatch?.session;
     if (existing) {
       if (existing.status === "archived") {
         throw new SparkSessionRegistryError(
@@ -387,7 +488,14 @@ export class SparkSessionRegistry {
           `bound session is archived: ${existing.sessionId}`,
         );
       }
-      return existing;
+      if (!adapterId && !adapterAccountIdentity) return existing;
+      return await this.bind({
+        sessionId: existing.sessionId,
+        externalKey,
+        ...(adapterId ? { adapterId } : {}),
+        ...(adapterAccountIdentity ? { adapterAccountIdentity } : {}),
+        now: input.now,
+      });
     }
     const policy = input.onUnbound ?? "reject";
     if (policy === "reject") {
@@ -403,6 +511,11 @@ export class SparkSessionRegistry {
     return await this.bind({
       sessionId: created.sessionId,
       externalKey,
+      ...(adapterId ? { adapterId } : {}),
+      ...(adapterAccountIdentity ? { adapterAccountIdentity } : {}),
+      // resolveBinding already decided that this account has no owner. Do not
+      // let the lower-level bind step silently claim a different legacy row.
+      allowLegacyAccountClaim: false,
       now: input.now,
     });
   }
@@ -466,7 +579,10 @@ function parseRegistryFile(value: unknown): SparkSessionRegistryFile {
     throw new SparkSessionRegistryError("invalid_registry", "registry root must be an object");
   }
   const record = value as Record<string, unknown>;
-  if (record.version !== LEGACY_REGISTRY_VERSION && record.version !== REGISTRY_VERSION) {
+  if (
+    record.version !== REGISTRY_VERSION &&
+    !LEGACY_REGISTRY_VERSIONS.has(Number(record.version))
+  ) {
     throw new SparkSessionRegistryError(
       "invalid_registry",
       `unsupported registry version: ${String(record.version)}`,
@@ -510,4 +626,87 @@ function sameSessionScope(left: SparkSessionScope, right: SparkSessionScope): bo
   return left.kind === "workspace"
     ? left.workspaceId === (right as Extract<SparkSessionScope, { kind: "workspace" }>).workspaceId
     : left.daemonId === (right as Extract<SparkSessionScope, { kind: "daemon" }>).daemonId;
+}
+
+function normalizeSessionRole(value: string | undefined): string | undefined {
+  const normalized = value?.replace(/\s+/gu, " ").trim();
+  return normalized || undefined;
+}
+
+interface ChannelBindingSelector {
+  externalKey: string;
+  adapterId?: string;
+  adapterAccountIdentity?: string;
+  allowLegacyAccountClaim?: boolean;
+}
+
+interface SelectedChannelBinding {
+  session: SparkSessionRegistryRecord;
+  binding: SparkSessionChannelBinding;
+}
+
+/**
+ * Select one channel binding without ever guessing between provider accounts.
+ *
+ * Modern callers use the rename-stable account identity. A legacy binding that
+ * already recorded the same configured adapter can be upgraded safely. A fully
+ * unscoped legacy binding is claimable only when the caller has independently
+ * established that this is the sole configured account of that platform type.
+ */
+function selectChannelBinding(
+  sessions: SparkSessionRegistryRecord[],
+  selector: ChannelBindingSelector,
+): SelectedChannelBinding | undefined {
+  const matches = sessions.flatMap((session) =>
+    session.bindings
+      .filter((binding) => binding.externalKey === selector.externalKey)
+      .map((binding) => ({ session, binding })),
+  );
+  if (selector.adapterAccountIdentity) {
+    const exact = matches.filter(
+      ({ binding }) => binding.adapterAccountIdentity === selector.adapterAccountIdentity,
+    );
+    if (exact.length > 1) throwAmbiguousBinding(selector);
+    if (exact[0]) return exact[0];
+
+    const adapterScopedLegacy = selector.adapterId
+      ? matches.filter(
+          ({ binding }) =>
+            !binding.adapterAccountIdentity && binding.adapterId === selector.adapterId,
+        )
+      : [];
+    if (adapterScopedLegacy.length > 1) throwAmbiguousBinding(selector);
+    if (adapterScopedLegacy[0]) return adapterScopedLegacy[0];
+
+    if (selector.allowLegacyAccountClaim) {
+      const unscopedLegacy = matches.filter(
+        ({ binding }) => !binding.adapterAccountIdentity && !binding.adapterId,
+      );
+      if (unscopedLegacy.length > 1) throwAmbiguousBinding(selector);
+      if (unscopedLegacy[0]) return unscopedLegacy[0];
+    }
+    return undefined;
+  }
+  if (selector.adapterId) {
+    const exact = matches.filter(({ binding }) => binding.adapterId === selector.adapterId);
+    if (exact.length > 1) throwAmbiguousBinding(selector);
+    if (exact[0]) return exact[0];
+  }
+  if (matches.length > 1) throwAmbiguousBinding(selector);
+  return matches[0];
+}
+
+function throwAmbiguousBinding(selector: ChannelBindingSelector): never {
+  throw new SparkSessionRegistryError(
+    "binding_ambiguous",
+    `multiple provider accounts match ${bindingIdentityLabel(selector)}`,
+  );
+}
+
+function bindingIdentityLabel(
+  selector: Pick<ChannelBindingSelector, "externalKey" | "adapterAccountIdentity">,
+): string {
+  return selector.adapterAccountIdentity
+    ? `${selector.adapterAccountIdentity}:${selector.externalKey}`
+    : selector.externalKey;
 }

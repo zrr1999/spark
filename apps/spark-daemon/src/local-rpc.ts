@@ -46,6 +46,7 @@ import {
   type SparkSessionBindRequest,
   type SparkSessionCreateRequest,
   type SparkSessionGetRequest,
+  type SparkSessionMailChannelDeliveryView,
   type SparkSessionSnapshotRequest,
   type SparkSessionListRequest,
   type SparkSessionView,
@@ -61,7 +62,12 @@ import {
   type ChannelNotifyInput,
   type ChannelsConfig,
 } from "@zendev-lab/spark-channels";
-import { SparkSessionMailStore, SparkSessionRegistryError } from "@zendev-lab/spark-session";
+import {
+  SparkSessionMailStore,
+  SparkSessionRegistryError,
+  type SparkSessionMailDeliveryStatus,
+  type SparkSessionMailMessage,
+} from "@zendev-lab/spark-session";
 import type { SparkPaths } from "@zendev-lab/spark-system";
 import {
   requestSparkDaemonLocalRpcWire,
@@ -1552,18 +1558,49 @@ async function projectSessionMailbox(
 ): Promise<SparkSessionView> {
   if (!options.mailStore) return snapshot;
   const messages = await options.mailStore.list(snapshot.sessionId, { includeAcked: true });
-  const mailbox = messages.slice(-50).map((message) => ({
-    id: message.id,
-    fromSessionId: message.fromSessionId,
-    kind: message.kind,
-    intent: message.intent,
-    subject: message.subject,
-    body: message.body,
-    createdAt: message.createdAt,
-    readAt: message.readAt,
-    ackedAt: message.ackedAt,
-  }));
+  const mailbox = messages.slice(-50).map((message) => {
+    const channelDelivery = projectSessionMailChannelDelivery(message);
+    return {
+      id: message.id,
+      fromSessionId: message.fromSessionId,
+      kind: message.kind,
+      intent: message.intent,
+      subject: message.subject,
+      body: message.body,
+      createdAt: message.createdAt,
+      readAt: message.readAt,
+      ackedAt: message.ackedAt,
+      ...(channelDelivery ? { channelDelivery } : {}),
+    };
+  });
   return parseSparkSessionView({ ...snapshot, mailbox });
+}
+
+function projectSessionMailChannelDelivery(
+  message: SparkSessionMailMessage,
+): SparkSessionMailChannelDeliveryView | undefined {
+  if (message.delivery !== "channel" || message.deliveries.length === 0) return undefined;
+
+  const counts: Record<SparkSessionMailDeliveryStatus, number> = {
+    pending: 0,
+    delivered: 0,
+    failed: 0,
+    uncertain: 0,
+  };
+  for (const delivery of message.deliveries) counts[delivery.status] += 1;
+  const status: SparkSessionMailDeliveryStatus =
+    counts.uncertain > 0
+      ? "uncertain"
+      : counts.failed > 0
+        ? "failed"
+        : counts.pending > 0
+          ? "pending"
+          : "delivered";
+  return {
+    status,
+    total: message.deliveries.length,
+    ...counts,
+  };
 }
 
 function invocationResult(store: SparkInvocationStore, invocationId: string): LocalTurnResult {
@@ -2110,6 +2147,15 @@ function parseLocalChannelNotifyParams(
   if (action !== "send" && action !== "test" && action !== "list") {
     throw new Error("channel.notify action must be send, test, or list.");
   }
+  const image = isRecord(value.image)
+    ? {
+        ...(typeof value.image.url === "string" ? { url: value.image.url } : {}),
+        ...(typeof value.image.data === "string" ? { data: value.image.data } : {}),
+        ...(typeof value.image.mediaType === "string" ? { mediaType: value.image.mediaType } : {}),
+        ...(typeof value.image.name === "string" ? { name: value.image.name } : {}),
+        ...(typeof value.image.size === "number" ? { size: value.image.size } : {}),
+      }
+    : undefined;
   return {
     workspaceId: value.workspaceId.trim(),
     action,
@@ -2117,6 +2163,7 @@ function parseLocalChannelNotifyParams(
     ...(typeof value.route === "string" ? { route: value.route } : {}),
     ...(typeof value.recipient === "string" ? { recipient: value.recipient } : {}),
     ...(typeof value.text === "string" ? { text: value.text } : {}),
+    ...(image ? { image } : {}),
   };
 }
 
@@ -2401,12 +2448,13 @@ function daemonStatus(value: unknown): LocalDaemonStatusResult {
 }
 
 function channelDeliverySummary(value: unknown): SparkChannelDeliverySummary {
-  if (!isRecord(value)) return { pending: 0, retrying: 0, inFlight: 0, delivered: 0 };
+  if (!isRecord(value)) return { pending: 0, retrying: 0, inFlight: 0, delivered: 0, uncertain: 0 };
   return {
     pending: typeof value.pending === "number" ? value.pending : 0,
     retrying: typeof value.retrying === "number" ? value.retrying : 0,
     inFlight: typeof value.inFlight === "number" ? value.inFlight : 0,
     delivered: typeof value.delivered === "number" ? value.delivered : 0,
+    uncertain: typeof value.uncertain === "number" ? value.uncertain : 0,
     ...(typeof value.oldestPendingAt === "string"
       ? { oldestPendingAt: value.oldestPendingAt }
       : {}),

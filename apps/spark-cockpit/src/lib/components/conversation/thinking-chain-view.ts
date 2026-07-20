@@ -1,3 +1,4 @@
+import { isInternalExecutionTransportFailure } from "./internal-execution-detail";
 import type { ConversationChainStep } from "./types";
 
 const TERMINAL_ISSUE_STATES = new Set(["failed", "denied", "cancelled"]);
@@ -5,19 +6,33 @@ const TERMINAL_ISSUE_STATES = new Set(["failed", "denied", "cancelled"]);
 export function visibleThinkingChainSteps(
   steps: readonly ConversationChainStep[],
 ): ConversationChainStep[] {
-  return steps.filter((step) => {
-    if (step.type === "tool") return true;
-    if (step.type === "reasoning" && step.redacted) return true;
-    return step.summary.trim().length > 0;
+  return steps.flatMap<ConversationChainStep>((step) => {
+    if (step.type === "tool") {
+      if (isInternalExecutionTransportFailure(step.summary, step.name)) {
+        return [
+          {
+            type: "tool",
+            callId: step.callId,
+            name: step.name,
+            state: step.state,
+          },
+        ];
+      }
+      return [step];
+    }
+    if (step.type === "reasoning" && step.redacted) return [step];
+    return step.summary.trim().length > 0 ? [step] : [];
   });
 }
 
 export function thinkingChainHasTerminalIssue(steps: readonly ConversationChainStep[]) {
-  return steps.some((step) => step.type === "tool" && TERMINAL_ISSUE_STATES.has(step.state));
+  return visibleThinkingChainSteps(steps).some(
+    (step) => step.type === "tool" && TERMINAL_ISSUE_STATES.has(step.state),
+  );
 }
 
 export function thinkingChainNeedsFailureSummary(steps: readonly ConversationChainStep[]) {
-  const failedSteps = steps.filter(
+  const failedSteps = visibleThinkingChainSteps(steps).filter(
     (step) => step.type === "tool" && TERMINAL_ISSUE_STATES.has(step.state),
   );
   return (

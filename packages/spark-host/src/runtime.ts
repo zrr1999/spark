@@ -83,6 +83,10 @@ export interface SparkHostRuntimeOptions {
   channelBinding?: {
     adapter: "feishu" | "infoflow" | "qqbot";
     externalKey: string;
+    /** Runtime/config adapter id. Kept for legacy routing diagnostics. */
+    adapterId?: string;
+    /** Stable provider-account identity used for multi-account routing. */
+    adapterAccountIdentity?: string;
   };
   invocationId?: string;
   sessionQuestionChain?: readonly string[];

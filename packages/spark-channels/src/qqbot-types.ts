@@ -1,3 +1,6 @@
+import type { ChannelImage } from "./channel-images.ts";
+import type { InfoflowAttachment } from "./infoflow-content.ts";
+
 /** Normalized QQ Bot inbound scene for policy + external keys. */
 export type QqbotChatType = "c2c" | "group" | "channel";
 
@@ -13,6 +16,9 @@ export interface QqbotNormalizedInbound {
   eventType?: string;
   mentionedSelf?: boolean;
   mentions?: string[];
+  attachments?: InfoflowAttachment[];
+  /** Images materialized by the transport before its durable cursor advances. */
+  images?: ChannelImage[];
 }
 
 /**

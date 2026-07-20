@@ -7,6 +7,7 @@
   import MessageActions from "./MessageActions.svelte";
   import NoticePart from "./NoticePart.svelte";
   import ReasoningPart from "./ReasoningPart.svelte";
+  import SessionRetryAction from "./SessionRetryAction.svelte";
   import TaskRunPart from "./TaskRunPart.svelte";
   import ThinkingChainPart from "./ThinkingChainPart.svelte";
   import ToolCallPart from "./ToolCallPart.svelte";
@@ -27,6 +28,14 @@
     partLabels: ConversationPartLabels;
     relativeTime: (value: string) => string;
     statusLabel: (status: string) => string;
+    retryAction?: {
+      label: string;
+      submittingLabel: string;
+      unavailableLabel: string;
+      submitting: boolean;
+      disabled: boolean;
+      onRetry: () => void;
+    };
   };
 
   let {
@@ -40,6 +49,7 @@
     partLabels,
     relativeTime,
     statusLabel,
+    retryAction,
   }: Props = $props();
 
   let actorLabel = $derived(
@@ -157,6 +167,9 @@
 
       {#if hasCopyableText}
         <MessageActions text={copyableText} {copyLabel} {copiedLabel} />
+      {/if}
+      {#if retryAction}
+        <SessionRetryAction {...retryAction} />
       {/if}
     </div>
   </article>

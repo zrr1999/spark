@@ -86,6 +86,20 @@ export function cockpitSlashSuggestionsForInput(
   });
 }
 
+/**
+ * The session picker is a navigation surface, so its two explicit spellings
+ * should open it directly on Enter instead of requiring a second action-bar
+ * click. Other session aliases keep their distinct action-bar semantics.
+ */
+export function cockpitSessionSelectionShortcutForInput(input: string): boolean {
+  const resolution = resolveSparkSlashEditorInput(input);
+  return (
+    resolution.kind === "exact" &&
+    resolution.descriptor.name === "session" &&
+    (resolution.command === "session" || resolution.command === "sessions")
+  );
+}
+
 /** Match a known command name even when arguments are present. */
 export function cockpitSlashCatalogActionBarForInput(
   input: string,

@@ -69,11 +69,7 @@ export type {
   ConversationToolState,
 } from "./types";
 export { default as ThinkingChainPart } from "./ThinkingChainPart.svelte";
-export {
-  sessionAutoCompactionEnabled,
-  sessionStatusIdentity,
-  sessionStatusUsage,
-} from "./session-status";
+export { sessionStatusIdentity, sessionStatusUsage } from "./session-status";
 export type {
   SessionStatusBarLabels,
   SessionStatusIdentityInput,

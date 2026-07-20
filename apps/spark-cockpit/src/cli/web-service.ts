@@ -1,11 +1,13 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   closeSync,
+  fsyncSync,
   linkSync,
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -19,6 +21,36 @@ const appDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const lockFileName = "cockpit-web.lock";
 const startupTimeoutMs = 15_000;
 const stopTimeoutMs = 10_000;
+
+type CockpitWebSpawn = (
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+) => ChildProcess;
+
+export interface CockpitWebServiceDependencies {
+  processStartToken(pid: number): string | null;
+  spawnProcess: CockpitWebSpawn;
+  canConnect(host: string, port: number): Promise<boolean>;
+  killProcess(pid: number, signal: NodeJS.Signals): void;
+  sleep(ms: number): Promise<void>;
+  now(): number;
+}
+
+const defaultDependencies: CockpitWebServiceDependencies = {
+  processStartToken: defaultProcessStartToken,
+  spawnProcess: (command, args, options) => spawn(command, [...args], options),
+  canConnect: defaultCanConnect,
+  killProcess: (pid, signal) => process.kill(pid, signal),
+  sleep: async (ms) => await delay(ms),
+  now: Date.now,
+};
+
+function dependencies(
+  overrides: Partial<CockpitWebServiceDependencies> = {},
+): CockpitWebServiceDependencies {
+  return { ...defaultDependencies, ...overrides };
+}
 
 export interface CockpitWebProcessRecord {
   pid: number;
@@ -55,7 +87,7 @@ function servicePaths(env: NodeJS.ProcessEnv = process.env): WebServicePaths {
   };
 }
 
-function processStartToken(pid: number): string | null {
+function defaultProcessStartToken(pid: number): string | null {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
 
   if (process.platform === "linux") {
@@ -99,17 +131,43 @@ function readRecord(path: string): CockpitWebProcessRecord | null {
   }
 }
 
-function isRecordRunning(record: CockpitWebProcessRecord): boolean {
-  return processStartToken(record.pid) === record.processStartToken;
+function isRecordRunning(
+  record: CockpitWebProcessRecord,
+  deps: CockpitWebServiceDependencies,
+): boolean {
+  return deps.processStartToken(record.pid) === record.processStartToken;
 }
 
-function removeStaleFiles(paths: WebServicePaths): void {
-  const pidRecord = readRecord(paths.pidFile);
-  const lockRecord = readRecord(paths.lockFile);
-  if (pidRecord && isRecordRunning(pidRecord)) return;
-  if (lockRecord && isRecordRunning(lockRecord)) return;
-  rmSync(paths.pidFile, { force: true });
-  rmSync(paths.lockFile, { force: true });
+function removeStaleRecord(path: string, deps: CockpitWebServiceDependencies): void {
+  const record = readRecord(path);
+  if (!record || !isRecordRunning(record, deps)) rmSync(path, { force: true });
+}
+
+function recordsMatch(
+  left: CockpitWebProcessRecord | null,
+  right: CockpitWebProcessRecord,
+): boolean {
+  return left?.pid === right.pid && left.processStartToken === right.processStartToken;
+}
+
+function removeOwnedRecord(path: string, owner: CockpitWebProcessRecord): void {
+  if (recordsMatch(readRecord(path), owner)) rmSync(path, { force: true });
+}
+
+function writeRecordAtomically(path: string, record: CockpitWebProcessRecord): void {
+  const temporary = join(dirname(path), `.${randomUUID()}.tmp`);
+  let fd: number | undefined;
+  try {
+    fd = openSync(temporary, "wx", 0o600);
+    writeFileSync(fd, `${JSON.stringify(record)}\n`, "utf8");
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
+    renameSync(temporary, path);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    rmSync(temporary, { force: true });
+  }
 }
 
 function ensureServiceDirectories(paths: WebServicePaths): void {
@@ -117,13 +175,25 @@ function ensureServiceDirectories(paths: WebServicePaths): void {
   mkdirSync(dirname(paths.logFile), { recursive: true, mode: 0o700 });
 }
 
-export function getCockpitWebStatus(env: NodeJS.ProcessEnv = process.env): CockpitWebStatus {
+export function getCockpitWebStatus(
+  env: NodeJS.ProcessEnv = process.env,
+  overrides: Partial<CockpitWebServiceDependencies> = {},
+): CockpitWebStatus {
+  const deps = dependencies(overrides);
   const paths = servicePaths(env);
-  const record = readRecord(paths.pidFile) ?? readRecord(paths.lockFile);
-  if (!record || !isRecordRunning(record)) {
-    removeStaleFiles(paths);
+  const pidRecord = readRecord(paths.pidFile);
+  const lockRecord = readRecord(paths.lockFile);
+  const record = [pidRecord, lockRecord].find(
+    (candidate): candidate is CockpitWebProcessRecord =>
+      candidate !== null && isRecordRunning(candidate, deps),
+  );
+  if (!record) {
+    removeStaleRecord(paths.pidFile, deps);
+    removeStaleRecord(paths.lockFile, deps);
     return { running: false, logFile: paths.logFile, pidFile: paths.pidFile };
   }
+  if (!recordsMatch(pidRecord, record)) removeStaleRecord(paths.pidFile, deps);
+  if (!recordsMatch(lockRecord, record)) removeStaleRecord(paths.lockFile, deps);
   const displayHost = record.host === "0.0.0.0" || record.host === "::" ? "127.0.0.1" : record.host;
   return {
     running: true,
@@ -148,7 +218,7 @@ function runnerExecArgv(): string[] {
   return result;
 }
 
-function canConnect(host: string, port: number): Promise<boolean> {
+function defaultCanConnect(host: string, port: number): Promise<boolean> {
   const targetHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
   return new Promise((resolveConnection) => {
     const socket = createConnection({ host: targetHost, port });
@@ -165,8 +235,10 @@ function canConnect(host: string, port: number): Promise<boolean> {
 
 export async function startCockpitWebService(
   env: NodeJS.ProcessEnv = process.env,
+  overrides: Partial<CockpitWebServiceDependencies> = {},
 ): Promise<{ alreadyRunning: boolean; status: CockpitWebStatus }> {
-  const current = getCockpitWebStatus(env);
+  const deps = dependencies(overrides);
+  const current = getCockpitWebStatus(env, deps);
   if (current.running) return { alreadyRunning: true, status: current };
 
   const paths = servicePaths(env);
@@ -174,7 +246,7 @@ export async function startCockpitWebService(
   const logFd = openSync(paths.logFile, "a", 0o600);
   let child: ChildProcess;
   try {
-    child = spawn(
+    child = deps.spawnProcess(
       process.execPath,
       [
         ...runnerExecArgv(),
@@ -195,20 +267,20 @@ export async function startCockpitWebService(
 
   const host = env.HOST ?? "127.0.0.1";
   const port = Number(env.PORT ?? "5173");
-  const deadline = Date.now() + startupTimeoutMs;
-  while (Date.now() < deadline) {
-    const status = getCockpitWebStatus(env);
-    if (status.running && (await canConnect(host, port))) {
+  const deadline = deps.now() + startupTimeoutMs;
+  while (deps.now() < deadline) {
+    const status = getCockpitWebStatus(env, deps);
+    if (status.running && (await deps.canConnect(host, port))) {
       return { alreadyRunning: false, status };
     }
     if (child.exitCode !== null || child.signalCode !== null) break;
-    await delay(100);
+    await deps.sleep(100);
   }
 
-  const status = getCockpitWebStatus(env);
+  const status = getCockpitWebStatus(env, deps);
   if (status.running && status.pid) {
     try {
-      killServiceProcess(status.pid, "SIGTERM");
+      killServiceProcess(status.pid, "SIGTERM", deps);
     } catch {
       // The runner may already have exited.
     }
@@ -218,25 +290,31 @@ export async function startCockpitWebService(
 
 export async function stopCockpitWebService(
   env: NodeJS.ProcessEnv = process.env,
+  overrides: Partial<CockpitWebServiceDependencies> = {},
 ): Promise<{ alreadyStopped: boolean; status: CockpitWebStatus }> {
-  const current = getCockpitWebStatus(env);
+  const deps = dependencies(overrides);
+  const current = getCockpitWebStatus(env, deps);
   if (!current.running || !current.pid) return { alreadyStopped: true, status: current };
 
-  killServiceProcess(current.pid, "SIGTERM");
-  const deadline = Date.now() + stopTimeoutMs;
-  while (Date.now() < deadline) {
-    const status = getCockpitWebStatus(env);
+  killServiceProcess(current.pid, "SIGTERM", deps);
+  const deadline = deps.now() + stopTimeoutMs;
+  while (deps.now() < deadline) {
+    const status = getCockpitWebStatus(env, deps);
     if (!status.running) return { alreadyStopped: false, status };
-    await delay(100);
+    await deps.sleep(100);
   }
 
   const record = readRecord(servicePaths(env).pidFile);
-  if (record && isRecordRunning(record)) killServiceProcess(record.pid, "SIGKILL");
-  await delay(100);
-  return { alreadyStopped: false, status: getCockpitWebStatus(env) };
+  if (record && isRecordRunning(record, deps)) killServiceProcess(record.pid, "SIGKILL", deps);
+  await deps.sleep(100);
+  return { alreadyStopped: false, status: getCockpitWebStatus(env, deps) };
 }
 
-function acquireRunnerLock(paths: WebServicePaths, record: CockpitWebProcessRecord): number {
+function acquireRunnerLock(
+  paths: WebServicePaths,
+  record: CockpitWebProcessRecord,
+  deps: CockpitWebServiceDependencies,
+): number {
   ensureServiceDirectories(paths);
   const temporary = join(paths.runtimeDir, `.cockpit-web.${process.pid}.${randomUUID()}.lock`);
   writeFileSync(temporary, `${JSON.stringify(record)}\n`, { mode: 0o600 });
@@ -247,7 +325,7 @@ function acquireRunnerLock(paths: WebServicePaths, record: CockpitWebProcessReco
         return openSync(paths.lockFile, "r");
       } catch (error) {
         const existing = readRecord(paths.lockFile);
-        if (existing && isRecordRunning(existing)) {
+        if (existing && isRecordRunning(existing, deps)) {
           throw new Error(`Spark Cockpit is already running (pid ${existing.pid}).`);
         }
         rmSync(paths.lockFile, { force: true });
@@ -266,18 +344,26 @@ function serverCommand(env: NodeJS.ProcessEnv): { command: string; args: string[
   return { command: "pnpm", args: ["exec", "tsx", join(appDir, "server", "index.ts")] };
 }
 
-function killServiceProcess(pid: number, signal: NodeJS.Signals): void {
-  process.kill(process.platform === "win32" ? pid : -pid, signal);
+function killServiceProcess(
+  pid: number,
+  signal: NodeJS.Signals,
+  deps: CockpitWebServiceDependencies,
+): void {
+  deps.killProcess(process.platform === "win32" ? pid : -pid, signal);
 }
 
-export async function runCockpitWebService(env: NodeJS.ProcessEnv = process.env): Promise<void> {
+export async function runCockpitWebService(
+  env: NodeJS.ProcessEnv = process.env,
+  overrides: Partial<CockpitWebServiceDependencies> = {},
+): Promise<void> {
+  const deps = dependencies(overrides);
   const paths = servicePaths(env);
   const host = env.HOST ?? "127.0.0.1";
   const port = Number(env.PORT ?? "5173");
   if (!Number.isSafeInteger(port) || port <= 0 || port > 65_535)
     throw new Error(`Invalid PORT: ${env.PORT}`);
 
-  const token = processStartToken(process.pid);
+  const token = deps.processStartToken(process.pid);
   if (!token) throw new Error("Unable to identify the Spark Cockpit service process.");
   const record: CockpitWebProcessRecord = {
     pid: process.pid,
@@ -287,18 +373,25 @@ export async function runCockpitWebService(env: NodeJS.ProcessEnv = process.env)
     port,
     logFile: paths.logFile,
   };
-  const lockFd = acquireRunnerLock(paths, record);
-  writeFileSync(paths.pidFile, `${JSON.stringify(record)}\n`, { mode: 0o600 });
-
-  const command = serverCommand(env);
-  const server = spawn(command.command, command.args, { cwd: appDir, env, stdio: "inherit" });
-  const forward = (signal: NodeJS.Signals) => {
-    if (server.exitCode === null && server.signalCode === null) server.kill(signal);
-  };
-  process.once("SIGTERM", () => forward("SIGTERM"));
-  process.once("SIGINT", () => forward("SIGINT"));
-
+  const lockFd = acquireRunnerLock(paths, record, deps);
+  let onSigterm: (() => void) | undefined;
+  let onSigint: (() => void) | undefined;
   try {
+    writeRecordAtomically(paths.pidFile, record);
+    const command = serverCommand(env);
+    const server = deps.spawnProcess(command.command, command.args, {
+      cwd: appDir,
+      env,
+      stdio: "inherit",
+    });
+    const forward = (signal: NodeJS.Signals) => {
+      if (server.exitCode === null && server.signalCode === null) server.kill(signal);
+    };
+    onSigterm = () => forward("SIGTERM");
+    onSigint = () => forward("SIGINT");
+    process.once("SIGTERM", onSigterm);
+    process.once("SIGINT", onSigint);
+
     const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
       (resolveExit, reject) => {
         server.once("error", reject);
@@ -307,8 +400,10 @@ export async function runCockpitWebService(env: NodeJS.ProcessEnv = process.env)
     );
     if (exit.code && exit.code !== 0) process.exitCode = exit.code;
   } finally {
-    rmSync(paths.pidFile, { force: true });
-    rmSync(paths.lockFile, { force: true });
+    if (onSigterm) process.off("SIGTERM", onSigterm);
+    if (onSigint) process.off("SIGINT", onSigint);
+    removeOwnedRecord(paths.pidFile, record);
+    removeOwnedRecord(paths.lockFile, record);
     closeSync(lockFd);
   }
 }

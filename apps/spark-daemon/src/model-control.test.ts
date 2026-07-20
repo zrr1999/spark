@@ -87,25 +87,25 @@ describe("daemon model control", () => {
     expect(flow).not.toHaveProperty("access");
   });
 
-  it("uses the current session model for a bounded title leaf without a provider override", async () => {
+  it("uses the current session model for a bounded role leaf without a provider override", async () => {
     const root = await mkdtemp(join(tmpdir(), "spark-model-title-"));
     roots.push(root);
     const sessionRegistry = createDaemonSessionRegistry(root, {
       daemonId: "install-model-title",
       daemonCwd: root,
     });
-    const runLeaf = vi.fn(async () => ({ degraded: false, text: " Diagnose daemon startup " }));
+    const runLeaf = vi.fn(async () => ({ degraded: false, text: " Runtime Operations " }));
     const control = createSparkDaemonModelControl({
       providerControl: fakeProviderControl(undefined, runLeaf),
       sessionRegistry,
     });
 
     await expect(
-      control.generateSessionTitle!({ prompt: "Why does startup fail?", model: selectedModel }),
-    ).resolves.toBe("Diagnose daemon startup");
+      control.generateSessionRole!({ prompt: "Why does startup fail?", model: selectedModel }),
+    ).resolves.toBe("Runtime Operations");
     expect(runLeaf).toHaveBeenCalledWith({
-      role: "session-title",
-      brief: expect.stringContaining("Return only the title"),
+      role: "session-role",
+      brief: expect.stringContaining("stable responsibility"),
       input: "Why does startup fail?",
       sessionModel: "baidu-oneapi/ernie-4.6",
       maxTokens: 48,
@@ -114,10 +114,10 @@ describe("daemon model control", () => {
 
     runLeaf.mockResolvedValueOnce({ degraded: true, text: "" });
     await expect(
-      control.generateSessionTitle!({ prompt: "fallback", model: selectedModel }),
+      control.generateSessionRole!({ prompt: "fallback", model: selectedModel }),
     ).resolves.toBeUndefined();
 
-    await control.generateSessionTitle!({ prompt: "x".repeat(2_100), model: selectedModel });
+    await control.generateSessionRole!({ prompt: "x".repeat(2_100), model: selectedModel });
     expect(runLeaf).toHaveBeenLastCalledWith(expect.objectContaining({ input: "x".repeat(2_000) }));
   });
 });

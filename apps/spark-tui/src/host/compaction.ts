@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import {
   SPARK_PROMPT_ITEM_METADATA_KEY,
+  compactToolResultContent,
   parseSparkPromptItemMetadata,
 } from "@zendev-lab/spark-turn";
 
@@ -82,6 +83,30 @@ const MAX_DETERMINISTIC_COMPACTION_SUMMARY_CHARS = 48_000;
 export interface SparkContextUsageEstimate {
   tokens: number;
   trailingTokens: number;
+  tokenSource: SparkCompactionTokenSource;
+}
+
+export interface SparkTokenMeterInput {
+  messages: SparkSessionMessage[];
+  reportedTokens?: number;
+  tokenize?: (messages: SparkSessionMessage[]) => number | undefined;
+}
+
+/** Select trustworthy provider usage, then a model tokenizer, then chars/4. */
+export function meterSparkContextTokens(input: SparkTokenMeterInput): SparkContextUsageEstimate {
+  const reported = nonNegativeInteger(input.reportedTokens);
+  // Some OpenAI-compatible providers emit an all-zero usage object even when
+  // the replay is non-empty. Treat that as missing data: trusting it disables
+  // preflight compaction exactly when the local estimate is most valuable.
+  if (reported !== undefined && (reported > 0 || input.messages.length === 0)) {
+    return { tokens: reported, trailingTokens: reported, tokenSource: "reported" };
+  }
+  const tokenized = nonNegativeInteger(input.tokenize?.(input.messages));
+  if (tokenized !== undefined) {
+    return { tokens: tokenized, trailingTokens: tokenized, tokenSource: "tokenizer" };
+  }
+  const estimated = input.messages.reduce((sum, message) => sum + estimateSparkTokens(message), 0);
+  return { tokens: estimated, trailingTokens: estimated, tokenSource: "estimated" };
 }
 
 export interface SparkCutPointResult {
@@ -100,14 +125,219 @@ export interface SparkCompactionPreparation {
   settings: SparkCompactionSettings;
 }
 
+export interface SparkSmartCompactionSummary {
+  version: 1;
+  objective: string;
+  completed: string[];
+  inProgress: string[];
+  decisions: string[];
+  changedFiles: Array<{ path: string; change: string; evidenceRefs: string[] }>;
+  commands: Array<{
+    command: string;
+    result: "passed" | "failed" | "blocked" | "unknown";
+    detail: string;
+  }>;
+  failures: Array<{ summary: string; cause: string; nextStep: string; evidenceRefs: string[] }>;
+  preservedFacts: string[];
+  unresolved: string[];
+  memoryRefs: string[];
+}
+
 export interface SparkCompactionSummaryResult<T = unknown> {
   summary: string;
   details?: T;
 }
 
+export interface SparkSmartCompactionModelRequest {
+  model: string;
+  preparation: SparkCompactionPreparation;
+}
+
+export type SparkSmartCompactionModelRunner = (
+  request: SparkSmartCompactionModelRequest,
+) => unknown;
+
 export type SparkCompactionSummarizer<T = unknown> = (
   preparation: SparkCompactionPreparation,
 ) => SparkCompactionSummaryResult<T> | Promise<SparkCompactionSummaryResult<T>>;
+
+export function parseSparkSmartCompactionSummary(
+  value: unknown,
+): SparkSmartCompactionSummary | undefined {
+  if (!isRecord(value) || value.version !== 1 || typeof value.objective !== "string")
+    return undefined;
+  const stringListKeys = [
+    "completed",
+    "inProgress",
+    "decisions",
+    "preservedFacts",
+    "unresolved",
+    "memoryRefs",
+  ] as const;
+  if (stringListKeys.some((key) => !isStringArray(value[key]))) return undefined;
+  if (!Array.isArray(value.changedFiles) || !value.changedFiles.every(validChangedFile))
+    return undefined;
+  if (!Array.isArray(value.commands) || !value.commands.every(validCommand)) return undefined;
+  if (!Array.isArray(value.failures) || !value.failures.every(validFailure)) return undefined;
+  return value as unknown as SparkSmartCompactionSummary;
+}
+
+export function renderSparkSmartCompactionSummary(summary: SparkSmartCompactionSummary): string {
+  const sections = [
+    ["Objective", [summary.objective]],
+    ["Completed", summary.completed],
+    ["In progress", summary.inProgress],
+    ["Decisions", summary.decisions],
+    [
+      "Changed files",
+      summary.changedFiles.map(
+        (item) => `${item.path}: ${item.change}${renderRefs(item.evidenceRefs)}`,
+      ),
+    ],
+    [
+      "Commands",
+      summary.commands.map(
+        (item) => `${item.result}: ${item.command}${item.detail ? ` - ${item.detail}` : ""}`,
+      ),
+    ],
+    [
+      "Failures",
+      summary.failures.map(
+        (item) =>
+          `${item.summary}; cause: ${item.cause}; next: ${item.nextStep}${renderRefs(item.evidenceRefs)}`,
+      ),
+    ],
+    ["Preserved facts", summary.preservedFacts],
+    ["Unresolved", summary.unresolved],
+    ["Memory refs", summary.memoryRefs],
+  ] as const;
+  return sections
+    .map(
+      ([title, items]) =>
+        `${title}:\n${items.length ? items.map((item) => `- ${item}`).join("\n") : "- none"}`,
+    )
+    .join("\n\n");
+}
+
+export async function smartSparkCompactionSummary(
+  preparation: SparkCompactionPreparation,
+  options: { model?: string; currentModel: string; runModel: SparkSmartCompactionModelRunner },
+): Promise<
+  SparkCompactionSummaryResult<{
+    mode: "smart";
+    model: string;
+    structured: SparkSmartCompactionSummary;
+  }>
+> {
+  const model = options.model && options.model !== "current" ? options.model : options.currentModel;
+  const raw = await options.runModel({ model, preparation });
+  const structured = parseSparkSmartCompactionSummary(raw);
+  if (!structured)
+    throw new Error("Smart compaction model returned an invalid fixed summary structure.");
+  return {
+    summary: renderSparkSmartCompactionSummary(structured),
+    details: { mode: "smart", model, structured },
+  };
+}
+
+export interface SparkSmartCompactionAttempt {
+  result: SparkCompactionSummaryResult;
+  fallbackReason?: SparkCompactionFallbackReason;
+}
+
+export async function smartSparkCompactionSummaryWithFallback(
+  preparation: SparkCompactionPreparation,
+  options: { model?: string; currentModel?: string; runModel?: SparkSmartCompactionModelRunner },
+): Promise<SparkSmartCompactionAttempt> {
+  if (!options.runModel || !options.currentModel) {
+    return {
+      result: deterministicSparkCompactionSummary(preparation),
+      fallbackReason: "model_unavailable",
+    };
+  }
+  try {
+    return {
+      result: await smartSparkCompactionSummary(preparation, {
+        model: options.model,
+        currentModel: options.currentModel,
+        runModel: options.runModel,
+      }),
+    };
+  } catch (error) {
+    const fallbackReason =
+      error instanceof Error && /invalid fixed summary structure/u.test(error.message)
+        ? "invalid_summary"
+        : "model_error";
+    return { result: deterministicSparkCompactionSummary(preparation), fallbackReason };
+  }
+}
+
+export interface SparkMicroCompactionResult {
+  messages: SparkSessionMessage[];
+  tokensBefore: number;
+  tokensAfter: number;
+  measuredReductionRatio: number;
+  compactedMessages: number;
+  abortedForLowYield: boolean;
+  abortReason?: "min_useful_reduction";
+}
+
+export function shouldSparkMicroCompact(
+  contextTokens: number,
+  contextWindow: number,
+  settings: SparkCompactionSettings = DEFAULT_SPARK_COMPACTION_SETTINGS,
+): boolean {
+  return (
+    settings.enabled &&
+    contextWindow > 0 &&
+    contextTokens / contextWindow >= settings.microThreshold
+  );
+}
+
+/** One stateless, model-free micro pass. Re-running applies the same algorithm to current input. */
+export function microCompactSparkMessages(
+  messages: readonly SparkSessionMessage[],
+  settings: SparkCompactionSettings = DEFAULT_SPARK_COMPACTION_SETTINGS,
+): SparkMicroCompactionResult {
+  const tokensBefore = meterSparkContextTokens({ messages: [...messages] }).tokens;
+  if (tokensBefore === 0) {
+    return {
+      messages: [...messages],
+      tokensBefore,
+      tokensAfter: 0,
+      measuredReductionRatio: 0,
+      compactedMessages: 0,
+      abortedForLowYield: true,
+      abortReason: "min_useful_reduction",
+    };
+  }
+  const targetTokens = Math.ceil(tokensBefore * settings.targetReduction);
+  const candidates = messages
+    .map((message, index) => microCandidate(message, index, messages.length))
+    .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== undefined)
+    .sort((left, right) => right.score - left.score || left.index - right.index);
+  const output = [...messages];
+  let removedTokens = 0;
+  let compactedMessages = 0;
+  for (const candidate of candidates) {
+    if (removedTokens >= targetTokens) break;
+    output[candidate.index] = candidate.compacted;
+    removedTokens += candidate.removedTokens;
+    compactedMessages += 1;
+  }
+  const tokensAfter = meterSparkContextTokens({ messages: output }).tokens;
+  const measuredReductionRatio = Math.max(0, (tokensBefore - tokensAfter) / tokensBefore);
+  const abortedForLowYield = measuredReductionRatio < settings.minUsefulReduction;
+  return {
+    messages: abortedForLowYield ? [...messages] : output,
+    tokensBefore,
+    tokensAfter: abortedForLowYield ? tokensBefore : tokensAfter,
+    measuredReductionRatio,
+    compactedMessages: abortedForLowYield ? 0 : compactedMessages,
+    abortedForLowYield,
+    ...(abortedForLowYield ? { abortReason: "min_useful_reduction" as const } : {}),
+  };
+}
 
 export interface SparkTranscriptMessageForCompaction {
   role: string;
@@ -187,8 +417,7 @@ export function estimateSparkTokens(message: SparkSessionMessage): number {
 export function estimateSparkContextTokens(
   messages: SparkSessionMessage[],
 ): SparkContextUsageEstimate {
-  const tokens = messages.reduce((sum, message) => sum + estimateSparkTokens(message), 0);
-  return { tokens, trailingTokens: tokens };
+  return meterSparkContextTokens({ messages });
 }
 
 export function findSparkCompactionCutPoint(
@@ -596,6 +825,88 @@ function messageSummaryWeight(message: SparkSessionMessage): number {
   if (message.role === "assistant" || message.role === "custom") return 3;
   if (message.role === "toolResult") return 1;
   return 2;
+}
+
+function microCandidate(
+  message: SparkSessionMessage,
+  index: number,
+  total: number,
+):
+  | { index: number; score: number; removedTokens: number; compacted: SparkSessionMessage }
+  | undefined {
+  if (message.role !== "toolResult" || !Array.isArray(message.content)) return undefined;
+  const toolName = typeof message.toolName === "string" ? message.toolName : "";
+  if (!toolName) return undefined;
+  const compacted = compactToolResultContent({
+    toolName,
+    args: isRecord(message.args) ? message.args : undefined,
+    content: message.content as Array<{ type: string; text?: string; [key: string]: unknown }>,
+    level: "ultra",
+  });
+  if (!compacted.details) return undefined;
+  const before = estimateSparkTokens(message);
+  const next: SparkSessionMessage = { ...message, content: compacted.content };
+  const after = estimateSparkTokens(next);
+  const removedTokens = before - after;
+  if (removedTokens <= 0) return undefined;
+  const failed =
+    message.isError === true || message.status === "failed" || message.status === "error";
+  const age = total <= 1 ? 1 : 1 - index / (total - 1);
+  const recoverable = typeof message.artifactRef === "string" ? 1 : 0;
+  const profileWeight =
+    compacted.details.profile === "log"
+      ? 1
+      : compacted.details.profile === "diagnostic"
+        ? 0.8
+        : 0.6;
+  const score =
+    removedTokens * 2 + age * 100 + recoverable * 80 + profileWeight * 40 - (failed ? 120 : 0);
+  return { index, score, removedTokens, compacted: next };
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function validChangedFile(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.path === "string" &&
+    typeof value.change === "string" &&
+    isStringArray(value.evidenceRefs)
+  );
+}
+
+function validCommand(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.command === "string" &&
+    (value.result === "passed" ||
+      value.result === "failed" ||
+      value.result === "blocked" ||
+      value.result === "unknown") &&
+    typeof value.detail === "string"
+  );
+}
+
+function validFailure(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.summary === "string" &&
+    typeof value.cause === "string" &&
+    typeof value.nextStep === "string" &&
+    isStringArray(value.evidenceRefs)
+  );
+}
+
+function renderRefs(refs: readonly string[]): string {
+  return refs.length ? ` [evidence: ${refs.join(", ")}]` : "";
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 function validTokenSource(value: unknown): SparkCompactionTokenSource {

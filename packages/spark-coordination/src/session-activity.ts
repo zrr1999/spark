@@ -575,6 +575,10 @@ function reportFromDaemonPayload(
     if (viewType === "session.message") {
       const message = recordValue(view, "message");
       const parsedMessage = sparkMessageViewSchema.safeParse(message);
+      const invocationId = stringValue(payload, "invocationId");
+      const correlatedMessage = parsedMessage.success
+        ? correlateUserMessage(parsedMessage.data, invocationId)
+        : undefined;
       const messageId = stringValue(message, "id");
       const role = stringValue(message, "role");
       const status = stringValue(message, "status");
@@ -587,7 +591,7 @@ function reportFromDaemonPayload(
         role,
         status,
         createdAt: row.createdAt,
-        ...(parsedMessage.success ? { message: parsedMessage.data } : {}),
+        ...(correlatedMessage ? { message: correlatedMessage } : {}),
       };
     }
     if (viewType === "run.update") {
@@ -701,6 +705,17 @@ function reportFromDaemonPayload(
     };
   }
   return null;
+}
+
+function correlateUserMessage(
+  message: SparkMessageView,
+  invocationId: string | null,
+): SparkMessageView {
+  if (message.role !== "user" || !invocationId) return message;
+  return {
+    ...message,
+    metadata: { ...message.metadata, invocationId },
+  };
 }
 
 function daemonMessageId(payload: Record<string, unknown> | null): string | null {

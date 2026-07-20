@@ -47,8 +47,7 @@ describe("daemon session registry", () => {
       bind: (input) => track(() => backing.bind(input)),
       unbind: (sessionId, externalKey) => track(() => backing.unbind(sessionId, externalKey)),
       archive: (sessionId) => track(() => backing.archive(sessionId)),
-      setTitleIfMissing: (sessionId, title) =>
-        track(() => backing.setTitleIfMissing(sessionId, title)),
+      setRoleIfMissing: (sessionId, role) => track(() => backing.setRoleIfMissing(sessionId, role)),
       setModel: (sessionId, model) => track(() => backing.setModel(sessionId, model)),
       setThinkingLevel: (sessionId, thinkingLevel) =>
         track(() => backing.setThinkingLevel(sessionId, thinkingLevel)),
@@ -75,7 +74,7 @@ describe("daemon session registry", () => {
         externalKey: "infoflow:user:u_bound",
       }),
       registry.archive("archive_target"),
-      registry.setTitleIfMissing?.("title_target", "Generated title"),
+      registry.setRoleIfMissing?.("title_target", "Generated role"),
     ]);
 
     expect(maximumActiveMutations).toBe(1);
@@ -95,9 +94,10 @@ describe("daemon session registry", () => {
     expect(persisted.find((session) => session.sessionId === "archive_target")?.status).toBe(
       "archived",
     );
-    expect(persisted.find((session) => session.sessionId === "title_target")?.title).toBe(
-      "Generated title",
-    );
+    expect(persisted.find((session) => session.sessionId === "title_target")).toMatchObject({
+      role: "Generated role",
+      title: "Generated role",
+    });
     expect(channelSession.bindings).toEqual([
       expect.objectContaining({ externalKey: "feishu:chat:oc_channel" }),
     ]);

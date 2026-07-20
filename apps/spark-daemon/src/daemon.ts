@@ -41,10 +41,14 @@ import {
   type DaemonChannelIngressRuntime,
 } from "./channels/ingress.ts";
 import {
-  channelInboundInvocationIdempotencyKey,
+  findChannelInboundInvocation,
   submitChannelInboundInvocation,
 } from "./channels/admission.ts";
-import { projectChannelAsk, settleChannelAskInteraction } from "./channels/human-interactions.ts";
+import {
+  projectChannelAsk,
+  settleChannelAskInteraction,
+  settleChannelAskTextReply,
+} from "./channels/human-interactions.ts";
 import { createDaemonChannelTransportFactory } from "./channels/transport-factory.ts";
 import {
   completeInvocationWithChannelDelivery,
@@ -252,7 +256,10 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
   const humanWaits = options.humanWaits ?? new SparkDaemonHumanWaitRegistry(options.db);
   const channelDeliveryStore = new SparkChannelDeliveryStore(options.db);
   const channelDeliveryOutbox = createDaemonChannelDeliveryOutbox(channelDeliveryStore);
-  const channelIngress: DaemonChannelIngressRuntime | null = prepareChannelIngress(options);
+  const channelIngress: DaemonChannelIngressRuntime | null = prepareChannelIngress(
+    options,
+    channelDeliveryOutbox,
+  );
   let channelShutdown: Promise<void> | undefined;
   const shutdownChannelIngress = (
     reason: "restart-drain" | "runtime-abort" | "daemon-finally",
@@ -306,6 +313,21 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
     }
   };
   channelIngress?.setInteractionHandler?.(onChannelInteraction);
+  const onChannelTextAsk: NonNullable<ChannelIngressHooks["onTextAskReply"]> = async (input) => {
+    try {
+      return await settleChannelAskTextReply(humanWaits, input, {
+        getRuntimeId(wait) {
+          const workspace = wait.workspaceBindingId
+            ? getWorkspaceById(options.db, wait.workspaceBindingId)
+            : null;
+          return workspace?.serverUrl ? getRuntimeIdForServer(workspace.serverUrl) : undefined;
+        },
+      });
+    } finally {
+      flushHumanRequestOutbox();
+    }
+  };
+  channelIngress?.setTextAskHandler?.(onChannelTextAsk);
   const registerHumanRequestOutboxTarget = (flush: () => void) => {
     humanRequestOutboxTargets.add(flush);
     return () => humanRequestOutboxTargets.delete(flush);
@@ -367,11 +389,16 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
               ...(options.modelControl ? { modelControl: options.modelControl } : {}),
               ...(options.sessionRegistry ? { sessionRegistry: options.sessionRegistry } : {}),
               channelIngress: {
-                openReplyStream: async (workspaceId, adapterId, target) =>
-                  await channelIngress?.openReplyStream(workspaceId, adapterId, target),
+                openReplyStream: async (workspaceId, adapterId, target, streamOptions) =>
+                  await channelIngress?.openReplyStream(
+                    workspaceId,
+                    adapterId,
+                    target,
+                    streamOptions,
+                  ),
                 sendReply: async (workspaceId, adapterId, input) => {
                   if (!channelIngress) throw new Error("channel ingress is unavailable");
-                  await channelIngress.sendReply(workspaceId, adapterId, input);
+                  return await channelIngress.sendReply(workspaceId, adapterId, input);
                 },
               },
               channelReplyDelivery: channelReplyDeliveryStore,
@@ -711,6 +738,7 @@ async function runNotificationReconcileLoop(
 
 function prepareChannelIngress(
   options: StartSparkDaemonOptions,
+  channelDeliveryOutbox: DaemonChannelDeliveryOutbox,
 ): DaemonChannelIngressRuntime | null {
   if (options.once || options.runScheduler === false) return null;
   const sparkHome =
@@ -723,9 +751,22 @@ function prepareChannelIngress(
       createWorkspaceTransport: createDaemonChannelTransportFactory(options.db),
       ...(options.sessionRegistry ? { sessionRegistry: options.sessionRegistry } : {}),
       hooks: {
+        onRejectedReply: async (rejected) => {
+          await channelDeliveryOutbox.enqueueReply({
+            kind: "failure",
+            idempotencyKey: rejected.deliveryIdentity,
+            invocationId: rejected.deliveryIdentity,
+            sessionId: rejected.sessionId,
+            workspaceId: rejected.workspaceId,
+            adapterId: rejected.adapterId,
+            adapterAccountIdentity: rejected.adapterAccountIdentity,
+            externalKey: rejected.externalKey,
+            target: rejected.target,
+            text: rejected.text,
+          });
+        },
         onAssignment: async (assignment) => {
-          const idempotencyKey = channelInboundInvocationIdempotencyKey(assignment);
-          if (idempotencyKey && invocationStore.findByIdempotencyKey(idempotencyKey)) {
+          if (findChannelInboundInvocation(invocationStore, assignment)) {
             return "duplicate";
           }
           const model = options.modelControl
@@ -762,7 +803,10 @@ function prepareChannelIngress(
             assignment: assignment.assignment,
             workspaceId,
             cwd,
-            channelReply: assignment.channelReply,
+            channelReply: {
+              ...assignment.channelReply,
+              adapterAccountIdentity: assignment.adapterAccountIdentity,
+            },
             ...(assignment.channelContext ? { channelContext: assignment.channelContext } : {}),
           };
           submitChannelInboundInvocation(invocationStore, assignment, task);

@@ -108,6 +108,40 @@ describe("QqbotAdapter", () => {
     });
   });
 
+  it("keeps image-only C2C messages visible and passes materialized bytes", () => {
+    const adapter = new QqbotAdapter({
+      id: "qqbot",
+      config: baseConfig,
+      transport: new FakeChannelTransport(),
+    });
+    const data = Buffer.from("image").toString("base64");
+    const message = adapter.parseInbound({
+      event_type: "C2C_MESSAGE_CREATE",
+      d: {
+        id: "image-1",
+        content: "",
+        author: { user_openid: "u1" },
+        attachments: [
+          {
+            content_type: "image/png",
+            url: "https://temporary.qq/image",
+            filename: "photo.png",
+            size: 5,
+          },
+        ],
+        spark_images: [{ data, mediaType: "image/png", name: "photo.png" }],
+      },
+    });
+
+    expect(message).toMatchObject({
+      text: "[图片]",
+      contentType: "image",
+      attachments: [{ kind: "image", name: "photo.png", mediaType: "image/png", size: 5 }],
+      images: [{ data, mediaType: "image/png", name: "photo.png" }],
+    });
+    expect(JSON.stringify(message?.attachments)).not.toContain("temporary.qq");
+  });
+
   it("parses group AT inbound into qqbot:group keys", () => {
     const adapter = new QqbotAdapter({
       id: "qqbot",

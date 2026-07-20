@@ -1918,6 +1918,9 @@ void test("SparkAgentLoop records raw trace artifact for large lossy compacted t
       text,
       /artifact\(\{ action: "read", artifactRef: "artifact:[^"]+", maxChars: 20000 \}\)/,
     );
+    assert.equal((toolResult as { toolCallId?: string }).toolCallId, toolCallEnvelope.id);
+    assert.equal((toolResult as { toolName?: string }).toolName, toolCallEnvelope.name);
+    assert.equal((toolResult as { isError?: boolean }).isError, false);
     const recovery = (toolResult as { details?: { toolResultRawRecovery?: any } }).details
       ?.toolResultRawRecovery;
     assert.match(recovery.artifactRef, /^artifact:/);
@@ -1985,6 +1988,67 @@ void test("SparkAgentLoop records raw trace artifact for large lossy compacted t
       .map((part: { text?: string }) => part.text ?? "")
       .join("\n");
     assert.match(explicitRawListText, new RegExp(recovery.artifactRef));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("SparkAgentLoop offloads failed long output while preserving diagnostics and exit code", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-agent-loop-error-recovery-"));
+  try {
+    const host = new SparkHostRuntime({ cwd: dir });
+    registerPiArtifactTool({
+      registerTool: (config) =>
+        host.registerTool(config as Parameters<typeof host.registerTool>[0]),
+    });
+    const diagnostic = `fatal: command failed${"\n".repeat(4_500)}exit code: 7`;
+    host.registerTool({
+      name: "cue_exec",
+      description: "failed fake cue output",
+      parameters: { type: "object" },
+      async execute() {
+        return {
+          content: [{ type: "text", text: diagnostic }],
+          isError: true,
+          details: { exitCode: 7 },
+        };
+      },
+    });
+    const toolCall: ToolCall = {
+      type: "toolCall",
+      id: "tc-error-recovery",
+      name: "cue_exec",
+      arguments: {},
+    };
+    const loop = new SparkAgentLoop({
+      host,
+      streamFunction: makeFakeStream({
+        rounds: [
+          [{ type: "done", reason: "toolUse", message: buildAssistant([toolCall], "toolUse") }],
+          [
+            {
+              type: "done",
+              reason: "stop",
+              message: buildAssistant([{ type: "text", text: "failure recorded" }]),
+            },
+          ],
+        ],
+      }),
+      getModel: () => TEST_MODEL,
+    });
+    await loop.submit("produce failed output");
+    const result = loop.getMessages().find((message) => message.role === "toolResult") as any;
+    const text = result?.content?.[0]?.text ?? "";
+    assert.equal(result.toolCallId, toolCall.id);
+    assert.equal(result.toolName, toolCall.name);
+    assert.equal(result.isError, true);
+    assert.match(text, /fatal: command failed/u);
+    assert.match(text, /exit code: 7/u);
+    assert.match(text, /artifact\(\{ action: "read"/u);
+    assert.equal(result.details.toolResultRawRecovery.reason, "error_compaction");
+    const store = defaultArtifactStore(dir);
+    const artifact = await store.get(result.details.toolResultRawRecovery.artifactRef);
+    assert.equal(await store.getBody(artifact.ref), diagnostic);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

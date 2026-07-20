@@ -56,7 +56,7 @@ describe("session list and inbox progressive disclosure", () => {
       { request: request as never },
     );
     const firstText = first.content[0]!.text;
-    expect(firstText).toContain(`title=${JSON.stringify(longTitle)}`);
+    expect(firstText).toContain(`role=${JSON.stringify(longTitle)}`);
     expect(firstText).toContain("next offset=1; remaining=1; use session get for details.");
     expect(first.details).toMatchObject({ offset: 0, limit: 1, total: 2 });
 
@@ -174,7 +174,241 @@ describe("persistent session channel routing", () => {
         },
         { request: request as never, mailStore: () => mailStore },
       ),
-    ).rejects.toThrow("session kind must be request or question");
-    expect(await mailStore.list(origin.sessionId, { includeAcked: true })).toEqual([]);
+    ).resolves.toMatchObject({ details: { executionTriggered: false } });
+    expect(await mailStore.list(origin.sessionId, { includeAcked: true })).toHaveLength(1);
+  });
+});
+
+describe("blocking session requests", () => {
+  const origin = session("sess_origin");
+  const worker = session("sess_worker");
+  const signal = new AbortController().signal;
+
+  function status(invocationId: string, value: "queued" | "running" | "succeeded" | "failed") {
+    return {
+      invocationId,
+      sessionId: worker.sessionId,
+      status: value,
+      createdAt: "2026-07-17T00:00:00.000Z",
+      updatedAt: "2026-07-17T00:00:01.000Z",
+      ...(value === "succeeded" || value === "failed"
+        ? { finishedAt: "2026-07-17T00:00:01.000Z" }
+        : {}),
+      eventCursor: 1,
+    };
+  }
+
+  function baseRequest(handler: (method: string, params: Record<string, unknown>) => unknown) {
+    return vi.fn(async (method: string, params: unknown) => {
+      if (method === "session.get") {
+        return (params as { sessionId: string }).sessionId === origin.sessionId ? origin : worker;
+      }
+      return await handler(method, params as Record<string, unknown>);
+    });
+  }
+
+  async function send(
+    params: Record<string, unknown>,
+    request: ReturnType<typeof baseRequest>,
+    mailStore: SparkSessionMailStore,
+    extras: { now?: () => number; sleep?: (ms: number, signal: AbortSignal) => Promise<void> } = {},
+    toolCallId = "blocking-request",
+  ) {
+    return await executeSparkSessionAction(
+      {
+        action: "send",
+        toolCallId,
+        params: { toSessionId: worker.sessionId, message: "do work", ...params },
+        signal,
+        ctx: { sessionId: origin.sessionId },
+      },
+      { request: request as never, mailStore: () => mailStore, ...extras },
+    );
+  }
+
+  it("defaults to notification and rejects notification completion waits", async () => {
+    const mailStore = await createMailStore();
+    const request = baseRequest((method) => {
+      throw new Error(`unexpected RPC method: ${method}`);
+    });
+
+    const delivered = await send({}, request, mailStore);
+    expect(delivered.details).toMatchObject({
+      executionTriggered: false,
+      blocking: false,
+      wait: "accepted",
+      message: { kind: "notification" },
+    });
+    expect(request).not.toHaveBeenCalledWith("turn.submit", expect.anything(), expect.anything());
+    await expect(
+      send({ kind: "notification", wait: "completed" }, request, mailStore, {}, "invalid-wait"),
+    ).rejects.toThrow("session notification cannot wait for completion");
+  });
+
+  it("keeps request wait=accepted asynchronous", async () => {
+    const mailStore = await createMailStore();
+    const request = baseRequest((method) => {
+      if (method === "turn.submit") {
+        return {
+          invocationId: "inv_accepted",
+          status: "queued",
+          acceptedAt: "2026-07-17T00:00:00.000Z",
+        };
+      }
+      throw new Error(`unexpected RPC method: ${method}`);
+    });
+
+    const result = await send({ kind: "request" }, request, mailStore);
+    expect(result.details).toMatchObject({
+      blocking: false,
+      wait: "accepted",
+      submitted: { invocationId: "inv_accepted" },
+    });
+  });
+
+  it("returns a result completed before waiter registration or after daemon restart", async () => {
+    const mailStore = await createMailStore();
+    const request = baseRequest((method) => {
+      if (method === "turn.submit") {
+        return {
+          invocationId: "inv_durable",
+          status: "queued",
+          acceptedAt: "2026-07-17T00:00:00.000Z",
+        };
+      }
+      if (method === "turn.status") return status("inv_durable", "succeeded");
+      if (method === "turn.result") {
+        return {
+          invocationId: "inv_durable",
+          status: "succeeded",
+          assistantText: "durable response",
+          finishedAt: "2026-07-17T00:00:01.000Z",
+        };
+      }
+      throw new Error(`unexpected RPC method: ${method}`);
+    });
+
+    const result = await send({ kind: "request", wait: "completed" }, request, mailStore);
+    expect(result.content[0]?.text).toBe("durable response");
+    expect(result.details).toMatchObject({
+      blocking: true,
+      waitTimedOut: false,
+      answer: "durable response",
+      invocationId: "inv_durable",
+    });
+  });
+
+  it("times out without cancelling the persistent invocation", async () => {
+    const mailStore = await createMailStore();
+    let now = 0;
+    const request = baseRequest((method) => {
+      if (method === "turn.submit") {
+        return {
+          invocationId: "inv_timeout",
+          status: "queued",
+          acceptedAt: "2026-07-17T00:00:00.000Z",
+        };
+      }
+      if (method === "turn.status") return status("inv_timeout", "running");
+      throw new Error(`unexpected RPC method: ${method}`);
+    });
+
+    const result = await send(
+      { kind: "request", wait: "completed", timeoutMs: 1_000 },
+      request,
+      mailStore,
+      { now: () => now, sleep: async (ms) => void (now += ms) },
+    );
+    expect(result.details).toMatchObject({
+      invocationId: "inv_timeout",
+      waitTimedOut: true,
+      status: { status: "running" },
+    });
+    expect(request).not.toHaveBeenCalledWith("turn.cancel", expect.anything(), expect.anything());
+  });
+
+  it("returns terminal failure details", async () => {
+    const mailStore = await createMailStore();
+    const request = baseRequest((method) => {
+      if (method === "turn.submit") {
+        return {
+          invocationId: "inv_failed",
+          status: "queued",
+          acceptedAt: "2026-07-17T00:00:00.000Z",
+        };
+      }
+      if (method === "turn.status") return status("inv_failed", "failed");
+      if (method === "turn.result") {
+        return {
+          invocationId: "inv_failed",
+          status: "failed",
+          error: { code: "MODEL_ERROR", message: "target failed", retryable: false },
+          finishedAt: "2026-07-17T00:00:01.000Z",
+        };
+      }
+      throw new Error(`unexpected RPC method: ${method}`);
+    });
+
+    const result = await send({ kind: "request", wait: "completed" }, request, mailStore);
+    expect(result.content[0]?.text).toContain("target failed");
+    expect(result.details).toMatchObject({
+      invocationId: "inv_failed",
+      result: { status: "failed", error: { message: "target failed" } },
+    });
+  });
+
+  it("keeps concurrent requests correlated by invocation id", async () => {
+    const mailStore = await createMailStore();
+    const invocationByPrompt = new Map([
+      ["first", "inv_first"],
+      ["second", "inv_second"],
+    ]);
+    const request = baseRequest((method, params) => {
+      if (method === "turn.submit") {
+        const invocationId = invocationByPrompt.get(String(params.prompt));
+        if (!invocationId) throw new Error("unknown prompt");
+        return {
+          invocationId,
+          status: "queued",
+          acceptedAt: "2026-07-17T00:00:00.000Z",
+        };
+      }
+      const invocationId = String(params.invocationId);
+      if (method === "turn.status") return status(invocationId, "succeeded");
+      if (method === "turn.result") {
+        return {
+          invocationId,
+          status: "succeeded",
+          assistantText: `${invocationId} response`,
+          finishedAt: "2026-07-17T00:00:01.000Z",
+        };
+      }
+      throw new Error(`unexpected RPC method: ${method}`);
+    });
+
+    const [first, second] = await Promise.all([
+      send(
+        { kind: "request", wait: "completed", message: "first" },
+        request,
+        mailStore,
+        {},
+        "concurrent-first",
+      ),
+      send(
+        { kind: "request", wait: "completed", message: "second" },
+        request,
+        mailStore,
+        {},
+        "concurrent-second",
+      ),
+    ]);
+    expect(first.details).toMatchObject({
+      invocationId: "inv_first",
+      answer: "inv_first response",
+    });
+    expect(second.details).toMatchObject({
+      invocationId: "inv_second",
+      answer: "inv_second response",
+    });
   });
 });

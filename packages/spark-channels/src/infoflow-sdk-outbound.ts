@@ -1,17 +1,31 @@
 import {
-  Client,
+  ConfigManager,
+  HttpClient,
   InfoFlowError,
   LogLevel,
+  MessageApi,
+  StreamingCardApi,
+  TokenManager,
   type StreamingCardSession,
 } from "@core-workspace/infoflow-sdk-nodejs";
+import { chunkInfoflowText, INFOFLOW_MAX_CARD_TEXT_LENGTH } from "./infoflow-text.ts";
 import type { InfoflowAdapterConfig } from "./types.ts";
-import type { ChannelReplyRecovery, ChannelReplyStream } from "./reply.ts";
+import {
+  channelDeliveryNotSent,
+  channelDeliveryOutcomeUnknown,
+  type ChannelDeliveryReceipt,
+  type ChannelDeliveryResult,
+  type ChannelReplyRecovery,
+  type ChannelReplyStream,
+} from "./reply.ts";
 
 const DEFAULT_INFOFLOW_API_HOST = "https://api.im.baidu.com";
 const INFOFLOW_STREAM_RECOVERY_KIND = "infoflow.streaming-card.v1";
-const INFOFLOW_MAX_CARD_TEXT_LENGTH = 6_000;
 const INFOFLOW_STREAM_FINALIZE_TIMEOUT_MS = 30_000;
 const INFOFLOW_STREAM_FINALIZE_POLL_MS = 10;
+const INFOFLOW_STREAM_FINALIZE_ATTEMPTS = 5;
+const INFOFLOW_STREAM_OVERFLOW_NOTICE =
+  "\n\n> 回答超出如流卡片上限，完整内容请在后续消息或 Spark Cockpit 查看。";
 
 export type InfoflowOutboundContent =
   | { type: "text"; text: string }
@@ -32,6 +46,8 @@ export interface InfoflowQuoteReply {
 export interface InfoflowOutboundSendInput {
   recipient: string;
   content: InfoflowOutboundContent;
+  /** Stable local identity; Infoflow exposes no server idempotency key for this API. */
+  deliveryId?: string;
   /** Group-only human user ids to mention. */
   mentionUserIds?: string[];
   mentionAll?: boolean;
@@ -97,6 +113,8 @@ export interface InfoflowSdkClientLike {
 
 export interface InfoflowSdkOutbound {
   send(input: InfoflowOutboundSendInput): Promise<void>;
+  /** Receipt-aware seam used by the durable registry. */
+  sendWithReceipt?(input: InfoflowOutboundSendInput): Promise<ChannelDeliveryResult>;
   openReplyStream(
     recipient: string,
     options?: { answerFormat?: "text" | "markdown" },
@@ -110,6 +128,103 @@ export interface InfoflowSdkOutbound {
 
 export interface InfoflowSdkOutboundOptions {
   createClient?: (config: InfoflowAdapterConfig) => InfoflowSdkClientLike;
+  /** Single-attempt HTTP mutation seam shared by ordinary messages and streaming cards. */
+  fetch?: typeof globalThis.fetch;
+  /** Test seam; production delegates token caching to the SDK TokenManager. */
+  accessTokenProvider?: () => Promise<string>;
+}
+
+interface InfoflowHttpRequestOptions {
+  path: string;
+  method?: "GET" | "POST" | "PUT" | "DELETE";
+  params?: Record<string, InfoflowQueryValue | readonly InfoflowQueryValue[] | null | undefined>;
+  data?: unknown;
+  headers?: Record<string, string>;
+  needToken?: boolean;
+  timeout?: number;
+  logId?: string;
+}
+
+type InfoflowQueryValue = string | number | boolean | bigint;
+
+interface InfoflowHttpResponse<T = unknown> {
+  code?: string;
+  data?: T & { errcode?: number; errmsg?: string };
+  errcode?: number;
+  errmsg?: string;
+  [key: string]: unknown;
+}
+
+/** SDK schema adapter whose public request method never retries a message mutation. */
+export class SingleAttemptInfoflowHttpClient extends HttpClient {
+  readonly #config: ConfigManager;
+  readonly #fetch: typeof globalThis.fetch;
+  readonly #accessTokenProvider: () => Promise<string>;
+
+  constructor(
+    config: ConfigManager,
+    tokenManager: TokenManager,
+    options: Pick<InfoflowSdkOutboundOptions, "fetch" | "accessTokenProvider"> = {},
+  ) {
+    super(config, tokenManager);
+    this.#config = config;
+    this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.#accessTokenProvider =
+      options.accessTokenProvider ?? (() => tokenManager.getAccessToken());
+  }
+
+  override async request<T = unknown>(
+    options: InfoflowHttpRequestOptions,
+  ): Promise<InfoflowHttpResponse<T>> {
+    const {
+      path,
+      method = "GET",
+      params,
+      data,
+      headers: suppliedHeaders = {},
+      needToken = true,
+      timeout = this.#config.getTimeout(),
+      logId = generateInfoflowLogId(),
+    } = options;
+    const url = new URL(`${this.#config.getBaseUrl()}${path}`);
+    appendInfoflowQuery(url, params);
+    const headers = new Headers(suppliedHeaders);
+    if (needToken) {
+      let accessToken: string;
+      try {
+        accessToken = await this.#accessTokenProvider();
+      } catch (error) {
+        throw channelDeliveryNotSent(error);
+      }
+      headers.set("Authorization", `Bearer-${accessToken}`);
+    }
+    if (!headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json; charset=utf-8");
+    }
+    headers.set("LOGID", logId);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    try {
+      // Every failure from this point is outcome-unknown: the write may have reached Infoflow.
+      const response = await this.#fetch(url, {
+        method,
+        headers,
+        ...(data === undefined ? {} : { body: JSON.stringify(data) }),
+        signal: controller.signal,
+      });
+      const text = await response.text();
+      const result = text ? parseInfoflowMessageResponse<T>(text) : {};
+      if (!response.ok) {
+        throw new Error(
+          `Infoflow message request failed with HTTP ${response.status}: ${response.statusText}`,
+        );
+      }
+      return result;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 }
 
 /** Outer card status (star row). Inner details row uses a different label. */
@@ -118,20 +233,43 @@ export const INFOFLOW_STREAM_DONE_LABEL = "已完成";
 export const INFOFLOW_STREAM_DETAILS_LABEL = "处理过程";
 
 /**
- * SDK-owned Infoflow outbound. `Client` owns TokenManager/cache/retry and emits
- * `InfoFlowError`; Spark deliberately does not duplicate those HTTP concerns.
+ * SDK-schema Infoflow outbound. Ordinary message mutations use the SDK's
+ * `MessageApi` with a single-attempt HTTP client so Spark remains the only
+ * retry-policy owner; streaming cards retain the official
+ * `StreamingCardApi` / `StreamingCardSession` lifecycle on the same transport.
  */
 export function createInfoflowSdkOutbound(
   config: InfoflowAdapterConfig,
   options: InfoflowSdkOutboundOptions = {},
 ): InfoflowSdkOutbound {
   let client: InfoflowSdkClientLike | undefined;
-  const getClient = () => (client ??= (options.createClient ?? createOfficialClient)(config));
+  const getClient = () =>
+    (client ??= options.createClient
+      ? options.createClient(config)
+      : createSingleAttemptInfoflowClient(config, options));
+  const getMessageApi = () => getClient().im.message;
+  const sendWithReceipt = async (
+    input: InfoflowOutboundSendInput,
+  ): Promise<ChannelDeliveryResult> => {
+    let activeMessageApi: InfoflowSdkMessageApi;
+    try {
+      activeMessageApi = getMessageApi();
+    } catch (error) {
+      // Credential validation and client construction are pre-dispatch.
+      throw channelDeliveryNotSent(error);
+    }
+    // One durable delivery owns at most one non-idempotent Infoflow mutation.
+    // The installed SDK does not document an ordinary-message size limit or a
+    // caller-provided idempotency key, so splitting here would make a partial
+    // success impossible to retry safely.
+    return await sendWithSdk(activeMessageApi, input);
+  };
 
   return {
     async send(input) {
-      await sendWithSdk(getClient(), input);
+      await sendWithReceipt(input);
     },
+    sendWithReceipt,
     async openReplyStream(recipient, streamOptions = {}) {
       const to = normalizeRecipient(recipient).platformRecipient;
       const answerFormat = streamOptions.answerFormat ?? "markdown";
@@ -139,8 +277,29 @@ export function createInfoflowSdkOutbound(
         to,
         answerFormat,
       });
-      if (!(await session.start())) return undefined;
-      return wrapInfoflowReplyStream(session, infoflowStreamRecovery(session, to, answerFormat));
+      let started: boolean;
+      try {
+        started = await session.start();
+      } catch (error) {
+        throw channelDeliveryOutcomeUnknown(error);
+      }
+      if (!started) {
+        // The official SDK catches every create failure (including a response
+        // timeout after the request may have arrived) and collapses it to
+        // `false`. A normal-message fallback could therefore create both a card
+        // and a message. Fail closed instead.
+        throw channelDeliveryOutcomeUnknown(
+          new Error("Infoflow streaming card create outcome is unknown"),
+        );
+      }
+      return wrapInfoflowReplyStream(session, infoflowStreamRecovery(session, to, answerFormat), {
+        sendOverflow: async (text) => {
+          await sendWithSdk(getMessageApi(), {
+            recipient,
+            content: answerFormat === "text" ? { type: "text", text } : { type: "markdown", text },
+          });
+        },
+      });
     },
     async recoverReply(input) {
       const recovery = parseInfoflowStreamRecovery(input.recovery);
@@ -148,6 +307,7 @@ export function createInfoflowSdkOutbound(
       if (recovery.to !== to) {
         throw new Error("Infoflow stream recovery recipient does not match reply target");
       }
+      const { primary, overflow } = partitionInfoflowStreamText(input.text);
       const answerField = recovery.answerFormat === "text" ? "ai_text" : "ai_markdown";
       const result = await getClient().im.streamingCard.update({
         to,
@@ -155,7 +315,9 @@ export function createInfoflowSdkOutbound(
         contents: {
           [answerField]: {
             type: "text",
-            content: input.text.slice(-INFOFLOW_MAX_CARD_TEXT_LENGTH),
+            // Keep the readable prefix. The SDK's own truncate keeps the tail,
+            // which hides the start of long replies; recovery must not repeat that.
+            content: overflow ? `${primary}${INFOFLOW_STREAM_OVERFLOW_NOTICE}` : primary,
           },
           status_info: { type: "text", content: INFOFLOW_STREAM_DETAILS_LABEL },
           think_status_text: { type: "text", content: INFOFLOW_STREAM_DONE_LABEL },
@@ -176,8 +338,18 @@ export function createInfoflowSdkOutbound(
       if (!result.ok) {
         throw new Error(`Infoflow stream recovery failed: ${result.error ?? "update failed"}`);
       }
+      // A recovery handle proves only that the card can be updated. It cannot
+      // prove whether the prior completion already sent an ordinary overflow
+      // message before a crash or lost local acknowledgement, so replaying the
+      // overflow here could duplicate it. The full answer remains in Spark's
+      // durable session and the card points users to Cockpit.
     },
   };
+}
+
+export interface WrapInfoflowReplyStreamOptions {
+  /** Deliver all answer text past the card budget in one ordinary mutation. */
+  sendOverflow?: (text: string) => Promise<void>;
 }
 
 /**
@@ -185,38 +357,140 @@ export function createInfoflowSdkOutbound(
  * Keep the inner process installed so one outer disclosure click reveals it, and
  * keep the completed outer/inner labels distinct.
  *
- * The card is the single user-visible reply: progress, tools, reasoning, and the
- * final answer all update in place. The daemon skips a second sendReply when
- * this stream completes successfully.
+ * The card is the single user-visible reply for the first budgeted chunk:
+ * progress, tools, reasoning, and the final answer update in place. Overflow
+ * past {@link INFOFLOW_MAX_CARD_TEXT_LENGTH} is sent as at most one follow-up
+ * message. The daemon skips a second sendReply when this stream completes
+ * successfully.
  */
 export function wrapInfoflowReplyStream(
   session: InfoflowStreamingSession,
   deliveryRecovery?: ChannelReplyRecovery,
+  options: WrapInfoflowReplyStreamOptions = {},
 ): InfoflowReplyStream {
   patchStreamingCardPresentation(session);
+  let answerText = "";
+  const mutableAnswer = session as InfoflowStreamingSession & { answerText?: string };
+
+  const setAnswerText = (text: string) => {
+    answerText = text;
+    mutableAnswer.answerText = text;
+  };
+
   return {
     ...(deliveryRecovery ? { deliveryRecovery } : {}),
     answerMode: "inline",
-    appendProgress: (delta) => session.appendText(delta),
-    appendText: (delta) => session.appendText(delta),
+    // Execution commentary belongs in thinking_aio — mixing it into ai_markdown
+    // burns the 6000-char card budget and makes mid-stream truncations worse.
+    appendProgress: (delta) => session.appendReasoning(delta),
+    appendText: (delta) => {
+      if (!delta) return;
+      answerText += delta;
+      session.appendText(delta);
+    },
+    replaceText: (text) => {
+      answerText = text;
+      mutableAnswer.answerText = text;
+      const schedule = (session as InfoflowStreamSessionState & { scheduleFlush?: () => void })
+        .scheduleFlush;
+      if (typeof schedule === "function") schedule.call(session);
+    },
     appendReasoning: (delta) => session.appendReasoning(delta),
     notifyToolStart: (input) => session.notifyToolStart(input),
     notifyToolResult: (text) => session.notifyToolResult(text),
     complete: async (label) => {
-      await waitForInfoflowStreamIdle(session);
-      await session.complete(label?.trim() || INFOFLOW_STREAM_DONE_LABEL);
-      assertInfoflowStreamFinalUpdate(session, "completion");
+      const doneLabel = label?.trim() || INFOFLOW_STREAM_DONE_LABEL;
+      const { primary, overflow } = partitionInfoflowStreamText(answerText);
+      // Force the card to keep the readable prefix. The SDK truncate keeps the
+      // tail, which would hide the start of long Chinese/Markdown replies.
+      setAnswerText(overflow ? `${primary}${INFOFLOW_STREAM_OVERFLOW_NOTICE}` : primary);
+      await finalizeInfoflowStream(session, { doneLabel });
+      if (overflow) {
+        if (!options.sendOverflow) {
+          throw channelDeliveryOutcomeUnknown(
+            new Error("Infoflow stream overflow sender is unavailable"),
+          );
+        }
+        try {
+          await options.sendOverflow(overflow);
+        } catch (error) {
+          // The card already exists, so even a pre-dispatch overflow failure is
+          // not a `not-sent` failure for the overall inline delivery. Never let
+          // the daemon fall back to a second full-answer message.
+          throw channelDeliveryOutcomeUnknown(error);
+        }
+      }
     },
     fail: async (message) => {
-      await waitForInfoflowStreamIdle(session);
-      await session.fail(message);
-      assertInfoflowStreamFinalUpdate(session, "failure");
+      await finalizeInfoflowStream(session, { error: message });
     },
   };
 }
 
+type InfoflowStreamSessionState = InfoflowStreamingSession & {
+  isFlushing?: unknown;
+  flushQueued?: unknown;
+  flushTimer?: ReturnType<typeof setTimeout> | null;
+  cancelFlushTimer?: () => void;
+  flushNow?: (opts: { final?: boolean; doneLabel?: string; error?: string }) => Promise<void>;
+  done?: boolean;
+  failed?: boolean;
+  updateFailCount?: number;
+  answerText?: string;
+};
+
+/**
+ * The official SDK can drop a final flush when `complete()` races an in-flight
+ * throttled update: it sets `done=true`, queues via `flushQueued`, then the
+ * in-flight flush refuses to re-run final because `done` is already set. Cancel
+ * the throttle timer, wait for idle, and retry `flushNow({ final: true })`.
+ */
+async function finalizeInfoflowStream(
+  session: InfoflowStreamingSession,
+  opts: { doneLabel?: string; error?: string },
+): Promise<void> {
+  const state = session as InfoflowStreamSessionState;
+  cancelInfoflowFlushTimer(state);
+  await waitForInfoflowStreamIdle(session);
+
+  if (typeof state.flushNow === "function") {
+    state.done = true;
+    state.failed = false;
+    state.updateFailCount = 0;
+    const finalOpts = opts.error
+      ? { final: true as const, error: opts.error }
+      : { final: true as const, doneLabel: opts.doneLabel ?? INFOFLOW_STREAM_DONE_LABEL };
+    for (let attempt = 0; attempt < INFOFLOW_STREAM_FINALIZE_ATTEMPTS; attempt += 1) {
+      state.flushQueued = false;
+      await state.flushNow(finalOpts);
+      await waitForInfoflowStreamIdle(session);
+      if (state.flushQueued !== true) break;
+    }
+    if (state.flushQueued === true) {
+      throw new Error("Infoflow stream finalization lost the final card update to a flush race");
+    }
+  } else if (opts.error) {
+    await session.fail(opts.error);
+  } else {
+    await session.complete(opts.doneLabel ?? INFOFLOW_STREAM_DONE_LABEL);
+  }
+
+  assertInfoflowStreamFinalUpdate(session, opts.error ? "failure" : "completion");
+}
+
+function cancelInfoflowFlushTimer(state: InfoflowStreamSessionState): void {
+  if (typeof state.cancelFlushTimer === "function") {
+    state.cancelFlushTimer();
+    return;
+  }
+  if (state.flushTimer) {
+    clearTimeout(state.flushTimer);
+    state.flushTimer = null;
+  }
+}
+
 async function waitForInfoflowStreamIdle(session: InfoflowStreamingSession): Promise<void> {
-  const state = session as InfoflowStreamingSession & { isFlushing?: unknown };
+  const state = session as InfoflowStreamSessionState;
   const deadline = Date.now() + INFOFLOW_STREAM_FINALIZE_TIMEOUT_MS;
   while (state.isFlushing === true) {
     if (Date.now() >= deadline) {
@@ -325,85 +599,166 @@ function patchStreamingCardPresentation(session: InfoflowStreamingSession): void
   mutable.__sparkPatchedPresentation = true;
 }
 
-function createOfficialClient(config: InfoflowAdapterConfig): InfoflowSdkClientLike {
+function partitionInfoflowStreamText(text: string): { primary: string; overflow: string } {
+  const normalized = text.replace(/\r\n/gu, "\n").trim();
+  if (!normalized) return { primary: "", overflow: "" };
+  if (normalized.length <= INFOFLOW_MAX_CARD_TEXT_LENGTH) {
+    return { primary: normalized, overflow: "" };
+  }
+  const cardBudget = INFOFLOW_MAX_CARD_TEXT_LENGTH - INFOFLOW_STREAM_OVERFLOW_NOTICE.length;
+  const primary = chunkInfoflowText(normalized, cardBudget)[0] ?? normalized;
+  if (primary.length === normalized.length) return { primary, overflow: "" };
+  // `chunkInfoflowText` always returns a trimmed prefix. Slice the original
+  // normalized text at that prefix so the remainder stays one message instead
+  // of becoming several independently retryable side effects.
+  return {
+    primary,
+    overflow: normalized.slice(primary.length).trimStart(),
+  };
+}
+
+function createSingleAttemptInfoflowClient(
+  config: InfoflowAdapterConfig,
+  options: Pick<InfoflowSdkOutboundOptions, "fetch" | "accessTokenProvider">,
+): InfoflowSdkClientLike {
   const appKey = required(config.app_key, "app_key");
   const appSecret = required(config.app_secret, "app_secret");
   const agentId = required(config.app_agent_id, "app_agent_id");
-  return new Client({
+  const configManager = new ConfigManager({
     appKey,
     appSecret,
-    agentId,
     baseUrl: infoflowApiBaseUrl(config.endpoint),
     loggerLevel: LogLevel.warn,
   });
+  const tokenManager = new TokenManager(configManager);
+  const httpClient = new SingleAttemptInfoflowHttpClient(configManager, tokenManager, options);
+  const logger = configManager.getLogger();
+  return {
+    im: {
+      message: new MessageApi(httpClient, logger, agentId),
+      streamingCard: new StreamingCardApi(httpClient, logger),
+    },
+  };
 }
 
 async function sendWithSdk(
-  client: InfoflowSdkClientLike,
+  client: InfoflowSdkClientLike | InfoflowSdkMessageApi,
   input: InfoflowOutboundSendInput,
-): Promise<void> {
+): Promise<ChannelDeliveryResult> {
+  const messageApi = "im" in client ? client.im.message : client;
+  let send: () => Promise<unknown>;
+  try {
+    send = prepareInfoflowSdkSend(messageApi, input);
+  } catch (error) {
+    // All validation in prepareInfoflowSdkSend happens before provider dispatch.
+    throw channelDeliveryNotSent(error);
+  }
+  const receipt = normalizeInfoflowReceipt(await send());
+  return { replaySafety: "unsafe", receipt };
+}
+
+function prepareInfoflowSdkSend(
+  messageApi: InfoflowSdkMessageApi,
+  input: InfoflowOutboundSendInput,
+): () => Promise<unknown> {
   const target = normalizeRecipient(input.recipient);
+  const content = input.content;
   if (target.kind === "private") {
     if (input.mentionAll || input.mentionUserIds?.length) {
       throw new Error("Infoflow mentions are supported only for group messages");
     }
     const reply = privateReply(input.reply);
-    switch (input.content.type) {
+    switch (content.type) {
       case "text":
-        await client.im.message.sendToUser(target.id, input.content.text, "text", reply);
-        return;
+        return () => messageApi.sendToUser(target.id, content.text, "text", reply);
       case "markdown":
-        await client.im.message.sendToUser(target.id, { content: input.content.text }, "md", reply);
-        return;
+        return () => messageApi.sendToUser(target.id, { content: content.text }, "md", reply);
       case "image":
-        await client.im.message.sendToUser(
-          target.id,
-          { content: input.content.base64 },
-          "image",
-          reply,
-        );
-        return;
+        return () => messageApi.sendToUser(target.id, { content: content.base64 }, "image", reply);
     }
   }
 
   const reply = groupReply(input.reply);
   const mentions = uniqueNonEmpty(input.mentionUserIds ?? []);
   if (input.mentionAll || mentions.length > 0) {
-    if (input.content.type === "image") {
+    if (content.type === "image") {
       throw new Error("Infoflow image messages cannot be combined with mentions");
     }
-    const type = input.content.type === "markdown" ? "MD" : "TEXT";
-    await client.im.message.sendToGroupWithOptions({
-      groupId: target.id,
-      msgtype: type,
-      body: [
-        {
-          type: "AT",
-          ...(input.mentionAll ? { atall: true } : { atall: false, atuserids: mentions }),
-        },
-        { type, content: input.content.text },
-      ],
-      ...(reply ? { reply } : {}),
-    });
-    return;
+    const type = content.type === "markdown" ? "MD" : "TEXT";
+    return () =>
+      messageApi.sendToGroupWithOptions({
+        groupId: target.id,
+        msgtype: type,
+        body: [
+          {
+            type: "AT",
+            ...(input.mentionAll ? { atall: true } : { atall: false, atuserids: mentions }),
+          },
+          { type, content: content.text },
+        ],
+        ...(reply ? { reply } : {}),
+      });
   }
 
-  switch (input.content.type) {
+  switch (content.type) {
     case "text":
-      await client.im.message.sendToGroup(target.id, input.content.text, "TEXT", reply);
-      return;
+      return () => messageApi.sendToGroup(target.id, content.text, "TEXT", reply);
     case "markdown":
-      await client.im.message.sendToGroup(target.id, { content: input.content.text }, "MD", reply);
-      return;
+      return () => messageApi.sendToGroup(target.id, { content: content.text }, "MD", reply);
     case "image":
-      await client.im.message.sendToGroup(
-        target.id,
-        { content: input.content.base64 },
-        "IMAGE",
-        reply,
-      );
-      return;
+      return () => messageApi.sendToGroup(target.id, { content: content.base64 }, "IMAGE", reply);
   }
+}
+
+function generateInfoflowLogId(): string {
+  return `${Date.now()}${Math.random().toString().slice(2, 11)}`;
+}
+
+function parseInfoflowMessageResponse<T>(text: string): InfoflowHttpResponse<T> {
+  const bigintSafeText = text.replace(
+    /"(messageid|msgseqid)"\s*:\s*(-?\d{15,})/gu,
+    (_match, field: string, value: string) => `"${field}":"${value}"`,
+  );
+  return JSON.parse(bigintSafeText) as InfoflowHttpResponse<T>;
+}
+
+function appendInfoflowQuery(
+  url: URL,
+  params:
+    | Record<string, InfoflowQueryValue | readonly InfoflowQueryValue[] | null | undefined>
+    | undefined,
+): void {
+  for (const [key, value] of Object.entries(params ?? {})) {
+    if (value === undefined || value === null) continue;
+    if (Array.isArray(value)) {
+      for (const entry of value) url.searchParams.append(key, String(entry));
+      continue;
+    }
+    url.searchParams.set(key, String(value as InfoflowQueryValue));
+  }
+}
+
+function normalizeInfoflowReceipt(receipt: unknown): ChannelDeliveryReceipt {
+  if (typeof receipt !== "object" || receipt === null) {
+    throw new Error("Infoflow SDK send returned no durable message receipt");
+  }
+  const record = receipt as Record<string, unknown>;
+  if (typeof record.msgkey === "string" && record.msgkey.trim()) {
+    return { messageKey: record.msgkey };
+  }
+  const messageId = infoflowReceiptId(record.messageid);
+  const messageSequence = infoflowReceiptId(record.msgseqid);
+  if (messageId !== undefined && messageSequence !== undefined) {
+    return { messageId, messageSequence };
+  }
+  // The request completed but the receipt is malformed; its external outcome is unknown.
+  throw new Error("Infoflow SDK send returned no durable message receipt");
+}
+
+function infoflowReceiptId(value: unknown): string | undefined {
+  return typeof value === "string" || typeof value === "number" || typeof value === "bigint"
+    ? String(value)
+    : undefined;
 }
 
 function privateReply(

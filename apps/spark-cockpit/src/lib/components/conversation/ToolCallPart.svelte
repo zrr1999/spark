@@ -33,11 +33,7 @@
   }
 </script>
 
-<details
-  class="tool-part {state}"
-  class:nested
-  open={state === "running" || state === "awaiting-approval"}
->
+<details class="tool-part {state}" class:nested>
   <summary>
     <span class="tool-name"><Icon name="activity" size={14} />{name}</span>
     {#if headline}

@@ -44,7 +44,7 @@ describe("SparkSessionRegistry", () => {
 
     await registry.create({ workspaceId: "ws_new" });
     expect(JSON.parse(await readFile(registry.filePath, "utf8"))).toMatchObject({
-      version: 2,
+      version: 3,
       sessions: [
         { sessionId: "sess_legacy", scope: { kind: "workspace" } },
         { scope: { kind: "workspace", workspaceId: "ws_new" } },
@@ -78,7 +78,11 @@ describe("SparkSessionRegistry", () => {
       title: "Ops",
       role: "coordinator",
     });
-    expect(created.status).toBe("ready");
+    expect(created).toMatchObject({
+      status: "ready",
+      role: "coordinator",
+      title: "coordinator",
+    });
     expect(created.sessionId).toMatch(/^sess_/);
 
     const bound = await registry.bind({
@@ -150,6 +154,133 @@ describe("SparkSessionRegistry", () => {
     expect(resolved.title).toBe("Auto");
   });
 
+  it("upgrades a legacy binding and follows one provider account across an adapter rename", async () => {
+    const registry = await tempRegistry();
+    const created = await registry.create({ workspaceId: "ws_adapter", title: "Adapter" });
+    await registry.bind({
+      sessionId: created.sessionId,
+      externalKey: "infoflow:user:u1",
+    });
+
+    const upgraded = await registry.resolveBinding({
+      externalKey: "infoflow:user:u1",
+      adapterId: "info-main",
+      adapterAccountIdentity: "channel-account:infoflow:account-a",
+      allowLegacyAccountClaim: true,
+    });
+    expect(upgraded.bindings).toEqual([
+      expect.objectContaining({
+        adapter: "infoflow",
+        adapterId: "info-main",
+        adapterAccountIdentity: "channel-account:infoflow:account-a",
+      }),
+    ]);
+
+    const renamed = await registry.resolveBinding({
+      externalKey: "infoflow:user:u1",
+      adapterId: "info-renamed",
+      adapterAccountIdentity: "channel-account:infoflow:account-a",
+    });
+    expect(renamed.bindings).toEqual([
+      expect.objectContaining({
+        adapterId: "info-renamed",
+        adapterAccountIdentity: "channel-account:infoflow:account-a",
+      }),
+    ]);
+  });
+
+  it("separates one external key across provider accounts", async () => {
+    const registry = await tempRegistry();
+    const first = await registry.resolveBinding({
+      externalKey: "infoflow:user:shared-user",
+      adapterId: "info-main",
+      adapterAccountIdentity: "channel-account:infoflow:account-a",
+      onUnbound: "create",
+      create: { workspaceId: "ws_accounts", title: "Account A" },
+    });
+    const second = await registry.resolveBinding({
+      externalKey: "infoflow:user:shared-user",
+      adapterId: "info-backup",
+      adapterAccountIdentity: "channel-account:infoflow:account-b",
+      onUnbound: "create",
+      create: { workspaceId: "ws_accounts", title: "Account B" },
+    });
+
+    expect(second.sessionId).not.toBe(first.sessionId);
+    await expect(
+      registry.resolveBinding({
+        externalKey: "infoflow:user:shared-user",
+        adapterAccountIdentity: "channel-account:infoflow:account-a",
+      }),
+    ).resolves.toMatchObject({ sessionId: first.sessionId });
+    await expect(
+      registry.resolveBinding({
+        externalKey: "infoflow:user:shared-user",
+        adapterAccountIdentity: "channel-account:infoflow:account-b",
+      }),
+    ).resolves.toMatchObject({ sessionId: second.sessionId });
+    await expect(
+      registry.resolveBinding({ externalKey: "infoflow:user:shared-user" }),
+    ).rejects.toMatchObject({ code: "binding_ambiguous" });
+  });
+
+  it("does not guess which configured account owns an unscoped legacy binding", async () => {
+    const registry = await tempRegistry();
+    const legacy = await registry.create({ workspaceId: "ws_legacy", title: "Legacy" });
+    await registry.bind({
+      sessionId: legacy.sessionId,
+      externalKey: "infoflow:user:shared-user",
+    });
+
+    const modern = await registry.resolveBinding({
+      externalKey: "infoflow:user:shared-user",
+      adapterId: "info-secondary",
+      adapterAccountIdentity: "channel-account:infoflow:secondary",
+      onUnbound: "create",
+      create: { workspaceId: "ws_legacy", title: "Secondary account" },
+    });
+
+    expect(modern.sessionId).not.toBe(legacy.sessionId);
+    const unchangedLegacy = await registry.get(legacy.sessionId);
+    expect(unchangedLegacy?.bindings).toEqual([
+      expect.objectContaining({ externalKey: "infoflow:user:shared-user" }),
+    ]);
+    expect(unchangedLegacy?.bindings[0]).not.toHaveProperty("adapterId");
+    expect(unchangedLegacy?.bindings[0]).not.toHaveProperty("adapterAccountIdentity");
+  });
+
+  it("unbinds an exact provider account and refuses an ambiguous legacy unbind", async () => {
+    const registry = await tempRegistry();
+    const session = await registry.create({ workspaceId: "ws_unbind_accounts" });
+    await registry.bind({
+      sessionId: session.sessionId,
+      externalKey: "qqbot:c2c:shared-user",
+      adapterId: "qq-main",
+      adapterAccountIdentity: "channel-account:qqbot:account-a",
+    });
+    await registry.bind({
+      sessionId: session.sessionId,
+      externalKey: "qqbot:c2c:shared-user",
+      adapterId: "qq-backup",
+      adapterAccountIdentity: "channel-account:qqbot:account-b",
+    });
+
+    await expect(registry.unbind(session.sessionId, "qqbot:c2c:shared-user")).rejects.toMatchObject(
+      { code: "binding_ambiguous" },
+    );
+    const updated = await registry.unbind(
+      session.sessionId,
+      "qqbot:c2c:shared-user",
+      "channel-account:qqbot:account-a",
+    );
+    expect(updated.bindings).toEqual([
+      expect.objectContaining({
+        adapterId: "qq-backup",
+        adapterAccountIdentity: "channel-account:qqbot:account-b",
+      }),
+    ]);
+  });
+
   it("persists a session-owned model selection", async () => {
     const registry = await tempRegistry();
     const created = await registry.create({ workspaceId: "ws_model", title: "Model" });
@@ -191,7 +322,7 @@ describe("SparkSessionRegistry", () => {
     } satisfies Partial<SparkSessionRegistryError>);
   });
 
-  it("sets a generated title once and preserves newer local or channel state", async () => {
+  it("sets a generated role once and mirrors it to the compatibility title", async () => {
     const registry = await tempRegistry();
     const untitled = await registry.create({
       sessionId: "sess_untitled",
@@ -199,19 +330,20 @@ describe("SparkSessionRegistry", () => {
       now: new Date("2026-07-10T07:00:00.000Z"),
     });
 
-    const titled = await registry.setTitleIfMissing(
+    const titled = await registry.setRoleIfMissing(
       untitled.sessionId,
-      "  Diagnose the daemon  ",
+      "  Runtime Operations  ",
       new Date("2026-07-10T07:01:00.000Z"),
     );
     expect(titled).toMatchObject({
-      title: "Diagnose the daemon",
+      role: "Runtime Operations",
+      title: "Runtime Operations",
       updatedAt: "2026-07-10T07:01:00.000Z",
     });
     await expect(
-      registry.setTitleIfMissing(
+      registry.setRoleIfMissing(
         untitled.sessionId,
-        "Do not replace the first title",
+        "Do not replace the first role",
         new Date("2026-07-10T07:02:00.000Z"),
       ),
     ).resolves.toEqual(titled);
@@ -225,7 +357,7 @@ describe("SparkSessionRegistry", () => {
       externalKey: "infoflow:user:alice",
     });
     await expect(
-      registry.setTitleIfMissing(channel.sessionId, "Do not title channels"),
+      registry.setRoleIfMissing(channel.sessionId, "Do not name channels"),
     ).resolves.toEqual(bound);
 
     const archived = await registry.create({
@@ -234,8 +366,16 @@ describe("SparkSessionRegistry", () => {
     });
     const archivedRecord = await registry.archive(archived.sessionId);
     await expect(
-      registry.setTitleIfMissing(archived.sessionId, "Do not title archives"),
+      registry.setRoleIfMissing(archived.sessionId, "Do not name archives"),
     ).resolves.toEqual(archivedRecord);
+  });
+
+  it("keeps an explicit legacy or platform title outside role ownership", async () => {
+    const registry = await tempRegistry();
+    const created = await registry.create({ workspaceId: "ws_legacy_title", title: "Verifier" });
+
+    expect(created).toMatchObject({ title: "Verifier" });
+    expect(created.role).toBeUndefined();
   });
 
   it("records a completed native transcript idempotently without moving updatedAt backwards", async () => {

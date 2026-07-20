@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   cockpitComposerFeedbackAfterInput,
   cockpitOpenSearchEvent,
+  cockpitSessionSelectionShortcutForInput,
   cockpitSlashCatalogActionBarForInput,
   cockpitSlashSuggestionsForInput,
   cockpitSlashSubmissionError,
@@ -97,6 +98,23 @@ describe("Cockpit slash action presentation", () => {
     ]);
     expect(cockpitSlashSuggestionsForInput("/sessions", messages)).toEqual([]);
     expect(cockpitSlashSuggestionsForInput("//sessions", messages)).toEqual([]);
+  });
+
+  it("routes only the explicit session picker commands directly on Enter", () => {
+    for (const input of ["/session", "/sessions", " /SESSION ", " /SESSIONS "]) {
+      expect(cockpitSessionSelectionShortcutForInput(input)).toBe(true);
+    }
+
+    for (const input of [
+      "/session inspect",
+      "/sessions current",
+      "/resume",
+      "/new",
+      "//sessions",
+      "open /sessions",
+    ]) {
+      expect(cockpitSessionSelectionShortcutForInput(input)).toBe(false);
+    }
   });
 
   it("recognizes catalog commands with arguments for the submission guard", () => {

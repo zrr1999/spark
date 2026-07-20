@@ -2,8 +2,13 @@ import { mkdtemp, readFile, rm, stat, writeFile, mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FakeChannelTransport, type ChannelTransport } from "@zendev-lab/spark-channels";
-import { parseChannelsConfig } from "@zendev-lab/spark-channels";
+import {
+  FakeChannelTransport,
+  channelAdapterAccountIdentity,
+  parseChannelsConfig,
+  type ChannelReplyStream,
+  type ChannelTransport,
+} from "@zendev-lab/spark-channels";
 import { defaultSparkSessionRegistryRoot, SparkSessionRegistry } from "@zendev-lab/spark-session";
 import {
   CHANNEL_INGRESS_FAILURE_REPLY,
@@ -14,6 +19,7 @@ import {
   migrateLegacyChannelsConfig,
   workspaceChannelsConfigPath,
   type ChannelIngressAssignment,
+  type ChannelIngressRejectedReply,
 } from "./ingress.ts";
 
 const roots: string[] = [];
@@ -23,6 +29,60 @@ afterEach(async () => {
 });
 
 describe("channel ingress", () => {
+  it("settles Infoflow text asks before ordinary turn admission", async () => {
+    const sparkHome = await mkdtemp(join(tmpdir(), "spark-channel-text-ask-"));
+    roots.push(sparkHome);
+    const onAssignment = vi.fn(async () => undefined);
+    const onTextAskReply = vi.fn(async () => "settled" as const);
+    let inbound: ((raw: unknown) => void) | undefined;
+    const transport: ChannelTransport = {
+      start: async (handler) => {
+        inbound = handler;
+      },
+      stop: async () => undefined,
+      send: async () => undefined,
+    };
+    const controller = createChannelIngressController({
+      sparkHome,
+      config: parseChannelsConfig({
+        adapters: { infoflow: { type: "infoflow" } },
+        routes: {},
+        ingress: { enabled: true, on_unbound: "create" },
+      }),
+      hooks: {
+        onAssignment,
+        onTextAskReply,
+      },
+      sessionRegistry: {
+        resolveBinding: async () => ({ sessionId: "sess_text_ask" }) as never,
+      },
+      workspaceId: "ws_text_ask",
+      createTransport: () => transport,
+    });
+
+    await controller.start();
+    inbound?.({
+      user_id: "alice",
+      text: "1",
+      chat_type: "private",
+      message_id: "msg_text_ask",
+    });
+    await controller.stop();
+
+    expect(onTextAskReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "ws_text_ask",
+        recipient: "alice",
+        message: expect.objectContaining({
+          adapter: "infoflow",
+          senderId: "alice",
+          text: "1",
+        }),
+      }),
+    );
+    expect(onAssignment).not.toHaveBeenCalled();
+  });
+
   it("reports admission failures without changing the session turn state", async () => {
     const sparkHome = await mkdtemp(join(tmpdir(), "spark-channel-rejected-"));
     roots.push(sparkHome);
@@ -80,10 +140,110 @@ describe("channel ingress", () => {
         messageId: "message-1",
         preview: "请处理",
         text: CHANNEL_INGRESS_FAILURE_REPLY,
+        deliveryId: expect.stringMatching(/^channel-ingress-failure:/),
       });
     } finally {
       log.mockRestore();
     }
+  });
+
+  it("persists one stable admission-failure intent without sending inline", async () => {
+    const sparkHome = await mkdtemp(join(tmpdir(), "spark-channel-rejected-outbox-"));
+    roots.push(sparkHome);
+    const sendReply = vi.fn(async () => undefined);
+    const onRejectedReply = vi.fn(async (_input: ChannelIngressRejectedReply) => undefined);
+    const transport: ChannelTransport = {
+      start: async () => undefined,
+      stop: async () => undefined,
+      send: async () => undefined,
+      reply: {
+        openReplyStream: async () => undefined,
+        sendReply,
+      },
+    };
+    const controller = createChannelIngressController({
+      sparkHome,
+      config: parseChannelsConfig({
+        adapters: { infoflow: { type: "infoflow" } },
+        routes: {},
+        ingress: { enabled: true, on_unbound: "create" },
+      }),
+      hooks: {
+        onAssignment: async () => {
+          throw new Error("admission unavailable");
+        },
+        onRejectedReply,
+      },
+      sessionRegistry: {
+        resolveBinding: async () => ({ sessionId: "sess_rejected_outbox" }) as never,
+      },
+      workspaceId: "ws_rejected_outbox",
+      createTransport: () => transport,
+    });
+    const inbound = {
+      adapter: "infoflow" as const,
+      externalKey: "infoflow:user:user-1",
+      senderId: "user-1",
+      text: "请处理",
+      messageId: "message-1",
+    };
+
+    await expect(controller.admitInbound(inbound)).resolves.toBeUndefined();
+    await expect(controller.admitInbound(inbound)).resolves.toBeUndefined();
+
+    expect(sendReply).not.toHaveBeenCalled();
+    expect(onRejectedReply).toHaveBeenCalledTimes(2);
+    const first = onRejectedReply.mock.calls[0]![0];
+    const second = onRejectedReply.mock.calls[1]![0];
+    expect(first).toMatchObject({
+      sessionId: "sess_rejected_outbox",
+      workspaceId: "ws_rejected_outbox",
+      externalKey: "infoflow:user:user-1",
+      adapterId: "infoflow",
+      adapterAccountIdentity: channelAdapterAccountIdentity({ type: "infoflow" }),
+      text: CHANNEL_INGRESS_FAILURE_REPLY,
+      deliveryFacts: { replaySafety: "unsafe" },
+    });
+    expect(first.deliveryIdentity).toBe(second.deliveryIdentity);
+  });
+
+  it("forwards reply-stream creation callbacks through ingress", async () => {
+    const sparkHome = await mkdtemp(join(tmpdir(), "spark-channel-stream-created-"));
+    roots.push(sparkHome);
+    const stream: ChannelReplyStream = {
+      appendText: vi.fn(),
+      notifyToolStart: vi.fn(),
+      notifyToolResult: vi.fn(),
+      complete: vi.fn(async () => undefined),
+      fail: vi.fn(async () => undefined),
+    };
+    const openReplyStream = vi.fn(async () => stream);
+    const transport: ChannelTransport = {
+      start: async () => undefined,
+      stop: async () => undefined,
+      send: async () => undefined,
+      reply: {
+        openReplyStream,
+        sendReply: async () => undefined,
+      },
+    };
+    const onCreated = vi.fn(async () => undefined);
+    const controller = createChannelIngressController({
+      sparkHome,
+      config: parseChannelsConfig({
+        adapters: { infoflow: { type: "infoflow" } },
+        routes: {},
+      }),
+      hooks: { onAssignment: async () => undefined },
+      workspaceId: "ws_stream_created",
+      createTransport: () => transport,
+    });
+
+    await expect(
+      controller.openReplyStream("infoflow", { recipient: "user-1" }, { onCreated }),
+    ).resolves.toBe(stream);
+    expect(openReplyStream).toHaveBeenCalledWith({ recipient: "user-1" });
+    expect(onCreated).toHaveBeenCalledWith(stream);
   });
 
   it("derives durable deduplication only from platform message identity", () => {
@@ -99,8 +259,10 @@ describe("channel ingress", () => {
       },
       source: { kind: "channel", channel: "infoflow", externalRef: "message-1" },
       externalKey: "infoflow:user:user-1",
+      adapterAccountIdentity: "channel-account:infoflow:account-a",
       channelReply: {
         workspaceId: "workspace-1",
+        adapter: "infoflow",
         adapterId: "infoflow",
         recipient: "user-1",
       },
@@ -248,8 +410,10 @@ describe("channel ingress", () => {
         },
         source: { kind: "channel", channel: "feishu", externalRef: "m1" },
         externalKey: "feishu:chat:oc_demo",
+        adapterAccountIdentity: channelAdapterAccountIdentity({ type: "feishu" }),
         channelReply: {
           workspaceId: "ws_demo",
+          adapter: "feishu",
           adapterId: "feishu",
           recipient: "oc_demo",
         },
@@ -402,6 +566,9 @@ describe("channel ingress", () => {
 
     expect(resolveBinding).toHaveBeenCalledWith({
       externalKey: "infoflow:user:u_owned",
+      adapterId: "infoflow",
+      adapterAccountIdentity: channelAdapterAccountIdentity({ type: "infoflow" }),
+      allowLegacyAccountClaim: true,
       onUnbound: "create",
       create: { workspaceId: "ws_owned", title: "channel infoflow:user:u_owned" },
     });

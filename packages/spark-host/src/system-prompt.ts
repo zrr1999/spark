@@ -21,6 +21,23 @@ export const SPARK_CHANNEL_SESSION_EXECUTION_PROMPT = [
   "The session target must belong to this workspace. Do not use session create/call/bind/unbind/archive, and do not target another channel session.",
 ].join(" ");
 
+/** Stable division-of-labour context shared by local and message-platform sessions. */
+export function renderPersistentSessionRolePrompt(role: string): string {
+  const normalized = role.replace(/\s+/gu, " ").trim();
+  if (!normalized) return "";
+  const administrator = /^(?:administrator|admin|管理员|管理协调)$/iu.test(normalized);
+  return [
+    `Persistent session role: ${normalized}.`,
+    "Treat this as a stable division of labour across many requests, not as the current task title.",
+    "Accept concrete work as turns within this role; do not rename or recreate the session for each task.",
+    administrator
+      ? "As the administrator session, keep the user's overall context, inspect and reuse existing role sessions, and delegate matching specialist work through the canonical session capability when that surface is available."
+      : undefined,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join(" ");
+}
+
 export type SparkChannelSurface = {
   adapter: "feishu" | "infoflow" | (string & {});
   scope: "user" | "group";

@@ -11,7 +11,6 @@ export interface SessionStatusBarLabels {
   cacheHit: string;
   cost: string;
   context: string;
-  autoCompaction: string;
 }
 
 export interface SessionStatusSnapshot {
@@ -24,8 +23,8 @@ export interface SessionStatusSnapshot {
   costUsd?: number;
   latestCacheHitPercent?: number;
   contextTokens?: number;
+  contextTokenSource?: "reported" | "tokenizer" | "estimated";
   contextWindow?: number;
-  autoCompactionEnabled?: boolean;
 }
 
 export interface SessionStatusUsage {
@@ -36,6 +35,7 @@ export interface SessionStatusUsage {
   costUsd?: number;
   latestCacheHitPercent?: number;
   contextTokens?: number;
+  contextTokenSource?: "reported" | "tokenizer" | "estimated";
   contextWindow?: number;
 }
 
@@ -58,12 +58,6 @@ export function sessionStatusIdentity(
   };
 }
 
-/** Native Spark sessions compact automatically unless the snapshot explicitly disables it. */
-export function sessionAutoCompactionEnabled(session: SparkSessionView | null): boolean {
-  const value = session?.metadata.autoCompactionEnabled;
-  return typeof value === "boolean" ? value : true;
-}
-
 /** Merge the daemon snapshot baseline with run updates received after that snapshot. */
 export function sessionStatusUsage(
   session: SparkSessionView | null,
@@ -78,6 +72,12 @@ export function sessionStatusUsage(
     const latestCacheHitPercent =
       numberValue(totals.latestCacheHitPercent) ?? usage.latestCacheHitPercent;
     const latestContextTokens = numberValue(totals.contextTokens) ?? usage.contextTokens;
+    const latestContextTokenSource =
+      totals.contextTokenSource === "reported" ||
+      totals.contextTokenSource === "tokenizer" ||
+      totals.contextTokenSource === "estimated"
+        ? totals.contextTokenSource
+        : usage.contextTokenSource;
     const latestContextWindow =
       contextWindow ?? numberValue(totals.contextWindow) ?? usage.contextWindow;
     usage = {
@@ -88,6 +88,7 @@ export function sessionStatusUsage(
       costUsd: (usage.costUsd ?? 0) + (numberValue(totals.costUsd) ?? 0),
       ...(latestCacheHitPercent !== undefined ? { latestCacheHitPercent } : {}),
       ...(latestContextTokens !== undefined ? { contextTokens: latestContextTokens } : {}),
+      ...(latestContextTokenSource ? { contextTokenSource: latestContextTokenSource } : {}),
       ...(latestContextWindow !== undefined ? { contextWindow: latestContextWindow } : {}),
     };
   }
@@ -177,7 +178,6 @@ export function describeSessionStatus(
     detail(labels.cacheHit, formatSessionStatusPercent(status.latestCacheHitPercent)),
     detail(labels.cost, formatSessionCost(status.costUsd)),
     detail(labels.context, context),
-    context && status.autoCompactionEnabled ? labels.autoCompaction : undefined,
   ]
     .filter((value): value is string => Boolean(value))
     .join(" · ");

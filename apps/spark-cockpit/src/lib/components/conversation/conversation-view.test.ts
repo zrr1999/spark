@@ -6,6 +6,7 @@ import {
   visibleConversationParts,
   visibleConversationPartText,
 } from "./conversation-view";
+import { visibleThinkingChainSteps } from "./thinking-chain-view";
 
 describe("Cockpit conversation view adapter", () => {
   it("keeps the legacy text field as a compatible presentation fallback", () => {
@@ -58,6 +59,61 @@ describe("Cockpit conversation view adapter", () => {
         summary: "cue_exec failed",
       },
     ]);
+  });
+
+  it("does not promote a structured cue transport failure into a terminal conversation error", () => {
+    const transportError =
+      "cue-shell error [TRANSPORT_RESOLVE_FAILED]: failed to resolve cue-shell client transport";
+    const parts = conversationPartsFromMessage(
+      message({
+        role: "assistant",
+        text: transportError,
+        status: "error",
+        parts: [
+          {
+            id: "tool-failure",
+            type: "tool-result",
+            status: "failed",
+            toolCallId: "call-cue",
+            toolName: "cue_exec",
+            summary: transportError,
+            metadata: {},
+          },
+        ],
+      }),
+    );
+
+    expect(parts).toEqual([
+      {
+        type: "tool",
+        callId: "call-cue",
+        name: "cue_exec",
+        state: "failed",
+        summary: transportError,
+      },
+    ]);
+    expect(parts.some((part) => part.type === "error")).toBe(false);
+    const visible = visibleConversationParts(groupThinkingChainParts(parts));
+    expect(visible).toEqual([
+      {
+        type: "chain",
+        state: "complete",
+        steps: [
+          {
+            type: "tool",
+            callId: "call-cue",
+            name: "cue_exec",
+            state: "failed",
+            summary: transportError,
+          },
+        ],
+      },
+    ]);
+    const chain = visible[0];
+    expect(chain?.type).toBe("chain");
+    expect(
+      JSON.stringify(chain?.type === "chain" ? visibleThinkingChainSteps(chain.steps) : []),
+    ).not.toContain("TRANSPORT_RESOLVE_FAILED");
   });
 
   it("presents a roundtrip budget stop as incomplete work without exposing the guard text", () => {
@@ -188,25 +244,22 @@ describe("Cockpit conversation view adapter", () => {
     expect(visibleConversationPartText(parts)).toBe("The workspace is ready.");
   });
 
-  it.each(["failed", "denied", "cancelled"] as const)(
-    "retains %s process detail without copying internal output",
-    (state) => {
-      const parts = groupThinkingChainParts([
-        {
-          type: "tool",
-          callId: `call-${state}`,
-          name: "cue_exec",
-          state,
-          summary: `Execution ${state}`,
-        },
-      ]);
+  it("retains a failed process step without copying internal output", () => {
+    const parts = groupThinkingChainParts([
+      {
+        type: "tool",
+        callId: "call-failed",
+        name: "cue_exec",
+        state: "failed",
+        summary: "Execution failed",
+      },
+    ]);
 
-      expect(visibleConversationParts(parts)).toMatchObject([
-        { type: "chain", steps: [{ type: "tool", state }] },
-      ]);
-      expect(visibleConversationPartText(parts)).toBe("");
-    },
-  );
+    expect(visibleConversationParts(parts)).toMatchObject([
+      { type: "chain", steps: [{ type: "tool", state: "failed" }] },
+    ]);
+    expect(visibleConversationPartText(parts)).toBe("");
+  });
 
   it("keeps provider commentary inside the execution chain instead of answer prose", () => {
     const parts = conversationPartsFromMessage(

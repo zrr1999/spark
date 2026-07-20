@@ -3,6 +3,9 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import { SparkProviderRegistry, type ProviderRegistrationAPI } from "../provider-registry.ts";
+import registerBaiduOneApiProvider from "../baidu-oneapi-provider.ts";
+import registerCursorProvider from "../cursor-provider.ts";
+import registerOpenAiCodexProvider from "../openai-codex-provider.ts";
 import { withPathMutation } from "./path-mutation.ts";
 
 export const DEFAULT_SPARK_PROVIDER_SPECS = [
@@ -165,5 +168,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 async function defaultImporter(specifier: string): Promise<unknown> {
+  // Keep product-bundled providers reachable through static imports. A built
+  // daemon executes from apps/spark-daemon/dist, where importing this
+  // workspace package by its public specifier would resolve to TypeScript
+  // below node_modules. Node deliberately refuses to strip types there, so a
+  // provider that works in the source/TUI host would silently disappear from
+  // the production daemon model catalog.
+  if (specifier === "@zendev-lab/spark-ai/baidu-oneapi-provider") {
+    return { default: registerBaiduOneApiProvider };
+  }
+  if (specifier === "@zendev-lab/spark-ai/openai-codex-provider") {
+    return { default: registerOpenAiCodexProvider };
+  }
+  if (specifier === "@zendev-lab/spark-ai/cursor-provider") {
+    return { default: registerCursorProvider };
+  }
   return import(specifier);
 }

@@ -14,10 +14,14 @@ export type SparkHeadlessRoleRunStatus =
   | "cancelled"
   | "not_started";
 
+export type SparkHeadlessUserContent =
+  | string
+  | Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>;
+
 export interface SparkHeadlessSessionRunInput {
   cwd: string;
   sessionId: string;
-  prompt: string;
+  prompt: SparkHeadlessUserContent;
   model?: string;
   thinkingLevel?: string;
   reset?: boolean;
@@ -29,6 +33,8 @@ export interface SparkHeadlessSessionRunInput {
   channelBinding?: {
     adapter: "feishu" | "infoflow" | "qqbot";
     externalKey: string;
+    adapterId?: string;
+    adapterAccountIdentity?: string;
   };
   invocationId?: string;
   sessionQuestionChain?: readonly string[];

@@ -9,6 +9,7 @@ import { migrateSparkDaemonDatabase } from "../store/schema.ts";
 import { SparkInvocationStore } from "../store/invocations.ts";
 import {
   channelInboundInvocationIdempotencyKey,
+  legacyChannelInboundInvocationIdempotencyKey,
   submitChannelInboundInvocation,
 } from "./admission.ts";
 import { createChannelIngressController, type ChannelIngressAssignment } from "./ingress.ts";
@@ -162,6 +163,7 @@ describe("channel inbound durable admission", () => {
         externalRef: "platform-message-stable",
       },
       externalKey: "qqbot:c2c:user-private",
+      adapterAccountIdentity: "channel-account:qqbot:account-a",
       channelReply: {
         workspaceId: "ws-overlap",
         adapterId: "qqbot",
@@ -200,6 +202,87 @@ describe("channel inbound durable admission", () => {
 
       expect(replay.invocationId).toBe(first.invocationId);
       expect(replay.task).toEqual(originalTask);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("accepts a matching v1 admission after upgrade without collapsing another account", () => {
+    const assignment = {
+      sessionId: "session-account-a",
+      goal: "account scoped message",
+      assignment: {
+        goal: "account scoped message",
+        target: { sessionId: "session-account-a", workspaceId: "ws-overlap" },
+        constraints: [],
+        evidence: [],
+        source: {
+          kind: "channel",
+          channel: "qqbot",
+          externalRef: "shared-message-id",
+        },
+      },
+      source: { kind: "channel", channel: "qqbot", externalRef: "shared-message-id" },
+      externalKey: "qqbot:c2c:shared-user",
+      adapterAccountIdentity: "channel-account:qqbot:account-a",
+      channelReply: {
+        workspaceId: "ws-overlap",
+        adapterId: "qqbot-account-a",
+        recipient: "c2c:shared-user",
+      },
+      channelContext: {
+        externalKey: "qqbot:c2c:shared-user",
+        senderId: "shared-user",
+        messageId: "shared-message-id",
+      },
+    } satisfies ChannelIngressAssignment;
+    const db = new DatabaseSync(":memory:");
+    migrateSparkDaemonDatabase(db);
+    try {
+      const store = new SparkInvocationStore(db);
+      const task: SparkDaemonTask = {
+        type: "session.run",
+        sessionId: assignment.sessionId,
+        prompt: assignment.goal,
+        assignment: assignment.assignment,
+        workspaceId: "ws-overlap",
+        cwd: "/workspace",
+        // v1 rows predate stable account identity, but retained the configured adapter id.
+        channelReply: assignment.channelReply,
+        channelContext: assignment.channelContext,
+      };
+      const legacyKey = legacyChannelInboundInvocationIdempotencyKey(assignment);
+      expect(legacyKey).toMatch(/^channel\.inbound:v1:[a-f0-9]{64}$/u);
+      const legacy = store.submit({
+        sessionId: task.sessionId,
+        prompt: task.prompt,
+        task,
+        sourceKind: "channel",
+        idempotencyKey: legacyKey,
+      });
+
+      expect(submitChannelInboundInvocation(store, assignment, task).invocationId).toBe(
+        legacy.invocationId,
+      );
+
+      const otherAccount = {
+        ...assignment,
+        sessionId: "session-account-b",
+        adapterAccountIdentity: "channel-account:qqbot:account-b",
+        channelReply: { ...assignment.channelReply, adapterId: "qqbot-account-b" },
+      } satisfies ChannelIngressAssignment;
+      const otherTask: SparkDaemonTask = {
+        ...task,
+        sessionId: otherAccount.sessionId,
+        channelReply: {
+          ...otherAccount.channelReply,
+          adapterAccountIdentity: otherAccount.adapterAccountIdentity,
+        },
+      };
+      const admitted = submitChannelInboundInvocation(store, otherAccount, otherTask);
+      expect(admitted.invocationId).not.toBe(legacy.invocationId);
+      expect(admitted.idempotencyKey).toMatch(/^channel\.inbound:v2:[a-f0-9]{64}$/u);
+      expect(store.listPage({ limit: 10 }).total).toBe(2);
     } finally {
       db.close();
     }

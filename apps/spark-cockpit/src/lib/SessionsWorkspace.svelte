@@ -6,11 +6,9 @@
     ConversationViewport,
     Message as ConversationMessage,
     SessionQueue,
-    SessionRetryAction,
     SessionStatusBar,
     SlashActionBar,
     SlashCommandMenu,
-    sessionAutoCompactionEnabled,
     sessionStatusIdentity,
     sessionStatusUsage,
     visibleConversationPartText,
@@ -55,6 +53,7 @@
   import {
     cockpitComposerFeedbackAfterInput,
     cockpitOpenSearchEvent,
+    cockpitSessionSelectionShortcutForInput,
     cockpitSlashSubmissionError,
     cockpitSlashSuggestionsForInput,
     localizeCockpitSlashActionBar,
@@ -74,11 +73,14 @@
     sessionViewRevisionKey,
     type SessionLiveEventState,
   } from "$lib/session-live-events";
-  import { resolveSessionActivityState } from "$lib/session-activity-state";
+  import {
+    resolveSessionActivityState,
+    sessionActivityNeedsStatusProbe,
+  } from "$lib/session-activity-state";
   import {
     activeSessionTimelineProcessItemId,
     buildSessionTimeline,
-    latestSessionRetryPrompt,
+    latestSessionRetryCandidate,
     SESSION_TIMELINE_PAGE_SIZE,
     sessionTimelineWindow,
   } from "$lib/session-timeline";
@@ -510,7 +512,6 @@
     cacheHit: copy.cacheHit,
     cost: copy.cost,
     context: copy.contextUsage,
-    autoCompaction: copy.autoCompaction,
   });
   let runtimeStatusUsage = $derived(
     sessionStatusUsage(liveSessionView, effectiveModelCatalogEntry?.contextWindow),
@@ -528,13 +529,17 @@
   let renderedTimeline = $derived(
     sessionTimelineWindow(timelineItems, effectiveTimelineRenderLimit),
   );
-  let latestRetryPrompt = $derived(
+  let latestRetryCandidate = $derived(
     conversationBusy || queuedTurns.length > 0
       ? null
-      : latestSessionRetryPrompt(sessionMessages),
+      : latestSessionRetryCandidate(sessionMessages),
   );
-  let hiddenTimelineCount = $derived(
-    renderedTimeline.hiddenCount + (liveSessionHistory?.hiddenMessages ?? 0),
+  let latestRetryPrompt = $derived(latestRetryCandidate?.prompt ?? null);
+  let retryableTimelineItemId = $derived(
+    latestRetryCandidate ? `message:${latestRetryCandidate.failureMessageId}` : null,
+  );
+  let hasEarlierTimeline = $derived(
+    renderedTimeline.hiddenCount > 0 || (liveSessionHistory?.hasEarlierMessages ?? false),
   );
   let activeProcessItemId = $derived(
     activeSessionTimelineProcessItemId(
@@ -563,7 +568,6 @@
     tabs: {
       summary: copy.summaryTab,
       changes: copy.changesTab,
-      todos: copy.todosTab,
       tasks: copy.tasksTab,
       mailbox: copy.mailboxTab,
     },
@@ -592,6 +596,10 @@
     mailUnread: copy.mailUnread,
     mailRead: copy.mailRead,
     mailAcknowledged: copy.mailAcknowledged,
+    mailDeliveryPending: copy.mailDeliveryPending,
+    mailDeliveryDelivered: copy.mailDeliveryDelivered,
+    mailDeliveryFailed: copy.mailDeliveryFailed,
+    mailDeliveryUncertain: copy.mailDeliveryUncertain,
     sessionId: copy.sessionId,
     sessionStatus: copy.sessionStatus,
     workingDirectory: copy.workingDirectory,
@@ -960,7 +968,7 @@
   // the transcript, stop button, or composer permanently stuck in "running".
   $effect(() => {
     const sessionId = liveSessionId;
-    const watchTerminalState = conversationBusy;
+    const watchTerminalState = sessionActivityNeedsStatusProbe(sessionActivityState);
     if (!sessionId || !watchTerminalState) return;
 
     let stopped = false;
@@ -1442,8 +1450,7 @@
 
     if (action.intent === "session.select") {
       clearSlashInput(surface);
-      await tick();
-      if (!focusSurface("[data-session-filter]")) await goto("/sessions");
+      await goto("/sessions");
       return;
     }
 
@@ -1791,6 +1798,17 @@
 
   function handleSlashCompletionKeydown(event: KeyboardEvent, surface: ComposerSurface) {
     if (event.isComposing) return;
+    const input = surface === "start" ? startMessage : message;
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      cockpitSessionSelectionShortcutForInput(input)
+    ) {
+      event.preventDefault();
+      clearSlashInput(surface);
+      void goto("/sessions");
+      return;
+    }
     const suggestions = surface === "start" ? startSlashSuggestions : sessionSlashSuggestions;
     if (suggestions.length === 0) return;
 
@@ -2089,8 +2107,8 @@
         followKey={timelineFollowKey}
         announcement={latestAnnouncement}
         jumpToLatestLabel={copy.jumpToLatest}
-        hasEarlier={hiddenTimelineCount > 0}
-        earlierLabel={`${copy.showEarlier} (${hiddenTimelineCount})`}
+        hasEarlier={hasEarlierTimeline}
+        earlierLabel={copy.showEarlier}
         earlierErrorLabel={copy.unavailable}
         onLoadEarlier={showEarlierTimeline}
       >
@@ -2100,19 +2118,7 @@
             <p>{copy.timelineEmpty}</p>
           </div>
         {:else}
-          {#if hiddenTimelineCount > 0}
-            <button
-              class="timeline-history-button"
-              type="button"
-              disabled={historyLoadState === "loading"}
-              onclick={showEarlierTimeline}
-            >
-              {copy.showEarlier}
-            </button>
-            {#if historyLoadState === "error"}
-              <p class="timeline-history-error">{copy.unavailable}</p>
-            {/if}
-          {/if}          {#each renderedTimeline.items as item (item.id)}
+          {#each renderedTimeline.items as item (item.id)}
             <ConversationMessage
               {item}
               active={item.id === activeProcessItemId}
@@ -2124,6 +2130,18 @@
               partLabels={conversationPartLabels}
               relativeTime={relative}
               {statusLabel}
+              retryAction={item.id === retryableTimelineItemId && latestRetryPrompt
+                ? {
+                    label: copy.retryTurn,
+                    submittingLabel: copy.retryingTurn,
+                    unavailableLabel: copy.retryUnavailable,
+                    submitting: retryState === "submitting",
+                    disabled: !canAssign || !modelReady,
+                    onRetry: () => {
+                      if (latestRetryPrompt) retryConversationTurn(latestRetryPrompt);
+                    },
+                  }
+                : undefined}
             />
           {/each}
         {/if}
@@ -2247,7 +2265,6 @@
                   latestCacheHitPercent={runtimeStatusUsage.latestCacheHitPercent}
                   contextTokens={runtimeStatusUsage.contextTokens}
                   contextWindow={runtimeStatusUsage.contextWindow}
-                  autoCompactionEnabled={sessionAutoCompactionEnabled(liveSessionView)}
                 />
               {/if}
               <SessionQueue
@@ -2298,18 +2315,6 @@
                 <Icon name="warning" size={13} />
                 {modelControl.available ? copy.modelUnavailable : copy.modelControlUnavailable}
               </a>
-            {/if}
-          {/snippet}
-          {#snippet toolbarActions()}
-            {#if latestRetryPrompt}
-              <SessionRetryAction
-                label={copy.retryTurn}
-                submittingLabel={copy.retryingTurn}
-                unavailableLabel={copy.retryUnavailable}
-                submitting={retryState === "submitting"}
-                disabled={!canAssign || !modelReady}
-                onRetry={() => latestRetryPrompt && retryConversationTurn(latestRetryPrompt)}
-              />
             {/if}
           {/snippet}
           {#snippet feedback()}

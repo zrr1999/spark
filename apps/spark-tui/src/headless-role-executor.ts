@@ -1,4 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { SparkHeadlessUserContent } from "@zendev-lab/spark-host/headless-loader";
 import { join } from "node:path";
 import type {
   ExtensionInteractionRequest,
@@ -78,7 +79,7 @@ export interface SparkHeadlessRoleInstructionResult {
 export interface SparkHeadlessSessionRunInput {
   cwd: string;
   sessionId: string;
-  prompt: string;
+  prompt: SparkHeadlessUserContent;
   model?: string;
   thinkingLevel?: string;
   reset?: boolean;
@@ -90,6 +91,8 @@ export interface SparkHeadlessSessionRunInput {
   channelBinding?: {
     adapter: "feishu" | "infoflow" | "qqbot";
     externalKey: string;
+    adapterId?: string;
+    adapterAccountIdentity?: string;
   };
   invocationId?: string;
   sessionQuestionChain?: readonly string[];

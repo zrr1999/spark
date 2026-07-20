@@ -373,11 +373,9 @@ export class SparkNativeSession {
   }
 
   /** Ordered, detached queue state suitable for rendering without mutation authority. */
-  get queuedInputs(): readonly SparkNativeQueuedInput[] {
+  get queuedInputs(): readonly Pick<SparkNativeQueuedInput, "text" | "mode">[] {
     return Object.freeze(
-      this.queuedFollowUps.map((input) =>
-        Object.freeze({ text: input.text, mode: input.mode, submissionId: input.submissionId }),
-      ),
+      this.queuedFollowUps.map((input) => Object.freeze({ text: input.text, mode: input.mode })),
     );
   }
 
@@ -403,12 +401,6 @@ export class SparkNativeSession {
     if (this.processing) {
       const mode = options.mode ?? "steer";
       this.queuedFollowUps.push({ text, mode, submissionId });
-      this.pushMessage({
-        role: "user",
-        text: displayNativeSubmittedInput(text),
-        queued: true,
-        details: { queueMode: mode },
-      });
       return "queued";
     }
 
@@ -3348,15 +3340,23 @@ export class SparkNativeTuiApp implements Component, Focusable {
       return;
     }
 
-    const actionBar = sparkSlashActionBarForInput(input);
-    if (actionBar) {
-      this.openActionBar(actionBar);
-      return;
-    }
-
     const builtIn = this.builtInSlashCommand(parsed.name, parsed.args);
     if (builtIn !== undefined) {
       if (builtIn) this.session.addSystemMessage(builtIn);
+      return;
+    }
+
+    // `/sessions` is an explicit navigation command, not a palette request.
+    // Execute it directly so the host can exit this TUI and reopen the same
+    // selector used at startup. `/session` keeps the richer action bar.
+    if (parsed.name === "sessions" && !parsed.args.trim()) {
+      await this.invokeRegisteredSlashCommand(parsed.name, parsed.args, true);
+      return;
+    }
+
+    const actionBar = sparkSlashActionBarForInput(input);
+    if (actionBar) {
+      this.openActionBar(actionBar);
       return;
     }
 

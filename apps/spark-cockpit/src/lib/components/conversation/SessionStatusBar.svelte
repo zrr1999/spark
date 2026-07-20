@@ -20,8 +20,6 @@
     latestCacheHitPercent?: number;
     contextTokens?: number;
     contextWindow?: number;
-    /** Runtime capability metadata accepted for compatibility; it is intentionally not presented. */
-    autoCompactionEnabled?: boolean;
   };
 
   let {

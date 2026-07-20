@@ -1,0 +1,38 @@
+{
+  "valid": {
+    "version": 1,
+    "objective": "Implement Compact V2",
+    "completed": ["Contract"],
+    "inProgress": ["Smart summary"],
+    "decisions": ["Fixed structure"],
+    "changedFiles": [
+      {
+        "path": "a.ts",
+        "change": "updated",
+        "evidenceRefs": ["artifact:a"]
+      }
+    ],
+    "commands": [
+      {
+        "command": "pnpm test",
+        "result": "passed",
+        "detail": "all green"
+      }
+    ],
+    "failures": [],
+    "preservedFacts": ["Summary is low authority"],
+    "unresolved": [],
+    "memoryRefs": ["memory:1"]
+  },
+  "invalid": {
+    "version": 1,
+    "objective": "missing sections"
+  },
+  "expectedFallbackReasons": {
+    "unavailable": "model_unavailable",
+    "providerFailure": "model_error",
+    "invalidStructure": "invalid_summary"
+  },
+  "expectedCurrentModel": "provider/current-model",
+  "configuredModel": "provider/compact-model"
+}

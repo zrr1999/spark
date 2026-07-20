@@ -3,7 +3,7 @@ import type { SparkJsonObject, SparkSessionView } from "@zendev-lab/spark-protoc
 const MAX_OUTPUT_CHARS = 4_000;
 const MAX_PREVIEW_CHARS = 8_000;
 
-export type SessionInspectorTab = "summary" | "changes" | "todos" | "tasks" | "mailbox";
+export type SessionInspectorTab = "summary" | "changes" | "tasks" | "mailbox";
 
 export interface SessionWorkbenchActivityCommand {
   id: string;
@@ -130,6 +130,14 @@ export interface SessionWorkbenchMailMessage {
   body: string;
   createdAt: string;
   status: "unread" | "read" | "acknowledged";
+  channelDelivery: {
+    status: "pending" | "delivered" | "failed" | "uncertain";
+    total: number;
+    pending: number;
+    delivered: number;
+    failed: number;
+    uncertain: number;
+  } | null;
 }
 
 export interface SessionWorkbenchView {
@@ -170,6 +178,10 @@ export interface SessionInspectorLabels {
   mailUnread: string;
   mailRead: string;
   mailAcknowledged: string;
+  mailDeliveryPending: string;
+  mailDeliveryDelivered: string;
+  mailDeliveryFailed: string;
+  mailDeliveryUncertain: string;
   sessionId: string;
   sessionStatus: string;
   workingDirectory: string;
@@ -229,6 +241,7 @@ export function buildSessionWorkbenchView(input: {
         body: message.body,
         createdAt: message.createdAt,
         status: message.ackedAt ? "acknowledged" : message.readAt ? "read" : "unread",
+        channelDelivery: message.channelDelivery ?? null,
       })),
     sessionTodo: latestSessionTodo(input.session),
     context: sessionContext(input.session),

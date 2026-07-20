@@ -224,6 +224,7 @@ export interface SparkDaemonLocalStatus {
     retrying: number;
     inFlight: number;
     delivered: number;
+    uncertain: number;
     oldestPendingAt?: string;
     lastError?: string;
     lastErrorAt?: string;
@@ -493,6 +494,8 @@ export interface SparkDaemonChannelCommand extends SparkDaemonCliCommandBase {
   adapter?: string;
   recipient?: string;
   text?: string;
+  imageUrl?: string;
+  imageType?: string;
 }
 
 export interface SparkDaemonRunsCommand extends SparkDaemonCliCommandBase {
@@ -753,6 +756,12 @@ export function parseSparkDaemonCliArgs(argv: string[]): SparkDaemonCliCommand {
             : {}),
           ...(readStringOption(parsed.options, "text")
             ? { text: readStringOption(parsed.options, "text") }
+            : {}),
+          ...(readStringOption(parsed.options, "image-url")
+            ? { imageUrl: readStringOption(parsed.options, "image-url") }
+            : {}),
+          ...(readStringOption(parsed.options, "image-type")
+            ? { imageType: readStringOption(parsed.options, "image-type") }
             : {}),
         };
       }
@@ -1880,6 +1889,14 @@ async function clientChannelNotify(
     ...(command.adapter ? { adapter: command.adapter } : {}),
     ...(command.recipient ? { recipient: command.recipient } : {}),
     ...(command.text ? { text: command.text } : {}),
+    ...(command.imageUrl
+      ? {
+          image: {
+            url: command.imageUrl,
+            ...(command.imageType ? { mediaType: command.imageType } : {}),
+          },
+        }
+      : {}),
   };
   return await localRpcRequest<ChannelNotifySendResult>(
     paths,
@@ -2778,7 +2795,7 @@ function formatNativeDaemonStatus(status: SparkDaemonClientStatus): string {
   const channelDeliveries = status.channelDeliveries;
   if (isChannelDeliveryCounts(channelDeliveries)) {
     lines.push(
-      `channel-deliveries: pending=${channelDeliveries.pending} retrying=${channelDeliveries.retrying} in-flight=${channelDeliveries.inFlight} delivered=${channelDeliveries.delivered}`,
+      `channel-deliveries: pending=${channelDeliveries.pending} retrying=${channelDeliveries.retrying} in-flight=${channelDeliveries.inFlight} delivered=${channelDeliveries.delivered} uncertain=${channelDeliveries.uncertain}`,
     );
     if (typeof channelDeliveries.lastError === "string") {
       lines.push(`channel-delivery-error: ${channelDeliveries.lastError}`);
@@ -2802,7 +2819,8 @@ function isChannelDeliveryCounts(
     typeof (value as { pending?: unknown }).pending === "number" &&
     typeof (value as { retrying?: unknown }).retrying === "number" &&
     typeof (value as { inFlight?: unknown }).inFlight === "number" &&
-    typeof (value as { delivered?: unknown }).delivered === "number"
+    typeof (value as { delivered?: unknown }).delivered === "number" &&
+    typeof (value as { uncertain?: unknown }).uncertain === "number"
   );
 }
 

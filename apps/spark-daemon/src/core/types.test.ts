@@ -3,6 +3,7 @@ import { validateSparkDaemonTask } from "./types.ts";
 
 describe("daemon task validation", () => {
   it("preserves normalized channel context without folding it into the prompt", () => {
+    const imageData = Buffer.from("image").toString("base64");
     expect(
       validateSparkDaemonTask({
         type: "session.run",
@@ -24,6 +25,10 @@ describe("daemon task validation", () => {
             { kind: "file", name: " plan.pdf ", reference: " fid-plan " },
             { kind: "unknown", url: "https://signed.invalid" },
           ],
+          images: [
+            { data: imageData, mediaType: "image/png", name: "photo.png" },
+            { data: "not base64!", mediaType: "image/png" },
+          ],
           mentions: [" 神经蛙 ", ""],
           mentionedSelf: true,
         },
@@ -44,6 +49,7 @@ describe("daemon task validation", () => {
         messageId: "m1",
         contentType: "mixed",
         attachments: [{ kind: "file", name: "plan.pdf", reference: "fid-plan" }],
+        images: [{ data: imageData, mediaType: "image/png", name: "photo.png" }],
         mentions: ["神经蛙"],
         mentionedSelf: true,
       },

@@ -242,7 +242,7 @@ void test("handleSparkRpcLine abort cancels the last submitted daemon turn", asy
     },
     { sessionId: "rpc-session", prompt: "do work", reset: undefined },
   );
-  assert.match(submissions[0]?.idempotencyKey ?? "", /^idem_[a-f0-9]{32}$/);
+  assert.match(submissions[0]?.idempotencyKey ?? "", /^turn\.submit:spark_cli_/u);
   assert.deepEqual(cancellations, [
     { invocationId: "inv_turn_file", reason: "Spark RPC abort requested by client." },
   ]);

@@ -15,7 +15,6 @@ const labels: SessionStatusBarLabels = {
   cacheHit: "Latest cache hit",
   cost: "Cost",
   context: "Context usage",
-  autoCompaction: "Automatic compaction enabled",
 };
 
 describe("SessionStatusBar", () => {
@@ -55,13 +54,11 @@ describe("SessionStatusBar", () => {
         cwd: "~/workspace/zrr1999/spark",
         contextTokens: 258_000,
         contextWindow: 258_000,
-        autoCompactionEnabled: true,
       },
     });
 
     expect(body).toContain("100%/258k");
     expect(body).not.toContain("(auto)");
-    expect(body).not.toContain(labels.autoCompaction);
   });
 
   it("omits the usage region when no usage is available", () => {

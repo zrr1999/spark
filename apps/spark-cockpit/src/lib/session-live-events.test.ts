@@ -206,6 +206,73 @@ describe("session live events", () => {
     expect(ignored).toEqual({ changed: false, refreshActivity: false });
   });
 
+  it("keeps the canonical user message when a correlated live projection arrives", () => {
+    const state = createSessionLiveEventState({
+      sessionId: "sess_current",
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        messages: [
+          {
+            id: "native-user-1",
+            role: "user",
+            text: "Try again",
+            metadata: { invocationId: "inv_one" },
+          },
+        ],
+      }),
+    });
+
+    applySessionLiveEvent(
+      state,
+      event({
+        id: "evt_same_invocation",
+        kind: "daemon.view_event",
+        payload: {
+          type: "daemon.view_event",
+          sessionId: "sess_current",
+          invocationId: "inv_one",
+          view: {
+            type: "session.message",
+            sessionId: "sess_current",
+            message: {
+              id: "sess_current:message:user:live:1",
+              role: "user",
+              text: "Try again",
+            },
+          },
+        },
+      }),
+    );
+    applySessionLiveEvent(
+      state,
+      event({
+        id: "evt_same_text_new_invocation",
+        kind: "daemon.view_event",
+        payload: {
+          type: "daemon.view_event",
+          sessionId: "sess_current",
+          invocationId: "inv_two",
+          view: {
+            type: "session.message",
+            sessionId: "sess_current",
+            message: {
+              id: "sess_current:message:user:live:2",
+              role: "user",
+              text: "Try again",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(
+      state.view?.messages.map((message) => [message.id, message.metadata.invocationId]),
+    ).toEqual([
+      ["native-user-1", "inv_one"],
+      ["sess_current:message:user:live:2", "inv_two"],
+    ]);
+  });
+
   it("keeps the daemon-projected mailbox across native session snapshots", () => {
     const mailbox = [
       {

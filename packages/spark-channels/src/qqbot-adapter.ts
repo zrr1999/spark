@@ -1,4 +1,6 @@
 import { createChannelExternalKey, createDefaultChannelExternalKey } from "./external-key.ts";
+import { normalizeChannelImage, type ChannelImage } from "./channel-images.ts";
+import type { InfoflowAttachment } from "./infoflow-content.ts";
 import type {
   ChannelInteractionCapability,
   ChannelInteractionEvent,
@@ -9,11 +11,18 @@ import { createQqbotTransport } from "./qqbot-transport.ts";
 import type { QqbotNormalizedInbound } from "./qqbot-types.ts";
 import type {
   ChannelAdapter,
+  ChannelImageCapability,
   ChannelTransport,
   IncomingMessage,
   QqbotAdapterConfig,
 } from "./types.ts";
-import type { ChannelReplyCapability } from "./reply.ts";
+import {
+  normalizeChannelDeliveryResult,
+  type ChannelDeliveryFacts,
+  type ChannelDeliveryResult,
+  type ChannelMessageTarget,
+  type ChannelReplyCapability,
+} from "./reply.ts";
 
 export interface QqbotAdapterOptions {
   id: string;
@@ -35,6 +44,10 @@ export class QqbotAdapter implements ChannelAdapter {
 
   get reply(): ChannelReplyCapability | undefined {
     return this.transport.reply;
+  }
+
+  get image(): ChannelImageCapability | undefined {
+    return this.transport.image;
   }
 
   get interaction(): ChannelInteractionCapability | undefined {
@@ -68,8 +81,18 @@ export class QqbotAdapter implements ChannelAdapter {
     this.running = false;
   }
 
-  async send(input: { recipient: string; text: string }): Promise<void> {
-    await this.transport.send(input.recipient, input.text);
+  messageDeliveryFacts(target: ChannelMessageTarget): ChannelDeliveryFacts {
+    return this.transport.messageDeliveryFacts?.(target) ?? { replaySafety: "unsafe" };
+  }
+
+  async send(input: {
+    recipient: string;
+    text: string;
+    deliveryId?: string;
+  }): Promise<ChannelDeliveryResult> {
+    const facts = this.messageDeliveryFacts(input);
+    const result = await this.transport.send(input.recipient, input.text, input.deliveryId);
+    return normalizeChannelDeliveryResult(result, facts);
   }
 
   status() {
@@ -117,7 +140,13 @@ export class QqbotAdapter implements ChannelAdapter {
       text: normalized.text,
       ...(normalized.messageId ? { messageId: normalized.messageId } : {}),
       ...(normalized.eventType ? { eventType: normalized.eventType } : {}),
-      contentType: "text",
+      contentType: normalized.attachments?.length
+        ? normalized.text.includes("[图片]") && normalized.text.trim() === "[图片]"
+          ? "image"
+          : "mixed"
+        : "text",
+      ...(normalized.attachments?.length ? { attachments: normalized.attachments } : {}),
+      ...(normalized.images?.length ? { images: normalized.images } : {}),
       ...(normalized.mentions?.length ? { mentions: normalized.mentions } : {}),
       ...(typeof normalized.mentionedSelf === "boolean"
         ? { mentionedSelf: normalized.mentionedSelf }
@@ -180,7 +209,9 @@ export function normalizeQqbotInboundEvent(raw: unknown): QqbotNormalizedInbound
       stringField(author, "user_openid") ||
       stringField(author, "union_openid") ||
       stringField(author, "id");
-    const text = stringField(payload, "content") ?? "";
+    const attachments = normalizeQqbotAttachments(payload.attachments);
+    const images = normalizeQqbotImages(payload.spark_images);
+    const text = visibleQqbotText(stringField(payload, "content") ?? "", attachments);
     const messageId = stringField(payload, "id");
     if (!senderId) return undefined;
     return {
@@ -188,6 +219,8 @@ export function normalizeQqbotInboundEvent(raw: unknown): QqbotNormalizedInbound
       senderId,
       ...(stringField(author, "username") ? { senderName: stringField(author, "username") } : {}),
       text: stripBotMention(text),
+      ...(attachments.length ? { attachments } : {}),
+      ...(images.length ? { images } : {}),
       ...(messageId ? { messageId } : {}),
       eventType: eventType || "C2C_MESSAGE_CREATE",
     };
@@ -200,7 +233,9 @@ export function normalizeQqbotInboundEvent(raw: unknown): QqbotNormalizedInbound
       stringField(author, "user_openid") ||
       stringField(author, "id");
     const groupId = stringField(payload, "group_openid") || stringField(payload, "group_id");
-    const text = stringField(payload, "content") ?? "";
+    const attachments = normalizeQqbotAttachments(payload.attachments);
+    const images = normalizeQqbotImages(payload.spark_images);
+    const text = visibleQqbotText(stringField(payload, "content") ?? "", attachments);
     const messageId = stringField(payload, "id");
     const mentions = extractMentions(payload.mentions);
     const mentionedSelf =
@@ -212,6 +247,8 @@ export function normalizeQqbotInboundEvent(raw: unknown): QqbotNormalizedInbound
       ...(stringField(author, "username") ? { senderName: stringField(author, "username") } : {}),
       chatId: groupId,
       text: stripBotMention(text),
+      ...(attachments.length ? { attachments } : {}),
+      ...(images.length ? { images } : {}),
       ...(messageId ? { messageId } : {}),
       eventType,
       ...(mentions.length
@@ -225,7 +262,9 @@ export function normalizeQqbotInboundEvent(raw: unknown): QqbotNormalizedInbound
     const author = asRecord(payload.author);
     const senderId = stringField(author, "id");
     const channelId = stringField(payload, "channel_id");
-    const text = stringField(payload, "content") ?? "";
+    const attachments = normalizeQqbotAttachments(payload.attachments);
+    const images = normalizeQqbotImages(payload.spark_images);
+    const text = visibleQqbotText(stringField(payload, "content") ?? "", attachments);
     const messageId = stringField(payload, "id");
     if (!senderId || !channelId) return undefined;
     return {
@@ -234,6 +273,8 @@ export function normalizeQqbotInboundEvent(raw: unknown): QqbotNormalizedInbound
       ...(stringField(author, "username") ? { senderName: stringField(author, "username") } : {}),
       chatId: channelId,
       text: stripBotMention(text),
+      ...(attachments.length ? { attachments } : {}),
+      ...(images.length ? { images } : {}),
       ...(messageId ? { messageId } : {}),
       eventType,
       mentionedSelf: eventType === "AT_MESSAGE_CREATE" ? true : undefined,
@@ -241,6 +282,45 @@ export function normalizeQqbotInboundEvent(raw: unknown): QqbotNormalizedInbound
   }
 
   return undefined;
+}
+
+function normalizeQqbotAttachments(value: unknown): InfoflowAttachment[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 32).flatMap((entry): InfoflowAttachment[] => {
+    const record = asRecord(entry);
+    if (!record) return [];
+    const mediaType = stringField(record, "content_type");
+    const name = stringField(record, "filename");
+    const kind = mediaType?.toLowerCase().startsWith("image/") ? "image" : "file";
+    const size =
+      typeof record.size === "number" && Number.isFinite(record.size) && record.size >= 0
+        ? record.size
+        : undefined;
+    return [
+      {
+        kind,
+        ...(name ? { name } : {}),
+        ...(mediaType ? { mediaType } : {}),
+        ...(size !== undefined ? { size } : {}),
+      },
+    ];
+  });
+}
+
+function normalizeQqbotImages(value: unknown): ChannelImage[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const image = normalizeChannelImage(entry);
+    return image ? [image] : [];
+  });
+}
+
+function visibleQqbotText(text: string, attachments: readonly InfoflowAttachment[]): string {
+  const normalized = stripBotMention(text);
+  if (normalized) return normalized;
+  if (attachments.some((attachment) => attachment.kind === "image")) return "[图片]";
+  const file = attachments.find((attachment) => attachment.kind === "file");
+  return file?.name ? `[文件: ${file.name}]` : attachments.length ? "[附件]" : "";
 }
 
 function extractMentions(value: unknown): Array<{ label: string; isYou: boolean }> {

@@ -2,7 +2,12 @@ import { EventEmitter } from "node:events";
 import WebSocket from "ws";
 import { describe, expect, it, vi } from "vitest";
 import type { QqbotApiClient } from "./qqbot-api.ts";
-import { createQqbotTransport, type QqbotGatewayCursor } from "./qqbot-transport.ts";
+import {
+  createQqbotTransport,
+  materializeQqbotInboundImages,
+  type QqbotGatewayCursor,
+} from "./qqbot-transport.ts";
+import { channelDeliveryFailureCertainty } from "./reply.ts";
 import type { QqbotAdapterConfig } from "./types.ts";
 
 const config: QqbotAdapterConfig = {
@@ -27,7 +32,21 @@ class FakeWebSocket extends EventEmitter {
 function createApiMock() {
   const getAccessToken = vi.fn(async () => "token");
   const getGatewayUrl = vi.fn(async () => "wss://gateway.example");
-  const sendC2CMarkdownMessage = vi.fn(async () => ({ id: "reply-c2c" }));
+  const sendC2CMessage = vi.fn(async () => ({ id: "text-c2c" }));
+  const sendGroupMessage = vi.fn(async () => ({ id: "text-group" }));
+  const uploadC2CImage = vi.fn(async () => ({
+    file_uuid: "file-c2c",
+    file_info: "info-c2c",
+    ttl: 60,
+  }));
+  const uploadGroupImage = vi.fn(async () => ({
+    file_uuid: "file-group",
+    file_info: "info-group",
+    ttl: 60,
+  }));
+  const sendC2CImageMessage = vi.fn(async () => ({ id: "image-c2c" }));
+  const sendGroupImageMessage = vi.fn(async () => ({ id: "image-group" }));
+  const sendC2CMarkdownMessage = vi.fn(async () => ({ id: "reply-c2c", timestamp: 1234 }));
   const sendGroupMarkdownMessage = vi.fn(async () => ({ id: "reply-group" }));
   const sendC2CMarkdownKeyboardMessage = vi.fn(async () => ({ id: "ask-c2c" }));
   const sendGroupMarkdownKeyboardMessage = vi.fn(async () => ({ id: "ask-group" }));
@@ -42,8 +61,12 @@ function createApiMock() {
     }),
     getAccessToken,
     getGatewayUrl,
-    sendC2CMessage: vi.fn(async () => ({ id: "text-c2c" })),
-    sendGroupMessage: vi.fn(async () => ({ id: "text-group" })),
+    sendC2CMessage,
+    sendGroupMessage,
+    uploadC2CImage,
+    uploadGroupImage,
+    sendC2CImageMessage,
+    sendGroupImageMessage,
     sendC2CMarkdownMessage,
     sendGroupMarkdownMessage,
     sendC2CMarkdownKeyboardMessage,
@@ -56,6 +79,12 @@ function createApiMock() {
     api,
     getAccessToken,
     getGatewayUrl,
+    sendC2CMessage,
+    sendGroupMessage,
+    uploadC2CImage,
+    uploadGroupImage,
+    sendC2CImageMessage,
+    sendGroupImageMessage,
     sendC2CMarkdownMessage,
     sendGroupMarkdownMessage,
     sendC2CMarkdownKeyboardMessage,
@@ -67,6 +96,59 @@ function createApiMock() {
 }
 
 describe("createQqbotTransport", () => {
+  it("materializes inbound attachments and sends outbound rich media", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(Uint8Array.from([1, 2, 3]), {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        }),
+    );
+    await expect(
+      materializeQqbotInboundImages(
+        {
+          attachments: [
+            {
+              content_type: "image/png",
+              url: "https://1.1.1.1/image",
+              filename: "photo.png",
+            },
+          ],
+        },
+        fetchImpl as unknown as typeof fetch,
+      ),
+    ).resolves.toEqual([
+      {
+        data: Buffer.from([1, 2, 3]).toString("base64"),
+        mediaType: "image/png",
+        name: "photo.png",
+      },
+    ]);
+
+    const { api, uploadC2CImage, sendC2CImageMessage } = createApiMock();
+    const transport = createQqbotTransport(config, { api });
+    const data = Buffer.from("image").toString("base64");
+    await expect(
+      transport.image?.sendImage({
+        recipient: "c2c:u1",
+        image: { data, mediaType: "image/png" },
+        caption: "caption",
+      }),
+    ).resolves.toMatchObject({
+      replaySafety: "unsafe",
+      receipt: { messageId: "image-c2c" },
+    });
+    expect(uploadC2CImage).toHaveBeenCalledWith("token", "u1", { data });
+    expect(sendC2CImageMessage).toHaveBeenCalledWith(
+      "token",
+      "u1",
+      "info-c2c",
+      "caption",
+      undefined,
+      undefined,
+    );
+  });
+
   it("reconnects when the gateway stops acknowledging heartbeats", async () => {
     vi.useFakeTimers();
     const sockets: FakeWebSocket[] = [];
@@ -498,6 +580,106 @@ describe("createQqbotTransport", () => {
     await transport.stop();
   });
 
+  it("reports proactive sends as unsafe and preserves the QQ receipt", async () => {
+    const { api } = createApiMock();
+    const transport = createQqbotTransport(config, { api });
+
+    await expect(transport.send("c2c:user-1", "hello", "message:1")).resolves.toEqual({
+      replaySafety: "unsafe",
+      receipt: { messageId: "text-c2c" },
+    });
+    expect(transport.messageDeliveryFacts?.({ recipient: "c2c:user-1" })).toEqual({
+      replaySafety: "unsafe",
+    });
+  });
+
+  it("deduplicates only passive replies that reuse source msg_id and fixed msg_seq", async () => {
+    const { api, sendC2CMarkdownMessage, sendGroupMarkdownMessage } = createApiMock();
+    const transport = createQqbotTransport(config, { api });
+
+    expect(
+      transport.reply?.deliveryFacts?.({
+        recipient: "c2c:user-1",
+        messageId: "source-c2c",
+      }),
+    ).toEqual({ replaySafety: "deduplicated" });
+    expect(
+      transport.reply?.deliveryFacts?.({
+        recipient: "group:group-1",
+        messageId: "source-group",
+      }),
+    ).toEqual({ replaySafety: "deduplicated" });
+    expect(transport.reply?.deliveryFacts?.({ recipient: "c2c:user-1" })).toEqual({
+      replaySafety: "unsafe",
+    });
+    expect(
+      transport.reply?.deliveryFacts?.({
+        recipient: "channel:channel-1",
+        messageId: "source-channel",
+      }),
+    ).toEqual({ replaySafety: "unsafe" });
+
+    await expect(
+      transport.reply?.sendReply({
+        recipient: "c2c:user-1",
+        messageId: "source-c2c",
+        text: "private answer",
+        deliveryId: "reply:c2c:1",
+      }),
+    ).resolves.toEqual({
+      replaySafety: "deduplicated",
+      receipt: { messageId: "reply-c2c", timestamp: "1234" },
+    });
+    await expect(
+      transport.reply?.sendReply({
+        recipient: "group:group-1",
+        messageId: "source-group",
+        text: "group answer",
+        deliveryId: "reply:group:1",
+      }),
+    ).resolves.toEqual({
+      replaySafety: "deduplicated",
+      receipt: { messageId: "reply-group" },
+    });
+    expect(sendC2CMarkdownMessage).toHaveBeenCalledWith(
+      "token",
+      "user-1",
+      "private answer",
+      "source-c2c",
+      4,
+    );
+    expect(sendGroupMarkdownMessage).toHaveBeenCalledWith(
+      "token",
+      "group-1",
+      "group answer",
+      "source-group",
+      5,
+    );
+  });
+
+  it("classifies only pre-dispatch QQ failures as not-sent", async () => {
+    const { api, getAccessToken, sendC2CMessage } = createApiMock();
+    const transport = createQqbotTransport(config, { api });
+
+    const invalidRecipient = await transport
+      .send("not-a-recipient", "hello", "message:invalid")
+      .catch((error: unknown) => error);
+    expect(channelDeliveryFailureCertainty(invalidRecipient)).toBe("not-sent");
+
+    getAccessToken.mockRejectedValueOnce(new Error("token unavailable"));
+    const tokenFailure = await transport
+      .send("c2c:user-1", "hello", "message:token")
+      .catch((error: unknown) => error);
+    expect(channelDeliveryFailureCertainty(tokenFailure)).toBe("not-sent");
+
+    sendC2CMessage.mockRejectedValueOnce(new Error("response timeout"));
+    const ambiguous = await transport
+      .send("c2c:user-1", "hello", "message:timeout")
+      .catch((error: unknown) => error);
+    expect(channelDeliveryFailureCertainty(ambiguous)).toBe("unknown");
+    expect(sendC2CMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("streams the C2C final answer in place through stream_messages", async () => {
     const { api, sendC2CMarkdownMessage, sendC2CStreamMessage } = createApiMock();
     sendC2CStreamMessage.mockResolvedValue({ id: "stream-1" });
@@ -527,6 +709,24 @@ describe("createQqbotTransport", () => {
       index: 0,
     });
     expect(sendC2CMarkdownMessage).not.toHaveBeenCalled();
+  });
+
+  it("chunks long final replies across unused passive sequences", async () => {
+    const { api, sendC2CMarkdownMessage } = createApiMock();
+    const transport = createQqbotTransport(config, { api });
+    const long = `${"第一段".repeat(500)}\n\n${"第二段".repeat(500)}`;
+
+    await transport.reply?.sendReply({
+      recipient: "c2c:user-1",
+      messageId: "source-long",
+      text: long,
+    });
+
+    expect(sendC2CMarkdownMessage.mock.calls.length).toBeGreaterThan(1);
+    const sequences = sendC2CMarkdownMessage.mock.calls.map(
+      (call) => (call as unknown as [string, string, string, string, number | undefined])[4],
+    );
+    expect(sequences).toEqual([4, 1, 3].slice(0, sequences.length));
   });
 
   it("does not open a reply stream for QQ group or channel recipients", async () => {

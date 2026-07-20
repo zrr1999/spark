@@ -151,12 +151,15 @@ export async function runPiAskFlow(
     }
   }
 
-  return createPiAskFlowResult({
-    answers,
-    flow: request.flow,
-    mode: "submit",
-    cancelled: false,
-  });
+  return normalizePiAskFlowResult(
+    createPiAskFlowResult({
+      answers,
+      flow: request.flow,
+      mode: "submit",
+      cancelled: false,
+    }),
+    request,
+  );
 }
 
 export function defaultPiAskFlowResult(request: PiAskFlowRequest): PiAskFlowResult {

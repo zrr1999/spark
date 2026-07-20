@@ -503,7 +503,12 @@ async function resolveNativeSessionGitBranch(cwd: string): Promise<string | unde
 }
 
 function displayMessageMetadata(value: unknown): SparkJsonObject {
-  if (!isRecord(value) || !isRecord(value.channel)) return {};
+  if (!isRecord(value)) return {};
+  const safeMetadata: SparkJsonObject = {};
+  if (typeof value.invocationId === "string" && value.invocationId.trim()) {
+    safeMetadata.invocationId = value.invocationId.trim();
+  }
+  if (!isRecord(value.channel)) return safeMetadata;
   const channel = value.channel;
   const safeChannel: SparkJsonObject = {};
   for (const key of [
@@ -521,7 +526,8 @@ function displayMessageMetadata(value: unknown): SparkJsonObject {
   }
   const attachments = displayChannelAttachments(channel.attachments);
   if (attachments.length > 0) safeChannel.attachments = attachments;
-  return Object.keys(safeChannel).length > 0 ? { channel: safeChannel } : {};
+  if (Object.keys(safeChannel).length > 0) safeMetadata.channel = safeChannel;
+  return safeMetadata;
 }
 
 function displayChannelAttachments(value: unknown): SparkJsonObject[] {

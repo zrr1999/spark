@@ -1,100 +1,100 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SparkSessionRegistryRecord } from "@zendev-lab/spark-protocol";
 
-import { assignCompletedSessionTitle } from "./session-title.ts";
+import { assignCompletedSessionRole } from "./session-title.ts";
 
 const model = { providerName: "baidu-oneapi", modelId: "gpt-5.6-sol" };
 
-describe("completed session title assignment", () => {
-  it("normalizes a bounded model title and persists it through compare-and-set", async () => {
+describe("completed session role assignment", () => {
+  it("normalizes a bounded model role and persists it through compare-and-set", async () => {
     const session = localSession();
     const escape = String.fromCodePoint(0x1b);
     const bidiOverride = String.fromCodePoint(0x202e);
-    const generateSessionTitle = vi.fn(
-      async () =>
-        `${escape}[31m# 标题：修复 daemon 启动${escape}[0m${bidiOverride}\n不要输出这一行`,
+    const generateSessionRole = vi.fn(
+      async () => `${escape}[31m# 职责：运行维护${escape}[0m${bidiOverride}\n不要输出这一行`,
     );
-    const setTitleIfMissing = vi.fn(async () => ({ ...session, title: "修复 daemon 启动" }));
+    const setRoleIfMissing = vi.fn(async () => ({
+      ...session,
+      title: "运行维护",
+      role: "运行维护",
+    }));
 
-    await assignCompletedSessionTitle(
+    await assignCompletedSessionRole(
       { sessionId: session.sessionId, prompt: "daemon 为什么启动失败？", model },
       {
-        modelControl: { generateSessionTitle },
-        sessionRegistry: { get: async () => session, setTitleIfMissing },
+        modelControl: { generateSessionRole },
+        sessionRegistry: { get: async () => session, setRoleIfMissing },
       },
     );
 
-    expect(generateSessionTitle).toHaveBeenCalledWith({
+    expect(generateSessionRole).toHaveBeenCalledWith({
       prompt: "daemon 为什么启动失败？",
       model,
     });
-    expect(setTitleIfMissing).toHaveBeenCalledWith(session.sessionId, "修复 daemon 启动");
+    expect(setRoleIfMissing).toHaveBeenCalledWith(session.sessionId, "运行维护");
   });
 
   it("removes terminal control sequences from the mechanical fallback", async () => {
     const session = localSession("sess_control_fallback");
     const escape = String.fromCodePoint(0x1b);
-    const setTitleIfMissing = vi.fn(async () => session);
+    const setRoleIfMissing = vi.fn(async () => session);
 
-    await assignCompletedSessionTitle(
+    await assignCompletedSessionRole(
       {
         sessionId: session.sessionId,
         prompt: `${escape}[2J- 修复 daemon 启动。继续运行。`,
         model,
       },
       {
-        modelControl: { generateSessionTitle: async () => undefined },
-        sessionRegistry: { get: async () => session, setTitleIfMissing },
+        modelControl: { generateSessionRole: async () => undefined },
+        sessionRegistry: { get: async () => session, setRoleIfMissing },
       },
     );
 
-    expect(setTitleIfMissing).toHaveBeenCalledWith(session.sessionId, "修复 daemon 启动");
+    expect(setRoleIfMissing).toHaveBeenCalledWith(session.sessionId, "运行维护");
   });
 
-  it("uses a mechanical first-sentence fallback when the leaf degrades or throws", async () => {
+  it("uses a stable responsibility fallback when the leaf degrades or throws", async () => {
     const session = localSession();
-    const setTitleIfMissing = vi.fn(async () => session);
+    const setRoleIfMissing = vi.fn(async () => session);
     const logError = vi.fn();
 
-    await assignCompletedSessionTitle(
+    await assignCompletedSessionRole(
       {
         sessionId: session.sessionId,
         prompt: "Investigate daemon startup. Then add a regression test.",
         model,
       },
       {
-        modelControl: { generateSessionTitle: async () => undefined },
-        sessionRegistry: { get: async () => session, setTitleIfMissing },
+        modelControl: { generateSessionRole: async () => undefined },
+        sessionRegistry: { get: async () => session, setRoleIfMissing },
         logError,
       },
     );
-    expect(setTitleIfMissing).toHaveBeenLastCalledWith(
-      session.sessionId,
-      "Investigate daemon startup",
-    );
+    expect(setRoleIfMissing).toHaveBeenLastCalledWith(session.sessionId, "Runtime Operations");
 
-    await assignCompletedSessionTitle(
+    await assignCompletedSessionRole(
       { sessionId: session.sessionId, prompt: "修复标题生成。不要重放主任务。", model },
       {
         modelControl: {
-          generateSessionTitle: async () => {
+          generateSessionRole: async () => {
             throw new Error("provider unavailable");
           },
         },
-        sessionRegistry: { get: async () => session, setTitleIfMissing },
+        sessionRegistry: { get: async () => session, setRoleIfMissing },
         logError,
       },
     );
-    expect(setTitleIfMissing).toHaveBeenLastCalledWith(session.sessionId, "修复标题生成");
+    expect(setRoleIfMissing).toHaveBeenLastCalledWith(session.sessionId, "通用执行");
     expect(logError).toHaveBeenCalledWith(expect.stringContaining("using fallback"));
   });
 
-  it("does not persist a fallback title after the owning invocation is cancelled", async () => {
+  it("does not persist a fallback role after the owning invocation is cancelled", async () => {
     const session = localSession("sess_cancelled_title");
     const controller = new AbortController();
-    const setTitleIfMissing = vi.fn(async () => session);
+    const setRoleIfMissing = vi.fn(async () => session);
     const logError = vi.fn();
-    const generateSessionTitle = vi.fn(
+    const generateSessionRole = vi.fn(
       async ({ signal }: { signal?: AbortSignal }) =>
         await new Promise<string>((_resolve, reject) => {
           const rejectWithReason = () => reject(signal?.reason ?? new Error("cancelled"));
@@ -106,7 +106,7 @@ describe("completed session title assignment", () => {
         }),
     );
 
-    const assignment = assignCompletedSessionTitle(
+    const assignment = assignCompletedSessionRole(
       {
         sessionId: session.sessionId,
         prompt: "Do not name this cancelled invocation.",
@@ -114,23 +114,55 @@ describe("completed session title assignment", () => {
         signal: controller.signal,
       },
       {
-        modelControl: { generateSessionTitle },
-        sessionRegistry: { get: async () => session, setTitleIfMissing },
+        modelControl: { generateSessionRole },
+        sessionRegistry: { get: async () => session, setRoleIfMissing },
         logError,
       },
     );
-    await vi.waitFor(() => expect(generateSessionTitle).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(generateSessionRole).toHaveBeenCalledOnce());
 
     controller.abort(new Error("invocation cancelled"));
 
     await expect(assignment).resolves.toBeUndefined();
-    expect(setTitleIfMissing).not.toHaveBeenCalled();
+    expect(setRoleIfMissing).not.toHaveBeenCalled();
     expect(logError).not.toHaveBeenCalled();
   });
 
+  it("persists the deterministic fallback when only the advisory leaf times out", async () => {
+    const session = localSession("sess_role_timeout");
+    const controller = new AbortController();
+    const setRoleIfMissing = vi.fn(async () => session);
+    const generateSessionRole = vi.fn(
+      async ({ signal }: { signal?: AbortSignal }) =>
+        await new Promise<string>((_resolve, reject) => {
+          const rejectWithReason = () => reject(signal?.reason ?? new Error("cancelled"));
+          if (signal?.aborted) rejectWithReason();
+          else signal?.addEventListener("abort", rejectWithReason, { once: true });
+        }),
+    );
+
+    const assigning = assignCompletedSessionRole(
+      {
+        sessionId: session.sessionId,
+        prompt: "修复 daemon 启动",
+        model,
+        signal: controller.signal,
+      },
+      {
+        modelControl: { generateSessionRole },
+        sessionRegistry: { get: async () => session, setRoleIfMissing },
+      },
+    );
+    await vi.waitFor(() => expect(generateSessionRole).toHaveBeenCalledOnce());
+    controller.abort(new DOMException("role deadline", "TimeoutError"));
+    await assigning;
+
+    expect(setRoleIfMissing).toHaveBeenCalledWith(session.sessionId, "运行维护");
+  });
+
   it("skips existing, channel-bound, and archived sessions before calling the model", async () => {
-    const generateSessionTitle = vi.fn(async () => "Unused");
-    const setTitleIfMissing = vi.fn(async (sessionId: string) => localSession(sessionId));
+    const generateSessionRole = vi.fn(async () => "Unused");
+    const setRoleIfMissing = vi.fn(async (sessionId: string) => localSession(sessionId));
     for (const session of [
       { ...localSession("sess_titled"), title: "Existing" },
       {
@@ -146,29 +178,29 @@ describe("completed session title assignment", () => {
       },
       { ...localSession("sess_archived"), status: "archived" as const },
     ]) {
-      await assignCompletedSessionTitle(
+      await assignCompletedSessionRole(
         { sessionId: session.sessionId, prompt: "unused", model },
         {
-          modelControl: { generateSessionTitle },
-          sessionRegistry: { get: async () => session, setTitleIfMissing },
+          modelControl: { generateSessionRole },
+          sessionRegistry: { get: async () => session, setRoleIfMissing },
         },
       );
     }
 
-    expect(generateSessionTitle).not.toHaveBeenCalled();
-    expect(setTitleIfMissing).not.toHaveBeenCalled();
+    expect(generateSessionRole).not.toHaveBeenCalled();
+    expect(setRoleIfMissing).not.toHaveBeenCalled();
   });
 
   it("keeps title persistence failure advisory", async () => {
     const logError = vi.fn();
     await expect(
-      assignCompletedSessionTitle(
+      assignCompletedSessionRole(
         { sessionId: "sess_failure", prompt: "Keep the main turn successful", model },
         {
-          modelControl: { generateSessionTitle: async () => "Main turn stays successful" },
+          modelControl: { generateSessionRole: async () => "Generalist" },
           sessionRegistry: {
             get: async () => localSession("sess_failure"),
-            setTitleIfMissing: async () => {
+            setRoleIfMissing: async () => {
               throw new Error("registry unavailable");
             },
           },

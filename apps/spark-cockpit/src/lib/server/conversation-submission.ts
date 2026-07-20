@@ -16,7 +16,12 @@ export function conversationTurnIdempotencyKey(
   submissionId: string | undefined,
 ): string | undefined {
   const normalized = normalizeConversationSubmissionId(submissionId);
-  return normalized ? `cockpit:${sessionId}:${normalized}` : undefined;
+  if (!normalized) return undefined;
+  const digest = createHash("sha256")
+    .update(JSON.stringify([1, "turn.submit", sessionId.trim(), normalized]))
+    .digest("hex")
+    .slice(0, 32);
+  return `idem_${digest}`;
 }
 
 /** Stable session identity for retrying the first message after a lost HTTP response. */

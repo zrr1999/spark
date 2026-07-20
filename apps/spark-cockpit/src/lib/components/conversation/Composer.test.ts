@@ -122,20 +122,16 @@ describe("Composer", () => {
     expect(onValueChange).toHaveBeenCalledWith("/mod");
   });
 
-  it("keeps auxiliary turn actions beside Send without changing the form submit target", async () => {
-    const toolbarActions = createRawSnippet(() => ({
-      render: () => '<button type="button" data-retry-latest-turn>Retry last turn</button>',
+  it("keeps session recovery in the contextual action area instead of beside Send", async () => {
+    const actions = createRawSnippet(() => ({
+      render: () => '<button type="button" data-session-retry-action>Retry last turn</button>',
     }));
-    const { form, textarea, submit, requestSubmit } = await renderComposer({ toolbarActions });
-    const toolbar = form.querySelector<HTMLElement>(".composer-toolbar");
-    const actionGroup = form.querySelector<HTMLElement>(".composer-submit-actions");
-    const retry = form.querySelector<HTMLButtonElement>("[data-retry-latest-turn]");
+    const { form, textarea, submit, requestSubmit } = await renderComposer({ actions });
+    const retry = form.querySelector<HTMLButtonElement>("[data-session-retry-action]");
 
-    expect(toolbar).not.toBeNull();
-    expect(actionGroup).not.toBeNull();
-    expect(retry?.type).toBe("button");
-    expect(Array.from(actionGroup?.children ?? [])).toEqual([retry, submit]);
-    expect(retry?.nextElementSibling).toBe(submit);
+    expect(retry?.closest(".composer-actions")).not.toBeNull();
+    expect(retry?.closest(".composer-submit-actions")).toBeNull();
+    expect(form.querySelector(".composer-submit-actions")?.children).toHaveLength(1);
 
     pressKey(textarea, { key: "Enter" });
 

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   parseSparkSessionRegistryRecord,
+  sparkSessionBindRequestSchema,
   sparkSessionCreateRequestSchema,
   sparkSessionListRequestSchema,
+  sparkSessionUnbindRequestSchema,
 } from "./session-assignment.ts";
 
 const timestamps = {
@@ -36,6 +38,47 @@ describe("session ownership protocol", () => {
       daemonId: "spark-daemon-install-test",
     });
     expect(record).not.toHaveProperty("workspaceId");
+  });
+
+  it("preserves configured and stable account identities on channel bindings", () => {
+    expect(
+      parseSparkSessionRegistryRecord({
+        sessionId: "sess_channel",
+        scope: { kind: "workspace", workspaceId: "ws_channel" },
+        bindings: [
+          {
+            kind: "channel",
+            adapter: "infoflow",
+            adapterId: "info-main",
+            adapterAccountIdentity: "channel-account:infoflow:account-a",
+            externalKey: "infoflow:user:alice",
+          },
+        ],
+        ...timestamps,
+      }),
+    ).toMatchObject({
+      bindings: [
+        {
+          adapterId: "info-main",
+          adapterAccountIdentity: "channel-account:infoflow:account-a",
+        },
+      ],
+    });
+    expect(
+      sparkSessionBindRequestSchema.parse({
+        sessionId: "sess_channel",
+        externalKey: "infoflow:user:alice",
+        adapterId: "info-main",
+        adapterAccountIdentity: "channel-account:infoflow:account-a",
+      }),
+    ).toMatchObject({ adapterId: "info-main", adapterAccountIdentity: expect.any(String) });
+    expect(
+      sparkSessionUnbindRequestSchema.parse({
+        sessionId: "sess_channel",
+        externalKey: "infoflow:user:alice",
+        adapterAccountIdentity: "channel-account:infoflow:account-a",
+      }),
+    ).toMatchObject({ adapterAccountIdentity: "channel-account:infoflow:account-a" });
   });
 
   it("lets clients request daemon scope but rejects a client-supplied daemonId", () => {

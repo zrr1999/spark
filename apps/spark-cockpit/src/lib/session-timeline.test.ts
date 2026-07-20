@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SparkJsonObject } from "@zendev-lab/spark-protocol";
+import { visibleConversationParts } from "./components/conversation/conversation-view";
+import { visibleThinkingChainSteps } from "./components/conversation/thinking-chain-view";
 import {
   activeSessionTimelineProcessItemId,
   buildSessionTimeline,
@@ -99,6 +101,8 @@ describe("session timeline", () => {
   });
 
   it("shows terminal system failures while keeping ordinary system messages hidden", () => {
+    const internalTransportFailure =
+      "cue-shell error [TRANSPORT_RESOLVE_FAILED]: failed to resolve cue-shell client transport";
     const timeline = buildSessionTimeline({
       fallbackTimestamp: "2026-07-10T00:00:00.000Z",
       messages: [
@@ -119,7 +123,17 @@ describe("session timeline", () => {
         },
       ],
       commands: [],
-      reports: [],
+      reports: [
+        {
+          id: "internal-run",
+          kind: "run.update",
+          title: "Spark",
+          text: internalTransportFailure,
+          role: null,
+          status: "failed",
+          createdAt: "2026-07-10T00:00:03.000Z",
+        },
+      ],
     });
 
     expect(timeline).toHaveLength(1);
@@ -129,6 +143,7 @@ describe("session timeline", () => {
       status: null,
       parts: [{ type: "error", title: "Session interrupted", message: "provider unavailable" }],
     });
+    expect(JSON.stringify(timeline)).not.toContain(internalTransportFailure);
   });
 
   it("selects the latest canonical failed turn for session-level retry", () => {
@@ -256,7 +271,7 @@ describe("session timeline", () => {
     expect(latestSessionRetryCandidate([user, toolFailure])).toBeNull();
   });
 
-  it("keeps tool failures in the execution chain and presents budget exhaustion as a notice", () => {
+  it("keeps failed cue execution without exposing raw transport diagnostics", () => {
     const transportError =
       "cue-shell error [TRANSPORT_RESOLVE_FAILED]: failed to resolve cue-shell client transport";
     const budgetError = "agent loop hit maxRoundtrips=16; stopping";
@@ -325,19 +340,17 @@ describe("session timeline", () => {
     const processTurn = timeline.find((item) => item.id === "message:a-call");
     expect(processTurn).toMatchObject({ status: null });
     expect(processTurn?.parts.some((part) => part.type === "error")).toBe(false);
-    expect(processTurn?.parts).toContainEqual(
-      expect.objectContaining({
-        type: "chain",
-        state: "complete",
-        steps: [
-          expect.objectContaining({
-            type: "tool",
-            callId: "call-cue",
-            state: "failed",
-          }),
-        ],
-      }),
-    );
+    const visibleParts = visibleConversationParts(processTurn?.parts ?? []);
+    expect(visibleParts.map((part) => part.type)).toEqual(["chain", "text"]);
+    const processChain = visibleParts.find((part) => part.type === "chain");
+    expect(
+      processChain?.type === "chain" ? visibleThinkingChainSteps(processChain.steps) : [],
+    ).toEqual([{ type: "tool", callId: "call-cue", name: "cue_exec", state: "failed" }]);
+    expect(visibleParts.at(-1)).toEqual({
+      type: "text",
+      text: "已改用本地回退。",
+      streaming: false,
+    });
 
     expect(timeline.some((item) => item.id === "message:internal-system-error")).toBe(false);
     const budgetNotice = timeline.find((item) => item.id === "message:budget-exhausted");
@@ -408,6 +421,57 @@ describe("session timeline", () => {
       ["message:a1", "Same result"],
       ["message:u2", "Try again"],
       ["message:a2", "Same result"],
+    ]);
+  });
+
+  it("reconciles a live user projection with its canonical message by invocation", () => {
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [
+        message("native-u1", "user", "Try again", "2026-07-10T00:00:01.000Z", {
+          invocationId: "inv_one",
+        }),
+      ],
+      commands: [],
+      reports: [
+        {
+          id: "message:sess_demo:message:user:live:1",
+          kind: "session.message",
+          title: "user message",
+          text: "Try again",
+          role: "user",
+          status: "done",
+          createdAt: "2026-07-10T00:00:01.000Z",
+          message: message(
+            "sess_demo:message:user:live:1",
+            "user",
+            "Try again",
+            "2026-07-10T00:00:01.000Z",
+            { invocationId: "inv_one" },
+          ),
+        },
+        {
+          id: "message:sess_demo:message:user:live:2",
+          kind: "session.message",
+          title: "user message",
+          text: "Try again",
+          role: "user",
+          status: "done",
+          createdAt: "2026-07-10T00:00:02.000Z",
+          message: message(
+            "sess_demo:message:user:live:2",
+            "user",
+            "Try again",
+            "2026-07-10T00:00:02.000Z",
+            { invocationId: "inv_two" },
+          ),
+        },
+      ],
+    });
+
+    expect(timeline.map((item) => [item.id, item.body])).toEqual([
+      ["message:native-u1", "Try again"],
+      ["message:sess_demo:message:user:live:2", "Try again"],
     ]);
   });
 

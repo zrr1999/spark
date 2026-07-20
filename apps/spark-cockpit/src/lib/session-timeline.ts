@@ -1,5 +1,6 @@
 import type { SparkMessageView } from "@zendev-lab/spark-protocol";
 import { shortenOpaqueChannelId } from "./channel-session-title";
+import { isInternalExecutionTransportFailure } from "./components/conversation/internal-execution-detail";
 import {
   conversationPartsFromMessage,
   conversationPartText,
@@ -161,6 +162,7 @@ export function buildSessionTimeline(input: {
 }): SessionTimelineItem[] {
   const items: SessionTimelineItem[] = [];
   const canonicalMessageIds = new Set<string>();
+  const canonicalUserInvocationIds = new Set<string>();
   const canonicalFallbackMatches = new Map<string, number>();
   for (const [messageIndex, message] of input.messages.entries()) {
     if (
@@ -174,6 +176,8 @@ export function buildSessionTimeline(input: {
     const parts = conversationPartsFromMessage(message, displayText);
     if (parts.length === 0) continue;
     canonicalMessageIds.add(message.id);
+    const invocationId = userMessageInvocationId(message);
+    if (invocationId) canonicalUserInvocationIds.add(invocationId);
     if (message.role === "user" || isFailedTerminalStatus(message.status)) {
       incrementCount(canonicalFallbackMatches, fallbackMatchKey(actor, displayText));
     }
@@ -224,12 +228,15 @@ export function buildSessionTimeline(input: {
     if (
       report.kind === "daemon.task.lifecycle" ||
       report.role === "tool" ||
+      isInternalExecutionFailureReport(report) ||
       (report.role === "system" && report.message?.metadata.conversationVisible !== true)
     ) {
       continue;
     }
     const sourceMessageId = sessionMessageId(report);
     if (sourceMessageId && canonicalMessageIds.has(sourceMessageId)) continue;
+    const reportInvocationId = report.message ? userMessageInvocationId(report.message) : null;
+    if (reportInvocationId && canonicalUserInvocationIds.has(reportInvocationId)) continue;
     const actor = report.message
       ? messageActor(report.message)
       : isUserRole(report.role)
@@ -292,6 +299,12 @@ export function buildSessionTimeline(input: {
       mergeTimelineInteractionParts(mergeTimelineToolParts(sortedItems)),
     ),
   );
+}
+
+function isInternalExecutionFailureReport(report: SessionTimelineReport): boolean {
+  if (report.kind !== "run.update" && report.kind !== "task.update") return false;
+  if (!isFailedTerminalStatus(report.status)) return false;
+  return isInternalExecutionTransportFailure(`${report.title}\n${report.text}`);
 }
 
 function conversationSystemMessageVisible(message: SparkMessageView): boolean {
@@ -551,6 +564,11 @@ function sessionMessageId(report: SessionTimelineReport) {
   if (report.kind !== "session.message" || !report.id.startsWith("message:")) return null;
   const id = report.id.slice("message:".length).trim();
   return id || null;
+}
+
+function userMessageInvocationId(message: SparkMessageView): string | null {
+  if (message.role !== "user") return null;
+  return nonEmptyString(message.metadata.invocationId);
 }
 
 function normalizeMessage(value: string) {

@@ -415,10 +415,13 @@ function applyDaemonEvent(
     if (viewEvent.sessionId !== state.sessionId) {
       return { changed: false, refreshActivity: false };
     }
-    const message = sanitizeLiveMessage(viewEvent.message);
+    const message = correlateLiveUserMessage(
+      sanitizeLiveMessage(viewEvent.message),
+      daemonEvent.invocationId ?? null,
+    );
     state.view = {
       ...current,
-      messages: upsertById(current.messages, message),
+      messages: upsertSessionMessage(current.messages, message, state.sessionId),
       updatedAt: message.updatedAt ?? message.createdAt ?? event.createdAt,
     };
     return { changed: true, refreshActivity: false };
@@ -645,6 +648,45 @@ function emptySessionView(sessionId: string, createdAt: string): SparkSessionVie
 
 function upsertById<T extends { id: string }>(items: readonly T[], next: T): T[] {
   return upsertByKey(items, next, (item) => item.id);
+}
+
+function upsertSessionMessage(
+  items: readonly SparkMessageView[],
+  next: SparkMessageView,
+  sessionId: string,
+): SparkMessageView[] {
+  const exactIndex = items.findIndex((item) => item.id === next.id);
+  if (exactIndex >= 0) {
+    return items.map((item, index) => (index === exactIndex ? next : item));
+  }
+
+  const invocationId = userMessageInvocationId(next);
+  if (!invocationId) return [...items, next];
+  const correlatedIndex = items.findIndex((item) => userMessageInvocationId(item) === invocationId);
+  if (correlatedIndex < 0) return [...items, next];
+
+  const current = items[correlatedIndex]!;
+  const livePrefix = `${sessionId}:message:user:`;
+  const currentIsTemporary = current.id.startsWith(livePrefix);
+  const nextIsTemporary = next.id.startsWith(livePrefix);
+  const preferred = currentIsTemporary && !nextIsTemporary ? next : current;
+  return items.map((item, index) => (index === correlatedIndex ? preferred : item));
+}
+
+function correlateLiveUserMessage(
+  message: SparkMessageView,
+  invocationId: string | null,
+): SparkMessageView {
+  if (message.role !== "user" || !invocationId) return message;
+  return {
+    ...message,
+    metadata: { ...message.metadata, invocationId },
+  };
+}
+
+function userMessageInvocationId(message: SparkMessageView): string | null {
+  if (message.role !== "user") return null;
+  return stringField(message.metadata, "invocationId");
 }
 
 function upsertByKey<T>(items: readonly T[], next: T, key: (item: T) => string): T[] {

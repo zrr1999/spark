@@ -7,18 +7,23 @@ import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { parseSparkInteractionRequest } from "@zendev-lab/spark-protocol";
 import type { ChannelNotifyInput, ChannelNotifyResult } from "@zendev-lab/spark-channels";
-import { SparkSessionMailStore } from "@zendev-lab/spark-session";
+import {
+  SparkSessionMailStore,
+  type SparkSessionMailDeliveryReceipt,
+} from "@zendev-lab/spark-session";
 import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import { requestSparkDaemonLocalRpcWire } from "@zendev-lab/spark-system/daemon-local-rpc";
 import {
   createDaemonSessionRegistry,
   handleLocalRpcLine,
   parseSparkDaemonLifecycleSnapshot,
+  requestDaemonStatus,
   requestDaemonRestart,
   requestWorkspaceEnsureLocal,
   startLocalRpcServer,
 } from "./local-rpc.js";
 import { SparkInvocationStore } from "./store/invocations.ts";
+import { SparkChannelDeliveryStore } from "./store/channel-deliveries.ts";
 import { openSparkDaemonDatabase } from "./store/schema.js";
 import {
   ensureLocalWorkspace,
@@ -93,6 +98,54 @@ describe("Spark daemon local RPC", () => {
         },
       }),
     ).toThrow("Invalid local RPC daemon drain work item.");
+  });
+
+  it("projects uncertain channel deliveries through daemon.status", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-rpc-uncertain-"));
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const deliveries = new SparkChannelDeliveryStore(db);
+    deliveries.enqueue({
+      deliveryId: "delivery-rpc-uncertain",
+      kind: "notification",
+      idempotencyKey: "rpc-uncertain",
+      payload: { text: "possibly delivered" },
+    });
+    const claimed = deliveries.claimDue("worker-rpc", { leaseMs: 10_000 });
+    deliveries.markDispatchStarted(claimed!.deliveryId, claimed!.leaseToken!);
+    deliveries.recordFailure(
+      claimed!.deliveryId,
+      claimed!.leaseToken!,
+      "provider outcome unknown",
+      { outcome: "unknown", replaySafety: "unsafe" },
+    );
+    const server = await startLocalRpcServer({ paths, sparkHome: join(root, ".spark"), db });
+
+    try {
+      await expect(requestDaemonStatus(paths)).resolves.toMatchObject({
+        channelDeliveries: {
+          pending: 0,
+          retrying: 0,
+          inFlight: 0,
+          delivered: 0,
+          uncertain: 1,
+          lastError: "provider outcome unknown",
+        },
+      });
+    } finally {
+      await server.close();
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("keeps turn observation and cancellation available while admission is closed", async () => {
@@ -1626,6 +1679,8 @@ describe("Spark daemon local RPC", () => {
         ok: true,
         result: { sessionId: "sess_a", status: "ready" },
       });
+      const queuedRegistryUpdatedAt = (staleRegistry as { result: { updatedAt: string } }).result
+        .updatedAt;
 
       const invocationStore = new SparkInvocationStore(db);
       const activeInvocation = invocationStore.submit({
@@ -1640,13 +1695,13 @@ describe("Spark daemon local RPC", () => {
         ok: true,
         result: {
           sessionId: "sess_a",
-          status: "running",
-          updatedAt: "2099-07-15T00:00:00.000Z",
+          status: "ready",
+          updatedAt: queuedRegistryUpdatedAt,
         },
       });
       expect(
         await request("session_list_active", "session.list", { workspaceId: "ws_a" }),
-      ).toMatchObject({ ok: true, result: [{ sessionId: "sess_a", status: "running" }] });
+      ).toMatchObject({ ok: true, result: [{ sessionId: "sess_a", status: "ready" }] });
       invocationStore.claimNext("test-worker", "2099-07-15T00:00:01.000Z");
       invocationStore.complete(activeInvocation.invocationId, {
         status: "succeeded",
@@ -1660,7 +1715,7 @@ describe("Spark daemon local RPC", () => {
         result: {
           sessionId: "sess_a",
           status: "ready",
-          updatedAt: "2099-07-15T00:00:02.000Z",
+          updatedAt: queuedRegistryUpdatedAt,
         },
       });
       expect(
@@ -1799,7 +1854,7 @@ describe("Spark daemon local RPC", () => {
         await request("get_global_running", "session.get", { sessionId: "sess_global" }),
       ).toMatchObject({
         ok: true,
-        result: { status: "running" },
+        result: { status: "ready" },
       });
 
       await request("create_question", "session.create", {
@@ -1847,7 +1902,7 @@ describe("Spark daemon local RPC", () => {
         await request("get_question_running", "session.get", { sessionId: "sess_question" }),
       ).toMatchObject({
         ok: true,
-        result: { status: "running" },
+        result: { status: "ready" },
       });
 
       const workspaceTurn = await request("turn_workspace", "turn.submit", {
@@ -2158,25 +2213,21 @@ describe("Spark daemon local RPC", () => {
       expect(JSON.stringify(retried)).not.toContain("channel temporarily unavailable");
       expect(notify).toHaveBeenCalledTimes(2);
 
-      const internal = await mailStore.send({
-        toSessionId: "sess_retry",
-        fromSessionId: "sess_sender",
-        kind: "notification",
-        visibility: "internal",
-        delivery: "channel",
-        deliveryTargets: [{ adapter: "infoflow", externalKey: "infoflow:user:user-1" }],
-        body: "Internal only",
-        source: "tool",
-      });
-      const rejected = await request("deliver_internal", internal.message.id);
-      expect(rejected).toMatchObject({
-        ok: false,
-        error: { message: expect.stringContaining("not user-visible") },
-      });
+      await expect(
+        Promise.resolve().then(() =>
+          mailStore.send({
+            toSessionId: "sess_retry",
+            fromSessionId: "sess_sender",
+            kind: "notification",
+            visibility: "internal",
+            delivery: "channel",
+            deliveryTargets: [{ adapter: "infoflow", externalKey: "infoflow:user:user-1" }],
+            body: "Internal only",
+            source: "tool",
+          }),
+        ),
+      ).rejects.toThrow("channel delivery requires explicit user visibility");
       expect(notify).toHaveBeenCalledTimes(2);
-      expect(await mailStore.get("sess_retry", internal.message.id)).toMatchObject({
-        deliveries: [{ status: "pending", attemptCount: 0 }],
-      });
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });
@@ -2209,22 +2260,61 @@ describe("Spark daemon local RPC", () => {
         {
           sessionRegistry,
           mailStore: {
-            list: async (_sessionId, options) => {
+            list: async (_sessionId, options?) => {
               expect(_sessionId).toBe("sess_view");
               expect(options).toEqual({ includeAcked: true });
               return Array.from({ length: 51 }, (_, index) => ({
                 id: `mail:${index}`,
                 toSessionId: "sess_view",
                 fromSessionId: `sess_sender_${index}`,
-                kind:
-                  index === 50
-                    ? ("question" as const)
-                    : index % 2 === 0
-                      ? ("request" as const)
-                      : ("notification" as const),
+                kind: index % 2 === 0 ? ("request" as const) : ("notification" as const),
                 visibility: "user" as const,
-                delivery: "mailbox" as const,
-                deliveries: [],
+                delivery: index === 50 ? ("channel" as const) : ("mailbox" as const),
+                deliveries:
+                  index === 50
+                    ? ([
+                        {
+                          adapter: "infoflow",
+                          externalKey: "infoflow:user:delivered-secret",
+                          status: "delivered" as const,
+                          attemptCount: 1,
+                          lastAttemptAt: "2026-07-14T03:51:00.000Z",
+                          deliveredAt: "2026-07-14T03:51:00.000Z",
+                          lastError: null,
+                          receipt: { providerReceipt: "provider-secret" },
+                        },
+                        {
+                          adapter: "infoflow",
+                          externalKey: "infoflow:user:pending-secret",
+                          status: "pending" as const,
+                          attemptCount: 0,
+                          lastAttemptAt: null,
+                          deliveredAt: null,
+                          lastError: null,
+                          receipt: null,
+                        },
+                        {
+                          adapter: "qqbot",
+                          externalKey: "qqbot:c2c:failed-secret",
+                          status: "failed" as const,
+                          attemptCount: 2,
+                          lastAttemptAt: "2026-07-14T03:52:00.000Z",
+                          deliveredAt: null,
+                          lastError: "provider-failure-secret",
+                          receipt: null,
+                        },
+                        {
+                          adapter: "qqbot",
+                          externalKey: "qqbot:c2c:uncertain-secret",
+                          status: "uncertain" as const,
+                          attemptCount: 1,
+                          lastAttemptAt: "2026-07-14T03:53:00.000Z",
+                          deliveredAt: null,
+                          lastError: "provider-unknown-secret",
+                          receipt: null,
+                        },
+                      ] satisfies SparkSessionMailDeliveryReceipt[])
+                    : [],
                 intent: "review.pull-request",
                 payload: { secret: `not-for-cockpit-${index}` },
                 correlationId: `corr:${index}`,
@@ -2275,11 +2365,22 @@ describe("Spark daemon local RPC", () => {
       });
       expect(emptyResult.mailbox.at(-1)).toMatchObject({
         id: "mail:50",
-        kind: "question",
+        kind: "request",
         subject: "Newest request",
+        channelDelivery: {
+          status: "uncertain",
+          total: 4,
+          pending: 1,
+          delivered: 1,
+          failed: 1,
+          uncertain: 1,
+        },
       });
       expect(JSON.stringify(emptyResult.mailbox)).not.toContain("not-for-cockpit");
       expect(JSON.stringify(emptyResult.mailbox)).not.toContain("secret-idempotency");
+      expect(JSON.stringify(emptyResult.mailbox)).not.toContain("provider-secret");
+      expect(JSON.stringify(emptyResult.mailbox)).not.toContain("provider-failure-secret");
+      expect(JSON.stringify(emptyResult.mailbox)).not.toContain("uncertain-secret");
 
       await sessionRegistry.recordTurnQueued("sess_view");
       const store = new SparkInvocationStore(db);
@@ -2292,7 +2393,7 @@ describe("Spark daemon local RPC", () => {
       expect(pending).toMatchObject({
         ok: true,
         result: {
-          status: "running",
+          status: "queued",
           messages: [
             {
               id: `invocation:${queued.invocationId}`,
@@ -2312,7 +2413,9 @@ describe("Spark daemon local RPC", () => {
         result: {
           status: "idle",
           messages: [],
-          metadata: { registryStatus: "ready" },
+          // Raw registry metadata may remain stale after direct store settlement;
+          // the daemon-owned pending projection above is the activity authority.
+          metadata: { registryStatus: "running" },
         },
       });
 

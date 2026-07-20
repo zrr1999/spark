@@ -11,6 +11,10 @@ export const sparkChannelAdapterSchema = z.enum(sparkChannelAdapterOptions);
 export const sparkSessionChannelBindingSchema = z.object({
   kind: z.literal("channel"),
   adapter: sparkChannelAdapterSchema,
+  /** Configured adapter instance used for local routing. */
+  adapterId: z.string().trim().min(1).optional(),
+  /** Opaque provider-account identity that survives adapter renames and secret rotation. */
+  adapterAccountIdentity: z.string().trim().min(1).optional(),
   externalKey: z.string().min(1),
   boundAt: isoDateTimeSchema.optional(),
 });
@@ -33,8 +37,10 @@ export const sparkSessionScopeSchema = z.discriminatedUnion("kind", [
 
 const sparkSessionRegistryRecordBaseSchema = z.object({
   sessionId: z.string().min(1),
+  /** Compatibility display mirror of role for role-named sessions. */
   title: z.string().min(1).optional(),
   status: sparkSessionStatusSchema.default("ready"),
+  /** Canonical long-lived division of labour; concrete tasks do not belong here. */
   role: z.string().min(1).optional(),
   cwd: z.string().min(1).optional(),
   sessionPath: z.string().min(1).optional(),
@@ -80,7 +86,9 @@ export const sparkSessionRegistryRecordSchema = z.preprocess(
  * engine; clients only exchange these transport-neutral values. */
 const sparkSessionCreateRequestBaseSchema = z.object({
   sessionId: z.string().trim().min(1).optional(),
+  /** Legacy display input; new role-aware creators should send role. */
   title: z.string().trim().min(1).optional(),
+  /** Stable division of labour chosen at creation for non-user sessions. */
   role: z.string().trim().min(1).optional(),
   cwd: z.string().trim().min(1).optional(),
   sessionPath: z.string().trim().min(1).optional(),
@@ -166,9 +174,13 @@ export const sparkSessionSnapshotRequestSchema = sparkSessionGetRequestSchema.ex
 export const sparkSessionBindRequestSchema = z.object({
   sessionId: z.string().trim().min(1),
   externalKey: z.string().trim().min(1),
+  adapterId: z.string().trim().min(1).optional(),
+  adapterAccountIdentity: z.string().trim().min(1).optional(),
 });
 
-export const sparkSessionUnbindRequestSchema = sparkSessionBindRequestSchema;
+export const sparkSessionUnbindRequestSchema = sparkSessionBindRequestSchema.omit({
+  adapterId: true,
+});
 export const sparkSessionArchiveRequestSchema = sparkSessionGetRequestSchema;
 export const sparkSessionSetModelRequestSchema = sparkSessionGetRequestSchema.extend({
   model: sparkModelRefSchema,

@@ -1144,6 +1144,13 @@ void test("Spark daemon native slash commands render invocation status and start
         observedAt: "2026-06-22T00:00:00.000Z",
         servers: [{ url: "ws://local", workspaceCount: 2, wsConnected: true }],
         invocations: { queued: 1, running: 2, succeeded: 3, failed: 4, cancelled: 5 },
+        channelDeliveries: {
+          pending: 6,
+          retrying: 2,
+          inFlight: 1,
+          delivered: 7,
+          uncertain: 3,
+        },
       }),
     }),
   });
@@ -1155,6 +1162,10 @@ void test("Spark daemon native slash commands render invocation status and start
   assert.equal(started, true);
   assert.match(rendered, /daemon: running/);
   assert.match(rendered, /invocations: queued=1 running=2 succeeded=3 failed=4 cancelled=5/);
+  assert.match(
+    rendered,
+    /channel-deliveries: pending=6 retrying=2 in-flight=1 delivered=7 uncertain=3/,
+  );
   assert.match(rendered, /server: ws:\/\/local workspaces=2 ws=connected/);
   assert.doesNotMatch(rendered, /queue:/u);
 });

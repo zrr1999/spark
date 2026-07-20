@@ -10,6 +10,11 @@ export type SessionActivityState = {
   runningTurnId: string | null;
 };
 
+/** Probe until every daemon-owned pending turn has reached a terminal state. */
+export function sessionActivityNeedsStatusProbe(state: SessionActivityState): boolean {
+  return state.phase !== "idle";
+}
+
 /** One presentation boundary for daemon run truth used by spinner, Stop and queue UI. */
 export function resolveSessionActivityState(input: {
   registryStatus?: string | null;

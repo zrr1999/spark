@@ -1,7 +1,14 @@
 import type { QqbotApiClient } from "./qqbot-api.ts";
-import type { ChannelReplyStream, ChannelReplyTarget } from "./reply.ts";
+import { QQBOT_MARKDOWN_MAX_BYTES, chunkQqbotMarkdownText } from "./qqbot-markdown.ts";
+import {
+  channelDeliveryNotSent,
+  type ChannelReplyStream,
+  type ChannelReplyTarget,
+} from "./reply.ts";
 
 const QQBOT_STREAM_FLUSH_MS = 500;
+/** Platform stream frames idle out if no update arrives for too long during tool waits. */
+const QQBOT_STREAM_KEEPALIVE_MS = 10_000;
 
 export interface QqbotC2CReplyStreamOptions {
   api: QqbotApiClient;
@@ -12,8 +19,15 @@ export interface QqbotC2CReplyStreamOptions {
   reserveFinalSeq: () => number;
   /** Test seam for flush scheduling. */
   flushDelayMs?: number;
+  keepaliveDelayMs?: number;
   schedule?: (callback: () => void, delayMs: number) => unknown;
   cancelSchedule?: (handle: unknown) => void;
+  /**
+   * Optional follow-up sender used when the final answer exceeds one markdown
+   * frame. The stream finalizes the first chunk in place; remaining chunks are
+   * delivered as ordinary passive markdown replies.
+   */
+  sendFollowUpMarkdown?: (content: string) => Promise<void>;
 }
 
 /**
@@ -22,6 +36,7 @@ export interface QqbotC2CReplyStreamOptions {
  */
 export function createQqbotC2CReplyStream(options: QqbotC2CReplyStreamOptions): ChannelReplyStream {
   const flushDelayMs = options.flushDelayMs ?? QQBOT_STREAM_FLUSH_MS;
+  const keepaliveDelayMs = options.keepaliveDelayMs ?? QQBOT_STREAM_KEEPALIVE_MS;
   const schedule =
     options.schedule ?? ((callback: () => void, delayMs: number) => setTimeout(callback, delayMs));
   const cancelSchedule =
@@ -33,14 +48,16 @@ export function createQqbotC2CReplyStream(options: QqbotC2CReplyStreamOptions): 
   let streamMsgId: string | undefined;
   let msgSeq: number | undefined;
   let pendingTimer: unknown;
+  let keepaliveTimer: unknown;
   let flushChain: Promise<void> = Promise.resolve();
   let finished = false;
+  let lastFlushError: unknown;
 
-  const enqueueFlush = (final: boolean, content: string) => {
-    flushChain = flushChain.then(async () => {
+  const enqueueFlush = (final: boolean, content: string, keepalive = false) => {
+    const run = async () => {
       if (finished && !final) return;
       const raw = ensureStreamMarkdown(content);
-      if (!raw.trim() && !final) return;
+      if (!raw.trim() && !final && !keepalive) return;
       msgSeq ??= options.reserveFinalSeq();
       const token = await options.resolveToken();
       const response = await options.api.sendC2CStreamMessage(token, options.openid, {
@@ -57,25 +74,85 @@ export function createQqbotC2CReplyStream(options: QqbotC2CReplyStreamOptions): 
       index += 1;
       const nextId = response.id?.trim();
       if (nextId) streamMsgId = nextId;
+      lastFlushError = undefined;
       if (final) finished = true;
+    };
+
+    // Keep the serial chain alive after intermediate failures so `complete()`
+    // can still deliver the terminal input_state=10 frame with the full answer.
+    // Callers await `attempt` for the real error; never leave a second rejected
+    // promise on `flushChain` (that becomes an unhandled rejection).
+    const attempt = flushChain.then(run, run);
+    flushChain = attempt.catch((error) => {
+      lastFlushError = error;
+      if (!final) {
+        console.error("[spark-channels] qqbot c2c stream flush failed", error);
+      }
     });
-    return flushChain;
+    return attempt;
+  };
+
+  const clearPending = () => {
+    if (pendingTimer !== undefined) {
+      cancelSchedule(pendingTimer);
+      pendingTimer = undefined;
+    }
+  };
+
+  const clearKeepalive = () => {
+    if (keepaliveTimer === undefined) return;
+    cancelSchedule(keepaliveTimer);
+    keepaliveTimer = undefined;
+  };
+
+  const armKeepalive = () => {
+    if (finished) return;
+    clearKeepalive();
+    keepaliveTimer = schedule(() => {
+      keepaliveTimer = undefined;
+      if (finished) return;
+      void enqueueFlush(false, answer, true).catch(() => {
+        // enqueueFlush already records/logs intermediate failures.
+      });
+      armKeepalive();
+    }, keepaliveDelayMs);
   };
 
   const scheduleFlush = () => {
     if (finished || pendingTimer !== undefined) return;
     pendingTimer = schedule(() => {
       pendingTimer = undefined;
-      void enqueueFlush(false, answer).catch((error) => {
-        console.error("[spark-channels] qqbot c2c stream flush failed", error);
+      void enqueueFlush(false, answer).catch(() => {
+        // enqueueFlush already records/logs intermediate failures.
       });
     }, flushDelayMs);
+    armKeepalive();
   };
 
-  const clearPending = () => {
-    if (pendingTimer === undefined) return;
-    cancelSchedule(pendingTimer);
-    pendingTimer = undefined;
+  const finalizeWithOptionalFollowUps = async (fullAnswer: string) => {
+    clearPending();
+    clearKeepalive();
+    const chunks = chunkQqbotMarkdownText(fullAnswer, QQBOT_MARKDOWN_MAX_BYTES);
+    const primary = chunks[0] ?? "";
+    answer = primary;
+    try {
+      await enqueueFlush(true, primary);
+    } catch (error) {
+      // Prefer the freshest terminal failure; fall back to last intermediate.
+      throw error ?? lastFlushError;
+    }
+    const followUps = chunks.slice(1);
+    if (followUps.length === 0) return;
+    if (!options.sendFollowUpMarkdown) {
+      console.error(
+        "[spark-channels] qqbot c2c stream truncated long reply; follow-up sender unavailable",
+        { omittedChunks: followUps.length },
+      );
+      return;
+    }
+    for (const chunk of followUps) {
+      await options.sendFollowUpMarkdown(chunk);
+    }
   };
 
   return {
@@ -85,19 +162,31 @@ export function createQqbotC2CReplyStream(options: QqbotC2CReplyStreamOptions): 
       answer += delta;
       scheduleFlush();
     },
+    replaceText(text) {
+      if (finished) return;
+      answer = text;
+      scheduleFlush();
+    },
     // Keep tool/progress off the C2C stream body; Cockpit/TUI remain the
-    // process surfaces. The stream only carries the final answer prose.
-    notifyToolStart() {},
-    notifyToolResult() {},
+    // process surfaces. Still refresh the frame so long tool waits do not
+    // idle-out the platform stream before final delivery.
+    notifyToolStart() {
+      armKeepalive();
+      if (!answer.trim()) return;
+      void enqueueFlush(false, answer, true).catch(() => undefined);
+    },
+    notifyToolResult() {
+      armKeepalive();
+      if (!answer.trim()) return;
+      void enqueueFlush(false, answer, true).catch(() => undefined);
+    },
     async complete() {
-      clearPending();
-      await enqueueFlush(true, answer);
+      await finalizeWithOptionalFollowUps(answer);
     },
     async fail(message) {
-      clearPending();
       const failureText = message.trim() || "处理失败，请稍后重试";
       if (!answer.trim()) answer = failureText;
-      await enqueueFlush(true, answer);
+      await finalizeWithOptionalFollowUps(answer);
     },
   };
 }
@@ -107,6 +196,7 @@ export function tryCreateQqbotC2CReplyStream(input: {
   api: QqbotApiClient;
   resolveToken: () => Promise<string>;
   reserveFinalSeq: (messageId: string) => number | undefined;
+  sendFollowUpMarkdown?: (content: string) => Promise<void>;
 }): ChannelReplyStream | undefined {
   const recipient = input.target.recipient.trim();
   const messageId = input.target.messageId?.trim();
@@ -119,10 +209,13 @@ export function tryCreateQqbotC2CReplyStream(input: {
     resolveToken: input.resolveToken,
     openid,
     messageId,
+    sendFollowUpMarkdown: input.sendFollowUpMarkdown,
     reserveFinalSeq: () => {
       const msgSeq = input.reserveFinalSeq(messageId);
       if (msgSeq === undefined) {
-        throw new Error("qqbot passive reply budget exhausted before c2c stream");
+        throw channelDeliveryNotSent(
+          new Error("qqbot passive reply budget exhausted before c2c stream"),
+        );
       }
       return msgSeq;
     },

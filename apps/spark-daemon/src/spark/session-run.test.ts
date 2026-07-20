@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  CHANNEL_DELIVERY_OUTCOME_UNKNOWN_ERROR_CODE,
+  channelDeliveryNotSent,
+} from "@zendev-lab/spark-channels";
 import { SPARK_PROTOCOL_VERSION, type SparkDaemonEvent } from "@zendev-lab/spark-protocol";
 import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import type { SparkDaemonSessionRunTask, SparkDaemonTaskExecutionContext } from "../core/types.ts";
 import {
+  CHANNEL_REPLY_TERMINAL_PRESENTED_ERROR_CODE,
   channelReplyDeliveryForCompletion,
   createChannelAwareTaskExecutor,
   createSparkDaemonTaskExecutor,
@@ -246,54 +251,6 @@ describe("daemon native session execution", () => {
     ).toMatchObject({ text: "检查完成", idempotencyKey: "channel.reply:final:invocation-1" });
   });
 
-  it("falls back to durable sendReply when an inline stream fails to complete", async () => {
-    const appendText = vi.fn();
-    const complete = vi.fn(async () => {
-      throw new Error("stream dead");
-    });
-    const sendReply = vi.fn(async () => undefined);
-    const task: SparkDaemonSessionRunTask = {
-      type: "session.run",
-      sessionId: "sess_inline_fallback",
-      prompt: "请回复",
-      channelReply: {
-        workspaceId: "workspace-infoflow",
-        adapterId: "infoflow",
-        recipient: "alice",
-      },
-      channelContext: {
-        externalKey: "infoflow:user:alice",
-        senderId: "alice",
-        messageId: "message-1",
-      },
-    };
-    const executeSession = vi.fn(async () => ({ assistantText: "你好" }));
-    const executor = createChannelAwareTaskExecutor({
-      paths,
-      createSparkHeadlessSessionExecutor: () => executeSession,
-      channelIngress: {
-        openReplyStream: vi.fn(async () => ({
-          answerMode: "inline" as const,
-          appendText,
-          notifyToolStart: vi.fn(),
-          notifyToolResult: vi.fn(),
-          complete,
-          fail: vi.fn(async () => undefined),
-        })),
-        sendReply,
-      },
-    });
-
-    const result = await executor(task, context(task));
-
-    expect(complete).toHaveBeenCalledWith("已完成");
-    expect(result).toEqual({ assistantText: "你好" });
-    expect(channelReplyDeliveryForCompletion(task, "invocation-1", "final", result)).toMatchObject({
-      text: "你好",
-      idempotencyKey: "channel.reply:final:invocation-1",
-    });
-  });
-
   it("leaves final delivery to the scheduler transaction when a stream is unavailable", async () => {
     const sendReply = vi.fn(async () => undefined);
     const task: SparkDaemonSessionRunTask = {
@@ -336,6 +293,118 @@ describe("daemon native session execution", () => {
       },
       text: "**完成**",
     });
+  });
+
+  it("uses the durable fallback only when stream creation is confirmed not sent", async () => {
+    const executeSession = vi.fn(async () => ({ assistantText: "done" }));
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_stream_not_sent",
+      prompt: "finish safely",
+      channelReply: {
+        workspaceId: "workspace-infoflow",
+        adapterId: "infoflow",
+        recipient: "alice",
+      },
+    };
+    const executor = createChannelAwareTaskExecutor({
+      paths,
+      createSparkHeadlessSessionExecutor: () => executeSession,
+      channelIngress: {
+        openReplyStream: vi.fn(async () => {
+          throw channelDeliveryNotSent(new Error("rejected before dispatch"));
+        }),
+        sendReply: vi.fn(async () => undefined),
+      },
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      const result = await executor(task, context(task));
+
+      expect(executeSession).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ assistantText: "done" });
+      expect(
+        channelReplyDeliveryForCompletion(task, "invocation-1", "final", result),
+      ).toMatchObject({ text: "done" });
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("stops before model execution when stream creation may already have sent", async () => {
+    const executeSession = vi.fn(async () => ({ assistantText: "must not run" }));
+    const recordTurnSettled = vi.fn(async () => ({}) as never);
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_stream_unknown",
+      prompt: "do not duplicate",
+      channelReply: {
+        workspaceId: "workspace-infoflow",
+        adapterId: "infoflow",
+        recipient: "alice",
+      },
+    };
+    const executor = createChannelAwareTaskExecutor({
+      paths,
+      sessionRegistry: {
+        recordRun: vi.fn(async () => ({}) as never),
+        recordTurnQueued: vi.fn(async () => ({}) as never),
+        recordTurnSettled,
+      },
+      createSparkHeadlessSessionExecutor: () => executeSession,
+      channelIngress: {
+        openReplyStream: vi.fn(async () => {
+          throw new Error("socket closed after request write");
+        }),
+        sendReply: vi.fn(async () => undefined),
+      },
+    });
+
+    await expect(executor(task, context(task))).rejects.toMatchObject({
+      code: CHANNEL_DELIVERY_OUTCOME_UNKNOWN_ERROR_CODE,
+      outcome: "unknown",
+    });
+    expect(executeSession).not.toHaveBeenCalled();
+    expect(recordTurnSettled).toHaveBeenCalledWith(task.sessionId);
+  });
+
+  it("keeps an inline model failure on the existing card without a competing reply", async () => {
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_inline_model_failure",
+      prompt: "fail once",
+      channelReply: {
+        workspaceId: "workspace-infoflow",
+        adapterId: "infoflow",
+        recipient: "alice",
+      },
+    };
+    const fail = vi.fn(async () => undefined);
+    const sendReply = vi.fn(async () => undefined);
+    const executor = createChannelAwareTaskExecutor({
+      paths,
+      createSparkHeadlessSessionExecutor: () => async () => {
+        throw new Error("provider failed");
+      },
+      channelIngress: {
+        openReplyStream: vi.fn(async () => ({
+          appendText: vi.fn(),
+          notifyToolStart: vi.fn(),
+          notifyToolResult: vi.fn(),
+          complete: vi.fn(async () => undefined),
+          fail,
+        })),
+        sendReply,
+      },
+    });
+
+    await expect(executor(task, context(task))).rejects.toMatchObject({
+      code: CHANNEL_REPLY_TERMINAL_PRESENTED_ERROR_CODE,
+    });
+    expect(fail).toHaveBeenCalledOnce();
+    expect(fail).toHaveBeenCalledWith("处理失败，请稍后重试");
+    expect(sendReply).not.toHaveBeenCalled();
   });
 
   it("builds one stable final delivery intent from the terminal result", async () => {
@@ -571,7 +640,6 @@ describe("daemon native session execution", () => {
     );
     expect(projectedMessages).toContainEqual(
       expect.objectContaining({
-        invocationId: "invocation-1",
         view: expect.objectContaining({
           message: expect.objectContaining({
             id: "tool-result:legacy-failure",
@@ -582,30 +650,17 @@ describe("daemon native session execution", () => {
         }),
       }),
     );
-    const terminalFailures = projectedMessages.filter(
-      (event) =>
-        event.type === "daemon.view_event" &&
-        event.view.type === "session.message" &&
-        event.view.message.id === "invocation:invocation-1:failure",
-    );
-    expect(terminalFailures).toHaveLength(1);
-    expect(terminalFailures[0]).toMatchObject({
-      view: {
-        message: {
-          role: "system",
-          text: "provider disconnected after tool failure",
-          status: "error",
-          metadata: {
-            source: "daemon.invocation",
-            invocationId: "invocation-1",
-            kind: "invocation_failure",
-          },
-        },
-      },
-    });
+    expect(
+      projectedMessages.filter(
+        (event) =>
+          event.type === "daemon.view_event" &&
+          event.view.type === "session.message" &&
+          event.view.message.id === "invocation:invocation-1:failure",
+      ),
+    ).toHaveLength(1);
   });
 
-  it("never leaves a successful channel turn without a visible reply", () => {
+  it("fails an empty channel result through the active stream without completing it", async () => {
     const task: SparkDaemonSessionRunTask = {
       type: "session.run",
       sessionId: "sess_channel_empty",
@@ -616,32 +671,34 @@ describe("daemon native session execution", () => {
         recipient: "c2c:user-1",
       },
     };
-
-    expect(channelReplyDeliveryForCompletion(task, "invocation-empty", "final", {})).toMatchObject({
-      kind: "final",
-      idempotencyKey: "channel.reply:final:invocation-empty",
-      text: "处理完成，但未生成可展示的回复",
+    const complete = vi.fn(async () => undefined);
+    const fail = vi.fn(async () => undefined);
+    const sendReply = vi.fn(async () => undefined);
+    const executor = createChannelAwareTaskExecutor({
+      paths,
+      createSparkHeadlessSessionExecutor: () => async () => ({}),
+      channelIngress: {
+        openReplyStream: vi.fn(async () => ({
+          appendText: vi.fn(),
+          notifyToolStart: vi.fn(),
+          notifyToolResult: vi.fn(),
+          complete,
+          fail,
+        })),
+        sendReply,
+      },
     });
+
+    await expect(executor(task, context(task))).rejects.toMatchObject({
+      code: CHANNEL_REPLY_TERMINAL_PRESENTED_ERROR_CODE,
+    });
+    expect(fail).toHaveBeenCalledWith("未生成可发送的回复，请稍后重试");
+    expect(complete).not.toHaveBeenCalled();
+    expect(sendReply).not.toHaveBeenCalled();
   });
 
-  it("does not let streaming card completion failure block the durable answer path", async () => {
+  it("falls back after inline completion only when no platform send is confirmed", async () => {
     const sendReply = vi.fn(async () => undefined);
-    const acknowledge = vi.fn();
-    const rerouteToMessage = vi.fn();
-    const stage = vi.fn(() => ({
-      deliveryId: "channel.reply:invocation-1",
-      invocationId: "invocation-1",
-      sessionId: "sess_channel_complete_fallback",
-      workspaceId: "workspace-infoflow",
-      adapterId: "infoflow",
-      target: { recipient: "alice", senderId: "alice", preview: "go" },
-      text: "done",
-      deliveryMode: "inline-stream" as const,
-      status: "sending" as const,
-      attemptCount: 0,
-      createdAt: "2026-07-15T00:00:00.000Z",
-      updatedAt: "2026-07-15T00:00:00.000Z",
-    }));
     const task: SparkDaemonSessionRunTask = {
       type: "session.run",
       sessionId: "sess_channel_complete_fallback",
@@ -663,17 +720,11 @@ describe("daemon native session execution", () => {
           notifyToolStart: vi.fn(),
           notifyToolResult: vi.fn(),
           complete: vi.fn(async () => {
-            throw new Error("card update failed");
+            throw channelDeliveryNotSent(new Error("card rejected before dispatch"));
           }),
           fail: vi.fn(async () => undefined),
         })),
         sendReply,
-      },
-      channelReplyDelivery: {
-        stage,
-        acknowledge,
-        defer: vi.fn(),
-        rerouteToMessage,
       },
     });
 
@@ -683,68 +734,94 @@ describe("daemon native session execution", () => {
       expect(sendReply).not.toHaveBeenCalled();
       expect(error).toHaveBeenCalledWith(
         expect.stringContaining("durable answer remains queued"),
-        expect.any(Error),
+        expect.objectContaining({ outcome: "not_sent" }),
       );
-      expect(stage).toHaveBeenCalledWith(
-        expect.objectContaining({ deliveryMode: "inline-stream", text: "done" }),
-      );
-      expect(rerouteToMessage).toHaveBeenCalledWith("channel.reply:invocation-1");
-      expect(rerouteToMessage.mock.invocationCallOrder[0]).toBeLessThan(
-        sendReply.mock.invocationCallOrder[0]!,
-      );
-      expect(acknowledge).toHaveBeenCalledWith("channel.reply:invocation-1");
     } finally {
       error.mockRestore();
     }
   });
 
-  it("does not duplicate a completed stream when local delivery acknowledgement fails", async () => {
-    const sendReply = vi.fn(async () => undefined);
-    const complete = vi.fn(async () => undefined);
-    const acknowledge = vi.fn(() => {
-      throw new Error("ack write failed");
-    });
-    const defer = vi.fn();
-    const stage = vi.fn(() => ({
-      deliveryId: "channel.reply:invocation-1",
-      invocationId: "invocation-1",
-      sessionId: "sess_channel_ack_failure",
-      workspaceId: "workspace-infoflow",
-      adapterId: "infoflow",
-      target: { recipient: "alice" },
-      text: "done",
-      deliveryMode: "inline-stream" as const,
-      recovery: {
-        kind: "infoflow.streaming-card.v1",
-        data: { modifyToken: "token-1" },
-      },
-      status: "sending" as const,
-      attemptCount: 0,
-      createdAt: "2026-07-15T00:00:00.000Z",
-      updatedAt: "2026-07-15T00:00:00.000Z",
-    }));
-    const recovery = {
-      kind: "infoflow.streaming-card.v1",
-      data: { modifyToken: "token-1" },
-    };
+  it("does not enqueue an ordinary fallback when inline completion is ambiguous", async () => {
     const task: SparkDaemonSessionRunTask = {
       type: "session.run",
-      sessionId: "sess_channel_ack_failure",
+      sessionId: "sess_channel_complete_unknown",
       prompt: "go",
       channelReply: {
         workspaceId: "workspace-infoflow",
         adapterId: "infoflow",
         recipient: "alice",
       },
-      channelContext: { externalKey: "infoflow:user:alice", senderId: "alice" },
     };
+    const executeSession = vi.fn(async () => ({ assistantText: "done" }));
+    const sendReply = vi.fn(async () => undefined);
     const executor = createChannelAwareTaskExecutor({
       paths,
-      createSparkHeadlessSessionExecutor: () => async () => ({ assistantText: "done" }),
+      createSparkHeadlessSessionExecutor: () => executeSession,
       channelIngress: {
         openReplyStream: vi.fn(async () => ({
-          deliveryRecovery: recovery,
           appendText: vi.fn(),
+          notifyToolStart: vi.fn(),
+          notifyToolResult: vi.fn(),
+          complete: vi.fn(async () => {
+            throw new Error("connection closed after card update");
+          }),
+          fail: vi.fn(async () => undefined),
+        })),
+        sendReply,
+      },
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      await expect(executor(task, context(task))).rejects.toMatchObject({
+        code: CHANNEL_DELIVERY_OUTCOME_UNKNOWN_ERROR_CODE,
+      });
+      expect(executeSession).toHaveBeenCalledTimes(1);
+      expect(sendReply).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("fails closed before model work when inline recovery staging loses local durability", async () => {
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_inline_stage_failure",
+      prompt: "finish once",
+      channelReply: {
+        workspaceId: "workspace-infoflow",
+        adapterId: "infoflow",
+        recipient: "alice",
+      },
+    };
+    const appendText = vi.fn();
+    const complete = vi.fn(async () => undefined);
+    const sendReply = vi.fn(async () => undefined);
+    const executor = createChannelAwareTaskExecutor({
+      paths,
+      createSparkHeadlessSessionExecutor: () => async (input) => {
+        await input.onEvent?.({
+          type: "view_event",
+          event: {
+            version: SPARK_PROTOCOL_VERSION,
+            type: "session.message",
+            sessionId: task.sessionId,
+            message: {
+              version: SPARK_PROTOCOL_VERSION,
+              id: "assistant-partial",
+              role: "assistant",
+              text: "partial",
+              status: "streaming",
+              metadata: {},
+            },
+          },
+        });
+        return { assistantText: "done" };
+      },
+      channelIngress: {
+        openReplyStream: vi.fn(async () => ({
+          deliveryRecovery: { kind: "infoflow.streaming-card.v1", data: { token: "card-1" } },
+          appendText,
           notifyToolStart: vi.fn(),
           notifyToolResult: vi.fn(),
           complete,
@@ -753,40 +830,34 @@ describe("daemon native session execution", () => {
         sendReply,
       },
       channelReplyDelivery: {
-        stage,
-        acknowledge,
-        defer,
+        stage: vi.fn(() => {
+          throw new Error("database write failed");
+        }),
+        updateText: vi.fn(),
+        acknowledge: vi.fn(),
+        defer: vi.fn(),
         rerouteToMessage: vi.fn(),
       },
     });
 
     await expect(executor(task, context(task))).rejects.toMatchObject({
-      code: "CHANNEL_REPLY_DELIVERY_PENDING",
-      deliveryId: "channel.reply:invocation-1",
+      code: CHANNEL_DELIVERY_OUTCOME_UNKNOWN_ERROR_CODE,
     });
-    expect(complete).toHaveBeenCalledOnce();
-    expect(stage).toHaveBeenCalledWith(
-      expect.objectContaining({ deliveryMode: "inline-stream", recovery, text: "done" }),
-    );
-    expect(acknowledge).toHaveBeenCalledOnce();
-    expect(defer).toHaveBeenCalledWith("channel.reply:invocation-1", expect.any(Error));
+    expect(appendText).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
     expect(sendReply).not.toHaveBeenCalled();
   });
 
-  it("uses streamed final text when the host result omits assistantText", async () => {
-    const appendText = vi.fn();
-    const complete = vi.fn(async () => undefined);
-    const fail = vi.fn(async () => undefined);
+  it("preserves streamed final text when the host omits assistantText", async () => {
     const task: SparkDaemonSessionRunTask = {
       type: "session.run",
-      sessionId: "sess_channel_stream_result_fallback",
-      prompt: "go",
+      sessionId: "sess_streamed_terminal_text",
+      prompt: "stream the answer",
       channelReply: {
         workspaceId: "workspace-infoflow",
         adapterId: "infoflow",
         recipient: "alice",
       },
-      channelContext: { externalKey: "infoflow:user:alice", senderId: "alice" },
     };
     const executor = createChannelAwareTaskExecutor({
       paths,
@@ -799,9 +870,9 @@ describe("daemon native session execution", () => {
             sessionId: task.sessionId,
             message: {
               version: SPARK_PROTOCOL_VERSION,
-              id: "assistant-fallback",
+              id: "assistant-streamed",
               role: "assistant",
-              text: "流式最终答案",
+              text: "streamed answer",
               status: "done",
               metadata: {},
             },
@@ -811,61 +882,87 @@ describe("daemon native session execution", () => {
       },
       channelIngress: {
         openReplyStream: vi.fn(async () => ({
-          appendText,
+          appendText: vi.fn(),
           notifyToolStart: vi.fn(),
           notifyToolResult: vi.fn(),
-          complete,
-          fail,
+          complete: vi.fn(async () => undefined),
+          fail: vi.fn(async () => undefined),
         })),
         sendReply: vi.fn(async () => undefined),
       },
     });
 
-    await expect(executor(task, context(task))).resolves.toEqual({});
-    expect(appendText).toHaveBeenCalledWith("流式最终答案");
-    expect(complete).toHaveBeenCalledWith("已完成");
-    expect(fail).not.toHaveBeenCalled();
+    await expect(executor(task, context(task))).resolves.toMatchObject({
+      assistantText: "streamed answer",
+    });
   });
 
-  it("fails a channel invocation that produces no deliverable assistant text", async () => {
-    const complete = vi.fn(async () => undefined);
-    const fail = vi.fn(async () => undefined);
-    const sendReply = vi.fn(async () => undefined);
+  it("keeps a completed inline reply owned when local acknowledgement fails", async () => {
     const task: SparkDaemonSessionRunTask = {
       type: "session.run",
-      sessionId: "sess_channel_empty",
-      prompt: "go",
+      sessionId: "sess_inline_ack_failure",
+      prompt: "finish once",
       channelReply: {
         workspaceId: "workspace-infoflow",
         adapterId: "infoflow",
         recipient: "alice",
       },
-      channelContext: { externalKey: "infoflow:user:alice", senderId: "alice" },
     };
+    const defer = vi.fn();
+    const sendReply = vi.fn(async () => undefined);
     const executor = createChannelAwareTaskExecutor({
       paths,
-      createSparkHeadlessSessionExecutor: () => async () => ({ assistantText: "   " }),
+      createSparkHeadlessSessionExecutor: () => async () => ({ assistantText: "done" }),
       channelIngress: {
         openReplyStream: vi.fn(async () => ({
+          deliveryRecovery: { kind: "infoflow.streaming-card.v1", data: { token: "card-1" } },
           appendText: vi.fn(),
           notifyToolStart: vi.fn(),
           notifyToolResult: vi.fn(),
-          complete,
-          fail,
+          complete: vi.fn(async () => undefined),
+          fail: vi.fn(async () => undefined),
         })),
         sendReply,
       },
+      channelReplyDelivery: {
+        stage: vi.fn(
+          () =>
+            ({
+              deliveryId: "channel.reply:invocation-1",
+            }) as never,
+        ),
+        updateText: vi.fn(
+          () =>
+            ({
+              deliveryId: "channel.reply:invocation-1",
+            }) as never,
+        ),
+        acknowledge: vi.fn(() => {
+          throw new Error("local commit failed");
+        }),
+        defer,
+        rerouteToMessage: vi.fn(),
+      },
     });
 
-    await expect(executor(task, context(task))).rejects.toMatchObject({
-      code: "CHANNEL_REPLY_EMPTY",
+    const result = await executor(task, context(task));
+
+    expect(result).toMatchObject({
+      assistantText: "done",
+      channelReplyDeliveryPending: true,
     });
-    expect(fail).toHaveBeenCalledWith("未生成可发送的回复，请稍后重试");
-    expect(complete).not.toHaveBeenCalled();
+    expect(defer).toHaveBeenCalledWith(
+      "channel.reply:invocation-1",
+      expect.objectContaining({ message: "local commit failed" }),
+    );
     expect(sendReply).not.toHaveBeenCalled();
+    expect(
+      channelReplyDeliveryForCompletion(task, "invocation-1", "final", result),
+    ).toBeUndefined();
   });
 
   it("keeps the Infoflow user message clean and supplies channel facts through prompt layers", async () => {
+    const imageData = Buffer.from("image").toString("base64");
     const task: SparkDaemonSessionRunTask = {
       type: "session.run",
       sessionId: "sess_infoflow",
@@ -884,6 +981,7 @@ describe("daemon native session execution", () => {
         eventType: "MESSAGE_RECEIVE",
         contentType: "mixed",
         attachments: [{ kind: "image", reference: "image-fid-1" }],
+        images: [{ data: imageData, mediaType: "image/png", name: "photo.png" }],
         mentions: ["神经蛙"],
         mentionedSelf: true,
       },
@@ -897,7 +995,11 @@ describe("daemon native session execution", () => {
 
     const input = executeSession.mock.calls[0]?.[0] as
       | {
-          prompt?: string;
+          prompt?:
+            | string
+            | Array<
+                { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
+              >;
           systemPrompt?: string;
           messageMetadata?: Record<string, unknown>;
           sessionSource?: string;
@@ -906,7 +1008,10 @@ describe("daemon native session execution", () => {
           allowedTools?: readonly string[];
         }
       | undefined;
-    expect(input?.prompt).toBe("@神经蛙 你叫什么名字");
+    expect(input?.prompt).toEqual([
+      { type: "text", text: "@神经蛙 你叫什么名字" },
+      { type: "image", data: imageData, mimeType: "image/png" },
+    ]);
     expect(input?.approvalMethod).toBe("auto");
     expect(input?.sessionSurface).toBe("channel");
     expect(input?.allowedTools).toEqual(["session", "ask", "context", "todo"]);
@@ -929,6 +1034,7 @@ describe("daemon native session execution", () => {
     expect(input?.systemPrompt).toContain('"reference":"image-fid-1"');
     expect(input?.sessionSource).toBe("channel");
     expect(input?.messageMetadata).toEqual({
+      invocationId: "invocation-1",
       origin: {
         kind: "user",
         host: "channel",
@@ -962,7 +1068,9 @@ describe("daemon native session execution", () => {
       prompt: "research this",
       channelReply: {
         workspaceId: "workspace-qq",
-        adapterId: "qqbot",
+        adapter: "qqbot",
+        adapterId: "qqbot-account-a",
+        adapterAccountIdentity: "channel-account:qqbot:account-a",
         recipient: "qq:user:42",
       },
       channelContext: {
@@ -979,13 +1087,53 @@ describe("daemon native session execution", () => {
         channelBinding: {
           adapter: "qqbot",
           externalKey: "qqbot:user:42",
+          adapterId: "qqbot-account-a",
+          adapterAccountIdentity: "channel-account:qqbot:account-a",
         },
       }),
     );
   });
 
+  it("injects the persistent administrator role into a local session prompt", async () => {
+    const executeSession = vi.fn(async () => ({ assistantText: "coordinated" }));
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_administrator",
+      prompt: "安排一下后续工作",
+    };
+
+    await executeSparkDaemonSessionRunTask(task, context(task), {
+      paths,
+      executeSession,
+      sessionRegistry: {
+        get: vi.fn(
+          async () =>
+            ({
+              role: "管理员",
+              bindings: [],
+            }) as never,
+        ),
+        recordRun: vi.fn(async () => ({}) as never),
+        recordTurnQueued: vi.fn(async () => ({}) as never),
+        recordTurnSettled: vi.fn(async () => ({}) as never),
+      },
+    });
+
+    expect(executeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionSurface: "local",
+        systemPrompt: expect.stringContaining("Persistent session role: 管理员"),
+      }),
+    );
+    const call = executeSession.mock.calls.at(0) as [{ systemPrompt?: string }] | undefined;
+    const input = call?.[0];
+    expect(input?.systemPrompt).toContain("You are Spark, a coding assistant");
+    expect(input?.systemPrompt).toContain("As the administrator session");
+  });
+
   it("keeps direct session requests exact and projects their execution source as session", async () => {
     const messageMetadata = {
+      invocationId: "invocation-1",
       origin: {
         kind: "session",
         sessionId: "sess_sender",
@@ -1041,6 +1189,7 @@ describe("daemon native session execution", () => {
         prompt: "generic daemon turn",
         sessionSource: "daemon",
         messageMetadata: {
+          invocationId: "invocation-1",
           origin: { kind: "user", host: "daemon", surface: "local" },
         },
       }),
@@ -1111,9 +1260,9 @@ describe("daemon native session execution", () => {
           sessionId: task.sessionId,
           message: {
             version: SPARK_PROTOCOL_VERSION,
-            id: "assistant-1",
-            role: "assistant",
-            text: "done",
+            id: `${task.sessionId}:message:user:live:1`,
+            role: "user",
+            text: "hello",
             status: "done",
             metadata: {},
           },
@@ -1152,28 +1301,36 @@ describe("daemon native session execution", () => {
         projectId: "project-1",
         invocationId: "invocation-1",
         metadata: { workspaceBindingId: "binding-1" },
+        view: expect.objectContaining({
+          type: "session.message",
+          message: expect.objectContaining({
+            role: "user",
+            metadata: { invocationId: "invocation-1" },
+          }),
+        }),
       }),
     ]);
   });
 
-  it("names an untitled local session only after its completed transcript is indexed", async () => {
+  it("assigns a user session role only after its completed transcript is indexed", async () => {
     const recordTurnQueued = vi.fn(async () => ({}) as never);
     const recordTurnSettled = vi.fn(async () => ({}) as never);
     const recordRun = vi.fn(async () => ({}) as never);
-    const setTitleIfMissing = vi.fn(async (_sessionId: string, title: string) => ({
+    const setRoleIfMissing = vi.fn(async (_sessionId: string, role: string) => ({
       sessionId: task.sessionId,
       scope: { kind: "workspace" as const, workspaceId: "workspace-title" },
       workspaceId: "workspace-title",
-      title,
+      title: role,
+      role,
       status: "ready" as const,
       bindings: [],
       createdAt: "2026-07-10T00:00:00.000Z",
       updatedAt: "2026-07-10T00:02:00.000Z",
       sessionPath: "/daemon/sessions/sess_auto_title.jsonl",
     }));
-    let resolveTitle!: (title: string) => void;
-    const generateSessionTitle = vi.fn(
-      async () => await new Promise<string>((resolve) => (resolveTitle = resolve)),
+    let resolveRole!: (role: string) => void;
+    const generateSessionRole = vi.fn(
+      async () => await new Promise<string>((resolve) => (resolveRole = resolve)),
     );
     const task: SparkDaemonSessionRunTask = {
       type: "session.run",
@@ -1189,7 +1346,7 @@ describe("daemon native session execution", () => {
           modelId: "gpt-5.6-sol",
         })),
         prepareModel: vi.fn(async () => undefined),
-        generateSessionTitle,
+        generateSessionRole,
       },
       sessionRegistry: {
         get: vi.fn(async () => ({
@@ -1202,7 +1359,7 @@ describe("daemon native session execution", () => {
           updatedAt: "2026-07-10T00:01:00.000Z",
           sessionPath: "/daemon/sessions/sess_auto_title.jsonl",
         })),
-        setTitleIfMissing,
+        setRoleIfMissing,
         recordTurnQueued,
         recordTurnSettled,
         recordRun,
@@ -1220,40 +1377,42 @@ describe("daemon native session execution", () => {
     });
     expect(recordRun).toHaveBeenCalledOnce();
     await vi.waitFor(() =>
-      expect(generateSessionTitle).toHaveBeenCalledWith({
+      expect(generateSessionRole).toHaveBeenCalledWith({
         prompt: task.prompt,
         model: { providerName: "baidu-oneapi", modelId: "gpt-5.6-sol" },
         signal: expect.any(AbortSignal),
       }),
     );
-    // The main invocation has already resolved while the advisory title leaf is pending.
-    expect(setTitleIfMissing).not.toHaveBeenCalled();
-    resolveTitle("Daemon startup diagnosis");
+    // The main invocation has already resolved while the advisory role leaf is pending.
+    expect(setRoleIfMissing).not.toHaveBeenCalled();
+    resolveRole("Runtime Operations");
     await vi.waitFor(() =>
-      expect(setTitleIfMissing).toHaveBeenCalledWith(task.sessionId, "Daemon startup diagnosis"),
+      expect(setRoleIfMissing).toHaveBeenCalledWith(task.sessionId, "Runtime Operations"),
     );
     await vi.waitFor(() =>
       expect(emitted).toContainEqual(
         expect.objectContaining({
           type: "daemon.session.updated",
           sessionId: task.sessionId,
-          title: "Daemon startup diagnosis",
+          title: "Runtime Operations",
         }),
       ),
     );
     expect(recordRun.mock.invocationCallOrder[0]).toBeLessThan(
-      generateSessionTitle.mock.invocationCallOrder[0]!,
+      generateSessionRole.mock.invocationCallOrder[0]!,
     );
   });
 
-  it("propagates invocation cancellation into the detached title projection", async () => {
+  it("keeps the detached role projection independent after a completed invocation", async () => {
     const controller = new AbortController();
-    const setTitleIfMissing = vi.fn(async () => ({}) as never);
-    let titleSignal: AbortSignal | undefined;
-    const generateSessionTitle = vi.fn(
+    const setRoleIfMissing = vi.fn(async () => ({}) as never);
+    let roleSignal: AbortSignal | undefined;
+    let resolveRole!: (role: string) => void;
+    const generateSessionRole = vi.fn(
       async (input: { signal?: AbortSignal }) =>
-        await new Promise<string>((_resolve, reject) => {
-          titleSignal = input.signal;
+        await new Promise<string>((resolve, reject) => {
+          resolveRole = resolve;
+          roleSignal = input.signal;
           const rejectWithReason = () => reject(input.signal?.reason ?? new Error("cancelled"));
           if (input.signal?.aborted) {
             rejectWithReason();
@@ -1276,7 +1435,7 @@ describe("daemon native session execution", () => {
           modelId: "gpt-5.6-sol",
         })),
         prepareModel: vi.fn(async () => undefined),
-        generateSessionTitle,
+        generateSessionRole,
       },
       sessionRegistry: {
         get: vi.fn(async () => ({
@@ -1289,7 +1448,7 @@ describe("daemon native session execution", () => {
           updatedAt: "2026-07-10T00:01:00.000Z",
           sessionPath: "/daemon/sessions/sess_cancelled_title_projection.jsonl",
         })),
-        setTitleIfMissing,
+        setRoleIfMissing,
         recordTurnQueued: vi.fn(async () => ({}) as never),
         recordTurnSettled: vi.fn(async () => ({}) as never),
         recordRun: vi.fn(async () => ({}) as never),
@@ -1302,16 +1461,17 @@ describe("daemon native session execution", () => {
     });
 
     await executor(task, context(task, [], controller.signal));
-    await vi.waitFor(() => expect(titleSignal).toBeInstanceOf(AbortSignal));
+    await vi.waitFor(() => expect(roleSignal).toBeInstanceOf(AbortSignal));
     controller.abort(new Error("invocation cancelled"));
-    await vi.waitFor(() => expect(titleSignal?.aborted).toBe(true));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(setTitleIfMissing).not.toHaveBeenCalled();
+    expect(roleSignal?.aborted).toBe(false);
+    resolveRole("Runtime Operations");
+    await vi.waitFor(() =>
+      expect(setRoleIfMissing).toHaveBeenCalledWith(task.sessionId, "Runtime Operations"),
+    );
   });
 
   it("does not name a session when transcript indexing fails", async () => {
-    const generateSessionTitle = vi.fn(async () => "Unused title");
+    const generateSessionRole = vi.fn(async () => "Unused role");
     const task: SparkDaemonSessionRunTask = {
       type: "session.run",
       sessionId: "sess_title_index_failure",
@@ -1326,11 +1486,11 @@ describe("daemon native session execution", () => {
           modelId: "gpt-5.6-sol",
         })),
         prepareModel: vi.fn(async () => undefined),
-        generateSessionTitle,
+        generateSessionRole,
       },
       sessionRegistry: {
         get: vi.fn(async () => undefined),
-        setTitleIfMissing: vi.fn(async () => ({}) as never),
+        setRoleIfMissing: vi.fn(async () => ({}) as never),
         recordTurnQueued: vi.fn(async () => ({}) as never),
         recordTurnSettled: vi.fn(async () => ({}) as never),
         recordRun: vi.fn(async () => {
@@ -1350,7 +1510,7 @@ describe("daemon native session execution", () => {
         assistantText: "completed once",
         registryPersistence: { status: "failed" },
       });
-      expect(generateSessionTitle).not.toHaveBeenCalled();
+      expect(generateSessionRole).not.toHaveBeenCalled();
     } finally {
       error.mockRestore();
     }

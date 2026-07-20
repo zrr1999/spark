@@ -250,14 +250,26 @@ describe("session workbench projection", () => {
             createdAt: "2026-07-13T08:03:00.000Z",
             readAt: null,
             ackedAt: null,
+            channelDelivery: {
+              status: "uncertain",
+              total: 2,
+              pending: 0,
+              delivered: 1,
+              failed: 0,
+              uncertain: 1,
+            },
           },
         ],
       }),
     });
 
     expect(view.mailbox).toMatchObject([
-      { id: "mail:newer", status: "unread" },
-      { id: "mail:older", status: "read" },
+      {
+        id: "mail:newer",
+        status: "unread",
+        channelDelivery: { status: "uncertain", total: 2, delivered: 1, uncertain: 1 },
+      },
+      { id: "mail:older", status: "read", channelDelivery: null },
     ]);
   });
 

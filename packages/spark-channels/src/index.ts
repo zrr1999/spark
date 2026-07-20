@@ -1,4 +1,14 @@
 export {
+  CHANNEL_IMAGE_MAX_BYTES,
+  CHANNEL_IMAGE_MAX_COUNT,
+  CHANNEL_IMAGE_MAX_TOTAL_BYTES,
+  materializeChannelImages,
+  normalizeChannelImage,
+  type ChannelImage,
+  type ChannelImageSource,
+  type MaterializeChannelImagesOptions,
+} from "./channel-images.ts";
+export {
   createChannelExternalKey,
   createDefaultChannelExternalKey,
   defaultChannelScope,
@@ -21,6 +31,8 @@ export {
   resolveQqbotApiBase,
   type QqbotApiClient,
   type QqbotInteractionAckCode,
+  type QqbotImageUploadSource,
+  type QqbotMediaUploadResponse,
   type QqbotMessageResponse,
   type QqbotStreamMessageRequest,
 } from "./qqbot-api.ts";
@@ -44,6 +56,8 @@ export {
   type QqbotGatewayCursor,
   type QqbotTransportOptions,
 } from "./qqbot-transport.ts";
+export { QQBOT_MARKDOWN_MAX_BYTES, chunkQqbotMarkdownText } from "./qqbot-markdown.ts";
+export { createQqbotC2CReplyStream, tryCreateQqbotC2CReplyStream } from "./qqbot-reply-stream.ts";
 export {
   formatQqbotRecipient,
   parseQqbotRecipient,
@@ -89,6 +103,7 @@ export {
   type InfoflowSdkOutbound,
   type InfoflowSdkOutboundOptions,
 } from "./infoflow-sdk-outbound.ts";
+export { INFOFLOW_MAX_CARD_TEXT_LENGTH, chunkInfoflowText } from "./infoflow-text.ts";
 export {
   createInfoflowTransport,
   DEFAULT_INFOFLOW_API_HOST,
@@ -113,12 +128,45 @@ export {
 } from "./infoflow-prompts.ts";
 export type { InfoflowMessageContext, InfoflowPromptScope } from "./infoflow-prompts.ts";
 export type {
+  ChannelDeliveryFacts,
+  ChannelDeliveryFailureCertainty,
   ChannelReplyCapability,
+  ChannelDeliveryFailureOutcome,
+  ChannelDeliveryReceipt,
+  ChannelDeliveryReplaySafety,
+  ChannelDeliveryResult,
+  ChannelMessageSendInput,
+  ChannelMessageTarget,
+  ChannelReplyCapabilitySendInput,
   ChannelReplyRecovery,
+  ChannelReplySendInput,
   ChannelReplyStream,
   ChannelReplyTarget,
 } from "./reply.ts";
-export { ChannelRegistry, ChannelRegistryError, parseChannelsConfig } from "./registry.ts";
+export {
+  renderTextChannelAsk,
+  renderTextChannelAskRequest,
+  type TextChannelAskOption,
+  type TextChannelAskRenderInput,
+} from "./text-ask.ts";
+export {
+  CHANNEL_DELIVERY_NOT_SENT_ERROR_CODE,
+  CHANNEL_DELIVERY_OUTCOME_UNKNOWN_ERROR_CODE,
+  ChannelDeliveryError,
+  ChannelDeliveryOutcomeError,
+  channelDeliveryFailureCertainty,
+  channelDeliveryFailureOutcome,
+  channelDeliveryNotSent,
+  channelDeliveryOutcomeUnknown,
+  normalizeChannelDeliveryResult,
+  requireChannelDeliveryId,
+} from "./reply.ts";
+export {
+  ChannelRegistry,
+  ChannelRegistryError,
+  channelAdapterAccountIdentity,
+  parseChannelsConfig,
+} from "./registry.ts";
 export { FakeChannelTransport } from "./transport.ts";
 export type {
   ChannelAdapter,
@@ -127,6 +175,8 @@ export type {
   ChannelAdapterType,
   ChannelConnectionState,
   ChannelIngressConfig,
+  ChannelImageCapability,
+  ChannelImageSendInput,
   ChannelNotifyInput,
   ChannelNotifyListResult,
   ChannelNotifyResult,

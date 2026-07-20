@@ -79,13 +79,14 @@ export function migrateSparkDaemonDatabase(db: DatabaseSync): void {
       kind TEXT NOT NULL CHECK (kind IN ('reply', 'ask', 'interaction_ack', 'inbound', 'notification')),
       idempotency_key TEXT NOT NULL UNIQUE,
       payload_json TEXT NOT NULL,
-      status TEXT NOT NULL CHECK (status IN ('pending', 'retry_wait', 'delivered')),
+      status TEXT NOT NULL CHECK (status IN ('pending', 'retry_wait', 'delivered', 'uncertain')),
       attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
       next_attempt_at TEXT NOT NULL,
       lease_owner TEXT,
       lease_token TEXT,
       lease_expires_at TEXT,
       claimed_at TEXT,
+      dispatched_at TEXT,
       last_error TEXT,
       receipt_json TEXT,
       delivered_at TEXT,
@@ -166,7 +167,7 @@ export function migrateSparkDaemonDatabase(db: DatabaseSync): void {
       WHERE terminal_json IS NOT NULL;
     CREATE INDEX IF NOT EXISTS daemon_human_waits_status_idx ON daemon_human_waits(status, created_at);
   `);
-  migrateChannelDeliveryKinds(db);
+  migrateChannelDeliverySchema(db);
   addMissingRuntimeCommandReceiptColumns(db);
   addMissingInvocationColumns(db);
   db.exec(`
@@ -201,11 +202,22 @@ function addMissingRuntimeCommandReceiptColumns(db: DatabaseSync): void {
   }
 }
 
-function migrateChannelDeliveryKinds(db: DatabaseSync): void {
+function migrateChannelDeliverySchema(db: DatabaseSync): void {
   const row = db
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'channel_deliveries'")
     .get() as { sql?: string } | undefined;
-  if (!row?.sql || (row.sql.includes("'inbound'") && row.sql.includes("'notification'"))) return;
+  if (
+    !row?.sql ||
+    (row.sql.includes("'inbound'") &&
+      row.sql.includes("'notification'") &&
+      row.sql.includes("'uncertain'") &&
+      workspaceColumns(db, "channel_deliveries").has("dispatched_at"))
+  ) {
+    return;
+  }
+
+  const columns = workspaceColumns(db, "channel_deliveries");
+  const dispatchedAt = columns.has("dispatched_at") ? "dispatched_at" : "NULL";
 
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -218,13 +230,14 @@ function migrateChannelDeliveryKinds(db: DatabaseSync): void {
         kind TEXT NOT NULL CHECK (kind IN ('reply', 'ask', 'interaction_ack', 'inbound', 'notification')),
         idempotency_key TEXT NOT NULL UNIQUE,
         payload_json TEXT NOT NULL,
-        status TEXT NOT NULL CHECK (status IN ('pending', 'retry_wait', 'delivered')),
+        status TEXT NOT NULL CHECK (status IN ('pending', 'retry_wait', 'delivered', 'uncertain')),
         attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
         next_attempt_at TEXT NOT NULL,
         lease_owner TEXT,
         lease_token TEXT,
         lease_expires_at TEXT,
         claimed_at TEXT,
+        dispatched_at TEXT,
         last_error TEXT,
         receipt_json TEXT,
         delivered_at TEXT,
@@ -233,12 +246,12 @@ function migrateChannelDeliveryKinds(db: DatabaseSync): void {
       );
       INSERT INTO channel_deliveries (
         id, kind, idempotency_key, payload_json, status, attempt_count,
-        next_attempt_at, lease_owner, lease_token, lease_expires_at, claimed_at,
+        next_attempt_at, lease_owner, lease_token, lease_expires_at, claimed_at, dispatched_at,
         last_error, receipt_json, delivered_at, created_at, updated_at
       )
       SELECT
         id, kind, idempotency_key, payload_json, status, attempt_count,
-        next_attempt_at, lease_owner, lease_token, lease_expires_at, claimed_at,
+        next_attempt_at, lease_owner, lease_token, lease_expires_at, claimed_at, ${dispatchedAt},
         last_error, receipt_json, delivered_at, created_at, updated_at
       FROM channel_deliveries_legacy;
       DROP TABLE channel_deliveries_legacy;

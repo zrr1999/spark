@@ -32,6 +32,15 @@ describe("Spark conversation view protocol", () => {
           createdAt: "2026-07-14T03:00:00.000Z",
           readAt: null,
           ackedAt: null,
+          channelDelivery: {
+            status: "uncertain",
+            total: 4,
+            pending: 1,
+            delivered: 1,
+            failed: 1,
+            uncertain: 1,
+            providerReceipt: "must be stripped",
+          },
         },
       ],
     });
@@ -47,6 +56,14 @@ describe("Spark conversation view protocol", () => {
         createdAt: "2026-07-14T03:00:00.000Z",
         readAt: null,
         ackedAt: null,
+        channelDelivery: {
+          status: "uncertain",
+          total: 4,
+          pending: 1,
+          delivered: 1,
+          failed: 1,
+          uncertain: 1,
+        },
       },
     ]);
   });

@@ -13,11 +13,12 @@ describe("ThinkingChainPart component contract", () => {
     expect(() => compile(source, { filename: componentPath, generate: "server" })).not.toThrow();
   });
 
-  it("keeps execution details during work, then collapses into a reusable step timeline", () => {
+  it("keeps execution details collapsed by default, including during active work", () => {
     const source = readFileSync(componentPath, "utf8");
 
     expect(source).toContain('class="thinking-chain {chainState}"');
     expect(source).toContain("bind:open={expanded}");
+    expect(source).toContain("let expanded = $state(false)");
     expect(source).toContain("onclick={toggleExpanded}");
     expect(source).toContain("expanded = !expanded");
     expect(source).toContain("{#if expanded}");
@@ -31,8 +32,8 @@ describe("ThinkingChainPart component contract", () => {
     expect(source).toContain("grid-template-columns: 18px minmax(0, 1fr)");
     expect(source).toContain("chain-step-reveal");
     expect(source).toContain("animation: chain-pulse");
-    expect(source).toContain('previousState === "streaming" && chainState === "complete"');
-    expect(source).toContain("previousActive && !active");
+    expect(source).not.toContain("expanded = true");
+    expect(source).not.toContain("active && chainState");
     expect(source).toContain("@media (hover: hover) and (pointer: fine)");
     expect(source).toContain(":global(.conversation-message:hover)");
     expect(source).not.toContain("pointer-events: none");

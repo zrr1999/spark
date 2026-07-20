@@ -400,7 +400,7 @@ void test("spark ask plain select path receives only business options", async ()
   });
 });
 
-void test("single-question ask_flow custom answer resumes a required decision gate", () => {
+void test("single-question ask_flow custom answer blocks a required decision gate", () => {
   const request = createPiAskFlowRequest({
     flow: "custom",
     mode: "decision",
@@ -441,7 +441,7 @@ void test("single-question ask_flow custom answer resumes a required decision ga
   assert.equal(controller.handleKey("enter", {}), true);
 
   assert.equal(result?.status, "answered");
-  assert.equal(result?.nextAction, "resume");
+  assert.equal(result?.nextAction, "block");
   assert.deepEqual(result?.answers.answer, {
     questionId: "answer",
     kind: "custom",
@@ -971,7 +971,7 @@ void test("spark ask selectWithCustom keeps custom affordance out of business op
   });
 });
 
-void test("decision gates accept unmatched custom text as a resumable answer", async () => {
+void test("decision gates preserve unmatched custom text as a blocking answer", async () => {
   const request = createPiAskFlowRequest({
     flow: "custom",
     mode: "decision",
@@ -991,58 +991,45 @@ void test("decision gates accept unmatched custom text as a resumable answer", a
   });
   const result = await runPiAskFlow(request, { select: async () => "maybe later" });
   assert.equal(result.status, "answered");
-  assert.equal(result.nextAction, "resume");
+  assert.equal(result.nextAction, "block");
   assert.deepEqual(result.answers.answer, {
     questionId: "answer",
     kind: "custom",
     values: [],
     customText: "maybe later",
   });
+  assert.equal(isPiAskFlowGateBlocked(result, request), true);
+});
+
+void test("a required freeform gate resumes with the operator's answer", async () => {
+  const request = createPiAskFlowRequest({
+    mode: "approval",
+    questions: [
+      {
+        id: "reason",
+        prompt: "Why should execution continue?",
+        type: "freeform",
+        required: true,
+      },
+    ],
+  });
+
+  const result = await runPiAskFlow(request, {
+    input: async () => "The focused checks passed.",
+  });
+
+  assert.equal(result.status, "answered");
+  assert.equal(result.nextAction, "resume");
+  assert.deepEqual(result.answers.reason, {
+    questionId: "reason",
+    kind: "custom",
+    values: [],
+    customText: "The focused checks passed.",
+  });
   assert.equal(isPiAskFlowGateBlocked(result, request), false);
 });
 
-void test("required decision and approval gates accept custom replies for all question types", async () => {
-  const businessOptions = [
-    { value: "yes", label: "Yes" },
-    { value: "no", label: "No" },
-  ];
-  const cases = [
-    { type: "single" as const, mode: "decision" as const },
-    { type: "multi" as const, mode: "approval" as const },
-    { type: "preview" as const, mode: "decision" as const },
-    { type: "freeform" as const, mode: "approval" as const },
-  ];
-
-  for (const item of cases) {
-    const request = createPiAskFlowRequest({
-      mode: item.mode,
-      questions: [
-        {
-          id: item.type,
-          prompt: `Answer ${item.type}`,
-          type: item.type,
-          required: true,
-          ...(item.type === "freeform" ? {} : { options: businessOptions }),
-        },
-      ],
-    });
-    const customText = `custom ${item.type} answer`;
-    const result = await runPiAskFlow(
-      request,
-      item.type === "freeform"
-        ? { input: async () => customText }
-        : { selectWithCustom: async () => ({ customText }) },
-    );
-
-    assert.equal(result.status, "answered", item.type);
-    assert.equal(result.nextAction, "resume", item.type);
-    assert.deepEqual(result.answers[item.type]?.values, [], item.type);
-    assert.equal(result.answers[item.type]?.customText, customText, item.type);
-    assert.equal(isPiAskFlowGateBlocked(result, request), false, item.type);
-  }
-});
-
-void test("interaction custom answer overrides a stale blocked gate nextAction", async () => {
+void test("interaction custom answer preserves a blocked gate nextAction", async () => {
   const request = createPiAskFlowRequest({
     mode: "approval",
     questions: [
@@ -1071,8 +1058,8 @@ void test("interaction custom answer overrides a stale blocked gate nextAction",
   });
 
   assert.equal(result.status, "answered");
-  assert.equal(result.nextAction, "resume");
-  assert.equal(isPiAskFlowGateBlocked(result, request), false);
+  assert.equal(result.nextAction, "block");
+  assert.equal(isPiAskFlowGateBlocked(result, request), true);
 });
 
 void test("multi-select decision select path blocks empty selections", async () => {

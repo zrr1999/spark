@@ -171,7 +171,13 @@ export async function askUser(request: PiAskRequest, ui?: PiAskUi): Promise<PiAs
       return createNoSelectionAskUserResult(normalized, answers);
     }
   }
-  return createAskUserResult({ cancelled: false, answers });
+  const status = inferAskSubmitStatus(normalized, answers);
+  return createAskUserResult({
+    cancelled: false,
+    answers,
+    status,
+    nextAction: nextActionForAskSubmit(normalized, answers, status),
+  });
 }
 
 export function defaultAskUserResult(request: PiAskRequest): PiAskResult {

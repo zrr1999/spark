@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -17,10 +17,15 @@ import {
   entriesToMessages,
   estimateSparkContextTokens,
   estimateSparkTokens,
+  meterSparkContextTokens,
+  microCompactSparkMessages,
   navigateSparkSessionBranchWithSummary,
   prepareSparkCompaction,
+  renderSparkSmartCompactionSummary,
   sessionEntriesToAgentMessages,
   shouldSparkCompact,
+  shouldSparkMicroCompact,
+  smartSparkCompactionSummaryWithFallback,
   type SparkCompactionSettings,
   type SparkCliHostServices,
   type SparkSessionRecord,
@@ -79,6 +84,53 @@ void test("Spark Compact V2 defaults and outcome metadata are stable", () => {
   );
 });
 
+void test("Smart fixed summary validates, renders, selects current model, and falls back", async () => {
+  const fixture = JSON.parse(
+    await readFile(join(process.cwd(), "test/fixtures/smart-compaction-summary.json"), "utf8"),
+  ) as any;
+  const dir = await mkdtemp(join(tmpdir(), "spark-smart-summary-"));
+  try {
+    const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
+    const preparation = prepareSparkCompaction(
+      compactableRecord(store),
+      undefined,
+      tinyKeepSettings,
+    )!;
+    const structured = fixture.valid;
+    let selectedModel = "";
+    const valid = await smartSparkCompactionSummaryWithFallback(preparation, {
+      model: "current",
+      currentModel: fixture.expectedCurrentModel,
+      runModel: ({ model }) => {
+        selectedModel = model;
+        return structured;
+      },
+    });
+    assert.equal(selectedModel, fixture.expectedCurrentModel);
+    assert.equal(valid.fallbackReason, undefined);
+    assert.equal(valid.result.summary, renderSparkSmartCompactionSummary(structured));
+
+    const invalid = await smartSparkCompactionSummaryWithFallback(preparation, {
+      currentModel: fixture.expectedCurrentModel,
+      runModel: () => fixture.invalid,
+    });
+    assert.equal(invalid.fallbackReason, fixture.expectedFallbackReasons.invalidStructure);
+    assert.match(invalid.result.summary, /Conversation summary:/u);
+
+    const failed = await smartSparkCompactionSummaryWithFallback(preparation, {
+      model: fixture.configuredModel,
+      currentModel: fixture.expectedCurrentModel,
+      runModel: () => Promise.reject(new Error("provider failed")),
+    });
+    assert.equal(failed.fallbackReason, fixture.expectedFallbackReasons.providerFailure);
+
+    const unavailable = await smartSparkCompactionSummaryWithFallback(preparation, {});
+    assert.equal(unavailable.fallbackReason, fixture.expectedFallbackReasons.unavailable);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("Spark compaction uses Pi default trigger settings", () => {
   assert.deepEqual(DEFAULT_SPARK_COMPACTION_SETTINGS, {
     enabled: true,
@@ -98,6 +150,73 @@ void test("Spark compaction uses Pi default trigger settings", () => {
   );
 });
 
+void test("Spark token meter rejects zero provider usage for a non-empty replay", () => {
+  const messages = [{ role: "user", content: "persisted conversation context" }];
+
+  const reported = meterSparkContextTokens({ messages, reportedTokens: 300, tokenize: () => 100 });
+  assert.deepEqual(reported, { tokens: 300, trailingTokens: 300, tokenSource: "reported" });
+
+  const zeroReported = meterSparkContextTokens({
+    messages,
+    reportedTokens: 0,
+    tokenize: () => 100,
+  });
+  assert.deepEqual(zeroReported, {
+    tokens: 100,
+    trailingTokens: 100,
+    tokenSource: "tokenizer",
+  });
+
+  const estimated = meterSparkContextTokens({ messages, reportedTokens: 0 });
+  assert.equal(estimated.tokenSource, "estimated");
+  assert.equal(estimated.tokens > 0, true);
+  assert.deepEqual(meterSparkContextTokens({ messages: [], reportedTokens: 0 }), {
+    tokens: 0,
+    trailingTokens: 0,
+    tokenSource: "reported",
+  });
+});
+
+void test("isomorphic micro-compaction repeats without pass state and protects exact tools", () => {
+  const repeated = Array.from({ length: 200 }, () => "same log line").join("\n");
+  const messages = [
+    { role: "toolResult", toolName: "cue_exec", content: [{ type: "text", text: repeated }] },
+    { role: "toolResult", toolName: "cue_exec", content: [{ type: "text", text: repeated }] },
+    { role: "toolResult", toolName: "read", content: [{ type: "text", text: repeated }] },
+  ];
+  assert.equal(shouldSparkMicroCompact(75_000, 100_000), true);
+  assert.equal(shouldSparkMicroCompact(74_999, 100_000), false);
+  const first = microCompactSparkMessages(messages);
+  assert.equal(first.abortedForLowYield, false);
+  assert.equal(first.measuredReductionRatio >= 0.4, true);
+  assert.deepEqual(first.messages[2], messages[2]);
+  assert.equal("pass" in first, false);
+  assert.equal("round" in first, false);
+
+  const secondInput = [
+    ...first.messages,
+    { role: "toolResult", toolName: "cue_exec", content: [{ type: "text", text: repeated }] },
+  ];
+  const second = microCompactSparkMessages(secondInput);
+  assert.equal(second.compactedMessages, 1);
+  assert.equal("pass" in second, false);
+  assert.equal("round" in second, false);
+});
+
+void test("micro-compaction records low-yield abort without mutating input", () => {
+  const messages = [
+    { role: "toolResult", toolName: "cue_exec", content: [{ type: "text", text: "short output" }] },
+  ];
+  const result = microCompactSparkMessages(messages);
+  assert.equal(result.abortedForLowYield, true);
+  assert.equal(result.abortReason, "min_useful_reduction");
+  assert.equal(
+    result.measuredReductionRatio < DEFAULT_SPARK_COMPACTION_SETTINGS.minUsefulReduction,
+    true,
+  );
+  assert.deepEqual(result.messages, messages);
+});
+
 void test("Spark compaction token estimates follow chars/4 heuristic for native messages", () => {
   assert.equal(estimateSparkTokens({ role: "user", content: "12345678" }), 2);
   assert.equal(
@@ -111,7 +230,11 @@ void test("Spark compaction token estimates follow chars/4 heuristic for native 
     }),
     7,
   );
-  assert.equal(estimateSparkContextTokens([{ role: "user", content: "1234" }]).tokens, 1);
+  assert.deepEqual(estimateSparkContextTokens([{ role: "user", content: "1234" }]), {
+    tokens: 1,
+    trailingTokens: 1,
+    tokenSource: "estimated",
+  });
 });
 
 void test("prepareSparkCompaction finds first kept entry and split-turn prefix", async () => {

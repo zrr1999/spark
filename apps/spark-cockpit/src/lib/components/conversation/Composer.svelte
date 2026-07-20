@@ -18,7 +18,6 @@
     header?: Snippet;
     actions?: Snippet;
     context?: Snippet;
-    toolbarActions?: Snippet;
     feedback?: Snippet;
     onValueChange?: (value: string) => void;
     onKeydown?: (event: KeyboardEvent) => void;
@@ -45,7 +44,6 @@
     header,
     actions,
     context,
-    toolbarActions,
     feedback,
     onValueChange,
     onKeydown,
@@ -122,7 +120,6 @@
       <span class="keyboard-hint">{multilineHint}</span>
     </div>
     <div class="composer-submit-actions">
-      {#if toolbarActions}{@render toolbarActions()}{/if}
       <button
         class="composer-submit"
         type="submit"

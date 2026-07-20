@@ -37,6 +37,7 @@
  */
 
 export type SparkTurnContentPart = { type: string; [key: string]: unknown };
+export type SparkTurnUserContent = string | Array<{ type: string }>;
 
 // Spark-turn deliberately uses loose structural aliases here: the turn loop is
 // host-neutral, while concrete model/message schemas still come from the active
@@ -60,6 +61,8 @@ import {
   type ResolvedToolPolicy,
   type ToolConfig,
 } from "@zendev-lab/spark-extension-api";
+export { compactToolResultContent } from "./tool-result-compaction.ts";
+
 import {
   compactToolResultContent,
   shouldRecordRawToolResultArtifact,
@@ -481,12 +484,12 @@ export class SparkAgentLoop {
    * Submit a user message and run turns until stop. Returns the final
    * assistant message, or the aborted/error message envelope.
    */
-  async submit(content: string): Promise<AssistantMessage> {
+  async submit(content: SparkTurnUserContent): Promise<AssistantMessage> {
     return (await this.submitWithOutcome(content)).assistant;
   }
 
   /** Submit a user turn and retain the reason the loop terminated. */
-  async submitWithOutcome(content: string): Promise<SparkRunOutcome> {
+  async submitWithOutcome(content: SparkTurnUserContent): Promise<SparkRunOutcome> {
     if (this.state !== "idle" || this.triggerTurnRunning) {
       // The TUI handles queueing; the loop refuses to interleave.
       throw new Error(

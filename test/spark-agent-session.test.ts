@@ -311,10 +311,21 @@ void test("SparkAgentSession compacts an over-budget persisted session before it
       },
     );
     const record = services.sessionStore.createSession({ id: "preflight-session" });
-    for (let index = 0; index < 40; index += 1) {
+    for (let index = 0; index < 80; index += 1) {
       services.sessionStore.appendMessage(record, {
         role: index % 2 === 0 ? "user" : "assistant",
         content: `${index}:${"history ".repeat(400)}`,
+        ...(index === 79
+          ? {
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+              },
+            }
+          : {}),
       });
     }
     await services.sessionStore.save(record);
@@ -327,7 +338,10 @@ void test("SparkAgentSession compacts an over-budget persisted session before it
     assert.equal(providerCalls, 1);
     assert.equal(result.outcome?.status, "completed");
     const saved = await services.sessionStore.load(record.path);
-    assert.equal(saved.entries.filter((entry) => entry.type === "compaction").length, 1);
+    const compactions = saved.entries.filter((entry) => entry.type === "compaction");
+    assert.equal(compactions.length, 1);
+    assert.equal(compactions[0]?.metadata?.tokenSource, "estimated");
+    assert.equal((compactions[0]?.metadata?.measuredReductionRatio ?? 0) > 0, true);
     assert.equal(
       saved.entries.filter(
         (entry) =>
@@ -337,6 +351,105 @@ void test("SparkAgentSession compacts an over-budget persisted session before it
       ).length,
       1,
     );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("SparkAgentSession meters only the compacted replay on the active branch", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-replay-meter-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(cwd, { recursive: true });
+    let providerCalls = 0;
+    let providerReplay = "";
+    const services = await makeFakeServices(
+      { cwd, sparkHome },
+      {
+        contextWindow: 50_000,
+        maxTokens: 4_096,
+        streamSimple: ({ messages }) => {
+          providerCalls += 1;
+          providerReplay = JSON.stringify(messages);
+          return assistant("continued without redundant compaction");
+        },
+      },
+    );
+    const record = services.sessionStore.createSession({ id: "metered-replay-session" });
+    record.entries.push(
+      {
+        type: "message",
+        id: "root",
+        parentId: null,
+        timestamp: "2026-07-17T00:00:00.000Z",
+        message: { role: "user", content: "root request" },
+      },
+      {
+        type: "message",
+        id: "inactive-branch",
+        parentId: "root",
+        timestamp: "2026-07-17T00:00:01.000Z",
+        message: {
+          role: "assistant",
+          content: `inactive branch ${"x".repeat(200_000)}`,
+          usage: { input: 45_000, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+      {
+        type: "message",
+        id: "compacted-history",
+        parentId: "root",
+        timestamp: "2026-07-17T00:00:02.000Z",
+        message: { role: "user", content: `already compacted ${"y".repeat(200_000)}` },
+      },
+    );
+    let parentId = "compacted-history";
+    for (let index = 0; index < 50; index += 1) {
+      const id = `kept-${index}`;
+      record.entries.push({
+        type: "message",
+        id,
+        parentId,
+        timestamp: `2026-07-17T00:01:${String(index).padStart(2, "0")}.000Z`,
+        message: {
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `kept context ${index} ${"k".repeat(2_000)}`,
+        },
+      });
+      parentId = id;
+    }
+    record.entries.push(
+      {
+        type: "compaction",
+        id: "existing-compaction",
+        parentId,
+        timestamp: "2026-07-17T00:02:00.000Z",
+        summary: "The earlier active history was already summarized.",
+        firstKeptEntryId: "kept-0",
+        tokensBefore: 75_000,
+      },
+      {
+        type: "message",
+        id: "post-compaction",
+        parentId: "existing-compaction",
+        timestamp: "2026-07-17T00:02:01.000Z",
+        message: { role: "user", content: "continue from the compacted replay" },
+      },
+    );
+    await services.sessionStore.save(record);
+
+    const result = await new SparkAgentSession(services).run({
+      sessionId: record.header.id,
+      prompt: "one more turn",
+    });
+
+    assert.equal(providerCalls, 1);
+    assert.equal(result.outcome?.status, "completed");
+    assert.doesNotMatch(providerReplay, /inactive branch|already compacted/u);
+    assert.match(providerReplay, /earlier active history was already summarized/u);
+    const saved = await services.sessionStore.load(record.path);
+    assert.equal(saved.entries.filter((entry) => entry.type === "compaction").length, 1);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -5,7 +5,6 @@ import {
   formatContextUsage,
   formatSessionCost,
   formatSessionStatusPercent,
-  sessionAutoCompactionEnabled,
   sessionStatusIdentity,
   sessionStatusUsage,
   type SessionStatusBarLabels,
@@ -22,7 +21,6 @@ const labels: SessionStatusBarLabels = {
   cacheHit: "Latest cache hit",
   cost: "Cost",
   context: "Context",
-  autoCompaction: "Automatic compaction enabled",
 };
 
 describe("session status formatting", () => {
@@ -55,44 +53,12 @@ describe("session status formatting", () => {
       costUsd: 23.509,
       contextTokens: 262_632,
       contextWindow: 372_000,
-      autoCompactionEnabled: true,
     });
 
     expect(description).toContain("Working directory: ~/workspace/zrr1999/spark");
     expect(description).toContain("Input tokens: 19000000");
     expect(description).toContain("Context: 70.6%/372k");
-    expect(description).toContain("Automatic compaction enabled");
     expect(description).not.toContain("gpt-5.6-sol");
-  });
-
-  it("defaults native sessions to automatic compaction and honors an explicit override", () => {
-    expect(sessionAutoCompactionEnabled(null)).toBe(true);
-    expect(
-      sessionAutoCompactionEnabled({
-        version: 1,
-        sessionId: "session-auto-default",
-        status: "idle",
-        messages: [],
-        tools: [],
-        runs: [],
-        tasks: [],
-        artifacts: [],
-        metadata: {},
-      }),
-    ).toBe(true);
-    expect(
-      sessionAutoCompactionEnabled({
-        version: 1,
-        sessionId: "session-auto-disabled",
-        status: "idle",
-        messages: [],
-        tools: [],
-        runs: [],
-        tasks: [],
-        artifacts: [],
-        metadata: { autoCompactionEnabled: false },
-      }),
-    ).toBe(false);
   });
 
   it("adds live run totals to the full-transcript snapshot baseline", () => {

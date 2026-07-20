@@ -1,8 +1,12 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRawSnippet } from "svelte";
 import { compile } from "svelte/compiler";
+import { render } from "svelte/server";
 import { describe, expect, it } from "vitest";
+
+import ConversationViewport from "./ConversationViewport.svelte";
 
 const componentPath = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -40,5 +44,36 @@ describe("ConversationViewport component contract", () => {
     );
     expect(source).toContain("event.deltaY < 0 && updateScrollState()");
     expect(source).toContain('class="history-fallback"');
+    expect(source).toContain("cancelScheduledFollow();");
+  });
+
+  it("coalesces automatic stream following into one animation frame without smooth scrolling", () => {
+    const source = readFileSync(componentPath, "utf8");
+
+    expect(source).toContain("let followAnimationFrame: number | undefined");
+    expect(source).toContain("void tick().then(scheduleScrollToLatest)");
+    expect(source).toContain("followAnimationFrame !== undefined");
+    expect(source).toContain("followAnimationFrame = requestAnimationFrame");
+    expect(source).toContain('scrollToLatest("auto")');
+    expect(source).not.toContain('initialScrollComplete ? "smooth"');
+  });
+
+  it("renders one explicit history entry point", () => {
+    const children = createRawSnippet(() => ({
+      render: () => "<article>Latest message</article>",
+    }));
+    const { body } = render(ConversationViewport, {
+      props: {
+        label: "Conversation",
+        jumpToLatestLabel: "Latest",
+        hasEarlier: true,
+        earlierLabel: "Show earlier messages (96)",
+        onLoadEarlier: async () => true,
+        children,
+      },
+    });
+
+    expect(body.match(/Show earlier messages \(96\)/g)).toHaveLength(1);
+    expect(body.match(/<button\b/g)).toHaveLength(1);
   });
 });

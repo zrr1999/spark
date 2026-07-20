@@ -169,6 +169,58 @@ describe("createQqbotApiClient", () => {
     });
   });
 
+  it("uploads and sends C2C/group images through QQ rich media", async () => {
+    const requests: Array<{ url: string; body: unknown }> = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestUrl(input);
+      const body = requestBody(init);
+      requests.push({ url, body });
+      return new Response(
+        JSON.stringify(
+          url.endsWith("/files") ? { file_uuid: "f", file_info: "info", ttl: 60 } : { id: "m" },
+        ),
+        { status: 200 },
+      );
+    });
+    const api = createQqbotApiClient({ fetchImpl: fetchImpl as unknown as typeof fetch });
+
+    const c2cUpload = await api.uploadC2CImage("tok", "u/1", { data: "AQID" });
+    await api.sendC2CImageMessage("tok", "u/1", c2cUpload.file_info, "caption", "src", 2);
+    const groupUpload = await api.uploadGroupImage("tok", "g/1", {
+      url: "https://example.com/image.png",
+    });
+    await api.sendGroupImageMessage("tok", "g/1", groupUpload.file_info);
+
+    expect(requests).toEqual([
+      {
+        url: "https://api.sgroup.qq.com/v2/users/u%2F1/files",
+        body: { file_type: 1, srv_send_msg: false, file_data: "AQID" },
+      },
+      {
+        url: "https://api.sgroup.qq.com/v2/users/u%2F1/messages",
+        body: {
+          msg_type: 7,
+          media: { file_info: "info" },
+          msg_seq: 2,
+          content: "caption",
+          msg_id: "src",
+        },
+      },
+      {
+        url: "https://api.sgroup.qq.com/v2/groups/g%2F1/files",
+        body: {
+          file_type: 1,
+          srv_send_msg: false,
+          url: "https://example.com/image.png",
+        },
+      },
+      {
+        url: "https://api.sgroup.qq.com/v2/groups/g%2F1/messages",
+        body: { msg_type: 7, media: { file_info: "info" }, msg_seq: 1 },
+      },
+    ]);
+  });
+
   it("allocates monotonically increasing sequences per passive source message", async () => {
     const bodies: unknown[] = [];
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {

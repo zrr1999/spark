@@ -4,7 +4,11 @@ import { parseSparkInteractionRequest } from "@zendev-lab/spark-protocol";
 import { SparkDaemonHumanWaitRegistry } from "../core/human-waits.ts";
 import { migrateSparkDaemonDatabase } from "../store/schema.ts";
 import type { DaemonChannelIngressRuntime } from "./ingress.ts";
-import { projectChannelAsk, settleChannelAskInteraction } from "./human-interactions.ts";
+import {
+  projectChannelAsk,
+  settleChannelAskInteraction,
+  settleChannelAskTextReply,
+} from "./human-interactions.ts";
 
 describe("daemon channel human interactions", () => {
   it("projects a daemon ask to a sender-scoped QQ keyboard", async () => {
@@ -80,6 +84,226 @@ describe("daemon channel human interactions", () => {
           ],
         }),
       );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("projects an Infoflow ask as durable text and settles a numbered private reply", async () => {
+    const sendAsk = vi.fn(async () => ({}));
+    const channelIngress = { sendAsk } as unknown as DaemonChannelIngressRuntime;
+    const db = daemonDatabase();
+    try {
+      const waits = new SparkDaemonHumanWaitRegistry(db);
+      const registration = waits.register({
+        humanRequestId: "hreq_infoflow",
+        workspaceBindingId: "rtwb_1",
+        workspaceId: "ws_1",
+        delivery: "blocking",
+        kind: "ask_user",
+        title: "Choose a route",
+        prompt: "Which route?",
+        questions: [
+          {
+            id: "route",
+            type: "single",
+            prompt: "Which route?",
+            required: true,
+            options: [
+              { value: "fast", label: "Fast", description: "Prefer latency." },
+              { value: "safe", label: "Safe" },
+            ],
+          },
+        ],
+        context: {
+          channel: {
+            workspaceId: "ws_1",
+            adapterId: "infoflow",
+            recipient: "alice",
+            actorId: "alice",
+          },
+          channelCallbacks: {
+            opaque_fast: { questionId: "route", value: "fast", label: "Fast" },
+            opaque_safe: { questionId: "route", value: "safe", label: "Safe" },
+          },
+        },
+      });
+      const request = parseSparkInteractionRequest({
+        kind: "askFlow",
+        requestId: "ask_infoflow",
+        title: "Choose a route",
+        delivery: "blocking",
+        questions: [
+          {
+            id: "route",
+            type: "single",
+            prompt: "Which route?",
+            options: [
+              { value: "fast", label: "Fast", description: "Prefer latency." },
+              { value: "safe", label: "Safe" },
+            ],
+          },
+        ],
+      });
+      if (request.kind !== "askFlow") throw new Error("expected askFlow request");
+
+      await projectChannelAsk(channelIngress, {
+        wait: registration.wait,
+        request,
+        channel: {
+          workspaceId: "ws_1",
+          adapterId: "infoflow",
+          recipient: "alice",
+          actorId: "alice",
+        },
+        callbackOptions: [
+          {
+            token: "opaque_fast",
+            questionId: "route",
+            value: "fast",
+            label: "Fast",
+            description: "Prefer latency.",
+          },
+          {
+            token: "opaque_safe",
+            questionId: "route",
+            value: "safe",
+            label: "Safe",
+          },
+        ],
+      });
+
+      expect(sendAsk).toHaveBeenCalledWith(
+        "ws_1",
+        "infoflow",
+        "alice",
+        expect.objectContaining({
+          prompt: expect.stringContaining("1. Fast — Prefer latency."),
+          options: [
+            { id: "1", label: "Fast", data: "opaque_fast" },
+            { id: "2", label: "Safe", data: "opaque_safe" },
+          ],
+        }),
+      );
+
+      await expect(
+        settleChannelAskTextReply(
+          waits,
+          {
+            workspaceId: "ws_1",
+            recipient: "alice",
+            message: {
+              adapter: "infoflow",
+              externalKey: "infoflow:default:alice",
+              text: "1",
+              messageId: "msg_missing_actor",
+            },
+          },
+          { runtimeId: "rt_test" },
+        ),
+      ).resolves.toBe("continue");
+      expect(waits.get("hreq_infoflow")?.status).toBe("pending");
+
+      await expect(
+        settleChannelAskTextReply(
+          waits,
+          {
+            workspaceId: "ws_1",
+            recipient: "alice",
+            message: {
+              adapter: "infoflow",
+              externalKey: "infoflow:default:alice",
+              senderId: "alice",
+              text: "1",
+              messageId: "msg_reply_1",
+            },
+          },
+          { runtimeId: "rt_test" },
+        ),
+      ).resolves.toBe("settled");
+
+      expect(waits.get("hreq_infoflow")?.status).toBe("answered");
+      const stored = db
+        .prepare(
+          "SELECT response_json AS responseJson FROM daemon_human_waits WHERE human_request_id = ?",
+        )
+        .get("hreq_infoflow") as { responseJson: string };
+      expect(JSON.parse(stored.responseJson)).toMatchObject({ answers: { route: "fast" } });
+
+      await expect(
+        settleChannelAskTextReply(
+          waits,
+          {
+            workspaceId: "ws_1",
+            recipient: "alice",
+            message: {
+              adapter: "infoflow",
+              externalKey: "infoflow:default:alice",
+              senderId: "alice",
+              text: "2",
+              messageId: "msg_reply_2",
+            },
+          },
+          { runtimeId: "rt_test" },
+        ),
+      ).resolves.toBe("continue");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("settles an Infoflow freeform ask from ordinary private text without starting another turn", async () => {
+    const db = daemonDatabase();
+    try {
+      const waits = new SparkDaemonHumanWaitRegistry(db);
+      waits.register({
+        humanRequestId: "hreq_freeform",
+        workspaceBindingId: "rtwb_1",
+        workspaceId: "ws_1",
+        delivery: "async",
+        kind: "ask_user",
+        title: "Name it",
+        prompt: "What should we call this?",
+        questions: [
+          { id: "name", type: "freeform", prompt: "What should we call this?", required: true },
+        ],
+        context: {
+          channel: {
+            workspaceId: "ws_1",
+            adapterId: "infoflow",
+            recipient: "alice",
+            actorId: "alice",
+          },
+        },
+      });
+
+      await expect(
+        settleChannelAskTextReply(
+          waits,
+          {
+            workspaceId: "ws_1",
+            recipient: "alice",
+            message: {
+              adapter: "infoflow",
+              externalKey: "infoflow:default:alice",
+              senderId: "alice",
+              text: "spark-alpha",
+              messageId: "msg_freeform",
+            },
+          },
+          { runtimeId: "rt_test" },
+        ),
+      ).resolves.toBe("settled");
+
+      const stored = db
+        .prepare(
+          "SELECT status, response_json AS responseJson FROM daemon_human_waits WHERE human_request_id = ?",
+        )
+        .get("hreq_freeform") as { status: string; responseJson: string };
+      expect(stored.status).toBe("answered");
+      expect(JSON.parse(stored.responseJson)).toMatchObject({
+        answers: { name: { values: [], customText: "spark-alpha" } },
+      });
     } finally {
       db.close();
     }
@@ -230,8 +454,21 @@ describe("daemon channel human interactions", () => {
         },
         { runtimeId: "rt_test" },
       );
+      await settleChannelAskInteraction(
+        channelIngress,
+        waits,
+        {
+          workspaceId: "ws_1",
+          event: { ...event, actorId: "user_1", recipient: undefined },
+        },
+        { runtimeId: "rt_test" },
+      );
 
-      expect(ackInteraction.mock.calls.map((call) => call[3])).toEqual(["forbidden", "forbidden"]);
+      expect(ackInteraction.mock.calls.map((call) => call[3])).toEqual([
+        "forbidden",
+        "forbidden",
+        "forbidden",
+      ]);
       expect(waits.get("hreq_forbidden")?.status).toBe("pending");
     } finally {
       db.close();

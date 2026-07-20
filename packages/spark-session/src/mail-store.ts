@@ -3,14 +3,25 @@ import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/p
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-export type SparkSessionMailKind = "request" | "question" | "notification";
+export type SparkSessionMailKind = "request" | "notification";
 export type SparkSessionMailVisibility = "internal" | "user";
 export type SparkSessionMailDelivery = "mailbox" | "channel";
-export type SparkSessionMailDeliveryStatus = "pending" | "delivered" | "failed";
+export type SparkSessionMailDeliveryStatus = "pending" | "delivered" | "failed" | "uncertain";
 
-export interface SparkSessionMailDeliveryReceipt {
+export interface SparkSessionMailChannelTarget {
   adapter: string;
   externalKey: string;
+  /** Runtime/config adapter id. Kept for legacy routing diagnostics. */
+  adapterId?: string;
+  /** Stable provider-account identity; preferred over the mutable adapter id. */
+  adapterAccountIdentity?: string;
+}
+
+export interface SparkSessionMailOriginBinding extends SparkSessionMailChannelTarget {
+  adapter: "feishu" | "infoflow" | "qqbot";
+}
+
+export interface SparkSessionMailDeliveryReceipt extends SparkSessionMailChannelTarget {
   status: SparkSessionMailDeliveryStatus;
   attemptCount: number;
   lastAttemptAt: string | null;
@@ -27,7 +38,7 @@ export interface SparkSessionMailMessage {
   visibility: SparkSessionMailVisibility;
   delivery: SparkSessionMailDelivery;
   deliveries: SparkSessionMailDeliveryReceipt[];
-  originBinding?: { adapter: "feishu" | "infoflow" | "qqbot"; externalKey: string };
+  originBinding?: SparkSessionMailOriginBinding;
   intent: string;
   payload: Record<string, unknown>;
   correlationId: string;
@@ -58,8 +69,8 @@ export interface SparkSessionMailSendInput {
   kind?: SparkSessionMailKind;
   visibility?: SparkSessionMailVisibility;
   delivery?: SparkSessionMailDelivery;
-  deliveryTargets?: Array<{ adapter: string; externalKey: string }>;
-  originBinding?: { adapter: "feishu" | "infoflow" | "qqbot"; externalKey: string };
+  deliveryTargets?: SparkSessionMailChannelTarget[];
+  originBinding?: SparkSessionMailOriginBinding;
   intent?: string;
   payload?: Record<string, unknown>;
   correlationId?: string;
@@ -108,6 +119,7 @@ export class SparkSessionMailStore {
     const deliveries = normalizeDeliveryTargets(input.deliveryTargets);
     const delivery = normalizeDelivery(input.delivery, deliveries);
     const visibility = normalizeVisibility(input.visibility);
+    assertDeliveryVisibility(visibility, delivery);
     const candidate = {
       toSessionId,
       fromSessionId,
@@ -180,9 +192,17 @@ export class SparkSessionMailStore {
     const messages = await this.allStoredMessages();
     const pending: SparkSessionPendingChannelDelivery[] = [];
     for (const message of messages) {
+      if (
+        message.kind !== "notification" ||
+        message.visibility !== "user" ||
+        message.delivery !== "channel"
+      ) {
+        continue;
+      }
       for (const target of message.deliveries) {
         if (
           target.status === "delivered" ||
+          target.status === "uncertain" ||
           !deliveryRetryDue(target, this.options.now?.() ?? Date.now())
         ) {
           continue;
@@ -221,19 +241,17 @@ export class SparkSessionMailStore {
   async recordChannelDelivery(
     toSessionId: string,
     messageId: string,
-    target: { adapter: string; externalKey: string },
-    outcome: { ok: true; receipt: unknown } | { ok: false; error: string },
+    target: SparkSessionMailChannelTarget,
+    outcome:
+      | { ok: true; receipt: unknown }
+      | { ok: false; error: string; status?: "failed" | "uncertain" },
   ): Promise<SparkSessionMailMessage> {
     const normalizedTarget = normalizeDeliveryTarget(target);
     return await this.updateMessage(toSessionId, messageId, (message) => {
       const now = this.nowIso();
-      const index = message.deliveries.findIndex(
-        (delivery) =>
-          delivery.adapter === normalizedTarget.adapter &&
-          delivery.externalKey === normalizedTarget.externalKey,
-      );
+      const index = findDeliveryTargetIndex(message.deliveries, normalizedTarget);
       const previous = index >= 0 ? message.deliveries[index]! : pendingDelivery(normalizedTarget);
-      if (previous.status === "delivered") return message;
+      if (previous.status === "delivered" || previous.status === "uncertain") return message;
       const updated: SparkSessionMailDeliveryReceipt = outcome.ok
         ? {
             ...previous,
@@ -246,7 +264,7 @@ export class SparkSessionMailStore {
           }
         : {
             ...previous,
-            status: "failed",
+            status: outcome.status ?? "failed",
             attemptCount: previous.attemptCount + 1,
             lastAttemptAt: now,
             deliveredAt: null,
@@ -590,7 +608,7 @@ function normalizeMailMessage(value: unknown): SparkSessionMailMessage | undefin
 }
 
 function normalizeMailKind(value: unknown): SparkSessionMailKind {
-  if (value === "request" || value === "question") return value;
+  if (value === "request") return value;
   // `inform` and `reply` are legacy NNP values. Causality now lives in
   // replyToMessageId/correlationId; delivery policy is simply notification.
   return "notification";
@@ -622,15 +640,12 @@ function normalizePayload(value: unknown): Record<string, unknown> {
   }
 }
 
-function normalizeOriginBinding(value: unknown): {
-  adapter: "feishu" | "infoflow" | "qqbot";
-  externalKey: string;
-} {
+function normalizeOriginBinding(value: unknown): SparkSessionMailOriginBinding {
   const target = normalizeDeliveryTarget(value);
   if (target.adapter !== "feishu" && target.adapter !== "infoflow" && target.adapter !== "qqbot") {
     throw new Error(`unsupported originating channel adapter: ${target.adapter}`);
   }
-  return { adapter: target.adapter, externalKey: target.externalKey };
+  return { ...target, adapter: target.adapter };
 }
 
 function normalizeDeliveryTargets(
@@ -639,8 +654,8 @@ function normalizeDeliveryTargets(
   if (!value) return [];
   const unique = new Map<string, SparkSessionMailDeliveryReceipt>();
   for (const target of value) {
-    const { adapter, externalKey } = normalizeDeliveryTarget(target);
-    unique.set(`${adapter}\u0000${externalKey}`, pendingDelivery({ adapter, externalKey }));
+    const normalized = normalizeDeliveryTarget(target);
+    unique.set(deliveryTargetKey(normalized), pendingDelivery(normalized));
   }
   return [...unique.values()].sort(compareDeliveryTargets);
 }
@@ -662,7 +677,16 @@ function normalizeDelivery(
   return delivery;
 }
 
-function normalizeDeliveryTarget(value: unknown): { adapter: string; externalKey: string } {
+function assertDeliveryVisibility(
+  visibility: SparkSessionMailVisibility,
+  delivery: SparkSessionMailDelivery,
+): void {
+  if (delivery === "channel" && visibility !== "user") {
+    throw new Error("channel delivery requires explicit user visibility");
+  }
+}
+
+function normalizeDeliveryTarget(value: unknown): SparkSessionMailChannelTarget {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("channel delivery target is incomplete");
   }
@@ -670,11 +694,19 @@ function normalizeDeliveryTarget(value: unknown): { adapter: string; externalKey
   const adapter = typeof record.adapter === "string" ? record.adapter.trim() : "";
   const externalKey = typeof record.externalKey === "string" ? record.externalKey.trim() : "";
   if (!adapter || !externalKey) throw new Error("channel delivery target is incomplete");
-  return { adapter, externalKey };
+  const adapterId = typeof record.adapterId === "string" ? record.adapterId.trim() : "";
+  const adapterAccountIdentity =
+    typeof record.adapterAccountIdentity === "string" ? record.adapterAccountIdentity.trim() : "";
+  return {
+    adapter,
+    externalKey,
+    ...(adapterId ? { adapterId } : {}),
+    ...(adapterAccountIdentity ? { adapterAccountIdentity } : {}),
+  };
 }
 
 function deliveryRetryDue(target: SparkSessionMailDeliveryReceipt, now: number): boolean {
-  if (target.status === "delivered") return false;
+  if (target.status === "delivered" || target.status === "uncertain") return false;
   if (!target.lastAttemptAt) return true;
   const lastAttempt = Date.parse(target.lastAttemptAt);
   if (!Number.isFinite(lastAttempt)) return true;
@@ -682,13 +714,9 @@ function deliveryRetryDue(target: SparkSessionMailDeliveryReceipt, now: number):
   return now - lastAttempt >= backoff;
 }
 
-function pendingDelivery(target: {
-  adapter: string;
-  externalKey: string;
-}): SparkSessionMailDeliveryReceipt {
+function pendingDelivery(target: SparkSessionMailChannelTarget): SparkSessionMailDeliveryReceipt {
   return {
-    adapter: target.adapter,
-    externalKey: target.externalKey,
+    ...target,
     status: "pending",
     attemptCount: 0,
     lastAttemptAt: null,
@@ -703,15 +731,19 @@ function normalizeStoredDeliveries(value: unknown): SparkSessionMailDeliveryRece
   const deliveries = value.flatMap((entry): SparkSessionMailDeliveryReceipt[] => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
     const record = entry as Record<string, unknown>;
-    const adapter = typeof record.adapter === "string" ? record.adapter.trim() : "";
-    const externalKey = typeof record.externalKey === "string" ? record.externalKey.trim() : "";
-    if (!adapter || !externalKey) return [];
+    let target: SparkSessionMailChannelTarget;
+    try {
+      target = normalizeDeliveryTarget(record);
+    } catch {
+      return [];
+    }
     const status =
-      record.status === "delivered" || record.status === "failed" ? record.status : "pending";
+      record.status === "delivered" || record.status === "failed" || record.status === "uncertain"
+        ? record.status
+        : "pending";
     return [
       {
-        adapter,
-        externalKey,
+        ...target,
         status,
         attemptCount:
           typeof record.attemptCount === "number" && Number.isFinite(record.attemptCount)
@@ -728,11 +760,42 @@ function normalizeStoredDeliveries(value: unknown): SparkSessionMailDeliveryRece
 }
 
 function compareDeliveryTargets(
-  left: Pick<SparkSessionMailDeliveryReceipt, "adapter" | "externalKey">,
-  right: Pick<SparkSessionMailDeliveryReceipt, "adapter" | "externalKey">,
+  left: SparkSessionMailChannelTarget,
+  right: SparkSessionMailChannelTarget,
 ): number {
   return (
-    left.adapter.localeCompare(right.adapter) || left.externalKey.localeCompare(right.externalKey)
+    left.adapter.localeCompare(right.adapter) ||
+    left.externalKey.localeCompare(right.externalKey) ||
+    (left.adapterAccountIdentity ?? "").localeCompare(right.adapterAccountIdentity ?? "") ||
+    (left.adapterId ?? "").localeCompare(right.adapterId ?? "")
+  );
+}
+
+function deliveryTargetKey(target: SparkSessionMailChannelTarget): string {
+  const accountSelector = target.adapterAccountIdentity
+    ? `account:${target.adapterAccountIdentity}`
+    : target.adapterId
+      ? `adapter:${target.adapterId}`
+      : "legacy";
+  return `${target.adapter}\u0000${target.externalKey}\u0000${accountSelector}`;
+}
+
+function findDeliveryTargetIndex(
+  deliveries: SparkSessionMailDeliveryReceipt[],
+  target: SparkSessionMailChannelTarget,
+): number {
+  const exact = deliveries.findIndex(
+    (delivery) => deliveryTargetKey(delivery) === deliveryTargetKey(target),
+  );
+  if (exact >= 0) return exact;
+  const compatible = deliveries.flatMap((delivery, index) =>
+    delivery.adapter === target.adapter && delivery.externalKey === target.externalKey
+      ? [index]
+      : [],
+  );
+  if (compatible.length <= 1) return compatible[0] ?? -1;
+  throw new Error(
+    `channel delivery target is ambiguous for ${target.adapter}:${target.externalKey}; provider account identity is required`,
   );
 }
 
@@ -797,11 +860,8 @@ function assertSameLogicalMessage(
     kind: existing.kind,
     visibility: existing.visibility,
     delivery: existing.delivery,
-    deliveryTargets: existing.deliveries.map(({ adapter, externalKey }) => ({
-      adapter,
-      externalKey,
-    })),
-    originBinding: existing.originBinding ?? null,
+    deliveryTargets: existing.deliveries.map(projectDeliveryTarget),
+    originBinding: existing.originBinding ? projectDeliveryTarget(existing.originBinding) : null,
     intent: existing.intent,
     payload: existing.payload,
     ...(candidate.correlationId ? { correlationId: existing.correlationId } : {}),
@@ -815,11 +875,8 @@ function assertSameLogicalMessage(
     kind: candidate.kind,
     visibility: candidate.visibility,
     delivery: candidate.delivery,
-    deliveryTargets: candidate.deliveries.map(({ adapter, externalKey }) => ({
-      adapter,
-      externalKey,
-    })),
-    originBinding: candidate.originBinding ?? null,
+    deliveryTargets: candidate.deliveries.map(projectDeliveryTarget),
+    originBinding: candidate.originBinding ? projectDeliveryTarget(candidate.originBinding) : null,
     intent: candidate.intent,
     payload: candidate.payload,
     ...(candidate.correlationId ? { correlationId: candidate.correlationId } : {}),
@@ -832,6 +889,20 @@ function assertSameLogicalMessage(
       `Spark session mail idempotency key ${existing.idempotencyKey} was reused for a different message`,
     );
   }
+}
+
+function projectDeliveryTarget(
+  target: SparkSessionMailChannelTarget,
+): SparkSessionMailChannelTarget {
+  return {
+    adapter: target.adapter,
+    externalKey: target.externalKey,
+    ...(target.adapterAccountIdentity
+      ? { adapterAccountIdentity: target.adapterAccountIdentity }
+      : target.adapterId
+        ? { adapterId: target.adapterId }
+        : {}),
+  };
 }
 
 function compareMailMessages(

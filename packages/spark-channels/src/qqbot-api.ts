@@ -49,6 +49,14 @@ export interface QqbotMessageResponse {
   timestamp?: number | string;
 }
 
+export interface QqbotMediaUploadResponse {
+  file_uuid: string;
+  file_info: string;
+  ttl: number;
+}
+
+export type QqbotImageUploadSource = { url: string; data?: never } | { url?: never; data: string };
+
 export interface QqbotStreamMessageRequest {
   input_mode: "replace";
   input_state: 1 | 10;
@@ -79,6 +87,32 @@ export interface QqbotApiClient {
     groupOpenid: string,
     content: string,
     msgId?: string,
+  ): Promise<QqbotMessageResponse>;
+  uploadC2CImage(
+    accessToken: string,
+    openid: string,
+    source: QqbotImageUploadSource,
+  ): Promise<QqbotMediaUploadResponse>;
+  uploadGroupImage(
+    accessToken: string,
+    groupOpenid: string,
+    source: QqbotImageUploadSource,
+  ): Promise<QqbotMediaUploadResponse>;
+  sendC2CImageMessage(
+    accessToken: string,
+    openid: string,
+    fileInfo: string,
+    content?: string,
+    msgId?: string,
+    msgSeq?: number,
+  ): Promise<QqbotMessageResponse>;
+  sendGroupImageMessage(
+    accessToken: string,
+    groupOpenid: string,
+    fileInfo: string,
+    content?: string,
+    msgId?: string,
+    msgSeq?: number,
   ): Promise<QqbotMessageResponse>;
   sendC2CMarkdownMessage(
     accessToken: string,
@@ -302,6 +336,35 @@ export function createQqbotApiClient(
     return body;
   }
 
+  function buildImageUploadBody(source: QqbotImageUploadSource): Record<string, unknown> {
+    const url = source.url?.trim();
+    const data = source.data?.trim();
+    if (Boolean(url) === Boolean(data)) {
+      throw new Error("QQ Bot image upload requires exactly one of url or data");
+    }
+    return {
+      file_type: 1,
+      srv_send_msg: false,
+      ...(url ? { url } : { file_data: data }),
+    };
+  }
+
+  function buildImageMessageBody(
+    fileInfo: string,
+    content?: string,
+    msgId?: string,
+    msgSeq?: number,
+  ): Record<string, unknown> {
+    if (!fileInfo.trim()) throw new Error("QQ Bot image message requires file_info");
+    return {
+      msg_type: 7,
+      media: { file_info: fileInfo },
+      msg_seq: useMessageSequence(msgId, msgSeq),
+      ...(content?.trim() ? { content: content.trim() } : {}),
+      ...(msgId ? { msg_id: msgId } : {}),
+    };
+  }
+
   function buildMarkdownKeyboardBody(
     request: QqbotMarkdownKeyboardMessageRequest,
   ): Record<string, unknown> {
@@ -351,6 +414,38 @@ export function createQqbotApiClient(
         "POST",
         `/v2/groups/${encodeURIComponent(groupOpenid)}/messages`,
         buildTextBody(content, msgId),
+      );
+    },
+    async uploadC2CImage(accessToken, openid, source) {
+      return await apiRequest<QqbotMediaUploadResponse>(
+        accessToken,
+        "POST",
+        `/v2/users/${encodeURIComponent(openid)}/files`,
+        buildImageUploadBody(source),
+      );
+    },
+    async uploadGroupImage(accessToken, groupOpenid, source) {
+      return await apiRequest<QqbotMediaUploadResponse>(
+        accessToken,
+        "POST",
+        `/v2/groups/${encodeURIComponent(groupOpenid)}/files`,
+        buildImageUploadBody(source),
+      );
+    },
+    async sendC2CImageMessage(accessToken, openid, fileInfo, content, msgId, msgSeq) {
+      return await apiRequest<QqbotMessageResponse>(
+        accessToken,
+        "POST",
+        `/v2/users/${encodeURIComponent(openid)}/messages`,
+        buildImageMessageBody(fileInfo, content, msgId, msgSeq),
+      );
+    },
+    async sendGroupImageMessage(accessToken, groupOpenid, fileInfo, content, msgId, msgSeq) {
+      return await apiRequest<QqbotMessageResponse>(
+        accessToken,
+        "POST",
+        `/v2/groups/${encodeURIComponent(groupOpenid)}/messages`,
+        buildImageMessageBody(fileInfo, content, msgId, msgSeq),
       );
     },
     async sendC2CMarkdownMessage(accessToken, openid, content, msgId, msgSeq) {

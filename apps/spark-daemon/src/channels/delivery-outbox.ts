@@ -7,6 +7,13 @@ import type {
   IncomingMessage,
 } from "@zendev-lab/spark-channels";
 import {
+  CHANNEL_DELIVERY_OUTCOME_UNKNOWN_ERROR_CODE,
+  channelDeliveryFailureOutcome,
+  channelDeliveryNotSent,
+  channelDeliveryOutcomeUnknown,
+} from "@zendev-lab/spark-channels";
+import {
+  CHANNEL_REPLY_TERMINAL_PRESENTED_ERROR_CODE,
   channelReplyDeliveryForCompletion,
   type SparkDaemonChannelReplyDeliveryInput,
 } from "../spark/session-run.ts";
@@ -21,12 +28,17 @@ import {
   SparkInvocationStore,
 } from "../store/invocations.ts";
 import type { DaemonChannelIngressRuntime } from "./ingress.ts";
-import { channelInboundMessageIdempotencyKey } from "./admission.ts";
+import { CHANNEL_REPLY_DELIVERY_PENDING_ERROR_CODE } from "./reply-delivery.ts";
+import {
+  channelInboundMessageIdempotencyKey,
+  legacyChannelInboundMessageIdempotencyKey,
+} from "./admission.ts";
 
 export interface DaemonChannelAskDeliveryInput {
   idempotencyKey: string;
   workspaceId: string;
   adapterId: string;
+  adapterAccountIdentity?: string;
   recipient: string;
   request: ChannelAskRequest;
 }
@@ -35,6 +47,7 @@ export interface DaemonChannelInteractionAckDeliveryInput {
   idempotencyKey: string;
   workspaceId: string;
   adapterId: string;
+  adapterAccountIdentity?: string;
   interactionId: string;
   status: ChannelInteractionAckStatus;
 }
@@ -50,6 +63,7 @@ export interface DaemonChannelNotificationDeliveryInput {
   messageId: string;
   workspaceId: string;
   adapterId: string;
+  adapterAccountIdentity?: string;
   externalKey: string;
   recipient: string;
   text: string;
@@ -74,7 +88,31 @@ type ChannelDeliveryIngress = Pick<
   DaemonChannelIngressRuntime,
   "sendReply" | "sendAsk" | "ackInteraction" | "admitInbound"
 > &
-  Partial<Pick<DaemonChannelIngressRuntime, "notify">>;
+  Partial<Pick<DaemonChannelIngressRuntime, "notify">> & {
+    resolveAdapterId?(
+      workspaceId: string,
+      adapterId: string,
+      adapterAccountIdentity?: string,
+    ): string;
+    replyDeliveryFacts?(
+      workspaceId: string,
+      adapterId: string,
+      target: ChannelReplyTarget,
+    ): { replaySafety: ChannelDeliveryReplaySafety };
+    messageDeliveryFacts?(
+      workspaceId: string,
+      adapterId: string,
+      target: { recipient: string },
+    ): { replaySafety: ChannelDeliveryReplaySafety };
+  };
+
+type ChannelDeliveryReplaySafety = "deduplicated" | "unsafe";
+
+interface PreparedChannelDelivery {
+  adapterId?: string;
+  external: boolean;
+  replaySafety: ChannelDeliveryReplaySafety;
+}
 
 export function createDaemonChannelDeliveryOutbox(
   store: SparkChannelDeliveryStore,
@@ -93,13 +131,19 @@ export function createDaemonChannelDeliveryOutbox(
       store.enqueue({ kind: "interaction_ack", idempotencyKey, payload });
     },
     enqueueInbound: (input) => {
+      const accountIdentity = input.message.adapterAccountIdentity?.trim();
       const idempotencyKey =
-        channelInboundMessageIdempotencyKey(input.workspaceId, input.message) ??
+        (accountIdentity
+          ? channelInboundMessageIdempotencyKey(input.workspaceId, input.message)
+          : legacyChannelInboundMessageIdempotencyKey(input.workspaceId, input.message)) ??
         `channel.inbound:unkeyed:${randomUUID()}`;
       // Platform identity is authoritative across reconnects. A redelivery may
       // carry harmless projection drift (for example a changed display name),
       // but must not create a second durable admission.
       if (store.findByIdempotencyKey(idempotencyKey)) return;
+      const legacyKey = legacyChannelInboundMessageIdempotencyKey(input.workspaceId, input.message);
+      const legacy = legacyKey ? store.findByIdempotencyKey(legacyKey) : undefined;
+      if (legacy && legacyInboundDeliveryMatchesAccount(legacy, input.message)) return;
       try {
         store.enqueue({
           kind: "inbound",
@@ -121,6 +165,20 @@ export function createDaemonChannelDeliveryOutbox(
   };
 }
 
+function legacyInboundDeliveryMatchesAccount(
+  delivery: SparkChannelDeliveryRecord,
+  message: IncomingMessage,
+): boolean {
+  if (delivery.kind !== "inbound") return false;
+  const payload = asOptionalRecord(delivery.payload);
+  const persistedMessage = asOptionalRecord(payload?.message);
+  const persistedIdentity = optionalString(persistedMessage?.adapterAccountIdentity);
+  if (persistedIdentity) return persistedIdentity === message.adapterAccountIdentity?.trim();
+
+  const persistedAdapterId = optionalString(persistedMessage?.adapterId);
+  return Boolean(persistedAdapterId && persistedAdapterId === message.adapterId?.trim());
+}
+
 /**
  * Commit a terminal invocation and its user-visible channel reply intent in
  * one SQLite transaction. Platform I/O remains outside this transaction and
@@ -136,12 +194,14 @@ export function completeInvocationWithChannelDelivery(
   task: SparkDaemonTask,
   completion: CompleteSparkInvocationInput,
 ): SparkInvocationRecord {
-  const delivery = channelReplyDeliveryForCompletion(
-    task,
-    invocation.invocationId,
-    completion.status === "succeeded" ? "final" : "failure",
-    completion.result,
-  );
+  const delivery = completionSuppressesCompetingChannelDelivery(completion)
+    ? undefined
+    : channelReplyDeliveryForCompletion(
+        task,
+        invocation.invocationId,
+        completion.status === "succeeded" ? "final" : "failure",
+        completion.result,
+      );
   if (!delivery) {
     return deps.invocations.complete(invocation.invocationId, completion);
   }
@@ -159,6 +219,18 @@ export function completeInvocationWithChannelDelivery(
   }
 }
 
+/** Fail closed when the first platform attempt still owns an ambiguous outcome. */
+function completionSuppressesCompetingChannelDelivery(
+  completion: CompleteSparkInvocationInput,
+): boolean {
+  if (completion.status !== "failed") return false;
+  return (
+    completion.errorCode === CHANNEL_REPLY_DELIVERY_PENDING_ERROR_CODE ||
+    completion.errorCode === CHANNEL_REPLY_TERMINAL_PRESENTED_ERROR_CODE ||
+    completion.errorCode === CHANNEL_DELIVERY_OUTCOME_UNKNOWN_ERROR_CODE
+  );
+}
+
 export async function reconcileDaemonChannelDeliveries(
   deps: {
     store: SparkChannelDeliveryStore;
@@ -171,7 +243,7 @@ export async function reconcileDaemonChannelDeliveries(
     heartbeatIntervalMs?: number;
     attemptTimeoutMs?: number;
   } = {},
-): Promise<{ attempted: number; delivered: number; failed: number }> {
+): Promise<{ attempted: number; delivered: number; failed: number; uncertain: number }> {
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 50)));
   const leaseMs = positiveDurationMs(options.leaseMs ?? 90_000, "leaseMs");
   const heartbeatIntervalMs = positiveDurationMs(
@@ -200,12 +272,24 @@ export async function reconcileDaemonChannelDeliveries(
   // other. Claims are fenced first, then attempts run concurrently; each one
   // owns its own heartbeat and hard application deadline.
   const outcomes = await Promise.all(
-    claimed.map(async (delivery): Promise<"delivered" | "failed"> => {
+    claimed.map(async (delivery): Promise<"delivered" | "failed" | "uncertain"> => {
+      let replaySafety: ChannelDeliveryReplaySafety =
+        delivery.kind === "inbound" ? "deduplicated" : "unsafe";
       try {
+        const prepared = prepareChannelDelivery(delivery, deps.channelIngress);
+        replaySafety = prepared.replaySafety;
+        if (delivery.dispatchedAt && prepared.external && replaySafety === "unsafe") {
+          throw channelDeliveryOutcomeUnknown(
+            new Error(
+              `channel delivery ${delivery.deliveryId} was interrupted after dispatch started`,
+            ),
+          );
+        }
         const receipt = await dispatchWithLeaseHeartbeat(
           delivery,
           deps.store,
           deps.channelIngress,
+          prepared,
           leaseMs,
           heartbeatIntervalMs,
           attemptTimeoutMs,
@@ -219,7 +303,18 @@ export async function reconcileDaemonChannelDeliveries(
             delivery.deliveryId,
             requireLeaseToken(delivery),
             message,
+            {
+              outcome:
+                delivery.kind === "inbound" ? "not_sent" : channelDeliveryFailureOutcome(error),
+              replaySafety,
+            },
           );
+          if (retry.status === "uncertain") {
+            console.error(
+              `[spark-daemon] channel delivery ${delivery.deliveryId} ${delivery.kind} outcome is uncertain; automatic retry stopped: ${message}`,
+            );
+            return "uncertain";
+          }
           console.error(
             `[spark-daemon] channel delivery ${delivery.deliveryId} ${delivery.kind} attempt=${retry.attemptCount} failed; retryAt=${retry.nextAttemptAt}: ${message}`,
           );
@@ -237,6 +332,7 @@ export async function reconcileDaemonChannelDeliveries(
     attempted: claimed.length,
     delivered: outcomes.filter((outcome) => outcome === "delivered").length,
     failed: outcomes.filter((outcome) => outcome === "failed").length,
+    uncertain: outcomes.filter((outcome) => outcome === "uncertain").length,
   };
 }
 
@@ -244,6 +340,7 @@ async function dispatchWithLeaseHeartbeat(
   delivery: SparkChannelDeliveryRecord,
   store: SparkChannelDeliveryStore,
   channelIngress: ChannelDeliveryIngress,
+  prepared: PreparedChannelDelivery,
   leaseMs: number,
   heartbeatIntervalMs: number,
   attemptTimeoutMs: number,
@@ -265,8 +362,11 @@ async function dispatchWithLeaseHeartbeat(
     let dispatchError: unknown;
     let dispatchFailed = false;
     try {
+      if (prepared.external) {
+        store.markDispatchStarted(delivery.deliveryId, leaseToken);
+      }
       receipt = await withChannelDeliveryAttemptTimeout(
-        dispatchChannelDelivery(delivery, channelIngress),
+        dispatchChannelDelivery(delivery, channelIngress, prepared.adapterId),
         delivery,
         attemptTimeoutMs,
       );
@@ -318,31 +418,28 @@ async function withChannelDeliveryAttemptTimeout<T>(
 async function dispatchChannelDelivery(
   delivery: SparkChannelDeliveryRecord,
   channelIngress: ChannelDeliveryIngress,
+  resolvedAdapterId?: string,
 ): Promise<unknown> {
   switch (delivery.kind) {
     case "reply": {
       const payload = parseReplyPayload(delivery.payload);
-      await channelIngress.sendReply(payload.workspaceId, payload.adapterId, {
+      return await channelIngress.sendReply(payload.workspaceId, resolvedAdapterId!, {
         ...payload.target,
         text: payload.text,
+        deliveryId: delivery.deliveryId,
       });
-      return {
-        workspaceId: payload.workspaceId,
-        adapterId: payload.adapterId,
-        recipient: payload.target.recipient,
-      };
     }
     case "ask": {
       const payload = parseAskPayload(delivery.payload);
       return await channelIngress.sendAsk(
         payload.workspaceId,
-        payload.adapterId,
+        resolvedAdapterId!,
         payload.recipient,
         {
           ...payload.request,
           // Carry the immutable ledger identity into adapters. QQ uses it to
           // retry the same passive message slot after an ambiguous timeout.
-          idempotencyKey: delivery.idempotencyKey,
+          idempotencyKey: delivery.deliveryId,
         },
       );
     }
@@ -350,13 +447,13 @@ async function dispatchChannelDelivery(
       const payload = parseInteractionAckPayload(delivery.payload);
       await channelIngress.ackInteraction(
         payload.workspaceId,
-        payload.adapterId,
+        resolvedAdapterId!,
         payload.interactionId,
         payload.status,
       );
       return {
         workspaceId: payload.workspaceId,
-        adapterId: payload.adapterId,
+        adapterId: resolvedAdapterId!,
         interactionId: payload.interactionId,
         status: payload.status,
       };
@@ -380,12 +477,99 @@ async function dispatchChannelDelivery(
       }
       return await channelIngress.notify(payload.workspaceId, {
         action: "send",
-        adapter: payload.adapterId,
+        adapter: resolvedAdapterId!,
         recipient: payload.recipient,
         text: payload.text,
+        deliveryId: delivery.deliveryId,
       });
     }
   }
+}
+
+function prepareChannelDelivery(
+  delivery: SparkChannelDeliveryRecord,
+  channelIngress: ChannelDeliveryIngress,
+): PreparedChannelDelivery {
+  if (delivery.kind === "inbound") {
+    return { external: false, replaySafety: "deduplicated" };
+  }
+  try {
+    switch (delivery.kind) {
+      case "reply": {
+        const payload = parseReplyPayload(delivery.payload);
+        const adapterId = resolveDeliveryAdapterId(
+          channelIngress,
+          payload.workspaceId,
+          payload.adapterId,
+          payload.adapterAccountIdentity,
+        );
+        return {
+          adapterId,
+          external: true,
+          replaySafety:
+            channelIngress.replyDeliveryFacts?.(payload.workspaceId, adapterId, payload.target)
+              .replaySafety ?? "unsafe",
+        };
+      }
+      case "notification": {
+        const payload = parseNotificationPayload(delivery.payload);
+        const adapterId = resolveDeliveryAdapterId(
+          channelIngress,
+          payload.workspaceId,
+          payload.adapterId,
+          payload.adapterAccountIdentity,
+        );
+        return {
+          adapterId,
+          external: true,
+          replaySafety:
+            channelIngress.messageDeliveryFacts?.(payload.workspaceId, adapterId, {
+              recipient: payload.recipient,
+            }).replaySafety ?? "unsafe",
+        };
+      }
+      case "ask": {
+        const payload = parseAskPayload(delivery.payload);
+        return {
+          adapterId: resolveDeliveryAdapterId(
+            channelIngress,
+            payload.workspaceId,
+            payload.adapterId,
+            payload.adapterAccountIdentity,
+          ),
+          external: true,
+          replaySafety: "unsafe",
+        };
+      }
+      case "interaction_ack": {
+        const payload = parseInteractionAckPayload(delivery.payload);
+        return {
+          adapterId: resolveDeliveryAdapterId(
+            channelIngress,
+            payload.workspaceId,
+            payload.adapterId,
+            payload.adapterAccountIdentity,
+          ),
+          external: true,
+          replaySafety: "unsafe",
+        };
+      }
+    }
+  } catch (error) {
+    // Adapter lookup and replay-policy resolution happen before provider I/O.
+    throw channelDeliveryNotSent(error);
+  }
+}
+
+function resolveDeliveryAdapterId(
+  channelIngress: ChannelDeliveryIngress,
+  workspaceId: string,
+  adapterId: string,
+  adapterAccountIdentity?: string,
+): string {
+  return (
+    channelIngress.resolveAdapterId?.(workspaceId, adapterId, adapterAccountIdentity) ?? adapterId
+  );
 }
 
 function parseReplyPayload(value: unknown): ReplyPayload {
@@ -399,6 +583,9 @@ function parseReplyPayload(value: unknown): ReplyPayload {
     sessionId: requiredString(record.sessionId, "reply sessionId"),
     workspaceId: requiredString(record.workspaceId, "reply workspaceId"),
     adapterId: requiredString(record.adapterId, "reply adapterId"),
+    ...(optionalString(record.adapterAccountIdentity)
+      ? { adapterAccountIdentity: optionalString(record.adapterAccountIdentity) }
+      : {}),
     ...(optionalString(record.externalKey)
       ? { externalKey: optionalString(record.externalKey) }
       : {}),
@@ -442,6 +629,9 @@ function parseAskPayload(value: unknown): AskPayload {
   return {
     workspaceId: requiredString(record.workspaceId, "ask workspaceId"),
     adapterId: requiredString(record.adapterId, "ask adapterId"),
+    ...(optionalString(record.adapterAccountIdentity)
+      ? { adapterAccountIdentity: optionalString(record.adapterAccountIdentity) }
+      : {}),
     recipient: requiredString(record.recipient, "ask recipient"),
     request: {
       prompt: requiredString(request.prompt, "ask prompt"),
@@ -473,6 +663,9 @@ function parseInteractionAckPayload(value: unknown): InteractionAckPayload {
   return {
     workspaceId: requiredString(record.workspaceId, "interaction ack workspaceId"),
     adapterId: requiredString(record.adapterId, "interaction ack adapterId"),
+    ...(optionalString(record.adapterAccountIdentity)
+      ? { adapterAccountIdentity: optionalString(record.adapterAccountIdentity) }
+      : {}),
     interactionId: requiredString(record.interactionId, "interaction ack interactionId"),
     status,
   };
@@ -492,6 +685,12 @@ function parseInboundPayload(value: unknown): InboundPayload {
     workspaceId: requiredString(record.workspaceId, "inbound workspaceId"),
     message: {
       adapter,
+      ...(optionalString(rawMessage.adapterId)
+        ? { adapterId: optionalString(rawMessage.adapterId) }
+        : {}),
+      ...(optionalString(rawMessage.adapterAccountIdentity)
+        ? { adapterAccountIdentity: optionalString(rawMessage.adapterAccountIdentity) }
+        : {}),
       externalKey: requiredString(rawMessage.externalKey, "inbound externalKey"),
       text: requiredString(rawMessage.text, "inbound text"),
       ...(optionalString(rawMessage.senderId)
@@ -513,6 +712,9 @@ function parseInboundPayload(value: unknown): InboundPayload {
       ...(Array.isArray(rawMessage.attachments)
         ? { attachments: rawMessage.attachments as IncomingMessage["attachments"] }
         : {}),
+      ...(Array.isArray(rawMessage.images)
+        ? { images: rawMessage.images as IncomingMessage["images"] }
+        : {}),
       ...(mentions?.length ? { mentions } : {}),
       ...(typeof rawMessage.mentionedSelf === "boolean"
         ? { mentionedSelf: rawMessage.mentionedSelf }
@@ -528,6 +730,9 @@ function parseNotificationPayload(value: unknown): NotificationPayload {
     messageId: requiredString(record.messageId, "notification messageId"),
     workspaceId: requiredString(record.workspaceId, "notification workspaceId"),
     adapterId: requiredString(record.adapterId, "notification adapterId"),
+    ...(optionalString(record.adapterAccountIdentity)
+      ? { adapterAccountIdentity: optionalString(record.adapterAccountIdentity) }
+      : {}),
     externalKey: requiredString(record.externalKey, "notification externalKey"),
     recipient: requiredString(record.recipient, "notification recipient"),
     text: requiredString(record.text, "notification text"),
@@ -549,6 +754,12 @@ function requiredRecord(value: unknown, label: string): Record<string, unknown> 
     throw new Error(`${label} must be an object`);
   }
   return value as Record<string, unknown>;
+}
+
+function asOptionalRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function requiredString(value: unknown, label: string): string {

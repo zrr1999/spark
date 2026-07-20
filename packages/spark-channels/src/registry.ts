@@ -1,4 +1,5 @@
 import { FeishuAdapter } from "./feishu-adapter.ts";
+import { createHash, randomUUID } from "node:crypto";
 import { InfoflowAdapter } from "./infoflow-adapter.ts";
 import type {
   ChannelAskRequest,
@@ -18,7 +19,19 @@ import type {
   IncomingMessage,
   ResolvedChannelRoute,
 } from "./types.ts";
-import type { ChannelReplyRecovery, ChannelReplyStream, ChannelReplyTarget } from "./reply.ts";
+import {
+  channelDeliveryNotSent,
+  normalizeChannelDeliveryResult,
+  requireChannelDeliveryId,
+  type ChannelDeliveryFacts,
+  type ChannelDeliveryResult,
+  type ChannelMessageSendInput,
+  type ChannelMessageTarget,
+  type ChannelReplyRecovery,
+  type ChannelReplySendInput,
+  type ChannelReplyStream,
+  type ChannelReplyTarget,
+} from "./reply.ts";
 
 export class ChannelRegistryError extends Error {
   readonly code: string;
@@ -41,8 +54,7 @@ export class ChannelRegistry {
   }
 
   get ingressEnabled(): boolean {
-    // Channel enable/disable is adapter presence; inbound follows that (default on when configured).
-    return this.adapters.size > 0;
+    return [...this.adapters.values()].some((adapter) => adapter.runtimeCapable !== false);
   }
 
   get onUnboundPolicy(): "reject" | "create" {
@@ -50,10 +62,14 @@ export class ChannelRegistry {
   }
 
   listAdapters() {
-    return [...this.adapters.values()].map((adapter) => ({
-      ...adapter.status(),
-      running: this.running.has(adapter.id),
-    }));
+    return [...this.adapters.values()].map((adapter) => {
+      const config = this.options.config.adapters[adapter.id];
+      return {
+        ...adapter.status(),
+        ...(config ? { adapterAccountIdentity: channelAdapterAccountIdentity(config) } : {}),
+        running: this.running.has(adapter.id),
+      };
+    });
   }
 
   resolveRoute(name: string): ResolvedChannelRoute {
@@ -84,6 +100,7 @@ export class ChannelRegistry {
   async startAll(): Promise<void> {
     if (!this.ingressEnabled) return;
     for (const adapter of this.adapters.values()) {
+      if (adapter.runtimeCapable === false) continue;
       await this.startAdapter(adapter.id);
     }
   }
@@ -96,6 +113,12 @@ export class ChannelRegistry {
 
   async startAdapter(adapterId: string): Promise<void> {
     const adapter = this.requireAdapter(adapterId);
+    if (adapter.runtimeCapable === false) {
+      throw new ChannelRegistryError(
+        "adapter_unavailable",
+        `adapter does not have a runtime transport: ${adapterId}`,
+      );
+    }
     if (this.running.has(adapterId)) return;
     await adapter.start();
     this.running.add(adapterId);
@@ -133,17 +156,78 @@ export class ChannelRegistry {
   async openReplyStream(
     adapterId: string,
     target: ChannelReplyTarget,
+    options: { onCreated?: (stream: ChannelReplyStream) => void | Promise<void> } = {},
   ): Promise<ChannelReplyStream | undefined> {
-    return await this.requireAdapter(adapterId).reply?.openReplyStream(target);
+    let adapter: ChannelAdapter;
+    try {
+      adapter = this.requireAdapter(adapterId);
+    } catch (error) {
+      throw channelDeliveryNotSent(error);
+    }
+    const stream = await adapter.reply?.openReplyStream(target);
+    if (!stream || !options.onCreated) return stream;
+    try {
+      await options.onCreated(stream);
+    } catch (error) {
+      try {
+        await stream.fail("无法开始处理，请重新发送");
+      } catch (closeError) {
+        console.error("[spark-channels] failed to close undurable reply stream", closeError);
+      }
+      throw error;
+    }
+    return stream;
   }
 
-  async sendReply(adapterId: string, input: ChannelReplyTarget & { text: string }): Promise<void> {
+  messageDeliveryFacts(adapterId: string, target: ChannelMessageTarget): ChannelDeliveryFacts {
     const adapter = this.requireAdapter(adapterId);
-    if (adapter.reply) {
-      await adapter.reply.sendReply(input);
-      return;
+    return adapter.messageDeliveryFacts?.(target) ?? { replaySafety: "unsafe" };
+  }
+
+  async sendMessage(
+    adapterId: string,
+    input: ChannelMessageSendInput,
+  ): Promise<ChannelDeliveryResult> {
+    let adapter: ChannelAdapter;
+    let facts: ChannelDeliveryFacts;
+    let deliveryId: string;
+    try {
+      deliveryId = requireChannelDeliveryId(input.deliveryId);
+      adapter = this.requireAdapter(adapterId);
+      facts = adapter.messageDeliveryFacts?.(input) ?? { replaySafety: "unsafe" };
+    } catch (error) {
+      throw channelDeliveryNotSent(error);
     }
-    await adapter.send({ recipient: input.recipient, text: input.text });
+    return normalizeChannelDeliveryResult(await adapter.send({ ...input, deliveryId }), facts);
+  }
+
+  replyDeliveryFacts(adapterId: string, target: ChannelReplyTarget): ChannelDeliveryFacts {
+    const adapter = this.requireAdapter(adapterId);
+    return (
+      adapter.reply?.deliveryFacts?.(target) ??
+      adapter.messageDeliveryFacts?.(target) ?? { replaySafety: "unsafe" }
+    );
+  }
+
+  async sendReply(adapterId: string, input: ChannelReplySendInput): Promise<ChannelDeliveryResult> {
+    let adapter: ChannelAdapter;
+    let facts: ChannelDeliveryFacts;
+    let deliveryId: string;
+    try {
+      deliveryId = requireChannelDeliveryId(input.deliveryId);
+      adapter = this.requireAdapter(adapterId);
+      facts = adapter.reply?.deliveryFacts?.(input) ??
+        adapter.messageDeliveryFacts?.(input) ?? { replaySafety: "unsafe" };
+    } catch (error) {
+      throw channelDeliveryNotSent(error);
+    }
+    if (adapter.reply) {
+      return normalizeChannelDeliveryResult(
+        await adapter.reply.sendReply({ ...input, deliveryId }),
+        facts,
+      );
+    }
+    return normalizeChannelDeliveryResult(await adapter.send({ ...input, deliveryId }), facts);
   }
 
   async recoverReply(
@@ -203,7 +287,12 @@ export class ChannelRegistry {
 
   private createAdapter(adapterId: string, config: ChannelAdapterConfig): ChannelAdapter {
     const transport = this.options.createTransport?.(adapterId, config);
-    const onMessage = this.options.onMessage;
+    const handleMessage = this.options.onMessage;
+    const adapterAccountIdentity = channelAdapterAccountIdentity(config);
+    const onMessage = handleMessage
+      ? (message: IncomingMessage) =>
+          handleMessage({ ...message, adapterId, adapterAccountIdentity })
+      : undefined;
     const onInteraction = this.options.onInteraction;
     switch (config.type) {
       case "feishu":
@@ -258,14 +347,49 @@ export class ChannelRegistry {
 
   private async notifySend(input: ChannelNotifyInput, text: string): Promise<ChannelNotifyResult> {
     const target = this.resolveNotifyTarget(input);
+    const deliveryId = input.deliveryId?.trim() || `channel.notify:${randomUUID()}`;
     const adapter = this.requireAdapter(target.adapterId);
-    await adapter.send({ recipient: target.recipient, text });
+    const delivery = input.image
+      ? await this.sendNotifyImage(adapter, target.recipient, input, deliveryId)
+      : await this.sendMessage(target.adapterId, {
+          recipient: target.recipient,
+          text,
+          deliveryId,
+        });
     return {
       action: input.action === "test" ? "test" : "send",
-      adapter: adapter.id,
+      adapter: target.adapterId,
       recipient: target.recipient,
       text,
+      ...(input.image ? { image: channelNotifyImageSummary(input.image) } : {}),
+      deliveryId,
+      delivery,
+      deliverySemantics: "one-shot",
     };
+  }
+
+  private async sendNotifyImage(
+    adapter: ChannelAdapter,
+    recipient: string,
+    input: ChannelNotifyInput,
+    deliveryId: string,
+  ): Promise<ChannelDeliveryResult> {
+    if (!adapter.image) {
+      throw new ChannelRegistryError(
+        "image_not_supported",
+        `adapter does not support image messages: ${adapter.id}`,
+      );
+    }
+    const facts = adapter.messageDeliveryFacts?.({ recipient }) ?? { replaySafety: "unsafe" };
+    return normalizeChannelDeliveryResult(
+      await adapter.image.sendImage({
+        recipient,
+        image: input.image!,
+        ...(input.text?.trim() ? { caption: input.text.trim() } : {}),
+        deliveryId,
+      }),
+      facts,
+    );
   }
 
   private resolveNotifyTarget(input: ChannelNotifyInput): {
@@ -299,6 +423,39 @@ export class ChannelRegistry {
     );
     return route?.recipient;
   }
+}
+
+function channelNotifyImageSummary(image: NonNullable<ChannelNotifyInput["image"]>): {
+  source: "url" | "data";
+  mediaType?: string;
+  name?: string;
+} {
+  return {
+    source: image.url?.trim() ? "url" : "data",
+    ...(image.mediaType?.trim() ? { mediaType: image.mediaType.trim() } : {}),
+    ...(image.name?.trim() ? { name: image.name.trim() } : {}),
+  };
+}
+
+/**
+ * Rename-stable account identity for inbound idempotency and account routing.
+ * Secrets and the operator-owned adapter key deliberately do not participate.
+ */
+export function channelAdapterAccountIdentity(config: ChannelAdapterConfig): string {
+  const publicIdentity = (() => {
+    switch (config.type) {
+      case "feishu":
+        return [config.app_id?.trim() ?? ""];
+      case "infoflow":
+        return [config.app_key?.trim() ?? "", config.app_agent_id?.trim() ?? ""];
+      case "qqbot":
+        return [config.app_id?.trim() ?? "", config.api_environment ?? "production"];
+    }
+  })();
+  const digest = createHash("sha256")
+    .update(JSON.stringify([1, config.type, ...publicIdentity]))
+    .digest("hex");
+  return `channel-account:${config.type}:${digest}`;
 }
 
 export function parseChannelsConfig(value: unknown): ChannelsConfig {

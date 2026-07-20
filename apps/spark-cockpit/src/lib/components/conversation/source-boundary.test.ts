@@ -60,6 +60,8 @@ describe("source-derived conversation component boundary", () => {
     expect(workspace).toContain("use:enhance={enhanceSendMessage}");
     expect(workspace).toContain('name="submissionId" value={startSubmissionId}');
     expect(workspace).toContain('name="submissionId" value={sendSubmissionId}');
+    expect(workspace).toContain("retryAction={item.id === retryableTimelineItemId");
+    expect(workspace).not.toContain("<SessionRetryAction");
     expect(workspace).not.toContain('class="timeline-entry');
     expect(workspace).not.toContain('class="message-block');
   });

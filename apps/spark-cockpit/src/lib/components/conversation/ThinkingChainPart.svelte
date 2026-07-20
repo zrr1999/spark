@@ -2,7 +2,6 @@
   import Icon from "$lib/Icon.svelte";
   import ReasoningPart from "./ReasoningPart.svelte";
   import ToolCallPart from "./ToolCallPart.svelte";
-  import { untrack } from "svelte";
   import {
     isVisibleThinkingChain,
     thinkingChainHasTerminalIssue,
@@ -27,9 +26,7 @@
   let hasTerminalIssue = $derived(thinkingChainHasTerminalIssue(steps));
   let needsFailureSummary = $derived(thinkingChainNeedsFailureSummary(steps));
   let shouldRender = $derived(isVisibleThinkingChain(chainState, steps));
-  let expanded = $state(untrack(() => active && chainState === "streaming"));
-  let previousState = $state(untrack(() => chainState));
-  let previousActive = $state(untrack(() => active));
+  let expanded = $state(false);
 
   function stepStatus(step: ConversationChainStep): "complete" | "active" | "pending" {
     if (step.type === "reasoning" || step.type === "commentary") {
@@ -45,19 +42,6 @@
     if (step.type === "commentary") return "message" as const;
     return "spark" as const;
   }
-
-  $effect(() => {
-    if (active && chainState === "streaming") {
-      expanded = true;
-    } else if (
-      (previousActive && !active) ||
-      (previousState === "streaming" && chainState === "complete")
-    ) {
-      expanded = false;
-    }
-    previousState = chainState;
-    previousActive = active;
-  });
 
   function toggleExpanded(event: MouseEvent) {
     event.preventDefault();

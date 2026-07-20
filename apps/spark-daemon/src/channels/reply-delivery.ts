@@ -6,7 +6,7 @@ import type { SparkInvocationStore } from "../store/invocations.ts";
 export const CHANNEL_REPLY_DELIVERY_KIND = "channel.reply";
 export const CHANNEL_REPLY_DELIVERY_PENDING_ERROR_CODE = "CHANNEL_REPLY_DELIVERY_PENDING";
 
-export type ChannelReplyDeliveryStatus = "sending" | "pending" | "acked";
+export type ChannelReplyDeliveryStatus = "sending" | "pending" | "acked" | "uncertain";
 export type ChannelReplyDeliveryMode = "message" | "inline-stream";
 
 export interface ChannelReplyDeliveryInput {
@@ -90,6 +90,11 @@ export class ChannelReplyDeliveryStore {
     input: ChannelReplyDeliveryInput,
     now = new Date().toISOString(),
   ): ChannelReplyDeliveryRecord {
+    if ((input.deliveryMode ?? "message") !== "inline-stream" || !input.recovery) {
+      throw new Error(
+        "ChannelReplyDeliveryStore only accepts recoverable inline streams; ordinary replies use the unified channel delivery outbox",
+      );
+    }
     const deliveryId = channelReplyDeliveryId(input.invocationId);
     const existing = this.get(deliveryId);
     if (existing) {
@@ -117,6 +122,33 @@ export class ChannelReplyDeliveryStore {
     return this.finishAttempt(deliveryId, { status: "acked", now });
   }
 
+  /** Replace the restart fallback with the immutable final answer before completion. */
+  updateText(
+    deliveryId: string,
+    text: string,
+    now = new Date().toISOString(),
+  ): ChannelReplyDeliveryRecord {
+    if (!text.trim()) throw new Error("Channel reply delivery text must not be empty");
+    const current = this.require(deliveryId);
+    if (current.status !== "sending") {
+      throw new Error(`Channel reply delivery is not claimed: ${deliveryId}`);
+    }
+    const payload = payloadFromRecord(current, { text });
+    const changed = Number(
+      this.db
+        .prepare(
+          `UPDATE outbox
+           SET payload_json = ?, updated_at = ?
+           WHERE id = ? AND kind = ? AND status = 'sending'`,
+        )
+        .run(JSON.stringify(payload), now, deliveryId, CHANNEL_REPLY_DELIVERY_KIND).changes,
+    );
+    if (changed !== 1) {
+      throw new Error(`Channel reply delivery is not claimed: ${deliveryId}`);
+    }
+    return this.require(deliveryId);
+  }
+
   defer(
     deliveryId: string,
     error: unknown,
@@ -127,6 +159,36 @@ export class ChannelReplyDeliveryStore {
       now,
       error: errorMessage(error),
     });
+  }
+
+  markUncertain(
+    deliveryId: string,
+    error: unknown,
+    now = new Date().toISOString(),
+  ): ChannelReplyDeliveryRecord {
+    const current = this.require(deliveryId);
+    if (current.status !== "sending") {
+      throw new Error(`Channel reply delivery is not claimed: ${deliveryId}`);
+    }
+    const payload = payloadFromRecord(current, {
+      lastError: errorMessage(error),
+      nextAttemptAt: undefined,
+    });
+    const changed = Number(
+      this.db
+        .prepare(
+          `UPDATE outbox
+           SET payload_json = ?, status = 'uncertain', updated_at = ?
+           WHERE id = ? AND kind = ? AND status = 'sending'`,
+        )
+        .run(JSON.stringify(payload), now, deliveryId, CHANNEL_REPLY_DELIVERY_KIND).changes,
+    );
+    if (changed !== 1) {
+      throw new Error(`Channel reply delivery is not claimed: ${deliveryId}`);
+    }
+    const record = this.require(deliveryId);
+    this.appendStateEvent(record);
+    return record;
   }
 
   /** Switch a failed inline-card completion to an ordinary-message fallback. */
@@ -169,18 +231,26 @@ export class ChannelReplyDeliveryStore {
       .all(CHANNEL_REPLY_DELIVERY_KIND) as unknown as ChannelReplyOutboxRow[];
     for (const row of rows) {
       const payload = parsePayload(row.payload_json);
+      const canRecoverSameArtifact =
+        payload.deliveryMode === "inline-stream" && payload.recovery !== undefined;
       const next: ChannelReplyDeliveryPayload = {
         ...payload,
         lastError: "daemon restarted before delivery acknowledgement",
-        nextAttemptAt: now,
+        ...(canRecoverSameArtifact ? { nextAttemptAt: now } : { nextAttemptAt: undefined }),
       };
       this.db
         .prepare(
           `UPDATE outbox
-           SET payload_json = ?, status = 'pending', updated_at = ?
+           SET payload_json = ?, status = ?, updated_at = ?
            WHERE id = ? AND kind = ? AND status = 'sending'`,
         )
-        .run(JSON.stringify(next), now, row.id, CHANNEL_REPLY_DELIVERY_KIND);
+        .run(
+          JSON.stringify(next),
+          canRecoverSameArtifact ? "pending" : "uncertain",
+          now,
+          row.id,
+          CHANNEL_REPLY_DELIVERY_KIND,
+        );
       this.appendStateEvent(this.require(row.id));
     }
     return rows.length;
@@ -324,14 +394,16 @@ export class ChannelReplyDeliveryStore {
 
 export async function reconcileChannelReplyDeliveries(input: {
   store: ChannelReplyDeliveryStore;
-  channelIngress: Pick<DaemonChannelIngressRuntime, "sendReply" | "recoverReply">;
+  channelIngress: Pick<DaemonChannelIngressRuntime, "sendReply" | "recoverReply"> &
+    Partial<Pick<DaemonChannelIngressRuntime, "replyDeliveryFacts">>;
   limit?: number;
   now?: () => string;
-}): Promise<{ attempted: number; delivered: number; pending: number }> {
+}): Promise<{ attempted: number; delivered: number; pending: number; uncertain: number }> {
   const limit = Math.max(1, Math.min(100, Math.floor(input.limit ?? 25)));
   let attempted = 0;
   let delivered = 0;
   let pending = 0;
+  let uncertain = 0;
   const attemptedIds: string[] = [];
   while (attempted < limit) {
     const delivery = input.store.claimNext(input.now?.() ?? new Date().toISOString(), attemptedIds);
@@ -341,9 +413,15 @@ export async function reconcileChannelReplyDeliveries(input: {
     try {
       if (delivery.deliveryMode === "inline-stream") {
         if (!delivery.recovery) {
-          throw new Error(
-            `Interrupted streamed reply has no platform recovery handle: ${delivery.deliveryId}`,
+          input.store.markUncertain(
+            delivery.deliveryId,
+            new Error(
+              `Interrupted streamed reply has no platform recovery handle: ${delivery.deliveryId}`,
+            ),
+            input.now?.() ?? new Date().toISOString(),
           );
+          uncertain += 1;
+          continue;
         }
         await input.channelIngress.recoverReply(delivery.workspaceId, delivery.adapterId, {
           ...delivery.target,
@@ -352,9 +430,27 @@ export async function reconcileChannelReplyDeliveries(input: {
           recovery: delivery.recovery,
         });
       } else {
+        const replaySafety =
+          input.channelIngress.replyDeliveryFacts?.(
+            delivery.workspaceId,
+            delivery.adapterId,
+            delivery.target,
+          ).replaySafety ?? "unsafe";
+        if (replaySafety === "unsafe") {
+          input.store.markUncertain(
+            delivery.deliveryId,
+            new Error(
+              "legacy ordinary reply has no provably safe replay boundary; automatic retry stopped",
+            ),
+            input.now?.() ?? new Date().toISOString(),
+          );
+          uncertain += 1;
+          continue;
+        }
         await input.channelIngress.sendReply(delivery.workspaceId, delivery.adapterId, {
           ...delivery.target,
           text: delivery.text,
+          deliveryId: delivery.deliveryId,
         });
       }
       input.store.acknowledge(delivery.deliveryId, input.now?.() ?? new Date().toISOString());
@@ -364,7 +460,7 @@ export async function reconcileChannelReplyDeliveries(input: {
       pending += 1;
     }
   }
-  return { attempted, delivered, pending };
+  return { attempted, delivered, pending, uncertain };
 }
 
 export function channelReplyDeliveryId(invocationId: string): string {
@@ -489,7 +585,7 @@ function isRecovery(value: unknown): value is ChannelReplyRecovery {
 }
 
 function isDeliveryStatus(value: string): value is ChannelReplyDeliveryStatus {
-  return value === "sending" || value === "pending" || value === "acked";
+  return value === "sending" || value === "pending" || value === "acked" || value === "uncertain";
 }
 
 function errorMessage(error: unknown): string {

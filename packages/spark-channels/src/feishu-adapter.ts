@@ -6,6 +6,13 @@ import type {
   FeishuInboundRaw,
   IncomingMessage,
 } from "./types.ts";
+import {
+  channelDeliveryNotSent,
+  normalizeChannelDeliveryResult,
+  type ChannelDeliveryFacts,
+  type ChannelDeliveryResult,
+  type ChannelMessageTarget,
+} from "./reply.ts";
 
 export interface FeishuAdapterOptions {
   id: string;
@@ -18,6 +25,7 @@ export class FeishuAdapter implements ChannelAdapter {
   readonly id: string;
   readonly type = "feishu" as const;
   readonly config: FeishuAdapterConfig;
+  readonly runtimeCapable: boolean;
   private readonly transport: ChannelTransport;
   private readonly onMessage?: (message: IncomingMessage) => void;
   private running = false;
@@ -25,6 +33,7 @@ export class FeishuAdapter implements ChannelAdapter {
   constructor(options: FeishuAdapterOptions) {
     this.id = options.id;
     this.config = options.config;
+    this.runtimeCapable = options.transport !== undefined;
     this.onMessage = options.onMessage;
     this.transport = options.transport ?? createDefaultFeishuTransport(options.config);
   }
@@ -45,8 +54,18 @@ export class FeishuAdapter implements ChannelAdapter {
     this.running = false;
   }
 
-  async send(input: { recipient: string; text: string }): Promise<void> {
-    await this.transport.send(input.recipient, input.text);
+  messageDeliveryFacts(target: ChannelMessageTarget): ChannelDeliveryFacts {
+    return this.transport.messageDeliveryFacts?.(target) ?? { replaySafety: "unsafe" };
+  }
+
+  async send(input: {
+    recipient: string;
+    text: string;
+    deliveryId?: string;
+  }): Promise<ChannelDeliveryResult> {
+    const facts = this.messageDeliveryFacts(input);
+    const result = await this.transport.send(input.recipient, input.text, input.deliveryId);
+    return normalizeChannelDeliveryResult(result, facts);
   }
 
   status() {
@@ -104,16 +123,18 @@ function parseFeishuInbound(raw: unknown): FeishuInboundRaw {
 
 function createDefaultFeishuTransport(config: FeishuAdapterConfig): ChannelTransport {
   void config;
+  const unavailable =
+    "Feishu transport is not implemented; inject a concrete transport before enabling it";
   return {
     async start() {
       // Production wiring loads @larksuiteoapi/node-sdk via dynamic import here.
     },
     async stop() {},
     async send() {
-      throw new Error("FeishuAdapter requires an injected transport or production SDK wiring");
+      throw channelDeliveryNotSent(new Error(unavailable));
     },
     status() {
-      return { state: "stopped" };
+      return { state: "degraded", error: unavailable };
     },
   };
 }

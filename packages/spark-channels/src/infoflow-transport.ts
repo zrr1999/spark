@@ -5,9 +5,17 @@ import {
   type EventMessage,
   type NormalizedEventData,
 } from "@core-workspace/infoflow-sdk-nodejs";
+import {
+  materializeChannelImages,
+  type ChannelImage,
+  type ChannelImageSource,
+} from "./channel-images.ts";
 import { normalizeInfoflowContent, type InfoflowAttachment } from "./infoflow-content.ts";
 import { createInfoflowSdkOutbound, type InfoflowSdkOutbound } from "./infoflow-sdk-outbound.ts";
+import type { ChannelInteractionCapability } from "./interaction.ts";
+import { channelDeliveryNotSent, type ChannelDeliveryResult } from "./reply.ts";
 import { scheduledReconnectDelayWithJitter } from "./reconnect-delay.ts";
+import { renderTextChannelAskRequest } from "./text-ask.ts";
 import type { ChannelConnectionState, ChannelTransport, InfoflowAdapterConfig } from "./types.ts";
 
 export const DEFAULT_INFOFLOW_API_HOST = "https://api.im.baidu.com";
@@ -19,6 +27,8 @@ const DEFAULT_INFOFLOW_CONNECT_TIMEOUT_MS = 45_000;
 
 export interface InfoflowTransportOptions {
   outbound?: InfoflowSdkOutbound;
+  /** Test seam for downloading platform-issued inbound image URLs. */
+  fetchImpl?: typeof fetch;
   wsClientFactory?: () => WSClient;
   /** Test seam for the wrapper-owned connect recovery schedule. */
   reconnectDelaysMs?: readonly number[];
@@ -46,6 +56,7 @@ export type InfoflowNormalizedInbound = {
   event_type?: string;
   content_type?: string;
   attachments?: InfoflowAttachment[];
+  images?: ChannelImage[];
   sender_name?: string;
   mentions?: string[];
   mentioned_self?: boolean;
@@ -54,7 +65,8 @@ export type InfoflowNormalizedInbound = {
 /**
  * Infoflow transport aligned with nyakore:
  * - inbound via official `@core-workspace/infoflow-sdk-nodejs` WSClient
- * - outbound via official SDK Client/TokenManager/InfoFlowError
+ * - ordinary outbound via the SDK MessageApi schema with a single provider attempt
+ * - streaming cards via the official SDK Client lifecycle
  */
 export function createInfoflowTransport(
   config: InfoflowAdapterConfig,
@@ -83,6 +95,7 @@ export function createInfoflowTransport(
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempt = 0;
   let connectionGeneration = 0;
+  const pendingReceipts = new Set<Promise<void>>();
   const reconnectDelays =
     options.reconnectDelaysMs?.length === 0
       ? INFOFLOW_RECONNECT_DELAYS_MS
@@ -97,11 +110,76 @@ export function createInfoflowTransport(
     throw new Error("infoflow connectTimeoutMs must be a positive finite number");
   }
 
-  async function send(recipient: string, text: string): Promise<void> {
-    await outbound.send({ recipient, content: { type: "text", text } });
+  async function sendOutbound(
+    input: Parameters<InfoflowSdkOutbound["send"]>[0],
+  ): Promise<ChannelDeliveryResult> {
+    if (outbound.sendWithReceipt) return await outbound.sendWithReceipt(input);
+    await outbound.send(input);
+    return { replaySafety: "unsafe" };
   }
 
-  function handleSdkEvent(event: EventMessage<NormalizedEventData>): void {
+  async function send(recipient: string, text: string, deliveryId?: string) {
+    return await sendOutbound({
+      recipient,
+      content: { type: "text", text },
+      ...(deliveryId ? { deliveryId } : {}),
+    });
+  }
+
+  /**
+   * Infoflow has no native interactive cards/buttons. Project asks as Markdown
+   * text; later user messages are correlated by the daemon pending-ask path.
+   */
+  const sentAskKeys = new Set<string>();
+  const interaction: ChannelInteractionCapability = {
+    async sendAsk(recipient, request) {
+      const key = request.idempotencyKey?.trim();
+      if (key && sentAskKeys.has(key)) {
+        return {};
+      }
+      const text = renderTextChannelAskRequest(request);
+      if (!text.trim()) {
+        throw new Error("infoflow text ask prompt must not be empty");
+      }
+      const mentionUserIds =
+        request.audience?.kind === "users" && /^group:/iu.test(recipient)
+          ? [...request.audience.userIds]
+          : undefined;
+      await outbound.send({
+        recipient,
+        content: { type: "markdown", text },
+        ...(mentionUserIds?.length ? { mentionUserIds } : {}),
+      });
+      if (key) sentAskKeys.add(key);
+      return {};
+    },
+    async ackInteraction() {
+      // Text asks have no platform interaction id to acknowledge.
+    },
+  };
+
+  const image: NonNullable<ChannelTransport["image"]> = {
+    async sendImage(input) {
+      if (input.caption?.trim()) {
+        throw channelDeliveryNotSent(
+          new Error("infoflow image messages do not support an atomic text caption"),
+        );
+      }
+      const [materialized] = await materializeChannelImages([input.image], {
+        fetchImpl: options.fetchImpl,
+      });
+      if (!materialized) {
+        throw channelDeliveryNotSent(new Error("infoflow image could not be materialized"));
+      }
+      return await sendOutbound({
+        recipient: input.recipient,
+        content: { type: "image", base64: materialized.data },
+        ...(input.deliveryId ? { deliveryId: input.deliveryId } : {}),
+      });
+    },
+  };
+
+  async function handleSdkEvent(event: EventMessage<NormalizedEventData>): Promise<void> {
     if (
       event.type === "connected" ||
       event.type === "disconnected" ||
@@ -120,7 +198,28 @@ export function createInfoflowTransport(
         ` textChars=${normalized.text.length}` +
         (normalized.mentions?.length ? ` mentions=${JSON.stringify(normalized.mentions)}` : ""),
     );
-    onMessage?.(normalized);
+    const imageSources = infoflowImageSources(event);
+    if (imageSources.length === 0) {
+      onMessage?.(normalized);
+      return;
+    }
+    const images = await materializeChannelImages(imageSources, {
+      fetchImpl: options.fetchImpl,
+      onError: (error) => {
+        console.error(`[spark-channels] infoflow image skipped: ${error.message}`);
+      },
+    });
+    onMessage?.({ ...normalized, ...(images.length ? { images } : {}) });
+  }
+
+  async function handleTrackedSdkEvent(event: EventMessage<NormalizedEventData>): Promise<void> {
+    const operation = handleSdkEvent(event);
+    pendingReceipts.add(operation);
+    try {
+      await operation;
+    } finally {
+      pendingReceipts.delete(operation);
+    }
   }
 
   function clearReconnect(): void {
@@ -257,20 +356,20 @@ export function createInfoflowTransport(
     const client = wsClient;
     const isCurrentClient = () => client === wsClient && generation === connectionGeneration;
     const isActiveClient = () => running && isCurrentClient();
-    privateHandler = (event) => {
+    privateHandler = async (event) => {
       if (!isActiveClient()) return;
       try {
-        handleSdkEvent(event);
+        await handleTrackedSdkEvent(event);
       } catch (error) {
         console.error("[spark-channels] infoflow private handler failed", error);
         rejectDurableReceipt(error);
         throw error;
       }
     };
-    groupHandler = (event) => {
+    groupHandler = async (event) => {
       if (!isActiveClient()) return;
       try {
-        handleSdkEvent(event);
+        await handleTrackedSdkEvent(event);
       } catch (error) {
         console.error("[spark-channels] infoflow group handler failed", error);
         rejectDurableReceipt(error);
@@ -381,7 +480,7 @@ export function createInfoflowTransport(
     reconnectAttempt = 0;
     connectionState = "stopped";
     connectionError = undefined;
-    onMessage = null;
+    const stoppedHandler = onMessage;
     if (wsClient) {
       if (privateHandler) wsClient.off("private.*", privateHandler);
       if (groupHandler) wsClient.off("group.*", groupHandler);
@@ -404,20 +503,25 @@ export function createInfoflowTransport(
       }
       wsClient = null;
     }
+    await Promise.allSettled([...pendingReceipts]);
+    if (!running && onMessage === stoppedHandler) onMessage = null;
   }
 
   return {
     start,
     stop,
     send,
+    messageDeliveryFacts: () => ({ replaySafety: "unsafe" }),
     reply: {
+      deliveryFacts: () => ({ replaySafety: "unsafe" }),
       openReplyStream: async (target) => outbound.openReplyStream(target.recipient),
       sendReply: async (target) => {
         const mentionUserIds =
           target.senderId && /^group:/iu.test(target.recipient) ? [target.senderId] : undefined;
-        await outbound.send({
+        return await sendOutbound({
           recipient: target.recipient,
           content: { type: "markdown", text: target.text },
+          ...(target.deliveryId ? { deliveryId: target.deliveryId } : {}),
           ...(mentionUserIds ? { mentionUserIds } : {}),
         });
       },
@@ -429,6 +533,8 @@ export function createInfoflowTransport(
         });
       },
     },
+    image,
+    interaction,
     status: () => {
       const liveState = wsClient
         ? infoflowConnectionState(wsClient.getState(), running)
@@ -439,6 +545,85 @@ export function createInfoflowTransport(
       };
     },
   };
+}
+
+/** Extract temporary image sources without copying them into normalized metadata. */
+export function infoflowImageSources(
+  event: EventMessage<NormalizedEventData> | Record<string, unknown>,
+): ChannelImageSource[] {
+  const data = ((event as { data?: unknown }).data ?? event) as Record<string, unknown>;
+  const raw = ((data.raw as unknown) ?? data) as Record<string, unknown>;
+  const message =
+    raw.message && typeof raw.message === "object" && !Array.isArray(raw.message)
+      ? (raw.message as Record<string, unknown>)
+      : undefined;
+  const body = Array.isArray(message?.body)
+    ? message.body
+    : Array.isArray(raw.body)
+      ? raw.body
+      : Array.isArray(data.body)
+        ? data.body
+        : [];
+  const bodySources = body.flatMap((entry) => infoflowImageSource(entry));
+  if (bodySources.length > 0) return bodySources;
+
+  const messageType = scalarString(
+    data.msgType ?? raw.MsgType ?? raw.msgType ?? raw.msgtype ?? (event as { type?: unknown }).type,
+  ).toLowerCase();
+  if (!messageType.includes("image")) return [];
+  return infoflowImageSource(raw.Content ?? raw.content ?? data.content);
+}
+
+function infoflowImageSource(value: unknown): ChannelImageSource[] {
+  const parsed = parseInfoflowImageContent(value);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+  const record = parsed as Record<string, unknown>;
+  const type = scalarString(record.type).toLowerCase();
+  if (type && type !== "image" && type !== "img") return [];
+  const url = scalarString(
+    record.downloadurl ?? record.downloadUrl ?? record.download_url ?? record.url,
+  ).trim();
+  const rawData = scalarString(record.content ?? record.base64 ?? record.data).trim();
+  const data = rawData.startsWith("data:image/") || looksLikeImageBase64(rawData) ? rawData : "";
+  if (!url && !data) return [];
+  const mediaType = scalarString(
+    record.mimeType ?? record.mimetype ?? record.mediaType ?? record.imageType ?? record.fileType,
+  ).trim();
+  const name = scalarString(
+    record.fileName ?? record.filename ?? record.name ?? record.imageName,
+  ).trim();
+  const sizeValue = record.size ?? record.fileSize;
+  const size =
+    typeof sizeValue === "number" && Number.isFinite(sizeValue) && sizeValue >= 0
+      ? sizeValue
+      : undefined;
+  return [
+    {
+      ...(url ? { url } : { data }),
+      mediaType: mediaType || imageMediaTypeFromDataUrl(data) || "image/jpeg",
+      ...(name ? { name } : {}),
+      ...(size !== undefined ? { size } : {}),
+    },
+  ];
+}
+
+function parseInfoflowImageContent(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return { content: value };
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return { content: value };
+  }
+}
+
+function looksLikeImageBase64(value: string): boolean {
+  return value.length >= 16 && /^[A-Za-z0-9+/=_-]+$/u.test(value);
+}
+
+function imageMediaTypeFromDataUrl(value: string): string | undefined {
+  return /^data:([^;,]+);base64,/iu.exec(value)?.[1];
 }
 
 function infoflowConnectionState(state: string, running: boolean): ChannelConnectionState {

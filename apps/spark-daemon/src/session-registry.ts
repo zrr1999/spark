@@ -26,8 +26,14 @@ export interface DaemonSessionRegistry {
   list(options?: SparkSessionListRequest): Promise<SparkSessionRegistryRecord[]>;
   get(sessionId: string): Promise<SparkSessionRegistryRecord | undefined>;
   bind(input: SparkSessionBindRequest): Promise<SparkSessionRegistryRecord>;
-  unbind(sessionId: string, externalKey: string): Promise<SparkSessionRegistryRecord>;
+  unbind(
+    sessionId: string,
+    externalKey: string,
+    adapterAccountIdentity?: string,
+  ): Promise<SparkSessionRegistryRecord>;
   archive(sessionId: SparkSessionArchiveRequest["sessionId"]): Promise<SparkSessionRegistryRecord>;
+  setRoleIfMissing?(sessionId: string, role: string): Promise<SparkSessionRegistryRecord>;
+  /** @deprecated Compatibility alias for older daemon collaborators. */
   setTitleIfMissing?(sessionId: string, title: string): Promise<SparkSessionRegistryRecord>;
   setModel(sessionId: string, model: SparkModelRef): Promise<SparkSessionRegistryRecord>;
   setThinkingLevel(
@@ -79,8 +85,15 @@ export function createSerializedDaemonSessionRegistry(
     list: (options) => readAfterMutations(() => registry.list(options)),
     get: (sessionId) => readAfterMutations(() => registry.get(sessionId)),
     bind: (input) => mutate(() => registry.bind(input)),
-    unbind: (sessionId, externalKey) => mutate(() => registry.unbind(sessionId, externalKey)),
+    unbind: (sessionId, externalKey, adapterAccountIdentity) =>
+      mutate(() => registry.unbind(sessionId, externalKey, adapterAccountIdentity)),
     archive: (sessionId) => mutate(() => registry.archive(sessionId)),
+    ...(registry.setRoleIfMissing
+      ? {
+          setRoleIfMissing: (sessionId: string, role: string) =>
+            mutate(() => registry.setRoleIfMissing!(sessionId, role)),
+        }
+      : {}),
     ...(registry.setTitleIfMissing
       ? {
           setTitleIfMissing: (sessionId: string, title: string) =>
@@ -109,8 +122,10 @@ export function createDaemonSessionRegistry(
     list: async (request = {}) => await registry.list(resolveListRequest(request, options)),
     get: async (sessionId) => await registry.get(sessionId),
     bind: async (input) => await registry.bind(input),
-    unbind: async (sessionId, externalKey) => await registry.unbind(sessionId, externalKey),
+    unbind: async (sessionId, externalKey, adapterAccountIdentity) =>
+      await registry.unbind(sessionId, externalKey, adapterAccountIdentity),
     archive: async (sessionId) => await registry.archive(sessionId),
+    setRoleIfMissing: async (sessionId, role) => await registry.setRoleIfMissing(sessionId, role),
     setTitleIfMissing: async (sessionId, title) =>
       await registry.setTitleIfMissing(sessionId, title),
     setModel: async (sessionId, model) => await registry.setModel(sessionId, model),

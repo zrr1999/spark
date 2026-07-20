@@ -7,6 +7,7 @@
   import type {
     SessionInspectorLabels,
     SessionInspectorTab,
+    SessionWorkbenchMailMessage,
     SessionWorkbenchTask,
     SessionWorkbenchView,
   } from "$lib/session-workbench";
@@ -25,9 +26,7 @@
     initialTab?: SessionInspectorTab;
   } = $props();
 
-  let activeTab = $state<SessionInspectorTab>(
-    untrack(() => (initialTab === "todos" ? "summary" : initialTab)),
-  );
+  let activeTab = $state<SessionInspectorTab>(untrack(() => initialTab));
   let tabs = $derived<{ id: SessionInspectorTab; label: string; icon: IconName }[]>([
     { id: "summary", label: labels.tabs.summary, icon: "activity" },
     { id: "changes", label: labels.tabs.changes, icon: "repos" },
@@ -55,6 +54,15 @@
     return labels.mailAcknowledged;
   }
 
+  function mailDeliveryLabel(
+    status: NonNullable<SessionWorkbenchMailMessage["channelDelivery"]>["status"],
+  ) {
+    if (status === "pending") return labels.mailDeliveryPending;
+    if (status === "delivered") return labels.mailDeliveryDelivered;
+    if (status === "failed") return labels.mailDeliveryFailed;
+    return labels.mailDeliveryUncertain;
+  }
+
   function compactTimestamp(value: string) {
     return value.slice(0, 16).replace("T", " ");
   }
@@ -69,6 +77,10 @@
 
   function headingId(section: SessionInspectorTab) {
     return `${instanceId}-${section}-heading`;
+  }
+
+  function sessionTodoHeadingId() {
+    return `${instanceId}-session-todo-heading`;
   }
 
   function groupTasksByProject(tasks: SessionWorkbenchTask[]) {
@@ -98,7 +110,7 @@
 </script>
 
 <section class="session-inspector" aria-label={labels.ariaLabel}>
-  <div class="session-todo-rail" aria-label={labels.tabs.todos}>
+  <div class="session-todo-rail" aria-label={labels.sessionTodoHeading}>
     {#if view.sessionTodo === null}
       <EmptyState
         title={labels.noSessionTodoTitle}
@@ -107,10 +119,13 @@
         compact
       />
     {:else}
-      <section class="inspector-section session-todo-section" aria-labelledby={headingId("todos")}>
+      <section
+        class="inspector-section session-todo-section"
+        aria-labelledby={sessionTodoHeadingId()}
+      >
         <header class="session-todo-header">
           <div>
-            <h2 id={headingId("todos")}>{labels.sessionTodoHeading}</h2>
+            <h2 id={sessionTodoHeadingId()}>{labels.sessionTodoHeading}</h2>
             <p>{view.sessionTodo.summary}</p>
           </div>
           <a href={`#${view.sessionTodo.anchor}`}>{labels.openSessionTodo}</a>
@@ -322,9 +337,18 @@
                       </p>
                     </div>
                   </div>
-                  <span class={`status-pill ${statusClass(message.status)}`}>
-                    {mailStatusLabel(message.status)}
-                  </span>
+                  <div class="mail-statuses">
+                    {#if message.channelDelivery}
+                      <span
+                        class={`status-pill mail-delivery-status ${statusClass(message.channelDelivery.status)}`}
+                      >
+                        {mailDeliveryLabel(message.channelDelivery.status)}
+                      </span>
+                    {/if}
+                    <span class={`status-pill mail-read-status ${statusClass(message.status)}`}>
+                      {mailStatusLabel(message.status)}
+                    </span>
+                  </div>
                 </header>
                 {#if message.body}
                   <p class="card-summary mail-body">{message.body}</p>
@@ -586,6 +610,18 @@
   .mailbox-card time {
     color: var(--color-ink-subtle);
     font-size: var(--text-caption);
+  }
+
+  .mail-statuses {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-xxs);
+    justify-content: flex-end;
+  }
+
+  .mail-delivery-status.uncertain {
+    background: var(--color-warning-soft);
+    color: var(--color-warning);
   }
 
   .mail-body {

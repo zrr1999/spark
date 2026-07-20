@@ -11,6 +11,7 @@ import {
   SparkAgentLoop as SparkTurnAgentLoop,
   type SparkAgentLoopOptions as SparkTurnAgentLoopOptions,
   type SparkRunOutcome,
+  type SparkTurnUserContent,
 } from "@zendev-lab/spark-turn";
 
 export interface SparkAgentLoopOptions extends SparkTurnAgentLoopOptions {
@@ -32,7 +33,7 @@ export class SparkAgentLoop extends SparkTurnAgentLoop {
     this.finishUserSubmit = finishUserSubmit;
   }
 
-  override async submitWithOutcome(content: string): Promise<SparkRunOutcome> {
+  override async submitWithOutcome(content: SparkTurnUserContent): Promise<SparkRunOutcome> {
     // Let the core loop produce its canonical busy error without mutating the
     // prompt of the in-flight turn.
     if (this.getState() !== "idle") return await super.submitWithOutcome(content);
@@ -48,7 +49,7 @@ export class SparkAgentLoop extends SparkTurnAgentLoop {
     this.beginUserSubmitPreparation();
     this.preparingUserSubmit = true;
     try {
-      await this.prepareUserSubmit?.(content);
+      await this.prepareUserSubmit?.(userContentText(content));
       return await super.submitWithOutcome(content);
     } finally {
       try {
@@ -59,6 +60,19 @@ export class SparkAgentLoop extends SparkTurnAgentLoop {
       }
     }
   }
+}
+
+function userContentText(content: SparkTurnUserContent): string {
+  if (typeof content === "string") return content;
+  return content
+    .filter(
+      (part): part is { type: "text"; text: string } =>
+        part.type === "text" &&
+        "text" in part &&
+        typeof (part as { text?: unknown }).text === "string",
+    )
+    .map((part) => part.text)
+    .join("\n");
 }
 
 export {

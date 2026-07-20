@@ -6,6 +6,7 @@ import type {
   ConversationTaskState,
   ConversationToolState,
 } from "./types";
+import { isInternalExecutionTransportFailure } from "./internal-execution-detail";
 import { isVisibleThinkingChain } from "./thinking-chain-view";
 
 type UnknownRecord = Record<string, unknown>;
@@ -38,7 +39,11 @@ export function conversationPartsFromMessage(
   if (
     message.status === "error" &&
     (message.role === "assistant" || message.role === "system") &&
-    !parts.some((part) => part.type === "error")
+    !parts.some((part) => part.type === "error") &&
+    !parts.some(
+      (part) =>
+        part.type === "tool" && isInternalExecutionTransportFailure(part.summary, part.name),
+    )
   ) {
     const detail = stringField(message.metadata, "errorMessage") ?? displayText.trim();
     if (detail) {

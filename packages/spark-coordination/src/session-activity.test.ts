@@ -130,6 +130,49 @@ function submitProjectedTurn(
 }
 
 describe("session activity projection", () => {
+  it("retains the daemon invocation correlation on projected user messages", () => {
+    const { db, workspace, runtimeWorkspaceBindingId } = setupWorkspace();
+    const sessionId = "sess_correlated_user";
+    appendEvent(db, {
+      workspaceId: workspace.id,
+      actorKind: "runtime",
+      actorId: runtimeWorkspaceBindingId,
+      kind: "daemon.view_event",
+      subjectKind: "view_model",
+      subjectId: sessionId,
+      payload: {
+        type: "daemon.view_event",
+        sessionId,
+        invocationId: "inv_correlated_user",
+        view: {
+          type: "session.message",
+          sessionId,
+          message: {
+            id: `${sessionId}:message:user:live:1`,
+            role: "user",
+            text: "Repeatable prompt",
+            status: "done",
+            metadata: {},
+          },
+        },
+      },
+      createdAt: "2026-07-09T00:01:00.000Z",
+    });
+
+    const activity = loadSessionActivity(db, { workspaceId: workspace.id, sessionId });
+
+    expect(activity.reports).toEqual([
+      expect.objectContaining({
+        kind: "session.message",
+        message: expect.objectContaining({
+          role: "user",
+          metadata: { invocationId: "inv_correlated_user" },
+        }),
+      }),
+    ]);
+    db.close();
+  });
+
   it("shows assigned work and daemon reports for one session", () => {
     const { db, workspace, runtimeWorkspaceBindingId } = setupWorkspace();
     const sessionId = "sess_ui";

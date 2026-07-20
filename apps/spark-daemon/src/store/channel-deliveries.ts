@@ -11,7 +11,12 @@ export const sparkChannelDeliveryKinds = [
 ] as const;
 export type SparkChannelDeliveryKind = (typeof sparkChannelDeliveryKinds)[number];
 
-export const sparkChannelDeliveryStatuses = ["pending", "retry_wait", "delivered"] as const;
+export const sparkChannelDeliveryStatuses = [
+  "pending",
+  "retry_wait",
+  "delivered",
+  "uncertain",
+] as const;
 export type SparkChannelDeliveryStatus = (typeof sparkChannelDeliveryStatuses)[number];
 
 export const DEFAULT_CHANNEL_DELIVERY_LEASE_MS = 30_000;
@@ -30,6 +35,8 @@ export interface SparkChannelDeliveryRecord {
   leaseToken?: string;
   leaseExpiresAt?: string;
   claimedAt?: string;
+  /** Persisted immediately before crossing the provider side-effect boundary. */
+  dispatchedAt?: string;
   lastError?: string;
   receipt?: unknown;
   deliveredAt?: string;
@@ -42,6 +49,7 @@ export interface SparkChannelDeliverySummary {
   retrying: number;
   inFlight: number;
   delivered: number;
+  uncertain: number;
   oldestPendingAt?: string;
   lastError?: string;
   lastErrorAt?: string;
@@ -60,6 +68,13 @@ export interface ClaimSparkChannelDeliveryOptions {
 
 export type RenewSparkChannelDeliveryOptions = ClaimSparkChannelDeliveryOptions;
 
+export interface RecordSparkChannelDeliveryFailureOptions {
+  /** What the adapter can prove about the failed attempt. */
+  outcome: "not_sent" | "unknown";
+  /** Whether replaying the same durable identity is provider-deduplicated. */
+  replaySafety: "deduplicated" | "unsafe";
+}
+
 export interface SparkChannelDeliveryStoreOptions {
   now?: () => string;
   random?: () => number;
@@ -77,6 +92,7 @@ interface ChannelDeliveryRow {
   lease_token: string | null;
   lease_expires_at: string | null;
   claimed_at: string | null;
+  dispatched_at: string | null;
   last_error: string | null;
   receipt_json: string | null;
   delivered_at: string | null;
@@ -86,7 +102,7 @@ interface ChannelDeliveryRow {
 
 const channelDeliverySelect = `SELECT
   id, kind, idempotency_key, payload_json, status, attempt_count, next_attempt_at,
-  lease_owner, lease_token, lease_expires_at, claimed_at, last_error, receipt_json,
+  lease_owner, lease_token, lease_expires_at, claimed_at, dispatched_at, last_error, receipt_json,
   delivered_at, created_at, updated_at
 FROM channel_deliveries`;
 
@@ -160,11 +176,12 @@ export class SparkChannelDeliveryStore {
     const counts = this.db
       .prepare(
         `SELECT
-           SUM(CASE WHEN status != 'delivered' THEN 1 ELSE 0 END) AS pending,
+           SUM(CASE WHEN status IN ('pending', 'retry_wait') THEN 1 ELSE 0 END) AS pending,
            SUM(CASE WHEN status = 'retry_wait' THEN 1 ELSE 0 END) AS retrying,
-           SUM(CASE WHEN status != 'delivered' AND lease_expires_at > ? THEN 1 ELSE 0 END) AS inFlight,
+           SUM(CASE WHEN status IN ('pending', 'retry_wait') AND lease_expires_at > ? THEN 1 ELSE 0 END) AS inFlight,
            SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS delivered,
-           MIN(CASE WHEN status != 'delivered' THEN created_at END) AS oldestPendingAt
+           SUM(CASE WHEN status = 'uncertain' THEN 1 ELSE 0 END) AS uncertain,
+           MIN(CASE WHEN status IN ('pending', 'retry_wait') THEN created_at END) AS oldestPendingAt
          FROM channel_deliveries`,
       )
       .get(now) as {
@@ -172,6 +189,7 @@ export class SparkChannelDeliveryStore {
       retrying: number | null;
       inFlight: number | null;
       delivered: number | null;
+      uncertain: number | null;
       oldestPendingAt: string | null;
     };
     const failure = this.db
@@ -188,6 +206,7 @@ export class SparkChannelDeliveryStore {
       retrying: Number(counts.retrying ?? 0),
       inFlight: Number(counts.inFlight ?? 0),
       delivered: Number(counts.delivered ?? 0),
+      uncertain: Number(counts.uncertain ?? 0),
       ...(counts.oldestPendingAt ? { oldestPendingAt: counts.oldestPendingAt } : {}),
       ...(failure ? { lastError: failure.lastError, lastErrorAt: failure.lastErrorAt } : {}),
     };
@@ -264,23 +283,69 @@ export class SparkChannelDeliveryStore {
     return this.require(deliveryId);
   }
 
-  recordFailure(deliveryId: string, leaseToken: string, error: string): SparkChannelDeliveryRecord {
+  /**
+   * Record the exact point at which an external request may start creating a
+   * provider-visible side effect. A crashed unsafe attempt carrying this mark
+   * must be reconciled as uncertain instead of sent again.
+   */
+  markDispatchStarted(deliveryId: string, leaseToken: string): SparkChannelDeliveryRecord {
+    assertNonEmpty(leaseToken, "channel delivery leaseToken");
+    const now = this.now();
+    const result = this.db
+      .prepare(
+        `UPDATE channel_deliveries
+         SET dispatched_at = ?, updated_at = ?
+         WHERE id = ? AND lease_token = ? AND lease_expires_at > ?
+           AND status IN ('pending', 'retry_wait')`,
+      )
+      .run(now, now, deliveryId, leaseToken, now);
+    if (Number(result.changes) !== 1) throw leaseLost(deliveryId);
+    return this.require(deliveryId);
+  }
+
+  recordFailure(
+    deliveryId: string,
+    leaseToken: string,
+    error: string,
+    options: RecordSparkChannelDeliveryFailureOptions = {
+      outcome: "unknown",
+      replaySafety: "unsafe",
+    },
+  ): SparkChannelDeliveryRecord {
     assertNonEmpty(leaseToken, "channel delivery leaseToken");
     const now = this.now();
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const leased = this.requireActiveLease(deliveryId, leaseToken, now);
-      const delayMs = channelDeliveryRetryDelayMs(leased.attemptCount, this.random);
-      const nextAttemptAt = new Date(Date.parse(now) + delayMs).toISOString();
+      const retryable =
+        leased.kind === "inbound" ||
+        options.outcome === "not_sent" ||
+        options.replaySafety === "deduplicated";
+      const nextAttemptAt = retryable
+        ? new Date(
+            Date.parse(now) + channelDeliveryRetryDelayMs(leased.attemptCount, this.random),
+          ).toISOString()
+        : now;
       const result = this.db
         .prepare(
           `UPDATE channel_deliveries
-           SET status = 'retry_wait', next_attempt_at = ?, lease_owner = NULL,
-               lease_token = NULL, lease_expires_at = NULL, last_error = ?, updated_at = ?
+           SET status = ?, next_attempt_at = ?, lease_owner = NULL,
+               lease_token = NULL, lease_expires_at = NULL,
+               dispatched_at = CASE WHEN ? THEN NULL ELSE dispatched_at END,
+               last_error = ?, updated_at = ?
            WHERE id = ? AND lease_token = ? AND lease_expires_at > ?
              AND status IN ('pending', 'retry_wait')`,
         )
-        .run(nextAttemptAt, error, now, deliveryId, leaseToken, now);
+        .run(
+          retryable ? "retry_wait" : "uncertain",
+          nextAttemptAt,
+          retryable ? 1 : 0,
+          error,
+          now,
+          deliveryId,
+          leaseToken,
+          now,
+        );
       if (Number(result.changes) !== 1) throw leaseLost(deliveryId);
       const record = this.require(deliveryId);
       this.db.exec("COMMIT");
@@ -361,6 +426,7 @@ function channelDeliveryRecord(row: ChannelDeliveryRow): SparkChannelDeliveryRec
     ...(row.lease_token ? { leaseToken: row.lease_token } : {}),
     ...(row.lease_expires_at ? { leaseExpiresAt: row.lease_expires_at } : {}),
     ...(row.claimed_at ? { claimedAt: row.claimed_at } : {}),
+    ...(row.dispatched_at ? { dispatchedAt: row.dispatched_at } : {}),
     ...(row.last_error ? { lastError: row.last_error } : {}),
     ...(row.receipt_json ? { receipt: JSON.parse(row.receipt_json) as unknown } : {}),
     ...(row.delivered_at ? { deliveredAt: row.delivered_at } : {}),

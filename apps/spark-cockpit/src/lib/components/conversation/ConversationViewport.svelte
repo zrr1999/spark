@@ -40,6 +40,7 @@
   let earlierFailed = $state(false);
   let suspendFollow = $state(false);
   let initialScrollComplete = $state(false);
+  let followAnimationFrame: number | undefined;
 
   $effect(() => {
     if (!hasEarlier) earlierFailed = false;
@@ -49,17 +50,20 @@
     if (followKey === null && initialScrollComplete) return;
     if (suspendFollow) return;
     if (!viewport || (!atBottom && initialScrollComplete)) return;
-    void tick().then(() => scrollToLatest(initialScrollComplete ? "smooth" : "instant"));
+    void tick().then(scheduleScrollToLatest);
   });
 
   $effect(() => {
     if (!viewport) return;
     const element = viewport;
     const observer = new ResizeObserver(() => {
-      if (atBottom && !suspendFollow) scrollToLatest("instant");
+      if (atBottom && !suspendFollow) scheduleScrollToLatest();
     });
     observer.observe(element);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      cancelScheduledFollow();
+    };
   });
 
   $effect(() => {
@@ -90,6 +94,7 @@
     loadingEarlier = true;
     earlierFailed = false;
     suspendFollow = true;
+    cancelScheduledFollow();
     try {
       const loaded = await onLoadEarlier();
       await tick();
@@ -116,8 +121,38 @@
     }
   }
 
+  function scheduleScrollToLatest() {
+    const element = viewport;
+    if (
+      !element ||
+      suspendFollow ||
+      (!atBottom && initialScrollComplete) ||
+      followAnimationFrame !== undefined
+    ) {
+      return;
+    }
+    followAnimationFrame = requestAnimationFrame(() => {
+      followAnimationFrame = undefined;
+      if (
+        viewport !== element ||
+        suspendFollow ||
+        (!atBottom && initialScrollComplete)
+      ) {
+        return;
+      }
+      scrollToLatest("auto");
+    });
+  }
+
+  function cancelScheduledFollow() {
+    if (followAnimationFrame === undefined) return;
+    cancelAnimationFrame(followAnimationFrame);
+    followAnimationFrame = undefined;
+  }
+
   function scrollToLatest(behavior: ScrollBehavior = "smooth") {
     if (!viewport) return;
+    cancelScheduledFollow();
     viewport.scrollTo({ top: viewport.scrollHeight, behavior });
     atBottom = true;
     initialScrollComplete = true;
@@ -196,33 +231,12 @@
   }
 
   .history-fallback {
-    border: 0;
-    clip: rect(0 0 0 0);
-    clip-path: inset(50%);
-    height: 1px;
-    margin: -1px;
-    overflow: hidden;
-    padding: 0;
-    position: absolute;
-    white-space: nowrap;
-    width: 1px;
-  }
-
-  .history-fallback.failed,
-  .history-fallback:focus-within {
     align-items: center;
-    clip: auto;
-    clip-path: none;
     display: flex;
     flex-direction: column;
     gap: 6px;
-    height: auto;
     justify-self: center;
     margin: 0;
-    overflow: visible;
-    position: static;
-    white-space: normal;
-    width: auto;
   }
 
   .history-fallback button {

@@ -18,10 +18,13 @@ import {
   DEFAULT_SPARK_IDENTITY_PROMPT,
   SPARK_CHANNEL_ALLOWED_TOOLS,
   SPARK_CHANNEL_SESSION_EXECUTION_PROMPT,
+  renderPersistentSessionRolePrompt,
   renderSparkChannelSurfacePrompt,
 } from "@zendev-lab/spark-host/system-prompt";
 import { composeAgentSystemPrompt } from "@zendev-lab/spark-modes";
 import {
+  channelDeliveryFailureOutcome,
+  channelDeliveryOutcomeUnknown,
   renderInfoflowInternalSystemPrompt,
   renderInfoflowMessageContextPrompt,
   resolveInfoflowCustomSystemPrompt,
@@ -39,13 +42,11 @@ import type {
 import type { SparkDaemonModelControl } from "../model-control.ts";
 import type { DaemonSessionRegistry } from "../session-registry.ts";
 import { ChannelReplyEventProjector } from "../channels/reply-stream.ts";
-import {
-  ChannelReplyDeliveryPendingError,
-  type ChannelReplyDeliveryStore,
-} from "../channels/reply-delivery.ts";
-import { assignCompletedSessionTitle } from "./session-title.ts";
+import type { ChannelReplyDeliveryStore } from "../channels/reply-delivery.ts";
+import { assignCompletedSessionRole } from "./session-title.ts";
 
 export const CHANNEL_REPLY_EMPTY_ERROR_CODE = "CHANNEL_REPLY_EMPTY";
+export const CHANNEL_REPLY_TERMINAL_PRESENTED_ERROR_CODE = "CHANNEL_REPLY_TERMINAL_PRESENTED";
 
 export class ChannelReplyContentError extends Error {
   readonly code = CHANNEL_REPLY_EMPTY_ERROR_CODE;
@@ -53,6 +54,15 @@ export class ChannelReplyContentError extends Error {
   constructor(invocationId: string) {
     super(`Channel invocation ${invocationId} completed without a deliverable assistant reply`);
     this.name = "ChannelReplyContentError";
+  }
+}
+
+class ChannelReplyTerminalPresentedError extends Error {
+  readonly code = CHANNEL_REPLY_TERMINAL_PRESENTED_ERROR_CODE;
+
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "ChannelReplyTerminalPresentedError";
   }
 }
 
@@ -64,12 +74,12 @@ export interface SparkDaemonTaskExecutorOptions {
   /** Workspace channels config root (`$SPARK_HOME`); defaults to controlSparkHome. */
   channelsSparkHome?: string;
   modelControl?: Pick<SparkDaemonModelControl, "effectiveModel" | "prepareModel"> &
-    Partial<Pick<SparkDaemonModelControl, "generateSessionTitle">>;
+    Partial<Pick<SparkDaemonModelControl, "generateSessionRole">>;
   sessionRegistry?: Pick<
     DaemonSessionRegistry,
     "recordRun" | "recordTurnQueued" | "recordTurnSettled"
   > &
-    Partial<Pick<DaemonSessionRegistry, "get" | "setTitleIfMissing">>;
+    Partial<Pick<DaemonSessionRegistry, "get" | "setRoleIfMissing">>;
   createSparkHeadlessSessionExecutor?: CreateSparkHeadlessSessionExecutorFn;
   interact?: (
     request: SparkInteractionRequest,
@@ -85,6 +95,7 @@ export interface SparkDaemonChannelReplyDeliveryInput {
   sessionId: string;
   workspaceId: string;
   adapterId: string;
+  adapterAccountIdentity?: string;
   externalKey?: string;
   target: ChannelReplyTarget;
   text: string;
@@ -140,7 +151,7 @@ export function createSparkDaemonTaskExecutor(
           // Naming is a detached post-commit projection, so it must not keep a
           // successful invocation open. It still observes cancellation/drain
           // to avoid writing new projection state after ownership ends.
-          void assignTitleAfterCompletedSessionRun(effectiveTask, context, options);
+          void assignRoleAfterCompletedSessionRun(effectiveTask, context, options);
         }
         return completed.result;
       } catch (error) {
@@ -271,7 +282,7 @@ export function createChannelAwareTaskExecutor(
     channelIngress?: Pick<DaemonChannelIngressRuntime, "openReplyStream" | "sendReply">;
     channelReplyDelivery?: Pick<
       ChannelReplyDeliveryStore,
-      "stage" | "acknowledge" | "defer" | "rerouteToMessage"
+      "stage" | "updateText" | "acknowledge" | "defer" | "rerouteToMessage"
     >;
   },
 ): SparkDaemonTaskExecutor {
@@ -282,17 +293,59 @@ export function createChannelAwareTaskExecutor(
     }
 
     const target = channelReplyTarget(task);
+    let inlineDelivery:
+      | ReturnType<NonNullable<typeof options.channelReplyDelivery>["stage"]>
+      | undefined;
+    const persistInlineRecovery = (created: ChannelReplyStream): void => {
+      if (
+        inlineDelivery ||
+        created.answerMode === "separate" ||
+        !created.deliveryRecovery ||
+        !options.channelReplyDelivery
+      ) {
+        return;
+      }
+      inlineDelivery = options.channelReplyDelivery.stage({
+        invocationId: context.invocationId,
+        sessionId: task.sessionId,
+        workspaceId: task.channelReply!.workspaceId,
+        adapterId: task.channelReply!.adapterId,
+        target,
+        // If the process exits during model execution, startup recovery updates
+        // the already-created card with this honest terminal instead of sending
+        // a second ordinary message or leaving a permanent spinner.
+        text: CHANNEL_INTERRUPTED_REPLY_TEXT,
+        deliveryMode: "inline-stream",
+        recovery: created.deliveryRecovery,
+      });
+    };
     let stream: ChannelReplyStream | undefined;
     try {
       stream = await options.channelIngress.openReplyStream(
         task.channelReply.workspaceId,
         task.channelReply.adapterId,
         target,
+        { onCreated: persistInlineRecovery },
       );
+      // Compatibility fallback for ingress implementations and tests that do
+      // not yet invoke onCreated. The real registry calls it synchronously as
+      // soon as the platform returns the recovery handle.
+      if (stream) persistInlineRecovery(stream);
     } catch (error) {
-      console.error("[spark-daemon] channel reply stream start failed; using fallback", error);
+      if (channelDeliveryFailureOutcome(error) !== "not_sent") {
+        // An untagged transport failure may already have created a platform
+        // artifact. Stop before running the model so the scheduler cannot
+        // enqueue a competing failure reply for an outcome it cannot prove.
+        await settleFailedSessionRun(task.sessionId, options.sessionRegistry);
+        throw channelDeliveryOutcomeUnknown(error);
+      }
+      console.error(
+        "[spark-daemon] channel reply stream was confirmed not sent; using durable fallback",
+        error,
+      );
     }
 
+    const inlineStream = Boolean(stream && stream.answerMode !== "separate");
     const projector = stream ? new ChannelReplyEventProjector(stream) : undefined;
     const executionContext = projector
       ? {
@@ -309,69 +362,164 @@ export function createChannelAwareTaskExecutor(
       result = await base(task, executionContext);
     } catch (error) {
       if (stream) {
-        // Progress-card finalization is a best-effort projection. Never put it
-        // in front of the scheduler's durable terminal commit/outbox insert.
-        void stream.fail(CHANNEL_FAILURE_REPLY_TEXT).catch((streamError) => {
-          console.error("[spark-daemon] channel reply stream failure update failed", streamError);
-        });
-      }
-      throw error;
-    }
-
-    const text = assistantTextFromResult(result) ?? projector?.finalAnswerText();
-    const inlineStream = Boolean(stream && projector && stream.answerMode !== "separate");
-    const deliveryText = text ?? (inlineStream ? CHANNEL_EMPTY_REPLY_TEXT : undefined);
-    if (!deliveryText) {
-      const error = new ChannelReplyContentError(context.invocationId);
-      if (stream) {
-        try {
-          await stream.fail("未生成可发送的回复，请稍后重试");
-        } catch (streamError) {
-          console.error("[spark-daemon] empty channel reply failure update failed", streamError);
+        if (inlineStream) {
+          try {
+            // An inline card and an ordinary failure message are competing
+            // user-visible terminals. Await the same-card update and record
+            // single ownership through the error code consumed by the
+            // scheduler completion transaction.
+            await stream.fail(
+              context.signal.aborted ? CHANNEL_CANCELLED_REPLY_TEXT : CHANNEL_FAILURE_REPLY_TEXT,
+            );
+            if (inlineDelivery && options.channelReplyDelivery) {
+              acknowledgeChannelReplyDelivery(
+                options.channelReplyDelivery,
+                inlineDelivery.deliveryId,
+              );
+            }
+            throw new ChannelReplyTerminalPresentedError(error);
+          } catch (streamError) {
+            if (streamError instanceof ChannelReplyTerminalPresentedError) throw streamError;
+            console.error(
+              "[spark-daemon] inline channel reply stream failure update failed",
+              streamError,
+            );
+            if (inlineDelivery && options.channelReplyDelivery) {
+              deferFailedInlineDelivery(
+                options.channelReplyDelivery,
+                inlineDelivery.deliveryId,
+                streamError,
+              );
+              throw new ChannelReplyTerminalPresentedError(error);
+            }
+            if (channelDeliveryFailureOutcome(streamError) !== "not_sent") {
+              throw channelDeliveryOutcomeUnknown(streamError);
+            }
+          }
+        } else if (!context.signal.aborted) {
+          // A separate progress card is not the terminal answer. Its cleanup is
+          // advisory while the durable scheduler outbox owns the failure reply.
+          void stream.fail(CHANNEL_FAILURE_REPLY_TEXT).catch((streamError) => {
+            console.error("[spark-daemon] channel reply stream failure update failed", streamError);
+          });
         }
       }
       throw error;
     }
-    const delivery = options.channelReplyDelivery?.stage({
-      invocationId: context.invocationId,
-      sessionId: task.sessionId,
-      workspaceId: task.channelReply.workspaceId,
-      adapterId: task.channelReply.adapterId,
-      target,
-      text: deliveryText,
-      deliveryMode: inlineStream ? "inline-stream" : "message",
-      ...(inlineStream && stream?.deliveryRecovery ? { recovery: stream.deliveryRecovery } : {}),
-    });
+
+    const hasInlineProjection = Boolean(inlineStream && projector);
+    const text = assistantTextFromResult(result) ?? projector?.finalAnswerText();
+    if (!text) {
+      const error = new ChannelReplyContentError(context.invocationId);
+      if (stream) {
+        try {
+          await stream.fail("未生成可发送的回复，请稍后重试");
+          if (inlineDelivery && options.channelReplyDelivery) {
+            acknowledgeChannelReplyDelivery(
+              options.channelReplyDelivery,
+              inlineDelivery.deliveryId,
+            );
+          }
+        } catch (streamError) {
+          console.error("[spark-daemon] empty channel reply failure update failed", streamError);
+          if (inlineStream) {
+            if (inlineDelivery && options.channelReplyDelivery) {
+              deferFailedInlineDelivery(
+                options.channelReplyDelivery,
+                inlineDelivery.deliveryId,
+                streamError,
+              );
+              throw new ChannelReplyTerminalPresentedError(error);
+            }
+            if (channelDeliveryFailureOutcome(streamError) === "not_sent") throw error;
+            throw channelDeliveryOutcomeUnknown(streamError);
+          }
+        }
+        if (hasInlineProjection) throw new ChannelReplyTerminalPresentedError(error);
+      }
+      throw error;
+    }
+
+    // Preserve a streamed final answer in the executor result so the
+    // scheduler can commit the exact immutable delivery intent even when the
+    // headless host omitted assistantText from its terminal result.
+    const resultWithText = resultWithAssistantText(result, text);
+    // The inline recovery row was written at card creation, before model work.
+    // Replace its restart fallback with the exact immutable answer before the
+    // final platform update.
+    if (inlineDelivery && options.channelReplyDelivery) {
+      try {
+        inlineDelivery = options.channelReplyDelivery.updateText(inlineDelivery.deliveryId, text);
+      } catch (error) {
+        // The stream may already have produced a card or partial content. A
+        // local durability failure cannot prove that no platform side effect
+        // happened, so prevent the scheduler from creating a fresh message.
+        throw channelDeliveryOutcomeUnknown(error);
+      }
+    }
     if (stream && projector) {
-      projector.appendFinalText(deliveryText);
-      if (inlineStream) {
-        // Inline streams are the durable user-visible answer. Await completion
-        // so a failed card/stream can fall back to outbox sendReply.
+      projector.appendFinalText(text);
+      if (hasInlineProjection) {
+        // Await inline completion so a recoverable successful card can be
+        // acknowledged without also enqueuing an ordinary message.
         let streamCompleted = false;
+        let streamCompletionError: unknown;
         try {
           await stream.complete("已完成");
           streamCompleted = true;
         } catch (error) {
+          streamCompletionError = error;
           console.error(
             "[spark-daemon] inline channel reply stream completion failed; durable answer remains queued",
             error,
           );
         }
-        // Once the platform has accepted the completed stream, never fall through
-        // to sendReply merely because the local acknowledgement write failed. The
-        // outbox provides at-least-once recovery; an immediate fallback here would
-        // create a deterministic duplicate on the same successful attempt.
+        // A completed inline stream is already the user-visible final answer;
+        // never enqueue a second ordinary message. When a recovery row exists,
+        // acknowledge it only after the platform completion succeeds.
         if (streamCompleted) {
-          if (delivery && options.channelReplyDelivery) {
-            acknowledgeChannelReplyDelivery(options.channelReplyDelivery, delivery.deliveryId);
+          const deliveryAcknowledged =
+            !inlineDelivery ||
+            !options.channelReplyDelivery ||
+            acknowledgeChannelReplyDelivery(
+              options.channelReplyDelivery,
+              inlineDelivery.deliveryId,
+            );
+          if (resultWithText && typeof resultWithText === "object") {
+            return {
+              ...(resultWithText as Record<string, unknown>),
+              ...(deliveryAcknowledged
+                ? { channelReplyDelivered: true }
+                : { channelReplyDeliveryPending: true }),
+            };
           }
-          if (result && typeof result === "object" && !Array.isArray(result)) {
-            return { ...(result as Record<string, unknown>), channelReplyDelivered: true };
-          }
-          return result;
+          return resultWithText;
         }
-        if (delivery) {
-          options.channelReplyDelivery?.rerouteToMessage(delivery.deliveryId);
+
+        if (inlineDelivery && options.channelReplyDelivery) {
+          // The recoverable legacy row remains the sole owner of this inline
+          // answer. Mark it retryable and tell the scheduler not to create an
+          // ordinary-message intent for the same terminal result.
+          deferFailedInlineDelivery(
+            options.channelReplyDelivery,
+            inlineDelivery.deliveryId,
+            streamCompletionError,
+          );
+          if (resultWithText && typeof resultWithText === "object") {
+            return {
+              ...(resultWithText as Record<string, unknown>),
+              channelReplyDeliveryPending: true,
+            };
+          }
+          return resultWithText;
+        }
+
+        if (channelDeliveryFailureOutcome(streamCompletionError) !== "not_sent") {
+          // The inline surface may already contain the final answer. Without
+          // a same-artifact recovery handle there is no safe ordinary-message
+          // fallback, so fail closed and let the completion hook suppress a
+          // competing failure delivery.
+          throw channelDeliveryOutcomeUnknown(streamCompletionError);
         }
       } else {
         // Separate progress cards must not hold the invocation open on SDK
@@ -384,32 +532,32 @@ export function createChannelAwareTaskExecutor(
         });
       }
     }
-    try {
-      await options.channelIngress.sendReply(
-        task.channelReply.workspaceId,
-        task.channelReply.adapterId,
-        { ...target, text: deliveryText },
-      );
-    } catch (error) {
-      if (delivery) {
-        options.channelReplyDelivery?.defer(delivery.deliveryId, error);
-        throw new ChannelReplyDeliveryPendingError(delivery.deliveryId, error);
-      }
-      throw error;
-    }
-    if (delivery && options.channelReplyDelivery) {
-      acknowledgeChannelReplyDelivery(options.channelReplyDelivery, delivery.deliveryId);
-    }
-    return result;
+    return resultWithText;
   };
+}
+
+function deferFailedInlineDelivery(
+  store: Pick<ChannelReplyDeliveryStore, "defer">,
+  deliveryId: string,
+  error: unknown,
+): void {
+  try {
+    store.defer(deliveryId, error ?? new Error("inline channel reply stream completion failed"));
+  } catch (deferError) {
+    // The staged row remains durable even if its retry state cannot be updated
+    // in this process. Do not turn a valid model answer into a model failure or
+    // create a competing ordinary-message delivery.
+    console.error("[spark-daemon] failed to defer inline channel reply delivery", deferError);
+  }
 }
 
 function acknowledgeChannelReplyDelivery(
   store: Pick<ChannelReplyDeliveryStore, "acknowledge" | "defer">,
   deliveryId: string,
-): void {
+): boolean {
   try {
     store.acknowledge(deliveryId);
+    return true;
   } catch (error) {
     // The platform side effect has already succeeded. Move the durable row to
     // retryable state without attempting another immediate send. Inline stream
@@ -419,11 +567,13 @@ function acknowledgeChannelReplyDelivery(
     } catch (deferError) {
       console.error("[spark-daemon] channel reply acknowledgement recovery failed", deferError);
     }
-    throw new ChannelReplyDeliveryPendingError(deliveryId, error);
+    return false;
   }
 }
 
 export const CHANNEL_FAILURE_REPLY_TEXT = "处理失败，请稍后重试";
+export const CHANNEL_CANCELLED_REPLY_TEXT = "处理已停止";
+export const CHANNEL_INTERRUPTED_REPLY_TEXT = "处理因服务重启而中断，请重新发送";
 export const CHANNEL_EMPTY_REPLY_TEXT = "处理完成，但未生成可展示的回复";
 
 /** Build the immutable delivery intent committed beside a terminal invocation. */
@@ -435,8 +585,9 @@ export function channelReplyDeliveryForCompletion(
 ): SparkDaemonChannelReplyDeliveryInput | undefined {
   const channelReply = task.channelReply;
   if (!channelReply) return undefined;
-  // Inline streams already presented the answer; do not enqueue a second message.
-  if (kind === "final" && channelReplyDeliveredFromResult(result)) return undefined;
+  // Inline streams either already presented the answer or own a recoverable
+  // retry row. Do not enqueue a competing ordinary-message delivery.
+  if (kind === "final" && channelReplyOwnedFromResult(result)) return undefined;
   const text =
     kind === "failure"
       ? CHANNEL_FAILURE_REPLY_TEXT
@@ -448,6 +599,9 @@ export function channelReplyDeliveryForCompletion(
     sessionId: task.sessionId,
     workspaceId: channelReply.workspaceId,
     adapterId: channelReply.adapterId,
+    ...(channelReply.adapterAccountIdentity
+      ? { adapterAccountIdentity: channelReply.adapterAccountIdentity }
+      : {}),
     ...(task.channelContext?.externalKey ? { externalKey: task.channelContext.externalKey } : {}),
     target: channelReplyTarget(task),
     text,
@@ -469,9 +623,21 @@ function assistantTextFromResult(result: unknown): string | undefined {
   return typeof text === "string" && text.trim() ? text.trim() : undefined;
 }
 
-function channelReplyDeliveredFromResult(result: unknown): boolean {
+function resultWithAssistantText(result: unknown, assistantText: string): unknown {
+  if (assistantTextFromResult(result)) return result;
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    return { ...(result as Record<string, unknown>), assistantText };
+  }
+  return { assistantText };
+}
+
+function channelReplyOwnedFromResult(result: unknown): boolean {
   if (!result || typeof result !== "object" || Array.isArray(result)) return false;
-  return (result as { channelReplyDelivered?: unknown }).channelReplyDelivered === true;
+  const value = result as {
+    channelReplyDelivered?: unknown;
+    channelReplyDeliveryPending?: unknown;
+  };
+  return value.channelReplyDelivered === true || value.channelReplyDeliveryPending === true;
 }
 
 export async function executeSparkDaemonSessionRunTask(
@@ -479,14 +645,19 @@ export async function executeSparkDaemonSessionRunTask(
   context: SparkDaemonTaskExecutionContext,
   options: SparkDaemonTaskExecutorOptions & { executeSession: SparkHeadlessSessionExecutor },
 ): Promise<unknown> {
-  const sessionSurface = await sessionSurfaceForTask(task, options.sessionRegistry);
-  const systemPrompt = await systemPromptForChannelSession(task, options, sessionSurface);
-  const messageMetadata = sessionRunMessageMetadata(task);
+  const sessionContext = await sessionContextForTask(task, options.sessionRegistry);
+  const systemPrompt = await systemPromptForSession(
+    task,
+    options,
+    sessionContext.surface,
+    sessionContext.role,
+  );
+  const messageMetadata = sessionRunMessageMetadata(task, context.invocationId);
   return await options.executeSession({
     cwd: task.cwd ?? options.cwd ?? process.cwd(),
     sparkHome: options.paths.piAgentDir,
     sessionId: task.sessionId,
-    prompt: task.prompt,
+    prompt: sessionRunPrompt(task),
     ...(task.model ? { model: task.model } : {}),
     ...(task.thinkingLevel ? { thinkingLevel: task.thinkingLevel } : {}),
     reset: task.reset,
@@ -497,13 +668,18 @@ export async function executeSparkDaemonSessionRunTask(
     // scheduler budget is paused.
     ...(systemPrompt ? { systemPrompt } : {}),
     ...(messageMetadata ? { messageMetadata } : {}),
-    ...(sessionSurface ? { sessionSurface } : {}),
+    ...(sessionContext.surface ? { sessionSurface: sessionContext.surface } : {}),
     sessionSource: sessionSourceForTask(task),
     ...(task.channelReply && task.channelContext
       ? {
           channelBinding: {
-            adapter: sessionChannelAdapter(task.channelReply.adapterId),
+            adapter:
+              task.channelReply.adapter ?? sessionChannelAdapter(task.channelReply.adapterId),
             externalKey: task.channelContext.externalKey,
+            adapterId: task.channelReply.adapterId,
+            ...(task.channelReply.adapterAccountIdentity
+              ? { adapterAccountIdentity: task.channelReply.adapterAccountIdentity }
+              : {}),
           },
         }
       : {}),
@@ -511,7 +687,7 @@ export async function executeSparkDaemonSessionRunTask(
     ...(sessionQuestionChainForTask(task)
       ? { sessionQuestionChain: sessionQuestionChainForTask(task) }
       : {}),
-    ...(sessionSurface === "channel"
+    ...(sessionContext.surface === "channel"
       ? {
           allowedTools: SPARK_CHANNEL_ALLOWED_TOOLS,
           approvalMethod: "auto" as const,
@@ -530,7 +706,25 @@ export async function executeSparkDaemonSessionRunTask(
   });
 }
 
-function sessionRunMessageMetadata(task: SparkDaemonSessionRunTask): Record<string, unknown> {
+function sessionRunPrompt(
+  task: SparkDaemonSessionRunTask,
+): Parameters<SparkHeadlessSessionExecutor>[0]["prompt"] {
+  const images = task.channelContext?.images ?? [];
+  if (images.length === 0) return task.prompt;
+  return [
+    { type: "text", text: task.prompt },
+    ...images.map((image) => ({
+      type: "image" as const,
+      data: image.data,
+      mimeType: image.mediaType,
+    })),
+  ];
+}
+
+function sessionRunMessageMetadata(
+  task: SparkDaemonSessionRunTask,
+  invocationId: string,
+): Record<string, unknown> {
   const source = sessionSourceForTask(task);
   const baseMetadata = {
     origin: {
@@ -568,6 +762,11 @@ function sessionRunMessageMetadata(task: SparkDaemonSessionRunTask): Record<stri
     ...baseMetadata,
     ...(task.messageMetadata ?? {}),
     ...(channelMetadata ?? {}),
+    // The headless loop emits a temporary live message ID before the native
+    // transcript assigns its durable entry ID. Persist the invocation
+    // correlation so projections can reconcile those two identities without
+    // collapsing legitimate repeated prompts by text.
+    invocationId,
   };
 }
 
@@ -612,14 +811,18 @@ export function sessionSourceForTask(
   return "daemon";
 }
 
-async function sessionSurfaceForTask(
+async function sessionContextForTask(
   task: SparkDaemonSessionRunTask,
   registry: SparkDaemonTaskExecutorOptions["sessionRegistry"],
-): Promise<"local" | "channel" | undefined> {
-  if (task.channelReply) return "channel";
+): Promise<{ surface?: "local" | "channel"; role?: string }> {
   const session = await registry?.get?.(task.sessionId);
-  if (!session) return undefined;
-  return session.bindings.length > 0 ? "channel" : "local";
+  const role = session?.role?.trim();
+  if (task.channelReply) return { surface: "channel", ...(role ? { role } : {}) };
+  if (!session) return {};
+  return {
+    surface: session.bindings.length > 0 ? "channel" : "local",
+    ...(role ? { role } : {}),
+  };
 }
 
 async function systemPromptForChannelSession(
@@ -688,6 +891,19 @@ async function systemPromptForChannelSession(
   ]);
 }
 
+async function systemPromptForSession(
+  task: SparkDaemonSessionRunTask,
+  options: SparkDaemonTaskExecutorOptions,
+  sessionSurface: "local" | "channel" | undefined,
+  role: string | undefined,
+): Promise<string | undefined> {
+  const channelPrompt = await systemPromptForChannelSession(task, options, sessionSurface);
+  const rolePrompt = role ? renderPersistentSessionRolePrompt(role) : undefined;
+  if (channelPrompt) return composeAgentSystemPrompt([channelPrompt, rolePrompt]);
+  if (rolePrompt) return composeAgentSystemPrompt([DEFAULT_SPARK_IDENTITY_PROMPT, rolePrompt]);
+  return undefined;
+}
+
 async function loadInfoflowAdapterConfig(
   options: SparkDaemonTaskExecutorOptions,
   workspaceId: string,
@@ -748,6 +964,16 @@ function daemonEventFromHeadlessEvent(
   if (raw.type === "view_event") {
     try {
       const view = parseSparkViewModelEvent(raw.event);
+      const correlatedView =
+        view.type === "session.message" && view.message.role === "user"
+          ? {
+              ...view,
+              message: {
+                ...view.message,
+                metadata: { ...view.message.metadata, invocationId },
+              },
+            }
+          : view;
       return {
         version: SPARK_PROTOCOL_VERSION,
         type: "daemon.view_event",
@@ -758,7 +984,7 @@ function daemonEventFromHeadlessEvent(
         metadata: daemonTaskRouteMetadata(task),
         sessionId: task.sessionId,
         invocationId,
-        view,
+        view: correlatedView,
       };
     } catch {
       return undefined;
@@ -820,33 +1046,34 @@ async function recordCompletedSessionRun(
   }
 }
 
-async function assignTitleAfterCompletedSessionRun(
+async function assignRoleAfterCompletedSessionRun(
   task: SparkDaemonSessionRunTask,
   context: SparkDaemonTaskExecutionContext,
   options: SparkDaemonTaskExecutorOptions,
 ): Promise<void> {
-  const generateSessionTitle = options.modelControl?.generateSessionTitle;
+  const generateSessionRole = options.modelControl?.generateSessionRole;
   const get = options.sessionRegistry?.get;
-  const setTitleIfMissing = options.sessionRegistry?.setTitleIfMissing;
-  if (!task.model || !generateSessionTitle || !get || !setTitleIfMissing) return;
+  const setRoleIfMissing = options.sessionRegistry?.setRoleIfMissing;
+  if (!task.model || !generateSessionRole || !get || !setRoleIfMissing) return;
   try {
-    const session = await assignCompletedSessionTitle(
+    const session = await assignCompletedSessionRole(
       {
         sessionId: task.sessionId,
         prompt: task.prompt,
         model: modelRefFromValue(task.model),
-        // Title generation is auxiliary work: stop it when either its small
-        // local budget expires or the owning invocation is cancelled/drained.
-        signal: AbortSignal.any([context.signal, AbortSignal.timeout(5_000)]),
+        // The user turn has already committed, so its scheduler signal may be
+        // closed immediately. Give this independent projection a small local
+        // budget; registry CAS still protects channel/archive ownership races.
+        signal: AbortSignal.timeout(5_000),
       },
       {
         modelControl: {
-          generateSessionTitle: (input) => options.modelControl!.generateSessionTitle!(input),
+          generateSessionRole: (input) => options.modelControl!.generateSessionRole!(input),
         },
         sessionRegistry: {
           get: (sessionId) => options.sessionRegistry!.get!(sessionId),
-          setTitleIfMissing: (sessionId, title) =>
-            options.sessionRegistry!.setTitleIfMissing!(sessionId, title),
+          setRoleIfMissing: (sessionId, role) =>
+            options.sessionRegistry!.setRoleIfMissing!(sessionId, role),
         },
       },
     );
@@ -864,9 +1091,9 @@ async function assignTitleAfterCompletedSessionRun(
       metadata: daemonTaskRouteMetadata(task),
     });
   } catch {
-    // Keep naming fully advisory even if a future dependency implementation
+    // Keep role naming fully advisory even if a future dependency implementation
     // violates the helper's best-effort contract.
-    console.error(`[spark-daemon] unexpected session title failure for ${task.sessionId}`);
+    console.error(`[spark-daemon] unexpected session role failure for ${task.sessionId}`);
   }
 }
 

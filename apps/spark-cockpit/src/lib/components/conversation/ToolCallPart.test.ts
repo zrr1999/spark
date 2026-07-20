@@ -13,10 +13,12 @@ describe("ToolCallPart component contract", () => {
     expect(() => compile(source, { filename: componentPath, generate: "server" })).not.toThrow();
   });
 
-  it("collapses completed tool calls while keeping live and approval work visible", () => {
+  it("keeps every tool call collapsed by default, including live and approval work", () => {
     const source = readFileSync(componentPath, "utf8");
 
-    expect(source).toContain('open={state === "running" || state === "awaiting-approval"}');
+    expect(source).toContain('<details class="tool-part {state}" class:nested>');
+    expect(source).not.toContain("bind:open");
+    expect(source).not.toContain('open={state === "running" || state === "awaiting-approval"}');
     expect(source).toContain("<summary>");
     expect(source).toContain('class="disclosure"');
     expect(source).not.toContain("nested && Boolean(preview)");

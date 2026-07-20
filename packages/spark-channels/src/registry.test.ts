@@ -3,9 +3,15 @@ import { createChannelExternalKey } from "./external-key.ts";
 import { FeishuAdapter } from "./feishu-adapter.ts";
 import { InfoflowAdapter } from "./infoflow-adapter.ts";
 import type { RoutedChannelInteractionEvent } from "./interaction.ts";
-import { ChannelRegistry, parseChannelsConfig } from "./registry.ts";
+import { ChannelRegistry, channelAdapterAccountIdentity, parseChannelsConfig } from "./registry.ts";
+import { channelDeliveryFailureCertainty } from "./reply.ts";
 import { FakeChannelTransport } from "./transport.ts";
-import type { ChannelAdapterConfig, ChannelsConfig, IncomingMessage } from "./types.ts";
+import type {
+  ChannelAdapterConfig,
+  ChannelsConfig,
+  ChannelTransport,
+  IncomingMessage,
+} from "./types.ts";
 
 const sampleConfig: ChannelsConfig = {
   adapters: {
@@ -102,6 +108,150 @@ describe("ChannelRegistry", () => {
     ]);
   });
 
+  it("routes image notifications through the adapter image capability", async () => {
+    const sendImage = vi.fn(async () => ({
+      replaySafety: "unsafe" as const,
+      receipt: { messageId: "image-1" },
+    }));
+    const infoflowTransport = Object.assign(new FakeChannelTransport(), {
+      image: { sendImage },
+    });
+    const registry = createTestRegistry(() => {}, {
+      feishu: new FakeChannelTransport(),
+      infoflow: infoflowTransport,
+    });
+
+    await expect(
+      registry.notify({
+        action: "send",
+        adapter: "infoflow",
+        recipient: "alice",
+        image: { url: "https://example.com/photo.png", mediaType: "image/png" },
+      }),
+    ).resolves.toMatchObject({
+      action: "send",
+      adapter: "infoflow",
+      recipient: "alice",
+      text: "",
+      image: { source: "url", mediaType: "image/png" },
+      delivery: { receipt: { messageId: "image-1" } },
+    });
+    expect(sendImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recipient: "alice",
+        image: { url: "https://example.com/photo.png", mediaType: "image/png" },
+      }),
+    );
+  });
+
+  it("requires stable ids for durable sends and exposes conservative defaults", async () => {
+    const transport = new FakeChannelTransport();
+    const registry = createTestRegistry(() => {}, {
+      feishu: transport,
+      infoflow: new FakeChannelTransport(),
+    });
+
+    expect(registry.messageDeliveryFacts("feishu", { recipient: "oc_ops" })).toEqual({
+      replaySafety: "unsafe",
+    });
+    expect(
+      registry.replyDeliveryFacts("feishu", {
+        recipient: "oc_ops",
+        messageId: "source-message",
+      }),
+    ).toEqual({ replaySafety: "unsafe" });
+    await expect(
+      registry.sendMessage("feishu", {
+        recipient: "oc_ops",
+        text: "durable message",
+        deliveryId: "message:1",
+      }),
+    ).resolves.toEqual({ replaySafety: "unsafe" });
+    await expect(
+      registry.sendReply("feishu", {
+        recipient: "oc_ops",
+        text: "durable reply",
+        deliveryId: "reply:1",
+      }),
+    ).resolves.toEqual({ replaySafety: "unsafe" });
+
+    const missingId = await registry
+      .sendMessage("feishu", {
+        recipient: "oc_ops",
+        text: "must not send",
+        deliveryId: " ",
+      })
+      .catch((error: unknown) => error);
+    expect(channelDeliveryFailureCertainty(missingId)).toBe("not-sent");
+    expect(transport.sent).toEqual([
+      { recipient: "oc_ops", text: "durable message" },
+      { recipient: "oc_ops", text: "durable reply" },
+    ]);
+  });
+
+  it("keeps provider dispatch failures unknown", async () => {
+    const registry = new ChannelRegistry({
+      config: { adapters: { "info-main": { type: "infoflow" } }, routes: {} },
+      createTransport: () =>
+        ({
+          start: async () => undefined,
+          stop: async () => undefined,
+          send: async () => {
+            throw new Error("provider request failed");
+          },
+          reply: {
+            openReplyStream: async () => undefined,
+            sendReply: async () => {
+              throw new Error("provider reply failed");
+            },
+          },
+        }) satisfies ChannelTransport,
+    });
+
+    const messageError = await registry
+      .sendMessage("info-main", {
+        recipient: "user-1",
+        text: "hello",
+        deliveryId: "message:provider-error",
+      })
+      .catch((error: unknown) => error);
+    const replyError = await registry
+      .sendReply("info-main", {
+        recipient: "user-1",
+        text: "hello",
+        deliveryId: "reply:provider-error",
+      })
+      .catch((error: unknown) => error);
+
+    expect(channelDeliveryFailureCertainty(messageError)).toBe("unknown");
+    expect(channelDeliveryFailureCertainty(replyError)).toBe("unknown");
+  });
+
+  it("derives rename-stable account identity without hashing secrets", () => {
+    const original = channelAdapterAccountIdentity({
+      type: "infoflow",
+      app_key: "public-key",
+      app_secret: "secret-one",
+      app_agent_id: "43163",
+    });
+    const secretRotated = channelAdapterAccountIdentity({
+      type: "infoflow",
+      app_key: "public-key",
+      app_secret: "secret-two",
+      app_agent_id: "43163",
+    });
+    const differentAccount = channelAdapterAccountIdentity({
+      type: "infoflow",
+      app_key: "other-public-key",
+      app_secret: "secret-one",
+      app_agent_id: "43163",
+    });
+
+    expect(secretRotated).toBe(original);
+    expect(differentAccount).not.toBe(original);
+    expect(original).toMatch(/^channel-account:infoflow:[a-f0-9]{64}$/u);
+  });
+
   it("starts ingress listeners and normalizes feishu inbound externalKey", async () => {
     const feishuTransport = new FakeChannelTransport();
     const infoflowTransport = new FakeChannelTransport();
@@ -158,6 +308,10 @@ describe("ChannelRegistry", () => {
     });
 
     expect(inbound[0]?.externalKey).toBe("infoflow:user:u_ops");
+    expect(inbound[0]?.adapterId).toBe("infoflow");
+    expect(inbound[0]?.adapterAccountIdentity).toBe(
+      channelAdapterAccountIdentity({ type: "infoflow" }),
+    );
     expect(inbound[0]?.senderId).toBe("u_ops");
     expect(inbound[0]).toMatchObject({
       contentType: "file",

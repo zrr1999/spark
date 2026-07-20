@@ -53,6 +53,7 @@ export class ChannelReplyEventProjector {
     if (!this.projectsAnswerText) return;
     const finalText = stripToolCallMarkers(text ?? "").trim();
     if (!finalText) return;
+    if (finalText === this.renderedAnswer) return;
     if (!this.renderedAnswer) {
       this.stream.appendText(finalText);
       this.renderedAnswer = finalText;
@@ -62,7 +63,17 @@ export class ChannelReplyEventProjector {
       const delta = finalText.slice(this.renderedAnswer.length);
       if (delta) this.stream.appendText(delta);
       this.renderedAnswer = finalText;
+      return;
     }
+    // Tool rounds often replace earlier streaming prose. Prefer an explicit
+    // replace seam so replace-mode adapters (QQ C2C) do not finalize a stale
+    // prefix. Append-only adapters fall back to emitting the full final text.
+    if (typeof this.stream.replaceText === "function") {
+      this.stream.replaceText(finalText);
+    } else {
+      this.stream.appendText(finalText);
+    }
+    this.renderedAnswer = finalText;
   }
 
   /** Best locally observed final answer, used when a host result omits assistantText. */

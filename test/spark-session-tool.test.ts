@@ -157,10 +157,15 @@ void test("session tool routes managed actions through daemon RPC and classifies
     "session:a",
   );
 
+  await assert.rejects(
+    execute(tool, ctx, { action: "create" }),
+    /requires role as a stable division of labour/u,
+  );
+
   const created = await execute(tool, ctx, {
     action: "create",
     sessionId: "session:new",
-    title: "New session",
+    role: "Verifier",
   });
   assert.equal(
     (created.details as { session: { sessionId: string } }).session.sessionId,
@@ -168,7 +173,8 @@ void test("session tool routes managed actions through daemon RPC and classifies
   );
   assert.deepEqual(calls.find((call) => call.method === "session.create")?.params, {
     sessionId: "session:new",
-    title: "New session",
+    title: "Verifier",
+    role: "Verifier",
     cwd: "/workspace/test",
     scope: { kind: "workspace", workspaceId: "workspace:test" },
     workspaceId: "workspace:test",
@@ -470,7 +476,7 @@ void test("session request queues the original message with hidden sender metada
           kind: "inform",
           message: "Invalid legacy kind",
         }),
-      /kind must be request or question/u,
+      /kind must be request or notification/u,
     );
     await assert.rejects(
       () =>
@@ -535,8 +541,8 @@ void test("session request queues the original message with hidden sender metada
   }
 });
 
-void test("session question blocks for success and preserves causal invocation metadata", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-session-question-success-"));
+void test("session request blocks for success and preserves causal invocation metadata", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-session-request-success-"));
   try {
     const mailStore = new SparkSessionMailStore({ sparkHome: dir });
     const calls: Array<{ method: string; params: unknown }> = [];
@@ -549,7 +555,7 @@ void test("session question blocks for success and preserves causal invocation m
         }
         if (method === "turn.submit") {
           return {
-            invocationId: "inv_questionsuccess",
+            invocationId: "inv_requestsuccess",
             status: "queued",
             acceptedAt: NOW,
           } as T;
@@ -557,7 +563,7 @@ void test("session question blocks for success and preserves causal invocation m
         if (method === "turn.status") {
           statusReads += 1;
           return {
-            invocationId: "inv_questionsuccess",
+            invocationId: "inv_requestsuccess",
             sessionId: "session:worker",
             status: statusReads === 1 ? "running" : "succeeded",
             createdAt: NOW,
@@ -568,7 +574,7 @@ void test("session question blocks for success and preserves causal invocation m
         }
         if (method === "turn.result") {
           return {
-            invocationId: "inv_questionsuccess",
+            invocationId: "inv_requestsuccess",
             status: "succeeded",
             assistantText: "The build is green.",
             finishedAt: NOW,
@@ -589,12 +595,13 @@ void test("session question blocks for success and preserves causal invocation m
       },
       {
         action: "send",
-        kind: "question",
+        kind: "request",
+        wait: "completed",
         toSessionId: "session:worker",
         message: "Is the build green?",
         timeoutMs: 1_000,
       },
-      "call-question-success",
+      "call-request-success",
     );
 
     assert.equal(toolText(result), "The build is green.");
@@ -609,7 +616,7 @@ void test("session question blocks for success and preserves causal invocation m
     assert.equal(details.executionTriggered, true);
     assert.equal(details.waitTimedOut, false);
     assert.equal(details.answer, "The build is green.");
-    assert.equal(details.invocationId, "inv_questionsuccess");
+    assert.equal(details.invocationId, "inv_requestsuccess");
     assert.deepEqual(
       calls.find((call) => call.method === "turn.submit")?.params as {
         prompt: string;
@@ -629,14 +636,13 @@ void test("session question blocks for success and preserves causal invocation m
           },
           sessionMail: {
             messageId: (result.details as { message: { id: string } }).message.id,
-            kind: "question",
-            intent: "session.question",
+            kind: "request",
+            intent: "work.request",
             correlationId: (result.details as { message: { correlationId: string } }).message
               .correlationId,
             fromSessionId: "session:caller",
             toSessionId: "session:worker",
             parentInvocationId: "inv_parent",
-            questionChain: ["session:caller", "session:worker"],
           },
         },
       },
@@ -650,8 +656,8 @@ void test("session question blocks for success and preserves causal invocation m
   }
 });
 
-void test("session question reports terminal failure without retrying or throwing", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-session-question-failure-"));
+void test("session request reports terminal failure without retrying or throwing", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-session-request-failure-"));
   try {
     const mailStore = new SparkSessionMailStore({ sparkHome: dir });
     const tool = registerTestTool({
@@ -661,14 +667,14 @@ void test("session question reports terminal failure without retrying or throwin
         }
         if (method === "turn.submit") {
           return {
-            invocationId: "inv_questionfailed",
+            invocationId: "inv_requestfailed",
             status: "queued",
             acceptedAt: NOW,
           } as T;
         }
         if (method === "turn.status") {
           return {
-            invocationId: "inv_questionfailed",
+            invocationId: "inv_requestfailed",
             sessionId: "session:worker",
             status: "failed",
             createdAt: NOW,
@@ -680,7 +686,7 @@ void test("session question reports terminal failure without retrying or throwin
         }
         if (method === "turn.result") {
           return {
-            invocationId: "inv_questionfailed",
+            invocationId: "inv_requestfailed",
             status: "failed",
             error: { code: "EXECUTION_FAILED", message: "worker failed", retryable: false },
             finishedAt: NOW,
@@ -693,12 +699,13 @@ void test("session question reports terminal failure without retrying or throwin
 
     const result = await execute(tool, context("session:caller"), {
       action: "send",
-      kind: "question",
+      kind: "request",
+      wait: "completed",
       toSessionId: "session:worker",
       message: "Run the check",
     });
 
-    assert.match(toolText(result), /inv_questionfailed failed: worker failed/u);
+    assert.match(toolText(result), /inv_requestfailed failed: worker failed/u);
     assert.equal((result.details as { waitTimedOut: boolean }).waitTimedOut, false);
     assert.equal(
       (result.details as { result: { error: { retryable: boolean } } }).result.error.retryable,
@@ -709,8 +716,8 @@ void test("session question reports terminal failure without retrying or throwin
   }
 });
 
-void test("session question timeout stops only the sender wait and rejects nested questions", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-session-question-timeout-"));
+void test("session request timeout stops only the sender wait", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-session-request-timeout-"));
   try {
     const mailStore = new SparkSessionMailStore({ sparkHome: dir });
     let now = 0;
@@ -723,14 +730,14 @@ void test("session question timeout stops only the sender wait and rejects neste
         if (method === "turn.submit") {
           submitCount += 1;
           return {
-            invocationId: "inv_questiontimeout",
+            invocationId: "inv_requesttimeout",
             status: "queued",
             acceptedAt: NOW,
           } as T;
         }
         if (method === "turn.status") {
           return {
-            invocationId: "inv_questiontimeout",
+            invocationId: "inv_requesttimeout",
             sessionId: "session:worker",
             status: "running",
             createdAt: NOW,
@@ -749,7 +756,8 @@ void test("session question timeout stops only the sender wait and rejects neste
 
     const timedOut = await execute(tool, context("session:caller"), {
       action: "send",
-      kind: "question",
+      kind: "request",
+      wait: "completed",
       toSessionId: "session:worker",
       message: "Keep working after I stop waiting",
       timeoutMs: 1_000,
@@ -764,34 +772,26 @@ void test("session question timeout stops only the sender wait and rejects neste
       () =>
         execute(tool, context("session:invalid-timeout"), {
           action: "send",
-          kind: "question",
+          kind: "request",
+          wait: "completed",
           toSessionId: "session:other",
           message: "Reject before persistence",
           timeoutMs: 999,
         }),
-      /question timeoutMs must be between 1000 and 300000/u,
+      /request timeoutMs must be between 1000 and 300000/u,
     );
     assert.equal((await mailStore.list("session:other")).length, 0);
 
-    await assert.rejects(
-      () =>
-        execute(
-          tool,
-          {
-            ...context("session:nested"),
-            sessionQuestionChain: ["session:caller", "session:nested"],
-          },
-          {
-            action: "send",
-            kind: "question",
-            toSessionId: "session:other",
-            message: "Do not block recursively",
-          },
-        ),
-      /question cannot be nested; use kind=request/u,
-    );
-    assert.equal(submitCount, 1);
-    assert.equal((await mailStore.list("session:other")).length, 0);
+    const delegated = await execute(tool, context("session:nested"), {
+      action: "send",
+      kind: "request",
+      wait: "accepted",
+      toSessionId: "session:other",
+      message: "Delegate asynchronously",
+    });
+    assert.match(toolText(delegated), /invocation inv_requesttimeout was accepted/u);
+    assert.equal(submitCount, 2);
+    assert.equal((await mailStore.list("session:other")).length, 1);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -903,21 +903,21 @@ void test("channel sessions may request work only from local sessions in their w
   }
 });
 
-void test("session send rejects the removed notification mode", async () => {
+void test("session send rejects the removed question mode", async () => {
   const tool = registerTestTool({
-    request: async () => assert.fail("notification rejection must happen before daemon RPC"),
-    mailStore: () => assert.fail("notification rejection must happen before mailbox writes"),
+    request: async () => assert.fail("question rejection must happen before daemon RPC"),
+    mailStore: () => assert.fail("question rejection must happen before mailbox writes"),
   });
 
   await assert.rejects(
     () =>
       execute(tool, context("session:caller"), {
         action: "send",
-        kind: "notification",
+        kind: "question",
         toSessionId: "session:target",
         message: "Do not persist this",
       }),
-    /session kind must be request or question/u,
+    /session kind must be request or notification/u,
   );
 });
 void test("session mail uses the host Spark state root", async () => {

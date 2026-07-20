@@ -1,14 +1,24 @@
 import { createChannelExternalKey, createDefaultChannelExternalKey } from "./external-key.ts";
+import { normalizeChannelImage } from "./channel-images.ts";
 import { isInfoflowInboundAllowed } from "./infoflow-policy.ts";
 import { createInfoflowTransport } from "./infoflow-transport.ts";
+import type { ChannelInteractionCapability } from "./interaction.ts";
 import type {
   ChannelAdapter,
+  ChannelImageCapability,
   ChannelTransport,
   IncomingMessage,
   InfoflowAdapterConfig,
   InfoflowInboundRaw,
 } from "./types.ts";
-import type { ChannelReplyCapability } from "./reply.ts";
+import {
+  channelDeliveryNotSent,
+  normalizeChannelDeliveryResult,
+  type ChannelDeliveryFacts,
+  type ChannelDeliveryResult,
+  type ChannelMessageTarget,
+  type ChannelReplyCapability,
+} from "./reply.ts";
 
 export interface InfoflowAdapterOptions {
   id: string;
@@ -28,6 +38,14 @@ export class InfoflowAdapter implements ChannelAdapter {
 
   get reply(): ChannelReplyCapability | undefined {
     return this.transport.reply;
+  }
+
+  get image(): ChannelImageCapability | undefined {
+    return this.transport.image;
+  }
+
+  get interaction(): ChannelInteractionCapability | undefined {
+    return this.transport.interaction;
   }
 
   constructor(options: InfoflowAdapterOptions) {
@@ -53,8 +71,18 @@ export class InfoflowAdapter implements ChannelAdapter {
     this.running = false;
   }
 
-  async send(input: { recipient: string; text: string }): Promise<void> {
-    await this.transport.send(input.recipient, input.text);
+  messageDeliveryFacts(target: ChannelMessageTarget): ChannelDeliveryFacts {
+    return this.transport.messageDeliveryFacts?.(target) ?? { replaySafety: "unsafe" };
+  }
+
+  async send(input: {
+    recipient: string;
+    text: string;
+    deliveryId?: string;
+  }): Promise<ChannelDeliveryResult> {
+    const facts = this.messageDeliveryFacts(input);
+    const result = await this.transport.send(input.recipient, input.text, input.deliveryId);
+    return normalizeChannelDeliveryResult(result, facts);
   }
 
   status() {
@@ -95,6 +123,7 @@ export class InfoflowAdapter implements ChannelAdapter {
       ...(payload.event_type ? { eventType: payload.event_type } : {}),
       ...(payload.content_type ? { contentType: payload.content_type } : {}),
       ...(payload.attachments?.length ? { attachments: payload.attachments } : {}),
+      ...(payload.images?.length ? { images: payload.images } : {}),
       ...(mentions.length > 0 ? { mentions } : {}),
       ...(typeof mentionedSelf === "boolean" ? { mentionedSelf } : {}),
       raw,
@@ -214,6 +243,14 @@ function parseInfoflowInbound(raw: unknown): InfoflowInboundRaw {
           }),
         }
       : {}),
+    ...(Array.isArray(record.images)
+      ? {
+          images: record.images.flatMap((entry) => {
+            const image = normalizeChannelImage(entry);
+            return image ? [image] : [];
+          }),
+        }
+      : {}),
     ...(typeof record.sender_name === "string" ? { sender_name: record.sender_name } : {}),
     ...(Array.isArray(record.mentions)
       ? {
@@ -239,7 +276,7 @@ function createDefaultInfoflowTransport(config: InfoflowAdapterConfig): ChannelT
     },
     async stop() {},
     async send() {
-      throw new Error(error);
+      throw channelDeliveryNotSent(new Error(error));
     },
     status() {
       return { state: "degraded", error };

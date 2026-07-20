@@ -329,4 +329,56 @@ describe("ChannelReplyEventProjector", () => {
     projector.appendFinalText("你好，世界");
     expect(appendText.mock.calls).toEqual([["你好"], ["，世界"]]);
   });
+
+  it("replaces stale streamed prose when the final answer is not a prefix", () => {
+    const appendText = vi.fn();
+    const replaceText = vi.fn();
+    const target: ChannelReplyStream = {
+      appendText,
+      replaceText,
+      notifyToolStart: vi.fn(),
+      notifyToolResult: vi.fn(),
+      complete: vi.fn(async () => undefined),
+      fail: vi.fn(async () => undefined),
+    };
+    const projector = new ChannelReplyEventProjector(target);
+    projector.observe(
+      messageEvent({
+        id: "assistant-partial",
+        role: "assistant",
+        text: "先看一下目录",
+        status: "streaming",
+      }),
+    );
+    projector.observe(
+      messageEvent({
+        id: "assistant-partial",
+        role: "assistant",
+        text: "先看一下目录",
+        status: "done",
+        metadata: { stopReason: "toolUse" },
+        parts: [
+          {
+            id: "assistant-partial:part:0",
+            type: "text",
+            text: "先看一下目录",
+            status: "complete",
+            metadata: {},
+          },
+          {
+            id: "assistant-partial:part:1",
+            type: "tool-call",
+            toolCallId: "call-1",
+            toolName: "cue_exec",
+            status: "complete",
+            metadata: {},
+          },
+        ],
+      }),
+    );
+    projector.appendFinalText("目录里有三个文件");
+
+    expect(appendText).toHaveBeenCalledWith("先看一下目录");
+    expect(replaceText).toHaveBeenCalledWith("目录里有三个文件");
+  });
 });

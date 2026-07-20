@@ -1,4 +1,5 @@
 import type { ChannelInteractionCapability, ChannelInteractionEvent } from "./interaction.ts";
+import type { ChannelDeliveryFacts, ChannelDeliveryResult, ChannelMessageTarget } from "./reply.ts";
 import type { ChannelTransport, ChannelTransportStatus } from "./types.ts";
 
 export class FakeChannelTransport implements ChannelTransport {
@@ -21,6 +22,10 @@ export class FakeChannelTransport implements ChannelTransport {
     return { state: this.running ? ("connected" as const) : ("stopped" as const) };
   }
 
+  messageDeliveryFacts(_target: ChannelMessageTarget): ChannelDeliveryFacts {
+    return { replaySafety: "unsafe" };
+  }
+
   async start(
     onMessage: (raw: unknown) => void,
     onInteraction?: (event: ChannelInteractionEvent) => void | Promise<void>,
@@ -39,8 +44,9 @@ export class FakeChannelTransport implements ChannelTransport {
     this.interactionHandler = undefined;
   }
 
-  async send(recipient: string, text: string): Promise<void> {
+  async send(recipient: string, text: string): Promise<ChannelDeliveryResult> {
     this.sent.push({ recipient, text });
+    return { replaySafety: "unsafe" };
   }
 
   /** Push a synthetic inbound payload (for tests). */
