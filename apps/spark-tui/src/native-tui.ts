@@ -483,16 +483,15 @@ export class SparkNativeSession {
   applySessionView(view: SparkSessionView): void {
     const messages: SparkNativeMessage[] = [];
     for (const projected of view.messages.flatMap(messageViewToNativeMessages)) {
-      const native = this.normalizeMessage(projected);
-      const index = this.findMessageViewIndex(native, messages);
-      if (index >= 0) messages[index] = this.normalizeMessage(native, messages[index]);
-      else messages.push(native);
+      const index = this.findMessageViewIndex(projected, messages);
+      if (index >= 0) messages[index] = this.normalizeMessage(projected, messages[index]);
+      else messages.push(this.normalizeMessage(projected));
     }
     for (const tool of view.tools) {
-      const native = this.normalizeMessage(toolViewToNativeMessage(tool));
-      const index = this.findMessageViewIndex(native, messages);
-      if (index >= 0) messages[index] = this.normalizeMessage(native, messages[index]);
-      else messages.push(native);
+      const projected = toolViewToNativeMessage(tool);
+      const index = this.findMessageViewIndex(projected, messages);
+      if (index >= 0) messages[index] = this.normalizeMessage(projected, messages[index]);
+      else messages.push(this.normalizeMessage(projected));
     }
     this.messages.splice(0, this.messages.length, ...messages);
     this.sortMessagesChronologically();
