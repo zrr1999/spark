@@ -16,6 +16,7 @@
     isSessionVisibleInWorkbenchRail,
     workbenchSessionScope,
   } from "$lib/workbench-session-scope";
+  import { workspaceSessionPath, workspaceSessionsPath } from "$lib/workspace-routes";
 
   type SessionRecord = {
     sessionId: string;
@@ -74,6 +75,10 @@
   } = $props();
 
   let filter = $state("");
+  let activeWorkspace = $derived(
+    workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null,
+  );
+  let sessionsHref = $derived(activeWorkspace ? workspaceSessionsPath(activeWorkspace) : "/sessions");
 
   let filteredSessions = $derived(
     sessions.filter((session) => {
@@ -158,7 +163,7 @@
       {#if sessionControlAvailable}
         <a
           class="new-session"
-          href="/sessions?new=workspace"
+          href={`${sessionsHref}?new=workspace`}
           aria-label={messages.newSession}
           title={messages.newSession}
         >
@@ -219,7 +224,9 @@
                   class:active={isSelected}
                   class:has-action={canArchive}
                   aria-current={isSelected ? "page" : undefined}
-                  href={`/sessions/${encodeURIComponent(session.sessionId)}`}
+                  href={activeWorkspace
+                    ? workspaceSessionPath(activeWorkspace, session.sessionId)
+                    : `/sessions/${encodeURIComponent(session.sessionId)}`}
                   data-sveltekit-preload-data="hover"
                 >
                   <span class="session-title-row">
@@ -244,7 +251,11 @@
                   <small>{relative(session.activityUpdatedAt ?? session.updatedAt)}</small>
                 </a>
                 {#if canArchive}
-                  <form class="session-archive-form" method="POST" action="/sessions?/archiveSession">
+                  <form
+                    class="session-archive-form"
+                    method="POST"
+                    action={`${sessionsHref}?/archiveSession`}
+                  >
                     <input type="hidden" name="sessionId" value={session.sessionId} />
                     <button
                       type="submit"

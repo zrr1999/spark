@@ -365,8 +365,23 @@ export function pendingRuntimeControlCommands(
 }> {
   const rows = db
     .prepare(
-      `SELECT id FROM runtime_control_commands
-       WHERE runtime_id = ? AND status = 'queued'
+      `SELECT rcc.id
+       FROM runtime_control_commands rcc
+       WHERE rcc.runtime_id = ?
+         AND rcc.status = 'queued'
+         AND (
+           rcc.scope = 'daemon'
+           OR EXISTS (
+             SELECT 1
+             FROM workspace_owner_bindings wob
+             JOIN runtime_workspace_bindings rwb
+               ON rwb.id = wob.runtime_workspace_binding_id
+             WHERE wob.workspace_id = rcc.workspace_id
+               AND wob.runtime_workspace_binding_id = rcc.runtime_workspace_binding_id
+               AND wob.ended_at IS NULL
+               AND rwb.runtime_id = rcc.runtime_id
+           )
+         )
        ORDER BY created_at, id LIMIT ?`,
     )
     .all(runtimeId, Math.max(1, Math.min(100, Math.floor(limit)))) as Array<{ id: string }>;

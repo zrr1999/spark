@@ -16,12 +16,16 @@ import {
 
 import type { SparkCliHostServices } from "./bootstrap.ts";
 import {
+  CURRENT_SPARK_COMPACTION_SUMMARY_VERSION,
   DEFAULT_SPARK_COMPACTION_SETTINGS,
   compactSparkSessionRecord,
   deterministicSparkCompactionSummary,
   meterSparkContextTokens,
   prepareSparkCompaction,
+  scheduleSparkCompaction,
   shouldSparkCompact,
+  type SparkCompactionScheduleResult,
+  type SparkCompactionSettings,
   type SparkCompactionPreparation,
 } from "./compaction.ts";
 import { getSparkSessionBranch } from "./session-navigation.ts";
@@ -31,6 +35,7 @@ import type {
   SparkCustomMessageEntry,
   SparkSessionEntry,
   SparkSessionMessage,
+  SparkSessionMessageEntry,
   SparkSessionRecord,
 } from "./session-store.ts";
 
@@ -169,9 +174,6 @@ export class SparkAgentSession {
     record: SparkSessionRecord,
     prompt: UserMessage["content"],
   ): Promise<void> {
-    const preparation = prepareForAutomaticCompaction(record, false);
-    if (!preparation || preparation.messagesToSummarize.length === 0) return;
-
     let model: ReturnType<SparkCliHostServices["providerRegistry"]["buildActiveModel"]>;
     try {
       model = this.services.providerRegistry.buildActiveModel();
@@ -181,6 +183,8 @@ export class SparkAgentSession {
     if (!model) return;
     const contextWindow = positiveNumber(model.contextWindow);
     if (!contextWindow) return;
+    const settings = this.services.config.compact ?? DEFAULT_SPARK_COMPACTION_SETTINGS;
+    if (!settings.enabled) return;
     const requestedOutput = positiveNumber(model.maxTokens) ?? 0;
     const replayMessages = activeSessionReplayMessages(record);
     const contextMeter = meterSparkContextTokens({
@@ -188,9 +192,71 @@ export class SparkAgentSession {
       reportedTokens: latestReportedContextTokens(record),
     });
     const promptMeter = meterSparkContextTokens({ messages: [{ role: "user", content: prompt }] });
-    const estimatedRequestTokens = contextMeter.tokens + promptMeter.tokens + requestedOutput;
-    if (!shouldSparkCompact(estimatedRequestTokens, contextWindow)) return;
-    await this.tryCompact(record, "auto", false, false);
+    const schedule = scheduleSparkCompaction(replayMessages, contextWindow, settings);
+    const micro = schedule.find((pass) => pass.type === "micro");
+    let replayTokensAfter = contextMeter.tokens;
+    if (micro && (await this.tryPersistMicroCompaction(record, replayMessages, micro))) {
+      replayTokensAfter = micro.tokensAfter;
+    }
+
+    const estimatedRequestTokens = replayTokensAfter + promptMeter.tokens + requestedOutput;
+    const requiresFull =
+      schedule.some((pass) => pass.type === "full") ||
+      shouldSparkCompact(estimatedRequestTokens, contextWindow, settings);
+    if (!requiresFull) return;
+    await this.tryCompact(record, "auto", false, true, settings);
+  }
+
+  private async tryPersistMicroCompaction(
+    record: SparkSessionRecord,
+    before: readonly SparkSessionMessage[],
+    pass: SparkCompactionScheduleResult,
+  ): Promise<boolean> {
+    const changes = changedMicroToolResults(before, pass.messages);
+    if (changes.length !== pass.compactedMessages) return false;
+
+    const applied: Array<{ entry: SparkSessionMessageEntry; content: unknown }> = [];
+    const branch = getSparkSessionBranch(record);
+    const available = branch.filter(
+      (entry): entry is SparkSessionMessageEntry =>
+        entry.type === "message" && entry.message.role === "toolResult",
+    );
+    const used = new Set<string>();
+    for (const change of changes) {
+      const entry = findMicroToolResultEntry(available, used, change.before);
+      if (!entry) {
+        restoreMicroToolResults(applied);
+        return false;
+      }
+      used.add(entry.id);
+      applied.push({ entry, content: entry.message.content });
+      entry.message = { ...entry.message, content: change.after.content };
+    }
+
+    const telemetryId = this.services.sessionStore.appendCustomEntry(
+      record,
+      "spark-compaction-micro",
+      {
+        type: "micro",
+        tokensBefore: pass.tokensBefore,
+        tokensAfter: pass.tokensAfter,
+        compactedMessages: pass.compactedMessages,
+        ...(pass.abortReason ? { abortReason: pass.abortReason } : {}),
+        metadata: {
+          summaryVersion: CURRENT_SPARK_COMPACTION_SUMMARY_VERSION,
+          tokenSource: pass.tokenSource,
+          measuredReductionRatio: pass.measuredReductionRatio,
+        },
+      },
+    );
+    try {
+      await this.services.sessionStore.save(record);
+      return true;
+    } catch {
+      restoreMicroToolResults(applied);
+      if (record.entries.at(-1)?.id === telemetryId) record.entries.pop();
+      return false;
+    }
   }
 
   private async tryCompact(
@@ -198,9 +264,16 @@ export class SparkAgentSession {
     reason: "auto" | "context_overflow",
     willRetry: boolean,
     force: boolean,
+    settings?: SparkCompactionSettings,
   ): Promise<boolean> {
     try {
-      return await this.compact(record, reason, willRetry, force);
+      return await this.compact(
+        record,
+        reason,
+        willRetry,
+        force,
+        settings ?? this.services.config.compact ?? DEFAULT_SPARK_COMPACTION_SETTINGS,
+      );
     } catch {
       // Keep the original provider outcome if compaction itself cannot be
       // completed. The user still receives the actionable overflow error.
@@ -213,8 +286,9 @@ export class SparkAgentSession {
     reason: "auto" | "context_overflow",
     willRetry: boolean,
     force: boolean,
+    settings: SparkCompactionSettings,
   ): Promise<boolean> {
-    const initialPreparation = prepareForAutomaticCompaction(record, force);
+    const initialPreparation = prepareForAutomaticCompaction(record, force, settings);
     if (!initialPreparation || initialPreparation.messagesToSummarize.length === 0) return false;
 
     let compactionEntry: SparkCompactionEntry | undefined;
@@ -227,7 +301,7 @@ export class SparkAgentSession {
         consumeMessage: true,
       });
       appendCompactionCheckpointMessages(this.services, record, results);
-      const preparation = prepareForAutomaticCompaction(record, force);
+      const preparation = prepareForAutomaticCompaction(record, force, settings);
       if (!preparation || preparation.messagesToSummarize.length === 0) return false;
       const replayBefore = activeSessionReplayMessages(record);
       const beforeMeter = meterSparkContextTokens({
@@ -280,11 +354,12 @@ export class SparkAgentSession {
 function prepareForAutomaticCompaction(
   record: SparkSessionRecord,
   force: boolean,
+  settings: SparkCompactionSettings = DEFAULT_SPARK_COMPACTION_SETTINGS,
 ): SparkCompactionPreparation | undefined {
-  const preparation = prepareSparkCompaction(record);
+  const preparation = prepareSparkCompaction(record, undefined, settings);
   if (!force || !preparation || preparation.messagesToSummarize.length > 0) return preparation;
   return prepareSparkCompaction(record, undefined, {
-    ...DEFAULT_SPARK_COMPACTION_SETTINGS,
+    ...settings,
     keepRecentTokens: Math.max(1, Math.min(10_000, Math.floor(preparation.tokensBefore / 2))),
   });
 }
@@ -326,6 +401,59 @@ function latestReportedContextTokens(record: SparkSessionRecord): number | undef
 
 function activeSessionReplayMessages(record: SparkSessionRecord): SparkSessionMessage[] {
   return sessionRecordToAgentMessages(record).map(agentMessageToSessionMessage);
+}
+
+interface SparkMicroToolResultChange {
+  before: SparkSessionMessage;
+  after: SparkSessionMessage;
+}
+
+function changedMicroToolResults(
+  before: readonly SparkSessionMessage[],
+  after: readonly SparkSessionMessage[],
+): SparkMicroToolResultChange[] {
+  const changes: SparkMicroToolResultChange[] = [];
+  for (let index = 0; index < before.length; index += 1) {
+    const previous = before[index];
+    const next = after[index];
+    if (!previous || !next || previous.role !== "toolResult" || next.role !== "toolResult")
+      continue;
+    if (JSON.stringify(previous.content) === JSON.stringify(next.content)) continue;
+    changes.push({ before: previous, after: next });
+  }
+  return changes;
+}
+
+function findMicroToolResultEntry(
+  entries: readonly SparkSessionMessageEntry[],
+  used: ReadonlySet<string>,
+  message: SparkSessionMessage,
+): SparkSessionMessageEntry | undefined {
+  const toolCallId = typeof message.toolCallId === "string" ? message.toolCallId : undefined;
+  if (toolCallId) {
+    const byCallId = entries.find(
+      (entry) => !used.has(entry.id) && entry.message.toolCallId === toolCallId,
+    );
+    if (byCallId) return byCallId;
+  }
+  const signature = JSON.stringify({
+    toolName: message.toolName,
+    content: message.content,
+  });
+  return entries.find(
+    (entry) =>
+      !used.has(entry.id) &&
+      JSON.stringify({
+        toolName: entry.message.toolName,
+        content: entry.message.content,
+      }) === signature,
+  );
+}
+
+function restoreMicroToolResults(
+  applied: ReadonlyArray<{ entry: SparkSessionMessageEntry; content: unknown }>,
+): void {
+  for (const { entry, content } of applied) entry.message = { ...entry.message, content };
 }
 
 function measuredReductionRatio(tokensBefore: number, tokensAfter: number): number {

@@ -1,5 +1,6 @@
 import { workbenchSessionScope } from "../workbench-session-scope";
 import { formatChannelSessionTitle, type ChannelSessionLabels } from "../channel-session-title";
+import { workspaceSessionPath } from "../workspace-routes";
 
 export interface CockpitSearchSession {
   sessionId: string;
@@ -67,7 +68,7 @@ export function buildCockpitSearchResults(input: {
         }),
         description: workspace ? workspace.name : null,
         status: activityStatus,
-        href: `/sessions/${session.sessionId}`,
+        href: workspace ? workspaceSessionPath(workspace, session.sessionId) : "/sessions",
       };
     });
 

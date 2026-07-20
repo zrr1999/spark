@@ -10,7 +10,7 @@ This file names stable agent-facing capabilities. Schemas and result types live 
 - `/goal` uses reviewer-backed decisions and reviewer-gated completion.
 - `/workflow` executes a selected saved workflow; `/ultracode` explicitly opts into approval-gated fan-out.
 
-Session operating phases are only `plan` and `implement`. `plan` covers investigation, explanation, review, and durable planning without requiring durable writes for ordinary answers. Research remains a task kind and workflow capability, not a separate session phase. Repro setup uses one `plan` phase with both problem-definition and reproduction-strategy acceptance conditions.
+Session operating phases are only `plan` and `implement`. `plan` covers investigation, explanation, review, and durable planning without requiring durable writes for ordinary answers. Research remains a task kind and workflow capability, not a separate session phase. Repro setup uses one research-first `plan` phase with typed, artifact-backed requirements: freeze the reproduction contract, inspect reusable implementation and extension boundaries, compare real-module and eager alignment paths, record the implementation and alignment decisions through user-answered canonical asks, and pass a minimum baseline probe. Readiness and gates are derived from that evidence; no caller can force-pass them with a bare boolean. Goal mode adopts only the conservative part of this policy: inspect discoverable facts and run focused probes before sending a still-material decision to reviewer auto-answer.
 
 ## State and execution
 

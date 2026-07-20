@@ -130,6 +130,42 @@ function submitProjectedTurn(
 }
 
 describe("session activity projection", () => {
+  it("retains the structured run kind on daemon run reports", () => {
+    const { db, workspace, runtimeWorkspaceBindingId } = setupWorkspace();
+    const sessionId = "sess_session_run";
+    appendEvent(db, {
+      workspaceId: workspace.id,
+      actorKind: "runtime",
+      actorId: runtimeWorkspaceBindingId,
+      kind: "daemon.view_event",
+      subjectKind: "view_model",
+      subjectId: sessionId,
+      payload: {
+        type: "daemon.view_event",
+        sessionId,
+        view: {
+          type: "run.update",
+          sessionId,
+          run: {
+            id: `${sessionId}:run:1`,
+            kind: "session",
+            status: "succeeded",
+          },
+        },
+      },
+      createdAt: "2026-07-09T00:01:00.000Z",
+    });
+
+    expect(loadSessionActivity(db, { workspaceId: workspace.id, sessionId }).reports).toEqual([
+      expect.objectContaining({
+        id: `${sessionId}:run:1`,
+        kind: "run.update",
+        runKind: "session",
+      }),
+    ]);
+    db.close();
+  });
+
   it("retains the daemon invocation correlation on projected user messages", () => {
     const { db, workspace, runtimeWorkspaceBindingId } = setupWorkspace();
     const sessionId = "sess_correlated_user";

@@ -50,18 +50,20 @@ export function resolveActiveMode(input: ResolveActiveModeInput): ResolvedActive
 
 /**
  * Derive the active turn driver from concurrent foreground signals. Precedence:
- * active workflow run > active goal > active loop > assist. This mirrors the
+ * active workflow run > active repro > active goal > active loop > assist. This mirrors the
  * foreground drive axis; background workflow slots are tracked separately by the
  * host and do not change the foreground mode.
  */
 export function resolveTurnDriver(input: {
   workflowRunActive?: boolean;
+  reproActive?: boolean;
   goalActive?: boolean;
   /** @deprecated Use goalActive. */
   goalLoopActive?: boolean;
   loopActive?: boolean;
 }): TurnDriver {
   if (input.workflowRunActive) return "workflow";
+  if (input.reproActive) return "repro";
   if (input.goalActive ?? input.goalLoopActive) return "goal";
   if (input.loopActive) return "loop";
   return "assist";

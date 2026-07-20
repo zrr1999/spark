@@ -626,7 +626,13 @@ async function handleCompactCommand(
     sessionId: result.record.header.id,
     compactionEntryId: result.entry.id,
   });
-  return `Compacted visible Spark transcript into session ${result.record.header.id} (${result.entry.tokensBefore} estimated tokens before compaction).`;
+  const metadata = result.entry.metadata;
+  return [
+    `Compacted visible Spark transcript into session ${result.record.header.id}`,
+    `type=full tokensBefore=${result.entry.tokensBefore} tokensAfter=${result.tokensAfter}`,
+    `reductionRatio=${(metadata?.measuredReductionRatio ?? 0).toFixed(3)} tokenSource=${metadata?.tokenSource ?? "estimated"}`,
+    `fallback=${metadata?.fallbackReason ?? "none"}`,
+  ].join("; ");
 }
 
 function compactCheckpointMessagesFromEvents(results: unknown[]): SparkNativeMessage[] {

@@ -25,8 +25,8 @@ export function registerPiSessionTool(
     description:
       "Canonical persistent session capability for long-lived staff roles. Reuse sessions by stable division of labour, manage lifecycle and bindings, submit tasks, or send durable requests and notifications.",
     promptGuidelines: [
-      "A persistent session represents a long-lived division of labour, never one task. List and reuse the matching role session before creating another.",
-      "session create requires role and names the session from that stable responsibility. Put the concrete task only in session call/send; never create or name a session after a task or deliverable.",
+      "A persistent session represents a long-lived division of labour, never one task. Before create, you MUST list same-workspace local sessions and compare roles semantically; reuse the closest owner with session call/send even when task wording, technology, or language differs.",
+      "Use session create only when no existing division of labour owns the responsibility. role must be one concise stable responsibility label in the user's language and existing naming style, such as 运行维护, 前端体验, 质量验证, or Messaging Platforms. Put the concrete task only in session call/send; never use a task slug, implementation name, model name, deliverable, or temporary phase as the role.",
       "session list is paginated and labels each surface as local or channel plus activity as idle or running; use surface, activity, and adapter filters, then continue with offset when total exceeds the returned page.",
       "session send kind=notification persists without triggering the target session; it is the default and cannot wait for completion.",
       "session send kind=request persists and submits one turn to an idle or running local target. wait=accepted is asynchronous and is the default; wait=completed polls the durable invocation through restart and returns its terminal response.",
@@ -69,7 +69,7 @@ export function registerPiSessionTool(
       role: Type.Optional(
         Type.String({
           description:
-            "Required for create: concise, reusable division of labour such as administrator, frontend, runtime-ops, or verifier.",
+            "Required for create only after list finds no semantic role match: one concise stable responsibility label in the user's language and existing naming style, never a task slug.",
         }),
       ),
       cwd: Type.Optional(Type.String({ description: "Optional working directory for create." })),

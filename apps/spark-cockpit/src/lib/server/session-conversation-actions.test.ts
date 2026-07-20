@@ -6,9 +6,11 @@ const mocks = vi.hoisted(() => ({
   cancelConversationTurnForCockpit: vi.fn(),
   createManagedSessionForCockpit: vi.fn(),
   getManagedSessionForCockpit: vi.fn(),
+  getProjectedManagedSessionForCockpit: vi.fn(),
   listManagedSessionsForCockpit: vi.fn(),
   loadModelControlForCockpit: vi.fn(),
   loadProjectedModelControlForCockpit: vi.fn(),
+  requireWorkspaceByRouteId: vi.fn(),
   setSessionModelForCockpit: vi.fn(),
   setSessionThinkingLevelForCockpit: vi.fn(),
   submitConversationTurnForCockpit: vi.fn(),
@@ -18,6 +20,7 @@ vi.mock("$lib/server/managed-sessions", () => ({
   archiveManagedSessionForCockpit: mocks.archiveManagedSessionForCockpit,
   createManagedSessionForCockpit: mocks.createManagedSessionForCockpit,
   getManagedSessionForCockpit: mocks.getManagedSessionForCockpit,
+  getProjectedManagedSessionForCockpit: mocks.getProjectedManagedSessionForCockpit,
   listManagedSessionsForCockpit: mocks.listManagedSessionsForCockpit,
 }));
 
@@ -102,6 +105,11 @@ vi.mock("$lib/server/form-data", () => ({
   },
 }));
 
+vi.mock("$lib/server/db", () => ({ getDatabase: () => ({}) }));
+vi.mock("$lib/server/workspace-routing", () => ({
+  requireWorkspaceByRouteId: mocks.requireWorkspaceByRouteId,
+}));
+
 vi.mock("$lib/server/submission-idempotency", () => ({
   createCockpitSubmissionId: () => "generated-browser-submission",
   cockpitSubmissionIdempotencyKey: (submissionId: string, phase: string) =>
@@ -126,6 +134,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.createManagedSessionForCockpit.mockResolvedValue(session);
   mocks.getManagedSessionForCockpit.mockResolvedValue(session);
+  mocks.getProjectedManagedSessionForCockpit.mockReturnValue(session);
   mocks.archiveManagedSessionForCockpit.mockResolvedValue({
     ...session,
     status: "archived",
@@ -138,6 +147,11 @@ beforeEach(() => {
     available: true,
     snapshot: { providers: [], diagnostics: [] },
   });
+  mocks.requireWorkspaceByRouteId.mockImplementation((_db, routeId: string) => ({
+    id: routeId === "demo" ? "ws_demo" : routeId === "other" ? "ws_other" : routeId,
+    slug: routeId,
+    name: routeId,
+  }));
   mocks.setSessionModelForCockpit.mockResolvedValue(session);
   mocks.setSessionThinkingLevelForCockpit.mockResolvedValue(session);
   mocks.cancelConversationTurnForCockpit.mockResolvedValue({
@@ -406,6 +420,11 @@ describe("session conversation actions", () => {
   });
 
   it("queues each later message against the existing session", async () => {
+    mocks.getManagedSessionForCockpit.mockRejectedValueOnce(
+      new Error(
+        "Runtime command is still pending; it remains durable and may complete after reconnect.",
+      ),
+    );
     const result = await requireAction("sendMessage")(
       actionEvent({ sessionId: "sess_conversation", message: "Now run the focused tests." }),
     );
@@ -428,6 +447,8 @@ describe("session conversation actions", () => {
       title: "Now run the focused tests.",
       submissionId: expect.any(String),
     });
+    expect(mocks.getProjectedManagedSessionForCockpit).toHaveBeenCalledWith("sess_conversation");
+    expect(mocks.getManagedSessionForCockpit).not.toHaveBeenCalled();
   });
 
   it("passes the hidden browser submission nonce through the send action", async () => {
@@ -454,7 +475,7 @@ describe("session conversation actions", () => {
   });
 
   it("rejects daemon-global conversations at the workspace-scoped Web boundary", async () => {
-    mocks.getManagedSessionForCockpit.mockResolvedValueOnce({
+    mocks.getProjectedManagedSessionForCockpit.mockReturnValueOnce({
       ...session,
       sessionId: "sess_global",
       scope: { kind: "daemon", daemonId: "daemon-local" },
@@ -499,6 +520,41 @@ describe("session conversation actions", () => {
       });
     }
 
+    expect(mocks.cancelConversationTurnForCockpit).not.toHaveBeenCalled();
+    expect(mocks.setSessionModelForCockpit).not.toHaveBeenCalled();
+    expect(mocks.setSessionThinkingLevelForCockpit).not.toHaveBeenCalled();
+    expect(mocks.archiveManagedSessionForCockpit).not.toHaveBeenCalled();
+  });
+
+  it("rejects canonical actions when the URL workspace differs from form or session ownership", async () => {
+    await expect(
+      requireAction("startConversation")(
+        actionEvent({ workspaceId: "ws_demo", message: "Do not cross the boundary." }, "other"),
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+    await expect(
+      requireAction("sendMessage")(
+        actionEvent(
+          { sessionId: "sess_conversation", message: "Do not cross the boundary." },
+          "other",
+        ),
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+
+    for (const [name, values] of [
+      ["cancelTurn", { sessionId: "sess_conversation", turnId: "turn_demo" }],
+      ["selectModel", { sessionId: "sess_conversation", model: "provider/model" }],
+      ["selectThinking", { sessionId: "sess_conversation", thinkingLevel: "high" }],
+      ["archiveSession", { sessionId: "sess_conversation" }],
+    ] as const) {
+      const result = await Promise.resolve(requireAction(name)(actionEvent(values, "other"))).catch(
+        (error) => error,
+      );
+      expect(result).toMatchObject({ status: expect.any(Number) });
+    }
+
+    expect(mocks.createManagedSessionForCockpit).not.toHaveBeenCalled();
+    expect(mocks.submitConversationTurnForCockpit).not.toHaveBeenCalled();
     expect(mocks.cancelConversationTurnForCockpit).not.toHaveBeenCalled();
     expect(mocks.setSessionModelForCockpit).not.toHaveBeenCalled();
     expect(mocks.setSessionThinkingLevelForCockpit).not.toHaveBeenCalled();
@@ -789,7 +845,7 @@ function requireAction(name: keyof typeof actions) {
   return action;
 }
 
-function actionEvent(values: Record<string, string>) {
+function actionEvent(values: Record<string, string>, workspaceId?: string) {
   const formData = new FormData();
   for (const [key, value] of Object.entries(values)) {
     formData.set(key, value);
@@ -797,6 +853,7 @@ function actionEvent(values: Record<string, string>) {
   return {
     cookies: { get: () => undefined },
     locals: { sessionToken: "session-token" },
+    params: workspaceId ? { workspaceId } : {},
     request: new Request("http://localhost/sessions", {
       method: "POST",
       body: formData,

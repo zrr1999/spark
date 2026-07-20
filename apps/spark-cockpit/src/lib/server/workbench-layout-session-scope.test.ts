@@ -81,4 +81,16 @@ describe("workbench session layout scope", () => {
       sessionControlAvailable: false,
     });
   });
+
+  it("keeps the workspace path authoritative for canonical session URLs", async () => {
+    const url = new URL("http://localhost:5173/cached/sessions/sess_cached");
+    await load({ cookies: {}, url } as never);
+
+    expect(mocks.shellLayout).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pathname: "/cached/sessions/sess_cached",
+        preferredWorkspaceId: null,
+      }),
+    );
+  });
 });

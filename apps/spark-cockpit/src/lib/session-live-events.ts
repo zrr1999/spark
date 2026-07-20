@@ -3,6 +3,7 @@ import {
   sanitizeSparkDisplayError,
   type SparkDaemonEvent,
   type SparkMessageView,
+  type SparkSessionSnapshotHistory,
   type SparkSessionView,
 } from "@zendev-lab/spark-protocol";
 
@@ -137,6 +138,21 @@ export function sessionViewRevisionKey(view: SparkSessionView | null): string {
   ].join(":");
 }
 
+export function shouldAdoptSessionHistory(
+  current: SparkSessionSnapshotHistory | null,
+  incoming: SparkSessionSnapshotHistory | null,
+): incoming is SparkSessionSnapshotHistory {
+  if (!incoming) return false;
+  if (!current) return true;
+  if (incoming.loadedMessages !== current.loadedMessages) {
+    return incoming.loadedMessages > current.loadedMessages;
+  }
+  if (incoming.totalMessages < current.totalMessages) return false;
+  if (!current.hasEarlierMessages && incoming.hasEarlierMessages) return false;
+  if (!current.nextBeforeMessageId && incoming.nextBeforeMessageId) return false;
+  return true;
+}
+
 export function createSessionLiveEventState(input: {
   sessionId: string;
   workspaceId?: string | null;
@@ -196,7 +212,10 @@ export function reconcileSessionLiveEventState(
     previous,
     normalizeSnapshotAgainstInvocationPhases(cloneSessionView(input.view), state.invocationPhases),
     state.sessionId,
-    input.preserveCurrentHistory ?? false,
+    {
+      preserveCurrentHistory: input.preserveCurrentHistory ?? false,
+      source: "refresh",
+    },
   );
   syncInvocationStateFromView(state, false);
   return state.view !== previous;
@@ -430,7 +449,7 @@ function applyDaemonEvent(
         state.invocationPhases,
       ),
       state.sessionId,
-      true,
+      { preserveCurrentHistory: true, source: "event" },
     );
     syncInvocationStateFromView(state, true);
     return { changed: state.view !== previous, refreshActivity: false };
@@ -445,7 +464,7 @@ function applyDaemonEvent(
       sanitizeLiveMessage(viewEvent.message),
       daemonEvent.invocationId ?? null,
     );
-    const messages = upsertSessionMessage(current.messages, message, state.sessionId);
+    const messages = upsertSessionMessage(current.messages, message, state.sessionId, "ordered");
     if (messages === current.messages) {
       return { changed: false, refreshActivity: false };
     }
@@ -608,27 +627,45 @@ function reconcileSessionView(
   current: SparkSessionView | null,
   snapshot: SparkSessionView,
   sessionId: string,
-  preserveCurrentHistory: boolean,
+  options: {
+    preserveCurrentHistory: boolean;
+    source: "event" | "refresh";
+  },
 ): SparkSessionView {
   if (!current) return snapshot;
+  const snapshotComparison = compareProjectionTimestamp(snapshot, current);
+  const snapshotOrder = options.source === "event" ? 1 : snapshotComparison;
+  const snapshotPreferred = snapshotOrder !== null && snapshotOrder >= 0;
+  const shell = snapshotPreferred ? snapshot : current;
   const messages = reconcileSnapshotMessages(
     current.messages,
     snapshot.messages,
     sessionId,
-    preserveCurrentHistory,
+    options.preserveCurrentHistory,
+    snapshotOrder,
   );
   const next: SparkSessionView = {
-    ...snapshot,
+    ...shell,
     messages,
-    tools: mergeSnapshotItems(current.tools, snapshot.tools, (item) => item.id),
-    runs: mergeSnapshotItems(current.runs, snapshot.runs, (item) => item.id),
-    tasks: mergeSnapshotItems(current.tasks, snapshot.tasks, (item) => item.ref),
-    artifacts: mergeSnapshotItems(current.artifacts, snapshot.artifacts, (item) => item.ref),
-    ...(snapshot.mailbox
-      ? { mailbox: snapshot.mailbox }
-      : current.mailbox
-        ? { mailbox: current.mailbox }
-        : {}),
+    tools: mergeSnapshotItems(current.tools, snapshot.tools, (item) => item.id, snapshotOrder),
+    runs: mergeSnapshotItems(current.runs, snapshot.runs, (item) => item.id, snapshotOrder),
+    tasks: mergeSnapshotItems(current.tasks, snapshot.tasks, (item) => item.ref, snapshotOrder),
+    artifacts: mergeSnapshotItems(
+      current.artifacts,
+      snapshot.artifacts,
+      (item) => item.ref,
+      snapshotOrder,
+    ),
+    ...(snapshot.mailbox || current.mailbox
+      ? {
+          mailbox: mergeSnapshotItems(
+            current.mailbox ?? [],
+            snapshot.mailbox ?? [],
+            (item) => item.id,
+            snapshotOrder,
+          ),
+        }
+      : {}),
     updatedAt: laterTimestamp(current.updatedAt, snapshot.updatedAt),
   };
   return sameJsonValue(current, next) ? current : next;
@@ -639,44 +676,172 @@ function reconcileSnapshotMessages(
   snapshot: SparkMessageView[],
   sessionId: string,
   preserveCurrentHistory: boolean,
+  snapshotOrder: number | null,
 ): SparkMessageView[] {
   if (preserveCurrentHistory) {
-    let messages = current;
-    for (const message of snapshot) {
-      messages = upsertSessionMessage(messages, message, sessionId);
-    }
-    return messages;
+    return mergeMessageSequences(
+      current,
+      snapshot,
+      sessionId,
+      snapshotOrder !== null && snapshotOrder < 0 ? "current" : "heuristic",
+    );
   }
-  let messages = [...snapshot];
   const snapshotIds = new Set(snapshot.map((message) => message.id));
   const lastSharedCurrentIndex = current.findLastIndex((message) => snapshotIds.has(message.id));
-  for (const [index, message] of current.entries()) {
+  const retainedCurrent = current.filter((message, index) => {
     const isShared = snapshotIds.has(message.id);
     const isLiveSuffix = lastSharedCurrentIndex < 0 || index > lastSharedCurrentIndex;
-    if (isShared || isLiveSuffix || userMessageInvocationId(message)) {
-      messages = upsertSessionMessage(messages, message, sessionId);
-    }
-  }
-  return messages;
+    return isShared || isLiveSuffix || Boolean(userMessageInvocationId(message));
+  });
+  return mergeMessageSequences(
+    snapshot,
+    retainedCurrent,
+    sessionId,
+    snapshotOrder === null || snapshotOrder < 0 ? "next" : "heuristic",
+  );
 }
 
 function mergeSnapshotItems<T>(
   current: readonly T[],
   snapshot: readonly T[],
   key: (item: T) => string,
+  snapshotOrder: number | null,
 ): T[] {
   const snapshotByKey = new Map(snapshot.map((item) => [key(item), item]));
   const currentKeys = new Set(current.map(key));
   return [
-    ...current.map((item) => snapshotByKey.get(key(item)) ?? item),
+    ...current.map((item) => {
+      const projected = snapshotByKey.get(key(item));
+      if (!projected) return item;
+      if (snapshotOrder !== null && snapshotOrder !== 0) {
+        return snapshotOrder > 0 ? projected : item;
+      }
+      return preferProjectionRevision(item, projected, snapshotOrder === 0);
+    }),
     ...snapshot.filter((item) => !currentKeys.has(key(item))),
   ];
+}
+
+function mergeMessageSequences(
+  base: SparkMessageView[],
+  overlay: SparkMessageView[],
+  sessionId: string,
+  revisionPreference: MessageRevisionPreference,
+): SparkMessageView[] {
+  let messages = [...base];
+  for (const [overlayIndex, message] of overlay.entries()) {
+    const existingIndex = messageIndex(messages, message);
+    if (existingIndex >= 0) {
+      messages = upsertSessionMessage(messages, message, sessionId, revisionPreference);
+      continue;
+    }
+    const insertionIndex = messageInsertionIndex(messages, overlay, overlayIndex);
+    messages = [...messages.slice(0, insertionIndex), message, ...messages.slice(insertionIndex)];
+  }
+  return messages;
+}
+
+function messageInsertionIndex(
+  messages: SparkMessageView[],
+  source: SparkMessageView[],
+  sourceIndex: number,
+): number {
+  for (let index = sourceIndex + 1; index < source.length; index += 1) {
+    const anchor = source[index];
+    if (!anchor) continue;
+    const anchorIndex = messageIndex(messages, anchor);
+    if (anchorIndex >= 0) return anchorIndex;
+  }
+  for (let index = sourceIndex - 1; index >= 0; index -= 1) {
+    const anchor = source[index];
+    if (!anchor) continue;
+    const anchorIndex = messageIndex(messages, anchor);
+    if (anchorIndex >= 0) return anchorIndex + 1;
+  }
+
+  const createdAt = source[sourceIndex]?.createdAt;
+  if (createdAt) {
+    const laterIndex = messages.findIndex(
+      (message) => message.createdAt && compareTimestampStrings(message.createdAt, createdAt) > 0,
+    );
+    if (laterIndex >= 0) return laterIndex;
+  }
+  return messages.length;
+}
+
+function messageIndex(messages: readonly SparkMessageView[], message: SparkMessageView): number {
+  const exactIndex = messages.findIndex((candidate) => candidate.id === message.id);
+  if (exactIndex >= 0) return exactIndex;
+  const invocationId = userMessageInvocationId(message);
+  return invocationId
+    ? messages.findIndex((candidate) => userMessageInvocationId(candidate) === invocationId)
+    : -1;
+}
+
+function preferProjectionRevision<T>(current: T, next: T, fallbackPreferNext: boolean): T {
+  const comparison = compareProjectionTimestamp(next, current);
+  if (comparison !== null && comparison !== 0) return comparison > 0 ? next : current;
+
+  const currentStatus = projectionStatus(current);
+  const nextStatus = projectionStatus(next);
+  const currentTerminal = isTerminalProjectionStatus(currentStatus);
+  const nextTerminal = isTerminalProjectionStatus(nextStatus);
+  if (currentTerminal !== nextTerminal) return nextTerminal ? next : current;
+  return fallbackPreferNext ? next : current;
+}
+
+function compareProjectionTimestamp(next: unknown, current: unknown): number | null {
+  const nextTimestamp = projectionTimestamp(next);
+  const currentTimestamp = projectionTimestamp(current);
+  if (!nextTimestamp && !currentTimestamp) return null;
+  if (!nextTimestamp) return -1;
+  if (!currentTimestamp) return 1;
+  return compareTimestampStrings(nextTimestamp, currentTimestamp);
+}
+
+function projectionTimestamp(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  return (
+    stringField(value, "updatedAt") ??
+    stringField(value, "completedAt") ??
+    stringField(value, "startedAt") ??
+    stringField(value, "createdAt")
+  );
+}
+
+function projectionStatus(value: unknown): string | null {
+  return stringField(value, "status")?.toLocaleLowerCase() ?? null;
+}
+
+function isTerminalProjectionStatus(status: string | null): boolean {
+  return Boolean(
+    status &&
+    [
+      "succeeded",
+      "completed",
+      "done",
+      "failed",
+      "error",
+      "lost",
+      "timeout",
+      "timed_out",
+      "cancelled",
+      "canceled",
+    ].includes(status),
+  );
 }
 
 function laterTimestamp(current: string | undefined, next: string | undefined): string | undefined {
   if (!current) return next;
   if (!next) return current;
-  return next > current ? next : current;
+  return compareTimestampStrings(next, current) > 0 ? next : current;
+}
+
+function compareTimestampStrings(next: string, current: string): number {
+  const nextTime = Date.parse(next);
+  const currentTime = Date.parse(current);
+  if (Number.isFinite(nextTime) && Number.isFinite(currentTime)) return nextTime - currentTime;
+  return next.localeCompare(current);
 }
 
 function syncInvocationStateFromView(state: SessionLiveEventState, pruneMissing: boolean): void {
@@ -776,11 +941,12 @@ function upsertSessionMessage(
   items: SparkMessageView[],
   next: SparkMessageView,
   sessionId: string,
+  revisionPreference: MessageRevisionPreference,
 ): SparkMessageView[] {
   const exactIndex = items.findIndex((item) => item.id === next.id);
   if (exactIndex >= 0) {
     const current = items[exactIndex]!;
-    const preferred = preferMessageRevision(current, next);
+    const preferred = preferMessageRevision(current, next, revisionPreference);
     if (preferred === current) return items;
     return items.map((item, index) => (index === exactIndex ? preferred : item));
   }
@@ -794,7 +960,14 @@ function upsertSessionMessage(
   const livePrefix = `${sessionId}:message:user:`;
   const currentIsTemporary = current.id.startsWith(livePrefix);
   const nextIsTemporary = next.id.startsWith(livePrefix);
-  const preferred = currentIsTemporary && !nextIsTemporary ? next : current;
+  const preferred =
+    currentIsTemporary !== nextIsTemporary
+      ? currentIsTemporary
+        ? next
+        : current
+      : revisionPreference === "ordered" || revisionPreference === "next"
+        ? next
+        : current;
   if (preferred === current) return items;
   return items.map((item, index) => (index === correlatedIndex ? preferred : item));
 }
@@ -802,24 +975,33 @@ function upsertSessionMessage(
 function preferMessageRevision(
   current: SparkMessageView,
   next: SparkMessageView,
+  revisionPreference: MessageRevisionPreference,
 ): SparkMessageView {
   if (sameJsonValue(current, next)) return current;
+  if (revisionPreference === "ordered" || revisionPreference === "next") return next;
+  if (revisionPreference === "current") return current;
 
-  const currentTerminal = current.status === "done" || current.status === "error";
-  const nextTerminal = next.status === "done" || next.status === "error";
-  if (currentTerminal !== nextTerminal) return nextTerminal ? next : current;
-  if (!currentTerminal && current.status === "streaming" && next.status === "pending") {
-    return current;
+  const currentPhase = messageStatusPhase(current.status);
+  const nextPhase = messageStatusPhase(next.status);
+  if (currentPhase !== nextPhase) return nextPhase > currentPhase ? next : current;
+  const comparison = compareProjectionTimestamp(next, current);
+  if (comparison !== null && comparison !== 0) return comparison > 0 ? next : current;
+  if (current.status === "streaming" && next.status === "streaming") {
+    return messageProjectionWeight(next) >= messageProjectionWeight(current) ? next : current;
   }
-
-  const currentWeight = messageProjectionWeight(current);
-  const nextWeight = messageProjectionWeight(next);
-  if (nextWeight < currentWeight) return current;
-  return next;
+  return current;
 }
+
+type MessageRevisionPreference = "ordered" | "next" | "current" | "heuristic";
 
 function messageProjectionWeight(message: SparkMessageView): number {
   return message.text.length + JSON.stringify(message.parts ?? []).length;
+}
+
+function messageStatusPhase(status: SparkMessageView["status"]): number {
+  if (status === "done" || status === "error") return 2;
+  if (status === "streaming") return 1;
+  return 0;
 }
 
 function sameJsonValue(left: unknown, right: unknown): boolean {

@@ -10,10 +10,15 @@ import {
   workspaceIdForWorkbenchSession,
   workspaceSessionsForWorkbench,
 } from "$lib/workbench-session-scope";
+import {
+  workbenchSessionIdFromPath,
+  workbenchSessionsPathFromPathname,
+} from "$lib/workspace-routes";
 import type { LayoutServerLoad } from "./$types";
 
 export const load: LayoutServerLoad = async ({ cookies, url }) => {
-  const selectedSessionId = sessionIdFromPath(url.pathname);
+  const selectedSessionId = workbenchSessionIdFromPath(url.pathname);
+  const sessionsPath = workbenchSessionsPathFromPathname(url.pathname);
   const projectedSelectedSession = selectedSessionId
     ? getProjectedManagedSessionForCockpit(selectedSessionId)
     : null;
@@ -21,9 +26,10 @@ export const load: LayoutServerLoad = async ({ cookies, url }) => {
     cookies,
     pathname: url.pathname,
     protocol: url.protocol,
-    preferredWorkspaceId: projectedSelectedSession
-      ? workspaceIdForWorkbenchSession(projectedSelectedSession)
-      : null,
+    preferredWorkspaceId:
+      sessionsPath === "/sessions" && projectedSelectedSession
+        ? workspaceIdForWorkbenchSession(projectedSelectedSession)
+        : null,
     preferredWorkspaceSlug: url.searchParams.get("workspace"),
   });
   const activeWorkspaceId = layout.activeWorkspace?.id ?? null;
@@ -63,13 +69,3 @@ export const load: LayoutServerLoad = async ({ cookies, url }) => {
     sessionControlAvailable: managedSessions.controlAvailable,
   };
 };
-
-function sessionIdFromPath(pathname: string) {
-  if (!pathname.startsWith("/sessions/")) return null;
-  try {
-    const sessionId = decodeURIComponent(pathname.slice("/sessions/".length).split("/")[0] ?? "");
-    return sessionId.trim() || null;
-  } catch {
-    return null;
-  }
-}

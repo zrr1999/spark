@@ -16,6 +16,6 @@
     "access": "public"
   },
   "scripts": {
-    "check": "tsc -p ../../tsconfig.json --noEmit"
+    "check": "vp check --no-fmt --no-lint ."
   }
 }

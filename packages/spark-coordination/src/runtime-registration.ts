@@ -40,6 +40,13 @@ export interface RegisteredRuntimeWorkspace {
   workspaceBinding: RegisteredWorkspaceBinding;
 }
 
+export interface UnboundRuntimeWorkspace {
+  runtimeId: string;
+  bindingId: string;
+  workspaceIds: string[];
+  unboundAt: string;
+}
+
 export interface RuntimeEnrollmentToken {
   id: string;
   refreshToken: string;
@@ -714,6 +721,62 @@ export function registerRuntimeWorkspace(
   });
 }
 
+/** Let an authenticated daemon detach its own directory projection before a Cockpit switch. */
+export function unbindRuntimeWorkspace(
+  db: DatabaseSync,
+  input: { runtimeId: string; bindingId: string; runtimeToken: string | null; unboundAt?: string },
+): UnboundRuntimeWorkspace {
+  const unboundAt = input.unboundAt ?? new Date().toISOString();
+  return withRuntimeRegistrationTransaction(db, () => {
+    authenticateRuntimeAccessToken(db, input.runtimeId, input.runtimeToken, unboundAt, [
+      "runtime:connect",
+    ]);
+    const binding = db
+      .prepare(
+        `SELECT id
+         FROM runtime_workspace_bindings
+         WHERE id = ? AND runtime_id = ?
+         LIMIT 1`,
+      )
+      .get(input.bindingId, input.runtimeId) as { id: string } | undefined;
+    if (!binding) {
+      throw new RuntimeEnrollmentError(
+        "Runtime workspace binding was not found.",
+        "WORKSPACE_BINDING_NOT_FOUND",
+      );
+    }
+    const owners = db
+      .prepare(
+        `SELECT id, workspace_id AS workspaceId
+         FROM workspace_owner_bindings
+         WHERE runtime_workspace_binding_id = ? AND ended_at IS NULL`,
+      )
+      .all(input.bindingId) as Array<{ id: string; workspaceId: string }>;
+    for (const owner of owners) {
+      db.prepare("UPDATE workspace_owner_bindings SET ended_at = ? WHERE id = ?").run(
+        unboundAt,
+        owner.id,
+      );
+      appendEvent(db, {
+        workspaceId: owner.workspaceId,
+        actorKind: "runtime",
+        actorId: input.runtimeId,
+        kind: "workspace.owner_unbound",
+        subjectKind: "workspace_owner_binding",
+        subjectId: owner.id,
+        payload: { runtimeWorkspaceBindingId: input.bindingId },
+        createdAt: unboundAt,
+      });
+    }
+    return {
+      runtimeId: input.runtimeId,
+      bindingId: input.bindingId,
+      workspaceIds: owners.map(({ workspaceId }) => workspaceId),
+      unboundAt,
+    };
+  });
+}
+
 export function refreshRuntimeToken(
   db: DatabaseSync,
   input: {
@@ -1079,6 +1142,14 @@ function completeWorkspaceRegistration(
 ): RegisteredWorkspaceBinding | undefined {
   if (!prepared) return undefined;
 
+  // A workspace-scoped one-time token is an explicit Cockpit-owner grant for
+  // this target workspace. It may move the same daemon-owned directory from a
+  // previous Cockpit workspace, while ordinary runtime credentials alone may
+  // not silently steal an existing owner projection.
+  if (workspaceGrant.enrollmentTokenId) {
+    endOtherOwnerBindingsForRuntimeBinding(db, prepared.bindingId, prepared.workspace.id, now);
+  }
+
   upsertRegisteredWorkspaceBinding(
     db,
     runtimeId,
@@ -1109,6 +1180,41 @@ function completeWorkspaceRegistration(
     displayName: prepared.workspaceRegistration.displayName,
     status: "available",
   };
+}
+
+function endOtherOwnerBindingsForRuntimeBinding(
+  db: DatabaseSync,
+  runtimeWorkspaceBindingId: string,
+  targetWorkspaceId: string,
+  endedAt: string,
+): void {
+  const owners = db
+    .prepare(
+      `SELECT id, workspace_id AS workspaceId
+       FROM workspace_owner_bindings
+       WHERE runtime_workspace_binding_id = ?
+         AND workspace_id != ?
+         AND ended_at IS NULL`,
+    )
+    .all(runtimeWorkspaceBindingId, targetWorkspaceId) as Array<{
+    id: string;
+    workspaceId: string;
+  }>;
+  for (const owner of owners) {
+    db.prepare("UPDATE workspace_owner_bindings SET ended_at = ? WHERE id = ?").run(
+      endedAt,
+      owner.id,
+    );
+    appendEvent(db, {
+      workspaceId: owner.workspaceId,
+      actorKind: "server",
+      kind: "workspace.owner_rebound",
+      subjectKind: "workspace_owner_binding",
+      subjectId: owner.id,
+      payload: { runtimeWorkspaceBindingId, targetWorkspaceId },
+      createdAt: endedAt,
+    });
+  }
 }
 
 function resolveRegisteredWorkspace(

@@ -13,6 +13,16 @@ const componentPath = resolve(
   "ConversationViewport.svelte",
 );
 
+function navigationItems(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `turn-${index}`,
+    actor: "user" as const,
+    label: "You",
+    summary: `Message ${index}`,
+    meta: "just now",
+  }));
+}
+
 describe("ConversationViewport component contract", () => {
   it("compiles as a Svelte component", () => {
     const source = readFileSync(componentPath, "utf8");
@@ -28,6 +38,42 @@ describe("ConversationViewport component contract", () => {
     expect(source).not.toContain("padding-inline: 0;");
   });
 
+  it("packs rendered turns into a dense clickable navigation rail", () => {
+    const source = readFileSync(componentPath, "utf8");
+
+    expect(source).toContain("ConversationTurnRail");
+    expect(source).toContain('querySelectorAll<HTMLElement>("[data-message-id]")');
+    expect(source).toContain("TURN_RAIL_MARKER_GAP = 10");
+    expect(source).toContain("markerStart + index * markerStep");
+    expect(source).not.toContain("item.top / contentHeight");
+    expect(source).toContain("activeNavigationId = id");
+    expect(source).toContain("target.offsetTop - 18");
+    expect(source).toContain("prefers-reduced-motion: reduce");
+  });
+
+  it("hides the turn rail until the conversation has at least six turns", () => {
+    const children = createRawSnippet(() => ({ render: () => "<article>Messages</article>" }));
+    const shortConversation = render(ConversationViewport, {
+      props: {
+        label: "Conversation",
+        jumpToLatestLabel: "Latest",
+        navigationItems: navigationItems(5),
+        children,
+      },
+    });
+    const longConversation = render(ConversationViewport, {
+      props: {
+        label: "Conversation",
+        jumpToLatestLabel: "Latest",
+        navigationItems: navigationItems(6),
+        children,
+      },
+    });
+
+    expect(shortConversation.body).not.toContain('data-testid="conversation-turn-rail"');
+    expect(longConversation.body).toContain('data-testid="conversation-turn-rail"');
+  });
+
   it("loads history near the top while preserving the visible message anchor", () => {
     const source = readFileSync(componentPath, "utf8");
 
@@ -37,13 +83,14 @@ describe("ConversationViewport component contract", () => {
     expect(source).toContain("restoreConversationPrependAnchor(element, anchor)");
     expect(source).toContain("suspendFollow = true");
     expect(source).toContain("initialScrollComplete = $state(false)");
-    expect(source).toContain("!element || !initialScrollComplete || !hasEarlier");
+    expect(source).toContain("!element || !initialScrollComplete || !hasEarlier || earlierFailed");
     expect(source).toContain("continueFillingViewport");
     expect(source).toContain(
       "element.scrollHeight <= element.clientHeight + LOAD_EARLIER_THRESHOLD",
     );
     expect(source).toContain("event.deltaY < 0 && updateScrollState()");
-    expect(source).toContain('class="history-fallback"');
+    expect(source).toContain("{#if earlierFailed && hasEarlier && onLoadEarlier}");
+    expect(source).toContain("if (!force && earlierFailed) return;");
     expect(source).toContain("cancelScheduledFollow();");
   });
 
@@ -58,7 +105,7 @@ describe("ConversationViewport component contract", () => {
     expect(source).not.toContain('initialScrollComplete ? "smooth"');
   });
 
-  it("renders one explicit history entry point", () => {
+  it("does not require a manual history entry point during normal scrolling", () => {
     const children = createRawSnippet(() => ({
       render: () => "<article>Latest message</article>",
     }));
@@ -73,7 +120,7 @@ describe("ConversationViewport component contract", () => {
       },
     });
 
-    expect(body.match(/Show earlier messages \(96\)/g)).toHaveLength(1);
-    expect(body.match(/<button\b/g)).toHaveLength(1);
+    expect(body).not.toContain("Show earlier messages (96)");
+    expect(body).not.toMatch(/<button\b/u);
   });
 });

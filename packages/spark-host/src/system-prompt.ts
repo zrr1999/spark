@@ -31,7 +31,7 @@ export function renderPersistentSessionRolePrompt(role: string): string {
     "Treat this as a stable division of labour across many requests, not as the current task title.",
     "Accept concrete work as turns within this role; do not rename or recreate the session for each task.",
     administrator
-      ? "As the administrator session, keep the user's overall context, inspect and reuse existing role sessions, and delegate matching specialist work through the canonical session capability when that surface is available."
+      ? "As the administrator session, keep the user's overall context. Before creating a session, list same-workspace local sessions and reuse a semantically matching role with session call/send, even when the current task wording or technology differs. Create only when no existing division of labour owns the responsibility. When a new role is truly needed, choose one concise stable responsibility label in the user's language and existing naming style, such as 运行维护, 前端体验, or 质量验证; never use a task slug, implementation name, model name, or temporary phase."
       : undefined,
   ]
     .filter((line): line is string => Boolean(line))

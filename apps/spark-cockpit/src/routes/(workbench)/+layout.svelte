@@ -18,7 +18,7 @@
     settingsHubHref,
     workspaceSwitcherHref as buildWorkspaceSwitcherHref,
   } from "$lib/workbench-nav";
-  import { workspacePath } from "$lib/workspace-routes";
+  import { workbenchSessionIdFromPath, workspacePath } from "$lib/workspace-routes";
 
   interface SessionRecord extends CockpitSearchSession {
     activityUpdatedAt?: string;
@@ -38,7 +38,7 @@
     data.activeWorkspace ? workspacePath(data.activeWorkspace) : "",
   );
   let settingsHref = $derived(settingsHubHref(data.activeWorkspace?.slug));
-  let selectedSessionId = $derived(sessionIdFromPath(page.url.pathname));
+  let selectedSessionId = $derived(workbenchSessionIdFromPath(page.url.pathname));
   let sidebarSessions = $derived((data.sessions ?? []) as SessionRecord[]);
   let navItems = $derived(
     buildWorkbenchNavItems({
@@ -126,18 +126,6 @@
 
   function handleWindowKeydown(event: KeyboardEvent) {
     if (event.key === "Escape" && mobileSidebarOpen) closeMobileSidebar();
-  }
-
-  function sessionIdFromPath(pathname: string) {
-    if (!pathname.startsWith("/sessions/")) return null;
-    try {
-      const id = decodeURIComponent(
-        pathname.slice("/sessions/".length).split("/")[0] ?? "",
-      ).trim();
-      return id || null;
-    } catch {
-      return null;
-    }
   }
 
   const pendingAskCursorKey = "spark-cockpit:pending-ask:events-cursor";

@@ -36,6 +36,12 @@ void test("session tool exposes persistent lifecycle, calls, classification, and
     assert.match(schema, new RegExp(action));
   }
   assert.match(tool.description, /Canonical persistent session capability/u);
+  const prompt = tool.promptGuidelines?.join(" ") ?? "";
+  assert.match(prompt, /MUST list same-workspace local sessions/u);
+  assert.match(prompt, /compare roles semantically/u);
+  assert.match(prompt, /only when no existing division of labour owns/u);
+  assert.match(prompt, /user's language and existing naming style/u);
+  assert.doesNotMatch(prompt, /runtime-ops|verifier/u);
 });
 
 void test("session tool routes managed actions through daemon RPC and classifies surfaces", async () => {

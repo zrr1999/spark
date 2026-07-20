@@ -441,6 +441,43 @@ void test("native TUI renders daemon ask flow and every question has a custom re
   assert.equal(harness.app.cockpitSnapshot().interactions, 0);
 });
 
+void test("native TUI closes the human ask overlay when its wait times out", async () => {
+  const harness = createSparkNativeTuiHarness({ withOverlay: true });
+  const responsePromise = harness.app.handleInteractionRequest({
+    version: SPARK_PROTOCOL_VERSION,
+    requestId: "ask-native-timeout",
+    kind: "askFlow",
+    title: "Choose before timeout",
+    mode: "decision",
+    timeoutMs: 250,
+    questions: [
+      {
+        id: "path",
+        prompt: "Which path should Spark take?",
+        type: "single",
+        required: true,
+        defaultValues: [],
+        options: [
+          { value: "safe", label: "Safe path" },
+          { value: "fast", label: "Fast path" },
+        ],
+      },
+    ],
+    metadata: {},
+  });
+  await harness.flush();
+
+  const overlay = harness.state.overlays.at(-1);
+  assert.ok(overlay);
+  assert.equal(overlay.visible, true);
+
+  const response = await responsePromise;
+  assert.equal(response.status, "cancelled");
+  assert.equal(response.metadata.timedOut, true);
+  assert.equal(overlay.visible, false);
+  assert.equal(harness.app.cockpitSnapshot().interactions, 0);
+});
+
 void test("native TUI falls back to a custom reply when a choice question has no options", async () => {
   const harness = createSparkNativeTuiHarness({ withOverlay: true });
   const responsePromise = harness.app.handleInteractionRequest({

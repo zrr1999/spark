@@ -18,7 +18,7 @@
     "access": "public"
   },
   "scripts": {
-    "check": "tsc -p ../../tsconfig.json --noEmit"
+    "check": "vp check --no-fmt --no-lint ."
   },
   "dependencies": {
     "@zendev-lab/spark-artifacts": "workspace:^",
@@ -30,6 +30,7 @@
     "@zendev-lab/spark-learnings": "workspace:^",
     "@zendev-lab/spark-loop": "workspace:^",
     "@zendev-lab/spark-modes": "workspace:^",
+    "@zendev-lab/spark-repro": "workspace:^",
     "@zendev-lab/spark-roles": "workspace:^",
     "@zendev-lab/spark-runtime": "workspace:^",
     "@zendev-lab/spark-tasks": "workspace:^",

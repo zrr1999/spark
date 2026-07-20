@@ -272,6 +272,22 @@ export async function smartSparkCompactionSummaryWithFallback(
   }
 }
 
+export type SparkCompactionPassType = "micro" | "full";
+
+export interface SparkCompactionScheduleResult {
+  type: SparkCompactionPassType;
+  /** Replay that the next pass/provider request must consume. */
+  messages: SparkSessionMessage[];
+  tokensBefore: number;
+  tokensAfter: number;
+  measuredReductionRatio: number;
+  tokenSource: SparkCompactionTokenSource;
+  fallbackReason?: SparkCompactionFallbackReason;
+  abortReason?: SparkMicroCompactionResult["abortReason"];
+  compactedMessages: number;
+  requiresFullPass?: boolean;
+}
+
 export interface SparkMicroCompactionResult {
   messages: SparkSessionMessage[];
   tokensBefore: number;
@@ -353,12 +369,50 @@ export interface SparkVisibleTranscriptCompactionResult {
   record: SparkSessionRecord;
   entry: SparkCompactionEntry<{ mode: "deterministic"; summarizedMessages: number }>;
   keptMessages: SparkSessionMessage[];
+  tokensAfter: number;
 }
 
 export interface SparkBranchNavigationSummaryResult {
   activeLeafId: string | null;
   editorText?: string;
   summaryEntry?: SparkBranchSummaryEntry<{ mode: "deterministic"; summarizedEntries: number }>;
+}
+
+export function scheduleSparkCompaction(
+  messages: readonly SparkSessionMessage[],
+  contextWindow: number,
+  settings: SparkCompactionSettings = DEFAULT_SPARK_COMPACTION_SETTINGS,
+): SparkCompactionScheduleResult[] {
+  if (!settings.enabled || contextWindow <= 0) return [];
+  const before = meterSparkContextTokens({ messages: [...messages] });
+  if (!shouldSparkMicroCompact(before.tokens, contextWindow, settings)) return [];
+
+  const micro = microCompactSparkMessages(messages, settings);
+  const passes: SparkCompactionScheduleResult[] = [
+    {
+      type: "micro",
+      messages: micro.messages,
+      tokensBefore: micro.tokensBefore,
+      tokensAfter: micro.tokensAfter,
+      measuredReductionRatio: micro.measuredReductionRatio,
+      tokenSource: before.tokenSource,
+      compactedMessages: micro.compactedMessages,
+      requiresFullPass: micro.tokensAfter / contextWindow >= settings.fullThreshold,
+      ...(micro.abortReason ? { abortReason: micro.abortReason } : {}),
+    },
+  ];
+  if (micro.tokensAfter / contextWindow >= settings.fullThreshold) {
+    passes.push({
+      type: "full",
+      messages: micro.messages,
+      tokensBefore: micro.tokensAfter,
+      tokensAfter: micro.tokensAfter,
+      measuredReductionRatio: 0,
+      tokenSource: before.tokenSource,
+      compactedMessages: 0,
+    });
+  }
+  return passes;
 }
 
 export function shouldSparkCompact(
@@ -575,14 +629,29 @@ export async function compactSparkVisibleTranscript(
   const preparation = prepareSparkCompaction(record, undefined, settings);
   if (!preparation || preparation.messagesToSummarize.length === 0) return undefined;
 
-  const entry = await compactSparkSessionRecord(record, preparation, (input) =>
-    deterministicSparkCompactionSummary(input, options.customInstructions),
+  const entry = await compactSparkSessionRecord(
+    record,
+    preparation,
+    (input) => deterministicSparkCompactionSummary(input, options.customInstructions),
+    {
+      tokenSource: "estimated",
+      measuredReductionRatio: 0,
+      fallbackReason: "deterministic_requested",
+    },
   );
+  const keptMessages = getCompactionKeptMessages(record, entry);
+  const tokensAfter = meterSparkContextTokens({
+    messages: [{ role: "compactionSummary", summary: entry.summary }, ...keptMessages],
+  }).tokens;
+  if (entry.metadata) {
+    entry.metadata.measuredReductionRatio = measuredReductionRatio(entry.tokensBefore, tokensAfter);
+  }
   await store.save(record);
   return {
     record,
     entry,
-    keptMessages: getCompactionKeptMessages(record, entry),
+    keptMessages,
+    tokensAfter,
   };
 }
 
@@ -932,6 +1001,11 @@ function unitRatio(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1
     ? value
     : fallback;
+}
+
+function measuredReductionRatio(tokensBefore: number, tokensAfter: number): number {
+  if (tokensBefore <= 0) return 0;
+  return Math.max(0, Math.min(1, (tokensBefore - tokensAfter) / tokensBefore));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

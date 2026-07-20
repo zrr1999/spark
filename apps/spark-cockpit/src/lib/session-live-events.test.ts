@@ -12,6 +12,7 @@ import {
   requestSessionActivityRefresh,
   sessionEventCursorStorageKey,
   sessionViewRevisionKey,
+  shouldAdoptSessionHistory,
   type SessionSerializedEvent,
 } from "./session-live-events";
 import { parseSparkSessionView } from "@zendev-lab/spark-protocol";
@@ -250,6 +251,7 @@ describe("session live events", () => {
       view: parseSparkSessionView({
         sessionId: "sess_current",
         title: "Before refresh",
+        updatedAt: "2026-07-13T08:00:00.000Z",
         messages: [{ id: "msg_stream", role: "assistant", text: "Hel", status: "streaming" }],
       }),
       cursor: "40|2026-07-13T08:00:00.000Z|evt_before",
@@ -284,6 +286,7 @@ describe("session live events", () => {
       view: parseSparkSessionView({
         sessionId: "sess_current",
         title: "After refresh",
+        updatedAt: "2026-07-13T08:00:01.000Z",
         messages: [{ id: "msg_stream", role: "assistant", text: "Hello", status: "streaming" }],
       }),
       commandIds: ["cmd_after_refresh"],
@@ -345,6 +348,293 @@ describe("session live events", () => {
       "msg_shared_2",
       "msg_live",
     ]);
+  });
+
+  it("inserts a missed middle message in canonical snapshot order", () => {
+    const state = createSessionLiveEventState({
+      sessionId: "sess_current",
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        messages: [
+          { id: "msg_1", role: "user", text: "One" },
+          { id: "msg_3", role: "assistant", text: "Three" },
+        ],
+      }),
+    });
+
+    reconcileSessionLiveEventState(state, {
+      preserveCurrentHistory: true,
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        messages: [
+          { id: "msg_1", role: "user", text: "One" },
+          { id: "msg_2", role: "assistant", text: "Two" },
+          { id: "msg_3", role: "assistant", text: "Three" },
+        ],
+      }),
+    });
+
+    expect(state.view?.messages.map((message) => message.id)).toEqual(["msg_1", "msg_2", "msg_3"]);
+  });
+
+  it("does not let an older refresh regress terminal live state", () => {
+    const state = createSessionLiveEventState({
+      sessionId: "sess_current",
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        status: "idle",
+        updatedAt: "2026-07-13T08:00:02.000Z",
+        messages: [{ id: "msg_final", role: "assistant", text: "Done", status: "done" }],
+        runs: [
+          {
+            id: "run_1",
+            kind: "session",
+            status: "succeeded",
+            completedAt: "2026-07-13T08:00:02.000Z",
+          },
+        ],
+        tasks: [{ ref: "task:1", title: "Task", status: "done" }],
+      }),
+    });
+
+    reconcileSessionLiveEventState(state, {
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        status: "running",
+        updatedAt: "2026-07-13T08:00:01.000Z",
+        messages: [
+          { id: "msg_final", role: "assistant", text: "Still working", status: "streaming" },
+        ],
+        runs: [
+          {
+            id: "run_1",
+            kind: "session",
+            status: "running",
+            startedAt: "2026-07-13T08:00:00.000Z",
+          },
+        ],
+        tasks: [{ ref: "task:1", title: "Task", status: "in_progress" }],
+      }),
+    });
+
+    expect(state.view).toMatchObject({
+      status: "idle",
+      messages: [{ id: "msg_final", text: "Done", status: "done" }],
+      runs: [{ id: "run_1", status: "succeeded" }],
+      tasks: [{ ref: "task:1", status: "done" }],
+      updatedAt: "2026-07-13T08:00:02.000Z",
+    });
+  });
+
+  it("does not let an unversioned refresh replace newer live shell state", () => {
+    const state = createSessionLiveEventState({
+      sessionId: "sess_current",
+      view: parseSparkSessionView({ sessionId: "sess_current", status: "idle" }),
+    });
+    applySessionLiveEvent(
+      state,
+      event({
+        id: "evt_live_status",
+        kind: "daemon.view_event",
+        payload: {
+          type: "daemon.view_event",
+          sessionId: "sess_current",
+          view: {
+            type: "session.status",
+            sessionId: "sess_current",
+            status: "idle",
+          },
+        },
+      }),
+    );
+
+    reconcileSessionLiveEventState(state, {
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        status: "running",
+        pendingTurns: [
+          {
+            id: "turn_stale",
+            invocationId: "inv_stale",
+            status: "running",
+            prompt: "stale",
+            createdAt: "2026-07-13T08:00:00.000Z",
+          },
+        ],
+      }),
+    });
+
+    expect(state.view).toMatchObject({ status: "idle" });
+    expect(state.view?.pendingTurns ?? []).toEqual([]);
+  });
+
+  it("does not let an older terminal task override a newer resumed task", () => {
+    const state = createSessionLiveEventState({
+      sessionId: "sess_current",
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        updatedAt: "2026-07-13T08:00:02.000Z",
+        tasks: [{ ref: "task:1", title: "Task", status: "in_progress" }],
+      }),
+    });
+
+    reconcileSessionLiveEventState(state, {
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        updatedAt: "2026-07-13T08:00:01.000Z",
+        tasks: [{ ref: "task:1", title: "Task", status: "done" }],
+      }),
+    });
+
+    expect(state.view?.tasks).toMatchObject([{ ref: "task:1", status: "in_progress" }]);
+  });
+
+  it("allows a blocked task to resume in a newer snapshot", () => {
+    const state = createSessionLiveEventState({
+      sessionId: "sess_current",
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        updatedAt: "2026-07-13T08:00:00.000Z",
+        tasks: [{ ref: "task:1", title: "Task", status: "blocked" }],
+      }),
+    });
+
+    reconcileSessionLiveEventState(state, {
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        updatedAt: "2026-07-13T08:00:01.000Z",
+        tasks: [{ ref: "task:1", title: "Task", status: "in_progress" }],
+      }),
+    });
+
+    expect(state.view?.tasks).toMatchObject([{ ref: "task:1", status: "in_progress" }]);
+  });
+
+  it("accepts an ordered streaming revision even when its projection is shorter", () => {
+    const state = createSessionLiveEventState({ sessionId: "sess_current" });
+    for (const [id, text] of [
+      ["evt_stream_long", "temporary cumulative placeholder"],
+      ["evt_stream_short", "corrected"],
+    ] as const) {
+      applySessionLiveEvent(
+        state,
+        event({
+          id,
+          kind: "daemon.view_event",
+          payload: {
+            type: "daemon.view_event",
+            sessionId: "sess_current",
+            view: {
+              type: "session.message",
+              sessionId: "sess_current",
+              message: { id: "msg_stream", role: "assistant", text, status: "streaming" },
+            },
+          },
+        }),
+      );
+    }
+
+    expect(state.view?.messages).toMatchObject([
+      { id: "msg_stream", text: "corrected", status: "streaming" },
+    ]);
+  });
+
+  it("compares timestamp offsets by instant instead of source text", () => {
+    const state = createSessionLiveEventState({
+      sessionId: "sess_current",
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        title: "Current",
+        updatedAt: "2026-07-13T08:00:00.000Z",
+      }),
+    });
+
+    reconcileSessionLiveEventState(state, {
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        title: "Older despite local clock text",
+        updatedAt: "2026-07-13T09:00:00.000+02:00",
+      }),
+    });
+
+    expect(state.view?.title).toBe("Current");
+  });
+
+  it("accepts a later terminal correction even when its payload is shorter", () => {
+    const state = createSessionLiveEventState({ sessionId: "sess_current" });
+    for (const [id, text, status] of [
+      ["evt_terminal_done", "A longer successful response", "done"],
+      ["evt_terminal_error", "Failed", "error"],
+    ] as const) {
+      applySessionLiveEvent(
+        state,
+        event({
+          id,
+          kind: "daemon.view_event",
+          payload: {
+            type: "daemon.view_event",
+            sessionId: "sess_current",
+            view: {
+              type: "session.message",
+              sessionId: "sess_current",
+              message: { id: "msg_terminal", role: "assistant", text, status },
+            },
+          },
+        }),
+      );
+    }
+
+    expect(state.view?.messages).toMatchObject([
+      { id: "msg_terminal", text: "Failed", status: "error" },
+    ]);
+  });
+
+  it("adopts equal-size history metadata updates but never rolls back loaded pages", () => {
+    const current = {
+      totalMessages: 64,
+      loadedMessages: 32,
+      hiddenMessages: 32,
+      earlierMessages: 32,
+      laterMessages: 0,
+      hasEarlierMessages: true,
+      nextBeforeMessageId: "msg_33",
+    };
+
+    expect(
+      shouldAdoptSessionHistory(current, {
+        ...current,
+        earlierMessages: 0,
+        laterMessages: 32,
+        hasEarlierMessages: false,
+        nextBeforeMessageId: undefined,
+      }),
+    ).toBe(true);
+    expect(
+      shouldAdoptSessionHistory(current, {
+        ...current,
+        loadedMessages: 16,
+        hiddenMessages: 48,
+        earlierMessages: 48,
+      }),
+    ).toBe(false);
+    expect(
+      shouldAdoptSessionHistory(
+        {
+          ...current,
+          earlierMessages: 0,
+          laterMessages: 32,
+          hasEarlierMessages: false,
+          nextBeforeMessageId: undefined,
+        },
+        current,
+      ),
+    ).toBe(false);
+    expect(
+      shouldAdoptSessionHistory(current, {
+        ...current,
+        totalMessages: 63,
+      }),
+    ).toBe(false);
   });
 
   it("keeps the canonical user message when a correlated live projection arrives", () => {

@@ -118,6 +118,7 @@ import {
 import {
   ensureSparkDaemonRegistrationForWorkspace,
   RegistrationGrantRefusedError,
+  unbindSparkDaemonWorkspaceFromCockpit,
   verifySparkDaemonWorkspaceConnection,
 } from "./registration.js";
 import { createDaemonSessionRegistry, type DaemonSessionRegistry } from "./session-registry.ts";
@@ -254,6 +255,7 @@ type LocalRpcMailStore = Pick<SparkSessionMailStore, "list"> &
 interface LocalRpcHandlerOptions {
   ensureSparkDaemonRegistrationForWorkspace?: typeof ensureSparkDaemonRegistrationForWorkspace;
   verifySparkDaemonWorkspaceConnection?: typeof verifySparkDaemonWorkspaceConnection;
+  unbindSparkDaemonWorkspaceFromCockpit?: typeof unbindSparkDaemonWorkspaceFromCockpit;
   channelIngress?: Pick<DaemonChannelIngressRuntime, "status" | "configure" | "reload" | "notify">;
   sessionRegistry?: DaemonSessionRegistry;
   modelControl?: SparkDaemonModelControl;
@@ -1001,6 +1003,8 @@ export async function handleLocalRpcLine(
     options.ensureSparkDaemonRegistrationForWorkspace ?? ensureSparkDaemonRegistrationForWorkspace;
   const verifyWorkspaceConnection =
     options.verifySparkDaemonWorkspaceConnection ?? verifySparkDaemonWorkspaceConnection;
+  const unbindWorkspaceFromCockpit =
+    options.unbindSparkDaemonWorkspaceFromCockpit ?? unbindSparkDaemonWorkspaceFromCockpit;
   try {
     // Capture the caller id before full request parsing so validation failures
     // (e.g. channel.configure schema errors) still round-trip the same id.
@@ -1243,7 +1247,25 @@ export async function handleLocalRpcLine(
           ),
         };
       case "workspace.register": {
-        const planned = planWorkspaceRegistration(db, request.params);
+        // A workspace-scoped one-time token is explicit authority to move the
+        // Cockpit projection to another daemon-owned directory. Preserve the
+        // daemon-local workspace id so existing sessions keep resolving after
+        // correcting or intentionally changing its path.
+        const allowLocalPathRebind = Boolean(request.params.registrationToken);
+        const planned = planWorkspaceRegistration(db, {
+          ...request.params,
+          ...(allowLocalPathRebind ? { allowLocalPathRebind: true } : {}),
+        });
+        if (planned.previousServerUrl && planned.previousServerBindingId) {
+          await unbindWorkspaceFromCockpit(paths, {
+            serverUrl: planned.previousServerUrl,
+            bindingId: planned.previousServerBindingId,
+            // Credentials were already provisioned for this origin. This only
+            // permits completing the explicit local rebind on a trusted legacy
+            // HTTP Cockpit; new target registration keeps its own URL guard.
+            allowInsecureHttp: true,
+          });
+        }
         const serviceRegistration = await ensureRegistration(paths, {
           serverUrl: planned.serverUrl,
           ...(request.params.allowInsecureHttp ? { allowInsecureHttp: true } : {}),
@@ -1268,6 +1290,7 @@ export async function handleLocalRpcLine(
         });
         const workspace = registerWorkspace(db, {
           ...request.params,
+          ...(allowLocalPathRebind ? { allowLocalPathRebind: true } : {}),
           ...(request.params.registrationToken
             ? { consumedRegistrationToken: request.params.registrationToken }
             : {}),
@@ -1296,6 +1319,9 @@ export async function handleLocalRpcLine(
               }
             : {}),
         });
+        if (planned.previousServerUrl) {
+          options.onUplinkReconfigure?.(planned.previousServerUrl);
+        }
         options.onUplinkReconfigure?.(workspace.serverUrl);
         return {
           id: request.id,

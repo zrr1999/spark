@@ -42,6 +42,12 @@
     return status.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
   }
 
+  function sessionTodoStatusLabel(status: string) {
+    if (status === "pending") return labels.sessionTodoPending;
+    if (status === "in_progress") return labels.sessionTodoInProgress;
+    return statusLabel(status);
+  }
+
   function mailKindLabel(kind: "request" | "question" | "notification") {
     if (kind === "request") return labels.mailRequest;
     if (kind === "question") return labels.mailQuestion;
@@ -137,7 +143,7 @@
                 <span class={`todo-state ${statusClass(todo.status)}`} aria-hidden="true"></span>
                 <span class="todo-content">{todo.content}</span>
                 <span class={`status-pill ${statusClass(todo.status)}`}>
-                  {statusLabel(todo.status)}
+                  {sessionTodoStatusLabel(todo.status)}
                 </span>
               </li>
             {/each}

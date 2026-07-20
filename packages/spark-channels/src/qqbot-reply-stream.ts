@@ -2,6 +2,7 @@ import type { QqbotApiClient } from "./qqbot-api.ts";
 import { QQBOT_MARKDOWN_MAX_BYTES, chunkQqbotMarkdownText } from "./qqbot-markdown.ts";
 import {
   channelDeliveryNotSent,
+  channelDeliveryOutcomeUnknown,
   type ChannelReplyStream,
   type ChannelReplyTarget,
 } from "./reply.ts";
@@ -17,6 +18,8 @@ export interface QqbotC2CReplyStreamOptions {
   messageId: string;
   /** Reserve the durable final passive-reply sequence on first network flush. */
   reserveFinalSeq: () => number;
+  /** Reserve all passive slots needed by overflow chunks before dispatching final. */
+  reserveFollowUpSeqs?: (count: number) => boolean;
   /** Test seam for flush scheduling. */
   flushDelayMs?: number;
   keepaliveDelayMs?: number;
@@ -51,6 +54,7 @@ export function createQqbotC2CReplyStream(options: QqbotC2CReplyStreamOptions): 
   let keepaliveTimer: unknown;
   let flushChain: Promise<void> = Promise.resolve();
   let finished = false;
+  let deliveredFrame = false;
   let lastFlushError: unknown;
 
   const enqueueFlush = (final: boolean, content: string, keepalive = false) => {
@@ -71,6 +75,7 @@ export function createQqbotC2CReplyStream(options: QqbotC2CReplyStreamOptions): 
         index,
         ...(streamMsgId ? { stream_msg_id: streamMsgId } : {}),
       });
+      deliveredFrame = true;
       index += 1;
       const nextId = response.id?.trim();
       if (nextId) streamMsgId = nextId;
@@ -134,6 +139,33 @@ export function createQqbotC2CReplyStream(options: QqbotC2CReplyStreamOptions): 
     clearKeepalive();
     const chunks = chunkQqbotMarkdownText(fullAnswer, QQBOT_MARKDOWN_MAX_BYTES);
     const primary = chunks[0] ?? "";
+    const followUps = chunks.slice(1);
+
+    // A C2C stream has one replaceable passive slot. Finalize that slot only
+    // when the complete answer fits in it; otherwise sending the first chunk
+    // as terminal before discovering that the remaining passive budget is
+    // exhausted makes QQ show a plausible prefix while silently losing the
+    // tail. The caller's durable message path remains the owner for a long
+    // answer when no bounded follow-up sender is available.
+    if (followUps.length > 0) {
+      const canReserveOverflow = Boolean(
+        options.sendFollowUpMarkdown && options.reserveFollowUpSeqs,
+      );
+      if (canReserveOverflow) {
+        // Claim the terminal sequence before overflow so a no-flush stream
+        // cannot reserve the same passive slot twice.
+        msgSeq ??= options.reserveFinalSeq();
+      }
+      if (!canReserveOverflow || !options.reserveFollowUpSeqs!(followUps.length)) {
+        const cause = new Error(
+          "qqbot c2c passive reply budget cannot deliver the complete oversized answer",
+        );
+        // A successful intermediate replace frame is already an external
+        // effect. A fresh ordinary fallback could duplicate visible text.
+        throw deliveredFrame ? channelDeliveryOutcomeUnknown(cause) : channelDeliveryNotSent(cause);
+      }
+    }
+
     answer = primary;
     try {
       await enqueueFlush(true, primary);
@@ -141,17 +173,8 @@ export function createQqbotC2CReplyStream(options: QqbotC2CReplyStreamOptions): 
       // Prefer the freshest terminal failure; fall back to last intermediate.
       throw error ?? lastFlushError;
     }
-    const followUps = chunks.slice(1);
-    if (followUps.length === 0) return;
-    if (!options.sendFollowUpMarkdown) {
-      console.error(
-        "[spark-channels] qqbot c2c stream truncated long reply; follow-up sender unavailable",
-        { omittedChunks: followUps.length },
-      );
-      return;
-    }
     for (const chunk of followUps) {
-      await options.sendFollowUpMarkdown(chunk);
+      await options.sendFollowUpMarkdown!(chunk);
     }
   };
 
@@ -197,6 +220,7 @@ export function tryCreateQqbotC2CReplyStream(input: {
   resolveToken: () => Promise<string>;
   reserveFinalSeq: (messageId: string) => number | undefined;
   sendFollowUpMarkdown?: (content: string) => Promise<void>;
+  reserveFollowUpSeqs?: (count: number) => boolean;
 }): ChannelReplyStream | undefined {
   const recipient = input.target.recipient.trim();
   const messageId = input.target.messageId?.trim();
@@ -210,6 +234,7 @@ export function tryCreateQqbotC2CReplyStream(input: {
     openid,
     messageId,
     sendFollowUpMarkdown: input.sendFollowUpMarkdown,
+    reserveFollowUpSeqs: input.reserveFollowUpSeqs,
     reserveFinalSeq: () => {
       const msgSeq = input.reserveFinalSeq(messageId);
       if (msgSeq === undefined) {

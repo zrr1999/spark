@@ -29,6 +29,7 @@ export interface SessionWorkbenchActivityReport {
   role: string | null;
   status: string | null;
   createdAt: string;
+  runKind?: string;
   interaction?: {
     requestId: string | null;
     kind: string | null;
@@ -171,6 +172,8 @@ export interface SessionInspectorLabels {
   todoList: string;
   sessionTodoHeading: string;
   openSessionTodo: string;
+  sessionTodoPending: string;
+  sessionTodoInProgress: string;
   mailFrom: string;
   mailRequest: string;
   mailQuestion: string;
@@ -382,7 +385,7 @@ function appendRunReports(
       id: `report:${report.id}`,
       canonicalId: report.id,
       source: "report",
-      kind: "other",
+      kind: report.runKind ?? "other",
       title: report.title || report.id,
       status: report.status ?? "unknown",
       summary: boundedText(report.text, MAX_OUTPUT_CHARS),

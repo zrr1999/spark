@@ -41,6 +41,8 @@ const labels: SessionInspectorLabels = {
   todoList: "SESSION_TODO_LIST",
   sessionTodoHeading: "SESSION_TODO_HEADING",
   openSessionTodo: "OPEN_SESSION_TODO",
+  sessionTodoPending: "TODO_WAITING",
+  sessionTodoInProgress: "TODO_IN_PROGRESS",
   mailFrom: "FROM",
   mailRequest: "REQUEST",
   mailQuestion: "QUESTION",
@@ -154,6 +156,7 @@ describe("SessionInspector component contract", () => {
               status: "in_progress",
               notes: [],
             },
+            { id: "todo-c", content: "Verify waiting copy", status: "pending", notes: [] },
           ],
           updatedAt: "2026-07-13T08:04:00.000Z",
         }),
@@ -170,7 +173,8 @@ describe("SessionInspector component contract", () => {
     expect(body).toContain("Session TODOs: 2 active.");
     expect(body).toContain("Inspect projection");
     expect(body).toContain("Render session TODO");
-    expect(body).toContain("STATUS_in_progress");
+    expect(body).toContain("TODO_IN_PROGRESS");
+    expect(body).toContain("TODO_WAITING");
     expect(body).toContain('href="#message:todo-message"');
     expect(body).not.toContain("NO_SESSION_TODO");
   });

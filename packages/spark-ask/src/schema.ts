@@ -7,6 +7,7 @@ export const MAX_OPTIONS = 6;
 export const MAX_HEADER_LENGTH = 20;
 export const MAX_LABEL_LENGTH = 80;
 export const MAX_PREVIEW_LENGTH = 8000;
+export const MAX_ASK_TIMEOUT_MS = 24 * 60 * 60_000;
 
 // ---- Option ----
 
@@ -94,6 +95,7 @@ export const PiAskFlowRequestSchema = Type.Object({
   flow: Type.Optional(Type.String()),
   mode: Type.Optional(PiAskFlowMode),
   delivery: Type.Optional(PiAskDeliverySchema),
+  timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_ASK_TIMEOUT_MS })),
   questions: Type.Array(PiAskFlowQuestionSchema, { minItems: 1, maxItems: MAX_QUESTIONS }),
   behaviour: Type.Optional(PiAskFlowBehaviourSchema),
 });
@@ -126,6 +128,8 @@ export interface PiAskFlowResult {
   status: PiAskFlowResultStatus;
   /** Durable daemon-owned request handle for an async ask. */
   humanRequestId?: string;
+  /** True only when the host closed the human wait because its deadline elapsed. */
+  timedOut?: boolean;
   answers: Record<string, PiAskFlowAnswerEntry>;
   flow?: string;
   mode: "submit" | "elaborate" | "cancel";
@@ -151,7 +155,8 @@ export type PiAskFlowValidationError =
   | "missing_question_id"
   | "missing_option_value"
   | "missing_option_label"
-  | "invalid_default_value";
+  | "invalid_default_value"
+  | "invalid_timeout";
 
 export const RESERVED_OPTION_LABELS = ["Other", "Skip", "Type your own", "Chat about this"];
 
@@ -180,6 +185,12 @@ export function validatePiAskFlowRequest(input: unknown): {
   if (!input || typeof input !== "object") return { valid: false, error: "missing_question_id" };
 
   const req = input as Partial<PiAskFlowRequest>;
+  if (
+    req.timeoutMs !== undefined &&
+    (!Number.isInteger(req.timeoutMs) || req.timeoutMs <= 0 || req.timeoutMs > MAX_ASK_TIMEOUT_MS)
+  ) {
+    return { valid: false, error: "invalid_timeout" };
+  }
   if (!req.questions || req.questions.length === 0) return { valid: false, error: "no_questions" };
   if (req.questions.length > MAX_QUESTIONS) return { valid: false, error: "too_many_questions" };
 

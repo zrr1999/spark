@@ -1604,9 +1604,12 @@ describe("Spark daemon CLI", () => {
 
     try {
       await withTempSparkEnv(async (root) => {
-        const workspacePath = join(root, "checkout");
-        mkdirSync(workspacePath, { recursive: true });
-        const realWorkspacePath = realpathSync(workspacePath);
+        const firstWorkspacePath = join(root, "checkout-first");
+        const secondWorkspacePath = join(root, "checkout-second");
+        mkdirSync(firstWorkspacePath, { recursive: true });
+        mkdirSync(secondWorkspacePath, { recursive: true });
+        const realFirstWorkspacePath = realpathSync(firstWorkspacePath);
+        const realSecondWorkspacePath = realpathSync(secondWorkspacePath);
         process.env.INIT_CWD = root;
         writeSparkDaemonConfig(resolveSparkPaths({ app: "daemon" }), testSparkDaemonConfig());
 
@@ -1615,7 +1618,7 @@ describe("Spark daemon CLI", () => {
             [
               "ws",
               "register",
-              "checkout",
+              "checkout-first",
               "--name",
               "Spark Dev",
               "--token",
@@ -1630,7 +1633,7 @@ describe("Spark daemon CLI", () => {
             [
               "ws",
               "register",
-              "checkout",
+              "checkout-second",
               "--server-url",
               "http://127.0.0.1:5174",
               "--token",
@@ -1658,13 +1661,13 @@ describe("Spark daemon CLI", () => {
               slug: "spark-dev",
               name: "Spark Dev",
               serverUrl: "http://127.0.0.1:5173/",
-              path: realWorkspacePath,
+              path: realFirstWorkspacePath,
             }),
             expect.objectContaining({
               slug: "spark-dev",
               name: "Spark Dev",
               serverUrl: "http://127.0.0.1:5174/",
-              path: realWorkspacePath,
+              path: realSecondWorkspacePath,
             }),
           ]),
         );

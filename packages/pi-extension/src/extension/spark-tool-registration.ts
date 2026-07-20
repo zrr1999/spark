@@ -1,4 +1,8 @@
-import type { ExtensionRoleRunner } from "@zendev-lab/spark-extension-api";
+import type {
+  ExtensionInteractionRequest,
+  ExtensionInteractionResponse,
+  ExtensionRoleRunner,
+} from "@zendev-lab/spark-extension-api";
 import type { ToolCallComponent, ToolCallRenderTheme } from "./tool-rendering.ts";
 import type { SparkDriveModeInput } from "./spark-drive-state.ts";
 
@@ -51,6 +55,10 @@ export interface SparkToolContext {
   hasUI?: boolean;
   askAutoAnswer?: "reviewer";
   askAutoAnswerResolver?: (request: unknown, ctx: any) => Promise<unknown>;
+  /** Internal host policy; models cannot set the human-wait deadline. */
+  askWaitTimeoutMs?: number;
+  /** @deprecated Compatibility alias for askWaitTimeoutMs. */
+  askReviewerFallbackAfterMs?: number;
 
   sparkAutonomousGoalTurn?: { goalId: string };
   ui?: {
@@ -66,5 +74,6 @@ export interface SparkToolContext {
     setStatus?: (key: string, text: string | undefined) => void;
     setEditorText?: (text: string) => void;
     custom?: (...args: unknown[]) => unknown;
+    interaction?: (request: ExtensionInteractionRequest) => Promise<ExtensionInteractionResponse>;
   };
 }

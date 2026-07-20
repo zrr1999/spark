@@ -62,12 +62,12 @@ export function registerSparkGoalTool(
     name: "goal",
     label: "Spark Goal",
     description:
-      "Manage the current Pi session's durable goal state. Actions: status, set, start, pause, resume, clear, edit, complete. Active goals are autonomous foreground drivers: reviewer-backed ask auto-answer may resolve material decisions during goal work, while final goal completion remains reviewer-gated (main session requests, reviewer audits, Spark applies approved transition). Autonomous pause is rejected; blockers must be resolved instead of pausing.",
+      "Manage the current Pi session's durable goal state. Actions: status, set, start, pause, resume, clear, edit, complete. Active goals are autonomous foreground drivers: asks wait for the user first and reviewer fallback may resolve material decisions only after timeout, while final goal completion remains reviewer-gated (main session requests, reviewer audits, Spark applies approved transition). Autonomous pause is rejected; blockers must be resolved instead of pausing.",
     parameters: Type.Object({
       action: Type.Optional(
         Type.String({
           description:
-            "status | set | start | pause | resume | clear | edit | complete. Defaults to status. Active goal work may use reviewer-backed ask auto-answer; completion requests are reviewer-gated and autonomous pause requests are rejected.",
+            "status | set | start | pause | resume | clear | edit | complete. Defaults to status. Active goal asks are user-first with reviewer fallback after timeout; completion requests are reviewer-gated and autonomous pause requests are rejected.",
         }),
       ),
       objective: Type.Optional(
@@ -615,7 +615,7 @@ function forbiddenAutonomousPauseResult(
         type: "text" as const,
         text:
           `Autonomous goal pause is not allowed for session goal: ${oneLine(goal.objective)}\n` +
-          'If progress is blocked, resolve the blocker first: inspect tasks, create or revise concrete blocking work with task_write({ action: "plan" }), claim/finish the blocking task, or use ask({ autoAnswer: "reviewer" }) only for reviewer-backed decisions when the host provides it. Do not reduce the goal or pause it to avoid hard work.',
+          'If progress is blocked, resolve the blocker first: inspect tasks, create or revise concrete blocking work with task_write({ action: "plan" }), claim/finish the blocking task, or use ask({ autoAnswer: "reviewer" }) only for a material decision after research; the user answers first and the host reviewer takes over only after timeout. Do not reduce the goal or pause it to avoid hard work.',
       },
     ],
     details: {
@@ -887,7 +887,7 @@ function renderGoalStatus(
   if (relationship.recommendedAction)
     lines.push(`Recommended next action: ${relationship.recommendedAction}`);
   lines.push(
-    'Actions: goal({ action: "status" }), goal({ action: "resume" }), goal({ action: "edit", objective, reason }), goal({ action: "complete" }), goal({ action: "clear" }), goal({ action: "start" }); active goal work may use reviewer-backed ask auto-answer for decisions, completion is reviewer-gated (main session requests, reviewer audits, Spark applies approved state), and autonomous pause is forbidden.',
+    'Actions: goal({ action: "status" }), goal({ action: "resume" }), goal({ action: "edit", objective, reason }), goal({ action: "complete" }), goal({ action: "clear" }), goal({ action: "start" }); active goal asks wait for the user first and use reviewer fallback only after timeout, completion is reviewer-gated (main session requests, reviewer audits, Spark applies approved state), and autonomous pause is forbidden.',
   );
   return lines.join("\n");
 }

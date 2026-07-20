@@ -2,7 +2,7 @@
  * Core types for the per-turn operating mode (lens) mechanism.
  *
  * A **mode** is a host-defined per-turn operating value. Spark uses mode for
- * the derived drive family (`assist | loop | goal | workflow`) and keeps
+ * the derived drive family (`assist | loop | goal | repro | workflow`) and keeps
  * `plan | implement` as the separate session phase/lens axis.
  *
  * A **driver** is what propels the current turn. It owns any durable state in
@@ -22,9 +22,15 @@ export const BUILTIN_MODES = ["plan", "implement"] as const;
 export type BuiltinMode = (typeof BUILTIN_MODES)[number];
 
 /** What propels the current turn. `assist` is the first-class default. */
-export type TurnDriver = "assist" | "loop" | "goal" | "workflow";
+export type TurnDriver = "assist" | "loop" | "goal" | "repro" | "workflow";
 
-export const TURN_DRIVERS: readonly TurnDriver[] = ["assist", "loop", "goal", "workflow"] as const;
+export const TURN_DRIVERS: readonly TurnDriver[] = [
+  "assist",
+  "loop",
+  "goal",
+  "repro",
+  "workflow",
+] as const;
 
 /**
  * Context passed to a mode definition when rendering its per-turn requirements.

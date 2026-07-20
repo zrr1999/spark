@@ -14,6 +14,7 @@ import {
   revokeRuntimeEnrollmentToken,
 } from "$lib/server/runtime-registration";
 import { loadWorkspaceRegistrationPage } from "@zendev-lab/spark-coordination/cockpit-queries";
+import { unbindWorkspaceOwner } from "@zendev-lab/spark-coordination/projection-services";
 import { workspacePath } from "$lib/workspace-routes";
 import type { Actions, PageServerLoad } from "./$types";
 
@@ -37,6 +38,38 @@ export const load: PageServerLoad = ({ params, url }) => {
 };
 
 export const actions: Actions = {
+  unbindWorkspace: async ({ cookies, locals, params, request }) => {
+    const messages = getRequestDictionary({
+      cookieLocale: cookies.get(localeCookieName),
+      acceptLanguage: request.headers.get("accept-language"),
+    }).settings.formMessages;
+    const db = getDatabase();
+    const page = loadWorkspaceRegistrationPage(db, params.workspaceId);
+    if (!page) throw kitError(404, "Workspace not found.");
+    const userId = ensureCurrentOwnerSession(db, cookies, locals.sessionToken);
+    const formData = await request.formData();
+    const bindingId = formText(formData, "bindingId").trim();
+    if (!bindingId) {
+      return fail(400, { intent: "workspaceBinding", message: messages.bindingIdRequired });
+    }
+    try {
+      const result = unbindWorkspaceOwner(db, {
+        workspaceId: page.workspace.id,
+        expectedRuntimeWorkspaceBindingId: bindingId,
+        actorId: userId,
+      });
+      return {
+        intent: "workspaceBinding",
+        message:
+          result.outcome === "unbound"
+            ? messages.workspaceUnbound
+            : messages.workspaceAlreadyUnbound,
+      };
+    } catch {
+      return fail(409, { intent: "workspaceBinding", message: messages.workspaceOwnerChanged });
+    }
+  },
+
   createEnrollmentToken: async ({ cookies, locals, params, request, url }) => {
     const messages = getRequestDictionary({
       cookieLocale: cookies.get(localeCookieName),

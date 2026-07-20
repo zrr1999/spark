@@ -161,6 +161,79 @@ export function createWorkspaceWithOwnerBinding(
   });
 }
 
+export interface UnbindWorkspaceOwnerInput {
+  workspaceId: string;
+  expectedRuntimeWorkspaceBindingId?: string;
+  actorId?: string;
+  endedAt?: string;
+}
+
+export type UnbindWorkspaceOwnerResult =
+  | {
+      outcome: "unbound";
+      ownerBindingId: string;
+      runtimeWorkspaceBindingId: string;
+      endedAt: string;
+    }
+  | { outcome: "already_unbound"; endedAt: string };
+
+/**
+ * End only the Cockpit projection. The daemon-owned directory and its runtime
+ * binding row remain intact so a reconnect can observe the unbound state and
+ * the directory can later be attached to another Cockpit workspace.
+ */
+export function unbindWorkspaceOwner(
+  db: DatabaseSync,
+  input: UnbindWorkspaceOwnerInput,
+): UnbindWorkspaceOwnerResult {
+  return withTransaction(db, () => {
+    const endedAt = input.endedAt ?? nowIso();
+    const active = db
+      .prepare(
+        `SELECT id,
+                runtime_workspace_binding_id AS runtimeWorkspaceBindingId
+         FROM workspace_owner_bindings
+         WHERE workspace_id = ? AND ended_at IS NULL
+         LIMIT 1`,
+      )
+      .get(input.workspaceId) as { id: string; runtimeWorkspaceBindingId: string } | undefined;
+    if (!active) return { outcome: "already_unbound", endedAt };
+    if (
+      input.expectedRuntimeWorkspaceBindingId &&
+      input.expectedRuntimeWorkspaceBindingId !== active.runtimeWorkspaceBindingId
+    ) {
+      throw new Error("Workspace owner changed before the unbind request was applied.");
+    }
+
+    const updated = db
+      .prepare(
+        `UPDATE workspace_owner_bindings
+         SET ended_at = ?
+         WHERE id = ? AND ended_at IS NULL`,
+      )
+      .run(endedAt, active.id);
+    if (updated.changes !== 1) {
+      throw new Error("Workspace owner changed before the unbind request was applied.");
+    }
+    appendEvent(db, {
+      workspaceId: input.workspaceId,
+      actorKind: "user",
+      actorId: input.actorId ?? null,
+      kind: "workspace.owner_unbound",
+      subjectKind: "workspace_owner_binding",
+      subjectId: active.id,
+      payload: { runtimeWorkspaceBindingId: active.runtimeWorkspaceBindingId },
+      createdAt: endedAt,
+    });
+    return {
+      outcome: "unbound",
+      ownerBindingId: active.id,
+      runtimeWorkspaceBindingId: active.runtimeWorkspaceBindingId,
+      endedAt,
+    };
+  });
+}
+
 function upsertWorkspaceProjection(
   db: DatabaseSync,
   input: CreateWorkspaceInput,
@@ -306,6 +379,19 @@ function ensureActiveOwnerBinding(
   timestamp: string,
   options: { replaceExisting: boolean },
 ): string {
+  const activeWorkspaceForBinding = db
+    .prepare(
+      `SELECT workspace_id AS workspaceId
+       FROM workspace_owner_bindings
+       WHERE runtime_workspace_binding_id = ? AND ended_at IS NULL
+       LIMIT 1`,
+    )
+    .get(runtimeWorkspaceBindingId) as { workspaceId: string } | undefined;
+  if (activeWorkspaceForBinding && activeWorkspaceForBinding.workspaceId !== workspaceId) {
+    throw new Error(
+      `Runtime workspace binding already belongs to another Cockpit workspace: ${runtimeWorkspaceBindingId}`,
+    );
+  }
   const active = db
     .prepare(
       `SELECT id,

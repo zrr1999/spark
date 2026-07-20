@@ -7,6 +7,7 @@ import {
   queueCommandForWorkspaceOwner,
   recordHumanRequestFromRuntime,
   recordHumanResponse,
+  unbindWorkspaceOwner,
 } from "./projection-services";
 import { requireRuntimeControlCommand, submitRuntimeControlCommand } from "./runtime-control.ts";
 import { hashSecret } from "./security.ts";
@@ -218,6 +219,49 @@ describe("runtime WebSocket handling", () => {
     db.close();
   });
 
+  it("rejects stale runtime routes after their Cockpit owner binding is ended", () => {
+    const { db, ws, now, runtimeId, workspaceBindingId } = setupRuntime();
+    const workspace = createWorkspace(db, workspaceBindingId, now);
+    unbindWorkspaceOwner(db, {
+      workspaceId: workspace.id,
+      expectedRuntimeWorkspaceBindingId: workspaceBindingId,
+      endedAt: "2026-07-20T00:01:00.000Z",
+    });
+
+    ws.emitMessage({
+      protocolVersion: runtimeProtocolVersion,
+      messageId: createId("msg"),
+      type: "daemon.event",
+      sentAt: "2026-07-20T00:01:01.000Z",
+      runtimeId,
+      workspaceBindingId,
+      workspaceId: workspace.id,
+      payload: {
+        type: "daemon.view_event",
+        source: "daemon",
+        sessionId: "session-stale",
+        view: {
+          type: "session.message",
+          sessionId: "session-stale",
+          message: { id: "m-stale", role: "assistant", text: "must not project" },
+        },
+      },
+    });
+
+    expect(JSON.parse(ws.sent.at(-1) ?? "{}")).toMatchObject({
+      type: "server.error",
+      payload: { code: "workspace_owner_binding_mismatch" },
+    });
+    expect(
+      db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM events WHERE workspace_id = ? AND kind = 'daemon.view_event'",
+        )
+        .get(workspace.id),
+    ).toEqual({ count: 0 });
+    db.close();
+  });
+
   it("ingests daemon-routable interaction request and response events", () => {
     const { db, ws, now, runtimeId, workspaceBindingId } = setupRuntime();
     const workspace = createWorkspace(db, workspaceBindingId, now);
@@ -311,6 +355,9 @@ describe("runtime WebSocket handling", () => {
       .map((message) => JSON.parse(message))
       .find((message) => message.type === "runtime.reconcile.request");
     expect(helloAck.type).toBe("server.hello_ack");
+    expect(helloAck.payload.workspaceBindingAssignments).toEqual([
+      { bindingId: workspaceBindingId, state: "unbound" },
+    ]);
     expect(reconcileRequest.payload.scopes).toContain("workspace_bindings");
 
     ws.emitMessage({
@@ -1396,11 +1443,11 @@ describe("runtime WebSocket handling", () => {
           messageId: createId("msg"),
           workspaceBindingId: otherBindingId,
         },
-        code: "human_request_binding_mismatch",
+        code: "workspace_owner_binding_mismatch",
       },
       {
         envelope: { ...baseEnvelope, messageId: createId("msg"), workspaceId: otherWorkspace.id },
-        code: "human_request_workspace_mismatch",
+        code: "workspace_owner_binding_mismatch",
       },
       {
         envelope: { ...baseEnvelope, messageId: createId("msg"), humanRequestId: createId("hreq") },

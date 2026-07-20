@@ -3,6 +3,7 @@
   import type { AppMessages } from "$lib/i18n";
   import SparkLogo from "$lib/SparkLogo.svelte";
   import { workspaceAvatarStyle, workspaceInitial } from "$lib/workspace-avatar";
+  import { workspaceSessionsPath } from "$lib/workspace-routes";
   import CockpitSearch from "./CockpitSearch.svelte";
   import type { CockpitSearchSession, CockpitSearchWorkspace } from "./cockpit-search";
 
@@ -37,6 +38,7 @@
   let activeWorkspaceLabel = $derived(
     activeWorkspace?.name ?? layout.user.workspaceSection,
   );
+  let homeHref = $derived(activeWorkspace ? workspaceSessionsPath(activeWorkspace) : "/");
 
   function toggleAccountMenu(event: MouseEvent) {
     event.stopPropagation();
@@ -73,7 +75,7 @@
     >
       <Icon name={navigationExpanded ? "close" : "menu"} size={18} stroke={2.2} />
     </button>
-    <a class="brand-mark" href="/sessions" aria-label={layout.aria.home}>
+    <a class="brand-mark" href={homeHref} aria-label={layout.aria.home}>
       <SparkLogo size={32} />
       <span class="brand-name">{layout.brand.name}</span>
     </a>

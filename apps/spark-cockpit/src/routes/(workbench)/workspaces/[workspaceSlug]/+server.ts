@@ -1,6 +1,7 @@
 import { error, redirect } from "@sveltejs/kit";
 import { getDatabase } from "$lib/server/db";
 import { loadWorkspaceByRouteId } from "$lib/server/workspace-routing";
+import { workspaceSessionsPath } from "$lib/workspace-routes";
 import type { RequestHandler } from "./$types";
 
 export const GET: RequestHandler = ({ params }) => {
@@ -9,5 +10,5 @@ export const GET: RequestHandler = ({ params }) => {
     throw error(404, "Workspace not found.");
   }
 
-  redirect(303, "/sessions");
+  redirect(303, workspaceSessionsPath(workspace));
 };

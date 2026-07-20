@@ -198,6 +198,110 @@ describe("daemon channel delivery outbox", () => {
     }
   });
 
+  it("keeps an expired unsafe dispatch uncertain when adapter preflight is unavailable", async () => {
+    let now = "2026-07-15T00:00:00.000Z";
+    const db = new DatabaseSync(":memory:");
+    migrateSparkDaemonDatabase(db);
+    const store = new SparkChannelDeliveryStore(db, { now: () => now });
+    const outbox = createDaemonChannelDeliveryOutbox(store);
+    const sendReply = vi.fn();
+    const ingress = {
+      sendReply,
+      sendAsk: vi.fn(),
+      ackInteraction: vi.fn(),
+      replyDeliveryFacts: vi.fn(() => {
+        throw channelDeliveryNotSent(new Error("adapter temporarily unavailable"));
+      }),
+    };
+    try {
+      await outbox.enqueueReply({
+        kind: "final",
+        idempotencyKey: "channel.reply:final:crashed-preflight",
+        invocationId: "crashed-preflight",
+        sessionId: "session-crashed-preflight",
+        workspaceId: "workspace-1",
+        adapterId: "plain-adapter",
+        externalKey: "plain-adapter:user:user-1",
+        target: { recipient: "user-1" },
+        text: "possibly sent before restart",
+      });
+      const crashed = store.claimDue("crashed-worker", { leaseMs: 1_000 });
+      store.markDispatchStarted(crashed!.deliveryId, crashed!.leaseToken!);
+
+      now = "2026-07-15T00:00:01.000Z";
+      const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        await expect(
+          reconcileDaemonChannelDeliveries(
+            { store, channelIngress: ingress, workerId: "recovery-worker" },
+            { leaseMs: 1_000, heartbeatIntervalMs: 250 },
+          ),
+        ).resolves.toEqual({ attempted: 1, delivered: 0, failed: 0, uncertain: 1 });
+      } finally {
+        log.mockRestore();
+      }
+
+      expect(sendReply).not.toHaveBeenCalled();
+      expect(store.findByIdempotencyKey("channel.reply:final:crashed-preflight")).toMatchObject({
+        status: "uncertain",
+        attemptCount: 2,
+        dispatchedAt: "2026-07-15T00:00:00.000Z",
+        lastError: expect.stringContaining("adapter temporarily unavailable"),
+      });
+      expect(store.claimDue("third-worker")).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("quarantines an ambiguous ordinary notification without automatically resending it", async () => {
+    const db = new DatabaseSync(":memory:");
+    migrateSparkDaemonDatabase(db);
+    const store = new SparkChannelDeliveryStore(db);
+    const outbox = createDaemonChannelDeliveryOutbox(store);
+    const notify = vi.fn().mockRejectedValue(new Error("provider response timed out"));
+    const ingress = {
+      sendReply: vi.fn(),
+      sendAsk: vi.fn(),
+      ackInteraction: vi.fn(),
+      notify,
+      messageDeliveryFacts: () => ({ replaySafety: "unsafe" as const }),
+    };
+    try {
+      await outbox.enqueueNotification({
+        idempotencyKey: "session.notification:unsafe-timeout",
+        sessionId: "session-notification",
+        messageId: "mail-notification",
+        workspaceId: "workspace-1",
+        adapterId: "infoflow",
+        externalKey: "infoflow:user:user-1",
+        recipient: "user-1",
+        text: "ordinary notification",
+      });
+
+      const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        await expect(
+          reconcileDaemonChannelDeliveries({ store, channelIngress: ingress, workerId: "worker" }),
+        ).resolves.toEqual({ attempted: 1, delivered: 0, failed: 0, uncertain: 1 });
+      } finally {
+        log.mockRestore();
+      }
+      expect(store.findByIdempotencyKey("session.notification:unsafe-timeout")).toMatchObject({
+        status: "uncertain",
+        attemptCount: 1,
+        lastError: "provider response timed out",
+      });
+
+      await expect(
+        reconcileDaemonChannelDeliveries({ store, channelIngress: ingress, workerId: "worker-2" }),
+      ).resolves.toEqual({ attempted: 0, delivered: 0, failed: 0, uncertain: 0 });
+      expect(notify).toHaveBeenCalledTimes(1);
+    } finally {
+      db.close();
+    }
+  });
+
   it("uses the same durable worker for native asks and interaction acknowledgements", async () => {
     const db = new DatabaseSync(":memory:");
     migrateSparkDaemonDatabase(db);

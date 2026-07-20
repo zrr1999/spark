@@ -440,12 +440,7 @@ function projectSessionForRequest(
 
   const workspaceId = request.workspaceId?.trim();
   if (session.scope.kind === "workspace" && workspaceId) {
-    const sessionPath = sessionLocalWorkspacePath(db, session);
-    const targetPath = requestWorkspacePath(db, request);
-    if (
-      session.scope.workspaceId === workspaceId ||
-      (sessionPath !== undefined && targetPath !== undefined && sessionPath === targetPath)
-    ) {
+    if (requestWorkspaceAliases(db, request).has(session.scope.workspaceId)) {
       return parseSparkSessionRegistryRecord({
         ...session,
         scope: { kind: "workspace", workspaceId },
@@ -459,26 +454,33 @@ function projectSessionForRequest(
   );
 }
 
-function requestWorkspacePath(
+function requestWorkspaceAliases(
   db: DatabaseSync,
   request: Pick<SparkDaemonSessionControlRequest, "workspaceId" | "workspaceBindingId">,
-): string | undefined {
-  return resolveWorkspaceLocalPath(db, request.workspaceBindingId ?? request.workspaceId ?? "");
-}
-
-function sessionLocalWorkspacePath(
-  db: DatabaseSync,
-  session: SparkSessionRegistryRecord,
-): string | undefined {
-  if (session.scope.kind !== "workspace") return undefined;
-  const workspaceId = session.scope.workspaceId;
-  const direct = getWorkspaceById(db, workspaceId);
-  if (direct) return direct.serverUrl === "" ? direct.localPath : undefined;
-
-  const legacyMatches = listWorkspaces(db).filter(
-    (workspace) => workspace.serverUrl === "" && workspace.localWorkspaceKey === workspaceId,
+): Set<string> {
+  const aliases = new Set(
+    [request.workspaceId?.trim(), request.workspaceBindingId?.trim()].filter(
+      (value): value is string => Boolean(value),
+    ),
   );
-  return legacyMatches.length === 1 ? legacyMatches[0]!.localPath : undefined;
+  const routeWorkspace = getWorkspaceById(
+    db,
+    request.workspaceBindingId?.trim() || request.workspaceId?.trim() || "",
+  );
+  if (!routeWorkspace) return aliases;
+
+  aliases.add(routeWorkspace.id);
+  if (routeWorkspace.serverWorkspaceId) aliases.add(routeWorkspace.serverWorkspaceId);
+
+  // A local workspace key is a useful legacy alias only while it identifies
+  // one daemon workspace. Local paths are deliberately not aliases: distinct
+  // workspace identities may share a checkout and must remain separate in
+  // Cockpit/session routing.
+  const localKeyMatches = listWorkspaces(db).filter(
+    (workspace) => workspace.localWorkspaceKey === routeWorkspace.localWorkspaceKey,
+  );
+  if (localKeyMatches.length === 1) aliases.add(routeWorkspace.localWorkspaceKey);
+  return aliases;
 }
 
 async function assertInvocationScope(

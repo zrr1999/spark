@@ -22,7 +22,7 @@
   "type": "module",
   "scripts": {
     "check": "pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && node scripts/check-pi-boundaries.mjs && node scripts/check-doc-terminology.mjs && vp check && node --experimental-strip-types --test \"test/*.test.ts\" && pnpm -r --filter './packages/*' --filter './apps/*' run check && pnpm --filter @zendev-lab/spark-cockpit run test && pnpm --filter @zendev-lab/spark-daemon run test",
-    "check:tsc": "tsc -p tsconfig.json --noEmit",
+    "check:tsc": "vp check --no-fmt --no-lint",
     "check:daemon-readiness": "node --experimental-strip-types scripts/spark-daemon-readiness.mts",
     "check:cue-harness": "node --experimental-strip-types scripts/spark-cue-harness.mts --no-exercise",
     "check:cue-contract": "node --experimental-strip-types scripts/spark-cue-contract-harness.mts",
@@ -33,7 +33,7 @@
     "test:mutation": "pnpm --filter @zendev-lab/spark-retry run test:mutation",
     "build": "pnpm --filter @zendev-lab/spark-daemon run build && pnpm --filter @zendev-lab/spark-cockpit run build",
     "preview": "pnpm --filter @zendev-lab/spark-cockpit run dev",
-    "publish": "pnpm run check && pnpm run build && pnpm -r --filter @zendev-lab/spark-retry --filter './apps/*' --filter @zendev-lab/pi-extension publish --access public",
+    "publish": "pnpm run check && pnpm run build && pnpm -r --filter @zendev-lab/spark-repro --filter @zendev-lab/spark-retry --filter './apps/*' --filter @zendev-lab/pi-extension publish --access public",
     "prepare": "prek install --hook-type commit-msg --hook-type pre-commit"
   },
   "dependencies": {
@@ -54,6 +54,7 @@
     "@zendev-lab/spark-memory": "workspace:^",
     "@zendev-lab/spark-protocol": "workspace:^",
     "@zendev-lab/spark-recall": "workspace:^",
+    "@zendev-lab/spark-repro": "workspace:^",
     "@zendev-lab/spark-roles": "workspace:^",
     "@zendev-lab/spark-runtime": "workspace:^",
     "@zendev-lab/spark-session": "workspace:^",
@@ -69,7 +70,6 @@
     "@j178/prek": "0.4.6",
     "@types/node": "^26.1.1",
     "@zendev-lab/spark-system": "workspace:*",
-    "oxlint": "1.70.0",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:",

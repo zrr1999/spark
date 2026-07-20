@@ -625,6 +625,8 @@ const messages = {
       todoList: "TODO list",
       sessionTodoHeading: "Session TODOs",
       openSessionTodo: "View execution",
+      sessionTodoPending: "Waiting",
+      sessionTodoInProgress: "In progress",
       mailFrom: "From",
       mailRequest: "Request",
       mailQuestion: "Question",
@@ -1415,6 +1417,9 @@ const messages = {
       empty: "After you run the connection command, the directory completes",
       emptyRest: "and appears here.",
       pathPending: "Waiting for daemon to report the directory",
+      unbind: "Disconnect",
+      unbindConfirm:
+        "Disconnect this directory from the Cockpit workspace? The daemon-owned directory and its sessions stay local and can be connected again.",
     },
     formMessages: {
       workspaceRequired: "Enter a workspace name and path identifier.",
@@ -1425,6 +1430,11 @@ const messages = {
       tokenIdRequired: "Token id is required.",
       tokenRevoked: "Registration token revoked.",
       tokenNotActive: "That registration token was not active.",
+      bindingIdRequired: "The connected directory id is required.",
+      workspaceUnbound:
+        "Directory disconnected from this Cockpit workspace. The daemon will synchronize the change on its next heartbeat.",
+      workspaceAlreadyUnbound: "This Cockpit workspace is already disconnected.",
+      workspaceOwnerChanged: "The connected directory changed. Refresh and try again.",
     },
   },
   daemonAuthorization: {

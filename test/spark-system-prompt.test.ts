@@ -22,6 +22,9 @@ void test("persistent session role prompt keeps work grouped by division of labo
 void test("administrator role prompt owns coordination without changing task identity", () => {
   const prompt = renderPersistentSessionRolePrompt("管理员");
   assert.match(prompt, /administrator session/u);
-  assert.match(prompt, /reuse existing role sessions/u);
-  assert.match(prompt, /canonical session capability/u);
+  assert.match(prompt, /Before creating a session, list same-workspace local sessions/u);
+  assert.match(prompt, /reuse a semantically matching role/u);
+  assert.match(prompt, /Create only when no existing division of labour owns/u);
+  assert.match(prompt, /user's language and existing naming style/u);
+  assert.match(prompt, /never use a task slug/u);
 });

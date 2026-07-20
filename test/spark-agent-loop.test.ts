@@ -742,20 +742,27 @@ void test("SparkAgentLoop suppresses identical cumulative assistant stream proje
     cwd: "/tmp/spark-agent-loop-cumulative-dedup-test",
     ui: { publishView: (event) => viewEvents.push(event) },
   });
-  const partial = buildAssistant([{ type: "text", text: "same cumulative text" }]);
+  const partialStart = buildAssistant([{ type: "text", text: "same" }]);
+  const partialComplete = buildAssistant([{ type: "text", text: "same cumulative text" }]);
   const loop = new SparkAgentLoop({
     host,
     streamFunction: makeFakeStream({
       rounds: [
         [
-          { type: "start", partial },
+          { type: "start", partial: partialStart },
           {
             type: "text_delta",
             contentIndex: 0,
-            delta: "same cumulative text",
-            partial,
+            delta: " cumulative text",
+            partial: partialComplete,
           },
-          { type: "done", reason: "stop", message: partial },
+          {
+            type: "text_delta",
+            contentIndex: 0,
+            delta: "",
+            partial: partialComplete,
+          },
+          { type: "done", reason: "stop", message: partialComplete },
         ],
       ],
     }),
@@ -767,7 +774,12 @@ void test("SparkAgentLoop suppresses identical cumulative assistant stream proje
   const assistantMessages = viewEvents.filter(
     (event) => event.type === "session.message" && event.message.role === "assistant",
   );
-  assert.equal(assistantMessages.filter((event) => event.message.status === "streaming").length, 1);
+  assert.deepEqual(
+    assistantMessages
+      .filter((event) => event.message.status === "streaming")
+      .map((event) => event.message.text),
+    ["same", "same cumulative text"],
+  );
   assert.equal(assistantMessages.filter((event) => event.message.status === "done").length, 1);
 });
 

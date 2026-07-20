@@ -561,7 +561,11 @@ void test("spark widget controller renders an active repro drive above goal and 
     });
 
     const lines = component?.render() ?? [];
-    assertLineIncludes(lines[0], ["◆ Repro(", "setup 1/5", "Problem statement documented"]);
+    assertLineIncludes(lines[0], [
+      "◆ Repro(",
+      "setup 1/5",
+      "Reproduction claim and acceptance contract frozen",
+    ]);
     assert.doesNotMatch(lines.join("\n"), /Goal hidden behind repro/);
     assert.doesNotMatch(lines.join("\n"), /Loop hidden behind repro/);
   } finally {

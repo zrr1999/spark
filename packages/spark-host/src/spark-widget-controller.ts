@@ -1,4 +1,5 @@
 import type { ProjectRef, Task } from "@zendev-lab/spark-extension-api";
+import { isReproRequirementSatisfied, type SparkReproRequirement } from "@zendev-lab/spark-repro";
 import type { WorkflowRunStatusSummary } from "@zendev-lab/spark-workflows";
 import type { SessionTodoEntry } from "@zendev-lab/spark-tasks";
 import {
@@ -328,11 +329,13 @@ function sparkForegroundDriverWidgetEntries(
         stageIndex: sessionRepro.currentStageIndex,
         totalStages: sessionRepro.stages.length,
         phase: sessionRepro.currentPhase,
-        acceptance: stage.acceptance.map((c: { description: string; satisfied: boolean }) => ({
-          description: c.description,
-          satisfied: c.satisfied,
+        acceptance: stage.acceptance.map((requirement: SparkReproRequirement) => ({
+          description: requirement.description,
+          satisfied: isReproRequirementSatisfied(requirement),
         })),
-        gate: stage.gate ? { id: stage.gate.id, passed: stage.gate.passed } : undefined,
+        gate: stage.gate
+          ? { id: stage.gate.id, passed: stage.gate.evaluation?.passed === true }
+          : undefined,
       },
     };
   }

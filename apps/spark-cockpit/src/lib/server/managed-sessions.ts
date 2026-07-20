@@ -4,6 +4,7 @@ import type {
   SparkSessionRegistryRecord,
 } from "@zendev-lab/spark-protocol";
 import { getRuntimeSessionProjection } from "@zendev-lab/spark-coordination/runtime-session-control";
+import { RuntimeControlCommandError } from "@zendev-lab/spark-coordination/runtime-control";
 import { parseSessionSnapshotWindow, type SessionSnapshotWindow } from "../session-snapshot-window";
 
 import {
@@ -87,14 +88,21 @@ export async function getManagedSessionForCockpit(
     // layout or session page into a 500.
     if (error instanceof CockpitRuntimeSessionUnavailableError) return null;
     if (isCockpitRuntimeSessionNotFoundError(error)) return null;
+    if (
+      error instanceof RuntimeControlCommandError &&
+      error.reasonCode === "COMMAND_RESULT_TIMEOUT"
+    ) {
+      return null;
+    }
     throw error;
   }
 }
 
 /**
  * Resolve an already projected conversation without requiring its owner to be
- * connected. Layout routing uses this only to recover the workspace scope for
- * a direct conversation URL; mutations continue through the runtime client.
+ * connected. Routing and non-authoritative mutation preflight use this local
+ * view only to recover the Web workspace boundary; mutations still continue
+ * through the runtime client, which owns current-state admission.
  */
 export function getProjectedManagedSessionForCockpit(
   sessionId: string,
@@ -150,6 +158,12 @@ export async function getManagedSessionSnapshotForCockpit(
     // enough to keep the page reachable while the runtime reconnects.
     if (error instanceof CockpitRuntimeSessionUnavailableError) return null;
     if (isCockpitRuntimeSessionNotFoundError(error)) return null;
+    if (
+      error instanceof RuntimeControlCommandError &&
+      error.reasonCode === "COMMAND_RESULT_TIMEOUT"
+    ) {
+      return null;
+    }
     throw error;
   }
 }

@@ -34,6 +34,7 @@ export type SessionTimelineReport = {
   role: string | null;
   status: string | null;
   createdAt: string;
+  runKind?: string;
   message?: SparkMessageView;
   interaction?: {
     requestId: string | null;
@@ -227,6 +228,7 @@ export function buildSessionTimeline(input: {
   for (const [reportIndex, report] of latestStableReports(input.reports).entries()) {
     if (
       report.kind === "daemon.task.lifecycle" ||
+      (report.kind === "run.update" && report.runKind === "session") ||
       report.role === "tool" ||
       isInternalExecutionFailureReport(report) ||
       (report.role === "system" && report.message?.metadata.conversationVisible !== true)

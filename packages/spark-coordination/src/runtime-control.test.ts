@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
-import { createWorkspaceWithOwnerBinding } from "./projection-services.ts";
+import { createWorkspaceWithOwnerBinding, unbindWorkspaceOwner } from "./projection-services.ts";
 import {
   markRuntimeControlCommandDeliveryAttempt,
   pendingRuntimeControlCommands,
@@ -71,6 +71,34 @@ describe("runtime control command outbox", () => {
       runtimeWorkspaceBindingId: h.bindingId,
     });
     expect(pendingRuntimeControlCommands(h.db, h.runtimeId)).toHaveLength(2);
+    h.db.close();
+  });
+
+  it("does not deliver queued workspace commands after the owner projection is unbound", () => {
+    const h = setup();
+    const daemon = submitRuntimeControlCommand(h.db, {
+      runtimeId: h.runtimeId,
+      payload: { kind: "daemon.status.request", scope: "daemon" },
+      createdAt: h.now,
+    });
+    submitRuntimeControlCommand(h.db, {
+      runtimeId: h.runtimeId,
+      workspaceId: h.workspaceId,
+      payload: { kind: "workspace.snapshot.request", scope: "workspace" },
+      createdAt: h.now,
+    });
+
+    unbindWorkspaceOwner(h.db, {
+      workspaceId: h.workspaceId,
+      expectedRuntimeWorkspaceBindingId: h.bindingId,
+      endedAt: "2026-07-15T00:01:00.000Z",
+    });
+
+    expect(pendingRuntimeControlCommands(h.db, h.runtimeId)).toEqual([
+      expect.objectContaining({
+        command: expect.objectContaining({ commandId: daemon.commandId }),
+      }),
+    ]);
     h.db.close();
   });
 

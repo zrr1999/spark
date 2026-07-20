@@ -1,13 +1,24 @@
 import { Type } from "typebox";
+import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
 import type {
   ExtensionContext,
+  JsonValue,
   ToolConfig,
   ToolRenderComponent,
   ToolRenderTheme,
 } from "@zendev-lab/spark-extension-api";
+import {
+  isUserAnsweredAskEvidenceArtifactBody,
+  recordCanonicalAskEvidenceReceipt,
+  type PiAskEvidenceArtifactBody,
+} from "./evidence.ts";
 
 export type PiAskAction = "ask" | "flow";
 export type PiAskAutoAnswerMode = "reviewer";
+export const DEFAULT_ASK_WAIT_TIMEOUT_MS = 60 * 60_000;
+/** @deprecated Use DEFAULT_ASK_WAIT_TIMEOUT_MS. */
+export const DEFAULT_ASK_REVIEWER_FALLBACK_AFTER_MS = DEFAULT_ASK_WAIT_TIMEOUT_MS;
+const MAX_ASK_WAIT_TIMEOUT_MS = 24 * 60 * 60_000;
 
 export interface PiAskActionToolApi {
   registerTool(config: ToolConfig): void;
@@ -111,20 +122,27 @@ export function registerPiAskActionTool(
     name: "ask",
     label: "Ask",
     description:
-      "Canonical ask capability. Use action=ask for a structured user ask; action=flow forces the fullscreen multi-question ask_flow renderer. autoAnswer=reviewer is an explicit host-provided mode for reviewer-backed decisions; ordinary asks do not auto-answer.",
+      "Canonical ask capability. Use action=ask for a structured user ask; action=flow forces the fullscreen multi-question ask_flow renderer. autoAnswer=reviewer waits for the user first and lets the host reviewer take over only after that wait times out; ordinary asks do not auto-answer.",
     promptGuidelines: [
       "Use ask as the canonical user-question tool instead of choosing between ask_user and ask_flow directly.",
       "Use delivery=blocking when this turn cannot continue without the answer; use delivery=async to create an Inbox request and continue immediately.",
       "Ask only context-specific questions whose answers change the next action, plan, dependency, priority, or success criteria.",
+      "Set recordAsEvidence=true when a later evidence gate must prove the user answered this ask.",
       "Use freeform questions for notes/context; do not create business options named Other or Type your own.",
-      "Do not set autoAnswer unless the active host policy explicitly asks for reviewer-backed decisions.",
+      "Do not set autoAnswer unless the active host policy explicitly asks for reviewer fallback after the user wait expires.",
     ],
     parameters: Type.Object({
       action: Type.Optional(Type.String({ description: "ask | flow. Defaults to ask." })),
       autoAnswer: Type.Optional(
         Type.String({
           description:
-            "Optional explicit auto-answer mode. Only reviewer is supported, and only when the host injected an auto-answer resolver.",
+            "Optional host policy. reviewer asks the user first, then uses the injected reviewer resolver only after the human wait times out.",
+        }),
+      ),
+      recordAsEvidence: Type.Optional(
+        Type.Boolean({
+          description:
+            "Persist the ask result as an artifact for a later evidence-backed decision gate.",
         }),
       ),
       title: Type.Optional(Type.String()),
@@ -172,6 +190,12 @@ export function registerPiAskActionTool(
       const autoAnswer = normalizeAskAutoAnswerMode(
         params.autoAnswer ?? contextAutoAnswerMode(ctx),
       );
+      if (params.recordAsEvidence === true && params.delivery === "async") {
+        throw new Error("ask.recordAsEvidence cannot be combined with delivery=async");
+      }
+      if (params.recordAsEvidence === true && autoAnswer) {
+        throw new Error("ask.recordAsEvidence requires a direct user answer, not autoAnswer");
+      }
       if (autoAnswer && params.delivery === "async") {
         throw new Error("ask.autoAnswer cannot be combined with delivery=async");
       }
@@ -179,7 +203,25 @@ export function registerPiAskActionTool(
       const tool = options.resolveTool(target);
       if (!tool) throw new Error(`ask action adapter could not find ${target}`);
       const forwarded = stripAdapterOnlyParams(params);
-      if (!autoAnswer) return tool.execute(toolCallId, forwarded, signal, onUpdate, ctx);
+      const waitTimeoutMs = contextAskWaitTimeoutMs(ctx);
+      const humanParams =
+        params.delivery !== "async" && hasProtocolInteraction(ctx)
+          ? { ...forwarded, timeoutMs: waitTimeoutMs }
+          : forwarded;
+      if (!autoAnswer) {
+        const result = await tool.execute(toolCallId, humanParams, signal, onUpdate, ctx);
+        return maybeRecordAskEvidence(params, result, ctx);
+      }
+      if (hasProtocolInteraction(ctx)) {
+        const humanResult = await tool.execute(toolCallId, humanParams, signal, onUpdate, ctx);
+        if (!didHumanAskTimeOut(humanResult)) return humanResult;
+      } else if (hasLegacyHumanInteraction(ctx)) {
+        // Legacy primitives cannot be cancelled. Keep one answer owner by waiting
+        // for the human instead of racing the prompt with reviewer output.
+        return await tool.execute(toolCallId, forwarded, signal, onUpdate, ctx);
+      } else {
+        await waitForReviewerFallback(waitTimeoutMs, signal);
+      }
       const request = decodeAutoAnswerRequest(params);
       const resolver = options.autoAnswer ?? contextAutoAnswerResolver(ctx);
       const autoAnswered = resolver
@@ -190,7 +232,7 @@ export function registerPiAskActionTool(
       if (blocked) return blockedAutoAnswerResult(params, blocked);
       const syntheticCtx = withSyntheticAutoAnswerUi(ctx, request, autoAnswered.answers ?? {});
       const result = await tool.execute(toolCallId, forwarded, signal, onUpdate, syntheticCtx);
-      return annotateAutoAnswerResult(result, autoAnswered);
+      return annotateAutoAnswerResult(result, autoAnswered, waitTimeoutMs);
     },
   });
 }
@@ -214,6 +256,55 @@ function contextAutoAnswerMode(ctx: ExtensionContext): unknown {
 function contextAutoAnswerResolver(ctx: ExtensionContext): PiAskAutoAnswerResolver | undefined {
   const resolver = (ctx as { askAutoAnswerResolver?: unknown }).askAutoAnswerResolver;
   return typeof resolver === "function" ? (resolver as PiAskAutoAnswerResolver) : undefined;
+}
+
+function contextAskWaitTimeoutMs(ctx: ExtensionContext): number {
+  const policy = ctx as {
+    askWaitTimeoutMs?: unknown;
+    askReviewerFallbackAfterMs?: unknown;
+  };
+  const value = policy.askWaitTimeoutMs ?? policy.askReviewerFallbackAfterMs;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_ASK_WAIT_TIMEOUT_MS;
+  }
+  return Math.min(MAX_ASK_WAIT_TIMEOUT_MS, Math.max(1, Math.floor(value)));
+}
+
+function hasProtocolInteraction(ctx: ExtensionContext): boolean {
+  return typeof ctx.ui?.interaction === "function";
+}
+
+function hasLegacyHumanInteraction(ctx: ExtensionContext): boolean {
+  return Boolean(
+    ctx.ui &&
+    (typeof ctx.ui.select === "function" ||
+      typeof ctx.ui.selectWithCustom === "function" ||
+      typeof ctx.ui.input === "function" ||
+      typeof ctx.ui.custom === "function"),
+  );
+}
+
+function didHumanAskTimeOut(result: Awaited<ReturnType<ToolConfig["execute"]>>): boolean {
+  return (
+    isRecord(result.details) &&
+    isRecord(result.details.result) &&
+    result.details.result.timedOut === true
+  );
+}
+
+async function waitForReviewerFallback(timeoutMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) throw signal.reason ?? new Error("ask aborted");
+  await new Promise<void>((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new Error("ask aborted"));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, timeoutMs);
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }
 
 async function resolveAutoAnswerFromProviders(
@@ -245,8 +336,49 @@ function selectAskTarget(
 }
 
 function stripAdapterOnlyParams(params: Record<string, unknown>): Record<string, unknown> {
-  const { action: _action, autoAnswer: _autoAnswer, ...rest } = params;
+  const {
+    action: _action,
+    autoAnswer: _autoAnswer,
+    recordAsEvidence: _recordAsEvidence,
+    ...rest
+  } = params;
   return rest;
+}
+
+async function maybeRecordAskEvidence(
+  params: Record<string, unknown>,
+  result: Awaited<ReturnType<ToolConfig["execute"]>>,
+  ctx: ExtensionContext,
+) {
+  if (params.recordAsEvidence !== true) return result;
+  const cwd = typeof ctx.cwd === "string" ? ctx.cwd : undefined;
+  if (!cwd) throw new Error("ask recordAsEvidence requires a workspace cwd");
+  const body: PiAskEvidenceArtifactBody = {
+    schema: "spark.ask.evidence/v1",
+    request: decodeAutoAnswerRequest(params),
+    result: isRecord(result.details) ? (result.details.result ?? null) : null,
+    autoAnswered: false,
+    recordedAt: new Date().toISOString(),
+  };
+  if (!isUserAnsweredAskEvidenceArtifactBody(body)) {
+    if (didHumanAskTimeOut(result)) return result;
+    throw new Error("ask.recordAsEvidence requires a completed user-answered result");
+  }
+  const artifact = await defaultArtifactStore(cwd).put({
+    kind: "record",
+    title: `Ask evidence: ${optionalString(params.title)?.trim() || "user decision"}`,
+    format: "json",
+    body: JSON.parse(JSON.stringify(body)) as JsonValue,
+    provenance: { producer: "ask" },
+  });
+  await recordCanonicalAskEvidenceReceipt(cwd, artifact);
+  return {
+    ...result,
+    details: {
+      ...(isRecord(result.details) ? result.details : {}),
+      askEvidenceRef: artifact.ref,
+    },
+  };
 }
 
 function hasPreview(value: unknown): boolean {
@@ -332,6 +464,9 @@ function withSyntheticAutoAnswerUi(
   let index = 0;
   const nextQuestion = () => request.questions[index++];
   const ui = {
+    // Reviewer owns the answer only after the host has closed the human interaction.
+    // Do not reopen that interaction while converting reviewer output through the raw adapter.
+    interaction: undefined,
     select: async () => labelChoice(nextQuestion(), answers),
     selectWithCustom: async () => selectionChoice(nextQuestion(), answers),
     input: async () => freeformChoice(nextQuestion(), answers),
@@ -410,13 +545,19 @@ function blockedAutoAnswerResult(params: Record<string, unknown>, reason: string
 function annotateAutoAnswerResult(
   result: Awaited<ReturnType<ToolConfig["execute"]>>,
   autoAnswered: PiAskAutoAnswerResult,
+  humanTimeoutMs: number,
 ) {
   return {
     ...result,
     details: {
       ...(isRecord(result.details) ? result.details : {}),
       autoAnswered: true,
-      autoAnswer: { mode: "reviewer", reason: autoAnswered.reason },
+      autoAnswer: {
+        mode: "reviewer",
+        reason: autoAnswered.reason,
+        takeover: "human_timeout",
+        humanTimeoutMs,
+      },
     },
   };
 }

@@ -258,6 +258,7 @@ export function createQqbotTransport(
       // Native in-place streaming exists only for C2C. Group/channel fall back
       // to a single durable sendReply from the daemon outbox.
       const parsed = parseQqbotRecipient(target.recipient);
+      let reservedStreamOverflowSeqs: number[] = [];
       return tryCreateQqbotC2CReplyStream({
         target,
         api,
@@ -276,17 +277,30 @@ export function createQqbotTransport(
           parsed.kind === "c2c"
             ? async (content) => {
                 const messageId = target.messageId?.trim();
-                const overflow = reservePassiveReplyForTarget(
+                const msgSeq = reservedStreamOverflowSeqs.shift();
+                if (msgSeq === undefined) {
+                  throw channelDeliveryNotSent(
+                    new Error("qqbot passive reply budget exhausted before stream follow-up"),
+                  );
+                }
+                const token = await deliveryToken();
+                await sendMarkdownChunk(token, parsed, content, messageId, msgSeq);
+              }
+            : undefined,
+        reserveFollowUpSeqs:
+          parsed.kind === "c2c"
+            ? (count) => {
+                if (count === 0) return true;
+                const messageId = target.messageId?.trim();
+                const reservations = reservePassiveOverflowForTarget(
                   passiveReplyBudget,
                   parsed,
                   messageId,
-                  "overflow",
+                  count,
                 );
-                if (!overflow) {
-                  throw new Error("qqbot passive reply budget exhausted before stream follow-up");
-                }
-                const token = await deliveryToken();
-                await sendMarkdownChunk(token, parsed, content, messageId, overflow.msgSeq);
+                if (!reservations?.every(({ msgSeq }) => msgSeq !== undefined)) return false;
+                reservedStreamOverflowSeqs = reservations.map(({ msgSeq }) => msgSeq!);
+                return true;
               }
             : undefined,
       });
@@ -1070,6 +1084,12 @@ interface QqbotPassiveReplyBudget {
     kind: QqbotPassiveReplyKind,
     idempotencyKey?: string,
   ): QqbotPassiveReplyReservation | undefined;
+  reserveOverflow(
+    scope: "c2c" | "group",
+    recipient: string,
+    messageId: string | undefined,
+    count: number,
+  ): QqbotPassiveReplyReservation[] | undefined;
 }
 
 function createQqbotPassiveReplyBudget(): QqbotPassiveReplyBudget {
@@ -1127,6 +1147,36 @@ function createQqbotPassiveReplyBudget(): QqbotPassiveReplyBudget {
       entries.set(key, entry);
       return { msgSeq };
     },
+    reserveOverflow(scope, recipient, messageId, count) {
+      if (!Number.isSafeInteger(count) || count < 0) return undefined;
+      if (count === 0) return [];
+      if (!messageId) return Array.from({ length: count }, () => ({}));
+
+      const now = Date.now();
+      for (const [key, entry] of entries) {
+        if (now - entry.touchedAt >= 60 * 60 * 1000) entries.delete(key);
+      }
+      const limit =
+        scope === "c2c" ? QQBOT_C2C_PASSIVE_REPLY_LIMIT : QQBOT_GROUP_PASSIVE_REPLY_LIMIT;
+      const key = `${scope}\0${recipient}\0${messageId}`;
+      const entry = entries.get(key) ?? {
+        askCount: 0,
+        finalReserved: false,
+        usedSeqs: new Set<number>(),
+        touchedAt: now,
+        limit,
+      };
+      const available = Array.from({ length: limit }, (_, index) => index + 1).filter(
+        (sequence) => !entry.usedSeqs.has(sequence),
+      );
+      if (available.length < count) return undefined;
+
+      const reserved = available.slice(0, count);
+      for (const sequence of reserved) entry.usedSeqs.add(sequence);
+      entry.touchedAt = now;
+      entries.set(key, entry);
+      return reserved.map((msgSeq) => ({ msgSeq }));
+    },
   };
 }
 
@@ -1151,4 +1201,19 @@ function reservePassiveReplyForTarget(
     return budget.reserve("group", target.groupOpenid, messageId, kind, idempotencyKey);
   }
   return {};
+}
+
+function reservePassiveOverflowForTarget(
+  budget: QqbotPassiveReplyBudget,
+  target: ReturnType<typeof parseQqbotRecipient>,
+  messageId: string | undefined,
+  count: number,
+): QqbotPassiveReplyReservation[] | undefined {
+  if (target.kind === "c2c") {
+    return budget.reserveOverflow("c2c", target.openid, messageId, count);
+  }
+  if (target.kind === "group") {
+    return budget.reserveOverflow("group", target.groupOpenid, messageId, count);
+  }
+  return Array.from({ length: count }, () => ({}));
 }
