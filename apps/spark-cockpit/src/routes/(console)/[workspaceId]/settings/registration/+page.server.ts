@@ -44,7 +44,13 @@ export const actions: Actions = {
     const db = getDatabase();
     const page = loadWorkspaceRegistrationPage(db, params.workspaceId);
     if (!page) throw kitError(404, "Workspace not found.");
-    const userId = ensureCurrentOwnerSession(db, cookies, locals.sessionToken, page.workspace.id);
+    const userId = ensureCurrentOwnerSession(
+      db,
+      cookies,
+      locals.sessionToken,
+      page.workspace.id,
+      locals.workspaceSessionToken,
+    );
     const formData = await request.formData();
     const bindingId = formText(formData, "bindingId").trim();
     if (!bindingId) {
@@ -77,7 +83,13 @@ export const actions: Actions = {
     const page = loadWorkspaceRegistrationPage(db, params.workspaceId);
     if (!page) throw kitError(404, "Workspace not found.");
     const { workspace } = page;
-    const userId = ensureCurrentOwnerSession(db, cookies, locals.sessionToken, workspace.id);
+    const userId = ensureCurrentOwnerSession(
+      db,
+      cookies,
+      locals.sessionToken,
+      workspace.id,
+      locals.workspaceSessionToken,
+    );
 
     const formData = await request.formData();
     const label = formText(formData, "label").trim() || messages.enrollment.labelPlaceholder;
@@ -107,7 +119,13 @@ export const actions: Actions = {
     const db = getDatabase();
     const page = loadWorkspaceRegistrationPage(db, params.workspaceId);
     if (!page) throw kitError(404, "Workspace not found.");
-    ensureCurrentOwnerSession(db, cookies, locals.sessionToken, page.workspace.id);
+    ensureCurrentOwnerSession(
+      db,
+      cookies,
+      locals.sessionToken,
+      page.workspace.id,
+      locals.workspaceSessionToken,
+    );
 
     const formData = await request.formData();
     const tokenId = formText(formData, "tokenId").trim();
@@ -133,7 +151,13 @@ export const actions: Actions = {
     const db = getDatabase();
     const page = loadWorkspaceRegistrationPage(db, params.workspaceId);
     if (!page) throw kitError(404, "Workspace not found.");
-    const userId = ensureCurrentOwnerSession(db, cookies, locals.sessionToken, page.workspace.id);
+    const userId = ensureCurrentOwnerSession(
+      db,
+      cookies,
+      locals.sessionToken,
+      page.workspace.id,
+      locals.workspaceSessionToken,
+    );
     const formData = await request.formData();
     const label = formText(formData, "label").trim() || messages.access.defaultTokenLabel;
     const token = createWorkspaceAccessToken(db, {
@@ -141,8 +165,7 @@ export const actions: Actions = {
       createdByUserId: userId,
       label,
     });
-    const loginUrl = new URL("/login", url.origin);
-    loginUrl.searchParams.set("workspace", page.workspace.slug);
+    const loginUrl = new URL(`/${encodeURIComponent(page.workspace.slug)}/login`, url.origin);
     return {
       intent: "workspaceAccess",
       message: messages.access.tokenCreatedHint,
@@ -160,7 +183,13 @@ export const actions: Actions = {
     const db = getDatabase();
     const page = loadWorkspaceRegistrationPage(db, params.workspaceId);
     if (!page) throw kitError(404, "Workspace not found.");
-    ensureCurrentOwnerSession(db, cookies, locals.sessionToken, page.workspace.id);
+    ensureCurrentOwnerSession(
+      db,
+      cookies,
+      locals.sessionToken,
+      page.workspace.id,
+      locals.workspaceSessionToken,
+    );
     const tokenId = formText(await request.formData(), "tokenId").trim();
     if (!tokenId) {
       return fail(400, {

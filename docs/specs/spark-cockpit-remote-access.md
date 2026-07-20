@@ -1,6 +1,16 @@
 # Spark Cockpit remote access
 
-Cockpit is local-first and listens on loopback by default. Remote browser authority is always scoped to one workspace; there is no Cockpit-wide bearer token.
+Cockpit is local-first and listens on loopback by default. Remote browser authority is progressive:
+
+1. **Cockpit access** — one-time `spark_cockpit_auth_…` key exchanged at `/login` for a Cockpit owner session (control plane).
+2. **Workspace access** — one-time `spark_workspace_auth_…` key exchanged at `/{slug}/login` for that workspace only.
+
+Minting stays in `@zendev-lab/spark-coordination`. Operators use thin CLIs:
+
+```sh
+spark cockpit access create [--label <text>] [--json]
+spark daemon workspace access create [--workspace <name>] [--json]
+```
 
 ## Direct private-network access
 
@@ -9,7 +19,7 @@ pnpm --filter @zendev-lab/spark-cockpit run build
 HOST=0.0.0.0 PORT=5173 spark cockpit
 ```
 
-Prefer an encrypted private path such as Tailscale, WireGuard, or SSH forwarding. Protected non-loopback requests redirect to `/login` until the browser exchanges a one-time workspace key.
+Prefer an encrypted private path such as Tailscale, WireGuard, or SSH forwarding. Protected non-loopback requests redirect to `/login` until the browser exchanges a Cockpit key. Workspace data routes then require `/{slug}/login`.
 
 ## Trusted reverse proxy
 
@@ -32,14 +42,14 @@ spark cockpit
 
 Use `SPARK_COCKPIT_PUBLIC_URL=auto` only behind the same trusted loopback proxy when the proxy supplies the hostname.
 
-## Workspace authorization flow
+## Progressive authorization flow
 
-1. In one workspace's connection settings, create a one-time workspace registration token.
-2. Run the generated `spark daemon workspace register ... --token ...` command from the daemon-owned directory. Existing daemon access/refresh credentials provide connectivity only and cannot replace this token.
-3. Successful registration binds that directory and prints a separate `spark_workspace_auth_...` browser key plus the workspace login URL. This key expires after 10 minutes and can be consumed once.
-4. `/login` exchanges the browser key for a 15-minute workspace access cookie and a 30-day rotating refresh cookie. Refresh rotates both credentials; replaying the previous refresh credential fails.
-5. Generate another one-time browser key from the workspace settings for every additional browser user. A key or session for workspace A cannot open workspace B, its sessions, artifacts, SSE events, or global Cockpit settings.
+1. On the Cockpit host, mint a Cockpit browser key: `spark cockpit access create`. Open `/login` and exchange it for Cockpit session cookies (`spark_cockpit_session` + rotating refresh).
+2. Create or open a workspace in the control plane. In connection settings (or via daemon registration), obtain a workspace registration token and run `spark daemon workspace register ... --token ...` from the daemon-owned directory.
+3. Successful registration binds that directory and prints a `spark_workspace_auth_...` browser key plus `/{slug}/login`. The key expires after 10 minutes and can be consumed once. Additional browsers use `spark daemon workspace access create`.
+4. `/{slug}/login` exchanges the workspace key for workspace session cookies (`spark_workspace_session` + rotating refresh). Refresh rotates both credentials; replaying the previous refresh credential fails.
+5. A Cockpit session alone does not open another workspace’s sessions, artifacts, or SSE. A workspace session for A cannot open workspace B or global Cockpit settings without a Cockpit session.
 
-Loopback clients retain the local owner flow. Runtime enrollment and runtime WebSocket endpoints under `/api/v1/runtime/` use separate runtime credentials. Static PWA assets plus `/login` and `/logout` remain available before browser login.
+Loopback clients retain the local owner flow for the control plane. Runtime enrollment and runtime WebSocket endpoints under `/api/v1/runtime/` use separate runtime credentials. Static PWA assets plus `/login`, `/{slug}/login`, and `/logout` remain available before the matching browser login.
 
-Use HTTPS or an encrypted overlay network. Revoking an unused browser key prevents its exchange; logout revokes the current browser session. Workspace access is not a Cockpit-wide administrator grant.
+Use HTTPS or an encrypted overlay network. Revoking an unused browser key prevents its exchange; logout revokes current browser sessions.

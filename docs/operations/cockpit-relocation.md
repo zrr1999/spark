@@ -80,7 +80,7 @@ export SPARK_COCKPIT_TRUST_PROXY=loopback
 spark cockpit
 ```
 
-Remote browser authority is not a deployment-wide environment token. After restore, generate a fresh one-time browser key for each workspace/user that needs access; access and rotating refresh sessions remain workspace-scoped. The reverse proxy must replace forwarding headers, preserve the public host, forward WebSocket upgrades, and leave streaming responses unbuffered. Verify:
+Remote browser authority is progressive. After restore, mint a fresh Cockpit key with `spark cockpit access create`, then workspace keys with `spark daemon workspace access create` (or registration). Cockpit and workspace rotating refresh sessions stay separate. The reverse proxy must replace forwarding headers, preserve the public host, forward WebSocket upgrades, and leave streaming responses unbuffered. Verify:
 
 ```sh
 curl --fail --silent --show-error "$TARGET_URL/api/v1/runtime/relocation/metadata"

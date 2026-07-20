@@ -16,6 +16,7 @@
     "./approval-center": "./src/approval-center.ts",
     "./artifact-cache": "./src/artifact-cache.ts",
     "./cockpit-queries": "./src/cockpit-queries.ts",
+    "./cockpit-access": "./src/cockpit-access.ts",
     "./command-submission": "./src/command-submission.ts",
     "./events": "./src/events.ts",
     "./liveness": "./src/liveness.ts",

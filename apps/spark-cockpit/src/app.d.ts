@@ -9,6 +9,7 @@ declare global {
     interface Locals {
       requestId: string;
       sessionToken: string | null;
+      workspaceSessionToken: string | null;
       workspaceId: string | null;
     }
   }

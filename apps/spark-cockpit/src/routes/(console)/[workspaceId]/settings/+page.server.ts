@@ -31,7 +31,13 @@ export const actions: Actions = {
     const db = getDatabase();
     const workspace = loadWorkspaceSettings(db, params.workspaceId);
     if (!workspace) throw kitError(404, "Workspace not found.");
-    ensureCurrentOwnerSession(db, cookies, locals.sessionToken, workspace.id);
+    ensureCurrentOwnerSession(
+      db,
+      cookies,
+      locals.sessionToken,
+      workspace.id,
+      locals.workspaceSessionToken,
+    );
 
     const formData = await request.formData();
     const name = formText(formData, "name").trim();

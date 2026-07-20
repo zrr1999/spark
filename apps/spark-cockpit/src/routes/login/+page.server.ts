@@ -1,28 +1,27 @@
 import { fail, redirect } from "@sveltejs/kit";
 import {
-  hasActiveWorkspaceAccessTokens,
-  WorkspaceAccessTokenError,
-} from "@zendev-lab/spark-coordination/workspace-access";
+  CockpitAccessTokenError,
+  hasActiveCockpitAccessTokens,
+} from "@zendev-lab/spark-coordination/cockpit-access";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import {
-  exchangeWorkspaceAccessToken,
-  getCurrentWorkspaceSession,
-  setWorkspaceSessionCookies,
+  exchangeCockpitAccessToken,
+  getCurrentCockpitSession,
+  setCockpitSessionCookies,
 } from "$lib/server/auth";
 import { getDatabase } from "$lib/server/db";
 import { formText } from "$lib/server/form-data";
-import { workspaceSessionsPath } from "$lib/workspace-routes";
 import type { Actions, PageServerLoad } from "./$types";
 
 export const load: PageServerLoad = ({ locals, url }) => {
   const next = safeNextPath(url.searchParams.get("next"));
-  const current = getCurrentWorkspaceSession(getDatabase(), locals.sessionToken);
+  const current = getCurrentCockpitSession(getDatabase(), locals.sessionToken);
   if (current) {
-    redirect(303, workspaceSessionsPath({ slug: current.workspaceSlug }));
+    redirect(303, next === "/" ? "/" : next);
   }
   return {
     next,
-    workspaceAccessAvailable: hasActiveWorkspaceAccessTokens(getDatabase()),
+    cockpitAccessAvailable: hasActiveCockpitAccessTokens(getDatabase()),
   };
 };
 
@@ -36,26 +35,30 @@ export const actions: Actions = {
     const token = formText(await request.formData(), "token").trim();
     let session;
     try {
-      session = exchangeWorkspaceAccessToken(getDatabase(), token);
+      session = exchangeCockpitAccessToken(getDatabase(), token);
     } catch (caught) {
-      if (!(caught instanceof WorkspaceAccessTokenError)) throw caught;
+      if (!(caught instanceof CockpitAccessTokenError)) throw caught;
       return fail(401, {
         next,
-        workspaceAccessAvailable: hasActiveWorkspaceAccessTokens(getDatabase()),
+        cockpitAccessAvailable: hasActiveCockpitAccessTokens(getDatabase()),
         message: t.invalid,
       });
     }
 
-    setWorkspaceSessionCookies(cookies, session, { secure: url.protocol === "https:" });
-    const workspacePath = workspaceSessionsPath({ slug: session.workspaceSlug });
-    redirect(
-      303,
-      next.startsWith(`/${encodeURIComponent(session.workspaceSlug)}/`) ? next : workspacePath,
-    );
+    setCockpitSessionCookies(cookies, session, { secure: url.protocol === "https:" });
+    redirect(303, isPreWorkspacePath(next) ? next : "/");
   },
 };
 
 function safeNextPath(value: string | null): string {
   if (!value || !value.startsWith("/") || value.startsWith("//")) return "/";
   return value;
+}
+
+function isPreWorkspacePath(value: string): boolean {
+  if (value === "/" || value === "/workspaces/new" || value.startsWith("/workspaces/new/")) {
+    return true;
+  }
+  if (value.startsWith("/settings") || value.startsWith("/daemon/")) return true;
+  return false;
 }

@@ -39,7 +39,7 @@ function normalizeClientAddress(address: string): string {
 }
 
 export function isPublicRemotePath(pathname: string): boolean {
-  return (
+  if (
     pathname === "/login" ||
     pathname === "/logout" ||
     pathname === "/manifest.webmanifest" ||
@@ -48,5 +48,9 @@ export function isPublicRemotePath(pathname: string): boolean {
     pathname.startsWith("/icons/") ||
     pathname.startsWith("/_app/") ||
     pathname.startsWith("/api/v1/runtime/")
-  );
+  ) {
+    return true;
+  }
+  const segments = pathname.split("/").filter(Boolean);
+  return segments.length === 2 && segments[1] === "login";
 }

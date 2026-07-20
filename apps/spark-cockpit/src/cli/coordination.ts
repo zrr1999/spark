@@ -12,6 +12,8 @@ import {
   readStringOption,
   type SparkCliOutput,
 } from "./shared.ts";
+import type { CockpitAccessCliResult } from "./access.ts";
+import { handleCockpitAccessCliCommand } from "./access.ts";
 import type {
   CockpitInstanceCliFailure,
   CockpitInstanceCliOptions,
@@ -37,7 +39,8 @@ export type SparkCockpitCliResource =
   | "review"
   | "workflow"
   | "assign"
-  | "instance";
+  | "instance"
+  | "access";
 
 export interface SparkCockpitCliCommand {
   resource: SparkCockpitCliResource;
@@ -54,6 +57,8 @@ export interface SparkCockpitCliCommand {
   databasePath?: string;
   rollbackRoot?: string;
   yes?: boolean;
+  label?: string;
+  tokenId?: string;
 }
 
 export interface SparkCockpitCliOptions {
@@ -115,7 +120,8 @@ export type SparkCockpitCliResult =
   | { action: "review"; result: SparkCockpitReviewListResult }
   | { action: "workflow"; result: SparkCockpitWorkflowListResult }
   | { action: "assign"; result: SparkCockpitAssignResult }
-  | { action: "instance"; result: CockpitInstanceCliResult };
+  | { action: "instance"; result: CockpitInstanceCliResult }
+  | { action: "access"; result: CockpitAccessCliResult };
 
 export interface SparkCockpitAssignResult {
   plane: "cockpit";
@@ -303,6 +309,17 @@ export function parseSparkCockpitCliArgs(argv: string[]): SparkCockpitCliCommand
         rollbackRoot: readStringOption(parsed.options, "rollback-root")?.trim(),
         yes: readBooleanOption(parsed.options, "yes") || readBooleanOption(parsed.options, "y"),
       };
+    case "access":
+      return {
+        resource: "access",
+        verb,
+        json,
+        databasePath: readStringOption(parsed.options, "database")?.trim(),
+        label: readStringOption(parsed.options, "label")?.trim(),
+        tokenId:
+          readStringOption(parsed.options, "id")?.trim() ||
+          (verb === "revoke" ? positionalSelector?.trim() : undefined),
+      };
     default:
       throw new Error(`unknown spark cockpit resource: ${resourceToken}`);
   }
@@ -327,6 +344,18 @@ export async function handleSparkCockpitCliCommand(
         },
         options.instance,
       ),
+    };
+  }
+  if (command.resource === "access") {
+    return {
+      action: "access",
+      result: await handleCockpitAccessCliCommand({
+        operation: command.verb ?? "list",
+        databasePath: command.databasePath,
+        label: command.label,
+        tokenId: command.tokenId,
+        json: command.json,
+      }),
     };
   }
   const state = await loadCockpitState(options);
@@ -394,7 +423,7 @@ function readCockpitInstanceFailure(error: unknown): CockpitInstanceCliFailure |
 }
 
 export function sparkCockpitHelpText(): string {
-  return `spark cockpit - Spark cross-daemon coordination CLI\n\nUsage:\n  spark cockpit status [--json]\n  spark cockpit project list [--json]\n  spark cockpit project status <project-ref> [--json]\n  spark cockpit task list [--project <project-ref>] [--json]\n  spark cockpit task status <task-ref> [--json]\n  spark cockpit goal status [--json]\n  spark cockpit artifact list [--json]\n  spark cockpit review list [--json]\n  spark cockpit workflow list [--json]\n  spark cockpit assign --session <session-id> --goal <text> [--title <text>] [--role <role>] [--workspace <id>] [--json]\n  spark cockpit instance status [--database <path>] [--json]\n  spark cockpit instance backup [snapshot-path] [--database <path>] [--json]\n  spark cockpit instance inspect <snapshot-path> [--json]\n  spark cockpit instance restore <snapshot-path> [--database <path>] [--rollback-root <path>] [--yes] [--json]\n\nThese commands use Cockpit coordination without starting the Web host.\nInstance restore replaces the complete Cockpit database and requires confirmation.\nExecution controls belong under spark daemon run/session/events.\n`;
+  return `spark cockpit - Spark cross-daemon coordination CLI\n\nUsage:\n  spark cockpit status [--json]\n  spark cockpit project list [--json]\n  spark cockpit project status <project-ref> [--json]\n  spark cockpit task list [--project <project-ref>] [--json]\n  spark cockpit task status <task-ref> [--json]\n  spark cockpit goal status [--json]\n  spark cockpit artifact list [--json]\n  spark cockpit review list [--json]\n  spark cockpit workflow list [--json]\n  spark cockpit assign --session <session-id> --goal <text> [--title <text>] [--role <role>] [--workspace <id>] [--json]\n  spark cockpit access create [--label <text>] [--database <path>] [--json]\n  spark cockpit access list [--database <path>] [--json]\n  spark cockpit access revoke --id <token-id> [--database <path>] [--json]\n  spark cockpit instance status [--database <path>] [--json]\n  spark cockpit instance backup [snapshot-path] [--database <path>] [--json]\n  spark cockpit instance inspect <snapshot-path> [--json]\n  spark cockpit instance restore <snapshot-path> [--database <path>] [--rollback-root <path>] [--yes] [--json]\n\nThese commands use Cockpit coordination without starting the Web host.\nAccess create mints a one-time Cockpit browser key for /login.\nInstance restore replaces the complete Cockpit database and requires confirmation.\nExecution controls belong under spark daemon run/session/events.\n`;
 }
 
 type LoadedCockpitState = SparkCockpitCoordinationState;

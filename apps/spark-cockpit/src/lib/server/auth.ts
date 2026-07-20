@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { consumeCockpitAccessToken } from "@zendev-lab/spark-coordination/cockpit-access";
 import {
   consumeWorkspaceAccessToken,
   type ConsumedWorkspaceAccessToken,
@@ -9,7 +10,11 @@ import type { DatabaseSync } from "node:sqlite";
 
 export const sessionCookieName = "spark_cockpit_session";
 export const sessionRefreshCookieName = "spark_cockpit_refresh";
+export const workspaceSessionCookieName = "spark_workspace_session";
+export const workspaceSessionRefreshCookieName = "spark_workspace_refresh";
 
+const cockpitAccessTtlMs = 15 * 60 * 1_000;
+const cockpitRefreshTtlMs = 30 * 24 * 60 * 60 * 1_000;
 const workspaceAccessTtlMs = 15 * 60 * 1_000;
 const workspaceRefreshTtlMs = 30 * 24 * 60 * 60 * 1_000;
 
@@ -22,6 +27,11 @@ export interface CreatedOwnerSession {
   sessionId: string;
   sessionToken: string;
   expiresAt: string;
+}
+
+export interface CockpitSession extends CreatedOwnerSession {
+  refreshToken: string;
+  refreshExpiresAt: string;
 }
 
 export interface WorkspaceSession extends CreatedOwnerSession {
@@ -62,7 +72,7 @@ export function createOwnerSession(
        VALUES (?, ?, ?, 'owner', 'active', ?, ?)`,
     ).run(userId, email, displayName, nowIso, nowIso);
 
-    session = insertSession(db, userId, now);
+    session = insertLocalOwnerSession(db, userId, now);
 
     db.exec("COMMIT");
   } catch (error) {
@@ -88,7 +98,7 @@ export function createLocalOwnerSession(db: DatabaseSync): CreatedOwnerSession {
     throw new Error("Spark Cockpit owner has not been set up");
   }
 
-  return insertSession(db, owner.id, new Date());
+  return insertLocalOwnerSession(db, owner.id, new Date());
 }
 
 export function getCurrentUserId(
@@ -114,6 +124,37 @@ export function getCurrentUserId(
     .get(hashSecret(sessionToken), now.toISOString()) as { userId: string } | undefined;
 
   return session?.userId ?? null;
+}
+
+export function getCurrentCockpitSession(
+  db: DatabaseSync,
+  sessionToken: string | null,
+  now = new Date(),
+): Omit<CockpitSession, "sessionToken" | "refreshToken" | "refreshExpiresAt"> | null {
+  if (!sessionToken) return null;
+  const row = db
+    .prepare(
+      `SELECT s.id AS sessionId,
+              s.user_id AS userId,
+              s.expires_at AS expiresAt
+       FROM sessions s
+       JOIN users u ON u.id = s.user_id
+       WHERE s.token_hash = ?
+         AND s.workspace_id IS NULL
+         AND s.revoked_at IS NULL
+         AND s.expires_at > ?
+         AND u.status = 'active'
+         AND u.role = 'owner'
+       LIMIT 1`,
+    )
+    .get(hashSecret(sessionToken), now.toISOString()) as
+    | {
+        sessionId: string;
+        userId: string;
+        expiresAt: string;
+      }
+    | undefined;
+  return row ?? null;
 }
 
 export function getCurrentWorkspaceSession(
@@ -152,6 +193,24 @@ export function getCurrentWorkspaceSession(
   return row ?? null;
 }
 
+export function exchangeCockpitAccessToken(
+  db: DatabaseSync,
+  token: string | null,
+  now = new Date(),
+): CockpitSession {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    consumeCockpitAccessToken(db, token, now.toISOString());
+    const ownerId = ensureLocalSystemUser(db);
+    const session = insertCockpitSession(db, ownerId, now);
+    db.exec("COMMIT");
+    return session;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 export function exchangeWorkspaceAccessToken(
   db: DatabaseSync,
   token: string | null,
@@ -166,6 +225,59 @@ export function exchangeWorkspaceAccessToken(
     return session;
   } catch (error) {
     db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+export function refreshCockpitSession(
+  db: DatabaseSync,
+  refreshToken: string | null,
+  now = new Date(),
+): CockpitSession | null {
+  if (!refreshToken) return null;
+  const nowIso = now.toISOString();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const current = db
+      .prepare(
+        `SELECT s.id AS sessionId,
+                s.user_id AS userId
+         FROM sessions s
+         JOIN users u ON u.id = s.user_id
+         WHERE s.refresh_token_hash = ?
+           AND s.workspace_id IS NULL
+           AND s.revoked_at IS NULL
+           AND s.refresh_expires_at > ?
+           AND u.status = 'active'
+           AND u.role = 'owner'
+         LIMIT 1`,
+      )
+      .get(hashSecret(refreshToken), nowIso) as
+      | {
+          sessionId: string;
+          userId: string;
+        }
+      | undefined;
+    if (!current) {
+      db.exec("ROLLBACK");
+      return null;
+    }
+    const rotated = db
+      .prepare("UPDATE sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
+      .run(nowIso, current.sessionId);
+    if (rotated.changes !== 1) {
+      db.exec("ROLLBACK");
+      return null;
+    }
+    const session = insertCockpitSession(db, current.userId, now);
+    db.exec("COMMIT");
+    return session;
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // Preserve the refresh error.
+    }
     throw error;
   }
 }
@@ -245,15 +357,20 @@ export function ensureCurrentOwnerSession(
   _cookies: Cookies,
   sessionToken: string | null,
   workspaceId?: string,
+  workspaceSessionToken?: string | null,
 ): string {
   if (workspaceId) {
-    const workspaceSession = getCurrentWorkspaceSession(db, sessionToken);
+    const workspaceSession = getCurrentWorkspaceSession(db, workspaceSessionToken ?? null);
     if (workspaceSession) {
       if (workspaceSession.workspaceId !== workspaceId) {
         throw new WorkspaceSessionError("This browser session does not grant this workspace.");
       }
       return workspaceSession.userId;
     }
+  }
+  const cockpitSession = getCurrentCockpitSession(db, sessionToken);
+  if (cockpitSession) {
+    return cockpitSession.userId;
   }
   const currentUserId = getCurrentUserId(db, sessionToken);
   if (currentUserId) {
@@ -302,9 +419,9 @@ export function setSessionCookie(
   });
 }
 
-export function setWorkspaceSessionCookies(
+export function setCockpitSessionCookies(
   cookies: Cookies,
-  session: WorkspaceSession,
+  session: CockpitSession,
   options: { secure?: boolean } = {},
 ): void {
   const common = {
@@ -323,8 +440,48 @@ export function setWorkspaceSessionCookies(
   });
 }
 
+export function setWorkspaceSessionCookies(
+  cookies: Cookies,
+  session: WorkspaceSession,
+  options: { secure?: boolean } = {},
+): void {
+  const common = {
+    path: "/",
+    httpOnly: true,
+    sameSite: "lax" as const,
+    secure: options.secure ?? false,
+  };
+  cookies.set(workspaceSessionCookieName, session.sessionToken, {
+    ...common,
+    expires: new Date(session.expiresAt),
+  });
+  cookies.set(workspaceSessionRefreshCookieName, session.refreshToken, {
+    ...common,
+    expires: new Date(session.refreshExpiresAt),
+  });
+}
+
 export function hashSecret(secret: string): string {
   return createHash("sha256").update(secret).digest("hex");
+}
+
+/** Workbench data under /{slug}/… that requires a workspace browser session when remote. */
+export function isRemoteWorkspaceDataPath(pathname: string): boolean {
+  const segments = pathname.split("/").filter(Boolean).map(decodePathSegment);
+  if (segments.length === 0) return false;
+  if (segments[0] === "api" && segments[1] === "v1") {
+    return segments[2] === "sessions" || segments[2] === "artifacts" || segments[2] === "events";
+  }
+  const section = segments[1];
+  if (!section || section === "login" || section === "settings") return false;
+  return (
+    section === "sessions" ||
+    section === "artifacts" ||
+    section === "inbox" ||
+    section === "projects" ||
+    section === "repos" ||
+    section === "agents"
+  );
 }
 
 export function workspaceSessionAllowsRequest(
@@ -368,6 +525,7 @@ export function workspaceSessionAllowsRequest(
 
   const resourceId = segments[2];
   if (!resourceId) return true;
+  if (segments[1] === "login" || segments[1] === "settings") return true;
   if (segments[1] === "sessions") {
     return Boolean(
       db
@@ -412,7 +570,7 @@ function decodePathSegment(value: string): string {
   }
 }
 
-function insertSession(db: DatabaseSync, userId: string, now: Date): CreatedOwnerSession {
+function insertLocalOwnerSession(db: DatabaseSync, userId: string, now: Date): CreatedOwnerSession {
   const nowIso = now.toISOString();
   const expiresAt = new Date(now.getTime() + 1000 * 60 * 60 * 24 * 30).toISOString();
   const sessionId = createId("sess");
@@ -426,6 +584,36 @@ function insertSession(db: DatabaseSync, userId: string, now: Date): CreatedOwne
   return { userId, sessionId, sessionToken, expiresAt };
 }
 
+function insertCockpitSession(db: DatabaseSync, userId: string, now: Date): CockpitSession {
+  const nowIso = now.toISOString();
+  const expiresAt = new Date(now.getTime() + cockpitAccessTtlMs).toISOString();
+  const refreshExpiresAt = new Date(now.getTime() + cockpitRefreshTtlMs).toISOString();
+  const sessionId = createId("sess");
+  const sessionToken = `spark_cockpit_access_${randomBytes(32).toString("base64url")}`;
+  const refreshToken = `spark_cockpit_refresh_${randomBytes(32).toString("base64url")}`;
+  db.prepare(
+    `INSERT INTO sessions
+      (id, user_id, token_hash, refresh_token_hash, created_at, expires_at, refresh_expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    sessionId,
+    userId,
+    hashSecret(sessionToken),
+    hashSecret(refreshToken),
+    nowIso,
+    expiresAt,
+    refreshExpiresAt,
+  );
+  return {
+    userId,
+    sessionId,
+    sessionToken,
+    expiresAt,
+    refreshToken,
+    refreshExpiresAt,
+  };
+}
+
 function insertWorkspaceSession(
   db: DatabaseSync,
   userId: string,
@@ -436,8 +624,8 @@ function insertWorkspaceSession(
   const expiresAt = new Date(now.getTime() + workspaceAccessTtlMs).toISOString();
   const refreshExpiresAt = new Date(now.getTime() + workspaceRefreshTtlMs).toISOString();
   const sessionId = createId("sess");
-  const sessionToken = `spark_cockpit_access_${randomBytes(32).toString("base64url")}`;
-  const refreshToken = `spark_cockpit_refresh_${randomBytes(32).toString("base64url")}`;
+  const sessionToken = `spark_workspace_access_${randomBytes(32).toString("base64url")}`;
+  const refreshToken = `spark_workspace_refresh_${randomBytes(32).toString("base64url")}`;
   db.prepare(
     `INSERT INTO sessions
       (id, user_id, token_hash, workspace_id, refresh_token_hash, created_at, expires_at, refresh_expires_at)

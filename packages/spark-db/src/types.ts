@@ -48,6 +48,17 @@ export interface WorkspaceAccessTokensTable {
   revoked_at: string | null;
 }
 
+export interface CockpitAccessTokensTable {
+  id: string;
+  token_hash: string;
+  label: string | null;
+  created_by_user_id: string | null;
+  created_at: string;
+  expires_at: string;
+  used_at: string | null;
+  revoked_at: string | null;
+}
+
 export interface WorkspacesTable {
   id: string;
   slug: string;
@@ -490,6 +501,7 @@ export interface SparkDatabase {
   users: UsersTable;
   sessions: SessionsTable;
   workspace_access_tokens: WorkspaceAccessTokensTable;
+  cockpit_access_tokens: CockpitAccessTokensTable;
   workspaces: WorkspacesTable;
   projects: ProjectsTable;
   resources: ResourcesTable;

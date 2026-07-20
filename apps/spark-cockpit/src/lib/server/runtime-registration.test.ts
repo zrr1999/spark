@@ -7,6 +7,7 @@ import {
 } from "@zendev-lab/spark-protocol";
 import {
   createRuntimeEnrollmentToken,
+  createRuntimeWorkspaceBrowserAccess,
   listRuntimeEnrollmentTokens,
   registerRuntime,
   registerRuntimeWorkspace,
@@ -371,6 +372,46 @@ describe("runtime registration", () => {
       null,
       "RUNTIME_TOKEN_REQUIRED",
     );
+    db.close();
+  });
+
+  it("mints another workspace browser key for an authenticated runtime binding", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    const enrollment = createRuntimeEnrollmentToken(db, {
+      workspaceName: "Spark",
+      workspaceSlug: "spark",
+    });
+    const registered = registerRuntime(
+      db,
+      {
+        ...registrationRequest,
+        workspaceRegistration: {
+          localWorkspaceKey: "spark",
+          displayName: "Spark",
+        },
+      },
+      enrollment.refreshToken,
+    );
+    const binding = registered.workspaceBinding;
+    if (!binding) throw new Error("Expected workspace binding.");
+
+    const authorization = createRuntimeWorkspaceBrowserAccess(db, {
+      runtimeId: registered.runtimeId,
+      bindingId: binding.bindingId,
+      runtimeToken: registered.runtimeToken,
+    });
+    expect(authorization.workspaceId).toBe(binding.workspaceId);
+    expect(authorization.workspaceSlug).toBe("spark");
+    expect(authorization.oneTimeToken).toMatch(/^spark_workspace_auth_/);
+
+    expect(() =>
+      createRuntimeWorkspaceBrowserAccess(db, {
+        runtimeId: registered.runtimeId,
+        bindingId: binding.bindingId,
+        runtimeToken: null,
+      }),
+    ).toThrow(/Runtime access token is required/);
     db.close();
   });
 

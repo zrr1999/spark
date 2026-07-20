@@ -211,12 +211,12 @@ describe("runtime registration", () => {
       workspaceId: expect.stringMatching(/^ws_/),
       bindingId: expect.stringMatching(/^rtwb_/),
       localWorkspaceKey: "local-default",
-      displayName: "Local default",
+      displayName: "local-default",
       status: "available",
     });
     expect(registered.workspaceAuthorization).toMatchObject({
       workspaceId: workspaceBinding?.workspaceId,
-      workspaceSlug: "spark-dev",
+      workspaceSlug: "local-default",
       oneTimeToken: expect.stringMatching(/^spark_workspace_auth_/),
       expiresAt: expect.any(String),
     });
@@ -225,7 +225,7 @@ describe("runtime registration", () => {
     }
     const workspace = db
       .prepare("SELECT id, slug, name FROM workspaces WHERE slug = ?")
-      .get("spark-dev") as { id: string; slug: string; name: string };
+      .get("local-default") as { id: string; slug: string; name: string };
     const binding = db
       .prepare(
         `SELECT id,
@@ -265,14 +265,14 @@ describe("runtime registration", () => {
 
     expect(workspace).toMatchObject({
       id: workspaceBinding.workspaceId,
-      slug: "spark-dev",
-      name: "Spark Dev",
+      slug: "local-default",
+      name: "local-default",
     });
     expect(binding).toMatchObject({
       id: workspaceBinding.bindingId,
       runtimeId: registered.runtimeId,
       localWorkspaceKey: "local-default",
-      displayName: "Local default",
+      displayName: "local-default",
       status: "available",
     });
     expect(owner).toEqual({
@@ -281,6 +281,39 @@ describe("runtime registration", () => {
       endedAt: null,
     });
     expect(token.workspaceId).toBe(workspace.id);
+    db.close();
+  });
+
+  it("rebinds a drifted workspace name to the connected directory basename", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    const enrollment = createRuntimeEnrollmentToken(db, {
+      label: "Drifted workspace",
+      workspaceName: "spore",
+      workspaceSlug: "spore",
+      createdAt: "2026-05-25T00:00:00.000Z",
+      ttlMs: durableEnrollmentTtlMs,
+    });
+
+    const registered = registerRuntime(
+      db,
+      {
+        ...registrationRequest,
+        workspaceRegistration: {
+          localWorkspaceKey: "spark",
+          localPath: "/Users/test/workspaces/spark",
+          displayName: "Unrelated label",
+        },
+      },
+      enrollment.refreshToken,
+    );
+
+    expect(registered.workspaceBinding?.displayName).toBe("spark");
+    expect(registered.workspaceAuthorization?.workspaceSlug).toBe("spark");
+    const workspace = db
+      .prepare("SELECT slug, name FROM workspaces WHERE id = ?")
+      .get(registered.workspaceBinding!.workspaceId) as { slug: string; name: string };
+    expect(workspace).toEqual({ slug: "spark", name: "spark" });
     db.close();
   });
 

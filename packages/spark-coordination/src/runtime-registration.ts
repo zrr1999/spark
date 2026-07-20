@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
 import {
   createId,
   runtimeDeviceAuthorizationRequestSchema,
@@ -11,7 +12,11 @@ import { asciiSlug } from "@zendev-lab/spark-system";
 import { appendEvent } from "./projection-services.ts";
 import { hashSecret } from "./security.ts";
 import { createWorkspaceAccessToken } from "./workspace-access.ts";
-import type { DatabaseSync } from "node:sqlite";
+import {
+  resolveWorkspaceDirectoryDisplayName,
+  syncWorkspaceIdentityFromLocalPath,
+  workspaceIdentityFromLocalPath,
+} from "./workspace-identity.ts";
 
 export interface RegisteredRuntime {
   runtimeId: string;
@@ -777,6 +782,50 @@ export function unbindRuntimeWorkspace(
   });
 }
 
+/** Mint a one-time workspace browser key for a binding owned by this runtime. */
+export function createRuntimeWorkspaceBrowserAccess(
+  db: DatabaseSync,
+  input: {
+    runtimeId: string;
+    bindingId: string;
+    runtimeToken: string | null;
+    label?: string | null;
+    createdAt?: string;
+  },
+): RegisteredWorkspaceAuthorization {
+  const createdAt = input.createdAt ?? new Date().toISOString();
+  return withRuntimeRegistrationTransaction(db, () => {
+    authenticateRuntimeAccessToken(db, input.runtimeId, input.runtimeToken, createdAt, [
+      "runtime:connect",
+    ]);
+    const owner = db
+      .prepare(
+        `SELECT wob.workspace_id AS workspaceId
+         FROM workspace_owner_bindings wob
+         JOIN runtime_workspace_bindings rwb
+           ON rwb.id = wob.runtime_workspace_binding_id
+         WHERE wob.runtime_workspace_binding_id = ?
+           AND rwb.runtime_id = ?
+           AND wob.ended_at IS NULL
+         LIMIT 1`,
+      )
+      .get(input.bindingId, input.runtimeId) as { workspaceId: string } | undefined;
+    if (!owner) {
+      throw new RuntimeEnrollmentError(
+        "Runtime workspace binding was not found or is not an active workspace owner.",
+        "WORKSPACE_BINDING_NOT_FOUND",
+      );
+    }
+    return createRegisteredWorkspaceAuthorization(
+      db,
+      owner.workspaceId,
+      input.runtimeId,
+      createdAt,
+      input.label ?? "Daemon workspace browser access",
+    );
+  });
+}
+
 export function refreshRuntimeToken(
   db: DatabaseSync,
   input: {
@@ -1078,11 +1127,12 @@ function createRegisteredWorkspaceAuthorization(
   workspaceId: string,
   runtimeId: string,
   createdAt: string,
+  label = "Daemon workspace registration",
 ): RegisteredWorkspaceAuthorization {
   const authorization = createWorkspaceAccessToken(db, {
     workspaceId,
     createdByRuntimeId: runtimeId,
-    label: "Daemon workspace registration",
+    label,
     createdAt,
   });
   return {
@@ -1182,6 +1232,18 @@ function completeWorkspaceRegistration(
     now,
   );
   ensureActiveOwnerBinding(db, prepared.workspace.id, runtimeId, prepared.bindingId, now);
+  const synced = syncWorkspaceIdentityFromLocalPath(
+    db,
+    prepared.workspace.id,
+    prepared.workspaceRegistration.localPath,
+    now,
+  );
+  const workspaceName = synced?.name ?? prepared.workspace.name;
+  const workspaceSlug = synced?.slug ?? prepared.workspace.slug;
+  const displayName = resolveWorkspaceDirectoryDisplayName({
+    localPath: prepared.workspaceRegistration.localPath,
+    displayName: prepared.workspaceRegistration.displayName,
+  });
   if (workspaceGrant.enrollmentTokenId) {
     db.prepare(
       `UPDATE runtime_enrollment_tokens
@@ -1189,19 +1251,14 @@ function completeWorkspaceRegistration(
            workspace_name = COALESCE(workspace_name, ?),
            workspace_slug = COALESCE(workspace_slug, ?)
        WHERE id = ?`,
-    ).run(
-      prepared.workspace.id,
-      prepared.workspace.name,
-      prepared.workspace.slug,
-      workspaceGrant.enrollmentTokenId,
-    );
+    ).run(prepared.workspace.id, workspaceName, workspaceSlug, workspaceGrant.enrollmentTokenId);
   }
 
   return {
     workspaceId: prepared.workspace.id,
     bindingId: prepared.bindingId,
     localWorkspaceKey: prepared.workspaceRegistration.localWorkspaceKey,
-    displayName: prepared.workspaceRegistration.displayName,
+    displayName,
     status: "available",
   };
 }
@@ -1260,13 +1317,16 @@ function resolveRegisteredWorkspace(
     return workspace;
   }
 
+  const pathIdentity = workspaceIdentityFromLocalPath(workspaceRegistration.localPath);
   const slug =
     workspaceGrant.workspaceSlug ??
     workspaceRegistration.workspaceSlug ??
+    pathIdentity?.slug ??
     slugify(workspaceRegistration.displayName);
   const name =
     workspaceGrant.workspaceName ??
     workspaceRegistration.workspaceName ??
+    pathIdentity?.name ??
     workspaceRegistration.displayName;
   const existing = db
     .prepare("SELECT id, slug, name FROM workspaces WHERE slug = ? AND status = 'active'")
@@ -1291,6 +1351,10 @@ function upsertRegisteredWorkspaceBinding(
   workspaceRegistration: NonNullable<RuntimeRegistrationRequest["workspaceRegistration"]>,
   now: string,
 ): void {
+  const displayName = resolveWorkspaceDirectoryDisplayName({
+    localPath: workspaceRegistration.localPath,
+    displayName: workspaceRegistration.displayName,
+  });
   const existing = db
     .prepare(
       `SELECT id
@@ -1307,12 +1371,7 @@ function upsertRegisteredWorkspaceBinding(
            status = 'available',
            updated_at = ?
        WHERE id = ?`,
-    ).run(
-      workspaceRegistration.displayName,
-      workspaceRegistration.localPath ?? null,
-      now,
-      existing.id,
-    );
+    ).run(displayName, workspaceRegistration.localPath ?? null, now, existing.id);
     return;
   }
 
@@ -1325,7 +1384,7 @@ function upsertRegisteredWorkspaceBinding(
     runtimeId,
     workspaceRegistration.localWorkspaceKey,
     workspaceRegistration.localPath ?? null,
-    workspaceRegistration.displayName,
+    displayName,
     now,
     now,
   );

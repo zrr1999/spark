@@ -87,7 +87,7 @@ server.listen(port, host, () => {
   }
   if (host === "0.0.0.0" || publicUrl.mode !== "local") {
     console.log(
-      "Spark Cockpit remote browser access requires a workspace-scoped one-time key and rotating session.",
+      "Spark Cockpit remote browser access requires a Cockpit one-time key (/login), then a workspace key (/{slug}/login).",
     );
   }
 });

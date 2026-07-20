@@ -72,6 +72,7 @@ export interface CockpitRestoreResult {
   transientReset: {
     browserSessionsDeleted: number;
     workspaceAccessTokensDeleted: number;
+    cockpitAccessTokensDeleted: number;
     runtimeSessionsClosed: number;
     runtimesMarkedOffline: number;
     deviceAuthorizationsDeleted: number;
@@ -239,6 +240,7 @@ export async function createCockpitSnapshot(input: {
       resetOnRestoreScopes: [
         "browser_sessions",
         "workspace_access_tokens",
+        "cockpit_access_tokens",
         "runtime_websocket_sessions",
         "pending_device_authorizations",
         "web_push_subscription",
@@ -401,6 +403,9 @@ function prepareRestoredDatabase(
     const workspaceAccessTokensDeleted = changes(
       db.prepare("DELETE FROM workspace_access_tokens WHERE used_at IS NULL").run(),
     );
+    const cockpitAccessTokensDeleted = changes(
+      db.prepare("DELETE FROM cockpit_access_tokens WHERE used_at IS NULL").run(),
+    );
     const runtimeSessionsClosed = changes(
       db
         .prepare(
@@ -433,6 +438,7 @@ function prepareRestoredDatabase(
     return {
       browserSessionsDeleted,
       workspaceAccessTokensDeleted,
+      cockpitAccessTokensDeleted,
       runtimeSessionsClosed,
       runtimesMarkedOffline,
       deviceAuthorizationsDeleted,

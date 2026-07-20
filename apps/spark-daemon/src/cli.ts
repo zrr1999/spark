@@ -66,6 +66,7 @@ import {
 import {
   completeSparkDaemonDeviceAuthorization,
   configuredServerUrl,
+  createSparkDaemonWorkspaceBrowserAccess,
   DeviceAuthorizationError,
   hasRunnableSparkDaemonCredentialsForServer,
   RegistrationGrantRefusedError,
@@ -1392,7 +1393,11 @@ async function workspace(
     return await relocateWorkspaceCommand(paths, args, io);
   }
 
-  throw new Error("Usage: spark daemon workspace <register|relocate|ls|show|stop>");
+  if (subcommand === "access") {
+    return await workspaceAccessCommand(paths, args, io);
+  }
+
+  throw new Error("Usage: spark daemon workspace <register|relocate|access|ls|show|stop>");
 }
 
 async function registerWorkspaceCommand(
@@ -1460,13 +1465,50 @@ async function registerWorkspaceCommand(
 function workspaceAuthorizationText(workspace: SparkDaemonWorkspace, serverUrl: string): string {
   const authorization = workspace.workspaceAuthorization;
   if (!authorization) return "";
-  const loginUrl = new URL("/login", serverUrl);
-  loginUrl.searchParams.set("workspace", authorization.workspaceSlug);
+  const loginUrl = new URL(`/${encodeURIComponent(authorization.workspaceSlug)}/login`, serverUrl);
   return (
     `  authorize ${loginUrl.toString()}\n` +
     `  one-time ${authorization.oneTimeToken}\n` +
     `  expires  ${authorization.expiresAt}\n`
   );
+}
+
+async function workspaceAccessCommand(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  args: string[],
+  io: CliIo,
+): Promise<number> {
+  const [action, ...rest] = args;
+  if (action !== "create") {
+    throw new Error("Usage: spark daemon workspace access create [--workspace <name>] [--json]");
+  }
+  const flags = parseFlags(rest);
+  const workspaces = await loadWorkspaceList(paths, io);
+  const workspace = resolveWorkspace(workspaces, flags.workspace ?? positionalArgs(rest)[0]);
+  if (!workspace.serverBindingId) {
+    throw new Error(
+      `Workspace '${workspace.displayName}' has no Cockpit binding. Re-run spark daemon workspace register.`,
+    );
+  }
+  if (!workspace.serverUrl) {
+    throw new Error(`Workspace '${workspace.displayName}' has no Cockpit server URL.`);
+  }
+  const authorization = await createSparkDaemonWorkspaceBrowserAccess(paths, {
+    serverUrl: workspace.serverUrl,
+    bindingId: workspace.serverBindingId,
+    ...(flags["allow-insecure-http"] === "true" ? { allowInsecureHttp: true } : {}),
+  });
+  if (flags.json === "true") {
+    io.stdout.write(`${JSON.stringify({ action: "workspace-access", authorization }, null, 2)}\n`);
+    return 0;
+  }
+  io.stdout.write(
+    `✓ workspace browser key for '${workspace.displayName}'\n` +
+      `  authorize ${authorization.loginUrl}\n` +
+      `  one-time ${authorization.oneTimeToken}\n` +
+      `  expires  ${authorization.expiresAt}\n`,
+  );
+  return 0;
 }
 
 async function relocateWorkspaceCommand(
@@ -2418,6 +2460,7 @@ Commands:
   login --server-url <url> [--no-open] [--allow-insecure-http]
   workspace register [path] --server-url <url> --token <workspace-registration-token|-> --name <name> [--profile <path-or-git-url>] [--allow-insecure-http]
   workspace relocate --to-server-url <https-origin> [--from-server-url <origin>] [--yes] [--json]
+  workspace access create [--workspace <name>] [--json] [--allow-insecure-http]
   workspace ls [--json] [--all] [--full]
   workspace show [name] [--workspace <name>] [--json]
   workspace stop <name> [--workspace <name>] [--yes]
@@ -2440,6 +2483,7 @@ function printWorkspaceHelp(io: CliIo): void {
 Commands:
   register [path] --server-url <url> --token <workspace-registration-token|-> --name <name> [--profile <path-or-git-url>] [--allow-insecure-http]
   relocate --to-server-url <https-origin> [--from-server-url <origin>] [--yes] [--json]
+  access create [--workspace <name>] [--json] [--allow-insecure-http]
   ls [--json] [--all] [--full]
   show [name] [--workspace <name>] [--json]
   stop <name> [--workspace <name>] [--yes]

@@ -299,15 +299,14 @@
           {#each data.runnerBindings as binding}
             <div class="runner-row binding-row">
               <div>
-                <strong>{binding.displayName}</strong>
-                <small
+                <strong
                   class="binding-path"
                   class:pending={!binding.localPath}
                   title={binding.localPath ?? t.bindings.pathPending}
                 >
                   <Icon name="folder" size={13} />
                   <span>{binding.localPath ?? t.bindings.pathPending}</span>
-                </small>
+                </strong>
                 <small>{binding.runtimeName} · {binding.localWorkspaceKey}</small>
               </div>
               <span class="status-pill {binding.status}">{statusLabel(binding.status)}</span>
@@ -632,6 +631,12 @@
     font-family: var(--font-mono);
     min-width: 0;
     overflow-wrap: anywhere;
+  }
+
+  .binding-path.pending span {
+    color: var(--color-ink-subtle);
+    font-family: inherit;
+    font-style: italic;
   }
 
   .binding-path :global(svg) {

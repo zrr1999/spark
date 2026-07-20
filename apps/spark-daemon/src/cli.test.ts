@@ -1786,7 +1786,7 @@ describe("Spark daemon CLI", () => {
           registrationToken: "spark_wsreg_profile_workspace",
         }),
       );
-      expect(capture.stdout()).toContain("http://127.0.0.1:5173/login?workspace=profile-workspace");
+      expect(capture.stdout()).toContain("http://127.0.0.1:5173/profile-workspace/login");
       expect(capture.stdout()).toContain("spark_workspace_auth_11111111111111111111111111111111");
     });
   });
@@ -2561,7 +2561,7 @@ describe("Spark daemon CLI", () => {
     await withTempSparkEnv(async () => {
       await expect(main(["ws", "reconcile"], capture.io)).resolves.toBe(1);
       expect(capture.stderr()).toContain(
-        "Usage: spark daemon workspace <register|relocate|ls|show|stop>",
+        "Usage: spark daemon workspace <register|relocate|access|ls|show|stop>",
       );
     });
   });

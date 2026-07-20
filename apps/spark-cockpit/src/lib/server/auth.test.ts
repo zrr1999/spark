@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { createCockpitAccessToken } from "@zendev-lab/spark-coordination/cockpit-access";
 import { createWorkspaceAccessToken } from "@zendev-lab/spark-coordination/workspace-access";
 import {
   createRuntimeEnrollmentToken,
@@ -11,11 +12,15 @@ import {
   createOwnerSession,
   ensureCurrentOwnerSession,
   ensureLocalSystemUser,
+  exchangeCockpitAccessToken,
   exchangeWorkspaceAccessToken,
+  getCurrentCockpitSession,
   getCurrentWorkspaceSession,
   getCurrentUserId,
   hashSecret,
+  isRemoteWorkspaceDataPath,
   sessionCookieName,
+  refreshCockpitSession,
   refreshWorkspaceSession,
   workspaceSessionAllowsRequest,
 } from "./auth";
@@ -43,7 +48,7 @@ describe("local owner auth", () => {
     const db = openMemoryDatabase();
     migrate(db);
     const session = createOwnerSession(db, "Local Owner", null);
-    const cookies = createCookieCapture();
+    const cookies = createCookieCapture(sessionCookieName);
 
     const userId = ensureCurrentOwnerSession(db, cookies as unknown as Cookies, null);
 
@@ -101,6 +106,41 @@ describe("local owner auth", () => {
 });
 
 describe("remote access auth", () => {
+  it("exchanges a Cockpit one-time key into an owner session with refresh", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    const grant = createCockpitAccessToken(db, {
+      createdAt: "2026-07-20T00:00:00.000Z",
+      ttlMs: 60_000,
+    });
+    const session = exchangeCockpitAccessToken(
+      db,
+      grant.token,
+      new Date("2026-07-20T00:00:01.000Z"),
+    );
+    expect(
+      getCurrentCockpitSession(db, session.sessionToken, new Date("2026-07-20T00:00:02.000Z")),
+    ).toMatchObject({
+      userId: session.userId,
+    });
+    expect(
+      getCurrentWorkspaceSession(db, session.sessionToken, new Date("2026-07-20T00:00:02.000Z")),
+    ).toBeNull();
+    expect(() =>
+      exchangeCockpitAccessToken(db, grant.token, new Date("2026-07-20T00:00:02.000Z")),
+    ).toThrow(/already been used/);
+
+    const refreshed = refreshCockpitSession(
+      db,
+      session.refreshToken,
+      new Date("2026-07-20T00:16:00.000Z"),
+    );
+    expect(refreshed?.userId).toBe(session.userId);
+    expect(refreshed?.refreshToken).not.toBe(session.refreshToken);
+    expect(refreshCockpitSession(db, session.refreshToken)).toBeNull();
+    db.close();
+  });
+
   it("exchanges the one-time browser key returned by daemon workspace registration", () => {
     const db = openMemoryDatabase();
     migrate(db);
@@ -131,6 +171,7 @@ describe("remote access auth", () => {
       workspaceId: authorization.workspaceId,
       workspaceSlug: "spore",
     });
+    expect(session.sessionToken).toMatch(/^spark_workspace_access_/);
     expect(() => exchangeWorkspaceAccessToken(db, authorization.oneTimeToken)).toThrow(
       /already been used/,
     );
@@ -225,9 +266,10 @@ describe("remote access auth", () => {
     ).toBe(true);
   });
 
-  it("allows login, PWA assets, and runtime bearer endpoints before Cockpit login", () => {
+  it("allows login, workspace login, PWA assets, and runtime bearer endpoints before auth", () => {
     for (const path of [
       "/login",
+      "/spore/login",
       "/manifest.webmanifest",
       "/service-worker.js",
       "/icons/spark-maskable.svg",
@@ -245,9 +287,18 @@ describe("remote access auth", () => {
       });
     }
   });
+
+  it("classifies workbench data paths that need a workspace session", () => {
+    expect(isRemoteWorkspaceDataPath("/spark/sessions")).toBe(true);
+    expect(isRemoteWorkspaceDataPath("/spark/artifacts/a1")).toBe(true);
+    expect(isRemoteWorkspaceDataPath("/spark/settings")).toBe(false);
+    expect(isRemoteWorkspaceDataPath("/spark/login")).toBe(false);
+    expect(isRemoteWorkspaceDataPath("/settings/models")).toBe(false);
+    expect(isRemoteWorkspaceDataPath("/api/v1/sessions/s1/status")).toBe(true);
+  });
 });
 
-function createCookieCapture() {
+function createCookieCapture(expectedName: string) {
   const capture: {
     value: string | undefined;
     options: Record<string, unknown> | undefined;
@@ -256,7 +307,7 @@ function createCookieCapture() {
     value: undefined,
     options: undefined,
     set(name, value, options) {
-      expect(name).toBe(sessionCookieName);
+      expect(name).toBe(expectedName);
       capture.value = value;
       capture.options = options;
     },

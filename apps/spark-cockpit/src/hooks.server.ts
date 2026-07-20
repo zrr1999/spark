@@ -1,12 +1,18 @@
 import { createId } from "@zendev-lab/spark-protocol";
 import type { Handle, HandleServerError, RequestEvent } from "@sveltejs/kit";
 import {
+  getCurrentCockpitSession,
   getCurrentWorkspaceSession,
+  isRemoteWorkspaceDataPath,
+  refreshCockpitSession,
   refreshWorkspaceSession,
   sessionCookieName,
   sessionRefreshCookieName,
+  setCockpitSessionCookies,
   setWorkspaceSessionCookies,
   workspaceSessionAllowsRequest,
+  workspaceSessionCookieName,
+  workspaceSessionRefreshCookieName,
 } from "$lib/server/auth";
 import { getDatabase } from "$lib/server/db";
 import { presentCockpitServerError } from "$lib/server/error-presentation";
@@ -16,18 +22,36 @@ import { remoteAccessDecision } from "$lib/server/remote-access";
 
 export const handle: Handle = async ({ event, resolve }) => {
   event.locals.requestId = createId("msg");
+  const db = getDatabase();
+
   event.locals.sessionToken = event.cookies.get(sessionCookieName) ?? null;
-  let workspaceSession = getCurrentWorkspaceSession(getDatabase(), event.locals.sessionToken);
+  let cockpitSession = getCurrentCockpitSession(db, event.locals.sessionToken);
+  if (!cockpitSession) {
+    const refreshed = refreshCockpitSession(
+      db,
+      event.cookies.get(sessionRefreshCookieName) ?? null,
+    );
+    if (refreshed) {
+      setCockpitSessionCookies(event.cookies, refreshed, {
+        secure: event.url.protocol === "https:",
+      });
+      event.locals.sessionToken = refreshed.sessionToken;
+      cockpitSession = refreshed;
+    }
+  }
+
+  event.locals.workspaceSessionToken = event.cookies.get(workspaceSessionCookieName) ?? null;
+  let workspaceSession = getCurrentWorkspaceSession(db, event.locals.workspaceSessionToken);
   if (!workspaceSession) {
     const refreshed = refreshWorkspaceSession(
-      getDatabase(),
-      event.cookies.get(sessionRefreshCookieName) ?? null,
+      db,
+      event.cookies.get(workspaceSessionRefreshCookieName) ?? null,
     );
     if (refreshed) {
       setWorkspaceSessionCookies(event.cookies, refreshed, {
         secure: event.url.protocol === "https:",
       });
-      event.locals.sessionToken = refreshed.sessionToken;
+      event.locals.workspaceSessionToken = refreshed.sessionToken;
       workspaceSession = refreshed;
     }
   }
@@ -35,15 +59,29 @@ export const handle: Handle = async ({ event, resolve }) => {
 
   const clientAddress = getClientAddress(event);
   const decision = remoteAccessDecision({ url: event.url, clientAddress });
-  if (decision.required && !workspaceSession) {
-    return remoteAccessRequiredResponse(event);
+  if (decision.required && !cockpitSession && !workspaceSession) {
+    return remoteAccessRequiredResponse(event, "cockpit");
+  }
+  if (
+    decision.required &&
+    cockpitSession &&
+    !workspaceSession &&
+    isRemoteWorkspaceDataPath(event.url.pathname)
+  ) {
+    const slug = workspaceSlugFromPath(event.url.pathname);
+    if (slug) {
+      return remoteAccessRequiredResponse(event, "workspace", slug);
+    }
   }
   if (
     decision.required &&
     workspaceSession &&
-    !workspaceSessionAllowsRequest(getDatabase(), workspaceSession.workspaceId, event.url.pathname)
+    !workspaceSessionAllowsRequest(db, workspaceSession.workspaceId, event.url.pathname)
   ) {
-    return workspaceAccessForbiddenResponse(workspaceSession.workspaceSlug);
+    // Cockpit owner sessions may still use control-plane routes.
+    if (!cockpitSession || isRemoteWorkspaceDataPath(event.url.pathname)) {
+      return workspaceAccessForbiddenResponse(workspaceSession.workspaceSlug);
+    }
   }
 
   const locale = resolveRequestLocale({
@@ -85,20 +123,42 @@ function getClientAddress(event: RequestEvent): string | null {
   }
 }
 
-function remoteAccessRequiredResponse(event: RequestEvent): Response {
+function workspaceSlugFromPath(pathname: string): string | null {
+  const segment = pathname.split("/").filter(Boolean)[0];
+  if (!segment) return null;
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+function remoteAccessRequiredResponse(
+  event: RequestEvent,
+  layer: "cockpit" | "workspace",
+  workspaceSlug?: string,
+): Response {
   const acceptsHtml = event.request.headers.get("accept")?.includes("text/html") ?? false;
   if ((event.request.method === "GET" || event.request.method === "HEAD") && acceptsHtml) {
     const next = `${event.url.pathname}${event.url.search}`;
+    const location =
+      layer === "workspace" && workspaceSlug
+        ? `/${encodeURIComponent(workspaceSlug)}/login?next=${encodeURIComponent(next)}`
+        : `/login?next=${encodeURIComponent(next)}`;
     return new Response(null, {
       status: 303,
-      headers: { location: `/login?next=${encodeURIComponent(next)}` },
+      headers: { location },
     });
   }
 
   return new Response(
     JSON.stringify({
-      error: "workspace_access_auth_required",
-      message: "Spark Cockpit requires a workspace-scoped access session.",
+      error:
+        layer === "workspace" ? "workspace_access_auth_required" : "cockpit_access_auth_required",
+      message:
+        layer === "workspace"
+          ? "Spark Cockpit requires a workspace-scoped access session for this path."
+          : "Spark Cockpit requires a Cockpit access session.",
     }),
     {
       status: 401,

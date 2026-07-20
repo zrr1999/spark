@@ -76,6 +76,7 @@ describe("Cockpit instance snapshots", () => {
       "0014",
       "0015",
       "0016",
+      "0017",
     ]);
     expect(manifest.tableCounts).toMatchObject({
       workspaces: 1,
@@ -109,6 +110,7 @@ describe("Cockpit instance snapshots", () => {
       transientReset: {
         browserSessionsDeleted: 1,
         workspaceAccessTokensDeleted: 0,
+        cockpitAccessTokensDeleted: 0,
         runtimeSessionsClosed: 1,
         runtimesMarkedOffline: 1,
         deviceAuthorizationsDeleted: 1,

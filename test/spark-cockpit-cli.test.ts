@@ -67,6 +67,7 @@ void test("spark cockpit help documents coordination resources and excludes daem
   assert.match(help, /spark cockpit review list/u);
   assert.match(help, /spark cockpit workflow list/u);
   assert.match(help, /spark cockpit instance backup/u);
+  assert.match(help, /spark cockpit access create/u);
   assert.match(help, /spark cockpit instance inspect/u);
   assert.match(help, /spark cockpit instance restore/u);
   assert.match(help, /spark cockpit instance status/u);

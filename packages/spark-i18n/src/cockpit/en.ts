@@ -1500,15 +1500,28 @@ const messages = {
   },
   login: {
     headTitle: "Sign in · Spark",
-    eyebrow: "Workspace access",
-    title: "Open a Spark workspace",
-    lede: "Enter a one-time key issued for one workspace. It does not grant access to the rest of this Cockpit.",
+    eyebrow: "Cockpit access",
+    title: "Open Spark Cockpit",
+    lede: "Enter a one-time Cockpit key. It unlocks the control plane; each workspace still needs its own key.",
     unconfigured:
-      "No active workspace access key is available. Ask a workspace member to generate one.",
+      "No active Cockpit access key is available. Run spark cockpit access create on the host.",
+    tokenLabel: "One-time Cockpit key",
+    tokenPlaceholder: "spark_cockpit_auth_…",
+    action: "Continue",
+    invalid: "The Cockpit key is invalid, expired, revoked, or already used.",
+  },
+  workspaceLogin: {
+    headTitle: "Workspace sign in · Spark",
+    eyebrow: "Workspace access",
+    title: "Open this workspace",
+    lede: "Enter a one-time key issued for {workspace}. It does not grant access to other workspaces or Cockpit settings.",
+    unconfigured:
+      "No active workspace access key is available. Ask an operator to run spark daemon workspace access create.",
     tokenLabel: "One-time workspace key",
     tokenPlaceholder: "spark_workspace_auth_…",
     action: "Continue",
     invalid: "The workspace key is invalid, expired, revoked, or already used.",
+    wrongWorkspace: "That key belongs to a different workspace.",
   },
   setup: {
     headTitle: "Set up Spark Cockpit",
