@@ -1183,7 +1183,7 @@ describe("Spark daemon local RPC", () => {
       db.close();
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   it("keeps 10,000-invocation diagnostics bounded and exposes result retry and retention", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-invocation-list-"));

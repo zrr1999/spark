@@ -171,6 +171,38 @@ export function createSessionLiveEventState(input: {
 }
 
 /**
+ * Adopt a refreshed server projection without replacing the live reducer.
+ * Keeping the reducer identity preserves its SSE cursor and replay fences, while
+ * the monotonic merge prevents a slightly older page snapshot from erasing text
+ * that has already arrived through the event stream.
+ */
+export function reconcileSessionLiveEventState(
+  state: SessionLiveEventState,
+  input: {
+    workspaceId?: string | null;
+    view?: SparkSessionView | null;
+    commandIds?: Iterable<string>;
+    invocationIds?: Iterable<string>;
+    preserveCurrentHistory?: boolean;
+  },
+): boolean {
+  state.workspaceId = input.workspaceId ?? state.workspaceId;
+  for (const commandId of input.commandIds ?? []) state.commandIds.add(commandId);
+  for (const invocationId of input.invocationIds ?? []) state.invocationIds.add(invocationId);
+  if (!input.view || input.view.sessionId !== state.sessionId) return false;
+
+  const previous = state.view;
+  state.view = reconcileSessionView(
+    previous,
+    normalizeSnapshotAgainstInvocationPhases(cloneSessionView(input.view), state.invocationPhases),
+    state.sessionId,
+    input.preserveCurrentHistory ?? false,
+  );
+  syncInvocationStateFromView(state, false);
+  return state.view !== previous;
+}
+
+/**
  * Register the durable turn receipt returned by `turn.submit` before the first
  * runtime event arrives. Direct Cockpit turns do not have a legacy command id,
  * so their invocation updates can only be scoped safely by this receipt.
@@ -387,27 +419,21 @@ function applyDaemonEvent(
       return { changed: false, refreshActivity: false };
     }
     const mailbox = viewEvent.session.mailbox ?? state.view?.mailbox;
-    state.view = normalizeSnapshotAgainstInvocationPhases(
-      cloneSessionView({
-        ...viewEvent.session,
-        ...(mailbox ? { mailbox } : {}),
-      }),
-      state.invocationPhases,
+    const previous = state.view;
+    state.view = reconcileSessionView(
+      previous,
+      normalizeSnapshotAgainstInvocationPhases(
+        cloneSessionView({
+          ...viewEvent.session,
+          ...(mailbox ? { mailbox } : {}),
+        }),
+        state.invocationPhases,
+      ),
+      state.sessionId,
+      true,
     );
-    const pendingInvocationIds = new Set(
-      (state.view.pendingTurns ?? []).map((turn) => turn.invocationId),
-    );
-    for (const [invocationId, phase] of state.invocationPhases) {
-      if (!isTerminalInvocationStatus(phase) && !pendingInvocationIds.has(invocationId)) {
-        state.invocationPhases.delete(invocationId);
-      }
-    }
-    for (const pending of state.view.pendingTurns ?? []) {
-      state.invocationIds.add(pending.invocationId);
-      acceptInvocationPhase(state, pending.invocationId, pending.status);
-    }
-    state.activeTurnId = queuedTurnId(state.view);
-    return { changed: true, refreshActivity: false };
+    syncInvocationStateFromView(state, true);
+    return { changed: state.view !== previous, refreshActivity: false };
   }
 
   const current = state.view ?? emptySessionView(state.sessionId, event.createdAt);
@@ -419,9 +445,13 @@ function applyDaemonEvent(
       sanitizeLiveMessage(viewEvent.message),
       daemonEvent.invocationId ?? null,
     );
+    const messages = upsertSessionMessage(current.messages, message, state.sessionId);
+    if (messages === current.messages) {
+      return { changed: false, refreshActivity: false };
+    }
     state.view = {
       ...current,
-      messages: upsertSessionMessage(current.messages, message, state.sessionId),
+      messages,
       updatedAt: message.updatedAt ?? message.createdAt ?? event.createdAt,
     };
     return { changed: true, refreshActivity: false };
@@ -574,6 +604,98 @@ function normalizeSnapshotAgainstInvocationPhases(
   };
 }
 
+function reconcileSessionView(
+  current: SparkSessionView | null,
+  snapshot: SparkSessionView,
+  sessionId: string,
+  preserveCurrentHistory: boolean,
+): SparkSessionView {
+  if (!current) return snapshot;
+  const messages = reconcileSnapshotMessages(
+    current.messages,
+    snapshot.messages,
+    sessionId,
+    preserveCurrentHistory,
+  );
+  const next: SparkSessionView = {
+    ...snapshot,
+    messages,
+    tools: mergeSnapshotItems(current.tools, snapshot.tools, (item) => item.id),
+    runs: mergeSnapshotItems(current.runs, snapshot.runs, (item) => item.id),
+    tasks: mergeSnapshotItems(current.tasks, snapshot.tasks, (item) => item.ref),
+    artifacts: mergeSnapshotItems(current.artifacts, snapshot.artifacts, (item) => item.ref),
+    ...(snapshot.mailbox
+      ? { mailbox: snapshot.mailbox }
+      : current.mailbox
+        ? { mailbox: current.mailbox }
+        : {}),
+    updatedAt: laterTimestamp(current.updatedAt, snapshot.updatedAt),
+  };
+  return sameJsonValue(current, next) ? current : next;
+}
+
+function reconcileSnapshotMessages(
+  current: SparkMessageView[],
+  snapshot: SparkMessageView[],
+  sessionId: string,
+  preserveCurrentHistory: boolean,
+): SparkMessageView[] {
+  if (preserveCurrentHistory) {
+    let messages = current;
+    for (const message of snapshot) {
+      messages = upsertSessionMessage(messages, message, sessionId);
+    }
+    return messages;
+  }
+  let messages = [...snapshot];
+  const snapshotIds = new Set(snapshot.map((message) => message.id));
+  const lastSharedCurrentIndex = current.findLastIndex((message) => snapshotIds.has(message.id));
+  for (const [index, message] of current.entries()) {
+    const isShared = snapshotIds.has(message.id);
+    const isLiveSuffix = lastSharedCurrentIndex < 0 || index > lastSharedCurrentIndex;
+    if (isShared || isLiveSuffix || userMessageInvocationId(message)) {
+      messages = upsertSessionMessage(messages, message, sessionId);
+    }
+  }
+  return messages;
+}
+
+function mergeSnapshotItems<T>(
+  current: readonly T[],
+  snapshot: readonly T[],
+  key: (item: T) => string,
+): T[] {
+  const snapshotByKey = new Map(snapshot.map((item) => [key(item), item]));
+  const currentKeys = new Set(current.map(key));
+  return [
+    ...current.map((item) => snapshotByKey.get(key(item)) ?? item),
+    ...snapshot.filter((item) => !currentKeys.has(key(item))),
+  ];
+}
+
+function laterTimestamp(current: string | undefined, next: string | undefined): string | undefined {
+  if (!current) return next;
+  if (!next) return current;
+  return next > current ? next : current;
+}
+
+function syncInvocationStateFromView(state: SessionLiveEventState, pruneMissing: boolean): void {
+  const pendingTurns = state.view?.pendingTurns ?? [];
+  const pendingInvocationIds = new Set(pendingTurns.map((turn) => turn.invocationId));
+  if (pruneMissing) {
+    for (const [invocationId, phase] of state.invocationPhases) {
+      if (!isTerminalInvocationStatus(phase) && !pendingInvocationIds.has(invocationId)) {
+        state.invocationPhases.delete(invocationId);
+      }
+    }
+  }
+  for (const pending of pendingTurns) {
+    state.invocationIds.add(pending.invocationId);
+    acceptInvocationPhase(state, pending.invocationId, pending.status);
+  }
+  state.activeTurnId = queuedTurnId(state.view);
+}
+
 function isActiveSessionStatus(status: string): boolean {
   const normalized = status.toLocaleLowerCase();
   return normalized === "running" || normalized === "streaming" || normalized === "queued";
@@ -651,13 +773,16 @@ function upsertById<T extends { id: string }>(items: readonly T[], next: T): T[]
 }
 
 function upsertSessionMessage(
-  items: readonly SparkMessageView[],
+  items: SparkMessageView[],
   next: SparkMessageView,
   sessionId: string,
 ): SparkMessageView[] {
   const exactIndex = items.findIndex((item) => item.id === next.id);
   if (exactIndex >= 0) {
-    return items.map((item, index) => (index === exactIndex ? next : item));
+    const current = items[exactIndex]!;
+    const preferred = preferMessageRevision(current, next);
+    if (preferred === current) return items;
+    return items.map((item, index) => (index === exactIndex ? preferred : item));
   }
 
   const invocationId = userMessageInvocationId(next);
@@ -670,7 +795,35 @@ function upsertSessionMessage(
   const currentIsTemporary = current.id.startsWith(livePrefix);
   const nextIsTemporary = next.id.startsWith(livePrefix);
   const preferred = currentIsTemporary && !nextIsTemporary ? next : current;
+  if (preferred === current) return items;
   return items.map((item, index) => (index === correlatedIndex ? preferred : item));
+}
+
+function preferMessageRevision(
+  current: SparkMessageView,
+  next: SparkMessageView,
+): SparkMessageView {
+  if (sameJsonValue(current, next)) return current;
+
+  const currentTerminal = current.status === "done" || current.status === "error";
+  const nextTerminal = next.status === "done" || next.status === "error";
+  if (currentTerminal !== nextTerminal) return nextTerminal ? next : current;
+  if (!currentTerminal && current.status === "streaming" && next.status === "pending") {
+    return current;
+  }
+
+  const currentWeight = messageProjectionWeight(current);
+  const nextWeight = messageProjectionWeight(next);
+  if (nextWeight < currentWeight) return current;
+  return next;
+}
+
+function messageProjectionWeight(message: SparkMessageView): number {
+  return message.text.length + JSON.stringify(message.parts ?? []).length;
+}
+
+function sameJsonValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function correlateLiveUserMessage(

@@ -736,6 +736,41 @@ void test("SparkAgentLoop projects user, streaming, final, and run updates to vi
   );
 });
 
+void test("SparkAgentLoop suppresses identical cumulative assistant stream projections", async () => {
+  const viewEvents: any[] = [];
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-agent-loop-cumulative-dedup-test",
+    ui: { publishView: (event) => viewEvents.push(event) },
+  });
+  const partial = buildAssistant([{ type: "text", text: "same cumulative text" }]);
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: makeFakeStream({
+      rounds: [
+        [
+          { type: "start", partial },
+          {
+            type: "text_delta",
+            contentIndex: 0,
+            delta: "same cumulative text",
+            partial,
+          },
+          { type: "done", reason: "stop", message: partial },
+        ],
+      ],
+    }),
+    getModel: () => TEST_MODEL,
+  });
+
+  await loop.submit("deduplicate the projection");
+
+  const assistantMessages = viewEvents.filter(
+    (event) => event.type === "session.message" && event.message.role === "assistant",
+  );
+  assert.equal(assistantMessages.filter((event) => event.message.status === "streaming").length, 1);
+  assert.equal(assistantMessages.filter((event) => event.message.status === "done").length, 1);
+});
+
 void test("SparkAgentLoop projects an empty provider error as a visible terminal message", async () => {
   const viewEvents: any[] = [];
   const host = new SparkHostRuntime({

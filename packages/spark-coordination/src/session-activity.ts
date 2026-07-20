@@ -35,6 +35,8 @@ export interface SessionActivityReport {
   role: string | null;
   status: string | null;
   createdAt: string;
+  /** Runtime turn correlation used to reconcile live and durable projections. */
+  invocationId?: string;
   /** Canonical structured message when the report originated from a view event. */
   message?: SparkMessageView;
   interaction?: {
@@ -213,12 +215,26 @@ export function loadSessionActivity(
   const directTurnReports = loadDirectTurnReports(db, { ...input, limit }).filter(
     (report) => !sessionReportIds.has(report.id),
   );
+  const directPromptInvocations = new Set(
+    directTurnReports.flatMap((report) =>
+      report.kind === "turn.submit.prompt" && report.invocationId ? [report.invocationId] : [],
+    ),
+  );
+  const reconciledSessionReports = sessionReports.filter(
+    (report) =>
+      !(
+        report.kind === "session.message" &&
+        report.role === "user" &&
+        report.invocationId &&
+        directPromptInvocations.has(report.invocationId)
+      ),
+  );
 
   return {
     commands,
     queuedTurns: loadQueuedTurns(db, { ...input, limit }),
     reports: [
-      ...sessionReports,
+      ...reconciledSessionReports,
       ...directTurnReports,
       ...loadArtifactReportsByCommand(db, commandIds, limit),
     ].sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
@@ -375,6 +391,7 @@ function loadDirectTurnReports(
 
   return commands.flatMap((command) => {
     const reports: SessionActivityReport[] = [];
+    const invocation = invocations.get(command.id) ?? null;
     const prompt = directTurnPrompt(command.payloadJson);
     if (prompt) {
       reports.push({
@@ -385,10 +402,10 @@ function loadDirectTurnReports(
         role: "user",
         status: null,
         createdAt: command.createdAt,
+        ...(invocation ? { invocationId: invocation.runtimeInvocationId } : {}),
       });
     }
 
-    const invocation = invocations.get(command.id) ?? null;
     const failure = directTurnFailure(command, invocation);
     if (failure) reports.push(failure);
     return reports;
@@ -430,6 +447,7 @@ function directTurnFailure(
     text,
     role: "system",
     status,
+    ...(invocationId ? { invocationId } : {}),
     createdAt:
       (invocationFailed ? invocation.completedAt || invocation.updatedAt : command.completedAt) ||
       command.updatedAt,
@@ -591,6 +609,7 @@ function reportFromDaemonPayload(
         role,
         status,
         createdAt: row.createdAt,
+        ...(invocationId ? { invocationId } : {}),
         ...(correlatedMessage ? { message: correlatedMessage } : {}),
       };
     }

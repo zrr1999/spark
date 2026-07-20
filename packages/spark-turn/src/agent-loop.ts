@@ -332,6 +332,7 @@ export class SparkAgentLoop {
   private currentViewRunUsage: SparkRunUsageTotals | undefined;
   private currentAssistantMessageId: string | undefined;
   private currentAssistantPartial?: AssistantMessage;
+  private currentAssistantProjection?: SparkMessageView;
   private readonly subscribers = new Set<(event: SparkAgentLoopEvent) => void>();
 
   constructor(options: SparkAgentLoopOptions) {
@@ -1227,6 +1228,7 @@ export class SparkAgentLoop {
     this.currentViewRunUsage = undefined;
     this.currentAssistantMessageId = undefined;
     this.currentAssistantPartial = undefined;
+    this.currentAssistantProjection = undefined;
     this.publishViewEvent({
       version: SPARK_PROTOCOL_VERSION,
       type: "run.update",
@@ -1253,6 +1255,7 @@ export class SparkAgentLoop {
     const id = this.assistantMessageId();
     this.currentAssistantMessageId = undefined;
     this.currentAssistantPartial = undefined;
+    this.currentAssistantProjection = undefined;
     return id;
   }
 
@@ -1370,20 +1373,25 @@ export class SparkAgentLoop {
       // overwriting the first assistant bubble in place.
       this.currentAssistantMessageId = nextViewMessageId(this.viewSessionId, "assistant");
       this.currentAssistantPartial = undefined;
+      this.currentAssistantProjection = undefined;
     }
     const partial = "partial" in event ? event.partial : undefined;
     if (partial && typeof partial === "object") {
       this.currentAssistantPartial = partial as AssistantMessage;
-      this.publishViewEvent({
-        version: SPARK_PROTOCOL_VERSION,
-        type: "session.message",
-        sessionId: this.viewSessionId,
-        message: assistantToMessageView(
-          this.currentAssistantPartial,
-          this.assistantMessageId(),
-          "streaming",
-        ),
-      });
+      const message = assistantToMessageView(
+        this.currentAssistantPartial,
+        this.assistantMessageId(),
+        "streaming",
+      );
+      if (!sameMessageProjection(this.currentAssistantProjection, message)) {
+        this.currentAssistantProjection = message;
+        this.publishViewEvent({
+          version: SPARK_PROTOCOL_VERSION,
+          type: "session.message",
+          sessionId: this.viewSessionId,
+          message,
+        });
+      }
     }
     if (event.type === "toolcall_end") {
       const toolCall = "toolCall" in event ? event.toolCall : undefined;
@@ -1418,6 +1426,7 @@ export class SparkAgentLoop {
     if (release) {
       this.currentAssistantPartial = undefined;
       this.currentAssistantMessageId = undefined;
+      this.currentAssistantProjection = undefined;
     }
   }
 
@@ -1485,6 +1494,13 @@ interface ToolResultRawRecoveryRecord {
   bodyChars: number;
   recoveryPath: SparkToolResultRawRecoveryPath;
   readHint: string;
+}
+
+function sameMessageProjection(
+  previous: SparkMessageView | undefined,
+  next: SparkMessageView,
+): boolean {
+  return previous !== undefined && JSON.stringify(previous) === JSON.stringify(next);
 }
 
 function mergeToolResultDetails(

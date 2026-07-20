@@ -173,6 +173,81 @@ describe("session activity projection", () => {
     db.close();
   });
 
+  it("folds a live user projection into its direct turn without merging equal text across turns", () => {
+    const { db, workspace, runtimeId, runtimeWorkspaceBindingId } = setupWorkspace();
+    const sessionId = "sess_correlated_direct_turn";
+    const prompt = "Repeatable prompt";
+    const invocationId = "inv_correlateddirectturn";
+    submitProjectedTurn(db, {
+      runtimeId,
+      runtimeWorkspaceBindingId,
+      workspaceId: workspace.id,
+      sessionId,
+      invocationId,
+      prompt,
+      status: "running",
+      createdAt: "2026-07-09T00:01:00.000Z",
+    });
+    for (const [eventInvocationId, createdAt] of [
+      [invocationId, "2026-07-09T00:01:01.000Z"],
+      ["inv_differentturn", "2026-07-09T00:01:02.000Z"],
+    ] as const) {
+      appendEvent(db, {
+        workspaceId: workspace.id,
+        actorKind: "runtime",
+        actorId: runtimeWorkspaceBindingId,
+        kind: "daemon.view_event",
+        subjectKind: "view_model",
+        subjectId: sessionId,
+        payload: {
+          type: "daemon.view_event",
+          sessionId,
+          invocationId: eventInvocationId,
+          view: {
+            type: "session.message",
+            sessionId,
+            message: {
+              id: `${sessionId}:message:user:${eventInvocationId}`,
+              role: "user",
+              text: prompt,
+              status: "done",
+              metadata: {},
+            },
+          },
+        },
+        createdAt,
+      });
+    }
+
+    const activity = loadSessionActivity(db, { workspaceId: workspace.id, sessionId });
+    const userReports = activity.reports.filter((report) => report.role === "user");
+
+    expect(userReports).toHaveLength(2);
+    expect(userReports).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "turn.submit.prompt",
+          invocationId,
+          text: prompt,
+        }),
+        expect.objectContaining({
+          kind: "session.message",
+          invocationId: "inv_differentturn",
+          text: prompt,
+        }),
+      ]),
+    );
+    expect(userReports).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "session.message",
+          invocationId,
+        }),
+      ]),
+    );
+    db.close();
+  });
+
   it("shows assigned work and daemon reports for one session", () => {
     const { db, workspace, runtimeWorkspaceBindingId } = setupWorkspace();
     const sessionId = "sess_ui";

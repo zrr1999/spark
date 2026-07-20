@@ -7,6 +7,7 @@ import {
   createSessionLiveEventState,
   finishSessionActivityRefresh,
   parseSessionSerializedEvent,
+  reconcileSessionLiveEventState,
   registerQueuedSessionTurn,
   requestSessionActivityRefresh,
   sessionEventCursorStorageKey,
@@ -204,6 +205,146 @@ describe("session live events", () => {
       status: "done",
     });
     expect(ignored).toEqual({ changed: false, refreshActivity: false });
+  });
+
+  it("does not redraw an identical cumulative message snapshot with a new event id", () => {
+    const state = createSessionLiveEventState({ sessionId: "sess_current" });
+    const payload = {
+      type: "daemon.view_event",
+      sessionId: "sess_current",
+      view: {
+        type: "session.message",
+        sessionId: "sess_current",
+        message: {
+          id: "msg_stream",
+          role: "assistant",
+          text: "Same cumulative text",
+          status: "streaming",
+          parts: [
+            { id: "part_stream", type: "text", text: "Same cumulative text", status: "running" },
+          ],
+        },
+      },
+    };
+
+    expect(
+      applySessionLiveEvent(
+        state,
+        event({ id: "evt_message_first", kind: "daemon.view_event", payload }),
+      ),
+    ).toEqual({ changed: true, refreshActivity: false });
+    const firstView = state.view;
+    expect(
+      applySessionLiveEvent(
+        state,
+        event({ id: "evt_message_duplicate", kind: "daemon.view_event", payload }),
+      ),
+    ).toEqual({ changed: false, refreshActivity: false });
+    expect(state.view).toBe(firstView);
+  });
+
+  it("reconciles a refreshed server snapshot without discarding newer live text or replay fences", () => {
+    const state = createSessionLiveEventState({
+      sessionId: "sess_current",
+      workspaceId: "ws_spore",
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        title: "Before refresh",
+        messages: [{ id: "msg_stream", role: "assistant", text: "Hel", status: "streaming" }],
+      }),
+      cursor: "40|2026-07-13T08:00:00.000Z|evt_before",
+    });
+    applySessionLiveEvent(
+      state,
+      event({
+        id: "evt_live_message",
+        sequence: 41,
+        kind: "daemon.view_event",
+        payload: {
+          type: "daemon.view_event",
+          sessionId: "sess_current",
+          view: {
+            type: "session.message",
+            sessionId: "sess_current",
+            message: {
+              id: "msg_stream",
+              role: "assistant",
+              text: "Hello from the live stream",
+              status: "streaming",
+            },
+          },
+        },
+      }),
+    );
+
+    const processedIds = state.processedEventIds;
+    const cursor = state.cursor;
+    const changed = reconcileSessionLiveEventState(state, {
+      workspaceId: "ws_spore",
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        title: "After refresh",
+        messages: [{ id: "msg_stream", role: "assistant", text: "Hello", status: "streaming" }],
+      }),
+      commandIds: ["cmd_after_refresh"],
+      invocationIds: ["inv_after_refresh"],
+    });
+
+    expect(changed).toBe(true);
+    expect(state.view).toMatchObject({
+      title: "After refresh",
+      messages: [{ id: "msg_stream", text: "Hello from the live stream" }],
+    });
+    expect(state.processedEventIds).toBe(processedIds);
+    expect(state.processedEventIds.has("evt_live_message")).toBe(true);
+    expect(state.cursor).toBe(cursor);
+    expect(state.commandIds.has("cmd_after_refresh")).toBe(true);
+    expect(state.invocationIds.has("inv_after_refresh")).toBe(true);
+  });
+
+  it("drops only the rolled-off latest-page prefix while retaining a live suffix", () => {
+    const currentView = parseSparkSessionView({
+      sessionId: "sess_current",
+      messages: [
+        { id: "msg_old", role: "user", text: "Rolled off" },
+        { id: "msg_shared_1", role: "assistant", text: "Shared one" },
+        { id: "msg_shared_2", role: "user", text: "Shared two" },
+        { id: "msg_live", role: "assistant", text: "Not committed yet", status: "streaming" },
+      ],
+    });
+    const serverView = parseSparkSessionView({
+      sessionId: "sess_current",
+      messages: [
+        { id: "msg_shared_1", role: "assistant", text: "Shared one" },
+        { id: "msg_shared_2", role: "user", text: "Shared two" },
+      ],
+    });
+    const latestPageState = createSessionLiveEventState({
+      sessionId: "sess_current",
+      view: currentView,
+    });
+    const expandedHistoryState = createSessionLiveEventState({
+      sessionId: "sess_current",
+      view: currentView,
+    });
+
+    reconcileSessionLiveEventState(latestPageState, { view: serverView });
+    reconcileSessionLiveEventState(expandedHistoryState, {
+      view: serverView,
+      preserveCurrentHistory: true,
+    });
+
+    expect(latestPageState.view?.messages.map((message) => message.id)).toEqual([
+      "msg_shared_1",
+      "msg_shared_2",
+      "msg_live",
+    ]);
+    expect(expandedHistoryState.view?.messages.map((message) => message.id)).toEqual([
+      "msg_old",
+      "msg_shared_1",
+      "msg_shared_2",
+      "msg_live",
+    ]);
   });
 
   it("keeps the canonical user message when a correlated live projection arrives", () => {

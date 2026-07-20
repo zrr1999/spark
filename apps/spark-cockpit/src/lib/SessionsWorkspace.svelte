@@ -67,6 +67,7 @@
     createSessionLiveEventState,
     finishSessionActivityRefresh,
     parseSessionSerializedEvent,
+    reconcileSessionLiveEventState,
     registerQueuedSessionTurn,
     requestSessionActivityRefresh,
     sessionEventCursorStorageKey,
@@ -639,14 +640,10 @@
     }
 
     const nextServerViewKey = sessionViewRevisionKey(sessionView);
-    if (sessionId !== liveSessionId || nextServerViewKey !== lastServerViewKey) {
-      if (sessionId !== liveSessionId) {
-        dequeueState = "idle";
-        dequeueFeedback = null;
-        dequeuingTurnId = null;
-      }
-      const cursor =
-        sessionId === liveSessionId ? liveEventState?.cursor : initialEventCursor;
+    if (sessionId !== liveSessionId) {
+      dequeueState = "idle";
+      dequeueFeedback = null;
+      dequeuingTurnId = null;
       liveSessionId = sessionId;
       lastServerViewKey = nextServerViewKey;
       liveEventState = createSessionLiveEventState({
@@ -657,12 +654,43 @@
         invocationIds: activityCommands.flatMap((command) =>
           command.invocationId ? [command.invocationId] : [],
         ),
-        cursor,
+        cursor: initialEventCursor,
       });
       liveSessionView = liveEventState.view;
       liveSessionHistory = sessionHistory;
       historyLoadState = "idle";
       return;
+    }
+
+    if (nextServerViewKey !== lastServerViewKey) {
+      lastServerViewKey = nextServerViewKey;
+      const state = untrack(() => liveEventState);
+      const currentHistory = untrack(() => liveSessionHistory);
+      const preserveCurrentHistory = Boolean(
+        currentHistory &&
+          sessionHistory &&
+          currentHistory.loadedMessages > sessionHistory.loadedMessages,
+      );
+      if (
+        state &&
+        reconcileSessionLiveEventState(state, {
+          workspaceId: selectedWorkspaceId,
+          view: sessionView,
+          commandIds: activityCommands.map((command) => command.id),
+          invocationIds: activityCommands.flatMap((command) =>
+            command.invocationId ? [command.invocationId] : [],
+          ),
+          preserveCurrentHistory,
+        })
+      ) {
+        liveSessionView = state.view;
+      }
+      if (
+        sessionHistory &&
+        (!currentHistory || currentHistory.loadedMessages <= sessionHistory.loadedMessages)
+      ) {
+        liveSessionHistory = sessionHistory;
+      }
     }
 
     for (const command of activityCommands) {
@@ -917,7 +945,6 @@
         }
         if (result.changed) {
           liveSessionView = state.view;
-          liveEventState = state;
         }
         if (result.refreshActivity) scheduleActivityRefresh();
       });
