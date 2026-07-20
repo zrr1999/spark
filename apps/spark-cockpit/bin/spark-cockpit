@@ -50,7 +50,7 @@ Production start environment:
   SPARK_COCKPIT_PUBLIC_URL=auto        Derive the origin from a trusted proxy request
   SPARK_COCKPIT_TRUST_PROXY=loopback   Trust forwarded headers from a loopback proxy
   SPARK_COCKPIT_PROXY_HOPS=1           Select the client entry in X-Forwarded-For
-  SPARK_COCKPIT_REMOTE_TOKEN           Required for non-localhost browser/API access
+  Remote browser access is authorized per workspace with one-time keys issued by that workspace.
 
 Examples:
   spark cockpit
@@ -62,9 +62,9 @@ Examples:
   spark cockpit instance inspect ~/.local/share/spark/cockpit/backups/<snapshot> --json
   spark cockpit instance restore <snapshot-path> --yes --json
   PORT=5174 spark cockpit
-  HOST=0.0.0.0 SPARK_COCKPIT_REMOTE_TOKEN=... spark cockpit
+  HOST=0.0.0.0 spark cockpit
   HOST=127.0.0.1 SPARK_COCKPIT_PUBLIC_URL=https://spark.example.com \
-    SPARK_COCKPIT_TRUST_PROXY=loopback SPARK_COCKPIT_REMOTE_TOKEN=... spark cockpit
+    SPARK_COCKPIT_TRUST_PROXY=loopback spark cockpit
 EOF
 }
 

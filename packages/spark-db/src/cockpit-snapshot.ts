@@ -71,6 +71,7 @@ export interface CockpitRestoreResult {
   rollbackSnapshotPath: string | null;
   transientReset: {
     browserSessionsDeleted: number;
+    workspaceAccessTokensDeleted: number;
     runtimeSessionsClosed: number;
     runtimesMarkedOffline: number;
     deviceAuthorizationsDeleted: number;
@@ -237,6 +238,7 @@ export async function createCockpitSnapshot(input: {
       ],
       resetOnRestoreScopes: [
         "browser_sessions",
+        "workspace_access_tokens",
         "runtime_websocket_sessions",
         "pending_device_authorizations",
         "web_push_subscription",
@@ -396,6 +398,9 @@ function prepareRestoredDatabase(
   try {
     db.exec("BEGIN IMMEDIATE");
     const browserSessionsDeleted = changes(db.prepare("DELETE FROM sessions").run());
+    const workspaceAccessTokensDeleted = changes(
+      db.prepare("DELETE FROM workspace_access_tokens WHERE used_at IS NULL").run(),
+    );
     const runtimeSessionsClosed = changes(
       db
         .prepare(
@@ -427,6 +432,7 @@ function prepareRestoredDatabase(
     db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     return {
       browserSessionsDeleted,
+      workspaceAccessTokensDeleted,
       runtimeSessionsClosed,
       runtimesMarkedOffline,
       deviceAuthorizationsDeleted,

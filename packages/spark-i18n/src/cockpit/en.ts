@@ -1325,21 +1325,20 @@ const messages = {
     },
     enrollment: {
       title: "Workspace connection",
-      body: "Authorize a daemon once, then connect any directory on that machine.",
-      deviceTitle: "Connect with browser authorization",
+      body: "Each command grants one daemon-owned directory to this workspace only.",
+      deviceTitle: "Workspace-scoped connection",
       deviceBody:
-        "Run the login command once on the daemon machine and approve the matching code in your browser. Then run the workspace command from the directory you want to connect.",
-      loginCommandLabel: "1 · Authorize this daemon",
-      workspaceCommandLabel: "2 · Connect this directory",
-      deviceReuseHint:
-        "Already authorized this daemon for this Cockpit? Skip the first command and connect the directory directly.",
+        "Generate a one-time workspace command and run it from the directory you want to connect. Existing daemon credentials never authorize another workspace.",
+      loginCommandLabel: "Daemon login is not a workspace grant",
+      workspaceCommandLabel: "Connect this directory",
+      deviceReuseHint: "Every additional workspace requires a new one-time connection token.",
       loopbackWarning:
         "This command uses a loopback Cockpit address. It works only when Cockpit and the daemon run on the same machine. For another machine, open Cockpit through a LAN or private-network address first.",
       insecureHttpWarning:
         "This remote Cockpit address uses plaintext HTTP. The command explicitly acknowledges that risk; use HTTPS whenever possible before authorizing a daemon.",
-      tokenFallbackTitle: "Use a one-time token instead",
+      tokenFallbackTitle: "Generate a one-time workspace command",
       tokenFallbackBody:
-        "Use this fallback for scripts or when browser authorization is unavailable. Each token connects one workspace and is shown only once.",
+        "Every command consumes one token and connects exactly one daemon directory to this workspace.",
       label: "Connection name (optional)",
       labelPlaceholder: "Local workspace",
       createToken: "Generate connection command",
@@ -1359,6 +1358,26 @@ const messages = {
       created: "Created",
       expires: "Expires",
       runner: "Used by",
+    },
+    access: {
+      title: "Browser access",
+      body: "Each one-time key authenticates one browser user to this workspace only.",
+      label: "Access label (optional)",
+      labelPlaceholder: "Teammate access",
+      createToken: "Generate one-time key",
+      tokenCreatedTitle: "Workspace key ready — shown once",
+      tokenCreatedHint:
+        "Share the login address and key separately. The key cannot be recovered later.",
+      loginUrl: "Login address",
+      oneTimeToken: "One-time key",
+      expiresPrefix: "Expires",
+      tableTitle: "Browser access keys",
+      tableCount: "keys",
+      emptyTitle: "No browser access keys yet",
+      emptyBody: "Generate a separate one-time key for each additional user.",
+      defaultTokenLabel: "Workspace browser access",
+      createdByDaemon: "Created by daemon registration",
+      revoke: "Revoke",
     },
     metrics: {
       aria: "Connection status",
@@ -1450,7 +1469,7 @@ const messages = {
     daemonLabel: "Daemon",
     installationLabel: "Installation",
     permissionLabel: "Permission",
-    permissionValue: "Connect and register workspaces on this daemon",
+    permissionValue: "Connect this daemon; workspaces still require separate one-time tokens",
     expiresLabel: "Expires",
     safetyNote:
       "Approve only if this code matches the terminal you started. Spark never asks for your Cockpit token here.",
@@ -1458,7 +1477,7 @@ const messages = {
     deny: "Deny",
     approvedTitle: "Daemon authorized",
     approvedBody:
-      "Return to the terminal. This daemon can now connect additional local workspaces without another one-time token.",
+      "Return to the terminal. This authorizes daemon connectivity only; every workspace still requires its own one-time registration token.",
     deniedTitle: "Authorization denied",
     deniedBody: "No credentials were issued. You can close this page.",
     expiredTitle: "Code expired",
@@ -1481,14 +1500,15 @@ const messages = {
   },
   login: {
     headTitle: "Sign in · Spark",
-    eyebrow: "Remote access",
-    title: "Sign in to Spark",
-    lede: "Enter the access token for this Cockpit.",
-    unconfigured: "Remote access is not configured. Set SPARK_COCKPIT_REMOTE_TOKEN on the server.",
-    tokenLabel: "Access token",
-    tokenPlaceholder: "Enter access token",
+    eyebrow: "Workspace access",
+    title: "Open a Spark workspace",
+    lede: "Enter a one-time key issued for one workspace. It does not grant access to the rest of this Cockpit.",
+    unconfigured:
+      "No active workspace access key is available. Ask a workspace member to generate one.",
+    tokenLabel: "One-time workspace key",
+    tokenPlaceholder: "spark_workspace_auth_…",
     action: "Continue",
-    invalid: "The access token is invalid.",
+    invalid: "The workspace key is invalid, expired, revoked, or already used.",
   },
   setup: {
     headTitle: "Set up Spark Cockpit",

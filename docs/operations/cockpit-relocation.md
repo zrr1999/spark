@@ -77,11 +77,10 @@ export HOST=127.0.0.1
 export PORT=5173
 export SPARK_COCKPIT_PUBLIC_URL="$TARGET_URL"
 export SPARK_COCKPIT_TRUST_PROXY=loopback
-export SPARK_COCKPIT_REMOTE_TOKEN_FILE=/run/secrets/spark-cockpit-remote-token
 spark cockpit
 ```
 
-The deployment wrapper must read `SPARK_COCKPIT_REMOTE_TOKEN_FILE` without logging it. The reverse proxy must replace forwarding headers, preserve the public host, forward WebSocket upgrades, and leave streaming responses unbuffered. Verify:
+Remote browser authority is not a deployment-wide environment token. After restore, generate a fresh one-time browser key for each workspace/user that needs access; access and rotating refresh sessions remain workspace-scoped. The reverse proxy must replace forwarding headers, preserve the public host, forward WebSocket upgrades, and leave streaming responses unbuffered. Verify:
 
 ```sh
 curl --fail --silent --show-error "$TARGET_URL/api/v1/runtime/relocation/metadata"

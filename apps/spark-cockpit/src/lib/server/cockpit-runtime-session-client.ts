@@ -4,6 +4,7 @@ import {
   getRuntimeSessionProjection,
   listRuntimeSessionProjections,
   listRuntimeSessionRoutes,
+  reconcileRuntimeSessionListProjection,
   runRuntimeSessionControlCommand,
   runtimeSessionRouteForRuntime,
   runtimeSessionRouteForSession,
@@ -102,7 +103,9 @@ export class CockpitRuntimeSessionUnavailableError extends Error {
 export function isCockpitRuntimeSessionNotFoundError(error: unknown): boolean {
   return (
     error instanceof RuntimeControlCommandError &&
-    (error.reasonCode === "SESSION_NOT_FOUND" || error.reasonCode === "session_not_found")
+    (error.reasonCode === "SESSION_NOT_FOUND" ||
+      error.reasonCode === "session_not_found" ||
+      error.reasonCode === "session_scope_mismatch")
   );
 }
 
@@ -190,6 +193,12 @@ async function listRouteSessions(
   route: RuntimeSessionRoute,
   request: ReturnType<typeof sparkSessionListRequestSchema.parse>,
 ): Promise<SparkSessionRegistryRecord[]> {
+  const candidateSessionIds = listRuntimeSessionProjections(db, {
+    runtimeId: route.runtimeId,
+    scope: route.scope,
+    ...(route.workspaceId ? { workspaceId: route.workspaceId } : {}),
+    includeArchived: true,
+  }).map((projection) => projection.session.sessionId);
   const sessions: SparkSessionRegistryRecord[] = [];
   let cursor: string | undefined;
   while (true) {
@@ -212,7 +221,13 @@ async function listRouteSessions(
     });
     const page = parseSessionListPage(result);
     sessions.push(...page.sessions);
-    if (!page.hasMore) return sessions;
+    if (!page.hasMore) {
+      reconcileRuntimeSessionListProjection(db, route, sessions, {
+        candidateSessionIds,
+        includeArchived: request.includeArchived,
+      });
+      return sessions;
+    }
     if (!page.nextCursor || page.nextCursor === cursor) {
       throw new RuntimeControlCommandError(
         "Spark daemon returned an invalid session list cursor.",

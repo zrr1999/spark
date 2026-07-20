@@ -3,7 +3,7 @@ export interface DaemonWorkspaceRegistrationCommandInput {
   displayName: string;
   workspaceName?: string;
   workspaceSlug?: string;
-  registrationToken?: string;
+  registrationToken: string;
   path?: string;
 }
 
@@ -22,7 +22,7 @@ export function buildDaemonWorkspaceRegistrationCommand(
     "spark daemon workspace register",
     shellQuote(input.path ?? "."),
     `--server-url ${shellQuote(input.serverOrigin)}`,
-    ...(input.registrationToken ? [`--token ${shellQuote(input.registrationToken)}`] : []),
+    `--token ${shellQuote(input.registrationToken)}`,
     `--name ${shellQuote(input.displayName)}`,
     ...(input.workspaceName ? [`--workspace-name ${shellQuote(input.workspaceName)}`] : []),
     ...(input.workspaceSlug ? [`--workspace-slug ${shellQuote(input.workspaceSlug)}`] : []),

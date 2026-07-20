@@ -191,13 +191,17 @@ async function discoverWorkflowDir(
   const errors: WorkflowRegistryError[] = [];
   for (const entry of entries.filter((name) => name.endsWith(".js")).sort(compareStrings)) {
     const path = join(dir, entry);
-    const id = entry.replace(/\.js$/u, "");
+    const rawId = entry.replace(/\.js$/u, "");
     try {
+      const id = normalizeWorkflowId(rawId);
+      if (id !== rawId) {
+        throw new Error(`workflow filename "${entry}" must use canonical id "${id}.js"`);
+      }
       const script = await readFile(path, "utf8");
       const meta = parseWorkflowScript(script).meta;
       workflows.push({
         selector: workflowSelector(source, id),
-        id: normalizeWorkflowId(id),
+        id,
         source,
         title: meta.name,
         description: meta.description,

@@ -1534,7 +1534,7 @@ describe("Spark daemon CLI", () => {
 
   it("asks before importing a detected workspace profile in interactive registration", async () => {
     const capture = createCliIo({
-      stdin: interactiveStdin(["checkout", "", "", "y"]),
+      stdin: interactiveStdin(["checkout", "", "spark_wsreg_interactive", "", "y"]),
     });
 
     await withTempSparkEnv(async (root) => {
@@ -1703,7 +1703,7 @@ describe("Spark daemon CLI", () => {
     }
   });
 
-  it("directs an unauthenticated daemon to login before tokenless workspace registration", async () => {
+  it("requires a one-time token before every workspace registration", async () => {
     const capture = createCliIo();
 
     await withTempSparkEnv(async (root) => {
@@ -1719,7 +1719,7 @@ describe("Spark daemon CLI", () => {
       await expect(
         main(["ws", "register", "checkout", "--name", "Spark Dev", "--no-service"], capture.io),
       ).resolves.toBe(1);
-      expect(capture.stderr()).toContain("spark daemon login --server-url http://127.0.0.1:5173/");
+      expect(capture.stderr()).toContain("requires a new one-time workspace token");
 
       const listCapture = createCliIo();
       await expect(main(["ws", "ls", "--json", "--no-service"], listCapture.io)).resolves.toBe(0);
@@ -1727,7 +1727,7 @@ describe("Spark daemon CLI", () => {
     });
   });
 
-  it("reuses machine credentials for another workspace and preserves server workspace identity", async () => {
+  it("reuses machine connectivity only after receiving a new workspace token", async () => {
     const registerWorkspaceInService = vi.fn(
       async (
         _paths: ReturnType<typeof resolveSparkPaths>,
@@ -1741,6 +1741,12 @@ describe("Spark daemon CLI", () => {
         status: "available" as const,
         capabilities: {},
         diagnostics: {},
+        workspaceAuthorization: {
+          workspaceId: "ws_11111111111141111111111111111111",
+          workspaceSlug: "profile-workspace",
+          oneTimeToken: "spark_workspace_auth_11111111111111111111111111111111",
+          expiresAt: "2026-07-13T00:10:00.000Z",
+        },
         updatedAt: "2026-07-13T00:00:00.000Z",
       }),
     );
@@ -1763,6 +1769,8 @@ describe("Spark daemon CLI", () => {
             "Profile workspace",
             "--workspace-slug",
             "profile-workspace",
+            "--token",
+            "spark_wsreg_profile_workspace",
             "--no-service",
           ],
           capture.io,
@@ -1775,9 +1783,11 @@ describe("Spark daemon CLI", () => {
           displayName: "Local checkout",
           workspaceName: "Profile workspace",
           workspaceSlug: "profile-workspace",
+          registrationToken: "spark_wsreg_profile_workspace",
         }),
       );
-      expect(registerWorkspaceInService.mock.calls[0]?.[1]).not.toHaveProperty("registrationToken");
+      expect(capture.stdout()).toContain("http://127.0.0.1:5173/login?workspace=profile-workspace");
+      expect(capture.stdout()).toContain("spark_workspace_auth_11111111111111111111111111111111");
     });
   });
 
@@ -1798,7 +1808,18 @@ describe("Spark daemon CLI", () => {
       });
 
       await expect(
-        main(["ws", "register", "checkout", "--name", "Checkout"], capture.io),
+        main(
+          [
+            "ws",
+            "register",
+            "checkout",
+            "--name",
+            "Checkout",
+            "--token",
+            "spark_wsreg_fetch_error",
+          ],
+          capture.io,
+        ),
       ).resolves.toBe(1);
       expect(capture.stderr()).toContain("Cockpit origin: http://127.0.0.1:5173");
       expect(capture.stderr()).not.toContain("Spark daemon is running but cannot be reached");

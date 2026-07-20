@@ -7,7 +7,7 @@ import {
 } from "./daemon-registration-commands";
 
 describe("daemon registration commands", () => {
-  it("builds a reusable device login and tokenless workspace command", () => {
+  it("keeps daemon connectivity separate from one-time workspace registration", () => {
     expect(buildDaemonLoginCommand("https://spark.example.test")).toBe(
       "spark daemon login --server-url https://spark.example.test",
     );
@@ -17,9 +17,10 @@ describe("daemon registration commands", () => {
         displayName: "Model repro",
         workspaceName: "Model repro",
         workspaceSlug: "model-repro",
+        registrationToken: "spark_wsreg_model_repro",
       }),
     ).toBe(
-      "spark daemon workspace register . --server-url https://spark.example.test --name 'Model repro' --workspace-name 'Model repro' --workspace-slug model-repro",
+      "spark daemon workspace register . --server-url https://spark.example.test --token spark_wsreg_model_repro --name 'Model repro' --workspace-name 'Model repro' --workspace-slug model-repro",
     );
   });
 
@@ -44,7 +45,11 @@ describe("daemon registration commands", () => {
     expect(isInsecureRemoteServerOrigin(origin)).toBe(true);
     expect(buildDaemonLoginCommand(origin)).toContain("--allow-insecure-http");
     expect(
-      buildDaemonWorkspaceRegistrationCommand({ serverOrigin: origin, displayName: "model-repro" }),
+      buildDaemonWorkspaceRegistrationCommand({
+        serverOrigin: origin,
+        displayName: "model-repro",
+        registrationToken: "spark_wsreg_model_repro",
+      }),
     ).toContain("--allow-insecure-http");
     expect(isInsecureRemoteServerOrigin("https://spark.example.test")).toBe(false);
   });

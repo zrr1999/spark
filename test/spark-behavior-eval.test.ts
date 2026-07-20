@@ -99,3 +99,30 @@ void test("behavior eval reports tool precision, coverage, effects, outcome, and
     ["allowed_tools", "forbidden_tools", "allowed_effects", "outcome", "tool_budget"],
   );
 });
+
+void test("behavior eval checks selected skill allowlists, requirements, exclusions, and budget", () => {
+  const result = evaluateSparkBehavior(
+    {
+      id: "skill-routing",
+      allowedSkills: ["testing"],
+      requiredSkills: ["testing", "release"],
+      forbiddenSkills: ["coding"],
+      maxSelectedSkills: 1,
+    },
+    {
+      manifest: manifest(),
+      toolCalls: [],
+      outcome: "completed",
+      roundtrips: 1,
+    },
+  );
+
+  assert.equal(result.passed, false);
+  assert.deepEqual(
+    result.checks.filter((entry) => !entry.passed).map((entry) => entry.id),
+    ["allowed_skills", "required_skills", "forbidden_skills", "skill_budget"],
+  );
+  assert.equal(result.metrics.selectedSkills, 2);
+  assert.equal(result.metrics.skillSelectionPrecision, 0.5);
+  assert.equal(result.metrics.requiredSkillCoverage, 0.5);
+});

@@ -30,6 +30,22 @@ export interface SessionsTable {
   last_seen_at: string | null;
   expires_at: string;
   revoked_at: string | null;
+  workspace_id: string | null;
+  refresh_token_hash: string | null;
+  refresh_expires_at: string | null;
+}
+
+export interface WorkspaceAccessTokensTable {
+  id: string;
+  workspace_id: string;
+  token_hash: string;
+  label: string | null;
+  created_by_user_id: string | null;
+  created_by_runtime_id: string | null;
+  created_at: string;
+  expires_at: string;
+  used_at: string | null;
+  revoked_at: string | null;
 }
 
 export interface WorkspacesTable {
@@ -473,6 +489,7 @@ export interface SparkDatabase {
   app_settings: AppSettingsTable;
   users: UsersTable;
   sessions: SessionsTable;
+  workspace_access_tokens: WorkspaceAccessTokensTable;
   workspaces: WorkspacesTable;
   projects: ProjectsTable;
   resources: ResourcesTable;

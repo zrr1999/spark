@@ -454,7 +454,7 @@ export interface SparkDaemonCliStrings {
   deviceAuthorizationOpenFailed: (verificationUriComplete: string) => string;
   deviceAuthorizationWaiting: string;
   deviceAuthorizationSucceeded: (runtimeId: string, serverUrl: string) => string;
-  workspaceLoginRequired: (serverUrl: string) => string;
+  workspaceTokenRequired: (serverUrl: string) => string;
 }
 
 const RESOURCE_STRINGS: Record<SparkLanguage, SparkTuiResourceStrings> = {
@@ -592,7 +592,7 @@ const PI_PARITY_STRINGS: Record<SparkLanguage, SparkTuiPiParityStrings> = {
   },
 };
 
-const DAEMON_HELP_TEXT = `spark daemon - daemon execution plane\n\nUsage:\n  spark daemon [--workspace <name>]\n  spark daemon login --server-url <url> [--no-open]\n  spark daemon status [--json]\n  spark daemon start [--json]\n  spark daemon stop [--yes]\n  spark daemon restart [--yes] [--wait]\n  spark daemon logs [--follow] [--lines <n>]\n  spark daemon submit --session <id> --prompt <text> [--reset] [--json]\n  spark daemon invocation list [--status <state>] [--session <id>] [--since <iso>] [--limit <n>] [--offset <n>] [--json]\n  spark daemon invocation status <invocation-id> [--json]\n  spark daemon invocation result <invocation-id> [--json]\n  spark daemon invocation stream <invocation-id> [--after <cursor>] [--limit <n>] [--json]\n  spark daemon invocation cancel <invocation-id> [--reason <text>] [--json]\n  spark daemon invocation retry <invocation-id> [--json]\n  spark daemon invocation retention --before <iso> [--limit <n>] [--json]\n  spark daemon session list [--json] [--registry] [--include-archived]\n  spark daemon session create --workspace <id> [--title <text>] [--role <role>] [--json]\n  spark daemon session bind <session-id> --external-key <key> [--json]\n  spark daemon session unbind <session-id> --external-key <key> [--json]\n  spark daemon session archive <session-id> [--json]\n  spark daemon session export --session <id|path> [--format jsonl|json|text] [--leaf <entry-id|root>] [--json]\n  spark daemon session replay --session <id|path> [--leaf <entry-id|root>] [--json]\n  spark daemon session inbox --session <session-id> [--all] [--json]\n  spark daemon session inbox read <message-id> --session <session-id> [--json]\n  spark daemon session inbox ack <message-id> --session <session-id> [--json]\n  spark daemon channel list [--json]\n  spark daemon channel status [--json]\n  spark daemon run list [--json]\n  spark daemon events watch [--json]\n  spark daemon workspace register [path] --server-url <url> [--token <token|->] --name <name>\n  spark daemon workspace ls [--json] [--all] [--full]\n  spark daemon workspace show [name] [--json]\n  spark daemon workspace stop <name> [--yes]\n\nRun spark daemon login once per daemon machine. Its machine credential can register additional workspaces on the same Cockpit without another token. Spark CLI starts/wakes the Spark daemon and talks over local IPC; SQLite-backed invocations are execution truth. Project/task/goal/review/assign commands belong under spark cockpit, the coordination CLI and Web host. Session registry and channel listeners are daemon-owned (see docs/specs/sessions-and-channels.md).`;
+const DAEMON_HELP_TEXT = `spark daemon - daemon execution plane\n\nUsage:\n  spark daemon [--workspace <name>]\n  spark daemon login --server-url <url> [--no-open]\n  spark daemon status [--json]\n  spark daemon start [--json]\n  spark daemon stop [--yes]\n  spark daemon restart [--yes] [--wait]\n  spark daemon logs [--follow] [--lines <n>]\n  spark daemon submit --session <id> --prompt <text> [--reset] [--json]\n  spark daemon invocation list [--status <state>] [--session <id>] [--since <iso>] [--limit <n>] [--offset <n>] [--json]\n  spark daemon invocation status <invocation-id> [--json]\n  spark daemon invocation result <invocation-id> [--json]\n  spark daemon invocation stream <invocation-id> [--after <cursor>] [--limit <n>] [--json]\n  spark daemon invocation cancel <invocation-id> [--reason <text>] [--json]\n  spark daemon invocation retry <invocation-id> [--json]\n  spark daemon invocation retention --before <iso> [--limit <n>] [--json]\n  spark daemon session list [--json] [--registry] [--include-archived]\n  spark daemon session create --workspace <id> [--title <text>] [--role <role>] [--json]\n  spark daemon session bind <session-id> --external-key <key> [--json]\n  spark daemon session unbind <session-id> --external-key <key> [--json]\n  spark daemon session archive <session-id> [--json]\n  spark daemon session export --session <id|path> [--format jsonl|json|text] [--leaf <entry-id|root>] [--json]\n  spark daemon session replay --session <id|path> [--leaf <entry-id|root>] [--json]\n  spark daemon session inbox --session <session-id> [--all] [--json]\n  spark daemon session inbox read <message-id> --session <session-id> [--json]\n  spark daemon session inbox ack <message-id> --session <session-id> [--json]\n  spark daemon channel list [--json]\n  spark daemon channel status [--json]\n  spark daemon run list [--json]\n  spark daemon events watch [--json]\n  spark daemon workspace register [path] --server-url <url> --token <token|-> --name <name>\n  spark daemon workspace ls [--json] [--all] [--full]\n  spark daemon workspace show [name] [--json]\n  spark daemon workspace stop <name> [--yes]\n\nDaemon login grants machine connectivity only. Every workspace registration consumes a fresh one-time workspace token. Spark CLI starts/wakes the Spark daemon and talks over local IPC; SQLite-backed invocations are execution truth. Project/task/goal/review/assign commands belong under spark cockpit, the coordination CLI and Web host. Session registry and channel listeners are daemon-owned (see docs/specs/sessions-and-channels.md).`;
 
 const DAEMON_STRINGS: Record<SparkLanguage, SparkDaemonCliStrings> = {
   en: {
@@ -630,8 +630,8 @@ const DAEMON_STRINGS: Record<SparkLanguage, SparkDaemonCliStrings> = {
     deviceAuthorizationWaiting: "Waiting for daemon authorization...",
     deviceAuthorizationSucceeded: (runtimeId, serverUrl) =>
       `✓ daemon ${runtimeId} authorized for ${serverUrl}`,
-    workspaceLoginRequired: (serverUrl) =>
-      `Spark daemon is not authorized for ${serverUrl}. Run spark daemon login --server-url ${serverUrl}, or pass --token <token>.`,
+    workspaceTokenRequired: (serverUrl) =>
+      `Workspace registration for ${serverUrl} requires a new one-time workspace token. Pass --token <token>.`,
   },
   zh: {
     submitRequiresSession: "spark daemon submit 需要 --session <id>",
@@ -668,8 +668,8 @@ const DAEMON_STRINGS: Record<SparkLanguage, SparkDaemonCliStrings> = {
     deviceAuthorizationWaiting: "正在等待 daemon 授权……",
     deviceAuthorizationSucceeded: (runtimeId, serverUrl) =>
       `✓ daemon ${runtimeId} 已授权连接 ${serverUrl}`,
-    workspaceLoginRequired: (serverUrl) =>
-      `Spark daemon 尚未获准连接 ${serverUrl}。请运行 spark daemon login --server-url ${serverUrl}，或传入 --token <token>。`,
+    workspaceTokenRequired: (serverUrl) =>
+      `在 ${serverUrl} 注册 workspace 需要新的 workspace 一次性 token。请传入 --token <token>。`,
   },
 };
 

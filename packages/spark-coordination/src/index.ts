@@ -15,3 +15,4 @@ export * from "./runtime-ws.ts";
 export * from "./routing.ts";
 export * from "./session-activity.ts";
 export * from "./security.ts";
+export * from "./workspace-access.ts";

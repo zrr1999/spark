@@ -5,7 +5,7 @@ Spark's local execution service. Public operator commands use `spark daemon`.
 ```bash
 spark daemon status
 spark daemon login --server-url http://127.0.0.1:5173
-spark daemon workspace register /path/to/workspace --server-url http://127.0.0.1:5173
+spark daemon workspace register /path/to/workspace --server-url http://127.0.0.1:5173 --token <workspace-token>
 spark daemon workspace stop <workspace-name>
 spark daemon submit --session <id> --prompt <text> --json
 spark daemon invocation status <invocation-id> --json
@@ -14,7 +14,7 @@ spark daemon invocation cancel <invocation-id> --reason <text> --json
 spark daemon restart --yes
 ```
 
-Use `--token -` to read a one-line registration token from stdin. Browser/device login stores a private machine credential that may register additional workspaces against the same Cockpit. Remote Cockpit URLs require HTTPS unless both login and registration explicitly use `--allow-insecure-http` on a trusted private network.
+Use `--token -` to read a one-line registration token from stdin. Browser/device login stores a private machine credential for connectivity and refresh only; every workspace registration consumes a fresh workspace token. A successful registration prints a separate one-time browser key for that workspace. Remote Cockpit URLs require HTTPS unless both login and registration explicitly use `--allow-insecure-http` on a trusted private network.
 
 The daemon owns workspace arbitration, persistent sessions, channels, SQLite invocations/events, per-session execution fencing, cancellation, timeout, restart recovery, and the runtime WebSocket uplink. Cockpit receives projections; it is not execution truth.
 

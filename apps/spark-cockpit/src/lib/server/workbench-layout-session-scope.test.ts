@@ -93,4 +93,18 @@ describe("workbench session layout scope", () => {
       }),
     );
   });
+
+  it("drops a stale selected projection when the live owner disproves it", async () => {
+    mocks.list.mockResolvedValue({
+      available: true,
+      controlAvailable: true,
+      sessions: [],
+    });
+    const url = new URL("http://localhost:5173/cached/sessions/sess_cached");
+
+    const result = await load({ cookies: {}, locals: { workspaceId: workspace.id }, url } as never);
+
+    expect(result).toMatchObject({ sessions: [] });
+    expect(mocks.conversationSummaries).toHaveBeenCalledWith({}, []);
+  });
 });

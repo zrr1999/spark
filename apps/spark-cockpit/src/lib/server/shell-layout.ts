@@ -9,11 +9,13 @@ export function loadShellWorkspaceLayout(input: {
   protocol: string;
   preferredWorkspaceId?: string | null;
   preferredWorkspaceSlug?: string | null;
+  authorizedWorkspaceId?: string | null;
 }) {
   const preferredFromQuery = input.preferredWorkspaceSlug?.trim() || null;
   const preferredFromCookie = input.cookies.get(activeWorkspaceCookieName)?.trim() || null;
   const loadedLayout = loadWorkbenchLayout(getDatabase(), input.pathname, {
     preferredWorkspaceSlug: preferredFromQuery || preferredFromCookie,
+    authorizedWorkspaceId: input.authorizedWorkspaceId ?? null,
   });
   const preferredById = input.preferredWorkspaceId
     ? loadedLayout.workspaces.find((workspace) => workspace.id === input.preferredWorkspaceId)

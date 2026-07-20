@@ -1,23 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { createWorkspaceAccessToken } from "@zendev-lab/spark-coordination/workspace-access";
+import {
+  createRuntimeEnrollmentToken,
+  registerRuntime,
+} from "@zendev-lab/spark-coordination/runtime-registration";
 import type { Cookies } from "@sveltejs/kit";
 import {
   createLocalOwnerSession,
   createOwnerSession,
-  createRemoteOwnerSession,
   ensureCurrentOwnerSession,
   ensureLocalSystemUser,
+  exchangeWorkspaceAccessToken,
+  getCurrentWorkspaceSession,
   getCurrentUserId,
   hashSecret,
   sessionCookieName,
+  refreshWorkspaceSession,
+  workspaceSessionAllowsRequest,
 } from "./auth";
-import {
-  bearerRemoteAccessToken,
-  isLoopbackClientAddress,
-  isRemoteAccessAllowed,
-  remoteAccessDecision,
-  verifyRemoteAccessToken,
-} from "./remote-access";
+import { isLoopbackClientAddress, remoteAccessDecision } from "./remote-access";
 
 describe("local owner auth", () => {
   it("creates a new session for an existing local owner", () => {
@@ -70,18 +72,6 @@ describe("local owner auth", () => {
     db.close();
   });
 
-  it("creates a remote owner session for the single-user token flow", () => {
-    const db = openMemoryDatabase();
-    migrate(db);
-
-    const session = createRemoteOwnerSession(db);
-
-    expect(session.userId).toMatch(/^usr_/);
-    expect(session.sessionToken).toMatch(/^spark_cockpit_sess_/);
-    expect(getCurrentUserId(db, session.sessionToken)).toBe(session.userId);
-    db.close();
-  });
-
   it("rejects revoked or expired sessions", () => {
     const db = openMemoryDatabase();
     migrate(db);
@@ -111,6 +101,93 @@ describe("local owner auth", () => {
 });
 
 describe("remote access auth", () => {
+  it("exchanges the one-time browser key returned by daemon workspace registration", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    const enrollment = createRuntimeEnrollmentToken(db, {
+      workspaceName: "Spore",
+      workspaceSlug: "spore",
+    });
+    const registered = registerRuntime(
+      db,
+      {
+        installationId: "install-spore",
+        displayName: "Spore daemon",
+        runtimeVersion: "0.1.0-test",
+        supportedFeatures: [],
+        labels: {},
+        workspaceRegistration: {
+          localWorkspaceKey: "spore-local",
+          displayName: "Spore local",
+        },
+      },
+      enrollment.refreshToken,
+    );
+    const authorization = registered.workspaceAuthorization;
+    if (!authorization) throw new Error("Expected workspace browser authorization.");
+
+    const session = exchangeWorkspaceAccessToken(db, authorization.oneTimeToken);
+    expect(session).toMatchObject({
+      workspaceId: authorization.workspaceId,
+      workspaceSlug: "spore",
+    });
+    expect(() => exchangeWorkspaceAccessToken(db, authorization.oneTimeToken)).toThrow(
+      /already been used/,
+    );
+    db.close();
+  });
+
+  it("exchanges and rotates a one-time workspace grant without broadening scope", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    db.prepare(
+      `INSERT INTO workspaces (id, slug, name, status, settings_json, created_at, updated_at)
+       VALUES ('ws_11111111111141111111111111111111', 'spark', 'Spark', 'active', '{}', ?, ?),
+              ('ws_22222222222242222222222222222222', 'spore', 'Spore', 'active', '{}', ?, ?)`,
+    ).run(
+      "2026-07-20T00:00:00.000Z",
+      "2026-07-20T00:00:00.000Z",
+      "2026-07-20T00:00:00.000Z",
+      "2026-07-20T00:00:00.000Z",
+    );
+    const grant = createWorkspaceAccessToken(db, {
+      workspaceId: "ws_11111111111141111111111111111111",
+      createdAt: "2026-07-20T00:00:00.000Z",
+      ttlMs: 60_000,
+    });
+    const session = exchangeWorkspaceAccessToken(
+      db,
+      grant.token,
+      new Date("2026-07-20T00:00:01.000Z"),
+    );
+    expect(
+      getCurrentWorkspaceSession(db, session.sessionToken, new Date("2026-07-20T00:00:02.000Z")),
+    ).toMatchObject({
+      workspaceId: "ws_11111111111141111111111111111111",
+      workspaceSlug: "spark",
+    });
+    expect(() =>
+      exchangeWorkspaceAccessToken(db, grant.token, new Date("2026-07-20T00:00:02.000Z")),
+    ).toThrow(/already been used/);
+    expect(workspaceSessionAllowsRequest(db, session.workspaceId, "/spark/sessions")).toBe(true);
+    expect(workspaceSessionAllowsRequest(db, session.workspaceId, "/sessions")).toBe(false);
+    expect(
+      workspaceSessionAllowsRequest(db, session.workspaceId, "/spark/sessions/missing-session"),
+    ).toBe(false);
+    expect(workspaceSessionAllowsRequest(db, session.workspaceId, "/spore/sessions")).toBe(false);
+    expect(workspaceSessionAllowsRequest(db, session.workspaceId, "/settings/models")).toBe(false);
+
+    const refreshed = refreshWorkspaceSession(
+      db,
+      session.refreshToken,
+      new Date("2026-07-20T00:16:00.000Z"),
+    );
+    expect(refreshed?.workspaceId).toBe(session.workspaceId);
+    expect(refreshed?.refreshToken).not.toBe(session.refreshToken);
+    expect(refreshWorkspaceSession(db, session.refreshToken)).toBeNull();
+    db.close();
+  });
+
   it("does not require token auth for loopback client addresses", () => {
     expect(isLoopbackClientAddress("localhost")).toBe(true);
     expect(isLoopbackClientAddress("127.0.0.1")).toBe(true);
@@ -167,46 +244,6 @@ describe("remote access auth", () => {
         publicPath: true,
       });
     }
-  });
-
-  it("blocks protected remote paths unless a session or configured bearer token is present", () => {
-    const url = new URL("http://spark.tailnet.test:5173/api/search");
-    const env = { SPARK_COCKPIT_REMOTE_TOKEN: "test-token" };
-
-    expect(isRemoteAccessAllowed({ url, clientAddress: "100.64.0.8", env })).toBe(false);
-    expect(
-      isRemoteAccessAllowed({
-        url,
-        clientAddress: "100.64.0.8",
-        bearerToken: "wrong-token",
-        env,
-      }),
-    ).toBe(false);
-    expect(
-      isRemoteAccessAllowed({ url, clientAddress: "100.64.0.8", bearerToken: "test-token", env }),
-    ).toBe(true);
-    expect(
-      isRemoteAccessAllowed({ url, clientAddress: "100.64.0.8", sessionUserId: "usr_owner", env }),
-    ).toBe(true);
-    expect(
-      isRemoteAccessAllowed({
-        url: new URL("http://localhost:5173/api/search"),
-        clientAddress: "127.0.0.1",
-        env,
-      }),
-    ).toBe(true);
-  });
-
-  it("verifies configured bearer tokens without accepting missing or wrong tokens", () => {
-    const env = { SPARK_COCKPIT_REMOTE_TOKEN: "test-token" };
-    const request = new Request("http://spark.tailnet.test/api/search", {
-      headers: { authorization: "Bearer test-token" },
-    });
-
-    expect(bearerRemoteAccessToken(request)).toBe("test-token");
-    expect(verifyRemoteAccessToken("test-token", env)).toBe(true);
-    expect(verifyRemoteAccessToken("wrong-token", env)).toBe(false);
-    expect(verifyRemoteAccessToken("test-token", {})).toBe(false);
   });
 });
 

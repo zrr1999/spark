@@ -86,23 +86,34 @@ export interface PendingWorkspaceRuntimeState {
 export function loadWorkbenchLayout(
   db: DatabaseSync,
   pathname: string,
-  options: { preferredWorkspaceSlug?: string | null } = {},
+  options: { preferredWorkspaceSlug?: string | null; authorizedWorkspaceId?: string | null } = {},
 ) {
   const workspaces = db
     .prepare(
       `SELECT id, slug, name
        FROM workspaces
        WHERE status = 'active'
+         AND (? IS NULL OR id = ?)
        ORDER BY updated_at DESC, created_at DESC`,
     )
-    .all() as unknown as WorkbenchWorkspaceSummary[];
+    .all(
+      options.authorizedWorkspaceId ?? null,
+      options.authorizedWorkspaceId ?? null,
+    ) as unknown as WorkbenchWorkspaceSummary[];
 
   const workspaceId = workspaceIdFromPath(pathname);
-  const pathWorkspace = workspaceId ? (loadWorkspaceByRouteId(db, workspaceId) ?? null) : null;
+  const loadedPathWorkspace = workspaceId
+    ? (loadWorkspaceByRouteId(db, workspaceId) ?? null)
+    : null;
+  const pathWorkspace =
+    loadedPathWorkspace &&
+    (!options.authorizedWorkspaceId || loadedPathWorkspace.id === options.authorizedWorkspaceId)
+      ? loadedPathWorkspace
+      : null;
   const preferredSlug = options.preferredWorkspaceSlug?.trim() || null;
   const preferredWorkspace = preferredSlug
     ? (workspaces.find((workspace) => workspace.slug === preferredSlug) ??
-      loadWorkspaceByRouteId(db, preferredSlug) ??
+      (options.authorizedWorkspaceId ? null : loadWorkspaceByRouteId(db, preferredSlug)) ??
       null)
     : null;
   const activeWorkspace = pathWorkspace ?? preferredWorkspace ?? workspaces[0] ?? null;
@@ -114,6 +125,7 @@ export function loadWorkbenchHome(
   input: {
     forceWorkspaceCreate: boolean;
     pendingWorkspaceSetup: PendingWorkspaceBindingSetup | null;
+    authorizedWorkspaceId?: string | null;
   },
 ) {
   const workspaces = db
@@ -145,10 +157,11 @@ export function loadWorkbenchHome(
        LEFT JOIN runtime_connections rc ON rc.id = rb.runtime_id
        LEFT JOIN workspace_profile_sources wps ON wps.workspace_id = w.id
        WHERE w.status = 'active'
+         AND (? IS NULL OR w.id = ?)
        GROUP BY w.id
        ORDER BY w.updated_at DESC, w.created_at DESC`,
     )
-    .all() as Array<{
+    .all(input.authorizedWorkspaceId ?? null, input.authorizedWorkspaceId ?? null) as Array<{
     id: string;
     slug: string;
     name: string;

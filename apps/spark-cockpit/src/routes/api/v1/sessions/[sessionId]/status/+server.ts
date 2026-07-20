@@ -8,9 +8,10 @@ import type { RequestHandler } from "./$types";
  * SSE remains the fast path; this lets the workbench converge when an optional
  * Cockpit projection misses the terminal lifecycle event.
  */
-export const GET: RequestHandler = async ({ params }) => {
+export const GET: RequestHandler = async ({ locals, params }) => {
   const session = await getManagedSessionForCockpit(params.sessionId);
-  if (session && !workspaceIdForWorkbenchSession(session)) {
+  const workspaceId = session ? workspaceIdForWorkbenchSession(session) : null;
+  if (session && (!workspaceId || (locals?.workspaceId && locals.workspaceId !== workspaceId))) {
     return json({ error: "session_not_found" }, { status: 404 });
   }
   if (!session) {

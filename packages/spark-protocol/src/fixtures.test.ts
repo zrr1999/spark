@@ -68,8 +68,9 @@ describe("runtime protocol fixtures", () => {
     ).toMatch(/^spark_device_/);
   });
 
-  it("allows an installation-scoped runtime token to register another workspace", () => {
+  it("requires a fresh one-time token for every additional workspace", () => {
     const parsed = runtimeWorkspaceRegistrationRequestSchema.parse({
+      registrationToken: "spark_wsreg_workspace_once",
       workspaceRegistration: {
         localWorkspaceKey: "spore",
         localPath: "/Users/test/workspaces/spore",
@@ -77,7 +78,7 @@ describe("runtime protocol fixtures", () => {
       },
     });
 
-    expect(parsed.registrationToken).toBeUndefined();
+    expect(parsed.registrationToken).toBe("spark_wsreg_workspace_once");
     expect(parsed.workspaceRegistration.localPath).toBe("/Users/test/workspaces/spore");
   });
 

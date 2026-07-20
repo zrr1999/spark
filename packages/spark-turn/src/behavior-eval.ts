@@ -22,8 +22,12 @@ export interface SparkBehaviorEvalExpectation {
   requiredTools?: readonly string[];
   forbiddenTools?: readonly string[];
   allowedEffects?: readonly SparkPromptManifestToolEffect[];
+  allowedSkills?: readonly string[];
+  requiredSkills?: readonly string[];
+  forbiddenSkills?: readonly string[];
   expectedOutcomes?: readonly SparkBehaviorEvalOutcome[];
   maxToolCalls?: number;
+  maxSelectedSkills?: number;
   requireEvidence?: boolean;
 }
 
@@ -42,6 +46,9 @@ export interface SparkBehaviorEvalResult {
     toolErrors: number;
     toolSelectionPrecision: number;
     requiredToolCoverage: number;
+    selectedSkills: number;
+    skillSelectionPrecision: number;
+    requiredSkillCoverage: number;
     roundtrips: number;
     evidenceRefs: number;
   };
@@ -57,6 +64,10 @@ export function evaluateSparkBehavior(
   const required = new Set(expectation.requiredTools ?? []);
   const forbidden = new Set(expectation.forbiddenTools ?? []);
   const allowedEffects = new Set(expectation.allowedEffects ?? []);
+  const selectedSkills = observation.manifest.selectedSkills;
+  const allowedSkills = new Set(expectation.allowedSkills ?? selectedSkills);
+  const requiredSkills = new Set(expectation.requiredSkills ?? []);
+  const forbiddenSkills = new Set(expectation.forbiddenSkills ?? []);
   const evidenceRefs = observation.evidenceRefs?.filter((ref) => ref.trim()) ?? [];
   const checks: SparkBehaviorEvalCheck[] = [];
 
@@ -82,6 +93,22 @@ export function evaluateSparkBehavior(
       check("allowed_effects", violations.length === 0, listMessage("effect", violations)),
     );
   }
+  if (expectation.allowedSkills) {
+    const unexpected = selectedSkills.filter((name) => !allowedSkills.has(name));
+    checks.push(
+      check("allowed_skills", unexpected.length === 0, listMessage("unexpected", unexpected)),
+    );
+  }
+  if (requiredSkills.size > 0) {
+    const missing = [...requiredSkills].filter((name) => !selectedSkills.includes(name));
+    checks.push(check("required_skills", missing.length === 0, listMessage("missing", missing)));
+  }
+  if (forbiddenSkills.size > 0) {
+    const selected = selectedSkills.filter((name) => forbiddenSkills.has(name));
+    checks.push(
+      check("forbidden_skills", selected.length === 0, listMessage("forbidden", selected)),
+    );
+  }
   if (expectation.expectedOutcomes) {
     checks.push(
       check(
@@ -100,12 +127,25 @@ export function evaluateSparkBehavior(
       ),
     );
   }
+  if (expectation.maxSelectedSkills !== undefined) {
+    checks.push(
+      check(
+        "skill_budget",
+        selectedSkills.length <= expectation.maxSelectedSkills,
+        `observed=${selectedSkills.length} maximum=${expectation.maxSelectedSkills}`,
+      ),
+    );
+  }
   if (expectation.requireEvidence) {
     checks.push(check("evidence", evidenceRefs.length > 0, `observed=${evidenceRefs.length}`));
   }
 
   const allowedCalls = calls.filter((name) => allowed.has(name)).length;
   const requiredCalls = [...required].filter((name) => calls.includes(name)).length;
+  const allowedSelectedSkills = selectedSkills.filter((name) => allowedSkills.has(name)).length;
+  const selectedRequiredSkills = [...requiredSkills].filter((name) =>
+    selectedSkills.includes(name),
+  ).length;
   return {
     id: expectation.id,
     passed: checks.every((entry) => entry.passed),
@@ -115,6 +155,11 @@ export function evaluateSparkBehavior(
       toolErrors: observation.toolCalls.filter((call) => call.isError === true).length,
       toolSelectionPrecision: calls.length === 0 ? 1 : allowedCalls / calls.length,
       requiredToolCoverage: required.size === 0 ? 1 : requiredCalls / required.size,
+      selectedSkills: selectedSkills.length,
+      skillSelectionPrecision:
+        selectedSkills.length === 0 ? 1 : allowedSelectedSkills / selectedSkills.length,
+      requiredSkillCoverage:
+        requiredSkills.size === 0 ? 1 : selectedRequiredSkills / requiredSkills.size,
       roundtrips: Math.max(0, Math.floor(observation.roundtrips)),
       evidenceRefs: evidenceRefs.length,
     },

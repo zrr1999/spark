@@ -214,6 +214,12 @@ describe("runtime registration", () => {
       displayName: "Local default",
       status: "available",
     });
+    expect(registered.workspaceAuthorization).toMatchObject({
+      workspaceId: workspaceBinding?.workspaceId,
+      workspaceSlug: "spark-dev",
+      oneTimeToken: expect.stringMatching(/^spark_workspace_auth_/),
+      expiresAt: expect.any(String),
+    });
     if (!workspaceBinding) {
       throw new Error("Expected workspace binding registration result.");
     }
@@ -501,12 +507,17 @@ describe("runtime registration", () => {
     const deviceRuntime = exchangeRuntimeDeviceAuthorization(db, {
       deviceCode: deviceAuthorization.deviceCode,
     });
+    const deviceWorkspaceGrant = createRuntimeEnrollmentToken(db, {
+      workspaceId: ownerBinding.workspaceId,
+      ttlMs: durableEnrollmentTtlMs,
+    });
     conflictErrors.push(
       expectWorkspaceOwnerConflict(() =>
         registerRuntimeWorkspace(
           db,
           deviceRuntime.runtimeId,
           {
+            registrationToken: deviceWorkspaceGrant.refreshToken,
             workspaceRegistration: {
               localWorkspaceKey: "device-conflict",
               displayName: "Device conflict",
@@ -655,6 +666,13 @@ describe("runtime registration", () => {
       });
       return exchangeRuntimeDeviceAuthorization(db, { deviceCode: authorization.deviceCode });
     });
+    const grants = runtimes.map(() =>
+      createRuntimeEnrollmentToken(db, {
+        workspaceName: "Shared race workspace",
+        workspaceSlug: "shared-race-workspace",
+        ttlMs: durableEnrollmentTtlMs,
+      }),
+    );
     db.close();
 
     try {
@@ -666,6 +684,7 @@ describe("runtime registration", () => {
           databasePath,
           runtimeId: runtimes[index]?.runtimeId,
           runtimeToken: runtimes[index]?.runtimeToken,
+          registrationToken: grants[index]?.refreshToken,
           localWorkspaceKey: `race-local-${index}`,
         });
       });
@@ -1234,8 +1253,8 @@ describe("runtime registration", () => {
       )
       .all(registered.runtimeId) as Array<{ scopesJson: string }>;
     expect(scopes.map((row) => JSON.parse(row.scopesJson))).toEqual([
-      ["runtime:connect", "workspace:register"],
-      ["runtime:refresh", "workspace:register"],
+      ["runtime:connect"],
+      ["runtime:refresh"],
     ]);
     expect(
       getRuntimeDeviceAuthorizationForApproval(db, {
@@ -1255,7 +1274,7 @@ describe("runtime registration", () => {
     db.close();
   });
 
-  it("lets a browser-approved daemon register another workspace without another token", () => {
+  it("requires a new token even after browser-approved daemon login", () => {
     const db = openMemoryDatabase();
     migrate(db);
     insertUser(db, "usr_owner", "owner", "active");
@@ -1268,62 +1287,56 @@ describe("runtime registration", () => {
       deviceCode: authorization.deviceCode,
     });
 
-    const workspace = registerRuntimeWorkspace(
-      db,
-      registered.runtimeId,
-      {
-        workspaceRegistration: {
-          localWorkspaceKey: "spore",
-          displayName: "Spore",
-          workspaceSlug: "spore",
+    expect(() =>
+      registerRuntimeWorkspace(
+        db,
+        registered.runtimeId,
+        {
+          registrationToken: "",
+          workspaceRegistration: {
+            localWorkspaceKey: "spore",
+            displayName: "Spore",
+            workspaceSlug: "spore",
+          },
         },
-      },
-      registered.runtimeToken,
-    );
-
-    expect(workspace.workspaceBinding).toMatchObject({
-      workspaceId: expect.stringMatching(/^ws_/),
-      bindingId: expect.stringMatching(/^rtwb_/),
-      localWorkspaceKey: "spore",
-      displayName: "Spore",
-      status: "available",
-    });
+        registered.runtimeToken,
+      ),
+    ).toThrow(/registration token is required/i);
     expect(db.prepare("SELECT COUNT(*) AS count FROM runtime_workspace_bindings").get()).toEqual({
-      count: 1,
+      count: 0,
     });
     db.close();
   });
 
-  it("keeps workspace enrollment credentials workspace-bound", () => {
+  it("uses a fresh workspace token instead of broad runtime scope", () => {
     const db = openMemoryDatabase();
     migrate(db);
     const enrollment = createRuntimeEnrollmentToken(db);
     const registered = registerRuntime(db, registrationRequest, enrollment.refreshToken);
+    const additionalGrant = createRuntimeEnrollmentToken(db, {
+      workspaceName: "Spore",
+      workspaceSlug: "spore",
+    });
     const request = {
+      registrationToken: additionalGrant.refreshToken,
       workspaceRegistration: {
         localWorkspaceKey: "spore",
         displayName: "Spore",
       },
     };
 
-    expectRuntimeAccessError(
+    const workspace = registerRuntimeWorkspace(
       db,
       registered.runtimeId,
       request,
       registered.runtimeToken,
-      "RUNTIME_TOKEN_SCOPE_INVALID",
     );
-    expectRuntimeAccessError(
-      db,
-      registered.runtimeId,
-      request,
-      registered.refreshToken,
-      "RUNTIME_TOKEN_SCOPE_INVALID",
-    );
+    expect(workspace.workspaceBinding.localWorkspaceKey).toBe("spore");
+    expect(workspace.workspaceAuthorization.oneTimeToken).toMatch(/^spark_workspace_auth_/);
     db.close();
   });
 
-  it("preserves installation-wide workspace scope when device credentials refresh", () => {
+  it("does not add workspace registration scope when device credentials refresh", () => {
     const db = openMemoryDatabase();
     migrate(db);
     insertUser(db, "usr_owner", "owner", "active");
@@ -1339,11 +1352,16 @@ describe("runtime registration", () => {
       runtimeId: registered.runtimeId,
       refreshToken: registered.refreshToken,
     });
+    const workspaceGrant = createRuntimeEnrollmentToken(db, {
+      workspaceName: "Spore after refresh",
+      workspaceSlug: "spore-after-refresh",
+    });
 
     const workspace = registerRuntimeWorkspace(
       db,
       registered.runtimeId,
       {
+        registrationToken: workspaceGrant.refreshToken,
         workspaceRegistration: {
           localWorkspaceKey: "spore-after-refresh",
           displayName: "Spore after refresh",
@@ -1367,8 +1385,8 @@ describe("runtime registration", () => {
       )
       .all(registered.runtimeId) as Array<{ scopesJson: string }>;
     expect(activeScopes.map((row) => JSON.parse(row.scopesJson))).toEqual([
-      ["runtime:connect", "workspace:register"],
-      ["runtime:refresh", "workspace:register"],
+      ["runtime:connect"],
+      ["runtime:refresh"],
     ]);
     db.close();
   });

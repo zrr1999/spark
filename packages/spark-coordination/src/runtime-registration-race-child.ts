@@ -8,6 +8,7 @@ interface RaceRegistrationInput {
   databasePath: string;
   runtimeId: string;
   runtimeToken: string;
+  registrationToken: string;
   localWorkspaceKey: string;
 }
 
@@ -24,6 +25,7 @@ process.on("message", (message: RaceRegistrationInput) => {
       db,
       message.runtimeId,
       {
+        registrationToken: message.registrationToken,
         workspaceRegistration: {
           localWorkspaceKey: message.localWorkspaceKey,
           displayName: message.localWorkspaceKey,

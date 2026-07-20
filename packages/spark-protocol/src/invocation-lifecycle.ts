@@ -11,11 +11,21 @@ export const sparkInvocationStatusSchema = z.enum([
   "cancelled",
 ]);
 
+export const sparkTurnOriginBindingSchema = z.object({
+  workspaceId: z.string().min(1),
+  adapter: z.enum(["feishu", "infoflow", "qqbot"]),
+  adapterId: z.string().min(1),
+  adapterAccountIdentity: z.string().min(1).optional(),
+  externalKey: z.string().min(1),
+  recipient: z.string().min(1),
+});
+
 export const sparkTurnSubmitRequestSchema = z.object({
   sessionId: z.string().min(1),
   prompt: z.string(),
   idempotencyKey: z.string().min(1).optional(),
   reset: z.boolean().optional(),
+  originBinding: sparkTurnOriginBindingSchema.optional(),
 });
 
 export const sparkTurnSubmitResultSchema = z.object({

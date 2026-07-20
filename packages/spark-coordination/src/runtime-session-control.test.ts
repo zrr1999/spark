@@ -13,6 +13,7 @@ import {
   getRuntimeTurnStatusProjection,
   getRuntimeTurnStreamProjection,
   listRuntimeSessionRoutes,
+  reconcileRuntimeSessionListProjection,
   recordRuntimeSessionControlProjection,
   runRuntimeSessionControlCommand,
   runtimeSessionRouteForSession,
@@ -131,6 +132,48 @@ describe("runtime session projections", () => {
     ).toThrowError(/Daemon command returned a workspace session/u);
     expect(requireRuntimeControlCommand(h.db, mismatched.commandId).status).toBe("queued");
     expect(getRuntimeSessionProjection(h.db, workspace.sessionId)?.session).toEqual(workspace);
+    h.db.close();
+  });
+
+  it("removes active workspace projections disproved by a complete daemon list", () => {
+    const h = setup();
+    const current = workspaceSession(h.workspaceId);
+    const stale = { ...workspaceSession(h.workspaceId), title: "Stale route" };
+    const archived = {
+      ...workspaceSession(h.workspaceId),
+      title: "Archived route",
+      status: "archived" as const,
+    };
+    const daemon = daemonSession();
+    projectSession(h, current, "workspace");
+    projectSession(h, stale, "workspace");
+    projectSession(h, archived, "workspace");
+    projectSession(h, daemon, "daemon");
+
+    const route = {
+      runtimeId: h.runtimeId,
+      scope: "workspace" as const,
+      workspaceId: h.workspaceId,
+      runtimeWorkspaceBindingId: h.bindingId,
+    };
+    const candidateSessionIds = [
+      current.sessionId,
+      stale.sessionId,
+      archived.sessionId,
+      daemon.sessionId,
+    ];
+    reconcileRuntimeSessionListProjection(h.db, route, [current], { candidateSessionIds });
+
+    expect(getRuntimeSessionProjection(h.db, current.sessionId)?.session).toEqual(current);
+    expect(getRuntimeSessionProjection(h.db, stale.sessionId)).toBeNull();
+    expect(getRuntimeSessionProjection(h.db, archived.sessionId)?.session).toEqual(archived);
+    expect(getRuntimeSessionProjection(h.db, daemon.sessionId)?.session).toEqual(daemon);
+
+    reconcileRuntimeSessionListProjection(h.db, route, [current], {
+      candidateSessionIds,
+      includeArchived: true,
+    });
+    expect(getRuntimeSessionProjection(h.db, archived.sessionId)).toBeNull();
     h.db.close();
   });
 

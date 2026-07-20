@@ -221,6 +221,36 @@ void test("spark-graft registers the final high-frequency direct tool set and ex
       "graft_cli_exec",
     ],
   );
+  const readTools = new Set([
+    "graft_help",
+    "graft_status",
+    "graft_ps",
+    "graft_scratch_diff",
+    "graft_show",
+    "graft_evidence",
+    "graft_candidates",
+    "graft_search",
+  ]);
+  for (const [name, tool] of tools) {
+    const effect =
+      name === "graft_cli_exec"
+        ? undefined
+        : name === "graft_scratch_drop"
+          ? "destructive"
+          : readTools.has(name)
+            ? "read"
+            : "local_write";
+    assert.deepEqual(
+      tool.policy,
+      {
+        ...(effect ? { effect } : {}),
+        executionMode: "sequential",
+        domains: ["graft"],
+        approval: "none",
+      },
+      `${name} must declare a canonical Graft policy`,
+    );
+  }
 });
 
 void test("spark-graft lifecycle prerequisite errors point to the next tool", async () => {

@@ -19,6 +19,7 @@ export interface CockpitEventStreamOptions {
   request: Request;
   url: URL;
   sweepLivenessIfDue: (db: DatabaseSync) => void;
+  workspaceId?: string | null;
 }
 
 export function createCockpitEventStreamResponse(options: CockpitEventStreamOptions): Response {
@@ -41,6 +42,7 @@ export function createCockpitEventStreamResponse(options: CockpitEventStreamOpti
         const drained = drainEventBatches(options.db, cursor, {
           batchSize: eventBatchSize,
           maxBatches: maxBatchesPerFlush,
+          workspaceId: options.workspaceId,
         });
         for (const row of drained.rows) {
           const serialized = serializeEventRow(row);

@@ -34,6 +34,7 @@ export function loadEventBatch(
   db: DatabaseSync,
   cursor: EventCursor | null,
   limit = 50,
+  workspaceId?: string | null,
 ): EventRow[] {
   if (cursor) {
     const sequence = cursor.sequence ?? eventSequenceForLegacyCursor(db, cursor);
@@ -53,10 +54,11 @@ export function loadEventBatch(
                   created_at AS createdAt
            FROM events
            WHERE ingest_sequence > ?
+             AND (? IS NULL OR workspace_id = ?)
            ORDER BY ingest_sequence ASC
            LIMIT ?`,
         )
-        .all(sequence, limit) as unknown as EventRow[];
+        .all(sequence, workspaceId ?? null, workspaceId ?? null, limit) as unknown as EventRow[];
     }
 
     // Compatibility for a stale cursor whose event has since been removed.
@@ -75,11 +77,19 @@ export function loadEventBatch(
                 payload_json AS payloadJson,
                 created_at AS createdAt
          FROM events
-         WHERE created_at > ? OR (created_at = ? AND id > ?)
+         WHERE (created_at > ? OR (created_at = ? AND id > ?))
+           AND (? IS NULL OR workspace_id = ?)
          ORDER BY ingest_sequence ASC
          LIMIT ?`,
       )
-      .all(cursor.createdAt, cursor.createdAt, cursor.id, limit) as unknown as EventRow[];
+      .all(
+        cursor.createdAt,
+        cursor.createdAt,
+        cursor.id,
+        workspaceId ?? null,
+        workspaceId ?? null,
+        limit,
+      ) as unknown as EventRow[];
   }
 
   return db
@@ -97,12 +107,13 @@ export function loadEventBatch(
                 payload_json AS payloadJson,
                 created_at AS createdAt
          FROM events
+         WHERE (? IS NULL OR workspace_id = ?)
          ORDER BY ingest_sequence DESC
          LIMIT ?
        )
        ORDER BY sequence ASC`,
     )
-    .all(limit) as unknown as EventRow[];
+    .all(workspaceId ?? null, workspaceId ?? null, limit) as unknown as EventRow[];
 }
 
 export function latestEventCursor(db: DatabaseSync): EventCursor | null {
@@ -149,6 +160,7 @@ export function cursorFromEvent(row: EventRow | SerializedEvent): EventCursor {
 export interface EventDrainOptions {
   batchSize?: number;
   maxBatches?: number;
+  workspaceId?: string | null;
 }
 
 export interface EventDrainResult {
@@ -171,7 +183,7 @@ export function drainEventBatches(
   let lastBatchSize = 0;
 
   for (let index = 0; index < maxBatches; index += 1) {
-    const batch = loadEventBatch(db, nextCursor, batchSize);
+    const batch = loadEventBatch(db, nextCursor, batchSize, options.workspaceId);
     lastBatchSize = batch.length;
     if (batch.length === 0) break;
     rows.push(...batch);

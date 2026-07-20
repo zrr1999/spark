@@ -1415,13 +1415,11 @@ async function registerWorkspaceCommand(
   const serverUrl = await resolveRegistrationServerUrl(flags, registrationDefault, io, {
     interactive,
   });
-  const serverConfig = configForCockpitServer(paths, config, serverUrl);
-  const hasMachineCredentials = hasRunnableSparkDaemonCredentialsForServer(serverConfig, serverUrl);
   const registrationToken = await resolveRegistrationToken(flags, io, {
-    interactive: interactive && !hasMachineCredentials,
+    interactive,
   });
-  if (!registrationToken && !hasMachineCredentials) {
-    throw new Error(STRINGS.workspaceLoginRequired(serverUrl));
+  if (!registrationToken) {
+    throw new Error(STRINGS.workspaceTokenRequired(serverUrl));
   }
   const displayName =
     flags.name ?? (interactive ? await promptWorkspaceName(localPath, io) : undefined);
@@ -1449,6 +1447,7 @@ async function registerWorkspaceCommand(
       `  server   ${added.serverUrl}\n` +
       profileTextLine(added.profile) +
       `  status   ${workspaceStatusLabel(added)}\n` +
+      workspaceAuthorizationText(added, serverUrl) +
       `  note     Cockpit can unbind this projection; rerun workspace register to bind it again.\n`,
   );
 
@@ -1456,6 +1455,18 @@ async function registerWorkspaceCommand(
     io.stdout.write("Spark daemon is running.\n");
   }
   return 0;
+}
+
+function workspaceAuthorizationText(workspace: SparkDaemonWorkspace, serverUrl: string): string {
+  const authorization = workspace.workspaceAuthorization;
+  if (!authorization) return "";
+  const loginUrl = new URL("/login", serverUrl);
+  loginUrl.searchParams.set("workspace", authorization.workspaceSlug);
+  return (
+    `  authorize ${loginUrl.toString()}\n` +
+    `  one-time ${authorization.oneTimeToken}\n` +
+    `  expires  ${authorization.expiresAt}\n`
+  );
 }
 
 async function relocateWorkspaceCommand(
@@ -1507,7 +1518,7 @@ async function defaultWorkspace(
   const workspaces = await loadWorkspaceList(paths, io);
   if (workspaces.length === 0) {
     io.stdout.write(
-      "no workspaces registered.\n  spark daemon login --server-url <url>\n  spark daemon workspace register . --server-url <url> --name <ws>\n",
+      "no workspaces registered.\n  spark daemon workspace register . --server-url <url> --token <workspace-token> --name <ws>\n",
     );
     return 0;
   }
@@ -1520,7 +1531,7 @@ async function defaultWorkspace(
   if (!workspace) {
     io.stdout.write(
       `${cwd} is not under a registered workspace.\n` +
-        "  spark daemon workspace register . --server-url <url> --name <ws>\n" +
+        "  spark daemon workspace register . --server-url <url> --token <workspace-token> --name <ws>\n" +
         "or cd into a registered workspace, or pass --workspace <name>.\n",
     );
     return 2;
@@ -1569,7 +1580,7 @@ async function listWorkspaceCommand(
 
   if (workspaces.length === 0) {
     io.stdout.write(
-      "no workspaces registered.\n  spark daemon login --server-url <url>\n  spark daemon workspace register . --server-url <url> --name <ws>\n",
+      "no workspaces registered.\n  spark daemon workspace register . --server-url <url> --token <workspace-token> --name <ws>\n",
     );
     return 0;
   }
@@ -2405,7 +2416,7 @@ Commands:
   spark daemon
   spark daemon --workspace <name>
   login --server-url <url> [--no-open] [--allow-insecure-http]
-  workspace register [path] --server-url <url> [--token <workspace-registration-token|->] --name <name> [--profile <path-or-git-url>] [--allow-insecure-http]
+  workspace register [path] --server-url <url> --token <workspace-registration-token|-> --name <name> [--profile <path-or-git-url>] [--allow-insecure-http]
   workspace relocate --to-server-url <https-origin> [--from-server-url <origin>] [--yes] [--json]
   workspace ls [--json] [--all] [--full]
   workspace show [name] [--workspace <name>] [--json]
@@ -2419,7 +2430,7 @@ Commands:
 
 Example:
   spark daemon login --server-url http://127.0.0.1:5173
-  spark daemon workspace register . --server-url http://127.0.0.1:5173 --name <ws>
+  spark daemon workspace register . --server-url http://127.0.0.1:5173 --token <workspace-token> --name <ws>
 `);
 }
 
@@ -2427,7 +2438,7 @@ function printWorkspaceHelp(io: CliIo): void {
   io.stdout.write(`Usage: spark daemon workspace <command>
 
 Commands:
-  register [path] --server-url <url> [--token <workspace-registration-token|->] --name <name> [--profile <path-or-git-url>] [--allow-insecure-http]
+  register [path] --server-url <url> --token <workspace-registration-token|-> --name <name> [--profile <path-or-git-url>] [--allow-insecure-http]
   relocate --to-server-url <https-origin> [--from-server-url <origin>] [--yes] [--json]
   ls [--json] [--all] [--full]
   show [name] [--workspace <name>] [--json]
@@ -2442,7 +2453,8 @@ function printLoginHelp(io: CliIo): void {
   io.stdout.write(`Usage: spark daemon login --server-url <url> [--no-open] [--allow-insecure-http]
 
 Authorize this daemon machine in Spark Cockpit. The stored machine credential is
-reused when registering additional workspaces against the same Cockpit origin.
+only for connectivity and refresh. Every workspace registration still consumes
+a fresh one-time workspace registration token.
 Non-loopback Cockpit URLs require HTTPS unless --allow-insecure-http is supplied.
 `);
 }

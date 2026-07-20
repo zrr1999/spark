@@ -28,7 +28,8 @@
     "./runtime-ws": "./src/runtime-ws.ts",
     "./routing": "./src/routing.ts",
     "./session-activity": "./src/session-activity.ts",
-    "./security": "./src/security.ts"
+    "./security": "./src/security.ts",
+    "./workspace-access": "./src/workspace-access.ts"
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint . && vp test run",

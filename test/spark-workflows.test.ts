@@ -102,6 +102,18 @@ return 'ok'`);
   assert.equal(parsed.body, "return 'ok'");
 });
 
+void test("spark-workflows rejects duplicate normalized metadata stage titles", () => {
+  assert.throws(
+    () =>
+      parseWorkflowScript(`export const meta = {
+  name: 'ambiguous stages',
+  description: 'Duplicate stage titles silently collapse runtime identity.',
+  stages: [{ title: 'Scan' }, { title: ' Scan ' }],
+}`),
+    /stages\[1\]\.title duplicates workflow meta\.stages\[0\]\.title: "Scan"/u,
+  );
+});
+
 void test("spark-workflows parses metadata and runs sandbox primitives with journal", async () => {
   const script = `export const meta = {
   name: 'demo',
@@ -203,6 +215,37 @@ void test("spark-workflows lists and reads builtin workflows without frontmatter
     () => readSavedWorkflow({ cwd: ".", selector: "inline:demo", includeUser: false }),
     /workflow selector must be builtin:<id>, workspace:<id>, or user:<id>/,
   );
+});
+
+void test("spark-workflows rejects non-canonical saved workflow filenames during discovery", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-workflow-canonical-filename-"));
+  const workflowDir = join(dir, "workflows");
+  try {
+    await mkdir(workflowDir, { recursive: true });
+    const path = join(workflowDir, "under_score.js");
+    await writeFile(
+      path,
+      `export const meta = { name: 'underscored', description: 'cannot round-trip' }`,
+    );
+
+    const listing = await listSavedWorkflows(dir, {
+      includeUser: false,
+      workspaceWorkflowDir: workflowDir,
+    });
+
+    assert.equal(
+      listing.workflows.some((workflow) => workflow.source === "workspace"),
+      false,
+    );
+    assert.equal(listing.errors.length, 1);
+    assert.equal(listing.errors[0]?.path, path);
+    assert.match(
+      listing.errors[0]?.error ?? "",
+      /workflow filename "under_score\.js" must use canonical id "under-score\.js"/u,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 void test("spark-workflows research builtin fans out with collected errors and report synthesis", async () => {
@@ -2014,6 +2057,8 @@ return await agent('slow child', { label: 'slow-child' })`;
 
     const store = defaultSparkDynamicWorkflowEventStore(dir);
     assert.equal((await store.get(details.workflow.runRef))?.status, "running");
+    const managerCompletion = defaultSparkDynamicWorkflowManager().wait(details.workflow.runRef);
+    assert.ok(managerCompletion, "background workflow should remain owned by the manager");
     releaseAgent("background result");
     let completed = await store.get(details.workflow.runRef);
     let events = await store.readEvents(details.workflow.runRef);
@@ -2035,6 +2080,7 @@ return await agent('slow child', { label: 'slow-child' })`;
       "agent_succeeded",
       "run_succeeded",
     ]);
+    assert.equal((await managerCompletion).status, "succeeded");
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }

@@ -226,6 +226,7 @@ describe("Spark daemon workspace registration", () => {
     });
     const fetchFn = vi.fn(async (_url: URL | string, init?: RequestInit) => {
       expect(parseRequestJson(init)).toEqual({
+        registrationToken: "spark_wsreg_spore_once",
         workspaceRegistration: {
           localWorkspaceKey: "local-spore",
           displayName: "Local Spore checkout",
@@ -244,6 +245,12 @@ describe("Spark daemon workspace registration", () => {
             displayName: "Local Spore checkout",
             status: "indexing",
           },
+          workspaceAuthorization: {
+            workspaceId: "ws_22222222222241112222222222222222",
+            workspaceSlug: "spore",
+            oneTimeToken: "spark_workspace_auth_11111111111111111111111111111111",
+            expiresAt: "2026-07-13T01:10:00.000Z",
+          },
         },
         201,
       );
@@ -253,6 +260,7 @@ describe("Spark daemon workspace registration", () => {
     try {
       const registered = await ensureSparkDaemonRegistrationForWorkspace(paths, {
         serverUrl: "https://cockpit.example.test",
+        registrationToken: "spark_wsreg_spore_once",
         workspaceRegistration: {
           localWorkspaceKey: "local-spore",
           displayName: "Local Spore checkout",
@@ -263,6 +271,11 @@ describe("Spark daemon workspace registration", () => {
 
       expect(fetchFn).toHaveBeenCalledOnce();
       expect(registered.workspaceBinding?.workspaceId).toBe("ws_22222222222241112222222222222222");
+      expect(registered.workspaceAuthorization).toMatchObject({
+        workspaceId: "ws_22222222222241112222222222222222",
+        workspaceSlug: "spore",
+        oneTimeToken: "spark_workspace_auth_11111111111111111111111111111111",
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -364,6 +377,12 @@ describe("Spark daemon workspace registration", () => {
             displayName: "spore",
             status: "indexing",
           },
+          workspaceAuthorization: {
+            workspaceId: "ws_22222222222241112222222222222222",
+            workspaceSlug: "spore",
+            oneTimeToken: "spark_workspace_auth_22222222222222222222222222222222",
+            expiresAt: "2026-05-25T00:40:01.000Z",
+          },
         }),
         { status: 201, headers: { "content-type": "application/json" } },
       );
@@ -385,6 +404,9 @@ describe("Spark daemon workspace registration", () => {
         bindingId: "rtwb_33333333333341113333333333333333",
         status: "indexing",
       });
+      expect(registered.workspaceAuthorization?.oneTimeToken).toBe(
+        "spark_workspace_auth_22222222222222222222222222222222",
+      );
       expect(readSparkDaemonConfig(paths)).toEqual({
         installationId: "install-test",
         displayName: "Test daemon",

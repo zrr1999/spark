@@ -10,6 +10,7 @@ import {
 import { asciiSlug } from "@zendev-lab/spark-system";
 import { appendEvent } from "./projection-services.ts";
 import { hashSecret } from "./security.ts";
+import { createWorkspaceAccessToken } from "./workspace-access.ts";
 import type { DatabaseSync } from "node:sqlite";
 
 export interface RegisteredRuntime {
@@ -20,6 +21,7 @@ export interface RegisteredRuntime {
   refreshTokenExpiresAt: string;
   registeredAt: string;
   workspaceBinding?: RegisteredWorkspaceBinding;
+  workspaceAuthorization?: RegisteredWorkspaceAuthorization;
 }
 
 export type RefreshedRuntimeToken = Omit<RegisteredRuntime, "registeredAt"> & {
@@ -38,6 +40,14 @@ export interface RegisteredRuntimeWorkspace {
   runtimeId: string;
   registeredAt: string;
   workspaceBinding: RegisteredWorkspaceBinding;
+  workspaceAuthorization: RegisteredWorkspaceAuthorization;
+}
+
+export interface RegisteredWorkspaceAuthorization {
+  workspaceId: string;
+  workspaceSlug: string;
+  oneTimeToken: string;
+  expiresAt: string;
 }
 
 export interface UnboundRuntimeWorkspace {
@@ -288,7 +298,7 @@ export function createRuntimeDeviceAuthorization(
       registration.installationId,
       registration.displayName,
       JSON.stringify(registration),
-      JSON.stringify(["workspace:register", "runtime:refresh"]),
+      JSON.stringify(["runtime:refresh"]),
       createdAt,
       expiresAt,
       interval,
@@ -445,12 +455,6 @@ export function exchangeRuntimeDeviceAuthorization(
 
     const registration = parseRuntimeDeviceRegistration(authorization.registrationJson);
     const grantScopes = parseScopes(authorization.scopesJson);
-    if (!grantScopes.includes("workspace:register")) {
-      throw new RuntimeDeviceAuthorizationError(
-        "Runtime device authorization does not grant workspace registration.",
-        "invalid_grant",
-      );
-    }
 
     const workspaceGrant = emptyWorkspaceGrant();
     const runtimeId = resolveRuntimeRegistrationId(db, registration.installationId);
@@ -662,23 +666,11 @@ export function registerRuntimeWorkspace(
   runtimeToken: string | null,
 ): RegisteredRuntimeWorkspace {
   const now = new Date().toISOString();
-  const usesEnrollmentToken = request.registrationToken !== undefined;
   return withRuntimeRegistrationTransaction(db, () => {
-    authenticateRuntimeAccessToken(
-      db,
-      runtimeId,
-      runtimeToken,
-      now,
-      usesEnrollmentToken ? ["runtime:connect"] : ["runtime:connect", "workspace:register"],
-    );
+    authenticateRuntimeAccessToken(db, runtimeId, runtimeToken, now, ["runtime:connect"]);
 
-    let workspaceGrant: RuntimeWorkspaceGrant;
-    if (usesEnrollmentToken) {
-      const enrollment = consumeRuntimeEnrollmentToken(db, request.registrationToken ?? null, now);
-      workspaceGrant = workspaceGrantFromEnrollment(enrollment);
-    } else {
-      workspaceGrant = emptyWorkspaceGrant();
-    }
+    const enrollment = consumeRuntimeEnrollmentToken(db, request.registrationToken, now);
+    const workspaceGrant = workspaceGrantFromEnrollment(enrollment);
 
     const preparedWorkspace = prepareWorkspaceRegistration(
       db,
@@ -687,20 +679,18 @@ export function registerRuntimeWorkspace(
       request.workspaceRegistration,
       now,
     );
-    if (workspaceGrant.enrollmentTokenId) {
-      const consumed = db
-        .prepare(
-          `UPDATE runtime_enrollment_tokens
+    const consumed = db
+      .prepare(
+        `UPDATE runtime_enrollment_tokens
            SET used_at = ?, created_runtime_id = ?
            WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL`,
-        )
-        .run(now, runtimeId, workspaceGrant.enrollmentTokenId);
-      if (consumed.changes !== 1) {
-        throw new RuntimeEnrollmentError(
-          "Workspace registration token was already consumed.",
-          "WORKSPACE_REGISTRATION_TOKEN_USED",
-        );
-      }
+      )
+      .run(now, runtimeId, workspaceGrant.enrollmentTokenId);
+    if (consumed.changes !== 1) {
+      throw new RuntimeEnrollmentError(
+        "Workspace registration token was already consumed.",
+        "WORKSPACE_REGISTRATION_TOKEN_USED",
+      );
     }
 
     const workspaceBinding = completeWorkspaceRegistration(
@@ -717,7 +707,17 @@ export function registerRuntimeWorkspace(
       );
     }
 
-    return { runtimeId, registeredAt: now, workspaceBinding };
+    return {
+      runtimeId,
+      registeredAt: now,
+      workspaceBinding,
+      workspaceAuthorization: createRegisteredWorkspaceAuthorization(
+        db,
+        workspaceBinding.workspaceId,
+        runtimeId,
+        now,
+      ),
+    };
   });
 }
 
@@ -1061,11 +1061,35 @@ function registerRuntimeInTransaction(
     preparedWorkspace,
     now,
   );
+  const workspaceAuthorization = workspaceBinding
+    ? createRegisteredWorkspaceAuthorization(db, workspaceBinding.workspaceId, runtimeId, now)
+    : undefined;
   return {
     runtimeId,
     ...credentials,
     registeredAt: now,
     ...(workspaceBinding ? { workspaceBinding } : {}),
+    ...(workspaceAuthorization ? { workspaceAuthorization } : {}),
+  };
+}
+
+function createRegisteredWorkspaceAuthorization(
+  db: DatabaseSync,
+  workspaceId: string,
+  runtimeId: string,
+  createdAt: string,
+): RegisteredWorkspaceAuthorization {
+  const authorization = createWorkspaceAccessToken(db, {
+    workspaceId,
+    createdByRuntimeId: runtimeId,
+    label: "Daemon workspace registration",
+    createdAt,
+  });
+  return {
+    workspaceId: authorization.workspaceId,
+    workspaceSlug: authorization.workspaceSlug,
+    oneTimeToken: authorization.token,
+    expiresAt: authorization.expiresAt,
   };
 }
 

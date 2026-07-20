@@ -299,14 +299,23 @@ export function normalizeWorkflowMeta(value: unknown): WorkflowMeta {
   const rawStages = raw.stages ?? raw.phases;
   if (rawStages !== undefined) {
     if (!Array.isArray(rawStages)) throw new Error("workflow meta.stages must be an array");
+    const stageTitleIndexes = new Map<string, number>();
     const stages = Array.from(rawStages).map((stage, index) => {
       if (!stage || typeof stage !== "object")
         throw new Error("workflow meta.stages[" + index + "] must be an object");
       const candidate = stage as Record<string, unknown>;
       if (typeof candidate.title !== "string" || !candidate.title.trim())
         throw new Error("workflow meta.stages[" + index + "].title must be a non-empty string");
+      const title = candidate.title.trim();
+      const duplicateIndex = stageTitleIndexes.get(title);
+      if (duplicateIndex !== undefined) {
+        throw new Error(
+          `workflow meta.stages[${index}].title duplicates workflow meta.stages[${duplicateIndex}].title: "${title}"`,
+        );
+      }
+      stageTitleIndexes.set(title, index);
       return {
-        title: candidate.title.trim(),
+        title,
         ...(typeof candidate.detail === "string" && candidate.detail.trim()
           ? { detail: candidate.detail.trim() }
           : {}),

@@ -1,19 +1,28 @@
 import { fail, redirect } from "@sveltejs/kit";
+import {
+  hasActiveWorkspaceAccessTokens,
+  WorkspaceAccessTokenError,
+} from "@zendev-lab/spark-coordination/workspace-access";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
-import { createRemoteOwnerSession, getCurrentUserId, setSessionCookie } from "$lib/server/auth";
+import {
+  exchangeWorkspaceAccessToken,
+  getCurrentWorkspaceSession,
+  setWorkspaceSessionCookies,
+} from "$lib/server/auth";
 import { getDatabase } from "$lib/server/db";
-import { isRemoteAccessConfigured, verifyRemoteAccessToken } from "$lib/server/remote-access";
 import { formText } from "$lib/server/form-data";
+import { workspaceSessionsPath } from "$lib/workspace-routes";
 import type { Actions, PageServerLoad } from "./$types";
 
 export const load: PageServerLoad = ({ locals, url }) => {
   const next = safeNextPath(url.searchParams.get("next"));
-  if (getCurrentUserId(getDatabase(), locals.sessionToken)) {
-    redirect(303, next);
+  const current = getCurrentWorkspaceSession(getDatabase(), locals.sessionToken);
+  if (current) {
+    redirect(303, workspaceSessionsPath({ slug: current.workspaceSlug }));
   }
   return {
     next,
-    remoteAccessConfigured: isRemoteAccessConfigured(),
+    workspaceAccessAvailable: hasActiveWorkspaceAccessTokens(getDatabase()),
   };
 };
 
@@ -25,17 +34,24 @@ export const actions: Actions = {
     }).login;
     const next = safeNextPath(url.searchParams.get("next"));
     const token = formText(await request.formData(), "token").trim();
-    if (!verifyRemoteAccessToken(token)) {
+    let session;
+    try {
+      session = exchangeWorkspaceAccessToken(getDatabase(), token);
+    } catch (caught) {
+      if (!(caught instanceof WorkspaceAccessTokenError)) throw caught;
       return fail(401, {
         next,
-        remoteAccessConfigured: isRemoteAccessConfigured(),
-        message: isRemoteAccessConfigured() ? t.invalid : t.unconfigured,
+        workspaceAccessAvailable: hasActiveWorkspaceAccessTokens(getDatabase()),
+        message: t.invalid,
       });
     }
 
-    const session = createRemoteOwnerSession(getDatabase());
-    setSessionCookie(cookies, session, { secure: url.protocol === "https:" });
-    redirect(303, next);
+    setWorkspaceSessionCookies(cookies, session, { secure: url.protocol === "https:" });
+    const workspacePath = workspaceSessionsPath({ slug: session.workspaceSlug });
+    redirect(
+      303,
+      next.startsWith(`/${encodeURIComponent(session.workspaceSlug)}/`) ? next : workspacePath,
+    );
   },
 };
 

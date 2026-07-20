@@ -176,10 +176,17 @@ describe("managed sessions for cockpit", () => {
       .mockRejectedValueOnce(new CockpitRuntimeSessionUnavailableError("daemon offline"))
       .mockRejectedValueOnce(
         new RuntimeControlCommandError("unknown session: sess_missing", "session_not_found"),
+      )
+      .mockRejectedValueOnce(
+        new RuntimeControlCommandError(
+          "session sess_foreign does not belong to workspace ws_a",
+          "session_scope_mismatch",
+        ),
       );
 
     await expect(getManagedSessionForCockpit("sess_a", client)).resolves.toBeNull();
     await expect(getManagedSessionForCockpit("sess_missing", client)).resolves.toBeNull();
+    await expect(getManagedSessionForCockpit("sess_foreign", client)).resolves.toBeNull();
   });
 
   it("returns null for unavailable snapshots and surfaces invalid daemon responses", async () => {

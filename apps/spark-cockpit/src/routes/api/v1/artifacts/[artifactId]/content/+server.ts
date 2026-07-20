@@ -7,9 +7,15 @@ import { getDatabase } from "$lib/server/db";
  * artifacts and an explicit JSON error envelope for missing/large/binary/error
  * states so the UI never has to guess the meaning of an empty body.
  */
-export const GET: RequestHandler = ({ params, request }) => {
+export const GET: RequestHandler = ({ locals, params, request }) => {
   if (!params.artifactId) {
     throw error(400, "Missing artifact id");
+  }
+  if (locals.workspaceId) {
+    const artifact = getDatabase()
+      .prepare("SELECT workspace_id AS workspaceId FROM artifacts WHERE id = ? LIMIT 1")
+      .get(params.artifactId) as { workspaceId: string } | undefined;
+    if (artifact?.workspaceId !== locals.workspaceId) throw error(404, "Artifact not found");
   }
 
   let result: ReturnType<typeof readArtifactPreviewContent>;

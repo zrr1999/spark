@@ -86,6 +86,7 @@ describe("runtime registration owner conflict routes", () => {
           "content-type": "application/json",
         },
         body: JSON.stringify({
+          registrationToken: "spark_wsreg_route_workspace_marker",
           workspaceRegistration: {
             localWorkspaceKey: "conflict-local",
             displayName: "Conflict workspace",

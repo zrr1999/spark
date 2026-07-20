@@ -16,7 +16,7 @@ import {
 } from "$lib/workspace-routes";
 import type { LayoutServerLoad } from "./$types";
 
-export const load: LayoutServerLoad = async ({ cookies, url }) => {
+export const load: LayoutServerLoad = async ({ cookies, locals, url }) => {
   const selectedSessionId = workbenchSessionIdFromPath(url.pathname);
   const sessionsPath = workbenchSessionsPathFromPathname(url.pathname);
   const projectedSelectedSession = selectedSessionId
@@ -31,6 +31,7 @@ export const load: LayoutServerLoad = async ({ cookies, url }) => {
         ? workspaceIdForWorkbenchSession(projectedSelectedSession)
         : null,
     preferredWorkspaceSlug: url.searchParams.get("workspace"),
+    authorizedWorkspaceId: locals?.workspaceId ?? null,
   });
   const activeWorkspaceId = layout.activeWorkspace?.id ?? null;
   const managedSessions = activeWorkspaceId
@@ -41,7 +42,7 @@ export const load: LayoutServerLoad = async ({ cookies, url }) => {
     : { available: true, controlAvailable: false, sessions: [] };
   const selectedSession = selectedSessionId
     ? (managedSessions.sessions.find((session) => session.sessionId === selectedSessionId) ??
-      projectedSelectedSession)
+      (managedSessions.controlAvailable ? null : projectedSelectedSession))
     : null;
   const db = getDatabase();
   const projectedSessions = workspaceSessionsForWorkbench(

@@ -27,6 +27,13 @@ export const runtimeWorkspaceRegistrationBindingSchema = z.object({
   status: z.enum(["available", "indexing", "degraded", "unavailable", "archived"]),
 });
 
+export const workspaceBrowserAuthorizationSchema = z.object({
+  workspaceId: prefixedIdSchema("ws"),
+  workspaceSlug: z.string().min(1),
+  oneTimeToken: z.string().startsWith("spark_workspace_auth_").min(32),
+  expiresAt: isoDateTimeSchema,
+});
+
 export const runtimeRegistrationResponseSchema = z.object({
   runtimeId: prefixedIdSchema("rt"),
   runtimeToken: z.string().min(32),
@@ -39,10 +46,11 @@ export const runtimeRegistrationResponseSchema = z.object({
   staleAfterMs: z.literal(45_000),
   registeredAt: isoDateTimeSchema,
   workspaceBinding: runtimeWorkspaceRegistrationBindingSchema.optional(),
+  workspaceAuthorization: workspaceBrowserAuthorizationSchema.optional(),
 });
 
 export const runtimeWorkspaceRegistrationRequestSchema = z.object({
-  registrationToken: z.string().min(1).optional(),
+  registrationToken: z.string().min(1),
   workspaceRegistration: runtimeWorkspaceRegistrationDetailsSchema,
 });
 
@@ -50,6 +58,7 @@ export const runtimeWorkspaceRegistrationResponseSchema = z.object({
   runtimeId: prefixedIdSchema("rt"),
   registeredAt: isoDateTimeSchema,
   workspaceBinding: runtimeWorkspaceRegistrationBindingSchema,
+  workspaceAuthorization: workspaceBrowserAuthorizationSchema,
 });
 
 export const runtimeTokenRefreshRequestSchema = z.object({

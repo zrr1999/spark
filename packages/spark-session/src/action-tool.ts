@@ -66,8 +66,10 @@ export interface SparkSessionToolContext {
   sessionSurface?: "local" | "channel";
   sessionSource?: "tui" | "web" | "channel" | "daemon" | "session";
   channelBinding?: {
+    workspaceId?: string;
     adapter: SparkChannelAdapter;
     externalKey: string;
+    recipient?: string;
     adapterId?: string;
     adapterAccountIdentity?: string;
   };
@@ -280,6 +282,7 @@ export async function executeSparkSessionAction(
               sessionId: toSessionId,
               prompt: sent.message.body,
               idempotencyKey: `session.mail:${sent.message.id}`,
+              ...(turnOriginBinding(sent.message.originBinding, ctx) ?? {}),
               messageMetadata: sessionRequestMessageMetadata({
                 ctx,
                 message: sent.message,
@@ -829,6 +832,33 @@ function sessionOriginMessageMetadata(
       sessionId,
       surface: ctx.sessionSurface ?? "local",
       host: ctx.sessionSource ?? (ctx.sessionSurface === "channel" ? "channel" : "session"),
+    },
+  };
+}
+
+function turnOriginBinding(
+  binding: SparkSessionMailMessage["originBinding"],
+  ctx: SparkSessionToolContext,
+): { originBinding: Record<string, string> } | undefined {
+  if (!binding) return undefined;
+  const workspaceId = ctx.channelBinding?.workspaceId?.trim();
+  const adapterId = binding.adapterId?.trim();
+  const recipient = ctx.channelBinding?.recipient?.trim();
+  if (!workspaceId || !adapterId || !recipient) {
+    throw new Error(
+      "originating channel request requires immutable workspaceId, adapterId, and recipient",
+    );
+  }
+  return {
+    originBinding: {
+      workspaceId,
+      adapter: binding.adapter,
+      adapterId,
+      ...(binding.adapterAccountIdentity
+        ? { adapterAccountIdentity: binding.adapterAccountIdentity }
+        : {}),
+      externalKey: binding.externalKey,
+      recipient,
     },
   };
 }

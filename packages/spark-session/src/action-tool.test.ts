@@ -110,7 +110,13 @@ describe("persistent session channel routing", () => {
   it("locks an asynchronous request result to its originating adapter binding", async () => {
     const mailStore = await createMailStore();
     const origin = session("sess_origin", [
-      { kind: "channel", adapter: "qqbot", externalKey: "qqbot:user:42" },
+      {
+        kind: "channel",
+        adapter: "qqbot",
+        externalKey: "qqbot:user:42",
+        adapterId: "qq-main",
+        adapterAccountIdentity: "channel-account:qqbot:main",
+      },
       { kind: "channel", adapter: "infoflow", externalKey: "infoflow:user:42" },
     ]);
     const worker = session("sess_worker");
@@ -143,7 +149,14 @@ describe("persistent session channel routing", () => {
           sessionId: origin.sessionId,
           sessionSurface: "channel",
           sessionSource: "channel",
-          channelBinding: { adapter: "qqbot", externalKey: "qqbot:user:42" },
+          channelBinding: {
+            workspaceId: "workspace-qq",
+            adapter: "qqbot",
+            adapterId: "qq-main",
+            adapterAccountIdentity: "channel-account:qqbot:main",
+            externalKey: "qqbot:user:42",
+            recipient: "c2c:user:42",
+          },
         },
       },
       { request: request as never, mailStore: () => mailStore },
@@ -152,8 +165,25 @@ describe("persistent session channel routing", () => {
     const [requestMessage] = await mailStore.list(worker.sessionId, { includeAcked: true });
     expect(requestMessage?.originBinding).toEqual({
       adapter: "qqbot",
+      adapterId: "qq-main",
+      adapterAccountIdentity: "channel-account:qqbot:main",
       externalKey: "qqbot:user:42",
     });
+    expect(request).toHaveBeenCalledWith(
+      "turn.submit",
+      expect.objectContaining({
+        sessionId: worker.sessionId,
+        originBinding: {
+          workspaceId: "workspace-qq",
+          adapter: "qqbot",
+          adapterId: "qq-main",
+          adapterAccountIdentity: "channel-account:qqbot:main",
+          externalKey: "qqbot:user:42",
+          recipient: "c2c:user:42",
+        },
+      }),
+      expect.anything(),
+    );
 
     await expect(
       executeSparkSessionAction(

@@ -1,7 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { configureCockpitPublicUrl } from "../src/lib/server/public-url.js";
 import { closeDatabase, getDatabase } from "../src/lib/server/db.js";
-import { isRemoteAccessConfigured } from "../src/lib/server/remote-access.js";
 import { attachRuntimeWebSocket, authenticateRuntimeToken } from "../src/lib/server/runtime-ws.js";
 import { startWebPushEventDispatcher } from "../src/lib/server/web-push.js";
 import { WebSocketServer } from "ws";
@@ -87,12 +86,8 @@ server.listen(port, host, () => {
     console.log("Spark Cockpit public URL is derived from its trusted loopback proxy.");
   }
   if (host === "0.0.0.0" || publicUrl.mode !== "local") {
-    if (isRemoteAccessConfigured()) {
-      console.log("Spark Cockpit remote access is protected by SPARK_COCKPIT_REMOTE_TOKEN.");
-    } else {
-      console.warn(
-        "Spark Cockpit has a remote access path; protected UI/API requests are blocked until SPARK_COCKPIT_REMOTE_TOKEN is set.",
-      );
-    }
+    console.log(
+      "Spark Cockpit remote browser access requires a workspace-scoped one-time key and rotating session.",
+    );
   }
 });

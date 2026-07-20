@@ -281,6 +281,51 @@ export function listRuntimeSessionProjections(
   return rows.map(runtimeSessionProjectionRecord);
 }
 
+/**
+ * Remove projections disproved by one authoritative daemon list.
+ *
+ * `candidateSessionIds` must be captured before the list starts. This keeps a
+ * concurrent create/detail projection from being deleted merely because it was
+ * admitted after the daemon produced the list page being reconciled.
+ */
+export function reconcileRuntimeSessionListProjection(
+  db: DatabaseSync,
+  route: RuntimeSessionRoute,
+  sessions: SparkSessionRegistryRecord[],
+  options: {
+    candidateSessionIds: Iterable<string>;
+    includeArchived?: boolean;
+  },
+): void {
+  const authoritativeIds = new Set(sessions.map((session) => session.sessionId));
+  const staleIds = [...new Set(options.candidateSessionIds)].filter(
+    (sessionId) => !authoritativeIds.has(sessionId),
+  );
+  if (staleIds.length === 0) return;
+
+  const routeCondition =
+    route.scope === "workspace"
+      ? "scope = 'workspace' AND workspace_id = ?"
+      : "scope = 'daemon' AND workspace_id IS NULL";
+  const routeValues = route.scope === "workspace" ? [route.workspaceId ?? ""] : [];
+  const archivedCondition = options.includeArchived ? "" : " AND status != 'archived'";
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const remove = db.prepare(
+      `DELETE FROM runtime_session_projections
+       WHERE runtime_id = ? AND session_id = ? AND ${routeCondition}${archivedCondition}`,
+    );
+    for (const sessionId of staleIds) {
+      remove.run(route.runtimeId, sessionId, ...routeValues);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 export function getRuntimeSessionProjection(
   db: DatabaseSync,
   sessionId: string,

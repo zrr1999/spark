@@ -49,9 +49,9 @@ describe("workspace creation page contract", () => {
   it("only exposes one-time token registration in the current UI", () => {
     const source = readFileSync(pagePath, "utf8");
 
-    expect(source).toContain('<input type="hidden" name="registrationMethod" value="token" />');
     expect(source).toContain("t.emptyWorkspace.stepActions.createToken");
-    expect(source).not.toContain('value="device"');
+    expect(source).not.toContain("registrationMethod");
+    expect(source).not.toContain('"device" | "token"');
     expect(source).not.toContain("t.emptyWorkspace.stepActions.createDeviceCommand");
     expect(source).not.toContain("t.emptyWorkspace.stepActions.createTokenFallback");
     expect(source).not.toContain("pendingDeviceRegistrationCommand");
@@ -67,12 +67,14 @@ describe("workspace creation page contract", () => {
     expect(source).toContain("pending.runtimeStatus");
   });
 
-  it("defaults form submissions to token while retaining the explicit device backend", () => {
+  it("hard-cuts the tokenless device registration backend", () => {
     const source = readFileSync(pageServerPath, "utf8");
 
-    expect(source).toContain('readFormString(formData, "registrationMethod") || "token"');
-    expect(source).toContain('registrationMode: "device"');
-    expect(source).toContain("buildDeviceRegistrationCommand(url.origin, workspaceSetup)");
-    expect(source).not.toContain("pendingDeviceRegistrationCommand:");
+    expect(source).toContain('registrationMode: "token"');
+    expect(source).toContain("createRuntimeEnrollmentToken(db");
+    expect(source).not.toContain("registrationMethod");
+    expect(source).not.toContain('registrationMode: "device"');
+    expect(source).not.toContain("buildDeviceRegistrationCommand");
+    expect(source).not.toContain("buildDaemonLoginCommand");
   });
 });

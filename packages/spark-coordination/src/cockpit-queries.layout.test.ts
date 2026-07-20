@@ -123,6 +123,37 @@ describe("loadWorkbenchLayout", () => {
     expect(layout.workspaces.map((item) => item.slug)).toEqual(["live"]);
     db.close();
   });
+
+  it("shows only the workspace granted to a remote browser session", () => {
+    const { db, workspace } = setupWorkspace("spore");
+    const runtimeId = createId("rt");
+    const bindingId = createId("rtwb");
+    const now = "2026-07-09T03:00:00.000Z";
+    db.prepare(
+      `INSERT INTO runtime_connections
+        (id, installation_id, name, status, protocol_version, capabilities_json, labels_json, created_at, updated_at)
+       VALUES (?, ?, 'Other runtime', 'online', ?, '{}', '{}', ?, ?)`,
+    ).run(runtimeId, "install-other", runtimeProtocolVersion, now, now);
+    db.prepare(
+      `INSERT INTO runtime_workspace_bindings
+        (id, runtime_id, local_workspace_key, display_name, status, capabilities_json, diagnostics_json, created_at, updated_at)
+       VALUES (?, ?, 'other', 'Other', 'available', '{}', '{}', ?, ?)`,
+    ).run(bindingId, runtimeId, now, now);
+    createWorkspaceWithOwnerBinding(db, {
+      slug: "other",
+      name: "other",
+      runtimeWorkspaceBindingId: bindingId,
+      createdAt: now,
+    });
+
+    const layout = loadWorkbenchLayout(db, "/other/sessions", {
+      preferredWorkspaceSlug: "other",
+      authorizedWorkspaceId: workspace.id,
+    });
+    expect(layout.workspaces.map((item) => item.slug)).toEqual(["spore"]);
+    expect(layout.activeWorkspace?.id).toBe(workspace.id);
+    db.close();
+  });
 });
 
 describe("loadWorkspaceRegistrationPage", () => {

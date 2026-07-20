@@ -3,6 +3,7 @@ import {
   registerExtensionRole,
   type RoleSpec,
 } from "@zendev-lab/spark-roles";
+import type { ToolPolicy } from "@zendev-lab/spark-extension-api";
 import { Type } from "typebox";
 
 import {
@@ -43,6 +44,58 @@ export const PI_GRAFT_PATCHER_ALLOWED_TOOLS = [
   "graft_repo",
   "graft_cli_exec",
 ] as const;
+type PiGraftToolName = (typeof PI_GRAFT_PATCHER_ALLOWED_TOOLS)[number];
+
+const GRAFT_READ_TOOL_POLICY = {
+  effect: "read",
+  executionMode: "sequential",
+  domains: ["graft"],
+  approval: "none",
+} as const satisfies ToolPolicy;
+const GRAFT_LOCAL_WRITE_TOOL_POLICY = {
+  effect: "local_write",
+  executionMode: "sequential",
+  domains: ["graft"],
+  approval: "none",
+} as const satisfies ToolPolicy;
+const GRAFT_DESTRUCTIVE_TOOL_POLICY = {
+  effect: "destructive",
+  executionMode: "sequential",
+  domains: ["graft"],
+  approval: "none",
+} as const satisfies ToolPolicy;
+const GRAFT_UNKNOWN_TOOL_POLICY = {
+  executionMode: "sequential",
+  domains: ["graft"],
+  approval: "none",
+} as const satisfies ToolPolicy;
+
+const GRAFT_TOOL_POLICIES = {
+  graft_help: GRAFT_READ_TOOL_POLICY,
+  graft_init: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  graft_status: GRAFT_READ_TOOL_POLICY,
+  graft_ps: GRAFT_READ_TOOL_POLICY,
+  graft_doctor: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  graft_scratch_open: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  graft_read: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  graft_write: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  graft_edit: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  graft_delete: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  graft_scratch_diff: GRAFT_READ_TOOL_POLICY,
+  graft_scratch_drop: GRAFT_DESTRUCTIVE_TOOL_POLICY,
+  graft_scratch_pin: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  graft_scratch_unpin: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  graft_candidate_from_scratch: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  graft_validate: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  graft_admit: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  graft_show: GRAFT_READ_TOOL_POLICY,
+  graft_evidence: GRAFT_READ_TOOL_POLICY,
+  graft_candidates: GRAFT_READ_TOOL_POLICY,
+  graft_search: GRAFT_READ_TOOL_POLICY,
+  graft_materialize: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  graft_repo: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  graft_cli_exec: GRAFT_UNKNOWN_TOOL_POLICY,
+} as const satisfies Record<PiGraftToolName, ToolPolicy>;
 const GRAFT_REPO_ACTIONS = ["add", "list", "sync", "lock", "update"] as const;
 const DEFAULT_GRAFT_LIST_LIMIT = 10;
 const DEFAULT_GRAFT_DOCTOR_SAMPLE_LIMIT = 3;
@@ -100,6 +153,8 @@ export interface PiGraftToolDefinition {
   /** Tool-specific guideline bullets for Pi's default system prompt. */
   promptGuidelines?: string[];
   parameters: unknown;
+  /** Canonical Spark host policy; legacy Pi hosts safely ignore this field. */
+  policy?: ToolPolicy;
   /** Per-tool execution mode hint understood by Pi; stateful sandbox tools use sequential. */
   executionMode?: "sequential" | "parallel";
   renderCall?: (
@@ -146,6 +201,12 @@ export interface PiGraftExtensionApi {
   on(event: string, handler: (event: unknown, ctx: unknown) => unknown): void;
   registerTool(definition: PiGraftToolDefinition): void;
   appendEntry?: (customType: string, data?: unknown) => void;
+}
+
+function registerGraftTool(pi: PiGraftExtensionApi, definition: PiGraftToolDefinition): void {
+  const policy = GRAFT_TOOL_POLICIES[definition.name as PiGraftToolName];
+  if (!policy) throw new Error(`missing canonical Graft tool policy for ${definition.name}`);
+  pi.registerTool({ ...definition, policy });
 }
 
 export interface ActiveGraftScratchState {
@@ -1032,7 +1093,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     activeState = restoreState(ctx);
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_help",
     label: "Graft Help",
     description: "Show maintained Graft workflow or command help.",
@@ -1069,7 +1130,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_init",
     label: "Graft Init",
     description: "Initialize or register a Graft workspace.",
@@ -1097,7 +1158,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_status",
     label: "Graft Status",
     description: "Inspect spark-graft convenience state and graftd status.",
@@ -1127,7 +1188,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_ps",
     label: "Graft Ps",
     description:
@@ -1160,7 +1221,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_doctor",
     label: "Graft Doctor",
     description:
@@ -1200,7 +1261,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_scratch_open",
     label: "Graft Scratch Open",
     description: "Open a base ref as a daemon scratch and remember it as lastScratch.",
@@ -1240,7 +1301,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_read",
     label: "Graft Read",
     description: "Read a UTF-8 file from a graft scratch as LINE#HASH text.",
@@ -1289,7 +1350,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_write",
     label: "Graft Write",
     description: "Write a UTF-8 file into a graft scratch.",
@@ -1335,7 +1396,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_edit",
     label: "Graft Edit",
     description: "Apply strict LINE#HASH edits into a graft scratch.",
@@ -1413,7 +1474,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_delete",
     label: "Graft Delete",
     description: "Delete a file from a graft scratch.",
@@ -1456,7 +1517,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_scratch_diff",
     label: "Graft Scratch Diff",
     description: "Show changed paths between two daemon scratch ids.",
@@ -1493,7 +1554,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_scratch_drop",
     label: "Graft Scratch Drop",
     description: "Drop an unpinned daemon scratch.",
@@ -1523,7 +1584,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_scratch_pin",
     label: "Graft Scratch Pin",
     description: "Pin a daemon scratch and return a lease.",
@@ -1557,7 +1618,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_scratch_unpin",
     label: "Graft Scratch Unpin",
     description: "Release a daemon scratch lease.",
@@ -1589,7 +1650,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_candidate_from_scratch",
     label: "Graft Candidate From Scratch",
     description: "Create a candidate from a scratch id.",
@@ -1658,7 +1719,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_validate",
     label: "Graft Validate",
     description: "Validate a candidate or patch.",
@@ -1699,7 +1760,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_admit",
     label: "Graft Admit",
     description: "Admit a validated candidate as a patch.",
@@ -1745,7 +1806,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_show",
     label: "Graft Show",
     description: "Show a candidate or patch summary.",
@@ -1779,7 +1840,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_evidence",
     label: "Graft Evidence",
     description: "List evidence for a candidate or patch.",
@@ -1808,7 +1869,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_candidates",
     label: "Graft Candidates",
     description: "List unadmitted candidates.",
@@ -1840,7 +1901,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_search",
     label: "Graft Search",
     description: "Search admitted patches.",
@@ -1875,7 +1936,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_materialize",
     label: "Graft Materialize",
     description: "Plan or materialize an admitted patch target into an isolated inspection state.",
@@ -1912,7 +1973,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_repo",
     label: "Graft Repo",
     description:
@@ -1984,7 +2045,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     },
   });
 
-  pi.registerTool({
+  registerGraftTool(pi, {
     name: "graft_cli_exec",
     label: "Graft CLI Exec",
     description:

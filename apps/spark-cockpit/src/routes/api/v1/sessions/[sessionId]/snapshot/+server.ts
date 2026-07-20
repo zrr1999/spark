@@ -7,9 +7,10 @@ import { workspaceIdForWorkbenchSession } from "$lib/workbench-session-scope";
 import { json } from "@sveltejs/kit";
 import type { RequestHandler } from "./$types";
 
-export const GET: RequestHandler = async ({ params, url }) => {
+export const GET: RequestHandler = async ({ locals, params, url }) => {
   const session = await getManagedSessionForCockpit(params.sessionId);
-  if (!session || !workspaceIdForWorkbenchSession(session)) {
+  const workspaceId = session ? workspaceIdForWorkbenchSession(session) : null;
+  if (!session || !workspaceId || (locals?.workspaceId && locals.workspaceId !== workspaceId)) {
     return json({ error: "session_not_found" }, { status: 404 });
   }
   const beforeMessageId = url.searchParams.get("before")?.trim() || undefined;

@@ -1,25 +1,49 @@
 import { createId } from "@zendev-lab/spark-protocol";
 import type { Handle, HandleServerError, RequestEvent } from "@sveltejs/kit";
-import { getCurrentUserId, sessionCookieName } from "$lib/server/auth";
+import {
+  getCurrentWorkspaceSession,
+  refreshWorkspaceSession,
+  sessionCookieName,
+  sessionRefreshCookieName,
+  setWorkspaceSessionCookies,
+  workspaceSessionAllowsRequest,
+} from "$lib/server/auth";
 import { getDatabase } from "$lib/server/db";
 import { presentCockpitServerError } from "$lib/server/error-presentation";
 import { INVOCATION_ROUTE_UNAVAILABLE_ERROR_CODE } from "$lib/error-codes";
 import { localeCookieName, resolveRequestLocale } from "$lib/i18n";
-import {
-  bearerRemoteAccessToken,
-  isRemoteAccessAllowed,
-  isRemoteAccessConfigured,
-  remoteAccessDecision,
-} from "$lib/server/remote-access";
+import { remoteAccessDecision } from "$lib/server/remote-access";
 
 export const handle: Handle = async ({ event, resolve }) => {
   event.locals.requestId = createId("msg");
   event.locals.sessionToken = event.cookies.get(sessionCookieName) ?? null;
+  let workspaceSession = getCurrentWorkspaceSession(getDatabase(), event.locals.sessionToken);
+  if (!workspaceSession) {
+    const refreshed = refreshWorkspaceSession(
+      getDatabase(),
+      event.cookies.get(sessionRefreshCookieName) ?? null,
+    );
+    if (refreshed) {
+      setWorkspaceSessionCookies(event.cookies, refreshed, {
+        secure: event.url.protocol === "https:",
+      });
+      event.locals.sessionToken = refreshed.sessionToken;
+      workspaceSession = refreshed;
+    }
+  }
+  event.locals.workspaceId = workspaceSession?.workspaceId ?? null;
 
   const clientAddress = getClientAddress(event);
   const decision = remoteAccessDecision({ url: event.url, clientAddress });
-  if (decision.required && !isRemoteRequestAuthenticated(event, clientAddress)) {
+  if (decision.required && !workspaceSession) {
     return remoteAccessRequiredResponse(event);
+  }
+  if (
+    decision.required &&
+    workspaceSession &&
+    !workspaceSessionAllowsRequest(getDatabase(), workspaceSession.workspaceId, event.url.pathname)
+  ) {
+    return workspaceAccessForbiddenResponse(workspaceSession.workspaceSlug);
   }
 
   const locale = resolveRequestLocale({
@@ -53,15 +77,6 @@ export const handleError: HandleServerError = ({ error, event, status, message }
   return presented;
 };
 
-function isRemoteRequestAuthenticated(event: RequestEvent, clientAddress: string | null): boolean {
-  return isRemoteAccessAllowed({
-    url: event.url,
-    clientAddress,
-    sessionUserId: getCurrentUserId(getDatabase(), event.locals.sessionToken),
-    bearerToken: bearerRemoteAccessToken(event.request),
-  });
-}
-
 function getClientAddress(event: RequestEvent): string | null {
   try {
     return event.getClientAddress();
@@ -71,7 +86,6 @@ function getClientAddress(event: RequestEvent): string | null {
 }
 
 function remoteAccessRequiredResponse(event: RequestEvent): Response {
-  const configured = isRemoteAccessConfigured();
   const acceptsHtml = event.request.headers.get("accept")?.includes("text/html") ?? false;
   if ((event.request.method === "GET" || event.request.method === "HEAD") && acceptsHtml) {
     const next = `${event.url.pathname}${event.url.search}`;
@@ -83,17 +97,24 @@ function remoteAccessRequiredResponse(event: RequestEvent): Response {
 
   return new Response(
     JSON.stringify({
-      error: configured ? "remote_access_auth_required" : "remote_access_token_not_configured",
-      message: configured
-        ? "Spark Cockpit remote access requires a valid session cookie or bearer token."
-        : "Set SPARK_COCKPIT_REMOTE_TOKEN before exposing Spark Cockpit on a non-localhost address.",
+      error: "workspace_access_auth_required",
+      message: "Spark Cockpit requires a workspace-scoped access session.",
     }),
     {
       status: 401,
       headers: {
         "content-type": "application/json",
-        "www-authenticate": 'Bearer realm="Spark Cockpit"',
       },
     },
+  );
+}
+
+function workspaceAccessForbiddenResponse(workspaceSlug: string): Response {
+  return new Response(
+    JSON.stringify({
+      error: "workspace_access_forbidden",
+      message: `This browser session grants only workspace ${workspaceSlug}.`,
+    }),
+    { status: 403, headers: { "content-type": "application/json" } },
   );
 }

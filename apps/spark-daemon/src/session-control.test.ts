@@ -12,12 +12,133 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { SparkDaemonModelControl } from "./model-control.ts";
 import { createDaemonSessionRegistry } from "./session-registry.ts";
+import { channelReplyDeliveryForCompletion } from "./spark/session-run.ts";
 import { executeSparkDaemonSessionControl } from "./session-control.ts";
 import { SparkInvocationStore } from "./store/invocations.ts";
 import { migrateSparkDaemonDatabase } from "./store/schema.ts";
 import { registerWorkspace } from "./store/workspaces.ts";
 
 describe("daemon session control admission", () => {
+  it("freezes an originating QQ binding into the durable child invocation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-session-origin-binding-"));
+    const db = openMemoryDatabase();
+    migrateSparkDaemonDatabase(db);
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const sessionRegistry = createDaemonSessionRegistry(join(root, ".spark"), {
+      daemonId: "origin-binding-test",
+      daemonCwd: root,
+    });
+    await sessionRegistry.create({ sessionId: "session-worker", scope: { kind: "daemon" } });
+    try {
+      const originBinding = {
+        workspaceId: "workspace-original",
+        adapter: "qqbot" as const,
+        adapterId: "qq-account-original",
+        adapterAccountIdentity: "channel-account:qqbot:original",
+        externalKey: "qqbot:c2c:user-original",
+        recipient: "c2c:user-original",
+      };
+      const submitted = await executeSparkDaemonSessionControl(
+        { paths, db, sessionRegistry, actor: "spark-daemon-local-rpc" },
+        {
+          kind: "turn.submit.request",
+          scope: "any",
+          sessionId: "session-worker",
+          payload: {
+            sessionId: "session-worker",
+            prompt: "complete the delegated work",
+            idempotencyKey: "origin-binding-request",
+            originBinding,
+          },
+        },
+      );
+      const invocation = new SparkInvocationStore(db).require(submitted.invocationId!);
+      expect(invocation.task).toMatchObject({
+        channelReply: {
+          workspaceId: "workspace-original",
+          adapter: "qqbot",
+          adapterId: "qq-account-original",
+          adapterAccountIdentity: "channel-account:qqbot:original",
+          recipient: "c2c:user-original",
+        },
+        channelContext: { externalKey: "qqbot:c2c:user-original" },
+      });
+      expect(
+        channelReplyDeliveryForCompletion(
+          invocation.task as never,
+          invocation.invocationId,
+          "final",
+          { assistantText: "delegated result" },
+        ),
+      ).toMatchObject({
+        workspaceId: "workspace-original",
+        adapterId: "qq-account-original",
+        adapterAccountIdentity: "channel-account:qqbot:original",
+        externalKey: "qqbot:c2c:user-original",
+        target: { recipient: "c2c:user-original" },
+        text: "delegated result",
+      });
+
+      await expect(
+        executeSparkDaemonSessionControl(
+          { paths, db, sessionRegistry, actor: "spark-daemon-local-rpc" },
+          {
+            kind: "turn.submit.request",
+            scope: "any",
+            sessionId: "session-worker",
+            payload: {
+              sessionId: "session-worker",
+              prompt: "complete the delegated work",
+              idempotencyKey: "origin-binding-request",
+              originBinding: { ...originBinding, adapterId: "qq-account-drifted" },
+            },
+          },
+        ),
+      ).rejects.toThrow(/idempotency conflict/u);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps local-origin turn submission compatible without a channel binding", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-session-local-origin-"));
+    const db = openMemoryDatabase();
+    migrateSparkDaemonDatabase(db);
+    const paths = resolveSparkPaths({ app: "daemon", env: { HOME: root } });
+    const sessionRegistry = createDaemonSessionRegistry(join(root, ".spark"), {
+      daemonId: "local-origin-test",
+      daemonCwd: root,
+    });
+    await sessionRegistry.create({ sessionId: "session-local", scope: { kind: "daemon" } });
+    try {
+      const submitted = await executeSparkDaemonSessionControl(
+        { paths, db, sessionRegistry, actor: "spark-daemon-local-rpc" },
+        {
+          kind: "turn.submit.request",
+          scope: "any",
+          sessionId: "session-local",
+          payload: { sessionId: "session-local", prompt: "local work" },
+        },
+      );
+      const invocation = new SparkInvocationStore(db).require(submitted.invocationId!);
+      expect(invocation.task).not.toHaveProperty("channelReply");
+      expect(invocation.task).not.toHaveProperty("channelContext");
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("converges concurrent lease claimants on one semantic turn despite dynamic model drift", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-session-admission-"));
     const db = openMemoryDatabase();

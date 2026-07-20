@@ -55,6 +55,7 @@ describe("migrations", () => {
       "runtime_channel_control_projections",
       "runtime_ephemeral_secret_audit",
       "event_ingest_sequence",
+      "workspace_access_tokens",
     ]) {
       expect(tableExists(db, table)?.name).toBe(table);
     }
@@ -81,6 +82,8 @@ describe("migrations", () => {
       "runtime_channel_control_projections_workspace_idx",
       "runtime_ephemeral_secret_audit_runtime_created_idx",
       "events_ingest_sequence_unique",
+      "sessions_refresh_token_unique",
+      "workspace_access_tokens_workspace_state_idx",
     ]) {
       expect(indexExists(db, index)?.name).toBe(index);
     }
@@ -105,6 +108,7 @@ describe("migrations", () => {
       "0013",
       "0014",
       "0015",
+      "0016",
     ]);
 
     const bindingColumns = db
@@ -126,7 +130,7 @@ describe("migrations", () => {
       count: number;
     };
 
-    expect(migrationCount.count).toBe(15);
+    expect(migrationCount.count).toBe(16);
     db.close();
   });
 

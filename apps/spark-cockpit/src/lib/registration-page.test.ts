@@ -28,13 +28,13 @@ describe("workspace registration page contract", () => {
     expect(source).toContain("overflow-wrap: anywhere");
   });
 
-  it("aligns both browser authorization command blocks from the top", () => {
+  it("keeps daemon registration and browser authorization as separate one-time grants", () => {
     const source = readFileSync(pagePath, "utf8");
 
-    expect(source).toContain(".device-commands > .token-display");
-    expect(source).toContain("display: flex");
-    expect(source).toContain("flex-direction: column");
-    expect(source).toContain("flex: 1 1 auto");
-    expect(source).not.toContain("min-height: 100%");
+    expect(source).toContain('action="?/createEnrollmentToken"');
+    expect(source).toContain('action="?/createWorkspaceAccessToken"');
+    expect(source).toContain("form.workspaceAccessToken");
+    expect(source).not.toContain("workspaceRegisterCommand");
+    expect(source).not.toContain("device-commands");
   });
 });

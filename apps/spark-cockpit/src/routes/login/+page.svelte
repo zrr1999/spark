@@ -15,7 +15,7 @@
     <h1 id="login-title">{t.title}</h1>
     <p class="lede">{t.lede}</p>
 
-    {#if !data.remoteAccessConfigured}
+    {#if !data.workspaceAccessAvailable}
       <div class="notice" role="alert">
         {t.unconfigured}
       </div>
@@ -37,7 +37,7 @@
           required
         />
       </Field>
-      <Button class="login-submit" type="submit" disabled={!data.remoteAccessConfigured}>{t.action}</Button>
+      <Button class="login-submit" type="submit" disabled={!data.workspaceAccessAvailable}>{t.action}</Button>
     </form>
   </Panel>
 </section>

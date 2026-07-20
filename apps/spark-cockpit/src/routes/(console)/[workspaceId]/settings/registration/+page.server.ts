@@ -3,7 +3,6 @@ import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import { ensureCurrentOwnerSession } from "$lib/server/auth";
 import { getDatabase } from "$lib/server/db";
 import {
-  buildDaemonLoginCommand,
   buildDaemonWorkspaceRegistrationCommand,
   isInsecureRemoteServerOrigin,
   isLoopbackServerOrigin,
@@ -15,6 +14,11 @@ import {
 } from "$lib/server/runtime-registration";
 import { loadWorkspaceRegistrationPage } from "@zendev-lab/spark-coordination/cockpit-queries";
 import { unbindWorkspaceOwner } from "@zendev-lab/spark-coordination/projection-services";
+import {
+  createWorkspaceAccessToken,
+  listWorkspaceAccessTokens,
+  revokeWorkspaceAccessToken,
+} from "@zendev-lab/spark-coordination/workspace-access";
 import { workspacePath } from "$lib/workspace-routes";
 import type { Actions, PageServerLoad } from "./$types";
 
@@ -23,15 +27,9 @@ export const load: PageServerLoad = ({ params, url }) => {
   if (!page) throw kitError(404, "Workspace not found.");
   return {
     ...page,
+    workspaceAccessTokens: listWorkspaceAccessTokens(getDatabase(), page.workspace.id),
     backSettingsPath: workspacePath(page.workspace, "/settings"),
     serverOrigin: url.origin,
-    deviceLoginCommand: buildDaemonLoginCommand(url.origin),
-    workspaceRegisterCommand: buildDaemonWorkspaceRegistrationCommand({
-      serverOrigin: url.origin,
-      displayName: page.workspace.name,
-      workspaceName: page.workspace.name,
-      workspaceSlug: page.workspace.slug,
-    }),
     loopbackServerOrigin: isLoopbackServerOrigin(url),
     insecureRemoteServerOrigin: isInsecureRemoteServerOrigin(url),
   };
@@ -46,7 +44,7 @@ export const actions: Actions = {
     const db = getDatabase();
     const page = loadWorkspaceRegistrationPage(db, params.workspaceId);
     if (!page) throw kitError(404, "Workspace not found.");
-    const userId = ensureCurrentOwnerSession(db, cookies, locals.sessionToken);
+    const userId = ensureCurrentOwnerSession(db, cookies, locals.sessionToken, page.workspace.id);
     const formData = await request.formData();
     const bindingId = formText(formData, "bindingId").trim();
     if (!bindingId) {
@@ -79,7 +77,7 @@ export const actions: Actions = {
     const page = loadWorkspaceRegistrationPage(db, params.workspaceId);
     if (!page) throw kitError(404, "Workspace not found.");
     const { workspace } = page;
-    const userId = ensureCurrentOwnerSession(db, cookies, locals.sessionToken);
+    const userId = ensureCurrentOwnerSession(db, cookies, locals.sessionToken, workspace.id);
 
     const formData = await request.formData();
     const label = formText(formData, "label").trim() || messages.enrollment.labelPlaceholder;
@@ -101,13 +99,15 @@ export const actions: Actions = {
     };
   },
 
-  revokeEnrollmentToken: async ({ cookies, locals, request }) => {
+  revokeEnrollmentToken: async ({ cookies, locals, params, request }) => {
     const t = getRequestDictionary({
       cookieLocale: cookies.get(localeCookieName),
       acceptLanguage: request.headers.get("accept-language"),
     }).settings.formMessages;
     const db = getDatabase();
-    ensureCurrentOwnerSession(db, cookies, locals.sessionToken);
+    const page = loadWorkspaceRegistrationPage(db, params.workspaceId);
+    if (!page) throw kitError(404, "Workspace not found.");
+    ensureCurrentOwnerSession(db, cookies, locals.sessionToken, page.workspace.id);
 
     const formData = await request.formData();
     const tokenId = formText(formData, "tokenId").trim();
@@ -122,6 +122,59 @@ export const actions: Actions = {
     return {
       intent: "runnerEnrollment",
       message: revoked ? t.tokenRevoked : t.tokenNotActive,
+    };
+  },
+
+  createWorkspaceAccessToken: async ({ cookies, locals, params, request, url }) => {
+    const messages = getRequestDictionary({
+      cookieLocale: cookies.get(localeCookieName),
+      acceptLanguage: request.headers.get("accept-language"),
+    }).settings;
+    const db = getDatabase();
+    const page = loadWorkspaceRegistrationPage(db, params.workspaceId);
+    if (!page) throw kitError(404, "Workspace not found.");
+    const userId = ensureCurrentOwnerSession(db, cookies, locals.sessionToken, page.workspace.id);
+    const formData = await request.formData();
+    const label = formText(formData, "label").trim() || messages.access.defaultTokenLabel;
+    const token = createWorkspaceAccessToken(db, {
+      workspaceId: page.workspace.id,
+      createdByUserId: userId,
+      label,
+    });
+    const loginUrl = new URL("/login", url.origin);
+    loginUrl.searchParams.set("workspace", page.workspace.slug);
+    return {
+      intent: "workspaceAccess",
+      message: messages.access.tokenCreatedHint,
+      workspaceAccessToken: token.token,
+      workspaceAccessExpiresAt: token.expiresAt,
+      workspaceLoginUrl: loginUrl.toString(),
+    };
+  },
+
+  revokeWorkspaceAccessToken: async ({ cookies, locals, params, request }) => {
+    const messages = getRequestDictionary({
+      cookieLocale: cookies.get(localeCookieName),
+      acceptLanguage: request.headers.get("accept-language"),
+    }).settings;
+    const db = getDatabase();
+    const page = loadWorkspaceRegistrationPage(db, params.workspaceId);
+    if (!page) throw kitError(404, "Workspace not found.");
+    ensureCurrentOwnerSession(db, cookies, locals.sessionToken, page.workspace.id);
+    const tokenId = formText(await request.formData(), "tokenId").trim();
+    if (!tokenId) {
+      return fail(400, {
+        intent: "workspaceAccess",
+        message: messages.formMessages.tokenIdRequired,
+      });
+    }
+    const revoked = revokeWorkspaceAccessToken(db, {
+      workspaceId: page.workspace.id,
+      tokenId,
+    });
+    return {
+      intent: "workspaceAccess",
+      message: revoked ? messages.formMessages.tokenRevoked : messages.formMessages.tokenNotActive,
     };
   },
 };

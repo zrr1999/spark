@@ -64,6 +64,7 @@ export interface SparkDaemonRegistrationInput {
 export interface SparkDaemonRegistrationResult {
   config: SparkDaemonConfig;
   workspaceBinding?: RuntimeRegistrationResponse["workspaceBinding"];
+  workspaceAuthorization?: RuntimeRegistrationResponse["workspaceAuthorization"];
 }
 
 export interface SparkDaemonWorkspaceUnbindResult {
@@ -226,6 +227,11 @@ export async function ensureSparkDaemonRegistrationForWorkspace(
   let current = existingProfile
     ? sparkDaemonConfigForServerProfile(identity, existingProfile)
     : identity;
+  if (!input.registrationToken) {
+    throw new Error(
+      `Workspace registration for ${serverUrl} requires a new one-time workspace token. Cockpit machine credentials do not grant access to additional workspaces.`,
+    );
+  }
   if (hasRunnableSparkDaemonCredentialsForServer(current, serverUrl)) {
     current = shouldRefreshSparkDaemonToken(current)
       ? await refreshSparkDaemonCredentials({ paths, config: current })
@@ -237,19 +243,14 @@ export async function ensureSparkDaemonRegistrationForWorkspace(
       serverUrl,
       runtimeId: current.runtimeId!,
       runtimeToken: current.runtimeToken!,
-      ...(input.registrationToken ? { registrationToken: input.registrationToken } : {}),
+      registrationToken: input.registrationToken,
       workspaceRegistration: input.workspaceRegistration,
     });
     return {
       config: current,
       workspaceBinding: registered.workspaceBinding,
+      workspaceAuthorization: registered.workspaceAuthorization,
     };
-  }
-
-  if (!input.registrationToken) {
-    throw new Error(
-      `Spark daemon is not authorized for ${serverUrl}. Run spark daemon login --server-url ${serverUrl} or pass --token <token>.`,
-    );
   }
 
   const registered = await registerSparkDaemonWithToken(paths, {
@@ -260,6 +261,9 @@ export async function ensureSparkDaemonRegistrationForWorkspace(
   return {
     config: configForRegisteredServer(paths, serverUrl),
     ...(registered.workspaceBinding ? { workspaceBinding: registered.workspaceBinding } : {}),
+    ...(registered.workspaceAuthorization
+      ? { workspaceAuthorization: registered.workspaceAuthorization }
+      : {}),
   };
 }
 
@@ -587,7 +591,7 @@ async function registerWorkspaceWithRuntime(input: {
   serverUrl: string;
   runtimeId: string;
   runtimeToken: string;
-  registrationToken?: string;
+  registrationToken: string;
   workspaceRegistration: NonNullable<SparkDaemonRegistrationInput["workspaceRegistration"]>;
 }) {
   const url = new URL(
@@ -601,7 +605,7 @@ async function registerWorkspaceWithRuntime(input: {
       authorization: `Bearer ${input.runtimeToken}`,
     },
     body: JSON.stringify({
-      ...(input.registrationToken ? { registrationToken: input.registrationToken } : {}),
+      registrationToken: input.registrationToken,
       workspaceRegistration: input.workspaceRegistration,
     }),
   });

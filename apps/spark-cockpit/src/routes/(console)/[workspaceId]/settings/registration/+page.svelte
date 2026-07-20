@@ -70,35 +70,89 @@
     {/each}
   </div>
 
-  <section class="panel-card device-registration">
+  <section class="panel-card fallback-card">
     <div class="device-heading">
       <div>
-        <h2>{t.enrollment.deviceTitle}</h2>
-        <p>{t.enrollment.deviceBody}</p>
+        <h2>{t.access.title}</h2>
+        <p>{t.access.body}</p>
       </div>
-      <Icon name="spark" size={20} />
+      <Icon name="user" size={20} />
     </div>
+    <form class="token-form" method="POST" action="?/createWorkspaceAccessToken">
+      <Field id="workspace-access-label" label={t.access.label} reserveMeta={false}>
+        <Input
+          id="workspace-access-label"
+          name="label"
+          placeholder={t.access.labelPlaceholder}
+        />
+      </Field>
+      <Button type="submit">
+        <Icon name="plus" size={16} stroke={2.4} />
+        <span>{t.access.createToken}</span>
+      </Button>
+    </form>
 
-    {#if data.loopbackServerOrigin}
-      <p class="loopback-warning" role="note">{t.enrollment.loopbackWarning}</p>
-    {:else if data.insecureRemoteServerOrigin}
-      <p class="loopback-warning" role="note">{t.enrollment.insecureHttpWarning}</p>
+    {#if form?.intent === "workspaceAccess" && form?.workspaceAccessToken}
+      <div class="token-created">
+        <div>
+          <strong>{t.access.tokenCreatedTitle}</strong>
+          <p>{form.message}</p>
+        </div>
+        <div class="token-display">
+          <span>{t.access.loginUrl}</span>
+          <pre>{form.workspaceLoginUrl}</pre>
+        </div>
+        <div class="token-display">
+          <span>{t.access.oneTimeToken}</span>
+          <pre>{form.workspaceAccessToken}</pre>
+        </div>
+        <small>{t.access.expiresPrefix} {formatRelative(form.workspaceAccessExpiresAt ?? null)}</small>
+      </div>
+    {:else if form?.intent === "workspaceAccess" && form?.message}
+      <p class="form-message" role="alert">{form.message}</p>
     {/if}
 
-    <div class="device-commands">
-      <div class="token-display">
-        <span>{t.enrollment.loginCommandLabel}</span>
-        <pre>{data.deviceLoginCommand}</pre>
+    <article class="token-table">
+      <div class="table-heading">
+        <h3>{t.access.tableTitle}</h3>
+        <span>{data.workspaceAccessTokens.length} {t.access.tableCount}</span>
       </div>
-      <div class="token-display">
-        <span>{t.enrollment.workspaceCommandLabel}</span>
-        <pre>{data.workspaceRegisterCommand}</pre>
-      </div>
-    </div>
-    <p class="reuse-hint">{t.enrollment.deviceReuseHint}</p>
+      {#if data.workspaceAccessTokens.length === 0}
+        <div class="empty-state">
+          <Icon name="user" size={20} />
+          <div>
+            <strong>{t.access.emptyTitle}</strong>
+            <p>{t.access.emptyBody}</p>
+          </div>
+        </div>
+      {:else}
+        <div class="token-list">
+          {#each data.workspaceAccessTokens as token}
+            {@const status = enrollmentStatus(token)}
+            <div class="token-row">
+              <div>
+                <strong>{token.label ?? t.access.defaultTokenLabel}</strong>
+                {#if token.createdByRuntimeName}
+                  <small>{t.access.createdByDaemon}: {token.createdByRuntimeName}</small>
+                {/if}
+              </div>
+              <span class="status-pill {status}">{statusLabel(status)}</span>
+              <time><small>{t.enrollment.created}</small>{formatRelative(token.createdAt)}</time>
+              <time><small>{t.enrollment.expires}</small>{formatRelative(token.expiresAt)}</time>
+              <form method="POST" action="?/revokeWorkspaceAccessToken">
+                <input type="hidden" name="tokenId" value={token.id} />
+                <Button variant="secondary" size="compact" type="submit" disabled={status !== "ready"}>
+                  {t.access.revoke}
+                </Button>
+              </form>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </article>
   </section>
 
-  <details class="token-fallback">
+  <details class="token-fallback" open>
     <summary>
       <span>
         <strong>{t.enrollment.tokenFallbackTitle}</strong>
@@ -106,6 +160,11 @@
       </span>
     </summary>
     <section class="panel-card fallback-card">
+    {#if data.loopbackServerOrigin}
+      <p class="loopback-warning" role="note">{t.enrollment.loopbackWarning}</p>
+    {:else if data.insecureRemoteServerOrigin}
+      <p class="loopback-warning" role="note">{t.enrollment.insecureHttpWarning}</p>
+    {/if}
     <form class="token-form" method="POST" action="?/createEnrollmentToken">
       <Field id="enrollment-label" label={t.enrollment.label} reserveMeta={false}>
         <Input id="enrollment-label" name="label" placeholder={t.enrollment.labelPlaceholder} />
@@ -359,7 +418,6 @@
   }
 
   .device-heading p,
-  .reuse-hint,
   .token-fallback summary small {
     color: var(--color-ink-subtle);
     font-size: 13px;
@@ -369,33 +427,6 @@
   .device-heading :global(svg) {
     color: var(--color-primary);
     flex: 0 0 auto;
-  }
-
-  .device-commands {
-    display: grid;
-    gap: 12px;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .device-commands > .token-display {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-  }
-
-  .device-commands pre {
-    background: var(--color-ink);
-    border-radius: var(--rounded-md);
-    color: var(--color-border);
-    font-family: var(--font-mono);
-    font-size: 12px;
-    line-height: 1.55;
-    margin: 0;
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-x: auto;
-    padding: 12px;
-    white-space: pre-wrap;
   }
 
   .loopback-warning {
@@ -731,8 +762,7 @@
 
   @media (max-width: 980px) {
     .summary-grid,
-    .connections-grid,
-    .device-commands {
+    .connections-grid {
       grid-template-columns: 1fr;
     }
 

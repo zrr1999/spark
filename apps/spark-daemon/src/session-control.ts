@@ -256,6 +256,20 @@ export async function executeSparkDaemonSessionControl(
             ...(route.workspaceId ? { workspaceId: route.workspaceId } : {}),
             ...(parsed.assignment ? { assignment: parsed.assignment } : {}),
             ...(parsed.messageMetadata ? { messageMetadata: parsed.messageMetadata } : {}),
+            ...(parsed.originBinding
+              ? {
+                  channelReply: {
+                    workspaceId: parsed.originBinding.workspaceId,
+                    adapter: parsed.originBinding.adapter,
+                    adapterId: parsed.originBinding.adapterId,
+                    ...(parsed.originBinding.adapterAccountIdentity
+                      ? { adapterAccountIdentity: parsed.originBinding.adapterAccountIdentity }
+                      : {}),
+                    recipient: parsed.originBinding.recipient,
+                  },
+                  channelContext: { externalKey: parsed.originBinding.externalKey },
+                }
+              : {}),
             actor: options.actor,
           },
           idempotencyKey,
@@ -342,10 +356,25 @@ function assertIdempotentTurnReplay(
     task.prompt !== parsed.prompt ||
     task.reset !== parsed.reset ||
     JSON.stringify(task.assignment) !== JSON.stringify(parsed.assignment) ||
-    JSON.stringify(task.messageMetadata) !== JSON.stringify(parsed.messageMetadata)
+    JSON.stringify(task.messageMetadata) !== JSON.stringify(parsed.messageMetadata) ||
+    JSON.stringify(originBindingFromTask(task)) !== JSON.stringify(parsed.originBinding)
   ) {
     throw new Error(`Invocation idempotency conflict: ${parsed.idempotencyKey ?? "unknown"}`);
   }
+}
+
+function originBindingFromTask(task: SparkDaemonTask) {
+  if (!task.channelReply || !task.channelContext) return undefined;
+  return {
+    workspaceId: task.channelReply.workspaceId,
+    adapter: task.channelReply.adapter,
+    adapterId: task.channelReply.adapterId,
+    ...(task.channelReply.adapterAccountIdentity
+      ? { adapterAccountIdentity: task.channelReply.adapterAccountIdentity }
+      : {}),
+    externalKey: task.channelContext.externalKey,
+    recipient: task.channelReply.recipient,
+  };
 }
 
 export function assertIdempotentTurnPayloadReplay(

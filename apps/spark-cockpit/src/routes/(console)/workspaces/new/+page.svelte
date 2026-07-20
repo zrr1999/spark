@@ -30,7 +30,7 @@
   };
 
   type RegistrationCommand = {
-    registrationMode: "device" | "token";
+    registrationMode: "token";
     enrollCommand: string;
     enrollmentExpiresAt: string | null;
     profileSetup: RegistrationProfile;
@@ -483,7 +483,6 @@
                           value={registrationProfile.description ?? ""}
                         />
                       </Field>
-                      <input type="hidden" name="registrationMethod" value="token" />
                       <div class="registration-actions">
                         <Button type="submit">
                           <Icon name="spark" size={16} stroke={2.4} />
@@ -507,9 +506,7 @@
                         .commandCreatedTitle}</strong
                     >
                     <p>
-                      {currentCommand.registrationMode === "token"
-                        ? t.emptyWorkspace.stepActions.tokenCommandCreatedHint
-                        : t.emptyWorkspace.stepActions.commandCreatedHint}
+                      {t.emptyWorkspace.stepActions.tokenCommandCreatedHint}
                     </p>
                   </div>
                   {#if data.loopbackServerOrigin}

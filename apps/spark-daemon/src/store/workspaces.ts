@@ -7,6 +7,7 @@ import {
   type ExecutorClientProjection,
   type RuntimeWorkspaceBindingAssignment,
   type RuntimeWorkspaceBindingSummary,
+  type RuntimeRegistrationResponse,
   type WorkspaceBorrowedState,
   type WorkspaceClientKind,
   type WorkspaceClientProjection,
@@ -25,6 +26,8 @@ export interface SparkDaemonWorkspace {
   serverWorkspaceId?: string;
   serverBindingId?: string;
   cockpitBindingState?: RuntimeWorkspaceBindingAssignment["state"];
+  /** Returned once by workspace registration; never persisted or listed later. */
+  workspaceAuthorization?: NonNullable<RuntimeRegistrationResponse["workspaceAuthorization"]>;
   serverUrl: string;
   localWorkspaceKey: string;
   displayName: string;
