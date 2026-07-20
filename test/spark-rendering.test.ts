@@ -726,6 +726,7 @@ void test("SparkNativeSession flattens display-safe conversation parts and merge
         role: "assistant",
         text: "Legacy text must not duplicate.",
         status: "streaming",
+        createdAt: "2026-01-01T00:00:00.000Z",
         parts: [
           {
             id: "part-thinking",

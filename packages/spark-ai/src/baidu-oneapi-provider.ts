@@ -160,14 +160,44 @@ function withBaiduOneApiTransportApi<TApi extends BaiduOneApiTransportApi>(
   return { ...model, api } as Model<TApi>;
 }
 
+const BAIDU_CONTEXT_OVERFLOW_MESSAGE =
+  "Context window is full — reduce conversation history, tool/file output, or system prompt.";
+const BAIDU_CONTEXT_OVERFLOW_SEMANTIC = "context_length_exceeded";
+
+function isBaiduContextOverflowMessage(message: AssistantMessage): boolean {
+  if (message.stopReason !== "error" || typeof message.errorMessage !== "string") return false;
+  return message.errorMessage.includes(BAIDU_CONTEXT_OVERFLOW_MESSAGE);
+}
+
+export function normalizeBaiduOneApiMessage(message: AssistantMessage): AssistantMessage {
+  const errorMessage = isBaiduContextOverflowMessage(message)
+    ? `${BAIDU_CONTEXT_OVERFLOW_SEMANTIC}: ${message.errorMessage}`
+    : message.errorMessage;
+  return {
+    ...message,
+    ...(errorMessage !== undefined ? { errorMessage } : {}),
+    api: BAIDU_ONEAPI_API,
+    provider: BAIDU_ONEAPI_PROVIDER,
+  };
+}
+
+export function isNormalizedBaiduContextOverflow(message: AssistantMessage): boolean {
+  return piAi.isContextOverflow(message);
+}
+
 function retagBaiduOneApiMessage(message: AssistantMessage): AssistantMessage {
-  return { ...message, api: BAIDU_ONEAPI_API, provider: BAIDU_ONEAPI_PROVIDER };
+  return normalizeBaiduOneApiMessage(message);
+}
+
+export function normalizeBaiduOneApiEvent(event: AssistantMessageEvent): AssistantMessageEvent {
+  if (event.type === "done")
+    return { ...event, message: normalizeBaiduOneApiMessage(event.message) };
+  if (event.type === "error") return { ...event, error: normalizeBaiduOneApiMessage(event.error) };
+  return { ...event, partial: normalizeBaiduOneApiMessage(event.partial) };
 }
 
 function retagBaiduOneApiEvent(event: AssistantMessageEvent): AssistantMessageEvent {
-  if (event.type === "done") return { ...event, message: retagBaiduOneApiMessage(event.message) };
-  if (event.type === "error") return { ...event, error: retagBaiduOneApiMessage(event.error) };
-  return { ...event, partial: retagBaiduOneApiMessage(event.partial) };
+  return normalizeBaiduOneApiEvent(event);
 }
 
 function retagBaiduOneApiStream(stream: BaiduOneApiStream): BaiduOneApiStream {

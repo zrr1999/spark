@@ -62,7 +62,7 @@ function renderGoalDriverGuidance(focus: string | undefined): string {
     `- Active goal objective: ${goal}`,
     "- Work toward the objective using goal-driver task/project state and evidence boundaries. The main session requests completion, the reviewer audits, and Spark applies any approved state transition.",
     "- Goal turns do not need to classify the whole turn as plan or implement; choose concrete next actions from current task state, blockers, and validation needs.",
-    "- Goal turns may use canonical ask only with reviewer auto-answer; if the reviewer cannot answer, record or report the blocker and keep the objective unchanged.",
+    "- Before a goal turn uses canonical ask, inspect the workspace, dependencies, environment, and available evidence so the ask contains only a still-unresolved material decision, never a discoverable fact. Goal asks wait for the user first; only after that wait times out may the host reviewer take over. If the reviewer cannot answer, record or report the blocker and keep the objective unchanged.",
     '- Request goal({ action: "complete" }) only after evidence covers every requirement in the objective.',
   ].join("\n");
 }
@@ -77,7 +77,7 @@ export function renderSparkGoalModePrompt(
         renderGoalAction(Boolean(focus?.trim())),
         WORKFLOW_AND_SUBAGENT_ARE_TOOLS,
         PARALLEL_EXECUTION_WORKFLOW_STRATEGY,
-        "Goal driver decisions use canonical ask with reviewer auto-answer for material decisions. If reviewer auto-answer is blocked, record or report the blocker and resolve it through concrete work or planning while keeping the goal objective unchanged.",
+        "Goal driver decisions are research-first: inspect available evidence and run a focused probe before using canonical ask for a still-unresolved material decision. The user gets the first chance to answer; reviewer fallback begins only after the human wait times out. Never ask either side for a discoverable fact. If reviewer fallback is blocked, record or report the blocker and resolve it through concrete work or planning while keeping the goal objective unchanged.",
         SPARK_GOAL_DECISION_RULE,
       ]
     : [
@@ -91,7 +91,7 @@ export function renderSparkGoalModePrompt(
 const PLANNING_AFFECTING_CHOICES =
   "scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order";
 
-const SPARK_GOAL_DECISION_RULE = `Goal objectives should normally describe the selected project's substantive intended outcome from its purpose, description, title, task plans, evidence requirements, and blockers; do not reduce the goal to task counts or merely stopping at a plan unless the user explicitly says planning-only/readiness-only/仅规划. Autonomous goal edits require a strong reason and may only correct materially wrong description or direction; never lower difficulty, narrow required outcomes, or convert implementation work into planning-only/readiness-only work. If task decomposition is wrong, missing, or blocks the goal, create or revise high-bar concrete tasks with task_write({ action: "plan" }) using objectively verifiable success criteria, concrete evidence, and checkable plan items; if a missing user decision would change ${PLANNING_AFFECTING_CHOICES} and cannot be inferred from context, use canonical ask only when reviewer auto-answer is available. A reviewer auto-answer may resolve the local decision; request reviewer-gated goal completion separately after evidence covers the objective. Otherwise stop and report the blocker without pausing or weakening the goal.`;
+const SPARK_GOAL_DECISION_RULE = `Goal objectives should normally describe the selected project's substantive intended outcome from its purpose, description, title, task plans, evidence requirements, and blockers; do not reduce the goal to task counts or merely stopping at a plan unless the user explicitly says planning-only/readiness-only/仅规划. Autonomous goal edits require a strong reason and may only correct materially wrong description or direction; never lower difficulty, narrow required outcomes, or convert implementation work into planning-only/readiness-only work. If task decomposition is wrong, missing, or blocks the goal, create or revise high-bar concrete tasks with task_write({ action: "plan" }) using objectively verifiable success criteria, concrete evidence, and checkable plan items; if a missing user decision would change ${PLANNING_AFFECTING_CHOICES} and cannot be inferred from context, use canonical ask only when reviewer fallback is available. The user owns the answer until the human wait times out; only then may reviewer fallback resolve the local decision. Request reviewer-gated goal completion separately after evidence covers the objective. Otherwise stop and report the blocker without pausing or weakening the goal.`;
 
 function renderGoalAction(hasExplicitGoal: boolean): string {
   const goalSource = hasExplicitGoal
@@ -100,7 +100,7 @@ function renderGoalAction(hasExplicitGoal: boolean): string {
   return (
     'Run the Spark goal drive from durable task/project state: read the current project/task plan and inspect ready tasks with task_read({ action: "project_status" }). ' +
     goalSource +
-    ' If the inspected state identifies a single next goal, state that derived goal briefly and work toward it by claiming one ready concrete task at a time with task_write({ action: "claim" }), executing it, verifying required evidence, and calling task_write({ action: "finish" }). Continue to the next ready task after each successful finish until the goal is complete, no ready task remains, validation fails, or a required decision cannot be resolved by reviewer auto-answer.'
+    ' If the inspected state identifies a single next goal, state that derived goal briefly and work toward it by claiming one ready concrete task at a time with task_write({ action: "claim" }), executing it, verifying required evidence, and calling task_write({ action: "finish" }). Continue to the next ready task after each successful finish until the goal is complete, no ready task remains, validation fails, or a required decision cannot be resolved by the user-first ask and reviewer-after-timeout fallback.'
   );
 }
 

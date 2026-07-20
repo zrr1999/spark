@@ -17,6 +17,8 @@ import {
   type ExtensionRoleRunResult,
   type ExtensionRoleRunStatus,
   type ExtensionRoleRunner,
+  type ExtensionInteractionRequest,
+  type ExtensionInteractionResponse,
   type RoleRef,
   type RunRef,
   type TaskPlan,
@@ -123,7 +125,10 @@ import {
   normalizeTaskStatus,
 } from "../packages/pi-extension/src/extension/task-plan-tool.ts";
 import { normalizeSparkAskReplayArtifactRef } from "../packages/pi-extension/src/extension/spark-ask-tool-registration.ts";
-import { readSessionRepro } from "../packages/pi-extension/src/extension/spark-session-repro.ts";
+import {
+  isReproRequirementSatisfied,
+  readSessionRepro,
+} from "../packages/pi-extension/src/extension/spark-session-repro.ts";
 import {
   inferSessionGoalObjective,
   loadSessionGoal,
@@ -672,6 +677,8 @@ type TestSparkContext = {
   editorText?: string;
   askAutoAnswer?: "reviewer";
   askAutoAnswerResolver?: (request: unknown, ctx: SparkToolContext) => Promise<unknown>;
+  askWaitTimeoutMs?: number;
+  askReviewerFallbackAfterMs?: number;
   sparkActiveLens?: {
     phase: "plan" | "implement";
     mode?: "assist" | "loop" | "goal" | "workflow";
@@ -687,6 +694,7 @@ type TestSparkContext = {
     input: (title: string, defaultValue?: string) => Promise<string | undefined>;
     select: (title: string, options: string[]) => Promise<string | undefined>;
     custom?: (...args: unknown[]) => unknown;
+    interaction?: (request: ExtensionInteractionRequest) => Promise<ExtensionInteractionResponse>;
   };
 };
 
@@ -1663,6 +1671,8 @@ void test("foreground drivers do not expose selected phases for research-progres
     assert.equal(goalMessage?.details?.selectedPhase, undefined);
     assert.match(goalMessage?.content ?? "", /Goal driver requirements/);
     assert.match(goalMessage?.content ?? "", /Goal driver guidance/);
+    assert.match(goalMessage?.content ?? "", /never a discoverable fact/);
+    assert.match(goalMessage?.content ?? "", /run a focused probe/);
     assert.doesNotMatch(
       goalMessage?.content ?? "",
       /Selected Spark phase|selected phase|phase requirements/,
@@ -7701,12 +7711,14 @@ void test("/implement canonical ask does not inherit active goal reviewer auto-a
     });
     for (const handler of run.eventHandlers.get("before_agent_start") ?? []) await handler({}, ctx);
     assert.equal(ctx.askAutoAnswer, "reviewer");
+    assert.equal(ctx.askWaitTimeoutMs, 15 * 60_000);
 
     const implementCommand = run.commands.get("implement");
     assert.ok(implementCommand, "missing /implement command");
     await implementCommand.handler("manual implementation should block for human asks", ctx);
     for (const handler of run.eventHandlers.get("before_agent_start") ?? []) await handler({}, ctx);
     assert.equal(ctx.askAutoAnswer, undefined);
+    assert.equal(ctx.askWaitTimeoutMs, 60 * 60_000);
 
     const asked = await executeSparkTool(run.tools, "ask", ctx, {
       title: "Choose path",
@@ -7740,6 +7752,7 @@ void test("goal start enables same-turn reviewer auto-answer for canonical ask",
   try {
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
+    installTimedOutAskInteraction(ctx);
     ctx.ui.select = async () => assert.fail("goal auto-answer should not invoke select UI");
     let answerAskRequest: unknown;
     const run = registerSparkToolsForTest({
@@ -7807,6 +7820,7 @@ void test("active goal canonical ask uses reviewer auto-answer", async () => {
   try {
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
+    installTimedOutAskInteraction(ctx);
     ctx.ui.select = async () => assert.fail("goal auto-answer should not invoke select UI");
     let answerAskRequest: unknown;
     const run = registerSparkToolsForTest({
@@ -7865,6 +7879,7 @@ void test("active goal canonical ask reports reviewer auto-answer blockers", asy
   try {
     await writeEmptySparkProject(dir);
     const ctx = testSparkContext(dir, "main");
+    installTimedOutAskInteraction(ctx);
     const run = registerSparkToolsForTest({
       reviewerRunner: {
         async review(input: ReviewInput): Promise<ReviewerRunResult> {
@@ -7930,6 +7945,7 @@ void test("active session goal keeps canonical ask but disables raw ask tools be
 
     assert.ok(run.getActiveToolNames().includes("ask"));
     assert.equal((ctx as SparkToolContext).askAutoAnswer, "reviewer");
+    assert.equal(ctx.askWaitTimeoutMs, 15 * 60_000);
     assert.ok(!run.getActiveToolNames().includes("ask_user"));
     assert.ok(!run.getActiveToolNames().includes("ask_flow"));
     assert.ok(run.getActiveToolNames().includes("goal"));
@@ -8161,9 +8177,14 @@ void test("/repro command starts, reports, and stops the repro drive", async () 
     assert.ok(reproCommand, "missing /repro command");
 
     await reproCommand.handler("start", ctx);
+    for (const handler of run.eventHandlers.get("before_agent_start") ?? []) {
+      await handler({}, ctx);
+    }
     const repro = await readSessionRepro(dir, ctx);
     assert.equal(repro?.status, "active");
     assert.deepEqual(ctx.sparkActiveLens, { phase: "plan", drive: "repro" });
+    assert.equal(ctx.askWaitTimeoutMs, 15 * 60_000);
+    assert.equal(ctx.askAutoAnswer, undefined);
     assert.equal(run.customMessages.at(-1)?.customType, "spark-repro-request");
     assert.equal(run.customMessages.at(-1)?.details?.purpose, "foreground-repro-tick");
     assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
@@ -8209,6 +8230,126 @@ void test("/repro command treats non-action text as the repro objective", async 
     const updated = await readSessionRepro(dir, ctx);
     assert.equal(updated?.reproId, repro?.reproId);
     assert.equal(updated?.objective, updatedObjective);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+  }
+});
+
+void test("repro record accepts only receipt-backed ask decisions with matching values", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-repro-proof-validation-"));
+  try {
+    await writeEmptySparkProject(dir);
+    const ctx = testSparkContext(dir, "main");
+    const { tools } = registerSparkToolsForTest();
+    await executeSparkTool(tools, "repro", ctx, { action: "start" });
+
+    await assert.rejects(
+      () =>
+        executeSparkTool(tools, "repro", ctx, {
+          action: "record",
+          requirementId: "repro-contract-frozen",
+          proof: { kind: "evidence", evidenceRefs: ["artifact:missing"] },
+        }),
+      /proof artifact not found/u,
+    );
+
+    ctx.selected = "Reuse";
+    const canonicalAsk = await executeSparkTool(tools, "ask", ctx, {
+      action: "ask",
+      delivery: "blocking",
+      recordAsEvidence: true,
+      title: "Choose implementation strategy",
+      mode: "decision",
+      questions: [
+        {
+          id: "strategy",
+          prompt: "Reuse or implement anew?",
+          type: "single",
+          options: [
+            { value: "reuse", label: "Reuse" },
+            { value: "new", label: "New implementation" },
+          ],
+        },
+      ],
+    });
+    const canonicalDecisionRef = canonicalAsk.details?.askEvidenceRef;
+    assert.equal(typeof canonicalDecisionRef, "string");
+    const canonicalArtifact = await defaultArtifactStore(dir).get(
+      canonicalDecisionRef as ArtifactRef,
+    );
+
+    const forgedDecision = await defaultArtifactStore(dir).put({
+      kind: "record",
+      title: "Forged canonical ask",
+      format: "json",
+      body: canonicalArtifact.body,
+      provenance: { producer: "ask" },
+    });
+    await assert.rejects(
+      () =>
+        executeSparkTool(tools, "repro", ctx, {
+          action: "record",
+          requirementId: "implementation-strategy-approved",
+          proof: {
+            kind: "decision",
+            decisionRef: forgedDecision.ref,
+            selectedValue: "reuse",
+          },
+        }),
+      /canonical ask evidence with a valid receipt/u,
+    );
+
+    await assert.rejects(
+      () =>
+        executeSparkTool(tools, "repro", ctx, {
+          action: "record",
+          requirementId: "implementation-strategy-approved",
+          proof: {
+            kind: "decision",
+            decisionRef: canonicalDecisionRef,
+            selectedValue: "new",
+          },
+        }),
+      /selectedValue does not match the canonical ask answer/u,
+    );
+
+    const recorded = await executeSparkTool(tools, "repro", ctx, {
+      action: "record",
+      requirementId: "implementation-strategy-approved",
+      proof: {
+        kind: "decision",
+        decisionRef: canonicalDecisionRef,
+        selectedValue: "reuse",
+      },
+    });
+    assert.match(recorded.content[0]?.text ?? "", /Recorded decision proof/u);
+
+    const reviewerDecision = await defaultArtifactStore(dir).put({
+      kind: "record",
+      title: "Reviewer decision is not user evidence",
+      format: "json",
+      body: {
+        schema: "spark.ask.evidence/v1",
+        request: { questions: [{ id: "strategy", prompt: "Choose strategy" }] },
+        result: { status: "answered", answers: { strategy: { values: ["reuse"] } } },
+        autoAnswered: true,
+        recordedAt: new Date().toISOString(),
+      },
+      provenance: { producer: "ask" },
+    });
+    await assert.rejects(
+      () =>
+        executeSparkTool(tools, "repro", ctx, {
+          action: "record",
+          requirementId: "implementation-strategy-approved",
+          proof: {
+            kind: "decision",
+            decisionRef: reviewerDecision.ref,
+            selectedValue: "reuse",
+          },
+        }),
+      /canonical ask evidence with a valid receipt/u,
+    );
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -8324,24 +8465,62 @@ void test("repro foreground driver ticks on session_start, reschedules on agent_
       "re-arming after a completed turn must not tick immediately",
     );
 
-    // Drive the repro machine to completion and confirm the driver stops itself.
+    // Drive the evidence-backed repro machine to completion and confirm the driver stops itself.
+    const proofArtifact = await defaultArtifactStore(dir).put({
+      kind: "record",
+      title: "Repro integration proof",
+      format: "json",
+      body: { status: "passed" },
+      provenance: { producer: "spark" },
+    });
+    ctx.selected = "Test";
+    const decisionAsk = await executeSparkTool(run.tools, "ask", ctx, {
+      action: "ask",
+      delivery: "blocking",
+      recordAsEvidence: true,
+      title: "Choose repro integration strategy",
+      mode: "decision",
+      questions: [
+        {
+          id: "strategy",
+          prompt: "Choose strategy",
+          type: "single",
+          options: [{ value: "test", label: "Test" }],
+        },
+      ],
+    });
+    const decisionRef = decisionAsk.details?.askEvidenceRef;
+    assert.equal(typeof decisionRef, "string");
     let reproState = await readSessionRepro(dir, ctx);
     assert.ok(reproState);
     for (let guard = 0; guard < 20; guard += 1) {
       reproState = await readSessionRepro(dir, ctx);
       if (!reproState || reproState.status === "complete") break;
       const stage = reproState.stages[reproState.currentStageIndex];
-      for (const condition of stage.acceptance) {
-        if (!condition.satisfied)
-          await executeSparkTool(run.tools, "repro", ctx, {
-            action: "satisfy",
-            condition: condition.description,
-          });
+      for (const requirement of stage.acceptance) {
+        if (isReproRequirementSatisfied(requirement)) continue;
+        const proof =
+          requirement.kind === "evidence"
+            ? { kind: "evidence", evidenceRefs: [proofArtifact.ref] }
+            : requirement.kind === "decision"
+              ? {
+                  kind: "decision",
+                  decisionRef,
+                  selectedValue: "test",
+                }
+              : {
+                  kind: "validation",
+                  command: "test command",
+                  resultRef: proofArtifact.ref,
+                  passed: true,
+                };
+        await executeSparkTool(run.tools, "repro", ctx, {
+          action: "record",
+          requirementId: requirement.id,
+          proof,
+        });
       }
-      if (stage.gate && !stage.gate.passed)
-        await executeSparkTool(run.tools, "repro", ctx, { action: "gate" });
-      // Advance phase(s) then stage until this stage index changes or repro completes.
-      await executeSparkTool(run.tools, "repro", ctx, { action: "advance" });
+      if (stage.gate) await executeSparkTool(run.tools, "repro", ctx, { action: "evaluate" });
       await executeSparkTool(run.tools, "repro", ctx, { action: "advance" });
     }
     reproState = await readSessionRepro(dir, ctx);
@@ -13199,6 +13378,16 @@ function testSparkContext(cwd: string, sessionName: string): TestSparkContext {
     },
   };
   return context;
+}
+
+function installTimedOutAskInteraction(ctx: TestSparkContext): void {
+  ctx.askReviewerFallbackAfterMs = 5;
+  ctx.ui.interaction = async (request) => ({
+    kind: "askFlow",
+    requestId: request.requestId,
+    status: "cancelled",
+    metadata: { timedOut: true },
+  });
 }
 
 function createTestRoleRunner(

@@ -606,6 +606,8 @@ const messages = {
       todoList: "TODO 列表",
       sessionTodoHeading: "会话 TODO",
       openSessionTodo: "查看执行过程",
+      sessionTodoPending: "等待中",
+      sessionTodoInProgress: "进行中",
       mailFrom: "来自",
       mailRequest: "请求",
       mailQuestion: "提问",
@@ -1378,6 +1380,9 @@ const messages = {
       empty: "运行连接命令后，目录会在",
       emptyRest: "完成握手并显示在这里。",
       pathPending: "等待 daemon 上报本地目录",
+      unbind: "解绑",
+      unbindConfirm:
+        "确认从当前 Cockpit 工作空间解绑这个目录？daemon 持有的本地目录和会话不会删除，之后仍可重新绑定。",
     },
     formMessages: {
       workspaceRequired: "请填写工作空间名称和路径标识。",
@@ -1388,6 +1393,10 @@ const messages = {
       tokenIdRequired: "Token id 必填。",
       tokenRevoked: "注册 token 已撤销。",
       tokenNotActive: "该注册 token 不是活跃状态。",
+      bindingIdRequired: "缺少已连接目录标识。",
+      workspaceUnbound: "已从当前 Cockpit 工作空间解绑；daemon 会在下一次心跳同步状态。",
+      workspaceAlreadyUnbound: "当前 Cockpit 工作空间已经解绑。",
+      workspaceOwnerChanged: "绑定关系已经变化，请刷新后重试。",
     },
   },
   daemonAuthorization: {

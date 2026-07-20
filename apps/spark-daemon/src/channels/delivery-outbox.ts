@@ -299,13 +299,20 @@ export async function reconcileDaemonChannelDeliveries(
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         try {
+          // A preflight failure in this recovery attempt cannot erase an older
+          // unsafe dispatch marker: the prior process may already have sent.
+          const failureOutcome =
+            delivery.kind === "inbound"
+              ? "not_sent"
+              : delivery.dispatchedAt && replaySafety === "unsafe"
+                ? "unknown"
+                : channelDeliveryFailureOutcome(error);
           const retry = deps.store.recordFailure(
             delivery.deliveryId,
             requireLeaseToken(delivery),
             message,
             {
-              outcome:
-                delivery.kind === "inbound" ? "not_sent" : channelDeliveryFailureOutcome(error),
+              outcome: failureOutcome,
               replaySafety,
             },
           );

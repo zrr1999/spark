@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { QqbotApiClient } from "./qqbot-api.ts";
 import { QQBOT_MARKDOWN_MAX_BYTES, chunkQqbotMarkdownText } from "./qqbot-markdown.ts";
 import { createQqbotC2CReplyStream, tryCreateQqbotC2CReplyStream } from "./qqbot-reply-stream.ts";
-import { CHANNEL_DELIVERY_NOT_SENT_ERROR_CODE } from "./reply.ts";
+import {
+  CHANNEL_DELIVERY_NOT_SENT_ERROR_CODE,
+  CHANNEL_DELIVERY_OUTCOME_UNKNOWN_ERROR_CODE,
+} from "./reply.ts";
 
 function createManualScheduler() {
   const timers = new Map<number, { callback: () => void; delayMs: number }>();
@@ -199,6 +202,7 @@ describe("qqbot C2C reply stream", () => {
       openid: "user-1",
       messageId: "source-1",
       reserveFinalSeq: () => 4,
+      reserveFollowUpSeqs: () => true,
       sendFollowUpMarkdown,
       flushDelayMs: 60_000,
       keepaliveDelayMs: 60_000,
@@ -215,6 +219,84 @@ describe("qqbot C2C reply stream", () => {
       content_raw: `${chunks[0]}\n`,
     });
     expect(sendFollowUpMarkdown.mock.calls.map((call) => call[0])).toEqual(chunks.slice(1));
+  });
+
+  it("reserves every long-reply follow-up before sending the terminal frame", async () => {
+    const sendC2CStreamMessage = vi.fn().mockResolvedValue({ id: "stream-1" });
+    const sendFollowUpMarkdown = vi.fn(async (_text: string) => undefined);
+    const reserveFollowUpSeqs = vi.fn(() => false);
+    const long = `${"段落一".repeat(400)}\n\n${"段落二".repeat(400)}`;
+    const stream = createQqbotC2CReplyStream({
+      api: { sendC2CStreamMessage } as unknown as QqbotApiClient,
+      resolveToken: async () => "token",
+      openid: "user-1",
+      messageId: "source-1",
+      reserveFinalSeq: () => 4,
+      reserveFollowUpSeqs,
+      sendFollowUpMarkdown,
+      flushDelayMs: 60_000,
+      keepaliveDelayMs: 60_000,
+    });
+
+    stream.appendText(long);
+    await expect(stream.complete()).rejects.toMatchObject({
+      code: CHANNEL_DELIVERY_NOT_SENT_ERROR_CODE,
+      outcome: "not_sent",
+    });
+    expect(reserveFollowUpSeqs).toHaveBeenCalledWith(chunkQqbotMarkdownText(long).length - 1);
+    expect(sendC2CStreamMessage).not.toHaveBeenCalled();
+    expect(sendFollowUpMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when overflow becomes impossible after an intermediate frame", async () => {
+    const sendC2CStreamMessage = vi.fn().mockResolvedValue({ id: "stream-1" });
+    const scheduler = createManualScheduler();
+    const long = `${"段落一".repeat(400)}\n\n${"段落二".repeat(400)}`;
+    const stream = createQqbotC2CReplyStream({
+      api: { sendC2CStreamMessage } as unknown as QqbotApiClient,
+      resolveToken: async () => "token",
+      openid: "user-1",
+      messageId: "source-1",
+      reserveFinalSeq: () => 4,
+      reserveFollowUpSeqs: () => false,
+      sendFollowUpMarkdown: async () => undefined,
+      flushDelayMs: 60_000,
+      keepaliveDelayMs: 60_000,
+      schedule: scheduler.schedule,
+      cancelSchedule: scheduler.cancelSchedule,
+    });
+
+    stream.appendText("已显示的前缀");
+    stream.notifyToolStart({ name: "cue_exec", phase: "执行中" });
+    await vi.waitFor(() => expect(sendC2CStreamMessage).toHaveBeenCalledTimes(1));
+    stream.replaceText?.(long);
+
+    await expect(stream.complete()).rejects.toMatchObject({
+      code: CHANNEL_DELIVERY_OUTCOME_UNKNOWN_ERROR_CODE,
+      outcome: "unknown",
+    });
+    expect(sendC2CStreamMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails before a terminal frame when a long answer has no follow-up sender", async () => {
+    const sendC2CStreamMessage = vi.fn().mockResolvedValue({ id: "stream-1" });
+    const long = `${"段落一".repeat(400)}\n\n${"段落二".repeat(400)}`;
+    const stream = createQqbotC2CReplyStream({
+      api: { sendC2CStreamMessage } as unknown as QqbotApiClient,
+      resolveToken: async () => "token",
+      openid: "user-1",
+      messageId: "source-1",
+      reserveFinalSeq: () => 4,
+      flushDelayMs: 60_000,
+      keepaliveDelayMs: 60_000,
+    });
+
+    stream.appendText(long);
+    await expect(stream.complete()).rejects.toMatchObject({
+      code: CHANNEL_DELIVERY_NOT_SENT_ERROR_CODE,
+      outcome: "not_sent",
+    });
+    expect(sendC2CStreamMessage).not.toHaveBeenCalled();
   });
 
   it("reports exhausted passive reply capacity as confirmed not sent", async () => {

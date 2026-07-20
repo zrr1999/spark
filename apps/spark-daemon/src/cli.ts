@@ -1449,7 +1449,7 @@ async function registerWorkspaceCommand(
       `  server   ${added.serverUrl}\n` +
       profileTextLine(added.profile) +
       `  status   ${workspaceStatusLabel(added)}\n` +
-      `  note     v0.1 has no removal command; this registration is permanent.\n`,
+      `  note     Cockpit can unbind this projection; rerun workspace register to bind it again.\n`,
   );
 
   if (readRunningPid(paths) !== null) {

@@ -6,7 +6,7 @@
     statusLabel as getStatusLabel,
   } from "$lib/i18n";
   import { Button, EmptyState, PageHeader, Panel } from "$lib/ui";
-  import { workspacePath } from "$lib/workspace-routes";
+  import { workspacePath, workspaceSessionPath } from "$lib/workspace-routes";
 
   let { data } = $props();
   let t = $derived(data.messages.inbox);
@@ -86,7 +86,7 @@
                 {#if item.sessionId}
                   <a
                     class="session-link"
-                    href={`/sessions/${encodeURIComponent(item.sessionId)}`}
+                    href={workspaceSessionPath(data.workspace, item.sessionId)}
                     aria-label={`${t.list.conversation}: ${item.title}`}
                     title={t.list.conversation}
                   >

@@ -100,6 +100,31 @@ describe("session timeline", () => {
     ]);
   });
 
+  it("keeps top-level session run status in the inspector instead of duplicating the reply", () => {
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [
+        message("u1", "user", "Check the task", "2026-07-10T00:00:01.000Z"),
+        message("a1", "assistant", "The task is complete.", "2026-07-10T00:00:02.000Z"),
+      ],
+      commands: [],
+      reports: [
+        {
+          id: "sess_current:run:1",
+          kind: "run.update",
+          runKind: "session",
+          title: "sess_current:run:1",
+          text: "Run succeeded.",
+          role: null,
+          status: "succeeded",
+          createdAt: "2026-07-10T00:00:03.000Z",
+        },
+      ],
+    });
+
+    expect(timeline.map((item) => item.id)).toEqual(["message:u1", "message:a1"]);
+  });
+
   it("shows terminal system failures while keeping ordinary system messages hidden", () => {
     const internalTransportFailure =
       "cue-shell error [TRANSPORT_RESOLVE_FAILED]: failed to resolve cue-shell client transport";

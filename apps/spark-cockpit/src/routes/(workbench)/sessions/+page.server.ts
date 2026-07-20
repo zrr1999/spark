@@ -1,4 +1,4 @@
-import { fail, redirect } from "@sveltejs/kit";
+import { error as httpError, fail, redirect } from "@sveltejs/kit";
 import { createId } from "@zendev-lab/spark-protocol";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import { titleFromPrompt } from "$lib/server/agents-product";
@@ -7,11 +7,14 @@ import {
   submitConversationTurnForCockpit,
 } from "$lib/server/conversation-control";
 import { formText } from "$lib/server/form-data";
+import { getDatabase } from "$lib/server/db";
+import { requireWorkspaceByRouteId } from "$lib/server/workspace-routing";
 import { conversationStartSessionId } from "../../../lib/server/conversation-submission";
 import {
   archiveManagedSessionForCockpit,
   createManagedSessionForCockpit,
   getManagedSessionForCockpit,
+  getProjectedManagedSessionForCockpit,
 } from "$lib/server/managed-sessions";
 import {
   loadModelControlForCockpit,
@@ -29,10 +32,26 @@ import {
 import { workspaceIdForWorkbenchSession } from "../../../lib/workbench-session-scope";
 import { sessionHasChannelBinding } from "../../../lib/channel-session-title";
 import { cockpitSlashSubmissionError } from "../../../lib/slash-actions";
+import {
+  workbenchSessionsPathFromPathname,
+  workspaceSessionsPath,
+} from "../../../lib/workspace-routes";
 import type { Actions, PageServerLoad } from "./$types";
+import type { Cookies } from "@sveltejs/kit";
 
-export const load: PageServerLoad = async ({ parent }) => {
+type SessionsPageLoadEvent = Pick<Parameters<PageServerLoad>[0], "parent" | "url">;
+
+export async function _loadSessionsPage(
+  { parent, url }: SessionsPageLoadEvent,
+  expectedWorkspaceId?: string,
+) {
   const parentData = await parent();
+  if (expectedWorkspaceId && parentData.activeWorkspace?.id !== expectedWorkspaceId) {
+    throw httpError(404, "Workspace not found.");
+  }
+  if (url?.pathname === "/sessions" && parentData.activeWorkspace) {
+    redirect(303, `${workspaceSessionsPath(parentData.activeWorkspace)}${url.search}`);
+  }
   const workspaceId = parentData.activeWorkspace?.id ?? null;
   const modelControl = workspaceId
     ? parentData.sessionControlAvailable
@@ -49,10 +68,19 @@ export const load: PageServerLoad = async ({ parent }) => {
     modelControl,
     submissionId: createCockpitSubmissionId(),
   };
-};
+}
 
-export const actions: Actions = {
-  startConversation: async ({ cookies, request }) => {
+export const load: PageServerLoad = _loadSessionsPage;
+
+interface SessionActionEvent {
+  cookies: Cookies;
+  params: Record<string, string | undefined>;
+  request: Request;
+  url: URL;
+}
+
+export const actions = {
+  startConversation: async ({ cookies, params, request, url }: SessionActionEvent) => {
     const t = getRequestDictionary({
       cookieLocale: cookies.get(localeCookieName),
       acceptLanguage: request.headers.get("accept-language"),
@@ -75,6 +103,7 @@ export const actions: Actions = {
         values,
       });
     }
+    assertRouteWorkspace(params, workspaceId, "Workspace not found.");
     if (!message) {
       return fail(400, {
         intent: "startConversation",
@@ -166,10 +195,11 @@ export const actions: Actions = {
       });
     }
 
-    redirect(303, `/sessions/${session.sessionId}`);
+    const sessionsPath = workbenchSessionsPathFromPathname(url?.pathname ?? "") ?? "/sessions";
+    redirect(303, `${sessionsPath}/${encodeURIComponent(session.sessionId)}`);
   },
 
-  sendMessage: async ({ cookies, request }) => {
+  sendMessage: async ({ cookies, params, request }: SessionActionEvent) => {
     const t = getRequestDictionary({
       cookieLocale: cookies.get(localeCookieName),
       acceptLanguage: request.headers.get("accept-language"),
@@ -209,9 +239,13 @@ export const actions: Actions = {
       });
     }
 
+    // Sending must not wait for a redundant live `session.get` command. The
+    // selected conversation is already projected locally, while `turn.submit`
+    // is the daemon-owned admission boundary that validates current state and
+    // durably deduplicates the browser submission nonce.
     let session;
     try {
-      session = await getManagedSessionForCockpit(sessionId);
+      session = getProjectedManagedSessionForCockpit(sessionId);
     } catch (caught) {
       const error = caught instanceof Error ? caught.message : t.assignFailed;
       return fail(400, {
@@ -241,6 +275,7 @@ export const actions: Actions = {
         values,
       });
     }
+    assertRouteWorkspace(params, workspaceId, "Session not found.");
     if (session.status === "archived") {
       return fail(400, {
         intent: "sendMessage",
@@ -278,7 +313,7 @@ export const actions: Actions = {
     }
   },
 
-  cancelTurn: async ({ cookies, request }) => {
+  cancelTurn: async ({ cookies, params, request }: SessionActionEvent) => {
     const t = getRequestDictionary({
       cookieLocale: cookies.get(localeCookieName),
       acceptLanguage: request.headers.get("accept-language"),
@@ -331,7 +366,8 @@ export const actions: Actions = {
         values,
       });
     }
-    if (!workspaceIdForWorkbenchSession(session)) {
+    const workspaceId = workspaceIdForWorkbenchSession(session);
+    if (!workspaceId) {
       return fail(400, {
         intent,
         success: false,
@@ -340,6 +376,7 @@ export const actions: Actions = {
         values,
       });
     }
+    assertRouteWorkspace(params, workspaceId, "Session not found.");
     if (session.status === "archived") {
       return fail(400, {
         intent,
@@ -389,7 +426,7 @@ export const actions: Actions = {
     }
   },
 
-  selectModel: async ({ cookies, request }) => {
+  selectModel: async ({ cookies, params, request }: SessionActionEvent) => {
     const t = getRequestDictionary({
       cookieLocale: cookies.get(localeCookieName),
       acceptLanguage: request.headers.get("accept-language"),
@@ -406,7 +443,8 @@ export const actions: Actions = {
     }
     try {
       const session = await getManagedSessionForCockpit(sessionId);
-      if (!session || !workspaceIdForWorkbenchSession(session)) {
+      const workspaceId = session ? workspaceIdForWorkbenchSession(session) : null;
+      if (!session || !workspaceId) {
         return fail(400, {
           intent: "selectModel",
           success: false,
@@ -414,6 +452,7 @@ export const actions: Actions = {
           values: { sessionId, model },
         });
       }
+      assertRouteWorkspace(params, workspaceId, "Session not found.");
       const updatedSession = await setSessionModelForCockpit(sessionId, parseModelValue(model));
       if (!updatedSession.model) {
         return fail(400, {
@@ -441,7 +480,7 @@ export const actions: Actions = {
     }
   },
 
-  selectThinking: async ({ cookies, request }) => {
+  selectThinking: async ({ cookies, params, request }: SessionActionEvent) => {
     const t = getRequestDictionary({
       cookieLocale: cookies.get(localeCookieName),
       acceptLanguage: request.headers.get("accept-language"),
@@ -458,7 +497,8 @@ export const actions: Actions = {
     }
     try {
       const session = await getManagedSessionForCockpit(sessionId);
-      if (!session || !workspaceIdForWorkbenchSession(session)) {
+      const workspaceId = session ? workspaceIdForWorkbenchSession(session) : null;
+      if (!session || !workspaceId) {
         return fail(400, {
           intent: "selectThinking",
           success: false,
@@ -466,6 +506,7 @@ export const actions: Actions = {
           values: { sessionId, thinkingLevel },
         });
       }
+      assertRouteWorkspace(params, workspaceId, "Session not found.");
       const updatedSession = await setSessionThinkingLevelForCockpit(
         sessionId,
         parseThinkingLevelValue(thinkingLevel),
@@ -488,7 +529,7 @@ export const actions: Actions = {
     }
   },
 
-  archiveSession: async ({ cookies, request }) => {
+  archiveSession: async ({ cookies, params, request, url }: SessionActionEvent) => {
     const t = getRequestDictionary({
       cookieLocale: cookies.get(localeCookieName),
       acceptLanguage: request.headers.get("accept-language"),
@@ -505,12 +546,14 @@ export const actions: Actions = {
 
     try {
       const session = await getManagedSessionForCockpit(sessionId);
-      if (!session || !workspaceIdForWorkbenchSession(session)) {
+      const workspaceId = session ? workspaceIdForWorkbenchSession(session) : null;
+      if (!session || !workspaceId) {
         return fail(400, {
           intent: "archiveSession",
           message: t.archiveSessionRequired,
         });
       }
+      assertRouteWorkspace(params, workspaceId, "Session not found.");
       if (sessionHasChannelBinding(session)) {
         return fail(409, {
           intent: "archiveSession",
@@ -525,9 +568,22 @@ export const actions: Actions = {
       });
     }
 
-    redirect(303, "/sessions");
+    redirect(303, workbenchSessionsPathFromPathname(url?.pathname ?? "") ?? "/sessions");
   },
-};
+} satisfies Actions;
+
+function assertRouteWorkspace(
+  params: Record<string, string | undefined> | undefined,
+  actualWorkspaceId: string,
+  message: string,
+): void {
+  const routeWorkspaceId = params?.workspaceId?.trim();
+  if (!routeWorkspaceId) return;
+  const expectedWorkspace = requireWorkspaceByRouteId(getDatabase(), routeWorkspaceId);
+  if (expectedWorkspace.id !== actualWorkspaceId) {
+    throw httpError(404, message);
+  }
+}
 
 async function submitConversationMessage(input: {
   workspaceId?: string;

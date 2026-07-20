@@ -77,6 +77,7 @@ export function currentWorkbenchPageLabel(input: {
     return input.pages.overview;
   }
 
+  if (section === "sessions") return input.nav.sessions;
   if (section === "inbox") return input.nav.inbox;
   if (section === "agents") return input.nav.artifacts;
   if (section === "artifacts") return input.nav.artifacts;
@@ -108,9 +109,18 @@ export function workspaceSwitcherHref(input: {
   workspacePath: (workspace: { slug: string }, suffix?: string) => string;
 }): string {
   const { pathname } = input;
+  const activeSessionsPath = input.activeWorkspacePath
+    ? `${input.activeWorkspacePath}/sessions`
+    : "";
   if (
     pathname === "/sessions" ||
     pathname.startsWith("/sessions/") ||
+    (activeSessionsPath &&
+      (pathname === activeSessionsPath || pathname.startsWith(`${activeSessionsPath}/`)))
+  ) {
+    return input.workspacePath({ slug: input.targetWorkspaceSlug }, "/sessions");
+  }
+  if (
     pathname === "/settings" ||
     pathname.startsWith("/settings/") ||
     pathname === "/workspaces/new" ||

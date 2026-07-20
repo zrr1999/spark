@@ -41,6 +41,7 @@ void test("spark protocol validates interaction requests and typed responses", (
     kind: "askFlow",
     title: "Choose plan",
     mode: "decision",
+    timeoutMs: 60 * 60_000,
     questions: [
       {
         id: "plan",
@@ -51,6 +52,7 @@ void test("spark protocol validates interaction requests and typed responses", (
     ],
   });
   assert.equal(ask.kind, "askFlow");
+  assert.equal(ask.timeoutMs, 60 * 60_000);
 
   const model = parseSparkInteractionRequest({
     requestId: "req-model",
@@ -162,6 +164,17 @@ void test("spark protocol rejects malformed interaction requests", () => {
   assert.throws(
     () => sparkInteractionRequestSchema.parse({ requestId: "bad", kind: "askFlow", title: "Bad" }),
     /questions/u,
+  );
+  assert.throws(
+    () =>
+      sparkInteractionRequestSchema.parse({
+        requestId: "bad-timeout",
+        kind: "askFlow",
+        title: "Bad timeout",
+        timeoutMs: 0,
+        questions: [{ id: "q", prompt: "Continue?", type: "freeform", options: [] }],
+      }),
+    /timeoutMs/u,
   );
   assert.throws(
     () =>

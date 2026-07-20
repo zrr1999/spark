@@ -18,7 +18,7 @@ import {
   formatHiddenRoleRunInbox,
   markHiddenRoleRunInboxDelivered,
 } from "./role-run-completions.ts";
-import { sparkActiveLensPhase } from "./spark-drive-state.ts";
+import { sparkActiveLensDriveMode, sparkActiveLensPhase } from "./spark-drive-state.ts";
 import type { SparkModeMessageApi } from "./spark-mode-entry.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 
@@ -189,6 +189,8 @@ export function registerSparkExtensionEvents(
 }
 
 const GOAL_DISABLED_INTERACTIVE_TOOLS = new Set(["ask_user", "ask_flow"]);
+export const SPARK_AUTONOMOUS_ASK_WAIT_TIMEOUT_MS = 15 * 60_000;
+export const SPARK_DEFAULT_ASK_WAIT_TIMEOUT_MS = 60 * 60_000;
 
 type PendingSparkAgentInstruction = { instruction: string; goalId?: string };
 
@@ -205,12 +207,22 @@ export async function syncSparkGoalAskAutoAnswerPolicy(
   ctx: SparkToolContext,
   deps: SparkExtensionEventDeps,
 ): Promise<void> {
-  if (sparkActiveLensPhase(ctx.sparkActiveLens) === "implement") {
+  const drive = sparkActiveLensDriveMode(ctx.sparkActiveLens);
+  const phase = sparkActiveLensPhase(ctx.sparkActiveLens);
+  const activeGoal = await hasActiveCurrentSessionGoal(ctx);
+  ctx.askWaitTimeoutMs =
+    drive === "repro" || (phase !== "implement" && (drive === "goal" || activeGoal))
+      ? SPARK_AUTONOMOUS_ASK_WAIT_TIMEOUT_MS
+      : SPARK_DEFAULT_ASK_WAIT_TIMEOUT_MS;
+
+  // Repro decisions remain real-user evidence. Timeout closes the wait and
+  // leaves a blocker; it must never mint a reviewer-authored decision receipt.
+  if (phase === "implement" || drive === "repro") {
     delete ctx.askAutoAnswer;
     delete ctx.askAutoAnswerResolver;
     return;
   }
-  if (await hasActiveCurrentSessionGoal(ctx)) {
+  if (activeGoal) {
     ctx.askAutoAnswer = "reviewer";
     ctx.askAutoAnswerResolver = await deps.createAskAutoAnswerResolver?.(ctx);
     return;

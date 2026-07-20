@@ -105,7 +105,9 @@ describe("daemon model control", () => {
     ).resolves.toBe("Runtime Operations");
     expect(runLeaf).toHaveBeenCalledWith({
       role: "session-role",
-      brief: expect.stringContaining("stable responsibility"),
+      brief: expect.stringMatching(
+        /user's language[\s\S]*broad stable responsibility[\s\S]*established naming style/u,
+      ),
       input: "Why does startup fail?",
       sessionModel: "baidu-oneapi/ernie-4.6",
       maxTokens: 48,

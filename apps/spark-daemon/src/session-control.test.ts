@@ -279,7 +279,7 @@ describe("daemon session control admission", () => {
     }
   });
 
-  it("projects local TUI sessions into the same-path Cockpit workspace only", async () => {
+  it("projects workspace aliases without merging same-path workspace identities", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-session-workspace-alias-"));
     const db = openMemoryDatabase();
     migrateSparkDaemonDatabase(db);
@@ -328,6 +328,12 @@ describe("daemon session control admission", () => {
       cwd: root,
     });
     await sessionRegistry.create({
+      sessionId: "session-cockpit",
+      scope: { kind: "workspace", workspaceId: cockpitWorkspaceId },
+      workspaceId: cockpitWorkspaceId,
+      cwd: root,
+    });
+    await sessionRegistry.create({
       sessionId: "session-other-cockpit",
       scope: { kind: "workspace", workspaceId: otherWorkspaceId },
       workspaceId: otherWorkspaceId,
@@ -348,7 +354,7 @@ describe("daemon session control admission", () => {
 
       expect(response.result.sessions).toEqual([
         expect.objectContaining({
-          sessionId: "session-local-tui",
+          sessionId: "session-cockpit",
           scope: { kind: "workspace", workspaceId: cockpitWorkspaceId },
           workspaceId: cockpitWorkspaceId,
         }),

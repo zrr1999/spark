@@ -43,6 +43,8 @@ export interface PiAskRequest {
   mode?: PiAskMode;
   /** Defaults to blocking. Async asks return after the daemon durably accepts them. */
   delivery?: PiAskDelivery;
+  /** Host-owned blocking wait deadline; intended for internal fallback policy. */
+  timeoutMs?: number;
   context?: string;
   questions: PiAskQuestion[];
 }
@@ -61,6 +63,8 @@ export type PiAskResultStatus = "answered" | "pending" | "cancelled" | "no_selec
 export interface PiAskResult {
   status: PiAskResultStatus;
   humanRequestId?: string;
+  /** True only when the host closed the human wait because its deadline elapsed. */
+  timedOut?: boolean;
   cancelled: boolean;
   answers: Record<string, PiAskAnswerEntry>;
   nextAction: "resume" | "block";
@@ -127,6 +131,14 @@ class ToolCallText implements ToolCallComponent {
 
 export function createAskUserRequest(input: PiAskRequest): PiAskRequest {
   if (input.questions.length === 0) throw new Error("ask_user needs at least one question");
+  if (
+    input.timeoutMs !== undefined &&
+    (!Number.isInteger(input.timeoutMs) ||
+      input.timeoutMs <= 0 ||
+      input.timeoutMs > 24 * 60 * 60_000)
+  ) {
+    throw new Error("ask_user.timeoutMs must be an integer between 1 and 86400000");
+  }
   const seen = new Set<string>();
   for (const question of input.questions) {
     if (!question.id.trim()) throw new Error("question id is required");
@@ -299,6 +311,7 @@ function decodeAskRequest(params: Record<string, unknown>): PiAskRequest {
     title: params.title as string | undefined,
     mode: params.mode as PiAskMode | undefined,
     delivery: normalizeAskDelivery(params.delivery),
+    timeoutMs: normalizeAskTimeoutMs(params.timeoutMs),
     context: params.context as string | undefined,
     questions,
   });
@@ -360,6 +373,7 @@ function createAskUserInteractionRequest(request: PiAskRequest): ExtensionIntera
     source: "extension",
     metadata: { tool: "ask_user" },
     delivery: request.delivery ?? "blocking",
+    ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
     mode: request.mode ?? "clarification",
     questions: request.questions.map((question) => ({
       id: question.id,
@@ -380,7 +394,12 @@ function askUserResultFromInteractionResponse(
   if (response.kind !== "askFlow") return undefined;
   if (response.status === "blocked" || response.status === "error") return undefined;
   if (response.status === "cancelled") {
-    return createAskUserResult({ cancelled: true, answers: {}, status: "cancelled" });
+    return createAskUserResult({
+      cancelled: true,
+      answers: {},
+      status: "cancelled",
+      ...(response.metadata?.timedOut === true ? { timedOut: true } : {}),
+    });
   }
   if (response.status === "pending") {
     const humanRequestId = optionalNonEmptyString(response.humanRequestId);
@@ -581,6 +600,14 @@ function normalizeAskDelivery(value: unknown): PiAskDelivery | undefined {
   throw new Error("ask_user.delivery must be blocking or async");
 }
 
+function normalizeAskTimeoutMs(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Number.isInteger(value) || (value as number) <= 0 || (value as number) > 24 * 60 * 60_000) {
+    throw new Error("ask_user.timeoutMs must be an integer between 1 and 86400000");
+  }
+  return value as number;
+}
+
 function optionalNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -625,13 +652,27 @@ function truncateInline(value: string, maxLength: number): string {
 
 export * from "./schema.ts";
 export * from "./flow.ts";
-export { registerPiAskActionTool, registerPiAskAutoAnswerProvider } from "./action-tool.ts";
+export {
+  DEFAULT_ASK_WAIT_TIMEOUT_MS,
+  DEFAULT_ASK_REVIEWER_FALLBACK_AFTER_MS,
+  registerPiAskActionTool,
+  registerPiAskAutoAnswerProvider,
+} from "./action-tool.ts";
 export type {
   PiAskAction,
   PiAskActionToolOptions,
   PiAskAutoAnswerProvider,
   PiAskAutoAnswerResolver,
 } from "./action-tool.ts";
+export {
+  isUserAnsweredAskEvidenceArtifactBody,
+  verifyCanonicalAskEvidenceArtifact,
+} from "./evidence.ts";
+export type {
+  CanonicalAskEvidenceAnswer,
+  PiAskEvidenceArtifactBody,
+  VerifiedCanonicalAskEvidence,
+} from "./evidence.ts";
 export {
   createAskArtifactBody,
   isAskArtifactBody,

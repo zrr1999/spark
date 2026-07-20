@@ -35,7 +35,7 @@ describe("WorkbenchSessionRail component contract", () => {
   it("offers only workspace-scoped conversation creation", () => {
     const source = readFileSync(componentPath, "utf8");
 
-    expect(source).toContain('href="/sessions?new=workspace"');
+    expect(source).toContain("href={`${sessionsHref}?new=workspace`}");
     expect(source).not.toContain('href="/sessions"');
     expect(source).not.toContain("new=daemon");
     expect(source).not.toContain("daemonConversation");
@@ -56,7 +56,7 @@ describe("WorkbenchSessionRail component contract", () => {
     const source = readFileSync(componentPath, "utf8");
 
     expect(source).toContain('data-sveltekit-preload-data="hover"');
-    expect(source).toContain("/sessions/${encodeURIComponent(session.sessionId)}");
+    expect(source).toContain("workspaceSessionPath(activeWorkspace, session.sessionId)");
   });
 
   it("keeps the compact new-conversation action beside the filter", () => {

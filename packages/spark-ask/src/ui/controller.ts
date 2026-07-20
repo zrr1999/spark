@@ -111,6 +111,16 @@ export class PiAskFlowController {
     const action = this.routeKeyDirect(keyData);
     if (!action) return false;
 
+    return this.dispatch(action);
+  }
+
+  /** Close the active flow through the same reducer path as an explicit user cancel. */
+  cancel(): boolean {
+    if (!this.done) return false;
+    return this.dispatch({ kind: "cancel" });
+  }
+
+  private dispatch(action: AskAction): boolean {
     const ctx = {
       questions: this.questions,
       optionsByTab: this.optionsByTab,
@@ -123,7 +133,9 @@ export class PiAskFlowController {
     // Execute effects
     for (const effect of result.effects) {
       if (effect.kind === "done" && this.done) {
-        this.done(effect.result);
+        const done = this.done;
+        this.done = null;
+        done(effect.result);
         return true;
       }
       if (effect.kind === "request_rerender" && this.tui) {

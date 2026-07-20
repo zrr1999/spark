@@ -401,7 +401,11 @@ async function runPiAskFlowInteraction(
     )(createPiAskFlowInteractionRequest(request))) as ExtensionInteractionResponse | undefined;
     if (!response || response.kind !== "askFlow") return undefined;
     if (response.status === "blocked" || response.status === "error") return undefined;
-    if (response.status === "cancelled") return { result: createCancelledPiAskFlowResult(request) };
+    if (response.status === "cancelled") {
+      return {
+        result: createCancelledPiAskFlowResult(request, response.metadata?.timedOut === true),
+      };
+    }
     if (response.status === "pending") {
       const humanRequestId = optionalNonEmptyString(response.humanRequestId);
       if (!humanRequestId) return undefined;
@@ -437,6 +441,7 @@ function createPiAskFlowInteractionRequest(request: PiAskFlowRequest): Extension
     source: "extension",
     metadata: { tool: "ask_flow" },
     delivery: request.delivery ?? "blocking",
+    ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
     mode: request.mode ?? "clarification",
     ...(request.flow ? { flow: request.flow } : {}),
     questions: (request.questions ?? []).map((question) => ({
@@ -570,13 +575,17 @@ async function runPiAskFlowCustomUi(
   }
 }
 
-function createCancelledPiAskFlowResult(request: PiAskFlowRequest): PiAskFlowResult {
+function createCancelledPiAskFlowResult(
+  request: PiAskFlowRequest,
+  timedOut = false,
+): PiAskFlowResult {
   return createPiAskFlowResult({
     answers: {},
     flow: request.flow,
     mode: "cancel",
     cancelled: true,
     status: "cancelled",
+    ...(timedOut ? { timedOut: true } : {}),
   });
 }
 

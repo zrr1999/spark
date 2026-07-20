@@ -14,4 +14,15 @@ void test("repro ticks require a timely commit or visible work evidence", () => 
   assert.match(instruction, /artifact refs or file paths/);
   assert.match(instruction, /commands\/tests and their results/);
   assert.match(instruction, /Do not end with only a progress claim/);
+  assert.match(
+    instruction,
+    /Classify each unknown as fact, reversible choice, material user decision/,
+  );
+  assert.match(instruction, /compare reuse, adaptation, and new implementation/);
+  assert.match(
+    instruction,
+    /inspect the real module path first and compare it with an eager probe/,
+  );
+  assert.match(instruction, /Ask exactly one material user decision at a time/);
+  assert.match(instruction, /recordAsEvidence=true/);
 });

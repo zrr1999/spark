@@ -81,13 +81,16 @@ describe("workbench nav", () => {
     expect(currentWorkbenchPageLabel({ pathname: "/sessions/sess_1", nav, pages })).toBe(
       "Sessions",
     );
+    expect(currentWorkbenchPageLabel({ pathname: "/local/sessions/sess_1", nav, pages })).toBe(
+      "Sessions",
+    );
     expect(currentWorkbenchPageLabel({ pathname: "/local/artifacts/art-1", nav, pages })).toBe(
       "Artifacts",
     );
     expect(currentWorkbenchPageLabel({ pathname: "/local/repos", nav, pages })).toBe("Resources");
   });
 
-  it("keeps global routes on switch and preserves workspace-scoped suffixes", () => {
+  it("switches session routes at workspace scope and preserves other scoped suffixes", () => {
     expect(
       workspaceSwitcherHref({
         pathname: "/sessions",
@@ -96,7 +99,16 @@ describe("workbench nav", () => {
         targetWorkspaceSlug: "other",
         workspacePath,
       }),
-    ).toBe("/sessions?workspace=other");
+    ).toBe("/other/sessions");
+    expect(
+      workspaceSwitcherHref({
+        pathname: "/local/sessions/sess_1",
+        origin: "http://127.0.0.1:5173",
+        activeWorkspacePath: "/local",
+        targetWorkspaceSlug: "other",
+        workspacePath,
+      }),
+    ).toBe("/other/sessions");
     expect(
       workspaceSwitcherHref({
         pathname: "/local/inbox",

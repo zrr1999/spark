@@ -17,9 +17,10 @@
     "access": "public"
   },
   "scripts": {
-    "check": "tsc -p ../../tsconfig.json --noEmit"
+    "check": "vp check --no-fmt --no-lint ."
   },
   "dependencies": {
+    "@zendev-lab/spark-artifacts": "workspace:^",
     "@zendev-lab/spark-extension-api": "workspace:^",
     "@zendev-lab/spark-protocol": "workspace:^",
     "@zendev-lab/spark-system": "workspace:^",

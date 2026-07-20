@@ -16,7 +16,7 @@
   },
   "scripts": {
     "build": "node scripts/build-cli.mjs",
-    "check": "tsc -p tsconfig.json --noEmit",
+    "check": "vp check --no-fmt --no-lint .",
     "cli": "pnpm run build && node dist/cli.js",
     "prepack": "pnpm run build",
     "test": "vp test run",

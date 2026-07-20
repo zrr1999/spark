@@ -1,14 +1,36 @@
 import { createWorkspaceWithOwnerBinding } from "@zendev-lab/spark-coordination/projection-services";
+import { RuntimeControlCommandError } from "@zendev-lab/spark-coordination/runtime-control";
 import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import { describe, expect, it } from "vitest";
-import { createCockpitRuntimeSessionClient } from "./cockpit-runtime-session-client";
+import {
+  createCockpitRuntimeSessionClient,
+  shouldRetainControlForStaleProjection,
+} from "./cockpit-runtime-session-client";
 import {
   getProjectedManagedSessionForCockpit,
   getProjectedManagedSessionSnapshotForCockpit,
 } from "./managed-sessions";
 
 describe("cockpit runtime session cache", () => {
+  it("retains control only for explicit response timeouts with a stale projection", () => {
+    const timeout = new RuntimeControlCommandError("timed out", "COMMAND_RESULT_TIMEOUT");
+    const protocolFailure = new RuntimeControlCommandError("bad response", "INVALID_RESPONSE");
+
+    expect(
+      shouldRetainControlForStaleProjection([{ status: "rejected", reason: timeout }], true),
+    ).toBe(true);
+    expect(
+      shouldRetainControlForStaleProjection(
+        [{ status: "rejected", reason: protocolFailure }],
+        true,
+      ),
+    ).toBe(false);
+    expect(
+      shouldRetainControlForStaleProjection([{ status: "rejected", reason: timeout }], false),
+    ).toBe(false);
+  });
+
   it("returns workspace projections without advertising control when the owner is offline", async () => {
     const db = openMemoryDatabase();
     migrate(db);

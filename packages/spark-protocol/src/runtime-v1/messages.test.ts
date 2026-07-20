@@ -8,6 +8,7 @@ import {
   maxRuntimeCommandPayloadBytes,
   runtimeCommandResultEnvelopeSchema,
   runtimeMessageEnvelopeSchema,
+  serverHeartbeatAckEnvelopeSchema,
   serverCommandEnvelopeSchema,
 } from "./messages.ts";
 
@@ -32,6 +33,31 @@ function recordedChannelResponse() {
 }
 
 describe("typed runtime control messages", () => {
+  it("parses bound and unbound workspace assignments from heartbeat acknowledgements", () => {
+    const bound = createId("rtwb");
+    const unbound = createId("rtwb");
+    const parsed = serverHeartbeatAckEnvelopeSchema.parse({
+      protocolVersion: runtimeProtocolVersion,
+      messageId: createId("msg"),
+      type: "server.heartbeat_ack",
+      sentAt: "2026-07-20T00:00:00.000Z",
+      payload: {
+        runtimeSessionId: createId("rtsn"),
+        sequence: 1,
+        serverTime: "2026-07-20T00:00:00.000Z",
+        workspaceBindingAssignments: [
+          { bindingId: bound, state: "bound", workspaceId: createId("ws") },
+          { bindingId: unbound, state: "unbound" },
+        ],
+      },
+    });
+
+    expect(parsed.payload.workspaceBindingAssignments.map(({ state }) => state)).toEqual([
+      "bound",
+      "unbound",
+    ]);
+  });
+
   const base = {
     protocolVersion: runtimeProtocolVersion,
     messageId: createId("msg"),

@@ -125,6 +125,11 @@ export function attachRuntimeWebSocket(
       }
 
       runtimeSessionId = handleHello(context, hello.data.payload);
+      const workspaceBindingAssignments = listWorkspaceBindingAssignments(
+        context.db,
+        context.runtimeId,
+        hello.data.payload.workspaceBindings.map(({ bindingId }) => bindingId),
+      );
       ws.send(
         JSON.stringify({
           protocolVersion: hello.data.protocolVersion,
@@ -136,6 +141,7 @@ export function attachRuntimeWebSocket(
             acceptedFeatures: hello.data.payload.supportedFeatures,
             heartbeatIntervalMs: context.heartbeatIntervalMs ?? 15_000,
             serverTime: new Date().toISOString(),
+            workspaceBindingAssignments,
           },
         }),
       );
@@ -229,6 +235,11 @@ export function attachRuntimeWebSocket(
             runtimeSessionId,
             sequence: heartbeat.data.payload.sequence,
             serverTime: new Date().toISOString(),
+            workspaceBindingAssignments: listWorkspaceBindingAssignments(
+              context.db,
+              context.runtimeId,
+              heartbeat.data.payload.workspaceBindings?.map(({ bindingId }) => bindingId) ?? [],
+            ),
           },
         }),
       );
@@ -1090,6 +1101,29 @@ function upsertWorkspaceBindings(
   }
 }
 
+function listWorkspaceBindingAssignments(
+  db: DatabaseSync,
+  runtimeId: string,
+  bindingIds: string[],
+) {
+  if (bindingIds.length === 0) return [];
+  const read = db.prepare(
+    `SELECT wob.workspace_id AS workspaceId
+     FROM runtime_workspace_bindings rwb
+     LEFT JOIN workspace_owner_bindings wob
+       ON wob.runtime_workspace_binding_id = rwb.id
+      AND wob.ended_at IS NULL
+     WHERE rwb.runtime_id = ? AND rwb.id = ?
+     LIMIT 1`,
+  );
+  return bindingIds.map((bindingId) => {
+    const owner = read.get(runtimeId, bindingId) as { workspaceId: string | null } | undefined;
+    return owner?.workspaceId
+      ? { bindingId, state: "bound" as const, workspaceId: owner.workspaceId }
+      : { bindingId, state: "unbound" as const };
+  });
+}
+
 function requireRoutedContext(
   ws: WebSocket | RuntimeWebSocketConnection,
   context: RuntimeWebSocketContext,
@@ -1144,6 +1178,24 @@ function requireRoutedContext(
     return null;
   }
 
+  if (
+    envelope.workspaceBindingId &&
+    envelope.workspaceId &&
+    !bindingOwnsWorkspace(
+      context.db,
+      context.runtimeId,
+      envelope.workspaceBindingId,
+      envelope.workspaceId,
+    )
+  ) {
+    sendError(
+      ws,
+      "workspace_owner_binding_mismatch",
+      "Runtime message did not match the active Cockpit workspace owner binding.",
+    );
+    return null;
+  }
+
   if (required.command && !envelope.commandId) {
     sendError(ws, "missing_command_id", "Runtime message requires commandId.");
     return null;
@@ -1169,6 +1221,29 @@ function requireRoutedContext(
     invocationId: envelope.invocationId,
     sessionId: envelope.sessionId,
   };
+}
+
+function bindingOwnsWorkspace(
+  db: DatabaseSync,
+  runtimeId: string,
+  workspaceBindingId: string,
+  workspaceId: string,
+): boolean {
+  return Boolean(
+    db
+      .prepare(
+        `SELECT 1
+         FROM runtime_workspace_bindings rwb
+         JOIN workspace_owner_bindings wob
+           ON wob.runtime_workspace_binding_id = rwb.id
+          AND wob.ended_at IS NULL
+         WHERE rwb.id = ?
+           AND rwb.runtime_id = ?
+           AND wob.workspace_id = ?
+         LIMIT 1`,
+      )
+      .get(workspaceBindingId, runtimeId, workspaceId),
+  );
 }
 
 function requireCommandRoutedContext(
@@ -1303,6 +1378,10 @@ function flushPendingCommands(
        FROM command_deliveries cd
        JOIN commands c ON c.id = cd.command_id
        JOIN runtime_workspace_bindings rb ON rb.id = cd.runtime_workspace_binding_id
+       JOIN workspace_owner_bindings wob
+         ON wob.runtime_workspace_binding_id = rb.id
+        AND wob.workspace_id = c.workspace_id
+        AND wob.ended_at IS NULL
        WHERE rb.runtime_id = ? AND cd.status = 'pending' AND c.status IN ('queued', 'delivered')
          AND rb.status = 'available'
        ORDER BY cd.created_at ASC
@@ -1418,6 +1497,10 @@ function flushPendingHumanResponses(
        FROM human_responses hres
        JOIN human_requests hreq ON hreq.id = hres.human_request_id
        JOIN runtime_workspace_bindings rb ON rb.id = hreq.runtime_workspace_binding_id
+       JOIN workspace_owner_bindings wob
+         ON wob.runtime_workspace_binding_id = rb.id
+        AND wob.workspace_id = hreq.workspace_id
+        AND wob.ended_at IS NULL
        WHERE rb.runtime_id = ? AND hres.status = 'delivering'
        ORDER BY hres.created_at ASC
        LIMIT 10`,

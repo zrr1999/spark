@@ -110,8 +110,12 @@ void test("resolveActiveMode throws on an empty registry", () => {
   assert.throws(() => resolveActiveMode({ registry, driver: "assist" }), /registry is empty/u);
 });
 
-void test("resolveTurnDriver prefers workflow over goal over loop over assist", () => {
-  assert.equal(resolveTurnDriver({ workflowRunActive: true, goalLoopActive: true }), "workflow");
+void test("resolveTurnDriver prefers workflow over repro over goal over loop over assist", () => {
+  assert.equal(
+    resolveTurnDriver({ workflowRunActive: true, reproActive: true, goalLoopActive: true }),
+    "workflow",
+  );
+  assert.equal(resolveTurnDriver({ reproActive: true, goalLoopActive: true }), "repro");
   assert.equal(resolveTurnDriver({ goalLoopActive: true }), "goal");
   assert.equal(resolveTurnDriver({ loopActive: true }), "loop");
   assert.equal(resolveTurnDriver({}), "assist");

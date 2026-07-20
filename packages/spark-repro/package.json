@@ -1,0 +1,33 @@
+{
+  "name": "@zendev-lab/spark-repro",
+  "version": "0.1.0",
+  "description": "Host-neutral reproduction contract, readiness, and gate primitives for Spark.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "vp check --no-fmt --no-lint . && vp test run",
+    "test": "vp test run"
+  },
+  "dependencies": {
+    "@zendev-lab/spark-extension-api": "workspace:^"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=26.0.0 <27"
+  }
+}

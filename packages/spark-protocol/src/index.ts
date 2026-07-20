@@ -433,6 +433,13 @@ export const sparkAskFlowInteractionRequestSchema = sparkInteractionBaseRequestS
    * durably opens the request and returns its handle to the caller immediately.
    */
   delivery: z.enum(["blocking", "async"]).optional(),
+  /** Host-owned blocking wait deadline. A timeout closes the human wait before fallback begins. */
+  timeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .max(24 * 60 * 60_000)
+    .optional(),
   mode: z.enum(["clarification", "decision", "approval", "unblock"]).default("clarification"),
   flow: z.string().min(1).optional(),
   questions: z.array(sparkAskQuestionViewSchema).min(1),

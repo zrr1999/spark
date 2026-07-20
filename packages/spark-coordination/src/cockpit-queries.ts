@@ -197,7 +197,11 @@ export function loadWorkspaceDashboard(db: DatabaseSync, workspaceRouteId: strin
     workspaces: [workspace],
     pendingInboxCount,
     workspaceControl: loadWorkspaceServerControl(db, workspace.id),
-    runnerConnections: listRuntimeConnections(db),
+    // A workspace page describes its active owner, not every daemon that has
+    // ever connected to this Cockpit. Global runtime inventory belongs on the
+    // registration/binding surface; mixing it into workspace health makes an
+    // unrelated online daemon look capable of controlling this workspace.
+    runnerConnections: listOwnerRuntimeConnections(db, workspace.id),
     runnerBindings: listOwnerRuntimeWorkspaceBindings(db, workspace.id),
     ownerBindings: listOwnerBindings(db, workspace.id),
     recentEvents: listRecentWorkspaceEvents(db, workspace.id),
@@ -983,17 +987,6 @@ function loadWorkspaceFullByRouteId(db: DatabaseSync, workspaceRouteId: string) 
        LIMIT 1`,
     )
     .get(workspaceRouteId, workspaceRouteId) as WorkspaceFullRow | undefined;
-}
-
-function listRuntimeConnections(db: DatabaseSync) {
-  return db
-    .prepare(
-      `SELECT id, installation_id AS installationId, name, status, protocol_version AS protocolVersion,
-              last_heartbeat_at AS lastHeartbeatAt, updated_at AS updatedAt
-       FROM runtime_connections
-       ORDER BY updated_at DESC`,
-    )
-    .all() as unknown as RuntimeConnectionView[];
 }
 
 function listAllRuntimeWorkspaceBindings(db: DatabaseSync) {

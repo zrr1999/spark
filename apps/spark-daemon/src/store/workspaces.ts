@@ -5,6 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   createId,
   type ExecutorClientProjection,
+  type RuntimeWorkspaceBindingAssignment,
   type RuntimeWorkspaceBindingSummary,
   type WorkspaceBorrowedState,
   type WorkspaceClientKind,
@@ -22,6 +23,8 @@ export interface WorkspaceProfileRegistration {
 export interface SparkDaemonWorkspace {
   id: string;
   serverWorkspaceId?: string;
+  serverBindingId?: string;
+  cockpitBindingState?: RuntimeWorkspaceBindingAssignment["state"];
   serverUrl: string;
   localWorkspaceKey: string;
   displayName: string;
@@ -98,6 +101,7 @@ export interface AddWorkspaceOptions {
   localPath: string;
   status?: RuntimeWorkspaceBindingSummary["status"];
   profile?: WorkspaceProfileRegistration;
+  allowLocalPathRebind?: boolean;
   now?: string;
 }
 
@@ -114,6 +118,7 @@ export interface RegisterWorkspaceOptions {
   workspaceSlug?: string;
   profile?: WorkspaceProfileRegistration;
   consumedRegistrationToken?: string;
+  allowLocalPathRebind?: boolean;
   serverCredential?: SparkDaemonServerCredentialRegistration;
   now?: string;
 }
@@ -132,6 +137,9 @@ export interface PlannedWorkspaceRegistration {
   displayName: string;
   workspaceName: string;
   workspaceSlug: string;
+  existingWorkspaceId?: string;
+  previousServerUrl?: string;
+  previousServerBindingId?: string;
 }
 
 export interface SparkDaemonServerCredentialRegistration {
@@ -173,8 +181,14 @@ export function addWorkspace(db: DatabaseSync, options: AddWorkspaceOptions): Sp
   const now = options.now ?? new Date().toISOString();
   const serverUrl = options.serverUrl ?? "";
   const localPath = normalizeLocalPath(options.localPath);
-  assertWorkspaceSlotAvailable(db, serverUrl, localPath, options.localWorkspaceKey);
   const existing = getWorkspaceByKey(db, serverUrl, options.localWorkspaceKey);
+  assertWorkspaceSlotAvailable(
+    db,
+    serverUrl,
+    localPath,
+    options.localWorkspaceKey,
+    options.allowLocalPathRebind ? existing?.id : undefined,
+  );
 
   const workspace: SparkDaemonWorkspace = {
     id: existing?.id ?? options.id ?? createId("rtwb"),
@@ -232,19 +246,40 @@ export function registerWorkspace(
   const now = options.now ?? new Date().toISOString();
 
   return withSparkDaemonTransaction(db, () => {
+    if (planned.existingWorkspaceId) {
+      db.prepare(
+        `UPDATE workspaces
+         SET server_url = ?,
+             local_workspace_key = ?,
+             display_name = ?,
+             updated_at = ?
+         WHERE id = ?`,
+      ).run(
+        planned.serverUrl,
+        planned.localWorkspaceKey,
+        planned.displayName,
+        now,
+        planned.existingWorkspaceId,
+      );
+    }
     const addOptions: AddWorkspaceOptions = {
       serverUrl: planned.serverUrl,
       localWorkspaceKey: planned.localWorkspaceKey,
       localPath: planned.localPath,
       displayName: planned.displayName,
       now,
-      ...(options.serverBindingId ? { id: options.serverBindingId } : {}),
+      ...(planned.existingWorkspaceId
+        ? { id: planned.existingWorkspaceId }
+        : options.serverBindingId
+          ? { id: options.serverBindingId }
+          : {}),
       ...(options.serverStatus ? { status: options.serverStatus } : {}),
       ...(options.profile ? { profile: options.profile } : {}),
+      ...(options.allowLocalPathRebind ? { allowLocalPathRebind: true } : {}),
     };
     const workspace = addWorkspace(db, addOptions);
     recordSparkDaemonWorkspaceRegistration(db, workspace, options, now);
-    return workspace;
+    return getWorkspaceById(db, workspace.id) ?? workspace;
   });
 }
 
@@ -253,7 +288,7 @@ export function ensureLocalWorkspace(
   options: EnsureLocalWorkspaceOptions,
 ): SparkDaemonWorkspace {
   const localPath = normalizeLocalPath(options.localPath);
-  const existing = findWorkspaceByPathOnServer(db, "", localPath);
+  const existing = getWorkspaceByPath(db, localPath);
   if (existing) {
     return isUserDetachedWorkspace(existing) ? attachWorkspace(db, { id: existing.id }) : existing;
   }
@@ -277,14 +312,32 @@ export function planWorkspaceRegistration(
   const localWorkspaceKey = options.localWorkspaceKey ?? workspaceKeyForName(displayName);
   const workspaceName = options.workspaceName ?? displayName;
   const workspaceSlug = options.workspaceSlug ?? localWorkspaceKey;
-  const existingPath = findWorkspaceByPathOnServer(db, serverUrl, localPath);
-  if (existingPath) {
+  const pathMatches = listWorkspaces(db).filter((workspace) => workspace.localPath === localPath);
+  const existingPath = pathMatches.find((workspace) => workspace.serverUrl === serverUrl);
+  const existingKey = getWorkspaceByKey(db, serverUrl, localWorkspaceKey);
+  const pathRebindWorkspace =
+    options.allowLocalPathRebind && existingKey?.localPath !== localPath ? existingKey : undefined;
+  const rebindWorkspace =
+    existingPath ?? pathRebindWorkspace ?? (pathMatches.length === 1 ? pathMatches[0] : undefined);
+  if (existingPath && existingPath.localWorkspaceKey !== localWorkspaceKey) {
     throw new WorkspacePathConflictError(
       `Workspace path ${localPath} is already registered as ${existingPath.localWorkspaceKey} on ${formatServerUrl(serverUrl)}.`,
       "same-path",
     );
   }
-  assertWorkspaceSlotAvailable(db, serverUrl, localPath, localWorkspaceKey);
+  if (!existingPath && pathMatches.length > 1) {
+    throw new WorkspacePathConflictError(
+      `Workspace path ${localPath} has multiple legacy Cockpit bindings. Unbind the duplicates before reconnecting it.`,
+      "same-path",
+    );
+  }
+  if (pathRebindWorkspace && activeInvocationCount(db, pathRebindWorkspace.id) > 0) {
+    throw new WorkspacePathConflictError(
+      `Workspace ${localWorkspaceKey} cannot change local path while it has active invocations.`,
+      "same-key",
+    );
+  }
+  assertWorkspaceSlotAvailable(db, serverUrl, localPath, localWorkspaceKey, rebindWorkspace?.id);
   return {
     serverUrl,
     localPath,
@@ -292,6 +345,13 @@ export function planWorkspaceRegistration(
     displayName,
     workspaceName,
     workspaceSlug,
+    ...(rebindWorkspace?.id ? { existingWorkspaceId: rebindWorkspace.id } : {}),
+    ...(rebindWorkspace?.serverUrl && rebindWorkspace.serverUrl !== serverUrl
+      ? { previousServerUrl: rebindWorkspace.serverUrl }
+      : {}),
+    ...(rebindWorkspace?.serverBindingId && rebindWorkspace.serverUrl !== serverUrl
+      ? { previousServerBindingId: rebindWorkspace.serverBindingId }
+      : {}),
   };
 }
 
@@ -302,6 +362,19 @@ function recordSparkDaemonWorkspaceRegistration(
   now: string,
 ): void {
   const serverId = ensureSparkDaemonServer(db, workspace.serverUrl, now);
+  const conflictingProjection = db
+    .prepare("SELECT local_path AS localPath FROM daemon_workspaces WHERE id = ? LIMIT 1")
+    .get(workspace.id) as { localPath: string } | undefined;
+  if (
+    conflictingProjection &&
+    conflictingProjection.localPath !== workspace.localPath &&
+    !options.allowLocalPathRebind
+  ) {
+    throw new WorkspacePathConflictError(
+      `Workspace binding id ${workspace.id} already belongs to ${conflictingProjection.localPath}.`,
+      "same-path",
+    );
+  }
   if (options.serverCredential) {
     upsertSparkDaemonServerCredential(db, serverId, options.serverCredential, now);
   }
@@ -309,7 +382,20 @@ function recordSparkDaemonWorkspaceRegistration(
   db.prepare(
     `INSERT INTO daemon_workspaces
       (id, server_id, server_workspace_id, server_binding_id, name, slug, local_path, profile_source_kind, profile_ref, profile_commit, registered_at, last_known_status, last_known_offline_reason, last_status_changed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       server_id = excluded.server_id,
+       server_workspace_id = excluded.server_workspace_id,
+       server_binding_id = excluded.server_binding_id,
+       name = excluded.name,
+       slug = excluded.slug,
+       local_path = excluded.local_path,
+       profile_source_kind = excluded.profile_source_kind,
+       profile_ref = excluded.profile_ref,
+       profile_commit = excluded.profile_commit,
+       last_known_status = excluded.last_known_status,
+       last_known_offline_reason = excluded.last_known_offline_reason,
+       last_status_changed_at = excluded.last_status_changed_at`,
   ).run(
     workspace.id,
     serverId,
@@ -442,6 +528,31 @@ export function markSparkDaemonServerDisconnected(
   ).run(reason, serverUrl);
 }
 
+/** Apply the Cockpit's authoritative owner projection returned in hello/heartbeat acks. */
+export function applyCockpitWorkspaceBindingAssignments(
+  db: DatabaseSync,
+  serverUrl: string,
+  assignments: RuntimeWorkspaceBindingAssignment[],
+): void {
+  if (assignments.length === 0) return;
+  const server = db
+    .prepare("SELECT id FROM daemon_servers WHERE server_url = ? LIMIT 1")
+    .get(serverUrl) as { id: string } | undefined;
+  if (!server) return;
+
+  const update = db.prepare(
+    `UPDATE daemon_workspaces
+     SET server_workspace_id = ?
+     WHERE server_id = ?
+       AND server_binding_id = ?
+       AND server_workspace_id IS NOT ?`,
+  );
+  for (const assignment of assignments) {
+    const workspaceId = assignment.state === "bound" ? assignment.workspaceId : null;
+    update.run(workspaceId ?? null, server.id, assignment.bindingId, workspaceId ?? null);
+  }
+}
+
 export function sparkDaemonServerStatusSummaries(
   db: DatabaseSync,
 ): SparkDaemonServerStatusSummary[] {
@@ -560,32 +671,39 @@ export function workspaceBindingBelongsToServer(
 ): boolean {
   return Boolean(
     db
-      .prepare("SELECT 1 AS present FROM workspaces WHERE id = ? AND server_url = ? LIMIT 1")
-      .get(workspaceBindingId, serverUrl),
+      .prepare(
+        `SELECT 1 AS present
+         FROM workspaces w
+         LEFT JOIN daemon_workspaces dw ON dw.id = w.id
+         WHERE (w.id = ? OR dw.server_binding_id = ?) AND w.server_url = ?
+         LIMIT 1`,
+      )
+      .get(workspaceBindingId, workspaceBindingId, serverUrl),
   );
 }
 
 export function getWorkspaceById(db: DatabaseSync, id: string): SparkDaemonWorkspace | null {
   const row = db
     .prepare(
-      `SELECT id,
-              server_url AS serverUrl,
-              local_workspace_key AS localWorkspaceKey,
-              display_name AS displayName,
-              local_path AS localPath,
-              status,
-              capabilities_json AS capabilitiesJson,
-              diagnostics_json AS diagnosticsJson,
-              profile_source_kind AS profileSourceKind,
-              profile_ref AS profileRef,
-              profile_commit AS profileCommit,
-              profile_imported_at AS profileImportedAt,
-              updated_at AS updatedAt
-       FROM workspaces
-       WHERE id = ?
+      `SELECT w.id,
+              w.server_url AS serverUrl,
+              w.local_workspace_key AS localWorkspaceKey,
+              w.display_name AS displayName,
+              w.local_path AS localPath,
+              w.status,
+              w.capabilities_json AS capabilitiesJson,
+              w.diagnostics_json AS diagnosticsJson,
+              w.profile_source_kind AS profileSourceKind,
+              w.profile_ref AS profileRef,
+              w.profile_commit AS profileCommit,
+              w.profile_imported_at AS profileImportedAt,
+              w.updated_at AS updatedAt
+       FROM workspaces w
+       LEFT JOIN daemon_workspaces dw ON dw.id = w.id
+       WHERE w.id = ? OR dw.server_binding_id = ?
        LIMIT 1`,
     )
-    .get(id) as WorkspaceRow | undefined;
+    .get(id, id) as WorkspaceRow | undefined;
   return row ? mapWorkspaceRow(row, db) : null;
 }
 
@@ -664,23 +782,11 @@ export function getWorkspaceByPath(
               updated_at AS updatedAt
        FROM workspaces
        WHERE local_path = ?
+       ORDER BY CASE WHEN server_url = '' THEN 0 ELSE 1 END, updated_at DESC
        LIMIT 1`,
     )
     .get(normalizeLocalPath(localPath)) as WorkspaceRow | undefined;
   return row ? mapWorkspaceRow(row, db) : null;
-}
-
-function findWorkspaceByPathOnServer(
-  db: DatabaseSync,
-  serverUrl: string,
-  localPath: string,
-): SparkDaemonWorkspace | null {
-  const normalizedPath = normalizeLocalPath(localPath);
-  return (
-    listWorkspaces(db).find(
-      (workspace) => workspace.serverUrl === serverUrl && workspace.localPath === normalizedPath,
-    ) ?? null
-  );
 }
 
 function assertWorkspaceSlotAvailable(
@@ -688,16 +794,23 @@ function assertWorkspaceSlotAvailable(
   serverUrl: string,
   localPath: string,
   localWorkspaceKey: string,
+  ignoredWorkspaceId?: string,
 ): void {
   const existing = getWorkspaceByKey(db, serverUrl, localWorkspaceKey);
-  if (existing && existing.localPath !== localPath) {
+  if (existing && existing.id !== ignoredWorkspaceId && existing.localPath !== localPath) {
     throw new WorkspacePathConflictError(
       `Workspace key ${localWorkspaceKey} is already registered on ${formatServerUrl(serverUrl)} at ${existing.localPath}.`,
       "same-key",
     );
   }
 
-  const collision = findPathCollision(db, localPath, serverUrl, localWorkspaceKey);
+  const collision = findPathCollision(
+    db,
+    localPath,
+    serverUrl,
+    localWorkspaceKey,
+    ignoredWorkspaceId,
+  );
   if (collision?.kind === "same-path") {
     throw new WorkspacePathConflictError(
       `Workspace path ${localPath} is already bound as ${collision.workspace.localWorkspaceKey} on ${formatServerUrl(collision.workspace.serverUrl)}.`,
@@ -717,19 +830,18 @@ function findPathCollision(
   localPath: string,
   serverUrl: string,
   localWorkspaceKey: string,
+  ignoredWorkspaceId?: string,
 ): { kind: "same-path" | "nested"; workspace: SparkDaemonWorkspace } | null {
   const normalizedPath = normalizeLocalPath(localPath);
   for (const workspace of listWorkspaces(db)) {
+    if (workspace.id === ignoredWorkspaceId) continue;
     const sameServer = workspace.serverUrl === serverUrl;
     if (sameServer && workspace.localWorkspaceKey === localWorkspaceKey) {
       continue;
     }
 
     if (workspace.localPath === normalizedPath) {
-      if (sameServer) {
-        return { kind: "same-path", workspace };
-      }
-      continue;
+      return { kind: "same-path", workspace };
     }
 
     if (
@@ -1018,7 +1130,7 @@ export function workspaceSummaries(
 ): RuntimeWorkspaceBindingSummary[] {
   const workspaces = serverUrl ? listWorkspacesForServer(db, serverUrl) : listWorkspaces(db);
   return workspaces.map((workspace) => ({
-    bindingId: workspace.id,
+    bindingId: workspace.serverBindingId ?? workspace.id,
     localWorkspaceKey: workspace.localWorkspaceKey,
     localPath: workspace.localPath,
     displayName: workspace.displayName,
@@ -1047,25 +1159,37 @@ interface WorkspaceRow {
   updatedAt: string;
 }
 
-function workspaceServerWorkspaceId(db: DatabaseSync, workspaceId: string): string | undefined {
+function workspaceServerProjection(
+  db: DatabaseSync,
+  workspaceId: string,
+): { serverWorkspaceId?: string; serverBindingId?: string } {
   const row = db
     .prepare(
-      `SELECT server_workspace_id AS serverWorkspaceId
+      `SELECT server_workspace_id AS serverWorkspaceId,
+              server_binding_id AS serverBindingId
        FROM daemon_workspaces
        WHERE id = ?
        LIMIT 1`,
     )
-    .get(workspaceId) as { serverWorkspaceId: string | null } | undefined;
-  return row?.serverWorkspaceId ?? undefined;
+    .get(workspaceId) as
+    | { serverWorkspaceId: string | null; serverBindingId: string | null }
+    | undefined;
+  return {
+    ...(row?.serverWorkspaceId ? { serverWorkspaceId: row.serverWorkspaceId } : {}),
+    ...(row?.serverBindingId ? { serverBindingId: row.serverBindingId } : {}),
+  };
 }
 
 function mapWorkspaceRow(row: WorkspaceRow, db?: DatabaseSync): SparkDaemonWorkspace {
   const projection = db ? workspaceInvocationProjection(db, row.id) : {};
   const clientProjection = db ? workspaceClientStateProjection(db, row.id) : {};
-  const serverWorkspaceId = db ? workspaceServerWorkspaceId(db, row.id) : undefined;
+  const serverProjection = db ? workspaceServerProjection(db, row.id) : {};
   return {
     id: row.id,
-    ...(serverWorkspaceId ? { serverWorkspaceId } : {}),
+    ...serverProjection,
+    ...(row.serverUrl
+      ? { cockpitBindingState: serverProjection.serverWorkspaceId ? "bound" : "unbound" }
+      : {}),
     serverUrl: row.serverUrl,
     localWorkspaceKey: row.localWorkspaceKey,
     displayName: row.displayName,

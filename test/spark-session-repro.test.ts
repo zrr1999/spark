@@ -4,41 +4,61 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 
+import type { ArtifactRef } from "@zendev-lab/spark-extension-api";
 import {
-  createSparkSessionRepro,
-  currentReproStage,
-  currentPhaseAcceptance,
-  isPhaseComplete,
-  isStageAcceptanceMet,
-  isStageGatePassed,
-  isStageComplete,
-  advanceReproPhase,
+  DEFAULT_REPRO_STAGES,
   advanceReproStage,
-  satisfyAcceptanceCondition,
+  createSparkSessionRepro,
+  currentPhaseAcceptance,
+  currentReproStage,
+  evaluateStageGate,
+  isPhaseComplete,
+  isReproRequirementSatisfied,
+  isStageComplete,
   passStageGate,
   readSessionRepro,
+  recordReproRequirementProof,
+  satisfyAcceptanceCondition,
   sessionReproStorePath,
-  DEFAULT_REPRO_STAGES,
+  type SparkReproRequirementProof,
   type SparkSessionRepro,
 } from "../packages/pi-extension/src/extension/spark-session-repro.ts";
 
-void describe("SparkSessionRepro state machine", () => {
+const artifactRef = (id: string) => `artifact:${id}` as ArtifactRef;
+
+void describe("SparkSessionRepro evidence-backed state machine", () => {
   function makeRepro(): SparkSessionRepro {
     return createSparkSessionRepro("test-session");
   }
 
-  void it("creates repro with 5 default stages starting at setup/plan", () => {
+  void it("starts a v3 research-first setup with stable typed requirements", () => {
     const repro = makeRepro();
-    assert.equal(repro.version, 2);
+    const setup = currentReproStage(repro);
+
+    assert.equal(repro.version, 3);
     assert.equal(repro.status, "active");
     assert.equal(repro.currentStageIndex, 0);
     assert.equal(repro.currentPhase, "plan");
-    assert.equal(repro.stages.length, 5);
-    assert.equal(repro.stages[0].name, "setup");
-    assert.equal(repro.stages[1].name, "scaffold");
-    assert.equal(repro.stages[2].name, "reproduce");
-    assert.equal(repro.stages[3].name, "scale");
-    assert.equal(repro.stages[4].name, "deliver");
+    assert.deepEqual(
+      repro.stages.map((stage) => stage.name),
+      ["setup", "scaffold", "reproduce", "scale", "deliver"],
+    );
+    assert.deepEqual(
+      setup.acceptance.map(({ id, kind }) => [id, kind]),
+      [
+        ["repro-contract-frozen", "evidence"],
+        ["implementation-landscape-researched", "evidence"],
+        ["alignment-paths-researched", "evidence"],
+        ["implementation-strategy-approved", "decision"],
+        ["alignment-strategy-approved", "decision"],
+        ["baseline-probe-passed", "validation"],
+      ],
+    );
+    assert.equal(currentPhaseAcceptance(repro).length, 6);
+    assert.equal(
+      setup.acceptance.every((item) => !isReproRequirementSatisfied(item)),
+      true,
+    );
   });
 
   void it("preserves an optional user-supplied reproduction objective", () => {
@@ -48,193 +68,265 @@ void describe("SparkSessionRepro state machine", () => {
     assert.equal(repro.objective, "进行正经的复现对齐工作");
   });
 
-  void it("currentReproStage returns the active stage", () => {
-    const repro = makeRepro();
-    const stage = currentReproStage(repro);
-    assert.equal(stage.name, "setup");
-    assert.deepEqual(stage.phases, ["plan"]);
-  });
-
-  void it("currentPhaseAcceptance filters by current phase", () => {
-    const repro = makeRepro();
-    const conditions = currentPhaseAcceptance(repro);
-    assert.equal(conditions.length, 2);
-    assert.equal(conditions[0].phase, "plan");
-    assert.equal(conditions[0].satisfied, false);
-  });
-
-  void it("isPhaseComplete returns false when conditions unsatisfied", () => {
-    const repro = makeRepro();
+  void it("derives readiness from evidence, user decisions, and validation proof", () => {
+    let repro = makeRepro();
+    repro = record(repro, "repro-contract-frozen", {
+      kind: "evidence",
+      evidenceRefs: [artifactRef("contract")],
+    });
+    repro = record(repro, "implementation-landscape-researched", {
+      kind: "evidence",
+      evidenceRefs: [artifactRef("reuse-research")],
+    });
+    repro = record(repro, "alignment-paths-researched", {
+      kind: "evidence",
+      evidenceRefs: [artifactRef("alignment-research")],
+    });
+    repro = record(repro, "implementation-strategy-approved", {
+      kind: "decision",
+      decisionRef: artifactRef("implementation-ask"),
+      selectedValue: "reuse",
+    });
+    repro = record(repro, "alignment-strategy-approved", {
+      kind: "decision",
+      decisionRef: artifactRef("alignment-ask"),
+      selectedValue: "real-module",
+    });
     assert.equal(isPhaseComplete(repro), false);
-  });
 
-  void it("satisfyAcceptanceCondition marks a condition satisfied", () => {
-    const repro = makeRepro();
-    const updated = satisfyAcceptanceCondition(repro, "Problem statement documented", "art:123");
-    assert.ok(updated);
-    const stage = currentReproStage(updated!);
-    assert.equal(stage.acceptance[0].satisfied, true);
-    assert.equal(stage.acceptance[0].evidenceRef, "art:123");
-  });
+    repro = record(repro, "baseline-probe-passed", {
+      kind: "validation",
+      command: "pnpm test baseline",
+      resultRef: artifactRef("baseline-output"),
+      passed: true,
+    });
 
-  void it("isPhaseComplete remains false until both merged plan conditions are satisfied", () => {
-    const repro = makeRepro();
-    const updated = satisfyAcceptanceCondition(repro, "Problem statement documented");
-    assert.ok(updated);
-    assert.equal(isPhaseComplete(updated!), false);
-  });
-
-  void it("setup remains in plan until both merged acceptance conditions are satisfied", () => {
-    let repro = makeRepro();
-    repro = satisfyAcceptanceCondition(repro, "Problem statement documented")!;
-    assert.equal(advanceReproPhase(repro), undefined);
-    repro = satisfyAcceptanceCondition(repro, "Reproduction strategy planned")!;
     assert.equal(isPhaseComplete(repro), true);
-    assert.equal(advanceReproPhase(repro), undefined);
+    assert.equal(isStageComplete(repro), true);
+    const scaffold = advanceReproStage(repro);
+    assert.equal(scaffold?.currentStageIndex, 1);
+    assert.equal(scaffold?.currentPhase, "implement");
   });
 
-  void it("advanceReproPhase returns undefined when phase conditions not met", () => {
+  void it("rejects proof kinds that do not match the stable requirement", () => {
     const repro = makeRepro();
-    const result = advanceReproPhase(repro);
-    assert.equal(result, undefined);
+    assert.throws(
+      () =>
+        recordReproRequirementProof(repro, "implementation-strategy-approved", {
+          kind: "evidence",
+          evidenceRefs: [artifactRef("research")],
+        }),
+      /expects decision proof, received evidence/u,
+    );
   });
 
-  void it("isStageAcceptanceMet requires all conditions in all phases", () => {
-    let repro = makeRepro();
-    repro = satisfyAcceptanceCondition(repro, "Problem statement documented")!;
-    assert.equal(isStageAcceptanceMet(repro), false); // second plan condition still unsatisfied
-    repro = satisfyAcceptanceCondition(repro, "Reproduction strategy planned")!;
-    assert.equal(isStageAcceptanceMet(repro), true);
-  });
-
-  void it("isStageGatePassed returns true when no gate defined", () => {
-    const repro = makeRepro(); // setup has no gate
-    assert.equal(isStageGatePassed(repro), true);
-  });
-
-  void it("isStageComplete checks both acceptance and gate", () => {
-    let repro = makeRepro();
-    repro = satisfyAcceptanceCondition(repro, "Problem statement documented")!;
-    repro = satisfyAcceptanceCondition(repro, "Reproduction strategy planned")!;
-    assert.equal(isStageComplete(repro), true); // No gate on setup
-  });
-
-  void it("advanceReproStage moves to next stage", () => {
-    let repro = makeRepro();
-    repro = satisfyAcceptanceCondition(repro, "Problem statement documented")!;
-    repro = satisfyAcceptanceCondition(repro, "Reproduction strategy planned")!;
-    const advanced = advanceReproStage(repro);
-    assert.ok(advanced);
-    assert.equal(advanced!.currentStageIndex, 1);
-    assert.equal(advanced!.currentPhase, "implement");
-    assert.equal(currentReproStage(advanced!).name, "scaffold");
-  });
-
-  void it("advanceReproStage returns undefined when stage not complete", () => {
+  void it("keeps the legacy satisfy helper fail-closed", () => {
     const repro = makeRepro();
-    assert.equal(advanceReproStage(repro), undefined);
+    assert.equal(satisfyAcceptanceCondition(repro, "repro-contract-frozen"), undefined);
+    assert.equal(
+      satisfyAcceptanceCondition(
+        repro,
+        "implementation-strategy-approved",
+        artifactRef("decision"),
+      ),
+      undefined,
+    );
+    const updated = satisfyAcceptanceCondition(
+      repro,
+      "repro-contract-frozen",
+      artifactRef("contract"),
+    );
+    assert.equal(updated?.stages[0]?.acceptance[0]?.kind, "evidence");
+    assert.equal(isReproRequirementSatisfied(updated!.stages[0]!.acceptance[0]!), true);
   });
 
-  void it("passStageGate marks gate as passed", () => {
-    let repro = makeRepro();
-    // Move to reproduce stage (index 2) which has gate-A
-    repro = { ...repro, currentStageIndex: 2, currentPhase: "implement" };
-    const withGate = passStageGate(repro);
-    assert.ok(withGate);
-    assert.equal(withGate!.stages[2].gate!.passed, true);
-    assert.ok(withGate!.stages[2].gate!.passedAt);
-  });
-
-  void it("passStageGate returns undefined when no gate exists", () => {
-    const repro = makeRepro(); // setup stage, no gate
+  void it("derives gates from proof and cannot force-pass an incomplete stage", () => {
+    const repro = { ...makeRepro(), currentStageIndex: 2, currentPhase: "implement" as const };
+    const blocked = evaluateStageGate(repro);
+    assert.equal(blocked.passed, false);
+    assert.deepEqual(blocked.blockers, [
+      "bitwise-pass-20 requires a command, result artifact, and passing validation result",
+      "bitwise-pass-100 requires a command, result artifact, and passing validation result",
+    ]);
     assert.equal(passStageGate(repro), undefined);
+
+    let proved = record(repro, "bitwise-pass-20", validation("20", true));
+    proved = record(proved, "bitwise-pass-100", validation("100", true));
+    const passed = evaluateStageGate(proved);
+    assert.equal(passed.passed, true);
+    assert.equal(passed.repro.stages[2]?.gate?.evaluation?.passed, true);
+    assert.deepEqual(passed.repro.stages[2]?.gate?.evaluation?.evidenceRefs, [
+      artifactRef("result-20"),
+      artifactRef("result-100"),
+    ]);
   });
 
-  void it("advanceReproStage at last stage marks repro complete", () => {
-    let repro = makeRepro();
-    // Move to deliver stage (index 4)
-    repro = { ...repro, currentStageIndex: 4, currentPhase: "implement" };
-    // Satisfy deliver acceptance
-    repro = satisfyAcceptanceCondition(repro, "PR submitted")!;
-    repro = satisfyAcceptanceCondition(repro, "No runtime patches remain")!;
-    // Pass gate-C
-    repro = passStageGate(repro)!;
-    // Advance should complete
-    const completed = advanceReproStage(repro);
-    assert.ok(completed);
-    assert.equal(completed!.status, "complete");
-    assert.ok(completed!.completedAt);
-  });
-
-  void it("normalizes legacy research and plan setup phases into one plan phase", async () => {
+  void it("migrates legacy setup facts but not bare booleans or agent-authored decisions", async () => {
     const dir = await mkdtemp(join(tmpdir(), "spark-repro-phase-migration-"));
     try {
-      const legacy = structuredClone(makeRepro()) as unknown as {
-        version: 1 | 2;
-        currentPhase: "research" | "plan" | "implement";
-        stages: Array<Record<string, any>>;
+      const current = makeRepro();
+      const legacy: any = {
+        ...current,
+        version: 1,
+        currentPhase: "research",
+        stages: current.stages.map((stage) => ({
+          name: stage.name,
+          title: stage.title,
+          phases: stage.name === "setup" ? ["research", "plan"] : stage.phases,
+          acceptance: stage.acceptance.map((requirement) => ({
+            description: requirement.description,
+            phase: requirement.phase,
+            satisfied: false,
+          })),
+          ...(stage.gate
+            ? {
+                gate: {
+                  id: stage.gate.id,
+                  description: stage.gate.description,
+                  passed: true,
+                },
+              }
+            : {}),
+        })),
       };
-      legacy.version = 1;
-      legacy.currentPhase = "research";
-      legacy.stages[0] = {
-        ...legacy.stages[0],
-        phases: ["research", "plan"],
-        acceptance: [
-          {
-            description: "Problem statement documented",
-            phase: "research",
-            satisfied: true,
-            evidenceRef: "art:problem",
-          },
-          { description: "Reproduction strategy planned", phase: "plan", satisfied: false },
-        ],
-      };
+      legacy.stages[0]!.acceptance = [
+        {
+          description: "Problem statement documented",
+          phase: "research",
+          satisfied: true,
+          evidenceRef: "artifact:legacy-problem",
+        },
+        {
+          description: "Reproduction strategy planned",
+          phase: "plan",
+          satisfied: true,
+        },
+      ];
       const path = sessionReproStorePath(dir);
       await mkdir(dirname(path), { recursive: true });
       await writeFile(path, `${JSON.stringify({ version: 1, repro: legacy })}\n`, "utf8");
 
       const migrated = await readSessionRepro(dir);
-      assert.equal(migrated?.version, 2);
+      assert.equal(migrated?.version, 3);
       assert.equal(migrated?.currentPhase, "plan");
-      assert.deepEqual(migrated?.stages[0].phases, ["plan"]);
-      assert.deepEqual(
-        migrated?.stages[0].acceptance.map((condition) => ({
-          phase: condition.phase,
-          satisfied: condition.satisfied,
-          evidenceRef: condition.evidenceRef,
-        })),
-        [
-          { phase: "plan", satisfied: true, evidenceRef: "art:problem" },
-          { phase: "plan", satisfied: false, evidenceRef: undefined },
-        ],
+      assert.deepEqual(migrated?.stages[0]?.phases, ["plan"]);
+      assert.deepEqual(migrated?.stages[0]?.acceptance[0], {
+        id: "repro-contract-frozen",
+        kind: "evidence",
+        description: "Reproduction claim and acceptance contract frozen",
+        phase: "plan",
+        evidenceRefs: [artifactRef("legacy-problem")],
+      });
+      assert.equal(
+        isReproRequirementSatisfied(migrated!.stages[0]!.acceptance[3]!),
+        false,
+        "a legacy strategy boolean is not a recorded user decision",
       );
+      assert.equal(migrated?.stages[2]?.gate?.evaluation, undefined);
 
       const persisted = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
-      assert.equal(persisted.version, 2);
-      assert.equal((persisted.repro as Record<string, unknown>).version, 2);
-      assert.doesNotMatch(JSON.stringify(persisted), /research/u);
+      assert.equal(persisted.version, 3);
+      assert.doesNotMatch(JSON.stringify(persisted), /"research"/u);
+      assert.doesNotMatch(JSON.stringify(persisted), /"satisfied"/u);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 
-  void it("DEFAULT_REPRO_STAGES has correct structure", () => {
-    assert.equal(DEFAULT_REPRO_STAGES.length, 5);
-    // setup has no gate
-    assert.equal(DEFAULT_REPRO_STAGES[0].gate, undefined);
-    // reproduce has gate-A
-    assert.equal(DEFAULT_REPRO_STAGES[2].gate!.id, "gate-A");
-    // scale has gate-B
-    assert.equal(DEFAULT_REPRO_STAGES[3].gate!.id, "gate-B");
-    // deliver has gate-C
-    assert.equal(DEFAULT_REPRO_STAGES[4].gate!.id, "gate-C");
-  });
+  for (const version of [1, 2] as const) {
+    void it(`reopens incomplete legacy v${version} snapshots that claimed completion`, async () => {
+      const dir = await mkdtemp(join(tmpdir(), `spark-repro-v${version}-fail-closed-`));
+      try {
+        const current = makeRepro();
+        const completedAt = "2026-01-02T03:04:05.000Z";
+        const legacy: any = {
+          ...current,
+          version,
+          status: "complete",
+          currentStageIndex: current.stages.length - 1,
+          currentPhase: "implement",
+          completedAt,
+          stages: current.stages.map((stage) => ({
+            name: stage.name,
+            title: stage.title,
+            phases: stage.phases,
+            acceptance: stage.acceptance.map((requirement) => ({
+              description: requirement.description,
+              phase: requirement.phase,
+              satisfied: true,
+              evidenceRef: `artifact:legacy-${requirement.id}`,
+            })),
+            ...(stage.gate
+              ? {
+                  gate: {
+                    id: stage.gate.id,
+                    description: stage.gate.description,
+                    passed: true,
+                    passedAt: completedAt,
+                  },
+                }
+              : {}),
+          })),
+        };
+        const path = sessionReproStorePath(dir);
+        await mkdir(dirname(path), { recursive: true });
+        await writeFile(path, `${JSON.stringify({ version, repro: legacy })}\n`, "utf8");
 
-  void it("stages have correct phase configurations", () => {
-    assert.deepEqual(DEFAULT_REPRO_STAGES[0].phases, ["plan"]);
-    assert.deepEqual(DEFAULT_REPRO_STAGES[1].phases, ["implement"]);
-    assert.deepEqual(DEFAULT_REPRO_STAGES[2].phases, ["implement"]);
-    assert.deepEqual(DEFAULT_REPRO_STAGES[3].phases, ["implement"]);
-    assert.deepEqual(DEFAULT_REPRO_STAGES[4].phases, ["implement"]);
+        const migrated = await readSessionRepro(dir);
+        assert.equal(migrated?.version, 3);
+        assert.equal(migrated?.status, "active");
+        assert.equal(migrated?.completedAt, undefined);
+        assert.equal(migrated?.currentStageIndex, 0);
+        assert.equal(migrated?.currentPhase, "plan");
+        assert.equal(
+          isReproRequirementSatisfied(migrated!.stages[0]!.acceptance[3]!),
+          false,
+          "legacy satisfied booleans and evidence refs cannot forge a v3 user decision",
+        );
+        assert.equal(
+          isReproRequirementSatisfied(migrated!.stages[0]!.acceptance[5]!),
+          false,
+          "a legacy evidence ref cannot certify a v3 validation command and pass result",
+        );
+        assert.equal(migrated?.stages[2]?.gate?.evaluation, undefined);
+
+        const persisted = JSON.parse(await readFile(path, "utf8")) as {
+          version: number;
+          repro?: Record<string, unknown>;
+        };
+        assert.equal(persisted.version, 3);
+        assert.equal(persisted.repro?.status, "active");
+        assert.equal(Object.hasOwn(persisted.repro ?? {}, "completedAt"), false);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  void it("keeps the five-stage gate topology", () => {
+    assert.equal(DEFAULT_REPRO_STAGES.length, 5);
+    assert.equal(DEFAULT_REPRO_STAGES[0]?.gate, undefined);
+    assert.equal(DEFAULT_REPRO_STAGES[2]?.gate?.id, "gate-A");
+    assert.equal(DEFAULT_REPRO_STAGES[3]?.gate?.id, "gate-B");
+    assert.equal(DEFAULT_REPRO_STAGES[4]?.gate?.id, "gate-C");
   });
 });
+
+function record(
+  repro: SparkSessionRepro,
+  requirementId: string,
+  proof: SparkReproRequirementProof,
+): SparkSessionRepro {
+  const updated = recordReproRequirementProof(repro, requirementId, proof);
+  assert.ok(updated, `requirement should exist: ${requirementId}`);
+  return updated;
+}
+
+function validation(id: string, passed: boolean): SparkReproRequirementProof {
+  return {
+    kind: "validation",
+    command: `run ${id}`,
+    resultRef: artifactRef(`result-${id}`),
+    passed,
+  };
+}

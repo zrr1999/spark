@@ -27,7 +27,7 @@
   },
   "scripts": {
     "generate": "node scripts/generate-paraglide.mjs && node scripts/allow-generated-output.mjs",
-    "check": "pnpm run generate && tsc -p tsconfig.json --noEmit && vp test run",
+    "check": "pnpm run generate && vp check --no-fmt --no-lint . && vp test run",
     "test": "vp test run"
   },
   "devDependencies": {

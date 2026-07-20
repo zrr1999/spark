@@ -15,6 +15,7 @@ import {
   ensureSparkDaemonRegistrationForWorkspace,
   registerSparkDaemonWithToken,
   startSparkDaemonDeviceAuthorization,
+  unbindSparkDaemonWorkspaceFromCockpit,
   validateRegistrationServerUrl,
   verifySparkDaemonWorkspaceConnection,
 } from "./registration.js";
@@ -22,6 +23,55 @@ import {
 describe("Spark daemon workspace registration", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("authenticates a local Cockpit switch and validates the unbind response", async () => {
+    const { root, paths } = tempSparkPaths();
+    writeSparkDaemonConfig(paths, {
+      installationId: "install-test",
+      displayName: "Test daemon",
+    });
+    await upsertSparkDaemonServerProfile(paths, {
+      serverUrl: "https://cockpit.example.test/",
+      runtimeId: "rt_11111111111141111111111111111111",
+      runtimeToken: "spark_rt_device_token_0000000000000000000000000000",
+      runtimeTokenExpiresAt: "2099-07-20T00:00:00.000Z",
+      refreshToken: "spark_rt_device_refresh_00000000000000000000000000",
+      refreshTokenExpiresAt: "2099-07-21T00:00:00.000Z",
+      webSocketUrl: "wss://cockpit.example.test/runtime",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL | string, init?: RequestInit) => {
+        expect(new URL(String(url)).pathname).toBe(
+          "/api/v1/runtime/runtimes/rt_11111111111141111111111111111111/workspaces/rtwb_11111111111141111111111111111111",
+        );
+        expect(init?.method).toBe("DELETE");
+        expect(new Headers(init?.headers).get("authorization")).toMatch(/^Bearer /);
+        return jsonResponse(
+          {
+            runtimeId: "rt_11111111111141111111111111111111",
+            bindingId: "rtwb_11111111111141111111111111111111",
+            workspaceIds: ["ws_11111111111141111111111111111111"],
+            unboundAt: "2026-07-20T00:00:00.000Z",
+          },
+          200,
+        );
+      }),
+    );
+
+    try {
+      await expect(
+        unbindSparkDaemonWorkspaceFromCockpit(paths, {
+          serverUrl: "https://cockpit.example.test/",
+          bindingId: "rtwb_11111111111141111111111111111111",
+        }),
+      ).resolves.toMatchObject({
+        workspaceIds: ["ws_11111111111141111111111111111111"],
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("polls device authorization and persists the machine credential without exposing it to workspaces", async () => {

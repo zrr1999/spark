@@ -224,6 +224,9 @@
         </div>
         <span>{data.runnerBindings.length}</span>
       </div>
+      {#if form?.intent === "workspaceBinding" && form?.message}
+        <p class="form-message" role="status">{form.message}</p>
+      {/if}
       {#if data.runnerBindings.length === 0}
         <div class="empty-state">
           <Icon name="folder" size={20} />
@@ -250,6 +253,16 @@
               </div>
               <span class="status-pill {binding.status}">{statusLabel(binding.status)}</span>
               <time>{formatRelative(binding.updatedAt)}</time>
+              <form
+                method="POST"
+                action="?/unbindWorkspace"
+                onsubmit={(event) => {
+                  if (!confirm(t.bindings.unbindConfirm)) event.preventDefault();
+                }}
+              >
+                <input type="hidden" name="bindingId" value={binding.id} />
+                <Button variant="danger" size="compact" type="submit">{t.bindings.unbind}</Button>
+              </form>
             </div>
           {/each}
         </div>
@@ -548,7 +561,7 @@
   }
 
   .binding-row {
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
   }
 
   .token-row + .token-row,

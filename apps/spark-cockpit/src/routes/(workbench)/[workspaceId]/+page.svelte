@@ -5,7 +5,7 @@
   import PageHeader from "$lib/ui/PageHeader.svelte";
   import StatCard from "$lib/ui/StatCard.svelte";
   import { workspaceControlDisplay } from "$lib/workspace-control-display";
-  import { workspacePath } from "$lib/workspace-routes";
+  import { workspacePath, workspaceSessionsPath } from "$lib/workspace-routes";
 
   let { data } = $props();
 
@@ -13,6 +13,7 @@
   let common = $derived(data.messages.common);
   let workspace = $derived(data.workspaces[0]!);
   let workspaceUrl = $derived(workspacePath(workspace));
+  let workspaceSessionsUrl = $derived(workspaceSessionsPath(workspace));
   let controlDisplay = $derived(
     workspaceControlDisplay(data.workspaceControl, t.workspaceControl),
   );
@@ -73,7 +74,7 @@
   </section>
 
   <section class="action-grid" aria-label={t.actions.aria}>
-    <a class="action-card primary" href="/sessions">
+    <a class="action-card primary" href={workspaceSessionsUrl}>
       <span class="action-icon"><Icon name="spark" size={22} /></span>
       <span><strong>{t.actions.conversationTitle}</strong><small>{t.actions.conversationBody}</small></span>
       <Icon name="chevron" size={18} />

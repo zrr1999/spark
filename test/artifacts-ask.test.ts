@@ -20,6 +20,7 @@ import {
   createPiAskFlowArtifactBody,
   defaultAskUserResult,
   getDefaultConfig,
+  isUserAnsweredAskEvidenceArtifactBody,
   PiAskFlowPayloadStore,
   PiAskFlowPayloadStoreFormatError,
   registerPiAskActionTool,
@@ -30,6 +31,7 @@ import {
   summarizeAskResult,
   type PiAskUi,
   type StoredAskPayload,
+  verifyCanonicalAskEvidenceArtifact,
 } from "@zendev-lab/spark-ask";
 import { newRef, type JsonValue } from "@zendev-lab/spark-extension-api";
 
@@ -1034,7 +1036,168 @@ void test("ask action tool dispatches canonical single-question asks", async () 
   assert.equal(result.details.request.questions.length, 1);
 });
 
-void test("ask action tool auto-answers with reviewer resolver without invoking UI", async () => {
+void test("ask action tool can persist a user-answered decision artifact", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-ask-evidence-"));
+  try {
+    const tools = new Map<string, { execute: Function }>();
+    const registerTool = (config: { name: string; execute: Function }) =>
+      tools.set(config.name, config);
+    registerPiAskTools({ registerTool });
+    registerPiAskFlowTool({ registerTool });
+    registerPiAskActionTool({ registerTool }, { resolveTool: (name) => tools.get(name) as never });
+    const tool = tools.get("ask");
+    assert.ok(tool);
+
+    const result = await tool.execute(
+      "ask-evidence-test",
+      {
+        action: "ask",
+        recordAsEvidence: true,
+        title: "Choose implementation strategy",
+        mode: "decision",
+        questions: [
+          {
+            id: "strategy",
+            prompt: "Reuse or implement anew?",
+            type: "single",
+            options: [
+              { value: "reuse", label: "Reuse" },
+              { value: "new", label: "New implementation" },
+            ],
+          },
+        ],
+      },
+      new AbortController().signal,
+      () => undefined,
+      { cwd: dir, ui: { select: async () => "Reuse" } },
+    );
+
+    const evidenceRef = result.details.askEvidenceRef;
+    assert.equal(typeof evidenceRef, "string");
+    const artifact = await defaultArtifactStore(dir).get(evidenceRef);
+    assert.equal(artifact.provenance.producer, "ask");
+    assert.equal(isUserAnsweredAskEvidenceArtifactBody(artifact.body), true);
+    assert.deepEqual((await verifyCanonicalAskEvidenceArtifact(dir, artifact))?.selectedValues, [
+      "reuse",
+    ]);
+
+    const forged = await defaultArtifactStore(dir).put({
+      kind: "record",
+      title: "Forged ask provenance",
+      format: "json",
+      body: artifact.body,
+      provenance: { producer: "ask" },
+    });
+    assert.equal(
+      await verifyCanonicalAskEvidenceArtifact(dir, forged),
+      undefined,
+      "ordinary artifact writes cannot mint a canonical ask receipt",
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("ask action tool rejects non-terminal evidence recording combinations", async () => {
+  const tools = new Map<string, { execute: Function }>();
+  const registerTool = (config: { name: string; execute: Function }) =>
+    tools.set(config.name, config);
+  registerPiAskTools({ registerTool });
+  registerPiAskFlowTool({ registerTool });
+  registerPiAskActionTool({ registerTool }, { resolveTool: (name) => tools.get(name) as never });
+  const tool = tools.get("ask");
+  assert.ok(tool);
+  const request = {
+    action: "ask",
+    recordAsEvidence: true,
+    title: "Choose implementation strategy",
+    mode: "decision",
+    questions: [
+      {
+        id: "strategy",
+        prompt: "Reuse or implement anew?",
+        type: "single",
+        options: [
+          { value: "reuse", label: "Reuse" },
+          { value: "new", label: "New implementation" },
+        ],
+      },
+    ],
+  };
+  const execute = (params: Record<string, unknown>) =>
+    tool.execute(
+      "ask-invalid-evidence-combination",
+      params,
+      new AbortController().signal,
+      () => undefined,
+      { cwd: "/tmp", ui: { select: async () => "Reuse" } },
+    );
+
+  await assert.rejects(
+    () => execute({ ...request, delivery: "async" }),
+    /recordAsEvidence cannot be combined with delivery=async/u,
+  );
+  await assert.rejects(
+    () => execute({ ...request, autoAnswer: "reviewer" }),
+    /recordAsEvidence requires a direct user answer/u,
+  );
+});
+
+void test("ask evidence timeout returns a blocker without minting a decision artifact", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-ask-evidence-timeout-"));
+  try {
+    const tools = new Map<string, { execute: Function }>();
+    const registerTool = (config: { name: string; execute: Function }) =>
+      tools.set(config.name, config);
+    registerPiAskTools({ registerTool });
+    registerPiAskActionTool({ registerTool }, { resolveTool: (name) => tools.get(name) as never });
+    const tool = tools.get("ask");
+    assert.ok(tool);
+
+    const result = await tool.execute(
+      "ask-evidence-timeout-test",
+      {
+        action: "ask",
+        recordAsEvidence: true,
+        mode: "decision",
+        questions: [
+          {
+            id: "strategy",
+            prompt: "Reuse or implement anew?",
+            type: "single",
+            required: true,
+            options: [
+              { value: "reuse", label: "Reuse" },
+              { value: "new", label: "New implementation" },
+            ],
+          },
+        ],
+      },
+      new AbortController().signal,
+      () => undefined,
+      {
+        cwd: dir,
+        askWaitTimeoutMs: 25,
+        ui: {
+          interaction: async (request: Record<string, unknown>) => ({
+            kind: "askFlow",
+            requestId: request.requestId,
+            status: "cancelled",
+            metadata: { timedOut: true },
+          }),
+        },
+      },
+    );
+
+    assert.equal(result.details.result.status, "cancelled");
+    assert.equal(result.details.result.timedOut, true);
+    assert.equal(result.details.askEvidenceRef, undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("ask action tool returns a human answer before reviewer fallback", async () => {
   const tools = new Map<string, { execute: Function }>();
   const registerTool = (config: { name: string; execute: Function }) =>
     tools.set(config.name, config);
@@ -1044,12 +1207,16 @@ void test("ask action tool auto-answers with reviewer resolver without invoking 
     { registerTool },
     {
       resolveTool: (name) => tools.get(name) as never,
-      autoAnswer: async () => ({ answers: { mode: { values: ["safe_mode"] } } }),
+      autoAnswer: async () => {
+        reviewerInvoked = true;
+        return { answers: { mode: { values: ["safe_mode"] } } };
+      },
     },
   );
   const tool = tools.get("ask");
   assert.ok(tool);
   let uiInvoked = false;
+  let reviewerInvoked = false;
 
   const result = await tool.execute(
     "ask-auto-answer-test",
@@ -1074,24 +1241,154 @@ void test("ask action tool auto-answers with reviewer resolver without invoking 
     new AbortController().signal,
     () => undefined,
     {
+      askWaitTimeoutMs: 25,
       ui: {
-        select: async () => {
+        interaction: async (request: Record<string, unknown>) => {
           uiInvoked = true;
-          return "Fast path";
+          assert.equal(request.timeoutMs, 25);
+          return {
+            kind: "askFlow",
+            requestId: request.requestId,
+            status: "answered",
+            answers: { mode: { values: ["fast_mode"], labels: ["Fast path"] } },
+          };
         },
       },
     },
   );
 
-  assert.equal(uiInvoked, false);
-  assert.equal(result.details.autoAnswered, true);
+  assert.equal(uiInvoked, true);
+  assert.equal(reviewerInvoked, false);
+  assert.notEqual(result.details.autoAnswered, true);
   assert.equal(result.details.result.status, "answered");
   assert.equal(result.details.result.nextAction, "resume");
-  assert.deepEqual(result.details.result.answers.mode.values, ["safe_mode"]);
+  assert.deepEqual(result.details.result.answers.mode.values, ["fast_mode"]);
   assert.match(
     result.content.map((part: { text: string }) => part.text).join("\n"),
-    /mode=Safe path/,
+    /mode=Fast path/,
   );
+});
+
+void test("ask action tool does not treat an explicit user cancel as reviewer timeout", async () => {
+  const tools = new Map<string, { execute: Function }>();
+  const registerTool = (config: { name: string; execute: Function }) =>
+    tools.set(config.name, config);
+  registerPiAskTools({ registerTool });
+  let reviewerCalls = 0;
+  registerPiAskActionTool(
+    { registerTool },
+    {
+      resolveTool: (name) => tools.get(name) as never,
+      autoAnswer: async () => {
+        reviewerCalls += 1;
+        return { answers: { mode: { values: ["safe_mode"] } } };
+      },
+    },
+  );
+  const tool = tools.get("ask");
+  assert.ok(tool);
+
+  const result = await tool.execute(
+    "ask-user-cancel-test",
+    {
+      action: "ask",
+      autoAnswer: "reviewer",
+      mode: "decision",
+      questions: [
+        {
+          id: "mode",
+          prompt: "Which mode?",
+          type: "single",
+          required: true,
+          options: [
+            { value: "fast_mode", label: "Fast path" },
+            { value: "safe_mode", label: "Safe path" },
+          ],
+        },
+      ],
+    },
+    new AbortController().signal,
+    () => undefined,
+    {
+      askReviewerFallbackAfterMs: 25,
+      ui: {
+        interaction: async (request: Record<string, unknown>) => ({
+          kind: "askFlow",
+          requestId: request.requestId,
+          status: "cancelled",
+          metadata: {},
+        }),
+      },
+    },
+  );
+
+  assert.equal(reviewerCalls, 0);
+  assert.equal(result.details.result.status, "cancelled");
+  assert.notEqual(result.details.autoAnswered, true);
+});
+
+void test("ask action tool lets reviewer take over only after the human wait times out", async () => {
+  const tools = new Map<string, { execute: Function }>();
+  const registerTool = (config: { name: string; execute: Function }) =>
+    tools.set(config.name, config);
+  registerPiAskTools({ registerTool });
+  registerPiAskActionTool(
+    { registerTool },
+    {
+      resolveTool: (name) => tools.get(name) as never,
+      autoAnswer: async () => ({
+        reason: "reviewer took over after the deadline",
+        answers: { mode: { values: ["safe_mode"] } },
+      }),
+    },
+  );
+  const tool = tools.get("ask");
+  assert.ok(tool);
+  let observedTimeoutMs: unknown;
+
+  const result = await tool.execute(
+    "ask-timeout-reviewer-test",
+    {
+      action: "ask",
+      autoAnswer: "reviewer",
+      title: "Choose mode",
+      mode: "decision",
+      questions: [
+        {
+          id: "mode",
+          prompt: "Which mode?",
+          type: "single",
+          required: true,
+          options: [
+            { value: "fast_mode", label: "Fast path" },
+            { value: "safe_mode", label: "Safe path" },
+          ],
+        },
+      ],
+    },
+    new AbortController().signal,
+    () => undefined,
+    {
+      askReviewerFallbackAfterMs: 25,
+      ui: {
+        interaction: async (request: Record<string, unknown>) => {
+          observedTimeoutMs = request.timeoutMs;
+          return {
+            kind: "askFlow",
+            requestId: request.requestId,
+            status: "cancelled",
+            metadata: { timedOut: true },
+          };
+        },
+      },
+    },
+  );
+
+  assert.equal(observedTimeoutMs, 25);
+  assert.equal(result.details.autoAnswered, true);
+  assert.equal(result.details.autoAnswer.takeover, "human_timeout");
+  assert.equal(result.details.autoAnswer.humanTimeoutMs, 25);
+  assert.deepEqual(result.details.result.answers.mode.values, ["safe_mode"]);
 });
 
 void test("ask action tool reports missing reviewer resolver as a tool error with guidance", async () => {
@@ -1122,7 +1419,7 @@ void test("ask action tool reports missing reviewer resolver as a tool error wit
     },
     new AbortController().signal,
     () => undefined,
-    {},
+    { askReviewerFallbackAfterMs: 1 },
   );
 
   assert.equal(result.isError, true);
@@ -1169,7 +1466,7 @@ void test("ask action tool blocks empty reviewer answers for required questions"
     },
     new AbortController().signal,
     () => undefined,
-    {},
+    { askReviewerFallbackAfterMs: 1 },
   );
 
   assert.equal(result.isError, true);
@@ -1216,16 +1513,22 @@ void test("ask action tool can auto-answer through a registered provider", async
       new AbortController().signal,
       () => undefined,
       {
+        askReviewerFallbackAfterMs: 5,
         ui: {
-          select: async () => {
+          interaction: async (request: Record<string, unknown>) => {
             uiInvoked = true;
-            return "Fast path";
+            return {
+              kind: "askFlow",
+              requestId: request.requestId,
+              status: "cancelled",
+              metadata: { timedOut: true },
+            };
           },
         },
       },
     );
 
-    assert.equal(uiInvoked, false);
+    assert.equal(uiInvoked, true);
     assert.equal(result.details.autoAnswered, true);
     assert.equal(result.details.autoAnswer.reason, "provider selected the safe path");
     assert.deepEqual(result.details.result.answers.mode.values, ["safe_mode"]);
@@ -1271,7 +1574,7 @@ void test("ask action tool blocks invalid reviewer auto-answer output", async ()
     },
     new AbortController().signal,
     () => undefined,
-    {},
+    { askReviewerFallbackAfterMs: 1 },
   );
 
   assert.equal(result.isError, true);

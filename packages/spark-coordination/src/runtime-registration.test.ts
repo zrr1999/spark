@@ -27,6 +27,7 @@ import {
   RuntimeEnrollmentError,
   RuntimeTokenRefreshError,
   RuntimeWorkspaceOwnerConflictError,
+  unbindRuntimeWorkspace,
 } from "./runtime-registration";
 
 const registrationRequest = {
@@ -329,6 +330,106 @@ describe("runtime registration", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM runtime_workspace_bindings").get()).toEqual({
       count: 1,
     });
+    db.close();
+  });
+
+  it("moves one daemon-owned directory with an explicit target workspace token", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    const firstGrant = createRuntimeEnrollmentToken(db, {
+      workspaceName: "First workspace",
+      workspaceSlug: "first-workspace",
+      ttlMs: durableEnrollmentTtlMs,
+    });
+    const registered = registerRuntime(
+      db,
+      {
+        ...registrationRequest,
+        workspaceRegistration: {
+          localWorkspaceKey: "shared-local",
+          displayName: "Shared local directory",
+        },
+      },
+      firstGrant.refreshToken,
+    );
+    const first = registered.workspaceBinding;
+    if (!first) throw new Error("Expected the initial workspace binding.");
+    const targetGrant = createRuntimeEnrollmentToken(db, {
+      workspaceName: "Second workspace",
+      workspaceSlug: "second-workspace",
+      ttlMs: durableEnrollmentTtlMs,
+    });
+
+    const rebound = registerRuntimeWorkspace(
+      db,
+      registered.runtimeId,
+      {
+        registrationToken: targetGrant.refreshToken,
+        workspaceRegistration: {
+          localWorkspaceKey: "shared-local",
+          displayName: "Shared local directory",
+        },
+      },
+      registered.runtimeToken,
+    );
+
+    expect(rebound.workspaceBinding.bindingId).toBe(first.bindingId);
+    expect(rebound.workspaceBinding.workspaceId).not.toBe(first.workspaceId);
+    expect(
+      db
+        .prepare(
+          `SELECT workspace_id AS workspaceId, ended_at AS endedAt
+           FROM workspace_owner_bindings
+           WHERE runtime_workspace_binding_id = ?
+           ORDER BY started_at`,
+        )
+        .all(first.bindingId),
+    ).toEqual([
+      { workspaceId: first.workspaceId, endedAt: expect.any(String) },
+      { workspaceId: rebound.workspaceBinding.workspaceId, endedAt: null },
+    ]);
+    expect(
+      db.prepare("SELECT kind FROM events WHERE kind = 'workspace.owner_rebound'").get(),
+    ).toEqual({ kind: "workspace.owner_rebound" });
+    db.close();
+  });
+
+  it("lets an authenticated daemon unbind its own directory before switching Cockpits", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    const grant = createRuntimeEnrollmentToken(db, {
+      workspaceName: "Source workspace",
+      workspaceSlug: "source-workspace",
+      ttlMs: durableEnrollmentTtlMs,
+    });
+    const registered = registerRuntime(
+      db,
+      {
+        ...registrationRequest,
+        workspaceRegistration: {
+          localWorkspaceKey: "source-local",
+          displayName: "Source local",
+        },
+      },
+      grant.refreshToken,
+    );
+    const binding = registered.workspaceBinding;
+    if (!binding) throw new Error("Expected a workspace binding.");
+
+    const result = unbindRuntimeWorkspace(db, {
+      runtimeId: registered.runtimeId,
+      bindingId: binding.bindingId,
+      runtimeToken: registered.runtimeToken,
+      unboundAt: "2026-07-20T00:00:00.000Z",
+    });
+
+    expect(result).toEqual({
+      runtimeId: registered.runtimeId,
+      bindingId: binding.bindingId,
+      workspaceIds: [binding.workspaceId],
+      unboundAt: "2026-07-20T00:00:00.000Z",
+    });
+    expect(ownerBindingState(db, binding.workspaceId)?.endedAt).toBe("2026-07-20T00:00:00.000Z");
     db.close();
   });
 

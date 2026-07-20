@@ -3,7 +3,7 @@
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
   import { Button, Field, Panel, Textarea } from "$lib/ui";
-  import { workspacePath } from "$lib/workspace-routes";
+  import { workspacePath, workspaceSessionPath } from "$lib/workspace-routes";
 
   let { data, form } = $props();
   let t = $derived(data.messages.inboxDetail);
@@ -36,7 +36,7 @@
       <span class="back-icon"><Icon name="chevron" size={15} /></span>{t.navigation.back}
     </a>
     {#if data.item.sessionId}
-      <a href={`/sessions/${encodeURIComponent(data.item.sessionId)}`}>
+      <a href={workspaceSessionPath({ slug: data.item.workspaceSlug }, data.item.sessionId)}>
         <Icon name="spark" size={15} />{t.navigation.conversation}
       </a>
     {/if}

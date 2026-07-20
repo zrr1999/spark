@@ -15,6 +15,7 @@ import {
   sparkProtocolJsonObjectSchema,
   runtimeReconcileRequestEnvelopeSchema,
   serverCommandEnvelopeSchema,
+  serverHeartbeatAckEnvelopeSchema,
   serverHelloAckEnvelopeSchema,
   type SparkDaemonEvent,
   type SparkCommand,
@@ -111,6 +112,7 @@ import {
   type SparkInvocationPendingDelivery,
 } from "./store/invocations.ts";
 import {
+  applyCockpitWorkspaceBindingAssignments,
   getWorkspaceById,
   isBorrowedWorkspace,
   isUserDetachedWorkspace,
@@ -597,7 +599,6 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
         );
       });
     }
-
     // No JavaScript callback can run between opening the synchronous gates and
     // this CAS. If explicit stop wins, onServing aborts the runtime and we close
     // every gate again before releasing the loop promises.
@@ -1043,7 +1044,11 @@ async function runSparkDaemonServerConnection(
     const deliveryDestination = `cockpit:${runtimeId}`;
     const currentWorkspaceBindingIds = () =>
       serverUrl
-        ? listWorkspacesForServer(options.db, serverUrl).map((workspace) => workspace.id)
+        ? listWorkspacesForServer(options.db, serverUrl).flatMap((workspace) =>
+            workspace.serverBindingId && workspace.serverBindingId !== workspace.id
+              ? [workspace.id, workspace.serverBindingId]
+              : [workspace.id],
+          )
         : [];
     const activeHandlers = new Set<Promise<void>>();
     const scheduleTokenRefresh = (delayMs = nextSparkDaemonTokenRefreshDelayMs(config)) => {
@@ -1390,9 +1395,28 @@ export async function handleServerMessage(
 
   const helloAck = serverHelloAckEnvelopeSchema.safeParse(value);
   if (helloAck.success) {
+    if (context.serverUrl) {
+      applyCockpitWorkspaceBindingAssignments(
+        context.db,
+        context.serverUrl,
+        helloAck.data.payload.workspaceBindingAssignments,
+      );
+    }
     context.setRuntimeSessionId(helloAck.data.payload.runtimeSessionId);
     context.ensureHeartbeat(helloAck.data.payload.heartbeatIntervalMs);
     context.onRuntimeReady?.();
+    return;
+  }
+
+  const heartbeatAck = serverHeartbeatAckEnvelopeSchema.safeParse(value);
+  if (heartbeatAck.success) {
+    if (context.serverUrl) {
+      applyCockpitWorkspaceBindingAssignments(
+        context.db,
+        context.serverUrl,
+        heartbeatAck.data.payload.workspaceBindingAssignments,
+      );
+    }
     return;
   }
 
@@ -1581,10 +1605,12 @@ function daemonWorkspaceRouteMatches(
       .prepare(
         `SELECT 1
          FROM daemon_workspaces
-         WHERE id = ? AND server_workspace_id = ? AND server_binding_id = ?
+         WHERE (id = ? OR server_binding_id = ?)
+           AND server_workspace_id = ?
+           AND server_binding_id = ?
          LIMIT 1`,
       )
-      .get(localWorkspaceId, serverWorkspaceId, serverBindingId),
+      .get(localWorkspaceId, localWorkspaceId, serverWorkspaceId, serverBindingId),
   );
 }
 
@@ -1717,7 +1743,11 @@ async function executeClaimedCommand(
     (context.serverUrl
       ? listWorkspacesForServer(context.db, context.serverUrl)
       : listWorkspaces(context.db)
-    ).map((workspace) => workspace.id),
+    ).flatMap((workspace) =>
+      workspace.serverBindingId && workspace.serverBindingId !== workspace.id
+        ? [workspace.id, workspace.serverBindingId]
+        : [workspace.id],
+    ),
   );
   const commandWorkspace = command.workspaceBindingId
     ? getWorkspaceById(context.db, command.workspaceBindingId)
@@ -1823,7 +1853,7 @@ async function executeClaimedCommand(
             latestArtifactIds: [],
             resources: [],
           },
-          { ...route, workspaceBindingId: workspace.id },
+          { ...route, workspaceBindingId: workspace.serverBindingId ?? workspace.id },
         ),
       );
     }
@@ -2624,7 +2654,7 @@ function workspaceSummary(
   workspace: ReturnType<typeof reconcileWorkspaces>[number],
 ): RuntimeWorkspaceBindingSummary {
   return {
-    bindingId: workspace.id,
+    bindingId: workspace.serverBindingId ?? workspace.id,
     localWorkspaceKey: workspace.localWorkspaceKey,
     localPath: workspace.localPath,
     displayName: workspace.displayName,

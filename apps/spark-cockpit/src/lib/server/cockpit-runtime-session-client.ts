@@ -53,7 +53,7 @@ export type CockpitRuntimeSessionSnapshotRequest = Omit<SparkSessionSnapshotRequ
 
 export interface CockpitRuntimeSessionListResult {
   sessions: SparkSessionRegistryRecord[];
-  /** True only when this list request completed against a live owner route. */
+  /** True when a live owner route can accept control commands. */
   controlAvailable: boolean;
 }
 
@@ -155,13 +155,34 @@ async function listSessionsWithControlState(
   );
   if (results.every((result) => result.status === "rejected")) {
     const stale = projectedSessions(db, parsed, runtimeId);
-    if (stale.length > 0) return { sessions: stale, controlAvailable: false };
+    // Only an explicit response timeout preserves the connected owner's
+    // control state. Protocol, authorization, and routing failures must fail
+    // closed instead of turning a stale projection into a writable surface.
+    if (shouldRetainControlForStaleProjection(results, stale.length > 0)) {
+      return { sessions: stale, controlAvailable: true };
+    }
     throw unavailableFrom(results[0]!.reason);
   }
   return {
     sessions: projectedSessions(db, parsed, runtimeId),
     controlAvailable: results.some((result) => result.status === "fulfilled"),
   };
+}
+
+export function shouldRetainControlForStaleProjection(
+  results: PromiseSettledResult<unknown>[],
+  hasStaleProjection: boolean,
+): boolean {
+  return (
+    hasStaleProjection &&
+    results.length > 0 &&
+    results.every(
+      (result) =>
+        result.status === "rejected" &&
+        result.reason instanceof RuntimeControlCommandError &&
+        result.reason.reasonCode === "COMMAND_RESULT_TIMEOUT",
+    )
+  );
 }
 
 async function listRouteSessions(

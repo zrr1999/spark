@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { backup, DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { loadMigrations, migrate } from "./migrate.js";
 
 export const cockpitInstanceIdSettingKey = "spark_cockpit:instance_id";
@@ -206,7 +206,10 @@ export async function createCockpitSnapshot(input: {
 
   try {
     const databasePath = join(temporary, snapshotDatabaseFile);
-    await backup(input.sourceDb, databasePath);
+    // VACUUM INTO creates a transactionally consistent copy of a live database.
+    // Keep this operation on DatabaseSync instead of node:sqlite backup(), whose
+    // thread-pool scheduling can add multi-second stalls on loaded Linux hosts.
+    input.sourceDb.prepare("VACUUM INTO ?").run(databasePath);
     chmodSync(databasePath, 0o600);
     const summary = inspectDatabaseFile(databasePath);
     const manifest: CockpitSnapshotManifest = {

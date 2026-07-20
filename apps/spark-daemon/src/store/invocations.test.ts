@@ -1,4 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseSparkDaemonEvent } from "@zendev-lab/spark-protocol";
 import { describe, expect, it } from "vitest";
 import { migrateSparkDaemonDatabase } from "./schema.ts";
@@ -229,6 +232,8 @@ describe("SparkInvocationStore", () => {
   });
 
   it("does not guess a route for legacy invocations when a workspace id is globally ambiguous", () => {
+    const firstPath = mkdtempSync(join(tmpdir(), "spark-invocation-route-first-"));
+    const secondPath = mkdtempSync(join(tmpdir(), "spark-invocation-route-second-"));
     const { db, store } = createStore();
     try {
       const first = registerWorkspace(db, {
@@ -237,7 +242,7 @@ describe("SparkInvocationStore", () => {
         serverWorkspaceId: "ws_shared_legacy_id",
         localWorkspaceKey: "ambiguous-first",
         displayName: "Ambiguous first",
-        localPath: process.cwd(),
+        localPath: firstPath,
       });
       const second = registerWorkspace(db, {
         serverUrl: "https://second-cockpit.example",
@@ -245,8 +250,9 @@ describe("SparkInvocationStore", () => {
         serverWorkspaceId: "ws_shared_legacy_id",
         localWorkspaceKey: "ambiguous-second",
         displayName: "Ambiguous second",
-        localPath: process.cwd(),
+        localPath: secondPath,
       });
+      expect(first.id).not.toBe(second.id);
       const invocation = store.submit({
         sessionId: "session-ambiguous-legacy",
         prompt: "do not cross server boundaries",
@@ -266,6 +272,8 @@ describe("SparkInvocationStore", () => {
       expect(store.pendingDeliveries("cockpit:both", 10, [first.id, second.id])).toEqual([]);
     } finally {
       db.close();
+      rmSync(firstPath, { recursive: true, force: true });
+      rmSync(secondPath, { recursive: true, force: true });
     }
   });
 

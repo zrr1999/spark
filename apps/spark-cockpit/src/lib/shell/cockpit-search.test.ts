@@ -47,6 +47,7 @@ describe("cockpit search", () => {
         id: "sess_workspace",
         description: "Spore",
         status: "running",
+        href: "/spore/sessions/sess_workspace",
       }),
     ]);
   });

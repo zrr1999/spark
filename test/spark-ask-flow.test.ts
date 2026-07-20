@@ -1062,6 +1062,41 @@ void test("interaction custom answer preserves a blocked gate nextAction", async
   assert.equal(isPiAskFlowGateBlocked(result, request), true);
 });
 
+void test("ask flow preserves the host timeout marker on a cancelled human wait", async () => {
+  const request = createPiAskFlowRequest({
+    mode: "decision",
+    timeoutMs: 25,
+    questions: [
+      {
+        id: "route",
+        prompt: "Which route?",
+        type: "single",
+        required: true,
+        options: [
+          { value: "reuse", label: "Reuse" },
+          { value: "new", label: "New implementation" },
+        ],
+      },
+    ],
+  });
+  let observedTimeoutMs: unknown;
+  const result = await runPiAskFlow(request, {
+    interaction: async (interactionRequest) => {
+      observedTimeoutMs = interactionRequest.timeoutMs;
+      return {
+        kind: "askFlow",
+        requestId: interactionRequest.requestId,
+        status: "cancelled",
+        metadata: { timedOut: true },
+      };
+    },
+  });
+
+  assert.equal(observedTimeoutMs, 25);
+  assert.equal(result.status, "cancelled");
+  assert.equal(result.timedOut, true);
+});
+
 void test("multi-select decision select path blocks empty selections", async () => {
   const request = createPiAskFlowRequest({
     flow: "custom",

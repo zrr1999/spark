@@ -4,6 +4,7 @@
   import Icon from "$lib/Icon.svelte";
   import type { AppMessages } from "$lib/i18n";
   import { cockpitOpenSearchEvent } from "$lib/slash-actions";
+  import { workspaceSessionsPath } from "$lib/workspace-routes";
   import {
     buildCockpitSearchResults,
     type CockpitSearchResult,
@@ -46,7 +47,7 @@
         type: "page",
         title: sessionMessages.newSession,
         description: activeWorkspace.name,
-        href: "/sessions",
+        href: workspaceSessionsPath(activeWorkspace),
       },
       { id: "overview", type: "page", title: layout.nav.overview, description: activeWorkspace.name, href: base },
       { id: "inbox", type: "page", title: layout.nav.inbox, description: activeWorkspace.name, href: `${base}/inbox` },

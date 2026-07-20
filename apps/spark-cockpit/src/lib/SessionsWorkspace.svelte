@@ -51,6 +51,11 @@
     type StartConversationSubmissionContext,
   } from "$lib/session-draft";
   import {
+    initialSessionEventConnectionState,
+    openingSessionEventConnectionState,
+    type SessionEventConnectionState,
+  } from "$lib/session-event-connection";
+  import {
     cockpitComposerFeedbackAfterInput,
     cockpitOpenSearchEvent,
     cockpitSessionSelectionShortcutForInput,
@@ -71,6 +76,7 @@
     registerQueuedSessionTurn,
     requestSessionActivityRefresh,
     sessionEventCursorStorageKey,
+    shouldAdoptSessionHistory,
     sessionViewRevisionKey,
     type SessionLiveEventState,
   } from "$lib/session-live-events";
@@ -84,6 +90,7 @@
     latestSessionRetryCandidate,
     SESSION_TIMELINE_PAGE_SIZE,
     sessionTimelineWindow,
+    type SessionTimelineItem,
   } from "$lib/session-timeline";
   import {
     hydrateSessionConversationWindow,
@@ -101,7 +108,7 @@
     workbenchSessionScope,
     workspaceIdForWorkbenchSession,
   } from "$lib/workbench-session-scope";
-  import { workspacePath } from "$lib/workspace-routes";
+  import { workspacePath, workspaceSessionsPath } from "$lib/workspace-routes";
   import {
     createId,
     sparkSlashActionBarForInput,
@@ -167,6 +174,7 @@
     role: string | null;
     status: string | null;
     createdAt: string;
+    runKind?: string;
     message?: SparkMessageView;
   };
 
@@ -262,8 +270,8 @@
   let liveEventState = $state<SessionLiveEventState | null>(null);
   let liveSessionId = $state("");
   let lastServerViewKey = $state("");
-  let liveConnection = $state<"connecting" | "live" | "reconnecting" | "offline">(
-    "connecting",
+  let liveConnection = $state<SessionEventConnectionState>(
+    untrack(() => initialSessionEventConnectionState(selectedSessionId)),
   );
   let selectedWorkspaceId = $derived(
     selected ? workspaceIdForWorkbenchSession(selected) : null,
@@ -293,6 +301,7 @@
   let activeWorkspace = $derived(
     workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null,
   );
+  let sessionsHref = $derived(activeWorkspace ? workspaceSessionsPath(activeWorkspace) : "/sessions");
   let availableModels = $derived(
     modelControl.snapshot.providers.flatMap((provider) =>
       provider.models.filter((entry) => entry.available),
@@ -322,7 +331,10 @@
           .find((entry) => modelValue(entry.model) === effectiveModelValue)
       : undefined,
   );
-  let modelReady = $derived(modelControl.available && effectiveModelAvailable);
+  // A transient catalog/control read must not block an existing conversation.
+  // The session snapshot already carries its effective model; the daemon owns
+  // final provider/auth admission when `turn.submit` reaches the runtime.
+  let modelReady = $derived(Boolean(effectiveModelValue));
   let startModel = $state(
     untrack(() => (formIntent === "startConversation" ? (formValues?.model ?? "") : "")),
   );
@@ -530,6 +542,20 @@
   let renderedTimeline = $derived(
     sessionTimelineWindow(timelineItems, effectiveTimelineRenderLimit),
   );
+  let timelineNavigationItems = $derived(
+    renderedTimeline.items
+      .filter(isNavigationTurn)
+      .map((item) => ({
+        id: item.id,
+        actor: item.actor,
+        label:
+          item.actor === "session"
+            ? `${copy.agent} · ${item.senderLabel ?? "?"}`
+            : (item.senderLabel ?? copy.you),
+        summary: navigationSummary(item),
+        meta: relative(item.timestamp),
+      })),
+  );
   let latestRetryCandidate = $derived(
     conversationBusy || queuedTurns.length > 0
       ? null
@@ -590,6 +616,8 @@
     todoList: copy.todoList,
     sessionTodoHeading: copy.sessionTodoHeading,
     openSessionTodo: copy.openSessionTodo,
+    sessionTodoPending: copy.sessionTodoPending,
+    sessionTodoInProgress: copy.sessionTodoInProgress,
     mailFrom: copy.mailFrom,
     mailRequest: copy.mailRequest,
     mailQuestion: copy.mailQuestion,
@@ -662,15 +690,15 @@
       return;
     }
 
+    const currentHistory = untrack(() => liveSessionHistory);
+    const preserveCurrentHistory = Boolean(
+      currentHistory &&
+        sessionHistory &&
+        currentHistory.loadedMessages > sessionHistory.loadedMessages,
+    );
     if (nextServerViewKey !== lastServerViewKey) {
       lastServerViewKey = nextServerViewKey;
       const state = untrack(() => liveEventState);
-      const currentHistory = untrack(() => liveSessionHistory);
-      const preserveCurrentHistory = Boolean(
-        currentHistory &&
-          sessionHistory &&
-          currentHistory.loadedMessages > sessionHistory.loadedMessages,
-      );
       if (
         state &&
         reconcileSessionLiveEventState(state, {
@@ -685,12 +713,9 @@
       ) {
         liveSessionView = state.view;
       }
-      if (
-        sessionHistory &&
-        (!currentHistory || currentHistory.loadedMessages <= sessionHistory.loadedMessages)
-      ) {
-        liveSessionHistory = sessionHistory;
-      }
+    }
+    if (shouldAdoptSessionHistory(currentHistory, sessionHistory)) {
+      liveSessionHistory = sessionHistory;
     }
 
     for (const command of activityCommands) {
@@ -927,7 +952,7 @@
       }
       const state = untrack(() => liveEventState);
       if (!state || state.sessionId !== streamSessionId) return;
-      liveConnection = "connecting";
+      liveConnection = openingSessionEventConnectionState(untrack(() => liveConnection));
       const url = new URL("/api/v1/events", window.location.origin);
       if (state.cursor) url.searchParams.set("cursor", state.cursor);
       eventSource = new EventSource(url);
@@ -1223,6 +1248,19 @@
       : null;
   }
 
+  function navigationSummary(item: SessionTimelineItem) {
+    const summary = (visibleConversationPartText(item.parts) || item.title || item.body)
+      .trim()
+      .replace(/\s+/gu, " ");
+    return summary.length <= 160 ? summary : `${summary.slice(0, 159)}…`;
+  }
+
+  function isNavigationTurn(
+    item: SessionTimelineItem,
+  ): item is SessionTimelineItem & { actor: "user" | "session" } {
+    return item.actor !== "spark";
+  }
+
   function connectionLabel() {
     if (liveConnection === "live") return copy.live;
     if (liveConnection === "connecting") return copy.connecting;
@@ -1471,13 +1509,13 @@
 
     if (action.intent === "session.create") {
       clearSlashInput(surface);
-      await goto("/sessions?new=workspace");
+      await goto(`${sessionsHref}?new=workspace`);
       return;
     }
 
     if (action.intent === "session.select") {
       clearSlashInput(surface);
-      await goto("/sessions");
+      await goto(sessionsHref);
       return;
     }
 
@@ -1833,7 +1871,7 @@
     ) {
       event.preventDefault();
       clearSlashInput(surface);
-      void goto("/sessions");
+      void goto(sessionsHref);
       return;
     }
     const suggestions = surface === "start" ? startSlashSuggestions : sessionSlashSuggestions;
@@ -2129,16 +2167,18 @@
         {@render sessionDetails(true)}
       </details>
 
-      <ConversationViewport
-        label={copy.timelineTitle}
-        followKey={timelineFollowKey}
-        announcement={latestAnnouncement}
-        jumpToLatestLabel={copy.jumpToLatest}
-        hasEarlier={hasEarlierTimeline}
-        earlierLabel={copy.showEarlier}
-        earlierErrorLabel={copy.unavailable}
-        onLoadEarlier={showEarlierTimeline}
-      >
+      {#key selected.sessionId}
+        <ConversationViewport
+          label={copy.timelineTitle}
+          followKey={timelineFollowKey}
+          announcement={latestAnnouncement}
+          jumpToLatestLabel={copy.jumpToLatest}
+          hasEarlier={hasEarlierTimeline}
+          earlierLabel={copy.showEarlier}
+          earlierErrorLabel={copy.unavailable}
+          onLoadEarlier={showEarlierTimeline}
+          navigationItems={timelineNavigationItems}
+        >
         {#if timelineItems.length === 0}
           <div class="conversation-empty">
             <span class="spark-mark"><Icon name="spark" size={20} /></span>
@@ -2172,7 +2212,8 @@
             />
           {/each}
         {/if}
-      </ConversationViewport>
+        </ConversationViewport>
+      {/key}
 
       <form
         id="session-model-form"

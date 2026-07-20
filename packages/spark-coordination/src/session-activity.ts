@@ -35,6 +35,8 @@ export interface SessionActivityReport {
   role: string | null;
   status: string | null;
   createdAt: string;
+  /** Structured run category; top-level session runs stay out of the chat transcript. */
+  runKind?: string;
   /** Runtime turn correlation used to reconcile live and durable projections. */
   invocationId?: string;
   /** Canonical structured message when the report originated from a view event. */
@@ -616,6 +618,7 @@ function reportFromDaemonPayload(
     if (viewType === "run.update") {
       const run = recordValue(view, "run");
       const runId = stringValue(run, "id");
+      const runKind = stringValue(run, "kind");
       const title = stringValue(run, "title") || runId || "Run update";
       const status = stringValue(run, "status");
       const summary = stringValue(run, "summary");
@@ -627,6 +630,7 @@ function reportFromDaemonPayload(
         role: null,
         status,
         createdAt: row.createdAt,
+        ...(runKind ? { runKind } : {}),
       };
     }
     if (viewType === "task.update") {

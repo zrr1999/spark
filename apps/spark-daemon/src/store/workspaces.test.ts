@@ -6,8 +6,10 @@ import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import { openSparkDaemonDatabase } from "./schema.js";
 import {
   addWorkspace,
+  applyCockpitWorkspaceBindingAssignments,
   attachWorkspace,
   attachWorkspaceClient,
+  ensureLocalWorkspace,
   ensureWorkspaceExecutorClient,
   heartbeatWorkspaceClient,
   getWorkspaceById,
@@ -52,6 +54,149 @@ function withSparkDaemonWorkspaceStore<T>(
 }
 
 describe("Spark daemon workspace store", () => {
+  it("applies bound and unbound Cockpit owner assignments without removing the local workspace", () => {
+    withSparkDaemonWorkspaceStore(({ db, root }) => {
+      const serverUrl = "https://cockpit.example/";
+      const bindingId = "rtwb_11111111111141111111111111111111";
+      const workspace = registerWorkspace(db, {
+        serverUrl,
+        localPath: root,
+        serverBindingId: bindingId,
+        serverWorkspaceId: "ws_11111111111141111111111111111111",
+      });
+
+      applyCockpitWorkspaceBindingAssignments(db, serverUrl, [{ bindingId, state: "unbound" }]);
+      expect(getWorkspaceById(db, workspace.id)).toMatchObject({
+        id: workspace.id,
+        serverBindingId: bindingId,
+        cockpitBindingState: "unbound",
+      });
+      expect(getWorkspaceById(db, workspace.id)).not.toHaveProperty("serverWorkspaceId");
+
+      const reboundWorkspaceId = "ws_22222222222242222222222222222222";
+      applyCockpitWorkspaceBindingAssignments(db, serverUrl, [
+        { bindingId, state: "bound", workspaceId: reboundWorkspaceId },
+      ]);
+      expect(getWorkspaceById(db, workspace.id)).toMatchObject({
+        serverWorkspaceId: reboundWorkspaceId,
+        cockpitBindingState: "bound",
+      });
+    });
+  });
+
+  it("reuses the daemon-owned workspace when reconnecting the same path and key", () => {
+    withSparkDaemonWorkspaceStore(({ db, root }) => {
+      const serverUrl = "https://cockpit.example/";
+      const bindingId = "rtwb_11111111111141111111111111111111";
+      const first = registerWorkspace(db, {
+        serverUrl,
+        localPath: root,
+        displayName: "spark",
+        serverBindingId: bindingId,
+        serverWorkspaceId: "ws_11111111111141111111111111111111",
+      });
+      const rebound = registerWorkspace(db, {
+        serverUrl,
+        localPath: root,
+        displayName: "spark",
+        serverBindingId: bindingId,
+        serverWorkspaceId: "ws_22222222222242222222222222222222",
+      });
+
+      expect(rebound.id).toBe(first.id);
+      expect(listWorkspaces(db)).toHaveLength(1);
+      expect(rebound).toMatchObject({
+        serverWorkspaceId: "ws_22222222222242222222222222222222",
+        cockpitBindingState: "bound",
+      });
+    });
+  });
+
+  it("moves one daemon-owned workspace between Cockpit servers without duplicating its path", () => {
+    withSparkDaemonWorkspaceStore(({ db, root }) => {
+      const firstBindingId = "rtwb_11111111111141111111111111111111";
+      const first = registerWorkspace(db, {
+        serverUrl: "https://first.example/",
+        localPath: root,
+        displayName: "spark",
+        serverBindingId: firstBindingId,
+        serverWorkspaceId: "ws_11111111111141111111111111111111",
+      });
+
+      const planned = planWorkspaceRegistration(db, {
+        serverUrl: "https://second.example/",
+        localPath: root,
+        displayName: "spark",
+      });
+      expect(planned).toMatchObject({
+        existingWorkspaceId: first.id,
+        previousServerUrl: "https://first.example/",
+        previousServerBindingId: firstBindingId,
+      });
+
+      const moved = registerWorkspace(db, {
+        serverUrl: "https://second.example/",
+        localPath: root,
+        displayName: "spark",
+        serverBindingId: "rtwb_22222222222242222222222222222222",
+        serverWorkspaceId: "ws_22222222222242222222222222222222",
+      });
+
+      expect(moved).toMatchObject({
+        id: first.id,
+        serverUrl: "https://second.example/",
+        serverBindingId: "rtwb_22222222222242222222222222222222",
+      });
+      expect(listWorkspaces(db)).toHaveLength(1);
+    });
+  });
+
+  it("changes a Cockpit workspace path only with explicit rebind authority", () => {
+    withSparkDaemonWorkspaceStore(({ db, root }) => {
+      const originalPath = join(root, "wrong");
+      const correctedPath = join(root, "correct");
+      mkdirSync(originalPath);
+      mkdirSync(correctedPath);
+      const first = registerWorkspace(db, {
+        serverUrl: "http://127.0.0.1:5173/",
+        localPath: originalPath,
+        displayName: "spore",
+        serverBindingId: "rtwb_11111111111141111111111111111111",
+        serverWorkspaceId: "ws_11111111111141111111111111111111",
+      });
+
+      expect(() =>
+        planWorkspaceRegistration(db, {
+          serverUrl: "http://127.0.0.1:5173/",
+          localPath: correctedPath,
+          displayName: "spore",
+        }),
+      ).toThrow(/Workspace key spore is already registered/);
+
+      const planned = planWorkspaceRegistration(db, {
+        serverUrl: "http://127.0.0.1:5173/",
+        localPath: correctedPath,
+        displayName: "spore",
+        allowLocalPathRebind: true,
+      });
+      expect(planned.existingWorkspaceId).toBe(first.id);
+
+      const rebound = registerWorkspace(db, {
+        serverUrl: "http://127.0.0.1:5173/",
+        localPath: correctedPath,
+        displayName: "spore",
+        serverBindingId: "rtwb_11111111111141111111111111111111",
+        serverWorkspaceId: "ws_11111111111141111111111111111111",
+        allowLocalPathRebind: true,
+      });
+      expect(rebound).toMatchObject({
+        id: first.id,
+        localPath: realpathSync(correctedPath),
+      });
+      expect(listWorkspaces(db)).toHaveLength(1);
+    });
+  });
+
   it("stores workspace bindings in daemon SQLite", () => {
     withSparkDaemonWorkspaceStore(({ db, root }) => {
       const workspace = addWorkspace(db, {
@@ -415,36 +560,48 @@ describe("Spark daemon workspace store", () => {
     });
   });
 
-  it("allows the same local path and slug on different servers", () => {
+  it("rejects binding one daemon-owned path to two Cockpit servers", () => {
     withSparkDaemonWorkspaceStore(({ db, root }) => {
-      const first = addWorkspace(db, {
+      addWorkspace(db, {
         serverUrl: "http://127.0.0.1:5173/",
         localWorkspaceKey: "spark",
         displayName: "spark",
         localPath: root,
       });
-      const second = addWorkspace(db, {
-        serverUrl: "https://spark.example.com/",
-        localWorkspaceKey: "spark",
-        displayName: "spark",
+      expect(() =>
+        addWorkspace(db, {
+          serverUrl: "https://spark.example.com/",
+          localWorkspaceKey: "spark",
+          displayName: "spark",
+          localPath: root,
+        }),
+      ).toThrow(/already bound as spark/);
+    });
+  });
+
+  it("binds an existing local workspace in place and keeps its daemon identity", () => {
+    withSparkDaemonWorkspaceStore(({ db, root }) => {
+      const local = ensureLocalWorkspace(db, {
         localPath: root,
+        displayName: "spark",
+      });
+      const bound = registerWorkspace(db, {
+        serverUrl: "https://cockpit.example/",
+        localPath: root,
+        displayName: "spark",
+        serverBindingId: "rtwb_11111111111141111111111111111111",
+        serverWorkspaceId: "ws_11111111111141111111111111111111",
       });
 
-      expect(second.id).not.toBe(first.id);
-      expect(listWorkspaces(db)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            serverUrl: "http://127.0.0.1:5173/",
-            localWorkspaceKey: "spark",
-            localPath: realpathSync(root),
-          }),
-          expect.objectContaining({
-            serverUrl: "https://spark.example.com/",
-            localWorkspaceKey: "spark",
-            localPath: realpathSync(root),
-          }),
-        ]),
-      );
+      expect(bound).toMatchObject({
+        id: local.id,
+        serverUrl: "https://cockpit.example/",
+        serverBindingId: "rtwb_11111111111141111111111111111111",
+        serverWorkspaceId: "ws_11111111111141111111111111111111",
+      });
+      expect(workspaceSummaries(db)[0]?.bindingId).toBe("rtwb_11111111111141111111111111111111");
+      expect(getWorkspaceById(db, "rtwb_11111111111141111111111111111111")?.id).toBe(local.id);
+      expect(listWorkspaces(db)).toHaveLength(1);
     });
   });
 

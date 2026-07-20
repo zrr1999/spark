@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  isNormalizedBaiduContextOverflow,
+  normalizeBaiduOneApiEvent,
+  normalizeBaiduOneApiMessage,
   remapBaiduOneApiPayload,
   resolveBaiduOneApiKey,
   streamBaiduOneApiAnthropic,
@@ -315,6 +318,61 @@ void test("Baidu OneAPI key resolver uses only dedicated auth identity", () => {
     if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousOpenAiKey;
   }
+});
+
+void test("Baidu OneAPI normalizes only explicit context overflow errors for Pi recovery", async () => {
+  const base = {
+    role: "assistant" as const,
+    content: [],
+    api: "anthropic-messages" as never,
+    provider: "anthropic" as never,
+    model: "test",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "error" as const,
+    timestamp: Date.now(),
+  };
+  const source =
+    "Context window is full — reduce conversation history, tool/file output, or system prompt.";
+  const normalized = normalizeBaiduOneApiMessage({ ...base, errorMessage: source });
+  assert.equal(normalized.errorMessage, `context_length_exceeded: ${source}`);
+  assert.equal(isNormalizedBaiduContextOverflow(normalized), true);
+
+  const ordinary400 = normalizeBaiduOneApiMessage({
+    ...base,
+    errorMessage: "HTTP 400 Bad Request",
+  });
+  assert.equal(ordinary400.errorMessage, "HTTP 400 Bad Request");
+  assert.equal(isNormalizedBaiduContextOverflow(ordinary400), false);
+
+  const partial = normalizeBaiduOneApiEvent({
+    type: "text_delta",
+    contentIndex: 0,
+    delta: "",
+    partial: { ...base, errorMessage: source },
+  });
+  assert.ok("partial" in partial);
+  assert.equal(isNormalizedBaiduContextOverflow(partial.partial), true);
+  const done = normalizeBaiduOneApiEvent({
+    type: "done",
+    reason: "stop",
+    message: { ...base, errorMessage: source },
+  });
+  assert.ok("message" in done);
+  assert.equal(isNormalizedBaiduContextOverflow(done.message), true);
+  const error = normalizeBaiduOneApiEvent({
+    type: "error",
+    reason: "error",
+    error: { ...base, errorMessage: source },
+  });
+  assert.ok("error" in error);
+  assert.equal(isNormalizedBaiduContextOverflow(error.error), true);
 });
 
 void test("Baidu OneAPI adapters use upstream transport APIs but report baidu-oneapi", async () => {

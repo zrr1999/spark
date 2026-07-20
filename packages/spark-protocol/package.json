@@ -31,7 +31,7 @@
     "access": "public"
   },
   "scripts": {
-    "check": "tsc -p tsconfig.json --noEmit && vp test run",
+    "check": "vp check --no-fmt --no-lint . && vp test run",
     "test": "vp test run"
   },
   "dependencies": {

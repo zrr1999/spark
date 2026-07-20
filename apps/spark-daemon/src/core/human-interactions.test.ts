@@ -65,13 +65,18 @@ function primaryRuntimeId(route: SparkDaemonHumanInteractionRoute): string | und
   return route.serverUrl === SERVER_URL ? RUNTIME_ID : undefined;
 }
 
-function askRequest(requestId: string, delivery: "blocking" | "async"): SparkInteractionRequest {
+function askRequest(
+  requestId: string,
+  delivery: "blocking" | "async",
+  timeoutMs?: number,
+): SparkInteractionRequest {
   return parseSparkInteractionRequest({
     requestId,
     kind: "askFlow",
     title: "Choose a direction",
     prompt: "How should Spark continue?",
     delivery,
+    ...(timeoutMs ? { timeoutMs } : {}),
     mode: "decision",
     source: "daemon",
     questions: [
@@ -217,7 +222,7 @@ describe("SparkDaemonHumanInteractionBroker", () => {
 
     try {
       let settled = false;
-      const pendingResponse = broker.interact(askRequest("interaction-blocking", "blocking"), {
+      const pendingResponse = broker.interact(askRequest("interaction-blocking", "blocking", 500), {
         ...interactionContext(),
         sessionSource: "tui",
       });
@@ -253,7 +258,8 @@ describe("SparkDaemonHumanInteractionBroker", () => {
         winnerResponseId: expect.stringMatching(/^hres_/u),
       });
 
-      await expect(pendingResponse).resolves.toMatchObject({
+      const answeredResponse = await pendingResponse;
+      expect(answeredResponse).toMatchObject({
         kind: "askFlow",
         requestId: "interaction-blocking",
         humanRequestId: wait!.humanRequestId,
@@ -270,6 +276,7 @@ describe("SparkDaemonHumanInteractionBroker", () => {
           humanResponseId: expect.stringMatching(/^hres_/u),
         },
       });
+      expect(answeredResponse.metadata.timedOut).toBeUndefined();
       expect(waits.hasActive(wait!.humanRequestId)).toBe(false);
       expect(waits.listPendingOutbox()).toEqual([
         expect.objectContaining({ kind: "human.request.created" }),
@@ -284,6 +291,49 @@ describe("SparkDaemonHumanInteractionBroker", () => {
               source: "daemon",
               status: "answered",
             }),
+          }),
+        }),
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("durably closes a blocking ask when its human wait times out", async () => {
+    const db = new DatabaseSync(":memory:");
+    migrateSparkDaemonDatabase(db);
+    seedHumanRoute(db);
+    const waits = new SparkDaemonHumanWaitRegistry(db);
+    const broker = new SparkDaemonHumanInteractionBroker({
+      db,
+      waits,
+      getRuntimeId: primaryRuntimeId,
+    });
+
+    try {
+      const response = await broker.interact(
+        askRequest("interaction-human-timeout", "blocking", 10),
+        interactionContext(),
+      );
+
+      expect(response).toMatchObject({
+        kind: "askFlow",
+        requestId: "interaction-human-timeout",
+        status: "cancelled",
+        nextAction: "cancel",
+        metadata: {
+          delivery: "blocking",
+          timedOut: true,
+          humanResponseId: expect.stringMatching(/^hres_/u),
+        },
+      });
+      expect(waits.listPending()).toEqual([]);
+      expect(waits.listPendingOutbox()).toEqual([
+        expect.objectContaining({ kind: "human.request.created" }),
+        expect.objectContaining({
+          kind: "human.response.recorded",
+          envelope: expect.objectContaining({
+            payload: expect.objectContaining({ status: "cancelled" }),
           }),
         }),
       ]);

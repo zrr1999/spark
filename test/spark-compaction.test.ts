@@ -20,6 +20,7 @@ import {
   meterSparkContextTokens,
   microCompactSparkMessages,
   navigateSparkSessionBranchWithSummary,
+  scheduleSparkCompaction,
   prepareSparkCompaction,
   renderSparkSmartCompactionSummary,
   sessionEntriesToAgentMessages,
@@ -129,6 +130,50 @@ void test("Smart fixed summary validates, renders, selects current model, and fa
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+void test("Compact V2 scheduler performs one micro pass and schedules full escalation", () => {
+  const messages = [
+    {
+      role: "user",
+      content: "uncompactable".repeat(800),
+    },
+    {
+      role: "toolResult",
+      toolName: "cue_exec",
+      content: [{ type: "text", text: "line\n".repeat(5_000) }],
+    },
+  ];
+  const passes = scheduleSparkCompaction(messages, 10_000, {
+    ...DEFAULT_SPARK_COMPACTION_SETTINGS,
+    microThreshold: 0.1,
+    fullThreshold: 0.2,
+  });
+  assert.equal(passes[0]?.type, "micro");
+  assert.equal(passes.length, 2);
+  assert.equal(passes[1]?.type, "full");
+  assert.equal(passes[0]?.requiresFullPass, true);
+  assert.notDeepEqual(passes[0]?.messages, messages);
+  assert.deepEqual(passes[1]?.messages, passes[0]?.messages);
+  assert.equal(passes[0]?.fallbackReason, undefined);
+  assert.equal(passes[1]?.fallbackReason, undefined);
+});
+
+void test("Compact V2 scheduler skips below-threshold and already-compacted input", () => {
+  assert.deepEqual(scheduleSparkCompaction([{ role: "user", content: "small" }], 10_000), []);
+  const record = compactableRecord(
+    new SparkSessionStore({ cwd: "/tmp", sparkHome: "/tmp/.spark" }),
+  );
+  record.entries.push({
+    type: "compaction",
+    id: "last-compaction",
+    parentId: record.entries.at(-1)?.id ?? null,
+    timestamp: new Date().toISOString(),
+    summary: "already compacted",
+    firstKeptEntryId: record.entries[0]!.id,
+    tokensBefore: 1,
+  });
+  assert.equal(prepareSparkCompaction(record), undefined);
 });
 
 void test("Spark compaction uses Pi default trigger settings", () => {
@@ -385,6 +430,12 @@ void test("compactSparkVisibleTranscript persists a compaction entry and returns
     assert.match(result.entry.summary, /Conversation summary:/);
     assert.match(result.entry.summary, /Original request/);
     assert.equal(result.keptMessages.at(-1)?.content, "Recent answer");
+    const keptTokens = meterSparkContextTokens({ messages: result.keptMessages }).tokens;
+    assert.equal(result.tokensAfter > keptTokens, true);
+    assert.equal(result.entry.metadata?.summaryVersion, CURRENT_SPARK_COMPACTION_SUMMARY_VERSION);
+    assert.equal(result.entry.metadata?.tokenSource, "estimated");
+    assert.equal(typeof result.entry.metadata?.measuredReductionRatio, "number");
+    assert.equal(result.entry.metadata?.fallbackReason, "deterministic_requested");
 
     const saved = await store.loadByRef(result.record.header.id);
     assert.equal(saved.entries.at(-1)?.type, "compaction");
@@ -492,6 +543,11 @@ void test("native /compact and /tree summarize commands use persisted compaction
       exit: () => undefined,
     });
     assert.match(String(compacted), /Compacted visible Spark transcript into session/);
+    assert.match(String(compacted), /type=full/);
+    assert.match(String(compacted), /tokensBefore=\d+ tokensAfter=\d+/);
+    assert.match(String(compacted), /reductionRatio=\d+\.\d{3}/);
+    assert.match(String(compacted), /tokenSource=estimated/);
+    assert.match(String(compacted), /fallback=deterministic_requested/);
     assert.equal((await store.list()).length, 1);
     const compactedText = session.messages.map((message) => message.text).join("\n");
     assert.match(compactedText, /Compacted visible transcript summary/);

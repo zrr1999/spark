@@ -483,16 +483,15 @@ export class SparkNativeSession {
   applySessionView(view: SparkSessionView): void {
     const messages: SparkNativeMessage[] = [];
     for (const projected of view.messages.flatMap(messageViewToNativeMessages)) {
-      const native = this.normalizeMessage(projected);
-      const index = this.findMessageViewIndex(native, messages);
-      if (index >= 0) messages[index] = this.normalizeMessage(native, messages[index]);
-      else messages.push(native);
+      const index = this.findMessageViewIndex(projected, messages);
+      if (index >= 0) messages[index] = this.normalizeMessage(projected, messages[index]);
+      else messages.push(this.normalizeMessage(projected));
     }
     for (const tool of view.tools) {
-      const native = this.normalizeMessage(toolViewToNativeMessage(tool));
-      const index = this.findMessageViewIndex(native, messages);
-      if (index >= 0) messages[index] = this.normalizeMessage(native, messages[index]);
-      else messages.push(native);
+      const projected = toolViewToNativeMessage(tool);
+      const index = this.findMessageViewIndex(projected, messages);
+      if (index >= 0) messages[index] = this.normalizeMessage(projected, messages[index]);
+      else messages.push(this.normalizeMessage(projected));
     }
     this.messages.splice(0, this.messages.length, ...messages);
     this.sortMessagesChronologically();
@@ -2418,13 +2417,26 @@ export class SparkNativeTuiApp implements Component, Focusable {
       request: flowRequest,
       language: nativeAskLanguage(),
     });
-    const result = await this.custom<PiAskFlowResult>(
+    let timedOut = false;
+    const resultPromise = this.custom<PiAskFlowResult>(
       (tui, theme, _keybindings, done) => controller.run(tui, theme as AskRenderTheme, done),
       {
         overlay: true,
         overlayOptions: { width: "78%", minWidth: 56, maxHeight: "88%" },
       },
     );
+    const timeout = request.timeoutMs
+      ? setTimeout(() => {
+          timedOut = controller.cancel();
+        }, request.timeoutMs)
+      : undefined;
+    timeout?.unref?.();
+    let result: PiAskFlowResult;
+    try {
+      result = await resultPromise;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
     const cancelled = result.cancelled || result.status === "cancelled";
     return {
       version: SPARK_PROTOCOL_VERSION,
@@ -2437,7 +2449,10 @@ export class SparkNativeTuiApp implements Component, Focusable {
         : result.nextAction === "block" || result.nextAction === "clarify_then_reask"
           ? "block"
           : "resume",
-      metadata: { surface: "native-tui" },
+      metadata: {
+        surface: "native-tui",
+        ...(timedOut && cancelled ? { timedOut: true } : {}),
+      },
     };
   }
 
@@ -3574,6 +3589,7 @@ function nativeAskFlowRequest(
     ...(request.prompt ? { context: request.prompt } : {}),
     ...(request.flow ? { flow: request.flow } : {}),
     ...(request.delivery ? { delivery: request.delivery } : {}),
+    ...(request.timeoutMs ? { timeoutMs: request.timeoutMs } : {}),
     mode: request.mode,
     questions: request.questions.map((question) => {
       // The protocol permits choice-shaped questions with no business options.

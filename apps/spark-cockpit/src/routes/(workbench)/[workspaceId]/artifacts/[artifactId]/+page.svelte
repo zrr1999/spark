@@ -4,7 +4,7 @@
   import { buildArtifactSparkUiReplay } from "$lib/artifact-ui-replay";
   import { enumLabel, formatByteSize, formatRelativeTime } from "$lib/i18n";
   import { Button, Panel } from "$lib/ui";
-  import { workspacePath } from "$lib/workspace-routes";
+  import { workspacePath, workspaceSessionPath } from "$lib/workspace-routes";
 
   let { data, form } = $props();
   let t = $derived(data.messages.artifactDetail);
@@ -133,7 +133,7 @@
         <h2 id="provenance-title">{t.provenance.title}</h2>
         <div class="provenance-list">
           {#if data.artifact.sessionId}
-            <article><span>{t.provenance.conversation}</span><a href={`/sessions/${encodeURIComponent(data.artifact.sessionId)}`}>{data.artifact.sessionId}</a></article>
+            <article><span>{t.provenance.conversation}</span><a href={workspaceSessionPath({ slug: data.artifact.workspaceSlug }, data.artifact.sessionId)}>{data.artifact.sessionId}</a></article>
           {/if}
           {#if data.artifact.runtimeInvocationId}
             <article><span>{t.provenance.invocation}</span><strong>{data.artifact.runtimeInvocationId}</strong><small>{data.artifact.agentName ?? common.fallback.runner} · {data.artifact.invocationStatus}</small></article>

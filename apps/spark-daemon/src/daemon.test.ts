@@ -71,6 +71,8 @@ function makeHarness(): TestHarness {
   });
   const db = openSparkDaemonDatabase(paths);
   const sparkHome = join(root, "spark-home");
+  const workspacePath = join(root, "workspace");
+  mkdirSync(workspacePath);
   const workspace = registerWorkspace(db, {
     serverUrl: "https://cockpit.example.test/",
     serverWorkspaceId: "ws_22222222222222222222222222222222",
@@ -79,7 +81,7 @@ function makeHarness(): TestHarness {
     displayName: "Local default",
     workspaceName: "Local default",
     workspaceSlug: "local-default",
-    localPath: root,
+    localPath: workspacePath,
   });
   return {
     paths,
@@ -248,6 +250,8 @@ function makeContext(
 }
 
 function registerSecondCockpitWorkspace(harness: TestHarness) {
+  const localPath = join(harness.workspace.localPath, "..", "other-cockpit-workspace");
+  mkdirSync(localPath, { recursive: true });
   return registerWorkspace(harness.db, {
     serverUrl: "https://other-cockpit.example.test/",
     serverWorkspaceId: "ws_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -256,7 +260,7 @@ function registerSecondCockpitWorkspace(harness: TestHarness) {
     displayName: "Other Cockpit workspace",
     workspaceName: "Other Cockpit workspace",
     workspaceSlug: "other-cockpit-workspace",
-    localPath: harness.workspace.localPath,
+    localPath,
   });
 }
 

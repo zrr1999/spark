@@ -11,6 +11,7 @@ import {
   loadInboxDetailPage,
   loadInboxPage,
   loadWorkbenchLayout,
+  loadWorkspaceDashboard,
   loadWorkspaceRegistrationPage,
   resolvePendingWorkspaceBinding,
   resolvePendingWorkspaceRuntimeState,
@@ -132,6 +133,24 @@ describe("loadWorkspaceRegistrationPage", () => {
 
     expect(page?.runnerBindings).toHaveLength(1);
     expect(page?.runnerBindings[0]?.localPath).toBe("/Users/test/workspaces/spore");
+    db.close();
+  });
+});
+
+describe("loadWorkspaceDashboard", () => {
+  it("scopes runtime health to the workspace owner binding", () => {
+    const { db } = setupWorkspace("spore");
+    const unrelatedRuntimeId = createId("rt");
+    const now = "2026-07-09T00:05:00.000Z";
+    db.prepare(
+      `INSERT INTO runtime_connections
+        (id, installation_id, name, status, protocol_version, capabilities_json, labels_json, created_at, updated_at)
+       VALUES (?, ?, 'Unbound online runtime', 'online', ?, '{}', '{}', ?, ?)`,
+    ).run(unrelatedRuntimeId, "install-unbound", runtimeProtocolVersion, now, now);
+
+    const page = loadWorkspaceDashboard(db, "spore");
+
+    expect(page?.runnerConnections.map((runtime) => runtime.name)).toEqual(["Runtime"]);
     db.close();
   });
 });

@@ -356,6 +356,139 @@ void test("SparkAgentSession compacts an over-budget persisted session before it
   }
 });
 
+void test("SparkAgentSession persists and consumes a micro pass without forcing full compaction", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-micro-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(cwd, { recursive: true });
+    let providerReplay = "";
+    const services = await makeFakeServices(
+      { cwd, sparkHome },
+      {
+        contextWindow: 22_000,
+        maxTokens: 1,
+        streamSimple: ({ messages }) => {
+          providerReplay = JSON.stringify(messages);
+          return assistant("continued after micro compaction");
+        },
+      },
+    );
+    const record = services.sessionStore.createSession({ id: "micro-session" });
+    services.sessionStore.appendMessage(record, { role: "user", content: "inspect the log" });
+    services.sessionStore.appendMessage(record, {
+      role: "toolResult",
+      toolName: "cue_exec",
+      toolCallId: "micro-call",
+      content: [{ type: "text", text: "same log line\n".repeat(5_000) }],
+    });
+    services.sessionStore.appendMessage(record, { role: "assistant", content: "log inspected" });
+    await services.sessionStore.save(record);
+
+    const result = await new SparkAgentSession(services).run({
+      sessionId: record.header.id,
+      prompt: "continue after the micro threshold",
+    });
+
+    assert.equal(result.outcome?.status, "completed");
+    assert.doesNotMatch(providerReplay, /same log line\\nsame log line/u);
+    assert.match(providerReplay, /previous line repeated 4999/u);
+    const saved = await services.sessionStore.load(record.path);
+    assert.equal(saved.entries.filter((entry) => entry.type === "compaction").length, 0);
+    const persistedTool = saved.entries.find(
+      (entry) => entry.type === "message" && entry.message.toolCallId === "micro-call",
+    );
+    assert.match(
+      JSON.stringify(persistedTool?.type === "message" ? persistedTool.message.content : ""),
+      /previous line repeated 4999/u,
+    );
+    const telemetry = saved.entries.find(
+      (entry) => entry.type === "custom" && entry.customType === "spark-compaction-micro",
+    );
+    const telemetryData =
+      telemetry?.type === "custom"
+        ? (telemetry.data as {
+            type?: string;
+            metadata?: { measuredReductionRatio?: number };
+          })
+        : undefined;
+    assert.equal(telemetry?.type, "custom");
+    assert.equal(telemetryData?.type, "micro");
+    assert.equal((telemetryData?.metadata?.measuredReductionRatio ?? 0) > 0.4, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+void test("SparkAgentSession full escalation summarizes the persisted micro replay once", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-micro-full-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(cwd, { recursive: true });
+    let providerReplay = "";
+    const services = await makeFakeServices(
+      { cwd, sparkHome },
+      {
+        contextWindow: 25_000,
+        maxTokens: 1,
+        streamSimple: ({ messages }) => {
+          providerReplay = JSON.stringify(messages);
+          return assistant("continued after full escalation");
+        },
+      },
+    );
+    const record = services.sessionStore.createSession({ id: "micro-full-session" });
+    services.sessionStore.appendMessage(record, {
+      role: "user",
+      content: `older durable request ${"o".repeat(30_000)}`,
+    });
+    services.sessionStore.appendMessage(record, {
+      role: "assistant",
+      content: `older durable answer ${"a".repeat(16_000)}`,
+    });
+    services.sessionStore.appendMessage(record, {
+      role: "user",
+      content: `recent durable request ${"u".repeat(48_000)}`,
+    });
+    services.sessionStore.appendMessage(record, {
+      role: "toolResult",
+      toolName: "cue_exec",
+      toolCallId: "micro-full-call",
+      content: [{ type: "text", text: "same log line\n".repeat(5_000) }],
+    });
+    services.sessionStore.appendMessage(record, { role: "assistant", content: "log inspected" });
+    await services.sessionStore.save(record);
+
+    const result = await new SparkAgentSession(services).run({
+      sessionId: record.header.id,
+      prompt: "continue after both passes",
+    });
+
+    assert.equal(result.outcome?.status, "completed");
+    assert.doesNotMatch(providerReplay, /same log line\\nsame log line/u);
+    const saved = await services.sessionStore.load(record.path);
+    assert.equal(saved.entries.filter((entry) => entry.type === "compaction").length, 1);
+    assert.equal(
+      saved.entries.filter(
+        (entry) => entry.type === "custom" && entry.customType === "spark-compaction-micro",
+      ).length,
+      1,
+    );
+    const full = saved.entries.find((entry) => entry.type === "compaction");
+    assert.doesNotMatch(
+      full?.type === "compaction" ? full.summary : "",
+      /same log line\nsame log line/u,
+    );
+    assert.equal(
+      full?.type === "compaction" ? full.metadata?.fallbackReason : undefined,
+      "deterministic_requested",
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 void test("SparkAgentSession meters only the compacted replay on the active branch", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-replay-meter-"));
   try {

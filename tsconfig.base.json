@@ -37,6 +37,7 @@
       "@zendev-lab/spark-modes": ["./packages/spark-modes/src/index.ts"],
       "@zendev-lab/spark-recall": ["./packages/spark-recall/src/index.ts"],
       "@zendev-lab/spark-recall/extension": ["./packages/spark-recall/src/extension.ts"],
+      "@zendev-lab/spark-repro": ["./packages/spark-repro/src/index.ts"],
       "@zendev-lab/spark-roles": ["./packages/spark-roles/src/index.ts"],
       "@zendev-lab/spark-roles/extension": ["./packages/spark-roles/src/extension.ts"],
       "@zendev-lab/spark-tasks": ["./packages/spark-tasks/src/index.ts"],

@@ -24,6 +24,7 @@ import {
   recordHumanResponseAck,
   recordInvocationLogChunk,
   recordInvocationUpdate,
+  unbindWorkspaceOwner,
 } from "./projection-services";
 import { cursorFromEvent, loadEventBatch, serializeEventRow } from "./events";
 
@@ -51,6 +52,46 @@ function setupRuntimeBinding() {
 }
 
 describe("projection services", () => {
+  it("unbinds only the Cockpit owner projection and keeps daemon binding history", () => {
+    const { db, runtimeWorkspaceBindingId, now } = setupRuntimeBinding();
+    const workspace = createWorkspaceWithOwnerBinding(db, {
+      slug: "local-default",
+      name: "Local default",
+      runtimeWorkspaceBindingId,
+      createdAt: now,
+    });
+
+    const result = unbindWorkspaceOwner(db, {
+      workspaceId: workspace.id,
+      expectedRuntimeWorkspaceBindingId: runtimeWorkspaceBindingId,
+      actorId: "user_owner",
+      endedAt: "2026-05-22T00:01:00.000Z",
+    });
+
+    expect(result).toMatchObject({ outcome: "unbound", runtimeWorkspaceBindingId });
+    expect(
+      db
+        .prepare(
+          `SELECT ended_at AS endedAt
+           FROM workspace_owner_bindings
+           WHERE workspace_id = ?`,
+        )
+        .get(workspace.id),
+    ).toEqual({ endedAt: "2026-05-22T00:01:00.000Z" });
+    expect(
+      db
+        .prepare("SELECT id FROM runtime_workspace_bindings WHERE id = ?")
+        .get(runtimeWorkspaceBindingId),
+    ).toEqual({ id: runtimeWorkspaceBindingId });
+    expect(
+      db.prepare("SELECT kind FROM events WHERE kind = 'workspace.owner_unbound'").get(),
+    ).toEqual({ kind: "workspace.owner_unbound" });
+    expect(unbindWorkspaceOwner(db, { workspaceId: workspace.id })).toMatchObject({
+      outcome: "already_unbound",
+    });
+    db.close();
+  });
+
   it("creates a workspace, binds its runtime owner, creates a project, and queues a command", () => {
     const { db, runtimeWorkspaceBindingId, now } = setupRuntimeBinding();
 

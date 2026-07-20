@@ -299,15 +299,27 @@ export class SparkDaemonHumanInteractionBroker {
         "Daemon failed to attach the blocking ask continuation.",
       );
     }
-    const response = await awaitHumanResponse(registration.response, context.signal, () => {
+    const timeoutResponseId = request.timeoutMs ? createId("hres") : undefined;
+    const cancel = (humanResponseId?: string) => {
       void this.respond(registration.wait, {
+        ...(humanResponseId ? { humanResponseId } : {}),
         status: "cancelled",
         answers: {},
         responseArtifactRefs: [],
       }).catch((error: unknown) => {
         console.error("[spark-daemon] failed to cancel daemon-owned human interaction", error);
       });
-    });
+    };
+    const response = await awaitHumanResponse(
+      registration.response,
+      context.signal,
+      () => cancel(),
+      request.timeoutMs && timeoutResponseId
+        ? { timeoutMs: request.timeoutMs, cancel: () => cancel(timeoutResponseId) }
+        : undefined,
+    );
+    const timedOut =
+      response.status === "cancelled" && response.humanResponseId === timeoutResponseId;
     return {
       version: SPARK_PROTOCOL_VERSION,
       kind: "askFlow",
@@ -319,6 +331,7 @@ export class SparkDaemonHumanInteractionBroker {
       metadata: {
         delivery: "blocking",
         humanResponseId: response.humanResponseId,
+        ...(timedOut ? { timedOut: true } : {}),
       },
     };
   }
@@ -450,14 +463,16 @@ async function awaitHumanResponse<T>(
   response: Promise<T>,
   signal: AbortSignal | undefined,
   cancel: () => void,
+  timeout?: { timeoutMs: number; cancel: () => void },
 ): Promise<T> {
-  if (!signal) return await response;
-  if (signal.aborted) cancel();
+  if (signal?.aborted) cancel();
   const abort = () => cancel();
-  signal.addEventListener("abort", abort, { once: true });
+  signal?.addEventListener("abort", abort, { once: true });
+  const timer = timeout ? setTimeout(timeout.cancel, timeout.timeoutMs) : undefined;
   try {
     return await response;
   } finally {
-    signal.removeEventListener("abort", abort);
+    signal?.removeEventListener("abort", abort);
+    if (timer) clearTimeout(timer);
   }
 }

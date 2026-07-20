@@ -2,12 +2,13 @@ import { EventEmitter } from "node:events";
 import WebSocket from "ws";
 import { describe, expect, it, vi } from "vitest";
 import type { QqbotApiClient } from "./qqbot-api.ts";
+import { chunkQqbotMarkdownText } from "./qqbot-markdown.ts";
 import {
   createQqbotTransport,
   materializeQqbotInboundImages,
   type QqbotGatewayCursor,
 } from "./qqbot-transport.ts";
-import { channelDeliveryFailureCertainty } from "./reply.ts";
+import { channelDeliveryFailureCertainty, CHANNEL_DELIVERY_NOT_SENT_ERROR_CODE } from "./reply.ts";
 import type { QqbotAdapterConfig } from "./types.ts";
 
 const config: QqbotAdapterConfig = {
@@ -709,6 +710,40 @@ describe("createQqbotTransport", () => {
       index: 0,
     });
     expect(sendC2CMarkdownMessage).not.toHaveBeenCalled();
+  });
+
+  it("reserves stream overflow atomically so a safe fallback keeps its final slot", async () => {
+    const { api, sendC2CMarkdownMessage, sendC2CStreamMessage } = createApiMock();
+    const transport = createQqbotTransport(config, { api });
+    const stream = await transport.reply?.openReplyStream({
+      recipient: "c2c:user-1",
+      messageId: "source-overflow",
+    });
+    const oversized = Array.from(
+      { length: 8 },
+      (_, index) => `第 ${index + 1} 段 ${"内容".repeat(700)}`,
+    ).join("\n\n");
+    expect(chunkQqbotMarkdownText(oversized).length).toBeGreaterThan(4);
+
+    stream?.appendText(oversized);
+    await expect(stream?.complete()).rejects.toMatchObject({
+      code: CHANNEL_DELIVERY_NOT_SENT_ERROR_CODE,
+      outcome: "not_sent",
+    });
+    expect(sendC2CStreamMessage).not.toHaveBeenCalled();
+
+    await transport.reply?.sendReply({
+      recipient: "c2c:user-1",
+      messageId: "source-overflow",
+      text: "安全回退",
+    });
+    expect(sendC2CMarkdownMessage).toHaveBeenCalledWith(
+      "token",
+      "user-1",
+      "安全回退",
+      "source-overflow",
+      4,
+    );
   });
 
   it("chunks long final replies across unused passive sequences", async () => {

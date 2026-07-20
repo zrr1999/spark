@@ -84,11 +84,35 @@ export const runtimeHelloPayloadSchema = z.object({
   workspaceBindings: z.array(runtimeWorkspaceBindingSummarySchema).default([]),
 });
 
+export const runtimeWorkspaceBindingAssignmentSchema = z
+  .object({
+    bindingId: prefixedIdSchema("rtwb"),
+    state: z.enum(["bound", "unbound"]),
+    workspaceId: prefixedIdSchema("ws").optional(),
+  })
+  .superRefine((assignment, context) => {
+    if (assignment.state === "bound" && !assignment.workspaceId) {
+      context.addIssue({
+        code: "custom",
+        path: ["workspaceId"],
+        message: "A bound runtime workspace assignment requires workspaceId",
+      });
+    }
+    if (assignment.state === "unbound" && assignment.workspaceId) {
+      context.addIssue({
+        code: "custom",
+        path: ["workspaceId"],
+        message: "An unbound runtime workspace assignment must not include workspaceId",
+      });
+    }
+  });
+
 export const serverHelloAckPayloadSchema = z.object({
   runtimeSessionId: prefixedIdSchema("rtsn"),
   acceptedFeatures: z.array(runtimeFeatureSchema),
   heartbeatIntervalMs: z.literal(15_000),
   serverTime: isoDateTimeSchema,
+  workspaceBindingAssignments: z.array(runtimeWorkspaceBindingAssignmentSchema).default([]),
 });
 
 export const runtimeHeartbeatPayloadSchema = z.object({
@@ -97,6 +121,13 @@ export const runtimeHeartbeatPayloadSchema = z.object({
   sequence: z.number().int().nonnegative(),
   observedAt: isoDateTimeSchema,
   workspaceBindings: z.array(runtimeWorkspaceBindingSummarySchema).optional(),
+});
+
+export const serverHeartbeatAckPayloadSchema = z.object({
+  runtimeSessionId: prefixedIdSchema("rtsn"),
+  sequence: z.number().int().nonnegative(),
+  serverTime: isoDateTimeSchema,
+  workspaceBindingAssignments: z.array(runtimeWorkspaceBindingAssignmentSchema).default([]),
 });
 
 export const runtimeReconcileScopeSchema = z.enum([
@@ -469,6 +500,12 @@ export const runtimeHeartbeatEnvelopeSchema = runtimeEnvelopeFor(
   type: z.literal("runtime.heartbeat"),
 });
 
+export const serverHeartbeatAckEnvelopeSchema = runtimeEnvelopeFor(
+  serverHeartbeatAckPayloadSchema,
+).extend({
+  type: z.literal("server.heartbeat_ack"),
+});
+
 export const runtimeReconcileRequestEnvelopeSchema = routedRuntimeEnvelopeFor(
   runtimeReconcileRequestPayloadSchema,
 ).extend({
@@ -588,6 +625,7 @@ export const runtimeMessageEnvelopeSchema = z.discriminatedUnion("type", [
   runtimeHelloEnvelopeSchema,
   serverHelloAckEnvelopeSchema,
   runtimeHeartbeatEnvelopeSchema,
+  serverHeartbeatAckEnvelopeSchema,
   runtimeReconcileRequestEnvelopeSchema,
   runtimeReconcileReportEnvelopeSchema,
   workspaceSnapshotEnvelopeSchema,
@@ -621,6 +659,10 @@ export type ExecutorClientProjection = z.infer<typeof executorClientProjectionSc
 export type RuntimeHelloPayload = z.infer<typeof runtimeHelloPayloadSchema>;
 export type RuntimeHeartbeatPayload = z.infer<typeof runtimeHeartbeatPayloadSchema>;
 export type RuntimeWorkspaceBindingSummary = z.infer<typeof runtimeWorkspaceBindingSummarySchema>;
+export type RuntimeWorkspaceBindingAssignment = z.infer<
+  typeof runtimeWorkspaceBindingAssignmentSchema
+>;
+export type ServerHeartbeatAckPayload = z.infer<typeof serverHeartbeatAckPayloadSchema>;
 export type RuntimeReconcileRequestPayload = z.infer<typeof runtimeReconcileRequestPayloadSchema>;
 export type RuntimeReconcileReportPayload = z.infer<typeof runtimeReconcileReportPayloadSchema>;
 export type WorkspaceSnapshotPayload = z.infer<typeof workspaceSnapshotPayloadSchema>;

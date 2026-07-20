@@ -66,6 +66,13 @@ export interface SparkDaemonRegistrationResult {
   workspaceBinding?: RuntimeRegistrationResponse["workspaceBinding"];
 }
 
+export interface SparkDaemonWorkspaceUnbindResult {
+  runtimeId: string;
+  bindingId: string;
+  workspaceIds: string[];
+  unboundAt: string;
+}
+
 export interface SparkDaemonDeviceAuthorizationOptions {
   fetchFn?: typeof fetch;
   sleep?: (delayMs: number) => Promise<void>;
@@ -254,6 +261,51 @@ export async function ensureSparkDaemonRegistrationForWorkspace(
     config: configForRegisteredServer(paths, serverUrl),
     ...(registered.workspaceBinding ? { workspaceBinding: registered.workspaceBinding } : {}),
   };
+}
+
+export async function unbindSparkDaemonWorkspaceFromCockpit(
+  paths: SparkPaths,
+  input: { serverUrl: string; bindingId: string; allowInsecureHttp?: boolean },
+): Promise<SparkDaemonWorkspaceUnbindResult> {
+  const identity = readSparkDaemonConfig(paths);
+  const serverUrl = validateRegistrationServerUrl(input.serverUrl, {
+    allowInsecureHttp: input.allowInsecureHttp,
+  });
+  const profile = getSparkDaemonServerProfile(paths, serverUrl);
+  if (!profile) {
+    throw new Error(`Spark daemon has no credentials for ${serverUrl}.`);
+  }
+  let config = sparkDaemonConfigForServerProfile(identity, profile);
+  config = shouldRefreshSparkDaemonToken(config)
+    ? await refreshSparkDaemonCredentials({ paths, config })
+    : config;
+  const runtimeId = requireConfig(config.runtimeId, "runtimeId");
+  const runtimeToken = requireConfig(config.runtimeToken, "runtimeToken");
+  const url = new URL(
+    `/api/v1/runtime/runtimes/${encodeURIComponent(runtimeId)}/workspaces/${encodeURIComponent(input.bindingId)}`,
+    serverUrl,
+  );
+  const response = await fetchRegistrationEndpoint(url, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${runtimeToken}` },
+  });
+  if (!response.ok) {
+    const failure = await readHttpFailure(response);
+    throw new Error(
+      `Workspace unbind failed at ${url.toString()}: HTTP ${response.status} ${failure.message}`,
+    );
+  }
+  const value = (await response.json()) as Record<string, unknown>;
+  if (
+    value.runtimeId !== runtimeId ||
+    value.bindingId !== input.bindingId ||
+    !Array.isArray(value.workspaceIds) ||
+    !value.workspaceIds.every((workspaceId) => typeof workspaceId === "string") ||
+    typeof value.unboundAt !== "string"
+  ) {
+    throw new Error("Cockpit returned an invalid workspace unbind response.");
+  }
+  return value as unknown as SparkDaemonWorkspaceUnbindResult;
 }
 
 export function hasRunnableSparkDaemonCredentialsForServer(

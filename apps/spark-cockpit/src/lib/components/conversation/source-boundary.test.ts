@@ -51,6 +51,7 @@ describe("source-derived conversation component boundary", () => {
     const workspace = readFileSync(join(appRoot, "src/lib/SessionsWorkspace.svelte"), "utf8");
 
     expect(workspace).toContain("<ConversationViewport");
+    expect(workspace).toContain("{#key selected.sessionId}");
     expect(workspace).toContain("<ConversationMessage");
     expect(workspace).toContain("<Composer");
     expect(workspace).toContain("<ModelRuntimeControl");

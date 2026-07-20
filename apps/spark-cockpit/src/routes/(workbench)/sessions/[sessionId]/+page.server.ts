@@ -1,4 +1,4 @@
-import { error } from "@sveltejs/kit";
+import { error, redirect } from "@sveltejs/kit";
 import { createId } from "@zendev-lab/spark-protocol";
 import {
   getManagedSessionSnapshotForCockpit,
@@ -15,9 +15,17 @@ import { createCockpitSubmissionId } from "$lib/server/submission-idempotency";
 import type { PageServerLoad } from "./$types";
 import { SESSION_SNAPSHOT_PAGE_SIZE } from "../../../../lib/session-snapshot-window";
 import { workspaceIdForWorkbenchSession } from "../../../../lib/workbench-session-scope";
+import { workspaceSessionPath } from "../../../../lib/workspace-routes";
 import { actions as sessionsActions } from "../+page.server";
 
-export const load: PageServerLoad = async ({ params, parent }) => {
+type SessionPageLoadEvent = Pick<Parameters<PageServerLoad>[0], "parent" | "url"> & {
+  params: { sessionId: string };
+};
+
+export async function _loadSessionPage(
+  { params, parent, url }: SessionPageLoadEvent,
+  expectedWorkspaceId?: string,
+) {
   const db = getDatabase();
   // Capture the event watermark before loading daemon truth. Events committed
   // during the load are replayed after this cursor; older history must not
@@ -36,15 +44,28 @@ export const load: PageServerLoad = async ({ params, parent }) => {
     // detached registry record re-enter the rail through a direct URL.
     throw error(404, "Session not found");
   }
+  if (expectedWorkspaceId && workspaceId !== expectedWorkspaceId) {
+    throw error(404, "Session not found");
+  }
+  if (url?.pathname.startsWith("/sessions/")) {
+    redirect(
+      303,
+      `${workspaceSessionPath(parentData.activeWorkspace, selected.sessionId)}${url.search}`,
+    );
+  }
   const [snapshotWindow, modelControl] = parentData.sessionControlAvailable
     ? await Promise.all([
         getManagedSessionSnapshotForCockpit(params.sessionId, {
           messageLimit: SESSION_SNAPSHOT_PAGE_SIZE,
-        }),
+        }).then(
+          (snapshot) => snapshot ?? getProjectedManagedSessionSnapshotForCockpit(params.sessionId),
+        ),
         // Catalog is daemon-global. Route it by workspace so a stale session
         // registry entry cannot blank the model picker (settings/models works
         // for the same reason). Session selection still comes from the snapshot.
-        loadModelControlForCockpit({ workspaceId }),
+        loadModelControlForCockpit({ workspaceId }).then((control) =>
+          control.available ? control : loadProjectedModelControlForCockpit({ workspaceId }),
+        ),
       ])
     : await Promise.all([
         Promise.resolve(getProjectedManagedSessionSnapshotForCockpit(params.sessionId)),
@@ -72,6 +93,8 @@ export const load: PageServerLoad = async ({ params, parent }) => {
       sessionId: selected.sessionId,
     }),
   };
-};
+}
+
+export const load: PageServerLoad = _loadSessionPage;
 
 export const actions = sessionsActions;

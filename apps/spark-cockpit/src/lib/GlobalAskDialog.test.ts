@@ -100,7 +100,12 @@ beforeAll(() => {
 });
 
 afterEach(async () => {
-  if (mounted) await unmount(mounted);
+  if (mounted) {
+    await unmount(mounted);
+    // Bits UI defers body-scroll restoration for 24 ms. Let that cleanup run
+    // before Vitest disposes jsdom and removes the global document.
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 32));
+  }
   mounted = undefined;
   document.body.replaceChildren();
   appMocks.formSubmits.mockClear();

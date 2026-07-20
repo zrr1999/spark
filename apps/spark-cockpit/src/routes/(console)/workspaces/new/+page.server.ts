@@ -19,6 +19,7 @@ import {
   createRuntimeEnrollmentToken,
 } from "$lib/server/runtime-registration";
 import { slugifyWorkspaceIdentifier } from "$lib/slugify";
+import { workspaceSessionsPath } from "$lib/workspace-routes";
 import {
   builtinFreshWorkspaceProfile,
   loadWorkspaceProfileFromGitHubUrl,
@@ -237,7 +238,7 @@ export const actions: Actions = {
       });
     }
 
-    redirect(303, "/sessions");
+    redirect(303, workspaceSessionsPath({ slug }));
   },
 };
 
