@@ -79,7 +79,7 @@ void test("SparkSkillResolver discovers builtin, workspace, and user skills with
   try {
     const builtin = join(dir, "builtin");
     const workspace = join(dir, "repo", ".spark", "skills");
-    const user = join(dir, "home", "skills");
+    const user = join(dir, "home", ".agents", "skills");
     await writeSkill(
       builtin,
       "shared/SKILL.md",
@@ -108,7 +108,7 @@ void test("SparkSkillResolver discovers builtin, workspace, and user skills with
       cwd: join(dir, "repo"),
       builtinDirs: [builtin],
       userDir: user,
-      userAgentsDir: join(dir, "none-user-agents"),
+      userAgentsDir: user,
     });
     const result = await resolver.resolve();
 

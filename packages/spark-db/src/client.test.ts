@@ -9,11 +9,11 @@ afterEach(() => {
 });
 
 describe("defaultDatabasePath", () => {
-  it("uses the unified default Spark root", () => {
+  it("uses the default XDG data root", () => {
     process.env = { HOME: "/Users/example" };
 
     expect(defaultDatabasePath()).toBe(
-      join("/Users/example", ".spark", "apps", "cockpit", "data", "cockpit.sqlite"),
+      join("/Users/example", ".local", "share", "spark", "cockpit", "cockpit.sqlite"),
     );
   });
 

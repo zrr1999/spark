@@ -3,11 +3,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { sparkCliDispatcherStrings } from "@zendev-lab/spark-i18n/cli";
-import {
-  resolveSparkHome,
-  resolveSparkPaths,
-  resolveSparkUserPaths,
-} from "@zendev-lab/spark-system";
+import { resolveSparkPaths, resolveSparkUserPaths } from "@zendev-lab/spark-system";
 
 export const SPARK_CLI_VERSION = "0.1.0";
 
@@ -85,7 +81,7 @@ export async function runSparkDispatcher(
       return 0;
     case "paths": {
       const payload = {
-        sparkHome: resolveSparkHome(),
+        sparkHome: process.env.SPARK_HOME?.trim() ?? null,
         user: resolveSparkUserPaths(),
         cockpit: resolveSparkPaths({ app: "cockpit" }),
         daemon: resolveSparkPaths({ app: "daemon" }),
@@ -202,12 +198,12 @@ function parseSparkPathsCommand(argv: string[]): SparkDispatcherCommand {
 }
 
 function formatSparkPaths(payload: {
-  sparkHome: string;
+  sparkHome: string | null;
   user: ReturnType<typeof resolveSparkUserPaths>;
   cockpit: ReturnType<typeof resolveSparkPaths>;
   daemon: ReturnType<typeof resolveSparkPaths>;
 }): string {
-  const lines = [`SPARK_HOME=${payload.sparkHome}`, "", "user:"];
+  const lines = [`SPARK_HOME=${payload.sparkHome ?? "<unset>"}`, "", "user:"];
   for (const [key, value] of Object.entries(payload.user)) lines.push(`  ${key}=${value}`);
   for (const [label, paths] of [
     ["cockpit", payload.cockpit],

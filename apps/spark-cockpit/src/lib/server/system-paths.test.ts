@@ -9,11 +9,11 @@ afterEach(() => {
 });
 
 describe("Cockpit system paths", () => {
-  it("uses the unified default Spark root for artifact previews", () => {
+  it("uses the default XDG cache root for artifact previews", () => {
     process.env = { HOME: "/Users/example" };
 
     expect(defaultArtifactCacheRoot()).toBe(
-      join("/Users/example", ".spark", "apps", "cockpit", "cache", "artifacts"),
+      join("/Users/example", ".cache", "spark", "cockpit", "artifacts"),
     );
   });
 

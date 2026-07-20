@@ -5,7 +5,7 @@
  * line is a session header, subsequent lines are tree entries linked by
  * `id`/`parentId`; branch state is represented by that tree and the active leaf
  * is the last entry. Spark keeps the same key names and entry shapes for
- * cross-debugging, but writes under ~/.spark/sessions/<workspaceHash>/ instead
+ * cross-debugging, but writes under the effective Spark sessions root instead
  * of ~/.pi/agent/sessions.
  */
 
@@ -145,7 +145,7 @@ export interface SparkSessionInfo {
 
 export interface SparkSessionStoreOptions {
   cwd: string;
-  /** Defaults to $SPARK_HOME or ~/.spark. */
+  /** Defaults to the effective Spark user data root sessions directory. */
   sparkHome?: string;
   /** Overrides sparkHome/sessions, mainly for tests. */
   sessionsRoot?: string;

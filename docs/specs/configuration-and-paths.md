@@ -1,35 +1,43 @@
 # Spark Configuration And Paths
 
-## One Root
+## Path roots
 
-Spark uses one root for all user-level configuration and persistent state. The root is resolved in this order:
+Spark uses `SPARK_HOME` as an explicit all-in-one root when it is set. When it is unset, Spark follows the XDG directories independently:
 
 ```text
-explicit API sparkHome
-> SPARK_HOME
-> $HOME/.spark
+explicit API sparkHome > SPARK_HOME > XDG roots
 ```
 
-`SPARK_HOME` is the only environment variable that relocates Spark-owned paths:
+The XDG roots are:
+
+```text
+XDG_CONFIG_HOME                         default $HOME/.config
+XDG_DATA_HOME                           default $HOME/.local/share
+XDG_CACHE_HOME                          default $HOME/.cache
+XDG_STATE_HOME                          default $HOME/.local/state
+XDG_RUNTIME_DIR                         app runtime falls back to XDG state
+```
+
+Set one explicit root when a self-contained installation is preferred:
 
 ```sh
 export SPARK_HOME=/path/to/spark-home
 ```
 
-When it is unset, the same layout lives under `$HOME/.spark`. `SPARK_HOME` is a user-level root, not the workspace state directory.
+`SPARK_HOME` is a user-level root, not the workspace state directory.
 
 ## Layout
 
+With `SPARK_HOME` set:
+
 ```text
-${SPARK_HOME:-$HOME/.spark}/
+$SPARK_HOME/
 ├── config.json                    # Spark TUI/provider configuration
 ├── auth.json                      # provider credentials
 ├── sessions/                      # local TUI transcripts
 ├── ask.json                       # ask capability settings
 ├── agent/keybindings.json         # TUI keybinding overrides
 ├── role-model-settings.json       # Spark user role-to-model bindings
-├── workflows/                     # user workflows
-├── skills/                        # user Spark skills
 ├── prompts/                       # user prompt templates
 ├── themes/                        # user themes
 ├── learnings/                     # user learning artifacts
@@ -45,42 +53,56 @@ ${SPARK_HOME:-$HOME/.spark}/
     └── daemon/{data,cache,state,run}/
 ```
 
-Workspace state remains under the current workspace `.spark/`. Cross-harness role and skill definitions remain in `$HOME/.agents/{roles,skills}` and project `.agents/{roles,skills}`. Spark discovers those public layers in addition to Spark-specific `$SPARK_HOME/skills`; only Spark-owned settings and data use the unified root.
+With `SPARK_HOME` unset, files are split by XDG ownership:
 
-## Precedence
+```text
+$XDG_CONFIG_HOME/spark/        config, auth, ask, role model settings, prompts, themes, keybindings, app TOML files
+$XDG_DATA_HOME/spark/          sessions, learnings, memory, recall, exports, share, workspaces, cockpit/, daemon/
+$XDG_CACHE_HOME/spark/         model/release caches, cockpit/, daemon/
+$XDG_STATE_HOME/spark/         cockpit/, daemon/ state and logs
+$XDG_RUNTIME_DIR/spark/        cockpit/, daemon/ sockets and pid files (app state `run/` fallback)
+```
 
-Explicit API path overrides are available for embedded hosts and tests. For ordinary Spark processes, `SPARK_HOME` is the sole path environment variable. If it is absent, Spark uses `$HOME/.spark`.
+The namespace is added after the XDG root, so the default config path is `$HOME/.config/spark/config.json`, not `$HOME/.config/config.json`. If `XDG_RUNTIME_DIR` is unset, each app uses `$XDG_STATE_HOME/spark/<app>/run`.
 
-The following legacy variables and XDG homes no longer influence current Spark path resolution:
+## Public agent definitions
+
+User role, skill, and workflow definitions use the public cross-harness standard and are independent of `SPARK_HOME` and XDG:
+
+```text
+$HOME/.agents/roles/
+$HOME/.agents/skills/
+$HOME/.agents/workflows/
+```
+
+There is no `$SPARK_HOME/skills` or `$SPARK_HOME/workflows`. Project role and skill definitions remain under project `.agents/{roles,skills}`; Spark also retains workspace-specific `.spark/{skills,workflows}` layers. Workspace-owned Spark state remains under the workspace `.spark/`, and repository learnings remain under `.learnings/`.
+
+## Retired variables
+
+These variables have no current path-resolution implementation and are ignored:
 
 - `PI_ROLES_HOME`
 - `PI_CODING_AGENT_DIR`
+- `PI_MEMORY_DIR`
 - `SPARK_MEMORY_HOME`
+- `SPARK_MEMORY_COMPAT_DIR`
 - `SPARK_AGENT_DIR`
-- `SPARK_COCKPIT_*` storage overrides
-- `SPARK_DAEMON_*` storage overrides
-- `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, and `XDG_RUNTIME_DIR`
+- `SPARK_COCKPIT_*_DIR`
+- `SPARK_DAEMON_*_DIR`
+
+Explicit API path overrides remain available for embedded hosts and tests.
 
 ## Migration
 
-Spark does not automatically move credentials, SQLite databases, sessions, or user-authored files. Before adopting this version, inspect the old locations and deliberately copy the data that should survive:
+Spark does not automatically move credentials, SQLite databases, sessions, or user-authored files. Inspect old locations and deliberately copy data that should survive. Stop Spark daemon and Cockpit before copying mutable databases or runtime state.
 
-- `~/.agents/workflows` and `~/.agents/role-model-settings.json` (public `~/.agents/{roles,skills}` remain in place)
-- `${PI_CODING_AGENT_DIR}/learning` and `${PI_CODING_AGENT_DIR}/recall-candidates.json`
-- `~/.pi/agent/extensions/spark-ask.json` and any Spark-managed pi-memory compatibility Markdown
-- `${XDG_DATA_HOME:-~/.local/share}/spark/`
-- `${XDG_CONFIG_HOME:-~/.config}/spark/`
-- `${XDG_CACHE_HOME:-~/.cache}/spark/`
-- `${XDG_STATE_HOME:-~/.local/state}/spark/`
-- paths selected by the retired component-specific variables listed above
+Public `$HOME/.agents/{roles,skills,workflows}` definitions should remain in place. Old component variables and Pi-specific locations may still identify migration sources, but they do not affect current path resolution.
 
-Use `spark paths --json` to determine the destination tree. Stop Spark daemon and Cockpit before copying mutable databases or runtime state.
-
-## Inspecting Paths
+## Inspecting paths
 
 ```sh
 spark paths
 spark paths --json
 ```
 
-The command is read-only and reports the effective user, Cockpit, and daemon paths. It does not create directories or migrate files.
+The command is read-only and reports effective user, Cockpit, and daemon paths. It does not create directories or migrate files.

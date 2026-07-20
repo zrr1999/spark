@@ -4,7 +4,7 @@ Owns reusable `RoleSpec` definitions, role model settings, anonymous `RoleRun` e
 
 ## Storage and models
 
-Role Markdown loads from project `.agents/roles/**/*.md`, user `~/.agents/roles/**/*.md`, builtins, and loaded extensions. Role files do not carry `model` or `defaultModel`; Spark model bindings live separately in project `.spark/role-model-settings.json` and user `${SPARK_HOME:-$HOME/.spark}/role-model-settings.json`. Resolution order is explicit run model, project settings, then user settings.
+Role Markdown loads from project `.agents/roles/**/*.md`, user `~/.agents/roles/**/*.md`, builtins, and loaded extensions. Role files do not carry `model` or `defaultModel`; Spark model bindings live separately in project `.spark/role-model-settings.json` and user `$SPARK_HOME/role-model-settings.json` or `$XDG_CONFIG_HOME/spark/role-model-settings.json`. Resolution order is explicit run model, project settings, then user settings.
 
 ## Public surface
 

@@ -1,7 +1,7 @@
 /** Path helpers for Spark daemon core state. */
 
 import { join, resolve } from "node:path";
-import { resolveSparkHome, type SparkPaths } from "@zendev-lab/spark-system";
+import { resolveSparkHome, resolveSparkPaths, type SparkPaths } from "@zendev-lab/spark-system";
 
 export interface SparkDaemonPathOptions {
   sparkHome?: string;
@@ -24,7 +24,7 @@ export function legacySparkDaemonQueueRoot(options: SparkDaemonPathOptions = {})
 }
 
 export function defaultSparkDaemonRuntimeDir(sparkHome?: string): string {
-  return join(defaultSparkHome(sparkHome), "apps", "daemon", "run");
+  return resolveSparkPaths({ app: "daemon", sparkHome }).runtimeDir;
 }
 
 export function sparkDaemonRuntimeDir(options: SparkDaemonPathOptions = {}): string {

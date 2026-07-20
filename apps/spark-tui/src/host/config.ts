@@ -1,5 +1,5 @@
 /**
- * SparkConfig — the on-disk schema for `~/.spark/config.json`.
+ * SparkConfig — the on-disk schema for the effective Spark `config.json`.
  *
  * Two parallel plugin lists:
  *   - `extensions[]` — module specifiers loaded as ExtensionAPI plugins

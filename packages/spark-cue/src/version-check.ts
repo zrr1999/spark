@@ -17,7 +17,8 @@
  *    - Pre-version-reporting daemons reply with `Pong: {}`, surfaced as
  *      `null` and treated as "outdated, version unknown".
  * 2. In the background, fetch the latest release tag from GitHub
- *    (cached in `${SPARK_HOME:-$HOME/.spark}/cache/cued-version.json`, TTL 6h).
+ *    (cached in `$SPARK_HOME/cache/cued-version.json` or
+ *    `$XDG_CACHE_HOME/spark/cued-version.json`, TTL 6h).
  * 3. Compare. Warn at most once per process when:
  *    - daemon hides its version, OR
  *    - daemon reports a version older than the latest release.

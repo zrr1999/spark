@@ -60,7 +60,7 @@ export type SparkConfigSaver = (config: SparkConfig) => void | Promise<void>;
 
 export interface SparkModelSelectorOptions {
   registry: SparkProviderRegistry;
-  /** Pre-loaded config. If omitted, the selector lazily loads ~/.spark/config.json. */
+  /** Pre-loaded config. If omitted, the selector lazily loads the effective Spark config.json. */
   config?: SparkConfig;
   loadConfig?: SparkConfigLoader;
   saveConfig?: SparkConfigSaver;

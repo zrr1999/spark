@@ -1,6 +1,6 @@
 /**
  * Plugin loader for spark-cli — loads extensions[] and providers[] plugin
- * lists from `~/.spark/config.json` via the same import-default mechanism
+ * lists from the effective Spark config.json via the same import-default mechanism
  * but with two distinct surfaces:
  *
  *   - extension plugins → call default(api: ExtensionAPI)  (spark-extension-api)

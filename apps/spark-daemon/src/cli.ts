@@ -9,7 +9,7 @@ import {
   watchFile,
   unwatchFile,
 } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -18,8 +18,8 @@ import { createId } from "@zendev-lab/spark-protocol";
 import {
   ensureSparkPathDirs,
   gitCommand,
-  resolveSparkHome,
   resolveSparkPaths,
+  resolveSparkUserPaths,
   writePrivateFile,
 } from "@zendev-lab/spark-system";
 import { sparkDaemonCliStrings } from "@zendev-lab/spark-i18n/cli";
@@ -501,7 +501,8 @@ async function start(
   const localEventBus = createSparkDaemonLocalEventBus();
   const invocationRegistry = new SparkDaemonInvocationRegistry();
   await migrateLegacyQueueHistory({ db, queueRoot: legacySparkDaemonQueueRoot({ paths }) });
-  const sparkHome = resolveSparkHome();
+  const userPaths = resolveSparkUserPaths();
+  const sparkHome = userPaths.dataRoot;
   const config = existsSync(paths.configFile)
     ? readSparkDaemonConfig(paths)
     : defaultSparkDaemonConfig();
@@ -513,7 +514,10 @@ async function start(
     resolveWorkspaceCwd: (workspaceId) => resolveWorkspaceLocalPath(db, workspaceId),
   });
   const modelControl = createSparkDaemonModelControl({
-    providerControl: createSparkProviderControl({ sparkHome }),
+    providerControl: createSparkProviderControl({
+      authPath: userPaths.authFile,
+      configPath: userPaths.configFile,
+    }),
     sessionRegistry,
   });
   const humanWaits = new SparkDaemonHumanWaitRegistry(db);
@@ -608,7 +612,7 @@ async function start(
   try {
     await startSparkDaemon({
       paths,
-      sparkHome,
+      ...(process.env.SPARK_HOME?.trim() ? { sparkHome: process.env.SPARK_HOME.trim() } : {}),
       config,
       db,
       signal: shutdown.signal,

@@ -57,6 +57,6 @@ void test("Spark workflow registry lists workspace and user workflows", async ()
 void test("Spark workflow registry exposes stable source/ref helpers", () => {
   assert.equal(sparkWorkflowRef("builtin", "research"), "workflow:builtin-research");
   assert.equal(sparkWorkflowRef("workspace", "deep_research"), "workflow:workspace-deep-research");
-  assert.match(userWorkflowDir(), /\.spark\/workflows$/);
+  assert.match(userWorkflowDir(), /\.agents\/workflows$/);
   assert.throws(() => sparkWorkflowRef("workspace", "Bad Name"), /workflow id/);
 });

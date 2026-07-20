@@ -32,8 +32,8 @@ Spark also registers compatibility aliases when the names are not already owned 
 
 ## Storage
 
-Workspace/repo entries default to `.spark/memory/memory.json`. User entries use `${SPARK_HOME:-$HOME/.spark}/memory/memory.json`.
+Workspace/repo entries default to `.spark/memory/memory.json`. User entries use `$SPARK_HOME/memory/memory.json` when `SPARK_HOME` is set, otherwise `${XDG_DATA_HOME:-$HOME/.local/share}/spark/memory/memory.json`.
 
-pi-memory compatibility Markdown defaults to `${SPARK_HOME:-$HOME/.spark}/memory` and can be redirected with the tool `sourceDir` parameter when importing or interoperating with an external Pi memory directory.
+pi-memory compatibility Markdown uses the same user memory directory and can be redirected with the tool `sourceDir` parameter when importing or interoperating with an external Pi memory directory.
 
 Import legacy Markdown with `memory({ action: "import_legacy", apply: false })` to preview, then repeat with `apply: true` only after review. Spark skips duplicate compatibility aliases when another memory package already owns them.

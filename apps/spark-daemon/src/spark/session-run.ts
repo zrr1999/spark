@@ -71,7 +71,7 @@ export interface SparkDaemonTaskExecutorOptions {
   cwd?: string;
   /** Global provider/auth control root; daemon session files remain isolated. */
   controlSparkHome?: string;
-  /** Workspace channels config root (`$SPARK_HOME`); defaults to controlSparkHome. */
+  /** Workspace channels config data root; defaults to controlSparkHome. */
   channelsSparkHome?: string;
   modelControl?: Pick<SparkDaemonModelControl, "effectiveModel" | "prepareModel"> &
     Partial<Pick<SparkDaemonModelControl, "generateSessionRole">>;

@@ -23,7 +23,7 @@ import {
   type RuntimeWorkspaceBindingSummary,
 } from "@zendev-lab/spark-protocol";
 import { SparkSessionMailStore } from "@zendev-lab/spark-session";
-import { resolveSparkHome, writePrivateFile, type SparkPaths } from "@zendev-lab/spark-system";
+import { resolveSparkUserPaths, writePrivateFile, type SparkPaths } from "@zendev-lab/spark-system";
 import { readSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
 import {
   getSparkDaemonServerProfile,
@@ -186,7 +186,7 @@ export function createSparkDaemonUplinkControl(): SparkDaemonUplinkControl {
 
 export interface StartSparkDaemonOptions {
   paths: SparkPaths;
-  /** Global Spark provider/auth control root (normally ~/.spark). */
+  /** Global Spark provider/auth control root. */
   sparkHome?: string;
   modelControl?: SparkDaemonModelControl;
   sessionRegistry?: DaemonSessionRegistry;
@@ -370,6 +370,7 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
       queueRoot: legacySparkDaemonQueueRoot({ paths: options.paths }),
     });
   }
+  const userPaths = resolveSparkUserPaths({ sparkHome: options.sparkHome });
   const scheduler =
     options.runScheduler === false
       ? null
@@ -380,8 +381,8 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
             createChannelAwareTaskExecutor({
               paths: options.paths,
               cwd: process.cwd(),
-              controlSparkHome: resolveSparkHome({ sparkHome: options.sparkHome }),
-              channelsSparkHome: resolveSparkHome({ sparkHome: options.sparkHome }),
+              controlSparkHome: userPaths.configRoot,
+              channelsSparkHome: userPaths.dataRoot,
               ...(options.modelControl ? { modelControl: options.modelControl } : {}),
               ...(options.sessionRegistry ? { sessionRegistry: options.sessionRegistry } : {}),
               channelIngress: {
@@ -516,7 +517,7 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
   const mailStore =
     options.mailStore ??
     new SparkSessionMailStore({
-      sparkHome: resolveSparkHome({ sparkHome: options.sparkHome }),
+      sparkHome: userPaths.dataRoot,
     });
   let notificationReconcileLoop: Promise<void> | undefined;
   let channelDeliveryReconcileLoop: Promise<void> | undefined;
@@ -737,12 +738,12 @@ function prepareChannelIngress(
   channelDeliveryOutbox: DaemonChannelDeliveryOutbox,
 ): DaemonChannelIngressRuntime | null {
   if (options.once || options.runScheduler === false) return null;
-  const sparkHome = resolveSparkHome({ sparkHome: options.sparkHome });
+  const userPaths = resolveSparkUserPaths({ sparkHome: options.sparkHome });
   const invocationStore = new SparkInvocationStore(options.db);
   return (
     options.channelIngress ??
     createDaemonChannelIngressRuntime({
-      sparkHome,
+      sparkHome: userPaths.dataRoot,
       createWorkspaceTransport: createDaemonChannelTransportFactory(options.db),
       ...(options.sessionRegistry ? { sessionRegistry: options.sessionRegistry } : {}),
       hooks: {
@@ -1012,6 +1013,7 @@ function sparkDaemonServerProfileFingerprint(profile: SparkDaemonServerProfile):
 async function runSparkDaemonServerConnection(
   options: SparkDaemonServerConnectionOptions,
 ): Promise<void> {
+  const userPaths = resolveSparkUserPaths({ sparkHome: options.sparkHome });
   let config = shouldRefreshSparkDaemonToken(options.config)
     ? await refreshSparkDaemonCredentials({
         paths: options.paths,
@@ -1212,7 +1214,7 @@ async function runSparkDaemonServerConnection(
         serverUrl: serverUrl ?? undefined,
         runSparkCommand: options.runSparkCommand ?? runSparkCommandBridge,
         cancelSparkInvocation: options.cancelSparkInvocation ?? cancelSparkBridgeInvocation,
-        ...(options.sparkHome ? { sparkHome: options.sparkHome } : {}),
+        controlSparkHome: userPaths.configRoot,
         ...(options.modelControl ? { modelControl: options.modelControl } : {}),
         ...(options.channelIngress ? { channelIngress: options.channelIngress } : {}),
         ...(options.sessionRegistry ? { sessionRegistry: options.sessionRegistry } : {}),
@@ -1322,6 +1324,7 @@ export interface MessageContext {
   runtimeId: string;
   serverUrl?: string;
   sparkHome?: string;
+  controlSparkHome?: string;
   runtimeSessionId: string | undefined;
   setRuntimeSessionId(value: string): void;
   ensureHeartbeat(intervalMs: number): void;
@@ -2137,7 +2140,9 @@ async function executeClaimedCommand(
       route: invocation ? { ...route, invocationId: invocation.invocationId } : route,
       paths: context.paths,
       ...(selectedModel ? { model: `${selectedModel.providerName}/${selectedModel.modelId}` } : {}),
-      ...(context.sparkHome ? { controlSparkHome: context.sparkHome } : {}),
+      ...((context.controlSparkHome ?? context.sparkHome)
+        ? { controlSparkHome: context.controlSparkHome ?? context.sparkHome }
+        : {}),
       db: context.db,
       ...(invocation ? { invocationId: invocation.invocationId, signal: invocation.signal } : {}),
       emit(message) {

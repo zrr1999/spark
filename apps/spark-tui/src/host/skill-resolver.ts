@@ -10,7 +10,7 @@ import {
   parseSkillFrontmatter,
   type SparkSkillFrontmatter,
 } from "@zendev-lab/pi-extension/host-support";
-import { resolveSparkHome, resolveSparkUserPaths } from "@zendev-lab/spark-system";
+import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 
 export { defaultBuiltinSkillsDir, defaultPiCueSkillsDir, parseSkillFrontmatter };
 export type { SparkSkillFrontmatter };
@@ -64,6 +64,7 @@ export class SparkSkillResolver {
   readonly workspaceDir: string;
   readonly workspaceAgentsDirs: string[];
   readonly userDir: string;
+  readonly userDirConfigured: boolean;
   readonly userAgentsDir: string;
   readonly configuredSkillDirs: string[];
 
@@ -80,10 +81,8 @@ export class SparkSkillResolver {
     this.workspaceAgentsDirs =
       options.workspaceAgentsDirs?.map((dir) => resolvePath(dir, this.cwd)) ??
       defaultProjectAgentsSkillsDirs(this.cwd);
-    this.userDir = resolvePath(
-      options.userDir ?? defaultUserSkillsDir(options.sparkHome),
-      this.cwd,
-    );
+    this.userDir = resolvePath(options.userDir ?? defaultUserAgentsSkillsDir(), this.cwd);
+    this.userDirConfigured = options.userDir !== undefined;
     this.userAgentsDir = resolvePath(
       options.userAgentsDir ?? defaultUserAgentsSkillsDir(),
       this.cwd,
@@ -136,12 +135,12 @@ export class SparkSkillResolver {
   }
 }
 
-export function defaultSparkSkillsRoot(sparkHome?: string): string {
-  return resolveSparkHome({ sparkHome });
+export function defaultSparkSkillsRoot(_sparkHome?: string): string {
+  return dirname(defaultUserAgentsSkillsDir());
 }
 
-export function defaultUserSkillsDir(sparkHome?: string): string {
-  return join(defaultSparkSkillsRoot(sparkHome), "skills");
+export function defaultUserSkillsDir(_sparkHome?: string): string {
+  return defaultUserAgentsSkillsDir();
 }
 
 /** Public cross-harness user skills directory; independent of SPARK_HOME. */
@@ -522,7 +521,7 @@ function skillLayerSpecs(
       layer: "workspace",
       // `.agents/skills` follows the shared cross-harness convention: root `.md`
       // files are ignored there, only `SKILL.md` directories are skills. Spark's
-      // own `.spark/skills` and explicitly configured dirs still allow root `.md`
+      // own workspace `.spark/skills` and explicitly configured dirs still allow root `.md`
       // and take precedence over the generic `.agents` location.
       dirs: [
         ...resolver.workspaceAgentsDirs.map((path) => ({ path, rootMarkdownAsSkill: false })),
@@ -534,7 +533,9 @@ function skillLayerSpecs(
       layer: "user",
       dirs: [
         { path: resolver.userAgentsDir, rootMarkdownAsSkill: false },
-        { path: resolver.userDir, rootMarkdownAsSkill: true },
+        ...(resolver.userDirConfigured && resolver.userDir !== resolver.userAgentsDir
+          ? [{ path: resolver.userDir, rootMarkdownAsSkill: true }]
+          : []),
       ],
     },
   ];

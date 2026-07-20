@@ -5,8 +5,8 @@
  * normalized onto session.run / task.start. Adapters never own session tables.
  *
  * Config is workspace-scoped:
- *   $SPARK_HOME/workspaces/<workspaceId>/channels/config.json
- * Legacy global `$SPARK_HOME/channels/config.json` is migrated on demand.
+ *   $SPARK_DATA_ROOT/workspaces/<workspaceId>/channels/config.json
+ * Legacy global `$SPARK_DATA_ROOT/channels/config.json` is migrated on demand.
  */
 
 import {

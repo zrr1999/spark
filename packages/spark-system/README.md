@@ -4,9 +4,11 @@ Filesystem path, private-file permission, command, and local runtime helpers sha
 
 ## Paths
 
-`resolveSparkHome()` resolves the user-level Spark root. `resolveSparkUserPaths()` derives all Spark-owned user configuration and state paths, and `resolveSparkPaths({ app })` derives Cockpit/daemon data, cache, state, and runtime paths.
+`resolveSparkUserPaths()` derives Spark-owned user configuration, data, cache, state, and runtime paths. `resolveSparkPaths({ app })` derives Cockpit/daemon paths from those roots. `resolveSparkHome()` returns the explicit `SPARK_HOME` when configured, otherwise the effective XDG data root for compatibility callers that require one persistent root.
 
-All Spark-owned user paths use one root: explicit API `sparkHome`, then `SPARK_HOME`, then `$HOME/.spark`. Workspace state remains under each workspace `.spark/` directory. Legacy component variables and XDG paths are not active path overrides.
+Precedence is explicit API `sparkHome`, then `SPARK_HOME`; when neither is set, Spark follows `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, and `XDG_RUNTIME_DIR` independently. Workspace state remains under each workspace `.spark/`. Public role, skill, and workflow definitions remain under `$HOME/.agents/`.
+
+Retired Pi/component-specific path variables are not active overrides.
 
 See [`../../docs/specs/configuration-and-paths.md`](../../docs/specs/configuration-and-paths.md) for layout, precedence, and migration policy.
 

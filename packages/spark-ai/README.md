@@ -68,7 +68,7 @@ runtime.
 
 `@zendev-lab/spark-ai/cursor-provider` registers Cursor models through the local
 `@cursor/sdk` agent runtime. It is not enabled by default. Add it to
-`~/.spark/config.json`; `providers` adds plugins on top of Spark's bundled
+`config.json`; `providers` adds plugins on top of Spark's bundled
 providers:
 
 ```json
@@ -109,8 +109,8 @@ remains the separate `--thinking` control; the provider maps it to Cursor
 exposes them.
 
 Model discovery uses `Cursor.models.list({ apiKey })`. Public model metadata is
-cached for 24 hours at `$SPARK_HOME/cursor-sdk-model-list.json` (normally
-`~/.spark/cursor-sdk-model-list.json`) under an API-key fingerprint; the key
+cached for 24 hours at `$SPARK_HOME/cursor-sdk-model-list.json` when `SPARK_HOME` is set, or
+`$XDG_CACHE_HOME/spark/cursor-sdk-model-list.json` otherwise, under an API-key fingerprint; the key
 itself is never stored. Missing auth, an empty catalog, or a discovery failure
 uses a checked-in fallback catalog so model selection remains inspectable.
 Actual runs still require valid Cursor SDK auth.

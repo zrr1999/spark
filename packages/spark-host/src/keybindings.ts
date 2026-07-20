@@ -9,7 +9,7 @@
  *     conventions but live in this file as the single source of truth so
  *     spark-cli can diverge if needed.
  *
- *   - Layer user overrides loaded from `~/.spark/agent/keybindings.json` on
+ *   - Layer user overrides loaded from the effective Spark keybindings path on
  *     top of defaults. The JSON file maps each registered binding id to a
  *     key string (`shift+tab`, `ctrl+o`, etc.). User-provided keys win over
  *     defaults. Bindings not present in the JSON file inherit the default

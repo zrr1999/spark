@@ -17,17 +17,19 @@ Compatibility aliases include `spark-tui`, `spark --print`, and `spark-tui --pri
 
 ## Configuration
 
-All user-level Spark configuration and state use one root. It defaults to `$HOME/.spark`; set one environment variable to relocate the complete tree:
+Spark follows the standard XDG config, data, cache, state, and runtime roots by default. Set `SPARK_HOME` only when one self-contained root is preferred:
 
 ```sh
 export SPARK_HOME=/path/to/spark-home
 ```
 
-With `SPARK_HOME`, the main config is `$SPARK_HOME/config.json`, credentials are `$SPARK_HOME/auth.json`, sessions are under `$SPARK_HOME/sessions/`, keybindings under `$SPARK_HOME/agent/`, prompt templates under `$SPARK_HOME/prompts/`, and themes under `$SPARK_HOME/themes/`. Spark-owned role model settings, workflows, skills, learnings, memory, recall, exports, and share files use sibling paths under the same root. App-specific daemon/Cockpit data uses `$SPARK_HOME/apps/<app>/{data,cache,state,run}`.
+With `SPARK_HOME`, the main config is `$SPARK_HOME/config.json`, credentials are `$SPARK_HOME/auth.json`, sessions are under `$SPARK_HOME/sessions/`, keybindings under `$SPARK_HOME/agent/`, prompt templates under `$SPARK_HOME/prompts/`, and themes under `$SPARK_HOME/themes/`. Spark-owned role model settings, learnings, memory, recall, exports, and share files use sibling paths under the same root. App-specific daemon/Cockpit data uses `$SPARK_HOME/apps/<app>/{data,cache,state,run}`.
 
-Workspace state remains in the current workspace `.spark/`. Cross-harness role and skill definitions continue to load from user and project `.agents/{roles,skills}`. Run `spark paths --json` to inspect the effective paths without creating files.
+Without `SPARK_HOME`, these paths use `$XDG_CONFIG_HOME/spark`, `$XDG_DATA_HOME/spark`, `$XDG_CACHE_HOME/spark`, `$XDG_STATE_HOME/spark`, and `$XDG_RUNTIME_DIR/spark` according to ownership.
 
-The layout is identical whether `SPARK_HOME` is explicit or defaults to `$HOME/.spark`. Legacy component variables and XDG directories are migration sources only and no longer influence current Spark path resolution.
+Workspace state remains in the current workspace `.spark/`. Cross-harness user roles, skills, and workflows load from `~/.agents/{roles,skills,workflows}`; project roles and skills load from `.agents/{roles,skills}`, while workspace-specific Spark skills and workflows use `.spark/{skills,workflows}`. There are no `$SPARK_HOME/skills` or `$SPARK_HOME/workflows` directories. Run `spark paths --json` to inspect effective paths without creating files.
+
+Retired Pi and component-specific storage variables no longer influence path resolution.
 
 The native editor supports `@path`, image paths, `!command`, `!!command`, multiline input, steering, follow-ups, abort/restore, model selection, transcript export, and persisted session resume. Terminal-specific chords and binary clipboard images depend on terminal support.
 
