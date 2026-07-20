@@ -1406,9 +1406,18 @@ void test("Spark native editor expands @file/image refs and bang commands throug
     assert.equal(submitted.length, beforeTooWide);
     assert.match(stripAnsi(harness.render()), /max dimension is 4096px/);
 
+    const bangOutputPattern = /\$ printf spark-bang\nexit: 0\nspark-bang/;
+    const beforeBang = submitted.length;
     await submitEditorText(harness, "!printf spark-bang");
     await harness.flush();
-    assert.match(submitted.at(-1) ?? "", /\$ printf spark-bang\nexit: 0\nspark-bang/);
+    await waitForNativeCondition(
+      () => submitted.slice(beforeBang).some((message) => bangOutputPattern.test(message)),
+      "the bang command output to reach the submit path",
+    );
+    assert.match(
+      submitted.slice(beforeBang).find((message) => bangOutputPattern.test(message)) ?? "",
+      bangOutputPattern,
+    );
 
     const beforeHidden = submitted.length;
     await submitEditorText(harness, "!!printf hidden-bang");

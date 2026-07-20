@@ -389,13 +389,7 @@ void test("spark cockpit assign crosses the real daemon RPC without starting HTT
     });
     assert.equal(existsSync(join(root, "assignments", "v1", "assignments.json")), false);
   } finally {
-    if (child.connected) {
-      const stopped = waitForAcceptanceMessage(child, "stopped");
-      const exited = waitForChildExit(child);
-      child.send({ action: "stop" });
-      await stopped;
-      await exited;
-    }
+    await stopCockpitAcceptanceDaemon(child);
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -535,6 +529,22 @@ function waitForChildExit(child: ChildProcess): Promise<void> {
       else reject(new Error(`Cockpit acceptance daemon exited with code ${String(code)}.`));
     });
   });
+}
+
+async function stopCockpitAcceptanceDaemon(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null || !child.connected) return;
+
+  const exited = waitForChildExit(child);
+  const sendError = await new Promise<Error | undefined>((resolve) => {
+    child.send({ action: "stop" }, (error) => resolve(error ?? undefined));
+  });
+  if (sendError) {
+    const code = (sendError as NodeJS.ErrnoException).code;
+    if (code !== "EPIPE" && code !== "ERR_IPC_CHANNEL_CLOSED") throw sendError;
+    await exited.catch(() => undefined);
+    return;
+  }
+  await exited;
 }
 
 function fixtureCockpitOptions() {

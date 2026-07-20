@@ -70,6 +70,7 @@
     "@j178/prek": "0.4.6",
     "@types/node": "^26.1.1",
     "@zendev-lab/spark-system": "workspace:*",
+    "tsx": "^4.20.5",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:",
