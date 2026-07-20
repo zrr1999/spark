@@ -206,7 +206,10 @@ export async function createCockpitSnapshot(input: {
 
   try {
     const databasePath = join(temporary, snapshotDatabaseFile);
-    await backup(input.sourceDb, databasePath);
+    // Snapshot databases are copied from dedicated read-only connections. Copy all
+    // remaining pages in one step so the backup is not repeatedly requeued behind
+    // unrelated libuv thread-pool work on loaded CI and production hosts.
+    await backup(input.sourceDb, databasePath, { rate: -1 });
     chmodSync(databasePath, 0o600);
     const summary = inspectDatabaseFile(databasePath);
     const manifest: CockpitSnapshotManifest = {
