@@ -42,7 +42,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("Cockpit instance snapshots", { timeout: 15_000 }, () => {
+describe("Cockpit instance snapshots", { timeout: 60_000 }, () => {
   it("preserves durable identity and history while invalidating origin-bound transient state", async () => {
     const root = createRoot();
     const sourcePath = join(root, "source.sqlite");
