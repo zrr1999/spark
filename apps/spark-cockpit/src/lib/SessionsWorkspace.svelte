@@ -768,4 +768,24 @@
     font-size: 15px;
     font-weight: 650;
   }
+
+  @media (max-width: 960px) {
+    .sessions-stage,
+    .sessions-stage.has-selection {
+      grid-template-columns: minmax(0, 1fr);
+      height: 100%;
+      min-height: 0;
+    }
+
+    .details-pane {
+      display: none;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .stage-pane {
+      gap: 12px;
+      padding: 14px 12px;
+    }
+  }
 </style>
