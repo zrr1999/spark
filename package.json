@@ -23,6 +23,9 @@
   "scripts": {
     "check": "pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && pnpm run check:boundaries && node scripts/check-doc-terminology.mjs && vp check && vp test run --config vitest.root.config.ts && pnpm -r --filter './packages/*' --filter './apps/*' run check && pnpm --filter @zendev-lab/spark-cockpit run test && pnpm --filter @zendev-lab/spark-daemon run test",
     "check:boundaries": "depcruise --config .dependency-cruiser.cjs apps packages test",
+    "check:knip": "knip --no-progress --no-config-hints || true",
+    "check:dup": "mkdir -p reports/jscpd && jscpd --config .jscpd.json apps packages || true",
+    "check:complexity": "vp lint -c .oxlintrc.complexity.json apps packages 2>&1 | head -n 200 || true",
     "check:tsc": "vp check --no-fmt --no-lint",
     "check:daemon-readiness": "node --experimental-strip-types scripts/spark-daemon-readiness.mts",
     "check:cue-harness": "node --experimental-strip-types scripts/spark-cue-harness.mts --no-exercise",
@@ -70,6 +73,8 @@
     "@types/node": "^26.1.1",
     "@zendev-lab/spark-system": "workspace:*",
     "dependency-cruiser": "^18.1.0",
+    "jscpd": "^5.0.12",
+    "knip": "^6.27.0",
     "tsx": "^4.20.5",
     "typescript": "catalog:",
     "vite": "catalog:",
