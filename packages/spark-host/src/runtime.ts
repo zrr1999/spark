@@ -47,6 +47,7 @@ import {
   parseSparkInteractionRequest,
   parseSparkInteractionResponse,
   type SparkDaemonEvent,
+  type SparkHostBuiltinEventName,
   type SparkInteractionRequest,
   type SparkInteractionResponse,
   type SparkViewModelEvent,
@@ -62,9 +63,11 @@ import type {
   EventListener,
   EventListenerMap,
   EventName,
+  BuiltinEventPayloadMap,
   OutboxEnvelope,
   RegisteredCommand,
   RegisteredCommandMap,
+  RegisteredEventListener,
   RegisteredTool,
   RegisteredToolMap,
   SparkHostMessageRenderer,
@@ -207,10 +210,16 @@ export class SparkHostRuntime implements SparkHostAPI {
     this.commands.set(name, this.toRegisteredCommand(config));
   };
 
-  on = (event: string, handler: EventListener): void => {
-    const list = this.listeners.get(event) ?? [];
-    list.push(handler);
-    this.listeners.set(event, list);
+  on = <E extends string>(
+    event: E,
+    handler: E extends SparkHostBuiltinEventName
+      ? (event: BuiltinEventPayloadMap[E], ctx: SparkHostContext) => unknown
+      : EventListener,
+  ): void => {
+    const key = event as EventName;
+    const list = this.listeners.get(key) ?? [];
+    list.push(handler as RegisteredEventListener);
+    this.listeners.set(key, list);
   };
 
   sendMessage = (
@@ -339,8 +348,11 @@ export class SparkHostRuntime implements SparkHostAPI {
    * listener results in registration order, awaiting any thenables. The agent
    * turn loop will drive this for `session_start`, `turn_start`, etc.
    */
-  async emit(event: EventName, payload?: unknown): Promise<unknown[]> {
-    const listeners = this.listeners.get(event);
+  async emit<E extends string>(
+    event: E,
+    payload?: E extends SparkHostBuiltinEventName ? BuiltinEventPayloadMap[E] : unknown,
+  ): Promise<unknown[]> {
+    const listeners = this.listeners.get(event as EventName);
     if (!listeners?.length) return [];
     const ctx = this.makeContext();
     const results: unknown[] = [];

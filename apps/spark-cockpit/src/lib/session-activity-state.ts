@@ -1,8 +1,8 @@
-import type { SparkSessionView } from "@zendev-lab/spark-protocol";
+import type { SparkSessionView, SparkSessionActivityPhase } from "@zendev-lab/spark-protocol";
 import { resolveSessionPendingTurns, type CockpitPendingTurn } from "./session-pending-turns";
 import { sessionIsWorking } from "./session-working-state";
 
-export type SessionActivityPhase = "idle" | "queued" | "running";
+export type SessionActivityPhase = SparkSessionActivityPhase;
 
 export type SessionActivityState = {
   phase: SessionActivityPhase;

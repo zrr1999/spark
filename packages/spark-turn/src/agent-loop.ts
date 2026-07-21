@@ -114,12 +114,14 @@ import {
   sparkTextPhaseFromSignature,
   summarizeToolCallArguments,
   summarizeToolResultContent,
+  type SparkAgentLoopEventType,
   type SparkArtifactView,
   type SparkConversationPart,
   type SparkEvidenceView,
   type SparkInteractionRequest,
   type SparkInteractionResponse,
   type SparkMessageView,
+  type SparkRunOutcomeStatus,
   type SparkRunView,
   type SparkTaskTodoView,
   type SparkTaskView,
@@ -191,15 +193,19 @@ export type SparkToolApprovalRejectAction = "ask" | "deny";
 export type SparkToolApprovalReviewOutcome = "approved" | "needs_changes" | "blocked";
 
 export type SparkRunOutcome =
-  | { status: "completed"; assistant: AssistantMessage; roundtrips: number }
   | {
-      status: "aborted";
+      status: Extract<SparkRunOutcomeStatus, "completed">;
+      assistant: AssistantMessage;
+      roundtrips: number;
+    }
+  | {
+      status: Extract<SparkRunOutcomeStatus, "aborted">;
       assistant: AssistantMessage;
       roundtrips: number;
       reason: string;
     }
   | {
-      status: "failed";
+      status: Extract<SparkRunOutcomeStatus, "failed">;
       assistant: AssistantMessage;
       roundtrips: number;
       errorMessage: string;
@@ -289,17 +295,27 @@ export interface SparkAgentLoopOptions {
   getReasoning?: () => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined;
 }
 
+/**
+ * Turn-loop subscriber events. Discriminants are single-sourced in
+ * `@zendev-lab/spark-protocol` (`SPARK_AGENT_LOOP_EVENT_TYPES`). AI message
+ * payloads use spark-ai / pi-ai types (not protocol view projections);
+ * `view_event` carries protocol `SparkViewModelEvent`.
+ */
 export type SparkAgentLoopEvent =
-  | { type: "stream_event"; event: AssistantMessageEvent }
-  | { type: "user_message"; message: Message }
-  | { type: "runtime_message"; item: SparkPromptItem }
-  | { type: "prompt_manifest"; manifest: SparkPromptManifest }
-  | { type: "tool_result"; message: ToolResultMessage }
-  | { type: "turn_complete"; assistant: AssistantMessage; reason: AssistantMessage["stopReason"] }
-  | { type: "run_outcome"; outcome: SparkRunOutcome }
-  | { type: "view_event"; event: SparkViewModelEvent }
-  | { type: "abort"; reason: string }
-  | { type: "error"; message: string };
+  | { type: Extract<SparkAgentLoopEventType, "stream_event">; event: AssistantMessageEvent }
+  | { type: Extract<SparkAgentLoopEventType, "user_message">; message: Message }
+  | { type: Extract<SparkAgentLoopEventType, "runtime_message">; item: SparkPromptItem }
+  | { type: Extract<SparkAgentLoopEventType, "prompt_manifest">; manifest: SparkPromptManifest }
+  | { type: Extract<SparkAgentLoopEventType, "tool_result">; message: ToolResultMessage }
+  | {
+      type: Extract<SparkAgentLoopEventType, "turn_complete">;
+      assistant: AssistantMessage;
+      reason: AssistantMessage["stopReason"];
+    }
+  | { type: Extract<SparkAgentLoopEventType, "run_outcome">; outcome: SparkRunOutcome }
+  | { type: Extract<SparkAgentLoopEventType, "view_event">; event: SparkViewModelEvent }
+  | { type: Extract<SparkAgentLoopEventType, "abort">; reason: string }
+  | { type: Extract<SparkAgentLoopEventType, "error">; message: string };
 
 export class SparkAgentLoop {
   readonly host: SparkTurnHost;

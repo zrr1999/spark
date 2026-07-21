@@ -10,6 +10,7 @@ export * from "./command-events.ts";
 export * from "./command-sources.ts";
 export * from "./display-error.ts";
 export * from "./errors.ts";
+export * from "./host-events.ts";
 export * from "./human-interaction.ts";
 export * from "./invocation-lifecycle.ts";
 export * from "./model-control.ts";
