@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   sparkInvocationEventSchema,
   sparkTurnCancelRequestSchema,
+  sparkTurnSubmitRequestSchema,
   sparkTurnStatusResultSchema,
   sparkTurnStreamPageSchema,
   sparkTurnSubmitResultSchema,
@@ -45,6 +46,45 @@ describe("invocation lifecycle protocol", () => {
     expect(JSON.stringify({ submit, status, page, cancel })).not.toMatch(
       /filePath|inbox|processed|failed|queueState/u,
     );
+  });
+
+  it("accepts valid provider/model in submit request schema", () => {
+    const valid = sparkTurnSubmitRequestSchema.parse({
+      sessionId: "sess-1",
+      prompt: "hello",
+      model: "anthropic/claude-sonnet-4-20250514",
+    });
+    expect(valid.model).toBe("anthropic/claude-sonnet-4-20250514");
+
+    // Without model — should be undefined
+    const noModel = sparkTurnSubmitRequestSchema.parse({
+      sessionId: "sess-1",
+      prompt: "hello",
+    });
+    expect(noModel.model).toBeUndefined();
+
+    // Invalid model formats
+    expect(() =>
+      sparkTurnSubmitRequestSchema.parse({
+        sessionId: "sess-1",
+        prompt: "hello",
+        model: "no-slash",
+      }),
+    ).toThrow();
+    expect(() =>
+      sparkTurnSubmitRequestSchema.parse({
+        sessionId: "sess-1",
+        prompt: "hello",
+        model: "/leading-slash",
+      }),
+    ).toThrow();
+    expect(() =>
+      sparkTurnSubmitRequestSchema.parse({
+        sessionId: "sess-1",
+        prompt: "hello",
+        model: "has space/model",
+      }),
+    ).toThrow();
   });
 
   it("rejects queue-shaped ids and oversized event pages", () => {

@@ -577,6 +577,144 @@ describe("daemon session control admission", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+  it("propagates explicit --model from CLI through to frozen invocation task", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-session-model-propagation-"));
+    const db = openMemoryDatabase();
+    migrateSparkDaemonDatabase(db);
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const sessionRegistry = createDaemonSessionRegistry(join(root, ".spark"), {
+      daemonId: "model-propagation-test",
+      daemonCwd: root,
+    });
+    await sessionRegistry.create({ sessionId: "session-model", scope: { kind: "daemon" } });
+
+    const effectiveModel = vi.fn(async () => ({
+      providerName: "default-provider",
+      modelId: "default-model",
+    }));
+    const modelControl = {
+      effectiveModel,
+      prepareModel: vi.fn(async () => undefined),
+      effectiveThinkingLevel: vi.fn(async () => undefined),
+    } as unknown as SparkDaemonModelControl;
+
+    try {
+      // Submit with explicit model in payload
+      const submitted = await executeSparkDaemonSessionControl(
+        { paths, db, sessionRegistry, modelControl, actor: "spark-daemon-local-rpc" },
+        {
+          kind: "turn.submit.request",
+          scope: "any",
+          sessionId: "session-model",
+          payload: {
+            sessionId: "session-model",
+            prompt: "use explicit model",
+            model: "anthropic/claude-sonnet-4-20250514",
+          },
+        },
+      );
+      const invocation = new SparkInvocationStore(db).require(submitted.invocationId!);
+      // The explicit model must be frozen into the task, bypassing modelControl
+      expect(invocation.task).toMatchObject({ model: "anthropic/claude-sonnet-4-20250514" });
+      // modelControl.effectiveModel should NOT have been called
+      expect(effectiveModel).not.toHaveBeenCalled();
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects invalid model format in turn submission", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-session-model-validation-"));
+    const db = openMemoryDatabase();
+    migrateSparkDaemonDatabase(db);
+    const paths = resolveSparkPaths({ app: "daemon", env: { HOME: root } });
+    const sessionRegistry = createDaemonSessionRegistry(join(root, ".spark"), {
+      daemonId: "model-validation-test",
+      daemonCwd: root,
+    });
+    await sessionRegistry.create({ sessionId: "session-invalid-model", scope: { kind: "daemon" } });
+
+    try {
+      // Model without provider/ prefix should be rejected by schema
+      await expect(
+        executeSparkDaemonSessionControl(
+          { paths, db, sessionRegistry, actor: "spark-daemon-local-rpc" },
+          {
+            kind: "turn.submit.request",
+            scope: "any",
+            sessionId: "session-invalid-model",
+            payload: {
+              sessionId: "session-invalid-model",
+              prompt: "bad model",
+              model: "just-a-model-name",
+            },
+          },
+        ),
+      ).rejects.toThrow();
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to modelControl when no explicit model is provided", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-session-model-fallback-"));
+    const db = openMemoryDatabase();
+    migrateSparkDaemonDatabase(db);
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const sessionRegistry = createDaemonSessionRegistry(join(root, ".spark"), {
+      daemonId: "model-fallback-test",
+      daemonCwd: root,
+    });
+    await sessionRegistry.create({ sessionId: "session-fallback", scope: { kind: "daemon" } });
+
+    const effectiveModel = vi.fn(async () => ({ providerName: "openai", modelId: "gpt-4o" }));
+    const modelControl = {
+      effectiveModel,
+      prepareModel: vi.fn(async () => undefined),
+      effectiveThinkingLevel: vi.fn(async () => undefined),
+    } as unknown as SparkDaemonModelControl;
+
+    try {
+      const submitted = await executeSparkDaemonSessionControl(
+        { paths, db, sessionRegistry, modelControl, actor: "spark-daemon-local-rpc" },
+        {
+          kind: "turn.submit.request",
+          scope: "any",
+          sessionId: "session-fallback",
+          payload: {
+            sessionId: "session-fallback",
+            prompt: "no explicit model",
+          },
+        },
+      );
+      const invocation = new SparkInvocationStore(db).require(submitted.invocationId!);
+      expect(invocation.task).toMatchObject({ model: "openai/gpt-4o" });
+      expect(effectiveModel).toHaveBeenCalledTimes(1);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 function deferred<T>(): {

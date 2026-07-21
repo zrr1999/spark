@@ -967,6 +967,12 @@ export async function runSparkCli(
             json: true,
             sessionId,
             prompt: command.prompt,
+            model:
+              command.options?.model &&
+              command.options.provider &&
+              !command.options.model.includes("/")
+                ? `${command.options.provider}/${command.options.model}`
+                : command.options?.model,
             reset: command.options?.noSession,
           },
           daemonClient,

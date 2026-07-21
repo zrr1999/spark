@@ -443,6 +443,7 @@ export interface SparkDaemonSubmitCommand extends SparkDaemonCliCommandBase {
   sessionId: string;
   prompt: string;
   idempotencyKey?: string;
+  model?: string;
   reset?: boolean;
   assignment?: SparkAssignment;
 }
@@ -1012,6 +1013,7 @@ export async function handleSparkDaemonCliCommand(
             sessionId: command.sessionId,
             prompt: command.prompt,
             idempotencyKey: command.idempotencyKey,
+            model: command.model,
             reset: command.reset,
             ...(command.assignment ? { assignment: command.assignment } : {}),
           },
