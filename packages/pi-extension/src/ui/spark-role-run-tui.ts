@@ -30,12 +30,7 @@ export interface SparkRoleRunTuiRenderOptions {
 const MAX_ROLE_RUN_BOARD_LINES = 8;
 const RECENT_TERMINAL_MS = 10 * 60_000;
 const TERMINAL_STATUSES = new Set<SparkRoleRunObservedStatus>(["done", "failed", "cancelled"]);
-const PROBLEM_STATUSES = new Set<SparkRoleRunObservedStatus>([
-  "failed",
-  "cancelled",
-  "interrupted",
-  "stale",
-]);
+const PROBLEM_STATUSES = new Set<SparkRoleRunObservedStatus>(["interrupted", "stale"]);
 const ACTIVE_STATUSES = new Set<SparkRoleRunObservedStatus>(["queued", "waiting", "running"]);
 
 export function formatSparkRoleRunStatusSummary(
