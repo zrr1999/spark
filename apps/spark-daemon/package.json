@@ -43,6 +43,7 @@
   },
   "devDependencies": {
     "@types/ws": "catalog:",
+    "@zendev-lab/spark-coordination": "workspace:*",
     "@zendev-lab/spark-db": "workspace:*",
     "esbuild": "^0.28.0",
     "typescript": "catalog:",

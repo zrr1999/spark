@@ -11,15 +11,13 @@ import {
   type ServerCommandEnvelope,
 } from "@zendev-lab/spark-protocol";
 import { resolveSparkPaths } from "@zendev-lab/spark-system";
-import { createWorkspaceWithOwnerBinding } from "../../../packages/spark-coordination/src/projection-services.ts";
-import {
-  requireRuntimeControlCommand,
-  submitRuntimeControlCommand,
-} from "../../../packages/spark-coordination/src/runtime-control.ts";
 import {
   attachRuntimeWebSocket,
+  createWorkspaceWithOwnerBinding,
+  requireRuntimeControlCommand,
+  submitRuntimeControlCommand,
   type RuntimeWebSocketConnection,
-} from "../../../packages/spark-coordination/src/runtime-ws.ts";
+} from "@zendev-lab/spark-coordination";
 import {
   handleCommand,
   handleServerMessage,

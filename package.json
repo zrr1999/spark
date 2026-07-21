@@ -21,7 +21,8 @@
   },
   "type": "module",
   "scripts": {
-    "check": "pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && node scripts/check-pi-boundaries.mjs && node scripts/check-doc-terminology.mjs && vp check && vp test run --config vitest.root.config.ts && pnpm -r --filter './packages/*' --filter './apps/*' run check && pnpm --filter @zendev-lab/spark-cockpit run test && pnpm --filter @zendev-lab/spark-daemon run test",
+    "check": "pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && pnpm run check:boundaries && node scripts/check-doc-terminology.mjs && vp check && vp test run --config vitest.root.config.ts && pnpm -r --filter './packages/*' --filter './apps/*' run check && pnpm --filter @zendev-lab/spark-cockpit run test && pnpm --filter @zendev-lab/spark-daemon run test",
+    "check:boundaries": "depcruise --config .dependency-cruiser.cjs apps packages test",
     "check:tsc": "vp check --no-fmt --no-lint",
     "check:daemon-readiness": "node --experimental-strip-types scripts/spark-daemon-readiness.mts",
     "check:cue-harness": "node --experimental-strip-types scripts/spark-cue-harness.mts --no-exercise",
@@ -68,6 +69,7 @@
     "@j178/prek": "0.4.6",
     "@types/node": "^26.1.1",
     "@zendev-lab/spark-system": "workspace:*",
+    "dependency-cruiser": "^18.1.0",
     "tsx": "^4.20.5",
     "typescript": "catalog:",
     "vite": "catalog:",

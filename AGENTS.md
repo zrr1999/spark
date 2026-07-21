@@ -21,7 +21,7 @@ Target package topology follows type-first names:
 
 - **pnpm** — `packageManager` is pinned in root `package.json`; workspaces live in `pnpm-workspace.yaml` (catalog + overrides align Vite / Vite+ / Vitest versions with [sixbones.dev](https://github.com/zrr1999/sixbones.dev)).
 - **Vite+** — Root [`vite.config.ts`](./vite.config.ts) drives `vp fmt`, `vp lint`, and `vp check` (format + lint + type-aware checks). Install the `vp` CLI (see [viteplus.dev](https://viteplus.dev)) for local use; CI installs it via [`voidzero-dev/setup-vp`](https://github.com/voidzero-dev/setup-vp).
-- **TypeScript / tests** — `pnpm run check` is the root validation gate: SvelteKit sync, Pi package boundary guard, `vp check`, root Vitest suite (`test/**/*.test.ts` via `vitest.root.config.ts`), workspace package checks, Spark Cockpit tests, and Spark daemon tests. Use `pnpm run check:tsc` for typecheck-only validation. Use `pnpm test` for the root Vitest suite only; single-file runs use `pnpm test:file -- test/name.test.ts`. Package-specific tests use `pnpm --filter <package> run test`.
+- **TypeScript / tests** — `pnpm run check` is the root validation gate: SvelteKit sync, package boundary guard (`dependency-cruiser` via `pnpm run check:boundaries`), `vp check`, root Vitest suite (`test/**/*.test.ts` via `vitest.root.config.ts`), workspace package checks, Spark Cockpit tests, and Spark daemon tests. Use `pnpm run check:tsc` for typecheck-only validation. Use `pnpm test` for the root Vitest suite only; single-file runs use `pnpm test:file -- test/name.test.ts`. Package-specific tests use `pnpm --filter <package> run test`.
 - **Git hooks** — Managed by [prek](https://github.com/j178/prek) from [`prek.toml`](./prek.toml). After clone, `pnpm install` runs `prepare` → `prek install`; run `prek install-hooks` once if hooks are missing.
 
 ## Useful commands
@@ -58,7 +58,7 @@ Target package topology follows type-first names:
 - Spark extension/shared packages must not import concrete app host internals from `apps/spark-cli`, `apps/spark-tui`, `@zendev-lab/spark-tui-app`, or `@earendil-works/pi-coding-agent` runtime code.
 - Shared Spark host/turn code belongs in `packages/spark-host` and `packages/spark-turn`; executable apps keep only bootstrap, UI, daemon, and compatibility-adapter glue. `pi-tui` wrappers stay behind `packages/spark-tui`.
 - Prefer Spark-native host tests when changing extension behavior. Keep dual-host contract tests (`test/spark-ext-host-contract.test.ts`, `test/spark-host-runtime-cross.test.ts`) only while the Pi product path remains loadable; do not grow new Pi-product-only APIs.
-- Keep builtin extension loading explicit for Spark native hosts; do not reintroduce Pi **product** package discovery or `loadPiSdk` into Spark apps. Direct `@earendil-works/pi-ai` / `pi-tui` use must stay behind the existing Spark package boundaries.
+- Keep builtin extension loading explicit for Spark native hosts; do not reintroduce Pi **product** package discovery or `loadPiSdk` into Spark apps. Direct `@earendil-works/pi-ai` / `pi-tui` use must stay behind the existing Spark package boundaries (`spark-ai` / `spark-tui`+`spark-text`); enforced by `pnpm run check:boundaries` (dependency-cruiser).
 
 ## Notes for agents
 

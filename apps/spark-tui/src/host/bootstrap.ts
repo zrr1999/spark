@@ -1,13 +1,13 @@
 /** Spark TUI native host service construction. */
 
 import { basename, join, resolve } from "node:path";
-import type { Model } from "@earendil-works/pi-ai";
 import { stableId, type SparkHostAPI } from "@zendev-lab/spark-core";
 import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 import {
   createProviderRegistryLeafRunner,
   createProviderRegistryStreamFunction,
   createProviderRegistryWorkflowModelRunner,
+  type Model,
 } from "@zendev-lab/spark-ai";
 import {
   DEFAULT_SPARK_IDENTITY_PROMPT,

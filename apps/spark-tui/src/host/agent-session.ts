@@ -1,7 +1,11 @@
 /** Persisted Spark agent session facade shared by TUI/daemon-style callers. */
 
-import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai";
-import { classifyProviderFailure } from "@zendev-lab/spark-ai";
+import {
+  classifyProviderFailure,
+  type AssistantMessage,
+  type Message,
+  type UserMessage,
+} from "@zendev-lab/spark-ai";
 import { sparkTextPhaseFromSignature } from "@zendev-lab/spark-protocol";
 import {
   SPARK_PROMPT_ITEM_METADATA_KEY,
