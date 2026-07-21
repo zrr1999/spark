@@ -36,7 +36,6 @@
   import { formatRelativeTime, statusLabel as getStatusLabel, type AppMessages } from "$lib/i18n";
   import SessionAskPanel from "$lib/SessionAskPanel.svelte";
   import type { PendingWorkbenchAsk } from "$lib/pending-ask";
-  import SessionInspector from "$lib/SessionInspector.svelte";
   import {
     cancelledTurnIdFromActionResult,
     queuedTurnIdFromActionResult,
@@ -55,7 +54,6 @@
   } from "$lib/session-draft";
   import {
     initialSessionEventConnectionState,
-    openingSessionEventConnectionState,
     type SessionEventConnectionState,
   } from "$lib/session-event-connection";
   import {
@@ -68,19 +66,14 @@
     scheduleCockpitActionAfterCurrentEvent,
   } from "$lib/slash-actions";
   import {
-    applySessionLiveEvent,
     beginSessionActivityRefresh,
     canStartSessionActivityRefresh,
     createSessionActivityRefreshState,
     createSessionLiveEventState,
     finishSessionActivityRefresh,
-    parseSessionSerializedEvent,
     reconcileSessionLiveEventState,
-    registerQueuedSessionTurn,
-    settleCancelledSessionTurn,
     convergeSessionLiveEventStateFromRegistryStatus,
     requestSessionActivityRefresh,
-    sessionEventCursorStorageKey,
     shouldAdoptSessionHistory,
     sessionViewRevisionKey,
     type SessionLiveEventState,
@@ -98,11 +91,7 @@
     type SessionTimelineItem,
   } from "$lib/session-timeline";
   import {
-    hydrateSessionConversationWindow,
-    mergeEarlierSessionSnapshotWindow,
-    parseSessionSnapshotWindow,
     SESSION_CONVERSATION_ANCHOR_BATCH,
-    SESSION_SNAPSHOT_PAGE_SIZE,
     sessionConversationAnchorCount,
     type SessionSnapshotHistory,
     type SessionSnapshotWindow,
@@ -129,6 +118,44 @@
   import type { CockpitMessages } from "@zendev-lab/spark-i18n";
   import type { SubmitFunction } from "@sveltejs/kit";
   import { onMount, tick, untrack } from "svelte";
+  import SessionDetailsPanel from "$lib/sessions-workspace/SessionDetailsPanel.svelte";
+  import SessionStartPane from "$lib/sessions-workspace/SessionStartPane.svelte";
+  import SessionConversationPane from "$lib/sessions-workspace/SessionConversationPane.svelte";
+  import type { SessionConversationHost } from "$lib/sessions-workspace/conversation-host";
+  import type { SessionActivity } from "$lib/sessions-workspace/types";
+  import {
+    applyCancelSubmitResult,
+    applyDequeueSubmitResult,
+    beginCancelSubmit,
+    beginDequeueSubmit,
+    resetCancelUiForActiveTurn,
+    resetDequeueUiOnSessionChange,
+  } from "$lib/sessions-workspace/cancel-dequeue";
+  import { resultMessage, resultModel } from "$lib/sessions-workspace/form-results";
+  import { buildModelGroups as buildModelGroupsFromProviders } from "$lib/sessions-workspace/model-groups";
+  import {
+    attachSessionLiveEventSource,
+    attachSessionStatusProbe,
+  } from "$lib/sessions-workspace/live-connection";
+  import {
+    connectionLabel as resolveConnectionLabel,
+    compactWorkingDirectory,
+    isNavigationTurn,
+    modelValue,
+    navigationSummary,
+    queueRemoveFormId,
+    sessionMessageInvocationId,
+  } from "$lib/sessions-workspace/presentation";
+  import { slashActionAvailability as resolveSlashAvailability } from "$lib/sessions-workspace/slash-availability";
+  import {
+    adoptCancelledTurnIntoLiveState,
+    adoptQueuedTurnIntoLiveState,
+  } from "$lib/sessions-workspace/turn-adoption";
+  import {
+    bumpTimelineRenderLimit,
+    loadEarlierSessionTimeline,
+  } from "$lib/sessions-workspace/timeline-window";
+  import { buildInspectorLabels } from "$lib/sessions-workspace/ask-inspector.svelte";
 
   type SessionRecord = {
     sessionId: string;
@@ -155,48 +182,6 @@
     name: string;
   };
 
-  type SessionActivityCommand = {
-    id: string;
-    title: string | null;
-    goal: string | null;
-    status: string;
-    deliveryStatus: string | null;
-    runtimeName: string | null;
-    runtimeStatus: string | null;
-    invocationId: string | null;
-    invocationStatus: string | null;
-    latestLog: string | null;
-    latestLogAt: string | null;
-    createdAt: string;
-    updatedAt: string;
-  };
-
-  type SessionActivityReport = {
-    id: string;
-    kind: string;
-    title: string;
-    text: string;
-    role: string | null;
-    status: string | null;
-    createdAt: string;
-    runKind?: string;
-    message?: SparkMessageView;
-  };
-
-  type SessionActivityQueuedTurn = {
-    commandId: string;
-    invocationId: string;
-    prompt: string;
-    status: "queued" | "running";
-    createdAt: string;
-    startedAt: string | null;
-  };
-
-  type SessionActivity = {
-    commands: SessionActivityCommand[];
-    queuedTurns?: SessionActivityQueuedTurn[];
-    reports: SessionActivityReport[];
-  };
 
   type FormValues = {
     workspaceId?: string;
@@ -311,7 +296,7 @@
   let modelProviders = $derived(
     modelControl.snapshot.providers.filter((provider) => provider.models.length > 0),
   );
-  let modelGroups = $derived(buildModelGroups(modelProviders));
+  let modelGroups = $derived(buildModelGroupsFromProviders(modelProviders, messages.workbench));
   let activeWorkspace = $derived(
     workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null,
   );
@@ -604,57 +589,7 @@
     budgetExhausted: copy.budgetExhausted,
     budgetExhaustedHint: copy.budgetExhaustedHint,
   });
-  let inspectorLabels = $derived<SessionInspectorLabels>({
-    ariaLabel: copy.inspectorAria,
-    tabs: {
-      summary: copy.summaryTab,
-      artifacts: copy.artifactsTab,
-      changes: copy.changesTab,
-      tasks: copy.tasksTab,
-      messages: copy.messagesTab,
-    },
-    summaryHeading: copy.summaryHeading,
-    artifactsHeading: copy.artifactsHeading,
-    tasksHeading: copy.tasksHeading,
-    changesHeading: copy.changesHeading,
-    messagesHeading: copy.messagesHeading,
-    noTasksTitle: copy.noTasksTitle,
-    noTasksBody: copy.noTasksBody,
-    noArtifactsTitle: copy.noArtifactsTitle,
-    noArtifactsBody: copy.noArtifactsBody,
-    noChangesTitle: copy.noChangesTitle,
-    noChangesBody: copy.noChangesBody,
-    noMessagesTitle: copy.noMessagesTitle,
-    noMessagesBody: copy.noMessagesBody,
-    noSessionTodoTitle: copy.noSessionTodoTitle,
-    noSessionTodoBody: copy.noSessionTodoBody,
-    noActiveSessionTodo: copy.noActiveSessionTodo,
-    unassignedProject: copy.unassignedProject,
-    progress: copy.progress,
-    todoList: copy.todoList,
-    sessionTodoHeading: copy.sessionTodoHeading,
-    openSessionTodo: copy.openSessionTodo,
-    sessionTodoPending: copy.sessionTodoPending,
-    sessionTodoInProgress: copy.sessionTodoInProgress,
-    messageFrom: copy.messageFrom,
-    messageRequest: copy.messageRequest,
-    messageQuestion: copy.messageQuestion,
-    messageNotification: copy.messageNotification,
-    messageUnread: copy.messageUnread,
-    messageRead: copy.messageRead,
-    messageAcknowledged: copy.messageAcknowledged,
-    messageDeliveryPending: copy.messageDeliveryPending,
-    messageDeliveryDelivered: copy.messageDeliveryDelivered,
-    messageDeliveryFailed: copy.messageDeliveryFailed,
-    messageDeliveryUncertain: copy.messageDeliveryUncertain,
-    sessionId: copy.sessionId,
-    sessionStatus: copy.sessionStatus,
-    workingDirectory: copy.workingDirectory,
-    model: copy.contextModel,
-    createdAt: copy.createdAt,
-    updatedAt: copy.updatedAt,
-    unavailable: copy.unavailable,
-  });
+  let inspectorLabels = $derived(buildInspectorLabels(copy));
   let workbenchView = $derived.by(() => {
     if (!liveSessionView) return null;
     const effectiveStatus: "running" | "idle" = conversationBusy ? "running" : "idle";
@@ -687,9 +622,10 @@
 
     const nextServerViewKey = sessionViewRevisionKey(sessionView);
     if (sessionId !== liveSessionId) {
-      dequeueState = "idle";
-      dequeueFeedback = null;
-      dequeuingTurnId = null;
+      const reset = resetDequeueUiOnSessionChange();
+      dequeueState = reset.dequeueState;
+      dequeueFeedback = reset.dequeueFeedback;
+      dequeuingTurnId = reset.dequeuingTurnId;
       liveSessionId = sessionId;
       lastServerViewKey = nextServerViewKey;
       liveEventState = createSessionLiveEventState({
@@ -743,10 +679,12 @@
   });
 
   $effect(() => {
-    if (activeTurnId && activeTurnId !== cancelledTurnId && cancelState !== "submitting") {
-      cancelState = "idle";
-      cancelFeedback = null;
-    }
+    const next = resetCancelUiForActiveTurn(
+      { cancelState, cancelFeedback, cancelledTurnId },
+      activeTurnId,
+    );
+    cancelState = next.cancelState;
+    cancelFeedback = next.cancelFeedback;
   });
 
   $effect(() => {
@@ -952,85 +890,17 @@
       return;
     }
 
-    let closed = false;
-    let eventSource: EventSource | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let reconnectAttempt = 0;
-    const storageKey = sessionEventCursorStorageKey(streamSessionId);
-
-    if (storageKey && !untrack(() => streamState.cursor)) {
-      streamState.cursor = window.sessionStorage.getItem(storageKey);
-    }
-
-    const connect = () => {
-      if (closed) return;
-      if (!navigator.onLine) {
-        liveConnection = "offline";
-        return;
-      }
-      const state = untrack(() => liveEventState);
-      if (!state || state.sessionId !== streamSessionId) return;
-      liveConnection = openingSessionEventConnectionState(untrack(() => liveConnection));
-      const url = new URL("/api/v1/events", window.location.origin);
-      if (state.cursor) url.searchParams.set("cursor", state.cursor);
-      eventSource = new EventSource(url);
-      eventSource.onopen = () => {
-        reconnectAttempt = 0;
-        liveConnection = "live";
-      };
-      eventSource.addEventListener("spark-cockpit.event", (message) => {
-        const event = parseSessionSerializedEvent(message.data);
-        const state = untrack(() => liveEventState);
-        if (!event || !state || state.sessionId !== streamSessionId) return;
-        const result = applySessionLiveEvent(state, event);
-        if (storageKey && state.cursor) {
-          window.sessionStorage.setItem(storageKey, state.cursor);
-        }
-        if (result.changed) {
-          liveSessionView = state.view;
-        }
-        if (result.refreshActivity) scheduleActivityRefresh();
-      });
-      eventSource.onerror = () => {
-        eventSource?.close();
-        eventSource = null;
-        liveConnection = navigator.onLine ? "reconnecting" : "offline";
-        if (!closed && navigator.onLine && !reconnectTimer) {
-          const delay = Math.min(1_000 * 2 ** reconnectAttempt, 10_000);
-          reconnectAttempt += 1;
-          reconnectTimer = setTimeout(() => {
-            reconnectTimer = null;
-            connect();
-          }, delay);
-        }
-      };
-    };
-
-    const handleOnline = () => {
-      if (closed || eventSource) return;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-      connect();
-    };
-    const handleOffline = () => {
-      liveConnection = "offline";
-      eventSource?.close();
-      eventSource = null;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    };
-
-    connect();
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-
-    return () => {
-      closed = true;
-      eventSource?.close();
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
+    return attachSessionLiveEventSource(streamSessionId, {
+      getLiveEventState: () => untrack(() => liveEventState),
+      setLiveConnection: (next) => {
+        liveConnection = next;
+      },
+      getLiveConnection: () => untrack(() => liveConnection),
+      onViewChanged: (view) => {
+        liveSessionView = view;
+      },
+      onRefreshActivity: () => scheduleActivityRefresh(),
+    });
   });
 
   // SSE is the immediate path. While a turn is active, also probe the daemon's
@@ -1041,59 +911,15 @@
     const watchTerminalState = sessionActivityNeedsStatusProbe(sessionActivityState);
     if (!sessionId || !watchTerminalState) return;
 
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let refreshing = false;
-
-    const schedule = (delay = 3_000) => {
-      if (stopped || timer) return;
-      timer = setTimeout(() => {
-        timer = null;
-        void probeStatus();
-      }, delay);
-    };
-
-    const probeStatus = async () => {
-      if (stopped || refreshing) return;
-      if (document.visibilityState === "hidden") {
-        schedule();
-        return;
-      }
-      refreshing = true;
-      try {
-        const response = await fetch(
-          `/api/v1/sessions/${encodeURIComponent(sessionId)}/status`,
-          { cache: "no-store" },
-        );
-        if (!response.ok) return;
-        const result = (await response.json()) as { sessionId?: unknown; status?: unknown };
-        if (
-          result.sessionId === sessionId &&
-          typeof result.status === "string" &&
-          result.status !== "running"
-        ) {
-          const state = untrack(() => liveEventState);
-          if (
-            state &&
-            state.sessionId === sessionId &&
-            convergeSessionLiveEventStateFromRegistryStatus(state, result.status)
-          ) {
-            liveEventState = state;
-            liveSessionView = state.view;
-          }
-          await invalidateAll();
-        }
-      } finally {
-        refreshing = false;
-        schedule();
-      }
-    };
-
-    schedule(1_500);
-    return () => {
-      stopped = true;
-      if (timer) clearTimeout(timer);
-    };
+    return attachSessionStatusProbe(sessionId, {
+      getLiveEventState: () => untrack(() => liveEventState),
+      convergeFromRegistryStatus: convergeSessionLiveEventStateFromRegistryStatus,
+      onConverged: (state) => {
+        liveEventState = state;
+        liveSessionView = state.view;
+      },
+      invalidateAll,
+    });
   });
 
   onMount(() => {
@@ -1144,7 +970,7 @@
     const history = liveSessionHistory;
     const snapshot = liveSessionView;
     if (!history || !snapshot || !history.hasEarlierMessages) {
-      timelineRenderLimit += SESSION_TIMELINE_PAGE_SIZE;
+      timelineRenderLimit = bumpTimelineRenderLimit(timelineRenderLimit);
       historyLoadState = "idle";
       return "loaded";
     }
@@ -1163,73 +989,31 @@
     if (!sessionId || !history || !initialSnapshot || !history.hasEarlierMessages) {
       return "exhausted";
     }
-    const beforeMessageId = history.nextBeforeMessageId;
-    if (!beforeMessageId) {
-      historyLoadState = "idle";
-      return "error";
-    }
 
     historyLoadState = "loading";
-    try {
-      const initialWindow: SessionSnapshotWindow = {
-        snapshot: initialSnapshot,
-        history,
-      };
-      const loadedPages: SessionSnapshotWindow[] = [];
-      await hydrateSessionConversationWindow(initialWindow, {
-        minimumAnchors,
-        loadEarlier: async (cursor) => {
-          const query = new URLSearchParams({
-            limit: String(SESSION_SNAPSHOT_PAGE_SIZE),
-            before: cursor,
-          });
-          const response = await fetch(
-            `/api/v1/sessions/${encodeURIComponent(sessionId)}/snapshot?${query}`,
-            { cache: "no-store" },
-          );
-          if (!response.ok) {
-            throw new Error(`session history request failed: ${response.status}`);
-          }
-          const earlierPage = parseSessionSnapshotWindow(await response.json());
-          if (earlierPage.snapshot.sessionId !== sessionId || selectedSessionId !== sessionId) {
-            throw new Error("session changed while loading history");
-          }
-          loadedPages.push(earlierPage);
-          return earlierPage;
-        },
-      });
-      // A live event may append or settle a message while this request is in
-      // flight. Merge into the latest browser window, never the pre-fetch copy.
-      const currentSnapshot = untrack(() => liveSessionView);
-      const currentHistory = untrack(() => liveSessionHistory);
-      if (!currentSnapshot || !currentHistory || selectedSessionId !== sessionId) {
-        historyLoadState = "idle";
-        return "busy";
+    const result = await loadEarlierSessionTimeline({
+      sessionId,
+      selectedSessionId,
+      history,
+      initialSnapshot,
+      minimumAnchors,
+      getCurrentWindow: () => {
+        const currentSnapshot = untrack(() => liveSessionView);
+        const currentHistory = untrack(() => liveSessionHistory);
+        if (!currentSnapshot || !currentHistory) return null;
+        return { snapshot: currentSnapshot, history: currentHistory };
+      },
+    });
+    if (result.outcome === "loaded" && result.window) {
+      liveSessionView = result.window.snapshot;
+      if (liveEventState?.sessionId === sessionId) liveEventState.view = result.window.snapshot;
+      liveSessionHistory = result.window.history;
+      if (result.timelineRenderLimitDelta) {
+        timelineRenderLimit += result.timelineRenderLimitDelta;
       }
-      if (currentHistory.nextBeforeMessageId !== beforeMessageId) {
-        // Cursor moved (live reconciliation). Caller should retry from the new tip.
-        historyLoadState = "idle";
-        return "busy";
-      }
-      if (loadedPages.length === 0) {
-        historyLoadState = "idle";
-        return currentHistory.hasEarlierMessages ? "busy" : "exhausted";
-      }
-      let window: SessionSnapshotWindow = { snapshot: currentSnapshot, history: currentHistory };
-      for (const earlierPage of loadedPages) {
-        window = mergeEarlierSessionSnapshotWindow(window, earlierPage);
-      }
-
-      liveSessionView = window.snapshot;
-      if (liveEventState?.sessionId === sessionId) liveEventState.view = window.snapshot;
-      liveSessionHistory = window.history;
-      timelineRenderLimit += SESSION_TIMELINE_PAGE_SIZE;
-      historyLoadState = "idle";
-      return "loaded";
-    } catch {
-      historyLoadState = "idle";
-      return selectedSessionId === sessionId ? "error" : "busy";
     }
+    historyLoadState = "idle";
+    return result.outcome;
   }
 
   function workspaceLabel(workspaceId: string) {
@@ -1272,41 +1056,13 @@
     return formatRelativeTime(value, locale as "en" | "zh-CN", common);
   }
 
-  function sessionMessageInvocationId(entry: SparkMessageView) {
-    const metadata = entry.metadata;
-    if (!metadata || metadata.source !== "daemon.invocation") return null;
-    const invocationId = metadata.invocationId;
-    return typeof invocationId === "string" && invocationId.trim()
-      ? invocationId.trim()
-      : null;
-  }
 
-  function navigationSummary(item: SessionTimelineItem) {
-    const summary = (visibleConversationPartText(item.parts) || item.title || item.body)
-      .trim()
-      .replace(/\s+/gu, " ");
-    return summary.length <= 160 ? summary : `${summary.slice(0, 159)}…`;
-  }
 
-  function isNavigationTurn(
-    item: SessionTimelineItem,
-  ): item is SessionTimelineItem & { actor: "user" | "session" } {
-    return item.actor !== "spark";
-  }
 
   function connectionLabel() {
-    if (liveConnection === "live") return copy.live;
-    if (liveConnection === "connecting") return copy.connecting;
-    if (liveConnection === "reconnecting") return copy.reconnecting;
-    return copy.offline;
+    return resolveConnectionLabel(liveConnection, copy);
   }
 
-  function compactWorkingDirectory(value: string | undefined) {
-    const path = value?.trim() ?? "";
-    if (!path) return "";
-    const home = /^\/(?:Users|home)\/[^/]+(?=\/|$)|^\/root(?=\/|$)/u.exec(path)?.[0];
-    return home ? `~${path.slice(home.length)}` : path;
-  }
 
   function startConversationContext(
     context: StartConversationSubmissionContext,
@@ -1319,155 +1075,50 @@
     };
   }
 
-  function queueRemoveFormId(turnId: string) {
-    return `queue-remove-${turnId.replace(/[^a-zA-Z0-9_-]/gu, "-")}`;
-  }
 
-  function resultMessage(result: unknown, fallback: string) {
-    if (!result || typeof result !== "object") return fallback;
 
-    if ("data" in result && result.data && typeof result.data === "object") {
-      const candidate = (result.data as { message?: unknown }).message;
-      if (typeof candidate === "string" && candidate.trim()) return candidate;
-    }
-    if ("error" in result && result.error instanceof Error && result.error.message) {
-      return result.error.message;
-    }
-    return fallback;
-  }
-
-  function resultModel(result: unknown) {
-    if (!result || typeof result !== "object" || !("data" in result)) return null;
-    const data = result.data;
-    if (!data || typeof data !== "object" || !("model" in data)) return null;
-    return typeof data.model === "string" && data.model.trim() ? data.model : null;
-  }
 
   function adoptQueuedTurn(result: unknown) {
-    const turnId = queuedTurnIdFromActionResult(result);
     const state = untrack(() => liveEventState);
-    if (!turnId || !state || state.sessionId !== liveSessionId) return;
-    if (!registerQueuedSessionTurn(state, turnId)) return;
-    liveEventState = state;
-    liveSessionView = state.view;
+    const adopted = adoptQueuedTurnIntoLiveState(result, state, liveSessionId);
+    if (!adopted) return;
+    liveEventState = adopted;
+    liveSessionView = adopted.view;
   }
 
   function adoptCancelledTurn(result: unknown) {
-    const turnId = cancelledTurnIdFromActionResult(result);
     const state = untrack(() => liveEventState);
-    if (!turnId || !state || state.sessionId !== liveSessionId) return;
-    const status = invocationStatusFromActionResult(result) ?? "cancelled";
-    if (!settleCancelledSessionTurn(state, turnId, status)) return;
-    liveEventState = state;
-    liveSessionView = state.view;
+    const adopted = adoptCancelledTurnIntoLiveState(result, state, liveSessionId);
+    if (!adopted) return;
+    liveEventState = adopted;
+    liveSessionView = adopted.view;
   }
 
-  function invocationStatusFromActionResult(result: unknown): string | null {
-    if (!result || typeof result !== "object") return null;
-    const data =
-      "data" in result && result.data && typeof result.data === "object" ? result.data : result;
-    if (!data || typeof data !== "object" || !("invocationStatus" in data)) return null;
-    const value = data.invocationStatus;
-    return typeof value === "string" && value.trim() ? value.trim() : null;
-  }
 
-  function buildModelGroups(providers: SparkModelCatalogProvider[]): ModelPickerGroup[] {
-    return providers.map((provider) => {
-      const available = provider.models.filter((entry) => entry.available);
-      return {
-        id: provider.providerName,
-        label: provider.label,
-        description: provider.auth.configured ? undefined : copy.providerLoginRequired,
-        options:
-          available.length > 0
-            ? available.map((entry) => ({
-                value: modelValue(entry.model),
-                label: entry.model.modelLabel ?? entry.model.modelId,
-                description:
-                  entry.model.modelLabel && entry.model.modelLabel !== entry.model.modelId
-                    ? entry.model.modelId
-                    : undefined,
-                keywords: [entry.model.modelId, provider.providerName],
-                reasoning: entry.reasoning,
-              }))
-            : [
-                {
-                  value: `unavailable:${provider.providerName}`,
-                  label: `${copy.providerLoginRequired} · ${provider.models.length}`,
-                  disabled: true,
-                },
-              ],
-      };
-    });
-  }
 
-  function unavailable(reason: string): SlashActionAvailability {
-    return { enabled: false, reason };
-  }
 
   function slashActionAvailability(
     action: SparkActionView,
     surface: ComposerSurface,
   ): SlashActionAvailability {
-    const hasSelectedSession = surface === "session" && Boolean(selected);
-
-    switch (action.intent) {
-      case "model.select":
-        if (!canAssign) return unavailable(copy.slashActions.reasons.ownerOffline);
-        if (modelProviders.length === 0) return unavailable(copy.slashActions.reasons.noModel);
-        if (surface === "session" && modelState === "submitting") {
-          return unavailable(copy.slashActions.reasons.modelUpdating);
-        }
-        return { enabled: true };
-      case "thinking.select":
-        if (!canAssign) return unavailable(copy.slashActions.reasons.ownerOffline);
-        if (modelProviders.length === 0) return unavailable(copy.slashActions.reasons.noModel);
-        if (surface === "session" && thinkingState === "submitting") {
-          return unavailable(copy.slashActions.reasons.thinkingUpdating);
-        }
-        return { enabled: true };
-      case "settings.inspect":
-      case "settings.providers":
-        return { enabled: true };
-      case "status.inspect":
-      case "session.inspect":
-        return hasSelectedSession
-          ? { enabled: true }
-          : unavailable(copy.slashActions.reasons.sessionRequired);
-      case "session.select":
-        return sessions.length > 0
-          ? { enabled: true }
-          : unavailable(copy.slashActions.reasons.noSessions);
-      case "session.create":
-        if (!activeWorkspace) return unavailable(copy.slashActions.reasons.workspaceRequired);
-        return canAssign
-          ? { enabled: true }
-          : unavailable(copy.slashActions.reasons.ownerOffline);
-      case "queue.inspect":
-        if (!hasSelectedSession) return unavailable(copy.slashActions.reasons.sessionRequired);
-        return queueItems.length > 0
-          ? { enabled: true }
-          : unavailable(copy.slashActions.reasons.queueEmpty);
-      case "turn.stop":
-        if (!hasSelectedSession) return unavailable(copy.slashActions.reasons.sessionRequired);
-        return conversationBusy && Boolean(activeTurnId) && cancelState !== "submitting"
-          ? { enabled: true }
-          : unavailable(copy.slashActions.reasons.noActiveTurn);
-      case "turn.retry":
-        if (!hasSelectedSession) return unavailable(copy.slashActions.reasons.sessionRequired);
-        if (!canAssign) return unavailable(copy.slashActions.reasons.ownerOffline);
-        if (!latestRetryPrompt) return unavailable(copy.slashActions.reasons.retryUnavailable);
-        if (!modelReady) return unavailable(copy.slashActions.reasons.noModel);
-        return retryState === "submitting"
-          ? unavailable(copy.slashActions.reasons.retryInProgress)
-          : { enabled: true };
-      case "help.commands":
-        return { enabled: true };
-      case "help.hotkeys":
-        return unavailable(copy.slashActions.reasons.hotkeysUnavailable);
-      default:
-        return unavailable(copy.slashActions.reasons.daemonExecutorUnavailable);
-    }
+    return resolveSlashAvailability(action, {
+      surface,
+      hasSelectedSession: Boolean(selected),
+      canAssign,
+      sessionsCount: sessions.length,
+      hasActiveWorkspace: Boolean(activeWorkspace),
+      modelProvidersCount: modelProviders.length,
+      modelState,
+      thinkingState,
+      queueItemCount: queueItems.length,
+      conversationBusy,
+      hasActiveTurn: Boolean(activeTurnId),
+      cancelState,
+      hasRetryPrompt: Boolean(latestRetryPrompt),
+      modelReady,
+      retryState,
+      reasons: copy.slashActions.reasons,
+    });
   }
 
   function clearSlashInput(surface: ComposerSurface) {
@@ -1761,51 +1412,56 @@
   };
 
   const enhanceCancelTurn: SubmitFunction = () => {
-    cancelState = "submitting";
-    cancelFeedback = null;
+    const started = beginCancelSubmit({ cancelState, cancelFeedback, cancelledTurnId });
+    cancelState = started.cancelState;
+    cancelFeedback = started.cancelFeedback;
 
     return async ({ result, update }) => {
       const confirmedCancelledTurnId = cancelledTurnIdFromActionResult(result);
       await update({ reset: false });
-
+      const next = applyCancelSubmitResult(
+        { cancelState, cancelFeedback, cancelledTurnId },
+        {
+          resultType: result.type,
+          confirmedCancelledTurnId,
+          errorMessage: resultMessage(result, copy.stopFailed),
+        },
+      );
+      cancelState = next.cancelState;
+      cancelFeedback = next.cancelFeedback;
+      cancelledTurnId = next.cancelledTurnId;
       if (result.type === "success") {
-        cancelState = "success";
-        cancelledTurnId = confirmedCancelledTurnId;
-        cancelFeedback = null;
         adoptCancelledTurn(result);
         await invalidateAll();
-        return;
       }
-
-      if (result.type === "redirect") return;
-      cancelState = "error";
-      cancelFeedback = resultMessage(result, copy.stopFailed);
     };
   };
 
   const enhanceRemoveQueuedTurn: SubmitFunction = ({ formData }) => {
     const requestedTurnId = String(formData.get("turnId") ?? "").trim();
-    dequeuingTurnId = requestedTurnId || null;
-    dequeueState = "submitting";
-    dequeueFeedback = null;
+    const started = beginDequeueSubmit(
+      { dequeueState, dequeueFeedback, dequeuingTurnId },
+      requestedTurnId,
+    );
+    dequeueState = started.dequeueState;
+    dequeueFeedback = started.dequeueFeedback;
+    dequeuingTurnId = started.dequeuingTurnId;
 
     return async ({ result, update }) => {
       await update({ reset: false });
-
-      if (result.type === "success") {
-        dequeueState = "success";
-        dequeueFeedback = resultMessage(result, copy.removeQueued);
-        adoptCancelledTurn(result);
-        dequeuingTurnId = null;
-        await invalidateAll();
-        return;
-      }
-
-      if (result.type === "redirect") return;
-      dequeueState = "error";
-      dequeueFeedback = resultMessage(result, copy.removeQueuedFailed);
-      dequeuingTurnId = null;
-      await invalidateAll();
+      const next = applyDequeueSubmitResult(
+        { dequeueState, dequeueFeedback, dequeuingTurnId },
+        {
+          resultType: result.type,
+          successMessage: resultMessage(result, copy.removeQueued),
+          errorMessage: resultMessage(result, copy.removeQueuedFailed),
+        },
+      );
+      dequeueState = next.dequeueState;
+      dequeueFeedback = next.dequeueFeedback;
+      dequeuingTurnId = next.dequeuingTurnId;
+      if (result.type === "success") adoptCancelledTurn(result);
+      if (result.type !== "redirect") await invalidateAll();
     };
   };
 
@@ -1832,9 +1488,6 @@
     };
   };
 
-  function modelValue(model: SparkModelRef | undefined) {
-    return model ? `${model.providerName}/${model.modelId}` : "";
-  }
 
   async function submitModelSelection(nextValue: string) {
     sessionModel = nextValue;
@@ -1964,540 +1617,156 @@
   function createClientSubmissionId(): string {
     return createId("idem");
   }
+
+  let conversationHost = $derived.by((): SessionConversationHost => ({
+    selected: selected!,
+    messages,
+    copy,
+    canAssign,
+    conversationBusy,
+    activeTurnId,
+    liveConnection,
+    connectionLabel,
+    statusLabel,
+    sessionScopeLabel,
+    sessionPresentation,
+    timelineFollowKey,
+    latestAnnouncement,
+    hasEarlierTimeline,
+    showEarlierTimeline,
+    timelineNavigationItems,
+    timelineItems,
+    renderedTimelineItems: renderedTimeline.items,
+    activeProcessItemId,
+    conversationPartLabels,
+    relative,
+    retryableTimelineItemId,
+    latestRetryPrompt,
+    retryState,
+    modelReady,
+    retryConversationTurn,
+    get sessionModelForm() { return sessionModelForm; },
+    set sessionModelForm(v) { sessionModelForm = v; },
+    get sessionThinkingForm() { return sessionThinkingForm; },
+    set sessionThinkingForm(v) { sessionThinkingForm = v; },
+    get retryMessageForm() { return retryMessageForm; },
+    set retryMessageForm(v) { retryMessageForm = v; },
+    get sessionModel() { return sessionModel; },
+    set sessionModel(v) { sessionModel = v; },
+    get sessionThinkingLevel() { return sessionThinkingLevel; },
+    set sessionThinkingLevel(v) { sessionThinkingLevel = v; },
+    retryPrompt,
+    retrySubmissionId,
+    get message() { return message; },
+    set message(v) { message = v; },
+    sendSubmissionId,
+    sendState,
+    sendFeedback,
+    retryFeedback,
+    modelFeedback,
+    thinkingFeedback,
+    cancelFeedback,
+    dequeueFeedback,
+    modelState,
+    thinkingState,
+    cancelState,
+    dequeueState,
+    dequeuingTurnId,
+    queueItems,
+    queueLabels,
+    queueRemoveFormId,
+    sessionPendingAsk,
+    askDetailMessages,
+    liveSessionView,
+    statusBarLabels,
+    compactWorkingDirectory,
+    runtimeStatusUsage,
+    modelProvidersLength: modelProviders.length,
+    modelGroups,
+    modelRuntimeLabels,
+    availableModelsLength: availableModels.length,
+    modelControl,
+    effectiveModelAvailable,
+    get sessionModelPickerOpen() { return sessionModelPickerOpen; },
+    set sessionModelPickerOpen(v) { sessionModelPickerOpen = v; },
+    sessionSlashSuggestions,
+    sessionSlashActionBar,
+    sessionSlashActiveIndex,
+    setSessionSlashActiveIndex: (index) => { sessionSlashActiveIndex = index; },
+    sessionSlashListboxId,
+    sessionSlashActiveOptionId,
+    enhanceCancelTurn,
+    enhanceSelectModel,
+    enhanceSelectThinking,
+    enhanceRemoveQueuedTurn,
+    enhanceRetryMessage,
+    enhanceSendMessage,
+    slashActionAvailability: (action, _surface) => slashActionAvailability(action, "session"),
+    handleSessionMessageChange,
+    handleSlashCompletionKeydown: (event, _surface) => handleSlashCompletionKeydown(event, "session"),
+    selectSlashSuggestion: (suggestion, _surface) => selectSlashSuggestion(suggestion, "session"),
+    handleSlashAction: (action, _surface) => handleSlashAction(action, "session"),
+    submitModelSelection,
+    submitThinkingSelection,
+  }));
+
 </script>
 
 {#snippet sessionDetails(compact = false)}
   {#if selected}
-    {@const displayedSessionStatus = visibleSessionStatus(selected.status)}
-    <div
-      class:compact-details={compact}
-      class="details-content"
-      data-session-inspector-surface
-      tabindex="-1"
-    >
-      <dl class="details-grid">
-        {#if displayedSessionStatus}
-          <div>
-            <dt>{messages.statusLabel}</dt>
-            <dd><span class="status-pill {displayedSessionStatus}">{statusLabel(displayedSessionStatus)}</span></dd>
-          </div>
-        {/if}
-        <div>
-          <dt>{messages.workspaceLabel}</dt>
-          <dd>
-            {#if selectedWorkspaceHref}
-              <a href={selectedWorkspaceHref}>{sessionScopeLabel(selected)}</a>
-            {:else}
-              {sessionScopeLabel(selected)}
-            {/if}
-          </dd>
-        </div>
-        {#if selected.role}
-          <div>
-            <dt>{messages.roleLabel}</dt>
-            <dd>{selected.role}</dd>
-          </div>
-        {/if}
-        {#if selectedIsChannelSession}
-          <div>
-            <dt>{messages.channelSessionBadge}</dt>
-            <dd>
-              <span class="channel-badge">{messages.channelSessionKicker}</span>
-            </dd>
-          </div>
-          {#if selectedChannelBindings.length > 0}
-            <div>
-              <dt>{messages.channelBindingLabel}</dt>
-              <dd class="channel-bindings">
-                {#each selectedChannelBindings as binding (binding.externalKey ?? binding.adapter)}
-                  <code>{binding.externalKey ?? binding.adapter}</code>
-                {/each}
-              </dd>
-            </div>
-          {/if}
-          {#if selectedChannelsSettingsHref}
-            <div class="channel-settings-row">
-              <a class="channel-settings-link" href={selectedChannelsSettingsHref}>
-                <Icon name="settings" size={14} />
-                {messages.openChannelSettings}
-              </a>
-              <p class="muted">{messages.channelRoutingBody}</p>
-            </div>
-          {/if}
-        {/if}
-      </dl>
-
-      {#if workbenchView}
-        <SessionInspector
-          view={workbenchView}
-          labels={inspectorLabels}
-          instanceId={compact ? "session-inspector-mobile" : "session-inspector-desktop"}
-          {statusLabel}
-        />
-      {/if}
-
-    </div>
+    <SessionDetailsPanel
+      {selected}
+      {compact}
+      {messages}
+      statusLabel={statusLabel}
+      sessionScopeLabel={sessionScopeLabel(selected)}
+      {selectedWorkspaceHref}
+      {selectedIsChannelSession}
+      {selectedChannelBindings}
+      {selectedChannelsSettingsHref}
+      {workbenchView}
+      {inspectorLabels}
+      instanceId={compact ? "session-inspector-mobile" : "session-inspector-desktop"}
+    />
   {/if}
 {/snippet}
 
 <section class="sessions-stage" class:has-selection={Boolean(selected)} aria-label={messages.aria}>
   <main class="stage-pane">
     {#if !selected}
-      <div class="conversation-start">
-        {#if !activeWorkspace}
-          <div class="stage-empty">
-            <Icon name="agents" size={28} />
-            <div>
-              <h1>{messages.createNoWorkspaceTitle}</h1>
-              <p>{messages.createNoWorkspaceBody}</p>
-              <a class="primary-action" href="/workspaces/new">{messages.createWorkspaceAction}</a>
-            </div>
-          </div>
-        {:else}
-          <div class="start-heading">
-            <span class="spark-mark"><Icon name="spark" size={22} /></span>
-            <div>
-              <p class="kicker">Spark</p>
-              <h1>{copy.newConversation}</h1>
-              <p>{copy.workspaceStartHint}</p>
-            </div>
-          </div>
-
-          <form
-            method="POST"
-            action="?/startConversation"
-            class="start-composer"
-            aria-busy={startState === "submitting"}
-            use:enhance={enhanceStartConversation}
-          >
-            {#if activeWorkspace}
-              <input type="hidden" name="workspaceId" value={activeWorkspace.id} />
-            {/if}
-            <input type="hidden" name="submissionId" value={startSubmissionId} />
-            <Composer
-              id="start-conversation-message"
-              rows={2}
-              placeholder={copy.startPlaceholder}
-              bind:value={startMessage}
-              disabled={!canAssign || startState === "submitting"}
-              submitDisabled={!canAssign ||
-                startState === "submitting" ||
-                !startModelReady ||
-                !startMessage.trim() ||
-                Boolean(startSlashActionBar) ||
-                startSlashSuggestions.length > 0}
-              submitting={startState === "submitting"}
-              submitLabel={copy.startSubmit}
-              submittingLabel={copy.sending}
-              ariaLabel={copy.messageLabel}
-              multilineHint={copy.multilineHint}
-              onValueChange={handleStartMessageChange}
-              onKeydown={(event) => handleSlashCompletionKeydown(event, "start")}
-              completion={{
-                expanded: startSlashSuggestions.length > 0,
-                listboxId: startSlashListboxId,
-                activeOptionId: startSlashActiveOptionId,
-              }}            >
-              {#snippet actions()}
-                {#if startSlashSuggestions.length > 0}
-                  <SlashCommandMenu
-                    id={startSlashListboxId}
-                    suggestions={startSlashSuggestions}
-                    activeIndex={startSlashActiveIndex}
-                    ariaLabel={copy.slashActions.completionLabel}
-                    hint={copy.slashActions.completionHint}
-                    onActiveIndexChange={(index) => (startSlashActiveIndex = index)}
-                    onSelect={(suggestion) => selectSlashSuggestion(suggestion, "start")}
-                  />
-                {/if}
-                {#if startSlashActionBar}
-                  <SlashActionBar
-                    view={startSlashActionBar}
-                    resolveAction={(action) => slashActionAvailability(action, "start")}
-                    onAction={(action) => handleSlashAction(action, "start")}
-                  />
-                {/if}
-              {/snippet}
-              {#snippet context()}
-                {#if modelProviders.length > 0}
-                  <ModelRuntimeControl
-                    id="start-conversation"
-                    required
-                    bind:open={startModelPickerOpen}
-                    bind:modelValue={startModel}
-                    bind:thinkingValue={startThinkingLevel}
-                    groups={modelGroups}
-                    labels={modelRuntimeLabels}
-                    modelDisabled={!canAssign || availableModels.length === 0}
-                    thinkingDisabled={!canAssign}
-                    settingsHref="/settings/models"
-                  />
-                {:else}
-                  <a class="model-settings-link" href="/settings/models">
-                    <Icon name={modelControl.available ? "settings" : "warning"} size={14} />
-                    {modelControl.available ? copy.configureModels : copy.modelControlUnavailable}
-                  </a>
-                {/if}
-              {/snippet}
-              {#snippet feedback()}
-                {#if startFeedback}
-                <p
-                  class="form-feedback {startState}"
-                  role={startState === "error" ? "alert" : "status"}
-                  aria-live="polite"
-                >
-                  {startFeedback}
-                </p>
-                {/if}
-              {/snippet}
-            </Composer>
-          </form>
-        {/if}
-      </div>
-    {:else}
-      {@const displayedSessionStatus = visibleSessionStatus(selected.status)}
-      {@const selectedPresentation = sessionPresentation(selected)}
-      <header class="stage-header">
-        <div class="stage-title">
-          <p class="kicker">{copy.timelineTitle}</p>
-          <h1>
-            {#if selectedPresentation.channel}
-              <ChannelSessionIcon
-                adapter={selectedPresentation.channel.adapter}
-                scope={selectedPresentation.channel.scope}
-                label={selectedPresentation.channel.label}
-              />
-            {/if}
-            <span class="session-heading-title">{selectedPresentation.title}</span>
-          </h1>
-          <p>{sessionScopeLabel(selected)}</p>
-        </div>
-        <div class="stage-actions">
-          {#if selected.role}<span class="context-chip">{selected.role}</span>{/if}
-          {#if conversationBusy}
-            <span
-              class="session-working-indicator"
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-            >
-              <span class="session-working-spinner" aria-hidden="true"></span>
-              {copy.working}
-            </span>
-          {/if}
-          <span class="connection-state {liveConnection}" title={connectionLabel()}>
-            <span aria-hidden="true"></span>
-            {connectionLabel()}
-          </span>
-          {#if conversationBusy && activeTurnId}
-            <form
-              id="session-cancel-turn-form"
-              method="POST"
-              action="?/cancelTurn"
-              use:enhance={enhanceCancelTurn}
-            >
-              <input type="hidden" name="sessionId" value={selected.sessionId} />
-              <input type="hidden" name="turnId" value={activeTurnId} />
-              <Button
-                variant="danger"
-                size="compact"
-                type="submit"
-                disabled={cancelState === "submitting" || cancelState === "success"}
-              >
-                <Icon name="close" size={14} stroke={2.2} />
-                <span>{cancelState === "submitting" ? copy.stopping : copy.stop}</span>
-              </Button>
-            </form>
-          {/if}
-          {#if displayedSessionStatus && displayedSessionStatus !== "running"}
-            <span class="status-pill {displayedSessionStatus}">{statusLabel(displayedSessionStatus)}</span>
-          {/if}
-        </div>
-      </header>
-
-      <details class="mobile-details">
-        <summary>
-          <span><Icon name="activity" size={15} />{copy.collapseDetails}</span>
-          <Icon name="chevron-down" size={15} />
-        </summary>
-        {@render sessionDetails(true)}
-      </details>
-
-      {#key selected.sessionId}
-        <ConversationViewport
-          label={copy.timelineTitle}
-          followKey={timelineFollowKey}
-          announcement={latestAnnouncement}
-          jumpToLatestLabel={copy.jumpToLatest}
-          hasEarlier={hasEarlierTimeline}
-          onLoadEarlier={showEarlierTimeline}
-          navigationItems={timelineNavigationItems}
-        >
-        {#if timelineItems.length === 0}
-          <div class="conversation-empty">
-            <span class="spark-mark"><Icon name="spark" size={20} /></span>
-            <p>{copy.timelineEmpty}</p>
-          </div>
-        {:else}
-          {#each renderedTimeline.items as item (item.id)}
-            <ConversationMessage
-              {item}
-              active={item.id === activeProcessItemId}
-              userLabel={copy.you}
-              assistantLabel={copy.spark}
-              sessionLabel={copy.agent}
-              copyLabel={copy.copyMessage}
-              copiedLabel={copy.copiedMessage}
-              partLabels={conversationPartLabels}
-              relativeTime={relative}
-              {statusLabel}
-              retryAction={item.id === retryableTimelineItemId && latestRetryPrompt
-                ? {
-                    label: copy.retryTurn,
-                    submittingLabel: copy.retryingTurn,
-                    unavailableLabel: copy.retryUnavailable,
-                    submitting: retryState === "submitting",
-                    disabled: !canAssign || !modelReady,
-                    onRetry: () => {
-                      if (latestRetryPrompt) retryConversationTurn(latestRetryPrompt);
-                    },
-                  }
-                : undefined}
-            />
-          {/each}
-        {/if}
-        </ConversationViewport>
-      {/key}
-
-      <form
-        id="session-model-form"
-        bind:this={sessionModelForm}
-        method="POST"
-        action="?/selectModel"
-        use:enhance={enhanceSelectModel}
-      ></form>
-      <input form="session-model-form" type="hidden" name="sessionId" value={selected.sessionId} />
-      <form
-        id="session-thinking-form"
-        bind:this={sessionThinkingForm}
-        method="POST"
-        action="?/selectThinking"
-        use:enhance={enhanceSelectThinking}
-      ></form>
-      <input
-        form="session-thinking-form"
-        type="hidden"
-        name="sessionId"
-        value={selected.sessionId}
+      <SessionStartPane
+        {messages}
+        {copy}
+        {activeWorkspace}
+        {canAssign}
+        {startState}
+        {startFeedback}
+        bind:startMessage
+        {startSubmissionId}
+        bind:startModel
+        bind:startThinkingLevel
+        {startModelReady}
+        bind:startModelPickerOpen
+        {startSlashSuggestions}
+        {startSlashActionBar}
+        {startSlashActiveIndex}
+        {startSlashListboxId}
+        {startSlashActiveOptionId}
+        modelProvidersLength={modelProviders.length}
+        {modelGroups}
+        {modelRuntimeLabels}
+        availableModelsLength={availableModels.length}
+        {modelControl}
+        {enhanceStartConversation}
+        slashActionAvailability={(action, _surface) => slashActionAvailability(action, "start")}
+        onStartMessageChange={handleStartMessageChange}
+        onSlashKeydown={(event) => handleSlashCompletionKeydown(event, "start")}
+        onSlashActiveIndexChange={(index) => (startSlashActiveIndex = index)}
+        onSlashSelect={(suggestion) => selectSlashSuggestion(suggestion, "start")}
+        onSlashAction={(action) => handleSlashAction(action, "start")}
       />
-
-      {#each queueItems as item (item.id)}
-        <form
-          id={queueRemoveFormId(item.id)}
-          method="POST"
-          action="?/cancelTurn"
-          hidden
-          use:enhance={enhanceRemoveQueuedTurn}
-        >
-          <input type="hidden" name="sessionId" value={selected.sessionId} />
-          <input type="hidden" name="turnId" value={item.id} />
-          <input type="hidden" name="cancelIntent" value="dequeue" />
-        </form>
-      {/each}
-
-      <form
-        bind:this={retryMessageForm}
-        method="POST"
-        action="?/sendMessage"
-        hidden
-        use:enhance={enhanceRetryMessage}
-      >
-        <input type="hidden" name="sessionId" value={selected.sessionId} />
-        <input type="hidden" name="submissionId" value={retrySubmissionId} />
-        <input type="hidden" name="message" value={retryPrompt} />
-      </form>
-
-      <form
-        method="POST"
-        action="?/sendMessage"
-        class="conversation-composer"
-        aria-busy={sendState === "submitting"}
-        use:enhance={enhanceSendMessage}
-      >
-        <input type="hidden" name="sessionId" value={selected.sessionId} />
-        <input type="hidden" name="submissionId" value={sendSubmissionId} />
-        <Composer
-          id="conversation-message"
-          rows={2}
-          placeholder={conversationBusy ? copy.queuePlaceholder : copy.messagePlaceholder}
-          bind:value={message}
-          disabled={!canAssign || sendState === "submitting"}
-          submitDisabled={!canAssign ||
-            !modelReady ||
-            modelState === "submitting" ||
-            thinkingState === "submitting" ||
-            sendState === "submitting" ||
-            !message.trim() ||
-            Boolean(sessionSlashActionBar) ||
-            sessionSlashSuggestions.length > 0}
-          submitting={sendState === "submitting"}
-          submitLabel={conversationBusy ? copy.queueSubmit : copy.sendSubmit}
-          submittingLabel={copy.sending}
-          ariaLabel={copy.messageLabel}
-          multilineHint={copy.multilineHint}
-          onValueChange={handleSessionMessageChange}
-          onKeydown={(event) => handleSlashCompletionKeydown(event, "session")}
-          completion={{
-            expanded: sessionSlashSuggestions.length > 0,
-            listboxId: sessionSlashListboxId,
-            activeOptionId: sessionSlashActiveOptionId,
-          }}        >
-          {#snippet actions()}
-            {#if sessionSlashSuggestions.length > 0}
-              <SlashCommandMenu
-                id={sessionSlashListboxId}
-                suggestions={sessionSlashSuggestions}
-                activeIndex={sessionSlashActiveIndex}
-                ariaLabel={copy.slashActions.completionLabel}
-                hint={copy.slashActions.completionHint}
-                onActiveIndexChange={(index) => (sessionSlashActiveIndex = index)}
-                onSelect={(suggestion) => selectSlashSuggestion(suggestion, "session")}
-              />
-            {/if}
-            {#if sessionSlashActionBar}
-              <SlashActionBar
-                view={sessionSlashActionBar}
-                resolveAction={(action) => slashActionAvailability(action, "session")}
-                onAction={(action) => handleSlashAction(action, "session")}
-              />
-            {/if}
-          {/snippet}
-          {#snippet header()}
-            <div class="composer-runtime-header">
-              {#if sessionPendingAsk && askDetailMessages}
-                <SessionAskPanel ask={sessionPendingAsk} messages={askDetailMessages} />
-              {/if}
-              {#if liveSessionView?.cwd}
-                <SessionStatusBar
-                  labels={statusBarLabels}
-                  cwd={compactWorkingDirectory(liveSessionView.cwd)}
-                  gitBranch={liveSessionView.gitBranch}
-                  inputTokens={runtimeStatusUsage.inputTokens}
-                  outputTokens={runtimeStatusUsage.outputTokens}
-                  cacheReadTokens={runtimeStatusUsage.cacheReadTokens}
-                  cacheWriteTokens={runtimeStatusUsage.cacheWriteTokens}
-                  costUsd={runtimeStatusUsage.costUsd}
-                  latestCacheHitPercent={runtimeStatusUsage.latestCacheHitPercent}
-                  contextTokens={runtimeStatusUsage.contextTokens}
-                  contextWindow={runtimeStatusUsage.contextWindow}
-                />
-              {/if}
-              <SessionQueue
-                items={queueItems}
-                labels={queueLabels}
-                hasRunningTurn={conversationBusy}
-              >
-                {#snippet actions(item)}
-                  <button
-                    class="queue-remove-button"
-                    type="submit"
-                    form={queueRemoveFormId(item.id)}
-                    disabled={dequeueState === "submitting"}
-                    aria-label={`${copy.removeQueued}: ${item.text}`}
-                    title={copy.removeQueued}
-                  >
-                    <Icon name="close" size={13} stroke={2.2} />
-                    <span>
-                      {dequeuingTurnId === item.id && dequeueState === "submitting"
-                        ? copy.removingQueued
-                        : copy.removeQueued}
-                    </span>
-                  </button>
-                {/snippet}
-              </SessionQueue>
-            </div>
-          {/snippet}
-          {#snippet context()}
-            {#if modelProviders.length > 0}
-              <ModelRuntimeControl
-                id="conversation"
-                bind:open={sessionModelPickerOpen}
-                modelForm="session-model-form"
-                thinkingForm="session-thinking-form"
-                bind:modelValue={sessionModel}
-                bind:thinkingValue={sessionThinkingLevel}
-                groups={modelGroups}
-                labels={modelRuntimeLabels}
-                modelDisabled={!canAssign || modelState === "submitting" || availableModels.length === 0}
-                thinkingDisabled={!canAssign || thinkingState === "submitting"}
-                selectedLabel={!effectiveModelAvailable ? copy.currentModelUnavailable : undefined}
-                settingsHref="/settings/models"
-                onModelChange={submitModelSelection}
-                onThinkingCommit={() => void submitThinkingSelection()}
-              />
-            {:else}
-              <a class="model-settings-link compact" href="/settings/models">
-                <Icon name="warning" size={13} />
-                {modelControl.available ? copy.modelUnavailable : copy.modelControlUnavailable}
-              </a>
-            {/if}
-          {/snippet}
-          {#snippet feedback()}
-            {#if sendFeedback}
-              <p
-                class="form-feedback {sendState}"
-                role={sendState === "error" ? "alert" : "status"}
-                aria-live="polite"
-              >
-                {sendFeedback}
-              </p>
-            {/if}
-            {#if retryFeedback}
-              <p class="form-feedback error" role="alert" aria-live="polite">
-                {retryFeedback}
-              </p>
-            {/if}
-            {#if modelFeedback}
-              <p
-                class="form-feedback {modelState}"
-                class:sr-only={modelState !== "error"}
-                role={modelState === "error" ? "alert" : "status"}
-                aria-live="polite"
-              >
-                {modelFeedback}
-              </p>
-            {/if}
-            {#if thinkingFeedback}
-              <p
-                class="form-feedback {thinkingState}"
-                class:sr-only={thinkingState !== "error"}
-                role={thinkingState === "error" ? "alert" : "status"}
-                aria-live="polite"
-              >
-                {thinkingFeedback}
-              </p>
-            {/if}
-            {#if cancelFeedback}
-              <p
-                class="form-feedback {cancelState}"
-                role={cancelState === "error" ? "alert" : "status"}
-                aria-live="polite"
-              >
-                {cancelFeedback}
-              </p>
-            {/if}
-            {#if dequeueFeedback}
-              <p
-                class="form-feedback {dequeueState}"
-                role={dequeueState === "error" ? "alert" : "status"}
-                aria-live="polite"
-              >
-                {dequeueFeedback}
-              </p>
-            {/if}
-          {/snippet}
-        </Composer>
-      </form>
+    {:else}
+      <SessionConversationPane host={conversationHost} {sessionDetails} />
     {/if}
   </main>
 
@@ -2513,6 +1782,7 @@
 </section>
 
 <style>
+
   .sessions-stage {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -2546,599 +1816,16 @@
     padding: 22px 20px;
   }
 
-  .stage-header {
-    align-items: start;
-    display: flex;
-    flex: 0 0 auto;
-    gap: 16px;
-    justify-content: space-between;
-  }
-
-  .stage-title {
-    min-width: 0;
-  }
-
-  .stage-actions {
-    align-items: center;
-    display: flex;
-    flex: 0 0 auto;
-    flex-wrap: wrap;
-    gap: 8px;
-    justify-content: flex-end;
-  }
-
-  .connection-state {
-    align-items: center;
-    color: var(--color-ink-subtle);
-    display: inline-flex;
-    font-size: 10px;
-    font-weight: 650;
-    gap: 6px;
-    min-height: 32px;
-    white-space: nowrap;
-  }
-
-  .connection-state > span {
-    background: var(--color-ink-disabled);
-    border-radius: 999px;
-    height: 7px;
-    width: 7px;
-  }
-
-  .connection-state.live > span {
-    background: var(--color-success);
-  }
-
-  .connection-state.connecting > span,
-  .connection-state.reconnecting > span {
-    background: var(--color-warning);
-  }
-
-  .connection-state.offline > span {
-    background: var(--color-danger);
-  }
-
-  .session-working-indicator {
-    align-items: center;
-    background: var(--color-primary-weak);
-    border: 1px solid color-mix(in srgb, var(--color-primary) 22%, transparent);
-    border-radius: var(--rounded-full);
-    color: var(--color-primary);
-    display: inline-flex;
-    font-size: 11px;
-    font-weight: 650;
-    gap: 7px;
-    min-height: 30px;
-    padding: 0 10px;
-    white-space: nowrap;
-  }
-
-  .session-working-spinner {
-    animation: session-working-spin 760ms linear infinite;
-    border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
-    border-radius: 50%;
-    border-top-color: currentColor;
-    box-sizing: border-box;
-    height: 13px;
-    width: 13px;
-  }
-
-  @keyframes session-working-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
-  .stage-header h1,
-  .start-heading h1,
-  .stage-empty h1 {
-    color: var(--color-ink);
-    font-size: 20px;
-    font-weight: 650;
-    letter-spacing: -0.015em;
-    line-height: 1.3;
-    margin: 0;
-  }
-
-  .stage-header h1 {
-    align-items: center;
-    display: inline-flex;
-    gap: 8px;
-    max-width: 100%;
-    min-width: 0;
-    overflow: hidden;
-  }
-
-  .session-heading-title {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .channel-badge {
-    background: color-mix(in srgb, var(--color-primary) 12%, transparent);
-    border-radius: 999px;
-    color: var(--color-primary);
-    flex-shrink: 0;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    line-height: 1;
-    padding: 5px 8px;
-    text-transform: none;
-    white-space: nowrap;
-  }
-
-  .channel-settings-link {
-    align-items: center;
-    background: var(--color-surface-soft);
-    border: 1px solid transparent;
-    border-radius: var(--rounded-md, 8px);
-    color: var(--color-ink);
-    display: inline-flex;
-    font-size: 12px;
-    font-weight: 650;
-    gap: 5px;
-    padding: 6px 10px;
-    text-decoration: none;
-    white-space: nowrap;
-  }
-
-  .channel-settings-link:hover {
-    background: var(--color-primary-weak);
-    border-color: var(--color-primary-soft);
-    color: var(--color-primary);
-  }
-
-  .channel-bindings {
-    display: grid;
-    gap: 4px;
-  }
-
-  .channel-bindings code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
-    word-break: break-all;
-  }
-
-  .channel-settings-row {
-    display: grid;
-    gap: 6px;
-    grid-column: 1 / -1;
-  }
-
-  .stage-title > p:last-child,
-  .start-heading > div > p:last-child,
-  .stage-empty p {
-    color: var(--color-ink-subtle);
-    font-size: 13px;
-    line-height: 1.5;
-    margin: 4px 0 0;
-  }
-
-  .kicker {
-    color: var(--color-primary);
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    margin: 0 0 5px;
-    text-transform: uppercase;
-  }
-
-  h2,
-  p {
-    margin: 0;
-  }
-
-  .conversation-start {
-    align-items: center;
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    justify-content: center;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 24px 0;
-  }
-
-  .start-heading,
-  .start-composer {
-    max-width: 720px;
-    width: 100%;
-  }
-
-  .start-heading {
-    align-items: start;
-    display: grid;
-    gap: 14px;
-    grid-template-columns: auto minmax(0, 1fr);
-    margin-bottom: 14px;
-  }
-
-  .spark-mark {
-    align-items: center;
-    background: var(--color-primary-weak);
-    border: 1px solid var(--color-primary-soft);
-    border-radius: 10px;
-    color: var(--color-primary);
-    display: inline-flex;
-    flex: 0 0 auto;
-    height: 40px;
-    justify-content: center;
-    width: 40px;
-  }
-
-  .stage-empty {
-    align-items: center;
-    color: var(--color-ink-subtle);
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    justify-content: center;
-    max-width: 460px;
-    text-align: center;
-  }
-
-  .stage-empty > div {
-    display: grid;
-    gap: 12px;
-    justify-items: center;
-  }
-
-  .conversation-empty {
-    align-items: center;
-    color: var(--color-ink-subtle);
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    height: 100%;
-    justify-content: center;
-    min-height: 180px;
-    text-align: center;
-  }
-
-  .conversation-empty p {
-    font-size: 13px;
-    line-height: 1.5;
-    max-width: 380px;
-  }
-
-  .conversation-composer {
-    align-self: center;
-    flex: 0 0 auto;
-    max-width: 800px;
-    min-width: 0;
-    width: 100%;
-  }
-
-  .composer-runtime-header {
-    display: grid;
-    gap: 8px;
-    min-width: 0;
-  }
-
-  .queue-remove-button {
-    align-items: center;
-    background: transparent;
-    border: 1px solid var(--color-border-soft);
-    border-radius: var(--rounded-sm);
-    color: var(--color-ink-subtle);
-    cursor: pointer;
-    display: inline-flex;
-    font: inherit;
-    font-size: 11px;
-    font-weight: 600;
-    gap: 4px;
-    min-height: 26px;
-    padding: 3px 7px;
-    white-space: nowrap;
-  }
-
-  .queue-remove-button:hover:not(:disabled) {
-    background: var(--color-surface);
-    border-color: var(--color-danger-soft, var(--color-border));
-    color: var(--color-danger);
-  }
-
-  .queue-remove-button:focus-visible {
-    box-shadow: var(--shadow-focus);
-    outline: none;
-  }
-
-  .queue-remove-button:disabled {
-    cursor: wait;
-    opacity: 0.55;
-  }
-
-  .context-chip {
-    align-items: center;
-    color: var(--color-ink-subtle);
-    display: inline-flex;
-    flex: 0 1 auto;
-    font-size: 11px;
-    gap: 5px;
-    max-width: min(220px, 100%);
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .stage-actions .context-chip {
-    max-width: min(260px, 36vw);
-  }
-
-  .sr-only {
-    border: 0;
-    clip: rect(0, 0, 0, 0);
-    height: 1px;
-    margin: -1px;
-    overflow: hidden;
-    padding: 0;
-    position: absolute;
-    white-space: nowrap;
-    width: 1px;
-  }
-
-  .model-settings-link {
-    align-items: center;
-    background: var(--color-surface-soft);
-    border: 1px solid var(--color-border);
-    border-radius: var(--rounded-md);
-    color: var(--color-ink-muted);
-    display: inline-flex;
-    flex: 0 0 auto;
-    font-size: 11px;
-    font-weight: 600;
-    gap: 5px;
-    min-height: 40px;
-    padding: 0 10px;
-    text-decoration: none;
-  }
-
-  .model-settings-link.compact {
-    color: var(--color-danger);
-  }
-
-  .primary-action,
-  .secondary-action {
-    align-items: center;
-    border-radius: var(--rounded-md);
-    display: inline-flex;
-    font-size: 13px;
-    font-weight: 600;
-    gap: 6px;
-    justify-content: center;
-    min-height: 40px;
-    padding: 0 13px;
-    text-decoration: none;
-    width: fit-content;
-  }
-
-  .primary-action {
-    background: var(--color-primary);
-    border: 0;
-    color: var(--color-on-primary, #fff);
-    cursor: pointer;
-  }
-
-  .primary-action:hover {
-    background: var(--color-primary-hover, #1d4ed8);
-  }
-
-  .secondary-action {
-    background: var(--color-surface-soft);
-    border: 1px solid var(--color-border);
-    color: var(--color-ink-muted);
-  }
-
-  .form-feedback {
-    color: var(--color-ink-subtle);
-    font-size: 12px;
-    line-height: 1.4;
-    margin: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .form-feedback.success {
-    color: var(--color-success-strong, var(--color-success));
-  }
-
-  .form-feedback.error {
-    color: var(--color-danger-strong, var(--color-danger));
-  }
-
   .details-heading h2 {
     color: var(--color-ink);
     font-size: 15px;
     font-weight: 650;
   }
 
-  .details-content {
-    display: grid;
-    gap: 20px;
-  }
 
-  .details-grid {
-    display: grid;
-    gap: 14px;
-    margin: 0;
-  }
 
-  .details-grid div {
-    display: grid;
-    gap: 5px;
-  }
 
-  .details-grid dt {
-    color: var(--color-ink-subtle);
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-  }
 
-  .details-grid dd {
-    color: var(--color-ink-muted);
-    font-size: 13px;
-    margin: 0;
-    min-width: 0;
-  }
 
-  .details-grid a {
-    color: var(--color-primary);
-    text-decoration: none;
-  }
 
-  .mobile-details summary {
-    align-items: center;
-    color: var(--color-ink-muted);
-    cursor: pointer;
-    display: flex;
-    font-size: 12px;
-    font-weight: 650;
-    justify-content: space-between;
-    list-style: none;
-    min-height: 40px;
-  }
-
-  .mobile-details summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .mobile-details summary > span {
-    align-items: center;
-    display: inline-flex;
-    gap: 7px;
-  }
-
-  .muted {
-    color: var(--color-ink-subtle);
-    font-size: 12px;
-    line-height: 1.5;
-  }
-
-  .status-pill {
-    background: var(--color-surface-soft);
-    border-radius: 999px;
-    color: var(--color-ink-subtle);
-    font-size: 10px;
-    font-weight: 650;
-    padding: 4px 7px;
-    text-transform: capitalize;
-    white-space: nowrap;
-  }
-
-  .status-pill.running,
-  .status-pill.ready,
-  .status-pill.queued,
-  .status-pill.acked {
-    background: var(--color-primary-weak);
-    color: var(--color-primary);
-  }
-
-  .status-pill.completed,
-  .status-pill.success,
-  .status-pill.delivered {
-    background: var(--color-success-weak, #ecfdf5);
-    color: var(--color-success-strong, #047857);
-  }
-
-  .status-pill.failed,
-  .status-pill.error,
-  .status-pill.rejected {
-    background: var(--color-danger-weak, #fef2f2);
-    color: var(--color-danger-strong, #b91c1c);
-  }
-
-  .status-pill.archived,
-  .status-pill.cancelled {
-    background: var(--color-warning-soft);
-    color: var(--color-warning-strong, var(--color-warning));
-  }
-
-  .mobile-details {
-    display: none;
-  }
-
-  .sr-only {
-    border: 0;
-    clip: rect(0 0 0 0);
-    clip-path: inset(50%);
-    height: 1px;
-    margin: -1px;
-    overflow: hidden;
-    padding: 0;
-    position: absolute;
-    white-space: nowrap;
-    width: 1px;
-  }
-
-  @media (max-width: 960px) {
-    .sessions-stage,
-    .sessions-stage.has-selection {
-      grid-template-columns: minmax(0, 1fr);
-      height: 100%;
-      min-height: 0;
-    }
-
-    .details-pane {
-      display: none;
-    }
-
-    .mobile-details {
-      background: var(--color-surface);
-      border: 1px solid var(--color-border);
-      border-radius: 10px;
-      display: block;
-      flex: 0 0 auto;
-      padding: 10px 12px;
-    }
-
-    .mobile-details[open] {
-      max-height: min(48dvh, 420px);
-      overflow-y: auto;
-    }
-
-    .mobile-details .details-content {
-      border-top: 1px solid var(--color-border-soft);
-      gap: 14px;
-      margin-top: 10px;
-      padding-top: 12px;
-    }
-
-    .mobile-details .details-grid {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-
-  }
-
-  @media (max-width: 640px) {
-    .stage-pane {
-      gap: 12px;
-      padding: 14px 12px;
-    }
-
-    .conversation-start {
-      align-items: stretch;
-      justify-content: flex-start;
-      padding: 10px 0;
-    }
-
-    .start-heading {
-      margin-bottom: 14px;
-    }
-
-    .mobile-details .details-grid {
-      grid-template-columns: 1fr 1fr;
-    }
-
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .session-working-spinner {
-      animation: none;
-    }
-  }
 </style>

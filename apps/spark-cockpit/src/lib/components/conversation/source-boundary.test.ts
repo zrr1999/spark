@@ -49,19 +49,36 @@ describe("source-derived conversation component boundary", () => {
 
   it("integrates presentation components without replacing the daemon form path", () => {
     const workspace = readFileSync(join(appRoot, "src/lib/SessionsWorkspace.svelte"), "utf8");
+    const startPane = readFileSync(
+      join(appRoot, "src/lib/sessions-workspace/SessionStartPane.svelte"),
+      "utf8",
+    );
+    const conversationPane = readFileSync(
+      join(appRoot, "src/lib/sessions-workspace/SessionConversationPane.svelte"),
+      "utf8",
+    );
+    const stageHeader = readFileSync(
+      join(appRoot, "src/lib/sessions-workspace/SessionStageHeader.svelte"),
+      "utf8",
+    );
+    const composerPane = readFileSync(
+      join(appRoot, "src/lib/sessions-workspace/SessionComposerPane.svelte"),
+      "utf8",
+    );
+    const shell = `${workspace}\n${startPane}\n${conversationPane}\n${stageHeader}\n${composerPane}`;
 
-    expect(workspace).toContain("<ConversationViewport");
-    expect(workspace).toContain("{#key selected.sessionId}");
-    expect(workspace).toContain("<ConversationMessage");
-    expect(workspace).toContain("<Composer");
-    expect(workspace).toContain("<ModelRuntimeControl");
-    expect(workspace).toContain('action="?/sendMessage"');
-    expect(workspace).toContain('action="?/selectModel"');
-    expect(workspace).toContain('action="?/selectThinking"');
-    expect(workspace).toContain("use:enhance={enhanceSendMessage}");
-    expect(workspace).toContain('name="submissionId" value={startSubmissionId}');
-    expect(workspace).toContain('name="submissionId" value={sendSubmissionId}');
-    expect(workspace).toContain("retryAction={item.id === retryableTimelineItemId");
+    expect(shell).toContain("<ConversationViewport");
+    expect(shell).toContain("{#key host.selected.sessionId}");
+    expect(shell).toContain("<ConversationMessage");
+    expect(shell).toContain("<Composer");
+    expect(shell).toContain("<ModelRuntimeControl");
+    expect(shell).toContain('action="?/sendMessage"');
+    expect(shell).toContain('action="?/selectModel"');
+    expect(shell).toContain('action="?/selectThinking"');
+    expect(shell).toContain("use:enhance={host.enhanceSendMessage}");
+    expect(startPane).toContain('name="submissionId" value={startSubmissionId}');
+    expect(shell).toContain('name="submissionId" value={host.sendSubmissionId}');
+    expect(shell).toContain("retryAction={item.id === host.retryableTimelineItemId");
     expect(workspace).not.toContain("<SessionRetryAction");
     expect(workspace).not.toContain('class="timeline-entry');
     expect(workspace).not.toContain('class="message-block');

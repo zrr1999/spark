@@ -43,7 +43,11 @@ describe("remote PWA assets", () => {
       "src/routes/(workbench)/[workspaceId]/inbox/[inboxItemId]/+page.svelte",
     );
     const askQuestionField = readAppFile("src/lib/AskQuestionField.svelte");
-    const conversationDetail = readAppFile("src/lib/SessionsWorkspace.svelte");
+    const conversationDetail = [
+      readAppFile("src/lib/SessionsWorkspace.svelte"),
+      readAppFile("src/lib/sessions-workspace/SessionStageHeader.svelte"),
+      readAppFile("src/lib/sessions-workspace/SessionConversationPane.svelte"),
+    ].join("\n");
     const workbenchLayout = readAppFile("src/routes/(workbench)/+layout.svelte");
     const cockpitTopbar = readAppFile("src/lib/shell/CockpitTopbar.svelte");
 
