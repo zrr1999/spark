@@ -7,6 +7,7 @@
   "files": [
     "src/**/*.ts",
     "!src/**/*.test.ts",
+    "skills/**/*",
     "README.md"
   ],
   "type": "module",
@@ -16,6 +17,7 @@
     "./headless-loader": "./src/headless-loader.ts",
     "./keybindings": "./src/keybindings.ts",
     "./system-prompt": "./src/system-prompt.ts",
+    "./builtin-skills": "./src/builtin-skills.ts",
     "./spark-widget": "./src/spark-widget.ts",
     "./spark-widget-controller": "./src/spark-widget-controller.ts",
     "./types": "./src/types.ts"

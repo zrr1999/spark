@@ -695,6 +695,9 @@ importers:
       '@zendev-lab/pi-extension':
         specifier: workspace:^
         version: link:../pi-extension
+      '@zendev-lab/spark-host':
+        specifier: workspace:^
+        version: link:../spark-host
       '@zendev-lab/spark-roles':
         specifier: workspace:^
         version: link:../spark-roles

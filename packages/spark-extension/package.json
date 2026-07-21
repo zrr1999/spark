@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@zendev-lab/pi-extension": "workspace:^",
+    "@zendev-lab/spark-host": "workspace:^",
     "@zendev-lab/spark-roles": "workspace:^"
   }
 }

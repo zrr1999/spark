@@ -15,7 +15,7 @@ import { splitSparkSystemPrompt } from "../packages/spark-turn/src/agent-loop.ts
 import {
   loadBuiltinSkills,
   renderBuiltinSkillsForPrompt,
-} from "../packages/pi-extension/src/extension/spark-builtin-skills.ts";
+} from "../packages/spark-host/src/builtin-skills.ts";
 
 async function writeSkill(
   root: string,
