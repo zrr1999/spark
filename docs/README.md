@@ -14,6 +14,9 @@ These files are current contracts or operator procedures. Product and package im
 - [`operations/cockpit-relocation.md`](./operations/cockpit-relocation.md): feature-only Cockpit snapshot relocation, HTTPS/WSS cutover, validation, and rollback.
 - [`operations/zellij-harness.md`](./operations/zellij-harness.md): real TUI validation and pane capture.
 - [`operations/mutation-ce.md`](./operations/mutation-ce.md): leaf-package Stryker continuous evaluation, timing table, and hygiene.
+- [`operations/acp-spike.md`](./operations/acp-spike.md): experimental ACP agent stub and future daemon wiring map (not default-enabled).
+- [`operations/mcp-spike.md`](./operations/mcp-spike.md): experimental MCP server exposing read-only Spark memory tools (not default-enabled).
+- [`operations/durable-execution-notes.md`](./operations/durable-execution-notes.md): Inngest/Restate step-checkpoint notes mapped to workflows/loop/invocations.
 
 ## Terminology: three “runtime” meanings
 

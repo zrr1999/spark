@@ -10,6 +10,8 @@ allowBuilds:
   protobufjs: true
 
 catalog:
+  "@agentclientprotocol/sdk": "1.2.1"
+  "@modelcontextprotocol/sdk": "1.29.0"
   "@orpc/client": "1.14.8"
   "@orpc/contract": "1.14.8"
   "@orpc/server": "1.14.8"
