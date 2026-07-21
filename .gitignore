@@ -33,3 +33,5 @@ playwright-report/
 test-results/
 *.tsbuildinfo
 reports/
+packages/spark-db/.codegen-tmp/
+packages/spark-db/src/generated-types.ts

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { delay } from "es-toolkit";
 import {
   builtinRoleRef,
   defaultProjectRoleModelSettingsStore,
@@ -882,23 +883,14 @@ function isRetriableAskFailure(result: AskAutoAnswerResult): boolean {
   return RETRIABLE_FAILURE_PATTERNS.some((pattern) => pattern.test(result.reason!));
 }
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal?.aborted) {
-      resolve();
-      return;
-    }
-    const timer = setTimeout(resolve, ms);
-    timer.unref?.();
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
-  });
+async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  // es-toolkit delay rejects on abort; reviewer retries treat abort as soft stop.
+  try {
+    await delay(ms, signal ? { signal } : undefined);
+  } catch {
+    if (signal?.aborted) return;
+    throw new Error(`reviewer delay interrupted after ${ms}ms`);
+  }
 }
 
 function failedReviewerRunVerdict(input: ReviewInput, reason: string): ReviewerVerdict {

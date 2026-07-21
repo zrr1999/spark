@@ -37,6 +37,7 @@
     "@zendev-lab/spark-tasks": "workspace:^",
     "@zendev-lab/spark-text": "workspace:^",
     "@zendev-lab/spark-workflows": "workspace:^",
+    "es-toolkit": "catalog:",
     "typebox": "catalog:"
   }
 }

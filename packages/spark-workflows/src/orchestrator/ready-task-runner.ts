@@ -8,6 +8,7 @@ import {
   type ProjectRef,
 } from "@zendev-lab/spark-core";
 import type { TaskGraph } from "@zendev-lab/spark-tasks";
+import { delay } from "es-toolkit";
 
 export interface ReadyTaskRunInput {
   graph: TaskGraph;
@@ -162,7 +163,7 @@ export async function runReadyTasks(input: ReadyTaskRunnerOptions): Promise<Read
 
       await Promise.race([
         Promise.race(running),
-        sleep(Math.max(0, deadline - Date.now())).then(() => {
+        delay(Math.max(0, deadline - Date.now())).then(() => {
           foregroundTimedOut = true;
         }),
       ]);
@@ -280,11 +281,4 @@ function taskRunRecordedForTaskError(graph: TaskGraph, task: Task, error: unknow
     .at(-1);
   if (latest && latest.status !== "running" && latest.status !== "queued") return latest;
   throw error;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref?.();
-  });
 }

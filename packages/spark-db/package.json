@@ -17,7 +17,9 @@
     "access": "public"
   },
   "scripts": {
-    "check": "vp check --no-fmt --no-lint . && vp test run",
+    "check": "vp check --no-fmt --no-lint . && node --experimental-strip-types scripts/check-schema-types.mjs && vp test run",
+    "check:schema-types": "node --experimental-strip-types scripts/check-schema-types.mjs",
+    "generate:types": "node --experimental-strip-types scripts/generate-types.mjs",
     "test": "vp test run",
     "test:mutation": "stryker run"
   },
@@ -28,6 +30,9 @@
   "devDependencies": {
     "@stryker-mutator/core": "catalog:",
     "@stryker-mutator/vitest-runner": "catalog:",
+    "@types/better-sqlite3": "^7.6.13",
+    "better-sqlite3": "^12.11.1",
+    "kysely-codegen": "^0.20.0",
     "typescript": "catalog:",
     "vitest": "catalog:"
   },

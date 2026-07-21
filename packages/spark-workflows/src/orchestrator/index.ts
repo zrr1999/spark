@@ -1,5 +1,6 @@
 import { mkdir, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { delay } from "es-toolkit";
 
 import {
   newRef,
@@ -589,7 +590,7 @@ async function acquireWorkflowRunStoreLock(lockPath: string): Promise<() => Prom
       await removeStaleWorkflowRunStoreLock(lockPath, staleMs);
       if (Date.now() - started >= timeoutMs)
         throw new Error(`timed out waiting for workflow run store lock: ${lockPath}`);
-      await sleep(retryIntervalMs);
+      await delay(retryIntervalMs);
     }
   }
 }
@@ -601,13 +602,6 @@ async function removeStaleWorkflowRunStoreLock(lockPath: string, staleMs: number
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref?.();
-  });
 }
 
 export function sparkWorkflowRunStorePath(cwd: string): string {

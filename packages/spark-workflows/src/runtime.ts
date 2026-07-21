@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import vm from "node:vm";
+import { delay } from "es-toolkit";
 import { parseWorkflowScript } from "./metadata.ts";
 import type {
   WorkflowAgentDeliverySummary,
@@ -1239,7 +1240,7 @@ async function runWorkflowParallelItem<T>(
       return { status: "fulfilled", value: await item(), attempts: attempt };
     } catch (error) {
       lastError = error;
-      if (attempt < retry.attempts && retry.backoffMs > 0) await sleep(retry.backoffMs);
+      if (attempt < retry.attempts && retry.backoffMs > 0) await delay(retry.backoffMs);
     }
   }
   return { status: "rejected", reason: lastError, attempts: attempt };
@@ -1269,10 +1270,6 @@ async function runWorkflowPipeline(input: unknown[]): Promise<unknown> {
   throw new TypeError(
     "workflow pipeline expects pipeline([steps], initial) or pipeline(items, ...stages)",
   );
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function normalizeNonEmptyWorkflowString(value: unknown, field: string): string {

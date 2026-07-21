@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { delay } from "es-toolkit";
 
 import {
   formatJsonFile,
@@ -641,7 +642,7 @@ async function acquireTaskGraphStoreLock(
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       await removeStaleTaskGraphStoreLock(lockPath, staleMs);
       if (Date.now() - started >= timeoutMs) throw new TaskGraphStoreLockTimeoutError(lockPath);
-      await sleep(retryIntervalMs);
+      await delay(retryIntervalMs);
     }
   }
 }
@@ -724,11 +725,4 @@ function parseTaskGraphStoreLockOwner(
 
 function unknownErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref?.();
-  });
 }
