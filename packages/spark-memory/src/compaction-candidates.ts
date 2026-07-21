@@ -51,7 +51,9 @@ export interface SparkCompactionCandidatePipelineOptions {
   reviewCandidate?: (candidate: SparkCompactionMemoryCandidate) => Promise<"accept" | "reject">;
 }
 
-const EVIDENCE_REF_PATTERN = /\b(?:artifact|evidence):[A-Za-z0-9][A-Za-z0-9._:-]*/gu;
+const EVIDENCE_REF_PATTERN =
+  /\b(?:artifact|evidence):[A-Za-z0-9][A-Za-z0-9._-]*(?![:A-Za-z0-9._-])/gu;
+const VALID_EVIDENCE_REF_PATTERN = /^(?:artifact|evidence):[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 
 /**
  * Extract only the durable portions of the structured Smart summary. Open work
@@ -205,24 +207,30 @@ export async function runSparkCompactionCandidatePipeline(
 }
 
 function normalizeStructuredSummary(value: unknown): SparkCompactionStructuredSummary | undefined {
-  const root = isRecord(value) && isRecord(value.structured) ? value.structured : value;
-  if (!isRecord(root)) return undefined;
-  const preservedFacts = stringArray(root.preservedFacts);
-  const decisions = stringArray(root.decisions);
-  const unresolved = stringArray(root.unresolved);
-  const inProgress = stringArray(root.inProgress);
-  const memoryRefs = stringArray(root.memoryRefs);
-  const changedFiles = changedFileArray(root.changedFiles);
-  const failures = failureArray(root.failures);
+  if (!isRecord(value) || value.mode !== "smart" || !isRecord(value.structured)) return undefined;
+  const root = value.structured;
+  if (root.version !== 1 || typeof root.objective !== "string") return undefined;
+  const requiredStringArrays = [
+    "completed",
+    "inProgress",
+    "decisions",
+    "preservedFacts",
+    "unresolved",
+    "memoryRefs",
+  ] as const;
+  if (requiredStringArrays.some((key) => !isStringArray(root[key]))) return undefined;
+  if (!validChangedFileArray(root.changedFiles)) return undefined;
+  if (!validCommandArray(root.commands)) return undefined;
+  if (!validFailureArray(root.failures)) return undefined;
   return {
-    ...(preservedFacts ? { preservedFacts } : {}),
-    ...(decisions ? { decisions } : {}),
-    ...(unresolved ? { unresolved } : {}),
-    ...(inProgress ? { inProgress } : {}),
-    ...(memoryRefs ? { memoryRefs } : {}),
-    ...(changedFiles.length > 0 ? { changedFiles } : {}),
-    ...(failures.length > 0 ? { failures } : {}),
-  };
+    preservedFacts: root.preservedFacts,
+    decisions: root.decisions,
+    unresolved: root.unresolved,
+    inProgress: root.inProgress,
+    memoryRefs: root.memoryRefs,
+    changedFiles: root.changedFiles,
+    failures: root.failures,
+  } as SparkCompactionStructuredSummary;
 }
 
 function refsInText(text: string): string[] {
@@ -235,7 +243,7 @@ async function resolveValidEvidenceRefs(
 ): Promise<string[]> {
   const valid: string[] = [];
   for (const ref of uniqueNonEmpty([...refs])) {
-    if (!/^(?:artifact|evidence):/u.test(ref)) continue;
+    if (!VALID_EVIDENCE_REF_PATTERN.test(ref)) continue;
     try {
       if (await store.tryGet(ref as ArtifactRef | EvidenceRef)) valid.push(ref);
     } catch {
@@ -245,47 +253,51 @@ async function resolveValidEvidenceRefs(
   return valid;
 }
 
-function changedFileArray(
-  value: unknown,
-): Array<{ path?: string; change?: string; evidenceRefs?: string[] }> {
-  if (!Array.isArray(value)) return [];
-  return value.filter(isRecord).map((item) => {
-    const path = optionalString(item.path);
-    const change = optionalString(item.change);
-    const evidenceRefs = stringArray(item.evidenceRefs);
-    return {
-      ...(path ? { path } : {}),
-      ...(change ? { change } : {}),
-      ...(evidenceRefs ? { evidenceRefs } : {}),
-    };
-  });
+function validChangedFileArray(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        isRecord(item) &&
+        typeof item.path === "string" &&
+        typeof item.change === "string" &&
+        isStringArray(item.evidenceRefs),
+    )
+  );
 }
 
-function failureArray(
-  value: unknown,
-): Array<{ summary?: string; cause?: string; nextStep?: string; evidenceRefs?: string[] }> {
-  if (!Array.isArray(value)) return [];
-  return value.filter(isRecord).map((item) => {
-    const summary = optionalString(item.summary);
-    const cause = optionalString(item.cause);
-    const nextStep = optionalString(item.nextStep);
-    const evidenceRefs = stringArray(item.evidenceRefs);
-    return {
-      ...(summary ? { summary } : {}),
-      ...(cause ? { cause } : {}),
-      ...(nextStep ? { nextStep } : {}),
-      ...(evidenceRefs ? { evidenceRefs } : {}),
-    };
-  });
+function validCommandArray(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        isRecord(item) &&
+        typeof item.command === "string" &&
+        (item.result === "passed" ||
+          item.result === "failed" ||
+          item.result === "blocked" ||
+          item.result === "unknown") &&
+        typeof item.detail === "string",
+    )
+  );
 }
 
-function optionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+function validFailureArray(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        isRecord(item) &&
+        typeof item.summary === "string" &&
+        typeof item.cause === "string" &&
+        typeof item.nextStep === "string" &&
+        isStringArray(item.evidenceRefs),
+    )
+  );
 }
 
-function stringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  return value.filter((item): item is string => typeof item === "string");
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
 function uniqueNonEmpty(values: readonly string[]): string[] {

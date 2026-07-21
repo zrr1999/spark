@@ -136,6 +136,7 @@ export {
   normalizeSparkCompactionOutcomeMetadata,
   parseSparkSmartCompactionSummary,
   prepareSparkCompaction,
+  renderSparkSmartCompactionPrompt,
   renderSparkSmartCompactionSummary,
   scheduleSparkCompaction,
   shouldSparkCompact,

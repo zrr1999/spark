@@ -19,7 +19,11 @@ import type { ToolConfig } from "../packages/spark-core/src/index.ts";
 
 const structuredSummary = {
   mode: "smart",
+  model: "provider/compact-model",
   structured: {
+    version: 1,
+    objective: "Complete Compact V2",
+    completed: [],
     preservedFacts: [
       "Package manager is pnpm.",
       "Validated durable delivery (evidence:delivery-proof).",
@@ -32,6 +36,7 @@ const structuredSummary = {
         evidenceRefs: ["artifact:changed-file-proof"],
       },
     ],
+    commands: [],
     unresolved: ["Run the final full gate."],
     inProgress: ["Document Compact V2."],
     failures: [
@@ -68,6 +73,25 @@ test("Smart compact extraction separates stable facts from open items and preser
     ["artifact:changed-file-proof"],
   );
   assert.ok(candidates.every((candidate) => candidate.sourceSessionId === "session:compact"));
+});
+
+test("post-compact extraction fails closed for malformed or non-Smart details", () => {
+  assert.deepEqual(
+    extractSparkCompactionCandidates({ structured: { preservedFacts: ["partial"] } }),
+    [],
+  );
+  assert.deepEqual(
+    extractSparkCompactionCandidates({ ...structuredSummary, mode: "deterministic" }),
+    [],
+  );
+  const malformedRefDetails = {
+    ...structuredSummary,
+    structured: {
+      ...structuredSummary.structured,
+      preservedFacts: ["Malformed evidence evidence:delivery-proof:extra must not be truncated."],
+    },
+  };
+  assert.deepEqual(extractSparkCompactionCandidates(malformedRefDetails)[0]?.evidenceRefs, []);
 });
 
 test("post-compact pipeline persists candidates but writes Memory only with resolvable evidence", async () => {
@@ -153,11 +177,22 @@ test("candidate review and Memory write failures are isolated from remaining can
     cwd: "/unused",
     summary: "rendered summary",
     details: {
+      mode: "smart",
       structured: {
+        version: 1,
+        objective: "Verify failure isolation",
+        completed: [],
+        preservedFacts: [],
+        decisions: [],
         changedFiles: [
           { path: "a.ts", change: "first", evidenceRefs: ["evidence:first"] },
           { path: "b.ts", change: "second", evidenceRefs: ["evidence:second"] },
         ],
+        commands: [],
+        unresolved: [],
+        inProgress: [],
+        failures: [],
+        memoryRefs: [],
       },
     },
     candidateStore: new InMemoryCandidateStore(),
@@ -235,6 +270,48 @@ test("session_compact schedules candidate work after returning and ignores faile
   assert.equal(calls, 0);
 });
 
+test("session_compact reports candidate failures as hidden non-triggering diagnostics", async () => {
+  const api = new FakeApi();
+  api.runPipeline = async () => ({
+    ...emptyPipelineResult(),
+    failures: ["memory unavailable"],
+  });
+  sparkMemoryExtension(api, {
+    runCompactionCandidatePipeline: (options) => api.runPipeline(options),
+  });
+  const handler = api.handlers.get("session_compact");
+  assert.ok(handler);
+
+  handler(
+    {
+      compactType: "full",
+      succeeded: true,
+      sessionId: "session:compact",
+      compactionEntry: {
+        type: "compaction",
+        summary: "Smart summary",
+        details: structuredSummary,
+      },
+    },
+    { cwd: "/workspace" },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(api.messages, [
+    {
+      message: {
+        customType: "spark-memory-compaction-candidate-diagnostic",
+        content: "Post-compact Memory candidate processing reported 1 failure(s).",
+        display: false,
+        authority: "runtime_data",
+        trust: "untrusted",
+        details: { failures: ["memory unavailable"] },
+      },
+      options: { deliverAs: "nextTurn", triggerTurn: false },
+    },
+  ]);
+});
+
 class InMemoryCandidateStore {
   readonly candidates: Awaited<ReturnType<ReturnType<typeof defaultRecallStore>["list"]>> = [];
 
@@ -264,6 +341,17 @@ class InMemoryCandidateStore {
 class FakeApi {
   readonly handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
   readonly tools = new Map<string, ToolConfig>();
+  readonly messages: Array<{
+    message: {
+      customType: string;
+      content: string;
+      display?: boolean;
+      details?: Record<string, unknown>;
+      authority?: "runtime_control" | "runtime_data";
+      trust?: "trusted" | "untrusted";
+    };
+    options?: { deliverAs?: "steer" | "followUp" | "nextTurn"; triggerTurn?: boolean };
+  }> = [];
   runPipeline: (
     options: SparkCompactionCandidatePipelineOptions,
   ) => Promise<SparkCompactionCandidatePipelineResult> = async () => emptyPipelineResult();
@@ -280,7 +368,19 @@ class FakeApi {
     this.handlers.set(event, handler);
   }
 
-  sendMessage(): void {}
+  sendMessage(
+    message: {
+      customType: string;
+      content: string;
+      display?: boolean;
+      details?: Record<string, unknown>;
+      authority?: "runtime_control" | "runtime_data";
+      trust?: "trusted" | "untrusted";
+    },
+    options?: { deliverAs?: "steer" | "followUp" | "nextTurn"; triggerTurn?: boolean },
+  ): void {
+    this.messages.push({ message, ...(options ? { options } : {}) });
+  }
 }
 
 function emptyPipelineResult(): SparkCompactionCandidatePipelineResult {

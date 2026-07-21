@@ -666,15 +666,26 @@ export function registerSparkMemoryCheckpointEvents(
     const runPipeline =
       options.runCompactionCandidatePipeline ?? runSparkCompactionCandidatePipeline;
     queueMicrotask(() => {
-      void runPipeline({
-        cwd,
-        sessionId: compact.sessionId,
-        summary: compact.summary,
-        details: compact.details,
-      }).catch(() => {
-        // Compact is already durable. Candidate review/write failures are
-        // background diagnostics and must not alter its foreground outcome.
-      });
+      void Promise.resolve()
+        .then(
+          async () =>
+            await runPipeline({
+              cwd,
+              sessionId: compact.sessionId,
+              summary: compact.summary,
+              details: compact.details,
+            }),
+        )
+        .then((result) => {
+          if (result.failures.length > 0) {
+            sendCompactionCandidateDiagnostic(pi, result.failures);
+          }
+        })
+        .catch((error) => {
+          sendCompactionCandidateDiagnostic(pi, [
+            error instanceof Error ? error.message : String(error),
+          ]);
+        });
     });
   });
 }
@@ -810,6 +821,27 @@ function normalizeLimit(value: unknown): number | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function sendCompactionCandidateDiagnostic(
+  pi: SparkMemoryExtensionApi,
+  failures: readonly string[],
+): void {
+  try {
+    pi.sendMessage?.(
+      {
+        customType: "spark-memory-compaction-candidate-diagnostic",
+        content: `Post-compact Memory candidate processing reported ${failures.length} failure(s).`,
+        display: false,
+        authority: "runtime_data",
+        trust: "untrusted",
+        details: { failures: failures.slice(0, 5) },
+      },
+      { deliverAs: "nextTurn", triggerTurn: false },
+    );
+  } catch {
+    // Diagnostics are best-effort and cannot change an already durable compact outcome.
+  }
 }
 
 function successfulFullCompaction(
