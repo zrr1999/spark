@@ -2,7 +2,7 @@
   "name": "spark",
   "version": "0.1.0",
   "private": true,
-  "description": "Spark suite for Pi: project/task orchestration with controlled agents, artifacts, review, ask, and cue execution primitives.",
+  "description": "Spark monorepo: daemon-first agent orchestration across TUI, Cockpit, and channels, with Pi product compatibility retained.",
   "keywords": [
     "Agentic Workflow",
     "Coding Agent",
