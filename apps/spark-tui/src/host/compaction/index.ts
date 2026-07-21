@@ -1,7 +1,17 @@
-/** @deprecated Import path preserved — implementation lives in ./compaction/. */
+/** Compaction surface for the native TUI host. */
+
+export type {
+  SparkCompactionTokenSource,
+  SparkCompactionFallbackReason,
+  SparkCompactModelSelection,
+  SparkCompactionSettings,
+} from "./types.ts";
 export {
   CURRENT_SPARK_COMPACTION_SUMMARY_VERSION,
   DEFAULT_SPARK_COMPACTION_SETTINGS,
+} from "./types.ts";
+
+export {
   normalizeSparkCompactionOutcomeMetadata,
   meterSparkContextTokens,
   parseSparkSmartCompactionSummary,
@@ -26,10 +36,6 @@ export {
   navigateSparkSessionBranchWithSummary,
   collectSparkBranchEntriesToSummarize,
   entriesToMessages,
-  type SparkCompactionTokenSource,
-  type SparkCompactionFallbackReason,
-  type SparkCompactModelSelection,
-  type SparkCompactionSettings,
   type SparkContextUsageEstimate,
   type SparkTokenMeterInput,
   type SparkCutPointResult,
@@ -46,4 +52,4 @@ export {
   type SparkTranscriptMessageForCompaction,
   type SparkVisibleTranscriptCompactionResult,
   type SparkBranchNavigationSummaryResult,
-} from "./compaction/index.ts";
+} from "./algorithm.ts";

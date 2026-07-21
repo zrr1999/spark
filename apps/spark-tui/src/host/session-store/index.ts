@@ -1,12 +1,7 @@
-/** @deprecated Import path preserved — implementation lives in ./session-store/. */
+/** Session-store package surface (kept import-stable via ../session-store.ts). */
+
 export {
   CURRENT_SPARK_SESSION_VERSION,
-  SparkSessionStore,
-  defaultSparkSessionsRoot,
-  defaultSparkHome,
-  workspaceSessionHash,
-  parseSparkSessionEntries,
-  writeJsonLinesAtomically,
   type SparkSessionHeader,
   type SparkSessionEntryBase,
   type SparkSessionMessage,
@@ -26,4 +21,12 @@ export {
   type SparkSessionInfo,
   type SparkSessionStoreOptions,
   type NewSparkSessionOptions,
-} from "./session-store/index.ts";
+} from "./types.ts";
+export {
+  SparkSessionStore,
+  defaultSparkSessionsRoot,
+  defaultSparkHome,
+  workspaceSessionHash,
+  parseSparkSessionEntries,
+  writeJsonLinesAtomically,
+} from "./store.ts";
