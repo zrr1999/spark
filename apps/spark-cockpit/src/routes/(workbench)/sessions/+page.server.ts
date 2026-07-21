@@ -350,9 +350,11 @@ export const actions = {
       });
     }
 
+    // Cancel must not wait for a live `session.get`. Workspace admission uses
+    // the local projection; `turn.cancel` remains the daemon-owned gate.
     let session;
     try {
-      session = await getManagedSessionForCockpit(sessionId);
+      session = getProjectedManagedSessionForCockpit(sessionId);
     } catch (caught) {
       const error = caught instanceof Error ? caught.message : t.cancelTurnFailed;
       return fail(400, {

@@ -40,7 +40,7 @@ jobs:
           persist-credentials: false
 
       - name: Run typos
-        uses: crate-ci/typos@master
+        uses: crate-ci/typos@bee27e3a4fd1ea2111cf90ab89cd076c870fce14 # v1.48.0
         with:
           config: ./_typos.toml
           files: ".github AGENTS.md README.md docs packages test _typos.toml"

@@ -9,6 +9,8 @@ import {
   parseSessionSerializedEvent,
   reconcileSessionLiveEventState,
   registerQueuedSessionTurn,
+  settleCancelledSessionTurn,
+  convergeSessionLiveEventStateFromRegistryStatus,
   requestSessionActivityRefresh,
   sessionEventCursorStorageKey,
   sessionViewRevisionKey,
@@ -825,6 +827,99 @@ describe("session live events", () => {
     expect(result).toEqual({ changed: false, refreshActivity: true });
     expect(state.activeTurnId).toBeNull();
     expect(state.view).toBeNull();
+  });
+
+  it("settles a cancel receipt by dropping the pending turn before refresh", () => {
+    const state = createSessionLiveEventState({
+      sessionId: "sess_current",
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        status: "queued",
+        pendingTurns: [
+          {
+            invocationId: "inv_remove",
+            prompt: "Queued follow-up",
+            status: "queued",
+            createdAt: "2026-07-13T08:00:00.000Z",
+          },
+          {
+            invocationId: "inv_keep",
+            prompt: "Keep me",
+            status: "queued",
+            createdAt: "2026-07-13T08:00:01.000Z",
+          },
+        ],
+      }),
+    });
+
+    expect(settleCancelledSessionTurn(state, " inv_remove ", "cancelled")).toBe(true);
+    expect(state.view).toMatchObject({
+      status: "queued",
+      pendingTurns: [{ invocationId: "inv_keep", status: "queued" }],
+    });
+
+    const refreshedAt = new Date(Date.now() + 60_000).toISOString();
+    expect(
+      reconcileSessionLiveEventState(state, {
+        view: parseSparkSessionView({
+          sessionId: "sess_current",
+          status: "queued",
+          pendingTurns: [
+            {
+              invocationId: "inv_remove",
+              prompt: "Queued follow-up",
+              status: "queued",
+              createdAt: "2026-07-13T08:00:00.000Z",
+            },
+            {
+              invocationId: "inv_keep",
+              prompt: "Keep me",
+              status: "queued",
+              createdAt: "2026-07-13T08:00:01.000Z",
+            },
+          ],
+          updatedAt: refreshedAt,
+        }),
+      }),
+    ).toBe(true);
+    expect(state.view).toMatchObject({
+      status: "queued",
+      pendingTurns: [{ invocationId: "inv_keep", status: "queued" }],
+    });
+  });
+
+  it("clears a stuck running turn when the registry reports idle", () => {
+    const state = createSessionLiveEventState({
+      sessionId: "sess_current",
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        status: "running",
+        pendingTurns: [
+          {
+            invocationId: "inv_stuck",
+            prompt: "Still spinning",
+            status: "running",
+            createdAt: "2026-07-13T08:00:00.000Z",
+            startedAt: "2026-07-13T08:00:01.000Z",
+          },
+          {
+            invocationId: "inv_queued",
+            prompt: "Keep queued",
+            status: "queued",
+            createdAt: "2026-07-13T08:00:02.000Z",
+          },
+        ],
+      }),
+    });
+    state.activeTurnId = "inv_stuck";
+
+    expect(convergeSessionLiveEventStateFromRegistryStatus(state, "ready")).toBe(true);
+    expect(state.activeTurnId).toBeNull();
+    expect(state.view).toMatchObject({
+      status: "queued",
+      pendingTurns: [{ invocationId: "inv_queued", status: "queued" }],
+    });
+    expect(convergeSessionLiveEventStateFromRegistryStatus(state, "running")).toBe(false);
   });
 
   it("does not promote the conversation to running from a nested run projection", () => {

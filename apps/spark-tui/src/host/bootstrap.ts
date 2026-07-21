@@ -7,6 +7,7 @@ import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 import {
   createProviderRegistryLeafRunner,
   createProviderRegistryStreamFunction,
+  createProviderRegistryWorkflowModelRunner,
 } from "@zendev-lab/spark-ai";
 import {
   DEFAULT_SPARK_IDENTITY_PROMPT,
@@ -58,6 +59,16 @@ export interface SparkCliHostDiagnostic {
   message: string;
 }
 
+export interface SparkCompactionModelRunnerRequest {
+  model: string;
+  prompt: string;
+  maxTokens: number;
+}
+
+export type SparkCompactionModelRunner = (
+  request: SparkCompactionModelRunnerRequest,
+) => Promise<unknown>;
+
 export interface SparkCliHostServices {
   cwd: string;
   config: SparkConfig;
@@ -70,6 +81,7 @@ export interface SparkCliHostServices {
   modelRegistry?: SparkHostModelRegistry;
   modelSelector: SparkModelSelector;
   sessionStore: SparkSessionStore;
+  runCompactionModel?: SparkCompactionModelRunner;
   skillResolver: SparkSkillResolver;
   promptTemplates?: SparkPromptTemplateResolveResult;
   agentLoop: SparkAgentLoop;
@@ -232,6 +244,20 @@ export async function createSparkCliHostServices(
   });
 
   const sessionStore = new SparkSessionStore({ cwd, sparkHome: options.sparkHome });
+  const workflowModelRunner = createProviderRegistryWorkflowModelRunner(providerRegistry, {
+    resolveApiKey: (provider) => authResolver.resolveApiKey(provider),
+  });
+  const runCompactionModel: SparkCompactionModelRunner = async (request) => {
+    const response = await workflowModelRunner({
+      prompt: request.prompt,
+      label: "compact-v2-smart-summary",
+      phase: "compact",
+      model: request.model,
+      metadata: { purpose: "session_compaction" },
+      maxTokens: request.maxTokens,
+    });
+    return response.structured ?? response.text;
+  };
   runtime.setSessionManager(
     options.sessionManager ?? createSparkCliSessionManagerStub(sessionStore, cwd),
   );
@@ -413,6 +439,7 @@ export async function createSparkCliHostServices(
     modelRegistry,
     modelSelector,
     sessionStore,
+    runCompactionModel,
     skillResolver,
     promptTemplates,
     agentLoop,

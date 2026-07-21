@@ -97,7 +97,6 @@
       "./packages/spark-roles/src/extension-entry.ts",
       "./packages/spark-session/src/extension-entry.ts",
       "./packages/spark-memory/src/extension-entry.ts",
-      "./packages/spark-recall/src/extension-entry.ts",
       "./packages/spark-web/src/extension-entry.ts",
       "./packages/spark-workflows/src/extension-entry.ts",
       "./packages/spark-ai/src/baidu-oneapi-provider.ts",

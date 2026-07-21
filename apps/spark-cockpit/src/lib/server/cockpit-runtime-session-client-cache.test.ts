@@ -84,6 +84,7 @@ describe("cockpit runtime session cache", () => {
       runs: [],
       tasks: [],
       artifacts: [],
+      evidence: [],
       metadata: {},
     };
     db.prepare(

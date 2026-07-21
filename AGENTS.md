@@ -47,7 +47,7 @@ Target package topology follows type-first names:
 
 - `.github/workflows/ci-static-checks.yml` — prek + `setup-vp` + full prek pass (matches sixbones pattern).
 - `.github/workflows/ci-verify.yml` — `pnpm install` + `pnpm run check`.
-- `.github/workflows/ci-mutation.yml` — weekly/manual leaf-package mutation CE (non-blocking).
+- `.github/workflows/ce-mutation.yml` — weekly/manual leaf-package mutation CE (non-blocking).
 - `.github/workflows/ci-pr-checks.yml` — PR title validation (zendev).
 - `.github/workflows/ci-typos.yml` — spellcheck with `_typos.toml`.
 

@@ -33,7 +33,7 @@ pnpm run test:mutation
 pnpm --filter @zendev-lab/spark-channels run test:mutation
 ```
 
-CI: `.github/workflows/ci-mutation.yml` (Monday 03:17 UTC + `workflow_dispatch`, `continue-on-error`, uploads HTML/JSON reports).
+CI: `.github/workflows/ce-mutation.yml` (Monday 03:17 UTC + `workflow_dispatch`, `continue-on-error`, uploads HTML/JSON reports).
 
 ## Timing comparison (local, Apple Silicon / Node 26)
 

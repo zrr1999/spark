@@ -243,6 +243,77 @@ export function registerQueuedSessionTurn(
 }
 
 /**
+ * Apply a confirmed `turn.cancel` receipt before the matching lifecycle event
+ * or refreshed projection arrives. Without this, a stale page snapshot can keep
+ * the cancelled invocation in `pendingTurns` and the queue UI looks stuck.
+ */
+export function settleCancelledSessionTurn(
+  state: SessionLiveEventState,
+  turnId: string,
+  status: string = "cancelled",
+  emittedAt = new Date().toISOString(),
+): boolean {
+  const normalizedTurnId = turnId.trim();
+  const normalizedStatus = status.trim().toLocaleLowerCase() || "cancelled";
+  if (!normalizedTurnId || !isTerminalInvocationStatus(normalizedStatus)) return false;
+  state.invocationIds.add(normalizedTurnId);
+  const previousActiveTurnId = state.activeTurnId;
+  acceptInvocationPhase(state, normalizedTurnId, normalizedStatus);
+  const viewChanged = applyDaemonInvocationPhaseToView(
+    state,
+    normalizedTurnId,
+    normalizedStatus,
+    emittedAt,
+  );
+  applyInvocationCancellationTarget(state, normalizedTurnId, normalizedStatus);
+  return viewChanged || state.activeTurnId !== previousActiveTurnId;
+}
+
+/**
+ * When the daemon registry says the conversation is no longer running, drop any
+ * locally remembered running turns. Status probes use this so a missed terminal
+ * SSE/projection cannot leave the header spinner and Stop button stuck.
+ *
+ * Queued follow-ups are preserved: registry "ready" is compatible with a queue.
+ */
+export function convergeSessionLiveEventStateFromRegistryStatus(
+  state: SessionLiveEventState,
+  registryStatus: string,
+  emittedAt = new Date().toISOString(),
+): boolean {
+  const normalized = registryStatus.trim().toLocaleLowerCase();
+  if (!normalized || normalized === "running") return false;
+
+  const runningIds = new Set<string>();
+  for (const turn of state.view?.pendingTurns ?? []) {
+    if (turn.status === "running") runningIds.add(turn.invocationId);
+  }
+  for (const [invocationId, phase] of state.invocationPhases) {
+    if (phase === "running") runningIds.add(invocationId);
+  }
+  if (state.activeTurnId) runningIds.add(state.activeTurnId);
+
+  let changed = false;
+  for (const invocationId of runningIds) {
+    if (settleCancelledSessionTurn(state, invocationId, "succeeded", emittedAt)) {
+      changed = true;
+    }
+  }
+
+  if (
+    state.view &&
+    isActiveSessionStatus(state.view.status) &&
+    !(state.view.pendingTurns?.some((turn) => turn.status === "running") ?? false) &&
+    !(state.view.pendingTurns?.some((turn) => turn.status === "queued") ?? false)
+  ) {
+    state.view = { ...state.view, status: "idle", updatedAt: emittedAt };
+    changed = true;
+  }
+
+  return changed;
+}
+
+/**
  * Apply only events that belong to the selected conversation. Native view events
  * update the transcript immediately; projection-only activity asks for one
  * debounced server refresh. Unrelated workspaces and sessions are ignored.

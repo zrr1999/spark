@@ -77,6 +77,8 @@
     parseSessionSerializedEvent,
     reconcileSessionLiveEventState,
     registerQueuedSessionTurn,
+    settleCancelledSessionTurn,
+    convergeSessionLiveEventStateFromRegistryStatus,
     requestSessionActivityRefresh,
     sessionEventCursorStorageKey,
     shouldAdoptSessionHistory,
@@ -1070,6 +1072,15 @@
           typeof result.status === "string" &&
           result.status !== "running"
         ) {
+          const state = untrack(() => liveEventState);
+          if (
+            state &&
+            state.sessionId === sessionId &&
+            convergeSessionLiveEventStateFromRegistryStatus(state, result.status)
+          ) {
+            liveEventState = state;
+            liveSessionView = state.view;
+          }
           await invalidateAll();
         }
       } finally {
@@ -1339,6 +1350,25 @@
     if (!registerQueuedSessionTurn(state, turnId)) return;
     liveEventState = state;
     liveSessionView = state.view;
+  }
+
+  function adoptCancelledTurn(result: unknown) {
+    const turnId = cancelledTurnIdFromActionResult(result);
+    const state = untrack(() => liveEventState);
+    if (!turnId || !state || state.sessionId !== liveSessionId) return;
+    const status = invocationStatusFromActionResult(result) ?? "cancelled";
+    if (!settleCancelledSessionTurn(state, turnId, status)) return;
+    liveEventState = state;
+    liveSessionView = state.view;
+  }
+
+  function invocationStatusFromActionResult(result: unknown): string | null {
+    if (!result || typeof result !== "object") return null;
+    const data =
+      "data" in result && result.data && typeof result.data === "object" ? result.data : result;
+    if (!data || typeof data !== "object" || !("invocationStatus" in data)) return null;
+    const value = data.invocationStatus;
+    return typeof value === "string" && value.trim() ? value.trim() : null;
   }
 
   function buildModelGroups(providers: SparkModelCatalogProvider[]): ModelPickerGroup[] {
@@ -1742,6 +1772,7 @@
         cancelState = "success";
         cancelledTurnId = confirmedCancelledTurnId;
         cancelFeedback = null;
+        adoptCancelledTurn(result);
         await invalidateAll();
         return;
       }
@@ -1764,6 +1795,8 @@
       if (result.type === "success") {
         dequeueState = "success";
         dequeueFeedback = resultMessage(result, copy.removeQueued);
+        adoptCancelledTurn(result);
+        dequeuingTurnId = null;
         await invalidateAll();
         return;
       }
@@ -1771,6 +1804,7 @@
       if (result.type === "redirect") return;
       dequeueState = "error";
       dequeueFeedback = resultMessage(result, copy.removeQueuedFailed);
+      dequeuingTurnId = null;
       await invalidateAll();
     };
   };

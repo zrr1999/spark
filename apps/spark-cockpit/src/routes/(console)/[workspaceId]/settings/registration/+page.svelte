@@ -158,6 +158,7 @@
     </section>
   </details>
 
+  {#if data.runnerConnections.length > 0 || data.runnerBindings.length > 0}
   <details class="connection-diagnostics">
     <summary><span><strong>{t.runner.kicker}</strong><small>{t.runner.routesLabel}</small></span></summary>
     <section class="connections-grid" aria-label={t.navigation.connections}>
@@ -246,6 +247,7 @@
     </article>
     </section>
   </details>
+  {/if}
 </section>
 
 <style>

@@ -15,6 +15,7 @@ import {
   createSparkAskFlowResult,
   isSparkAskFlowArtifactBody,
   isSparkAskFlowGateBlocked,
+  isSparkAskFlowResultLike,
   normalizeSparkAskFlowResult,
   replaySparkAskFlow,
   runSparkAskFlow,
@@ -317,10 +318,6 @@ function normalizeSparkAskCustomUiTimeoutMs(timeoutMs: number | undefined): numb
 
 function isThenable(value: unknown): value is Promise<unknown> {
   return Boolean(value && typeof (value as Promise<unknown>).then === "function");
-}
-
-function isSparkAskFlowResultLike(value: unknown): value is SparkAskFlowResult {
-  return Boolean(value && typeof value === "object" && "answers" in value && "status" in value);
 }
 
 function normalizeSparkAskToolQuestions(
