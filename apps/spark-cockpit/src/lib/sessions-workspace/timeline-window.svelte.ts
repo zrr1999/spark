@@ -38,6 +38,7 @@ export function createTimelineWindowController(sources: TimelineWindowSources) {
     if (nextSessionId === timelineRenderSessionId) return;
     timelineRenderSessionId = nextSessionId;
     timelineRenderLimit = SESSION_TIMELINE_PAGE_SIZE;
+    historyLoadState = "idle";
   });
 
   $effect(() => {

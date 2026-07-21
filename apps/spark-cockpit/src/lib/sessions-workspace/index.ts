@@ -38,3 +38,13 @@ export { createTimelineWindowController } from "./timeline-window.svelte";
 export { createComposerController } from "./composer.svelte";
 
 export { createSessionFormEnhancers } from "./form-enhancers";
+export { bindSessionFormEnhancers } from "./bind-form-enhancers";
+export { createSlashHandlers } from "./slash-handlers";
+export { createActivityRefreshController } from "./activity-refresh";
+export {
+  buildConversationPartLabels,
+  buildModelRuntimeLabels,
+  buildStatusBarLabels,
+} from "./workbench-labels";
+
+export { createShellFeedbackController } from "./shell-feedback.svelte";
