@@ -1,5 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Spark">
-  <rect width="128" height="128" fill="#2563EB"/>
-  <circle cx="64" cy="64" r="54" fill="#1D4ED8"/>
-  <path d="M70 19 31 74h29l-6 38 45-61H68l2-32Z" fill="#fff"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" aria-label="Spark" role="img" viewBox="0 0 128 128"><rect width="128" height="128" fill="#2563EB"/><circle cx="64" cy="64" r="54" fill="#1D4ED8"/><path fill="#fff" d="M70 19 31 74h29l-6 38 45-61H68l2-32Z"/></svg>
