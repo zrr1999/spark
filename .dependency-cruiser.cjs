@@ -140,13 +140,50 @@ module.exports = {
     // --- spark foundation packages (exclude cockpit-* private packages) ---
     {
       name: "spark-core-no-pi-extension",
-      comment: "Spark foundation packages must not import pi-extension policy.",
+      comment:
+        "Spark foundation packages must not import pi-extension policy. " +
+        "packages/spark-extension is the explicit Spark-native thin facade allowed to wrap it " +
+        "while domains migrate out of the Pi-compatible package.",
       severity: "error",
       from: {
-        path: "^packages/spark-(?!cockpit-)",
+        path: "^packages/spark-(?!cockpit-|extension(?:/|$))",
       },
       to: {
         path: "node_modules/.*/@zendev-lab/pi-extension|/node_modules/@zendev-lab/pi-extension|^packages/pi-extension/",
+      },
+    },
+    {
+      name: "tui-no-pi-extension",
+      comment:
+        "apps/spark-tui must consume @zendev-lab/spark-extension, not @zendev-lab/pi-extension.",
+      severity: "error",
+      from: {
+        path: "^apps/spark-tui/",
+      },
+      to: {
+        path: "node_modules/.*/@zendev-lab/pi-extension|/node_modules/@zendev-lab/pi-extension|^packages/pi-extension/",
+      },
+    },
+    {
+      name: "spark-extension-no-product-adapters",
+      comment: "spark-extension must not depend on product coordination or app adapter packages.",
+      severity: "error",
+      from: {
+        path: "^packages/spark-extension/",
+      },
+      to: {
+        path: productAdapterResolvedPathPattern(),
+      },
+    },
+    {
+      name: "spark-extension-no-app-internals",
+      comment: "spark-extension must not import Spark app host internals.",
+      severity: "error",
+      from: {
+        path: "^packages/spark-extension/",
+      },
+      to: {
+        path: sparkAppInternalResolvedPathPattern(),
       },
     },
     {

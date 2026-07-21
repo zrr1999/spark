@@ -14,7 +14,7 @@ import { DEFAULT_SPARK_EXTENSION_SPECS } from "./extension-specs.ts";
 
 export { DEFAULT_SPARK_EXTENSION_SPECS } from "./extension-specs.ts";
 import sparkModelsExtension from "@zendev-lab/spark-ai/models-extension";
-import sparkExtension from "@zendev-lab/pi-extension/extension";
+import sparkExtension from "@zendev-lab/spark-extension/extension";
 
 export type SparkBuiltinExtensionName =
   | "@zendev-lab/spark-ask"
@@ -102,7 +102,7 @@ const BUILTIN_EXTENSION_FACTORIES: readonly SparkBuiltinCapabilityFactory[] = [
   },
   {
     name: "spark",
-    specifier: "@zendev-lab/pi-extension/extension",
+    specifier: "@zendev-lab/spark-extension/extension",
     factory: sparkExtension as SparkCapabilityFactory,
   },
 ];

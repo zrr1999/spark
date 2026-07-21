@@ -54,8 +54,9 @@ export interface SparkConfig {
 
 export const CURRENT_SPARK_EXTENSION_PROFILE_VERSION = 1;
 
-const LEGACY_SPARK_EXTENSION_FACADE = "@zendev-lab/spark-extension/extension";
-const CURRENT_SPARK_EXTENSION_FACADE = "@zendev-lab/pi-extension/extension";
+const CURRENT_SPARK_EXTENSION_FACADE = "@zendev-lab/spark-extension/extension";
+/** Pi product / prior Spark-native facade; rewrite to the Spark-native boundary. */
+const LEGACY_PI_EXTENSION_FACADE = "@zendev-lab/pi-extension/extension";
 const LEGACY_DEFAULT_EXTENSION_CORE = [
   "@zendev-lab/spark-ask/extension",
   "@zendev-lab/spark-cue/extension",
@@ -235,11 +236,12 @@ export function migrateSparkExtensionProfile(
   const version = typeof rawVersion === "number" && Number.isInteger(rawVersion) ? rawVersion : 0;
   const normalized = dedupeStrings(
     extensions.map((specifier) =>
-      specifier === LEGACY_SPARK_EXTENSION_FACADE ? CURRENT_SPARK_EXTENSION_FACADE : specifier,
+      specifier === LEGACY_PI_EXTENSION_FACADE ? CURRENT_SPARK_EXTENSION_FACADE : specifier,
     ),
   );
   if (version >= CURRENT_SPARK_EXTENSION_PROFILE_VERSION) return normalized;
-  if (extensions.includes(LEGACY_SPARK_EXTENSION_FACADE)) {
+  // Prior Spark-native facade lived at pi-extension; rewrite and recover known bundled profiles.
+  if (extensions.includes(LEGACY_PI_EXTENSION_FACADE)) {
     const historicalBundled = new Set<string>([
       ...LEGACY_DEFAULT_EXTENSION_CORE,
       "@zendev-lab/spark-memory/extension",
@@ -247,6 +249,7 @@ export function migrateSparkExtensionProfile(
       "@zendev-lab/spark-web/extension",
       "@zendev-lab/spark-graft/extension",
       CURRENT_SPARK_EXTENSION_FACADE,
+      LEGACY_PI_EXTENSION_FACADE,
     ]);
     const custom = normalized.filter((specifier) => !historicalBundled.has(specifier));
     return dedupeStrings([...DEFAULT_SPARK_EXTENSION_SPECS, ...custom]);
@@ -254,12 +257,7 @@ export function migrateSparkExtensionProfile(
   if (extensions.length === 1 && extensions[0] === CURRENT_SPARK_EXTENSION_FACADE) {
     return [...DEFAULT_SPARK_EXTENSION_SPECS];
   }
-
-  const legacyDefault =
-    LEGACY_DEFAULT_EXTENSION_CORE.every((specifier) => normalized.includes(specifier)) &&
-    normalized.includes(CURRENT_SPARK_EXTENSION_FACADE) &&
-    normalized.includes("@zendev-lab/spark-graft/extension");
-  if (!legacyDefault) return normalized;
+  if (!legacyDefaultProfile(normalized)) return normalized;
 
   const legacyBundled = new Set<string>([
     ...LEGACY_DEFAULT_EXTENSION_CORE,
@@ -268,9 +266,18 @@ export function migrateSparkExtensionProfile(
     "@zendev-lab/spark-web/extension",
     "@zendev-lab/spark-graft/extension",
     CURRENT_SPARK_EXTENSION_FACADE,
+    LEGACY_PI_EXTENSION_FACADE,
   ]);
   const custom = normalized.filter((specifier) => !legacyBundled.has(specifier));
   return dedupeStrings([...DEFAULT_SPARK_EXTENSION_SPECS, ...custom]);
+}
+
+function legacyDefaultProfile(normalized: readonly string[]): boolean {
+  return (
+    LEGACY_DEFAULT_EXTENSION_CORE.every((specifier) => normalized.includes(specifier)) &&
+    normalized.includes(CURRENT_SPARK_EXTENSION_FACADE) &&
+    normalized.includes("@zendev-lab/spark-graft/extension")
+  );
 }
 
 function dedupeStrings(values: readonly string[]): string[] {

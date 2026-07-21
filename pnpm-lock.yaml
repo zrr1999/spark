@@ -363,9 +363,6 @@ importers:
       '@earendil-works/pi-ai':
         specifier: ^0.80.6
         version: 0.80.6(ws@8.21.0)(zod@4.4.3)
-      '@zendev-lab/pi-extension':
-        specifier: workspace:^
-        version: link:../../packages/pi-extension
       '@zendev-lab/spark-ai':
         specifier: workspace:^
         version: link:../../packages/spark-ai
@@ -381,6 +378,9 @@ importers:
       '@zendev-lab/spark-cue':
         specifier: workspace:^
         version: link:../../packages/spark-cue
+      '@zendev-lab/spark-extension':
+        specifier: workspace:^
+        version: link:../../packages/spark-extension
       '@zendev-lab/spark-files':
         specifier: workspace:^
         version: link:../../packages/spark-files
@@ -689,6 +689,12 @@ importers:
       vitest:
         specifier: 4.1.9
         version: 4.1.9(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-playwright@4.1.9)(@vitest/browser-preview@4.1.9)(@voidzero-dev/vite-plus-core@0.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(jsdom@27.4.0)
+
+  packages/spark-extension:
+    dependencies:
+      '@zendev-lab/pi-extension':
+        specifier: workspace:^
+        version: link:../pi-extension
 
   packages/spark-files:
     dependencies:

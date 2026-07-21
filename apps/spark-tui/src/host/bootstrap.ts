@@ -20,7 +20,7 @@ import {
   loadSparkMode,
   renderSparkActiveSystemPrompt,
   type SparkSessionContext,
-} from "@zendev-lab/pi-extension/host-support";
+} from "@zendev-lab/spark-extension/host-support";
 import { SparkAgentLoop } from "./agent-loop.ts";
 import { SparkAuthStore, SparkProviderAuthResolver, defaultSparkAuthPath } from "./auth.ts";
 import {

@@ -65,7 +65,7 @@ test("legacy bundled extension profiles migrate to current defaults without Graf
     "@zendev-lab/spark-ai/models-extension",
     "@zendev-lab/spark-roles/extension",
     "@zendev-lab/spark-graft/extension",
-    "@zendev-lab/spark-extension/extension",
+    "@zendev-lab/pi-extension/extension",
     "my-extension",
   ];
 
@@ -78,7 +78,7 @@ test("legacy bundled extension profiles migrate to current defaults without Graf
 
 test("legacy singleton facade recovers the canonical default extension profile", () => {
   const migrated = mergeSparkConfigWithDefault({
-    extensions: ["@zendev-lab/spark-extension/extension"],
+    extensions: ["@zendev-lab/pi-extension/extension"],
   });
 
   assert.deepEqual(migrated.extensions, [...DEFAULT_SPARK_EXTENSION_SPECS]);
@@ -86,10 +86,31 @@ test("legacy singleton facade recovers the canonical default extension profile",
 
 test("legacy facade plus custom extensions restores defaults and preserves custom entries", () => {
   const migrated = mergeSparkConfigWithDefault({
-    extensions: ["@zendev-lab/spark-extension/extension", "my-extension"],
+    extensions: ["@zendev-lab/pi-extension/extension", "my-extension"],
   });
 
   assert.deepEqual(migrated.extensions, [...DEFAULT_SPARK_EXTENSION_SPECS, "my-extension"]);
+});
+
+test("current Spark-native facade alone with profile version recovers defaults", () => {
+  const migrated = mergeSparkConfigWithDefault({
+    extensions: ["@zendev-lab/spark-extension/extension"],
+  });
+
+  assert.deepEqual(migrated.extensions, [...DEFAULT_SPARK_EXTENSION_SPECS]);
+});
+
+test("versioned pi-extension entries rewrite to spark-extension without profile rebuild", () => {
+  const migrated = mergeSparkConfigWithDefault({
+    extensionProfileVersion: CURRENT_SPARK_EXTENSION_PROFILE_VERSION,
+    extensions: ["@zendev-lab/pi-extension/extension", "@zendev-lab/spark-cue", "my-extension"],
+  });
+
+  assert.deepEqual(migrated.extensions, [
+    "@zendev-lab/spark-extension/extension",
+    "@zendev-lab/spark-cue",
+    "my-extension",
+  ]);
 });
 
 test("standalone Graft remains an explicit opt-in across profile migration", () => {
@@ -132,6 +153,7 @@ test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", async
     const path = join(dir, "config.json");
     await saveSparkConfig(
       {
+        extensionProfileVersion: CURRENT_SPARK_EXTENSION_PROFILE_VERSION,
         extensions: ["@zendev-lab/pi-extension/extension", "@zendev-lab/spark-cue", "my-extension"],
         providers: ["@zendev-lab/spark-ai/baidu-oneapi-provider", "my-provider"],
         activeModelId: "baidu-oneapi/claude-opus-4.7",
@@ -151,7 +173,7 @@ test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", async
     );
     const config = await loadSparkConfig(path);
     assert.deepEqual(config.extensions, [
-      "@zendev-lab/pi-extension/extension",
+      "@zendev-lab/spark-extension/extension",
       "@zendev-lab/spark-cue",
       "my-extension",
     ]);

@@ -9,7 +9,7 @@ import {
   defaultSparkCueSkillsDir,
   parseSkillFrontmatter,
   type SparkSkillFrontmatter,
-} from "@zendev-lab/pi-extension/host-support";
+} from "@zendev-lab/spark-extension/host-support";
 import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 
 export { defaultBuiltinSkillsDir, defaultSparkCueSkillsDir, parseSkillFrontmatter };
