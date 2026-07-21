@@ -317,26 +317,169 @@ export interface ToolInfo {
 
 export type ExtensionUiNotifyLevel = "info" | "warning" | "error" | "success";
 
-export interface ExtensionInteractionRequest {
-  kind: string;
-  requestId: string;
-  title: string;
-  version?: string | number;
-  prompt?: string;
-  createdAt?: string;
-  source?: "tui" | "web" | "daemon" | "extension" | "runtime" | "test" | (string & {});
-  metadata?: Record<string, unknown>;
-  [key: string]: unknown;
+/**
+ * Host-facing interaction request contract.
+ *
+ * Structurally aligned with `@zendev-lab/spark-protocol`'s
+ * `sparkInteractionRequestSchema` discriminated union. Wire validation stays in
+ * protocol (zod); this type is the portable `ExtensionUi.interaction` surface.
+ * Keep both in lockstep — protocol type tests assert assignability.
+ */
+export type ExtensionInteractionSource =
+  | "tui"
+  | "web"
+  | "daemon"
+  | "extension"
+  | "runtime"
+  | "test";
+
+export type ExtensionInteractionResponseStatus =
+  | "answered"
+  | "pending"
+  | "cancelled"
+  | "blocked"
+  | "error";
+
+export interface ExtensionAskOptionView {
+  value: string;
+  label: string;
+  description?: string | undefined;
+  preview?: string | undefined;
 }
 
-export interface ExtensionInteractionResponse {
-  kind: string;
-  requestId: string;
-  status: "answered" | "cancelled" | "blocked" | "error" | (string & {});
-  message?: string;
-  metadata?: Record<string, unknown>;
-  [key: string]: unknown;
+export interface ExtensionAskQuestionView {
+  id: string;
+  prompt: string;
+  header?: string | undefined;
+  type?: "single" | "multi" | "preview" | "freeform" | undefined;
+  required?: boolean | undefined;
+  defaultValues?: string[] | undefined;
+  options?: ExtensionAskOptionView[] | undefined;
 }
+
+export interface ExtensionInteractionRequestBase {
+  version?: number | undefined;
+  requestId: string;
+  title: string;
+  prompt?: string | undefined;
+  createdAt?: string | undefined;
+  source?: ExtensionInteractionSource | undefined;
+  metadata?: Record<string, unknown> | undefined;
+}
+
+export interface ExtensionAskFlowInteractionRequest extends ExtensionInteractionRequestBase {
+  kind: "askFlow";
+  delivery?: "blocking" | "async" | undefined;
+  timeoutMs?: number | undefined;
+  mode?: "clarification" | "decision" | "approval" | "unblock" | undefined;
+  flow?: string | undefined;
+  questions: ExtensionAskQuestionView[];
+  allowElaborate?: boolean | undefined;
+}
+
+export interface ExtensionModelRef {
+  providerName: string;
+  modelId: string;
+  providerLabel?: string | undefined;
+  modelLabel?: string | undefined;
+}
+
+export interface ExtensionModelSelectOption extends ExtensionModelRef {
+  value: string;
+  description?: string | undefined;
+  active?: boolean | undefined;
+  metadata?: Record<string, unknown> | undefined;
+}
+
+export interface ExtensionModelSelectInteractionRequest extends ExtensionInteractionRequestBase {
+  kind: "modelSelect";
+  active?: ExtensionModelRef | undefined;
+  options?: ExtensionModelSelectOption[] | undefined;
+}
+
+export interface ExtensionWorkflowPickerOption {
+  selector: string;
+  label: string;
+  description?: string | undefined;
+  phaseCount?: number | undefined;
+  metadata?: Record<string, unknown> | undefined;
+}
+
+export interface ExtensionWorkflowPickerInteractionRequest extends ExtensionInteractionRequestBase {
+  kind: "workflowPicker";
+  options?: ExtensionWorkflowPickerOption[] | undefined;
+}
+
+export interface ExtensionConfirmationInteractionRequest extends ExtensionInteractionRequestBase {
+  kind: "confirmation";
+  severity?: "info" | "warning" | "danger" | undefined;
+  confirmLabel?: string | undefined;
+  cancelLabel?: string | undefined;
+}
+
+export interface ExtensionDiffApprovalInteractionRequest extends ExtensionInteractionRequestBase {
+  kind: "diffApproval";
+  filePath?: string | undefined;
+  diff: string;
+  summary?: string | undefined;
+  approveLabel?: string | undefined;
+  rejectLabel?: string | undefined;
+}
+
+export interface ExtensionToolApprovalInteractionRequest extends ExtensionInteractionRequestBase {
+  kind: "toolApproval";
+  toolName: string;
+  toolCallId?: string | undefined;
+  arguments?: unknown;
+  reason?: string | undefined;
+  approveLabel?: string | undefined;
+  rejectLabel?: string | undefined;
+}
+
+export type ExtensionInteractionRequest =
+  | ExtensionAskFlowInteractionRequest
+  | ExtensionModelSelectInteractionRequest
+  | ExtensionWorkflowPickerInteractionRequest
+  | ExtensionConfirmationInteractionRequest
+  | ExtensionDiffApprovalInteractionRequest
+  | ExtensionToolApprovalInteractionRequest;
+
+export interface ExtensionInteractionResponseBase {
+  version?: number | undefined;
+  requestId: string;
+  status: ExtensionInteractionResponseStatus;
+  message?: string | undefined;
+  metadata?: Record<string, unknown> | undefined;
+}
+
+export interface ExtensionAskFlowInteractionResponse extends ExtensionInteractionResponseBase {
+  kind: "askFlow";
+  humanRequestId?: string | undefined;
+  answers?: Record<string, unknown> | undefined;
+  nextAction?: "resume" | "block" | "cancel" | undefined;
+}
+
+export interface ExtensionModelSelectInteractionResponse extends ExtensionInteractionResponseBase {
+  kind: "modelSelect";
+  selection?: ExtensionModelRef | undefined;
+}
+
+export interface ExtensionWorkflowPickerInteractionResponse extends ExtensionInteractionResponseBase {
+  kind: "workflowPicker";
+  selector?: string | undefined;
+}
+
+export interface ExtensionApprovalInteractionResponse extends ExtensionInteractionResponseBase {
+  kind: "confirmation" | "diffApproval" | "toolApproval";
+  approved?: boolean | undefined;
+  note?: string | undefined;
+}
+
+export type ExtensionInteractionResponse =
+  | ExtensionAskFlowInteractionResponse
+  | ExtensionModelSelectInteractionResponse
+  | ExtensionWorkflowPickerInteractionResponse
+  | ExtensionApprovalInteractionResponse;
 
 export interface ExtensionUi {
   notify?: (message: string, level?: ExtensionUiNotifyLevel) => void;
@@ -550,6 +693,15 @@ export interface SparkHostCommandContext extends SparkHostContext {
   sendUserMessage?: (content: string) => Promise<void>;
 }
 
+/**
+ * Agent/domain ref kinds (`kind:id`, e.g. `task:…`, `proj:…`).
+ *
+ * This is the in-process graph / memory / tool identity vocabulary owned by
+ * spark-core. It is intentionally separate from the daemon/Cockpit wire id
+ * vocabulary in `@zendev-lab/spark-protocol` (`prefix_hex`, see
+ * `packages/spark-protocol/src/refs.ts`). Do not invent a third id scheme —
+ * map at the boundary when crossing from domain refs to wire ids (or vice versa).
+ */
 export type RefKind =
   | "spark"
   | "proj"
@@ -779,14 +931,21 @@ export function isFileNotFoundError(error: unknown): boolean {
   );
 }
 
-export type TaskStatus =
-  | "pending"
-  | "ready"
-  | "running"
-  | "blocked"
-  | "done"
-  | "failed"
-  | "cancelled";
+export const TASK_STATUSES = [
+  "pending",
+  "ready",
+  "running",
+  "blocked",
+  "done",
+  "failed",
+  "cancelled",
+] as const;
+
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+export function isTaskStatus(value: string | undefined | null): value is TaskStatus {
+  return value != null && (TASK_STATUSES as readonly string[]).includes(value);
+}
 export type TaskKind =
   | "research"
   | "plan"

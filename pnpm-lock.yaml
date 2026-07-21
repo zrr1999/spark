@@ -787,6 +787,9 @@ importers:
 
   packages/spark-protocol:
     dependencies:
+      '@zendev-lab/spark-core':
+        specifier: workspace:^
+        version: link:../spark-core
       zod:
         specifier: ^4.1.5
         version: 4.4.3

@@ -1,4 +1,5 @@
 import type {
+  ExtensionAskFlowInteractionResponse,
   ExtensionInteractionRequest,
   ExtensionInteractionResponse,
 } from "@zendev-lab/spark-core";
@@ -467,7 +468,7 @@ function createSparkAskFlowInteractionRequest(
 
 function piAskFlowResultFromInteractionResponse(
   request: SparkAskFlowRequest,
-  response: ExtensionInteractionResponse,
+  response: ExtensionAskFlowInteractionResponse,
 ): SparkAskFlowResult {
   return createSparkAskFlowResult({
     answers: normalizeSparkAskFlowInteractionAnswers(request, response.answers),

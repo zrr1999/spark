@@ -37,6 +37,7 @@
     "test:mutation": "stryker run"
   },
   "dependencies": {
+    "@zendev-lab/spark-core": "workspace:^",
     "zod": "^4.1.5"
   },
   "devDependencies": {

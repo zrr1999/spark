@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TASK_STATUSES } from "@zendev-lab/spark-core";
 import { sparkModelRefSchema, sparkThinkingLevelSchema } from "./model-control.ts";
 
 export * from "./action-bars.ts";
@@ -228,7 +229,7 @@ export const sparkTaskViewSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
   kind: z.string().optional(),
-  status: z.string().min(1),
+  status: z.enum(TASK_STATUSES),
   owner: z.string().optional(),
   projectRef: sparkRefSchema.optional(),
   todos: z.array(sparkTaskTodoViewSchema).default([]),

@@ -1082,6 +1082,7 @@ test("ask flow preserves the host timeout marker on a cancelled human wait", asy
   let observedTimeoutMs: unknown;
   const result = await runSparkAskFlow(request, {
     interaction: async (interactionRequest) => {
+      assert.equal(interactionRequest.kind, "askFlow");
       observedTimeoutMs = interactionRequest.timeoutMs;
       return {
         kind: "askFlow",

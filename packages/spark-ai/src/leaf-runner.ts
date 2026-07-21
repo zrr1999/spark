@@ -1,4 +1,5 @@
 import type { Context } from "@earendil-works/pi-ai";
+import type { LeafDegradeReason } from "@zendev-lab/spark-core";
 
 import { SparkRouteExecutionError, type SparkModelId, type SparkRouteResolver } from "./index.ts";
 import { assistantMessageToText, type SparkProviderStreamFunction } from "./provider-runner.ts";
@@ -52,15 +53,11 @@ export interface SparkLeafRunnerDeps {
 }
 
 /**
- * Stable, credential-free reason codes for a degraded leaf. Never derived from
- * provider error text, so leaf output can never echo credentials.
+ * Stable, credential-free reason codes for a degraded leaf. Single-sourced from
+ * `@zendev-lab/spark-core` `LeafDegradeReason` (includes `host-unsupported`).
+ * Never derived from provider error text, so leaf output can never echo credentials.
  */
-export type SparkLeafDegradeReason =
-  | "aborted"
-  | "no-model"
-  | "model-binding-unavailable"
-  | "route-unavailable"
-  | "model-call-failed";
+export type SparkLeafDegradeReason = LeafDegradeReason;
 
 export interface SparkLeafResult {
   /** True when the leaf could not run a model and the caller must fall back. */

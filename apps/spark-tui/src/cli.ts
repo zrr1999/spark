@@ -6,6 +6,7 @@ import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
 import { sparkTuiCliStrings, sparkTuiPiParityStrings } from "@zendev-lab/spark-i18n/cli";
+import { isTaskStatus } from "@zendev-lab/spark-core";
 import {
   SPARK_PROTOCOL_VERSION,
   type SparkSessionRegistryRecord,
@@ -814,7 +815,8 @@ function addCompactTaskView(output: SparkTaskView[], value: unknown): void {
   const ref = stringField(value, "ref");
   const title = stringField(value, "title");
   const status = stringField(value, "status");
-  if (!ref || !title || !status || output.some((task) => task.ref === ref)) return;
+  if (!ref || !title || !status || !isTaskStatus(status) || output.some((task) => task.ref === ref))
+    return;
   const todosRecord = isRecord(value.todos) ? value.todos : undefined;
   const todoItems = Array.isArray(todosRecord?.items) ? todosRecord.items : [];
   output.push({

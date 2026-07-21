@@ -57,6 +57,7 @@ import { createHash } from "node:crypto";
 
 import {
   resolveToolPolicy,
+  isTaskStatus,
   type SparkHostContext,
   type ResolvedToolPolicy,
   type ToolConfig,
@@ -2503,7 +2504,8 @@ function taskViewFromCandidate(
   const ref = stringField(candidate, "ref");
   if (!ref?.startsWith("task:")) return undefined;
   const title = stringField(candidate, "title") ?? stringField(candidate, "name") ?? ref;
-  const status = stringField(candidate, "status") ?? "unknown";
+  const rawStatus = stringField(candidate, "status");
+  const status = isTaskStatus(rawStatus) ? rawStatus : "pending";
   return {
     version: SPARK_PROTOCOL_VERSION,
     ref,
