@@ -33,11 +33,10 @@ export const load: PageServerLoad = async ({ url }) => {
 };
 
 function parseStatus(value: string | null): SparkInvocationStatus | undefined {
-  if (!value) return "failed";
-  if (value === "all") return undefined;
+  if (!value || value === "all") return undefined;
   return invocationStatuses.has(value as SparkInvocationStatus)
     ? (value as SparkInvocationStatus)
-    : "failed";
+    : undefined;
 }
 
 function parseOffset(value: string | null): number {
