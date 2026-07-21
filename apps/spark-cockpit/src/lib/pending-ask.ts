@@ -1,4 +1,4 @@
-import type { HumanQuestion } from "@zendev-lab/spark-coordination/cockpit-queries";
+import type { HumanQuestion } from "@zendev-lab/spark-cockpit-coordination/cockpit-queries";
 import {
   hasSparkAskAnswerContent,
   parseSparkAskChoice,

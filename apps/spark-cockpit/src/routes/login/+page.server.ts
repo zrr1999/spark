@@ -2,7 +2,7 @@ import { fail, redirect } from "@sveltejs/kit";
 import {
   CockpitAccessTokenError,
   hasActiveCockpitAccessTokens,
-} from "@zendev-lab/spark-coordination/cockpit-access";
+} from "@zendev-lab/spark-cockpit-coordination/cockpit-access";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import {
   exchangeCockpitAccessToken,

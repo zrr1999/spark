@@ -1,6 +1,6 @@
 import type { RequestEvent } from "@sveltejs/kit";
-import { RuntimeControlCommandError } from "@zendev-lab/spark-coordination/runtime-control";
-import type { RuntimeEphemeralSecretRequestContext } from "@zendev-lab/spark-coordination/runtime-model-channel-control";
+import { RuntimeControlCommandError } from "@zendev-lab/spark-cockpit-coordination/runtime-control";
+import type { RuntimeEphemeralSecretRequestContext } from "@zendev-lab/spark-cockpit-coordination/runtime-model-channel-control";
 import { getCurrentUserId } from "./auth.ts";
 import { getDatabase } from "./db.ts";
 

@@ -1,8 +1,8 @@
 {
-  "name": "@zendev-lab/spark-db",
+  "name": "@zendev-lab/spark-cockpit-db",
   "version": "0.1.0",
   "private": true,
-  "description": "Spark SQLite migrations, database client, and Node SQLite dialect.",
+  "description": "Cockpit-private SQLite migrations, database client, and Node SQLite dialect.",
   "files": [
     "src",
     "!src/**/*.test.ts",

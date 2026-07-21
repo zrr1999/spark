@@ -192,8 +192,8 @@ module.exports = {
         "Spark core/runtime packages must not depend on product coordination or app adapter packages.",
       severity: "error",
       from: {
-        // spark-coordination is itself a product adapter; exclude self + cockpit-* packages
-        path: "^packages/spark-(?!cockpit-|coordination(?:/|$))",
+        // Cockpit-private packages (spark-cockpit-*) are product adapters; exclude them.
+        path: "^packages/spark-(?!cockpit-)",
       },
       to: {
         path: productAdapterResolvedPathPattern(),
@@ -289,9 +289,9 @@ function productAdapterResolvedPathPattern() {
     "node_modules/.*/@zendev-lab/spark-daemon(?:/|$)",
     "/node_modules/@zendev-lab/spark-daemon(?:/|$)",
     "^apps/spark-daemon/",
-    "node_modules/.*/@zendev-lab/spark-coordination(?:/|$)",
-    "/node_modules/@zendev-lab/spark-coordination(?:/|$)",
-    "^packages/spark-coordination/",
+    "node_modules/.*/@zendev-lab/spark-cockpit-coordination(?:/|$)",
+    "/node_modules/@zendev-lab/spark-cockpit-coordination(?:/|$)",
+    "^packages/spark-cockpit-coordination/",
     "node_modules/.*/@zendev-lab/spark-cockpit-[^/]+",
     "/node_modules/@zendev-lab/spark-cockpit-[^/]+",
     "^packages/spark-cockpit-",

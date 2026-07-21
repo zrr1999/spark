@@ -40,8 +40,8 @@ import {
   authenticateRuntimeToken,
   createWorkspaceWithOwnerBinding,
   hashSecret,
-} from "@zendev-lab/spark-coordination";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+} from "@zendev-lab/spark-cockpit-coordination";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import { createOwnerSession, getCurrentUserId } from "./auth.ts";
 import { createCockpitRuntimeModelChannelClient } from "./cockpit-runtime-model-channel-client.ts";
 import { createCockpitRuntimeSessionClient } from "./cockpit-runtime-session-client.ts";

@@ -5,7 +5,7 @@ import {
   loadWorkspaceByRouteId,
   workspacePath,
   type RouteWorkspace,
-} from "@zendev-lab/spark-coordination/routing";
+} from "@zendev-lab/spark-cockpit-coordination/routing";
 
 export type { RouteWorkspace };
 export { loadLatestWorkspace, loadWorkspaceByRouteId };

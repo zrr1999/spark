@@ -20,7 +20,7 @@
     type Locale,
   } from "$lib/i18n";
   import { workspaceControlControlLabel } from "$lib/workspace-control-display";
-  import type { AgentsProductProjection } from "@zendev-lab/spark-coordination/agents-product";
+  import type { AgentsProductProjection } from "@zendev-lab/spark-cockpit-coordination/agents-product";
 
   type WorkspaceAgentProductData = AgentsProductProjection & {
     locale: Locale;

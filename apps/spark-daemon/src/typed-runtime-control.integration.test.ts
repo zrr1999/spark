@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import {
   createId,
   runtimeProtocolVersion,
@@ -17,7 +17,7 @@ import {
   requireRuntimeControlCommand,
   submitRuntimeControlCommand,
   type RuntimeWebSocketConnection,
-} from "@zendev-lab/spark-coordination";
+} from "@zendev-lab/spark-cockpit-coordination";
 import {
   handleCommand,
   handleServerMessage,

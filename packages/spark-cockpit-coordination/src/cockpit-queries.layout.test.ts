@@ -4,7 +4,7 @@ import {
   runtimeProtocolVersion,
   type RuntimeRegistrationRequest,
 } from "@zendev-lab/spark-protocol";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import {
   isReservedWorkbenchPathSegment,
   loadArtifactDetailPage,

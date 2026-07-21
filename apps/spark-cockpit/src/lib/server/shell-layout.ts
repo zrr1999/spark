@@ -1,5 +1,5 @@
 import type { Cookies } from "@sveltejs/kit";
-import { loadWorkbenchLayout } from "@zendev-lab/spark-coordination/cockpit-queries";
+import { loadWorkbenchLayout } from "@zendev-lab/spark-cockpit-coordination/cockpit-queries";
 import { getDatabase } from "$lib/server/db";
 import { activeWorkspaceCookieName } from "$lib/server/active-workspace";
 

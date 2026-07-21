@@ -11,9 +11,9 @@ import { formText } from "$lib/server/form-data";
 import {
   createRuntimeEnrollmentToken,
   revokeRuntimeEnrollmentToken,
-} from "@zendev-lab/spark-coordination/runtime-registration";
-import { loadWorkspaceRegistrationPage } from "@zendev-lab/spark-coordination/cockpit-queries";
-import { unbindWorkspaceOwner } from "@zendev-lab/spark-coordination/projection-services";
+} from "@zendev-lab/spark-cockpit-coordination/runtime-registration";
+import { loadWorkspaceRegistrationPage } from "@zendev-lab/spark-cockpit-coordination/cockpit-queries";
+import { unbindWorkspaceOwner } from "@zendev-lab/spark-cockpit-coordination/projection-services";
 import { workspacePath } from "$lib/workspace-routes";
 import type { Actions, PageServerLoad } from "./$types";
 

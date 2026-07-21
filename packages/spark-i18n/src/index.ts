@@ -1,7 +1,5 @@
 import { m } from "./paraglide/messages.js";
 
-export * from "./cockpit.ts";
-
 export const locales = ["en", "zh-CN"] as const;
 export type SparkLocale = (typeof locales)[number];
 

@@ -10,8 +10,8 @@ import {
   runtimeSessionRouteForSession,
   runtimeSessionRouteForWorkspace,
   type RuntimeSessionRoute,
-} from "@zendev-lab/spark-coordination/runtime-session-control";
-import { RuntimeControlCommandError } from "@zendev-lab/spark-coordination/runtime-control";
+} from "@zendev-lab/spark-cockpit-coordination/runtime-session-control";
+import { RuntimeControlCommandError } from "@zendev-lab/spark-cockpit-coordination/runtime-control";
 import {
   parseSparkSessionRegistryRecord,
   parseSparkSessionRegistryRecords,

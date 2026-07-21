@@ -15,7 +15,7 @@ import {
   inspectCockpitSnapshot,
   readCockpitInstanceId,
   restoreCockpitSnapshot,
-} from "@zendev-lab/spark-db";
+} from "@zendev-lab/spark-cockpit-db";
 
 // Cockpit instance persistence is a server-owned Node surface. The public CLI
 // path re-exports this module without taking a direct dependency on spark-db.

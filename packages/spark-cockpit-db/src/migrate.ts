@@ -12,7 +12,7 @@ export interface Migration {
 const sourceMigrationsDir = join(dirname(fileURLToPath(import.meta.url)), "migrations");
 const repoMigrationsDir = resolve(
   process.env.SPARK_REPO_ROOT ?? findRepoRoot(process.cwd()),
-  "packages/spark-db/src/migrations",
+  "packages/spark-cockpit-db/src/migrations",
 );
 
 export function loadMigrations(): Migration[] {
@@ -45,7 +45,7 @@ function findRepoRoot(start: string): string {
   while (true) {
     if (
       existsSync(join(current, "pnpm-workspace.yaml")) &&
-      existsSync(join(current, "packages/spark-db/src/migrations"))
+      existsSync(join(current, "packages/spark-cockpit-db/src/migrations"))
     ) {
       return current;
     }

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { RuntimeRelocationPreflightError } from "@zendev-lab/spark-coordination/runtime-registration";
+import { RuntimeRelocationPreflightError } from "@zendev-lab/spark-cockpit-coordination/runtime-registration";
 import { runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 
 const instanceId = "cockpit_11111111111111111111111111111111";
@@ -14,7 +14,7 @@ vi.mock("$lib/server/json", () => ({
     Response.json({ error: { code, message } }, { status }),
 }));
 vi.mock("$lib/server/runtime-relocation", async () => ({
-  ...(await vi.importActual("@zendev-lab/spark-coordination/runtime-registration")),
+  ...(await vi.importActual("@zendev-lab/spark-cockpit-coordination/runtime-registration")),
   preflightCockpitRuntimeRelocation: mocks.preflightCockpitRuntimeRelocation,
   cockpitRuntimeRelocationInstanceId: mocks.cockpitRuntimeRelocationInstanceId,
 }));

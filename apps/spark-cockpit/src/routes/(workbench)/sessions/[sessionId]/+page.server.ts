@@ -5,8 +5,8 @@ import {
   getProjectedManagedSessionSnapshotForCockpit,
 } from "$lib/server/managed-sessions";
 import { getDatabase } from "$lib/server/db";
-import { latestEventCursor } from "@zendev-lab/spark-coordination/events";
-import { loadSessionActivity } from "@zendev-lab/spark-coordination/session-activity";
+import { latestEventCursor } from "@zendev-lab/spark-cockpit-coordination/events";
+import { loadSessionActivity } from "@zendev-lab/spark-cockpit-coordination/session-activity";
 import { loadProjectedModelControlForCockpit } from "$lib/server/model-control";
 import { createCockpitSubmissionId } from "$lib/server/submission-idempotency";
 import type { PageServerLoad } from "./$types";

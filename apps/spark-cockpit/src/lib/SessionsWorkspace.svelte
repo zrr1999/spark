@@ -36,7 +36,7 @@
     type SparkActionView,
     type SparkSessionView,
   } from "@zendev-lab/spark-protocol";
-  import type { CockpitMessages } from "@zendev-lab/spark-i18n";
+  import type { CockpitMessages } from "@zendev-lab/spark-cockpit-i18n";
   import { onMount, tick, untrack } from "svelte";
   import SessionDetailsPanel from "$lib/sessions-workspace/SessionDetailsPanel.svelte";
   import SessionStartPane from "$lib/sessions-workspace/SessionStartPane.svelte";

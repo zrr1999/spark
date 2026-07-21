@@ -5,21 +5,21 @@ import {
   buildApprovalDeliveryCommandPayload,
   describeApprovalCenterItem,
   type ApprovalDecision,
-} from "@zendev-lab/spark-coordination/approval-center";
+} from "@zendev-lab/spark-cockpit-coordination/approval-center";
 import {
   getCurrentUserIdBySessionToken,
   loadInboxDetailPage,
-} from "@zendev-lab/spark-coordination/cockpit-queries";
+} from "@zendev-lab/spark-cockpit-coordination/cockpit-queries";
 import {
   humanAskAnswerHasValue,
   humanMultiAnswerWithCustomFallback,
   humanSingleAnswerWithCustomFallback,
   parseHumanQuestions,
 } from "$lib/pending-ask";
-import { submitServerCommand } from "@zendev-lab/spark-coordination/command-submission";
+import { submitServerCommand } from "@zendev-lab/spark-cockpit-coordination/command-submission";
 import { getDatabase } from "$lib/server/db";
 import { formText, formTextList } from "$lib/server/form-data";
-import { recordHumanResponse } from "@zendev-lab/spark-coordination/projection-services";
+import { recordHumanResponse } from "@zendev-lab/spark-cockpit-coordination/projection-services";
 import { workspacePath } from "$lib/workspace-routes";
 import type { Actions, PageServerLoad } from "./$types";
 

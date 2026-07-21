@@ -8,7 +8,7 @@ import { errorJson } from "$lib/server/json";
 import {
   refreshRuntimeToken,
   RuntimeTokenRefreshError,
-} from "@zendev-lab/spark-coordination/runtime-registration";
+} from "@zendev-lab/spark-cockpit-coordination/runtime-registration";
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
   const runtimeId = params.runtimeId;

@@ -9,7 +9,7 @@ import {
   defaultDatabasePath,
   readCockpitInstanceId,
   restoreCockpitSnapshot,
-} from "@zendev-lab/spark-db";
+} from "@zendev-lab/spark-cockpit-db";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOwnerSession, getCurrentUserId } from "./auth";
 import {

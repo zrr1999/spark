@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import { appendEvent } from "./projection-services";
 import {
   cursorFromEvent,

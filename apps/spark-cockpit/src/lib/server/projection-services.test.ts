@@ -4,7 +4,7 @@ import {
   runtimeProtocolVersion,
   sparkAgentsCockpitSource,
 } from "@zendev-lab/spark-protocol";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import {
   appendEvent,
   createProject,
@@ -17,12 +17,12 @@ import {
   recordHumanResponse,
   recordInvocationLogChunk,
   recordInvocationUpdate,
-} from "@zendev-lab/spark-coordination/projection-services";
+} from "@zendev-lab/spark-cockpit-coordination/projection-services";
 import {
   cursorFromEvent,
   loadEventBatch,
   serializeEventRow,
-} from "@zendev-lab/spark-coordination/events";
+} from "@zendev-lab/spark-cockpit-coordination/events";
 
 function setupRuntimeBinding() {
   const db = openMemoryDatabase();

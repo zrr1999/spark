@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getCockpitDictionary } from "@zendev-lab/spark-i18n";
+import { getCockpitDictionary } from "@zendev-lab/spark-cockpit-i18n";
 import { buildCockpitSearchResults } from "./cockpit-search";
 
 const baseInput = {

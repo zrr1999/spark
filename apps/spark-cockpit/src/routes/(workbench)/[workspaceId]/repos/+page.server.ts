@@ -4,7 +4,7 @@ import {
   createWorkspaceResource,
   loadReposPage,
   updateWorkspaceResourceStatus,
-} from "@zendev-lab/spark-coordination/cockpit-queries";
+} from "@zendev-lab/spark-cockpit-coordination/cockpit-queries";
 import { getDatabase } from "$lib/server/db";
 import { formText } from "$lib/server/form-data";
 import { requireWorkspaceByRouteId } from "$lib/server/workspace-routing";

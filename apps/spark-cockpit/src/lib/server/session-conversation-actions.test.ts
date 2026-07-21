@@ -86,7 +86,7 @@ vi.mock("$lib/server/model-control", () => ({
   setSessionThinkingLevelForCockpit: mocks.setSessionThinkingLevelForCockpit,
 }));
 
-vi.mock("@zendev-lab/spark-coordination/agents-product", () => ({
+vi.mock("@zendev-lab/spark-cockpit-coordination/agents-product", () => ({
   titleFromPrompt: (prompt: string) => {
     const normalized = prompt.replace(/\s+/g, " ").trim();
     return normalized.length > 80 ? `${normalized.slice(0, 77)}…` : normalized;

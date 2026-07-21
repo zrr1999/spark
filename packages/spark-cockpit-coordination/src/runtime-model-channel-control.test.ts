@@ -1,5 +1,5 @@
 import { createId } from "@zendev-lab/spark-protocol";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import { describe, expect, it } from "vitest";
 import { createWorkspaceWithOwnerBinding } from "./projection-services.ts";
 import {

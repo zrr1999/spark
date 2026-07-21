@@ -1,4 +1,4 @@
-import type { CockpitMessages } from "@zendev-lab/spark-i18n";
+import type { CockpitMessages } from "@zendev-lab/spark-cockpit-i18n";
 import {
   parseSparkSlashInput,
   resolveSparkSlashEditorInput,

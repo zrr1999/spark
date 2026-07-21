@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { migrate, openDatabase, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { migrate, openDatabase, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import {
   runtimeProtocolVersion,
   type RuntimeRegistrationRequest,

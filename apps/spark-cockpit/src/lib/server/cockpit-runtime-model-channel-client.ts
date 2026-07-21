@@ -10,8 +10,8 @@ import {
   runtimeModelRouteForSession,
   runtimeModelRouteForWorkspace,
   type RuntimeEphemeralSecretRequestContext,
-} from "@zendev-lab/spark-coordination/runtime-model-channel-control";
-import { RuntimeControlCommandError } from "@zendev-lab/spark-coordination/runtime-control";
+} from "@zendev-lab/spark-cockpit-coordination/runtime-model-channel-control";
+import { RuntimeControlCommandError } from "@zendev-lab/spark-cockpit-coordination/runtime-control";
 import {
   parseSparkAuthFlow,
   parseSparkChannelControlSnapshot,

@@ -2,8 +2,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
-import { appendEvent } from "@zendev-lab/spark-coordination/projection-services";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
+import { appendEvent } from "@zendev-lab/spark-cockpit-coordination/projection-services";
 import {
   closeDatabase,
   databasePinCountForTests,

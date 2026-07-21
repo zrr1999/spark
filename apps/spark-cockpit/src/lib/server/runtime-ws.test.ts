@@ -1,18 +1,18 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import {
   createWorkspaceWithOwnerBinding,
   queueCommandForWorkspaceOwner,
   recordHumanRequestFromRuntime,
   recordHumanResponse,
-} from "@zendev-lab/spark-coordination/projection-services";
+} from "@zendev-lab/spark-cockpit-coordination/projection-services";
 import { hashSecret } from "./auth";
 import {
   attachRuntimeWebSocket,
   authenticateRuntimeToken,
-} from "@zendev-lab/spark-coordination/runtime-ws";
+} from "@zendev-lab/spark-cockpit-coordination/runtime-ws";
 import type { DatabaseSync } from "node:sqlite";
 import type { RawData } from "ws";
 

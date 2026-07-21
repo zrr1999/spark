@@ -1,6 +1,6 @@
-import en from "./cockpit/en.ts";
-import zhCN from "./cockpit/zh-CN.ts";
-import type { SparkLocale } from "./index.ts";
+import type { SparkLocale } from "@zendev-lab/spark-i18n";
+import en from "./en.ts";
+import zhCN from "./zh-CN.ts";
 
 export type CockpitMessages = typeof en;
 

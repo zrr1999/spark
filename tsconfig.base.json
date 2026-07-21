@@ -67,6 +67,8 @@
       "@zendev-lab/spark-host/keybindings": ["./packages/spark-host/src/keybindings.ts"],
       "@zendev-lab/spark-host/system-prompt": ["./packages/spark-host/src/system-prompt.ts"],
       "@zendev-lab/spark-host/types": ["./packages/spark-host/src/types.ts"],
+      "@zendev-lab/spark-cockpit-i18n": ["./packages/spark-cockpit-i18n/src/index.ts"],
+      "@zendev-lab/spark-cockpit-db": ["./packages/spark-cockpit-db/src/index.ts"],
       "@zendev-lab/spark-i18n": ["./packages/spark-i18n/src/index.ts"],
       "@zendev-lab/spark-i18n/cli": ["./packages/spark-i18n/src/cli.ts"],
       "@zendev-lab/spark-i18n/extension": ["./packages/spark-i18n/src/extension.ts"],
@@ -75,35 +77,45 @@
       ],
       "@zendev-lab/spark-protocol": ["./packages/spark-protocol/src/index.ts"],
       "@zendev-lab/spark-runtime": ["./packages/spark-runtime/src/index.ts"],
-      "@zendev-lab/spark-coordination": ["./packages/spark-coordination/src/index.ts"],
-      "@zendev-lab/spark-coordination/agents-product": [
-        "./packages/spark-coordination/src/agents-product.ts"
+      "@zendev-lab/spark-cockpit-coordination": [
+        "./packages/spark-cockpit-coordination/src/index.ts"
       ],
-      "@zendev-lab/spark-coordination/artifact-cache": [
-        "./packages/spark-coordination/src/artifact-cache.ts"
+      "@zendev-lab/spark-cockpit-coordination/agents-product": [
+        "./packages/spark-cockpit-coordination/src/agents-product.ts"
       ],
-      "@zendev-lab/spark-coordination/cockpit-queries": [
-        "./packages/spark-coordination/src/cockpit-queries.ts"
+      "@zendev-lab/spark-cockpit-coordination/artifact-cache": [
+        "./packages/spark-cockpit-coordination/src/artifact-cache.ts"
       ],
-      "@zendev-lab/spark-coordination/command-submission": [
-        "./packages/spark-coordination/src/command-submission.ts"
+      "@zendev-lab/spark-cockpit-coordination/cockpit-queries": [
+        "./packages/spark-cockpit-coordination/src/cockpit-queries.ts"
       ],
-      "@zendev-lab/spark-coordination/events": ["./packages/spark-coordination/src/events.ts"],
-      "@zendev-lab/spark-coordination/liveness": ["./packages/spark-coordination/src/liveness.ts"],
-      "@zendev-lab/spark-coordination/project-cockpit": [
-        "./packages/spark-coordination/src/project-cockpit.ts"
+      "@zendev-lab/spark-cockpit-coordination/command-submission": [
+        "./packages/spark-cockpit-coordination/src/command-submission.ts"
       ],
-      "@zendev-lab/spark-coordination/projection-services": [
-        "./packages/spark-coordination/src/projection-services.ts"
+      "@zendev-lab/spark-cockpit-coordination/events": [
+        "./packages/spark-cockpit-coordination/src/events.ts"
       ],
-      "@zendev-lab/spark-coordination/runtime-registration": [
-        "./packages/spark-coordination/src/runtime-registration.ts"
+      "@zendev-lab/spark-cockpit-coordination/liveness": [
+        "./packages/spark-cockpit-coordination/src/liveness.ts"
       ],
-      "@zendev-lab/spark-coordination/runtime-ws": [
-        "./packages/spark-coordination/src/runtime-ws.ts"
+      "@zendev-lab/spark-cockpit-coordination/project-cockpit": [
+        "./packages/spark-cockpit-coordination/src/project-cockpit.ts"
       ],
-      "@zendev-lab/spark-coordination/routing": ["./packages/spark-coordination/src/routing.ts"],
-      "@zendev-lab/spark-coordination/security": ["./packages/spark-coordination/src/security.ts"],
+      "@zendev-lab/spark-cockpit-coordination/projection-services": [
+        "./packages/spark-cockpit-coordination/src/projection-services.ts"
+      ],
+      "@zendev-lab/spark-cockpit-coordination/runtime-registration": [
+        "./packages/spark-cockpit-coordination/src/runtime-registration.ts"
+      ],
+      "@zendev-lab/spark-cockpit-coordination/runtime-ws": [
+        "./packages/spark-cockpit-coordination/src/runtime-ws.ts"
+      ],
+      "@zendev-lab/spark-cockpit-coordination/routing": [
+        "./packages/spark-cockpit-coordination/src/routing.ts"
+      ],
+      "@zendev-lab/spark-cockpit-coordination/security": [
+        "./packages/spark-cockpit-coordination/src/security.ts"
+      ],
       "@zendev-lab/spark-turn": ["./packages/spark-turn/src/agent-loop.ts"],
       "@zendev-lab/pi-extension/extension": ["./packages/pi-extension/src/extension/index.ts"],
       "@zendev-lab/pi-extension/host-support": ["./packages/pi-extension/src/host-support.ts"],

@@ -5,7 +5,7 @@ Cockpit is local-first and listens on loopback by default. Remote browser author
 1. **Cockpit access** — one-time `spark_cockpit_auth_…` key exchanged at `/login` for a Cockpit owner session (control plane).
 2. **Workspace access** — one-time `spark_workspace_auth_…` key exchanged at `/{slug}/login` for that workspace only.
 
-Minting stays in `@zendev-lab/spark-coordination` on the Cockpit host (single source of truth):
+Minting stays in `@zendev-lab/spark-cockpit-coordination` on the Cockpit host (single source of truth):
 
 ```sh
 spark cockpit access create|list|revoke [--label <text>] [--json]

@@ -1,8 +1,8 @@
 {
-  "name": "@zendev-lab/spark-coordination",
+  "name": "@zendev-lab/spark-cockpit-coordination",
   "version": "0.1.0",
   "private": true,
-  "description": "Spark cross-daemon coordination plane for runtime registration, command delivery, projections, and Cockpit queries.",
+  "description": "Cockpit-private cross-daemon coordination plane for runtime registration, command delivery, projections, and Cockpit queries.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [
@@ -48,7 +48,7 @@
     "@stryker-mutator/core": "catalog:",
     "@stryker-mutator/vitest-runner": "catalog:",
     "@types/ws": "catalog:",
-    "@zendev-lab/spark-db": "workspace:*",
+    "@zendev-lab/spark-cockpit-db": "workspace:*",
     "typescript": "catalog:",
     "vitest": "catalog:"
   },

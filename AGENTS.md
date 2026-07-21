@@ -13,8 +13,8 @@ Target package topology follows type-first names:
 - `packages/spark-*` — Spark-owned capability/runtime packages. Core capability primitives include `spark-core`, `spark-memory`, `spark-web`, `spark-artifacts`, `spark-tasks`, `spark-workflows`, `spark-loop`, and `spark-modes`.
 - **Pi SDK kernel (keep)** — `@earendil-works/pi-ai` via `spark-ai`, `@earendil-works/pi-tui` via `spark-tui` / `spark-text`. Model streams, providers, and terminal UI primitives stay on this kernel; do not “de-Pi” by removing these deps.
 - **Pi product host (freeze / thin facade)** — `packages/pi-extension` (Pi product loader facade) and `packages/pi-btw` (loads `pi-coding-agent`). Spark-native hosts use `@zendev-lab/spark-extension` instead of importing `pi-extension` directly. New features target TUI / Cockpit / channels, not the Pi product extension loader. Retained `pi-*` packages must not depend on Spark product/Cockpit packages; only Spark foundation packages and the `@zendev-lab/spark-tui` presentation boundary are allowed.
-- `packages/spark-runtime`, `packages/spark-protocol`, `packages/spark-tui`, `packages/spark-db`, and `packages/spark-system` — Spark shared runtime, protocol/schema, reusable TUI boundary, SQLite/migration, and local-system helper packages. Cross-surface ask / slash / session-view semantics belong in `spark-protocol`.
-- `packages/spark-cockpit-*` — reserved for Cockpit-private implementation packages; do not put daemon/shared helpers behind Cockpit-private names.
+- `packages/spark-runtime`, `packages/spark-protocol`, `packages/spark-tui`, and `packages/spark-system` — Spark shared runtime, protocol/schema, reusable TUI boundary, and local-system helper packages. Cross-surface ask / slash / session-view semantics belong in `spark-protocol`.
+- `packages/spark-cockpit-*` — Cockpit-private implementation packages (`spark-cockpit-db`, `spark-cockpit-coordination`, `spark-cockpit-i18n`, …); do not put daemon/shared helpers behind Cockpit-private names, and do not hang Cockpit-only catalogs on shared package names.
 - `docs/` — current docs are split into `specs/` and `operations/`; keep `docs/README.md` as the concise map (including the three “runtime” meanings).
 
 ## Tooling
@@ -36,7 +36,7 @@ Target package topology follows type-first names:
 | `pnpm run check:zellij-harness`          | Emit the native TUI/zellij harness capability audit report       |
 | `pnpm test`                              | Root Vitest suite (`test/**/*.test.ts`)                          |
 | `pnpm test:file -- <path>`               | Run one root Vitest file                                         |
-| `pnpm run test:mutation`                 | Leaf-package mutation CE (10 packages: L0 retry/protocol/db/system + L1 channels/coordination/session/artifacts/repro/i18n) |
+| `pnpm run test:mutation`                 | Leaf-package mutation CE (10 packages: L0 retry/protocol/cockpit-db/system + L1 channels/cockpit-coordination/session/artifacts/repro/i18n) |
 | `pnpm run build`                         | Build the Spark daemon CLI and Spark Cockpit web app             |
 | `pnpm run preview`                       | Start the local Spark Cockpit dev server                         |
 | `spark cockpit`                          | Start the built Spark Cockpit production server through the CLI   |

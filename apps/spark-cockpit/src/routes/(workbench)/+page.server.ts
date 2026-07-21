@@ -1,6 +1,6 @@
 import { fail, redirect } from "@sveltejs/kit";
-import { loadWorkbenchHome } from "@zendev-lab/spark-coordination/cockpit-queries";
-import { archiveWorkspace } from "@zendev-lab/spark-coordination/projection-services";
+import { loadWorkbenchHome } from "@zendev-lab/spark-cockpit-coordination/cockpit-queries";
+import { archiveWorkspace } from "@zendev-lab/spark-cockpit-coordination/projection-services";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import { activeWorkspaceCookieName } from "$lib/server/active-workspace";
 import { ensureCurrentOwnerSession } from "$lib/server/auth";

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
-import { createCockpitAccessToken } from "@zendev-lab/spark-coordination/cockpit-access";
-import { createWorkspaceAccessToken } from "@zendev-lab/spark-coordination/workspace-access";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
+import { createCockpitAccessToken } from "@zendev-lab/spark-cockpit-coordination/cockpit-access";
+import { createWorkspaceAccessToken } from "@zendev-lab/spark-cockpit-coordination/workspace-access";
 import {
   createRuntimeEnrollmentToken,
   registerRuntime,
-} from "@zendev-lab/spark-coordination/runtime-registration";
+} from "@zendev-lab/spark-cockpit-coordination/runtime-registration";
 import type { Cookies } from "@sveltejs/kit";
 import {
   createLocalOwnerSession,

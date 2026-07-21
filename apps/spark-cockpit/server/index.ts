@@ -4,7 +4,7 @@ import { closeDatabase, getDatabase, pinDatabase, unpinDatabase } from "../src/l
 import {
   attachRuntimeWebSocket,
   authenticateRuntimeToken,
-} from "@zendev-lab/spark-coordination/runtime-ws";
+} from "@zendev-lab/spark-cockpit-coordination/runtime-ws";
 import { startWebPushEventDispatcher } from "../src/lib/server/web-push.js";
 import { WebSocketServer } from "ws";
 

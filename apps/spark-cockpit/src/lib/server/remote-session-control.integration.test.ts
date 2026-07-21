@@ -34,8 +34,8 @@ import {
   attachRuntimeWebSocket,
   createWorkspaceWithOwnerBinding,
   type RuntimeWebSocketConnection,
-} from "@zendev-lab/spark-coordination";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+} from "@zendev-lab/spark-cockpit-coordination";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import { createCockpitRuntimeSessionClient } from "./cockpit-runtime-session-client.ts";
 
 const now = "2026-07-15T00:00:00.000Z";

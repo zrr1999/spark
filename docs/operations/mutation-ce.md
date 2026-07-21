@@ -10,7 +10,7 @@ Weekly/manual [Stryker](https://stryker-mutator.io/) runs evaluate whether Vites
 | --- | --- |
 | `@zendev-lab/spark-retry` | `src/**/*.ts` except tests |
 | `@zendev-lab/spark-protocol` | colocated / architecture-covered modules |
-| `@zendev-lab/spark-db` | `client.ts`, `dialect.ts`, `migrate.ts` |
+| `@zendev-lab/spark-cockpit-db` | `client.ts`, `dialect.ts`, `migrate.ts` |
 | `@zendev-lab/spark-system` | `paths.ts`, `daemon-local-rpc.ts` |
 
 ### L1 (Vitest packages with colocated tests)
@@ -18,7 +18,7 @@ Weekly/manual [Stryker](https://stryker-mutator.io/) runs evaluate whether Vites
 | Package | Mutate surface |
 | --- | --- |
 | `@zendev-lab/spark-channels` | modules with `*.test.ts` peers |
-| `@zendev-lab/spark-coordination` | modules with `*.test.ts` peers (+ `cockpit-queries.ts`) |
+| `@zendev-lab/spark-cockpit-coordination` | modules with `*.test.ts` peers (+ `cockpit-queries.ts`) |
 | `@zendev-lab/spark-session` | `action-tool`, `mail-store`, `registry`, `snapshot` |
 | `@zendev-lab/spark-artifacts` | `generative-ui` + product store/forge/types/worktree |
 | `@zendev-lab/spark-repro` | `src/index.ts` |

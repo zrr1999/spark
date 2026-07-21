@@ -1,4 +1,4 @@
-# @zendev-lab/spark-coordination
+# @zendev-lab/spark-cockpit-coordination
 
 Spark Cockpit coordination logic owns runtime registration/token handling, runtime WebSocket
 command delivery, projection ingestion, command outbox writes, event queries, and read-side

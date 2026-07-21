@@ -3,9 +3,9 @@ import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import {
   loadArtifactDetailPage,
   prepareArtifactPreviewForWorkspace,
-} from "@zendev-lab/spark-coordination/cockpit-queries";
+} from "@zendev-lab/spark-cockpit-coordination/cockpit-queries";
 import { getDatabase } from "$lib/server/db";
-import type { ArtifactPreviewStatus } from "@zendev-lab/spark-coordination/artifact-cache";
+import type { ArtifactPreviewStatus } from "@zendev-lab/spark-cockpit-coordination/artifact-cache";
 import type { Actions, PageServerLoad } from "./$types";
 
 export const load: PageServerLoad = ({ params }) => {

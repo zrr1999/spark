@@ -9,7 +9,7 @@ import { errorJson } from "$lib/server/json";
 import {
   exchangeRuntimeDeviceAuthorization,
   RuntimeDeviceAuthorizationError,
-} from "@zendev-lab/spark-coordination/runtime-registration";
+} from "@zendev-lab/spark-cockpit-coordination/runtime-registration";
 
 const deviceErrorStatuses = {
   authorization_pending: 202,

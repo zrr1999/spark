@@ -6,8 +6,8 @@ import {
   listCockpitAccessTokens,
   revokeCockpitAccessToken,
   type CockpitAccessTokenSummary,
-} from "@zendev-lab/spark-coordination/cockpit-access";
-import { defaultDatabasePath, migrate, openDatabase } from "@zendev-lab/spark-db";
+} from "@zendev-lab/spark-cockpit-coordination/cockpit-access";
+import { defaultDatabasePath, migrate, openDatabase } from "@zendev-lab/spark-cockpit-db";
 
 export type CockpitAccessOperation = "create" | "list" | "revoke";
 

@@ -3,10 +3,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import { gitCommand } from "@zendev-lab/spark-system";
-import { createWorkspaceWithOwnerBinding } from "@zendev-lab/spark-coordination/projection-services";
+import { createWorkspaceWithOwnerBinding } from "@zendev-lab/spark-cockpit-coordination/projection-services";
 import {
   builtinFreshWorkspaceProfile,
   exportWorkspaceProfileToml,

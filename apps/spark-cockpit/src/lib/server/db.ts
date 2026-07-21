@@ -5,7 +5,7 @@ import {
   migrate,
   openDatabase,
   type CockpitDatabaseLockHandle,
-} from "@zendev-lab/spark-db";
+} from "@zendev-lab/spark-cockpit-db";
 import type { DatabaseSync } from "node:sqlite";
 
 /** Idle grace before closing the DB and releasing the process lock when pin count hits 0. */

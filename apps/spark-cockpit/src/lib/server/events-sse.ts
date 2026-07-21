@@ -6,7 +6,7 @@ import {
   encodeSseMessage,
   serializeEventRow,
   type EventCursor,
-} from "@zendev-lab/spark-coordination/events";
+} from "@zendev-lab/spark-cockpit-coordination/events";
 import { getDatabase, pinDatabase, unpinDatabase } from "./db";
 
 const encoder = new TextEncoder();

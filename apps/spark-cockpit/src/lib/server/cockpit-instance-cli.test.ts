@@ -21,7 +21,7 @@ import {
   migrate,
   openDatabase,
   type CockpitSnapshotManifest,
-} from "@zendev-lab/spark-db";
+} from "@zendev-lab/spark-cockpit-db";
 
 import {
   handleSparkCockpitCliCommand,

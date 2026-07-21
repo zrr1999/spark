@@ -1,5 +1,5 @@
 import { parseChannelsConfig, type ChannelsConfig } from "@zendev-lab/spark-channels";
-import type { RuntimeEphemeralSecretRequestContext } from "@zendev-lab/spark-coordination/runtime-model-channel-control";
+import type { RuntimeEphemeralSecretRequestContext } from "@zendev-lab/spark-cockpit-coordination/runtime-model-channel-control";
 import {
   parseSparkChannelControlSnapshot,
   type SparkChannelConfigurationProjection,

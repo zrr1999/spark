@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { openMemoryDatabase } from "@zendev-lab/spark-db";
+import { openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import {
   sparkSessionSnapshotPageSchema,

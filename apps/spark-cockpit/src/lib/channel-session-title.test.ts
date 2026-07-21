@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getCockpitDictionary } from "@zendev-lab/spark-i18n";
+import { getCockpitDictionary } from "@zendev-lab/spark-cockpit-i18n";
 import {
   channelSessionPresentation,
   channelSessionScopeKind,
