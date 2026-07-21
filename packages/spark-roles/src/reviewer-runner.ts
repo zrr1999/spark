@@ -1,0 +1,1175 @@
+import { createHash } from "node:crypto";
+import { delay } from "es-toolkit";
+import {
+  builtinRoleRef,
+  defaultProjectRoleModelSettingsStore,
+  defaultUserRoleModelSettingsStore,
+  resolveRoleModelSetting,
+  runRole,
+  type RoleRegistry,
+  type RoleRunResult,
+  type RoleThinkingLevel,
+} from "./index.ts";
+import {
+  newRef,
+  nowIso,
+  type ArtifactRef,
+  type ExtensionRoleRunner,
+  type ProjectRef,
+  type RoleRef,
+  type RunRef,
+  type Task,
+  type TaskRef,
+} from "@zendev-lab/spark-core";
+
+export type ReviewTargetKind = "task" | "goal" | "tool_approval";
+export type ReviewVerdictOutcome = "approved" | "needs_changes" | "blocked";
+export type ReviewerThinkingLevel = RoleThinkingLevel;
+
+export interface TaskReviewInput {
+  targetKind: "task";
+  cwd: string;
+  projectRef: ProjectRef;
+  task: Task;
+  requestedStatus: "done" | "failed" | "cancelled";
+  summary?: string;
+  evidenceRefs: ArtifactRef[];
+  evidencePreviews?: GoalReviewEvidencePreview[];
+  sessionKey?: string;
+  forkFromSession?: string;
+}
+
+export interface GoalReviewEvidencePreview {
+  ref: ArtifactRef;
+  title?: string;
+  kind?: string;
+  format?: string;
+  provenance?: Record<string, unknown>;
+  bodyPreview?: string;
+  error?: string;
+}
+
+export type GoalReviewRequirementStatus = "verified" | "missing" | "blocked";
+
+export interface GoalReviewRequirement {
+  id: string;
+  description: string;
+  status: GoalReviewRequirementStatus;
+  evidenceRefs: ArtifactRef[];
+  note?: string;
+}
+
+export interface GoalCompletionProtocol {
+  requirements: GoalReviewRequirement[];
+  validationRuns: string[];
+  unresolved: string[];
+}
+
+export interface GoalReviewInput {
+  targetKind: "goal";
+  cwd: string;
+  projectRef?: ProjectRef;
+  currentProjectSelected?: boolean;
+  projectEvidenceSource?: "current_project" | "project_evidence_fallback" | "none";
+  projectStatus?: {
+    ref: ProjectRef;
+    title: string;
+    taskCounts: {
+      total: number;
+      unfinished: number;
+      claimed: number;
+      statusCounts: Record<string, number>;
+    };
+    readyTasks?: Array<{ ref: string; name?: string; title: string; status: string; kind: string }>;
+    unfinishedTasks?: Array<{
+      ref: string;
+      name?: string;
+      title: string;
+      status: string;
+      kind: string;
+    }>;
+  };
+  goalId: string;
+  /** Immutable user goal captured when the goal was started/set. Reviewers must compare completion claims against this, not only against derived task descriptions. */
+  originalObjective?: string;
+  /** Current objective text after any approved edits; must remain equivalent to originalObjective. */
+  objective: string;
+  status: "active" | "paused" | "complete";
+  requestedStatus: "paused" | "complete" | "edited";
+  reason?: string;
+  proposedObjective?: string;
+  evidenceRefs: ArtifactRef[];
+  evidencePreviews?: GoalReviewEvidencePreview[];
+  /** Machine-readable completion claims. Legacy callers derive one objective requirement. */
+  requirements?: GoalReviewRequirement[];
+  validationRuns?: string[];
+  unresolved?: string[];
+  sessionKey?: string;
+  forkFromSession?: string;
+}
+
+export interface ToolApprovalReviewInput {
+  targetKind: "tool_approval";
+  cwd: string;
+  toolName: string;
+  toolCallId: string;
+  arguments: Record<string, unknown>;
+  reason?: string;
+  sessionKey?: string;
+  forkFromSession?: string;
+}
+
+export type ReviewInput = TaskReviewInput | GoalReviewInput | ToolApprovalReviewInput;
+
+/**
+ * Normalize the completion packet once for prompts, runtime gates, and persisted reviews.
+ * Older callers remain compatible through one requirement representing the immutable objective.
+ */
+export function resolveGoalCompletionProtocol(input: GoalReviewInput): GoalCompletionProtocol {
+  const explicitRequirements = input.requirements?.map((requirement) => ({
+    id: requirement.id.trim(),
+    description: requirement.description.trim(),
+    status: requirement.status,
+    evidenceRefs: [...new Set(requirement.evidenceRefs)],
+    ...(requirement.note?.trim() ? { note: requirement.note.trim() } : {}),
+  }));
+  return {
+    requirements: explicitRequirements?.length
+      ? explicitRequirements
+      : [
+          {
+            id: "goal:objective",
+            description: (input.originalObjective ?? input.objective).trim(),
+            status: "verified",
+            evidenceRefs: [...new Set(input.evidenceRefs)],
+          },
+        ],
+    validationRuns: normalizeCompletionStringList(input.validationRuns),
+    unresolved: normalizeCompletionStringList(input.unresolved),
+  };
+}
+
+/** Return deterministic reasons that make a goal completion packet ineligible for approval. */
+export function goalCompletionProtocolBlockers(input: GoalReviewInput): string[] {
+  if (input.requestedStatus !== "complete") return [];
+  const protocol = resolveGoalCompletionProtocol(input);
+  const blockers = protocol.requirements.flatMap((requirement) => {
+    if (!requirement.id) return ["goal completion requirement has an empty id"];
+    if (!requirement.description)
+      return [`goal completion requirement ${requirement.id} has an empty description`];
+    if (requirement.status !== "verified")
+      return [
+        `goal completion requirement ${requirement.id} is ${requirement.status}: ${requirement.description}`,
+      ];
+    return requirement.evidenceRefs.length > 0
+      ? []
+      : [`goal completion verified requirement ${requirement.id} has no mapped evidenceRefs`];
+  });
+  return [...blockers, ...protocol.unresolved.map((item) => `goal completion unresolved: ${item}`)];
+}
+
+function normalizeCompletionStringList(values: readonly string[] | undefined): string[] {
+  return [...new Set(values?.map((value) => value.trim()).filter(Boolean) ?? [])];
+}
+
+export interface ReviewVerdict {
+  outcome: ReviewVerdictOutcome;
+  summary: string;
+  findings: string[];
+  blockers: string[];
+  confidence: "low" | "medium" | "high";
+}
+
+export interface TaskReviewVerdict extends ReviewVerdict {
+  targetKind: "task";
+  taskRef: TaskRef;
+  approved: boolean;
+}
+
+export interface GoalReviewVerdict extends ReviewVerdict {
+  targetKind: "goal";
+  goalId: string;
+  achieved: boolean;
+  /** Whether cited commands/files/tests are real and support the completion claim as evidence. */
+  evidenceValid?: boolean;
+  /** Whether the validated evidence semantically satisfies the immutable original user goal. */
+  objectiveSatisfied?: boolean;
+  remainingWork: string;
+}
+
+export interface ToolApprovalReviewVerdict extends ReviewVerdict {
+  targetKind: "tool_approval";
+  toolName: string;
+  approved: boolean;
+}
+
+export type ReviewerVerdict = TaskReviewVerdict | GoalReviewVerdict | ToolApprovalReviewVerdict;
+
+export interface ReviewerRunRecord {
+  runRef?: RunRef;
+  roleRef: RoleRef;
+  runName?: string;
+  startedAt: string;
+  finishedAt: string;
+  thinking?: ReviewerThinkingLevel;
+  stdout?: string;
+  stderr?: string;
+  jsonEvents?: unknown[];
+}
+
+export interface ReviewerRunResult {
+  verdict: ReviewerVerdict;
+  record: ReviewerRunRecord;
+}
+
+const REVIEWER_LOW_COST_READ_TOOLS = new Set([
+  "read",
+  "grep",
+  "find",
+  "task_read",
+  "artifact",
+  "evidence",
+]);
+
+export interface AskAutoAnswerInput {
+  cwd: string;
+  request: unknown;
+  sessionKey?: string;
+  forkFromSession?: string;
+}
+
+export interface AskAutoAnswerResult {
+  answers?: Record<
+    string,
+    { values?: string[]; customText?: string; notes?: string; comment?: string }
+  >;
+  blocked?: boolean;
+  reason?: string;
+}
+
+export interface ReviewerRunner {
+  review(input: ReviewInput, signal?: AbortSignal): Promise<ReviewerRunResult>;
+  answerAsk?(input: AskAutoAnswerInput, signal?: AbortSignal): Promise<AskAutoAnswerResult>;
+}
+
+export interface SparkRolesReviewerRunnerOptions {
+  registry: RoleRegistry;
+  cwd: string;
+  timeoutMs?: number;
+  reviewerRoleRef?: RoleRef;
+  model?: string;
+  sessionModel?: string;
+  sessionDir?: string;
+  env?: NodeJS.ProcessEnv;
+  reviewerThinkingLevel?: ReviewerThinkingLevel;
+  nativeExecutor?: ExtensionRoleRunner;
+  now?: () => string;
+  /** Maximum retry attempts for transient failures (timeout, overloaded). Default: 2. */
+  maxRetries?: number;
+  /** Base delay between retries in milliseconds. Default: 5000. Exponential backoff applied. */
+  retryBaseDelayMs?: number;
+}
+
+const REVIEWER_TIMEOUT_MS_ENV = "SPARK_REVIEWER_TIMEOUT_MS";
+const DEFAULT_REVIEWER_TIMEOUT_MS = 1_200_000;
+export const DEFAULT_REVIEWER_THINKING_LEVEL: ReviewerThinkingLevel = "medium";
+
+const REVIEWER_THINKING_RANK: Record<ReviewerThinkingLevel, number> = {
+  off: 0,
+  minimal: 1,
+  low: 2,
+  medium: 3,
+  high: 4,
+  xhigh: 5,
+};
+
+export function capReviewerThinkingLevel(value: unknown): ReviewerThinkingLevel {
+  if (!isReviewerThinkingLevel(value)) return DEFAULT_REVIEWER_THINKING_LEVEL;
+  return REVIEWER_THINKING_RANK[value] <= REVIEWER_THINKING_RANK.medium
+    ? value
+    : DEFAULT_REVIEWER_THINKING_LEVEL;
+}
+
+function isReviewerThinkingLevel(value: unknown): value is ReviewerThinkingLevel {
+  return (
+    value === "off" ||
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh"
+  );
+}
+
+const REVIEWER_JSON_SCHEMA = [
+  "Return ONLY one valid JSON object. Do not include markdown, prose, comments, or tool calls.",
+  'Use outcome exactly one of: "approved", "needs_changes", "blocked".',
+  'Use confidence exactly one of: "low", "medium", "high".',
+  "For task reviews, omit achieved, remainingWork, evidence_valid, and objective_satisfied.",
+  "For goal completion reviews, include achieved, evidence_valid, objective_satisfied, and remainingWork. Approve only when every requirement is verified with mapped evidenceRefs, unresolved is empty, evidence_valid=true, and objective_satisfied=true.",
+  "Task review example:",
+  '{"outcome":"approved","summary":"one sentence","findings":[],"blockers":[],"confidence":"high"}',
+  "Goal review example:",
+  '{"outcome":"needs_changes","summary":"one sentence","findings":["actionable finding"],"blockers":["blocking issue"],"confidence":"medium","achieved":false,"evidence_valid":true,"objective_satisfied":false,"remainingWork":"what remains"}',
+].join("\n");
+
+const ASK_AUTO_ANSWER_JSON_SCHEMA = [
+  "Return ONLY compact JSON with this shape:",
+  "{",
+  '  "answers": { "questionId": { "values": ["option_value"], "customText": "freeform text", "notes": "brief rationale" } },',
+  '  "blocked": false,',
+  '  "reason": "why blocked or why these answers were chosen"',
+  "}",
+  "Use options[].value exactly. For single/preview choose at most one value. For freeform use customText.",
+  "Answer every required question when the packet and options make the answer clear; otherwise set blocked=true and explain reason.",
+  "If the packet is ambiguous or evidence is insufficient, set blocked=true and explain reason instead of omitting answers.",
+].join("\n");
+
+export class SparkRolesReviewerRunner implements ReviewerRunner {
+  readonly #registry: RoleRegistry;
+  readonly #cwd: string;
+  readonly #timeoutMs: number;
+  readonly #reviewerRoleRef: RoleRef;
+  readonly #model?: string;
+  readonly #sessionModel?: string;
+  readonly #sessionDir?: string;
+  readonly #env?: NodeJS.ProcessEnv;
+  readonly #reviewerThinkingLevel: ReviewerThinkingLevel;
+  readonly #nativeExecutor?: ExtensionRoleRunner;
+  readonly #now: () => string;
+
+  readonly #maxRetries: number;
+  readonly #retryBaseDelayMs: number;
+
+  constructor(options: SparkRolesReviewerRunnerOptions) {
+    this.#registry = options.registry;
+    this.#cwd = options.cwd;
+    this.#timeoutMs = options.timeoutMs ?? reviewerTimeoutMsFromEnv(process.env);
+    this.#reviewerRoleRef = options.reviewerRoleRef ?? builtinRoleRef("reviewer");
+    this.#model = options.model;
+    this.#sessionModel = options.sessionModel;
+    this.#sessionDir = options.sessionDir;
+    this.#env = options.env;
+    this.#reviewerThinkingLevel = options.reviewerThinkingLevel ?? DEFAULT_REVIEWER_THINKING_LEVEL;
+    this.#nativeExecutor = options.nativeExecutor;
+    this.#now = options.now ?? nowIso;
+    this.#maxRetries = options.maxRetries ?? 2;
+    this.#retryBaseDelayMs = options.retryBaseDelayMs ?? 5_000;
+  }
+
+  async review(input: ReviewInput, signal?: AbortSignal): Promise<ReviewerRunResult> {
+    let lastResult: ReviewerRunResult | undefined;
+    for (let attempt = 0; attempt <= this.#maxRetries; attempt++) {
+      if (signal?.aborted) break;
+      if (attempt > 0) {
+        const delayMs = this.#retryBaseDelayMs * Math.pow(2, attempt - 1);
+        await sleep(delayMs, signal);
+        if (signal?.aborted) break;
+      }
+      const result = await this.#singleReviewAttempt(input, signal);
+      if (isRetriableReviewerFailure(result)) {
+        lastResult = result;
+        continue;
+      }
+      return result;
+    }
+    return (
+      lastResult ?? {
+        verdict: failedReviewerRunVerdict(input, "reviewer aborted before any attempt completed"),
+        record: { roleRef: this.#reviewerRoleRef, startedAt: this.#now(), finishedAt: this.#now() },
+      }
+    );
+  }
+
+  async #singleReviewAttempt(input: ReviewInput, signal?: AbortSignal): Promise<ReviewerRunResult> {
+    const role = this.#registry.get(this.#reviewerRoleRef);
+    const runRef = newRef("run");
+    const startedAt = this.#now();
+    const roleModel = await resolveRoleModelSetting({
+      roleRef: role.ref,
+      roleId: role.id,
+      roleName: role.id,
+      projectStore: defaultProjectRoleModelSettingsStore(input.cwd || this.#cwd),
+      userStore: defaultUserRoleModelSettingsStore(),
+    });
+    const resolvedModel = this.#model ?? roleModel?.model ?? this.#sessionModel;
+    let result: RoleRunResult;
+    try {
+      result = await runRole({
+        runRef: runRef as `run:${string}`,
+        roleRef: role.ref as `role:${string}`,
+        systemPrompt: buildReadOnlyReviewerSystemPrompt(role.systemPrompt),
+        model: resolvedModel,
+        thinking: this.#reviewerThinkingLevel,
+        instruction: renderReviewerInstruction(input),
+        runGuidance: REVIEWER_JSON_SCHEMA,
+        allowedTools: reviewerGateAllowedTools(role.allowedTools),
+        noSession: true,
+        noExtensions: true,
+        launch: "fresh",
+        sessionDir: this.#sessionDir,
+        env: this.#env,
+        cwd: input.cwd || this.#cwd,
+        timeoutMs: this.#timeoutMs,
+        signal,
+        stdinMode: "ignore",
+        nativeExecutor: this.#nativeExecutor,
+      });
+    } catch (error) {
+      const finishedAt = this.#now();
+      return {
+        verdict: failedReviewerRunVerdict(
+          input,
+          `reviewer role run error: ${unknownErrorMessage(error)}`,
+        ),
+        record: { runRef, roleRef: role.ref as RoleRef, startedAt, finishedAt },
+      };
+    }
+    const finishedAt = result.record.finishedAt ?? this.#now();
+    if (result.record.status !== "succeeded")
+      return {
+        verdict: failedReviewerRunVerdict(input, `reviewer role run ${result.record.status}`),
+        record: roleRunRecord(result, startedAt, finishedAt),
+      };
+    const record = roleRunRecord(result, startedAt, finishedAt);
+    try {
+      return {
+        verdict: parseReviewerVerdictForInput(input, result.stdout),
+        record,
+      };
+    } catch (error) {
+      return {
+        verdict: failedReviewerRunVerdict(
+          input,
+          `reviewer verdict parse failed: ${unknownErrorMessage(error)}`,
+        ),
+        record,
+      };
+    }
+  }
+
+  async answerAsk(input: AskAutoAnswerInput, signal?: AbortSignal): Promise<AskAutoAnswerResult> {
+    let lastResult: AskAutoAnswerResult | undefined;
+    for (let attempt = 0; attempt <= this.#maxRetries; attempt++) {
+      if (signal?.aborted) break;
+      if (attempt > 0) {
+        const delayMs = this.#retryBaseDelayMs * Math.pow(2, attempt - 1);
+        await sleep(delayMs, signal);
+        if (signal?.aborted) break;
+      }
+      const result = await this.#singleAskAttempt(input, signal);
+      if (isRetriableAskFailure(result)) {
+        lastResult = result;
+        continue;
+      }
+      return result;
+    }
+    return lastResult ?? { blocked: true, reason: "reviewer aborted before any attempt completed" };
+  }
+
+  async #singleAskAttempt(
+    input: AskAutoAnswerInput,
+    signal?: AbortSignal,
+  ): Promise<AskAutoAnswerResult> {
+    const role = this.#registry.get(this.#reviewerRoleRef);
+    const runRef = newRef("run");
+    const roleModel = await resolveRoleModelSetting({
+      roleRef: role.ref,
+      roleId: role.id,
+      roleName: role.id,
+      projectStore: defaultProjectRoleModelSettingsStore(input.cwd || this.#cwd),
+      userStore: defaultUserRoleModelSettingsStore(),
+    });
+    const resolvedModel = this.#model ?? roleModel?.model ?? this.#sessionModel;
+    let result: RoleRunResult;
+    try {
+      result = await runRole({
+        runRef: runRef as `run:${string}`,
+        roleRef: role.ref as `role:${string}`,
+        systemPrompt: buildReadOnlyReviewerSystemPrompt(role.systemPrompt),
+        model: resolvedModel,
+        thinking: this.#reviewerThinkingLevel,
+        instruction: renderAskAutoAnswerInstruction(input),
+        runGuidance: ASK_AUTO_ANSWER_JSON_SCHEMA,
+        allowedTools: reviewerGateAllowedTools(role.allowedTools),
+        noSession: true,
+        noExtensions: true,
+        launch: "fresh",
+        sessionDir: this.#sessionDir,
+        env: this.#env,
+        cwd: input.cwd || this.#cwd,
+        timeoutMs: this.#timeoutMs,
+        signal,
+        stdinMode: "ignore",
+        nativeExecutor: this.#nativeExecutor,
+      });
+    } catch (error) {
+      return { blocked: true, reason: `reviewer role run blocked: ${unknownErrorMessage(error)}` };
+    }
+    if (result.record.status !== "succeeded")
+      return { blocked: true, reason: `reviewer role run ${result.record.status}` };
+    return parseAskAutoAnswerResult(result.stdout);
+  }
+}
+
+export function buildReadOnlyReviewerSystemPrompt(basePrompt: string): string {
+  return [
+    basePrompt.trim(),
+    "",
+    "Spark reviewer gate constraints:",
+    "- Read-only verdict role: inspect the provided state/evidence only.",
+    "- Do not mutate tasks, goals, files, artifacts, recall, learning, asks, or project state.",
+    "- Do not call task_write, goal update, assign, role, workflow, file edit, write, memory, recall, ask, or learning mutation tools.",
+    "- Never ask interactively. If a question is required, return outcome=needs_changes or outcome=blocked and put the concrete question in findings/blockers.",
+    "- Return verdict JSON only; the Spark tool that invoked you will apply any state transition.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function renderReviewerInstruction(input: ReviewInput): string {
+  switch (input.targetKind) {
+    case "task":
+      return renderTaskOrGoalReviewerInstruction(input);
+    case "goal":
+      return renderTaskOrGoalReviewerInstruction(input);
+    case "tool_approval":
+      return [
+        "Review this Spark tool-call approval request before execution.",
+        "Approve only when the tool name and arguments look safe and appropriate for the current session context.",
+        "Reject with needs_changes or blocked when the call is destructive, opaque, overly privileged, or unjustified.",
+        "Always return the required compact JSON verdict, even when rejecting.",
+        "Review packet:",
+        JSON.stringify(
+          {
+            targetKind: input.targetKind,
+            toolName: input.toolName,
+            toolCallId: input.toolCallId,
+            arguments: input.arguments,
+            reason: input.reason,
+            sessionKey: input.sessionKey,
+          },
+          null,
+          2,
+        ),
+      ].join("\n");
+    default: {
+      const _exhaustive: never = input;
+      return _exhaustive;
+    }
+  }
+}
+
+function renderTaskOrGoalReviewerInstruction(input: TaskReviewInput | GoalReviewInput): string {
+  const completionProtocol =
+    input.targetKind === "goal" && input.requestedStatus === "complete"
+      ? resolveGoalCompletionProtocol(input)
+      : undefined;
+  const packet =
+    input.targetKind === "task"
+      ? {
+          targetKind: input.targetKind,
+          projectRef: input.projectRef,
+          task: compactTaskForReview(input.task),
+          requestedStatus: input.requestedStatus,
+          summary: input.summary,
+          evidenceRefs: input.evidenceRefs,
+          ...(input.evidencePreviews?.length ? { evidencePreviews: input.evidencePreviews } : {}),
+          sessionKey: input.sessionKey,
+        }
+      : {
+          targetKind: input.targetKind,
+          projectRef: input.projectRef,
+          currentProjectSelected: input.currentProjectSelected,
+          projectEvidenceSource: input.projectEvidenceSource,
+          projectStatus: input.projectStatus,
+          goalId: input.goalId,
+          originalObjective: input.originalObjective ?? input.objective,
+          objective: input.objective,
+          status: input.status,
+          requestedStatus: input.requestedStatus,
+          reason: input.reason,
+          proposedObjective: input.proposedObjective,
+          evidenceRefs: input.evidenceRefs,
+          evidencePreviews: input.evidencePreviews,
+          ...(completionProtocol ?? {}),
+          sessionKey: input.sessionKey,
+        };
+  const transitionGuidance =
+    input.targetKind === "task"
+      ? [
+          "For targetKind=task, review only the selected task's requestedStatus, task plan/scope, summary, and evidenceRefs.",
+          "Do not reject a task finish merely because sibling, downstream, or final-integration tasks in the same project are unfinished; dependency chains require scoped leaf tasks to close before downstream work can run.",
+          "Reject a task finish when the selected task's own plan items, scope, or evidence remain incomplete, or when the evidence defers work that belongs to the selected task rather than to an explicitly separate downstream task.",
+        ]
+      : [
+          "For targetKind=goal, review semantic satisfaction of the immutable original user goal, not only whether evidence supports a task description, intermediate artifact, or latest completion wording.",
+          "Completion success criteria (all required): every requirements[].status is verified and has mapped evidenceRefs; unresolved is empty; evidence_valid=true; objective_satisfied=true; and cited evidence directly and reproducibly tests originalObjective without scope drift. validationRuns are supplemental and do not replace per-requirement evidence.",
+          "Reject intermediate artifacts, simulations, summaries, manifests, wrappers, deterministic packaging, snapshots, mocks, or fixed-point-looking substitutes when they do not prove the original outcome. State what works, what remains, and any native/trusted dependency.",
+          "For compiler, self-hosting, bootstrap, interpreter, VM, or execution-engine goals, require core execution path proof: the acceptance command/call trace, code that executed core logic, native/trusted boundaries, and behavior when host helpers are disabled.",
+          'For requestedStatus=complete, a goal may complete without a current project only when evidenceRefs/projectStatus directly cover originalObjective. Otherwise, currentProjectSelected=false or projectEvidenceSource=project_evidence_fallback means the next step is research/plan: create/select a project with task_write({ action: "project_use", title, description }) and plan concrete tasks with task_write({ action: "plan" }); never use "no current project", "project cleared", or "all historical tasks are done" as the completion rationale.',
+          "If projectStatus.taskCounts.unfinished > 0, default to needs_changes unless originalObjective is planning-only/readiness-only, or explicit requirements plus direct evidence demonstrate to the reviewer that the unfinished tasks are outside this narrower goal.",
+          "When unfinished project work remains, include concrete remainingWork using projectStatus.readyTasks and unfinishedTasks instead of treating planning evidence as implementation completion.",
+          "For requestedStatus=paused, reject main-agent autonomous pauses; blockers should be resolved by doing or planning blocking work, not by pausing the goal.",
+          "For requestedStatus=edited, approve only when the proposed objective corrects a material description error or wrong direction in the current objective and does not reduce difficulty, remove required outcomes, narrow scope, or turn implementation work into planning-only/readiness-only work; compare proposedObjective against originalObjective.",
+        ];
+  return [
+    "Review this Spark state transition request.",
+    "Approve only if the provided evidence and current packet satisfy the requested state transition.",
+    ...transitionGuidance,
+    "If work remains or the requested transition is not justified, use outcome=needs_changes and list concrete blockers/findings.",
+    "Always return the required compact JSON verdict, even when rejecting.",
+    "Review packet:",
+    JSON.stringify(packet, null, 2),
+  ].join("\n");
+}
+
+export function renderAskAutoAnswerInstruction(input: AskAutoAnswerInput): string {
+  return [
+    "Answer this ask packet as a read-only reviewer for an autonomous goal turn.",
+    "Choose only when the request context and options make the next action clear.",
+    "Return option values, not labels. Do not mutate state or call tools.",
+    "Always return the required compact JSON answer packet, even when blocked.",
+    "Ask packet:",
+    JSON.stringify({ request: input.request, sessionKey: input.sessionKey }, null, 2),
+  ].join("\n");
+}
+
+export function parseAskAutoAnswerResult(text: string): AskAutoAnswerResult {
+  const value = parseAskAutoAnswerObjectFromText(text);
+  const output: AskAutoAnswerResult = {};
+  if (typeof value.reason === "string") output.reason = value.reason;
+  if (value.blocked === true) output.blocked = true;
+  if (value.answers && typeof value.answers === "object" && !Array.isArray(value.answers)) {
+    output.answers = {};
+    for (const [questionId, rawAnswer] of Object.entries(value.answers)) {
+      if (!rawAnswer || typeof rawAnswer !== "object" || Array.isArray(rawAnswer)) continue;
+      const answer = rawAnswer as Record<string, unknown>;
+      output.answers[questionId] = {
+        ...(Array.isArray(answer.values)
+          ? { values: answer.values.filter((item): item is string => typeof item === "string") }
+          : {}),
+        ...(typeof answer.customText === "string" ? { customText: answer.customText } : {}),
+        ...(typeof answer.notes === "string" ? { notes: answer.notes } : {}),
+        ...(typeof answer.comment === "string" ? { comment: answer.comment } : {}),
+      };
+    }
+  }
+  return output;
+}
+
+function parseAskAutoAnswerObjectFromText(text: string): Record<string, unknown> {
+  const trimmed = text.trim();
+  if (!trimmed) throw new Error("reviewer ask auto-answer must be non-empty JSON");
+  let fallback: Record<string, unknown> | undefined;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (isRecord(parsed)) {
+      fallback = parsed;
+      const answer = findAskAutoAnswerRecord(parsed);
+      if (answer) return answer;
+    }
+  } catch {
+    // Fall through to JSON-object extraction for role output wrappers.
+  }
+  for (const objectText of extractJsonObjects(trimmed)) {
+    try {
+      const parsed = JSON.parse(objectText);
+      if (!isRecord(parsed)) continue;
+      fallback ??= parsed;
+      const answer = findAskAutoAnswerRecord(parsed);
+      if (answer) return answer;
+    } catch {
+      // Keep scanning later objects; role stdout can contain protocol JSON and text fragments.
+    }
+  }
+  if (fallback) return fallback;
+  throw new Error("reviewer ask auto-answer must be a JSON object");
+}
+
+function findAskAutoAnswerRecord(
+  record: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (isAskAutoAnswerRecord(record)) return record;
+  for (const text of reviewerVerdictTextCandidates(record)) {
+    const found = findAskAutoAnswerRecordInText(text);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function findAskAutoAnswerRecordInText(text: string): Record<string, unknown> | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (isRecord(parsed)) {
+      const found = findAskAutoAnswerRecord(parsed);
+      if (found) return found;
+    }
+  } catch {
+    // Continue with object extraction below.
+  }
+  for (const objectText of extractJsonObjects(trimmed)) {
+    try {
+      const parsed = JSON.parse(objectText);
+      if (!isRecord(parsed)) continue;
+      const found = findAskAutoAnswerRecord(parsed);
+      if (found) return found;
+    } catch {
+      // Keep scanning; assistant content can include prose plus JSON.
+    }
+  }
+  return undefined;
+}
+
+function isAskAutoAnswerRecord(record: Record<string, unknown>): boolean {
+  return (
+    (record.answers !== undefined && isRecord(record.answers)) ||
+    record.blocked === true ||
+    record.blocked === false
+  );
+}
+
+export function parseReviewerVerdictForInput(input: ReviewInput, text: string): ReviewerVerdict {
+  const value = parseJsonObjectFromText(text, { requireReviewerVerdict: true });
+  const parsed = normalizeReviewerVerdictObject(value);
+  switch (input.targetKind) {
+    case "task":
+      return {
+        ...parsed,
+        targetKind: "task",
+        taskRef: input.task.ref,
+        approved: parsed.outcome === "approved",
+      };
+    case "tool_approval":
+      return {
+        ...parsed,
+        targetKind: "tool_approval",
+        toolName: input.toolName,
+        approved: parsed.outcome === "approved",
+      };
+    case "goal": {
+      const evidenceValid = parseBooleanAliasField(value, "evidence_valid", "evidenceValid");
+      const objectiveSatisfied = parseBooleanAliasField(
+        value,
+        "objective_satisfied",
+        "objectiveSatisfied",
+      );
+      const protocolBlockers = goalCompletionProtocolBlockers(input);
+      const missingRequiredApprovalFields =
+        input.requestedStatus === "complete" &&
+        parsed.outcome === "approved" &&
+        (evidenceValid !== true || objectiveSatisfied !== true);
+      const protocolRejectedApproval =
+        input.requestedStatus === "complete" &&
+        parsed.outcome === "approved" &&
+        protocolBlockers.length > 0;
+      const invalidApproval = missingRequiredApprovalFields || protocolRejectedApproval;
+      const outcome = invalidApproval ? "needs_changes" : parsed.outcome;
+      const blockers = invalidApproval
+        ? [
+            ...new Set([
+              ...parsed.blockers,
+              ...(missingRequiredApprovalFields
+                ? [
+                    "goal completion approval must explicitly set evidence_valid=true and objective_satisfied=true",
+                  ]
+                : []),
+              ...protocolBlockers,
+            ]),
+          ]
+        : parsed.blockers;
+      const achieved =
+        input.requestedStatus === "complete" &&
+        outcome === "approved" &&
+        (parseBooleanField(value, "achieved") ?? true) &&
+        evidenceValid === true &&
+        objectiveSatisfied === true &&
+        protocolBlockers.length === 0;
+      const summary = missingRequiredApprovalFields
+        ? "goal completion approval missing required evidence_valid/objective_satisfied semantic gate"
+        : protocolRejectedApproval
+          ? "goal completion approval failed structured completion protocol"
+          : parsed.summary;
+      const remainingWork = stringField(value, "remainingWork") ?? (achieved ? "" : summary);
+      return {
+        ...parsed,
+        outcome,
+        summary,
+        blockers,
+        targetKind: "goal",
+        goalId: input.goalId,
+        achieved,
+        evidenceValid,
+        objectiveSatisfied,
+        remainingWork,
+      };
+    }
+    default: {
+      const _exhaustive: never = input;
+      return _exhaustive;
+    }
+  }
+}
+
+export function parseReviewerVerdict(text: string): ReviewVerdict {
+  return normalizeReviewerVerdictObject(parseJsonObjectFromText(text));
+}
+
+function normalizeReviewerVerdictObject(value: Record<string, unknown>): ReviewVerdict {
+  const outcome = normalizeReviewOutcome(value.outcome);
+  return {
+    outcome,
+    summary: stringField(value, "summary") ?? defaultReviewSummary(outcome),
+    findings: stringArrayField(value, "findings"),
+    blockers: stringArrayField(value, "blockers"),
+    confidence: normalizeReviewConfidence(value.confidence),
+  };
+}
+
+function reviewerGateAllowedTools(allowedTools: string[] | undefined): string[] {
+  const candidates = allowedTools?.length ? allowedTools : Array.from(REVIEWER_LOW_COST_READ_TOOLS);
+  return candidates.filter((tool) => REVIEWER_LOW_COST_READ_TOOLS.has(tool));
+}
+
+function reviewerTimeoutMsFromEnv(env: NodeJS.ProcessEnv): number {
+  const raw = env[REVIEWER_TIMEOUT_MS_ENV]?.trim();
+  if (!raw) return DEFAULT_REVIEWER_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_REVIEWER_TIMEOUT_MS;
+  return Math.floor(parsed);
+}
+
+function roleRunRecord(
+  result: RoleRunResult,
+  fallbackStartedAt: string,
+  fallbackFinishedAt: string,
+): ReviewerRunRecord {
+  return {
+    runRef: result.record.ref as RunRef,
+    roleRef: result.record.roleRef as RoleRef,
+    runName: result.record.runName,
+    startedAt: result.record.startedAt ?? fallbackStartedAt,
+    finishedAt: result.record.finishedAt ?? fallbackFinishedAt,
+    thinking: result.record.thinking,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    jsonEvents: result.jsonEvents,
+  };
+}
+
+const RETRIABLE_FAILURE_PATTERNS = [
+  /timed out/i,
+  /timeout/i,
+  /overloaded/i,
+  /empty response/i,
+  /ECONNRESET/i,
+  /ECONNREFUSED/i,
+  /ETIMEDOUT/i,
+  /network/i,
+  /role run failed/i,
+  /role run error/i,
+];
+
+function isRetriableReviewerFailure(result: ReviewerRunResult): boolean {
+  if (result.verdict.outcome !== "blocked") return false;
+  const reason = result.verdict.summary;
+  return RETRIABLE_FAILURE_PATTERNS.some((pattern) => pattern.test(reason));
+}
+
+function isRetriableAskFailure(result: AskAutoAnswerResult): boolean {
+  if (!result.blocked || !result.reason) return false;
+  return RETRIABLE_FAILURE_PATTERNS.some((pattern) => pattern.test(result.reason!));
+}
+
+async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  // es-toolkit delay rejects on abort; reviewer retries treat abort as soft stop.
+  try {
+    await delay(ms, signal ? { signal } : undefined);
+  } catch {
+    if (signal?.aborted) return;
+    throw new Error(`reviewer delay interrupted after ${ms}ms`);
+  }
+}
+
+function failedReviewerRunVerdict(input: ReviewInput, reason: string): ReviewerVerdict {
+  const base: ReviewVerdict = {
+    outcome: "blocked",
+    summary: reason,
+    findings: [],
+    blockers: [reason],
+    confidence: "low",
+  };
+  switch (input.targetKind) {
+    case "task":
+      return { ...base, targetKind: "task", taskRef: input.task.ref, approved: false };
+    case "tool_approval":
+      return { ...base, targetKind: "tool_approval", toolName: input.toolName, approved: false };
+    case "goal":
+      return {
+        ...base,
+        targetKind: "goal",
+        goalId: input.goalId,
+        achieved: false,
+        remainingWork: reason,
+      };
+    default: {
+      const _exhaustive: never = input;
+      return _exhaustive;
+    }
+  }
+}
+
+function unknownErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function compactTaskForReview(task: Task): Record<string, unknown> {
+  return {
+    ref: task.ref,
+    name: task.name,
+    title: task.title,
+    description: task.description,
+    status: task.status,
+    kind: task.kind,
+    plan: task.plan,
+    outputArtifacts: task.outputArtifacts,
+  };
+}
+
+function parseJsonObjectFromText(
+  text: string,
+  options: { requireReviewerVerdict?: boolean } = {},
+): Record<string, unknown> {
+  const trimmed = text.trim();
+  if (!trimmed) throw new Error("reviewer verdict must be non-empty JSON");
+  let fallback: Record<string, unknown> | undefined;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (isRecord(parsed)) {
+      fallback = parsed;
+      const verdict = findReviewerVerdictRecord(parsed);
+      if (verdict) return verdict;
+    }
+  } catch {
+    // Fall through to JSON-object extraction for role output wrappers.
+  }
+  for (const objectText of extractJsonObjects(trimmed)) {
+    try {
+      const parsed = JSON.parse(objectText);
+      if (!isRecord(parsed)) continue;
+      fallback ??= parsed;
+      const verdict = findReviewerVerdictRecord(parsed);
+      if (verdict) return verdict;
+    } catch {
+      // Keep scanning later objects; role stdout can contain protocol JSON and text fragments.
+    }
+  }
+  if (fallback) {
+    if (options.requireReviewerVerdict)
+      throw new Error("reviewer output did not contain a verdict JSON object with outcome");
+    return fallback;
+  }
+  throw new Error("reviewer verdict must be a JSON object");
+}
+
+function findReviewerVerdictRecord(
+  record: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (typeof record.outcome === "string") return record;
+  for (const text of reviewerVerdictTextCandidates(record)) {
+    const found = findReviewerVerdictRecordInText(text);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function findReviewerVerdictRecordInText(text: string): Record<string, unknown> | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (isRecord(parsed)) {
+      const found = findReviewerVerdictRecord(parsed);
+      if (found) return found;
+    }
+  } catch {
+    // Continue with object extraction below.
+  }
+  for (const objectText of extractJsonObjects(trimmed)) {
+    try {
+      const parsed = JSON.parse(objectText);
+      if (!isRecord(parsed)) continue;
+      const found = findReviewerVerdictRecord(parsed);
+      if (found) return found;
+    } catch {
+      // Keep scanning; assistant content can include prose plus JSON.
+    }
+  }
+  return undefined;
+}
+
+function reviewerVerdictTextCandidates(record: Record<string, unknown>): string[] {
+  return [
+    assistantMessageText(record.message),
+    ...eventMessages(record).map(assistantMessageText),
+    assistantMessageText(record.assistantMessageEvent),
+  ].filter((value): value is string => Boolean(value));
+}
+
+function eventMessages(record: Record<string, unknown>): unknown[] {
+  return Array.isArray(record.messages) ? record.messages : [];
+}
+
+function assistantMessageText(message: unknown): string | undefined {
+  if (!isRecord(message)) return undefined;
+  const role = message.role;
+  if (role !== undefined && role !== "assistant") return undefined;
+  return messageContentText(message.content) ?? stringField(message, "text");
+}
+
+function messageContentText(content: unknown): string | undefined {
+  if (typeof content === "string") return content.trim() || undefined;
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .map((block) => {
+      if (!isRecord(block)) return "";
+      return block.type === "text" && typeof block.text === "string" ? block.text : "";
+    })
+    .join("")
+    .trim();
+  return text || undefined;
+}
+
+function extractJsonObjects(text: string): string[] {
+  const objects: string[] = [];
+  let searchFrom = 0;
+  while (searchFrom < text.length) {
+    const start = text.indexOf("{", searchFrom);
+    if (start < 0) break;
+    const end = findJsonObjectEnd(text, start);
+    if (end === undefined) {
+      searchFrom = start + 1;
+      continue;
+    }
+    objects.push(text.slice(start, end + 1));
+    searchFrom = end + 1;
+  }
+  return objects;
+}
+
+function findJsonObjectEnd(text: string, start: number): number | undefined {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return undefined;
+}
+
+function normalizeReviewOutcome(value: unknown): ReviewVerdictOutcome {
+  if (value === "approved" || value === "needs_changes" || value === "blocked") return value;
+  if (typeof value === "string") {
+    const normalized = value
+      .trim()
+      .toLowerCase()
+      .replace(/[\s-]+/gu, "_");
+    if (["approve", "approved", "accept", "accepted", "pass", "passed"].includes(normalized))
+      return "approved";
+    if (
+      [
+        "change_requested",
+        "changes_requested",
+        "need_changes",
+        "needs_change",
+        "needs_changes",
+        "not_approved",
+        "not_met",
+        "not_ready",
+        "reject",
+        "rejected",
+        "revise",
+        "revision_required",
+      ].includes(normalized)
+    )
+      return "needs_changes";
+    if (["block", "blocked", "blocking"].includes(normalized)) return "blocked";
+  }
+  throw new Error(
+    `reviewer verdict outcome must be approved, needs_changes, or blocked; got ${JSON.stringify(
+      value,
+    )}`,
+  );
+}
+
+function normalizeReviewConfidence(value: unknown): "low" | "medium" | "high" {
+  if (value === "low" || value === "medium" || value === "high") return value;
+  return "medium";
+}
+
+function defaultReviewSummary(outcome: ReviewVerdictOutcome): string {
+  if (outcome === "approved") return "review approved";
+  if (outcome === "needs_changes") return "review needs changes";
+  return "review blocked";
+}
+
+function stringField(record: Record<string, unknown>, field: string): string | undefined {
+  const value = record[field];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function stringArrayField(record: Record<string, unknown>, field: string): string[] {
+  const value = record[field];
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .map((item) => item.trim());
+}
+
+function parseBooleanField(record: Record<string, unknown>, field: string): boolean | undefined {
+  const value = record[field];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function parseBooleanAliasField(
+  record: Record<string, unknown>,
+  ...fields: string[]
+): boolean | undefined {
+  for (const field of fields) {
+    const value = parseBooleanField(record, field);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+export function reviewerInputFingerprint(input: ReviewInput): string {
+  return createHash("sha256").update(renderReviewerInstruction(input)).digest("hex");
+}

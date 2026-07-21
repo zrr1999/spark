@@ -109,6 +109,7 @@
       "@zendev-lab/spark-extension/host-support": [
         "./packages/spark-extension/src/host-support.ts"
       ],
+      "@zendev-lab/spark-roles/reviewer-runner": ["./packages/spark-roles/src/reviewer-runner.ts"],
       "@zendev-lab/spark-tui": ["./packages/spark-tui/src/index.ts"],
       "@zendev-lab/spark-tui/input": ["./packages/spark-tui/src/input.ts"],
       "@zendev-lab/spark-tui/pi-tui": ["./packages/spark-tui/src/pi-tui.ts"],

@@ -142,7 +142,7 @@ import type {
   ReviewInput,
   ReviewerRunResult,
   ReviewerRunner,
-} from "../packages/pi-extension/src/extension/reviewer-runner.ts";
+} from "../packages/spark-roles/src/reviewer-runner.ts";
 
 type SparkHostApiForTest = Parameters<typeof sparkExtension>[0];
 type SparkToolConfig = Parameters<NonNullable<SparkHostApiForTest["registerTool"]>>[0];

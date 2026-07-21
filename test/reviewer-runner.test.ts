@@ -21,7 +21,7 @@ import {
   reviewerInputFingerprint,
   type GoalReviewInput,
   type TaskReviewInput,
-} from "../packages/pi-extension/src/extension/reviewer-runner.ts";
+} from "../packages/spark-roles/src/reviewer-runner.ts";
 
 function reviewTaskInput(): TaskReviewInput {
   const graph = new TaskGraph();
