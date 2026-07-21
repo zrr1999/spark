@@ -44,6 +44,10 @@ const TEST_MODEL: Model = {
 
 import type { Message, ToolResultMessage } from "@zendev-lab/spark-turn";
 
+function messageContentText(content: unknown): string {
+  return typeof content === "string" ? content : (JSON.stringify(content) ?? "");
+}
+
 function asToolResult(message: Message | undefined): ToolResultMessage | undefined {
   return message?.role === "toolResult" ? message : undefined;
 }
@@ -55,7 +59,7 @@ function toolResultText(message: ToolResultMessage | undefined): string {
     : "";
 }
 
-function asAssistant(message: Message | undefined): AssistantMessage | undefined {
+function asAssistant(message: Message | undefined): { stopReason?: unknown } | undefined {
   return message?.role === "assistant" ? message : undefined;
 }
 
@@ -74,9 +78,10 @@ test("Spark prompt IR retains runtime authority until provider lowering", () => 
   assert.equal(item.visibility, "hidden");
   const lowered = lowerSparkPromptItem(item);
   assert.equal(lowered.role, "user");
-  assert.match(String(lowered.content), /<spark_runtime_data trust="untrusted"/u);
-  assert.match(String(lowered.content), /&lt;not-an-instruction&gt;/u);
-  assert.doesNotMatch(String(lowered.content), /page data <not-an-instruction>/u);
+  const loweredContent = messageContentText(lowered.content);
+  assert.match(loweredContent, /<spark_runtime_data trust="untrusted"/u);
+  assert.match(loweredContent, /&lt;not-an-instruction&gt;/u);
+  assert.doesNotMatch(loweredContent, /page data <not-an-instruction>/u);
 
   const developer = sparkRuntimePromptItem({
     authority: "developer",
@@ -85,14 +90,17 @@ test("Spark prompt IR retains runtime authority until provider lowering", () => 
     persistence: "session",
     content: "provider-neutral developer policy",
   });
-  assert.match(String(lowerSparkPromptItem(developer).content), /<spark_developer_context/u);
+  assert.match(
+    messageContentText(lowerSparkPromptItem(developer).content),
+    /<spark_developer_context/u,
+  );
   const replayedDeveloper = sparkPromptItemFromProviderMessage({
     role: "developer",
     content: "replayed developer policy",
   });
   const loweredDeveloper = lowerSparkPromptItem(replayedDeveloper);
   assert.equal(loweredDeveloper.role, "user");
-  assert.match(String(loweredDeveloper.content), /<spark_developer_context/u);
+  assert.match(messageContentText(loweredDeveloper.content), /<spark_developer_context/u);
 
   const mixedRuntimeData = sparkRuntimePromptItem({
     authority: "runtime_data",
@@ -104,7 +112,7 @@ test("Spark prompt IR retains runtime authority until provider lowering", () => 
       { type: "image", source: "browser://evidence" },
     ],
   });
-  const loweredMixed = String(lowerSparkPromptItem(mixedRuntimeData).content);
+  const loweredMixed = messageContentText(lowerSparkPromptItem(mixedRuntimeData).content);
   assert.match(loweredMixed, /browser caption/u);
   assert.match(loweredMixed, /"type":"image"/u);
   assert.match(loweredMixed, /browser:\/\/evidence/u);
@@ -2858,9 +2866,10 @@ test("SparkAgentLoop triggerTurn queues hidden custom messages without visible u
   assert.equal(loop.getState(), "idle");
   assert.equal(contextMessages.length, 1);
   assert.equal(contextMessages[0]?.role, "user");
-  assert.match(String(contextMessages[0]?.content), /<spark_runtime_control trust="trusted"/);
-  assert.match(String(contextMessages[0]?.content), /custom_type="spark-goal-request"/);
-  assert.match(String(contextMessages[0]?.content), /queued goal instruction/);
+  const contextContent = messageContentText(contextMessages[0]?.content);
+  assert.match(contextContent, /<spark_runtime_control trust="trusted"/);
+  assert.match(contextContent, /custom_type="spark-goal-request"/);
+  assert.match(contextContent, /queued goal instruction/);
   assert.match(JSON.stringify(loop.getMessages()), /spark-goal-request/);
   assert.equal(eventTypes.includes("user_message"), false);
 });
@@ -2894,7 +2903,10 @@ test("SparkAgentLoop defaults extension custom messages to untrusted runtime dat
   );
 
   await completed;
-  assert.match(String(contextMessages[0]?.content), /<spark_runtime_data trust="untrusted"/u);
+  assert.match(
+    messageContentText(contextMessages[0]?.content),
+    /<spark_runtime_data trust="untrusted"/u,
+  );
   const item = loop.getPromptItems().find((entry) => entry.customType === "spark-role-result");
   assert.equal(item?.authority, "runtime_data");
   assert.equal(item?.trust, "untrusted");
@@ -2936,8 +2948,9 @@ test("SparkAgentLoop retains nextTurn runtime data in its originating session", 
 
   assert.equal(contexts.length, 2);
   assert.equal(contexts[1]?.length, 2);
-  assert.match(String(contexts[1]?.[0]?.content), /spark-memory-checkpoint/u);
-  assert.match(String(contexts[1]?.[0]?.content), /checkpoint payload/u);
+  const checkpointContext = messageContentText(contexts[1]?.[0]?.content);
+  assert.match(checkpointContext, /spark-memory-checkpoint/u);
+  assert.match(checkpointContext, /checkpoint payload/u);
   assert.equal(contexts[1]?.[1]?.content, "session a prompt");
 });
 
@@ -3021,9 +3034,10 @@ test("SparkAgentLoop triggerTurn runs hidden before_agent_start context without 
   assert.equal(loop.getState(), "idle");
   assert.equal(contextMessages.length, 1);
   assert.equal(contextMessages[0]?.role, "user");
-  assert.match(String(contextMessages[0]?.content), /<spark_runtime_control trust="trusted"/);
-  assert.match(String(contextMessages[0]?.content), /custom_type="spark-mode-context"/);
-  assert.match(String(contextMessages[0]?.content), /hidden context payload/);
+  const contextContent = messageContentText(contextMessages[0]?.content);
+  assert.match(contextContent, /<spark_runtime_control trust="trusted"/);
+  assert.match(contextContent, /custom_type="spark-mode-context"/);
+  assert.match(contextContent, /hidden context payload/);
   assert.doesNotMatch(JSON.stringify(loop.getMessages()), /spark-goal-request/);
   assert.equal(eventTypes.includes("user_message"), false);
   assert.deepEqual(lifecycleSources, ["triggerTurn"]);
