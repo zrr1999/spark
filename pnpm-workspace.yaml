@@ -10,6 +10,9 @@ allowBuilds:
   protobufjs: true
 
 catalog:
+  "@orpc/client": "1.14.8"
+  "@orpc/contract": "1.14.8"
+  "@orpc/server": "1.14.8"
   "@stryker-mutator/core": "9.6.1"
   "@stryker-mutator/vitest-runner": "9.6.1"
   "@types/ws": "^8.18.1"

@@ -13,6 +13,7 @@ export * from "./errors.ts";
 export * from "./host-events.ts";
 export * from "./human-interaction.ts";
 export * from "./invocation-lifecycle.ts";
+export * from "./local-rpc-orpc-contract.ts";
 export * from "./model-control.ts";
 export * from "./model-control-client.ts";
 export * from "./refs.ts";
