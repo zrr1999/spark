@@ -26,6 +26,7 @@ const PREFERRED_ARG_KEYS = [
   "title",
   "status",
   "mode",
+  "phase",
   "view",
 ] as const;
 

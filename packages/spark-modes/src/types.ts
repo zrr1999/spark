@@ -1,14 +1,18 @@
 /**
- * Core types for the per-turn operating mode (lens) mechanism.
+ * Core types for the per-turn operating lens mechanism.
  *
- * A **mode** is a host-defined per-turn operating value. Spark uses mode for
- * the derived drive family (`assist | loop | goal | repro | workflow`) and keeps
- * `plan | implement` as the separate session phase/lens axis.
+ * This package uses the generic name **mode** for host-defined lens ids. Spark
+ * native hosts expose the public tool as `phase` (`plan | implement`) because
+ * session operating phase is the durable axis; the package itself stays host-
+ * neutral and defaults tool descriptors to `mode` unless the host overrides
+ * `createModeTool({ name: "phase", label: "Phase" })`.
  *
- * A **driver** is what propels the current turn. It owns any durable state in
- * its own domain package (goal objective lives in a goal package, workflow run
- * state in a workflow package). `assist` is the first-class default and is
- * never `undefined`.
+ * Separately, Spark uses a **driver** axis (`assist | loop | goal | repro |
+ * workflow`) for what propels the current turn.
+ *
+ * A **driver** owns durable state in its domain package (goal objective lives
+ * in a goal package, workflow run state in a workflow package). `assist` is the
+ * first-class default and is never `undefined`.
  *
  * This package is pure mechanism: it never imports goal, workflow, or role
  * packages. Hosts wire those concepts in through the driver axis.

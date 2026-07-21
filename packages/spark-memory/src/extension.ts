@@ -76,6 +76,12 @@ export interface SparkMemoryToolOptions {
   storePaths?: SparkMemoryStorePaths;
   compatMemoryDir?: string;
   recallStorePaths?: RecallStorePaths;
+  /**
+   * Register Pi-memory compatibility aliases
+   * (`memory_write`, `memory_read`, `scratchpad`, `memory_search`, `memory_status`).
+   * Default `false` (Spark native hosts). Pi product entry enables this explicitly.
+   */
+  enablePiCompatAliases?: boolean;
   /** @internal Test/host seam for the asynchronous post-compact pipeline. */
   runCompactionCandidatePipeline?: (
     options: SparkCompactionCandidatePipelineOptions,
@@ -112,11 +118,13 @@ export function registerSparkMemoryTool(
   options: SparkMemoryToolOptions = {},
 ): void {
   registerIfAvailable(pi, memoryTool(options));
-  registerIfAvailable(pi, memoryWriteTool(options));
-  registerIfAvailable(pi, memoryReadTool(options));
-  registerIfAvailable(pi, scratchpadTool(options));
-  registerIfAvailable(pi, memorySearchTool(options));
-  registerIfAvailable(pi, memoryStatusTool(options));
+  if (options.enablePiCompatAliases) {
+    registerIfAvailable(pi, memoryWriteTool(options));
+    registerIfAvailable(pi, memoryReadTool(options));
+    registerIfAvailable(pi, scratchpadTool(options));
+    registerIfAvailable(pi, memorySearchTool(options));
+    registerIfAvailable(pi, memoryStatusTool(options));
+  }
 }
 
 type RegisteredToolInspection =
