@@ -7,7 +7,7 @@ import {
   type RoleRegistry,
   type RoleSpec,
 } from "@zendev-lab/spark-roles";
-import type { RoleRef, ProjectRef } from "@zendev-lab/spark-extension-api";
+import type { RoleRef, ProjectRef } from "@zendev-lab/spark-core";
 import { sparkTaskExecutorRoleRef } from "@zendev-lab/spark-runtime";
 import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import { sessionModelName } from "./session-model.ts";

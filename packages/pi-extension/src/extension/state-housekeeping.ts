@@ -1,6 +1,6 @@
 import { join, relative } from "node:path";
 
-import { nowIso } from "@zendev-lab/spark-extension-api";
+import { nowIso } from "@zendev-lab/spark-core";
 import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import {
   collectSparkProtectedStoreSummaries,

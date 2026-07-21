@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { test } from "vitest";
 
 import {
   listSparkWorkflowRegistry,
@@ -11,7 +11,7 @@ import {
   workspaceWorkflowDir,
 } from "../packages/pi-extension/src/extension/spark-workflow-registry.ts";
 
-void test("Spark workflow registry lists workspace and user workflows", async () => {
+test("Spark workflow registry lists workspace and user workflows", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "spark-workflow-registry-"));
   const userDir = await mkdtemp(join(tmpdir(), "spark-user-workflows-"));
   await mkdir(workspaceWorkflowDir(cwd), { recursive: true });
@@ -54,7 +54,7 @@ void test("Spark workflow registry lists workspace and user workflows", async ()
   assert.deepEqual(workspace?.phases, ["Inspect", "Verify"]);
 });
 
-void test("Spark workflow registry exposes stable source/ref helpers", () => {
+test("Spark workflow registry exposes stable source/ref helpers", () => {
   assert.equal(sparkWorkflowRef("builtin", "research"), "workflow:builtin-research");
   assert.equal(sparkWorkflowRef("workspace", "deep_research"), "workflow:workspace-deep-research");
   assert.match(userWorkflowDir(), /\.agents\/workflows$/);

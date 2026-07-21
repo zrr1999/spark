@@ -3,7 +3,7 @@ import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
 import {
   DEFAULT_READY_TASK_MAX_CONCURRENCY,
   DEFAULT_READY_TASK_TIMEOUT_MS,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import { runReadyTasks } from "@zendev-lab/spark-workflows";
 import { defaultTaskGraphStore } from "@zendev-lab/spark-tasks";
 import { ensureRoleModelSettingsForProject } from "./role-model-settings.ts";

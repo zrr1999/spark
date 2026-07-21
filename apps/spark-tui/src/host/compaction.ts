@@ -535,10 +535,36 @@ export function prepareSparkCompaction(
   record: SparkSessionRecord,
   leafId: string | null = getSparkSessionLeafId(record),
   settings: SparkCompactionSettings = DEFAULT_SPARK_COMPACTION_SETTINGS,
+  options: { allowCompactionLeaf?: boolean } = {},
 ): SparkCompactionPreparation | undefined {
   const pathEntries = getSparkSessionBranch(record, leafId);
   if (pathEntries.length === 0) return undefined;
-  if (pathEntries.at(-1)?.type === "compaction") return undefined;
+  const leaf = pathEntries.at(-1);
+  if (leaf?.type === "compaction") {
+    if (options.allowCompactionLeaf !== true) return undefined;
+    const summaryMessage: SparkSessionMessage = {
+      role: "compactionSummary",
+      summary: leaf.summary,
+    };
+    const replayMessages: SparkSessionMessage[] = [summaryMessage];
+    if (
+      leaf.summary.includes("No prior history to summarize.") ||
+      estimateSparkContextTokens(replayMessages).tokens >=
+        estimateSparkContextTokens(entriesToMessages(pathEntries)).tokens
+    ) {
+      return undefined;
+    }
+    return {
+      firstKeptEntryId: leaf.id,
+      messagesToSummarize: replayMessages,
+      turnPrefixMessages: [],
+      isSplitTurn: false,
+      tokensBefore: estimateSparkContextTokens([...entriesToMessages(pathEntries), summaryMessage])
+        .tokens,
+      previousSummary: undefined,
+      settings,
+    };
+  }
 
   const prevCompactionIndex = findLastIndex(pathEntries, (entry) => entry.type === "compaction");
   const previousSummary =
@@ -666,9 +692,10 @@ export function deterministicSparkCompactionSummary(
   if (customInstructions?.trim()) {
     sections.push(`Custom focus: ${customInstructions.trim()}`);
   }
+  const summaryBudget = repeatedCompactionSummaryBudget(preparation);
   const summarized = summarizeSparkMessagesWithinBudget(
     preparation.messagesToSummarize,
-    MAX_DETERMINISTIC_COMPACTION_SUMMARY_CHARS,
+    summaryBudget,
   );
   sections.push(
     summarized.length > 0
@@ -827,6 +854,19 @@ function getCompactionKeptMessages(
     if (foundFirstKept && entry.type === "message") kept.push(entry);
   }
   return entriesToMessages(kept);
+}
+
+function repeatedCompactionSummaryBudget(preparation: SparkCompactionPreparation): number {
+  if (
+    preparation.previousSummary !== undefined ||
+    preparation.messagesToSummarize.length !== 1 ||
+    preparation.messagesToSummarize[0]?.role !== "compactionSummary"
+  ) {
+    return MAX_DETERMINISTIC_COMPACTION_SUMMARY_CHARS;
+  }
+  const sourceChars = extractMessageText(preparation.messagesToSummarize[0]).length;
+  const retainedRatio = Math.max(0, 1 - preparation.settings.targetReduction);
+  return Math.max(1, Math.floor(sourceChars * retainedRatio) - 64);
 }
 
 function deterministicSparkBranchSummary(

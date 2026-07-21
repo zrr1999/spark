@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 import { defaultSparkDynamicWorkflowEventStore } from "./spark-dynamic-workflow-event-store.ts";
 import { defaultTaskGraphStore, type TaskGraph } from "@zendev-lab/spark-tasks";
-import type { Project, ProjectRef, Task } from "@zendev-lab/spark-extension-api";
+import type { Project, ProjectRef, Task } from "@zendev-lab/spark-core";
 import { reconcileSparkWorkflowRunsWithActiveProcesses } from "./background-runs.ts";
 import { collectRecentRoleRunCompletions } from "./role-run-completions.ts";
 import {

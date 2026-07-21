@@ -118,13 +118,11 @@ const TOOL_OUTPUT_PROFILE_RULES: readonly ToolOutputProfileRule[] = [
       "graft_validate",
       "graft_write",
       "grep",
-      "learning",
       "loop",
       "memory",
       "ls",
       "models",
       "phase",
-      "recall",
       "role",
       "task_read",
       "task_write",
@@ -145,7 +143,7 @@ export const TOOL_RESULT_RAW_RECOVERY_MIN_OMITTED_CHARS = 1_000;
 export const TOOL_RESULT_RAW_RECOVERY_ERROR_MIN_ORIGINAL_CHARS = 1_000;
 
 const STRUCTURED_EXACT_ACTIONS = new Set(["read", "preview"]);
-const STRUCTURED_ACTION_TOOLS = new Set(["artifact", "learning", "context"]);
+const STRUCTURED_ACTION_TOOLS = new Set(["artifact", "memory", "context"]);
 const VALID_COMPACTION_LEVELS = new Set<SparkToolOutputCompactionLevel>([
   "off",
   "lite",

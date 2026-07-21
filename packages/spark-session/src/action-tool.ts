@@ -192,14 +192,38 @@ export async function executeSparkSessionAction(
       });
     }
     case "send": {
+      const kind = normalizeMailKind(params.kind);
+      const wait = normalizeSendWait(params.wait);
+      const continuationInvocationId = optionalString(params.invocationId, "invocationId");
+      if (continuationInvocationId) {
+        if (kind !== "request" || wait !== "completed") {
+          throw new Error("session continuation requires kind=request and wait=completed");
+        }
+        const timeoutMs = normalizeRequestTimeoutMs(params.timeoutMs);
+        const completion = await waitForRequestResult({
+          request,
+          invocationId: continuationInvocationId,
+          timeoutMs,
+          signal,
+          sleep: deps.sleep,
+          now: deps.now,
+        });
+        return completedRequestResult({
+          action,
+          sent: undefined,
+          targetSession: undefined,
+          submitted: undefined,
+          invocationId: continuationInvocationId,
+          timeoutMs,
+          completion,
+        });
+      }
       const current = await requireCurrentSessionId(ctx, action);
       const toSessionId = requiredString(
         params.toSessionId ?? params.sessionId,
         "session send requires toSessionId",
       );
       if (toSessionId === current) throw new Error("session send must target a different session");
-      const kind = normalizeMailKind(params.kind);
-      const wait = normalizeSendWait(params.wait);
       if (kind === "notification" && wait === "completed") {
         throw new Error("session notification cannot wait for completion");
       }
@@ -254,7 +278,26 @@ export async function executeSparkSessionAction(
         subject: optionalString(params.subject, "subject"),
         body: message,
         ...(kind === "request" && ctx.sessionSurface === "channel" && ctx.channelBinding
-          ? { originBinding: ctx.channelBinding }
+          ? {
+              originBinding: {
+                workspaceId: requiredString(
+                  ctx.channelBinding.workspaceId,
+                  "originating channel request requires workspaceId",
+                ),
+                adapter: ctx.channelBinding.adapter,
+                externalKey: ctx.channelBinding.externalKey,
+                recipient: requiredString(
+                  ctx.channelBinding.recipient,
+                  "originating channel request requires recipient",
+                ),
+                ...(ctx.channelBinding.adapterId
+                  ? { adapterId: ctx.channelBinding.adapterId }
+                  : {}),
+                ...(ctx.channelBinding.adapterAccountIdentity
+                  ? { adapterAccountIdentity: ctx.channelBinding.adapterAccountIdentity }
+                  : {}),
+              },
+            }
           : {}),
         source: "tool",
       });
@@ -838,12 +881,12 @@ function sessionOriginMessageMetadata(
 
 function turnOriginBinding(
   binding: SparkSessionMailMessage["originBinding"],
-  ctx: SparkSessionToolContext,
+  _ctx: SparkSessionToolContext,
 ): { originBinding: Record<string, string> } | undefined {
   if (!binding) return undefined;
-  const workspaceId = ctx.channelBinding?.workspaceId?.trim();
+  const workspaceId = binding.workspaceId.trim();
   const adapterId = binding.adapterId?.trim();
-  const recipient = ctx.channelBinding?.recipient?.trim();
+  const recipient = binding.recipient.trim();
   if (!workspaceId || !adapterId || !recipient) {
     throw new Error(
       "originating channel request requires immutable workspaceId, adapterId, and recipient",
@@ -945,28 +988,32 @@ async function waitForRequestResult(input: {
 
 function completedRequestResult(input: {
   action: "send";
-  sent: Awaited<ReturnType<SparkSessionMailStore["send"]>>;
-  targetSession: SparkSessionRegistryRecord;
-  submitted: SparkTurnSubmitResult;
+  sent?: Awaited<ReturnType<SparkSessionMailStore["send"]>>;
+  targetSession?: SparkSessionRegistryRecord;
+  submitted?: SparkTurnSubmitResult;
   invocationId: string;
   timeoutMs: number;
   completion: RequestCompletion;
 }) {
   const common = {
     action: input.action,
-    message: withMailStatus(input.sent.message),
-    filePath: input.sent.path,
-    created: input.sent.created,
+    ...(input.sent
+      ? {
+          message: withMailStatus(input.sent.message),
+          filePath: input.sent.path,
+          created: input.sent.created,
+        }
+      : {}),
     executionTriggered: true,
     blocking: true,
-    target: projectSession(input.targetSession),
+    ...(input.targetSession ? { target: projectSession(input.targetSession) } : {}),
     invocationId: input.invocationId,
     timeoutMs: input.timeoutMs,
-    submitted: input.submitted,
+    ...(input.submitted ? { submitted: input.submitted } : {}),
   };
   if (input.completion.timedOut) {
     return sessionResult(
-      `Request ${input.sent.message.id} is still ${input.completion.status.status}; stopped waiting after ${input.timeoutMs}ms. Invocation ${input.invocationId} continues asynchronously.`,
+      `Request ${input.sent?.message.id ?? input.invocationId} is still ${input.completion.status.status}; stopped waiting after ${input.timeoutMs}ms. Invocation ${input.invocationId} continues asynchronously.`,
       {
         ...common,
         waitTimedOut: true,

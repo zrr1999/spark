@@ -415,6 +415,14 @@ export interface AttachSparkWorkspaceClientOptions {
   leaseTtlMs?: number;
   heartbeatIntervalMs?: number | false;
   metadata?: Record<string, unknown>;
+  /** Called when a lease-transfer consent request appears for this workspace. */
+  onLeaseTransferPrompt?: (transfer: {
+    transferId: string;
+    workspaceDisplayName: string;
+    targetServerUrl: string;
+    previousServerUrl: string;
+    expiresAt: string;
+  }) => void | Promise<"accept" | "reject" | void>;
 }
 
 export interface SparkDaemonCliCommandBase {
@@ -1361,12 +1369,14 @@ export async function attachSparkWorkspaceClient(
   );
   let released = false;
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  let transferPollTimer: ReturnType<typeof setInterval> | undefined;
   const heartbeat = async () =>
     await clientWorkspaceClientHeartbeat({ clientId: attached.client.id, leaseTtlMs }, client);
   const release = async () => {
     if (released) return null;
     released = true;
     if (heartbeatTimer) clearInterval(heartbeatTimer);
+    if (transferPollTimer) clearInterval(transferPollTimer);
     return await clientWorkspaceClientRelease({ clientId: attached.client.id }, client);
   };
 
@@ -1376,6 +1386,52 @@ export async function attachSparkWorkspaceClient(
       void heartbeat().catch(() => undefined);
     }, heartbeatIntervalMs);
     heartbeatTimer.unref?.();
+  }
+
+  const promptedTransfers = new Set<string>();
+  if (options.kind === "interactive" && options.onLeaseTransferPrompt) {
+    const paths = resolveSparkDaemonClientPaths(client);
+    const pollTransfer = async () => {
+      try {
+        const result = await localRpcRequest<{
+          pending: Array<Record<string, unknown>>;
+          observedAt: string;
+        }>(paths, localRpcWireRequest("workspace.transfer.pending", { workspaceId: workspace.id }));
+        for (const item of result.pending ?? []) {
+          const transferId = typeof item.transferId === "string" ? item.transferId : null;
+          if (!transferId || promptedTransfers.has(transferId)) continue;
+          promptedTransfers.add(transferId);
+          const decision = await options.onLeaseTransferPrompt?.({
+            transferId,
+            workspaceDisplayName:
+              typeof item.workspaceDisplayName === "string"
+                ? item.workspaceDisplayName
+                : workspace.displayName,
+            targetServerUrl: typeof item.targetServerUrl === "string" ? item.targetServerUrl : "",
+            previousServerUrl:
+              typeof item.previousServerUrl === "string" ? item.previousServerUrl : "",
+            expiresAt: typeof item.expiresAt === "string" ? item.expiresAt : "",
+          });
+          if (decision === "accept" || decision === "reject") {
+            await localRpcRequest(
+              paths,
+              localRpcWireRequest("workspace.transfer.respond", {
+                transferId,
+                decision,
+                source: "tui",
+              }),
+            );
+          }
+        }
+      } catch {
+        // Transfer polling is best-effort; lease TTL still protects occupancy.
+      }
+    };
+    transferPollTimer = setInterval(() => {
+      void pollTransfer();
+    }, 2_000);
+    transferPollTimer.unref?.();
+    void pollTransfer();
   }
 
   return { client: attached.client, workspace: attached.workspace, heartbeat, release };

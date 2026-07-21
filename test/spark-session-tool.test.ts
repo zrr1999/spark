@@ -2,19 +2,19 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
-import type { ToolConfig } from "@zendev-lab/spark-extension-api";
+import type { ToolConfig } from "@zendev-lab/spark-core";
 import { SparkSessionMailStore, sanitizeSessionMailScope } from "@zendev-lab/spark-session";
 import type { SparkSessionRegistryRecord } from "@zendev-lab/spark-protocol";
-import { registerPiSessionTool } from "../packages/spark-session/src/extension.ts";
+import { registerSparkSessionTool } from "../packages/spark-session/src/extension.ts";
 import type { SparkSessionToolContext } from "../packages/spark-session/src/action-tool.ts";
 
 const NOW = "2026-07-13T00:00:00.000Z";
 
 type SessionToolResult = Awaited<ReturnType<ToolConfig["execute"]>>;
 
-void test("session tool exposes persistent lifecycle, calls, classification, and mail", () => {
+test("session tool exposes persistent lifecycle, calls, classification, and mail", () => {
   const tool = registerTestTool({
     request: async () => assert.fail("request should not run during registration"),
     mailStore: () => assert.fail("mail store should not run during registration"),
@@ -47,7 +47,7 @@ void test("session tool exposes persistent lifecycle, calls, classification, and
   assert.doesNotMatch(prompt, /runtime-ops|verifier/u);
 });
 
-void test("session tool routes managed actions through daemon RPC and classifies surfaces", async () => {
+test("session tool routes managed actions through daemon RPC and classifies surfaces", async () => {
   const calls: Array<{ method: string; params: unknown }> = [];
   const records = new Map<string, SparkSessionRegistryRecord>([
     ["session:a", sessionRecord("session:a")],
@@ -221,7 +221,7 @@ void test("session tool routes managed actions through daemon RPC and classifies
   );
 });
 
-void test("channel sessions can inspect same-workspace local and channel sessions", async () => {
+test("channel sessions can inspect same-workspace local and channel sessions", async () => {
   const channelCurrent: SparkSessionRegistryRecord = {
     ...sessionRecord("session:channel"),
     bindings: [
@@ -321,7 +321,7 @@ void test("channel sessions can inspect same-workspace local and channel session
   }
 });
 
-void test("session call uses daemon turn.submit for persistent continuity", async () => {
+test("session call uses daemon turn.submit for persistent continuity", async () => {
   const calls: Array<{ method: string; params: unknown }> = [];
   const request = async <T>(method: string, params?: unknown): Promise<T> => {
     calls.push({ method, params });
@@ -398,7 +398,7 @@ void test("session call uses daemon turn.submit for persistent continuity", asyn
   );
 });
 
-void test("session request queues the original message with hidden sender metadata", async () => {
+test("session request queues the original message with hidden sender metadata", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-request-tool-"));
   try {
     const mailStore = new SparkSessionMailStore({ sparkHome: dir, now: () => Date.parse(NOW) });
@@ -550,7 +550,7 @@ void test("session request queues the original message with hidden sender metada
   }
 });
 
-void test("session request blocks for success and preserves causal invocation metadata", async () => {
+test("session request blocks for success and preserves causal invocation metadata", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-request-success-"));
   try {
     const mailStore = new SparkSessionMailStore({ sparkHome: dir });
@@ -665,7 +665,7 @@ void test("session request blocks for success and preserves causal invocation me
   }
 });
 
-void test("session request reports terminal failure without retrying or throwing", async () => {
+test("session request reports terminal failure without retrying or throwing", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-request-failure-"));
   try {
     const mailStore = new SparkSessionMailStore({ sparkHome: dir });
@@ -725,7 +725,7 @@ void test("session request reports terminal failure without retrying or throwing
   }
 });
 
-void test("session request timeout stops only the sender wait", async () => {
+test("session request timeout stops only the sender wait", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-request-timeout-"));
   try {
     const mailStore = new SparkSessionMailStore({ sparkHome: dir });
@@ -806,7 +806,7 @@ void test("session request timeout stops only the sender wait", async () => {
   }
 });
 
-void test("session request preserves durable recovery data when queue acceptance fails", async () => {
+test("session request preserves durable recovery data when queue acceptance fails", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-request-failure-"));
   try {
     const mailStore = new SparkSessionMailStore({ sparkHome: dir });
@@ -843,7 +843,7 @@ void test("session request preserves durable recovery data when queue acceptance
   }
 });
 
-void test("channel sessions may request work only from local sessions in their workspace", async () => {
+test("channel sessions may request work only from local sessions in their workspace", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-channel-request-"));
   try {
     const mailStore = new SparkSessionMailStore({ sparkHome: dir });
@@ -912,7 +912,7 @@ void test("channel sessions may request work only from local sessions in their w
   }
 });
 
-void test("session send rejects the removed question mode", async () => {
+test("session send rejects the removed question mode", async () => {
   const tool = registerTestTool({
     request: async () => assert.fail("question rejection must happen before daemon RPC"),
     mailStore: () => assert.fail("question rejection must happen before mailbox writes"),
@@ -929,7 +929,7 @@ void test("session send rejects the removed question mode", async () => {
     /session kind must be request or notification/u,
   );
 });
-void test("session mail uses the host Spark state root", async () => {
+test("session mail uses the host Spark state root", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-state-root-"));
   try {
     const tool = registerTestTool({
@@ -962,7 +962,7 @@ void test("session mail uses the host Spark state root", async () => {
   }
 });
 
-void test("session inbox is current-session private and supports read and ack", async () => {
+test("session inbox is current-session private and supports read and ack", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-inbox-tool-"));
   try {
     const mailStore = new SparkSessionMailStore({ sparkHome: dir });
@@ -1010,7 +1010,7 @@ void test("session inbox is current-session private and supports read and ack", 
   }
 });
 
-void test("session mailbox paths isolate ids that collide under the legacy sanitizer", async () => {
+test("session mailbox paths isolate ids that collide under the legacy sanitizer", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-mail-paths-"));
   try {
     const store = new SparkSessionMailStore({ sparkHome: dir });
@@ -1038,7 +1038,7 @@ void test("session mailbox paths isolate ids that collide under the legacy sanit
   }
 });
 
-void test("session mailbox reads and migrates legacy v1 paths", async () => {
+test("session mailbox reads and migrates legacy v1 paths", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-mail-legacy-"));
   try {
     const sessionId = "session:legacy";
@@ -1079,7 +1079,7 @@ void test("session mailbox reads and migrates legacy v1 paths", async () => {
   }
 });
 
-void test("session mailbox serializes concurrent sends without losing messages", async () => {
+test("session mailbox serializes concurrent sends without losing messages", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-mail-concurrency-"));
   try {
     const store = new SparkSessionMailStore({ sparkHome: dir });
@@ -1104,10 +1104,10 @@ void test("session mailbox serializes concurrent sends without losing messages",
 });
 
 function registerTestTool(
-  deps: NonNullable<Parameters<typeof registerPiSessionTool>[1]>["deps"],
+  deps: NonNullable<Parameters<typeof registerSparkSessionTool>[1]>["deps"],
 ): ToolConfig {
   const tools = new Map<string, ToolConfig>();
-  registerPiSessionTool(
+  registerSparkSessionTool(
     { registerTool: (config) => tools.set(config.name, config as ToolConfig) },
     { deps },
   );

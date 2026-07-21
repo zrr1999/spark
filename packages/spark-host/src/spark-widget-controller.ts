@@ -1,4 +1,4 @@
-import type { ProjectRef, Task } from "@zendev-lab/spark-extension-api";
+import type { ProjectRef, Task } from "@zendev-lab/spark-core";
 import { isReproRequirementSatisfied, type SparkReproRequirement } from "@zendev-lab/spark-repro";
 import type { WorkflowRunStatusSummary } from "@zendev-lab/spark-workflows";
 import type { SessionTodoEntry } from "@zendev-lab/spark-tasks";

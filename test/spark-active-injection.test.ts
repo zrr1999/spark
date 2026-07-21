@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
 import { TaskGraph, defaultTaskGraphStore } from "@zendev-lab/spark-tasks";
@@ -51,7 +51,7 @@ async function withActiveSparkInputProject<T>(
   }
 }
 
-void test("injectSparkHints injects default plan lens without initialized Spark graph", async () => {
+test("injectSparkHints injects default plan lens without initialized Spark graph", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-active-input-no-graph-"));
   try {
     const ctx = testSparkInputContext(dir);
@@ -71,7 +71,7 @@ void test("injectSparkHints injects default plan lens without initialized Spark 
   }
 });
 
-void test("handleSparkInput lets an ordinary investigation request continue in plan", async () => {
+test("handleSparkInput lets an ordinary investigation request continue in plan", async () => {
   await withActiveSparkInputProject(
     async ({ dir, ctx, router, customMessages, queuedInstructions }) => {
       const result = await handleSparkInput(
@@ -90,7 +90,7 @@ void test("handleSparkInput lets an ordinary investigation request continue in p
   );
 });
 
-void test("handleSparkInput does not turn until-done input into a template ask", async () => {
+test("handleSparkInput does not turn until-done input into a template ask", async () => {
   await withActiveSparkInputProject(
     async ({ dir, ctx, router, customMessages, queuedInstructions }) => {
       const result = await handleSparkInput(
@@ -109,7 +109,7 @@ void test("handleSparkInput does not turn until-done input into a template ask",
   );
 });
 
-void test("handleSparkInput lets active goal input bypass phase route ask", async () => {
+test("handleSparkInput lets active goal input bypass phase route ask", async () => {
   await withActiveSparkInputProject(
     async ({ dir, ctx, router, customMessages, queuedInstructions }) => {
       await setSessionGoal(dir, ctx, {
@@ -134,7 +134,7 @@ void test("handleSparkInput lets active goal input bypass phase route ask", asyn
   );
 });
 
-void test("analyzeSparkEntryMode treats stack-trace bugfix with no tasks as planning work", () => {
+test("analyzeSparkEntryMode treats stack-trace bugfix with no tasks as planning work", () => {
   const graph = new TaskGraph();
   const project = graph.createProject({
     title: "Stack trace project",
@@ -159,7 +159,7 @@ void test("analyzeSparkEntryMode treats stack-trace bugfix with no tasks as plan
   assert.match(analysis.reasons.join("\n"), /no pending\/ready project task exists/);
 });
 
-void test("research, inspect, review, and audit signals resolve directly to plan", () => {
+test("research, inspect, review, and audit signals resolve directly to plan", () => {
   const graph = new TaskGraph();
   const project = graph.createProject({
     title: "Merged plan project",
@@ -182,7 +182,7 @@ void test("research, inspect, review, and audit signals resolve directly to plan
   }
 });
 
-void test("automatic plan policy keeps ordinary investigation free of durable writes", () => {
+test("automatic plan policy keeps ordinary investigation free of durable writes", () => {
   const graph = new TaskGraph();
   const project = graph.createProject({
     title: "Read-only plan project",
@@ -203,7 +203,7 @@ void test("automatic plan policy keeps ordinary investigation free of durable wr
   assert.match(prompt, /create or revise durable project state only when/u);
 });
 
-void test("handleSparkInput lets slash commands bypass default plan routing", async () => {
+test("handleSparkInput lets slash commands bypass default plan routing", async () => {
   await withActiveSparkInputProject(
     async ({ dir, ctx, router, customMessages, queuedInstructions }) => {
       ctx.selectedPrefix = "Research";

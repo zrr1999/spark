@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { ArtifactStore } from "@zendev-lab/spark-artifacts";
 import {
@@ -11,18 +11,18 @@ import {
   LearningStore,
   parseLearningExportMarkdown,
   renderLearningExportMarkdown,
-} from "@zendev-lab/spark-learnings";
-import { newRef } from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-memory";
+import { newRef } from "@zendev-lab/spark-core";
 
-void test("learning store records active learnings and searches by content", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-learnings-"));
+test("learning store records active learnings and searches by content", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-memory-learning-"));
   try {
     const store = new LearningStore({ artifactStore: new ArtifactStore({ rootDir: dir }) });
     const evidenceRef = newRef("artifact", "evidence-plan");
     const recorded = await store.record({
       title: "Prefer explicit export for shared knowledge",
       statement:
-        "Spark learnings live in .learnings locally and can be shared through explicit exports.",
+        "Spark learnings live in .spark/memory/learnings locally and can be shared through explicit exports.",
       category: "decision",
       applicability: "When persisting Spark learning artifacts for a repository.",
       evidenceRefs: [evidenceRef],
@@ -33,7 +33,7 @@ void test("learning store records active learnings and searches by content", asy
     assert.equal(recorded.kind, "knowledge");
     assert.equal(recorded.body.status, "active");
     assert.equal(recorded.provenance.producer, "task");
-    assert.match(recorded.provenance.note ?? "", /spark-learnings record/);
+    assert.match(recorded.provenance.note ?? "", /spark-memory learning record/);
     assert.deepEqual(
       recorded.links.map((link) => link.to),
       [evidenceRef],
@@ -49,8 +49,8 @@ void test("learning store records active learnings and searches by content", asy
   }
 });
 
-void test("learning store hydrates compacted artifact metadata for list and search", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-learnings-compacted-"));
+test("learning store hydrates compacted artifact metadata for list and search", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-memory-learning-compacted-"));
   try {
     const store = new LearningStore({
       artifactStore: new ArtifactStore({ rootDir: dir, inlineBodyThresholdBytes: 64 }),
@@ -72,9 +72,9 @@ void test("learning store hydrates compacted artifact metadata for list and sear
   }
 });
 
-void test("learning store skips malformed persisted learning artifacts with diagnostics", async () => {
-  const malformedDir = await mkdtemp(join(tmpdir(), "spark-learnings-malformed-"));
-  const mismatchDir = await mkdtemp(join(tmpdir(), "spark-learnings-kind-mismatch-"));
+test("learning store skips malformed persisted learning artifacts with diagnostics", async () => {
+  const malformedDir = await mkdtemp(join(tmpdir(), "spark-memory-learning-malformed-"));
+  const mismatchDir = await mkdtemp(join(tmpdir(), "spark-memory-learning-kind-mismatch-"));
   try {
     const malformedArtifactStore = new ArtifactStore({ rootDir: malformedDir });
     const malformedStore = new LearningStore({ artifactStore: malformedArtifactStore });
@@ -164,8 +164,8 @@ void test("learning store skips malformed persisted learning artifacts with diag
   }
 });
 
-void test("learning export markdown round-trips and rejects malformed blocks", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-learnings-export-format-"));
+test("learning export markdown round-trips and rejects malformed blocks", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-memory-learning-export-format-"));
   try {
     const store = new LearningStore({ artifactStore: new ArtifactStore({ rootDir: dir }) });
     const recorded = await store.record({
@@ -225,8 +225,8 @@ void test("learning export markdown round-trips and rejects malformed blocks", a
   }
 });
 
-void test("learning store keeps candidates out of default active recall", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-learnings-candidate-"));
+test("learning store keeps candidates out of default active recall", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-memory-learning-candidate-"));
   try {
     const store = new LearningStore({ artifactStore: new ArtifactStore({ rootDir: dir }) });
     const candidate = await store.record({
@@ -254,13 +254,13 @@ void test("learning store keeps candidates out of default active recall", async 
   }
 });
 
-void test("repository gitignore keeps local .learnings stores untracked", async () => {
+test("repository gitignore keeps local .spark stores untracked", async () => {
   const gitignore = await readFile(join(process.cwd(), ".gitignore"), "utf8");
-  assert.match(gitignore, /^\.learnings\/$/m);
+  assert.match(gitignore, /^\.spark\/$/m);
 });
 
-void test("default learning store writes to .learnings outside git workspaces", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-learnings-location-"));
+test("default learning store writes to .spark/memory/learnings outside git workspaces", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-memory-learning-location-"));
   try {
     const store = defaultLearningStore(dir);
     assert.equal(store.location, "workspace");
@@ -269,14 +269,18 @@ void test("default learning store writes to .learnings outside git workspaces", 
       title: "Location-derived learning store",
       statement: "Learning storage location is derived from the store path.",
     });
-    assert.ok((await stat(join(dir, ".learnings", "learning-location-path.json"))).isFile());
+    assert.ok(
+      (
+        await stat(join(dir, ".spark", "memory", "learnings", "learning-location-path.json"))
+      ).isFile(),
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-void test("default learning store treats git workspaces as repo learnings", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-learnings-repo-location-"));
+test("default learning store treats git workspaces as repo learnings", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-memory-learning-repo-location-"));
   try {
     await mkdir(join(dir, ".git"));
     const store = defaultLearningStore(join(dir, "subdir"));
@@ -286,17 +290,21 @@ void test("default learning store treats git workspaces as repo learnings", asyn
       title: "Repo learning store",
       statement: "Git workspace learnings are repo learnings.",
     });
-    assert.ok((await stat(join(dir, ".learnings", "learning-repo-location-path.json"))).isFile());
+    assert.ok(
+      (
+        await stat(join(dir, ".spark", "memory", "learnings", "learning-repo-location-path.json"))
+      ).isFile(),
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-void test("default learning store uses child repo .learnings over parent workspace .learnings", async () => {
-  const workspace = await mkdtemp(join(tmpdir(), "spark-learnings-parent-workspace-"));
+test("default learning store uses child repo .spark/memory/learnings over parent workspace learnings", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "spark-memory-learning-parent-workspace-"));
   const repo = join(workspace, "child-repo");
   try {
-    await mkdir(join(workspace, ".learnings"));
+    await mkdir(join(workspace, ".spark", "memory", "learnings"), { recursive: true });
     await mkdir(join(repo, ".git"), { recursive: true });
     const store = defaultLearningStore(join(repo, "src"));
     assert.equal(store.location, "repo");
@@ -306,18 +314,24 @@ void test("default learning store uses child repo .learnings over parent workspa
       statement: "Nested Git repos use their own repo learning store.",
     });
     assert.ok(
-      (await stat(join(repo, ".learnings", "learning-child-repo-location-path.json"))).isFile(),
+      (
+        await stat(
+          join(repo, ".spark", "memory", "learnings", "learning-child-repo-location-path.json"),
+        )
+      ).isFile(),
     );
     await assert.rejects(
-      stat(join(workspace, ".learnings", "learning-child-repo-location-path.json")),
+      stat(
+        join(workspace, ".spark", "memory", "learnings", "learning-child-repo-location-path.json"),
+      ),
     );
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
 });
 
-void test("default learning store writes user learnings under SPARK_HOME", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-learnings-user-location-"));
+test("default learning store writes user learnings under SPARK_HOME", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-memory-learning-user-location-"));
   const previous = process.env.SPARK_HOME;
   process.env.SPARK_HOME = dir;
   try {
@@ -328,7 +342,9 @@ void test("default learning store writes user learnings under SPARK_HOME", async
       title: "User learning store",
       statement: "User learnings live outside the repo/workspace.",
     });
-    assert.ok((await stat(join(dir, "learnings", "learning-user-location-path.json"))).isFile());
+    assert.ok(
+      (await stat(join(dir, "memory", "learnings", "learning-user-location-path.json"))).isFile(),
+    );
   } finally {
     if (previous === undefined) delete process.env.SPARK_HOME;
     else process.env.SPARK_HOME = previous;
@@ -336,8 +352,8 @@ void test("default learning store writes user learnings under SPARK_HOME", async
   }
 });
 
-void test("learning store supports stale, rejected, and superseded lifecycle states", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-learnings-lifecycle-"));
+test("learning store supports stale, rejected, and superseded lifecycle states", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-memory-learning-lifecycle-"));
   try {
     const store = defaultLearningStore(dir);
     const oldLearning = await store.record({

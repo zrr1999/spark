@@ -1,9 +1,5 @@
 import { Type } from "typebox";
-import type {
-  ExtensionAPI,
-  ToolConfig,
-  ToolRenderComponent,
-} from "@zendev-lab/spark-extension-api";
+import type { SparkHostAPI, ToolConfig, ToolRenderComponent } from "@zendev-lab/spark-core";
 import {
   PRODUCT_ARTIFACT_KINDS,
   applyWorktreeToPrBody,
@@ -226,7 +222,7 @@ export function registerProductArtifactTool(pi: PiProductArtifactsExtensionApi):
   });
 }
 
-export function registerPiProductArtifactTools(pi: ExtensionAPI): void {
+export function registerSparkProductArtifactTools(pi: SparkHostAPI): void {
   if (!pi.registerTool) throw new Error("spark-artifacts product tool requires registerTool");
   registerProductArtifactTool({ registerTool: (config) => pi.registerTool?.(config) });
 }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   BUILTIN_ROLE_CAPABILITY_PROFILES,
@@ -20,7 +20,7 @@ import {
   validateBuiltinRoleProfiles,
 } from "@zendev-lab/spark-roles";
 
-void test("builtin Pi worker is instructed to implement concrete repo behavior feedback", () => {
+test("builtin Pi worker is instructed to implement concrete repo behavior feedback", () => {
   const roles = createBuiltinRoles();
   const worker = roles.find((role) => role.id === "worker");
   assert.match(
@@ -29,7 +29,7 @@ void test("builtin Pi worker is instructed to implement concrete repo behavior f
   );
 });
 
-void test("builtin Pi roles expose audited capability profiles", () => {
+test("builtin Pi roles expose audited capability profiles", () => {
   const roles = createBuiltinRoles("2026-06-04T00:00:00.000Z");
   assert.deepEqual(
     roles.map((role) => role.id),
@@ -99,7 +99,7 @@ void test("builtin Pi roles expose audited capability profiles", () => {
   validateBuiltinRoleProfiles(roles);
 });
 
-void test("extension role specs hydrate separately from writable project/user stores", async () => {
+test("extension role specs hydrate separately from writable project/user stores", async () => {
   const role = createExtensionRoleSpec(
     {
       id: "test-extension-patcher",
@@ -124,7 +124,7 @@ void test("extension role specs hydrate separately from writable project/user st
   await assert.rejects(() => store.save(role), /only project roles can be saved/);
 });
 
-void test("project role spec store persists and hydrates registry", async () => {
+test("project role spec store persists and hydrates registry", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-"));
   try {
     const store = new MarkdownRoleStore(dir);
@@ -149,7 +149,7 @@ void test("project role spec store persists and hydrates registry", async () => 
   }
 });
 
-void test("markdown role store ignores foreign subagent specs in shared .agents roles", async () => {
+test("markdown role store ignores foreign subagent specs in shared .agents roles", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-"));
   try {
     await writeFile(
@@ -168,7 +168,7 @@ void test("markdown role store ignores foreign subagent specs in shared .agents 
   }
 });
 
-void test("markdown role store still rejects Pi role specs with model frontmatter", async () => {
+test("markdown role store still rejects Pi role specs with model frontmatter", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-"));
   try {
     await writeFile(

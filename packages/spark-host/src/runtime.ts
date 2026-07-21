@@ -1,6 +1,6 @@
 /**
  * SparkHostRuntime — the native spark-tui implementation of the
- * `spark-extension-api` ExtensionAPI surface.
+ * `spark-core` SparkHostAPI surface.
  *
  * This file owns the *contract surface* exposed to extensions plus the minimum
  * internal plumbing needed to make the existing 5 retained extensions
@@ -31,16 +31,16 @@
 
 import type {
   CommandConfig,
-  ExtensionAPI,
-  ExtensionContext,
-  ExtensionRuntimeMessage,
+  SparkHostAPI,
+  SparkHostContext,
+  SparkHostRuntimeMessage,
   ExtensionUi,
   LeafCapabilityRunner,
   ExtensionRoleRunner,
   ToolConfig,
   ToolInfo,
-} from "@zendev-lab/spark-extension-api";
-import { resolveToolPolicy } from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
+import { resolveToolPolicy } from "@zendev-lab/spark-core";
 import {
   SPARK_PROTOCOL_VERSION,
   createBlockedInteractionResponse,
@@ -83,6 +83,8 @@ export interface SparkHostRuntimeOptions {
   channelBinding?: {
     adapter: "feishu" | "infoflow" | "qqbot";
     externalKey: string;
+    workspaceId?: string;
+    recipient?: string;
     /** Runtime/config adapter id. Kept for legacy routing diagnostics. */
     adapterId?: string;
     /** Stable provider-account identity used for multi-account routing. */
@@ -109,13 +111,20 @@ const NOT_IMPLEMENTED = (name: string): Error =>
       "If you hit this in extension code, file a follow-up against the active CLI rework project.",
   );
 
-export class SparkHostRuntime implements ExtensionAPI {
+export class SparkHostRuntime implements SparkHostAPI {
   readonly cwd: string;
   readonly sparkStateRoot: string | undefined;
   readonly sessionSurface: "local" | "channel" | undefined;
   readonly sessionSource: "tui" | "web" | "channel" | "daemon" | "session" | undefined;
   readonly channelBinding:
-    | { adapter: "feishu" | "infoflow" | "qqbot"; externalKey: string }
+    | {
+        adapter: "feishu" | "infoflow" | "qqbot";
+        externalKey: string;
+        workspaceId?: string;
+        recipient?: string;
+        adapterId?: string;
+        adapterAccountIdentity?: string;
+      }
     | undefined;
   readonly invocationId: string | undefined;
   readonly sessionQuestionChain: readonly string[] | undefined;
@@ -161,7 +170,7 @@ export class SparkHostRuntime implements ExtensionAPI {
         : new SparkKeybindings(options.keybindings);
   }
 
-  // ── ExtensionAPI surface ────────────────────────────────────────────────
+  // ── SparkHostAPI surface ────────────────────────────────────────────────
 
   registerTool = (config: ToolConfig): void => {
     if (!config.name) throw new Error("SparkHostRuntime.registerTool requires a tool name");
@@ -205,7 +214,7 @@ export class SparkHostRuntime implements ExtensionAPI {
   };
 
   sendMessage = (
-    message: ExtensionRuntimeMessage,
+    message: SparkHostRuntimeMessage,
     options?: { deliverAs?: "steer" | "followUp" | "nextTurn"; triggerTurn?: boolean },
   ): void => {
     const envelope: OutboxEnvelope = {
@@ -413,11 +422,11 @@ export class SparkHostRuntime implements ExtensionAPI {
   }
 
   /**
-   * Build a fresh ExtensionContext with the current UI transport and
+   * Build a fresh SparkHostContext with the current UI transport and
    * sessionManager view bound. Each call returns a new object so the host can
    * later swap transports without retroactively mutating prior contexts.
    */
-  makeContext(extra: Partial<ExtensionContext> = {}): ExtensionContext & {
+  makeContext(extra: Partial<SparkHostContext> = {}): SparkHostContext & {
     sessionManager?: SparkHostSessionManagerStub;
     modelRegistry?: SparkHostModelRegistryLike;
   } {
@@ -459,7 +468,7 @@ export class SparkHostRuntime implements ExtensionAPI {
     return this.keybindings;
   }
 
-  async executeKey(key: string, extra: Partial<ExtensionContext> = {}): Promise<boolean> {
+  async executeKey(key: string, extra: Partial<SparkHostContext> = {}): Promise<boolean> {
     return this.keybindings.executeKey(
       key,
       this.makeContext(extra) as unknown as SparkKeybindingContext,
@@ -511,8 +520,8 @@ export class SparkHostRuntime implements ExtensionAPI {
     shortcut: string,
     options: {
       description?: string;
-      handler: (ctx: ExtensionContext) => unknown;
-      isActive?: (ctx: ExtensionContext) => boolean;
+      handler: (ctx: SparkHostContext) => unknown;
+      isActive?: (ctx: SparkHostContext) => boolean;
     },
   ): void {
     if (!shortcut) throw new Error("SparkHostRuntime.registerShortcut requires a shortcut key");
@@ -525,10 +534,10 @@ export class SparkHostRuntime implements ExtensionAPI {
       defaultKey: shortcut,
       description: options.description ?? `Extension shortcut for ${shortcut}`,
       handler: async (ctx: SparkKeybindingContext) => {
-        await options.handler(ctx as ExtensionContext);
+        await options.handler(ctx as SparkHostContext);
       },
       isActive: options.isActive
-        ? (ctx: SparkKeybindingContext) => options.isActive!(ctx as ExtensionContext)
+        ? (ctx: SparkKeybindingContext) => options.isActive!(ctx as SparkHostContext)
         : undefined,
     });
   }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { createSparkPiParitySlashCommands } from "../apps/spark-tui/src/cli/pi-parity-commands.ts";
 import {
@@ -54,7 +54,7 @@ async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   }
 }
 
-void test("loadSparkThemeCatalog loads builtin and user themes with active fallback", async () => {
+test("loadSparkThemeCatalog loads builtin and user themes with active fallback", async () => {
   await withTempDir(async (dir) => {
     const sparkHome = join(dir, ".spark");
     await mkdir(join(sparkHome, "themes"), { recursive: true });
@@ -92,7 +92,7 @@ void test("loadSparkThemeCatalog loads builtin and user themes with active fallb
   });
 });
 
-void test("Spark native renderer applies theme colors to markdown and diff/tool output", () => {
+test("Spark native renderer applies theme colors to markdown and diff/tool output", () => {
   const harness = createSparkNativeTuiHarness({ cols: 100, theme: testTheme });
   harness.session.appendAssistantChunk("# Heading\n\nHere is `code`.");
   harness.session.finishAssistantMessage();
@@ -112,7 +112,7 @@ void test("Spark native renderer applies theme colors to markdown and diff/tool 
   assert.equal(rendered.includes(`${ESC}[38;2;7;8;9m@@ file.ts @@${ESC}[0m`), true);
 });
 
-void test("/settings set theme persists activeTheme through Spark config", async () => {
+test("/settings set theme persists activeTheme through Spark config", async () => {
   await withTempDir(async (dir) => {
     const path = join(dir, "config.json");
     const config: SparkConfig = {

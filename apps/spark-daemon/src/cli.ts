@@ -38,6 +38,7 @@ import {
 import { createSparkDaemonModelControl } from "./model-control.ts";
 import type { DaemonChannelIngressRuntime } from "./channels/ingress.ts";
 import { SparkDaemonHumanWaitRegistry } from "./core/human-waits.ts";
+import { SparkDaemonLeaseTransferBroker } from "./core/lease-transfer.ts";
 import {
   SparkDaemonLifecycle,
   SparkDaemonInvocationRegistry,
@@ -70,7 +71,6 @@ import {
 import {
   completeSparkDaemonDeviceAuthorization,
   configuredServerUrl,
-  createSparkDaemonWorkspaceBrowserAccess,
   DeviceAuthorizationError,
   hasRunnableSparkDaemonCredentialsForServer,
   RegistrationGrantRefusedError,
@@ -528,12 +528,14 @@ async function start(
     sessionRegistry,
   });
   const humanWaits = new SparkDaemonHumanWaitRegistry(db);
+  const leaseTransfers = new SparkDaemonLeaseTransferBroker();
   // startSparkDaemon is the single bootstrap owner for channel transports,
   // durable cursor wiring, and assignment admission (including inbound
   // idempotency). Local RPC receives that exact runtime through onReady
   // instead of constructing a second variant.
   let channelIngress: DaemonChannelIngressRuntime | null = null;
   let respondHumanInteraction: SparkDaemonHumanInteractionResponder | null = null;
+  let flushHumanRequestOutbox: (() => void) | undefined;
   let drainProgress: SparkDaemonDrainProgress | undefined;
   const uplinkControl = createSparkDaemonUplinkControl();
   let armedRestart: Awaited<ReturnType<typeof scheduleSparkDaemonRestartSuccessor>> | undefined;
@@ -614,6 +616,17 @@ async function start(
       sessionRegistry,
       modelControl,
       humanWaits,
+      leaseTransfers,
+      onHumanRequestOutboxReady: () => {
+        flushHumanRequestOutbox?.();
+      },
+      getRuntimeIdForServer: (serverUrl) => {
+        try {
+          return getSparkDaemonServerProfile(paths, serverUrl)?.runtimeId;
+        } catch {
+          return undefined;
+        }
+      },
       ...(respondHumanInteraction ? { respondHumanInteraction } : {}),
     });
   try {
@@ -638,6 +651,7 @@ async function start(
       onReady: async (runtime) => {
         channelIngress = runtime.channelIngress;
         respondHumanInteraction = runtime.respondHumanInteraction;
+        flushHumanRequestOutbox = runtime.flushHumanRequestOutbox;
         // Bind status/stop while startup admission remains closed. Binding a
         // socket is not successor readiness: the Claimed fence remains active
         // until every daemon admission loop is live below.
@@ -1399,11 +1413,7 @@ async function workspace(
     return await relocateWorkspaceCommand(paths, args, io);
   }
 
-  if (subcommand === "access") {
-    return await workspaceAccessCommand(paths, args, io);
-  }
-
-  throw new Error("Usage: spark daemon workspace <register|relocate|access|ls|show|stop>");
+  throw new Error("Usage: spark daemon workspace <register|relocate|ls|show|stop>");
 }
 
 async function registerWorkspaceCommand(
@@ -1475,46 +1485,9 @@ function workspaceAuthorizationText(workspace: SparkDaemonWorkspace, serverUrl: 
   return (
     `  authorize ${loginUrl.toString()}\n` +
     `  one-time ${authorization.oneTimeToken}\n` +
-    `  expires  ${authorization.expiresAt}\n`
+    `  expires  ${authorization.expiresAt}\n` +
+    `  note     Additional browsers: spark cockpit workspace access create --workspace ${authorization.workspaceId}\n`
   );
-}
-
-async function workspaceAccessCommand(
-  paths: ReturnType<typeof resolveSparkPaths>,
-  args: string[],
-  io: CliIo,
-): Promise<number> {
-  const [action, ...rest] = args;
-  if (action !== "create") {
-    throw new Error("Usage: spark daemon workspace access create [--workspace <name>] [--json]");
-  }
-  const flags = parseFlags(rest);
-  const workspaces = await loadWorkspaceList(paths, io);
-  const workspace = resolveWorkspace(workspaces, flags.workspace ?? positionalArgs(rest)[0]);
-  if (!workspace.serverBindingId) {
-    throw new Error(
-      `Workspace '${workspace.displayName}' has no Cockpit binding. Re-run spark daemon workspace register.`,
-    );
-  }
-  if (!workspace.serverUrl) {
-    throw new Error(`Workspace '${workspace.displayName}' has no Cockpit server URL.`);
-  }
-  const authorization = await createSparkDaemonWorkspaceBrowserAccess(paths, {
-    serverUrl: workspace.serverUrl,
-    bindingId: workspace.serverBindingId,
-    ...(flags["allow-insecure-http"] === "true" ? { allowInsecureHttp: true } : {}),
-  });
-  if (flags.json === "true") {
-    io.stdout.write(`${JSON.stringify({ action: "workspace-access", authorization }, null, 2)}\n`);
-    return 0;
-  }
-  io.stdout.write(
-    `✓ workspace browser key for '${workspace.displayName}'\n` +
-      `  authorize ${authorization.loginUrl}\n` +
-      `  one-time ${authorization.oneTimeToken}\n` +
-      `  expires  ${authorization.expiresAt}\n`,
-  );
-  return 0;
 }
 
 async function uplink(
@@ -1605,9 +1578,7 @@ async function uplinkPreferCommand(
   const serverUrl = flags["server-url"];
   const workspace = flags.workspace ?? positionalArgs(args)[0];
   if (!serverUrl || !workspace) {
-    throw new Error(
-      "Usage: spark daemon uplink prefer --workspace <name|id> --server-url <origin>",
-    );
+    throw new Error("Usage: spark daemon uplink prefer --workspace <id> --server-url <origin>");
   }
   const preferred = await requestWorkspaceService(paths, io, async () =>
     (
@@ -1676,7 +1647,9 @@ function printUplinkHelp(io: CliIo): void {
 Commands:
   park --server-url <origin>
   unpark --server-url <origin>
-  prefer --workspace <name|id> --server-url <origin>
+  prefer --workspace <id> --server-url <origin> [--force]
+    Rebind a workspace onto another origin. If interactive sessions occupy it,
+    prompt them and auto-authorize after 30s unless --force skips consent.
   status [--json]
 
 Park stops dialing an origin without deleting credentials. Prefer rebinds one
@@ -1748,7 +1721,7 @@ async function defaultWorkspace(
     io.stdout.write(
       `${cwd} is not under a registered workspace.\n` +
         "  spark daemon workspace register . --server-url <url> --token <workspace-token> --name <ws>\n" +
-        "or cd into a registered workspace, or pass --workspace <name>.\n",
+        "or cd into a registered workspace, or pass --workspace <id>.\n",
     );
     return 2;
   }
@@ -1801,13 +1774,15 @@ async function listWorkspaceCommand(
     return 0;
   }
 
+  const idWidth = Math.max(37, ...workspaces.map((entry) => entry.id.length));
   io.stdout.write(
-    "NAME                 SERVER                         STATUS                   PATH                                  PROJECTS  INBOX  LAST SESSION\n",
+    `${pad("ID", idWidth)} ${pad("NAME", 20)} ${pad("SERVER", 30)} ${pad("STATUS", 24)} ${pad("PATH", 38)} ${pad("PROJECTS", 8)} ${pad("INBOX", 5)} LAST SESSION\n`,
   );
   for (const workspace of workspaces) {
     const listItem = workspaceListItem(workspace, statusContext);
     io.stdout.write(
-      `${pad(truncate(workspace.displayName, 20), 20)} ` +
+      `${pad(workspace.id, idWidth)} ` +
+        `${pad(truncate(workspace.displayName, 20), 20)} ` +
         `${pad(formatServerForList(workspace.serverUrl, flags.full === "true"), 30)} ` +
         `${pad(workspaceStatusLabel(workspace, statusContext), 24)} ` +
         `${pad(formatPathForList(workspace.localPath, flags.full === "true"), 38)} ` +
@@ -2011,11 +1986,15 @@ function workspaceDetailText(
 ) {
   return (
     `${workspace.displayName}\n` +
+    `  id             ${workspace.id}\n` +
     `  status         ${workspaceStatusLabel(workspace, statusContext)}\n` +
-    `  server         ${workspace.serverUrl}\n` +
+    `  server         ${workspace.serverUrl || "—"}\n` +
+    `  binding        ${workspace.serverBindingId ?? "—"}${
+      workspace.cockpitBindingState ? ` (${workspace.cockpitBindingState})` : ""
+    }\n` +
+    `  cockpit ws     ${workspace.serverWorkspaceId ?? "—"}\n` +
     `  path           ${formatPathForDisplay(workspace.localPath)}\n` +
     profileTextLine(workspace.profile, "  profile        ") +
-    `  connection     ${workspace.id}\n` +
     offlineTextBlock(workspace, statusContext) +
     degradedTextBlock(workspace, statusContext) +
     recentSessionsTextBlock(workspace)
@@ -2056,7 +2035,7 @@ function resolveWorkspaceForShow(
   const cwd = resolveInvocationCwd();
   const workspace = resolveWorkspaceForCwd(workspaces, cwd);
   if (!workspace) {
-    throw new Error(`${cwd} is not under a registered workspace. Pass a workspace name.`);
+    throw new Error(`${cwd} is not under a registered workspace. Pass a workspace id.`);
   }
   return workspace;
 }
@@ -2069,10 +2048,16 @@ async function stopWorkspaceCommand(
   const flags = parseFlags(args);
   const identifier = flags.workspace ?? positionalArgs(args)[0];
   if (!identifier) {
-    throw new Error("Pass a workspace name or --workspace <name>.");
+    throw new Error("Pass a workspace id or --workspace <id>.");
   }
   const workspace = resolveWorkspace(await loadWorkspaceList(paths, io), identifier);
-  if (!(await confirmAction(io, flags, `Pause workspace '${workspace.displayName}'?`))) {
+  if (
+    !(await confirmAction(
+      io,
+      flags,
+      `Pause workspace '${workspace.id}' (${workspace.displayName})?`,
+    ))
+  ) {
     io.stdout.write("Cancelled.\n");
     return 4;
   }
@@ -2101,11 +2086,19 @@ function resolveWorkspace(
         "No workspace found. Run spark daemon workspace register . --server-url <url>.",
       );
     }
-    throw new Error("Multiple workspaces are registered. Pass a workspace name.");
+    throw new Error(
+      `Multiple workspaces are registered. Pass --workspace <id>. Available: ${workspaces
+        .map(workspaceIdentifier)
+        .join(", ")}.`,
+    );
   }
 
   const parsed = parseWorkspaceIdentifier(identifier);
-  let matches = workspaces.filter((workspace) => workspaceMatchesRef(workspace, parsed.name));
+  const idMatches = workspaces.filter((workspace) => workspaceMatchesId(workspace, parsed.name));
+  let matches =
+    idMatches.length > 0
+      ? idMatches
+      : workspaces.filter((workspace) => workspaceMatchesName(workspace, parsed.name));
   if (parsed.serverRef !== undefined) {
     const matchingServers = new Set(
       workspaces
@@ -2124,7 +2117,7 @@ function resolveWorkspace(
   }
   if (matches.length > 1) {
     throw new Error(
-      `Ambiguous workspace name: ${identifier}. Use ${matches.map(workspaceIdentifier).join(", ")}.`,
+      `Ambiguous workspace: ${identifier}. Use ${matches.map(workspaceIdentifier).join(", ")}.`,
     );
   }
   throw new Error(`Unknown workspace: ${identifier}`);
@@ -2145,9 +2138,15 @@ function workspaceListItem(workspace: SparkDaemonWorkspace, context: WorkspaceSt
   const offlineReason = workspaceOfflineReasonJson(workspace, context);
   const degradedReasons = workspaceDegradedReasons(workspace, context);
   return {
+    id: workspace.id,
     slug: workspace.localWorkspaceKey,
     name: workspace.displayName,
     serverUrl: workspace.serverUrl,
+    ...(workspace.serverBindingId ? { serverBindingId: workspace.serverBindingId } : {}),
+    ...(workspace.serverWorkspaceId ? { serverWorkspaceId: workspace.serverWorkspaceId } : {}),
+    ...(workspace.cockpitBindingState
+      ? { cockpitBindingState: workspace.cockpitBindingState }
+      : {}),
     path: workspace.localPath,
     status: renderedStatus,
     ...(offlineReason ? { offlineReason } : {}),
@@ -2477,18 +2476,23 @@ function parseWorkspaceIdentifier(identifier: string): { name: string; serverRef
   return { name: identifier.slice(0, separator), serverRef };
 }
 
-function workspaceMatchesRef(workspace: SparkDaemonWorkspace, name: string): boolean {
+function workspaceMatchesId(workspace: SparkDaemonWorkspace, ref: string): boolean {
   return (
-    workspace.displayName === name || workspace.localWorkspaceKey === name || workspace.id === name
+    workspace.id === ref || workspace.serverBindingId === ref || workspace.serverWorkspaceId === ref
   );
+}
+
+function workspaceMatchesName(workspace: SparkDaemonWorkspace, name: string): boolean {
+  return workspace.displayName === name || workspace.localWorkspaceKey === name;
 }
 
 function serverMatchesRef(serverUrl: string, serverRef: string): boolean {
   return serverUrl === serverRef || serverUrl.startsWith(serverRef);
 }
 
+/** Canonical CLI marker for a daemon workspace. */
 function workspaceIdentifier(workspace: SparkDaemonWorkspace): string {
-  return `${workspace.displayName}@${workspace.serverUrl || "local"}`;
+  return workspace.id;
 }
 
 function pathContains(parentPath: string, childPath: string): boolean {
@@ -2630,17 +2634,16 @@ function printHelp(io: CliIo): void {
 
 Commands:
   spark daemon
-  spark daemon --workspace <name>
+  spark daemon --workspace <id>
   login --server-url <url> [--no-open] [--allow-insecure-http]
   workspace register [path] --server-url <url> --token <workspace-registration-token|-> --name <name> [--profile <path-or-git-url>] [--allow-insecure-http]
   workspace relocate --to-server-url <https-origin> [--from-server-url <origin>] [--yes] [--json]
-  workspace access create [--workspace <name>] [--json] [--allow-insecure-http]
   workspace ls [--json] [--all] [--full]
-  workspace show [name] [--workspace <name>] [--json]
-  workspace stop <name> [--workspace <name>] [--yes]
+  workspace show [id] [--workspace <id>] [--json]
+  workspace stop <id> [--workspace <id>] [--yes]
   uplink park --server-url <origin>
   uplink unpark --server-url <origin>
-  uplink prefer --workspace <name|id> --server-url <origin>
+  uplink prefer --workspace <id> --server-url <origin>
   uplink status [--json]
   ws
   status
@@ -2649,11 +2652,15 @@ Commands:
   restart [--yes] [--wait]
   logs
 
+Workspace registration may print a one-time browser key. Mint additional keys on the
+Cockpit host with spark cockpit workspace access create --workspace <id>.
+Workspace markers use id; name is display-only.
+
 Example:
   spark daemon login --server-url http://127.0.0.1:5173
   spark daemon workspace register . --server-url http://127.0.0.1:5173 --token <workspace-token> --name <ws>
   spark daemon uplink park --server-url https://prod.example/
-  spark daemon uplink prefer --workspace spark --server-url http://127.0.0.1:5173/
+  spark daemon uplink prefer --workspace rtwb_… --server-url http://127.0.0.1:5173/
 `);
 }
 
@@ -2663,10 +2670,14 @@ function printWorkspaceHelp(io: CliIo): void {
 Commands:
   register [path] --server-url <url> --token <workspace-registration-token|-> --name <name> [--profile <path-or-git-url>] [--allow-insecure-http]
   relocate --to-server-url <https-origin> [--from-server-url <origin>] [--yes] [--json]
-  access create [--workspace <name>] [--json] [--allow-insecure-http]
   ls [--json] [--all] [--full]
-  show [name] [--workspace <name>] [--json]
-  stop <name> [--workspace <name>] [--yes]
+  show [id] [--workspace <id>] [--json]
+  stop <id> [--workspace <id>] [--yes]
+
+Registration may print a one-time browser key for /{slug}/login.
+Mint additional keys on the Cockpit host (workspace id is the marker):
+  spark cockpit workspace access create|list|revoke --workspace <id>
+Name is display-only; prefer --workspace <id> for commands.
 
 Example:
   spark daemon workspace ls --json

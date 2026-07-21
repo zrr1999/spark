@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import { join, resolve, relative, isAbsolute } from "node:path";
+import { writeJsonFileAtomic, writeTextFileAtomic } from "@zendev-lab/spark-core";
 import {
   asJsonValue,
   isProductArtifactBody,
@@ -72,8 +73,8 @@ export class ProductArtifactStore {
       updatedAt: now,
     };
     if (!artifact.title) throw new ProductArtifactValidationError("title is required");
-    await writeTextAtomic(join(this.rootDir, blobPath), serialized);
-    await writeJsonAtomic(this.pathFor(ref), {
+    await writeTextFileAtomic(join(this.rootDir, blobPath), serialized);
+    await writeJsonFileAtomic(this.pathFor(ref), {
       ...artifact,
       body: asJsonValue(input.body),
     });
@@ -254,19 +255,4 @@ function resolveBlobPath(rootDir: string, blobPath: string): string | undefined 
 
 async function readJson(path: string): Promise<unknown> {
   return JSON.parse(await readFile(path, "utf8")) as unknown;
-}
-
-async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
-  await writeTextAtomic(path, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-async function writeTextAtomic(path: string, text: string): Promise<void> {
-  const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(tempPath, text, "utf8");
-    await rename(tempPath, path);
-  } catch (error) {
-    await rm(tempPath, { force: true }).catch(() => undefined);
-    throw error;
-  }
 }

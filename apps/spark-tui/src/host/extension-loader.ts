@@ -1,6 +1,6 @@
 /** Builtin extension loader for the native Spark TUI host. */
 
-import type { ExtensionAPI } from "@zendev-lab/spark-extension-api";
+import type { SparkHostAPI } from "@zendev-lab/spark-core";
 
 import sparkAskExtension from "@zendev-lab/spark-ask/extension";
 import sparkCueExtension from "@zendev-lab/spark-cue/extension";
@@ -28,12 +28,12 @@ export type SparkBuiltinExtensionName =
   | "@zendev-lab/spark-ai"
   | "spark";
 
-export type SparkExtensionFactory = (api: ExtensionAPI) => void | Promise<void>;
+export type SparkCapabilityFactory = (api: SparkHostAPI) => void | Promise<void>;
 
-export interface SparkBuiltinExtensionFactory {
+export interface SparkBuiltinCapabilityFactory {
   name: SparkBuiltinExtensionName;
   specifier: string;
-  factory: SparkExtensionFactory;
+  factory: SparkCapabilityFactory;
 }
 
 export interface SparkExtensionLoadOutcome {
@@ -49,51 +49,51 @@ export interface SparkExtensionLoadResult {
 }
 
 export interface SparkExtensionLoaderOptions {
-  api: ExtensionAPI;
+  api: SparkHostAPI;
   extensions?: string[];
   importer?: (specifier: string) => Promise<unknown>;
 }
 
-const BUILTIN_EXTENSION_FACTORIES: readonly SparkBuiltinExtensionFactory[] = [
+const BUILTIN_EXTENSION_FACTORIES: readonly SparkBuiltinCapabilityFactory[] = [
   {
     name: "@zendev-lab/spark-ask",
     specifier: "@zendev-lab/spark-ask/extension",
-    factory: sparkAskExtension as SparkExtensionFactory,
+    factory: sparkAskExtension as SparkCapabilityFactory,
   },
   {
     name: "@zendev-lab/spark-cue",
     specifier: "@zendev-lab/spark-cue/extension",
-    factory: sparkCueExtension as SparkExtensionFactory,
+    factory: sparkCueExtension as SparkCapabilityFactory,
   },
   {
     name: "@zendev-lab/spark-files",
     specifier: "@zendev-lab/spark-files/extension",
-    factory: sparkFilesExtension as SparkExtensionFactory,
+    factory: sparkFilesExtension as SparkCapabilityFactory,
   },
   {
     name: "@zendev-lab/spark-ai",
     specifier: "@zendev-lab/spark-ai/models-extension",
-    factory: sparkModelsExtension as SparkExtensionFactory,
+    factory: sparkModelsExtension as SparkCapabilityFactory,
   },
   {
     name: "@zendev-lab/spark-memory",
     specifier: "@zendev-lab/spark-memory/extension",
-    factory: sparkMemoryExtension as SparkExtensionFactory,
+    factory: sparkMemoryExtension as SparkCapabilityFactory,
   },
   {
     name: "@zendev-lab/spark-roles",
     specifier: "@zendev-lab/spark-roles/extension",
-    factory: sparkRolesExtension as SparkExtensionFactory,
+    factory: sparkRolesExtension as SparkCapabilityFactory,
   },
   {
     name: "@zendev-lab/spark-session",
     specifier: "@zendev-lab/spark-session/extension",
-    factory: sparkSessionExtension as SparkExtensionFactory,
+    factory: sparkSessionExtension as SparkCapabilityFactory,
   },
   {
     name: "@zendev-lab/spark-web",
     specifier: "@zendev-lab/spark-web/extension",
-    factory: sparkWebExtension as SparkExtensionFactory,
+    factory: sparkWebExtension as SparkCapabilityFactory,
   },
   {
     name: "@zendev-lab/spark-graft",
@@ -103,19 +103,19 @@ const BUILTIN_EXTENSION_FACTORIES: readonly SparkBuiltinExtensionFactory[] = [
   {
     name: "spark",
     specifier: "@zendev-lab/pi-extension/extension",
-    factory: sparkExtension as SparkExtensionFactory,
+    factory: sparkExtension as SparkCapabilityFactory,
   },
 ];
 
-async function loadSparkGraftExtension(api: ExtensionAPI): Promise<void> {
+async function loadSparkGraftExtension(api: SparkHostAPI): Promise<void> {
   // Graft is an optional compatibility package. Keep module evaluation off the
   // default startup path and import it only after explicit config/CLI opt-in.
   const module = await import("@zendev-lab/spark-graft/extension");
-  await (module.default as SparkExtensionFactory)(api);
+  await (module.default as SparkCapabilityFactory)(api);
 }
 
 export class SparkExtensionLoader {
-  private readonly api: ExtensionAPI;
+  private readonly api: SparkHostAPI;
   private readonly extensions: string[];
   private readonly importer: (specifier: string) => Promise<unknown>;
 
@@ -140,10 +140,10 @@ export class SparkExtensionLoader {
       const factory = pickDefault(mod);
       if (typeof factory !== "function") {
         throw new Error(
-          `Extension plugin "${specifier}" must default-export a function(api: ExtensionAPI)`,
+          `Extension plugin "${specifier}" must default-export a function(api: SparkHostAPI)`,
         );
       }
-      const result = (factory as SparkExtensionFactory)(this.api);
+      const result = (factory as SparkCapabilityFactory)(this.api);
       if (result instanceof Promise) await result;
       return { specifier, kind: "extension", ok: true, builtin: Boolean(builtin) };
     } catch (error) {
@@ -158,13 +158,13 @@ export class SparkExtensionLoader {
   }
 }
 
-export function loadBuiltinExtensionFactories(): SparkBuiltinExtensionFactory[] {
+export function loadBuiltinExtensionFactories(): SparkBuiltinCapabilityFactory[] {
   return BUILTIN_EXTENSION_FACTORIES.map((entry) => ({ ...entry }));
 }
 
 export function getBuiltinExtensionFactory(
   specifier: string,
-): SparkBuiltinExtensionFactory | undefined {
+): SparkBuiltinCapabilityFactory | undefined {
   return BUILTIN_EXTENSION_FACTORIES.find((entry) => entry.specifier === specifier);
 }
 

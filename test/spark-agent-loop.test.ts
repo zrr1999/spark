@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
-import { registerPiArtifactTool } from "@zendev-lab/spark-artifacts/extension";
+import { registerSparkArtifactTool } from "@zendev-lab/spark-artifacts/extension";
 import { evaluateSparkBehavior } from "@zendev-lab/spark-turn/behavior-eval";
 import {
   SparkAgentLoop,
@@ -43,7 +43,7 @@ const TEST_MODEL: Model = {
   maxTokens: 4000,
 };
 
-void test("Spark prompt IR retains runtime authority until provider lowering", () => {
+test("Spark prompt IR retains runtime authority until provider lowering", () => {
   const item = sparkRuntimePromptItem({
     authority: "runtime_data",
     trust: "untrusted",
@@ -157,7 +157,7 @@ async function waitForCondition(predicate: () => boolean, message: string): Prom
   assert.fail(message);
 }
 
-void test("compactToolResultContent normalizes status whitespace with details", () => {
+test("compactToolResultContent normalizes status whitespace with details", () => {
   const result = compactToolResultContent({
     toolName: "goal",
     content: [{ type: "text", text: "\n\nalpha\n\n\nbeta\n\n" }],
@@ -179,7 +179,7 @@ void test("compactToolResultContent normalizes status whitespace with details", 
   });
 });
 
-void test("compactToolResultContent supports diagnostic profile", () => {
+test("compactToolResultContent supports diagnostic profile", () => {
   const result = compactToolResultContent({
     toolName: "spark_diagnostic",
     content: [{ type: "text", text: `error${"\n".repeat(80)}next` }],
@@ -192,7 +192,7 @@ void test("compactToolResultContent supports diagnostic profile", () => {
   assert.equal(result.details?.collapsedRepeatedLines, 0);
 });
 
-void test("compactToolResultContent collapses repeated log lines", () => {
+test("compactToolResultContent collapses repeated log lines", () => {
   const result = compactToolResultContent({
     toolName: "cue_exec",
     content: [{ type: "text", text: `${"warning: noisy dependency\n".repeat(30)}done` }],
@@ -207,7 +207,7 @@ void test("compactToolResultContent collapses repeated log lines", () => {
   assert.equal(result.details?.collapsedRepeatedRuns, 1);
 });
 
-void test("compactToolResultContent treats memory as compact status output", () => {
+test("compactToolResultContent treats memory as compact status output", () => {
   const result = compactToolResultContent({
     toolName: "memory",
     content: [{ type: "text", text: "Memory status\n\n\n\n- active=1" }],
@@ -218,7 +218,7 @@ void test("compactToolResultContent treats memory as compact status output", () 
   assert.equal(result.details?.profile, "status");
 });
 
-void test("compactToolResultContent preserves unknown tools by default", () => {
+test("compactToolResultContent preserves unknown tools by default", () => {
   const output = "alpha\n\n\n\nbeta";
   const result = compactToolResultContent({
     toolName: "third_party_tool",
@@ -230,7 +230,7 @@ void test("compactToolResultContent preserves unknown tools by default", () => {
   assert.equal(result.details, undefined);
 });
 
-void test("compactToolResultContent respects off level and never-worse fallback", () => {
+test("compactToolResultContent respects off level and never-worse fallback", () => {
   const output = "a\n\n\n\nb";
   assert.equal(
     compactToolResultContent({
@@ -250,7 +250,7 @@ void test("compactToolResultContent respects off level and never-worse fallback"
   );
 });
 
-void test("Spark prompt cache splits stable/dynamic prompt sections and honors disable switches", () => {
+test("Spark prompt cache splits stable/dynamic prompt sections and honors disable switches", () => {
   const split = splitSparkSystemPrompt(
     [
       "Stable Spark operating rules.",
@@ -281,7 +281,7 @@ void test("Spark prompt cache splits stable/dynamic prompt sections and honors d
   assert.equal(disabled.disabledReason, "env");
 });
 
-void test("Spark prompt cache hashes long session ids without losing the stable fingerprint", () => {
+test("Spark prompt cache hashes long session ids without losing the stable fingerprint", () => {
   const systemPrompt = "Stable Spark operating rules.";
   const sharedSessionPrefix = `session:${"shared-segment-".repeat(20)}`;
   const first = resolveSparkPromptCache({
@@ -307,7 +307,7 @@ void test("Spark prompt cache hashes long session ids without losing the stable 
   assert.notEqual(first.promptCacheKey, second.promptCacheKey);
 });
 
-void test("SparkAgentLoop passes prompt_cache_key and reports cache usage summaries", async () => {
+test("SparkAgentLoop passes prompt_cache_key and reports cache usage summaries", async () => {
   const viewEvents: unknown[] = [];
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-agent-loop-cache-key-test",
@@ -443,7 +443,7 @@ void test("SparkAgentLoop passes prompt_cache_key and reports cache usage summar
   assert.equal(outcome.roundtrips, 1);
 });
 
-void test("SparkAgentLoop applies one phase profile to schemas, manifests, and dispatch", async () => {
+test("SparkAgentLoop applies one phase profile to schemas, manifests, and dispatch", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-phase-profile-test" });
   const lifecycleSources: unknown[] = [];
   host.on("before_agent_start", (event) => {
@@ -547,7 +547,7 @@ void test("SparkAgentLoop applies one phase profile to schemas, manifests, and d
   assert.deepEqual(lifecycleSources, ["agentLoop", "agentLoop", "agentLoop", "agentLoop"]);
 });
 
-void test("SparkAgentLoop rechecks phase availability after async approval", async () => {
+test("SparkAgentLoop rechecks phase availability after async approval", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-phase-approval-test" });
   let executions = 0;
   host.registerTool({
@@ -605,7 +605,7 @@ void test("SparkAgentLoop rechecks phase availability after async approval", asy
   assert.match(result?.content[0]?.text ?? "", /phase-inactive tool: approved_implement_action/u);
 });
 
-void test("SparkAgentLoop forwards getReasoning into stream options.reasoning", async () => {
+test("SparkAgentLoop forwards getReasoning into stream options.reasoning", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-reasoning-test" });
   const calls: Array<{ options: any }> = [];
   const streamFunction: SparkAgentStreamFunction = (_model, _context, options) => {
@@ -634,7 +634,7 @@ void test("SparkAgentLoop forwards getReasoning into stream options.reasoning", 
   assert.equal(calls[0]?.options?.reasoning, "high");
 });
 
-void test("SparkAgentLoop runs a single-turn stop with one streamed text chunk", async () => {
+test("SparkAgentLoop runs a single-turn stop with one streamed text chunk", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-test" });
   const events: SparkAgentLoopEvent[] = [];
   const finalMessage = buildAssistant([{ type: "text", text: "hello world" }]);
@@ -660,7 +660,7 @@ void test("SparkAgentLoop runs a single-turn stop with one streamed text chunk",
   assert.equal(events.find((event) => event.type === "turn_complete") !== undefined, true);
 });
 
-void test("SparkAgentLoop times out a never-resolving model stream", async () => {
+test("SparkAgentLoop times out a never-resolving model stream", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-stream-timeout-test" });
   const agentEndEvents: unknown[] = [];
   host.on("agent_end", (event) => agentEndEvents.push(event));
@@ -688,7 +688,7 @@ void test("SparkAgentLoop times out a never-resolving model stream", async () =>
   );
 });
 
-void test("SparkAgentLoop projects user, streaming, final, and run updates to view-model events", async () => {
+test("SparkAgentLoop projects user, streaming, final, and run updates to view-model events", async () => {
   const viewEvents: unknown[] = [];
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-agent-loop-view-test",
@@ -736,7 +736,7 @@ void test("SparkAgentLoop projects user, streaming, final, and run updates to vi
   );
 });
 
-void test("SparkAgentLoop suppresses identical cumulative assistant stream projections", async () => {
+test("SparkAgentLoop suppresses identical cumulative assistant stream projections", async () => {
   const viewEvents: any[] = [];
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-agent-loop-cumulative-dedup-test",
@@ -783,7 +783,7 @@ void test("SparkAgentLoop suppresses identical cumulative assistant stream proje
   assert.equal(assistantMessages.filter((event) => event.message.status === "done").length, 1);
 });
 
-void test("SparkAgentLoop projects an empty provider error as a visible terminal message", async () => {
+test("SparkAgentLoop projects an empty provider error as a visible terminal message", async () => {
   const viewEvents: any[] = [];
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-agent-loop-visible-error-test",
@@ -817,7 +817,7 @@ void test("SparkAgentLoop projects an empty provider error as a visible terminal
   );
 });
 
-void test("SparkAgentLoop appends multi-roundtrip assistant messages in order without overwriting", async () => {
+test("SparkAgentLoop appends multi-roundtrip assistant messages in order without overwriting", async () => {
   const viewEvents: any[] = [];
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-agent-loop-order-test",
@@ -870,7 +870,7 @@ void test("SparkAgentLoop appends multi-roundtrip assistant messages in order wi
   assert.deepEqual(doneTexts, ["before tool", "after tool"]);
 });
 
-void test("SparkAgentLoop projects thinking deltas on the stable assistant message", async () => {
+test("SparkAgentLoop projects thinking deltas on the stable assistant message", async () => {
   const viewEvents: any[] = [];
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-agent-loop-thinking-stream-test",
@@ -926,7 +926,7 @@ void test("SparkAgentLoop projects thinking deltas on the stable assistant messa
   assert.equal(doneMessage?.message.id, thinkingUpdate.message.id);
 });
 
-void test("SparkAgentLoop terminalizes a partial assistant bubble when the stream throws", async () => {
+test("SparkAgentLoop terminalizes a partial assistant bubble when the stream throws", async () => {
   const viewEvents: any[] = [];
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-agent-loop-partial-error-test",
@@ -966,7 +966,7 @@ void test("SparkAgentLoop terminalizes a partial assistant bubble when the strea
   );
 });
 
-void test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", async () => {
+test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", async () => {
   const stopAssistant = buildAssistant([{ type: "text", text: "done" }]);
   const cases: Array<{
     name: string;
@@ -1106,7 +1106,7 @@ void test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", as
   }
 });
 
-void test("SparkAgentLoop continues through more than sixteen tool rounds by default", async () => {
+test("SparkAgentLoop continues through more than sixteen tool rounds by default", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-long-tool-run-test" });
   const toolRounds = Array.from({ length: 16 }, (_, index) => [
     {
@@ -1146,7 +1146,7 @@ void test("SparkAgentLoop continues through more than sixteen tool rounds by def
   assert.deepEqual(errors, []);
 });
 
-void test("SparkAgentLoop dispatches tool calls and feeds tool results back into the next turn", async () => {
+test("SparkAgentLoop dispatches tool calls and feeds tool results back into the next turn", async () => {
   const viewEvents: unknown[] = [];
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-agent-loop-test",
@@ -1281,16 +1281,16 @@ void test("SparkAgentLoop dispatches tool calls and feeds tool results back into
   assert.equal(
     viewEvents.some(
       (event: any) =>
-        event.type === "artifact.update" &&
-        event.artifact.ref === "artifact:echo-1" &&
-        event.artifact.kind === "record" &&
-        event.artifact.metadata.sourceTool === "echo",
+        event.type === "evidence.update" &&
+        event.evidence.ref === "artifact:echo-1" &&
+        event.evidence.kind === "record" &&
+        event.evidence.metadata.sourceTool === "echo",
     ),
     true,
   );
 });
 
-void test("SparkAgentLoop keeps a thrown tool error inside the execution chain and completes the turn", async () => {
+test("SparkAgentLoop keeps a thrown tool error inside the execution chain and completes the turn", async () => {
   const viewEvents: any[] = [];
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-agent-loop-tool-error-projection-test",
@@ -1363,7 +1363,7 @@ void test("SparkAgentLoop keeps a thrown tool error inside the execution chain a
   );
 });
 
-void test("SparkAgentLoop runs an explicitly safe read batch concurrently and commits results in source order", async () => {
+test("SparkAgentLoop runs an explicitly safe read batch concurrently and commits results in source order", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-parallel-read-test" });
   const started: string[] = [];
   const releases = new Map<string, () => void>();
@@ -1430,7 +1430,7 @@ void test("SparkAgentLoop runs an explicitly safe read batch concurrently and co
   );
 });
 
-void test("SparkAgentLoop treats a mixed read/write batch as one sequential barrier", async () => {
+test("SparkAgentLoop treats a mixed read/write batch as one sequential barrier", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-mixed-tool-test" });
   const started: string[] = [];
   const releases = new Map<string, () => void>();
@@ -1494,7 +1494,7 @@ void test("SparkAgentLoop treats a mixed read/write batch as one sequential barr
   assert.deepEqual(started, ["tc-read-a", "tc-read-b", "tc-write"]);
 });
 
-void test("SparkAgentLoop keeps tools without explicit execution metadata sequential", async () => {
+test("SparkAgentLoop keeps tools without explicit execution metadata sequential", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-unknown-policy-test" });
   const started: string[] = [];
   const releases = new Map<string, () => void>();
@@ -1545,7 +1545,7 @@ void test("SparkAgentLoop keeps tools without explicit execution metadata sequen
   assert.deepEqual(started, ["tc-unknown-a", "tc-unknown-b"]);
 });
 
-void test("SparkAgentLoop bounds parallel read batches to four calls by default", async () => {
+test("SparkAgentLoop bounds parallel read batches to four calls by default", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-parallel-bound-test" });
   const started: string[] = [];
   const releases = new Map<string, () => void>();
@@ -1617,7 +1617,7 @@ void test("SparkAgentLoop bounds parallel read batches to four calls by default"
   );
 });
 
-void test("SparkAgentLoop isolates failures inside a parallel read batch", async () => {
+test("SparkAgentLoop isolates failures inside a parallel read batch", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-parallel-error-test" });
   const executed: string[] = [];
   host.registerTool({
@@ -1668,7 +1668,7 @@ void test("SparkAgentLoop isolates failures inside a parallel read batch", async
   assert.equal(results[1]?.content[0]?.text, "ok:tc-ok");
 });
 
-void test("SparkAgentLoop publishes ordered display-safe conversation parts without tool payloads", async () => {
+test("SparkAgentLoop publishes ordered display-safe conversation parts without tool payloads", async () => {
   const viewEvents: any[] = [];
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-agent-loop-display-safe-view-test",
@@ -1805,7 +1805,7 @@ void test("SparkAgentLoop publishes ordered display-safe conversation parts with
   );
 });
 
-void test("SparkAgentLoop keeps text phases without projecting commentary as assistant prose", async () => {
+test("SparkAgentLoop keeps text phases without projecting commentary as assistant prose", async () => {
   const viewEvents: any[] = [];
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-agent-loop-text-phase-test",
@@ -1873,7 +1873,7 @@ void test("SparkAgentLoop keeps text phases without projecting commentary as ass
   );
 });
 
-void test("SparkAgentLoop compacts blank runs for log-like tool results", async () => {
+test("SparkAgentLoop compacts blank runs for log-like tool results", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-compaction-test" });
   const noisyOutput = `alpha${"\n".repeat(61)}omega`;
   host.registerTool({
@@ -1921,11 +1921,11 @@ void test("SparkAgentLoop compacts blank runs for log-like tool results", async 
   assert.equal(compaction.originalChars > compaction.compactedChars, true);
 });
 
-void test("SparkAgentLoop records raw trace artifact for large lossy compacted tool output", async () => {
+test("SparkAgentLoop records raw trace artifact for large lossy compacted tool output", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-agent-loop-raw-recovery-"));
   try {
     const host = new SparkHostRuntime({ cwd: dir });
-    registerPiArtifactTool({
+    registerSparkArtifactTool({
       registerTool: (config) =>
         host.registerTool(config as Parameters<typeof host.registerTool>[0]),
     });
@@ -2040,11 +2040,11 @@ void test("SparkAgentLoop records raw trace artifact for large lossy compacted t
   }
 });
 
-void test("SparkAgentLoop offloads failed long output while preserving diagnostics and exit code", async () => {
+test("SparkAgentLoop offloads failed long output while preserving diagnostics and exit code", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-agent-loop-error-recovery-"));
   try {
     const host = new SparkHostRuntime({ cwd: dir });
-    registerPiArtifactTool({
+    registerSparkArtifactTool({
       registerTool: (config) =>
         host.registerTool(config as Parameters<typeof host.registerTool>[0]),
     });
@@ -2101,7 +2101,7 @@ void test("SparkAgentLoop offloads failed long output while preserving diagnosti
   }
 });
 
-void test(
+test(
   "SparkAgentLoop aborts a hanging raw recovery and keeps the compacted tool result paired",
   { timeout: 2_000 },
   async () => {
@@ -2173,7 +2173,7 @@ void test(
   },
 );
 
-void test("SparkAgentLoop preserves exact-content tool results", async () => {
+test("SparkAgentLoop preserves exact-content tool results", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-exact-compaction-test" });
   const exactOutput = "line1\n\n\n\n\nline2";
   host.registerTool({
@@ -2211,7 +2211,7 @@ void test("SparkAgentLoop preserves exact-content tool results", async () => {
   );
 });
 
-void test("SparkAgentLoop times out a never-resolving tool execution", async () => {
+test("SparkAgentLoop times out a never-resolving tool execution", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-tool-timeout-test" });
   host.registerTool({
     name: "hang_tool",
@@ -2254,7 +2254,7 @@ void test("SparkAgentLoop times out a never-resolving tool execution", async () 
   assert.equal(loop.getState(), "idle");
 });
 
-void test("SparkAgentLoop times out a never-resolving tool approval interaction", async () => {
+test("SparkAgentLoop times out a never-resolving tool approval interaction", async () => {
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-agent-loop-approval-timeout-test",
     ui: {
@@ -2306,7 +2306,7 @@ void test("SparkAgentLoop times out a never-resolving tool approval interaction"
   assert.equal(loop.getState(), "idle");
 });
 
-void test("SparkAgentLoop blocks approval-required tools without explicit approval", async () => {
+test("SparkAgentLoop blocks approval-required tools without explicit approval", async () => {
   const interactionRequests: unknown[] = [];
   const daemonEvents: unknown[] = [];
   const host = new SparkHostRuntime({
@@ -2383,7 +2383,7 @@ void test("SparkAgentLoop blocks approval-required tools without explicit approv
   assert.match(JSON.stringify(toolResult), /approval unavailable/);
 });
 
-void test("SparkAgentLoop skip approvalMethod executes requiresApproval tools without interaction", async () => {
+test("SparkAgentLoop skip approvalMethod executes requiresApproval tools without interaction", async () => {
   const interactionRequests: unknown[] = [];
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-agent-loop-approval-skip-test",
@@ -2444,7 +2444,7 @@ void test("SparkAgentLoop skip approvalMethod executes requiresApproval tools wi
   assert.equal(interactionRequests.length, 0);
 });
 
-void test("SparkAgentLoop auto approvalMethod executes when reviewer approves", async () => {
+test("SparkAgentLoop auto approvalMethod executes when reviewer approves", async () => {
   const interactionRequests: unknown[] = [];
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-agent-loop-approval-auto-ok-test",
@@ -2512,7 +2512,7 @@ void test("SparkAgentLoop auto approvalMethod executes when reviewer approves", 
   assert.equal(interactionRequests.length, 0);
 });
 
-void test("SparkAgentLoop auto approvalMethod escalates to ask when reviewer rejects", async () => {
+test("SparkAgentLoop auto approvalMethod escalates to ask when reviewer rejects", async () => {
   const interactionRequests: unknown[] = [];
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-agent-loop-approval-auto-ask-test",
@@ -2574,7 +2574,7 @@ void test("SparkAgentLoop auto approvalMethod escalates to ask when reviewer rej
   assert.equal((interactionRequests[0] as { kind?: string }).kind, "toolApproval");
 });
 
-void test("SparkAgentLoop auto approvalMethod can deny without ask", async () => {
+test("SparkAgentLoop auto approvalMethod can deny without ask", async () => {
   const interactionRequests: unknown[] = [];
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-agent-loop-approval-auto-deny-test",
@@ -2642,7 +2642,7 @@ void test("SparkAgentLoop auto approvalMethod can deny without ask", async () =>
   assert.match(JSON.stringify(toolResult), /needs a safer command/);
 });
 
-void test("SparkAgentLoop preserves tool-returned isError results", async () => {
+test("SparkAgentLoop preserves tool-returned isError results", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-test" });
   host.registerTool({
     name: "business_error",
@@ -2680,7 +2680,7 @@ void test("SparkAgentLoop preserves tool-returned isError results", async () => 
   assert.match(JSON.stringify(toolResult), /business_rule_failed/);
 });
 
-void test("SparkAgentLoop unknown tool returns an isError tool result without throwing", async () => {
+test("SparkAgentLoop unknown tool returns an isError tool result without throwing", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-test" });
   const toolCallEnvelope: ToolCall = {
     type: "toolCall",
@@ -2704,7 +2704,7 @@ void test("SparkAgentLoop unknown tool returns an isError tool result without th
   assert.match(JSON.stringify(toolResult), /unknown tool: missing/);
 });
 
-void test("SparkAgentLoop refuses a model call to a registered but inactive tool", async () => {
+test("SparkAgentLoop refuses a model call to a registered but inactive tool", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-inactive-tool-test" });
   let executed = false;
   host.registerTool({
@@ -2749,7 +2749,7 @@ void test("SparkAgentLoop refuses a model call to a registered but inactive tool
   assert.match(JSON.stringify(toolResult), /inactive tool: inactive_write/u);
 });
 
-void test("SparkAgentLoop drainOutboxIntoMessages turns sendUserMessage envelopes into next-turn user messages", async () => {
+test("SparkAgentLoop drainOutboxIntoMessages turns sendUserMessage envelopes into next-turn user messages", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-test" });
   const firstAssistant = buildAssistant([{ type: "text", text: "first turn" }]);
   const secondAssistant = buildAssistant([{ type: "text", text: "after outbox" }]);
@@ -2787,7 +2787,7 @@ void test("SparkAgentLoop drainOutboxIntoMessages turns sendUserMessage envelope
   assert.equal((messages[3] as AssistantMessage).content[0]!.type, "text");
 });
 
-void test("SparkAgentLoop triggerTurn queues hidden custom messages without visible user echo", async () => {
+test("SparkAgentLoop triggerTurn queues hidden custom messages without visible user echo", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-trigger-turn-custom-test" });
   const finalAssistant = buildAssistant([{ type: "text", text: "goal tick executed" }]);
   let streamCalls = 0;
@@ -2835,7 +2835,7 @@ void test("SparkAgentLoop triggerTurn queues hidden custom messages without visi
   assert.equal(eventTypes.includes("user_message"), false);
 });
 
-void test("SparkAgentLoop defaults extension custom messages to untrusted runtime data", async () => {
+test("SparkAgentLoop defaults extension custom messages to untrusted runtime data", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-untrusted-custom-test" });
   const finalAssistant = buildAssistant([{ type: "text", text: "observed" }]);
   let contextMessages: Message[] = [];
@@ -2870,7 +2870,7 @@ void test("SparkAgentLoop defaults extension custom messages to untrusted runtim
   assert.equal(item?.trust, "untrusted");
 });
 
-void test("SparkAgentLoop retains nextTurn runtime data in its originating session", async () => {
+test("SparkAgentLoop retains nextTurn runtime data in its originating session", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-next-turn-test" });
   const contexts: Message[][] = [];
   const loop = new SparkAgentLoop({
@@ -2911,7 +2911,7 @@ void test("SparkAgentLoop retains nextTurn runtime data in its originating sessi
   assert.equal(contexts[1]?.[1]?.content, "session a prompt");
 });
 
-void test("SparkAgentLoop triggerTurn uses queued user instruction without duplicate custom", async () => {
+test("SparkAgentLoop triggerTurn uses queued user instruction without duplicate custom", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-trigger-turn-user-test" });
   const finalAssistant = buildAssistant([{ type: "text", text: "goal tick executed" }]);
   let contextMessages: Message[] = [];
@@ -2943,7 +2943,7 @@ void test("SparkAgentLoop triggerTurn uses queued user instruction without dupli
   assert.doesNotMatch(JSON.stringify(loop.getMessages()), /spark-goal-request/);
 });
 
-void test("SparkAgentLoop triggerTurn runs hidden before_agent_start context without visible user echo", async () => {
+test("SparkAgentLoop triggerTurn runs hidden before_agent_start context without visible user echo", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-trigger-turn-test" });
   const finalAssistant = buildAssistant([{ type: "text", text: "goal tick executed" }]);
   let streamCalls = 0;
@@ -3006,7 +3006,7 @@ void test("SparkAgentLoop triggerTurn runs hidden before_agent_start context wit
   assert.equal(runtimeItem?.persistence, "transient");
 });
 
-void test("SparkAgentLoop abort cancels the in-flight stream and returns to idle", async () => {
+test("SparkAgentLoop abort cancels the in-flight stream and returns to idle", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-test" });
   let aborted = false;
   const fake: SparkAgentStreamFunction = (_model, _context, options) => {
@@ -3046,7 +3046,7 @@ void test("SparkAgentLoop abort cancels the in-flight stream and returns to idle
   assert.equal(loop.getState(), "idle");
 });
 
-void test("SparkAgentLoop classifies a provider AbortError caused by user abort as aborted", async () => {
+test("SparkAgentLoop classifies a provider AbortError caused by user abort as aborted", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-abort-throw-test" });
   const fake: SparkAgentStreamFunction = (_model, _context, options) =>
     ({
@@ -3076,7 +3076,7 @@ void test("SparkAgentLoop classifies a provider AbortError caused by user abort 
   assert.equal(loop.getState(), "idle");
 });
 
-void test("SparkAgentLoop abort releases a pending human tool approval", async () => {
+test("SparkAgentLoop abort releases a pending human tool approval", async () => {
   let toolCalls = 0;
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-agent-loop-approval-abort-test",
@@ -3122,7 +3122,7 @@ void test("SparkAgentLoop abort releases a pending human tool approval", async (
   assert.equal(loop.getState(), "idle");
 });
 
-void test("SparkAgentLoop pairs every sequential tool call with an aborted result", async () => {
+test("SparkAgentLoop pairs every sequential tool call with an aborted result", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-sequential-abort-test" });
   let firstStarted = false;
   let secondExecutions = 0;
@@ -3186,7 +3186,7 @@ void test("SparkAgentLoop pairs every sequential tool call with an aborted resul
   assert.match(results[1]?.content[0]?.text ?? "", /skipped because the agent was aborted/u);
 });
 
-void test("SparkAgentLoop refuses concurrent submit while in flight", async () => {
+test("SparkAgentLoop refuses concurrent submit while in flight", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-test" });
   let resolveStream!: (message: AssistantMessage) => void;
   const fake: SparkAgentStreamFunction = () => {

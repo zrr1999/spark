@@ -624,7 +624,10 @@ async function handleCompactCommand(
     customInstructions,
     willRetry: false,
     sessionId: result.record.header.id,
+    compactType: "full",
+    succeeded: true,
     compactionEntryId: result.entry.id,
+    compactionEntry: result.entry,
   });
   const metadata = result.entry.metadata;
   return [

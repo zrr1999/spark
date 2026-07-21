@@ -1,7 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { configureCockpitPublicUrl } from "../src/lib/server/public-url.js";
 import { closeDatabase, getDatabase, pinDatabase, unpinDatabase } from "../src/lib/server/db.js";
-import { attachRuntimeWebSocket, authenticateRuntimeToken } from "../src/lib/server/runtime-ws.js";
+import {
+  attachRuntimeWebSocket,
+  authenticateRuntimeToken,
+} from "@zendev-lab/spark-coordination/runtime-ws";
 import { startWebPushEventDispatcher } from "../src/lib/server/web-push.js";
 import { WebSocketServer } from "ws";
 

@@ -13,7 +13,7 @@ const importSpecifierPattern =
 
 const foundationContractPackages = new Set([
   join(root, "packages", "spark-protocol"),
-  join(root, "packages", "spark-extension-api"),
+  join(root, "packages", "spark-core"),
 ]);
 const violations = [];
 const piTuiSpecifier = "@earendil-works/pi-tui";
@@ -23,7 +23,7 @@ const allowedPiTuiPackageDirs = new Set([
 ]);
 const piAllowedSparkFoundationSpecifiers = [
   "@zendev-lab/spark-artifacts",
-  "@zendev-lab/spark-extension-api",
+  "@zendev-lab/spark-core",
   "@zendev-lab/spark-host",
   "@zendev-lab/spark-loop",
   "@zendev-lab/spark-modes",

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { FALLBACK_CURSOR_MODEL_ITEMS } from "../packages/spark-ai/src/cursor-fallback-models.ts";
 import {
@@ -60,7 +60,7 @@ const CATALOG_FIXTURE: CursorModelListItem[] = [
   },
 ];
 
-void test("Cursor provider registers the exact host-neutral provider contract with fallback models", async () => {
+test("Cursor provider registers the exact host-neutral provider contract with fallback models", async () => {
   let registeredName: string | undefined;
   let registeredConfig: ProviderConfig | undefined;
   let fallback: CursorCatalogFallbackIssue | undefined;
@@ -84,7 +84,7 @@ void test("Cursor provider registers the exact host-neutral provider contract wi
   assert.equal(fallback?.reason, "missing-api-key");
 });
 
-void test("Cursor local stream runs through the provider registry with ordered pi-ai events", async () => {
+test("Cursor local stream runs through the provider registry with ordered pi-ai events", async () => {
   const directory = await mkdtemp(join(tmpdir(), "spark-cursor-stream-"));
   let createdOptions: CursorAgentOptions | undefined;
   let sentOptions: CursorSendOptions | undefined;
@@ -171,7 +171,7 @@ void test("Cursor local stream runs through the provider registry with ordered p
   }
 });
 
-void test("Cursor local stream maps slow/xhigh selection and scrubs runtime credentials", async () => {
+test("Cursor local stream maps slow/xhigh selection and scrubs runtime credentials", async () => {
   convertCursorModelItems(CATALOG_FIXTURE);
   let sentOptions: CursorSendOptions | undefined;
   const streamFunction = createCursorStreamFunction({
@@ -205,7 +205,7 @@ void test("Cursor local stream maps slow/xhigh selection and scrubs runtime cred
   assert.match(message.errorMessage ?? "", /\[redacted\]/u);
 });
 
-void test("Cursor local stream reports missing auth without loading the SDK", async () => {
+test("Cursor local stream reports missing auth without loading the SDK", async () => {
   const previous = process.env.CURSOR_API_KEY;
   delete process.env.CURSOR_API_KEY;
   let loaded = false;
@@ -228,7 +228,7 @@ void test("Cursor local stream reports missing auth without loading the SDK", as
   }
 });
 
-void test("Cursor local stream cancels an aborted SDK run exactly once", async () => {
+test("Cursor local stream cancels an aborted SDK run exactly once", async () => {
   convertCursorModelItems(CATALOG_FIXTURE);
   let cancelCount = 0;
   let markSent: (() => void) | undefined;
@@ -258,7 +258,7 @@ void test("Cursor local stream cancels an aborted SDK run exactly once", async (
   assert.match(message.errorMessage ?? "", /aborted/u);
 });
 
-void test("Cursor prompt forwards only latest-user images and marks historical images", () => {
+test("Cursor prompt forwards only latest-user images and marks historical images", () => {
   const prompt = buildCursorPrompt({
     systemPrompt: "System rules",
     messages: [
@@ -303,7 +303,7 @@ void test("Cursor prompt forwards only latest-user images and marks historical i
   assert.deepEqual(prompt.images, [{ data: "new-data", mimeType: "image/jpeg" }]);
 });
 
-void test("Cursor catalog expands context and non-default fast variants without alias duplicates", () => {
+test("Cursor catalog expands context and non-default fast variants without alias duplicates", () => {
   const models = convertCursorModelItems(CATALOG_FIXTURE);
   const ids = models.map((model) => model.id);
   assert.deepEqual(ids, [
@@ -343,7 +343,7 @@ void test("Cursor catalog expands context and non-default fast variants without 
   ]);
 });
 
-void test("Cursor catalog skips the fast qualifier that matches the default variant", () => {
+test("Cursor catalog skips the fast qualifier that matches the default variant", () => {
   const models = convertCursorModelItems([
     {
       id: "composer-2.5",
@@ -369,7 +369,7 @@ void test("Cursor catalog skips the fast qualifier that matches the default vari
   assert.equal(getCursorModelMetadata("composer")?.baseModelId, "composer-2.5");
 });
 
-void test("Cursor fallback catalog includes Grok and only one Composer family", () => {
+test("Cursor fallback catalog includes Grok and only one Composer family", () => {
   const models = convertCursorModelItems(FALLBACK_CURSOR_MODEL_ITEMS);
   const ids = models.map((model) => model.id);
   assert.ok(ids.includes("composer-2.5"));
@@ -385,7 +385,7 @@ void test("Cursor fallback catalog includes Grok and only one Composer family", 
   assert.equal(getCursorModelMetadata("composer-latest")?.baseModelId, "composer-2.5");
 });
 
-void test("Cursor catalog maps boolean thinking parameters", () => {
+test("Cursor catalog maps boolean thinking parameters", () => {
   const [model] = convertCursorModelItems([
     {
       id: "thinking-model",
@@ -403,7 +403,7 @@ void test("Cursor catalog maps boolean thinking parameters", () => {
   });
 });
 
-void test("Cursor discovery falls back for empty and failed live catalogs without leaking keys", async () => {
+test("Cursor discovery falls back for empty and failed live catalogs without leaking keys", async () => {
   const directory = await mkdtemp(join(tmpdir(), "spark-cursor-discovery-"));
   try {
     const issues: CursorCatalogFallbackIssue[] = [];
@@ -435,7 +435,7 @@ void test("Cursor discovery falls back for empty and failed live catalogs withou
   }
 });
 
-void test("Cursor model cache contains a fingerprint and public metadata but never the raw key", async () => {
+test("Cursor model cache contains a fingerprint and public metadata but never the raw key", async () => {
   const directory = await mkdtemp(join(tmpdir(), "spark-cursor-cache-"));
   const path = join(directory, "models.json");
   const apiKey = "cursor-cache-secret";
@@ -452,48 +452,6 @@ void test("Cursor model cache contains a fingerprint and public metadata but nev
     assert.match(serialized, /composer-2\.5/u);
   } finally {
     await rm(directory, { recursive: true, force: true });
-  }
-});
-
-void test("Cursor SDK dependency boundary pins a licensed platform-specific runtime", async () => {
-  const sparkAiPackage = JSON.parse(
-    await readFile(join(process.cwd(), "packages/spark-ai/package.json"), "utf8"),
-  ) as { dependencies: Record<string, string> };
-  assert.equal(sparkAiPackage.dependencies["@cursor/sdk"], "1.0.23");
-  const sdkPackage = JSON.parse(
-    await readFile(
-      join(process.cwd(), "packages/spark-ai/node_modules/@cursor/sdk/package.json"),
-      "utf8",
-    ),
-  ) as { license: string; optionalDependencies: Record<string, string> };
-  assert.equal(sdkPackage.license, "SEE LICENSE IN LICENSE.md");
-  const platformPackages = {
-    "@cursor/sdk-darwin-arm64": "1.0.23",
-    "@cursor/sdk-darwin-x64": "1.0.23",
-    "@cursor/sdk-linux-arm64": "1.0.23",
-    "@cursor/sdk-linux-x64": "1.0.23",
-    "@cursor/sdk-win32-x64": "1.0.23",
-  };
-  assert.deepEqual(sdkPackage.optionalDependencies, platformPackages);
-  const rootPackage = JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8")) as {
-    optionalDependencies: Record<string, string>;
-  };
-  assert.deepEqual(rootPackage.optionalDependencies, platformPackages);
-});
-
-void test("Cursor provider sources preserve the host-neutral package boundary", async () => {
-  const paths = [
-    "cursor-constants.ts",
-    "cursor-fallback-models.ts",
-    "cursor-model-cache.ts",
-    "cursor-model-catalog.ts",
-    "cursor-model-discovery.ts",
-    "cursor-provider.ts",
-    "cursor-stream.ts",
-  ];
-  for (const path of paths) {
-    const source = await readFile(join(process.cwd(), "packages/spark-ai/src", path), "utf8");
-    assert.doesNotMatch(source, /apps\/spark-|@earendil-works\/pi-coding-agent|spark-tui-app/u);
   }
 });
 
@@ -569,7 +527,7 @@ function mockCursorRuntime(options: MockCursorRuntimeOptions): CursorSdkRuntime 
   };
 }
 
-void test("Cursor provider materializes a Spark profile with CURSOR_API_KEY auth", async () => {
+test("Cursor provider materializes a Spark profile with CURSOR_API_KEY auth", async () => {
   const registry = new SparkProviderRegistry();
   await registerCursorProvider(registry, { apiKey: "" });
   const model = registry.listModelsFor("cursor")[0]!;

@@ -177,8 +177,10 @@ describe("SparkSessionMailStore channel delivery receipts", () => {
         },
       ],
       originBinding: {
+        workspaceId: "workspace-info",
         adapter: "infoflow",
         externalKey: "infoflow:user:origin",
+        recipient: "origin",
         adapterId: "info-a",
         adapterAccountIdentity: "channel-account:infoflow:a",
       },
@@ -187,8 +189,10 @@ describe("SparkSessionMailStore channel delivery receipts", () => {
     });
 
     expect(sent.message.originBinding).toEqual({
+      workspaceId: "workspace-info",
       adapter: "infoflow",
       externalKey: "infoflow:user:origin",
+      recipient: "origin",
       adapterId: "info-a",
       adapterAccountIdentity: "channel-account:infoflow:a",
     });
@@ -242,8 +246,10 @@ describe("SparkSessionMailStore channel delivery receipts", () => {
         },
       ],
       originBinding: {
+        workspaceId: "workspace-info",
         adapter: "infoflow",
         externalKey: "infoflow:user:origin",
+        recipient: "origin",
         adapterId: "info-a-renamed",
         adapterAccountIdentity: "channel-account:infoflow:a",
       },

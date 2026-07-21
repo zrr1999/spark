@@ -1,3 +1,6 @@
+import { normalizeChannelMessageReference } from "./message-reference.ts";
+import type { ChannelMessageReference } from "./message-reference.ts";
+
 export type InfoflowAttachmentKind = "image" | "file" | "voice";
 
 /** Display-safe attachment facts. Raw bytes and signed download URLs are never retained here. */
@@ -16,6 +19,8 @@ export interface InfoflowNormalizedContent {
   contentType: string;
   mentions: string[];
   attachments: InfoflowAttachment[];
+  /** Structured quote/reply extracted from body parts; not inlined into text. */
+  messageReference?: ChannelMessageReference;
 }
 
 export interface NormalizeInfoflowContentInput {
@@ -81,6 +86,7 @@ function normalizeBody(body: unknown[], contentType: string): InfoflowNormalized
   const parts: string[] = [];
   const mentions: string[] = [];
   const attachments: InfoflowAttachment[] = [];
+  let messageReference: ChannelMessageReference | undefined;
 
   for (const item of body) {
     const entry = record(item);
@@ -132,8 +138,8 @@ function normalizeBody(body: unknown[], contentType: string): InfoflowNormalized
       }
       case "reply":
       case "quote": {
-        const quoted = firstStringField(entry, "text", "content");
-        if (quoted) parts.push(`> ${safeText(quoted)}`);
+        const extracted = extractInfoflowQuoteReference(entry);
+        if (extracted) messageReference = extracted;
         break;
       }
       case "text":
@@ -157,7 +163,26 @@ function normalizeBody(body: unknown[], contentType: string): InfoflowNormalized
     contentType,
     mentions: [...new Set(mentions)],
     attachments: attachments.map(compactAttachment),
+    ...(messageReference ? { messageReference } : {}),
   };
+}
+
+function extractInfoflowQuoteReference(
+  entry: Record<string, unknown>,
+): ChannelMessageReference | undefined {
+  const preview = firstStringField(entry, "text", "content", "preview");
+  const messageId = firstStringField(entry, "msgid", "messageId", "message_id", "msgId");
+  const secondaryMessageId = firstStringField(entry, "msgid2", "secondaryMessageId", "msgid_2");
+  const senderId = firstStringField(entry, "uid", "userid", "userId", "senderId", "fromuserid");
+  const senderName = firstStringField(entry, "username", "userName", "senderName", "fromusername");
+  return normalizeChannelMessageReference({
+    ...(messageId ? { messageId } : {}),
+    ...(secondaryMessageId ? { secondaryMessageId } : {}),
+    ...(preview ? { preview: safeText(preview) } : {}),
+    ...(senderId ? { senderId } : {}),
+    ...(senderName ? { senderName } : {}),
+    source: preview ? "embedded" : "unknown",
+  });
 }
 
 function attachmentFromContent(kind: InfoflowAttachmentKind, value: unknown): InfoflowAttachment {
@@ -229,7 +254,7 @@ function joinBodyParts(parts: string[]): string {
   for (const rawPart of parts) {
     const part = rawPart.trim();
     if (!part) continue;
-    const block = /^\[(?:图片|文件|语音|如流消息)/u.test(part) || part.startsWith(">");
+    const block = /^\[(?:图片|文件|语音|如流消息)/u.test(part);
     const previousIsBlock = /(?:^|\n)\[(?:图片|文件|语音|如流消息)[^\n]*\]$/u.test(text);
     if (text && (block || previousIsBlock)) {
       text += "\n";

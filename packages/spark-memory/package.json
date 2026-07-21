@@ -14,9 +14,12 @@
     ".": "./src/index.ts",
     "./extension": "./src/extension.ts",
     "./recall": "./src/recall-store.ts",
-    "./recall/extension": "./src/recall-extension.ts",
     "./learning": "./src/learning-store.ts",
-    "./learning/extension": "./src/learning-extension.ts"
+    "./compaction-candidates": "./src/compaction-candidates.ts",
+    "./reflection-candidate-inbox": "./src/reflection-candidate-inbox.ts",
+    "./reflection-in-session-scheduler": "./src/reflection-in-session-scheduler.ts",
+    "./reflection-session-scanner": "./src/reflection-session-scanner.ts",
+    "./reflection-synthesis-engine": "./src/reflection-synthesis-engine.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -26,7 +29,7 @@
   },
   "dependencies": {
     "@zendev-lab/spark-artifacts": "workspace:^",
-    "@zendev-lab/spark-extension-api": "workspace:^",
+    "@zendev-lab/spark-core": "workspace:^",
     "@zendev-lab/spark-system": "workspace:^",
     "typebox": "catalog:"
   },

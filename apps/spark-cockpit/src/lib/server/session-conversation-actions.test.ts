@@ -86,7 +86,7 @@ vi.mock("$lib/server/model-control", () => ({
   setSessionThinkingLevelForCockpit: mocks.setSessionThinkingLevelForCockpit,
 }));
 
-vi.mock("$lib/server/agents-product", () => ({
+vi.mock("@zendev-lab/spark-coordination/agents-product", () => ({
   titleFromPrompt: (prompt: string) => {
     const normalized = prompt.replace(/\s+/g, " ").trim();
     return normalized.length > 80 ? `${normalized.slice(0, 77)}…` : normalized;
@@ -180,7 +180,7 @@ describe("session conversation actions", () => {
     });
   });
 
-  it("loads the model catalog through the active workspace owner", async () => {
+  it("prefers the projected model catalog while the workspace owner is online", async () => {
     const parent = vi.fn().mockResolvedValue({
       activeWorkspace: { id: "ws_demo", slug: "demo", name: "Demo" },
       sessions: [session],
@@ -192,8 +192,29 @@ describe("session conversation actions", () => {
       sessions: [session],
       sessionControlAvailable: true,
     });
+    expect(mocks.loadProjectedModelControlForCockpit).toHaveBeenCalledWith({
+      workspaceId: "ws_demo",
+    });
+    expect(mocks.loadModelControlForCockpit).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the live model catalog when the projection is empty", async () => {
+    const parent = vi.fn().mockResolvedValue({
+      activeWorkspace: { id: "ws_demo", slug: "demo", name: "Demo" },
+      sessions: [session],
+      sessionsAvailable: true,
+      sessionControlAvailable: true,
+    });
+    mocks.loadProjectedModelControlForCockpit.mockResolvedValue({
+      available: false,
+      snapshot: { providers: [], diagnostics: [] },
+    });
+
+    await load({ parent } as never);
+    expect(mocks.loadProjectedModelControlForCockpit).toHaveBeenCalledWith({
+      workspaceId: "ws_demo",
+    });
     expect(mocks.loadModelControlForCockpit).toHaveBeenCalledWith({ workspaceId: "ws_demo" });
-    expect(mocks.loadProjectedModelControlForCockpit).not.toHaveBeenCalled();
   });
 
   it("uses the active workspace model projection while its owner is offline", async () => {

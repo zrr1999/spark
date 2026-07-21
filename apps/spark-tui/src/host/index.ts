@@ -1,7 +1,7 @@
 /**
- * Public barrel for the SparkHostRuntime native ExtensionAPI host.
+ * Public barrel for the SparkHostRuntime native SparkHostAPI host.
  *
- * Extensions speak to `spark-extension-api`'s `ExtensionAPI` shape; this
+ * Extensions speak to `spark-core`'s `SparkHostAPI` shape; this
  * package's job is to provide a runtime that satisfies that contract for the
  * spark-tui native pi-tui host. The barrel keeps the import surface stable
  * across follow-up tasks (`agent-turn-loop`, `model-selector-ui`,
@@ -188,7 +188,7 @@ export {
 export {
   SparkSkillResolver,
   defaultBuiltinSkillsDir,
-  defaultPiCueSkillsDir,
+  defaultSparkCueSkillsDir,
   defaultProjectAgentsSkillsDirs,
   defaultSparkSkillsRoot,
   defaultUserAgentsSkillsDir,
@@ -229,9 +229,9 @@ export type {
   SparkVisibleTranscriptCompactionResult,
 } from "./compaction.ts";
 export type {
-  SparkBuiltinExtensionFactory,
+  SparkBuiltinCapabilityFactory,
   SparkBuiltinExtensionName,
-  SparkExtensionFactory,
+  SparkCapabilityFactory,
   SparkExtensionLoadOutcome,
   SparkExtensionLoadResult,
   SparkExtensionLoaderOptions,

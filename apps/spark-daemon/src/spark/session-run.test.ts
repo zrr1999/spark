@@ -1085,8 +1085,10 @@ describe("daemon native session execution", () => {
       expect.objectContaining({
         sessionSurface: "channel",
         channelBinding: {
+          workspaceId: "workspace-qq",
           adapter: "qqbot",
           externalKey: "qqbot:user:42",
+          recipient: "qq:user:42",
           adapterId: "qqbot-account-a",
           adapterAccountIdentity: "channel-account:qqbot:account-a",
         },

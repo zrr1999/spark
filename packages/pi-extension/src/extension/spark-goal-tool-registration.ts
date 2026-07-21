@@ -1,12 +1,7 @@
 import { Type } from "typebox";
 import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
 import type { TaskGraph } from "@zendev-lab/spark-tasks";
-import {
-  nowIso,
-  type ArtifactRef,
-  type JsonValue,
-  type RoleRef,
-} from "@zendev-lab/spark-extension-api";
+import { nowIso, type ArtifactRef, type JsonValue, type RoleRef } from "@zendev-lab/spark-core";
 import { currentSparkProject, loadSparkGraph, sparkSessionKey } from "./session-state.ts";
 import {
   requestGoalCompletionReview,

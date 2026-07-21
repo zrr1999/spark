@@ -4,7 +4,7 @@ import {
   newRef,
   nowIso,
   readJsonFileOptional,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 
 import { normalizeTaskRunCompletionSummaries } from "./workflow-run-completion.ts";
 import { reconcileWorkflowRunCounters } from "./workflow-run-counters.ts";

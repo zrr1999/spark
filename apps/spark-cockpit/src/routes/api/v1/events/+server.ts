@@ -1,5 +1,5 @@
 import { createCockpitEventStreamResponse } from "$lib/server/events-sse";
-import { createLivenessSweepScheduler } from "$lib/server/liveness";
+import { createLivenessSweepScheduler } from "@zendev-lab/spark-coordination/liveness";
 import type { RequestHandler } from "@sveltejs/kit";
 
 const sweepLivenessIfDue = createLivenessSweepScheduler();

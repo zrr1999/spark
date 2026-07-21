@@ -211,7 +211,7 @@ export interface RuntimeMessageReceiptsTable {
   replay_count: number;
 }
 
-export interface WorkspaceOwnerBindingsTable {
+export interface WorkspaceLeasesTable {
   id: string;
   workspace_id: string;
   runtime_workspace_binding_id: string;
@@ -514,7 +514,7 @@ export interface SparkDatabase {
   runtime_sessions: RuntimeSessionsTable;
   runtime_workspace_bindings: RuntimeWorkspaceBindingsTable;
   runtime_message_receipts: RuntimeMessageReceiptsTable;
-  workspace_owner_bindings: WorkspaceOwnerBindingsTable;
+  workspace_leases: WorkspaceLeasesTable;
   workspace_profile_sources: WorkspaceProfileSourcesTable;
   workspace_profile_git_access: WorkspaceProfileGitAccessTable;
   commands: CommandsTable;

@@ -72,4 +72,32 @@ describe("normalizeInfoflowContent", () => {
   it("keeps an unsupported message visible instead of dropping the turn", () => {
     expect(normalizeInfoflowContent({ messageType: "private.face" }).text).toBe("[如流消息: face]");
   });
+
+  it("extracts quote/reply parts into messageReference without inlining into text", () => {
+    const normalized = normalizeInfoflowContent({
+      messageType: "group.mixed",
+      body: [
+        {
+          type: "quote",
+          text: "被引用原文",
+          msgid: "m-1",
+          msgid2: "m-2",
+          uid: "bob",
+          username: "Bob",
+        },
+        { type: "TEXT", content: "请继续" },
+      ],
+    });
+
+    expect(normalized.text).toBe("请继续");
+    expect(normalized.text).not.toContain(">");
+    expect(normalized.messageReference).toEqual({
+      messageId: "m-1",
+      secondaryMessageId: "m-2",
+      preview: "被引用原文",
+      senderId: "bob",
+      senderName: "Bob",
+      source: "embedded",
+    });
+  });
 });

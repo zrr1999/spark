@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   SparkProviderRegistry,
@@ -29,7 +29,7 @@ const fakeProvider: ProviderConfig = {
   ],
 };
 
-void test("provider registry stream path forwards prompt_cache_key to OpenAI-compatible options", async () => {
+test("provider registry stream path forwards prompt_cache_key to OpenAI-compatible options", async () => {
   const registry = new SparkProviderRegistry();
   let capturedOptions: any;
   registry.registerProvider("fake", {
@@ -59,7 +59,7 @@ void test("provider registry stream path forwards prompt_cache_key to OpenAI-com
   });
 });
 
-void test("provider transport retries have no attempt cap inside an abortable turn", () => {
+test("provider transport retries have no attempt cap inside an abortable turn", () => {
   const registry = new SparkProviderRegistry();
   let capturedOptions: any;
   registry.registerProvider("fake", {
@@ -80,7 +80,7 @@ void test("provider transport retries have no attempt cap inside an abortable tu
   assert.equal(capturedOptions.maxRetries, SPARK_PROVIDER_TRANSPORT_MAX_RETRIES);
 });
 
-void test("provider transport preserves an explicit retry policy", () => {
+test("provider transport preserves an explicit retry policy", () => {
   const registry = new SparkProviderRegistry();
   let capturedOptions: any;
   registry.registerProvider("fake", {
@@ -101,7 +101,7 @@ void test("provider transport preserves an explicit retry policy", () => {
   assert.equal(capturedOptions.maxRetries, 2);
 });
 
-void test("provider registry bridge composes an existing OpenAI Responses payload hook", async () => {
+test("provider registry bridge composes an existing OpenAI Responses payload hook", async () => {
   const registry = new SparkProviderRegistry();
   let capturedOptions: any;
   registry.registerProvider("fake", {
@@ -129,7 +129,7 @@ void test("provider registry bridge composes an existing OpenAI Responses payloa
   });
 });
 
-void test("provider registry bridge preserves an explicit OpenAI Responses sessionId", () => {
+test("provider registry bridge preserves an explicit OpenAI Responses sessionId", () => {
   const registry = new SparkProviderRegistry();
   let capturedOptions: any;
   registry.registerProvider("fake", {
@@ -151,7 +151,7 @@ void test("provider registry bridge preserves an explicit OpenAI Responses sessi
   assert.equal(capturedOptions.onPayload, undefined);
 });
 
-void test("provider registry payload bridge honors disabled cache retention", () => {
+test("provider registry payload bridge honors disabled cache retention", () => {
   const registry = new SparkProviderRegistry();
   let capturedOptions: any;
   registry.registerProvider("fake", {
@@ -173,7 +173,7 @@ void test("provider registry payload bridge honors disabled cache retention", ()
   assert.equal(capturedOptions.onPayload, undefined);
 });
 
-void test("provider registry payload bridge preserves the OpenAI cache-key length limit", async () => {
+test("provider registry payload bridge preserves the OpenAI cache-key length limit", async () => {
   const registry = new SparkProviderRegistry();
   let capturedOptions: any;
   registry.registerProvider("fake", {
@@ -195,7 +195,7 @@ void test("provider registry payload bridge preserves the OpenAI cache-key lengt
   assert.equal(payload.prompt_cache_key, "x".repeat(64));
 });
 
-void test("provider registry payload bridge leaves other transports untouched", () => {
+test("provider registry payload bridge leaves other transports untouched", () => {
   const registry = new SparkProviderRegistry();
   let capturedOptions: any;
   registry.registerProvider("fake", {
@@ -218,7 +218,7 @@ void test("provider registry payload bridge leaves other transports untouched", 
   assert.equal(capturedOptions.onPayload, undefined);
 });
 
-void test("Spark prompt cache key reaches the real pi-ai OpenAI Responses payload", async () => {
+test("Spark prompt cache key reaches the real pi-ai OpenAI Responses payload", async () => {
   const originalFetch = globalThis.fetch;
   let capturedPayload: Record<string, unknown> | undefined;
   let capturedRequestId: string | null | undefined;
@@ -258,7 +258,7 @@ void test("Spark prompt cache key reaches the real pi-ai OpenAI Responses payloa
   }
 });
 
-void test("Spark real pi-ai provider retries transient responses inside one invocation", async () => {
+test("Spark real pi-ai provider retries transient responses inside one invocation", async () => {
   const originalFetch = globalThis.fetch;
   let fetchCalls = 0;
   globalThis.fetch = (async () => {

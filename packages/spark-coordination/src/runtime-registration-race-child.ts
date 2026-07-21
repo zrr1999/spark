@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import {
   registerRuntimeWorkspace,
-  RuntimeWorkspaceOwnerConflictError,
+  RuntimeWorkspaceLeaseConflictError,
 } from "./runtime-registration.ts";
 
 interface RaceRegistrationInput {
@@ -39,7 +39,7 @@ process.on("message", (message: RaceRegistrationInput) => {
     process.send?.({
       ok: false,
       reasonCode:
-        error instanceof RuntimeWorkspaceOwnerConflictError
+        error instanceof RuntimeWorkspaceLeaseConflictError
           ? error.reasonCode
           : "UNEXPECTED_REGISTRATION_ERROR",
     });

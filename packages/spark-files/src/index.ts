@@ -7,9 +7,9 @@ export {
 export { createFindToolConfig, createGrepToolConfig } from "./search-tools.ts";
 export {
   default,
-  registerPiFilesTools,
-  type PiFilesExtensionApi,
-  type PiFilesOptions,
+  registerSparkFilesTools,
+  type SparkFilesHostApi,
+  type SparkFilesOptions,
 } from "./extension.ts";
 export {
   applyEditsToNormalizedContent,

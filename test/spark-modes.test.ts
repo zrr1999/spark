@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   BUILTIN_MODES,
@@ -26,7 +26,7 @@ function builtinDefinitions(): ModeDefinition[] {
   }));
 }
 
-void test("createModeRegistry preserves order, supports custom modes, and reports builtins", () => {
+test("createModeRegistry preserves order, supports custom modes, and reports builtins", () => {
   const registry = createModeRegistry({ definitions: builtinDefinitions() });
   registry.register({
     id: "audit",
@@ -41,7 +41,7 @@ void test("createModeRegistry preserves order, supports custom modes, and report
   assert.throws(() => registry.require("nope"), /unknown mode: nope/u);
 });
 
-void test("createModeRegistry re-registration overwrites without duplicating order", () => {
+test("createModeRegistry re-registration overwrites without duplicating order", () => {
   const registry = createModeRegistry({ definitions: builtinDefinitions() });
   registry.register({
     id: "plan",
@@ -53,7 +53,7 @@ void test("createModeRegistry re-registration overwrites without duplicating ord
   assert.equal(registry.require("plan").title, "Plan v2");
 });
 
-void test("resolveActiveMode honors explicit > suggested > fallback precedence", () => {
+test("resolveActiveMode honors explicit > suggested > fallback precedence", () => {
   const registry = createModeRegistry({ definitions: builtinDefinitions() });
   assert.deepEqual(
     resolveActiveMode({
@@ -76,7 +76,7 @@ void test("resolveActiveMode honors explicit > suggested > fallback precedence",
   });
 });
 
-void test("resolveActiveMode ignores unknown explicit/suggested ids and falls through", () => {
+test("resolveActiveMode ignores unknown explicit/suggested ids and falls through", () => {
   const registry = createModeRegistry({ definitions: builtinDefinitions() });
   assert.deepEqual(
     resolveActiveMode({
@@ -94,7 +94,7 @@ void test("resolveActiveMode ignores unknown explicit/suggested ids and falls th
   });
 });
 
-void test("resolveActiveMode uses first registered mode when fallback is unregistered", () => {
+test("resolveActiveMode uses first registered mode when fallback is unregistered", () => {
   const registry = createModeRegistry({
     definitions: [{ id: "only", title: "Only", renderRequirements: () => "x" }],
   });
@@ -105,12 +105,12 @@ void test("resolveActiveMode uses first registered mode when fallback is unregis
   });
 });
 
-void test("resolveActiveMode throws on an empty registry", () => {
+test("resolveActiveMode throws on an empty registry", () => {
   const registry = createModeRegistry();
   assert.throws(() => resolveActiveMode({ registry, driver: "assist" }), /registry is empty/u);
 });
 
-void test("resolveTurnDriver prefers workflow over repro over goal over loop over assist", () => {
+test("resolveTurnDriver prefers workflow over repro over goal over loop over assist", () => {
   assert.equal(
     resolveTurnDriver({ workflowRunActive: true, reproActive: true, goalLoopActive: true }),
     "workflow",
@@ -121,14 +121,14 @@ void test("resolveTurnDriver prefers workflow over repro over goal over loop ove
   assert.equal(resolveTurnDriver({}), "assist");
 });
 
-void test("createModeTool exposes registry ids plus status as actions", () => {
+test("createModeTool exposes registry ids plus status as actions", () => {
   const registry = createModeRegistry({ definitions: builtinDefinitions() });
   const tool = createModeTool({ registry });
   assert.equal(tool.name, "mode");
   assert.match(tool.description, /plan \| implement \| status/u);
 });
 
-void test("normalizeModeToolAction validates against registry and status", () => {
+test("normalizeModeToolAction validates against registry and status", () => {
   const registry = createModeRegistry({ definitions: builtinDefinitions() });
   assert.equal(normalizeModeToolAction(undefined, registry), MODE_TOOL_STATUS_ACTION);
   assert.equal(normalizeModeToolAction("plan", registry), "plan");
@@ -136,7 +136,7 @@ void test("normalizeModeToolAction validates against registry and status", () =>
   assert.throws(() => normalizeModeToolAction("bogus", registry), /mode action must be one of/u);
 });
 
-void test("runModeToolAction reports status without switching and switches otherwise", () => {
+test("runModeToolAction reports status without switching and switches otherwise", () => {
   const registry = createModeRegistry({ definitions: builtinDefinitions() });
   const status = runModeToolAction({
     action: MODE_TOOL_STATUS_ACTION,
@@ -161,7 +161,7 @@ void test("runModeToolAction reports status without switching and switches other
   assert.match(switched.text, /focus=ship/u);
 });
 
-void test("renderModeMarker shows phase only for assist and drive for autonomous drivers", () => {
+test("renderModeMarker shows phase only for assist and drive for autonomous drivers", () => {
   assert.equal(renderModeMarker({ mode: "plan", driver: "assist" }), undefined);
   assert.equal(
     renderModeMarker({ mode: "plan", driver: "assist", toolsHint: "Tools: x" }),
@@ -175,14 +175,14 @@ void test("renderModeMarker shows phase only for assist and drive for autonomous
   );
 });
 
-void test("composeAgentSystemPrompt drops empty sections", () => {
+test("composeAgentSystemPrompt drops empty sections", () => {
   assert.equal(
     composeAgentSystemPrompt(["identity", "  ", undefined, "surface", null, ""]),
     "identity\n\nsurface",
   );
 });
 
-void test("assembleModeSystemPrompt joins non-empty sections in order", () => {
+test("assembleModeSystemPrompt joins non-empty sections in order", () => {
   const registry = createModeRegistry({ definitions: builtinDefinitions() });
   const prompt = assembleModeSystemPrompt({
     basePrompt: "BASE",

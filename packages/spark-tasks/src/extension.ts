@@ -1,17 +1,13 @@
 import { Type } from "typebox";
-import type {
-  ToolConfig,
-  ToolRenderComponent,
-  ToolRenderTheme,
-} from "@zendev-lab/spark-extension-api";
+import type { ToolConfig, ToolRenderComponent, ToolRenderTheme } from "@zendev-lab/spark-core";
 
-export type PiTaskReadAction =
+export type SparkTaskReadAction =
   | "task_status"
   | "project_status"
   | "workspace_status"
   | "project_list"
   | "run_status";
-export type PiTaskWriteAction =
+export type SparkTaskWriteAction =
   | "project_use"
   | "project_rename"
   | "project_metadata_update"
@@ -21,15 +17,15 @@ export type PiTaskWriteAction =
   | "recover"
   | "plan_update"
   | "cache_cleanup";
-export type PiTaskAssignAction = "assign";
-export type PiTaskAction = PiTaskReadAction | PiTaskWriteAction | PiTaskAssignAction;
+export type SparkTaskAssignAction = "assign";
+export type SparkTaskAction = SparkTaskReadAction | SparkTaskWriteAction | SparkTaskAssignAction;
 
 /**
  * Session-bound TODO checklist ops. The `todo` tool is a lightweight, action-style
  * checklist that survives reload for the current session and is not tied to a claimed
  * task. Task plan items live on task_write({ action: "plan_update" }) instead.
  */
-export type PiTodoAction =
+export type SparkTodoAction =
   | "list"
   | "init"
   | "append"
@@ -47,9 +43,9 @@ type ToolExecute = ToolConfig["execute"];
 type ToolOnUpdate = Parameters<ToolExecute>[3];
 type ToolContext = Parameters<ToolExecute>[4];
 
-export type PiTaskToolResult = Awaited<ReturnType<ToolExecute>>;
+export type SparkTaskToolResult = Awaited<ReturnType<ToolExecute>>;
 
-export interface PiTaskActionHandlerArgs {
+export interface SparkTaskActionHandlerArgs {
   toolCallId: string;
   params: Record<string, unknown>;
   signal: AbortSignal;
@@ -57,21 +53,23 @@ export interface PiTaskActionHandlerArgs {
   ctx: ToolContext;
 }
 
-export type PiTaskActionHandler = (args: PiTaskActionHandlerArgs) => Promise<PiTaskToolResult>;
+export type SparkTaskActionHandler = (
+  args: SparkTaskActionHandlerArgs,
+) => Promise<SparkTaskToolResult>;
 
-export type PiTaskToolHandlers = Partial<Record<PiTaskAction, PiTaskActionHandler>>;
+export type SparkTaskToolHandlers = Partial<Record<SparkTaskAction, SparkTaskActionHandler>>;
 
-export interface PiTaskExtensionApi {
+export interface SparkTaskHostApi {
   registerTool(config: ToolConfig): void;
 }
 
-export interface PiTaskToolOptions {
-  handlers: PiTaskToolHandlers;
+export interface SparkTaskToolOptions {
+  handlers: SparkTaskToolHandlers;
 }
 
 /** The `todo` tool routes every action through one session-bound handler. */
-export interface PiTodoToolOptions {
-  handler: PiTaskActionHandler;
+export interface SparkTodoToolOptions {
+  handler: SparkTaskActionHandler;
 }
 
 class ToolCallText implements ToolRenderComponent {
@@ -88,7 +86,7 @@ class ToolCallText implements ToolRenderComponent {
   }
 }
 
-const TASK_READ_ACTIONS: readonly PiTaskReadAction[] = [
+const TASK_READ_ACTIONS: readonly SparkTaskReadAction[] = [
   "task_status",
   "project_status",
   "workspace_status",
@@ -96,7 +94,7 @@ const TASK_READ_ACTIONS: readonly PiTaskReadAction[] = [
   "run_status",
 ];
 
-const TASK_WRITE_ACTIONS: readonly PiTaskWriteAction[] = [
+const TASK_WRITE_ACTIONS: readonly SparkTaskWriteAction[] = [
   "project_use",
   "project_rename",
   "project_metadata_update",
@@ -108,7 +106,7 @@ const TASK_WRITE_ACTIONS: readonly PiTaskWriteAction[] = [
   "cache_cleanup",
 ];
 
-const TODO_ACTIONS: readonly PiTodoAction[] = [
+const TODO_ACTIONS: readonly SparkTodoAction[] = [
   "list",
   "init",
   "append",
@@ -123,7 +121,7 @@ const TODO_ACTIONS: readonly PiTodoAction[] = [
   "note",
 ];
 
-export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOptions): void {
+export function registerSparkTaskTool(pi: SparkTaskHostApi, options: SparkTaskToolOptions): void {
   pi.registerTool({
     name: "task_read",
     label: "Task Read",
@@ -190,8 +188,8 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
       return renderTaskCall("task_read", args, theme);
     },
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const action = normalizePiTaskReadAction(params.action);
-      return executePiTaskAction("task_read", action, options, {
+      const action = normalizeSparkTaskReadAction(params.action);
+      return executeSparkTaskAction("task_read", action, options, {
         toolCallId,
         params,
         signal,
@@ -308,8 +306,8 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
       return renderTaskCall("task_write", args, theme);
     },
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const action = normalizePiTaskWriteAction(params.action);
-      return executePiTaskAction("task_write", action, options, {
+      const action = normalizeSparkTaskWriteAction(params.action);
+      return executeSparkTaskAction("task_write", action, options, {
         toolCallId,
         params,
         signal,
@@ -346,7 +344,7 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
       return new ToolCallText(theme.bold ? theme.bold(text) : text);
     },
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      return executePiTaskAction("assign", "assign", options, {
+      return executeSparkTaskAction("assign", "assign", options, {
         toolCallId,
         params,
         signal,
@@ -357,18 +355,18 @@ export function registerPiTaskTool(pi: PiTaskExtensionApi, options: PiTaskToolOp
   });
 }
 
-function executePiTaskAction(
+function executeSparkTaskAction(
   toolName: string,
-  action: PiTaskAction,
-  options: PiTaskToolOptions,
-  args: PiTaskActionHandlerArgs,
-): Promise<PiTaskToolResult> {
+  action: SparkTaskAction,
+  options: SparkTaskToolOptions,
+  args: SparkTaskActionHandlerArgs,
+): Promise<SparkTaskToolResult> {
   const handler = options.handlers[action];
   if (!handler) throw new Error(`${toolName} action is not available in this host: ${action}`);
   return handler(args);
 }
 
-export function registerPiTodoTool(pi: PiTaskExtensionApi, options: PiTodoToolOptions): void {
+export function registerSparkTodoTool(pi: SparkTaskHostApi, options: SparkTodoToolOptions): void {
   pi.registerTool({
     name: "todo",
     label: "Todo",
@@ -401,7 +399,7 @@ export function registerPiTodoTool(pi: PiTaskExtensionApi, options: PiTodoToolOp
       return new ToolCallText(theme.bold ? theme.bold(text) : text);
     },
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      normalizePiTodoAction(params.action);
+      normalizeSparkTodoAction(params.action);
       return options.handler({ toolCallId, params, signal, onUpdate, ctx });
     },
   });
@@ -424,17 +422,18 @@ function renderTaskCall(
   return new ToolCallText(theme.bold ? theme.bold(text) : text);
 }
 
-function normalizePiTaskReadAction(value: unknown): PiTaskReadAction {
-  if (TASK_READ_ACTIONS.includes(value as PiTaskReadAction)) return value as PiTaskReadAction;
+function normalizeSparkTaskReadAction(value: unknown): SparkTaskReadAction {
+  if (TASK_READ_ACTIONS.includes(value as SparkTaskReadAction)) return value as SparkTaskReadAction;
   throw new Error(`task_read.action must be one of: ${TASK_READ_ACTIONS.join(", ")}`);
 }
 
-function normalizePiTaskWriteAction(value: unknown): PiTaskWriteAction {
-  if (TASK_WRITE_ACTIONS.includes(value as PiTaskWriteAction)) return value as PiTaskWriteAction;
+function normalizeSparkTaskWriteAction(value: unknown): SparkTaskWriteAction {
+  if (TASK_WRITE_ACTIONS.includes(value as SparkTaskWriteAction))
+    return value as SparkTaskWriteAction;
   throw new Error(`task_write.action must be one of: ${TASK_WRITE_ACTIONS.join(", ")}`);
 }
 
-export function normalizePiTodoAction(value: unknown): PiTodoAction {
-  if (TODO_ACTIONS.includes(value as PiTodoAction)) return value as PiTodoAction;
+export function normalizeSparkTodoAction(value: unknown): SparkTodoAction {
+  if (TODO_ACTIONS.includes(value as SparkTodoAction)) return value as SparkTodoAction;
   throw new Error(`todo.action must be one of: ${TODO_ACTIONS.join(", ")}`);
 }

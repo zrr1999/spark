@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import net, { type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { CueClient } from "../packages/spark-cue/src/index.ts";
 
@@ -18,7 +18,7 @@ function send(socket: Socket, id: number, ok: unknown): void {
   socket.write(encodeFrame({ type: "response", id, payload: { Ok: ok } }));
 }
 
-void test("CueClient accepts a compatible v2 Pong without instance_id", async () => {
+test("CueClient accepts a compatible v2 Pong without instance_id", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cue-instance-id-"));
   const socketPath = join(dir, "cued.sock");
   const sockets = new Set<Socket>();

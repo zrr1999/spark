@@ -3,7 +3,7 @@
 import { Type } from "typebox";
 import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
 import { verifyCanonicalAskEvidenceArtifact } from "@zendev-lab/spark-ask";
-import { nowIso, type ArtifactRef } from "@zendev-lab/spark-extension-api";
+import { nowIso, type ArtifactRef } from "@zendev-lab/spark-core";
 import { clearSessionGoal } from "./spark-session-goals.ts";
 import { clearSessionLoop } from "./spark-session-loops.ts";
 import { sparkActiveLens } from "./spark-drive-state.ts";
@@ -26,7 +26,7 @@ import {
   type SparkSessionRepro,
 } from "./spark-session-repro.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
-import { sparkSessionOwnerKey } from "./session-identity.ts";
+import { sparkSessionOwnerKey } from "@zendev-lab/spark-loop";
 
 interface SparkReproToolDeps {
   refreshSparkWidget?: (cwd: string, ctx?: SparkToolContext) => Promise<void>;

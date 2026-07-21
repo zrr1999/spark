@@ -1,7 +1,7 @@
 import type {
   ExtensionInteractionRequest,
   ExtensionInteractionResponse,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import { truncateToWidth } from "@zendev-lab/spark-tui/text";
 import { Type } from "typebox";
 
@@ -17,39 +17,39 @@ import {
   type ParsedAskChoice,
 } from "./shared-semantics.ts";
 
-export type PiAskMode = "clarification" | "decision" | "approval" | "unblock";
-export type PiAskDelivery = "blocking" | "async";
-export type PiAskQuestionType = "single" | "multi" | "freeform";
+export type SparkAskMode = "clarification" | "decision" | "approval" | "unblock";
+export type SparkAskDelivery = "blocking" | "async";
+export type SparkAskQuestionType = "single" | "multi" | "freeform";
 
-export interface PiAskOption {
+export interface SparkAskOption {
   value: string;
   label: string;
   description?: string;
   preview?: string;
 }
 
-export interface PiAskQuestion {
+export interface SparkAskQuestion {
   id: string;
   prompt: string;
   header?: string;
-  type?: PiAskQuestionType | "preview";
-  options?: PiAskOption[];
+  type?: SparkAskQuestionType | "preview";
+  options?: SparkAskOption[];
   required?: boolean;
   defaultValues?: string[];
 }
 
-export interface PiAskRequest {
+export interface SparkAskRequest {
   title?: string;
-  mode?: PiAskMode;
+  mode?: SparkAskMode;
   /** Defaults to blocking. Async asks return after the daemon durably accepts them. */
-  delivery?: PiAskDelivery;
+  delivery?: SparkAskDelivery;
   /** Host-owned blocking wait deadline; intended for internal fallback policy. */
   timeoutMs?: number;
   context?: string;
-  questions: PiAskQuestion[];
+  questions: SparkAskQuestion[];
 }
 
-export interface PiAskAnswerEntry {
+export interface SparkAskAnswerEntry {
   values: string[];
   labels: string[];
   customText?: string;
@@ -58,19 +58,19 @@ export interface PiAskAnswerEntry {
   preview?: string;
 }
 
-export type PiAskResultStatus = "answered" | "pending" | "cancelled" | "no_selection";
+export type SparkAskResultStatus = "answered" | "pending" | "cancelled" | "no_selection";
 
-export interface PiAskResult {
-  status: PiAskResultStatus;
+export interface SparkAskResult {
+  status: SparkAskResultStatus;
   humanRequestId?: string;
   /** True only when the host closed the human wait because its deadline elapsed. */
   timedOut?: boolean;
   cancelled: boolean;
-  answers: Record<string, PiAskAnswerEntry>;
+  answers: Record<string, SparkAskAnswerEntry>;
   nextAction: "resume" | "block";
 }
 
-export interface PiAskUi {
+export interface SparkAskUi {
   select?: (title: string, options: string[]) => Promise<string | undefined>;
   selectWithCustom?: (
     title: string,
@@ -82,11 +82,11 @@ export interface PiAskUi {
   notify?: (message: string, level?: "info" | "warning" | "error" | "success") => void;
 }
 
-export interface PiAskExtensionApi {
-  registerTool(config: PiAskToolConfig): void;
+export interface SparkAskHostApi {
+  registerTool(config: SparkAskToolConfig): void;
 }
 
-interface PiAskToolConfig {
+interface SparkAskToolConfig {
   name: string;
   label?: string;
   description: string;
@@ -129,7 +129,7 @@ class ToolCallText implements ToolCallComponent {
   }
 }
 
-export function createAskUserRequest(input: PiAskRequest): PiAskRequest {
+export function createAskUserRequest(input: SparkAskRequest): SparkAskRequest {
   if (input.questions.length === 0) throw new Error("ask_user needs at least one question");
   if (
     input.timeoutMs !== undefined &&
@@ -155,7 +155,7 @@ export function createAskUserRequest(input: PiAskRequest): PiAskRequest {
   return input;
 }
 
-export async function askUser(request: PiAskRequest, ui?: PiAskUi): Promise<PiAskResult> {
+export async function askUser(request: SparkAskRequest, ui?: SparkAskUi): Promise<SparkAskResult> {
   const normalized = createAskUserRequest(request);
   if (!ui) {
     return normalized.delivery === "async"
@@ -167,7 +167,7 @@ export async function askUser(request: PiAskRequest, ui?: PiAskUi): Promise<PiAs
   if (interactionResult) return normalizeAskUserResult(normalized, interactionResult);
   if (normalized.delivery === "async") return unavailableAskUserResult(normalized);
 
-  const answers: Record<string, PiAskAnswerEntry> = {};
+  const answers: Record<string, SparkAskAnswerEntry> = {};
   for (const question of normalized.questions) {
     const resolved = await resolveQuestion(question, normalized, ui);
     if (!resolved.answer) {
@@ -192,13 +192,13 @@ export async function askUser(request: PiAskRequest, ui?: PiAskUi): Promise<PiAs
   });
 }
 
-export function defaultAskUserResult(request: PiAskRequest): PiAskResult {
+export function defaultAskUserResult(request: SparkAskRequest): SparkAskResult {
   if (request.delivery === "async") return unavailableAskUserResult(request);
   if (requestRequiresExplicitAskUserSelection(request)) {
     return createAskUserResult({ cancelled: false, answers: {}, status: "no_selection" });
   }
 
-  const answers: Record<string, PiAskAnswerEntry> = {};
+  const answers: Record<string, SparkAskAnswerEntry> = {};
   for (const question of request.questions) {
     const answer = defaultAskChoice(question.options, question.type ?? "single");
     if (answer) answers[question.id] = toAskUserAnswer(answer);
@@ -207,9 +207,9 @@ export function defaultAskUserResult(request: PiAskRequest): PiAskResult {
 }
 
 export function createAskUserResult(
-  input: Omit<PiAskResult, "status" | "nextAction"> &
-    Partial<Pick<PiAskResult, "status" | "nextAction">>,
-): PiAskResult {
+  input: Omit<SparkAskResult, "status" | "nextAction"> &
+    Partial<Pick<SparkAskResult, "status" | "nextAction">>,
+): SparkAskResult {
   const status = input.status ?? inferAskUserResultStatus(input);
   return {
     ...input,
@@ -219,7 +219,7 @@ export function createAskUserResult(
   };
 }
 
-export function registerPiAskTools(pi: PiAskExtensionApi): void {
+export function registerSparkAskTools(pi: SparkAskHostApi): void {
   pi.registerTool({
     name: "ask_user",
     label: "Ask User",
@@ -281,14 +281,14 @@ export function registerPiAskTools(pi: PiAskExtensionApi): void {
   });
 }
 
-function decodeAskRequest(params: Record<string, unknown>): PiAskRequest {
+function decodeAskRequest(params: Record<string, unknown>): SparkAskRequest {
   const questions = Array.isArray(params.questions)
     ? (params.questions as Array<Record<string, unknown>>).map(
         (raw) =>
           ({
             id: typeof raw.id === "string" ? raw.id : "",
             prompt: typeof raw.prompt === "string" ? raw.prompt : "",
-            type: raw.type as PiAskQuestionType | undefined,
+            type: raw.type as SparkAskQuestionType | undefined,
             options: Array.isArray(raw.options)
               ? (raw.options as Array<Record<string, unknown>>).map(
                   (entry) =>
@@ -296,20 +296,20 @@ function decodeAskRequest(params: Record<string, unknown>): PiAskRequest {
                       value: typeof entry.value === "string" ? entry.value : "",
                       label: typeof entry.label === "string" ? entry.label : "",
                       description: entry.description as string | undefined,
-                    }) satisfies PiAskOption,
+                    }) satisfies SparkAskOption,
                 )
               : undefined,
             required: raw.required === true,
             defaultValues: Array.isArray(raw.defaultValues)
               ? raw.defaultValues.filter((value): value is string => typeof value === "string")
               : undefined,
-          }) satisfies PiAskQuestion,
+          }) satisfies SparkAskQuestion,
       )
     : [];
 
   return createAskUserRequest({
     title: params.title as string | undefined,
-    mode: params.mode as PiAskMode | undefined,
+    mode: params.mode as SparkAskMode | undefined,
     delivery: normalizeAskDelivery(params.delivery),
     timeoutMs: normalizeAskTimeoutMs(params.timeoutMs),
     context: params.context as string | undefined,
@@ -317,42 +317,42 @@ function decodeAskRequest(params: Record<string, unknown>): PiAskRequest {
   });
 }
 
-function ctxUi(ctx: unknown): PiAskUi | undefined {
+function ctxUi(ctx: unknown): SparkAskUi | undefined {
   if (!ctx || typeof ctx !== "object") return undefined;
   const ui = (ctx as { ui?: unknown }).ui;
   if (!ui || typeof ui !== "object") return undefined;
   return {
     select:
       typeof (ui as { select?: unknown }).select === "function"
-        ? (ui as { select: PiAskUi["select"] }).select
+        ? (ui as { select: SparkAskUi["select"] }).select
         : undefined,
     selectWithCustom:
       typeof (ui as { selectWithCustom?: unknown }).selectWithCustom === "function"
-        ? (ui as { selectWithCustom: PiAskUi["selectWithCustom"] }).selectWithCustom
+        ? (ui as { selectWithCustom: SparkAskUi["selectWithCustom"] }).selectWithCustom
         : undefined,
     confirm:
       typeof (ui as { confirm?: unknown }).confirm === "function"
-        ? (ui as { confirm: PiAskUi["confirm"] }).confirm
+        ? (ui as { confirm: SparkAskUi["confirm"] }).confirm
         : undefined,
     input:
       typeof (ui as { input?: unknown }).input === "function"
-        ? (ui as { input: PiAskUi["input"] }).input
+        ? (ui as { input: SparkAskUi["input"] }).input
         : undefined,
     interaction:
       typeof (ui as { interaction?: unknown }).interaction === "function"
-        ? (ui as { interaction: PiAskUi["interaction"] }).interaction
+        ? (ui as { interaction: SparkAskUi["interaction"] }).interaction
         : undefined,
     notify:
       typeof (ui as { notify?: unknown }).notify === "function"
-        ? (ui as { notify: PiAskUi["notify"] }).notify
+        ? (ui as { notify: SparkAskUi["notify"] }).notify
         : undefined,
   };
 }
 
 async function askUserViaInteraction(
-  request: PiAskRequest,
-  ui: PiAskUi,
-): Promise<PiAskResult | undefined> {
+  request: SparkAskRequest,
+  ui: SparkAskUi,
+): Promise<SparkAskResult | undefined> {
   if (!ui.interaction) return undefined;
   try {
     const response = await ui.interaction(createAskUserInteractionRequest(request));
@@ -363,7 +363,7 @@ async function askUserViaInteraction(
   }
 }
 
-function createAskUserInteractionRequest(request: PiAskRequest): ExtensionInteractionRequest {
+function createAskUserInteractionRequest(request: SparkAskRequest): ExtensionInteractionRequest {
   return {
     version: 1,
     kind: "askFlow",
@@ -388,9 +388,9 @@ function createAskUserInteractionRequest(request: PiAskRequest): ExtensionIntera
 }
 
 function askUserResultFromInteractionResponse(
-  request: PiAskRequest,
+  request: SparkAskRequest,
   response: ExtensionInteractionResponse,
-): PiAskResult | undefined {
+): SparkAskResult | undefined {
   if (response.kind !== "askFlow") return undefined;
   if (response.status === "blocked" || response.status === "error") return undefined;
   if (response.status === "cancelled") {
@@ -421,12 +421,12 @@ function askUserResultFromInteractionResponse(
 }
 
 function normalizeAskUserInteractionAnswers(
-  request: PiAskRequest,
+  request: SparkAskRequest,
   value: unknown,
-): Record<string, PiAskAnswerEntry> {
+): Record<string, SparkAskAnswerEntry> {
   if (!value || typeof value !== "object") return {};
   const rawAnswers = value as Record<string, unknown>;
-  const answers: Record<string, PiAskAnswerEntry> = {};
+  const answers: Record<string, SparkAskAnswerEntry> = {};
   for (const question of request.questions) {
     const raw = rawAnswers[question.id];
     const answer = normalizeAskUserInteractionAnswer(question, raw);
@@ -436,9 +436,9 @@ function normalizeAskUserInteractionAnswers(
 }
 
 function normalizeAskUserInteractionAnswer(
-  question: PiAskQuestion,
+  question: SparkAskQuestion,
   value: unknown,
-): PiAskAnswerEntry | undefined {
+): SparkAskAnswerEntry | undefined {
   if (typeof value === "string") {
     return toAskUserAnswer(
       parseAskChoice(question.options ?? [], value, question.type ?? "single"),
@@ -468,7 +468,7 @@ function normalizeAskUserInteractionAnswer(
   };
 }
 
-function labelsForValues(question: PiAskQuestion, values: string[]): string[] {
+function labelsForValues(question: SparkAskQuestion, values: string[]): string[] {
   const byValue = new Map((question.options ?? []).map((option) => [option.value, option.label]));
   return values.map((value) => byValue.get(value) ?? value);
 }
@@ -484,13 +484,13 @@ function formatUnknownError(error: unknown): string {
 }
 
 interface ResolvedQuestion {
-  answer?: PiAskAnswerEntry;
+  answer?: SparkAskAnswerEntry;
 }
 
 async function resolveQuestion(
-  question: PiAskQuestion,
-  request: PiAskRequest,
-  ui: PiAskUi,
+  question: SparkAskQuestion,
+  request: SparkAskRequest,
+  ui: SparkAskUi,
 ): Promise<ResolvedQuestion> {
   const title = request.title ? `${request.title} — ${question.prompt}` : question.prompt;
   if ((question.type ?? "single") === "freeform") {
@@ -499,7 +499,7 @@ async function resolveQuestion(
     return { answer: { values: [], labels: [], customText: text } };
   }
 
-  const questionType = (question.type ?? "single") as Exclude<PiAskQuestionType, "freeform">;
+  const questionType = (question.type ?? "single") as Exclude<SparkAskQuestionType, "freeform">;
 
   if (question.options && (ui.selectWithCustom || ui.select)) {
     const selected = await selectOptionWithCustom(ui, title, question.options);
@@ -543,7 +543,7 @@ async function resolveQuestion(
   return {};
 }
 
-function toAskUserAnswer(choice: ParsedAskChoice): PiAskAnswerEntry {
+function toAskUserAnswer(choice: ParsedAskChoice): SparkAskAnswerEntry {
   return {
     values: choice.values,
     labels: choice.labels,
@@ -553,9 +553,9 @@ function toAskUserAnswer(choice: ParsedAskChoice): PiAskAnswerEntry {
 }
 
 function createNoSelectionAskUserResult(
-  request: PiAskRequest,
-  answers: Record<string, PiAskAnswerEntry>,
-): PiAskResult {
+  request: SparkAskRequest,
+  answers: Record<string, SparkAskAnswerEntry>,
+): SparkAskResult {
   const status = inferAskSubmitStatus(request, answers);
   return createAskUserResult({
     cancelled: false,
@@ -565,7 +565,7 @@ function createNoSelectionAskUserResult(
   });
 }
 
-function normalizeAskUserResult(request: PiAskRequest, result: PiAskResult): PiAskResult {
+function normalizeAskUserResult(request: SparkAskRequest, result: SparkAskResult): SparkAskResult {
   if (result.status === "pending" || result.status === "cancelled") return result;
   const status = inferAskSubmitStatus(request, result.answers);
   return {
@@ -575,26 +575,29 @@ function normalizeAskUserResult(request: PiAskRequest, result: PiAskResult): PiA
   };
 }
 
-function requiresExplicitAskUserSelection(request: PiAskRequest, question: PiAskQuestion): boolean {
+function requiresExplicitAskUserSelection(
+  request: SparkAskRequest,
+  question: SparkAskQuestion,
+): boolean {
   return requiresExplicitSelectionForGate(request.mode, question);
 }
 
-function requestRequiresExplicitAskUserSelection(request: PiAskRequest): boolean {
+function requestRequiresExplicitAskUserSelection(request: SparkAskRequest): boolean {
   return request.questions.some((question) => requiresExplicitAskUserSelection(request, question));
 }
 
 function inferAskUserResultStatus(
-  result: Pick<PiAskResult, "answers" | "cancelled">,
-): PiAskResultStatus {
+  result: Pick<SparkAskResult, "answers" | "cancelled">,
+): SparkAskResultStatus {
   if (result.cancelled) return "cancelled";
   return Object.keys(result.answers).length > 0 ? "answered" : "no_selection";
 }
 
-function unavailableAskUserResult(_request: PiAskRequest): PiAskResult {
+function unavailableAskUserResult(_request: SparkAskRequest): SparkAskResult {
   return createAskUserResult({ cancelled: false, answers: {}, status: "no_selection" });
 }
 
-function normalizeAskDelivery(value: unknown): PiAskDelivery | undefined {
+function normalizeAskDelivery(value: unknown): SparkAskDelivery | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   if (value === "blocking" || value === "async") return value;
   throw new Error("ask_user.delivery must be blocking or async");
@@ -612,7 +615,7 @@ function optionalNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function summarizeResult(request: PiAskRequest, result: PiAskResult): string {
+function summarizeResult(request: SparkAskRequest, result: SparkAskResult): string {
   return summarizeAskResult(request, result);
 }
 
@@ -655,14 +658,14 @@ export * from "./flow.ts";
 export {
   DEFAULT_ASK_WAIT_TIMEOUT_MS,
   DEFAULT_ASK_REVIEWER_FALLBACK_AFTER_MS,
-  registerPiAskActionTool,
-  registerPiAskAutoAnswerProvider,
+  registerSparkAskActionTool,
+  registerSparkAskAutoAnswerProvider,
 } from "./action-tool.ts";
 export type {
-  PiAskAction,
-  PiAskActionToolOptions,
-  PiAskAutoAnswerProvider,
-  PiAskAutoAnswerResolver,
+  SparkAskAction,
+  SparkAskActionToolOptions,
+  SparkAskAutoAnswerProvider,
+  SparkAskAutoAnswerResolver,
 } from "./action-tool.ts";
 export {
   isUserAnsweredAskEvidenceArtifactBody,
@@ -670,7 +673,7 @@ export {
 } from "./evidence.ts";
 export type {
   CanonicalAskEvidenceAnswer,
-  PiAskEvidenceArtifactBody,
+  SparkAskEvidenceArtifactBody,
   VerifiedCanonicalAskEvidence,
 } from "./evidence.ts";
 export {
@@ -685,7 +688,10 @@ export type {
   AskSummaryRequest,
   AskSummaryResult,
 } from "./summary.ts";
-export { PiAskFlowPayloadStore, PiAskFlowPayloadStoreFormatError } from "./ask-payload-store.ts";
+export {
+  SparkAskFlowPayloadStore,
+  SparkAskFlowPayloadStoreFormatError,
+} from "./ask-payload-store.ts";
 export type { StoredAskPayload } from "./ask-payload-store.ts";
 export {
   AskConfigStoreFormatError,
@@ -694,8 +700,8 @@ export {
 } from "./config/store.ts";
 export type { AskConfigStoreOptions } from "./config/store.ts";
 export type { AskConfig, AskConfigStore } from "./config/schema.ts";
-export { PiAskFlowController, normalizeAskKey, printableAskText } from "./ui/controller.ts";
-export type { PiAskTui, PiAskView } from "./ui/controller.ts";
+export { SparkAskFlowController, normalizeAskKey, printableAskText } from "./ui/controller.ts";
+export type { SparkAskTui, SparkAskView } from "./ui/controller.ts";
 export { createInitialState, buildExtendedOptions } from "./state/state.ts";
 export type { AskState } from "./state/state.ts";
 export { reduce } from "./state/reducer.ts";

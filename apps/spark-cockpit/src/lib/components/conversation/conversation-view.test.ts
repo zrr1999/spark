@@ -15,6 +15,32 @@ describe("Cockpit conversation view adapter", () => {
     expect(parts).toEqual([{ type: "text", text: "Hello from Spark", streaming: false }]);
   });
 
+  it("prepends a channel quote part above the user body", () => {
+    const parts = conversationPartsFromMessage(
+      message({
+        role: "user",
+        text: "请继续",
+        metadata: {
+          channel: {
+            adapter: "qqbot",
+            externalKey: "qqbot:c2c:u1",
+            messageReference: {
+              messageId: "m-source",
+              preview: "被引用原文",
+              senderName: "Alice",
+              source: "embedded",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(parts).toEqual([
+      { type: "quote", text: "被引用原文", senderLabel: "Alice" },
+      { type: "text", text: "请继续", streaming: false },
+    ]);
+  });
+
   it("turns a terminal message failure into a visible error part", () => {
     const parts = conversationPartsFromMessage(
       message({

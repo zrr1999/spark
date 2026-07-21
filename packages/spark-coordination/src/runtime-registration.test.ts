@@ -14,6 +14,7 @@ import {
   approveRuntimeDeviceAuthorization,
   createRuntimeDeviceAuthorization,
   createRuntimeEnrollmentToken,
+  createRuntimeWorkspaceBrowserAccess,
   denyRuntimeDeviceAuthorization,
   exchangeRuntimeDeviceAuthorization,
   getRuntimeDeviceAuthorizationForApproval,
@@ -26,6 +27,7 @@ import {
   RuntimeDeviceAuthorizationError,
   RuntimeEnrollmentError,
   RuntimeTokenRefreshError,
+  RuntimeWorkspaceLeaseConflictError,
   RuntimeWorkspaceOwnerConflictError,
   unbindRuntimeWorkspace,
 } from "./runtime-registration";
@@ -41,6 +43,101 @@ const registrationRequest = {
 const durableEnrollmentTtlMs = 100 * 365 * 24 * 60 * 60 * 1000;
 
 describe("runtime registration", () => {
+  it("mints browser access only for this runtime's actively leased binding", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    const enrollment = createRuntimeEnrollmentToken(db, {
+      workspaceName: "Browser access",
+      workspaceSlug: "browser-access",
+      ttlMs: durableEnrollmentTtlMs,
+    });
+    const registered = registerRuntime(
+      db,
+      {
+        ...registrationRequest,
+        workspaceRegistration: {
+          localWorkspaceKey: "browser-access",
+          localPath: "/Users/test/workspaces/browser-access",
+          displayName: "Browser access",
+        },
+      },
+      enrollment.refreshToken,
+    );
+    const bindingId = registered.workspaceBinding?.bindingId;
+    expect(bindingId).toMatch(/^rtwb_/);
+    const activeBindingId = bindingId!;
+
+    const authorization = createRuntimeWorkspaceBrowserAccess(db, {
+      runtimeId: registered.runtimeId,
+      bindingId: activeBindingId,
+      runtimeToken: registered.runtimeToken,
+      createdAt: "2026-07-20T00:00:00.000Z",
+    });
+    expect(authorization).toMatchObject({
+      workspaceId: registered.workspaceBinding?.workspaceId,
+      oneTimeToken: expect.stringMatching(/^spark_workspace_auth_/),
+    });
+
+    db.prepare(
+      "UPDATE workspace_leases SET ended_at = ? WHERE runtime_workspace_binding_id = ? AND ended_at IS NULL",
+    ).run("2026-07-20T00:00:01.000Z", activeBindingId);
+    expect(() =>
+      createRuntimeWorkspaceBrowserAccess(db, {
+        runtimeId: registered.runtimeId,
+        bindingId: activeBindingId,
+        runtimeToken: registered.runtimeToken,
+        createdAt: "2026-07-20T00:00:02.000Z",
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<RuntimeEnrollmentError>>({
+        reasonCode: "WORKSPACE_BINDING_NOT_FOUND",
+      }),
+    );
+    db.close();
+  });
+
+  it("rejects browser access when the binding does not belong to the authenticated runtime", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    const firstEnrollment = createRuntimeEnrollmentToken(db, {
+      workspaceName: "Browser owner",
+      workspaceSlug: "browser-owner",
+      ttlMs: durableEnrollmentTtlMs,
+    });
+    const owner = registerRuntime(
+      db,
+      {
+        ...registrationRequest,
+        installationId: "install-browser-owner",
+        workspaceRegistration: {
+          localWorkspaceKey: "browser-owner",
+          localPath: "/Users/test/workspaces/browser-owner",
+          displayName: "Browser owner",
+        },
+      },
+      firstEnrollment.refreshToken,
+    );
+    const otherEnrollment = createRuntimeEnrollmentToken(db, { ttlMs: durableEnrollmentTtlMs });
+    const other = registerRuntime(
+      db,
+      { ...registrationRequest, installationId: "install-browser-other" },
+      otherEnrollment.refreshToken,
+    );
+
+    expect(() =>
+      createRuntimeWorkspaceBrowserAccess(db, {
+        runtimeId: other.runtimeId,
+        bindingId: owner.workspaceBinding!.bindingId,
+        runtimeToken: other.runtimeToken,
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<RuntimeEnrollmentError>>({
+        reasonCode: "WORKSPACE_BINDING_NOT_FOUND",
+      }),
+    );
+    db.close();
+  });
+
   it("stores workspace registration token hashes only", () => {
     const db = openMemoryDatabase();
     migrate(db);
@@ -251,7 +348,7 @@ describe("runtime registration", () => {
         `SELECT workspace_id AS workspaceId,
                 runtime_workspace_binding_id AS runtimeWorkspaceBindingId,
                 ended_at AS endedAt
-         FROM workspace_owner_bindings
+         FROM workspace_leases
          WHERE workspace_id = ?`,
       )
       .get(workspace.id) as {
@@ -317,6 +414,68 @@ describe("runtime registration", () => {
     db.close();
   });
 
+  it("rejects a second active origin lease for the same local path", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    const localPath = "/Users/test/workspaces/shared-lease";
+    const firstEnrollment = createRuntimeEnrollmentToken(db, {
+      workspaceName: "shared-lease",
+      workspaceSlug: "shared-lease",
+      ttlMs: durableEnrollmentTtlMs,
+    });
+    const first = registerRuntime(
+      db,
+      {
+        ...registrationRequest,
+        installationId: "install-lease-a",
+        workspaceRegistration: {
+          localWorkspaceKey: "lease-a",
+          localPath,
+          displayName: "shared-lease",
+        },
+      },
+      firstEnrollment.refreshToken,
+    );
+    expect(first.workspaceBinding?.bindingId).toMatch(/^rtwb_/);
+
+    const now = "2026-07-15T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO workspaces
+        (id, slug, name, description, status, settings_json, created_at, updated_at)
+       VALUES ('ws_lease_other', 'other-lease', 'other-lease', NULL, 'active', '{}', ?, ?)`,
+    ).run(now, now);
+    const secondEnrollment = createRuntimeEnrollmentToken(db, {
+      workspaceId: "ws_lease_other",
+      ttlMs: durableEnrollmentTtlMs,
+    });
+    const conflict = expectWorkspaceOwnerConflict(() =>
+      registerRuntime(
+        db,
+        {
+          ...registrationRequest,
+          installationId: "install-lease-b",
+          workspaceRegistration: {
+            localWorkspaceKey: "lease-b",
+            localPath,
+            displayName: "other-lease",
+          },
+        },
+        secondEnrollment.refreshToken,
+      ),
+    );
+    expect(conflict.conflict.workspaceId).toBe(first.workspaceBinding?.workspaceId);
+    expect(conflict.conflict.currentBindingId).toBe(first.workspaceBinding?.bindingId);
+    const activeLeases = db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM workspace_leases
+         WHERE ended_at IS NULL`,
+      )
+      .get() as { count: number };
+    expect(activeLeases.count).toBe(1);
+    db.close();
+  });
+
   it("keeps the same active owner binding for idempotent same-runtime registration", () => {
     const db = openMemoryDatabase();
     migrate(db);
@@ -361,7 +520,7 @@ describe("runtime registration", () => {
       db
         .prepare(
           `SELECT runtime_workspace_binding_id AS bindingId, ended_at AS endedAt
-           FROM workspace_owner_bindings
+           FROM workspace_leases
            WHERE workspace_id = ?`,
         )
         .all(firstBinding.workspaceId),
@@ -418,7 +577,7 @@ describe("runtime registration", () => {
       db
         .prepare(
           `SELECT workspace_id AS workspaceId, ended_at AS endedAt
-           FROM workspace_owner_bindings
+           FROM workspace_leases
            WHERE runtime_workspace_binding_id = ?
            ORDER BY started_at`,
         )
@@ -428,8 +587,57 @@ describe("runtime registration", () => {
       { workspaceId: rebound.workspaceBinding.workspaceId, endedAt: null },
     ]);
     expect(
-      db.prepare("SELECT kind FROM events WHERE kind = 'workspace.owner_rebound'").get(),
-    ).toEqual({ kind: "workspace.owner_rebound" });
+      db.prepare("SELECT kind FROM events WHERE kind = 'workspace.lease_rebound'").get(),
+    ).toEqual({ kind: "workspace.lease_rebound" });
+    db.close();
+  });
+
+  it("rejects a second workspace lease when another workspace already holds the same local_path", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    const sharedPath = "/Users/test/workspaces/shared-path-lease";
+    const firstGrant = createRuntimeEnrollmentToken(db, {
+      workspaceName: "Path first",
+      workspaceSlug: "path-first",
+      ttlMs: durableEnrollmentTtlMs,
+    });
+    registerRuntime(
+      db,
+      {
+        ...registrationRequest,
+        installationId: "install-path-first",
+        workspaceRegistration: {
+          localWorkspaceKey: "path-first",
+          localPath: sharedPath,
+          displayName: "Path first",
+        },
+      },
+      firstGrant.refreshToken,
+    );
+
+    const secondGrant = createRuntimeEnrollmentToken(db, {
+      workspaceName: "Path second",
+      workspaceSlug: "path-second",
+      ttlMs: durableEnrollmentTtlMs,
+    });
+    expectWorkspaceOwnerConflict(() =>
+      registerRuntime(
+        db,
+        {
+          ...registrationRequest,
+          installationId: "install-path-second",
+          workspaceRegistration: {
+            localWorkspaceKey: "path-second",
+            localPath: sharedPath,
+            displayName: "Path second",
+          },
+        },
+        secondGrant.refreshToken,
+      ),
+    );
+    expect(
+      db.prepare("SELECT COUNT(*) AS count FROM workspace_leases WHERE ended_at IS NULL").get(),
+    ).toEqual({ count: 1 });
     db.close();
   });
 
@@ -596,18 +804,16 @@ describe("runtime registration", () => {
     );
 
     expect(conflictErrors.map((error) => error.reasonCode)).toEqual([
-      "WORKSPACE_OWNER_CONFLICT",
-      "WORKSPACE_OWNER_CONFLICT",
-      "WORKSPACE_OWNER_CONFLICT",
+      "WORKSPACE_LEASE_CONFLICT",
+      "WORKSPACE_LEASE_CONFLICT",
+      "WORKSPACE_LEASE_CONFLICT",
     ]);
     expect(ownerBindingState(db, ownerBinding.workspaceId)).toEqual(originalOwner);
     expect(pendingDeliveryState(db)).toEqual(originalDelivery);
     expect(
-      db
-        .prepare("SELECT COUNT(*) AS count FROM workspace_owner_bindings WHERE ended_at IS NULL")
-        .get(),
+      db.prepare("SELECT COUNT(*) AS count FROM workspace_leases WHERE ended_at IS NULL").get(),
     ).toEqual({ count: 1 });
-    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_owner_bindings").get()).toEqual({
+    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_leases").get()).toEqual({
       count: 1,
     });
     expect(db.prepare("SELECT COUNT(*) AS count FROM runtime_workspace_bindings").get()).toEqual({
@@ -621,7 +827,7 @@ describe("runtime registration", () => {
         `SELECT workspace_id AS workspaceId, kind, subject_id AS subjectId,
                 payload_json AS payloadJson, created_at AS createdAt
          FROM events
-         WHERE kind = 'workspace.owner_registration_conflict'
+         WHERE kind = 'workspace.lease_registration_conflict'
          ORDER BY rowid`,
       )
       .all() as Array<{
@@ -635,7 +841,7 @@ describe("runtime registration", () => {
     for (const event of auditEvents) {
       expect(event).toMatchObject({
         workspaceId: ownerBinding.workspaceId,
-        kind: "workspace.owner_registration_conflict",
+        kind: "workspace.lease_registration_conflict",
         subjectId: ownerBinding.bindingId,
         createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
       });
@@ -667,7 +873,7 @@ describe("runtime registration", () => {
       expect(auditableText).not.toContain(secret);
     }
     console.log(
-      `SPARK_WORKSPACE_OWNER_CONFLICT_EVIDENCE ${JSON.stringify({
+      `SPARK_WORKSPACE_LEASE_CONFLICT_EVIDENCE ${JSON.stringify({
         conflictCode: conflictErrors[0]?.reasonCode,
         attemptedRuntimeCount: conflictErrors.length,
         activeOwnerCount: 1,
@@ -734,24 +940,24 @@ describe("runtime registration", () => {
 
       expect(outcomes.filter((outcome) => outcome.ok)).toHaveLength(1);
       expect(outcomes.filter((outcome) => !outcome.ok)).toEqual([
-        { ok: false, reasonCode: "WORKSPACE_OWNER_CONFLICT" },
+        { ok: false, reasonCode: "WORKSPACE_LEASE_CONFLICT" },
       ]);
       const verified = openDatabase({ path: databasePath });
       expect(
         verified
-          .prepare("SELECT COUNT(*) AS count FROM workspace_owner_bindings WHERE ended_at IS NULL")
+          .prepare("SELECT COUNT(*) AS count FROM workspace_leases WHERE ended_at IS NULL")
           .get(),
       ).toEqual({ count: 1 });
-      expect(
-        verified.prepare("SELECT COUNT(*) AS count FROM workspace_owner_bindings").get(),
-      ).toEqual({ count: 1 });
+      expect(verified.prepare("SELECT COUNT(*) AS count FROM workspace_leases").get()).toEqual({
+        count: 1,
+      });
       expect(
         verified.prepare("SELECT COUNT(*) AS count FROM runtime_workspace_bindings").get(),
       ).toEqual({ count: 1 });
       expect(
         verified
           .prepare(
-            "SELECT COUNT(*) AS count FROM events WHERE kind = 'workspace.owner_registration_conflict'",
+            "SELECT COUNT(*) AS count FROM events WHERE kind = 'workspace.lease_registration_conflict'",
           )
           .get(),
       ).toEqual({ count: 1 });
@@ -1425,16 +1631,19 @@ describe("runtime registration", () => {
   });
 });
 
-function expectWorkspaceOwnerConflict(action: () => unknown): RuntimeWorkspaceOwnerConflictError {
+function expectWorkspaceOwnerConflict(action: () => unknown): RuntimeWorkspaceLeaseConflictError {
   try {
     action();
   } catch (error) {
+    // Throws deprecated RuntimeWorkspaceOwnerConflictError subclass; reasonCode is WORKSPACE_LEASE_CONFLICT.
+    expect(error).toBeInstanceOf(RuntimeWorkspaceLeaseConflictError);
     expect(error).toBeInstanceOf(RuntimeWorkspaceOwnerConflictError);
-    const conflict = error as RuntimeWorkspaceOwnerConflictError;
-    expect(conflict.reasonCode).toBe("WORKSPACE_OWNER_CONFLICT");
+    const conflict = error as RuntimeWorkspaceLeaseConflictError;
+    expect(conflict.reasonCode).toBe("WORKSPACE_LEASE_CONFLICT");
+    expect(conflict.aliasReasonCode).toBe("WORKSPACE_OWNER_CONFLICT");
     return conflict;
   }
-  throw new Error("Expected WORKSPACE_OWNER_CONFLICT.");
+  throw new Error("Expected WORKSPACE_LEASE_CONFLICT.");
 }
 
 function insertPendingCommandDelivery(
@@ -1463,7 +1672,7 @@ function ownerBindingState(
     .prepare(
       `SELECT id, runtime_workspace_binding_id AS bindingId,
               started_at AS startedAt, ended_at AS endedAt
-       FROM workspace_owner_bindings
+       FROM workspace_leases
        WHERE workspace_id = ?`,
     )
     .get(workspaceId) as

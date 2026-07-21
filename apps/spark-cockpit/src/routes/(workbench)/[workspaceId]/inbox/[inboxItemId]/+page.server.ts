@@ -16,10 +16,10 @@ import {
   humanSingleAnswerWithCustomFallback,
   parseHumanQuestions,
 } from "$lib/pending-ask";
-import { submitServerCommand } from "$lib/server/command-submission";
+import { submitServerCommand } from "@zendev-lab/spark-coordination/command-submission";
 import { getDatabase } from "$lib/server/db";
 import { formText, formTextList } from "$lib/server/form-data";
-import { recordHumanResponse } from "$lib/server/projection-services";
+import { recordHumanResponse } from "@zendev-lab/spark-coordination/projection-services";
 import { workspacePath } from "$lib/workspace-routes";
 import type { Actions, PageServerLoad } from "./$types";
 

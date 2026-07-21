@@ -1,14 +1,17 @@
 export {
   default,
-  createPiGraftPatcherRoleSpec,
-  PI_GRAFT_PATCHER_ALLOWED_TOOLS,
-  PI_GRAFT_PATCHER_ROLE_ID,
-  PI_GRAFT_PATCHER_ROLE_REF,
-  registerPiGraftExtension,
+  createSparkGraftPatcherRoleSpec,
+  SPARK_GRAFT_PATCHER_ALLOWED_TOOLS,
+  SPARK_GRAFT_PATCHER_ROLE_ID,
+  SPARK_GRAFT_PATCHER_ROLE_REF,
+  registerSparkGraftExtension,
 } from "./extension.ts";
 export { GraftCliError, formatDirectOutput, runDirectGraft, runGraftJson } from "./graft-client.ts";
-export { default as piGraftSandboxExtension, registerPiGraftSandboxExtension } from "./sandbox.ts";
-export type { PiGraftSandboxState } from "./sandbox.ts";
+export {
+  default as piGraftSandboxExtension,
+  registerSparkGraftSandboxExtension,
+} from "./sandbox.ts";
+export type { SparkGraftSandboxState } from "./sandbox.ts";
 export type {
   DirectGraftExecution,
   GraftJsonExecution,
@@ -17,9 +20,9 @@ export type {
   RunDirectGraftOptions,
 } from "./graft-client.ts";
 export type {
-  PiGraftExtensionApi,
-  PiGraftSessionContext,
-  PiGraftToolContext,
-  PiGraftToolDefinition,
-  PiGraftToolResult,
+  SparkGraftHostApi,
+  SparkGraftSessionContext,
+  SparkGraftToolContext,
+  SparkGraftToolDefinition,
+  SparkGraftToolResult,
 } from "./extension.ts";

@@ -8,7 +8,7 @@ import type {
   ExtensionRoleRunInputControl,
   RoleRef,
   RunRef,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 
 import {
   assistantMessageToText,
@@ -94,6 +94,8 @@ export interface SparkHeadlessSessionRunInput {
   channelBinding?: {
     adapter: "feishu" | "infoflow" | "qqbot";
     externalKey: string;
+    workspaceId?: string;
+    recipient?: string;
     adapterId?: string;
     adapterAccountIdentity?: string;
   };

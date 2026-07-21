@@ -9,7 +9,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "typebox";
-import type { ToolConfig, ToolPolicy } from "@zendev-lab/spark-extension-api";
+import type { ToolConfig, ToolPolicy } from "@zendev-lab/spark-core";
 
 import {
   applyEditsToNormalizedContent,

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   SparkMemorySecretError,
@@ -11,9 +11,9 @@ import {
   renderSparkMemoryPolicy,
 } from "../packages/spark-memory/src/index.ts";
 import sparkMemoryExtension from "../packages/spark-memory/src/extension.ts";
-import type { ToolConfig } from "../packages/spark-extension-api/src/index.ts";
+import type { ToolConfig } from "../packages/spark-core/src/index.ts";
 
-void test("spark memory stores, searches, and forgets explicit scoped entries", async () => {
+test("spark memory stores, searches, and forgets explicit scoped entries", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-memory-store-"));
   try {
     const store = defaultSparkMemoryStore(dir, "workspace");
@@ -48,7 +48,7 @@ void test("spark memory stores, searches, and forgets explicit scoped entries", 
   }
 });
 
-void test("spark memory rejects likely secrets before persistence", async () => {
+test("spark memory rejects likely secrets before persistence", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-memory-secret-"));
   try {
     const store = defaultSparkMemoryStore(dir, "workspace");
@@ -68,7 +68,7 @@ void test("spark memory rejects likely secrets before persistence", async () => 
   }
 });
 
-void test("spark memory extension registers policy-only memory tool", async () => {
+test("spark memory extension registers policy-only memory tool", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-memory-tool-"));
   try {
     const api = new FakeApi();
@@ -132,7 +132,7 @@ void test("spark memory extension registers policy-only memory tool", async () =
   }
 });
 
-void test("spark memory extension covers pi-memory compatibility workflows", async () => {
+test("spark memory extension covers pi-memory compatibility workflows", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-memory-compat-"));
   try {
     const compatDir = join(dir, "legacy-memory");
@@ -285,7 +285,7 @@ void test("spark memory extension covers pi-memory compatibility workflows", asy
   }
 });
 
-void test("memory_search semantic/deep use one listwise rerank leaf over keyword candidates", async () => {
+test("memory_search semantic/deep use one listwise rerank leaf over keyword candidates", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-memory-rerank-"));
   try {
     const compatDir = join(dir, "legacy-memory");

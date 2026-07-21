@@ -1,5 +1,5 @@
 import { loadShellWorkspaceLayout } from "$lib/server/shell-layout";
-import { isGlobalConsolePath } from "$lib/console-nav";
+import { isControlPlanePath } from "$lib/console-nav";
 import type { LayoutServerLoad } from "./$types";
 
 export const load: LayoutServerLoad = ({ cookies, locals, url }) => {
@@ -16,6 +16,8 @@ export const load: LayoutServerLoad = ({ cookies, locals, url }) => {
     ...layout,
     sessions: [],
     sessionsAvailable: true,
-    isGlobalConsole: isGlobalConsolePath(url.pathname),
+    // Control-plane pages only (create workspace, browser access) — not
+    // workspace daemon settings such as models / invocations.
+    isGlobalConsole: isControlPlanePath(url.pathname),
   };
 };

@@ -1,5 +1,5 @@
 import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
-import { newRef, nowIso } from "@zendev-lab/spark-extension-api";
+import { newRef, nowIso } from "@zendev-lab/spark-core";
 import {
   createRoleRunClaimId,
   findResumableBackgroundRoleRunTasks,

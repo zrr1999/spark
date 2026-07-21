@@ -360,15 +360,6 @@ const SPARK_EXTENSION_TOOL_COPY: Record<string, Partial<SparkExtensionToolCopy>>
   impl_list_projects: { label: "Spark List Projects" },
   impl_project_mutation: { label: "Spark Project Mutation" },
   impl_use_project: { label: "Spark Use Project" },
-  impl_learning_record: { label: "Spark Learning Record" },
-  impl_learning_search: { label: "Spark Learning Search" },
-  impl_learning_list: { label: "Spark Learning List" },
-  impl_learning_read: { label: "Spark Learning Read" },
-  impl_learning_mark_stale: { label: "Spark Learning Mark Stale" },
-  impl_learning_supersede: { label: "Spark Learning Supersede" },
-  impl_learning_reject: { label: "Spark Learning Reject" },
-  impl_learning_export_markdown: { label: "Spark Learning Export Markdown" },
-  impl_learning_import_markdown: { label: "Spark Learning Import Markdown" },
 };
 
 export function sparkExtensionToolCopy(

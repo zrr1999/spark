@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   conversationSummaries: vi.fn(),
   getProjected: vi.fn(),
   list: vi.fn(),
+  projectedList: vi.fn(),
   pendingAsk: vi.fn(),
   shellLayout: vi.fn(),
 }));
@@ -15,6 +16,7 @@ vi.mock("$lib/server/db", () => ({ getDatabase: () => ({}) }));
 vi.mock("$lib/server/managed-sessions", () => ({
   getProjectedManagedSessionForCockpit: mocks.getProjected,
   listManagedSessionsForCockpit: mocks.list,
+  listProjectedManagedSessionsForCockpit: mocks.projectedList,
 }));
 vi.mock("$lib/server/pending-ask", () => ({
   loadPendingWorkbenchAsk: mocks.pendingAsk,
@@ -58,22 +60,33 @@ beforeEach(() => {
     controlAvailable: false,
     sessions: [cachedSession],
   });
+  mocks.projectedList.mockReturnValue({
+    available: true,
+    controlAvailable: false,
+    sessions: [cachedSession],
+  });
   mocks.conversationSummaries.mockImplementation((_db, sessions) => sessions);
   mocks.pendingAsk.mockReturnValue(null);
 });
 
 describe("workbench session layout scope", () => {
-  it("loads only the selected workspace and preserves cached sessions when its owner is offline", async () => {
+  it("paints the rail from the projected list without waiting on live session.list", async () => {
     const url = new URL("http://localhost:5173/sessions/sess_cached");
-    const result = await load({ cookies: {}, url } as never);
+    const result = await load({
+      cookies: {},
+      url,
+      params: {},
+      route: { id: "/(workbench)/sessions/[sessionId]" },
+    } as never);
 
     expect(mocks.shellLayout).toHaveBeenCalledWith(
-      expect.objectContaining({ preferredWorkspaceId: workspace.id }),
+      expect.objectContaining({
+        pathname: "/sessions",
+        preferredWorkspaceId: null,
+      }),
     );
-    expect(mocks.list).toHaveBeenCalledWith({
-      scope: { kind: "workspace", workspaceId: workspace.id },
-      workspaceId: workspace.id,
-    });
+    expect(mocks.projectedList).toHaveBeenCalledWith({ workspaceId: workspace.id });
+    expect(mocks.list).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       activeWorkspace: workspace,
       sessions: [cachedSession],
@@ -82,29 +95,59 @@ describe("workbench session layout scope", () => {
     });
   });
 
-  it("keeps the workspace path authoritative for canonical session URLs", async () => {
+  it("loads the session rail from workspaceId without depending on the session path", async () => {
     const url = new URL("http://localhost:5173/cached/sessions/sess_cached");
-    await load({ cookies: {}, url } as never);
+    const result = await load({
+      cookies: {},
+      url,
+      params: { workspaceId: "cached" },
+      route: { id: "/(workbench)/[workspaceId]/sessions/[sessionId]" },
+    } as never);
 
     expect(mocks.shellLayout).toHaveBeenCalledWith(
       expect.objectContaining({
-        pathname: "/cached/sessions/sess_cached",
+        pathname: "/cached",
         preferredWorkspaceId: null,
+        preferredWorkspaceSlug: "cached",
       }),
     );
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      sessions: [cachedSession],
+      sessionsAvailable: true,
+      sessionControlAvailable: false,
+    });
   });
 
-  it("drops a stale selected projection when the live owner disproves it", async () => {
+  it("falls back to live session.list only when the projection is empty", async () => {
+    mocks.projectedList.mockReturnValue({
+      available: true,
+      controlAvailable: false,
+      sessions: [],
+    });
     mocks.list.mockResolvedValue({
       available: true,
       controlAvailable: true,
-      sessions: [],
+      sessions: [cachedSession],
     });
-    const url = new URL("http://localhost:5173/cached/sessions/sess_cached");
+    const url = new URL("http://localhost:5173/sessions/sess_cached");
 
-    const result = await load({ cookies: {}, locals: { workspaceId: workspace.id }, url } as never);
+    const result = await load({
+      cookies: {},
+      locals: { workspaceId: workspace.id },
+      url,
+      params: {},
+      route: { id: "/(workbench)/sessions/[sessionId]" },
+    } as never);
 
-    expect(result).toMatchObject({ sessions: [] });
-    expect(mocks.conversationSummaries).toHaveBeenCalledWith({}, []);
+    expect(mocks.list).toHaveBeenCalledWith({
+      scope: { kind: "workspace", workspaceId: workspace.id },
+      workspaceId: workspace.id,
+      timeoutMs: 800,
+    });
+    expect(result).toMatchObject({
+      sessions: [cachedSession],
+      sessionControlAvailable: true,
+    });
   });
 });

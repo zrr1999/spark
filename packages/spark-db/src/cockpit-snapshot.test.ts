@@ -77,6 +77,7 @@ describe("Cockpit instance snapshots", () => {
       "0015",
       "0016",
       "0017",
+      "0018",
     ]);
     expect(manifest.tableCounts).toMatchObject({
       workspaces: 1,
@@ -166,7 +167,7 @@ describe("Cockpit instance snapshots", () => {
                     e.id AS eventId
              FROM workspaces w
              JOIN projects p ON p.workspace_id = w.id
-             JOIN workspace_owner_bindings wob ON wob.workspace_id = w.id AND wob.ended_at IS NULL
+             JOIN workspace_leases wob ON wob.workspace_id = w.id AND wob.ended_at IS NULL
              JOIN runtime_workspace_bindings rwb ON rwb.id = wob.runtime_workspace_binding_id
              JOIN runtime_connections rc ON rc.id = rwb.runtime_id
              JOIN runtime_tokens rt ON rt.runtime_id = rc.id AND rt.label = 'runtime refresh token'
@@ -459,7 +460,7 @@ function seededSourceDatabase(path: string): ReturnType<typeof openDatabase> {
              'available', '{}', '{}', ?, ?)`,
   ).run(now, now);
   db.prepare(
-    `INSERT INTO workspace_owner_bindings
+    `INSERT INTO workspace_leases
       (id, workspace_id, runtime_workspace_binding_id, owner_mode, started_at, created_at)
      VALUES ('wob_source', 'ws_source', 'rtwb_source', 'primary', ?, ?)`,
   ).run(now, now);

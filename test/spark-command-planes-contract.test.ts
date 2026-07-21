@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
-import { test } from "node:test";
+import { test } from "vitest";
 
 import { parseSparkDispatcherArgs } from "../apps/spark-cli/src/cli.ts";
 import {
@@ -18,7 +18,7 @@ const DEPRECATIONS_PATH = new URL(
   import.meta.url,
 );
 
-void test("root dispatcher reaches Cockpit and rejects the removed server namespace", async () => {
+test("root dispatcher reaches Cockpit and rejects the removed server namespace", async () => {
   assert.deepEqual(parseSparkDispatcherArgs(["server", "task", "list"]), {
     kind: "error",
     message: 'The "spark server" namespace was removed. Use "spark cockpit" instead.',
@@ -46,7 +46,7 @@ void test("root dispatcher reaches Cockpit and rejects the removed server namesp
   );
 });
 
-void test("daemon and Cockpit status JSON contracts validate current envelopes", () => {
+test("daemon and Cockpit status JSON contracts validate current envelopes", () => {
   const daemon = extractDaemonStatusContract({
     action: "status",
     daemon: {
@@ -93,7 +93,7 @@ void test("daemon and Cockpit status JSON contracts validate current envelopes",
   assert.deepEqual(cockpit.diagnostics, []);
 });
 
-void test("daemon status contract reports malformed envelopes with field paths", () => {
+test("daemon status contract reports malformed envelopes with field paths", () => {
   const missingInvocations = extractDaemonStatusContract({
     action: "status",
     daemon: { running: true },
@@ -123,7 +123,7 @@ void test("daemon status contract reports malformed envelopes with field paths",
   );
 });
 
-void test("Cockpit status contract reports malformed envelopes with field paths", () => {
+test("Cockpit status contract reports malformed envelopes with field paths", () => {
   const malformed = extractCockpitStatusContract({
     action: "status",
     result: { plane: "daemon", resource: "status", scope: {} },
@@ -144,7 +144,7 @@ void test("Cockpit status contract reports malformed envelopes with field paths"
   );
 });
 
-void test("deprecation map covers legacy slash aliases with canonical targets", async () => {
+test("deprecation map covers legacy slash aliases with canonical targets", async () => {
   const rows = JSON.parse(await readFile(DEPRECATIONS_PATH, "utf8")) as Array<{
     legacy?: string;
     canonicalSlash?: string;

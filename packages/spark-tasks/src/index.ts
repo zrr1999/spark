@@ -22,11 +22,15 @@ export {
 export type { TaskPlanReadinessRule } from "./internal.ts";
 
 export type {
-  PiTaskAction,
-  PiTaskActionHandler,
-  PiTaskToolHandlers,
-  PiTaskToolResult,
-  PiTodoAction,
-  PiTodoToolOptions,
+  SparkTaskAction,
+  SparkTaskActionHandler,
+  SparkTaskToolHandlers,
+  SparkTaskToolResult,
+  SparkTodoAction,
+  SparkTodoToolOptions,
 } from "./extension.ts";
-export { registerPiTaskTool, registerPiTodoTool, normalizePiTodoAction } from "./extension.ts";
+export {
+  registerSparkTaskTool,
+  registerSparkTodoTool,
+  normalizeSparkTodoAction,
+} from "./extension.ts";

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { createSparkPromptTemplateSlashCommands } from "../apps/spark-tui/src/cli/prompt-template-commands.ts";
 import {
@@ -20,7 +20,7 @@ function stripAnsi(text: string): string {
   return text.replace(ANSI_PATTERN, "");
 }
 
-void test("Spark prompt templates resolve user, workspace, and configured paths with deterministic precedence", async () => {
+test("Spark prompt templates resolve user, workspace, and configured paths with deterministic precedence", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-prompts-resolve-"));
   try {
     const cwd = join(dir, "repo");
@@ -106,7 +106,7 @@ void test("Spark prompt templates resolve user, workspace, and configured paths 
   }
 });
 
-void test("Spark prompt template argument substitution matches Pi positional, default, and slice semantics", () => {
+test("Spark prompt template argument substitution matches Pi positional, default, and slice semantics", () => {
   const args = parseSparkPromptTemplateArgs("Button \"click handler\" 'disabled state'");
   assert.deepEqual(args, ["Button", "click handler", "disabled state"]);
   assert.equal(
@@ -118,7 +118,7 @@ void test("Spark prompt template argument substitution matches Pi positional, de
   );
 });
 
-void test("Spark prompt templates register as slash commands without overriding builtins", async () => {
+test("Spark prompt templates register as slash commands without overriding builtins", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-prompts-slash-"));
   try {
     await writeFile(join(dir, "note.txt"), "template file context", "utf8");

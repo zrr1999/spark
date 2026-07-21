@@ -559,6 +559,35 @@
                   {t.emptyWorkspace.stepActions.waitForCommand}
                 </p>
               {/if}
+              {#if pendingRuntimeConnection}
+                {@const pending = pendingRuntimeConnection}
+                <div class="runtime-pending" role="status">
+                  <p class="runtime-pending-title">
+                    {t.emptyWorkspace.stepActions.runtimeRegisteredOfflineTitle}
+                  </p>
+                  <p>{t.emptyWorkspace.stepActions.runtimeRegisteredOfflineBody}</p>
+                  <dl class="runtime-pending-detail">
+                    <div>
+                      <dt
+                        >{t.emptyWorkspace.stepActions
+                          .runtimeRegisteredOfflineRuntimeLabel}</dt
+                      >
+                      <dd>{pending.runtimeName ?? pending.bindingDisplayName}</dd>
+                    </div>
+                    <div>
+                      <dt
+                        >{t.emptyWorkspace.stepActions
+                          .runtimeRegisteredOfflineStatusLabel}</dt
+                      >
+                      <dd><code>{pending.runtimeStatus}</code></dd>
+                    </div>
+                  </dl>
+                </div>
+              {:else if visibleRegistrationCommand}
+                <p class="step-note">
+                  {t.emptyWorkspace.stepActions.waitForWorkspace}
+                </p>
+              {/if}
             {:else if targetRunnerBinding}
               {@const targetBinding = targetRunnerBinding}
               <form

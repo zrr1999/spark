@@ -4,18 +4,18 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import test, { type TestContext } from "node:test";
+import { test, type TestContext } from "vitest";
 
 import { RoleRegistry, hydrateExtensionRoles, listExtensionRoles } from "@zendev-lab/spark-roles";
 import {
-  PI_GRAFT_PATCHER_ALLOWED_TOOLS,
-  PI_GRAFT_PATCHER_ROLE_REF,
-  registerPiGraftExtension,
-  registerPiGraftSandboxExtension,
-  type PiGraftExtensionApi,
-  type PiGraftToolContext,
-  type PiGraftToolDefinition,
-  type PiGraftToolResult,
+  SPARK_GRAFT_PATCHER_ALLOWED_TOOLS,
+  SPARK_GRAFT_PATCHER_ROLE_REF,
+  registerSparkGraftExtension,
+  registerSparkGraftSandboxExtension,
+  type SparkGraftHostApi,
+  type SparkGraftToolContext,
+  type SparkGraftToolDefinition,
+  type SparkGraftToolResult,
 } from "../packages/spark-graft/src/index.ts";
 
 const execFileAsync = promisify(execFile);
@@ -38,7 +38,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function detailsResult(result: PiGraftToolResult): Record<string, unknown> {
+function detailsResult(result: SparkGraftToolResult): Record<string, unknown> {
   const value = result.details?.result;
   assert.ok(isRecord(value), "expected tool details.result to be an object");
   return value;
@@ -50,20 +50,20 @@ function requiredString(value: unknown, message: string): string {
 }
 
 async function executeTool(
-  tool: PiGraftToolDefinition | undefined,
+  tool: SparkGraftToolDefinition | undefined,
   name: string,
   params: Record<string, unknown>,
-  ctx: PiGraftToolContext,
-): Promise<PiGraftToolResult> {
+  ctx: SparkGraftToolContext,
+): Promise<SparkGraftToolResult> {
   assert.ok(tool, `expected ${name} to be registered`);
   return tool.execute(name, params, undefined, undefined, ctx);
 }
 
 function createFakePi() {
-  const tools = new Map<string, PiGraftToolDefinition>();
+  const tools = new Map<string, SparkGraftToolDefinition>();
   const entries: unknown[] = [];
   const handlers = new Map<string, ExtensionHandler[]>();
-  const pi: PiGraftExtensionApi = {
+  const pi: SparkGraftHostApi = {
     on(event, handler) {
       handlers.set(event, [...(handlers.get(event) ?? []), handler as ExtensionHandler]);
     },
@@ -101,7 +101,7 @@ async function withEnvMutationLock<T>(callback: () => Promise<T>): Promise<T> {
 }
 
 function envTest(name: string, callback: (t: TestContext) => Promise<void>): void {
-  void test(name, async (t) => {
+  test(name, async (t) => {
     await withEnvMutationLock(() => callback(t));
   });
 }
@@ -111,7 +111,7 @@ type SimpleGraftRouteCase = {
   tempPrefix: string;
   toolName: string;
   params?: (paths: { dir: string; project: string }) => Record<string, unknown>;
-  ctx?: (paths: { dir: string; project: string }) => PiGraftToolContext;
+  ctx?: (paths: { dir: string; project: string }) => SparkGraftToolContext;
   mockOutput: string;
   expectedText: RegExp;
   expectedArgv: (paths: { dir: string; project: string }) => string[];
@@ -134,7 +134,7 @@ async function assertSimpleGraftRoute(route: SimpleGraftRouteCase): Promise<void
 
     try {
       const { pi, tools } = createFakePi();
-      registerPiGraftExtension(pi);
+      registerSparkGraftExtension(pi);
       const paths = { dir, project };
       const result = await executeTool(
         tools.get(route.toolName),
@@ -161,15 +161,15 @@ async function assertSimpleGraftRoute(route: SimpleGraftRouteCase): Promise<void
   });
 }
 
-void test("spark-graft registers the final high-frequency direct tool set and extension patcher role", () => {
+test("spark-graft registers the final high-frequency direct tool set and extension patcher role", () => {
   const { pi, tools, handlers } = createFakePi();
-  registerPiGraftExtension(pi);
+  registerSparkGraftExtension(pi);
 
-  const patcher = listExtensionRoles().find((role) => role.ref === PI_GRAFT_PATCHER_ROLE_REF);
+  const patcher = listExtensionRoles().find((role) => role.ref === SPARK_GRAFT_PATCHER_ROLE_REF);
   assert.ok(patcher, "expected spark-graft to register role:extension-patcher");
   assert.equal(patcher.id, "patcher");
   assert.equal(patcher.source, "extension");
-  assert.deepEqual(patcher.allowedTools, [...PI_GRAFT_PATCHER_ALLOWED_TOOLS]);
+  assert.deepEqual(patcher.allowedTools, [...SPARK_GRAFT_PATCHER_ALLOWED_TOOLS]);
   const patcherAllowedTools: readonly string[] = patcher.allowedTools ?? [];
   for (const forbiddenTool of [
     "ask",
@@ -187,7 +187,10 @@ void test("spark-graft registers the final high-frequency direct tool set and ex
   }
   const registry = new RoleRegistry([]);
   hydrateExtensionRoles(registry);
-  assert.equal(registry.select("patcher", { source: "extension" }).ref, PI_GRAFT_PATCHER_ROLE_REF);
+  assert.equal(
+    registry.select("patcher", { source: "extension" }).ref,
+    SPARK_GRAFT_PATCHER_ROLE_REF,
+  );
 
   assert.deepEqual([...handlers.keys()], ["session_start"]);
   assert.equal("registerCommand" in pi, false);
@@ -253,9 +256,9 @@ void test("spark-graft registers the final high-frequency direct tool set and ex
   }
 });
 
-void test("spark-graft lifecycle prerequisite errors point to the next tool", async () => {
+test("spark-graft lifecycle prerequisite errors point to the next tool", async () => {
   const { pi, tools } = createFakePi();
-  registerPiGraftExtension(pi);
+  registerSparkGraftExtension(pi);
   const ctx = { cwd: "/tmp/spark-graft-lifecycle-errors" };
 
   await assert.rejects(
@@ -336,7 +339,7 @@ envTest("graft_ps renders a bounded workspace sample with an expansion hint", as
 
   try {
     const { pi, tools } = createFakePi();
-    registerPiGraftExtension(pi);
+    registerSparkGraftExtension(pi);
     const bounded = await executeTool(
       tools.get("graft_ps"),
       "graft_ps",
@@ -405,7 +408,7 @@ envTest("graft_doctor buckets problems and samples each class", async () => {
 
   try {
     const { pi, tools } = createFakePi();
-    registerPiGraftExtension(pi);
+    registerSparkGraftExtension(pi);
     const bounded = await executeTool(
       tools.get("graft_doctor"),
       "graft_doctor",
@@ -464,7 +467,7 @@ envTest("graft_help defaults to the maintained agent workflow topic", async () =
 
   try {
     const { pi, tools } = createFakePi();
-    registerPiGraftExtension(pi);
+    registerSparkGraftExtension(pi);
     const result = await executeTool(tools.get("graft_help"), "graft_help", {}, { cwd: dir });
     assert.match(result.content[0].text, /Recommended workflow for agents and spark-graft tools/);
     assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
@@ -482,9 +485,9 @@ envTest("graft_help defaults to the maintained agent workflow topic", async () =
   }
 });
 
-void test("graft_cli_exec validates argv before daemon work", async () => {
+test("graft_cli_exec validates argv before daemon work", async () => {
   const { pi, tools } = createFakePi();
-  registerPiGraftExtension(pi);
+  registerSparkGraftExtension(pi);
   const cliExec = tools.get("graft_cli_exec");
   await assert.rejects(
     () =>
@@ -543,7 +546,7 @@ void test("graft_cli_exec validates argv before daemon work", async () => {
   );
 });
 
-void test("graft_cli_exec allows canonical patch incoming argv", async () => {
+test("graft_cli_exec allows canonical patch incoming argv", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-graft-patch-incoming-"));
   const argvFile = join(dir, "argv.txt");
   const previousGraftBin = process.env.GRAFT_BIN;
@@ -556,7 +559,7 @@ void test("graft_cli_exec allows canonical patch incoming argv", async () => {
 
   try {
     const { pi, tools } = createFakePi();
-    registerPiGraftExtension(pi);
+    registerSparkGraftExtension(pi);
     const result = await executeTool(
       tools.get("graft_cli_exec"),
       "graft_cli_exec",
@@ -580,7 +583,7 @@ void test("graft_cli_exec allows canonical patch incoming argv", async () => {
   }
 });
 
-void test("simple spark-graft tools use graft --json CLI routes", async () => {
+test("simple spark-graft tools use graft --json CLI routes", async () => {
   const routes: SimpleGraftRouteCase[] = [
     {
       name: "graft_ps",
@@ -777,9 +780,9 @@ void test("simple spark-graft tools use graft --json CLI routes", async () => {
   }
 });
 
-void test("graft candidates/search use constraint terminology", async () => {
+test("graft candidates/search use constraint terminology", async () => {
   const { pi, tools } = createFakePi();
-  registerPiGraftExtension(pi);
+  registerSparkGraftExtension(pi);
 
   const candidates = tools.get("graft_candidates");
   const search = tools.get("graft_search");
@@ -796,9 +799,9 @@ void test("graft candidates/search use constraint terminology", async () => {
   );
 });
 
-void test("spark-graft tools require explicit cwd or restored session state", async () => {
+test("spark-graft tools require explicit cwd or restored session state", async () => {
   const { pi, tools } = createFakePi();
-  registerPiGraftExtension(pi);
+  registerSparkGraftExtension(pi);
 
   const status = tools.get("graft_status");
   assert.ok(status, "expected graft_status tool to be registered");
@@ -831,7 +834,7 @@ esac`,
 
   try {
     const { pi, tools } = createFakePi();
-    registerPiGraftExtension(pi);
+    registerSparkGraftExtension(pi);
     const ctx = { cwd: project };
 
     const opened = await executeTool(
@@ -909,7 +912,7 @@ esac`,
 
     try {
       const { pi, tools } = createFakePi();
-      registerPiGraftExtension(pi);
+      registerSparkGraftExtension(pi);
       const ctx = { cwd: project };
 
       const written = await executeTool(
@@ -954,7 +957,7 @@ envTest("graft scratch tools require base, from, lastScratch, or GRAFT_BASE_REF"
   delete process.env.GRAFT_BASE_REF;
   try {
     const { pi, tools } = createFakePi();
-    registerPiGraftExtension(pi);
+    registerSparkGraftExtension(pi);
     await assert.rejects(
       executeTool(
         tools.get("graft_write"),
@@ -994,7 +997,7 @@ esac`,
 
   try {
     const { pi, tools } = createFakePi();
-    registerPiGraftExtension(pi);
+    registerSparkGraftExtension(pi);
     const ctx = { cwd: project };
 
     const written = await executeTool(
@@ -1066,7 +1069,7 @@ esac`,
 
     try {
       const { pi, tools, entries, handlers } = createFakePi();
-      registerPiGraftSandboxExtension(pi);
+      registerSparkGraftSandboxExtension(pi);
       for (const handler of handlers.get("session_start") ?? []) {
         await handler(
           { reason: "startup" },
@@ -1191,7 +1194,7 @@ esac`,
       customType: "spark-graft-sandbox-state",
       data: { state: restoredState },
     });
-    registerPiGraftSandboxExtension(pi);
+    registerSparkGraftSandboxExtension(pi);
     for (const handler of handlers.get("session_start") ?? []) {
       await handler(
         { reason: "startup" },
@@ -1309,7 +1312,7 @@ esac`,
       customType: "spark-graft-sandbox-state",
       data: { state: restoredState },
     });
-    registerPiGraftSandboxExtension(pi);
+    registerSparkGraftSandboxExtension(pi);
     for (const handler of handlers.get("session_start") ?? []) {
       await handler(
         { reason: "startup" },
@@ -1385,7 +1388,7 @@ esac`,
         customType: "spark-graft-sandbox-state",
         data: { state: restoredState },
       });
-      registerPiGraftSandboxExtension(pi);
+      registerSparkGraftSandboxExtension(pi);
       for (const handler of handlers.get("session_start") ?? []) {
         await handler(
           { reason: "startup" },
@@ -1437,7 +1440,7 @@ esac`,
 
   try {
     const { pi, tools, entries, handlers } = createFakePi();
-    registerPiGraftSandboxExtension(pi);
+    registerSparkGraftSandboxExtension(pi);
     for (const handler of handlers.get("session_start") ?? []) {
       await handler(
         { reason: "startup" },
@@ -1522,7 +1525,7 @@ esac`,
 
   try {
     const { pi, tools, entries, handlers } = createFakePi();
-    registerPiGraftSandboxExtension(pi);
+    registerSparkGraftSandboxExtension(pi);
     for (const handler of handlers.get("session_start") ?? []) {
       await handler(
         { reason: "startup" },
@@ -1597,7 +1600,7 @@ esac`,
         customType: "spark-graft-sandbox-state",
         data: { state: restoredState },
       });
-      registerPiGraftSandboxExtension(pi);
+      registerSparkGraftSandboxExtension(pi);
       for (const handler of handlers.get("session_start") ?? []) {
         await handler(
           { reason: "startup" },
@@ -1672,7 +1675,7 @@ esac`,
       customType: "spark-graft-sandbox-state",
       data: { state: restoredState },
     });
-    registerPiGraftSandboxExtension(pi);
+    registerSparkGraftSandboxExtension(pi);
     for (const handler of handlers.get("session_start") ?? []) {
       await handler(
         { reason: "startup" },
@@ -1767,7 +1770,7 @@ envTest("graft_candidate_from_scratch maps expected to CLI --expect flags", asyn
 
   try {
     const { pi, tools } = createFakePi();
-    registerPiGraftExtension(pi);
+    registerSparkGraftExtension(pi);
     const result = await executeTool(
       tools.get("graft_candidate_from_scratch"),
       "graft_candidate_from_scratch",
@@ -1822,8 +1825,8 @@ envTest(
 
     try {
       const { pi, tools, entries, handlers } = createFakePi();
-      registerPiGraftExtension(pi);
-      const toolCtx: PiGraftToolContext = {
+      registerSparkGraftExtension(pi);
+      const toolCtx: SparkGraftToolContext = {
         cwd: project,
         sessionManager: { getBranch: () => entries },
       };

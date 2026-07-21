@@ -4,7 +4,7 @@ import {
   type ArtifactFormat,
   type JsonValue,
 } from "@zendev-lab/spark-artifacts";
-import { type RoleRef, type RunRef } from "@zendev-lab/spark-extension-api";
+import { type RoleRef, type RunRef } from "@zendev-lab/spark-core";
 import {
   parseWorkflowScript,
   readSavedWorkflow,

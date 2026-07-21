@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   validateCueErrorPayload,
@@ -352,19 +352,19 @@ const eventCases: SchemaCase[] = [
 ];
 
 for (const schema of [...okCases, ...eventCases]) {
-  void test(`cue wire accepts canonical ${schema.name}`, () => {
+  test(`cue wire accepts canonical ${schema.name}`, () => {
     assert.doesNotThrow(() => schema.validate(clone(schema.canonical)));
   });
 
-  void test(`cue wire rejects missing fields for ${schema.name}`, () => {
+  test(`cue wire rejects missing fields for ${schema.name}`, () => {
     assert.throws(() => schema.validate(schema.missing()), /invalid cue-shell IPC message/);
   });
 
-  void test(`cue wire rejects extra fields for ${schema.name}`, () => {
+  test(`cue wire rejects extra fields for ${schema.name}`, () => {
     assert.throws(() => schema.validate(schema.extra()), /unknown field|exactly one/);
   });
 
-  void test(`cue wire rejects wrong field types for ${schema.name}`, () => {
+  test(`cue wire rejects wrong field types for ${schema.name}`, () => {
     assert.throws(() => schema.validate(schema.wrongType()), /invalid cue-shell IPC message/);
   });
 }
@@ -532,7 +532,7 @@ const nestedCases: Array<{
 ];
 
 for (const schema of nestedCases) {
-  void test(`cue wire nested ${schema.name} is exact and typed`, () => {
+  test(`cue wire nested ${schema.name} is exact and typed`, () => {
     assert.doesNotThrow(() => schema.validate(clone(schema.canonical)));
     assert.throws(
       () => schema.validate(deletePath(schema.canonical, [...schema.path, schema.required])),
@@ -549,7 +549,7 @@ for (const schema of nestedCases) {
   });
 }
 
-void test("cue wire output encoding accepts legacy UTF-8 and canonical base64 only", () => {
+test("cue wire output encoding accepts legacy UTF-8 and canonical base64 only", () => {
   assert.doesNotThrow(() =>
     validateCueOkPayload({ Output: { id: "J1", data: "legacy", truncated: false } }),
   );
@@ -581,7 +581,7 @@ void test("cue wire output encoding accepts legacy UTF-8 and canonical base64 on
   );
 });
 
-void test("cue wire Pong accepts optional restart generation and readiness compatibly", () => {
+test("cue wire Pong accepts optional restart generation and readiness compatibly", () => {
   const legacy = {
     Pong: { version: "0.1.0", protocol_version: 2, capabilities: ["cancel-execution"] },
   };
@@ -605,7 +605,7 @@ void test("cue wire Pong accepts optional restart generation and readiness compa
   );
 });
 
-void test("cue wire error payload has an exact schema", () => {
+test("cue wire error payload has an exact schema", () => {
   assert.doesNotThrow(() => validateCueErrorPayload({ code: "NOT_FOUND", message: "missing" }));
   assert.throws(() => validateCueErrorPayload({ code: "NOT_FOUND" }), /missing field message/);
   assert.throws(

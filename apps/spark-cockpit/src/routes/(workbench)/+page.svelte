@@ -1,17 +1,30 @@
 <script lang="ts">
+  import { Dialog as BitsDialog } from "bits-ui";
+  import { enhance } from "$app/forms";
   import Icon from "$lib/Icon.svelte";
   import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
-  import PageHeader from "$lib/ui/PageHeader.svelte";
+  import { Button, Dialog, EmptyState, PageHeader, Panel, StatCard } from "$lib/ui";
   import { workspaceAvatarStyle, workspaceInitial } from "$lib/workspace-avatar";
   import { workspacePath, workspaceSessionsPath } from "$lib/workspace-routes";
 
-  let { data } = $props();
+  let { data, form } = $props();
 
   let t = $derived(data.messages.home);
   let common = $derived(data.messages.common);
   let workspaces = $derived(data.workspaces);
   let onlineCount = $derived(
     workspaces.filter((workspace) => workspace.runtimeStatus === "online").length,
+  );
+  let pendingTotal = $derived(
+    workspaces.reduce((sum, workspace) => sum + workspace.pendingInboxCount, 0),
+  );
+
+  let removeOpen = $state(false);
+  let removeTarget = $state<(typeof workspaces)[number] | null>(null);
+  let removePending = $state(false);
+
+  let removeConfirmBody = $derived(
+    t.workspaceHome.removeConfirmBody.replace("{name}", removeTarget?.name ?? ""),
   );
 
   function formatRelative(value: string | null | undefined) {
@@ -30,14 +43,29 @@
     if (!workspace.bindingName) return t.workspaceHome.noConnection;
     return workspace.bindingName;
   }
+
+  function openRemoveDialog(workspace: (typeof workspaces)[number]) {
+    removeTarget = workspace;
+    removeOpen = true;
+  }
+
+  function closeRemoveDialog() {
+    if (removePending) return;
+    removeOpen = false;
+    removeTarget = null;
+  }
 </script>
 
 {#snippet headerActions()}
-  <a class="secondary-action" href="/settings/access">{t.workspaceHome.webAccess}</a>
-  <a class="primary-action" href="/workspaces/new">
+  <Button variant="secondary" href="/settings/access">{t.workspaceHome.webAccess}</Button>
+  <Button href="/workspaces/new">
     <Icon name="plus" size={16} />
     {t.hero.setUpRunner}
-  </a>
+  </Button>
+{/snippet}
+
+{#snippet emptyActions()}
+  <Button href="/workspaces/new">{t.hero.setUpRunner}</Button>
 {/snippet}
 
 <svelte:head>
@@ -52,42 +80,44 @@
     actions={headerActions}
   />
 
+  {#if form?.intent === "removeWorkspace" && form.message}
+    <p class="flash" role="status">{form.message}</p>
+  {/if}
+
   <section class="summary" aria-label={t.workspaceHome.summaryAria}>
-    <div class="summary-card">
-      <span class="summary-label">{t.metrics.workspaces}</span>
-      <strong>{workspaces.length}</strong>
-    </div>
-    <div class="summary-card">
-      <span class="summary-label">{t.metrics.runnerConnections}</span>
-      <strong>{onlineCount}</strong>
-    </div>
-    <div class="summary-card">
-      <span class="summary-label">{t.metrics.pendingInbox}</span>
-      <strong>{workspaces.reduce((sum, workspace) => sum + workspace.pendingInboxCount, 0)}</strong>
-    </div>
+    <StatCard label={t.metrics.workspaces} value={workspaces.length} tone="primary" icon="folder" />
+    <StatCard
+      label={t.metrics.runnerConnections}
+      value={onlineCount}
+      tone={onlineCount > 0 ? "success" : "warning"}
+      icon="activity"
+    />
+    <StatCard
+      label={t.metrics.pendingInbox}
+      value={pendingTotal}
+      tone={pendingTotal > 0 ? "warning" : "default"}
+      featured={pendingTotal > 0}
+      icon="inbox"
+    />
   </section>
 
-  <section class="catalog" aria-labelledby="workspace-catalog-title">
-    <div class="catalog-heading">
-      <div>
-        <p class="eyebrow">{t.workspaceHome.catalogEyebrow}</p>
-        <h2 id="workspace-catalog-title">{t.workspaceHome.catalogTitle}</h2>
-      </div>
-    </div>
-
+  <Panel
+    kicker={t.workspaceHome.catalogEyebrow}
+    title={t.workspaceHome.catalogTitle}
+    id="workspace-catalog-title"
+    padded={false}
+  >
     {#if workspaces.length === 0}
-      <div class="empty">
-        <Icon name="folder" size={28} />
-        <h3>{t.noWorkspaceHero.title}</h3>
-        <p>{t.noWorkspaceHero.lede}</p>
-        <div class="empty-actions">
-          <a class="primary-action" href="/workspaces/new">{t.hero.setUpRunner}</a>
-        </div>
-      </div>
+      <EmptyState
+        icon="folder"
+        title={t.noWorkspaceHero.title}
+        body={t.noWorkspaceHero.lede}
+        actions={emptyActions}
+      />
     {:else}
-      <ul class="workspace-grid">
+      <ul class="workspace-list">
         {#each workspaces as workspace (workspace.id)}
-          <li>
+          <li class="workspace-row">
             <a class="workspace-card" href={workspaceHref(workspace)}>
               <span class="avatar" style={workspaceAvatarStyle(workspace)}>
                 {workspaceInitial(workspace)}
@@ -109,111 +139,149 @@
               </span>
               <Icon name="chevron" size={18} />
             </a>
-            <a class="settings-link" href={`${workspacePath(workspace)}/settings/registration`}>
-              {t.workspaceHome.connectionSettings}
-            </a>
+            <div class="row-actions">
+              <Button
+                variant="ghost"
+                size="compact"
+                href={`${workspacePath(workspace)}/settings/registration`}
+              >
+                {t.workspaceHome.connectionSettings}
+              </Button>
+              <Button
+                variant="ghost"
+                size="compact"
+                ariaLabel={`${t.workspaceHome.removeWorkspace} ${workspace.name}`}
+                onclick={() => openRemoveDialog(workspace)}
+              >
+                <Icon name="archive" size={14} />
+                {t.workspaceHome.removeWorkspace}
+              </Button>
+            </div>
           </li>
         {/each}
       </ul>
     {/if}
-  </section>
+  </Panel>
 </section>
+
+<Dialog
+  bind:open={removeOpen}
+  width="min(440px, calc(100vw - 32px))"
+  maxHeight="min(420px, calc(100dvh - 32px))"
+  describedBy="remove-workspace-description"
+  onOpenChangeComplete={(open) => {
+    if (!open) closeRemoveDialog();
+  }}
+>
+  <div class="remove-dialog">
+    <header class="remove-dialog-header">
+      <div>
+        <BitsDialog.Title class="remove-dialog-title">
+          {t.workspaceHome.removeConfirmTitle}
+        </BitsDialog.Title>
+        <BitsDialog.Description id="remove-workspace-description" class="remove-dialog-body">
+          {removeConfirmBody}
+        </BitsDialog.Description>
+      </div>
+      <BitsDialog.Close class="remove-dialog-close" aria-label={t.workspaceHome.removeCancel}>
+        <Icon name="close" size={17} />
+      </BitsDialog.Close>
+    </header>
+    <footer class="remove-dialog-footer">
+      <Button variant="secondary" onclick={closeRemoveDialog} disabled={removePending}>
+        {t.workspaceHome.removeCancel}
+      </Button>
+      {#if removeTarget}
+        <form
+          method="POST"
+          action="?/removeWorkspace"
+          use:enhance={() => {
+            removePending = true;
+            return async ({ update }) => {
+              await update();
+              removePending = false;
+              removeOpen = false;
+              removeTarget = null;
+            };
+          }}
+        >
+          <input type="hidden" name="workspaceId" value={removeTarget.id} />
+          <Button variant="danger" type="submit" disabled={removePending}>
+            {t.workspaceHome.removeConfirmAction}
+          </Button>
+        </form>
+      {/if}
+    </footer>
+  </div>
+</Dialog>
 
 <style>
   .workspace-directory {
     display: grid;
-    gap: 1.5rem;
-    padding: 1.25rem 1.5rem 2rem;
+    gap: var(--spacing-xl);
+    padding: var(--spacing-xl) var(--spacing-xxl) var(--spacing-section);
+  }
+
+  .flash {
+    background: var(--color-success-soft);
+    border: 1px solid color-mix(in srgb, var(--color-success) 28%, var(--color-border));
+    border-radius: var(--rounded-md);
+    color: var(--color-success);
+    font-size: var(--text-caption);
+    margin: 0;
+    padding: var(--spacing-sm) var(--spacing-md);
   }
 
   .summary {
     display: grid;
+    gap: var(--spacing-md);
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.75rem;
   }
 
-  .summary-card {
+  .workspace-list {
     display: grid;
-    gap: 0.35rem;
-    padding: 0.9rem 1rem;
-    border: 1px solid var(--color-line);
-    border-radius: 0.9rem;
-    background: var(--color-panel);
-  }
-
-  .summary-label {
-    color: var(--color-muted);
-    font-size: 0.8rem;
-  }
-
-  .summary-card strong {
-    font-size: 1.4rem;
-    font-weight: 650;
-  }
-
-  .catalog {
-    display: grid;
-    gap: 1rem;
-  }
-
-  .catalog-heading {
-    display: grid;
-    gap: 0.2rem;
-  }
-
-  .eyebrow {
-    margin: 0 0 0.2rem;
-    color: var(--color-muted);
-    font-size: 0.75rem;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-  }
-
-  .catalog-heading h2 {
-    margin: 0;
-    font-size: 1.15rem;
-  }
-
-  .workspace-grid {
-    display: grid;
-    gap: 0.75rem;
+    gap: 0;
+    list-style: none;
     margin: 0;
     padding: 0;
-    list-style: none;
   }
 
-  .workspace-grid > li {
+  .workspace-row {
+    border-top: 1px solid var(--color-border);
     display: grid;
-    gap: 0.35rem;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-lg) var(--spacing-xl);
+  }
+
+  .workspace-row:first-child {
+    border-top: 0;
   }
 
   .workspace-card {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    gap: 0.9rem;
     align-items: center;
-    padding: 1rem 1.1rem;
-    border: 1px solid var(--color-line);
-    border-radius: 1rem;
-    background: var(--color-panel);
     color: inherit;
+    display: grid;
+    gap: var(--spacing-md);
+    grid-template-columns: auto 1fr auto;
+    min-width: 0;
     text-decoration: none;
   }
 
-  .workspace-card:hover {
-    border-color: color-mix(in srgb, var(--color-accent) 35%, var(--color-line));
+  .workspace-card:hover strong {
+    color: var(--color-primary);
   }
 
   .avatar {
-    display: grid;
-    place-items: center;
-    width: 2.5rem;
-    height: 2.5rem;
-    border: 1px solid var(--avatar-border);
-    border-radius: 0.8rem;
+    align-items: center;
     background: var(--avatar-bg);
+    border: 1px solid var(--avatar-border);
+    border-radius: var(--rounded-md);
     color: var(--avatar-ink);
+    display: grid;
     font-weight: 700;
+    height: 2.5rem;
+    justify-content: center;
+    width: 2.5rem;
   }
 
   .card-copy {
@@ -223,89 +291,91 @@
   }
 
   .card-copy strong {
-    font-size: 1rem;
+    font-size: var(--text-card-title);
+    font-weight: var(--weight-card-title);
   }
 
   .card-copy small,
   .meta,
   .counts {
-    color: var(--color-muted);
-    font-size: 0.82rem;
+    color: var(--color-ink-subtle);
+    font-size: var(--text-caption);
   }
 
   .meta,
-  .counts {
+  .counts,
+  .row-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.35rem;
+    gap: var(--spacing-xs);
   }
 
-  .settings-link {
-    justify-self: start;
-    margin-left: 3.4rem;
-    color: var(--color-muted);
-    font-size: 0.8rem;
-    text-decoration: none;
+  .row-actions {
+    margin-left: calc(2.5rem + var(--spacing-md));
   }
 
-  .settings-link:hover {
-    color: var(--color-accent);
-  }
-
-  .empty {
+  .remove-dialog {
     display: grid;
-    gap: 0.55rem;
-    justify-items: start;
-    padding: 1.5rem;
-    border: 1px dashed var(--color-line);
-    border-radius: 1rem;
-    background: color-mix(in srgb, var(--color-panel) 80%, transparent);
+    gap: var(--spacing-lg);
+    padding: var(--spacing-xl);
   }
 
-  .empty h3 {
-    margin: 0;
-  }
-
-  .empty p {
-    margin: 0;
-    color: var(--color-muted);
-  }
-
-  .empty-actions,
-  :global(.page-header-actions) {
+  .remove-dialog-header {
+    align-items: start;
     display: flex;
-    flex-wrap: wrap;
-    gap: 0.6rem;
+    gap: var(--spacing-md);
+    justify-content: space-between;
   }
 
-  .primary-action,
-  .secondary-action {
-    display: inline-flex;
+  :global(.remove-dialog-title) {
+    color: var(--color-ink);
+    font-size: var(--text-section-title);
+    font-weight: var(--weight-section-title);
+    margin: 0;
+  }
+
+  :global(.remove-dialog-body) {
+    color: var(--color-ink-subtle);
+    font-size: var(--text-body);
+    line-height: var(--leading-body);
+    margin: var(--spacing-xs) 0 0;
+  }
+
+  :global(.remove-dialog-close) {
     align-items: center;
-    gap: 0.4rem;
-    padding: 0.55rem 0.85rem;
-    border-radius: 999px;
-    font-size: 0.9rem;
-    text-decoration: none;
+    background: transparent;
+    border: 0;
+    border-radius: var(--rounded-md);
+    color: var(--color-ink-muted);
+    cursor: pointer;
+    display: inline-flex;
+    height: 32px;
+    justify-content: center;
+    width: 32px;
   }
 
-  .primary-action {
-    background: var(--color-ink);
-    color: var(--color-canvas);
-  }
-
-  .secondary-action {
-    border: 1px solid var(--color-line);
-    background: var(--color-panel);
+  :global(.remove-dialog-close:hover) {
+    background: var(--color-surface-soft);
     color: var(--color-ink);
   }
 
+  .remove-dialog-footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-xs);
+    justify-content: flex-end;
+  }
+
   @media (max-width: 720px) {
+    .workspace-directory {
+      padding: var(--spacing-lg) var(--spacing-md) var(--spacing-xxl);
+    }
+
     .summary {
       grid-template-columns: 1fr;
     }
 
-    .settings-link {
+    .row-actions {
       margin-left: 0;
     }
   }

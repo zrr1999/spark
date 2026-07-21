@@ -11,19 +11,13 @@ import {
 } from "$lib/server/auth";
 import { getDatabase } from "$lib/server/db";
 import { formText } from "$lib/server/form-data";
+import { loadWorkspaceByRouteId } from "$lib/server/workspace-routing";
 import { workspaceSessionsPath } from "$lib/workspace-routes";
 import type { Actions, PageServerLoad } from "./$types";
 
 export const load: PageServerLoad = ({ locals, params, url }) => {
   const db = getDatabase();
-  const workspace = db
-    .prepare(
-      `SELECT id, slug, name FROM workspaces
-       WHERE (id = ? OR slug = ?) AND status = 'active' LIMIT 1`,
-    )
-    .get(params.workspaceId, params.workspaceId) as
-    | { id: string; slug: string; name: string }
-    | undefined;
+  const workspace = loadWorkspaceByRouteId(db, params.workspaceId);
   if (!workspace) throw error(404, "Workspace not found.");
 
   const next = safeNextPath(url.searchParams.get("next"), workspace.slug);
@@ -47,14 +41,7 @@ export const actions: Actions = {
       acceptLanguage: request.headers.get("accept-language"),
     }).workspaceLogin;
     const db = getDatabase();
-    const workspace = db
-      .prepare(
-        `SELECT id, slug, name FROM workspaces
-         WHERE (id = ? OR slug = ?) AND status = 'active' LIMIT 1`,
-      )
-      .get(params.workspaceId, params.workspaceId) as
-      | { id: string; slug: string; name: string }
-      | undefined;
+    const workspace = loadWorkspaceByRouteId(db, params.workspaceId);
     if (!workspace) throw error(404, "Workspace not found.");
 
     const next = safeNextPath(url.searchParams.get("next"), workspace.slug);

@@ -5,12 +5,14 @@ Cockpit is local-first and listens on loopback by default. Remote browser author
 1. **Cockpit access** — one-time `spark_cockpit_auth_…` key exchanged at `/login` for a Cockpit owner session (control plane).
 2. **Workspace access** — one-time `spark_workspace_auth_…` key exchanged at `/{slug}/login` for that workspace only.
 
-Minting stays in `@zendev-lab/spark-coordination`. Operators use thin CLIs:
+Minting stays in `@zendev-lab/spark-coordination` on the Cockpit host (single source of truth):
 
 ```sh
-spark cockpit access create [--label <text>] [--json]
-spark daemon workspace access create [--workspace <name>] [--json]
+spark cockpit access create|list|revoke [--label <text>] [--json]
+spark cockpit workspace access create|list|revoke --workspace <id> [--label <text>] [--json]
 ```
+
+`spark daemon workspace register` may print one workspace browser key as part of binding. Additional browsers use the Cockpit CLI above—not a second daemon mint path. Prefer workspace **id** as the CLI marker; name/slug are display helpers.
 
 ## Direct private-network access
 
@@ -46,7 +48,7 @@ Use `SPARK_COCKPIT_PUBLIC_URL=auto` only behind the same trusted loopback proxy 
 
 1. On the Cockpit host, mint a Cockpit browser key: `spark cockpit access create`. Open `/login` and exchange it for Cockpit session cookies (`spark_cockpit_session` + rotating refresh).
 2. Create or open a workspace in the control plane. In connection settings (or via daemon registration), obtain a workspace registration token and run `spark daemon workspace register ... --token ...` from the daemon-owned directory.
-3. Successful registration binds that directory and prints a `spark_workspace_auth_...` browser key plus `/{slug}/login`. The key expires after 10 minutes and can be consumed once. Additional browsers use `spark daemon workspace access create`.
+3. Successful registration binds that directory and may print a `spark_workspace_auth_...` browser key plus `/{slug}/login`. The key expires after 10 minutes and can be consumed once. Additional browsers use `spark cockpit workspace access create --workspace <id>`.
 4. `/{slug}/login` exchanges the workspace key for workspace session cookies (`spark_workspace_session` + rotating refresh). Refresh rotates both credentials; replaying the previous refresh credential fails.
 5. A Cockpit session alone does not open another workspace’s sessions, artifacts, or SSE. A workspace session for A cannot open workspace B or global Cockpit settings without a Cockpit session.
 

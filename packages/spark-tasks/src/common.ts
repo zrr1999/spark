@@ -18,7 +18,7 @@ import type {
   TaskRun,
   TaskTodo,
   TaskTodoStatus,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 
 export interface CreateProjectInput {
   title: string;

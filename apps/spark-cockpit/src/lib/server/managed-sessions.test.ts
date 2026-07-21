@@ -49,6 +49,7 @@ const snapshot = {
   runs: [],
   tasks: [],
   artifacts: [],
+  evidence: [],
   metadata: {},
 };
 

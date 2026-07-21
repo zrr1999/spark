@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   SparkSkillResolver,
@@ -28,7 +28,7 @@ async function writeSkill(
   await writeFile(path, `---\n${frontmatter}---\n\n${body}`, "utf8");
 }
 
-void test("parseSkillFrontmatter reads skill metadata booleans and body", () => {
+test("parseSkillFrontmatter reads skill metadata booleans and body", () => {
   const parsed = parseSkillFrontmatter(
     "---\nname: demo-skill\ndescription: Demo description\ndisabled: true\ndisable-model-invocation: false\n---\n\n# Demo\n",
   );
@@ -41,7 +41,7 @@ void test("parseSkillFrontmatter reads skill metadata booleans and body", () => 
   assert.equal(parsed.body, "# Demo\n");
 });
 
-void test("parseSkillFrontmatter reads multiline block descriptions", () => {
+test("parseSkillFrontmatter reads multiline block descriptions", () => {
   const parsed = parseSkillFrontmatter(
     "---\nname: cue\ndescription: |\n  First line.\n  第二行。\ndisabled: false\n---\n\n# Cue\n",
   );
@@ -49,7 +49,7 @@ void test("parseSkillFrontmatter reads multiline block descriptions", () => {
   assert.equal(parsed.frontmatter.disabled, false);
 });
 
-void test("loadBuiltinSkills and renderBuiltinSkillsForPrompt expose full base prompt bodies", async () => {
+test("loadBuiltinSkills and renderBuiltinSkillsForPrompt expose full base prompt bodies", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-builtin-skills-fulltext-"));
   try {
     await writeSkill(
@@ -74,7 +74,7 @@ void test("loadBuiltinSkills and renderBuiltinSkillsForPrompt expose full base p
   }
 });
 
-void test("SparkSkillResolver discovers builtin, workspace, and user skills with user override precedence", async () => {
+test("SparkSkillResolver discovers builtin, workspace, and user skills with user override precedence", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-skills-precedence-"));
   try {
     const builtin = join(dir, "builtin");
@@ -129,7 +129,7 @@ void test("SparkSkillResolver discovers builtin, workspace, and user skills with
   }
 });
 
-void test("SparkSkillResolver skips disabled skills and hides disable-model-invocation from prompt", async () => {
+test("SparkSkillResolver skips disabled skills and hides disable-model-invocation from prompt", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-skills-visibility-"));
   try {
     const builtin = join(dir, "builtin");
@@ -163,7 +163,7 @@ void test("SparkSkillResolver skips disabled skills and hides disable-model-invo
   }
 });
 
-void test("SparkSkillResolver follows Pi-style discovery roots and does not recurse below SKILL.md roots", async () => {
+test("SparkSkillResolver follows Pi-style discovery roots and does not recurse below SKILL.md roots", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-skills-discovery-"));
   try {
     const skillsDir = join(dir, "skills");
@@ -189,7 +189,7 @@ void test("SparkSkillResolver follows Pi-style discovery roots and does not recu
   }
 });
 
-void test("SparkSkillResolver discovers cross-harness .agents/skills and ignores their root .md files", async () => {
+test("SparkSkillResolver discovers cross-harness .agents/skills and ignores their root .md files", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-skills-agents-"));
   try {
     const repo = join(dir, "repo");
@@ -236,7 +236,7 @@ void test("SparkSkillResolver discovers cross-harness .agents/skills and ignores
   }
 });
 
-void test("SparkSkillResolver lets the .agents/skills dir closest to cwd win a name collision", async () => {
+test("SparkSkillResolver lets the .agents/skills dir closest to cwd win a name collision", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-skills-agents-precedence-"));
   try {
     const repo = join(dir, "repo");
@@ -270,7 +270,7 @@ void test("SparkSkillResolver lets the .agents/skills dir closest to cwd win a n
   }
 });
 
-void test("loadMatchingSparkSkillsForPrompt loads full SKILL.md content by description match", async () => {
+test("loadMatchingSparkSkillsForPrompt loads full SKILL.md content by description match", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-skills-match-"));
   try {
     const builtin = join(dir, "builtin");
@@ -304,7 +304,7 @@ void test("loadMatchingSparkSkillsForPrompt loads full SKILL.md content by descr
   }
 });
 
-void test("SparkSkillResolver includes spark-cue in the default native skill catalog", async () => {
+test("SparkSkillResolver includes spark-cue in the default native skill catalog", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-skills-default-cue-"));
   try {
     const resolver = new SparkSkillResolver({
@@ -326,7 +326,7 @@ void test("SparkSkillResolver includes spark-cue in the default native skill cat
   }
 });
 
-void test("skill matching supports CJK request keywords", async () => {
+test("skill matching supports CJK request keywords", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-skills-cjk-match-"));
   try {
     const builtin = join(dir, "builtin");
@@ -357,7 +357,7 @@ void test("skill matching supports CJK request keywords", async () => {
   }
 });
 
-void test("skill matching ignores one common CJK bigram shared by unrelated skills", async () => {
+test("skill matching ignores one common CJK bigram shared by unrelated skills", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-skills-cjk-common-term-"));
   try {
     const builtin = join(dir, "builtin");
@@ -395,7 +395,7 @@ void test("skill matching ignores one common CJK bigram shared by unrelated skil
   }
 });
 
-void test("selected skill bodies stay entirely in the dynamic prompt section", async () => {
+test("selected skill bodies stay entirely in the dynamic prompt section", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-skills-dynamic-prompt-"));
   try {
     const skillPath = join(dir, "skill", "SKILL.md");

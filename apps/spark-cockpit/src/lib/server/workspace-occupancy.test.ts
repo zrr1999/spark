@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
-import { createWorkspaceWithOwnerBinding } from "./projection-services";
+import { createWorkspaceWithOwnerBinding } from "@zendev-lab/spark-coordination/projection-services";
 import { queueWorkspaceOccupancyCommand, workspaceExists } from "./workspace-occupancy";
 
 describe("workspace occupancy commands", () => {

@@ -1,10 +1,10 @@
 import { Type } from "typebox";
 import type {
-  ExtensionAPI,
+  SparkHostAPI,
   ToolConfig,
   ToolRenderComponent,
   ToolRenderTheme,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import {
   ARTIFACT_CURATION_STATUSES,
   ARTIFACT_FORMATS,
@@ -32,7 +32,7 @@ import {
 } from "./index.ts";
 import { registerProductArtifactTool } from "./product/extension.ts";
 
-export interface PiArtifactsExtensionApi {
+export interface SparkArtifactsHostApi {
   registerTool(config: ToolConfig): void;
 }
 
@@ -68,7 +68,7 @@ class ToolCallText implements ToolRenderComponent {
 }
 
 /** Register the agent-internal evidence ledger tool (`evidence`). */
-export function registerEvidenceTool(pi: PiArtifactsExtensionApi): void {
+export function registerEvidenceTool(pi: SparkArtifactsHostApi): void {
   pi.registerTool({
     name: "evidence",
     label: "Evidence",
@@ -414,14 +414,14 @@ export function registerEvidenceTool(pi: PiArtifactsExtensionApi): void {
 
 export { registerProductArtifactTool } from "./product/extension.ts";
 
-export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
+export function registerSparkArtifactTool(pi: SparkArtifactsHostApi): void {
   registerEvidenceTool(pi);
   registerProductArtifactTool(pi);
 }
 
-export default function sparkArtifactsExtension(pi: ExtensionAPI): void {
+export default function sparkArtifactsExtension(pi: SparkHostAPI): void {
   if (!pi.registerTool) throw new Error("spark-artifacts extension requires registerTool support");
-  registerPiArtifactTool({ registerTool: (config) => pi.registerTool?.(config) });
+  registerSparkArtifactTool({ registerTool: (config) => pi.registerTool?.(config) });
 }
 
 function renderEvidenceCall(

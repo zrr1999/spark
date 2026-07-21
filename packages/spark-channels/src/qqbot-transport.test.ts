@@ -5,6 +5,7 @@ import type { QqbotApiClient } from "./qqbot-api.ts";
 import { chunkQqbotMarkdownText } from "./qqbot-markdown.ts";
 import {
   createQqbotTransport,
+  enrichQqbotChannelQuotePreview,
   materializeQqbotInboundImages,
   type QqbotGatewayCursor,
 } from "./qqbot-transport.ts";
@@ -53,6 +54,7 @@ function createApiMock() {
   const sendGroupMarkdownKeyboardMessage = vi.fn(async () => ({ id: "ask-group" }));
   const sendC2CStreamMessage = vi.fn(async () => ({ id: "stream" }));
   const sendChannelMessage = vi.fn(async () => ({ id: "text-channel" }));
+  const getChannelMessage = vi.fn(async () => ({ id: "channel-message" }));
   const acknowledgeInteraction = vi.fn(async () => undefined);
   let messageSequence = 0;
   const api: QqbotApiClient = {
@@ -73,6 +75,7 @@ function createApiMock() {
     sendC2CMarkdownKeyboardMessage,
     sendGroupMarkdownKeyboardMessage,
     sendChannelMessage,
+    getChannelMessage,
     sendC2CStreamMessage,
     acknowledgeInteraction,
   };
@@ -92,6 +95,7 @@ function createApiMock() {
     sendGroupMarkdownKeyboardMessage,
     sendC2CStreamMessage,
     sendChannelMessage,
+    getChannelMessage,
     acknowledgeInteraction,
   };
 }
@@ -1083,5 +1087,54 @@ describe("createQqbotTransport", () => {
 
     await transport.interaction?.ackInteraction("interaction-1", "duplicate");
     expect(acknowledgeInteraction).toHaveBeenCalledWith("token", "interaction-1", 3);
+  });
+});
+
+describe("enrichQqbotChannelQuotePreview", () => {
+  it("fetches guild message preview when channel reference has only message_id", async () => {
+    const getChannelMessage = vi.fn(async () => ({
+      id: "m-source",
+      content: "子频道被引原文",
+      author: { id: "u-bot", username: "Spark" },
+    }));
+    const enriched = await enrichQqbotChannelQuotePreview(
+      { getChannelMessage },
+      async () => "token",
+      {
+        event_type: "AT_MESSAGE_CREATE",
+        d: {
+          id: "m-reply",
+          channel_id: "c1",
+          content: "继续",
+          message_reference: { message_id: "m-source" },
+        },
+      },
+    );
+    expect(getChannelMessage).toHaveBeenCalledWith("token", "c1", "m-source");
+    expect(enriched).toMatchObject({
+      d: {
+        message_reference: {
+          message_id: "m-source",
+          content: "子频道被引原文",
+          spark_quote_source: "fetched",
+        },
+      },
+    });
+  });
+
+  it("does not fetch for C2C events", async () => {
+    const getChannelMessage = vi.fn(async () => ({ content: "x" }));
+    const raw = {
+      event_type: "C2C_MESSAGE_CREATE",
+      d: {
+        id: "m-reply",
+        content: "继续",
+        message_reference: { message_id: "m-source" },
+      },
+    };
+    await expect(
+      enrichQqbotChannelQuotePreview({ getChannelMessage }, async () => "token", raw),
+    ).resolves.toEqual(raw);
+    expect(getChannelMessage).not.toHaveBeenCalled();
   });
 });

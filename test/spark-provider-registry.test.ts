@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import { SparkHostModelRegistry } from "../apps/spark-tui/src/host/model-registry.ts";
 import {
@@ -42,7 +42,7 @@ const fakeProvider: ProviderConfig = {
   ],
 };
 
-void test("SparkProviderRegistry registerProvider validates name + streamSimple + models", () => {
+test("SparkProviderRegistry registerProvider validates name + streamSimple + models", () => {
   const registry = new SparkProviderRegistry();
   assert.throws(() => registry.registerProvider("", fakeProvider), /requires a provider name/);
   assert.throws(
@@ -59,7 +59,7 @@ void test("SparkProviderRegistry registerProvider validates name + streamSimple 
   );
 });
 
-void test("SparkProviderRegistry registers, lists, and looks up providers/models", () => {
+test("SparkProviderRegistry registers, lists, and looks up providers/models", () => {
   const registry = new SparkProviderRegistry();
   registry.registerProvider("fake", fakeProvider);
   assert.equal(registry.hasProvider("fake"), true);
@@ -72,7 +72,7 @@ void test("SparkProviderRegistry registers, lists, and looks up providers/models
   );
 });
 
-void test("SparkProviderRegistry setActive validates provider + model existence", () => {
+test("SparkProviderRegistry setActive validates provider + model existence", () => {
   const registry = new SparkProviderRegistry();
   registry.registerProvider("fake", fakeProvider);
   assert.throws(
@@ -87,7 +87,7 @@ void test("SparkProviderRegistry setActive validates provider + model existence"
   assert.deepEqual(registry.getActive(), { providerName: "fake", modelId: "model-b" });
 });
 
-void test("SparkHostModelRegistry adapts provider models and filters env-auth availability", () => {
+test("SparkHostModelRegistry adapts provider models and filters env-auth availability", () => {
   const registry = new SparkProviderRegistry();
   registry.registerProvider("fake", fakeProvider);
 
@@ -107,7 +107,7 @@ void test("SparkHostModelRegistry adapts provider models and filters env-auth av
   assert.equal(withEnv.hasConfiguredAuth(withEnv.getAll()[0]!), true);
 });
 
-void test("SparkProviderRegistry buildModel returns a pi-ai compatible Model<Api>", () => {
+test("SparkProviderRegistry buildModel returns a pi-ai compatible Model<Api>", () => {
   const registry = new SparkProviderRegistry();
   registry.registerProvider("fake", fakeProvider);
   const model = registry.buildModel("fake", "model-b");
@@ -120,7 +120,7 @@ void test("SparkProviderRegistry buildModel returns a pi-ai compatible Model<Api
   assert.deepEqual(model.input, ["text", "image"]);
 });
 
-void test("SparkProviderRegistry supports model-level API overrides", () => {
+test("SparkProviderRegistry supports model-level API overrides", () => {
   const registry = new SparkProviderRegistry();
   registry.registerProvider("fake", {
     ...fakeProvider,
@@ -137,7 +137,7 @@ void test("SparkProviderRegistry supports model-level API overrides", () => {
   assert.equal(model.baseUrl, "https://fake.test/v1");
 });
 
-void test("SparkProviderRegistry buildActiveModel reuses the active selection", () => {
+test("SparkProviderRegistry buildActiveModel reuses the active selection", () => {
   const registry = new SparkProviderRegistry();
   registry.registerProvider("fake", fakeProvider);
   assert.equal(registry.buildActiveModel(), undefined);
@@ -146,7 +146,7 @@ void test("SparkProviderRegistry buildActiveModel reuses the active selection", 
   assert.equal(model?.id, "model-a");
 });
 
-void test("createProviderRegistryStreamFunction normalizes bare async provider streams", async () => {
+test("createProviderRegistryStreamFunction normalizes bare async provider streams", async () => {
   const registry = new SparkProviderRegistry();
   const assistant = {
     role: "assistant",
@@ -180,7 +180,7 @@ void test("createProviderRegistryStreamFunction normalizes bare async provider s
   assert.deepEqual(await stream.result(), retaggedAssistant);
 });
 
-void test("createProviderRegistryStreamFunction rejects non-stream provider outputs", () => {
+test("createProviderRegistryStreamFunction rejects non-stream provider outputs", () => {
   const registry = new SparkProviderRegistry();
   registry.registerProvider("fake", fakeProvider);
   registry.setActive({ providerName: "fake", modelId: "model-a" });
@@ -195,9 +195,9 @@ void test("createProviderRegistryStreamFunction rejects non-stream provider outp
   );
 });
 
-void test("SparkProviderRegistry accepts the production baidu-oneapi-provider plugin", () => {
+test("SparkProviderRegistry accepts the production baidu-oneapi-provider plugin", () => {
   const registry = new SparkProviderRegistry();
-  // Provider plugins follow the same contract as ExtensionAPI plugins:
+  // Provider plugins follow the same contract as SparkHostAPI plugins:
   //   default function(pi: ProviderRegistrationAPI): void
   registerBaiduOneApiProvider(registry);
   assert.equal(registry.hasProvider("baidu-oneapi"), true);
@@ -255,7 +255,7 @@ void test("SparkProviderRegistry accepts the production baidu-oneapi-provider pl
   assert.equal(gpt56Profile.routes[0]?.transportModelId, "gpt-5.6-sol");
 });
 
-void test("SparkProviderRegistry adapts pi-ai's production OpenAI Codex provider", () => {
+test("SparkProviderRegistry adapts pi-ai's production OpenAI Codex provider", () => {
   const registry = new SparkProviderRegistry();
   registerOpenAICodexProvider(registry);
 

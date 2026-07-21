@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { writeJsonFileAtomic } from "@zendev-lab/spark-core";
 import { resolveSparkHome } from "@zendev-lab/spark-system";
 
 export type SparkSessionMailKind = "request" | "notification";
@@ -18,7 +19,9 @@ export interface SparkSessionMailChannelTarget {
 }
 
 export interface SparkSessionMailOriginBinding extends SparkSessionMailChannelTarget {
+  workspaceId: string;
   adapter: "feishu" | "infoflow" | "qqbot";
+  recipient: string;
 }
 
 export interface SparkSessionMailDeliveryReceipt extends SparkSessionMailChannelTarget {
@@ -464,12 +467,12 @@ export class SparkSessionMailStore {
 
   private async save(toSessionId: string, mailbox: SparkSessionMailboxFile): Promise<void> {
     const path = this.mailboxPath(toSessionId);
-    await writeJsonAtomically(path, mailbox);
+    await writeJsonFileAtomic(path, mailbox);
     const legacyPath = this.legacyMailboxPath(toSessionId);
     if (legacyPath === path) return;
     try {
       assertMailboxOwner(await readMailboxFile(legacyPath, toSessionId), toSessionId, legacyPath);
-      await writeJsonAtomically(legacyPath, mailbox);
+      await writeJsonFileAtomic(legacyPath, mailbox);
     } catch (error) {
       if (
         (error as NodeJS.ErrnoException).code !== "ENOENT" &&
@@ -645,7 +648,16 @@ function normalizeOriginBinding(value: unknown): SparkSessionMailOriginBinding {
   if (target.adapter !== "feishu" && target.adapter !== "infoflow" && target.adapter !== "qqbot") {
     throw new Error(`unsupported originating channel adapter: ${target.adapter}`);
   }
-  return { ...target, adapter: target.adapter };
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("originating channel binding must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  const workspaceId = typeof record.workspaceId === "string" ? record.workspaceId.trim() : "";
+  const recipient = typeof record.recipient === "string" ? record.recipient.trim() : "";
+  if (!workspaceId || !recipient) {
+    throw new Error("originating channel binding requires workspaceId and recipient");
+  }
+  return { ...target, workspaceId, adapter: target.adapter, recipient };
 }
 
 function normalizeDeliveryTargets(
@@ -910,11 +922,4 @@ function compareMailMessages(
   right: SparkSessionMailMessage,
 ): number {
   return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
-}
-
-async function writeJsonAtomically(path: string, value: unknown): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  await rename(tmp, path);
 }

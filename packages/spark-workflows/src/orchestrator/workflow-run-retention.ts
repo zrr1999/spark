@@ -1,4 +1,4 @@
-import { nowIso, type RunRef, type ProjectRef } from "@zendev-lab/spark-extension-api";
+import { nowIso, type RunRef, type ProjectRef } from "@zendev-lab/spark-core";
 
 import type { WorkflowRunRecord, WorkflowRunStoreSnapshot } from "./index.ts";
 import {

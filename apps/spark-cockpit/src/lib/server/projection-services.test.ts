@@ -17,8 +17,12 @@ import {
   recordHumanResponse,
   recordInvocationLogChunk,
   recordInvocationUpdate,
-} from "./projection-services";
-import { cursorFromEvent, loadEventBatch, serializeEventRow } from "./events";
+} from "@zendev-lab/spark-coordination/projection-services";
+import {
+  cursorFromEvent,
+  loadEventBatch,
+  serializeEventRow,
+} from "@zendev-lab/spark-coordination/events";
 
 function setupRuntimeBinding() {
   const db = openMemoryDatabase();
@@ -72,7 +76,7 @@ describe("projection services", () => {
 
     const owner = db
       .prepare(
-        "SELECT runtime_workspace_binding_id AS bindingId FROM workspace_owner_bindings WHERE workspace_id = ?",
+        "SELECT runtime_workspace_binding_id AS bindingId FROM workspace_leases WHERE workspace_id = ?",
       )
       .get(workspace.id) as { bindingId: string };
     expect(owner.bindingId).toBe(runtimeWorkspaceBindingId);
@@ -367,7 +371,7 @@ describe("projection services", () => {
        VALUES (?, 'local-default', 'Pending local', NULL, 'active', '{}', ?, ?)`,
     ).run(workspaceId, now, now);
     db.prepare(
-      `INSERT INTO workspace_owner_bindings
+      `INSERT INTO workspace_leases
         (id, workspace_id, runtime_workspace_binding_id, owner_mode, started_at, ended_at, created_at)
        VALUES (?, ?, ?, 'primary', ?, NULL, ?)`,
     ).run(ownerBindingId, workspaceId, runtimeWorkspaceBindingId, now, now);
@@ -423,7 +427,7 @@ describe("projection services", () => {
     const activeOwnerCount = db
       .prepare(
         `SELECT COUNT(*) AS count
-         FROM workspace_owner_bindings
+         FROM workspace_leases
          WHERE workspace_id = ? AND ended_at IS NULL`,
       )
       .get(workspaceId) as { count: number };

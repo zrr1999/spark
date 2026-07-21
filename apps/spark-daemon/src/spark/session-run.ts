@@ -674,9 +674,11 @@ export async function executeSparkDaemonSessionRunTask(
     ...(task.channelReply && task.channelContext
       ? {
           channelBinding: {
+            workspaceId: task.channelReply.workspaceId,
             adapter:
               task.channelReply.adapter ?? sessionChannelAdapter(task.channelReply.adapterId),
             externalKey: task.channelContext.externalKey,
+            recipient: task.channelReply.recipient,
             adapterId: task.channelReply.adapterId,
             ...(task.channelReply.adapterAccountIdentity
               ? { adapterAccountIdentity: task.channelReply.adapterAccountIdentity }
@@ -753,6 +755,7 @@ function sessionRunMessageMetadata(
           ...(channel.senderName ? { senderName: channel.senderName } : {}),
           ...(channel.chatId ? { chatId: channel.chatId } : {}),
           ...(channel.messageId ? { messageId: channel.messageId } : {}),
+          ...(channel.messageReference ? { messageReference: channel.messageReference } : {}),
           ...(channel.eventType ? { eventType: channel.eventType } : {}),
           ...(channel.contentType ? { contentType: channel.contentType } : {}),
           ...(channel.attachments?.length ? { attachments: channel.attachments } : {}),

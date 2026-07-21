@@ -1,18 +1,18 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import { loadSparkHeadlessSessionModule } from "../packages/spark-host/src/headless-loader.ts";
 import { runSparkHeadlessSession } from "../apps/spark-tui/src/headless-role-executor.ts";
 import type { SparkRunOutcome } from "../apps/spark-tui/src/host/index.ts";
 
-void test("daemon headless loader resolves the real worker module and provider dependencies", async () => {
+test("daemon headless loader resolves the real worker module and provider dependencies", async () => {
   const headless = await loadSparkHeadlessSessionModule();
 
   assert.equal(typeof headless.createSparkHeadlessRoleExecutor, "function");
   assert.equal(typeof headless.createSparkHeadlessSessionExecutor, "function");
 });
 
-void test("runSparkHeadlessSession times out a never-resolving agent turn", async () => {
+test("runSparkHeadlessSession times out a never-resolving agent turn", async () => {
   const unsubscribed: string[] = [];
   let abortedReason: string | undefined;
   let capturedServiceOptions:
@@ -107,7 +107,7 @@ for (const terminal of [
     expected: /provider stream ended/u,
   },
 ]) {
-  void test(`runSparkHeadlessSession rejects assistant stopReason=${terminal.stopReason}`, async () => {
+  test(`runSparkHeadlessSession rejects assistant stopReason=${terminal.stopReason}`, async () => {
     const assistant = terminalAssistant(terminal.stopReason, terminal.errorMessage);
 
     await assert.rejects(
@@ -123,7 +123,7 @@ for (const terminal of [
   });
 }
 
-void test("runSparkHeadlessSession preserves an active caller cancellation", async () => {
+test("runSparkHeadlessSession preserves an active caller cancellation", async () => {
   const controller = new AbortController();
   const reason = new Error("operator cancelled");
   let createServicesCalls = 0;
@@ -154,7 +154,7 @@ void test("runSparkHeadlessSession preserves an active caller cancellation", asy
   assert.equal(submitCalls, 0);
 });
 
-void test("runSparkHeadlessSession never submits when cancellation wins during bootstrap", async () => {
+test("runSparkHeadlessSession never submits when cancellation wins during bootstrap", async () => {
   const controller = new AbortController();
   const reason = new Error("cancelled during service bootstrap");
   let submitCalls = 0;

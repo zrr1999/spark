@@ -20,7 +20,7 @@
     SessionStatusBarLabels,
     SlashActionAvailability,
   } from "$lib/components/conversation";
-  import type { ConversationPartLabels } from "$lib/components/conversation/types";
+  import type { ConversationPartLabels, LoadEarlierOutcome } from "$lib/components/conversation/types";
   import {
     ModelRuntimeControl,
     type ModelPickerGroup,
@@ -278,7 +278,7 @@
   let liveSessionHistory = $state<SessionSnapshotHistory | null>(
     untrack(() => sessionHistory),
   );
-  let historyLoadState = $state<"idle" | "loading" | "error">("idle");
+  let historyLoadState = $state<"idle" | "loading">("idle");
   let liveEventState = $state<SessionLiveEventState | null>(null);
   let liveSessionId = $state("");
   let lastServerViewKey = $state("");
@@ -1128,14 +1128,14 @@
     }
   }
 
-  async function showEarlierTimeline(): Promise<boolean> {
-    if (historyLoadState === "loading") return false;
+  async function showEarlierTimeline(): Promise<LoadEarlierOutcome> {
+    if (historyLoadState === "loading") return "busy";
     const history = liveSessionHistory;
     const snapshot = liveSessionView;
     if (!history || !snapshot || !history.hasEarlierMessages) {
       timelineRenderLimit += SESSION_TIMELINE_PAGE_SIZE;
       historyLoadState = "idle";
-      return true;
+      return "loaded";
     }
 
     const window: SessionSnapshotWindow = { snapshot, history };
@@ -1144,16 +1144,18 @@
     );
   }
 
-  async function loadEarlierTimeline(minimumAnchors: number): Promise<boolean> {
-    if (historyLoadState === "loading") return false;
+  async function loadEarlierTimeline(minimumAnchors: number): Promise<LoadEarlierOutcome> {
+    if (historyLoadState === "loading") return "busy";
     const sessionId = selectedSessionId;
     const history = liveSessionHistory;
     const initialSnapshot = liveSessionView;
-    if (!sessionId || !history || !initialSnapshot || !history.hasEarlierMessages) return false;
+    if (!sessionId || !history || !initialSnapshot || !history.hasEarlierMessages) {
+      return "exhausted";
+    }
     const beforeMessageId = history.nextBeforeMessageId;
     if (!beforeMessageId) {
-      historyLoadState = "error";
-      return false;
+      historyLoadState = "idle";
+      return "error";
     }
 
     historyLoadState = "loading";
@@ -1189,14 +1191,18 @@
       // flight. Merge into the latest browser window, never the pre-fetch copy.
       const currentSnapshot = untrack(() => liveSessionView);
       const currentHistory = untrack(() => liveSessionHistory);
-      if (
-        !currentSnapshot ||
-        !currentHistory ||
-        currentHistory.nextBeforeMessageId !== beforeMessageId ||
-        selectedSessionId !== sessionId
-      ) {
+      if (!currentSnapshot || !currentHistory || selectedSessionId !== sessionId) {
         historyLoadState = "idle";
-        return false;
+        return "busy";
+      }
+      if (currentHistory.nextBeforeMessageId !== beforeMessageId) {
+        // Cursor moved (live reconciliation). Caller should retry from the new tip.
+        historyLoadState = "idle";
+        return "busy";
+      }
+      if (loadedPages.length === 0) {
+        historyLoadState = "idle";
+        return currentHistory.hasEarlierMessages ? "busy" : "exhausted";
       }
       let window: SessionSnapshotWindow = { snapshot: currentSnapshot, history: currentHistory };
       for (const earlierPage of loadedPages) {
@@ -1208,10 +1214,10 @@
       liveSessionHistory = window.history;
       timelineRenderLimit += SESSION_TIMELINE_PAGE_SIZE;
       historyLoadState = "idle";
-      return true;
+      return "loaded";
     } catch {
-      historyLoadState = selectedSessionId === sessionId ? "error" : "idle";
-      return false;
+      historyLoadState = "idle";
+      return selectedSessionId === sessionId ? "error" : "busy";
     }
   }
 
@@ -2190,8 +2196,6 @@
           announcement={latestAnnouncement}
           jumpToLatestLabel={copy.jumpToLatest}
           hasEarlier={hasEarlierTimeline}
-          earlierLabel={copy.showEarlier}
-          earlierErrorLabel={copy.unavailable}
           onLoadEarlier={showEarlierTimeline}
           navigationItems={timelineNavigationItems}
         >

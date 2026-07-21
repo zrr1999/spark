@@ -7,7 +7,7 @@ const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 const repoRoot = resolve(webRoot, "../..");
 
-const sparkCoordinationAdapters = [
+const removedSparkCoordinationFacades = [
   "agents-product.ts",
   "artifact-cache.ts",
   "command-submission.ts",
@@ -21,10 +21,9 @@ const sparkCoordinationAdapters = [
 ];
 
 describe("package boundaries", () => {
-  it("keeps server coordination modules as spark-coordination adapters", () => {
-    for (const adapter of sparkCoordinationAdapters) {
-      const source = readFileSync(join(webRoot, "src/lib/server", adapter), "utf8").trim();
-      expect(source).toMatch(/^export \* from "@zendev-lab\/spark-coordination\//u);
+  it("does not keep empty spark-coordination facade re-exports under lib/server", () => {
+    for (const facade of removedSparkCoordinationFacades) {
+      expect(existsSync(join(webRoot, "src/lib/server", facade))).toBe(false);
     }
   });
 

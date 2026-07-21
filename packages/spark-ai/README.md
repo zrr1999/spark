@@ -30,7 +30,7 @@ The higher-level provider-plugin surface used by the native host:
 
 Provider plugins default-export `function(pi: ProviderRegistrationAPI)` and are
 loaded by the host the same way extensions are, but receive the provider API
-surface instead of `ExtensionAPI`.
+surface instead of `SparkHostAPI`.
 
 ## Models tool
 

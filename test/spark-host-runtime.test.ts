@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
-import type { ExtensionContext, ToolConfig } from "@zendev-lab/spark-extension-api";
+import type { SparkHostContext, ToolConfig } from "@zendev-lab/spark-core";
 
 import { SparkHostRuntime } from "../apps/spark-tui/src/host/runtime.ts";
 
-void test("SparkHostRuntime registers tools and reflects them in getAllTools", () => {
+test("SparkHostRuntime registers tools and reflects them in getAllTools", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
   host.registerTool({
     name: "impl_status",
@@ -31,7 +31,7 @@ void test("SparkHostRuntime registers tools and reflects them in getAllTools", (
   assert.deepEqual(names, ["impl_status", "impl_use_project"]);
 });
 
-void test("SparkHostRuntime keeps registered and active tool queries distinct", () => {
+test("SparkHostRuntime keeps registered and active tool queries distinct", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
   host.registerTool({
     name: "tool_a",
@@ -69,7 +69,7 @@ void test("SparkHostRuntime keeps registered and active tool queries distinct", 
   assert.equal(host.listTools().length, 2, "all tools remain registered, only active flag flips");
 });
 
-void test("SparkHostRuntime resolves and exposes immutable fail-closed tool policies", () => {
+test("SparkHostRuntime resolves and exposes immutable fail-closed tool policies", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-policy-test" });
   host.registerTool({
     name: "safe_read",
@@ -148,7 +148,7 @@ void test("SparkHostRuntime resolves and exposes immutable fail-closed tool poli
   });
 });
 
-void test("SparkHostRuntime permanently excludes tools outside the host allowlist", () => {
+test("SparkHostRuntime permanently excludes tools outside the host allowlist", () => {
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-host-runtime-channel-test",
     sessionSurface: "channel",
@@ -173,7 +173,7 @@ void test("SparkHostRuntime permanently excludes tools outside the host allowlis
   assert.equal(host.makeContext().sessionSource, "channel");
 });
 
-void test("SparkHostRuntime registerCommand adds numeric suffix for duplicate names", async () => {
+test("SparkHostRuntime registerCommand adds numeric suffix for duplicate names", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
   let aCalled = 0;
   let bCalled = 0;
@@ -199,9 +199,9 @@ void test("SparkHostRuntime registerCommand adds numeric suffix for duplicate na
   assert.equal(bCalled, 1);
 });
 
-void test("SparkHostRuntime emit fires registered listeners with a fresh context", async () => {
+test("SparkHostRuntime emit fires registered listeners with a fresh context", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test", hasUI: true });
-  const seen: ExtensionContext[] = [];
+  const seen: SparkHostContext[] = [];
   host.on("session_start", (_event, ctx) => {
     seen.push(ctx);
   });
@@ -212,7 +212,7 @@ void test("SparkHostRuntime emit fires registered listeners with a fresh context
   assert.equal(typeof seen[0]!.ui, "object");
 });
 
-void test("SparkHostRuntime sendMessage and sendUserMessage push envelopes into the outbox", () => {
+test("SparkHostRuntime sendMessage and sendUserMessage push envelopes into the outbox", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
   host.sendMessage(
     {
@@ -239,7 +239,7 @@ void test("SparkHostRuntime sendMessage and sendUserMessage push envelopes into 
   assert.equal(drained[1]!.kind, "user");
 });
 
-void test("SparkHostRuntime makeContext returns a no-op ui transport when none is plugged in", async () => {
+test("SparkHostRuntime makeContext returns a no-op ui transport when none is plugged in", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
   const ctx = host.makeContext();
   // Defensive optional chaining must keep extensions safe before TUI plugs in
@@ -249,7 +249,7 @@ void test("SparkHostRuntime makeContext returns a no-op ui transport when none i
   assert.equal(ctx.ui?.confirm, undefined);
 });
 
-void test("SparkHostRuntime setUiTransport plugs a real UI bridge into subsequent contexts", () => {
+test("SparkHostRuntime setUiTransport plugs a real UI bridge into subsequent contexts", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test", hasUI: true });
   const notifications: Array<{ message: string; level?: string }> = [];
   host.setUiTransport({
@@ -262,7 +262,7 @@ void test("SparkHostRuntime setUiTransport plugs a real UI bridge into subsequen
   assert.deepEqual(notifications, [{ message: "Spark active", level: "info" }]);
 });
 
-void test("SparkHostRuntime sessionManager defaults are defensive stubs", () => {
+test("SparkHostRuntime sessionManager defaults are defensive stubs", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
   const ctx = host.makeContext();
   const manager = (ctx as { sessionManager?: { getEntries?: () => unknown[] } }).sessionManager;
@@ -271,7 +271,7 @@ void test("SparkHostRuntime sessionManager defaults are defensive stubs", () => 
   assert.equal(manager?.getEntries, undefined);
 });
 
-void test("SparkHostRuntime emit awaits async listeners and surfaces their results", async () => {
+test("SparkHostRuntime emit awaits async listeners and surfaces their results", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
   host.on("turn_start", async () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -282,7 +282,7 @@ void test("SparkHostRuntime emit awaits async listeners and surfaces their resul
   assert.deepEqual(results, ["started", "sync"]);
 });
 
-void test("SparkHostRuntime onToolRegistration fires for every registerTool", () => {
+test("SparkHostRuntime onToolRegistration fires for every registerTool", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
   const seen: string[] = [];
   const off = host.onToolRegistration((info) => {
@@ -316,7 +316,7 @@ void test("SparkHostRuntime onToolRegistration fires for every registerTool", ()
   assert.deepEqual(seen, ["first", "second"]);
 });
 
-void test("SparkHostRuntime isIdle reflects setIdle toggle", () => {
+test("SparkHostRuntime isIdle reflects setIdle toggle", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
   assert.equal(host.isIdle(), true);
   host.setIdle(false);

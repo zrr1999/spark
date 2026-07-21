@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import test from "node:test";
+import { test } from "vitest";
 
 import { runWorkflowScript } from "../packages/spark-workflows/src/index.ts";
 import {
@@ -14,11 +14,11 @@ import {
   type SparkWorkflowRoleRunRequest,
 } from "../packages/spark-runtime/src/index.ts";
 import {
-  registerPiGraftExtension,
-  type PiGraftExtensionApi,
-  type PiGraftToolContext,
-  type PiGraftToolDefinition,
-  type PiGraftToolResult,
+  registerSparkGraftExtension,
+  type SparkGraftHostApi,
+  type SparkGraftToolContext,
+  type SparkGraftToolDefinition,
+  type SparkGraftToolResult,
 } from "../packages/spark-graft/src/index.ts";
 
 const execFileAsync = promisify(execFile);
@@ -37,17 +37,17 @@ function requiredString(value: unknown, message: string): string {
   return value;
 }
 
-function detailsResult(result: PiGraftToolResult): Record<string, unknown> {
+function detailsResult(result: SparkGraftToolResult): Record<string, unknown> {
   const value = result.details?.result;
   assert.ok(isRecord(value), "expected tool details.result to be an object");
   return value;
 }
 
-function createFakePiGraftTools() {
-  const tools = new Map<string, PiGraftToolDefinition>();
+function createFakeSparkGraftTools() {
+  const tools = new Map<string, SparkGraftToolDefinition>();
   const entries: unknown[] = [];
   const handlers = new Map<string, ExtensionHandler[]>();
-  const pi: PiGraftExtensionApi = {
+  const pi: SparkGraftHostApi = {
     on(event, handler) {
       handlers.set(event, [...(handlers.get(event) ?? []), handler as ExtensionHandler]);
     },
@@ -58,16 +58,16 @@ function createFakePiGraftTools() {
       entries.push({ type: "custom", customType, data });
     },
   };
-  registerPiGraftExtension(pi);
+  registerSparkGraftExtension(pi);
   return { tools, entries, handlers };
 }
 
 async function executeTool(
-  tool: PiGraftToolDefinition | undefined,
+  tool: SparkGraftToolDefinition | undefined,
   name: string,
   params: Record<string, unknown>,
-  ctx: PiGraftToolContext,
-): Promise<PiGraftToolResult> {
+  ctx: SparkGraftToolContext,
+): Promise<SparkGraftToolResult> {
   assert.ok(tool, `expected ${name} to be registered`);
   return tool.execute(name, params, undefined, undefined, ctx);
 }
@@ -84,9 +84,9 @@ async function binaryAvailable(path: string): Promise<boolean> {
 async function readCandidateContent(
   candidate: string,
   path: string,
-  ctx: PiGraftToolContext,
+  ctx: SparkGraftToolContext,
 ): Promise<string> {
-  const tools = createFakePiGraftTools().tools;
+  const tools = createFakeSparkGraftTools().tools;
   const read = await executeTool(
     tools.get("graft_read"),
     "graft_read",
@@ -108,7 +108,7 @@ function assertGraftPolicy(request: SparkWorkflowRoleRunRequest, base: string): 
   assert.match(request.instruction, /GRAFT_BASE_REF/);
 }
 
-void test("workflow graft isolation E2E creates separate candidates for parallel same-path edits", async (t) => {
+test("workflow graft isolation E2E creates separate candidates for parallel same-path edits", async (t) => {
   if (process.env.PI_GRAFT_E2E !== "1") {
     t.skip("set PI_GRAFT_E2E=1 to run the real workflow/graft isolation smoke test");
     return;
@@ -132,8 +132,8 @@ void test("workflow graft isolation E2E creates separate candidates for parallel
   await mkdir(project, { recursive: true });
 
   try {
-    const seed = createFakePiGraftTools();
-    const toolCtx: PiGraftToolContext = {
+    const seed = createFakeSparkGraftTools();
+    const toolCtx: SparkGraftToolContext = {
       cwd: project,
       sessionManager: { getBranch: () => seed.entries },
     };
@@ -175,7 +175,7 @@ void test("workflow graft isolation E2E creates separate candidates for parallel
         agentRequests.push(request);
         assertGraftPolicy(request, seedCandidate);
         const label = labelFromInstruction(request.instruction);
-        const childTools = createFakePiGraftTools().tools;
+        const childTools = createFakeSparkGraftTools().tools;
         const write = await executeTool(
           childTools.get("graft_write"),
           "graft_write",

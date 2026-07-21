@@ -58,13 +58,16 @@ describe("workspace creation page contract", () => {
     expect(source).toContain('form.registrationMode !== "token"');
   });
 
-  it("surfaces a registered-but-offline runtime instead of silently polling", () => {
+  it("surfaces a registered-but-offline runtime on the active command step", () => {
     const source = readFileSync(pagePath, "utf8");
 
     expect(source).toContain("pendingRuntimeConnection = $derived(data.pendingRuntimeConnection)");
-    expect(source).toContain("{:else if pendingRuntimeConnection}");
+    expect(source).toContain("{:else if index === 1}");
+    expect(source).toContain("{#if pendingRuntimeConnection}");
     expect(source).toContain("t.emptyWorkspace.stepActions.runtimeRegisteredOfflineTitle");
     expect(source).toContain("pending.runtimeStatus");
+    // Keep the same diagnostic available once step 3 is reached.
+    expect(source).toContain("{:else if pendingRuntimeConnection}");
   });
 
   it("hard-cuts the tokenless device registration backend", () => {

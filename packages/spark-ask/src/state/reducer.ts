@@ -1,4 +1,8 @@
-import type { PiAskFlowQuestion, PiAskFlowResult, PiAskFlowAnswerEntry } from "../schema.ts";
+import type {
+  SparkAskFlowQuestion,
+  SparkAskFlowResult,
+  SparkAskFlowAnswerEntry,
+} from "../schema.ts";
 import { inferAskSubmitStatus, nextActionForAskSubmit } from "../shared-semantics.ts";
 import type { AskState, ExtendedOption } from "./state.ts";
 import { initialMultiSelectChecked, initialOptionIndex, isSubmitTab } from "./state.ts";
@@ -26,7 +30,7 @@ export type AskAction =
 // ---- Effects ----
 
 export type Effect =
-  | { kind: "done"; result: PiAskFlowResult }
+  | { kind: "done"; result: SparkAskFlowResult }
   | { kind: "notify"; message: string; level?: "info" | "warning" }
   | { kind: "enter_input_mode" }
   | { kind: "enter_notes_mode" }
@@ -40,7 +44,7 @@ export interface ApplyResult {
 // ---- Context ----
 
 export interface ApplyContext {
-  questions: readonly PiAskFlowQuestion[];
+  questions: readonly SparkAskFlowQuestion[];
   optionsByTab: ReadonlyArray<readonly ExtendedOption[]>;
   mode?: "clarification" | "decision" | "approval" | "unblock";
 }
@@ -152,7 +156,7 @@ function commitOptionAnswer(
   focused: ExtendedOption,
 ): ApplyResult {
   const question = ctx.questions[state.currentTab];
-  const answer: PiAskFlowAnswerEntry = {
+  const answer: SparkAskFlowAnswerEntry = {
     questionId: question.id,
     kind: "option",
     values: [focused.option!.value],
@@ -196,7 +200,7 @@ function commitMulti(state: AskState, ctx: ApplyContext): ApplyResult {
   const selectedOptions = (question.options ?? []).filter((option) =>
     state.multiSelectChecked.has(option.value),
   );
-  const answer: PiAskFlowAnswerEntry = {
+  const answer: SparkAskFlowAnswerEntry = {
     questionId: question.id,
     kind: "multi",
     values: selectedOptions.map((option) => option.value),
@@ -234,7 +238,7 @@ function commitInput(state: AskState, ctx: ApplyContext): ApplyResult {
     return { state: nextState, effects: [{ kind: "request_rerender" }] };
   }
 
-  const answer: PiAskFlowAnswerEntry = {
+  const answer: SparkAskFlowAnswerEntry = {
     questionId: question.id,
     kind: "custom",
     values: [],
@@ -282,7 +286,7 @@ function submit(state: AskState, ctx: ApplyContext): ApplyResult {
   const answers = toAnswerRecord(state.answers);
   const request = { mode: ctx.mode, questions: ctx.questions };
   const status = inferAskSubmitStatus(request, answers);
-  const result: PiAskFlowResult = {
+  const result: SparkAskFlowResult = {
     status,
     answers,
     mode: "submit",
@@ -300,7 +304,7 @@ function elaborate(state: AskState, _ctx: ApplyContext): ApplyResult {
   }
   const affectedQuestionIds = notes.map((n) => n.questionId);
 
-  const result: PiAskFlowResult = {
+  const result: SparkAskFlowResult = {
     status: "answered",
     answers,
     mode: "elaborate",
@@ -316,7 +320,7 @@ function elaborate(state: AskState, _ctx: ApplyContext): ApplyResult {
 }
 
 function cancel(state: AskState, _ctx: ApplyContext): ApplyResult {
-  const result: PiAskFlowResult = {
+  const result: SparkAskFlowResult = {
     status: "cancelled",
     answers: toAnswerRecord(state.answers),
     mode: "cancel",
@@ -378,7 +382,7 @@ function moveToNextTab(state: AskState, ctx: ApplyContext): ApplyResult {
   return jumpTab(state, state.currentTab + 1, ctx);
 }
 
-function preservedCustomDraft(state: AskState, question: PiAskFlowQuestion | undefined): string {
+function preservedCustomDraft(state: AskState, question: SparkAskFlowQuestion | undefined): string {
   if (!question) return "";
   const draft = state.customDraftsByQuestion.get(question.id);
   if (draft !== undefined) return draft;
@@ -388,7 +392,7 @@ function preservedCustomDraft(state: AskState, question: PiAskFlowQuestion | und
 
 function rememberCustomDraft(
   state: AskState,
-  question: PiAskFlowQuestion | undefined,
+  question: SparkAskFlowQuestion | undefined,
   draft: string,
 ): ReadonlyMap<string, string> {
   if (!question) return state.customDraftsByQuestion;
@@ -405,9 +409,9 @@ function computeHasPreview(option?: ExtendedOption): boolean {
 }
 
 function toAnswerRecord(
-  answers: ReadonlyMap<string, PiAskFlowAnswerEntry>,
-): Record<string, PiAskFlowAnswerEntry> {
-  const record: Record<string, PiAskFlowAnswerEntry> = {};
+  answers: ReadonlyMap<string, SparkAskFlowAnswerEntry>,
+): Record<string, SparkAskFlowAnswerEntry> {
+  const record: Record<string, SparkAskFlowAnswerEntry> = {};
   for (const [id, entry] of answers) {
     record[id] = entry;
   }

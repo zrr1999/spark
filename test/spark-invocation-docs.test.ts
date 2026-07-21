@@ -3,11 +3,11 @@ import { spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 const terminologyScript = resolve("scripts/check-doc-terminology.mjs");
 
-void test("invocation terminology checker reports only classified migration/archive sources", () => {
+test("invocation terminology checker reports only classified migration/archive sources", () => {
   const result = runTerminologyCheck(resolve("."));
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /invocation terminology report/u);
@@ -15,7 +15,7 @@ void test("invocation terminology checker reports only classified migration/arch
   assert.doesNotMatch(result.stdout, /unclassified/u);
 });
 
-void test("invocation terminology checker rejects public docs, CLI help, and protocol fixtures", async () => {
+test("invocation terminology checker rejects public docs, CLI help, and protocol fixtures", async () => {
   const root = await mkdtemp(join(tmpdir(), "spark-invocation-terminology-"));
   try {
     await mkdir(join(root, "docs"), { recursive: true });
@@ -45,7 +45,7 @@ void test("invocation terminology checker rejects public docs, CLI help, and pro
   }
 });
 
-void test("invocation terminology checker rejects migration history in active docs", async () => {
+test("invocation terminology checker rejects migration history in active docs", async () => {
   const root = await mkdtemp(join(tmpdir(), "spark-invocation-migration-doc-"));
   try {
     await mkdir(join(root, "docs", "operations"), { recursive: true });

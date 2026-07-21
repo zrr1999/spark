@@ -36,6 +36,7 @@ export function migrateSparkDaemonDatabase(db: DatabaseSync): void {
       cancel_reason TEXT,
       error_code TEXT,
       error_message TEXT,
+      event_cursor INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       claimed_at TEXT,
@@ -344,6 +345,18 @@ function addMissingInvocationColumns(db: DatabaseSync): void {
   for (const [name, type] of additions) {
     if (!columns.has(name)) db.exec(`ALTER TABLE invocations ADD COLUMN ${name} ${type}`);
   }
+  if (!columns.has("event_cursor")) {
+    db.exec(`ALTER TABLE invocations ADD COLUMN event_cursor INTEGER NOT NULL DEFAULT 0`);
+    // One-time backfill so listSummaryPage can avoid scanning invocation_events.
+    db.exec(`
+      UPDATE invocations
+      SET event_cursor = COALESCE((
+        SELECT MAX(sequence)
+        FROM invocation_events
+        WHERE invocation_events.invocation_id = invocations.id
+      ), 0)
+    `);
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS invocation_events (
       invocation_id TEXT NOT NULL REFERENCES invocations(id) ON DELETE CASCADE,
@@ -356,6 +369,8 @@ function addMissingInvocationColumns(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS invocations_session_status_idx ON invocations(session_id, status);
     CREATE INDEX IF NOT EXISTS invocations_session_updated_idx
       ON invocations(session_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS invocations_created_at_idx
+      ON invocations(created_at DESC);
     CREATE UNIQUE INDEX IF NOT EXISTS invocations_idempotency_idx
       ON invocations(idempotency_key)
       WHERE idempotency_key IS NOT NULL;

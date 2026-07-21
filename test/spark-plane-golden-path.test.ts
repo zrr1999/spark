@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { TaskGraph } from "@zendev-lab/spark-tasks";
 
@@ -25,7 +25,7 @@ const PLAN = {
   askRefs: [],
 };
 
-void test("daemon/Cockpit/TUI golden path stays contract-focused and credential-free", async () => {
+test("daemon/Cockpit/TUI golden path stays contract-focused and credential-free", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "spark-plane-golden-"));
   try {
     const daemonBefore = daemonStatus(workspace, {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   SparkWebSafetyError,
@@ -15,7 +15,7 @@ import {
   type SparkWebSearchProvider,
 } from "../packages/spark-web/src/index.ts";
 import sparkWebExtension from "../packages/spark-web/src/extension.ts";
-import type { ToolConfig } from "../packages/spark-extension-api/src/index.ts";
+import type { ToolConfig } from "../packages/spark-core/src/index.ts";
 
 const mockFetcher: typeof fetch = async (_url) =>
   new Response(
@@ -37,7 +37,7 @@ const mockSearchProvider: SparkWebSearchProvider = {
   },
 };
 
-void test("spark-web refuses unsafe SSRF-style URLs", async () => {
+test("spark-web refuses unsafe SSRF-style URLs", async () => {
   await assert.rejects(() => assertSafeWebUrl("http://localhost/admin"), SparkWebSafetyError);
   await assert.rejects(() => assertSafeWebUrl("http://127.0.0.1/admin"), SparkWebSafetyError);
   await assert.rejects(
@@ -55,7 +55,7 @@ void test("spark-web refuses unsafe SSRF-style URLs", async () => {
   );
 });
 
-void test("fetch_content sanitizes HTML and stores untrusted content", async () => {
+test("fetch_content sanitizes HTML and stores untrusted content", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-web-fetch-"));
   try {
     const store = defaultSparkWebContentStore(dir);
@@ -76,7 +76,7 @@ void test("fetch_content sanitizes HTML and stores untrusted content", async () 
   }
 });
 
-void test("web_search stores recoverable search content", async () => {
+test("web_search stores recoverable search content", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-web-search-"));
   try {
     const store = defaultSparkWebContentStore(dir);
@@ -100,7 +100,7 @@ void test("web_search stores recoverable search content", async () => {
   }
 });
 
-void test("fetch_content covers GitHub raw URLs, Jina reader URLs, PDF placeholders, and long caches", async () => {
+test("fetch_content covers GitHub raw URLs, Jina reader URLs, PDF placeholders, and long caches", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-web-extractors-"));
   try {
     const store = defaultSparkWebContentStore(dir);
@@ -159,19 +159,19 @@ void test("fetch_content covers GitHub raw URLs, Jina reader URLs, PDF placehold
   }
 });
 
-void test("spark-web extension skips registration when Pi loading-stage action guards block inspection", () => {
+test("spark-web extension skips registration when Pi loading-stage action guards block inspection", () => {
   const api = new LoadingStageApi();
   assert.doesNotThrow(() => sparkWebExtension(api));
   assert.deepEqual(Array.from(api.tools.keys()), []);
 });
 
-void test("spark-web extension skips registration when inspection is unavailable", () => {
+test("spark-web extension skips registration when inspection is unavailable", () => {
   const api = new ConflictThrowingApi();
   assert.doesNotThrow(() => sparkWebExtension(api));
   assert.deepEqual(api.attempted, []);
 });
 
-void test("spark-web extension registers tools, retrieves cache, and skips conflicts", async () => {
+test("spark-web extension registers tools, retrieves cache, and skips conflicts", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-web-extension-"));
   try {
     const api = new FakeApi();

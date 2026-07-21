@@ -7,7 +7,7 @@ import {
   type RunRef,
   writeJsonFileAtomic,
   readJsonFileOptional,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import {
   type WorkflowAgentTelemetry,
   type WorkflowJournalEntry,

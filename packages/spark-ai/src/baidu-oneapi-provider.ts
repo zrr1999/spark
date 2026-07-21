@@ -33,7 +33,7 @@ const BAIDU_ONEAPI_OPENAI_RESPONSES_MODEL_IDS = new Set([
 ]);
 
 type BaiduOneApiTransportApi = "anthropic-messages" | "openai-responses";
-type BaiduOneApiStream = AsyncIterable<AssistantMessageEvent> & {
+export type BaiduOneApiStream = AsyncIterable<AssistantMessageEvent> & {
   result(): Promise<AssistantMessage>;
 };
 type BaiduOneApiTransportStreams = {
@@ -160,19 +160,25 @@ function withBaiduOneApiTransportApi<TApi extends BaiduOneApiTransportApi>(
   return { ...model, api } as Model<TApi>;
 }
 
-const BAIDU_CONTEXT_OVERFLOW_MESSAGE =
-  "Context window is full — reduce conversation history, tool/file output, or system prompt.";
 const BAIDU_CONTEXT_OVERFLOW_SEMANTIC = "context_length_exceeded";
+const BAIDU_CONTEXT_OVERFLOW_PATTERNS = [
+  /\bcontext (?:window|length) (?:is )?(?:full|exceeded)\b/iu,
+  /\bmaximum context (?:window|length)(?: size)?(?: is| has been)? exceeded\b/iu,
+  /\bprompt (?:is )?too long for (?:the )?context window\b/iu,
+  /\bcontext[_ -]length[_ -]exceeded\b/iu,
+] as const;
 
 function isBaiduContextOverflowMessage(message: AssistantMessage): boolean {
   if (message.stopReason !== "error" || typeof message.errorMessage !== "string") return false;
-  return message.errorMessage.includes(BAIDU_CONTEXT_OVERFLOW_MESSAGE);
+  return BAIDU_CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(message.errorMessage!));
 }
 
 export function normalizeBaiduOneApiMessage(message: AssistantMessage): AssistantMessage {
-  const errorMessage = isBaiduContextOverflowMessage(message)
-    ? `${BAIDU_CONTEXT_OVERFLOW_SEMANTIC}: ${message.errorMessage}`
-    : message.errorMessage;
+  const errorMessage =
+    isBaiduContextOverflowMessage(message) &&
+    !message.errorMessage?.includes(BAIDU_CONTEXT_OVERFLOW_SEMANTIC)
+      ? `${BAIDU_CONTEXT_OVERFLOW_SEMANTIC}: ${message.errorMessage}`
+      : message.errorMessage;
   return {
     ...message,
     ...(errorMessage !== undefined ? { errorMessage } : {}),
@@ -200,7 +206,7 @@ function retagBaiduOneApiEvent(event: AssistantMessageEvent): AssistantMessageEv
   return normalizeBaiduOneApiEvent(event);
 }
 
-function retagBaiduOneApiStream(stream: BaiduOneApiStream): BaiduOneApiStream {
+export function normalizeBaiduOneApiStream(stream: BaiduOneApiStream): BaiduOneApiStream {
   return {
     async *[Symbol.asyncIterator]() {
       for await (const event of stream) yield retagBaiduOneApiEvent(event);
@@ -216,9 +222,9 @@ function startBaiduOneApiStream(
   factory: () => BaiduOneApiStream,
 ): BaiduOneApiStream {
   try {
-    return retagBaiduOneApiStream(factory());
+    return normalizeBaiduOneApiStream(factory());
   } catch (error) {
-    return baiduOneApiErrorStream(model, error);
+    return normalizeBaiduOneApiStream(baiduOneApiErrorStream(model, error));
   }
 }
 

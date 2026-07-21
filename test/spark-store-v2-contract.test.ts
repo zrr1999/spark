@@ -3,13 +3,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import test from "node:test";
+import { test } from "vitest";
 import { fileURLToPath } from "node:url";
 
-import {
-  rebuildSessionIndex,
-  sessionDirectoryNameForKey,
-} from "../packages/pi-extension/src/extension/session-directory-store.ts";
+import { rebuildSessionIndex, sessionDirectoryNameForKey } from "@zendev-lab/spark-loop";
 
 type JsonObject = Record<string, unknown>;
 
@@ -55,7 +52,7 @@ function stringArrayField(value: JsonObject, key: string): string[] {
   return field as string[];
 }
 
-void test("Spark store V2 manifest codifies hard cutover and import-only legacy paths", async () => {
+test("Spark store V2 manifest codifies hard cutover and import-only legacy paths", async () => {
   const manifest = await loadJsonFixture("manifest.json");
 
   assert.equal(manifest.version, 1);
@@ -98,7 +95,7 @@ void test("Spark store V2 manifest codifies hard cutover and import-only legacy 
   assert.match(stringArrayField(manifest, "doctorRules").join("\n"), /falling back to V1/);
 });
 
-void test("Spark store V2 TODO SQLite schema is executable and enforces owner and status constraints", async () => {
+test("Spark store V2 TODO SQLite schema is executable and enforces owner and status constraints", async () => {
   const schema = await loadTextFixture("todo-schema.sql");
   const db = new DatabaseSync(":memory:");
   try {
@@ -207,7 +204,7 @@ void test("Spark store V2 TODO SQLite schema is executable and enforces owner an
   }
 });
 
-void test("Spark store V2 sessions index fixture is rebuildable and points at per-session truth", async () => {
+test("Spark store V2 sessions index fixture is rebuildable and points at per-session truth", async () => {
   const index = await loadJsonFixture("sessions-index.json");
   assert.equal(index.version, 1);
   assert.equal(index.rebuildable, true);
@@ -230,7 +227,7 @@ void test("Spark store V2 sessions index fixture is rebuildable and points at pe
   assert.ok(legacyImportOnly.includes(".spark/background-role-results-inbox/<session>.json"));
 });
 
-void test("Spark store V2 sessions index rebuilds from per-session directories", async () => {
+test("Spark store V2 sessions index rebuilds from per-session directories", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-store-v2-session-index-"));
   try {
     const sessionsRoot = join(dir, ".spark", "sessions");
@@ -313,7 +310,7 @@ void test("Spark store V2 sessions index rebuilds from per-session directories",
   }
 });
 
-void test("Spark store V2 project/task tree fixture splits graph state and keeps TODOs external", async () => {
+test("Spark store V2 project/task tree fixture splits graph state and keeps TODOs external", async () => {
   const tree = await loadJsonFixture("project-task-tree.json");
   assert.equal(tree.version, 1);
   assert.equal(tree.cutover, "hard");
@@ -343,7 +340,7 @@ void test("Spark store V2 project/task tree fixture splits graph state and keeps
   assert.equal(run.path, "projects/proj-demo/tasks/task-demo/runs/run-demo.json");
 });
 
-void test("Spark store V2 review fixture is subject-owned and keeps global review index rebuildable", async () => {
+test("Spark store V2 review fixture is subject-owned and keeps global review index rebuildable", async () => {
   const review = await loadJsonFixture("review-record.json");
   assert.equal(review.version, 1);
   assert.equal(review.policy, "required");

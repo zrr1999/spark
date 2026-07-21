@@ -5,7 +5,7 @@ import {
   type RoadmapItemRef,
   type TaskPlan,
   type TaskRef,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import { type TaskPlanInput, type TaskGraph } from "@zendev-lab/spark-tasks";
 
 export type { ProjectRoadmap, RoadmapItem, RoadmapItemRef };

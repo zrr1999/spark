@@ -1,4 +1,4 @@
-import type { ProjectRef, Task } from "@zendev-lab/spark-extension-api";
+import type { ProjectRef, Task } from "@zendev-lab/spark-core";
 import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/spark-tasks";
 import type { SparkEntryPhase } from "./spark-entry.ts";
 

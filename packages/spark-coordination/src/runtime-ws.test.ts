@@ -250,7 +250,7 @@ describe("runtime WebSocket handling", () => {
 
     expect(JSON.parse(ws.sent.at(-1) ?? "{}")).toMatchObject({
       type: "server.error",
-      payload: { code: "workspace_owner_binding_mismatch" },
+      payload: { code: "workspace_lease_mismatch" },
     });
     expect(
       db
@@ -440,7 +440,7 @@ describe("runtime WebSocket handling", () => {
     const ownerBinding = db
       .prepare(
         `SELECT runtime_workspace_binding_id AS runtimeWorkspaceBindingId
-         FROM workspace_owner_bindings
+         FROM workspace_leases
          WHERE workspace_id = ?`,
       )
       .get(workspace.id) as { runtimeWorkspaceBindingId: string };
@@ -1443,11 +1443,11 @@ describe("runtime WebSocket handling", () => {
           messageId: createId("msg"),
           workspaceBindingId: otherBindingId,
         },
-        code: "workspace_owner_binding_mismatch",
+        code: "workspace_lease_mismatch",
       },
       {
         envelope: { ...baseEnvelope, messageId: createId("msg"), workspaceId: otherWorkspace.id },
-        code: "workspace_owner_binding_mismatch",
+        code: "workspace_lease_mismatch",
       },
       {
         envelope: { ...baseEnvelope, messageId: createId("msg"), humanRequestId: createId("hreq") },

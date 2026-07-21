@@ -11,12 +11,15 @@ import {
   sparkUiAstArtifactKind,
   sparkUiSourceArtifactKind,
 } from "../artifact-ui-replay";
-import { createWorkspaceWithOwnerBinding, recordArtifactProjection } from "./projection-services";
+import {
+  createWorkspaceWithOwnerBinding,
+  recordArtifactProjection,
+} from "@zendev-lab/spark-coordination/projection-services";
 import {
   ensureArtifactPreviewCache,
   MAX_PREVIEW_BYTES,
   readArtifactPreviewContent,
-} from "./artifact-cache";
+} from "@zendev-lab/spark-coordination/artifact-cache";
 
 function setupWorkspace() {
   const db = openMemoryDatabase();

@@ -10,7 +10,7 @@ import {
   readJsonFileOptional,
   type RunRef,
   writeJsonFileAtomic,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import { parseWorkflowScript } from "./metadata.ts";
 import type {
   WorkflowAgentTelemetry,

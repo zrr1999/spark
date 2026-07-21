@@ -6,13 +6,13 @@ import {
   readJsonFileOptional,
   writeJsonFileAtomic,
   type ArtifactRef,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 
-import type { PiAskAutoAnswerRequest } from "./action-tool.ts";
+import type { SparkAskAutoAnswerRequest } from "./action-tool.ts";
 
-export interface PiAskEvidenceArtifactBody {
+export interface SparkAskEvidenceArtifactBody {
   schema: "spark.ask.evidence/v1";
-  request: PiAskAutoAnswerRequest;
+  request: SparkAskAutoAnswerRequest;
   result: unknown;
   autoAnswered: boolean;
   recordedAt: string;
@@ -39,7 +39,7 @@ interface CanonicalAskEvidenceReceipt {
 
 export function isUserAnsweredAskEvidenceArtifactBody(
   value: unknown,
-): value is PiAskEvidenceArtifactBody {
+): value is SparkAskEvidenceArtifactBody {
   return normalizeUserAnsweredAskEvidence(value) !== undefined;
 }
 

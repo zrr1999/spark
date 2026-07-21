@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import { visibleWidth } from "@zendev-lab/spark-tui/text";
 import type { Component } from "../apps/spark-tui/src/tui/pi-tui-adapter.ts";
@@ -64,7 +64,7 @@ function registryWithModels(): SparkProviderRegistry {
   return registry;
 }
 
-void test("SparkModelSelector cycles next/prev across Spark model ids with wraparound", async () => {
+test("SparkModelSelector cycles next/prev across Spark model ids with wraparound", async () => {
   const registry = registryWithModels();
   registry.setActive({ providerName: "fake", modelId: "model-a" });
   const saved: SparkConfig[] = [];
@@ -86,7 +86,7 @@ void test("SparkModelSelector cycles next/prev across Spark model ids with wrapa
   );
 });
 
-void test("SparkModelSelector select validates through registry and persists SparkConfig", async () => {
+test("SparkModelSelector select validates through registry and persists SparkConfig", async () => {
   const registry = registryWithModels();
   const config = configSeed();
   const saved: SparkConfig[] = [];
@@ -116,7 +116,7 @@ void test("SparkModelSelector select validates through registry and persists Spa
   ]);
 });
 
-void test("SparkModelSelector canonicalizes model aliases without exposing duplicate picker rows", async () => {
+test("SparkModelSelector canonicalizes model aliases without exposing duplicate picker rows", async () => {
   const registry = new SparkProviderRegistry();
   registry.registerProvider(
     "fake",
@@ -145,7 +145,7 @@ void test("SparkModelSelector canonicalizes model aliases without exposing dupli
   );
 });
 
-void test("SparkModelSelector includes model pricing in picker state", () => {
+test("SparkModelSelector includes model pricing in picker state", () => {
   const registry = registryWithModels();
   const selector = new SparkModelSelector({ registry, config: configSeed() });
 
@@ -155,7 +155,7 @@ void test("SparkModelSelector includes model pricing in picker state", () => {
   assert.equal(item?.description.includes("$0.5 in / $3 out / $0.05 read / $0 write per 1M"), true);
 });
 
-void test("SparkModelSelector openPicker passes active state and persists the chosen model", async () => {
+test("SparkModelSelector openPicker passes active state and persists the chosen model", async () => {
   const registry = registryWithModels();
   registry.setActive({ providerName: "fake", modelId: "model-a" });
   const saved: SparkConfig[] = [];
@@ -189,7 +189,7 @@ void test("SparkModelSelector openPicker passes active state and persists the ch
   );
 });
 
-void test("registerSparkModelSelectorKeybindings wires picker and cycle actions", async () => {
+test("registerSparkModelSelectorKeybindings wires picker and cycle actions", async () => {
   const registry = registryWithModels();
   registry.setActive({ providerName: "fake", modelId: "model-a" });
   const saved: SparkConfig[] = [];
@@ -220,7 +220,7 @@ void test("registerSparkModelSelectorKeybindings wires picker and cycle actions"
   );
 });
 
-void test("Spark model selector TUI wrapper renders bounded SelectList rows", () => {
+test("Spark model selector TUI wrapper renders bounded SelectList rows", () => {
   const registry = registryWithModels();
   registry.setActive({ providerName: "fake", modelId: "model-b" });
   const selector = new SparkModelSelector({ registry, config: configSeed() });
@@ -244,7 +244,7 @@ void test("Spark model selector TUI wrapper renders bounded SelectList rows", ()
   );
 });
 
-void test("createSparkModelPickerFromCustomUi mounts a SelectList overlay picker", async () => {
+test("createSparkModelPickerFromCustomUi mounts a SelectList overlay picker", async () => {
   const registry = registryWithModels();
   registry.setActive({ providerName: "fake", modelId: "model-a" });
   const selector = new SparkModelSelector({ registry, config: configSeed() });

@@ -21,7 +21,7 @@
     "check": "vp check --no-fmt --no-lint ."
   },
   "dependencies": {
-    "@zendev-lab/spark-extension-api": "workspace:^",
+    "@zendev-lab/spark-core": "workspace:^",
     "typebox": "catalog:"
   }
 }

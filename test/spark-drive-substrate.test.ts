@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
@@ -7,7 +7,7 @@ import {
   scheduledDriveDelayMs,
 } from "../packages/pi-extension/src/extension/spark-drive-substrate.ts";
 
-void test("SparkForegroundDriveSubstrate cancels stale generations per drive", async () => {
+test("SparkForegroundDriveSubstrate cancels stale generations per drive", async () => {
   const substrate = new SparkForegroundDriveSubstrate();
   const fired: string[] = [];
 
@@ -35,7 +35,7 @@ void test("SparkForegroundDriveSubstrate cancels stale generations per drive", a
   assert.deepEqual(fired.sort(), ["goal:2", "loop:1"]);
 });
 
-void test("SparkForegroundDriveSubstrate clears timers without affecting other drives", async () => {
+test("SparkForegroundDriveSubstrate clears timers without affecting other drives", async () => {
   const substrate = new SparkForegroundDriveSubstrate();
   const fired: string[] = [];
 
@@ -58,7 +58,7 @@ void test("SparkForegroundDriveSubstrate clears timers without affecting other d
   assert.deepEqual(fired, ["loop"]);
 });
 
-void test("scheduledDriveDelayMs supports absent, invalid, past, and future schedules", () => {
+test("scheduledDriveDelayMs supports absent, invalid, past, and future schedules", () => {
   assert.equal(scheduledDriveDelayMs(undefined), undefined);
   assert.equal(scheduledDriveDelayMs({ nextRunAt: "not-a-date" }), 0);
   assert.equal(scheduledDriveDelayMs({ nextRunAt: "2000-01-01T00:00:00.000Z" }), 0);

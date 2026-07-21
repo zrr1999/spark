@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   SparkModelRegistry,
@@ -70,7 +70,7 @@ function resolverFor(profile = sampleProfile()): SparkRouteResolver {
   return new SparkRouteResolver(new SparkModelRegistry([profile]), { clock: new FakeClock() });
 }
 
-void test("SparkRouteResolver resolves highest-priority capable route", () => {
+test("SparkRouteResolver resolves highest-priority capable route", () => {
   const resolver = resolverFor();
 
   const decision = resolver.resolve({ sparkModelId: "claude-opus-4.8" });
@@ -83,7 +83,7 @@ void test("SparkRouteResolver resolves highest-priority capable route", () => {
   assert.equal(decision.trace.events.at(-1)?.type, "CANDIDATE_START");
 });
 
-void test("SparkRouteResolver honors sticky session route", () => {
+test("SparkRouteResolver honors sticky session route", () => {
   const resolver = resolverFor();
 
   const first = resolver.resolve({ sparkModelId: "claude-opus-4.8", sessionId: "s1" });
@@ -95,7 +95,7 @@ void test("SparkRouteResolver honors sticky session route", () => {
   assert.equal(second.sticky, true);
 });
 
-void test("SparkRouteResolver executeWithFailover advances on transient failure", async () => {
+test("SparkRouteResolver executeWithFailover advances on transient failure", async () => {
   const resolver = resolverFor();
   const attempts: string[] = [];
 
@@ -114,7 +114,7 @@ void test("SparkRouteResolver executeWithFailover advances on transient failure"
   assert.equal(result.trace.events.at(-1)?.reason, "ok");
 });
 
-void test("SparkRouteResolver stops on provider_mismatch without failover", async () => {
+test("SparkRouteResolver stops on provider_mismatch without failover", async () => {
   const resolver = resolverFor();
 
   await assert.rejects(
@@ -129,7 +129,7 @@ void test("SparkRouteResolver stops on provider_mismatch without failover", asyn
   );
 });
 
-void test("SparkRouteResolver fails loudly on capability mismatch", () => {
+test("SparkRouteResolver fails loudly on capability mismatch", () => {
   const resolver = resolverFor(
     sampleProfile({
       capabilities: {
@@ -152,7 +152,7 @@ void test("SparkRouteResolver fails loudly on capability mismatch", () => {
   );
 });
 
-void test("SparkRouteResolver trace is bounded and secret-free", async () => {
+test("SparkRouteResolver trace is bounded and secret-free", async () => {
   const resolver = resolverFor();
 
   const result = await resolver.executeWithFailover(

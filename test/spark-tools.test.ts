@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { chmod } from "node:fs/promises";
-import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { RoleRegistry } from "@zendev-lab/spark-roles";
-import { registerPiRolesTools } from "@zendev-lab/spark-roles/extension";
-import { registerPiSessionTool } from "@zendev-lab/spark-session/extension";
+import { registerSparkRolesTools } from "@zendev-lab/spark-roles/extension";
+import { registerSparkSessionTool } from "@zendev-lab/spark-session/extension";
 import {
   newRef,
   stableId,
@@ -24,11 +24,11 @@ import {
   type TaskPlan,
   type TaskRef,
   type ProjectRef,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
-import { defaultLearningStore } from "@zendev-lab/spark-learnings";
+import { defaultLearningStore } from "@zendev-lab/spark-memory";
 import { defaultWorkflowRunStore } from "../packages/spark-workflows/src/index.ts";
-import { registerPiWorkflowTool } from "../packages/spark-workflows/src/extension.ts";
+import { registerSparkWorkflowTool } from "../packages/spark-workflows/src/extension.ts";
 import {
   killActiveSparkRoleRunProcesses,
   listActiveSparkRoleRunProcesses,
@@ -41,7 +41,8 @@ import {
   TaskGraph,
   TaskGraphStore,
 } from "@zendev-lab/spark-tasks";
-import { registerPiArtifactTool } from "@zendev-lab/spark-artifacts/extension";
+import { registerSparkArtifactTool } from "@zendev-lab/spark-artifacts/extension";
+import { registerSparkMemoryTool } from "@zendev-lab/spark-memory/extension";
 import piAskExtension from "../packages/spark-ask/src/extension.ts";
 import sparkExtension from "../packages/pi-extension/src/extension/index.ts";
 import { SparkWorkflowRunManagerController } from "../packages/pi-extension/src/extension/spark-workflow-run-manager.ts";
@@ -143,8 +144,8 @@ import type {
   ReviewerRunner,
 } from "../packages/pi-extension/src/extension/reviewer-runner.ts";
 
-type SparkExtensionApiForTest = Parameters<typeof sparkExtension>[0];
-type SparkToolConfig = Parameters<NonNullable<SparkExtensionApiForTest["registerTool"]>>[0];
+type SparkHostApiForTest = Parameters<typeof sparkExtension>[0];
+type SparkToolConfig = Parameters<NonNullable<SparkHostApiForTest["registerTool"]>>[0];
 type SparkToolResult = Awaited<ReturnType<SparkToolConfig["execute"]>>;
 type TestNotification = { message: string; level?: "info" | "warning" | "error" | "success" };
 
@@ -184,7 +185,7 @@ function runNormalizerGroup(
 const workflowRunActionError =
   /action must be status, list, inspect, pause, resume, stop, restart, save, kill, reply, steer, reconcile, ack, prune, clear_inactive, or kill_active/;
 
-void test("Spark tool normalizer groups reject invalid explicit parameters instead of using defaults", () => {
+test("Spark tool normalizer groups reject invalid explicit parameters instead of using defaults", () => {
   runNormalizerGroup(
     "status",
     [
@@ -698,12 +699,12 @@ type TestSparkContext = {
   };
 };
 
-void test("Spark command surface does not expose the removed /spark entry", () => {
+test("Spark command surface does not expose the removed /spark entry", () => {
   const run = registerSparkToolsForTest();
   assert.equal(run.commands.has("spark"), false);
 });
 
-void test("/ultracode enters opt-in high-effort workflow generation mode", async () => {
+test("/ultracode enters opt-in high-effort workflow generation mode", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ultracode-command-"));
   try {
     const ctx = testSparkContext(dir, "main");
@@ -722,7 +723,7 @@ void test("/ultracode enters opt-in high-effort workflow generation mode", async
   }
 });
 
-void test("/plan, /implement, /goal, and /workflow selector commands enter Spark modes directly", async () => {
+test("/plan, /implement, /goal, and /workflow selector commands enter Spark modes directly", async () => {
   const existingDir = await mkdtemp(join(tmpdir(), "spark-plan-direct-existing-"));
   const initializedDir = await mkdtemp(join(tmpdir(), "spark-execute-direct-initialized-"));
   const emptyDir = await mkdtemp(join(tmpdir(), "spark-execute-direct-empty-"));
@@ -961,7 +962,7 @@ void test("/plan, /implement, /goal, and /workflow selector commands enter Spark
   }
 });
 
-void test("/plan dispatches through an externally owned command turn bridge", async () => {
+test("/plan dispatches through an externally owned command turn bridge", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-plan-command-turn-bridge-"));
   try {
     await mkdir(join(dir, ".git"));
@@ -987,7 +988,7 @@ void test("/plan dispatches through an externally owned command turn bridge", as
   }
 });
 
-void test("/goal dispatches through an externally owned command turn bridge", async () => {
+test("/goal dispatches through an externally owned command turn bridge", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-command-turn-bridge-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1014,7 +1015,7 @@ void test("/goal dispatches through an externally owned command turn bridge", as
   }
 });
 
-void test("latest direct Spark mode replaces older pending hidden mode context", async () => {
+test("latest direct Spark mode replaces older pending hidden mode context", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-mode-context-replace-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1043,7 +1044,7 @@ void test("latest direct Spark mode replaces older pending hidden mode context",
   }
 });
 
-void test("/plan includes active roadmap item context and matches focus to an existing item", async () => {
+test("/plan includes active roadmap item context and matches focus to an existing item", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-plan-roadmap-context-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1093,7 +1094,7 @@ void test("/plan includes active roadmap item context and matches focus to an ex
   }
 });
 
-void test("/plan rejects malformed roadmap state without entering planning mode", async () => {
+test("/plan rejects malformed roadmap state without entering planning mode", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-plan-roadmap-malformed-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1126,7 +1127,7 @@ void test("/plan rejects malformed roadmap state without entering planning mode"
   }
 });
 
-void test("impl_plan_tasks maps active roadmap item hints into task plans and attaches refs", async () => {
+test("impl_plan_tasks maps active roadmap item hints into task plans and attaches refs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-plan-roadmap-hints-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1184,7 +1185,7 @@ void test("impl_plan_tasks maps active roadmap item hints into task plans and at
   }
 });
 
-void test("impl_plan_tasks writes directly whenever durable planning is needed", async () => {
+test("impl_plan_tasks writes directly whenever durable planning is needed", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-plan-direct-any-mode-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1238,7 +1239,7 @@ void test("impl_plan_tasks writes directly whenever durable planning is needed",
   }
 });
 
-void test("impl_plan_tasks writes directly without approval UI", async () => {
+test("impl_plan_tasks writes directly without approval UI", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-plan-direct-write-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1275,7 +1276,7 @@ void test("impl_plan_tasks writes directly without approval UI", async () => {
   }
 });
 
-void test("impl_plan_tasks accepts an explicit project selector", async () => {
+test("impl_plan_tasks accepts an explicit project selector", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-plan-explicit-project-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1318,7 +1319,7 @@ void test("impl_plan_tasks accepts an explicit project selector", async () => {
   }
 });
 
-void test("impl_plan_tasks blocks mixed readiness without saving", async () => {
+test("impl_plan_tasks blocks mixed readiness without saving", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-plan-readiness-mixed-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1370,7 +1371,7 @@ void test("impl_plan_tasks blocks mixed readiness without saving", async () => {
   }
 });
 
-void test("impl_plan_tasks blocks low-bar unverifiable task plans without saving", async () => {
+test("impl_plan_tasks blocks low-bar unverifiable task plans without saving", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-plan-quality-gate-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1422,7 +1423,7 @@ void test("impl_plan_tasks blocks low-bar unverifiable task plans without saving
   }
 });
 
-void test("impl_plan_tasks accepts warning-only openQuestions plans", async () => {
+test("impl_plan_tasks accepts warning-only openQuestions plans", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-plan-open-questions-warning-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1460,7 +1461,7 @@ void test("impl_plan_tasks accepts warning-only openQuestions plans", async () =
   }
 });
 
-void test("impl_plan_tasks reports all-rejected readiness without saving", async () => {
+test("impl_plan_tasks reports all-rejected readiness without saving", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-plan-rejected-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1515,7 +1516,7 @@ void test("impl_plan_tasks reports all-rejected readiness without saving", async
   }
 });
 
-void test("/implement continues by prompting for the next ready task without auto-answering or auto-claiming", async () => {
+test("/implement continues by prompting for the next ready task without auto-answering or auto-claiming", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-execute-one-task-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1614,7 +1615,7 @@ void test("/implement continues by prompting for the next ready task without aut
   }
 });
 
-void test("/goal sets a durable session goal instead of execute-mode continuation", async () => {
+test("/goal sets a durable session goal instead of execute-mode continuation", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-run-foreground-continue-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1654,7 +1655,7 @@ void test("/goal sets a durable session goal instead of execute-mode continuatio
   }
 });
 
-void test("foreground drivers do not expose selected phases for research-progress objectives", async () => {
+test("foreground drivers do not expose selected phases for research-progress objectives", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-foreground-empty-frontier-plan-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1691,7 +1692,7 @@ void test("foreground drivers do not expose selected phases for research-progres
   }
 });
 
-void test("foreground drivers keep pure research objectives driver-owned", async () => {
+test("foreground drivers keep pure research objectives driver-owned", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-foreground-empty-frontier-research-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1726,7 +1727,7 @@ void test("foreground drivers keep pure research objectives driver-owned", async
   }
 });
 
-void test("/goal without objective dispatches an agent infer instruction without writing", async () => {
+test("/goal without objective dispatches an agent infer instruction without writing", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-empty-infer-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1747,7 +1748,7 @@ void test("/goal without objective dispatches an agent infer instruction without
   }
 });
 
-void test("goal status surfaces lifecycle actions, usage, review, and retry state", async () => {
+test("goal status surfaces lifecycle actions, usage, review, and retry state", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-status-polish-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1798,7 +1799,7 @@ void test("goal status surfaces lifecycle actions, usage, review, and retry stat
   }
 });
 
-void test("goal status explains absent durable goal against current project context", async () => {
+test("goal status explains absent durable goal against current project context", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-status-no-goal-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1822,7 +1823,7 @@ void test("goal status explains absent durable goal against current project cont
   }
 });
 
-void test("/goal restarts without overwriting an existing goal objective", async () => {
+test("/goal restarts without overwriting an existing goal objective", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-no-overwrite-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1843,7 +1844,7 @@ void test("/goal restarts without overwriting an existing goal objective", async
   }
 });
 
-void test("/goal handles stale inferred project goals after project work has no unfinished tasks", async () => {
+test("/goal handles stale inferred project goals after project work has no unfinished tasks", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-stale-done-project-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -1887,7 +1888,7 @@ void test("/goal handles stale inferred project goals after project work has no 
   }
 });
 
-void test("session shutdown clears foreground timers without pausing active goals", async () => {
+test("session shutdown clears foreground timers without pausing active goals", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-shutdown-active-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -1947,7 +1948,7 @@ void test("session shutdown clears foreground timers without pausing active goal
   }
 });
 
-void test("/loop foreground driver persists, uses loop tool scheduling, and does not call reviewer completion", async () => {
+test("/loop foreground driver persists, uses loop tool scheduling, and does not call reviewer completion", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-loop-foreground-driver-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -2036,7 +2037,7 @@ void test("/loop foreground driver persists, uses loop tool scheduling, and does
   }
 });
 
-void test("/goal start clears an existing foreground loop", async () => {
+test("/goal start clears an existing foreground loop", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-clears-loop-"));
   try {
     await writeEmptySparkProject(dir);
@@ -2059,7 +2060,7 @@ void test("/goal start clears an existing foreground loop", async () => {
   }
 });
 
-void test("session_start schedules goal instead of loop when both persisted states exist", async () => {
+test("session_start schedules goal instead of loop when both persisted states exist", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-session-start-mutual-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -2125,7 +2126,7 @@ void test("session_start schedules goal instead of loop when both persisted stat
   }
 });
 
-void test("/loop stop aliases clear plain loop state and pause is removed", async () => {
+test("/loop stop aliases clear plain loop state and pause is removed", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-loop-pause-aliases-"));
   try {
     await writeEmptySparkProject(dir);
@@ -2172,7 +2173,7 @@ void test("/loop stop aliases clear plain loop state and pause is removed", asyn
   }
 });
 
-void test("/loop foreground driver keeps retrying failures with capped backoff", async () => {
+test("/loop foreground driver keeps retrying failures with capped backoff", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-loop-retry-budget-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -2245,7 +2246,7 @@ void test("/loop foreground driver keeps retrying failures with capped backoff",
   }
 });
 
-void test("/goal foreground loop reschedules active goal on session_start", async () => {
+test("/goal foreground loop reschedules active goal on session_start", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-session-start-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -2323,7 +2324,7 @@ void test("/goal foreground loop reschedules active goal on session_start", asyn
   }
 });
 
-void test("/goal foreground loop does not duplicate awaiting continuations", async () => {
+test("/goal foreground loop does not duplicate awaiting continuations", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-awaiting-no-duplicate-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -2396,7 +2397,7 @@ void test("/goal foreground loop does not duplicate awaiting continuations", asy
   }
 });
 
-void test("/goal foreground loop cancels scheduled tick when a user turn starts", async () => {
+test("/goal foreground loop cancels scheduled tick when a user turn starts", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-user-turn-cancel-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -2464,7 +2465,7 @@ void test("/goal foreground loop cancels scheduled tick when a user turn starts"
   }
 });
 
-void test("/goal foreground loop drops stale tick context after pause", async () => {
+test("/goal foreground loop drops stale tick context after pause", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-drop-stale-tick-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -2532,7 +2533,7 @@ void test("/goal foreground loop drops stale tick context after pause", async ()
   }
 });
 
-void test("/goal foreground loop ignores stale awaited-turn completions after replacement", async () => {
+test("/goal foreground loop ignores stale awaited-turn completions after replacement", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-ignore-stale-awaiting-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -2616,7 +2617,7 @@ void test("/goal foreground loop ignores stale awaited-turn completions after re
   }
 });
 
-void test("/goal foreground loop completes active goal when reviewer says achieved", async () => {
+test("/goal foreground loop completes active goal when reviewer says achieved", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-review-achieved-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -2704,7 +2705,7 @@ void test("/goal foreground loop completes active goal when reviewer says achiev
   }
 });
 
-void test("/goal foreground loop includes completed current project evidence", async () => {
+test("/goal foreground loop includes completed current project evidence", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-completed-project-evidence-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -2824,7 +2825,7 @@ void test("/goal foreground loop includes completed current project evidence", a
   }
 });
 
-void test("/goal foreground loop blocks completion when project tasks remain unfinished", async () => {
+test("/goal foreground loop blocks completion when project tasks remain unfinished", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-unfinished-project-blocker-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -2909,7 +2910,7 @@ void test("/goal foreground loop blocks completion when project tasks remain unf
   }
 });
 
-void test("/goal foreground loop includes project-scoped review artifacts", async () => {
+test("/goal foreground loop includes project-scoped review artifacts", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-project-review-artifact-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -3016,7 +3017,7 @@ void test("/goal foreground loop includes project-scoped review artifacts", asyn
   }
 });
 
-void test("/goal foreground loop records unmet reviewer verdict before continuation", async () => {
+test("/goal foreground loop records unmet reviewer verdict before continuation", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-review-unmet-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -3106,7 +3107,7 @@ void test("/goal foreground loop records unmet reviewer verdict before continuat
   }
 });
 
-void test("/goal foreground loop defers while task finish review is running", async () => {
+test("/goal foreground loop defers while task finish review is running", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-defers-task-review-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -3213,7 +3214,7 @@ void test("/goal foreground loop defers while task finish review is running", as
   }
 });
 
-void test("goal reviewer state machine covers restart, idle review, and task finish gates", async () => {
+test("goal reviewer state machine covers restart, idle review, and task finish gates", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-reviewer-state-machine-e2e-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -3379,7 +3380,7 @@ void test("goal reviewer state machine covers restart, idle review, and task fin
   }
 });
 
-void test("/goal foreground loop keeps retrying with capped backoff", async () => {
+test("/goal foreground loop keeps retrying with capped backoff", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-retry-budget-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -3499,7 +3500,7 @@ void test("/goal foreground loop keeps retrying with capped backoff", async () =
   }
 });
 
-void test("/goal foreground loop pauses without retry after manual abort", async () => {
+test("/goal foreground loop pauses without retry after manual abort", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-manual-abort-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -3589,7 +3590,7 @@ void test("/goal foreground loop pauses without retry after manual abort", async
   }
 });
 
-void test("/goal foreground loop clears retry state after successful turn", async () => {
+test("/goal foreground loop clears retry state after successful turn", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-retry-reset-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -3686,7 +3687,7 @@ void test("/goal foreground loop clears retry state after successful turn", asyn
   }
 });
 
-void test("/goal foreground loop waits for idle and stops after pause", async () => {
+test("/goal foreground loop waits for idle and stops after pause", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-tick-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -3865,7 +3866,7 @@ void test("/goal foreground loop waits for idle and stops after pause", async ()
   }
 });
 
-void test("/goal foreground loop defers ticks while compaction is active", async () => {
+test("/goal foreground loop defers ticks while compaction is active", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-compaction-gate-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -3953,7 +3954,7 @@ void test("/goal foreground loop defers ticks while compaction is active", async
   }
 });
 
-void test("Shift+Tab shortcut shows per-turn Spark mode hints without persisting mode", async () => {
+test("Shift+Tab shortcut shows per-turn Spark mode hints without persisting mode", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-shift-tab-mode-"));
   const inactiveDir = await mkdtemp(join(tmpdir(), "spark-shift-tab-inactive-"));
   try {
@@ -3977,7 +3978,7 @@ void test("Shift+Tab shortcut shows per-turn Spark mode hints without persisting
   }
 });
 
-void test("impl_plan_tasks blocks underspecified executable tasks without opening a canned ask", async () => {
+test("impl_plan_tasks blocks underspecified executable tasks without opening a canned ask", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-task-plan-not-ready-"));
   try {
     await writeEmptySparkProject(dir);
@@ -4022,7 +4023,7 @@ void test("impl_plan_tasks blocks underspecified executable tasks without openin
   }
 });
 
-void test("impl_plan_tasks rejects standalone design/planning tasks", async () => {
+test("impl_plan_tasks rejects standalone design/planning tasks", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-task-not-concrete-"));
   try {
     await writeEmptySparkProject(dir);
@@ -4054,7 +4055,7 @@ void test("impl_plan_tasks rejects standalone design/planning tasks", async () =
   }
 });
 
-void test("impl_plan_tasks rejects invalid explicit kind and status", async () => {
+test("impl_plan_tasks rejects invalid explicit kind and status", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-plan-invalid-kind-status-"));
   try {
     await writeEmptySparkProject(dir);
@@ -4115,7 +4116,7 @@ void test("impl_plan_tasks rejects invalid explicit kind and status", async () =
   }
 });
 
-void test("impl_plan_tasks rejects invalid explicit task shapes without saving", async () => {
+test("impl_plan_tasks rejects invalid explicit task shapes without saving", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-plan-invalid-shape-"));
   try {
     await writeEmptySparkProject(dir);
@@ -4185,7 +4186,7 @@ void test("impl_plan_tasks rejects invalid explicit task shapes without saving",
   }
 });
 
-void test("impl_plan_tasks accepts cancelled cleanup tasks without success/evidence readiness", async () => {
+test("impl_plan_tasks accepts cancelled cleanup tasks without success/evidence readiness", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-cancelled-plan-"));
   try {
     await writeEmptySparkProject(dir);
@@ -4221,7 +4222,7 @@ void test("impl_plan_tasks accepts cancelled cleanup tasks without success/evide
   }
 });
 
-void test("impl_plan_tasks refuses to cancel tasks that still have dependents", async () => {
+test("impl_plan_tasks refuses to cancel tasks that still have dependents", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-cancel-dependent-"));
   try {
     await writeEmptySparkProject(dir);
@@ -4272,7 +4273,7 @@ void test("impl_plan_tasks refuses to cancel tasks that still have dependents", 
   }
 });
 
-void test("impl_claim_task explains how to create or select a project when none exists", async () => {
+test("impl_claim_task explains how to create or select a project when none exists", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-claim-no-project-hint-"));
   try {
     const ctx = testSparkContext(dir, "main");
@@ -4299,7 +4300,7 @@ void test("impl_claim_task explains how to create or select a project when none 
   }
 });
 
-void test("impl_claim_task can claim an existing named task without title or description", async () => {
+test("impl_claim_task can claim an existing named task without title or description", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-claim-existing-by-name-"));
   try {
     await writeEmptySparkProject(dir);
@@ -4338,7 +4339,7 @@ void test("impl_claim_task can claim an existing named task without title or des
   }
 });
 
-void test("impl_status surfaces foreign-claim recovery guidance for blocked ready frontier", async () => {
+test("impl_status surfaces foreign-claim recovery guidance for blocked ready frontier", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-status-stale-claim-guidance-"));
   try {
     await writeEmptySparkProject(dir);
@@ -4393,7 +4394,7 @@ void test("impl_status surfaces foreign-claim recovery guidance for blocked read
   }
 });
 
-void test("impl_claim_task recovers an expired foreign claim when background work is idle", async () => {
+test("impl_claim_task recovers an expired foreign claim when background work is idle", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-claim-recover-expired-"));
   try {
     await writeEmptySparkProject(dir);
@@ -4454,7 +4455,7 @@ void test("impl_claim_task recovers an expired foreign claim when background wor
   }
 });
 
-void test("task_write recover requeues needs_changes inactive-owner claim without marking done", async () => {
+test("task_write recover requeues needs_changes inactive-owner claim without marking done", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-recover-needs-changes-requeue-"));
   try {
     await writeEmptySparkProject(dir);
@@ -4543,7 +4544,7 @@ void test("task_write recover requeues needs_changes inactive-owner claim withou
   }
 });
 
-void test("impl_claim_task refuses stale-claim recovery while workflow work is active", async () => {
+test("impl_claim_task refuses stale-claim recovery while workflow work is active", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-claim-recovery-active-workflow-"));
   try {
     await writeEmptySparkProject(dir);
@@ -4597,7 +4598,7 @@ void test("impl_claim_task refuses stale-claim recovery while workflow work is a
   }
 });
 
-void test("canonical task claim can claim an existing planned task by taskRef", async () => {
+test("canonical task claim can claim an existing planned task by taskRef", async () => {
   const dir = await mkdtemp(join(tmpdir(), "task-write-claim-existing-by-ref-"));
   try {
     await writeEmptySparkProject(dir);
@@ -4635,7 +4636,7 @@ void test("canonical task claim can claim an existing planned task by taskRef", 
   }
 });
 
-void test("impl_claim_task rejects inline plan on claim", async () => {
+test("impl_claim_task rejects inline plan on claim", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-claim-plan-rejected-"));
   try {
     await writeEmptySparkProject(dir);
@@ -4659,7 +4660,7 @@ void test("impl_claim_task rejects inline plan on claim", async () => {
   }
 });
 
-void test("impl_claim_task returns structured task plan details after claiming a planned task", async () => {
+test("impl_claim_task returns structured task plan details after claiming a planned task", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-claim-plan-output-"));
   try {
     await writeEmptySparkProject(dir);
@@ -4734,7 +4735,7 @@ void test("impl_claim_task returns structured task plan details after claiming a
   }
 });
 
-void test("impl_claim_task requires an existing bound task plan instead of asking at claim time", async () => {
+test("impl_claim_task requires an existing bound task plan instead of asking at claim time", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-claim-no-plan-ask-"));
   try {
     await writeEmptySparkProject(dir);
@@ -4780,7 +4781,7 @@ void test("impl_claim_task requires an existing bound task plan instead of askin
   }
 });
 
-void test("impl_claim_task and impl_update_task_plan_items persist task plan items across reload", async () => {
+test("impl_claim_task and impl_update_task_plan_items persist task plan items across reload", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-task-todos-"));
   try {
     await writeEmptySparkProject(dir);
@@ -4878,7 +4879,7 @@ void test("impl_claim_task and impl_update_task_plan_items persist task plan ite
   }
 });
 
-void test("impl_update_task_plan_items supports upsert_done with planned task item sync", async () => {
+test("impl_update_task_plan_items supports upsert_done with planned task item sync", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-task-plan-item-upsert-"));
   try {
     await writeEmptySparkProject(dir);
@@ -4946,7 +4947,7 @@ void test("impl_update_task_plan_items supports upsert_done with planned task it
   }
 });
 
-void test("impl_plan_tasks syncs concrete plan items into task plan items", async () => {
+test("impl_plan_tasks syncs concrete plan items into task plan items", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-plan-task-todo-sync-"));
   try {
     await writeEmptySparkProject(dir);
@@ -4992,7 +4993,7 @@ void test("impl_plan_tasks syncs concrete plan items into task plan items", asyn
   }
 });
 
-void test("spark rename tools improve obvious placeholder project and generic task names without changing refs", async () => {
+test("spark rename tools improve obvious placeholder project and generic task names without changing refs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-rename-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -5068,7 +5069,7 @@ void test("spark rename tools improve obvious placeholder project and generic ta
   }
 });
 
-void test("task project mutation actions preserve permanent projects and reject lifecycle actions", async () => {
+test("task project mutation actions preserve permanent projects and reject lifecycle actions", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-project-intents-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -5142,7 +5143,7 @@ void test("task project mutation actions preserve permanent projects and reject 
   }
 });
 
-void test("impl_claim_task preserves intentional task names when only the title improves", async () => {
+test("impl_claim_task preserves intentional task names when only the title improves", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-intentional-name-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -5180,7 +5181,7 @@ void test("impl_claim_task preserves intentional task names when only the title 
   }
 });
 
-void test("impl_claim_task refuses to create a new task when generic rename candidates are ambiguous", async () => {
+test("impl_claim_task refuses to create a new task when generic rename candidates are ambiguous", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-ambiguous-name-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -5226,7 +5227,7 @@ void test("impl_claim_task refuses to create a new task when generic rename cand
   }
 });
 
-void test("impl_claim_task rejects terminal statuses", async () => {
+test("impl_claim_task rejects terminal statuses", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-terminal-claim-"));
   try {
     await writeEmptySparkProject(dir);
@@ -5256,7 +5257,7 @@ void test("impl_claim_task rejects terminal statuses", async () => {
   }
 });
 
-void test("impl_claim_task rejects invalid explicit kind and status", async () => {
+test("impl_claim_task rejects invalid explicit kind and status", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-invalid-claim-kind-status-"));
   try {
     await writeEmptySparkProject(dir);
@@ -5289,7 +5290,7 @@ void test("impl_claim_task rejects invalid explicit kind and status", async () =
   }
 });
 
-void test("impl_claim_task rejects invalid explicit task shapes without saving", async () => {
+test("impl_claim_task rejects invalid explicit task shapes without saving", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-invalid-claim-shape-"));
   try {
     await writeEmptySparkProject(dir);
@@ -5327,7 +5328,7 @@ void test("impl_claim_task rejects invalid explicit task shapes without saving",
   }
 });
 
-void test("impl_finish_task completes this session's claimed task", async () => {
+test("impl_finish_task completes this session's claimed task", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-finish-task-"));
   try {
     await writeEmptySparkProject(dir);
@@ -5448,7 +5449,7 @@ void test("impl_finish_task completes this session's claimed task", async () => 
   }
 });
 
-void test("impl_finish_task returns structured transition data for failed no-review completion", async () => {
+test("impl_finish_task returns structured transition data for failed no-review completion", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-finish-failed-structured-"));
   try {
     await writeEmptySparkProject(dir);
@@ -5501,7 +5502,7 @@ void test("impl_finish_task returns structured transition data for failed no-rev
   }
 });
 
-void test("impl_finish_task attaches evidenceRefs before reviewer gate", async () => {
+test("impl_finish_task attaches evidenceRefs before reviewer gate", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-finish-evidence-"));
   try {
     await writeEmptySparkProject(dir);
@@ -5566,7 +5567,7 @@ void test("impl_finish_task attaches evidenceRefs before reviewer gate", async (
   }
 });
 
-void test("impl_finish_task can create bounded task evidence artifact before reviewer gate", async () => {
+test("impl_finish_task can create bounded task evidence artifact before reviewer gate", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-finish-generated-evidence-"));
   try {
     await writeEmptySparkProject(dir);
@@ -5639,7 +5640,7 @@ void test("impl_finish_task can create bounded task evidence artifact before rev
   }
 });
 
-void test("impl_finish_task does not persist evidenceRefs when follow-up gate blocks", async () => {
+test("impl_finish_task does not persist evidenceRefs when follow-up gate blocks", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-finish-evidence-followup-block-"));
   try {
     await writeEmptySparkProject(dir);
@@ -5700,7 +5701,7 @@ void test("impl_finish_task does not persist evidenceRefs when follow-up gate bl
   }
 });
 
-void test("impl_finish_task keeps task unfinished when reviewer rejects done transition", async () => {
+test("impl_finish_task keeps task unfinished when reviewer rejects done transition", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-finish-review-reject-"));
   try {
     await writeEmptySparkProject(dir);
@@ -5797,7 +5798,7 @@ void test("impl_finish_task keeps task unfinished when reviewer rejects done tra
   }
 });
 
-void test("impl_finish_task treats malformed reviewer verdict as blocking feedback", async () => {
+test("impl_finish_task treats malformed reviewer verdict as blocking feedback", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-finish-review-malformed-"));
   try {
     await writeEmptySparkProject(dir);
@@ -5857,7 +5858,7 @@ void test("impl_finish_task treats malformed reviewer verdict as blocking feedba
   }
 });
 
-void test("impl_finish_task blocks research follow-ups without explicit disposition", async () => {
+test("impl_finish_task blocks research follow-ups without explicit disposition", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-finish-followup-block-"));
   try {
     await writeEmptySparkProject(dir);
@@ -5907,7 +5908,7 @@ void test("impl_finish_task blocks research follow-ups without explicit disposit
   }
 });
 
-void test("impl_finish_task accepts summary disposition for artifact follow-ups", async () => {
+test("impl_finish_task accepts summary disposition for artifact follow-ups", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-finish-artifact-followup-disposition-"));
   try {
     await writeEmptySparkProject(dir);
@@ -5964,7 +5965,7 @@ void test("impl_finish_task accepts summary disposition for artifact follow-ups"
   }
 });
 
-void test("impl_finish_task completes research when follow-ups are dispositioned", async () => {
+test("impl_finish_task completes research when follow-ups are dispositioned", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-finish-followup-pass-"));
   try {
     await writeEmptySparkProject(dir);
@@ -6018,7 +6019,7 @@ void test("impl_finish_task completes research when follow-ups are dispositioned
   }
 });
 
-void test("impl_finish_task rejects invalid explicit parameters without changing status", async () => {
+test("impl_finish_task rejects invalid explicit parameters without changing status", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-finish-invalid-params-"));
   try {
     await writeEmptySparkProject(dir);
@@ -6054,7 +6055,7 @@ void test("impl_finish_task rejects invalid explicit parameters without changing
   }
 });
 
-void test("impl_finish_task refuses to cancel a claimed prerequisite with dependents", async () => {
+test("impl_finish_task refuses to cancel a claimed prerequisite with dependents", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-finish-cancel-dependent-"));
   try {
     await writeEmptySparkProject(dir);
@@ -6106,7 +6107,7 @@ void test("impl_finish_task refuses to cancel a claimed prerequisite with depend
   }
 });
 
-void test("split task tools dispatch read, write, and assign actions", async () => {
+test("split task tools dispatch read, write, and assign actions", async () => {
   const dir = await mkdtemp(join(tmpdir(), "task-tool-canonical-"));
   try {
     await writeEmptySparkProject(dir);
@@ -6223,7 +6224,7 @@ void test("split task tools dispatch read, write, and assign actions", async () 
   }
 });
 
-void test("task_read project_status hides unclaimed task plan-item details", async () => {
+test("task_read project_status hides unclaimed task plan-item details", async () => {
   const dir = await mkdtemp(join(tmpdir(), "task-tool-claim-gated-status-"));
   try {
     await writeEmptySparkProject(dir);
@@ -6295,7 +6296,7 @@ void test("task_read project_status hides unclaimed task plan-item details", asy
   }
 });
 
-void test("task_read scoped status actions do not return unrelated projects", async () => {
+test("task_read scoped status actions do not return unrelated projects", async () => {
   const dir = await mkdtemp(join(tmpdir(), "task-tool-scoped-status-"));
   try {
     await writeEmptySparkProject(dir);
@@ -6457,7 +6458,7 @@ void test("task_read scoped status actions do not return unrelated projects", as
   }
 });
 
-void test("canonical task project_use creates the first Spark project when graph is missing", async () => {
+test("canonical task project_use creates the first Spark project when graph is missing", async () => {
   const dir = await mkdtemp(join(tmpdir(), "task-tool-project-bootstrap-"));
   try {
     const ctx = testSparkContext(dir, "main");
@@ -6484,7 +6485,7 @@ void test("canonical task project_use creates the first Spark project when graph
   }
 });
 
-void test("evidence tool lists and reads evidence through the canonical facade", async () => {
+test("evidence tool lists and reads evidence through the canonical facade", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-artifacts-"));
   try {
     await writeEmptySparkProject(dir);
@@ -6536,7 +6537,7 @@ void test("evidence tool lists and reads evidence through the canonical facade",
   }
 });
 
-void test("artifact tool rejects invalid explicit filters", async () => {
+test("artifact tool rejects invalid explicit filters", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-artifacts-invalid-filters-"));
   try {
     await writeEmptySparkProject(dir);
@@ -6606,7 +6607,7 @@ void test("artifact tool rejects invalid explicit filters", async () => {
   }
 });
 
-void test("learning tool routes record, list, search, read, export, and import through the canonical facade", async () => {
+test("memory kind=learning routes record, list, search, read, export, and import", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-learnings-"));
   const importDir = await mkdtemp(join(tmpdir(), "spark-tool-learnings-import-"));
   try {
@@ -6616,13 +6617,14 @@ void test("learning tool routes record, list, search, read, export, and import t
     const importCtx = testSparkContext(importDir, "main");
     const { tools } = registerSparkToolsForTest();
 
-    assert.ok(tools.has("learning"), "missing canonical learning tool");
-    const recorded = await executeSparkTool(tools, "learning", ctx, {
+    assert.ok(tools.has("memory"), "missing canonical memory tool");
+    const recorded = await executeSparkTool(tools, "memory", ctx, {
+      kind: "learning",
       action: "record",
       id: "learning-explicit-export",
       title: "Export shared learnings explicitly",
       statement:
-        "Spark learnings live in .learnings locally and can be shared through explicit Markdown exports.",
+        "Spark learnings live in .spark/memory/learnings locally and can be shared through explicit Markdown exports.",
       category: "decision",
       evidenceRefs: ["artifact:decision-gate"],
       tags: ["nyakore", "spark"],
@@ -6630,7 +6632,7 @@ void test("learning tool routes record, list, search, read, export, and import t
     });
     assert.match(toolText(recorded), /Recorded learning artifact:learning-explicit-export/);
     await writeFile(
-      join(dir, ".learnings", "invalid-kind-learning.json"),
+      join(dir, ".spark", "memory", "learnings", "invalid-kind-learning.json"),
       JSON.stringify(
         {
           ref: "artifact:invalid-kind-learning",
@@ -6648,32 +6650,41 @@ void test("learning tool routes record, list, search, read, export, and import t
       ),
     );
 
-    const listed = await executeSparkTool(tools, "learning", ctx, {
+    const listed = await executeSparkTool(tools, "memory", ctx, {
+      kind: "learning",
       action: "list",
       tag: "spark",
       location: "workspace",
     });
     assert.match(toolText(listed), /Export shared learnings explicitly/);
-    assert.match(toolText(listed), /Warnings: skipped 1 invalid learning artifact/);
+    assert.match(toolText(listed), /warning:.*kind must be a valid artifact kind/);
     assert.equal((listed.details as { warnings?: unknown[] }).warnings?.length, 1);
 
-    const search = await executeSparkTool(tools, "learning", ctx, {
+    const search = await executeSparkTool(tools, "memory", ctx, {
+      kind: "learning",
       action: "search",
       query: "explicit Markdown exports",
       location: "workspace",
     });
     assert.match(toolText(search), /Export shared learnings explicitly/);
-    assert.match(toolText(search), /Warnings: skipped 1 invalid learning artifact/);
+    assert.match(toolText(search), /warning:.*kind must be a valid artifact kind/);
     assert.equal((search.details as { warnings?: unknown[] }).warnings?.length, 1);
 
-    const read = await executeSparkTool(tools, "learning", ctx, {
+    const read = await executeSparkTool(tools, "memory", ctx, {
+      kind: "learning",
       action: "read",
       ref: "artifact:learning-explicit-export",
     });
-    assert.match(toolText(read), /\.learnings/);
+    assert.match(toolText(read), /Export shared learnings explicitly/);
+    assert.ok(
+      (
+        await stat(join(dir, ".spark", "memory", "learnings", "learning-explicit-export.json"))
+      ).isFile(),
+    );
 
     const exportPath = join("exports", "learnings.md");
-    const exported = await executeSparkTool(tools, "learning", ctx, {
+    const exported = await executeSparkTool(tools, "memory", ctx, {
+      kind: "learning",
       action: "export_markdown",
       outputPath: exportPath,
       location: "workspace",
@@ -6681,7 +6692,8 @@ void test("learning tool routes record, list, search, read, export, and import t
     assert.match(toolText(exported), /Exported 1 learning/);
     assert.equal((exported.details as { count?: number }).count, 1);
 
-    const dryRun = await executeSparkTool(tools, "learning", importCtx, {
+    const dryRun = await executeSparkTool(tools, "memory", importCtx, {
+      kind: "learning",
       action: "import_markdown",
       inputPath: join(dir, exportPath),
     });
@@ -6689,7 +6701,8 @@ void test("learning tool routes record, list, search, read, export, and import t
     assert.equal((dryRun.details as { apply?: boolean; count?: number }).apply, false);
     assert.equal((dryRun.details as { apply?: boolean; count?: number }).count, 1);
 
-    const imported = await executeSparkTool(tools, "learning", importCtx, {
+    const imported = await executeSparkTool(tools, "memory", importCtx, {
+      kind: "learning",
       action: "import_markdown",
       inputPath: join(dir, exportPath),
       apply: true,
@@ -6702,7 +6715,7 @@ void test("learning tool routes record, list, search, read, export, and import t
   }
 });
 
-void test("spark learning tools reject invalid explicit parameters", async () => {
+test("memory kind=learning rejects invalid explicit parameters", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-learnings-invalid-params-"));
   try {
     await writeEmptySparkProject(dir);
@@ -6711,52 +6724,64 @@ void test("spark learning tools reject invalid explicit parameters", async () =>
 
     await assert.rejects(
       () =>
-        executeSparkTool(tools, "impl_learning_record", ctx, {
+        executeSparkTool(tools, "memory", ctx, {
+          kind: "learning",
+          action: "record",
           title: "Invalid category",
           statement: "This category should not be accepted.",
           category: "lesson",
         }),
-      /category must be pattern/,
+      /memory\.category must be one of/,
     );
     await assert.rejects(
       () =>
-        executeSparkTool(tools, "impl_learning_record", ctx, {
+        executeSparkTool(tools, "memory", ctx, {
+          kind: "learning",
+          action: "record",
           title: "Invalid confidence",
           statement: "Confidence should stay normalized.",
           confidence: 2,
         }),
-      /confidence must be a finite number between 0 and 1/,
+      /learning confidence must be between 0 and 1/,
     );
     await assert.rejects(
       () =>
-        executeSparkTool(tools, "impl_learning_search", ctx, {
+        executeSparkTool(tools, "memory", ctx, {
+          kind: "learning",
+          action: "search",
           query: "anything",
           includeCandidates: "true",
         }),
-      /includeCandidates must be a boolean/,
+      /memory\.includeCandidates must be a boolean/,
     );
     await assert.rejects(
       () =>
-        executeSparkTool(tools, "impl_learning_list", ctx, {
+        executeSparkTool(tools, "memory", ctx, {
+          kind: "learning",
+          action: "list",
           status: ["active", "archived"],
         }),
-      /status must be candidate/,
+      /memory\.status must be one of/,
     );
 
     await assert.rejects(
       () =>
-        executeSparkTool(tools, "impl_learning_export_markdown", ctx, {
+        executeSparkTool(tools, "memory", ctx, {
+          kind: "learning",
+          action: "export_markdown",
           includeInactive: "false",
         }),
-      /includeInactive must be a boolean/,
+      /memory\.includeInactive must be a boolean/,
     );
     await assert.rejects(
       () =>
-        executeSparkTool(tools, "impl_learning_import_markdown", ctx, {
-          inputPath: ".learnings",
+        executeSparkTool(tools, "memory", ctx, {
+          kind: "learning",
+          action: "import_markdown",
+          inputPath: ".spark/memory/learnings",
           apply: "true",
         }),
-      /apply must be a boolean/,
+      /memory\.apply must be a boolean/,
     );
 
     await writeFile(
@@ -6765,7 +6790,9 @@ void test("spark learning tools reject invalid explicit parameters", async () =>
     );
     await assert.rejects(
       () =>
-        executeSparkTool(tools, "impl_learning_import_markdown", ctx, {
+        executeSparkTool(tools, "memory", ctx, {
+          kind: "learning",
+          action: "import_markdown",
           inputPath: "not-learning-export.md",
         }),
       /\[E_LEARNING_IMPORT_FORMAT\][\s\S]*export_markdown[\s\S]*dry-run[\s\S]*apply=true/,
@@ -6775,7 +6802,7 @@ void test("spark learning tools reject invalid explicit parameters", async () =>
   }
 });
 
-void test("impl_ask_replay rejects invalid explicit artifact refs", async () => {
+test("impl_ask_replay rejects invalid explicit artifact refs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-ask-replay-invalid-ref-"));
   try {
     const ctx = testSparkContext(dir, "main");
@@ -6794,7 +6821,7 @@ void test("impl_ask_replay rejects invalid explicit artifact refs", async () => 
   }
 });
 
-void test("impl_use_project clarifies generic project labels", async () => {
+test("impl_use_project clarifies generic project labels", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-project-intent-"));
   try {
     await writeEmptySparkProject(dir);
@@ -6826,7 +6853,7 @@ void test("impl_use_project clarifies generic project labels", async () => {
   }
 });
 
-void test("impl_use_project blocks active duplicate project creation without writing state", async () => {
+test("impl_use_project blocks active duplicate project creation without writing state", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-project-duplicate-active-"));
   try {
     await writeEmptySparkProject(dir);
@@ -6863,7 +6890,7 @@ void test("impl_use_project blocks active duplicate project creation without wri
   }
 });
 
-void test("impl_use_project compares duplicates against permanent projects", async () => {
+test("impl_use_project compares duplicates against permanent projects", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-project-duplicate-permanent-"));
   try {
     await writeEmptySparkProject(dir);
@@ -6888,7 +6915,7 @@ void test("impl_use_project compares duplicates against permanent projects", asy
   }
 });
 
-void test("impl_use_project creates clearly distinct projects", async () => {
+test("impl_use_project creates clearly distinct projects", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-project-distinct-create-"));
   try {
     await writeEmptySparkProject(dir);
@@ -6916,7 +6943,7 @@ void test("impl_use_project creates clearly distinct projects", async () => {
   }
 });
 
-void test("impl_use_project duplicate gate does not block explicit existing project selection", async () => {
+test("impl_use_project duplicate gate does not block explicit existing project selection", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-project-duplicate-use-existing-"));
   try {
     await writeEmptySparkProject(dir);
@@ -6940,7 +6967,7 @@ void test("impl_use_project duplicate gate does not block explicit existing proj
   }
 });
 
-void test("canonical task project_use exposes duplicate creation gate guidance", async () => {
+test("canonical task project_use exposes duplicate creation gate guidance", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-project-duplicate-canonical-"));
   try {
     await writeEmptySparkProject(dir);
@@ -6979,7 +7006,7 @@ void test("canonical task project_use exposes duplicate creation gate guidance",
   }
 });
 
-void test("impl_use_project reports selected existing projects", async () => {
+test("impl_use_project reports selected existing projects", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-use-project-existing-"));
   try {
     await writeEmptySparkProject(dir);
@@ -6997,7 +7024,7 @@ void test("impl_use_project reports selected existing projects", async () => {
   }
 });
 
-void test("spark_goal start with objective bootstraps when no project exists", async () => {
+test("spark_goal start with objective bootstraps when no project exists", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-goal-bootstrap-no-project-"));
   try {
     const ctx = testSparkContext(dir, "main");
@@ -7024,7 +7051,7 @@ void test("spark_goal start with objective bootstraps when no project exists", a
   }
 });
 
-void test("spark_goal foreground loop asks agent to bootstrap a project when none exists", async () => {
+test("spark_goal foreground loop asks agent to bootstrap a project when none exists", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-bootstrap-no-project-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -7086,7 +7113,7 @@ void test("spark_goal foreground loop asks agent to bootstrap a project when non
   }
 });
 
-void test("spark_goal foreground loop hides internal artifact validation errors from UI", async () => {
+test("spark_goal foreground loop hides internal artifact validation errors from UI", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-safe-error-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -7158,7 +7185,7 @@ void test("spark_goal foreground loop hides internal artifact validation errors 
   }
 });
 
-void test("spark_goal start ignores legacy session-scoped TODO snapshots when inferring goals", async () => {
+test("spark_goal start ignores legacy session-scoped TODO snapshots when inferring goals", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-session-goal-ignore-legacy-todos-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -7191,7 +7218,7 @@ void test("spark_goal start ignores legacy session-scoped TODO snapshots when in
   }
 });
 
-void test("spark_goal inference describes substantive project outcomes instead of task completion", async () => {
+test("spark_goal inference describes substantive project outcomes instead of task completion", async () => {
   const graph = new TaskGraph();
   const project = graph.createProject({
     title: "Alignment precision",
@@ -7216,7 +7243,7 @@ void test("spark_goal inference describes substantive project outcomes instead o
   assert.doesNotMatch(objective ?? "", /Advance project|to completion|unfinished|ready/i);
 });
 
-void test("spark_goal tool sets and updates durable session goals", async () => {
+test("spark_goal tool sets and updates durable session goals", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-session-goal-"));
   try {
     await writeEmptySparkProject(dir);
@@ -7315,7 +7342,7 @@ void test("spark_goal tool sets and updates durable session goals", async () => 
   }
 });
 
-void test("spark_goal complete uses deterministic blocker before reviewer when work remains", async () => {
+test("spark_goal complete uses deterministic blocker before reviewer when work remains", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-goal-complete-blocker-"));
   try {
     await writeEmptySparkProject(dir);
@@ -7379,7 +7406,7 @@ void test("spark_goal complete uses deterministic blocker before reviewer when w
   }
 });
 
-void test("spark_goal complete requires explicit evidence and objective reviewer gates", async () => {
+test("spark_goal complete requires explicit evidence and objective reviewer gates", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-goal-explicit-review-gates-"));
   try {
     await writeEmptySparkProject(dir);
@@ -7445,7 +7472,7 @@ void test("spark_goal complete requires explicit evidence and objective reviewer
   }
 });
 
-void test("spark_goal complete allows an explicitly evidenced narrow goal after reviewer audit", async () => {
+test("spark_goal complete allows an explicitly evidenced narrow goal after reviewer audit", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-goal-complete-unrelated-backlog-"));
   try {
     await writeEmptySparkProject(dir);
@@ -7531,7 +7558,7 @@ void test("spark_goal complete allows an explicitly evidenced narrow goal after 
   }
 });
 
-void test("spark_goal pause requires reviewer approval and preserves active goal on rejection", async () => {
+test("spark_goal pause requires reviewer approval and preserves active goal on rejection", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-goal-pause-review-"));
   try {
     await writeEmptySparkProject(dir);
@@ -7561,7 +7588,7 @@ void test("spark_goal pause requires reviewer approval and preserves active goal
   }
 });
 
-void test("spark_goal rejects autonomous pause and keeps blocker resolution guidance", async () => {
+test("spark_goal rejects autonomous pause and keeps blocker resolution guidance", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-goal-autonomous-pause-"));
   try {
     await writeEmptySparkProject(dir);
@@ -7594,7 +7621,7 @@ void test("spark_goal rejects autonomous pause and keeps blocker resolution guid
   }
 });
 
-void test("spark_goal start updates the active session goal in place", async () => {
+test("spark_goal start updates the active session goal in place", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-goal-session-update-"));
   try {
     await writeEmptySparkProject(dir);
@@ -7633,7 +7660,7 @@ void test("spark_goal start updates the active session goal in place", async () 
   }
 });
 
-void test("/implement canonical ask uses UI instead of reviewer auto-answer", async () => {
+test("/implement canonical ask uses UI instead of reviewer auto-answer", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-implement-ask-ui-"));
   try {
     await writeEmptySparkProject(dir);
@@ -7690,7 +7717,7 @@ void test("/implement canonical ask uses UI instead of reviewer auto-answer", as
   }
 });
 
-void test("/implement canonical ask does not inherit active goal reviewer auto-answer", async () => {
+test("/implement canonical ask does not inherit active goal reviewer auto-answer", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-implement-ask-active-goal-ui-"));
   try {
     await writeEmptySparkProject(dir);
@@ -7758,7 +7785,7 @@ void test("/implement canonical ask does not inherit active goal reviewer auto-a
   }
 });
 
-void test("goal start enables same-turn reviewer auto-answer for canonical ask", async () => {
+test("goal start enables same-turn reviewer auto-answer for canonical ask", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-same-turn-ask-auto-answer-"));
   try {
     await writeEmptySparkProject(dir);
@@ -7826,7 +7853,7 @@ void test("goal start enables same-turn reviewer auto-answer for canonical ask",
   }
 });
 
-void test("active goal canonical ask uses reviewer auto-answer", async () => {
+test("active goal canonical ask uses reviewer auto-answer", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-ask-auto-answer-"));
   try {
     await writeEmptySparkProject(dir);
@@ -7885,7 +7912,7 @@ void test("active goal canonical ask uses reviewer auto-answer", async () => {
   }
 });
 
-void test("active goal canonical ask reports reviewer auto-answer blockers", async () => {
+test("active goal canonical ask reports reviewer auto-answer blockers", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-ask-auto-answer-blocker-"));
   try {
     await writeEmptySparkProject(dir);
@@ -7934,7 +7961,7 @@ void test("active goal canonical ask reports reviewer auto-answer blockers", asy
   }
 });
 
-void test("active session goal keeps canonical ask but disables raw ask tools before agent turns", async () => {
+test("active session goal keeps canonical ask but disables raw ask tools before agent turns", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-disable-asks-"));
   try {
     await writeEmptySparkProject(dir);
@@ -7981,7 +8008,7 @@ void test("active session goal keeps canonical ask but disables raw ask tools be
   }
 });
 
-void test("active session goal preserves tools disabled by other extensions", async () => {
+test("active session goal preserves tools disabled by other extensions", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-preserve-disabled-"));
   try {
     await writeEmptySparkProject(dir);
@@ -8021,7 +8048,7 @@ void test("active session goal preserves tools disabled by other extensions", as
   }
 });
 
-void test("spark project tools reject invalid explicit parameters", async () => {
+test("spark project tools reject invalid explicit parameters", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-project-invalid-params-"));
   try {
     await writeEmptySparkProject(dir);
@@ -8063,13 +8090,14 @@ void test("spark project tools reject invalid explicit parameters", async () => 
   }
 });
 
-void test("Spark extension exposes canonical tools instead of removed spark_* tools", () => {
+test("Spark extension exposes canonical tools instead of removed spark_* tools", () => {
   const run = registerSparkToolsForTest();
   assert.equal(run.tools.has("task"), false);
   assert.ok(run.tools.has("task_read"));
   assert.ok(run.tools.has("task_write"));
   assert.ok(run.tools.has("assign"));
-  assert.ok(run.tools.has("learning"));
+  assert.ok(run.tools.has("memory"));
+  assert.equal(run.tools.has("learning"), false);
   assert.ok(run.tools.has("ask"));
   assert.ok(run.tools.has("role"));
   assert.ok(run.tools.has("session"));
@@ -8088,7 +8116,7 @@ void test("Spark extension exposes canonical tools instead of removed spark_* to
   );
 });
 
-void test("phase tool returns requirements and persists session phase", async () => {
+test("phase tool returns requirements and persists session phase", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-phase-tool-"));
   try {
     await writeEmptySparkProject(dir);
@@ -8120,7 +8148,7 @@ void test("phase tool returns requirements and persists session phase", async ()
   }
 });
 
-void test("drive tool derives mode and switches explicit foreground drives", async () => {
+test("drive tool derives mode and switches explicit foreground drives", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-drive-tool-"));
   try {
     await writeEmptySparkProject(dir);
@@ -8178,7 +8206,7 @@ void test("drive tool derives mode and switches explicit foreground drives", asy
   }
 });
 
-void test("/repro command starts, reports, and stops the repro drive", async () => {
+test("/repro command starts, reports, and stops the repro drive", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-repro-command-"));
   try {
     await writeEmptySparkProject(dir);
@@ -8213,7 +8241,7 @@ void test("/repro command starts, reports, and stops the repro drive", async () 
   }
 });
 
-void test("/repro command treats non-action text as the repro objective", async () => {
+test("/repro command treats non-action text as the repro objective", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-repro-command-objective-"));
   try {
     await writeEmptySparkProject(dir);
@@ -8246,7 +8274,7 @@ void test("/repro command treats non-action text as the repro objective", async 
   }
 });
 
-void test("repro record accepts only receipt-backed ask decisions with matching values", async () => {
+test("repro record accepts only receipt-backed ask decisions with matching values", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-repro-proof-validation-"));
   try {
     await writeEmptySparkProject(dir);
@@ -8366,7 +8394,7 @@ void test("repro record accepts only receipt-backed ask decisions with matching 
   }
 });
 
-void test("foreground driver slash commands share status, stop, and restart grammar", async () => {
+test("foreground driver slash commands share status, stop, and restart grammar", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-foreground-command-grammar-"));
   try {
     await writeEmptySparkProject(dir);
@@ -8400,7 +8428,7 @@ void test("foreground driver slash commands share status, stop, and restart gram
   }
 });
 
-void test("repro foreground driver ticks on session_start, reschedules on agent_end, and stops when complete", async () => {
+test("repro foreground driver ticks on session_start, reschedules on agent_end, and stops when complete", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-repro-foreground-driver-"));
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -8558,7 +8586,7 @@ void test("repro foreground driver ticks on session_start, reschedules on agent_
   }
 });
 
-void test("impl_plan_tasks describes the public spark-tasks readiness contract", () => {
+test("impl_plan_tasks describes the public spark-tasks readiness contract", () => {
   const { tools } = registerSparkToolsForTest();
   const planTool = tools.get("impl_plan_tasks");
   assert.ok(planTool);
@@ -8567,7 +8595,7 @@ void test("impl_plan_tasks describes the public spark-tasks readiness contract",
   assert.match(planTool.description, /dependsOn resolution is active-project scoped/);
 });
 
-void test("impl_list_projects returns compact text with structured project details", async () => {
+test("impl_list_projects returns compact text with structured project details", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-list-projects-"));
   try {
     await writeEmptySparkProject(dir);
@@ -8641,7 +8669,7 @@ void test("impl_list_projects returns compact text with structured project detai
   }
 });
 
-void test("structured status and list facades default to compact text summaries", async () => {
+test("structured status and list facades default to compact text summaries", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-compact-status-surfaces-"));
   try {
     const ctx = testSparkContext(dir, "main");
@@ -8715,7 +8743,8 @@ void test("structured status and list facades default to compact text summaries"
     assert.match(toolText(artifactList), /Evidence ledger:/);
     assert.ok(artifactList.details);
 
-    const learningList = await executeSparkTool(tools, "learning", ctx, {
+    const learningList = await executeSparkTool(tools, "memory", ctx, {
+      kind: "learning",
       action: "list",
       limit: 5,
     });
@@ -8727,7 +8756,7 @@ void test("structured status and list facades default to compact text summaries"
   }
 });
 
-void test("project kind fields are preserved in metadata but no longer validated against registry", async () => {
+test("project kind fields are preserved in metadata but no longer validated against registry", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-project-kind-tools-"));
   try {
     await writeEmptySparkProject(dir);
@@ -8812,7 +8841,7 @@ void test("project kind fields are preserved in metadata but no longer validated
   }
 });
 
-void test("spark_goal complete no longer blocks on reproduction project kind gate (deprecated)", async () => {
+test("spark_goal complete no longer blocks on reproduction project kind gate (deprecated)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reproduction-gate-complete-"));
   try {
     await writeEmptySparkProject(dir);
@@ -8876,7 +8905,7 @@ void test("spark_goal complete no longer blocks on reproduction project kind gat
   }
 });
 
-void test("impl_status does not activate an arbitrary project for the Pi session", async () => {
+test("impl_status does not activate an arbitrary project for the Pi session", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-status-no-auto-project-"));
   try {
     await writeEmptySparkProject(dir);
@@ -8899,7 +8928,7 @@ void test("impl_status does not activate an arbitrary project for the Pi session
   }
 });
 
-void test("impl_status surfaces corrupt current project state", async () => {
+test("impl_status surfaces corrupt current project state", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-status-corrupt-sessions-"));
   try {
     await writeEmptySparkProject(dir);
@@ -8920,7 +8949,7 @@ void test("impl_status surfaces corrupt current project state", async () => {
   }
 });
 
-void test("impl_status rejects non-object current project state", async () => {
+test("impl_status rejects non-object current project state", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-status-non-object-sessions-"));
   try {
     await writeEmptySparkProject(dir);
@@ -8941,7 +8970,7 @@ void test("impl_status rejects non-object current project state", async () => {
   }
 });
 
-void test("session cache stores write JSON atomically without tmp leftovers", async () => {
+test("session cache stores write JSON atomically without tmp leftovers", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-session-cache-atomic-"));
   try {
     const ctx = testSparkContext(dir, "cache-atomic");
@@ -8970,7 +8999,7 @@ void test("session cache stores write JSON atomically without tmp leftovers", as
   }
 });
 
-void test("current project store ignores legacy mode and run control blocks", async () => {
+test("current project store ignores legacy mode and run control blocks", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-sessions-invalid-"));
   try {
     const ctx = testSparkContext(dir, "sessions-invalid");
@@ -9047,7 +9076,7 @@ void test("current project store ignores legacy mode and run control blocks", as
   }
 });
 
-void test("permanent projects remain visible as current selection without lifecycle reactivation", async () => {
+test("permanent projects remain visible as current selection without lifecycle reactivation", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-permanent-project-current-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -9082,7 +9111,7 @@ void test("permanent projects remain visible as current selection without lifecy
   }
 });
 
-void test("impl_status includes persisted Spark orchestrator status", async () => {
+test("impl_status includes persisted Spark orchestrator status", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-status-"));
   try {
     await writeEmptySparkProject(dir);
@@ -9145,7 +9174,7 @@ void test("impl_status includes persisted Spark orchestrator status", async () =
   }
 });
 
-void test("impl_status reconciles DAG runs with current workspace active children only", async () => {
+test("impl_status reconciles DAG runs with current workspace active children only", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-status-cwd-"));
   const otherDir = await mkdtemp(join(tmpdir(), "spark-tool-dag-status-other-cwd-"));
   let otherRunRef: RunRef | undefined;
@@ -9226,7 +9255,7 @@ void test("impl_status reconciles DAG runs with current workspace active childre
   }
 });
 
-void test("impl_workflow_runs kill_active only targets current workspace role-runs", async () => {
+test("impl_workflow_runs kill_active only targets current workspace role-runs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-workflow-run-kill-active-cwd-"));
   const otherDir = await mkdtemp(join(tmpdir(), "spark-tool-workflow-run-kill-active-other-cwd-"));
   let otherRunRef: RunRef | undefined;
@@ -9293,7 +9322,7 @@ void test("impl_workflow_runs kill_active only targets current workspace role-ru
   }
 });
 
-void test("impl_status includes active dynamic workflow snapshot projection", async () => {
+test("impl_status includes active dynamic workflow snapshot projection", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-status-dynamic-workflow-"));
   try {
     await writeEmptySparkProject(dir);
@@ -9376,7 +9405,7 @@ void test("impl_status includes active dynamic workflow snapshot projection", as
   }
 });
 
-void test("impl_workflow_runs renders and controls dynamic workflow_run records", async () => {
+test("impl_workflow_runs renders and controls dynamic workflow_run records", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dynamic-workflow-runs-"));
   try {
     const ctx = testSparkContext(dir, "main");
@@ -9606,7 +9635,7 @@ void test("impl_workflow_runs renders and controls dynamic workflow_run records"
   }
 });
 
-void test("workflow run slash commands expose direct dashboard controls", async () => {
+test("workflow run slash commands expose direct dashboard controls", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-workflow-run-slash-controls-"));
   try {
     const ctx = testSparkContext(dir, "main");
@@ -9683,7 +9712,7 @@ void test("workflow run slash commands expose direct dashboard controls", async 
   }
 });
 
-void test("impl_workflow_runs rejects invalid explicit control parameters", async () => {
+test("impl_workflow_runs rejects invalid explicit control parameters", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-workflow-runs-invalid-params-"));
   try {
     await writeEmptySparkProject(dir);
@@ -9717,7 +9746,7 @@ void test("impl_workflow_runs rejects invalid explicit control parameters", asyn
   }
 });
 
-void test("impl_workflow_runs reply and steer require one active visible role-run", async () => {
+test("impl_workflow_runs reply and steer require one active visible role-run", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-workflow-runs-reply-no-active-"));
   try {
     await writeEmptySparkProject(dir);
@@ -9770,7 +9799,7 @@ void test("impl_workflow_runs reply and steer require one active visible role-ru
   }
 });
 
-void test("impl_workflow_runs reconciles and clears inactive records", async () => {
+test("impl_workflow_runs reconciles and clears inactive records", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-workflow-runs-"));
   try {
     await writeEmptySparkProject(dir);
@@ -9852,7 +9881,7 @@ void test("impl_workflow_runs reconciles and clears inactive records", async () 
   }
 });
 
-void test("impl_state workflow_run_prune defaults to dry-run and does not write workflow run store", async () => {
+test("impl_state workflow_run_prune defaults to dry-run and does not write workflow run store", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-state-prune-dryrun-"));
   try {
     await writeEmptySparkProject(dir);
@@ -9882,7 +9911,7 @@ void test("impl_state workflow_run_prune defaults to dry-run and does not write 
   }
 });
 
-void test("impl_workflow_runs exposes active child runs and refuses broad kill", async () => {
+test("impl_workflow_runs exposes active child runs and refuses broad kill", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-background-runs-active-"));
   const previousBindingHome = process.env.SPARK_HOME;
   const previousPath = process.env.PATH;
@@ -10186,7 +10215,7 @@ void test("impl_workflow_runs exposes active child runs and refuses broad kill",
   }
 });
 
-void test("impl_workflow_runs reply records failed delivery without successful activity transition", async () => {
+test("impl_workflow_runs reply records failed delivery without successful activity transition", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-workflow-runs-reply-failed-delivery-"));
   const previousBindingHome = process.env.SPARK_HOME;
   let runPromise: Promise<unknown> | undefined;
@@ -10308,7 +10337,7 @@ void test("impl_workflow_runs reply records failed delivery without successful a
   }
 });
 
-void test("impl_workflow_runs reply delivers through native role-run input control", async () => {
+test("impl_workflow_runs reply delivers through native role-run input control", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-workflow-runs-reply-native-delivery-"));
   const previousBindingHome = process.env.SPARK_HOME;
   let runPromise: Promise<unknown> | undefined;
@@ -10428,7 +10457,7 @@ void test("impl_workflow_runs reply delivers through native role-run input contr
   }
 });
 
-void test("impl_workflow_runs reports failed workflow run with stuck child as attention needed", async () => {
+test("impl_workflow_runs reports failed workflow run with stuck child as attention needed", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-background-failed-active-"));
   let runPromise: Promise<unknown> | undefined;
   try {
@@ -10557,7 +10586,7 @@ void test("impl_workflow_runs reports failed workflow run with stuck child as at
   }
 });
 
-void test("impl_workflow_runs inspect/list use compact role-run summaries and tail refs", async () => {
+test("impl_workflow_runs inspect/list use compact role-run summaries and tail refs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-background-runs-role-summary-"));
   try {
     await writeEmptySparkProject(dir);
@@ -10792,7 +10821,7 @@ void test("impl_workflow_runs inspect/list use compact role-run summaries and ta
   }
 });
 
-void test("impl_workflow_runs inspect keeps legacy large role-run artifacts behind refs", async () => {
+test("impl_workflow_runs inspect keeps legacy large role-run artifacts behind refs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-background-runs-large-role-artifact-"));
   try {
     await writeEmptySparkProject(dir);
@@ -10853,7 +10882,7 @@ void test("impl_workflow_runs inspect keeps legacy large role-run artifacts behi
   }
 });
 
-void test("impl_workflow_runs reconciles, acks scoped problems, and renders historical timeouts", async () => {
+test("impl_workflow_runs reconciles, acks scoped problems, and renders historical timeouts", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-background-runs-records-"));
   try {
     await writeEmptySparkProject(dir);
@@ -10918,14 +10947,14 @@ void test("impl_workflow_runs reconciles, acks scoped problems, and renders hist
   }
 });
 
-void test("legacy /run commands are not registered", () => {
+test("legacy /run commands are not registered", () => {
   const { commands } = registerSparkToolsForTest();
   assert.equal(commands.get("run"), undefined);
   assert.equal(commands.get("run-sequential"), undefined);
   assert.equal(commands.get("run-parallel"), undefined);
 });
 
-void test("impl_run_ready_tasks preflights current ready frontier with configured Pi command", async () => {
+test("impl_run_ready_tasks preflights current ready frontier with configured Pi command", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-frontier-preflight-"));
   const previousBindingHome = process.env.SPARK_HOME;
   const previousPath = process.env.PATH;
@@ -11007,7 +11036,7 @@ void test("impl_run_ready_tasks preflights current ready frontier with configure
   }
 });
 
-void test("workflow-run manager preflights role models with configured Pi command", async () => {
+test("workflow-run manager preflights role models with configured Pi command", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-manager-pi-command-"));
   const previousBindingHome = process.env.SPARK_HOME;
   const previousPath = process.env.PATH;
@@ -11081,7 +11110,7 @@ void test("workflow-run manager preflights role models with configured Pi comman
   }
 });
 
-void test("impl_run_ready_tasks scheduler exposes native reply control on active children", async () => {
+test("impl_run_ready_tasks scheduler exposes native reply control on active children", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-native-reply-"));
   const previousBindingHome = process.env.SPARK_HOME;
   const previousPath = process.env.PATH;
@@ -11244,7 +11273,7 @@ void test("impl_run_ready_tasks scheduler exposes native reply control on active
   }
 });
 
-void test("impl_run_ready_tasks reports workflow-run completion without queuing a follow-up user message", async () => {
+test("impl_run_ready_tasks reports workflow-run completion without queuing a follow-up user message", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-followup-"));
   const previousBindingHome = process.env.SPARK_HOME;
   try {
@@ -11371,7 +11400,7 @@ void test("impl_run_ready_tasks reports workflow-run completion without queuing 
   }
 });
 
-void test("impl_status renders legacy large role-run artifacts by refs without artifact body", async () => {
+test("impl_status renders legacy large role-run artifacts by refs without artifact body", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-status-large-role-run-artifact-"));
   try {
     await writeEmptySparkProject(dir);
@@ -11439,7 +11468,7 @@ void test("impl_status renders legacy large role-run artifacts by refs without a
   }
 });
 
-void test("impl_run_ready_tasks marks Spark workflow-run scheduler failed when child role-run fails", async () => {
+test("impl_run_ready_tasks marks Spark workflow-run scheduler failed when child role-run fails", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-child-failed-"));
   const previousBindingHome = process.env.SPARK_HOME;
   try {
@@ -11509,7 +11538,7 @@ void test("impl_run_ready_tasks marks Spark workflow-run scheduler failed when c
   }
 });
 
-void test("impl_status reports derived ready frontier for pending execution-ready tasks", async () => {
+test("impl_status reports derived ready frontier for pending execution-ready tasks", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-status-derived-ready-"));
   try {
     await writeEmptySparkProject(dir);
@@ -11562,7 +11591,7 @@ void test("impl_status reports derived ready frontier for pending execution-read
   }
 });
 
-void test("impl_status defaults to active view, supports summary, limits, and state drill-down", async () => {
+test("impl_status defaults to active view, supports summary, limits, and state drill-down", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-status-views-"));
   try {
     await writeEmptySparkProject(dir);
@@ -11758,7 +11787,7 @@ void test("impl_status defaults to active view, supports summary, limits, and st
   }
 });
 
-void test("impl_state cache_cleanup previews and deletes only safe cache files", async () => {
+test("impl_state cache_cleanup previews and deletes only safe cache files", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-state-cleanup-"));
   try {
     await writeEmptySparkProject(dir);
@@ -11860,7 +11889,7 @@ void test("impl_state cache_cleanup previews and deletes only safe cache files",
   }
 });
 
-void test("impl_state reports broken cache files without counting them safe by default", async () => {
+test("impl_state reports broken cache files without counting them safe by default", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-state-cleanup-broken-"));
   try {
     await writeEmptySparkProject(dir);
@@ -11916,7 +11945,7 @@ void test("impl_state reports broken cache files without counting them safe by d
   }
 });
 
-void test("impl_state state_doctor reports protected-store candidates without deleting files", async () => {
+test("impl_state state_doctor reports protected-store candidates without deleting files", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-state-diagnostics-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -12032,7 +12061,7 @@ void test("impl_state state_doctor reports protected-store candidates without de
   }
 });
 
-void test("impl_state state_doctor reports store-v2 migration diagnostics with stable codes", async () => {
+test("impl_state state_doctor reports store-v2 migration diagnostics with stable codes", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-state-doctor-store-v2-"));
   try {
     const graph = new TaskGraph();
@@ -12114,7 +12143,7 @@ void test("impl_state state_doctor reports store-v2 migration diagnostics with s
   }
 });
 
-void test("impl_state store_v2_migrate previews, backs up, applies legacy graph import idempotently", async () => {
+test("impl_state store_v2_migrate previews, backs up, applies legacy graph import idempotently", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-state-migrate-v2-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -12235,7 +12264,7 @@ void test("impl_state store_v2_migrate previews, backs up, applies legacy graph 
   }
 });
 
-void test("impl_state state_doctor surfaces artifact blob stat failures", async () => {
+test("impl_state state_doctor surfaces artifact blob stat failures", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-state-diagnostics-stat-"));
   try {
     await writeEmptySparkProject(dir);
@@ -12269,7 +12298,7 @@ void test("impl_state state_doctor surfaces artifact blob stat failures", async 
   }
 });
 
-void test("impl_state rejects invalid explicit action and path parameters", async () => {
+test("impl_state rejects invalid explicit action and path parameters", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-state-invalid-action-"));
   try {
     await writeEmptySparkProject(dir);
@@ -12315,7 +12344,7 @@ void test("impl_state rejects invalid explicit action and path parameters", asyn
   }
 });
 
-void test("impl_state rejects invalid numeric parameters instead of using defaults", async () => {
+test("impl_state rejects invalid numeric parameters instead of using defaults", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-state-invalid-numeric-"));
   try {
     await writeEmptySparkProject(dir);
@@ -12351,7 +12380,7 @@ void test("impl_state rejects invalid numeric parameters instead of using defaul
   }
 });
 
-void test("impl_state rejects invalid boolean parameters instead of using defaults", async () => {
+test("impl_state rejects invalid boolean parameters instead of using defaults", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-state-invalid-boolean-"));
   try {
     await writeEmptySparkProject(dir);
@@ -12376,7 +12405,7 @@ void test("impl_state rejects invalid boolean parameters instead of using defaul
   }
 });
 
-void test("impl_state role_run_artifact_compact dry-run lists large role-run candidates and keeps non-role artifacts", async () => {
+test("impl_state role_run_artifact_compact dry-run lists large role-run candidates and keeps non-role artifacts", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-role-run-retention-dry-run-"));
   try {
     await writeEmptySparkProject(dir);
@@ -12463,7 +12492,7 @@ void test("impl_state role_run_artifact_compact dry-run lists large role-run can
   }
 });
 
-void test("impl_state role_run_artifact_compact skips blob paths outside artifact root", async () => {
+test("impl_state role_run_artifact_compact skips blob paths outside artifact root", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-role-run-retention-boundary-"));
   const outsidePath = `${dir}-outside-role-run.json`;
   try {
@@ -12516,7 +12545,7 @@ void test("impl_state role_run_artifact_compact skips blob paths outside artifac
   }
 });
 
-void test("impl_state role_run_artifact_compact reports invalid artifact metadata", async () => {
+test("impl_state role_run_artifact_compact reports invalid artifact metadata", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-role-run-retention-invalid-json-"));
   try {
     await writeEmptySparkProject(dir);
@@ -12549,7 +12578,7 @@ void test("impl_state role_run_artifact_compact reports invalid artifact metadat
   }
 });
 
-void test("impl_state role_run_artifact_compact apply writes replacement summary before deleting blob", async () => {
+test("impl_state role_run_artifact_compact apply writes replacement summary before deleting blob", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-role-run-retention-apply-"));
   try {
     await writeEmptySparkProject(dir);
@@ -12618,7 +12647,7 @@ void test("impl_state role_run_artifact_compact apply writes replacement summary
   }
 });
 
-void test("impl_plan_tasks keeps large plan output bounded", async () => {
+test("impl_plan_tasks keeps large plan output bounded", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-plan-bounded-"));
   try {
     await writeEmptySparkProject(dir);
@@ -12648,14 +12677,14 @@ void test("impl_plan_tasks keeps large plan output bounded", async () => {
   }
 });
 
-void test("session-bound todo implementation is registered as impl_todo", () => {
+test("session-bound todo implementation is registered as impl_todo", () => {
   const { tools } = registerSparkToolsForTest();
   assert.equal(tools.has("impl_update_todos"), false);
   assert.ok(tools.has("impl_todo"), "missing session-bound impl_todo tool");
   assert.ok(tools.has("todo"), "missing public todo tool");
 });
 
-void test("todo tool tracks session-bound checklist independent of claimed tasks", async () => {
+test("todo tool tracks session-bound checklist independent of claimed tasks", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-session-todo-"));
   try {
     const ctx = testSparkContext(dir, "main");
@@ -12688,7 +12717,7 @@ void test("todo tool tracks session-bound checklist independent of claimed tasks
   }
 });
 
-void test("todo tool rejects unknown actions", async () => {
+test("todo tool rejects unknown actions", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-session-todo-invalid-"));
   try {
     const ctx = testSparkContext(dir, "main");
@@ -12702,7 +12731,7 @@ void test("todo tool rejects unknown actions", async () => {
   }
 });
 
-void test("spark todo tools reject invalid explicit ops without saving", async () => {
+test("spark todo tools reject invalid explicit ops without saving", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-todos-invalid-ops-"));
   try {
     await writeEmptySparkProject(dir);
@@ -12739,7 +12768,7 @@ void test("spark todo tools reject invalid explicit ops without saving", async (
   }
 });
 
-void test("legacy session-scoped snapshot import rejects malformed persisted snapshots", async () => {
+test("legacy session-scoped snapshot import rejects malformed persisted snapshots", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-session-todos-invalid-"));
   try {
     const ctx = testSparkContext(dir, "main");
@@ -12794,7 +12823,7 @@ void test("legacy session-scoped snapshot import rejects malformed persisted sna
   }
 });
 
-void test("todo display number store rejects malformed persisted snapshots", async () => {
+test("todo display number store rejects malformed persisted snapshots", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-display-numbers-invalid-"));
   try {
     const ctx = testSparkContext(dir, "main");
@@ -12860,7 +12889,7 @@ void test("todo display number store rejects malformed persisted snapshots", asy
   }
 });
 
-void test("hidden role-run inbox store rejects malformed persisted snapshots", async () => {
+test("hidden role-run inbox store rejects malformed persisted snapshots", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-hidden-inbox-invalid-"));
   try {
     const ctx = testSparkContext(dir, "main");
@@ -13118,8 +13147,8 @@ function registerSparkToolsForTest(
     details?: Record<string, unknown>;
     options?: { deliverAs?: string; triggerTurn?: boolean };
   }>;
-  commands: Map<string, Parameters<SparkExtensionApiForTest["registerCommand"]>[1]>;
-  shortcuts: Map<string, Parameters<NonNullable<SparkExtensionApiForTest["registerShortcut"]>>[1]>;
+  commands: Map<string, Parameters<SparkHostApiForTest["registerCommand"]>[1]>;
+  shortcuts: Map<string, Parameters<NonNullable<SparkHostApiForTest["registerShortcut"]>>[1]>;
   eventHandlers: Map<string, Array<(event: unknown, ctx: TestSparkContext) => unknown>>;
   getActiveToolNames: () => string[];
   registerActiveTool: (name: string) => void;
@@ -13135,20 +13164,20 @@ function registerSparkToolsForTest(
     details?: Record<string, unknown>;
     options?: { deliverAs?: string; triggerTurn?: boolean };
   }> = [];
-  const commands = new Map<string, Parameters<SparkExtensionApiForTest["registerCommand"]>[1]>();
+  const commands = new Map<string, Parameters<SparkHostApiForTest["registerCommand"]>[1]>();
   const shortcuts = new Map<
     string,
-    Parameters<NonNullable<SparkExtensionApiForTest["registerShortcut"]>>[1]
+    Parameters<NonNullable<SparkHostApiForTest["registerShortcut"]>>[1]
   >();
   const eventHandlers = new Map<
     string,
     Array<(event: unknown, ctx: TestSparkContext) => unknown>
   >();
-  const pi: SparkExtensionApiForTest & {
+  const pi: SparkHostApiForTest & {
     getActiveTools: () => string[];
     getAllTools: () => Array<{ name: string }>;
     setActiveTools: (names: string[]) => void;
-    createReviewerRunner: NonNullable<SparkExtensionApiForTest["createReviewerRunner"]>;
+    createReviewerRunner: NonNullable<SparkHostApiForTest["createReviewerRunner"]>;
     getPiCommand?: () => string | undefined;
   } = {
     registerCommand: (name, config) => {
@@ -13191,16 +13220,20 @@ function registerSparkToolsForTest(
     tools.set(config.name, config);
     activeToolNames.add(config.name);
   };
-  registerPiArtifactTool({
+  registerSparkArtifactTool({
     registerTool: (config) => registerExternalTool(config as SparkToolConfig),
   });
-  registerPiRolesTools({
+  registerSparkMemoryTool({
+    registerTool: (config) => registerExternalTool(config as SparkToolConfig),
+    getAllTools: () => [...tools.keys()].map((name) => ({ name })),
+  });
+  registerSparkRolesTools({
     registerTool: (config) => registerExternalTool(config as SparkToolConfig),
   });
-  registerPiSessionTool({
+  registerSparkSessionTool({
     registerTool: (config) => registerExternalTool(config as SparkToolConfig),
   });
-  registerPiWorkflowTool({
+  registerSparkWorkflowTool({
     registerTool: (config) => registerExternalTool(config as SparkToolConfig),
   });
   piAskExtension(pi as never);

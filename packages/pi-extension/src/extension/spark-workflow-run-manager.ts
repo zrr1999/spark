@@ -4,7 +4,7 @@ import {
   DEFAULT_READY_TASK_TIMEOUT_MS,
   type TaskRef,
   type ProjectRef,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import {
   type WorkflowRunCompletionFollowUp,
   type WorkflowRunControlStatus,

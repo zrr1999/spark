@@ -9,49 +9,49 @@ import {
   isSubmitTab,
   getCurrentQuestion,
 } from "../state/state.ts";
-import type { PiAskFlowResult, PiAskFlowRequest, PiAskFlowQuestion } from "../schema.ts";
-import { validatePiAskFlowRequest } from "../schema.ts";
+import type { SparkAskFlowResult, SparkAskFlowRequest, SparkAskFlowQuestion } from "../schema.ts";
+import { validateSparkAskFlowRequest } from "../schema.ts";
 import type { RenderTheme } from "./render.ts";
 import { renderAskScreen, normalizeRenderTheme, type AskUILanguage } from "./render.ts";
 
 /**
- * PiAskFlowController orchestrates the interactive ask TUI.
+ * SparkAskFlowController orchestrates the interactive ask TUI.
  *
  * Usage:
- *   const controller = new PiAskFlowController({ ... });
+ *   const controller = new SparkAskFlowController({ ... });
  *   controller.run(tui, theme, doneCallback);
  */
 
 export interface AskFlowOptions {
-  request: PiAskFlowRequest;
+  request: SparkAskFlowRequest;
   language?: AskUILanguage;
   /** Run without TUI (returns immediately with empty answers). */
   headless?: boolean;
 }
 
-export interface PiAskTui {
+export interface SparkAskTui {
   terminal?: { columns?: number };
   requestRender?: () => void;
 }
 
-export interface PiAskView {
+export interface SparkAskView {
   render(): string[];
   handleInput(data: string): void;
   invalidate(): void;
 }
 
-export class PiAskFlowController {
+export class SparkAskFlowController {
   private state: AskState;
-  private questions: readonly PiAskFlowQuestion[];
+  private questions: readonly SparkAskFlowQuestion[];
   private optionsByTab: ReadonlyArray<readonly ExtendedOption[]>;
   private options: AskFlowOptions;
-  private done: ((result: PiAskFlowResult) => void) | null = null;
-  private tui: PiAskTui | null = null;
+  private done: ((result: SparkAskFlowResult) => void) | null = null;
+  private tui: SparkAskTui | null = null;
 
   constructor(options: AskFlowOptions) {
     this.options = options;
 
-    const validation = validatePiAskFlowRequest(options.request);
+    const validation = validateSparkAskFlowRequest(options.request);
     if (!validation.valid) {
       throw new Error(
         `Invalid ask request: ${validation.error}${validation.details ? ` (${validation.details})` : ""}`,
@@ -63,7 +63,11 @@ export class PiAskFlowController {
     this.state = createInitialState({ questions: [...this.questions] });
   }
 
-  run(tui: PiAskTui, theme: RenderTheme, done: (result: PiAskFlowResult) => void): PiAskView {
+  run(
+    tui: SparkAskTui,
+    theme: RenderTheme,
+    done: (result: SparkAskFlowResult) => void,
+  ): SparkAskView {
     this.tui = tui;
     this.done = done;
 
@@ -92,7 +96,7 @@ export class PiAskFlowController {
     };
   }
 
-  private renderFrame(tui: PiAskTui, theme: RenderTheme): string[] {
+  private renderFrame(tui: SparkAskTui, theme: RenderTheme): string[] {
     return renderAskScreen({
       state: this.state,
       questions: this.questions,

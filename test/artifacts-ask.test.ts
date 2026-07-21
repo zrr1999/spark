@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, readdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   ArtifactStore,
   ArtifactStoreFormatError,
   defaultArtifactStore,
 } from "@zendev-lab/spark-artifacts";
-import { registerPiArtifactTool } from "@zendev-lab/spark-artifacts/extension";
+import { registerSparkArtifactTool } from "@zendev-lab/spark-artifacts/extension";
 import {
   AskConfigStoreFormatError,
   askUser,
@@ -17,25 +17,25 @@ import {
   createAskConfigStore,
   createAskUserRequest,
   createAskUserResult,
-  createPiAskFlowArtifactBody,
+  createSparkAskFlowArtifactBody,
   defaultAskUserResult,
   getDefaultConfig,
   isUserAnsweredAskEvidenceArtifactBody,
-  PiAskFlowPayloadStore,
-  PiAskFlowPayloadStoreFormatError,
-  registerPiAskActionTool,
-  registerPiAskAutoAnswerProvider,
-  registerPiAskFlowTool,
-  registerPiAskTools,
-  runPiAskFlow,
+  SparkAskFlowPayloadStore,
+  SparkAskFlowPayloadStoreFormatError,
+  registerSparkAskActionTool,
+  registerSparkAskAutoAnswerProvider,
+  registerSparkAskFlowTool,
+  registerSparkAskTools,
+  runSparkAskFlow,
   summarizeAskResult,
-  type PiAskUi,
+  type SparkAskUi,
   type StoredAskPayload,
   verifyCanonicalAskEvidenceArtifact,
 } from "@zendev-lab/spark-ask";
-import { newRef, type JsonValue } from "@zendev-lab/spark-extension-api";
+import { newRef, type JsonValue } from "@zendev-lab/spark-core";
 
-void test("artifact store writes hashes, blobs, and lineage links", async () => {
+test("artifact store writes hashes, blobs, and lineage links", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-core-artifacts-"));
   try {
     const store = new ArtifactStore({ rootDir: dir });
@@ -79,9 +79,9 @@ void test("artifact store writes hashes, blobs, and lineage links", async () => 
   }
 });
 
-void test("artifact tool describes valid provenance producers", () => {
+test("artifact tool describes valid provenance producers", () => {
   const tools = new Map<string, { promptGuidelines?: string[]; parameters?: unknown }>();
-  registerPiArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
+  registerSparkArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
   const tool = tools.get("evidence");
   assert.ok(tool);
 
@@ -100,14 +100,14 @@ void test("artifact tool describes valid provenance producers", () => {
   assert.match(parameters, /Role ref filter|role ref/i);
 });
 
-void test("artifact record stores validation evidence as a producer-tagged record", async () => {
+test("artifact record stores validation evidence as a producer-tagged record", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-artifact-record-kind-"));
   try {
     const tools = new Map<
       string,
       { execute: Function; promptGuidelines?: string[]; parameters?: unknown }
     >();
-    registerPiArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
+    registerSparkArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
     const tool = tools.get("evidence");
     assert.ok(tool);
     const promptText = `${tool.promptGuidelines?.join("\n") ?? ""}\n${JSON.stringify(tool.parameters)}`;
@@ -140,11 +140,11 @@ void test("artifact record stores validation evidence as a producer-tagged recor
   }
 });
 
-void test("artifact record rejects retired verification kind with a directed hint", async () => {
+test("artifact record rejects retired verification kind with a directed hint", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-artifact-retired-kind-"));
   try {
     const tools = new Map<string, { execute: Function }>();
-    registerPiArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
+    registerSparkArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
     const tool = tools.get("evidence");
     assert.ok(tool);
     await assert.rejects(
@@ -169,7 +169,7 @@ void test("artifact record rejects retired verification kind with a directed hin
   }
 });
 
-void test("artifact store maps known legacy artifact kinds when reading metadata", async () => {
+test("artifact store maps known legacy artifact kinds when reading metadata", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-artifact-legacy-kind-"));
   try {
     const store = new ArtifactStore({ rootDir: dir });
@@ -205,7 +205,7 @@ void test("artifact store maps known legacy artifact kinds when reading metadata
   }
 });
 
-void test("artifact store rejects unknown non-canonical artifact kinds when reading metadata", async () => {
+test("artifact store rejects unknown non-canonical artifact kinds when reading metadata", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-artifact-noncanonical-kind-"));
   try {
     const ref = newRef("artifact", "noncanonical-unknown-kind");
@@ -233,11 +233,11 @@ void test("artifact store rejects unknown non-canonical artifact kinds when read
   }
 });
 
-void test("artifact record tool stores top-level refs as provenance shortcuts", async () => {
+test("artifact record tool stores top-level refs as provenance shortcuts", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-artifact-record-shortcuts-"));
   try {
     const tools = new Map<string, { execute: Function }>();
-    registerPiArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
+    registerSparkArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
     const tool = tools.get("evidence");
     assert.ok(tool);
     const projectRef = newRef("proj", "shortcut-project");
@@ -279,11 +279,11 @@ void test("artifact record tool stores top-level refs as provenance shortcuts", 
   }
 });
 
-void test("artifact record rejects conflicting top-level provenance shortcuts", async () => {
+test("artifact record rejects conflicting top-level provenance shortcuts", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-artifact-record-shortcut-conflict-"));
   try {
     const tools = new Map<string, { execute: Function }>();
-    registerPiArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
+    registerSparkArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
     const tool = tools.get("evidence");
     assert.ok(tool);
 
@@ -311,7 +311,7 @@ void test("artifact record rejects conflicting top-level provenance shortcuts", 
   }
 });
 
-void test("artifact store compacts large metadata while hydrating full bodies", async () => {
+test("artifact store compacts large metadata while hydrating full bodies", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-core-artifacts-compact-"));
   try {
     const store = new ArtifactStore({
@@ -344,7 +344,7 @@ void test("artifact store compacts large metadata while hydrating full bodies", 
   }
 });
 
-void test("artifact store rejects malformed persisted metadata with file context", async () => {
+test("artifact store rejects malformed persisted metadata with file context", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-core-artifacts-malformed-metadata-"));
   try {
     const store = new ArtifactStore({ rootDir: dir });
@@ -387,7 +387,7 @@ void test("artifact store rejects malformed persisted metadata with file context
   }
 });
 
-void test("artifact store rejects invalid bodies before writing blobs or metadata", async () => {
+test("artifact store rejects invalid bodies before writing blobs or metadata", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-core-artifacts-invalid-body-"));
   try {
     const store = new ArtifactStore({ rootDir: dir });
@@ -412,7 +412,7 @@ void test("artifact store rejects invalid bodies before writing blobs or metadat
   }
 });
 
-void test("artifact metadata compaction dry-runs and rewrites legacy inline bodies", async () => {
+test("artifact metadata compaction dry-runs and rewrites legacy inline bodies", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-core-artifacts-legacy-compact-"));
   try {
     const legacyStore = new ArtifactStore({
@@ -459,7 +459,7 @@ void test("artifact metadata compaction dry-runs and rewrites legacy inline bodi
   }
 });
 
-void test("artifact store refuses metadata blob paths outside the artifact root", async () => {
+test("artifact store refuses metadata blob paths outside the artifact root", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-core-artifacts-blob-boundary-"));
   try {
     const legacyStore = new ArtifactStore({
@@ -499,10 +499,10 @@ void test("artifact store refuses metadata blob paths outside the artifact root"
   }
 });
 
-void test("ask flow payload store saves and loads the latest payload", async () => {
+test("ask flow payload store saves and loads the latest payload", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-payload-store-"));
   try {
-    const store = new PiAskFlowPayloadStore();
+    const store = new SparkAskFlowPayloadStore();
     const payload = validAskFlowPayload();
 
     await store.save(dir, payload);
@@ -517,10 +517,10 @@ void test("ask flow payload store saves and loads the latest payload", async () 
   }
 });
 
-void test("ask flow payload store rejects malformed persisted payloads", async () => {
+test("ask flow payload store rejects malformed persisted payloads", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-payload-store-invalid-"));
   try {
-    const store = new PiAskFlowPayloadStore();
+    const store = new SparkAskFlowPayloadStore();
     const filePath = join(dir, ".spark", "asks", "latest.json");
 
     assert.equal(await store.load(dir), null);
@@ -530,7 +530,7 @@ void test("ask flow payload store rejects malformed persisted payloads", async (
     await assert.rejects(
       () => store.load(dir),
       (error) =>
-        error instanceof PiAskFlowPayloadStoreFormatError &&
+        error instanceof SparkAskFlowPayloadStoreFormatError &&
         error.filePath === filePath &&
         /not valid JSON/.test(error.message),
     );
@@ -539,7 +539,7 @@ void test("ask flow payload store rejects malformed persisted payloads", async (
     await assert.rejects(
       () => store.load(dir),
       (error) =>
-        error instanceof PiAskFlowPayloadStoreFormatError &&
+        error instanceof SparkAskFlowPayloadStoreFormatError &&
         error.filePath === filePath &&
         /JSON root must be an object/.test(error.message),
     );
@@ -555,7 +555,7 @@ void test("ask flow payload store rejects malformed persisted payloads", async (
     await assert.rejects(
       () => store.load(dir),
       (error) =>
-        error instanceof PiAskFlowPayloadStoreFormatError &&
+        error instanceof SparkAskFlowPayloadStoreFormatError &&
         error.filePath === filePath &&
         /request\.questions must be an array/.test(error.message),
     );
@@ -571,7 +571,7 @@ void test("ask flow payload store rejects malformed persisted payloads", async (
     await assert.rejects(
       () => store.load(dir),
       (error) =>
-        error instanceof PiAskFlowPayloadStoreFormatError &&
+        error instanceof SparkAskFlowPayloadStoreFormatError &&
         error.filePath === filePath &&
         /request is invalid: no_questions/.test(error.message),
     );
@@ -592,7 +592,7 @@ void test("ask flow payload store rejects malformed persisted payloads", async (
     await assert.rejects(
       () => store.load(dir),
       (error) =>
-        error instanceof PiAskFlowPayloadStoreFormatError &&
+        error instanceof SparkAskFlowPayloadStoreFormatError &&
         error.filePath === filePath &&
         /result\.answers\.decision\.values must be a string array/.test(error.message),
     );
@@ -605,7 +605,7 @@ void test("ask flow payload store rejects malformed persisted payloads", async (
     await assert.rejects(
       () => store.load(dir),
       (error) =>
-        error instanceof PiAskFlowPayloadStoreFormatError &&
+        error instanceof SparkAskFlowPayloadStoreFormatError &&
         error.filePath === filePath &&
         /timestamp must be a finite number/.test(error.message),
     );
@@ -614,7 +614,7 @@ void test("ask flow payload store rejects malformed persisted payloads", async (
   }
 });
 
-void test("ask config store defaults only when the config file is missing", async () => {
+test("ask config store defaults only when the config file is missing", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-config-store-"));
   try {
     const filePath = join(dir, "spark-ask.json");
@@ -633,7 +633,7 @@ void test("ask config store defaults only when the config file is missing", asyn
   }
 });
 
-void test("ask config store persists under SPARK_HOME by default", async () => {
+test("ask config store persists under SPARK_HOME by default", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-unified-home-"));
   const previous = process.env.SPARK_HOME;
   process.env.SPARK_HOME = dir;
@@ -651,7 +651,7 @@ void test("ask config store persists under SPARK_HOME by default", async () => {
   }
 });
 
-void test("ask config store rejects malformed persisted config", async () => {
+test("ask config store rejects malformed persisted config", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-config-store-invalid-"));
   try {
     const filePath = join(dir, "spark-ask.json");
@@ -699,7 +699,7 @@ void test("ask config store rejects malformed persisted config", async () => {
   }
 });
 
-void test("ask_user clarification without UI defaults to the first available option", () => {
+test("ask_user clarification without UI defaults to the first available option", () => {
   const request = createAskUserRequest({
     title: "Ship it?",
     mode: "clarification",
@@ -721,7 +721,7 @@ void test("ask_user clarification without UI defaults to the first available opt
   assert.deepEqual(answer.answers.decision.values, ["yes"]);
 });
 
-void test("ask_user decision without UI blocks instead of implicitly approving", () => {
+test("ask_user decision without UI blocks instead of implicitly approving", () => {
   const request = createAskUserRequest({
     title: "Ship it?",
     mode: "approval",
@@ -744,7 +744,7 @@ void test("ask_user decision without UI blocks instead of implicitly approving",
   assert.equal(answer.answers.decision, undefined);
 });
 
-void test("ask_user plain select receives only business options", async () => {
+test("ask_user plain select receives only business options", async () => {
   const request = createAskUserRequest({
     title: "Audience",
     questions: [
@@ -775,7 +775,7 @@ void test("ask_user plain select receives only business options", async () => {
   });
 });
 
-void test("ask_user supports explicit selectWithCustom custom input metadata", async () => {
+test("ask_user supports explicit selectWithCustom custom input metadata", async () => {
   const request = createAskUserRequest({
     title: "Audience",
     questions: [
@@ -806,7 +806,7 @@ void test("ask_user supports explicit selectWithCustom custom input metadata", a
   });
 });
 
-void test("ask_user and ask_flow share result summary and artifact body semantics", () => {
+test("ask_user and ask_flow share result summary and artifact body semantics", () => {
   const request = {
     title: "Choose mode",
     mode: "decision" as const,
@@ -840,7 +840,7 @@ void test("ask_user and ask_flow share result summary and artifact body semantic
   assert.equal(summarizeAskResult(request, askUserResult), "Choose mode: answered; mode=Safe");
   assert.equal(summarizeAskResult(request, flowResult), "Choose mode: answered; mode=Safe");
   assert.deepEqual(
-    createPiAskFlowArtifactBody(request, flowResult).summary,
+    createSparkAskFlowArtifactBody(request, flowResult).summary,
     "Choose mode: answered; mode=Safe",
   );
   const artifactBody = createAskArtifactBody(
@@ -858,9 +858,9 @@ void test("ask_user and ask_flow share result summary and artifact body semantic
   assert.equal("preview" in artifactBody.result.answers.mode, false);
 });
 
-void test("ask_user tool summary uses option labels rather than raw ids", async () => {
+test("ask_user tool summary uses option labels rather than raw ids", async () => {
   const tools = new Map<string, { execute: Function }>();
-  registerPiAskTools({ registerTool: (config) => tools.set(config.name, config) });
+  registerSparkAskTools({ registerTool: (config) => tools.set(config.name, config) });
   const tool = tools.get("ask_user");
   assert.ok(tool);
 
@@ -891,7 +891,7 @@ void test("ask_user tool summary uses option labels rather than raw ids", async 
   assert.doesNotMatch(text, /safe_mode/);
 });
 
-void test("ask_user uses protocol interaction before legacy select UI", async () => {
+test("ask_user uses protocol interaction before legacy select UI", async () => {
   let selectInvoked = false;
   let sawRequest: unknown;
   const result = await askUser(
@@ -935,7 +935,7 @@ void test("ask_user uses protocol interaction before legacy select UI", async ()
   assert.equal(result.nextAction, "resume");
 });
 
-void test("ask_user falls back to legacy UI when protocol interaction is blocked", async () => {
+test("ask_user falls back to legacy UI when protocol interaction is blocked", async () => {
   const result = await askUser(
     createAskUserRequest({
       title: "Choose mode",
@@ -966,7 +966,7 @@ void test("ask_user falls back to legacy UI when protocol interaction is blocked
   assert.deepEqual(result.answers.mode, { values: ["safe_mode"], labels: ["Safe path"] });
 });
 
-void test("ask_user preserves protocol cancellation as a blocking result", async () => {
+test("ask_user preserves protocol cancellation as a blocking result", async () => {
   const result = await askUser(
     createAskUserRequest({
       title: "Choose mode",
@@ -1000,13 +1000,13 @@ void test("ask_user preserves protocol cancellation as a blocking result", async
   assert.deepEqual(result.answers, {});
 });
 
-void test("ask action tool dispatches canonical single-question asks", async () => {
+test("ask action tool dispatches canonical single-question asks", async () => {
   const tools = new Map<string, { execute: Function }>();
   const registerTool = (config: { name: string; execute: Function }) =>
     tools.set(config.name, config);
-  registerPiAskTools({ registerTool });
-  registerPiAskFlowTool({ registerTool });
-  registerPiAskActionTool({ registerTool }, { resolveTool: (name) => tools.get(name) as never });
+  registerSparkAskTools({ registerTool });
+  registerSparkAskFlowTool({ registerTool });
+  registerSparkAskActionTool({ registerTool }, { resolveTool: (name) => tools.get(name) as never });
   const tool = tools.get("ask");
   assert.ok(tool);
 
@@ -1038,15 +1038,18 @@ void test("ask action tool dispatches canonical single-question asks", async () 
   assert.equal(result.details.request.questions.length, 1);
 });
 
-void test("ask action tool can persist a user-answered decision artifact", async () => {
+test("ask action tool can persist a user-answered decision artifact", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-evidence-"));
   try {
     const tools = new Map<string, { execute: Function }>();
     const registerTool = (config: { name: string; execute: Function }) =>
       tools.set(config.name, config);
-    registerPiAskTools({ registerTool });
-    registerPiAskFlowTool({ registerTool });
-    registerPiAskActionTool({ registerTool }, { resolveTool: (name) => tools.get(name) as never });
+    registerSparkAskTools({ registerTool });
+    registerSparkAskFlowTool({ registerTool });
+    registerSparkAskActionTool(
+      { registerTool },
+      { resolveTool: (name) => tools.get(name) as never },
+    );
     const tool = tools.get("ask");
     assert.ok(tool);
 
@@ -1100,13 +1103,13 @@ void test("ask action tool can persist a user-answered decision artifact", async
   }
 });
 
-void test("ask action tool rejects non-terminal evidence recording combinations", async () => {
+test("ask action tool rejects non-terminal evidence recording combinations", async () => {
   const tools = new Map<string, { execute: Function }>();
   const registerTool = (config: { name: string; execute: Function }) =>
     tools.set(config.name, config);
-  registerPiAskTools({ registerTool });
-  registerPiAskFlowTool({ registerTool });
-  registerPiAskActionTool({ registerTool }, { resolveTool: (name) => tools.get(name) as never });
+  registerSparkAskTools({ registerTool });
+  registerSparkAskFlowTool({ registerTool });
+  registerSparkAskActionTool({ registerTool }, { resolveTool: (name) => tools.get(name) as never });
   const tool = tools.get("ask");
   assert.ok(tool);
   const request = {
@@ -1145,14 +1148,17 @@ void test("ask action tool rejects non-terminal evidence recording combinations"
   );
 });
 
-void test("ask evidence timeout returns a blocker without minting a decision artifact", async () => {
+test("ask evidence timeout returns a blocker without minting a decision artifact", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-evidence-timeout-"));
   try {
     const tools = new Map<string, { execute: Function }>();
     const registerTool = (config: { name: string; execute: Function }) =>
       tools.set(config.name, config);
-    registerPiAskTools({ registerTool });
-    registerPiAskActionTool({ registerTool }, { resolveTool: (name) => tools.get(name) as never });
+    registerSparkAskTools({ registerTool });
+    registerSparkAskActionTool(
+      { registerTool },
+      { resolveTool: (name) => tools.get(name) as never },
+    );
     const tool = tools.get("ask");
     assert.ok(tool);
 
@@ -1199,13 +1205,13 @@ void test("ask evidence timeout returns a blocker without minting a decision art
   }
 });
 
-void test("ask action tool returns a human answer before reviewer fallback", async () => {
+test("ask action tool returns a human answer before reviewer fallback", async () => {
   const tools = new Map<string, { execute: Function }>();
   const registerTool = (config: { name: string; execute: Function }) =>
     tools.set(config.name, config);
-  registerPiAskTools({ registerTool });
-  registerPiAskFlowTool({ registerTool });
-  registerPiAskActionTool(
+  registerSparkAskTools({ registerTool });
+  registerSparkAskFlowTool({ registerTool });
+  registerSparkAskActionTool(
     { registerTool },
     {
       resolveTool: (name) => tools.get(name) as never,
@@ -1271,13 +1277,13 @@ void test("ask action tool returns a human answer before reviewer fallback", asy
   );
 });
 
-void test("ask action tool does not treat an explicit user cancel as reviewer timeout", async () => {
+test("ask action tool does not treat an explicit user cancel as reviewer timeout", async () => {
   const tools = new Map<string, { execute: Function }>();
   const registerTool = (config: { name: string; execute: Function }) =>
     tools.set(config.name, config);
-  registerPiAskTools({ registerTool });
+  registerSparkAskTools({ registerTool });
   let reviewerCalls = 0;
-  registerPiAskActionTool(
+  registerSparkAskActionTool(
     { registerTool },
     {
       resolveTool: (name) => tools.get(name) as never,
@@ -1329,12 +1335,12 @@ void test("ask action tool does not treat an explicit user cancel as reviewer ti
   assert.notEqual(result.details.autoAnswered, true);
 });
 
-void test("ask action tool lets reviewer take over only after the human wait times out", async () => {
+test("ask action tool lets reviewer take over only after the human wait times out", async () => {
   const tools = new Map<string, { execute: Function }>();
   const registerTool = (config: { name: string; execute: Function }) =>
     tools.set(config.name, config);
-  registerPiAskTools({ registerTool });
-  registerPiAskActionTool(
+  registerSparkAskTools({ registerTool });
+  registerSparkAskActionTool(
     { registerTool },
     {
       resolveTool: (name) => tools.get(name) as never,
@@ -1393,12 +1399,12 @@ void test("ask action tool lets reviewer take over only after the human wait tim
   assert.deepEqual(result.details.result.answers.mode.values, ["safe_mode"]);
 });
 
-void test("ask action tool reports missing reviewer resolver as a tool error with guidance", async () => {
+test("ask action tool reports missing reviewer resolver as a tool error with guidance", async () => {
   const tools = new Map<string, { execute: Function }>();
   const registerTool = (config: { name: string; execute: Function }) =>
     tools.set(config.name, config);
-  registerPiAskTools({ registerTool });
-  registerPiAskActionTool({ registerTool }, { resolveTool: (name) => tools.get(name) as never });
+  registerSparkAskTools({ registerTool });
+  registerSparkAskActionTool({ registerTool }, { resolveTool: (name) => tools.get(name) as never });
   const tool = tools.get("ask");
   assert.ok(tool);
 
@@ -1434,12 +1440,12 @@ void test("ask action tool reports missing reviewer resolver as a tool error wit
   assert.match(result.content.map((part: { text: string }) => part.text).join("\n"), /blocked/i);
 });
 
-void test("ask action tool blocks empty reviewer answers for required questions", async () => {
+test("ask action tool blocks empty reviewer answers for required questions", async () => {
   const tools = new Map<string, { execute: Function }>();
   const registerTool = (config: { name: string; execute: Function }) =>
     tools.set(config.name, config);
-  registerPiAskTools({ registerTool });
-  registerPiAskActionTool(
+  registerSparkAskTools({ registerTool });
+  registerSparkAskActionTool(
     { registerTool },
     {
       resolveTool: (name) => tools.get(name) as never,
@@ -1476,16 +1482,16 @@ void test("ask action tool blocks empty reviewer answers for required questions"
   assert.match(result.details.reason, /required question mode/);
 });
 
-void test("ask action tool can auto-answer through a registered provider", async () => {
+test("ask action tool can auto-answer through a registered provider", async () => {
   const tools = new Map<string, { execute: Function }>();
   const registerTool = (config: { name: string; execute: Function }) =>
     tools.set(config.name, config);
-  registerPiAskTools({ registerTool });
-  registerPiAskFlowTool({ registerTool });
-  registerPiAskActionTool({ registerTool }, { resolveTool: (name) => tools.get(name) as never });
+  registerSparkAskTools({ registerTool });
+  registerSparkAskFlowTool({ registerTool });
+  registerSparkAskActionTool({ registerTool }, { resolveTool: (name) => tools.get(name) as never });
   const tool = tools.get("ask");
   assert.ok(tool);
-  const unregister = registerPiAskAutoAnswerProvider("test-provider", async () => ({
+  const unregister = registerSparkAskAutoAnswerProvider("test-provider", async () => ({
     reason: "provider selected the safe path",
     answers: { mode: { values: ["safe_mode"] } },
   }));
@@ -1539,12 +1545,12 @@ void test("ask action tool can auto-answer through a registered provider", async
   }
 });
 
-void test("ask action tool blocks invalid reviewer auto-answer output", async () => {
+test("ask action tool blocks invalid reviewer auto-answer output", async () => {
   const tools = new Map<string, { execute: Function }>();
   const registerTool = (config: { name: string; execute: Function }) =>
     tools.set(config.name, config);
-  registerPiAskTools({ registerTool });
-  registerPiAskActionTool(
+  registerSparkAskTools({ registerTool });
+  registerSparkAskActionTool(
     { registerTool },
     {
       resolveTool: (name) => tools.get(name) as never,
@@ -1587,9 +1593,9 @@ void test("ask action tool blocks invalid reviewer auto-answer output", async ()
   assert.match(result.content.map((part: { text: string }) => part.text).join("\n"), /blocked/i);
 });
 
-void test("ask_flow fullscreen requires explicit cwd for persisted payloads", async () => {
+test("ask_flow fullscreen requires explicit cwd for persisted payloads", async () => {
   const tools = new Map<string, { execute: Function }>();
-  registerPiAskFlowTool({ registerTool: (config) => tools.set(config.name, config) });
+  registerSparkAskFlowTool({ registerTool: (config) => tools.set(config.name, config) });
   const tool = tools.get("ask_flow");
   assert.ok(tool);
 
@@ -1620,11 +1626,11 @@ void test("ask_flow fullscreen requires explicit cwd for persisted payloads", as
   );
 });
 
-void test("ask_flow fullscreen passes a custom UI factory to Pi host", async () => {
+test("ask_flow fullscreen passes a custom UI factory to Pi host", async () => {
   const dir = await mkdtemp(join(tmpdir(), "ask-flow-custom-factory-"));
   try {
     const tools = new Map<string, { execute: Function }>();
-    registerPiAskFlowTool({ registerTool: (config) => tools.set(config.name, config) });
+    registerSparkAskFlowTool({ registerTool: (config) => tools.set(config.name, config) });
     const tool = tools.get("ask_flow");
     assert.ok(tool);
 
@@ -1683,11 +1689,11 @@ void test("ask_flow fullscreen passes a custom UI factory to Pi host", async () 
   }
 });
 
-void test("ask_flow fullscreen catches custom UI failures and returns a blocking fallback", async () => {
+test("ask_flow fullscreen catches custom UI failures and returns a blocking fallback", async () => {
   const dir = await mkdtemp(join(tmpdir(), "ask-flow-custom-fallback-"));
   try {
     const tools = new Map<string, { execute: Function }>();
-    registerPiAskFlowTool({ registerTool: (config) => tools.set(config.name, config) });
+    registerSparkAskFlowTool({ registerTool: (config) => tools.set(config.name, config) });
     const tool = tools.get("ask_flow");
     assert.ok(tool);
 
@@ -1731,8 +1737,8 @@ void test("ask_flow fullscreen catches custom UI failures and returns a blocking
   }
 });
 
-void test("ask_user and ask_flow share UX result matrix semantics", async () => {
-  type MatrixUi = Pick<PiAskUi, "select" | "input">;
+test("ask_user and ask_flow share UX result matrix semantics", async () => {
+  type MatrixUi = Pick<SparkAskUi, "select" | "input">;
   const cases: Array<{
     name: string;
     mode: "clarification" | "decision";
@@ -1822,7 +1828,7 @@ void test("ask_user and ask_flow share UX result matrix semantics", async () => 
     };
 
     const askUserResult = await askUser(askUserRequest, matrixCase.ui);
-    const flowResult = await runPiAskFlow(flowRequest, matrixCase.ui);
+    const flowResult = await runSparkAskFlow(flowRequest, matrixCase.ui);
     assert.equal(askUserResult.status, matrixCase.expected.status, matrixCase.name);
     assert.equal(flowResult.status, matrixCase.expected.status, matrixCase.name);
     assert.equal(askUserResult.nextAction, matrixCase.expected.nextAction, matrixCase.name);
@@ -1834,7 +1840,7 @@ void test("ask_user and ask_flow share UX result matrix semantics", async () => 
   }
 });
 
-void test("ask_user and ask_flow share option/custom parsing semantics", async () => {
+test("ask_user and ask_flow share option/custom parsing semantics", async () => {
   const options = [
     { value: "docs", label: "Docs" },
     { value: "tests", label: "Tests" },
@@ -1854,7 +1860,7 @@ void test("ask_user and ask_flow share option/custom parsing semantics", async (
     }),
     { select: async () => "Docs, Research" },
   );
-  const flowResult = await runPiAskFlow(
+  const flowResult = await runSparkAskFlow(
     {
       flow: "comparison",
       mode: "clarification",
@@ -1880,7 +1886,7 @@ void test("ask_user and ask_flow share option/custom parsing semantics", async (
   });
 });
 
-void test("ask_user supports single option selection", async () => {
+test("ask_user supports single option selection", async () => {
   const request = createAskUserRequest({
     title: "Choose mode",
     mode: "clarification",
@@ -1901,7 +1907,7 @@ void test("ask_user supports single option selection", async () => {
   assert.deepEqual(result.answers.mode, { values: ["safe"], labels: ["Safe"] });
 });
 
-void test("ask_user supports multi option and custom selections", async () => {
+test("ask_user supports multi option and custom selections", async () => {
   const request = createAskUserRequest({
     title: "Choose workstreams",
     mode: "clarification",
@@ -1926,7 +1932,7 @@ void test("ask_user supports multi option and custom selections", async () => {
   });
 });
 
-void test("ask_user supports freeform questions as custom text answers", async () => {
+test("ask_user supports freeform questions as custom text answers", async () => {
   const request = createAskUserRequest({
     title: "Describe goal",
     mode: "clarification",
@@ -1948,7 +1954,7 @@ void test("ask_user supports freeform questions as custom text answers", async (
   });
 });
 
-void test("ask_user required approval gates expose no-selection as blocking envelopes", async () => {
+test("ask_user required approval gates expose no-selection as blocking envelopes", async () => {
   const request = createAskUserRequest({
     title: "Ship it?",
     mode: "approval",
@@ -1978,7 +1984,7 @@ void test("ask_user required approval gates expose no-selection as blocking enve
   assert.equal(noSelection.nextAction, "block");
 });
 
-void test("ask_user approval gates preserve unmatched custom text as answered but blocked", async () => {
+test("ask_user approval gates preserve unmatched custom text as answered but blocked", async () => {
   const request = createAskUserRequest({
     title: "Ship it?",
     mode: "approval",
@@ -2005,7 +2011,7 @@ void test("ask_user approval gates preserve unmatched custom text as answered bu
   });
 });
 
-void test("ask_user returns cancelled envelope without resuming", () => {
+test("ask_user returns cancelled envelope without resuming", () => {
   const cancelled = createAskUserResult({ cancelled: true, answers: {} });
   assert.equal(cancelled.status, "cancelled");
   assert.equal(cancelled.cancelled, true);

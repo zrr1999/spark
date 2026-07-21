@@ -19,7 +19,7 @@ import {
   type RunRef,
   type Task,
   type TaskRef,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 
 export type ReviewTargetKind = "task" | "goal" | "tool_approval";
 export type ReviewVerdictOutcome = "approved" | "needs_changes" | "blocked";
@@ -251,7 +251,7 @@ export interface ReviewerRunner {
   answerAsk?(input: AskAutoAnswerInput, signal?: AbortSignal): Promise<AskAutoAnswerResult>;
 }
 
-export interface PiRolesReviewerRunnerOptions {
+export interface SparkRolesReviewerRunnerOptions {
   registry: RoleRegistry;
   cwd: string;
   timeoutMs?: number;
@@ -324,7 +324,7 @@ const ASK_AUTO_ANSWER_JSON_SCHEMA = [
   "If the packet is ambiguous or evidence is insufficient, set blocked=true and explain reason instead of omitting answers.",
 ].join("\n");
 
-export class PiRolesReviewerRunner implements ReviewerRunner {
+export class SparkRolesReviewerRunner implements ReviewerRunner {
   readonly #registry: RoleRegistry;
   readonly #cwd: string;
   readonly #timeoutMs: number;
@@ -340,7 +340,7 @@ export class PiRolesReviewerRunner implements ReviewerRunner {
   readonly #maxRetries: number;
   readonly #retryBaseDelayMs: number;
 
-  constructor(options: PiRolesReviewerRunnerOptions) {
+  constructor(options: SparkRolesReviewerRunnerOptions) {
     this.#registry = options.registry;
     this.#cwd = options.cwd;
     this.#timeoutMs = options.timeoutMs ?? reviewerTimeoutMsFromEnv(process.env);

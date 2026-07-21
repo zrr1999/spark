@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { SparkKeybindings, SparkHostRuntime } from "../apps/spark-tui/src/host/index.ts";
 
-void test("SparkKeybindings exposes the default binding table snapshot", () => {
+test("SparkKeybindings exposes the default binding table snapshot", () => {
   const kb = new SparkKeybindings();
   const snapshot = kb.snapshot();
   const ids = snapshot.bindings.map((row) => row.id).sort();
@@ -26,14 +26,14 @@ void test("SparkKeybindings exposes the default binding table snapshot", () => {
   }
 });
 
-void test("SparkKeybindings keyFor returns user override when present, else default", () => {
+test("SparkKeybindings keyFor returns user override when present, else default", () => {
   const kb = new SparkKeybindings({ overrides: { "app.modelPicker": "ctrl+m" } });
   assert.equal(kb.keyFor("app.modelPicker"), "ctrl+m");
   assert.equal(kb.keyFor("app.thinking.cycle"), "shift+tab");
   assert.equal(kb.keyFor("app.exit"), "ctrl+c");
 });
 
-void test("SparkKeybindings executeKey runs the handler bound to a key", async () => {
+test("SparkKeybindings executeKey runs the handler bound to a key", async () => {
   const calls: string[] = [];
   const kb = new SparkKeybindings({
     defaults: [
@@ -53,7 +53,7 @@ void test("SparkKeybindings executeKey runs the handler bound to a key", async (
   assert.equal(missed, false);
 });
 
-void test("SparkKeybindings most-recent registration wins on the same key (Spark mode override)", async () => {
+test("SparkKeybindings most-recent registration wins on the same key (Spark mode override)", async () => {
   const calls: string[] = [];
   const kb = new SparkKeybindings({
     defaults: [
@@ -83,7 +83,7 @@ void test("SparkKeybindings most-recent registration wins on the same key (Spark
   assert.deepEqual(calls, ["spark", "thinking"], "thinking.cycle takes over when spark inactive");
 });
 
-void test("SparkKeybindings setOverride updates keyFor without re-registering", () => {
+test("SparkKeybindings setOverride updates keyFor without re-registering", () => {
   const kb = new SparkKeybindings();
   assert.equal(kb.keyFor("app.exit"), "ctrl+c");
   kb.setOverride("app.exit", "ctrl+q");
@@ -92,7 +92,7 @@ void test("SparkKeybindings setOverride updates keyFor without re-registering", 
   assert.equal(kb.keyFor("app.exit"), "ctrl+c");
 });
 
-void test("SparkKeybindings load/save round-trip uses ~/.spark/agent/keybindings.json layout", async () => {
+test("SparkKeybindings load/save round-trip uses ~/.spark/agent/keybindings.json layout", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-keybindings-"));
   try {
     const path = join(dir, "keybindings.json");
@@ -112,7 +112,7 @@ void test("SparkKeybindings load/save round-trip uses ~/.spark/agent/keybindings
   }
 });
 
-void test("SparkKeybindings loadFromDisk silently ignores missing files", async () => {
+test("SparkKeybindings loadFromDisk silently ignores missing files", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-keybindings-missing-"));
   try {
     const path = join(dir, "absent.json");
@@ -124,7 +124,7 @@ void test("SparkKeybindings loadFromDisk silently ignores missing files", async 
   }
 });
 
-void test("SparkHostRuntime.executeKey forwards to the embedded keybindings registry", async () => {
+test("SparkHostRuntime.executeKey forwards to the embedded keybindings registry", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-keybindings-host" });
   let invocations = 0;
   host.getKeybindings().register({
@@ -138,7 +138,7 @@ void test("SparkHostRuntime.executeKey forwards to the embedded keybindings regi
   assert.equal(invocations, 1);
 });
 
-void test("SparkHostRuntime.registerShortcut wires extensions into the keybindings registry", async () => {
+test("SparkHostRuntime.registerShortcut wires extensions into the keybindings registry", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-keybindings-host" });
   let toggled = 0;
   host.registerShortcut("ctrl+shift+p", {
@@ -150,7 +150,7 @@ void test("SparkHostRuntime.registerShortcut wires extensions into the keybindin
   assert.equal(toggled, 1);
 });
 
-void test("SparkHostRuntime.registerShortcut respects isActive gate", async () => {
+test("SparkHostRuntime.registerShortcut respects isActive gate", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-keybindings-host" });
   let active = false;
   let invoked = 0;

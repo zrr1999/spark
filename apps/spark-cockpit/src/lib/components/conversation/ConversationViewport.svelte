@@ -8,11 +8,16 @@
     captureConversationPrependAnchor,
     restoreConversationPrependAnchor,
   } from "./conversation-scroll-anchor";
+  import type { LoadEarlierOutcome } from "./types";
 
   const LOAD_EARLIER_THRESHOLD = 96;
   const MIN_TURN_RAIL_ITEMS = 6;
   const TURN_RAIL_INSET = 12;
   const TURN_RAIL_MARKER_GAP = 10;
+  /** Soft cooldown after a transient miss (busy / race) before scroll retries. */
+  const EARLIER_RETRY_COOLDOWN_MS = 800;
+  /** Longer cooldown after a hard fetch failure. */
+  const EARLIER_ERROR_COOLDOWN_MS = 2_000;
 
   type Props = {
     label: string;
@@ -20,9 +25,7 @@
     announcement?: string;
     jumpToLatestLabel: string;
     hasEarlier?: boolean;
-    earlierLabel?: string;
-    earlierErrorLabel?: string;
-    onLoadEarlier?: () => Promise<boolean>;
+    onLoadEarlier?: () => Promise<LoadEarlierOutcome>;
     navigationItems?: readonly ConversationTurnRailItem[];
     children?: Snippet;
     empty?: Snippet;
@@ -34,8 +37,6 @@
     announcement = "",
     jumpToLatestLabel,
     hasEarlier = false,
-    earlierLabel = "",
-    earlierErrorLabel = "",
     onLoadEarlier,
     navigationItems = [],
     children,
@@ -46,7 +47,7 @@
   let content: HTMLDivElement | null = $state(null);
   let atBottom = $state(true);
   let loadingEarlier = $state(false);
-  let earlierFailed = $state(false);
+  let retryAfterMs = $state(0);
   let suspendFollow = $state(false);
   let initialScrollComplete = $state(false);
   let followAnimationFrame: number | undefined;
@@ -56,7 +57,7 @@
   let showNavigationRail = $derived(navigationItems.length >= MIN_TURN_RAIL_ITEMS);
 
   $effect(() => {
-    if (!hasEarlier) earlierFailed = false;
+    if (!hasEarlier) retryAfterMs = 0;
   });
 
   $effect(() => {
@@ -95,7 +96,7 @@
 
   $effect(() => {
     const element = viewport;
-    if (!element || !initialScrollComplete || !hasEarlier || earlierFailed) return;
+    if (!element || !initialScrollComplete || !hasEarlier) return;
     void tick().then(() => {
       if (viewport === element && element.scrollTop <= LOAD_EARLIER_THRESHOLD) {
         void loadEarlier();
@@ -107,41 +108,52 @@
     if (!viewport) return;
     atBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 56;
     scheduleNavigationUpdate();
-    if (
-      initialScrollComplete &&
-      !earlierFailed &&
-      viewport.scrollTop <= LOAD_EARLIER_THRESHOLD
-    ) {
+    if (initialScrollComplete && viewport.scrollTop <= LOAD_EARLIER_THRESHOLD) {
       void loadEarlier();
     }
   }
 
-  async function loadEarlier(force = false) {
+  async function loadEarlier() {
     const element = viewport;
     if (!element || !hasEarlier || !onLoadEarlier || loadingEarlier) return;
-    if (!force && earlierFailed) return;
-    if (!force && element.scrollTop > LOAD_EARLIER_THRESHOLD) return;
+    if (Date.now() < retryAfterMs) return;
+    if (element.scrollTop > LOAD_EARLIER_THRESHOLD) return;
 
     const anchor = captureConversationPrependAnchor(element);
     let continueFillingViewport = false;
     loadingEarlier = true;
-    earlierFailed = false;
     suspendFollow = true;
     cancelScheduledFollow();
     try {
-      const loaded = await onLoadEarlier();
+      const outcome = await onLoadEarlier();
       await tick();
       if (viewport !== element) return;
-      if (loaded) {
-        restoreConversationPrependAnchor(element, anchor);
-        scheduleNavigationUpdate();
-        continueFillingViewport =
-          hasEarlier && element.scrollHeight <= element.clientHeight + LOAD_EARLIER_THRESHOLD;
-      } else {
-        earlierFailed = true;
+      switch (outcome) {
+        case "loaded":
+          restoreConversationPrependAnchor(element, anchor);
+          scheduleNavigationUpdate();
+          retryAfterMs = 0;
+          continueFillingViewport =
+            hasEarlier && element.scrollHeight <= element.clientHeight + LOAD_EARLIER_THRESHOLD;
+          break;
+        case "busy":
+          retryAfterMs = Date.now() + EARLIER_RETRY_COOLDOWN_MS;
+          break;
+        case "exhausted":
+          retryAfterMs = 0;
+          break;
+        case "error":
+          retryAfterMs = Date.now() + EARLIER_ERROR_COOLDOWN_MS;
+          break;
+        default: {
+          const _exhaustive: never = outcome;
+          void _exhaustive;
+          retryAfterMs = Date.now() + EARLIER_ERROR_COOLDOWN_MS;
+          break;
+        }
       }
     } catch {
-      earlierFailed = true;
+      retryAfterMs = Date.now() + EARLIER_ERROR_COOLDOWN_MS;
     } finally {
       if (viewport === element) {
         atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 56;
@@ -193,7 +205,7 @@
   }
 
   function cancelScheduledNavigationUpdate() {
-    if (navigationAnimationFrame === undefined) return;
+    if (navigationAnimationFrame !== undefined) return;
     cancelAnimationFrame(navigationAnimationFrame);
     navigationAnimationFrame = undefined;
   }
@@ -274,23 +286,9 @@
     onwheel={(event) => event.deltaY < 0 && updateScrollState()}
   >
     {#if children}
-      <div class="conversation-content" bind:this={content}>
-        {#if earlierFailed && hasEarlier && onLoadEarlier}
-          <div
-            class="history-fallback"
-            aria-busy={loadingEarlier}
-          >
-            <button
-              type="button"
-              disabled={loadingEarlier}
-              onclick={() => void loadEarlier(true)}
-            >
-              {earlierLabel}
-            </button>
-            {#if earlierErrorLabel}
-              <p role="alert">{earlierErrorLabel}</p>
-            {/if}
-          </div>
+      <div class="conversation-content" bind:this={content} aria-busy={loadingEarlier}>
+        {#if loadingEarlier && hasEarlier}
+          <div class="history-loading" aria-hidden="true"></div>
         {/if}
         {@render children()}
       </div>
@@ -346,48 +344,18 @@
     gap: 22px;
   }
 
-  .history-fallback {
-    align-items: center;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    justify-self: center;
-    margin: 0;
-  }
-
-  .history-fallback button {
-    background: var(--color-surface-soft);
-    border: 1px solid var(--color-border);
-    border-radius: var(--rounded-full);
-    color: var(--color-ink-muted);
-    cursor: pointer;
-    font: inherit;
-    font-size: 12px;
-    font-weight: 600;
-    min-height: 36px;
-    padding: 0 14px;
-  }
-
-  .history-fallback button:hover {
-    border-color: var(--color-primary-soft);
-    color: var(--color-primary);
-  }
-
-  .history-fallback button:disabled {
-    cursor: wait;
-    opacity: 0.6;
-  }
-
-  .history-fallback button:focus-visible {
-    box-shadow: var(--shadow-focus);
-    outline: none;
-  }
-
-  .history-fallback p {
-    color: var(--color-danger);
-    font-size: 12px;
-    margin: 0;
-    text-align: center;
+  .history-loading {
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--color-border-soft) 80%, transparent),
+      transparent
+    );
+    border-radius: 999px;
+    height: 2px;
+    justify-self: stretch;
+    margin: 0 0 4px;
+    opacity: 0.7;
   }
 
   .jump-latest {

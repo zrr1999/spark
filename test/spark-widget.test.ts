@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { visibleWidth } from "@zendev-lab/spark-tui/text";
 import { defaultTaskGraphStore, TaskGraph } from "@zendev-lab/spark-tasks";
@@ -66,7 +66,7 @@ function assertLineIncludes(line: string | undefined, fragments: string[]): void
   }
 }
 
-void test("SparkWidget registers, invalidates renders, clears hidden state, and disposes", () => {
+test("SparkWidget registers, invalidates renders, clears hidden state, and disposes", () => {
   let state = widgetState({
     projects: [
       {
@@ -148,7 +148,7 @@ void test("SparkWidget registers, invalidates renders, clears hidden state, and 
   assert.equal(registrations.length, 4);
 });
 
-void test("spark widget hides deleted task plan items but keeps done task plan items visible", () => {
+test("spark widget hides deleted task plan items but keeps done task plan items visible", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       tasks: [
@@ -175,7 +175,7 @@ void test("spark widget hides deleted task plan items but keeps done task plan i
   assert.doesNotMatch(lines, /Deleted child TODO/);
 });
 
-void test("spark widget shows compact workflow-run progress above project details", () => {
+test("spark widget shows compact workflow-run progress above project details", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       workflowRun: {
@@ -198,7 +198,7 @@ void test("spark widget shows compact workflow-run progress above project detail
   assertLineIncludes(lines[1], ["Background work:", "1/3", "running", "run:abc"]);
 });
 
-void test("spark widget keeps goal/project summary free of static evidence review hints", () => {
+test("spark widget keeps goal/project summary free of static evidence review hints", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       goal: { status: "active", objective: "replace pi from zellij" },
@@ -233,7 +233,7 @@ void test("spark widget keeps goal/project summary free of static evidence revie
   assert.ok(summaryLineCount <= 5, `summaryLineCount=${summaryLineCount}\n${rendered}`);
 });
 
-void test("spark widget shows active dynamic workflow snapshot progress", () => {
+test("spark widget shows active dynamic workflow snapshot progress", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       dynamicWorkflowRun: {
@@ -262,7 +262,7 @@ void test("spark widget shows active dynamic workflow snapshot progress", () => 
   ]);
 });
 
-void test("spark widget shows undelivered dynamic workflow result inbox entry", () => {
+test("spark widget shows undelivered dynamic workflow result inbox entry", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       dynamicWorkflowRun: {
@@ -288,7 +288,7 @@ void test("spark widget shows undelivered dynamic workflow result inbox entry", 
   ]);
 });
 
-void test("spark widget suppresses duplicate background row when session agent is shown", () => {
+test("spark widget suppresses duplicate background row when session agent is shown", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       workflowRun: {
@@ -321,7 +321,7 @@ void test("spark widget suppresses duplicate background row when session agent i
   assert.doesNotMatch(lines.join("\n"), /Background work/);
 });
 
-void test("spark widget hides terminal workflow-run history", () => {
+test("spark widget hides terminal workflow-run history", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       workflowRun: {
@@ -338,7 +338,7 @@ void test("spark widget hides terminal workflow-run history", () => {
   assert.deepEqual(lines, []);
 });
 
-void test("spark widget requires an active running workflow-run for background progress", () => {
+test("spark widget requires an active running workflow-run for background progress", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       workflowRun: {
@@ -355,7 +355,7 @@ void test("spark widget requires an active running workflow-run for background p
   assert.deepEqual(lines, []);
 });
 
-void test("spark widget shows session goal before project task state", () => {
+test("spark widget shows session goal before project task state", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       goal: {
@@ -381,7 +381,7 @@ void test("spark widget shows session goal before project task state", () => {
   assert.doesNotMatch(lines[1] ?? "", /Goal\(●\):/);
 });
 
-void test("spark widget pulses active session goal symbol", () => {
+test("spark widget pulses active session goal symbol", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       goal: {
@@ -397,7 +397,7 @@ void test("spark widget pulses active session goal symbol", () => {
   assert.match(lines[0] ?? "", /◆ Goal\(◉\): Keep working toward the session goal/);
 });
 
-void test("spark widget shows session goal label when no project target", () => {
+test("spark widget shows session goal label when no project target", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       goal: {
@@ -412,7 +412,7 @@ void test("spark widget shows session goal label when no project target", () => 
   assert.match(lines[0] ?? "", /◆ Goal\(●\): Finish the selected project goal/);
 });
 
-void test("spark widget renders active loop progress in the foreground slot", () => {
+test("spark widget renders active loop progress in the foreground slot", () => {
   const active = renderSparkWidgetLines(
     widgetState({
       loop: {
@@ -443,7 +443,7 @@ void test("spark widget renders active loop progress in the foreground slot", ()
   assert.match(scheduled[0] ?? "", /◆ Loop\(▰▰▰▰▰ 30m\): Echo periodically/);
 });
 
-void test("spark widget renders active repro drive in the foreground slot above goal and loop", () => {
+test("spark widget renders active repro drive in the foreground slot above goal and loop", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       repro: {
@@ -474,7 +474,7 @@ void test("spark widget renders active repro drive in the foreground slot above 
   assert.doesNotMatch(lines.join("\n"), /Should also be hidden/);
 });
 
-void test("spark widget controller lets active loop use the foreground slot instead of a completed goal", async () => {
+test("spark widget controller lets active loop use the foreground slot instead of a completed goal", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-widget-loop-completed-goal-"));
   try {
     await setSessionGoal(dir, undefined, {
@@ -510,7 +510,7 @@ void test("spark widget controller lets active loop use the foreground slot inst
   }
 });
 
-void test("spark widget controller clears legacy paused loop state instead of rendering it", async () => {
+test("spark widget controller clears legacy paused loop state instead of rendering it", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-widget-loop-legacy-paused-"));
   try {
     await setSessionLoop(dir, undefined, {
@@ -536,7 +536,7 @@ void test("spark widget controller clears legacy paused loop state instead of re
   }
 });
 
-void test("spark widget controller renders an active repro drive above goal and loop", async () => {
+test("spark widget controller renders an active repro drive above goal and loop", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-widget-repro-drive-"));
   try {
     await setSessionGoal(dir, undefined, {
@@ -573,7 +573,7 @@ void test("spark widget controller renders an active repro drive above goal and 
   }
 });
 
-void test("spark widget controller projects active dynamic workflow snapshots", async () => {
+test("spark widget controller projects active dynamic workflow snapshots", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-widget-dynamic-workflow-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -623,7 +623,7 @@ void test("spark widget controller projects active dynamic workflow snapshots", 
   }
 });
 
-void test("spark widget controller projects undelivered dynamic workflow results", async () => {
+test("spark widget controller projects undelivered dynamic workflow results", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-widget-dynamic-workflow-result-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -685,7 +685,7 @@ void test("spark widget controller projects undelivered dynamic workflow results
   }
 });
 
-void test("spark widget controller hides unclaimed task plan items before rendering", async () => {
+test("spark widget controller hides unclaimed task plan items before rendering", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-widget-claim-gated-controller-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -739,7 +739,7 @@ void test("spark widget controller hides unclaimed task plan items before render
   }
 });
 
-void test("spark widget shows project overview rows when no current project is selected", () => {
+test("spark widget shows project overview rows when no current project is selected", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       projectTitle: undefined,
@@ -769,7 +769,7 @@ void test("spark widget shows project overview rows when no current project is s
   assert.doesNotMatch(text, /Empty project/);
 });
 
-void test("spark widget controller registers project overview without a selected current project", async () => {
+test("spark widget controller registers project overview without a selected current project", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-widget-project-overview-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -805,7 +805,7 @@ void test("spark widget controller registers project overview without a selected
   }
 });
 
-void test("spark widget hides empty project phase placeholders", () => {
+test("spark widget hides empty project phase placeholders", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: "Spark UX redesign",
@@ -823,7 +823,7 @@ void test("spark widget hides empty project phase placeholders", () => {
   assert.deepEqual(lines, []);
 });
 
-void test("spark widget only shows missing plan marker on task rows", () => {
+test("spark widget only shows missing plan marker on task rows", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       tasks: [
@@ -852,7 +852,7 @@ void test("spark widget only shows missing plan marker on task rows", () => {
   assert.doesNotMatch(lines, /missing-success|missing-evidence/);
 });
 
-void test("spark widget hides task plan items until a task is claimed", () => {
+test("spark widget hides task plan items until a task is claimed", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: "Spark UX redesign",
@@ -905,7 +905,7 @@ void test("spark widget hides task plan items until a task is claimed", () => {
   assert.doesNotMatch(lines, /Hidden other-session plan item/);
 });
 
-void test("spark widget shows role/title task rows with nested task plan items", () => {
+test("spark widget shows role/title task rows with nested task plan items", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: "Spark UX redesign",
@@ -939,7 +939,7 @@ void test("spark widget shows role/title task rows with nested task plan items",
   assert.match(text, /#3 Decide project symbol/);
 });
 
-void test("spark widget does not expand plan items for finished tasks", () => {
+test("spark widget does not expand plan items for finished tasks", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: "Spark UX redesign",
@@ -981,7 +981,7 @@ void test("spark widget does not expand plan items for finished tasks", () => {
   assert.doesNotMatch(lines, /Cancelled child TODO/);
 });
 
-void test("spark widget uses stable TODO display numbers instead of sorted row ordinals", () => {
+test("spark widget uses stable TODO display numbers instead of sorted row ordinals", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: "Spark UX redesign",
@@ -1015,7 +1015,7 @@ void test("spark widget uses stable TODO display numbers instead of sorted row o
   assert.ok(lines.indexOf("#9 Active") < lines.indexOf("#4 Pending"));
 });
 
-void test("spark widget animates only current-session role-runs and keeps others static", () => {
+test("spark widget animates only current-session role-runs and keeps others static", () => {
   const animated = renderSparkWidgetLines(
     widgetState({
       tasks: [
@@ -1080,7 +1080,7 @@ void test("spark widget animates only current-session role-runs and keeps others
   assert.match(otherSession, /◼ @reviewer Other session task/);
 });
 
-void test("spark widget distinguishes cancelled, failed, and role labels", () => {
+test("spark widget distinguishes cancelled, failed, and role labels", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: "Spark UX redesign",
@@ -1130,7 +1130,7 @@ void test("spark widget distinguishes cancelled, failed, and role labels", () =>
   assert.match(lines, /◼ @reviewer Other session task/);
 });
 
-void test("spark widget keeps role labels before truncatable task titles", () => {
+test("spark widget keeps role labels before truncatable task titles", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: "Spark UX redesign",
@@ -1159,7 +1159,7 @@ void test("spark widget keeps role labels before truncatable task titles", () =>
   assert.doesNotMatch(lines, /worker-a1b2c3d4/);
 });
 
-void test("spark widget summarizes tasks and current-session in-memory running role-runs in header", () => {
+test("spark widget summarizes tasks and current-session in-memory running role-runs in header", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: "Spark UX redesign",
@@ -1220,7 +1220,7 @@ void test("spark widget summarizes tasks and current-session in-memory running r
   assert.doesNotMatch(header, /Tasks\(|a1b2c3d4|0c5a1efe|2dd9591d|stale-worker/);
 });
 
-void test("spark widget renders phase on the project header", () => {
+test("spark widget renders phase on the project header", () => {
   const planLines = renderSparkWidgetLines(
     widgetState({
       activeLens: { phase: "plan", drive: "assist" },
@@ -1243,7 +1243,7 @@ void test("spark widget renders phase on the project header", () => {
   assert.doesNotMatch(implementLines[0] ?? "", /Lens:/);
 });
 
-void test("spark widget renders declarative project kind panels", () => {
+test("spark widget renders declarative project kind panels", () => {
   const lines = renderSparkWidgetLines(
     widgetState({
       projectKind: {
@@ -1265,7 +1265,7 @@ void test("spark widget renders declarative project kind panels", () => {
   assert.match(lines[2] ?? "", /^◇ \[demo\] Metrics: 1\/2/);
 });
 
-void test("spark widget keeps task summary out of the project header", () => {
+test("spark widget keeps task summary out of the project header", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: "Spark UX redesign",
@@ -1305,7 +1305,7 @@ void test("spark widget keeps task summary out of the project header", () => {
   );
 });
 
-void test("spark widget hides placeholder-only done plan item state", () => {
+test("spark widget hides placeholder-only done plan item state", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: undefined,
@@ -1323,7 +1323,7 @@ void test("spark widget hides placeholder-only done plan item state", () => {
   assert.deepEqual(lines, []);
 });
 
-void test("spark widget renders active session TODOs after project tasks", () => {
+test("spark widget renders active session TODOs after project tasks", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: "Spark UX redesign",
@@ -1356,7 +1356,7 @@ void test("spark widget renders active session TODOs after project tasks", () =>
   assert.ok(text.indexOf("Cancelled task") < text.indexOf("Standalone follow-up"));
 });
 
-void test("spark widget truncates wide rendered rows", () => {
+test("spark widget truncates wide rendered rows", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: "Spark ask 中文宽字符宽度回归测试".repeat(4),
@@ -1391,7 +1391,7 @@ void test("spark widget truncates wide rendered rows", () => {
   }
 });
 
-void test("spark widget collapses overflowing rows", () => {
+test("spark widget collapses overflowing rows", () => {
   const lines = renderSparkWidgetLines(
     {
       projectTitle: "Spark UX redesign",

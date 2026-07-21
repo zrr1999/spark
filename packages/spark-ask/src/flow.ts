@@ -1,21 +1,21 @@
 import type {
   ExtensionInteractionRequest,
   ExtensionInteractionResponse,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import { truncateToWidth } from "@zendev-lab/spark-tui/text";
 import { Type } from "typebox";
 
-import { PiAskFlowController } from "./ui/controller.ts";
-import { PiAskFlowPayloadStore } from "./ask-payload-store.ts";
+import { SparkAskFlowController } from "./ui/controller.ts";
+import { SparkAskFlowPayloadStore } from "./ask-payload-store.ts";
 import type {
-  PiAskFlowAnswerEntry,
-  PiAskFlowQuestion,
-  PiAskFlowRequest,
-  PiAskFlowResult,
+  SparkAskFlowAnswerEntry,
+  SparkAskFlowQuestion,
+  SparkAskFlowRequest,
+  SparkAskFlowResult,
 } from "./schema.ts";
-import { validatePiAskFlowRequest } from "./schema.ts";
+import { validateSparkAskFlowRequest } from "./schema.ts";
 import {
-  createPiAskFlowArtifactBody as createSharedPiAskFlowArtifactBody,
+  createSparkAskFlowArtifactBody as createSharedSparkAskFlowArtifactBody,
   summarizeAskResult,
 } from "./summary.ts";
 import {
@@ -33,7 +33,7 @@ import {
   type SelectWithCustomUi,
 } from "./shared-semantics.ts";
 
-interface PiExtensionAPI {
+interface SparkHostAPI {
   registerTool?(config: {
     name: string;
     label?: string;
@@ -65,7 +65,7 @@ interface PiExtensionAPI {
   ): void;
 }
 
-interface PiAskFlowToolContext {
+interface SparkAskFlowToolContext {
   cwd?: string;
   ui?: {
     custom?: unknown;
@@ -73,30 +73,30 @@ interface PiAskFlowToolContext {
   };
 }
 
-interface PiAskFlowCustomOptions {
+interface SparkAskFlowCustomOptions {
   overlay?: boolean;
   overlayOptions?: unknown;
 }
 
-type PiAskFlowCustomFactory<T = unknown> = (
+type SparkAskFlowCustomFactory<T = unknown> = (
   tui: unknown,
   theme: unknown,
   keybindings: unknown,
   done: (result: T) => void,
 ) => unknown;
 
-export interface PiAskFlowElaborationNote {
+export interface SparkAskFlowElaborationNote {
   questionId: string;
   note: string;
 }
 
-export interface PiAskFlowArtifactBody {
-  request: PiAskFlowRequest;
-  result: PiAskFlowResult;
+export interface SparkAskFlowArtifactBody {
+  request: SparkAskFlowRequest;
+  result: SparkAskFlowResult;
 }
 
-export function createPiAskFlowRequest(input: PiAskFlowRequest): PiAskFlowRequest {
-  const validation = validatePiAskFlowRequest(input);
+export function createSparkAskFlowRequest(input: SparkAskFlowRequest): SparkAskFlowRequest {
+  const validation = validateSparkAskFlowRequest(input);
   if (!validation.valid) {
     throw new Error(
       `invalid ask flow request: ${validation.error}${validation.details ? ` (${validation.details})` : ""}`,
@@ -105,17 +105,20 @@ export function createPiAskFlowRequest(input: PiAskFlowRequest): PiAskFlowReques
   return input;
 }
 
-export async function runPiAskFlow(
-  input: PiAskFlowRequest,
+export async function runSparkAskFlow(
+  input: SparkAskFlowRequest,
   ui?: SelectWithCustomUi,
-): Promise<PiAskFlowResult> {
-  const request = createPiAskFlowRequest(input);
-  const interactionRun = await runPiAskFlowInteraction(request, ui as PiAskFlowToolContext["ui"]);
-  if (interactionRun) return normalizePiAskFlowResult(interactionRun.result, request);
-  if (request.delivery === "async") return createNoSelectionPiAskFlowResult(request, {});
-  if (!ui?.select && !ui?.selectWithCustom && !ui?.input) return defaultPiAskFlowResult(request);
+): Promise<SparkAskFlowResult> {
+  const request = createSparkAskFlowRequest(input);
+  const interactionRun = await runSparkAskFlowInteraction(
+    request,
+    ui as SparkAskFlowToolContext["ui"],
+  );
+  if (interactionRun) return normalizeSparkAskFlowResult(interactionRun.result, request);
+  if (request.delivery === "async") return createNoSelectionSparkAskFlowResult(request, {});
+  if (!ui?.select && !ui?.selectWithCustom && !ui?.input) return defaultSparkAskFlowResult(request);
 
-  const answers: Record<string, PiAskFlowAnswerEntry> = {};
+  const answers: Record<string, SparkAskFlowAnswerEntry> = {};
   for (const question of request.questions ?? []) {
     if (question.type === "freeform") {
       const text = await ui.input?.(question.prompt);
@@ -127,7 +130,7 @@ export async function runPiAskFlow(
           customText: text,
         };
       } else if (requiresExplicitSelection(request, question)) {
-        return createNoSelectionPiAskFlowResult(request, answers);
+        return createNoSelectionSparkAskFlowResult(request, answers);
       }
       continue;
     }
@@ -136,7 +139,7 @@ export async function runPiAskFlow(
       const choice = await selectOptionWithCustom(ui, question.prompt, question.options);
       if (!choice) {
         if (requiresExplicitSelection(request, question)) {
-          return createNoSelectionPiAskFlowResult(request, answers);
+          return createNoSelectionSparkAskFlowResult(request, answers);
         }
         continue;
       }
@@ -146,13 +149,13 @@ export async function runPiAskFlow(
       );
       answers[question.id] = answer;
       if (requiresExplicitSelection(request, question) && !hasAskAnswerContent(answer)) {
-        return createNoSelectionPiAskFlowResult(request, answers);
+        return createNoSelectionSparkAskFlowResult(request, answers);
       }
     }
   }
 
-  return normalizePiAskFlowResult(
-    createPiAskFlowResult({
+  return normalizeSparkAskFlowResult(
+    createSparkAskFlowResult({
       answers,
       flow: request.flow,
       mode: "submit",
@@ -162,12 +165,12 @@ export async function runPiAskFlow(
   );
 }
 
-export function defaultPiAskFlowResult(request: PiAskFlowRequest): PiAskFlowResult {
+export function defaultSparkAskFlowResult(request: SparkAskFlowRequest): SparkAskFlowResult {
   if (requestRequiresExplicitSelection(request)) {
-    return createNoSelectionPiAskFlowResult(request, {});
+    return createNoSelectionSparkAskFlowResult(request, {});
   }
 
-  const answers: Record<string, PiAskFlowAnswerEntry> = {};
+  const answers: Record<string, SparkAskFlowAnswerEntry> = {};
   for (const question of request.questions ?? []) {
     if (question.type === "freeform") {
       answers[question.id] = {
@@ -182,7 +185,7 @@ export function defaultPiAskFlowResult(request: PiAskFlowRequest): PiAskFlowResu
     if (!answer) continue;
     answers[question.id] = toFlowAnswer(question.id, answer);
   }
-  return createPiAskFlowResult({
+  return createSparkAskFlowResult({
     answers,
     flow: request.flow,
     mode: "submit",
@@ -190,20 +193,20 @@ export function defaultPiAskFlowResult(request: PiAskFlowRequest): PiAskFlowResu
   });
 }
 
-export async function replayPiAskFlow(
-  input: PiAskFlowRequest,
-  prior: PiAskFlowResult | undefined,
+export async function replaySparkAskFlow(
+  input: SparkAskFlowRequest,
+  prior: SparkAskFlowResult | undefined,
   ui?: SelectWithCustomUi,
-): Promise<PiAskFlowResult> {
-  return runPiAskFlow(replayablePiAskFlow(input, prior), ui);
+): Promise<SparkAskFlowResult> {
+  return runSparkAskFlow(replayableSparkAskFlow(input, prior), ui);
 }
 
-export function replayablePiAskFlow(
-  input: PiAskFlowRequest,
-  prior?: PiAskFlowResult,
-): PiAskFlowRequest {
+export function replayableSparkAskFlow(
+  input: SparkAskFlowRequest,
+  prior?: SparkAskFlowResult,
+): SparkAskFlowRequest {
   if (!prior?.answers || !input.behaviour?.preservePriorAnswers) return input;
-  const questions: PiAskFlowQuestion[] = (input.questions ?? []).map((question) => {
+  const questions: SparkAskFlowQuestion[] = (input.questions ?? []).map((question) => {
     const existing = prior.answers[question.id];
     if (!existing || question.type === "freeform") return question;
     const options = question.options?.map((option) => ({
@@ -217,14 +220,17 @@ export function replayablePiAskFlow(
   return { ...input, questions };
 }
 
-export function createPiAskFlowArtifactBody(
-  request: PiAskFlowRequest,
-  result: PiAskFlowResult,
-): PiAskFlowArtifactBody & { summary: string } {
-  return createSharedPiAskFlowArtifactBody(request, normalizePiAskFlowResult(result, request));
+export function createSparkAskFlowArtifactBody(
+  request: SparkAskFlowRequest,
+  result: SparkAskFlowResult,
+): SparkAskFlowArtifactBody & { summary: string } {
+  return createSharedSparkAskFlowArtifactBody(
+    request,
+    normalizeSparkAskFlowResult(result, request),
+  );
 }
 
-export function isPiAskFlowArtifactBody(value: unknown): value is PiAskFlowArtifactBody & {
+export function isSparkAskFlowArtifactBody(value: unknown): value is SparkAskFlowArtifactBody & {
   summary?: string;
 } {
   return Boolean(
@@ -236,10 +242,10 @@ export function isPiAskFlowArtifactBody(value: unknown): value is PiAskFlowArtif
 }
 
 export function createElaborationResult(
-  prior: PiAskFlowResult,
-  notes: PiAskFlowElaborationNote[],
-): PiAskFlowResult {
-  return createPiAskFlowResult({
+  prior: SparkAskFlowResult,
+  notes: SparkAskFlowElaborationNote[],
+): SparkAskFlowResult {
+  return createSparkAskFlowResult({
     ...prior,
     status: "answered",
     mode: "elaborate",
@@ -253,8 +259,8 @@ export function createElaborationResult(
   });
 }
 
-export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
-  const payloadStore = new PiAskFlowPayloadStore();
+export function registerSparkAskFlowTool(pi: SparkHostAPI): void {
+  const payloadStore = new SparkAskFlowPayloadStore();
 
   pi.registerTool?.({
     name: "ask_flow",
@@ -312,13 +318,13 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
     },
 
     async execute(_toolCallId, rawParams, _signal, _onUpdate, ctx) {
-      const request = createPiAskFlowRequest(rawParams as PiAskFlowRequest);
-      const context = decodePiAskFlowToolContext(ctx);
+      const request = createSparkAskFlowRequest(rawParams as SparkAskFlowRequest);
+      const context = decodeSparkAskFlowToolContext(ctx);
       const ui = context.ui;
 
-      const interactionRun = await runPiAskFlowInteraction(request, ui);
+      const interactionRun = await runSparkAskFlowInteraction(request, ui);
       if (interactionRun) {
-        const normalizedResult = normalizePiAskFlowResult(interactionRun.result, request);
+        const normalizedResult = normalizeSparkAskFlowResult(interactionRun.result, request);
         if (typeof context.cwd === "string" && context.cwd.trim()) {
           await payloadStore.save(context.cwd, {
             request,
@@ -344,7 +350,7 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
       }
 
       if (request.delivery === "async") {
-        const result = createNoSelectionPiAskFlowResult(request, {});
+        const result = createNoSelectionSparkAskFlowResult(request, {});
         return {
           content: [{ type: "text" as const, text: summarizeFlowResult(result, request) }],
           details: { result, status: result.status, cancelled: false, mode: result.mode },
@@ -352,7 +358,7 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
       }
 
       if (typeof ui?.custom !== "function") {
-        const result = createCancelledPiAskFlowResult(request);
+        const result = createCancelledSparkAskFlowResult(request);
         return {
           content: [{ type: "text" as const, text: summarizeFlowResult(result, request) }],
           details: { result, status: result.status, cancelled: true, mode: "cancel" },
@@ -360,13 +366,13 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
       }
 
       const custom = ui.custom as <T>(
-        factory: PiAskFlowCustomFactory<T>,
-        options?: PiAskFlowCustomOptions,
+        factory: SparkAskFlowCustomFactory<T>,
+        options?: SparkAskFlowCustomOptions,
       ) => unknown;
-      const cwd = requiredPiAskFlowCwd(context);
+      const cwd = requiredSparkAskFlowCwd(context);
 
-      const customRun = await runPiAskFlowCustomUi(request, custom);
-      const normalizedResult = normalizePiAskFlowResult(customRun.result, request);
+      const customRun = await runSparkAskFlowCustomUi(request, custom);
+      const normalizedResult = normalizeSparkAskFlowResult(customRun.result, request);
       await payloadStore.save(cwd, { request, result: normalizedResult, timestamp: Date.now() });
 
       return {
@@ -383,34 +389,34 @@ export function registerPiAskFlowTool(pi: PiExtensionAPI): void {
   });
 }
 
-interface PiAskFlowCustomRun {
-  result: PiAskFlowResult;
+interface SparkAskFlowCustomRun {
+  result: SparkAskFlowResult;
   fallbackReason?: string;
 }
 
-async function runPiAskFlowInteraction(
-  request: PiAskFlowRequest,
-  ui: PiAskFlowToolContext["ui"],
-): Promise<PiAskFlowCustomRun | undefined> {
+async function runSparkAskFlowInteraction(
+  request: SparkAskFlowRequest,
+  ui: SparkAskFlowToolContext["ui"],
+): Promise<SparkAskFlowCustomRun | undefined> {
   if (typeof ui?.interaction !== "function") return undefined;
   try {
     const response = (await (
       ui.interaction as (
         request: ExtensionInteractionRequest,
       ) => Promise<ExtensionInteractionResponse>
-    )(createPiAskFlowInteractionRequest(request))) as ExtensionInteractionResponse | undefined;
+    )(createSparkAskFlowInteractionRequest(request))) as ExtensionInteractionResponse | undefined;
     if (!response || response.kind !== "askFlow") return undefined;
     if (response.status === "blocked" || response.status === "error") return undefined;
     if (response.status === "cancelled") {
       return {
-        result: createCancelledPiAskFlowResult(request, response.metadata?.timedOut === true),
+        result: createCancelledSparkAskFlowResult(request, response.metadata?.timedOut === true),
       };
     }
     if (response.status === "pending") {
       const humanRequestId = optionalNonEmptyString(response.humanRequestId);
       if (!humanRequestId) return undefined;
       return {
-        result: createPiAskFlowResult({
+        result: createSparkAskFlowResult({
           answers: {},
           flow: request.flow,
           mode: "submit",
@@ -425,13 +431,15 @@ async function runPiAskFlowInteraction(
     return { result: piAskFlowResultFromInteractionResponse(request, response) };
   } catch (error) {
     return {
-      result: createCancelledPiAskFlowResult(request),
+      result: createCancelledSparkAskFlowResult(request),
       fallbackReason: `interaction failed: ${formatUnknownError(error)}`,
     };
   }
 }
 
-function createPiAskFlowInteractionRequest(request: PiAskFlowRequest): ExtensionInteractionRequest {
+function createSparkAskFlowInteractionRequest(
+  request: SparkAskFlowRequest,
+): ExtensionInteractionRequest {
   return {
     version: 1,
     kind: "askFlow",
@@ -458,11 +466,11 @@ function createPiAskFlowInteractionRequest(request: PiAskFlowRequest): Extension
 }
 
 function piAskFlowResultFromInteractionResponse(
-  request: PiAskFlowRequest,
+  request: SparkAskFlowRequest,
   response: ExtensionInteractionResponse,
-): PiAskFlowResult {
-  return createPiAskFlowResult({
-    answers: normalizePiAskFlowInteractionAnswers(request, response.answers),
+): SparkAskFlowResult {
+  return createSparkAskFlowResult({
+    answers: normalizeSparkAskFlowInteractionAnswers(request, response.answers),
     flow: request.flow,
     mode: "submit",
     cancelled: false,
@@ -470,24 +478,24 @@ function piAskFlowResultFromInteractionResponse(
   });
 }
 
-function normalizePiAskFlowInteractionAnswers(
-  request: PiAskFlowRequest,
+function normalizeSparkAskFlowInteractionAnswers(
+  request: SparkAskFlowRequest,
   value: unknown,
-): Record<string, PiAskFlowAnswerEntry> {
+): Record<string, SparkAskFlowAnswerEntry> {
   if (!value || typeof value !== "object") return {};
   const rawAnswers = value as Record<string, unknown>;
-  const answers: Record<string, PiAskFlowAnswerEntry> = {};
+  const answers: Record<string, SparkAskFlowAnswerEntry> = {};
   for (const question of request.questions ?? []) {
-    const answer = normalizePiAskFlowInteractionAnswer(question, rawAnswers[question.id]);
+    const answer = normalizeSparkAskFlowInteractionAnswer(question, rawAnswers[question.id]);
     if (answer) answers[question.id] = answer;
   }
   return answers;
 }
 
-function normalizePiAskFlowInteractionAnswer(
-  question: PiAskFlowQuestion,
+function normalizeSparkAskFlowInteractionAnswer(
+  question: SparkAskFlowQuestion,
   value: unknown,
-): PiAskFlowAnswerEntry | undefined {
+): SparkAskFlowAnswerEntry | undefined {
   if (typeof value === "string")
     return toFlowAnswer(question.id, parseAskChoice(question.options ?? [], value, question.type));
   if (Array.isArray(value)) {
@@ -519,7 +527,7 @@ function normalizePiAskFlowInteractionAnswer(
   };
 }
 
-function labelsForValues(question: PiAskFlowQuestion, values: string[]): string[] {
+function labelsForValues(question: SparkAskFlowQuestion, values: string[]): string[] {
   const byValue = new Map((question.options ?? []).map((option) => [option.value, option.label]));
   return values.map((value) => byValue.get(value) ?? value);
 }
@@ -530,21 +538,29 @@ function stringArray(value: unknown): string[] {
     : [];
 }
 
-async function runPiAskFlowCustomUi(
-  request: PiAskFlowRequest,
-  custom: <T>(factory: PiAskFlowCustomFactory<T>, options?: PiAskFlowCustomOptions) => unknown,
-): Promise<PiAskFlowCustomRun> {
+async function runSparkAskFlowCustomUi(
+  request: SparkAskFlowRequest,
+  custom: <T>(
+    factory: SparkAskFlowCustomFactory<T>,
+    options?: SparkAskFlowCustomOptions,
+  ) => unknown,
+): Promise<SparkAskFlowCustomRun> {
   try {
-    const result = await new Promise<PiAskFlowResult>((resolve, reject) => {
+    const result = await new Promise<SparkAskFlowResult>((resolve, reject) => {
       const resolveOnce = once(resolve);
       const rejectOnce = once(reject);
-      const controller = new PiAskFlowController({ request, language: "en" });
-      const factory: PiAskFlowCustomFactory<PiAskFlowResult> = (tui, theme, _keybindings, done) => {
+      const controller = new SparkAskFlowController({ request, language: "en" });
+      const factory: SparkAskFlowCustomFactory<SparkAskFlowResult> = (
+        tui,
+        theme,
+        _keybindings,
+        done,
+      ) => {
         try {
           return controller.run(
             tui as Parameters<typeof controller.run>[0],
             theme as Parameters<typeof controller.run>[1],
-            (flowResult: PiAskFlowResult) => {
+            (flowResult: SparkAskFlowResult) => {
               try {
                 done(flowResult);
               } catch (error) {
@@ -562,24 +578,24 @@ async function runPiAskFlowCustomUi(
       const customResult = custom(factory);
       if (isPromiseLike(customResult)) {
         void Promise.resolve(customResult).then((value) => {
-          if (isPiAskFlowResultLike(value)) resolveOnce(value);
+          if (isSparkAskFlowResultLike(value)) resolveOnce(value);
         }, rejectOnce);
       }
     });
     return { result };
   } catch (error) {
     return {
-      result: createCancelledPiAskFlowResult(request),
+      result: createCancelledSparkAskFlowResult(request),
       fallbackReason: `custom UI failed: ${formatUnknownError(error)}`,
     };
   }
 }
 
-function createCancelledPiAskFlowResult(
-  request: PiAskFlowRequest,
+function createCancelledSparkAskFlowResult(
+  request: SparkAskFlowRequest,
   timedOut = false,
-): PiAskFlowResult {
-  return createPiAskFlowResult({
+): SparkAskFlowResult {
+  return createSparkAskFlowResult({
     answers: {},
     flow: request.flow,
     mode: "cancel",
@@ -604,7 +620,7 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   );
 }
 
-function isPiAskFlowResultLike(value: unknown): value is PiAskFlowResult {
+function isSparkAskFlowResultLike(value: unknown): value is SparkAskFlowResult {
   return Boolean(
     value &&
     typeof value === "object" &&
@@ -650,33 +666,33 @@ function formatStringArg(
   return `${options.prefix ?? ""}${truncated}`;
 }
 
-function decodePiAskFlowToolContext(ctx: unknown): PiAskFlowToolContext {
-  return ctx && typeof ctx === "object" ? (ctx as PiAskFlowToolContext) : {};
+function decodeSparkAskFlowToolContext(ctx: unknown): SparkAskFlowToolContext {
+  return ctx && typeof ctx === "object" ? (ctx as SparkAskFlowToolContext) : {};
 }
 
-function requiredPiAskFlowCwd(ctx: PiAskFlowToolContext): string {
+function requiredSparkAskFlowCwd(ctx: SparkAskFlowToolContext): string {
   if (typeof ctx.cwd === "string" && ctx.cwd.trim()) return ctx.cwd;
   throw new Error("ask_flow fullscreen requires ctx.cwd to persist the latest ask payload.");
 }
 
-export function createPiAskFlowResult(
-  input: Omit<PiAskFlowResult, "status" | "nextAction"> &
-    Partial<Pick<PiAskFlowResult, "status" | "nextAction">>,
-): PiAskFlowResult {
+export function createSparkAskFlowResult(
+  input: Omit<SparkAskFlowResult, "status" | "nextAction"> &
+    Partial<Pick<SparkAskFlowResult, "status" | "nextAction">>,
+): SparkAskFlowResult {
   const result = input;
-  const status = result.status ?? inferPiAskFlowResultStatus(input);
+  const status = result.status ?? inferSparkAskFlowResultStatus(input);
   return {
     ...result,
     status,
-    nextAction: result.nextAction ?? nextActionForPiAskFlowStatus(status, result.mode),
+    nextAction: result.nextAction ?? nextActionForSparkAskFlowStatus(status, result.mode),
   };
 }
 
-export function normalizePiAskFlowResult(
-  result: PiAskFlowResult,
-  request?: PiAskFlowRequest,
-): PiAskFlowResult {
-  const normalized = createPiAskFlowResult(result);
+export function normalizeSparkAskFlowResult(
+  result: SparkAskFlowResult,
+  request?: SparkAskFlowRequest,
+): SparkAskFlowResult {
+  const normalized = createSparkAskFlowResult(result);
   if (normalized.status === "pending") return normalized;
   if (!request || !isGateMode(request.mode)) return normalized;
 
@@ -685,17 +701,17 @@ export function normalizePiAskFlowResult(
     hasSubmittedRequiredGateAnswers(request, normalized.answers)
       ? "answered"
       : normalized.status;
-  const blocked = isPiAskFlowGateBlocked({ ...normalized, status }, request);
+  const blocked = isSparkAskFlowGateBlocked({ ...normalized, status }, request);
   return {
     ...normalized,
     status,
-    nextAction: blocked ? "block" : nextActionForPiAskFlowStatus(status, normalized.mode),
+    nextAction: blocked ? "block" : nextActionForSparkAskFlowStatus(status, normalized.mode),
   };
 }
 
-export function isPiAskFlowGateBlocked(
-  result: PiAskFlowResult,
-  request: PiAskFlowRequest,
+export function isSparkAskFlowGateBlocked(
+  result: SparkAskFlowResult,
+  request: SparkAskFlowRequest,
 ): boolean {
   return (
     isGateMode(request.mode) &&
@@ -706,12 +722,12 @@ export function isPiAskFlowGateBlocked(
   );
 }
 
-function createNoSelectionPiAskFlowResult(
-  request: PiAskFlowRequest,
-  answers: Record<string, PiAskFlowAnswerEntry>,
-): PiAskFlowResult {
+function createNoSelectionSparkAskFlowResult(
+  request: SparkAskFlowRequest,
+  answers: Record<string, SparkAskFlowAnswerEntry>,
+): SparkAskFlowResult {
   const status = inferAskSubmitStatus(request, answers);
-  return createPiAskFlowResult({
+  return createSparkAskFlowResult({
     answers,
     flow: request.flow,
     mode: "submit",
@@ -721,8 +737,8 @@ function createNoSelectionPiAskFlowResult(
   });
 }
 
-function toFlowAnswer(questionId: string, choice: ParsedAskChoice): PiAskFlowAnswerEntry {
-  const answer: PiAskFlowAnswerEntry = {
+function toFlowAnswer(questionId: string, choice: ParsedAskChoice): SparkAskFlowAnswerEntry {
+  const answer: SparkAskFlowAnswerEntry = {
     questionId,
     kind: choice.kind,
     values: choice.values,
@@ -734,42 +750,42 @@ function toFlowAnswer(questionId: string, choice: ParsedAskChoice): PiAskFlowAns
 }
 
 function requiresExplicitSelection(
-  request: PiAskFlowRequest,
-  question: PiAskFlowQuestion,
+  request: SparkAskFlowRequest,
+  question: SparkAskFlowQuestion,
 ): boolean {
   return requiresExplicitSelectionForGate(request.mode, question);
 }
 
-function requestRequiresExplicitSelection(request: PiAskFlowRequest): boolean {
+function requestRequiresExplicitSelection(request: SparkAskFlowRequest): boolean {
   return (request.questions ?? []).some((question) => requiresExplicitSelection(request, question));
 }
 
 function hasSubmittedRequiredGateAnswers(
-  request: PiAskFlowRequest,
-  answers: Record<string, PiAskFlowAnswerEntry>,
+  request: SparkAskFlowRequest,
+  answers: Record<string, SparkAskFlowAnswerEntry>,
 ): boolean {
   return hasSubmittedRequiredAskAnswers(request, answers);
 }
 
 function hasRequiredGateSelections(
-  request: PiAskFlowRequest,
-  answers: Record<string, PiAskFlowAnswerEntry>,
+  request: SparkAskFlowRequest,
+  answers: Record<string, SparkAskFlowAnswerEntry>,
 ): boolean {
   return hasRequiredAskSelections(request, answers);
 }
 
-function inferPiAskFlowResultStatus(
-  result: Pick<PiAskFlowResult, "answers" | "cancelled" | "mode">,
-): PiAskFlowResult["status"] {
+function inferSparkAskFlowResultStatus(
+  result: Pick<SparkAskFlowResult, "answers" | "cancelled" | "mode">,
+): SparkAskFlowResult["status"] {
   if (result.cancelled || result.mode === "cancel") return "cancelled";
   if (Object.keys(result.answers).length > 0) return "answered";
   return "no_selection";
 }
 
-function nextActionForPiAskFlowStatus(
-  status: PiAskFlowResult["status"],
-  mode: PiAskFlowResult["mode"],
-): PiAskFlowResult["nextAction"] {
+function nextActionForSparkAskFlowStatus(
+  status: SparkAskFlowResult["status"],
+  mode: SparkAskFlowResult["mode"],
+): SparkAskFlowResult["nextAction"] {
   if (mode === "elaborate") return "clarify_then_reask";
   return status === "answered" || status === "pending" ? "resume" : "block";
 }
@@ -778,6 +794,6 @@ function optionalNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function summarizeFlowResult(result: PiAskFlowResult, request?: PiAskFlowRequest): string {
+function summarizeFlowResult(result: SparkAskFlowResult, request?: SparkAskFlowRequest): string {
   return summarizeAskResult(request ?? { title: "Ask flow" }, result);
 }

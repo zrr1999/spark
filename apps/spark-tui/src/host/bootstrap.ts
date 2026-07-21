@@ -2,7 +2,7 @@
 
 import { basename, join, resolve } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
-import { stableId, type ExtensionAPI } from "@zendev-lab/spark-extension-api";
+import { stableId, type SparkHostAPI } from "@zendev-lab/spark-core";
 import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 import {
   createProviderRegistryLeafRunner,
@@ -14,7 +14,7 @@ import {
 } from "@zendev-lab/spark-host/system-prompt";
 import { composeAgentSystemPrompt } from "@zendev-lab/spark-modes";
 import {
-  PiRolesReviewerRunner,
+  SparkRolesReviewerRunner,
   createSparkRoleRegistry,
   loadSparkMode,
   renderSparkActiveSystemPrompt,
@@ -237,7 +237,7 @@ export async function createSparkCliHostServices(
   );
 
   const extensionLoadResult = await new SparkExtensionLoader({
-    api: runtime as ExtensionAPI,
+    api: runtime as SparkHostAPI,
     extensions: options.extensions ?? config.extensions,
     importer: options.extensionImporter,
   }).load();
@@ -337,7 +337,7 @@ export async function createSparkCliHostServices(
     ...(options.approvalRejectAction ? { approvalRejectAction: options.approvalRejectAction } : {}),
     reviewToolApproval: async (request, signal) => {
       const ctx = runtime.makeContext();
-      const reviewer = new PiRolesReviewerRunner({
+      const reviewer = new SparkRolesReviewerRunner({
         registry: await createSparkRoleRegistry(cwd),
         cwd,
         nativeExecutor: ctx.runRole,

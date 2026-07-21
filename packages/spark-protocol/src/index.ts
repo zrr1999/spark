@@ -237,12 +237,32 @@ export const sparkTaskViewSchema = z.object({
   metadata: sparkJsonObjectSchema.default({}),
 });
 
+/**
+ * Product-facing deliverables (Cockpit 产物): issue / pr / preview.
+ * Legacy snapshots may still carry evidence kinds here; new emits use
+ * `evidence.update` + `sparkEvidenceViewSchema` instead.
+ */
 export const sparkArtifactViewSchema = z.object({
   version: sparkProtocolVersionSchema.default(SPARK_PROTOCOL_VERSION),
   ref: sparkRefSchema,
   title: z.string().min(1),
   kind: z.enum(["document", "record", "trace", "knowledge", "issue", "pr", "preview", "other"]),
   format: z.enum(["markdown", "json", "text", "mdx", "html", "blob", "other"]),
+  status: z.string().optional(),
+  producer: z.string().optional(),
+  createdAt: sparkIsoDateTimeSchema.optional(),
+  updatedAt: sparkIsoDateTimeSchema.optional(),
+  preview: z.string().optional(),
+  metadata: sparkJsonObjectSchema.default({}),
+});
+
+/** Agent-internal ledger notes (not Cockpit 产物). Prefer `evidence:` refs. */
+export const sparkEvidenceViewSchema = z.object({
+  version: sparkProtocolVersionSchema.default(SPARK_PROTOCOL_VERSION),
+  ref: sparkRefSchema,
+  title: z.string().min(1),
+  kind: z.enum(["document", "record", "trace", "knowledge", "other"]),
+  format: z.enum(["markdown", "json", "text", "blob", "other"]),
   status: z.string().optional(),
   producer: z.string().optional(),
   createdAt: sparkIsoDateTimeSchema.optional(),
@@ -324,6 +344,8 @@ export const sparkSessionViewSchema = z.object({
   runs: z.array(sparkRunViewSchema).default([]),
   tasks: z.array(sparkTaskViewSchema).default([]),
   artifacts: z.array(sparkArtifactViewSchema).default([]),
+  /** Agent-internal evidence ledger projections; product deliverables stay in `artifacts`. */
+  evidence: z.array(sparkEvidenceViewSchema).default([]),
   mailbox: z.array(sparkSessionMailMessageViewSchema).optional(),
   createdAt: sparkIsoDateTimeSchema.optional(),
   updatedAt: sparkIsoDateTimeSchema.optional(),
@@ -577,6 +599,11 @@ export const sparkViewModelEventSchema = z.discriminatedUnion("type", [
     type: z.literal("artifact.update"),
     artifact: sparkArtifactViewSchema,
   }),
+  z.object({
+    version: sparkProtocolVersionSchema.default(SPARK_PROTOCOL_VERSION),
+    type: z.literal("evidence.update"),
+    evidence: sparkEvidenceViewSchema,
+  }),
 ]);
 
 const sparkDaemonEventBaseSchema = z.object({
@@ -641,6 +668,7 @@ export type SparkRunView = z.infer<typeof sparkRunViewSchema>;
 export type SparkTaskTodoView = z.infer<typeof sparkTaskTodoViewSchema>;
 export type SparkTaskView = z.infer<typeof sparkTaskViewSchema>;
 export type SparkArtifactView = z.infer<typeof sparkArtifactViewSchema>;
+export type SparkEvidenceView = z.infer<typeof sparkEvidenceViewSchema>;
 export type SparkSessionMailChannelDeliveryView = z.infer<
   typeof sparkSessionMailChannelDeliveryViewSchema
 >;

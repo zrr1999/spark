@@ -24,6 +24,7 @@ import {
   recordHumanResponseAck,
   recordInvocationLogChunk,
   recordInvocationUpdate,
+  archiveWorkspace,
   unbindWorkspaceOwner,
 } from "./projection-services";
 import { cursorFromEvent, loadEventBatch, serializeEventRow } from "./events";
@@ -52,6 +53,55 @@ function setupRuntimeBinding() {
 }
 
 describe("projection services", () => {
+  it("archives a workspace, ends its lease, and frees the slug", () => {
+    const { db, runtimeWorkspaceBindingId, now } = setupRuntimeBinding();
+    const workspace = createWorkspaceWithOwnerBinding(db, {
+      slug: "local-default",
+      name: "Local default",
+      runtimeWorkspaceBindingId,
+      createdAt: now,
+    });
+
+    const result = archiveWorkspace(db, {
+      workspaceId: workspace.id,
+      actorId: "user_owner",
+      archivedAt: "2026-05-22T00:02:00.000Z",
+    });
+
+    expect(result).toMatchObject({
+      outcome: "archived",
+      previousSlug: "local-default",
+      archivedSlug: `archived-${workspace.id}`,
+      leaseUnbound: true,
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT status, slug
+           FROM workspaces
+           WHERE id = ?`,
+        )
+        .get(workspace.id),
+    ).toEqual({ status: "archived", slug: `archived-${workspace.id}` });
+    expect(
+      db
+        .prepare(
+          `SELECT ended_at AS endedAt
+           FROM workspace_leases
+           WHERE workspace_id = ?`,
+        )
+        .get(workspace.id),
+    ).toEqual({ endedAt: "2026-05-22T00:02:00.000Z" });
+    expect(
+      createWorkspaceWithOwnerBinding(db, {
+        slug: "local-default",
+        name: "Local default again",
+        runtimeWorkspaceBindingId,
+        createdAt: "2026-05-22T00:03:00.000Z",
+      }).id,
+    ).not.toBe(workspace.id);
+  });
+
   it("unbinds only the Cockpit owner projection and keeps daemon binding history", () => {
     const { db, runtimeWorkspaceBindingId, now } = setupRuntimeBinding();
     const workspace = createWorkspaceWithOwnerBinding(db, {
@@ -73,7 +123,7 @@ describe("projection services", () => {
       db
         .prepare(
           `SELECT ended_at AS endedAt
-           FROM workspace_owner_bindings
+           FROM workspace_leases
            WHERE workspace_id = ?`,
         )
         .get(workspace.id),
@@ -84,8 +134,8 @@ describe("projection services", () => {
         .get(runtimeWorkspaceBindingId),
     ).toEqual({ id: runtimeWorkspaceBindingId });
     expect(
-      db.prepare("SELECT kind FROM events WHERE kind = 'workspace.owner_unbound'").get(),
-    ).toEqual({ kind: "workspace.owner_unbound" });
+      db.prepare("SELECT kind FROM events WHERE kind = 'workspace.lease_unbound'").get(),
+    ).toEqual({ kind: "workspace.lease_unbound" });
     expect(unbindWorkspaceOwner(db, { workspaceId: workspace.id })).toMatchObject({
       outcome: "already_unbound",
     });
@@ -120,7 +170,7 @@ describe("projection services", () => {
 
     const owner = db
       .prepare(
-        "SELECT runtime_workspace_binding_id AS bindingId FROM workspace_owner_bindings WHERE workspace_id = ?",
+        "SELECT runtime_workspace_binding_id AS bindingId FROM workspace_leases WHERE workspace_id = ?",
       )
       .get(workspace.id) as { bindingId: string };
     expect(owner.bindingId).toBe(runtimeWorkspaceBindingId);
@@ -691,7 +741,7 @@ describe("projection services", () => {
        VALUES (?, 'local-default', 'Pending local', NULL, 'active', '{}', ?, ?)`,
     ).run(workspaceId, now, now);
     db.prepare(
-      `INSERT INTO workspace_owner_bindings
+      `INSERT INTO workspace_leases
         (id, workspace_id, runtime_workspace_binding_id, owner_mode, started_at, ended_at, created_at)
        VALUES (?, ?, ?, 'primary', ?, NULL, ?)`,
     ).run(ownerBindingId, workspaceId, runtimeWorkspaceBindingId, now, now);
@@ -747,7 +797,7 @@ describe("projection services", () => {
     const activeOwnerCount = db
       .prepare(
         `SELECT COUNT(*) AS count
-         FROM workspace_owner_bindings
+         FROM workspace_leases
          WHERE workspace_id = ? AND ended_at IS NULL`,
       )
       .get(workspaceId) as { count: number };

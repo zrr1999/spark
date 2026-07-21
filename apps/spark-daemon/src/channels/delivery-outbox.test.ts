@@ -16,6 +16,65 @@ import { legacyChannelInboundMessageIdempotencyKey } from "./admission.ts";
 import { CHANNEL_REPLY_DELIVERY_PENDING_ERROR_CODE } from "./reply-delivery.ts";
 
 describe("daemon channel delivery outbox", () => {
+  it("delivers a persistent child final only through its frozen QQ origin", async () => {
+    const db = new DatabaseSync(":memory:");
+    migrateSparkDaemonDatabase(db);
+    const invocations = new SparkInvocationStore(db);
+    const deliveries = new SparkChannelDeliveryStore(db);
+    const task = {
+      type: "session.run" as const,
+      sessionId: "session-persistent-child",
+      prompt: "delegated QQ work",
+      channelReply: {
+        workspaceId: "workspace-qq-origin",
+        adapter: "qqbot" as const,
+        adapterId: "qq-main",
+        recipient: "c2c:qq-user",
+      },
+      channelContext: { externalKey: "qqbot:c2c:qq-user" },
+    };
+    const sendReply = vi.fn(async () => ({ replaySafety: "deduplicated" as const }));
+    const channelIngress = {
+      sendReply,
+      sendAsk: vi.fn(),
+      ackInteraction: vi.fn(),
+      resolveAdapterId: vi.fn(
+        (_workspaceId: string, adapterId: string) =>
+          ({ "qq-main": "qq-main", "info-main": "info-main" })[adapterId],
+      ),
+    };
+    try {
+      const invocation = invocations.submit({
+        sessionId: task.sessionId,
+        prompt: task.prompt,
+        task,
+      });
+      invocations.claimNext("worker");
+      completeInvocationWithChannelDelivery({ db, invocations, deliveries }, invocation, task, {
+        status: "succeeded",
+        result: { assistantText: "QQ child final" },
+      });
+
+      await expect(
+        reconcileDaemonChannelDeliveries({
+          store: deliveries,
+          channelIngress: channelIngress as never,
+          workerId: "delivery-worker",
+        }),
+      ).resolves.toEqual({ attempted: 1, delivered: 1, failed: 0, uncertain: 0 });
+      expect(sendReply).toHaveBeenCalledTimes(1);
+      expect(sendReply).toHaveBeenCalledWith("workspace-qq-origin", "qq-main", {
+        recipient: "c2c:qq-user",
+        text: "QQ child final",
+        deliveryId: expect.any(String),
+        preview: "delegated QQ work",
+      });
+      expect(sendReply).not.toHaveBeenCalledWith(expect.anything(), "info-main", expect.anything());
+    } finally {
+      db.close();
+    }
+  });
+
   it("persists replies before delivery and retries the same QQ source identity until success", async () => {
     let now = "2026-07-15T00:00:00.000Z";
     const db = new DatabaseSync(":memory:");

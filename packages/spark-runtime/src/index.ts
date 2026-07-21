@@ -31,7 +31,7 @@ import {
   type TaskRun,
   type TaskRunCompletionSummary,
   type TaskTodo,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import type { RoleInstruction, RoleRunRecord, RoleSpec } from "@zendev-lab/spark-roles";
 import {
   taskCompletionReadiness,

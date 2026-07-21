@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   REFLECTION_MIN_INTERVAL_MS,
@@ -12,9 +12,9 @@ import {
   stopReflectionScheduler,
   type ReflectionCommandApi,
   type ReflectionCommandContext,
-} from "../packages/spark-learnings/src/reflection-in-session-scheduler.ts";
+} from "../packages/spark-memory/src/reflection-in-session-scheduler.ts";
 
-void test("runReflectionOnce scans incrementally, writes cursor/candidates/report, and avoids duplicate observations", async () => {
+test("runReflectionOnce scans incrementally, writes cursor/candidates/report, and avoids duplicate observations", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reflection-run-"));
   try {
     const sessionRoot = join(dir, "sessions");
@@ -70,7 +70,7 @@ void test("runReflectionOnce scans incrementally, writes cursor/candidates/repor
   }
 });
 
-void test("runReflectionOnce reads the unified Spark session root by default", async () => {
+test("runReflectionOnce reads the unified Spark session root by default", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reflection-unified-home-"));
   const previous = process.env.SPARK_HOME;
   process.env.SPARK_HOME = join(dir, "spark-home");
@@ -107,7 +107,7 @@ void test("runReflectionOnce reads the unified Spark session root by default", a
   }
 });
 
-void test("/reflect command runs once and session-local scheduler starts/stops safely", async () => {
+test("/reflect command runs once and session-local scheduler starts/stops safely", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reflection-command-"));
   try {
     const sessionRoot = join(dir, "sessions");
@@ -163,7 +163,7 @@ void test("/reflect command runs once and session-local scheduler starts/stops s
   }
 });
 
-void test("reflection run lock skips overlapping runs for the same workspace", async () => {
+test("reflection run lock skips overlapping runs for the same workspace", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reflection-lock-"));
   try {
     const sessionRoot = join(dir, "sessions");

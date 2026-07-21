@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { resolveCueTransport } from "../packages/spark-cue/src/cue-client.ts";
 
-void test("resolveCueTransport times out hung resolver commands", async () => {
+test("resolveCueTransport times out hung resolver commands", async () => {
   const root = await mkdtemp(join(tmpdir(), "spark-cue-resolver-timeout-"));
   const previousPath = process.env.PATH;
   const previousHome = process.env.HOME;

@@ -1,20 +1,15 @@
-import { registerPiAskAutoAnswerProvider } from "@zendev-lab/spark-ask";
-import { registerPiContextTool } from "@zendev-lab/spark-context/extension";
+import { registerSparkAskAutoAnswerProvider } from "@zendev-lab/spark-ask";
+import { registerSparkContextTool } from "@zendev-lab/spark-context/extension";
 import {
-  registerPiLearningTool,
-  type PiLearningToolHandlers,
-} from "@zendev-lab/spark-learnings/extension";
-import {
-  registerPiTaskTool,
-  registerPiTodoTool,
-  type PiTaskActionHandler,
-  type PiTaskToolHandlers,
+  registerSparkTaskTool,
+  registerSparkTodoTool,
+  type SparkTaskActionHandler,
+  type SparkTaskToolHandlers,
 } from "@zendev-lab/spark-tasks/extension";
 import { renderSparkToolCall } from "./tool-rendering.ts";
 import { registerSparkAskTools } from "./spark-ask-tool-registration.ts";
 import { registerSparkWorkflowRunsTool } from "./spark-workflow-runs-tool-registration.ts";
 import { registerSparkWorkflowRunTool } from "./spark-workflow-run-tool-registration.ts";
-import { registerSparkLearningTools } from "./learning-tool-registration.ts";
 import { registerSparkStateTool } from "./spark-state-tool-registration.ts";
 import { registerSparkTodoTools } from "./spark-todo-tool-registration.ts";
 import { registerSparkFinishTaskTool } from "./spark-finish-task-tool-registration.ts";
@@ -49,7 +44,7 @@ import { SparkWidgetController } from "./spark-widget-controller.ts";
 import { SparkRoleRunTuiController } from "./spark-role-run-tui-controller.ts";
 import { createSparkRoleRegistry } from "./spark-role-registry.ts";
 import {
-  PiRolesReviewerRunner,
+  SparkRolesReviewerRunner,
   capReviewerThinkingLevel,
   type ReviewerRunner,
 } from "./reviewer-runner.ts";
@@ -57,7 +52,7 @@ import { registerSparkReflectionCommands } from "./reflection-in-session-schedul
 import { sparkActiveLensPhase } from "./spark-drive-state.ts";
 import { loadSessionGoal } from "./spark-session-goals.ts";
 
-interface SparkExtensionAPI extends SparkCommandApi {
+interface SparkProductFacadeApi extends SparkCommandApi {
   registerTool?(config: SparkRegisteredToolConfig): void;
   registerInternalTool?(config: SparkRegisteredToolConfig): void;
   registerShortcut?(
@@ -85,7 +80,7 @@ interface SparkExtensionAPI extends SparkCommandApi {
   ): void;
 }
 
-export default function sparkExtension(pi: SparkExtensionAPI) {
+export default function sparkExtension(pi: SparkProductFacadeApi) {
   const widgetController = new SparkWidgetController();
   const roleRunTuiController = new SparkRoleRunTuiController(pi);
 
@@ -99,7 +94,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
     piCommand: () => pi.getPiCommand?.(),
   });
 
-  registerPiAskAutoAnswerProvider("spark-goal-reviewer", async (request, rawCtx) => {
+  registerSparkAskAutoAnswerProvider("spark-goal-reviewer", async (request, rawCtx) => {
     const askCtx = rawCtx as SparkToolContext;
     if (!askCtx.cwd) return undefined;
     if (sparkActiveLensPhase(askCtx.sparkActiveLens) === "implement")
@@ -138,7 +133,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
   async function createReviewerRunner(cwd: string, ctx: SparkToolContext): Promise<ReviewerRunner> {
     const provided = await pi.createReviewerRunner?.(cwd, ctx);
     if (provided) return provided;
-    return new PiRolesReviewerRunner({
+    return new SparkRolesReviewerRunner({
       registry: await createSparkRoleRegistry(cwd),
       cwd,
       sessionModel: sessionModelName(ctx.model),
@@ -225,22 +220,17 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
 
   registerSparkAskTools(registerSparkImplementationTool);
 
-  registerSparkLearningTools(registerSparkImplementationTool);
-
   if (pi.registerTool) {
     const genericToolRegistrar = {
       registerTool: (config: unknown) => pi.registerTool?.(config as SparkRegisteredToolConfig),
     };
-    registerPiTaskTool(genericToolRegistrar, {
+    registerSparkTaskTool(genericToolRegistrar, {
       handlers: createSparkTaskHandlers((name) => registeredSparkTools.get(name)),
     });
-    registerPiTodoTool(genericToolRegistrar, {
+    registerSparkTodoTool(genericToolRegistrar, {
       handler: createSparkTodoHandler((name) => registeredSparkTools.get(name)),
     });
-    registerPiLearningTool(genericToolRegistrar, {
-      handlers: createSparkLearningHandlers((name) => registeredSparkTools.get(name)),
-    });
-    registerPiContextTool(genericToolRegistrar, {
+    registerSparkContextTool(genericToolRegistrar, {
       providers: [
         {
           id: "spark.active",
@@ -262,7 +252,7 @@ export default function sparkExtension(pi: SparkExtensionAPI) {
 
 type SparkImplementationResolver = (name: string) => SparkRegisteredToolConfig | undefined;
 
-function createSparkTaskHandlers(resolveTool: SparkImplementationResolver): PiTaskToolHandlers {
+function createSparkTaskHandlers(resolveTool: SparkImplementationResolver): SparkTaskToolHandlers {
   const direct = (toolName: string) =>
     (({ toolCallId, params, signal, onUpdate, ctx }) =>
       executeSparkImplementationTool(resolveTool, toolName, {
@@ -271,7 +261,7 @@ function createSparkTaskHandlers(resolveTool: SparkImplementationResolver): PiTa
         signal,
         onUpdate,
         ctx,
-      })) satisfies NonNullable<PiTaskToolHandlers["project_list"]>;
+      })) satisfies NonNullable<SparkTaskToolHandlers["project_list"]>;
 
   const scopedStatus = (scope: "task" | "project" | "workspace") =>
     (({ toolCallId, params, signal, onUpdate, ctx }) =>
@@ -281,7 +271,7 @@ function createSparkTaskHandlers(resolveTool: SparkImplementationResolver): PiTa
         signal,
         onUpdate,
         ctx,
-      })) satisfies NonNullable<PiTaskToolHandlers["task_status"]>;
+      })) satisfies NonNullable<SparkTaskToolHandlers["task_status"]>;
 
   const projectMutation = (intent: "rename" | "metadata_update") =>
     (({ toolCallId, params, signal, onUpdate, ctx }) =>
@@ -291,7 +281,7 @@ function createSparkTaskHandlers(resolveTool: SparkImplementationResolver): PiTa
         signal,
         onUpdate,
         ctx,
-      })) satisfies NonNullable<PiTaskToolHandlers["project_rename"]>;
+      })) satisfies NonNullable<SparkTaskToolHandlers["project_rename"]>;
 
   return {
     task_status: scopedStatus("task"),
@@ -339,7 +329,7 @@ function createSparkTaskHandlers(resolveTool: SparkImplementationResolver): PiTa
   };
 }
 
-function createSparkTodoHandler(resolveTool: SparkImplementationResolver): PiTaskActionHandler {
+function createSparkTodoHandler(resolveTool: SparkImplementationResolver): SparkTaskActionHandler {
   return ({ toolCallId, params, signal, onUpdate, ctx }) =>
     executeSparkImplementationTool(resolveTool, "impl_todo", {
       toolCallId,
@@ -348,32 +338,6 @@ function createSparkTodoHandler(resolveTool: SparkImplementationResolver): PiTas
       onUpdate,
       ctx,
     });
-}
-
-function createSparkLearningHandlers(
-  resolveTool: SparkImplementationResolver,
-): PiLearningToolHandlers {
-  const direct = (toolName: string) =>
-    (({ toolCallId, params, signal, onUpdate, ctx }) =>
-      executeSparkImplementationTool(resolveTool, toolName, {
-        toolCallId,
-        params: stripLearningAction(params),
-        signal,
-        onUpdate,
-        ctx,
-      })) satisfies NonNullable<PiLearningToolHandlers["record"]>;
-
-  return {
-    record: direct("impl_learning_record"),
-    search: direct("impl_learning_search"),
-    list: direct("impl_learning_list"),
-    read: direct("impl_learning_read"),
-    mark_stale: direct("impl_learning_mark_stale"),
-    supersede: direct("impl_learning_supersede"),
-    reject: direct("impl_learning_reject"),
-    export_markdown: direct("impl_learning_export_markdown"),
-    import_markdown: direct("impl_learning_import_markdown"),
-  };
 }
 
 function executeSparkImplementationTool(
@@ -445,11 +409,6 @@ function stripTaskAction(params: Record<string, unknown>): Record<string, unknow
 
 function stripTaskActionAndScope(params: Record<string, unknown>): Record<string, unknown> {
   const { action: _action, scope: _scope, ...rest } = params;
-  return removeUndefined(rest);
-}
-
-function stripLearningAction(params: Record<string, unknown>): Record<string, unknown> {
-  const { action: _action, ...rest } = params;
   return removeUndefined(rest);
 }
 

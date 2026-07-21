@@ -8,7 +8,7 @@ import { errorJson } from "$lib/server/json";
 import {
   createRuntimeDeviceAuthorization,
   RuntimeDeviceAuthorizationError,
-} from "$lib/server/runtime-registration";
+} from "@zendev-lab/spark-coordination/runtime-registration";
 
 export const POST: RequestHandler = async ({ request, locals, url }) => {
   const parsed = runtimeDeviceAuthorizationRequestSchema.safeParse(

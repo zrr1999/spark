@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   renderSparkWidgetLines,
@@ -12,7 +12,7 @@ const theme = {
   strikethrough: (text: string) => text,
 };
 
-void test("spark widget does not show static task goal evidence review hint", () => {
+test("spark widget does not show static task goal evidence review hint", () => {
   const state: SparkWidgetState = {
     projectTitle: "Spark daemon-first session UX and Pi/Codex parity hardening",
     goal: { status: "active", objective: "replace pi from zellij" },

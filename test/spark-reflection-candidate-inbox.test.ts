@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   candidateFromObservation,
@@ -15,10 +15,10 @@ import {
   renderReflectionCandidateReport,
   saveReflectionCandidateStore,
   upsertReflectionCandidates,
-} from "../packages/spark-learnings/src/reflection-candidate-inbox.ts";
-import type { ReflectionObservation } from "../packages/spark-learnings/src/reflection-session-scanner.ts";
+} from "../packages/spark-memory/src/reflection-candidate-inbox.ts";
+import type { ReflectionObservation } from "../packages/spark-memory/src/reflection-session-scanner.ts";
 
-void test("reflection candidate inbox creates bounded report-only candidates and dedupes repeats", () => {
+test("reflection candidate inbox creates bounded report-only candidates and dedupes repeats", () => {
   const now = "2026-06-18T01:00:00.000Z";
   const observations: ReflectionObservation[] = [
     observation("u1", "TODO: fix follow-up scanner cursor", ["todo_like", "task_intent"]),
@@ -75,7 +75,7 @@ void test("reflection candidate inbox creates bounded report-only candidates and
   );
 });
 
-void test("reflection candidate store persists and reloads without task graph mutation APIs", async () => {
+test("reflection candidate store persists and reloads without task graph mutation APIs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reflection-candidates-"));
   try {
     const path = reflectionCandidateStorePath(dir);

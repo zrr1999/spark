@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import type {
   Project,
@@ -9,7 +9,7 @@ import type {
   Task,
   TaskRef,
   TaskRun,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import { TaskGraph } from "@zendev-lab/spark-tasks";
 import type { ActiveSparkRoleRunProcess } from "@zendev-lab/spark-runtime";
 import {
@@ -72,7 +72,7 @@ function taskRun(input: Partial<TaskRun> & { ref: RunRef }): TaskRun {
   };
 }
 
-void test("Spark role-run registry reconstructs ordered lifecycle events from task runs", () => {
+test("Spark role-run registry reconstructs ordered lifecycle events from task runs", () => {
   const run = taskRun({
     ref: "run:finished" as RunRef,
     status: "succeeded",
@@ -97,7 +97,7 @@ void test("Spark role-run registry reconstructs ordered lifecycle events from ta
   assert.equal(snapshot.counts.done, 1);
 });
 
-void test("Spark role-run registry serialization is reload-safe JSON data", () => {
+test("Spark role-run registry serialization is reload-safe JSON data", () => {
   const run = taskRun({
     ref: "run:failed" as RunRef,
     status: "failed",
@@ -120,7 +120,7 @@ void test("Spark role-run registry serialization is reload-safe JSON data", () =
   assert.equal(snapshot.entries[0].events[0].provenance.source, "task-graph");
 });
 
-void test("Spark role-run protocol carries parent links, usage, activity, and stopped events", () => {
+test("Spark role-run protocol carries parent links, usage, activity, and stopped events", () => {
   const run = taskRun({
     ref: "run:child" as RunRef,
     status: "cancelled",
@@ -180,7 +180,7 @@ void test("Spark role-run protocol carries parent links, usage, activity, and st
   assert.equal(entry?.status, "cancelled");
 });
 
-void test("Spark role-run registry distinguishes active, interrupted, and stale non-terminal runs", () => {
+test("Spark role-run registry distinguishes active, interrupted, and stale non-terminal runs", () => {
   const active = taskRun({ ref: "run:active" as RunRef });
   const interrupted = taskRun({
     ref: "run:interrupted" as RunRef,

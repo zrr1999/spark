@@ -1,15 +1,10 @@
-import { readFile } from "node:fs/promises";
 import {
   type LearningCategory,
-  LearningExportFormatError,
   type LearningRecord,
   type LearningLocation,
   type LearningRecordInput,
-  type LearningSearchResult,
   type LearningStatus,
-  type LearningStoreDiagnostic,
-  parseLearningExportMarkdown,
-} from "@zendev-lab/spark-learnings";
+} from "@zendev-lab/spark-memory";
 import type { Artifact } from "@zendev-lab/spark-artifacts";
 
 const LEARNING_STATUSES = ["candidate", "active", "stale", "superseded", "rejected"] as const;
@@ -90,12 +85,6 @@ export function normalizeLearningString(
   return value;
 }
 
-export function normalizeLearningArtifactRef(value: unknown, field = "ref"): string {
-  const ref = normalizeLearningString(value, field, { required: true });
-  if (!ref) throw new Error(`${field} must be a non-empty string`);
-  return ref;
-}
-
 export function normalizeLearningConfidence(value: unknown): number | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1)
@@ -147,104 +136,10 @@ export function compactLearningDetail(
   };
 }
 
-export function compactLearningSearchResult(result: LearningSearchResult) {
-  return {
-    ref: result.ref,
-    title: result.record.title,
-    status: result.record.status,
-    category: result.record.category,
-    location: result.location,
-    score: result.score,
-    snippet: result.snippet,
-    evidenceSummary: result.evidenceSummary,
-  };
-}
-
-export function formatLearningLine(
-  artifact: Artifact<LearningRecord>,
-  location = inferLearningArtifactLocation(artifact),
-): string {
-  const tags = formatLearningTags(artifact.body.tags);
-  return `- [${artifact.body.status}/${artifact.body.category}/${location}] ${artifact.ref}: ${artifact.body.title}${tags}`;
-}
-
-export function formatLearningSearchLine(result: LearningSearchResult): string {
-  const tags = formatLearningTags(result.record.tags);
-  return `- [${result.record.status}/${result.record.category}/${result.location}] ${result.ref}: ${result.record.title} — ${result.snippet}${tags}`;
-}
-
-export function formatLearningDiagnostics(
-  diagnostics: readonly LearningStoreDiagnostic[],
-): string[] {
-  if (diagnostics.length === 0) return [];
-  const visible = diagnostics.slice(0, 5);
-  const lines = [`Warnings: skipped ${diagnostics.length} invalid learning artifact(s)`];
-  for (const diagnostic of visible) {
-    const source = diagnostic.ref ?? diagnostic.filePath ?? diagnostic.source;
-    lines.push(`- skipped ${source}: ${diagnostic.message}`);
-  }
-  if (visible.length < diagnostics.length)
-    lines.push(`- … ${diagnostics.length - visible.length} more invalid learning artifact(s)`);
-  return lines;
-}
-
-export function compactLearningDiagnostic(diagnostic: LearningStoreDiagnostic) {
-  return {
-    source: diagnostic.source,
-    ref: diagnostic.ref,
-    filePath: diagnostic.filePath,
-    message: diagnostic.message,
-  };
-}
-
-function formatLearningTags(tags: readonly string[]): string {
-  if (tags.length === 0) return "";
-  const visible = tags.slice(0, 5);
-  const hidden = tags.length - visible.length;
-  return ` tags=${visible.join(",")}${hidden > 0 ? `,…+${hidden}` : ""}`;
-}
-
 function inferLearningArtifactLocation(artifact: Artifact<LearningRecord>): LearningLocation {
   const note = artifact.provenance.note ?? "";
   if (note.includes("location=user")) return "user";
   if (note.includes("location=repo")) return "repo";
   if (note.includes("location=workspace")) return "workspace";
   return "workspace";
-}
-
-export interface ParsedLearningImport {
-  source: "spark-export";
-  records: LearningRecord[];
-  inputs: LearningRecordInput[];
-}
-
-export async function parseLearningImportPath(
-  _cwd: string,
-  inputPath: string,
-): Promise<ParsedLearningImport> {
-  const markdown = await readFile(inputPath, "utf8");
-  let records: LearningRecord[];
-  try {
-    records = parseLearningExportMarkdown(markdown, inputPath);
-  } catch (error) {
-    if (error instanceof LearningExportFormatError) {
-      throw new Error(actionableLearningImportError(inputPath, error.message));
-    }
-    throw error;
-  }
-  if (records.length === 0) throw new Error(actionableLearningImportError(inputPath));
-  return { source: "spark-export", records, inputs: [] };
-}
-
-function actionableLearningImportError(inputPath: string, cause?: string): string {
-  const lines = [
-    `[E_LEARNING_IMPORT_FORMAT] ${inputPath} is not a Spark learning export Markdown file.`,
-  ];
-  if (cause) lines.push(`  cause: ${cause}`);
-  lines.push(
-    '  expected: Markdown produced by learning({ action: "export_markdown", outputPath }) containing ```json pi-learning fenced blocks.',
-    '  dry-run: learning({ action: "import_markdown", inputPath }) parses without writing; set apply=true only after the dry-run count looks right.',
-    '  next: export with learning({ action: "export_markdown" }) or convert each item to the pi-learning JSON fenced-block format before importing.',
-  );
-  return lines.join("\n");
 }

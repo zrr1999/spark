@@ -1,4 +1,4 @@
-import type { PiAskFlowAnswerEntry, PiAskFlowRequest, PiAskFlowResult } from "./schema.ts";
+import type { SparkAskFlowAnswerEntry, SparkAskFlowRequest, SparkAskFlowResult } from "./schema.ts";
 import { formatAskAnswerForDisplay } from "./shared-semantics.ts";
 
 export interface AskSummaryAnswer {
@@ -67,11 +67,11 @@ export function createAskArtifactBody<Req extends AskSummaryRequest, Res extends
   }) as AskArtifactBody<Req, Res>;
 }
 
-export function createPiAskFlowArtifactBody(
-  request: PiAskFlowRequest,
-  result: PiAskFlowResult,
+export function createSparkAskFlowArtifactBody(
+  request: SparkAskFlowRequest,
+  result: SparkAskFlowResult,
   options: { blocked?: boolean } = {},
-): AskArtifactBody<PiAskFlowRequest, PiAskFlowResult> {
+): AskArtifactBody<SparkAskFlowRequest, SparkAskFlowResult> {
   return createAskArtifactBody(request, result, options);
 }
 
@@ -86,7 +86,7 @@ export function isAskArtifactBody(value: unknown): value is AskArtifactBody {
 }
 
 export function answerEntriesFromFlow(
-  answers: Record<string, PiAskFlowAnswerEntry>,
+  answers: Record<string, SparkAskFlowAnswerEntry>,
 ): Record<string, AskSummaryAnswer> {
   return answers;
 }

@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
-import type { ProjectRef } from "@zendev-lab/spark-extension-api";
+import type { ProjectRef } from "@zendev-lab/spark-core";
 import {
   clearSparkPhase,
   loadCurrentProjectState,
@@ -24,14 +24,14 @@ async function withTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
   }
 }
 
-void test("loadSparkPhase defaults to plan with no persisted state", async () => {
+test("loadSparkPhase defaults to plan with no persisted state", async () => {
   await withTempDir(async (dir) => {
     const state = await loadSparkPhase(dir, undefined);
     assert.deepEqual(state, { phase: "plan" });
   });
 });
 
-void test("loadSparkPhase exposes current host active lens without changing persisted phase", async () => {
+test("loadSparkPhase exposes current host active lens without changing persisted phase", async () => {
   await withTempDir(async (dir) => {
     await saveSparkPhase(dir, undefined, { phase: "plan" });
     const state = await loadSparkPhase(dir, { sparkActiveLens: { phase: "implement" } });
@@ -41,7 +41,7 @@ void test("loadSparkPhase exposes current host active lens without changing pers
   });
 });
 
-void test("loadSparkPhase normalizes a legacy research active lens to plan", async () => {
+test("loadSparkPhase normalizes a legacy research active lens to plan", async () => {
   await withTempDir(async (dir) => {
     await saveSparkPhase(dir, undefined, { phase: "implement" });
     const legacyContext = { sparkActiveLens: { phase: "research" } } as unknown as NonNullable<
@@ -53,7 +53,7 @@ void test("loadSparkPhase normalizes a legacy research active lens to plan", asy
   });
 });
 
-void test("saveSparkPhase persists the current session phase and optional project ref", async () => {
+test("saveSparkPhase persists the current session phase and optional project ref", async () => {
   await withTempDir(async (dir) => {
     const projectRef = "proj:test-research" as ProjectRef;
     await saveSparkPhase(dir, undefined, { phase: "implement", projectRef, focus: "ship" });
@@ -68,7 +68,7 @@ void test("saveSparkPhase persists the current session phase and optional projec
   });
 });
 
-void test("legacy executionMode and planningMode blocks are ignored by loadSparkPhase", async () => {
+test("legacy executionMode and planningMode blocks are ignored by loadSparkPhase", async () => {
   await withTempDir(async (dir) => {
     const projectRef = "proj:test-legacy" as ProjectRef;
     await saveSparkPhase(dir, undefined, { phase: "implement", projectRef });
@@ -100,7 +100,7 @@ void test("legacy executionMode and planningMode blocks are ignored by loadSpark
   });
 });
 
-void test("clearSparkPhase removes current project selection but preserves session phase", async () => {
+test("clearSparkPhase removes current project selection but preserves session phase", async () => {
   await withTempDir(async (dir) => {
     const projectRef = "proj:test-clear" as ProjectRef;
     await saveSparkPhase(dir, undefined, { phase: "plan", projectRef });
@@ -110,7 +110,7 @@ void test("clearSparkPhase removes current project selection but preserves sessi
   });
 });
 
-void test("saveSparkPhase without projectRef preserves existing current project selection", async () => {
+test("saveSparkPhase without projectRef preserves existing current project selection", async () => {
   await withTempDir(async (dir) => {
     const projectRef = "proj:test-clear-empty" as ProjectRef;
     await saveSparkPhase(dir, undefined, { phase: "implement", projectRef });
@@ -119,7 +119,7 @@ void test("saveSparkPhase without projectRef preserves existing current project 
   });
 });
 
-void test("legacy persisted research phase normalizes one-way to plan", async () => {
+test("legacy persisted research phase normalizes one-way to plan", async () => {
   await withTempDir(async (dir) => {
     const statePath = join(dir, ".spark", "sessions", "session-ephemeral.json");
     await mkdir(join(dir, ".spark", "sessions"), { recursive: true });
@@ -131,7 +131,7 @@ void test("legacy persisted research phase normalizes one-way to plan", async ()
   });
 });
 
-void test("nextSparkSessionPhase walks the canonical cycle", () => {
+test("nextSparkSessionPhase walks the canonical cycle", () => {
   assert.deepEqual(SPARK_SESSION_PHASE_CYCLE, ["plan", "implement"]);
   assert.equal(nextSparkSessionPhase("plan"), "implement");
   assert.equal(nextSparkSessionPhase("implement"), "plan");

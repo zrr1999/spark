@@ -48,7 +48,7 @@ describe("workspace directory identity", () => {
        VALUES (?, 'spore', 'spore', NULL, 'active', '{}', ?, ?)`,
     ).run(workspaceId, now, now);
     db.prepare(
-      `INSERT INTO workspace_owner_bindings
+      `INSERT INTO workspace_leases
         (id, workspace_id, runtime_workspace_binding_id, owner_mode, started_at, ended_at, created_at)
        VALUES (?, ?, ?, 'primary', ?, NULL, ?)`,
     ).run(createId("wob"), workspaceId, bindingId, now, now);
@@ -95,7 +95,7 @@ describe("workspace directory identity", () => {
        VALUES (?, 'workspace-settings', 'old', NULL, 'active', '{}', ?, ?)`,
     ).run(workspaceId, now, now);
     db.prepare(
-      `INSERT INTO workspace_owner_bindings
+      `INSERT INTO workspace_leases
         (id, workspace_id, runtime_workspace_binding_id, owner_mode, started_at, ended_at, created_at)
        VALUES (?, ?, ?, 'primary', ?, NULL, ?)`,
     ).run(createId("wob"), workspaceId, bindingId, now, now);

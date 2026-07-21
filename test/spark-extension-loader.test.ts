@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import test from "node:test";
+import { test } from "vitest";
 
 import { SPARK_CHANNEL_ALLOWED_TOOLS } from "@zendev-lab/spark-host/system-prompt";
 import {
@@ -14,7 +14,7 @@ import {
   loadSparkExtensions,
 } from "../apps/spark-tui/src/host/index.ts";
 
-void test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin extension set", () => {
+test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin extension set", () => {
   const builtinExpected = [
     "@zendev-lab/spark-ask/extension",
     "@zendev-lab/spark-cue/extension",
@@ -37,7 +37,7 @@ void test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin 
   assert.deepEqual([...DEFAULT_SPARK_EXTENSION_SPECS], defaultExpected);
 });
 
-void test("default Spark extension profile leaves Graft available only for explicit opt-in", async () => {
+test("default Spark extension profile leaves Graft available only for explicit opt-in", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-extension-loader-default-no-graft" });
   const result = await new SparkExtensionLoader({ api: host }).load();
 
@@ -51,7 +51,7 @@ void test("default Spark extension profile leaves Graft available only for expli
   );
 });
 
-void test("root Pi extension list and native builtins both expose self-extension tools", async () => {
+test("root Pi extension list and native builtins both expose self-extension tools", async () => {
   const rootPackage = JSON.parse(
     await readFile(new URL("../package.json", import.meta.url), "utf8"),
   ) as {
@@ -77,7 +77,7 @@ void test("root Pi extension list and native builtins both expose self-extension
   );
 });
 
-void test("published Spark TUI resolves builtins through declared package exports", async () => {
+test("published Spark TUI resolves builtins through declared package exports", async () => {
   const tuiPackage = JSON.parse(
     await readFile(new URL("../apps/spark-tui/package.json", import.meta.url), "utf8"),
   ) as { dependencies?: Record<string, string> };
@@ -102,7 +102,7 @@ void test("published Spark TUI resolves builtins through declared package export
   assert.match(loaderSource, /await import\("@zendev-lab\/spark-graft\/extension"\)/u);
 });
 
-void test("Spark command policy is owned by pi-extension, not spark-host", async () => {
+test("Spark command policy is owned by pi-extension, not spark-host", async () => {
   const piPackage = JSON.parse(
     await readFile(new URL("../packages/pi-extension/package.json", import.meta.url), "utf8"),
   ) as { exports?: Record<string, string> };
@@ -116,7 +116,7 @@ void test("Spark command policy is owned by pi-extension, not spark-host", async
   assert.equal(hostPackage.exports?.["./spark-command-workflow-registration"], undefined);
 });
 
-void test("SparkExtensionLoader loads builtin factories through explicit imports", async () => {
+test("SparkExtensionLoader loads builtin factories through explicit imports", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-extension-loader-test", hasUI: true });
   const result = await new SparkExtensionLoader({
     api: host,
@@ -170,7 +170,7 @@ void test("SparkExtensionLoader loads builtin factories through explicit imports
   assert.ok(!commands.some((command) => command.startsWith("graft-")));
 });
 
-void test("channel host keeps only explicitly allowed tools active after extension handlers", async () => {
+test("channel host keeps only explicitly allowed tools active after extension handlers", async () => {
   const host = new SparkHostRuntime({
     cwd: "/tmp/spark-extension-loader-channel",
     sessionSurface: "channel",
@@ -186,7 +186,7 @@ void test("channel host keeps only explicitly allowed tools active after extensi
   assert.deepEqual(host.getActiveTools().sort(), ["ask", "context", "session", "todo"]);
 });
 
-void test("SparkExtensionLoader isolates one extension failure and continues loading later extensions", async () => {
+test("SparkExtensionLoader isolates one extension failure and continues loading later extensions", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-extension-loader-failure" });
   const result = await loadSparkExtensions({
     api: host,
@@ -208,7 +208,7 @@ void test("SparkExtensionLoader isolates one extension failure and continues loa
   );
 });
 
-void test("createSparkExtensionImporter resolves builtins without calling fallback importer", async () => {
+test("createSparkExtensionImporter resolves builtins without calling fallback importer", async () => {
   const importer = createSparkExtensionImporter(async () => {
     throw new Error("fallback should not be used for builtins");
   });
@@ -216,7 +216,7 @@ void test("createSparkExtensionImporter resolves builtins without calling fallba
   assert.equal(typeof (mod as { default?: unknown }).default, "function");
 });
 
-void test("loadPlugins default importer is wired to builtin extension imports while providers stay dynamic", async () => {
+test("loadPlugins default importer is wired to builtin extension imports while providers stay dynamic", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-plugin-builtin-importer" });
   const registry = new SparkProviderRegistry();
   const result = await loadPlugins({

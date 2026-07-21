@@ -526,8 +526,27 @@ function displayMessageMetadata(value: unknown): SparkJsonObject {
   }
   const attachments = displayChannelAttachments(channel.attachments);
   if (attachments.length > 0) safeChannel.attachments = attachments;
+  const messageReference = displayChannelMessageReference(channel.messageReference);
+  if (messageReference) safeChannel.messageReference = messageReference;
   if (Object.keys(safeChannel).length > 0) safeMetadata.channel = safeChannel;
   return safeMetadata;
+}
+
+function displayChannelMessageReference(value: unknown): SparkJsonObject | undefined {
+  if (!isRecord(value)) return undefined;
+  const reference: SparkJsonObject = {};
+  for (const key of [
+    "messageId",
+    "secondaryMessageId",
+    "preview",
+    "senderId",
+    "senderName",
+    "source",
+  ] as const) {
+    const field = value[key];
+    if (typeof field === "string" && field.trim()) reference[key] = field.trim();
+  }
+  return Object.keys(reference).length > 0 ? reference : undefined;
 }
 
 function displayChannelAttachments(value: unknown): SparkJsonObject[] {

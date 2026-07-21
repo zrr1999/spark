@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { TaskGraph, defaultTaskGraphStore, defaultTaskTodoStore } from "@zendev-lab/spark-tasks";
 import sparkExtension from "../packages/pi-extension/src/extension/index.ts";
@@ -20,11 +20,11 @@ import {
   shouldClarifyBeforeInit,
 } from "../packages/pi-extension/src/extension/spark-initialization.ts";
 
-type SparkExtensionApiForTest = Parameters<typeof sparkExtension>[0];
-type SparkToolConfig = Parameters<NonNullable<SparkExtensionApiForTest["registerTool"]>>[0];
+type SparkHostApiForTest = Parameters<typeof sparkExtension>[0];
+type SparkToolConfig = Parameters<NonNullable<SparkHostApiForTest["registerTool"]>>[0];
 type SparkToolContextForTest = Parameters<SparkToolConfig["execute"]>[4];
 
-void test("Spark project-file scan does not treat inaccessible directories as empty projects", async (t) => {
+test("Spark project-file scan does not treat inaccessible directories as empty projects", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "spark-inaccessible-"));
   const locked = join(dir, "locked");
   try {
@@ -44,7 +44,7 @@ void test("Spark project-file scan does not treat inaccessible directories as em
   }
 });
 
-void test("workspace-like cwd keeps Spark state under .spark without root SPARK.md", async () => {
+test("workspace-like cwd keeps Spark state under .spark without root SPARK.md", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-workspace-"));
   try {
     assert.equal(await shouldMaterializeSparkMd(dir), false);
@@ -74,7 +74,7 @@ void test("workspace-like cwd keeps Spark state under .spark without root SPARK.
   }
 });
 
-void test("repo-like cwd materializes root SPARK.md as well", async () => {
+test("repo-like cwd materializes root SPARK.md as well", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-repo-"));
   try {
     await mkdir(join(dir, ".git"));
@@ -105,7 +105,7 @@ void test("repo-like cwd materializes root SPARK.md as well", async () => {
   }
 });
 
-void test("initializeSparkIdea does not overwrite an existing initialized project", async () => {
+test("initializeSparkIdea does not overwrite an existing initialized project", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-no-overwrite-"));
   try {
     await mkdir(join(dir, ".git"));
@@ -121,7 +121,7 @@ void test("initializeSparkIdea does not overwrite an existing initialized projec
   }
 });
 
-void test("Spark prompt preserves base prompt and stays a single-line phase marker", () => {
+test("Spark prompt preserves base prompt and stays a single-line phase marker", () => {
   const prompt = renderSparkActiveSystemPrompt("Base prompt");
   assert.match(prompt, /^Base prompt\n\nSpark phase: plan\./);
   assert.match(prompt, /Tools:/);
@@ -141,7 +141,7 @@ void test("Spark prompt preserves base prompt and stays a single-line phase mark
   assert.doesNotMatch(prompt, /fix concrete repo behavior feedback in code\/docs\/tests/);
 });
 
-void test("active Spark context reports no selected project without persisting current selection", async () => {
+test("active Spark context reports no selected project without persisting current selection", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-no-current-before-activation-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -166,7 +166,7 @@ void test("active Spark context reports no selected project without persisting c
   }
 });
 
-void test("active Spark context keeps strict limits for intent, claimed tasks, and TODOs", async () => {
+test("active Spark context keeps strict limits for intent, claimed tasks, and TODOs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-active-context-limits-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -237,7 +237,7 @@ void test("active Spark context keeps strict limits for intent, claimed tasks, a
   }
 });
 
-void test("active Spark context omits finished history and finished TODOs", async () => {
+test("active Spark context omits finished history and finished TODOs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-active-context-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -326,7 +326,7 @@ void test("active Spark context omits finished history and finished TODOs", asyn
   }
 });
 
-void test("shouldClarifyBeforeInit disables generic upfront clarification templates", () => {
+test("shouldClarifyBeforeInit disables generic upfront clarification templates", () => {
   assert.equal(shouldClarifyBeforeInit("Fix typo"), false);
   assert.equal(shouldClarifyBeforeInit("Build v0 LSP plugin workflow"), false);
   assert.equal(
@@ -335,7 +335,7 @@ void test("shouldClarifyBeforeInit disables generic upfront clarification templa
   );
 });
 
-void test("initializeSparkIdea preserves clarified title and trace ask refs", async () => {
+test("initializeSparkIdea preserves clarified title and trace ask refs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-clarified-"));
   try {
     await mkdir(join(dir, ".git"));

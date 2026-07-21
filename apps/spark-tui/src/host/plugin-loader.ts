@@ -3,7 +3,7 @@
  * lists from the effective Spark config.json via the same import-default mechanism
  * but with two distinct surfaces:
  *
- *   - extension plugins → call default(api: ExtensionAPI)  (spark-extension-api)
+ *   - extension plugins → call default(api: SparkHostAPI)  (spark-core)
  *   - provider plugins  → call default(api: ProviderRegistrationAPI)
  *
  * Errors loading individual plugins are *isolated*: a failed import or a
@@ -16,7 +16,7 @@
  * (`spark-cue`, `spark/extension`) and absolute file URLs.
  */
 
-import type { ExtensionAPI } from "@zendev-lab/spark-extension-api";
+import type { SparkHostAPI } from "@zendev-lab/spark-core";
 
 import { createSparkExtensionImporter } from "./extension-loader.ts";
 import type { ProviderRegistrationAPI } from "./provider-registry.ts";
@@ -35,7 +35,7 @@ export interface LoadResult {
 }
 
 export interface LoadPluginsOptions {
-  extensionApi: ExtensionAPI;
+  extensionApi: SparkHostAPI;
   providerApi: ProviderRegistrationAPI;
   extensions: string[];
   providers: string[];
@@ -55,7 +55,7 @@ export async function loadPlugins(options: LoadPluginsOptions): Promise<LoadResu
         const factory = pickDefault(mod);
         if (typeof factory !== "function") {
           throw new Error(
-            `Extension plugin "${specifier}" must default-export a function(api: ExtensionAPI)`,
+            `Extension plugin "${specifier}" must default-export a function(api: SparkHostAPI)`,
           );
         }
         const result = factory(options.extensionApi);

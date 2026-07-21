@@ -14,16 +14,19 @@ import {
 } from "./file-tools.ts";
 import { createFindToolConfig, createGrepToolConfig } from "./search-tools.ts";
 
-export interface PiFilesExtensionApi {
-  registerTool(config: import("@zendev-lab/spark-extension-api").ToolConfig): void;
+export interface SparkFilesHostApi {
+  registerTool(config: import("@zendev-lab/spark-core").ToolConfig): void;
 }
 
-export interface PiFilesOptions {
+export interface SparkFilesOptions {
   /** Tool names to register. Defaults to all six. */
   tools?: ReadonlyArray<"read" | "write" | "edit" | "ls" | "grep" | "find">;
 }
 
-export function registerPiFilesTools(pi: PiFilesExtensionApi, options: PiFilesOptions = {}): void {
+export function registerSparkFilesTools(
+  pi: SparkFilesHostApi,
+  options: SparkFilesOptions = {},
+): void {
   const enabled = new Set(options.tools ?? ["read", "write", "edit", "ls", "grep", "find"]);
   if (enabled.has("read")) pi.registerTool(createReadToolConfig());
   if (enabled.has("write")) pi.registerTool(createWriteToolConfig());
@@ -33,6 +36,6 @@ export function registerPiFilesTools(pi: PiFilesExtensionApi, options: PiFilesOp
   if (enabled.has("find")) pi.registerTool(createFindToolConfig());
 }
 
-export default function piFilesExtension(pi: PiFilesExtensionApi): void {
-  registerPiFilesTools(pi);
+export default function piFilesExtension(pi: SparkFilesHostApi): void {
+  registerSparkFilesTools(pi);
 }

@@ -10,7 +10,7 @@ Target package topology follows type-first names:
 - `apps/spark-tui` — executable native terminal host (`@zendev-lab/spark-tui-app`). Keep host/runtime/editor code here, not in the dispatcher.
 - `apps/spark-daemon` — Spark daemon service package that owns local workspace state, IPC, and background execution.
 - `apps/spark-cockpit` — Spark Cockpit SvelteKit local web cockpit/projection app. Keep SvelteKit/browser-specific checks isolated from the non-Svelte Spark package checks.
-- `packages/spark-*` — Spark-owned capability/runtime packages. Core capability primitives include `spark-extension-api`, `spark-artifacts`, `spark-tasks`, `spark-workflows`, `spark-loop`, and `spark-modes`.
+- `packages/spark-*` — Spark-owned capability/runtime packages. Core capability primitives include `spark-core`, `spark-memory`, `spark-web`, `spark-artifacts`, `spark-tasks`, `spark-workflows`, `spark-loop`, and `spark-modes`.
 - **Pi SDK kernel (keep)** — `@earendil-works/pi-ai` via `spark-ai`, `@earendil-works/pi-tui` via `spark-tui` / `spark-text`. Model streams, providers, and terminal UI primitives stay on this kernel; do not “de-Pi” by removing these deps.
 - **Pi product host (freeze / retire)** — `packages/pi-extension` (legacy facade) and `packages/pi-btw` (loads `pi-coding-agent`). New features target TUI / Cockpit / channels, not the Pi product extension loader. Retained `pi-*` packages must not depend on Spark product/Cockpit packages; only Spark foundation packages and the `@zendev-lab/spark-tui` presentation boundary are allowed.
 - `packages/spark-runtime`, `packages/spark-protocol`, `packages/spark-tui`, `packages/spark-db`, and `packages/spark-system` — Spark shared runtime, protocol/schema, reusable TUI boundary, SQLite/migration, and local-system helper packages. Cross-surface ask / slash / session-view semantics belong in `spark-protocol`.
@@ -21,7 +21,7 @@ Target package topology follows type-first names:
 
 - **pnpm** — `packageManager` is pinned in root `package.json`; workspaces live in `pnpm-workspace.yaml` (catalog + overrides align Vite / Vite+ / Vitest versions with [sixbones.dev](https://github.com/zrr1999/sixbones.dev)).
 - **Vite+** — Root [`vite.config.ts`](./vite.config.ts) drives `vp fmt`, `vp lint`, and `vp check` (format + lint + type-aware checks). Install the `vp` CLI (see [viteplus.dev](https://viteplus.dev)) for local use; CI installs it via [`voidzero-dev/setup-vp`](https://github.com/voidzero-dev/setup-vp).
-- **TypeScript / tests** — `pnpm run check` is the root validation gate: SvelteKit sync, Pi package boundary guard, `vp check`, root Node tests, workspace package checks, Spark Cockpit tests, and Spark daemon tests. Use `pnpm run check:tsc` for typecheck-only validation. Use `pnpm test` for root Node tests only; single-file runs use `pnpm exec node --experimental-strip-types --test test/name.test.ts`. Package-specific tests use `pnpm --filter <package> run test`.
+- **TypeScript / tests** — `pnpm run check` is the root validation gate: SvelteKit sync, Pi package boundary guard, `vp check`, root Vitest suite (`test/**/*.test.ts` via `vitest.root.config.ts`), workspace package checks, Spark Cockpit tests, and Spark daemon tests. Use `pnpm run check:tsc` for typecheck-only validation. Use `pnpm test` for the root Vitest suite only; single-file runs use `pnpm test:file -- test/name.test.ts`. Package-specific tests use `pnpm --filter <package> run test`.
 - **Git hooks** — Managed by [prek](https://github.com/j178/prek) from [`prek.toml`](./prek.toml). After clone, `pnpm install` runs `prepare` → `prek install`; run `prek install-hooks` once if hooks are missing.
 
 ## Useful commands
@@ -34,7 +34,8 @@ Target package topology follows type-first names:
 | `pnpm run check:tsc`                     | Typecheck only (`tsc --noEmit`)                                  |
 | `pnpm run check:daemon-readiness`        | Emit the Spark daemon readiness audit report                     |
 | `pnpm run check:zellij-harness`          | Emit the native TUI/zellij harness capability audit report       |
-| `pnpm test`                              | Root Node tests only (`test/*.test.ts`)                          |
+| `pnpm test`                              | Root Vitest suite (`test/**/*.test.ts`)                          |
+| `pnpm test:file -- <path>`               | Run one root Vitest file                                         |
 | `pnpm run test:mutation`                 | Leaf-package mutation CE (`retry`/`protocol`/`db`/`system`)      |
 | `pnpm run build`                         | Build the Spark daemon CLI and Spark Cockpit web app             |
 | `pnpm run preview`                       | Start the local Spark Cockpit dev server                         |
@@ -52,7 +53,7 @@ Target package topology follows type-first names:
 
 ## Extension boundary (Spark-first; Pi product frozen)
 
-- First-class surfaces are TUI, Cockpit, and messaging channels on the Spark daemon. `spark-extension-api` is the host-neutral TypeScript contract for Spark extension hosts; retained Pi **product** adapters may still speak it until retired. Do not merge this contract into Cockpit/daemon app code.
+- First-class surfaces are TUI, Cockpit, and messaging channels on the Spark daemon. `spark-core` exports the host-neutral `SparkHostAPI` contract plus lightweight primitives for Spark extension hosts (not a revival of the retired spark-core capability bag); retained Pi **product** adapters may still speak it until retired. Do not merge this contract into Cockpit/daemon app code.
 - `packages/pi-extension/src/extension/` remains loadable by the Pi product as a normal extension until that product path is retired; do not expand its surface for new Spark features.
 - Spark extension/shared packages must not import concrete app host internals from `apps/spark-cli`, `apps/spark-tui`, `@zendev-lab/spark-tui-app`, or `@earendil-works/pi-coding-agent` runtime code.
 - Shared Spark host/turn code belongs in `packages/spark-host` and `packages/spark-turn`; executable apps keep only bootstrap, UI, daemon, and compatibility-adapter glue. `pi-tui` wrappers stay behind `packages/spark-tui`.
@@ -64,5 +65,5 @@ Target package topology follows type-first names:
 - Public/default repo-owned tools should use canonical `tool({ action })` surfaces when operations share one domain/state/permission/render/result contract; do not keep fragmented duplicate aliases public, and render action tools as `tool action=<value> ...`.
 - Prefer `vp fmt` / `vp check` before committing when touching TS/Markdown; pre-commit runs `vp check --fix`.
 - Do not commit secrets or `.env` files.
-- **State directories** — Workspace agent runtime lives under `.spark/`; local learnings under `.learnings/`. User-level Spark paths use explicit `SPARK_HOME` when set, otherwise the standard XDG config/data/cache/state/runtime roots via `resolveSparkUserPaths()` and `resolveSparkPaths()`. Public role, skill, and workflow definitions remain under `$HOME/.agents/`.
+- **State directories** — Workspace agent runtime lives under `.spark/` (durable memory under `.spark/memory/`, including `learnings/`, `reflections/`, and `recall-candidates.json`). User-level Spark paths use explicit `SPARK_HOME` when set, otherwise the standard XDG config/data/cache/state/runtime roots via `resolveSparkUserPaths()` and `resolveSparkPaths()`. Public role, skill, and workflow definitions remain under `$HOME/.agents/`. Learning / recall / reflection capability code lives in `@zendev-lab/spark-memory` (not separate `spark-learnings` / `spark-recall` packages). Legacy `.learnings/` and `.spark/reflections/` are migrated into `.spark/memory/` when needed.
 - Boundary checks should keep retained `pi-*` packages independent from Spark product/Cockpit packages except for renamed Spark foundation packages, and keep Spark shared packages independent from Cockpit/daemon adapter packages.

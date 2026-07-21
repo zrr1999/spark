@@ -8,7 +8,7 @@
  * a child of that selected entry.
  */
 
-import type { CommandConfig, ExtensionCommandContext } from "@zendev-lab/spark-extension-api";
+import type { CommandConfig, SparkHostCommandContext } from "@zendev-lab/spark-core";
 
 import type {
   SparkLabelEntry,
@@ -172,7 +172,7 @@ export function registerSparkSessionsCommand(
 
 export async function runSparkSessionsCommand(
   args: string,
-  ctx: ExtensionCommandContext,
+  ctx: SparkHostCommandContext,
   options: SparkSessionsCommandOptions,
 ): Promise<void> {
   const [subcommand = "list", ...rest] = args.trim().split(/\s+/).filter(Boolean);
@@ -370,7 +370,7 @@ function describeEntry(entry: SparkSessionEntry): string {
 }
 
 function notify(
-  ctx: ExtensionCommandContext,
+  ctx: SparkHostCommandContext,
   message: string,
   level: "info" | "warning" | "error" | "success" = "info",
 ): void {

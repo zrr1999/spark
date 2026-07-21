@@ -230,6 +230,7 @@ export function buildSessionTimeline(input: {
       report.kind === "daemon.task.lifecycle" ||
       (report.kind === "run.update" && report.runKind === "session") ||
       report.role === "tool" ||
+      isArtifactActivityReport(report) ||
       isInternalExecutionFailureReport(report) ||
       (report.role === "system" && report.message?.metadata.conversationVisible !== true)
     ) {
@@ -307,6 +308,20 @@ function isInternalExecutionFailureReport(report: SessionTimelineReport): boolea
   if (report.kind !== "run.update" && report.kind !== "task.update") return false;
   if (!isFailedTerminalStatus(report.status)) return false;
   return isInternalExecutionTransportFailure(`${report.title}\n${report.text}`);
+}
+
+/**
+ * Tool results emit `evidence.update` (and product-only `artifact.update`) as
+ * side-channel views. Those belong in the session inspector / evidence lanes,
+ * not as standalone chat bubbles — product artifacts already live under 产物.
+ */
+function isArtifactActivityReport(report: SessionTimelineReport): boolean {
+  return (
+    report.kind === "artifact.update" ||
+    report.kind === "evidence.update" ||
+    (report.kind.startsWith("artifact.") && report.kind.length > "artifact.".length) ||
+    (report.kind.startsWith("evidence.") && report.kind.length > "evidence.".length)
+  );
 }
 
 function conversationSystemMessageVisible(message: SparkMessageView): boolean {
@@ -744,7 +759,8 @@ function stableReportKey(report: SessionTimelineReport) {
   if (
     report.kind !== "run.update" &&
     report.kind !== "task.update" &&
-    report.kind !== "artifact.update"
+    report.kind !== "artifact.update" &&
+    report.kind !== "evidence.update"
   ) {
     return null;
   }

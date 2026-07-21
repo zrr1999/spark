@@ -3,7 +3,7 @@ import type {
   LeafCapabilityRequest,
   LeafCapabilityResult,
   LeafCapabilityRunner,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 
 import {
   normalizeProviderStream,

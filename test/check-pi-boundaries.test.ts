@@ -2,14 +2,14 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 
 const boundaryScriptPath = resolve("scripts/check-pi-boundaries.mjs");
 const docTerminologyScriptPath = resolve("scripts/check-doc-terminology.mjs");
 const piTuiSpecifier = "@earendil-works/" + "pi-tui";
 
-void test("boundary checker rejects pi package imports from Spark and cockpit packages", async () => {
+test("boundary checker rejects pi package imports from Spark and cockpit packages", async () => {
   const root = await fixtureRoot();
   await writePackage(root, "packages/pi-sample", {
     name: "@zendev-lab/pi-sample",
@@ -27,7 +27,7 @@ void test("boundary checker rejects pi package imports from Spark and cockpit pa
   );
 });
 
-void test("boundary checker rejects Spark packages importing cockpit packages", async () => {
+test("boundary checker rejects Spark packages importing cockpit packages", async () => {
   const root = await fixtureRoot();
   await writePackage(root, "packages/spark-sample", {
     name: "@zendev-lab/spark-sample",
@@ -43,7 +43,7 @@ void test("boundary checker rejects Spark packages importing cockpit packages", 
   );
 });
 
-void test("boundary checker keeps Spark capabilities independent from coordination adapters", async () => {
+test("boundary checker keeps Spark capabilities independent from coordination adapters", async () => {
   const root = await fixtureRoot();
   await writePackage(root, "packages/spark-sample", {
     name: "@zendev-lab/spark-sample",
@@ -59,7 +59,7 @@ void test("boundary checker keeps Spark capabilities independent from coordinati
   );
 });
 
-void test("boundary checker scans Svelte source imports", async () => {
+test("boundary checker scans Svelte source imports", async () => {
   const root = await fixtureRoot();
   await writePackage(root, "packages/spark-sample", {
     name: "@zendev-lab/spark-sample",
@@ -76,7 +76,7 @@ void test("boundary checker scans Svelte source imports", async () => {
   assert.match(result.stderr, /src\/Panel\.svelte:1/u);
 });
 
-void test("boundary checker rejects cockpit packages importing Spark CLI host internals", async () => {
+test("boundary checker rejects cockpit packages importing Spark CLI host internals", async () => {
   const root = await fixtureRoot();
   await writePackage(root, "apps/spark-cockpit", {
     name: "@zendev-lab/spark-cockpit",
@@ -89,7 +89,7 @@ void test("boundary checker rejects cockpit packages importing Spark CLI host in
   assert.match(result.stderr, /Cockpit packages must not import Spark CLI host internals/u);
 });
 
-void test("boundary checker allows pi-extension imports from spark-host foundation", async () => {
+test("boundary checker allows pi-extension imports from spark-host foundation", async () => {
   const root = await fixtureRoot();
   await writePackage(root, "packages/pi-extension", {
     name: "@zendev-lab/pi-extension",
@@ -102,7 +102,7 @@ void test("boundary checker allows pi-extension imports from spark-host foundati
   assert.equal(result.status, 0, result.stderr);
 });
 
-void test("boundary checker rejects Spark foundation imports from pi-extension policy", async () => {
+test("boundary checker rejects Spark foundation imports from pi-extension policy", async () => {
   const root = await fixtureRoot();
   await writePackage(root, "packages/spark-host", {
     name: "@zendev-lab/spark-host",
@@ -116,7 +116,7 @@ void test("boundary checker rejects Spark foundation imports from pi-extension p
   assert.match(result.stderr, /Spark foundation packages must not import pi-extension policy/u);
 });
 
-void test("boundary checker rejects Spark app imports from sibling package source trees", async () => {
+test("boundary checker rejects Spark app imports from sibling package source trees", async () => {
   const root = await fixtureRoot();
   await writePackage(root, "apps/spark-tui", {
     name: "@zendev-lab/spark-tui-app",
@@ -133,7 +133,7 @@ void test("boundary checker rejects Spark app imports from sibling package sourc
   );
 });
 
-void test("boundary checker rejects pi-extension imports from app host internals", async () => {
+test("boundary checker rejects pi-extension imports from app host internals", async () => {
   const root = await fixtureRoot();
   await writePackage(root, "packages/pi-extension", {
     name: "@zendev-lab/pi-extension",
@@ -146,7 +146,7 @@ void test("boundary checker rejects pi-extension imports from app host internals
   assert.match(result.stderr, /Spark shared packages must not import Spark app host internals/u);
 });
 
-void test("documentation terminology checker rejects retired product package names in active docs", async () => {
+test("documentation terminology checker rejects retired product package names in active docs", async () => {
   const root = await fixtureRoot();
   const retiredProduct = ["na", "via"].join("");
   await writeFile(
@@ -162,7 +162,7 @@ void test("documentation terminology checker rejects retired product package nam
   assert.match(terminologyResult.stderr, /retired product terminology/u);
 });
 
-void test("documentation terminology checker rejects retired product app names in active docs", async () => {
+test("documentation terminology checker rejects retired product app names in active docs", async () => {
   const root = await fixtureRoot();
   const retiredProduct = ["na", "via"].join("");
   await mkdir(join(root, "docs"), { recursive: true });
@@ -179,7 +179,7 @@ void test("documentation terminology checker rejects retired product app names i
   assert.match(terminologyResult.stderr, /retired product terminology/u);
 });
 
-void test("boundary checker allows shared Spark system/database packages", async () => {
+test("boundary checker allows shared Spark system/database packages", async () => {
   const root = await fixtureRoot();
   await writePackage(root, "packages/spark-db", {
     name: "@zendev-lab/spark-db",
@@ -192,7 +192,7 @@ void test("boundary checker allows shared Spark system/database packages", async
   assert.equal(result.status, 0, result.stderr);
 });
 
-void test("boundary checker treats spark-daemon as the daemon/cockpit adapter", async () => {
+test("boundary checker treats spark-daemon as the daemon/cockpit adapter", async () => {
   const root = await fixtureRoot();
   await writePackage(root, "apps/spark-daemon", {
     name: "@zendev-lab/spark-daemon",
@@ -211,7 +211,7 @@ void test("boundary checker treats spark-daemon as the daemon/cockpit adapter", 
   assert.equal(result.status, 0, result.stderr);
 });
 
-void test("boundary checker rejects spark-daemon imports from spark-tui-app", async () => {
+test("boundary checker rejects spark-daemon imports from spark-tui-app", async () => {
   const root = await fixtureRoot();
   await writePackage(root, "apps/spark-daemon", {
     name: "@zendev-lab/spark-daemon",
@@ -231,7 +231,7 @@ void test("boundary checker rejects spark-daemon imports from spark-tui-app", as
   );
 });
 
-void test("boundary checker keeps direct pi-tui usage behind spark-tui", async () => {
+test("boundary checker keeps direct pi-tui usage behind spark-tui", async () => {
   const root = await fixtureRoot();
   await writePackage(root, "packages/spark-tui", {
     name: "@zendev-lab/spark-tui",
@@ -251,7 +251,7 @@ void test("boundary checker keeps direct pi-tui usage behind spark-tui", async (
   assert.match(result.stderr, /direct pi-tui imports must go through @zendev-lab\/spark-tui/u);
 });
 
-void test("boundary checker rejects direct pi-tui imports from the removed Spark app adapter path", async () => {
+test("boundary checker rejects direct pi-tui imports from the removed Spark app adapter path", async () => {
   const root = await fixtureRoot();
   await writePackage(root, "apps/spark", {
     name: "@zendev-lab/spark-cli",
@@ -269,7 +269,7 @@ void test("boundary checker rejects direct pi-tui imports from the removed Spark
   assert.match(result.stderr, /direct pi-tui imports must go through @zendev-lab\/spark-tui/u);
 });
 
-void test("boundary checker allows pi packages to use the spark-tui boundary", async () => {
+test("boundary checker allows pi packages to use the spark-tui boundary", async () => {
   const root = await fixtureRoot();
   await writePackage(root, "packages/spark-tui", {
     name: "@zendev-lab/spark-tui",

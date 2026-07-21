@@ -9,6 +9,7 @@ import {
   humanResponseRecordedEnvelopeSchema,
   invocationLogChunkEnvelopeSchema,
   invocationUpdateEnvelopeSchema,
+  optionalWireIdempotencyKey,
   runtimeCommandAckEnvelopeSchema,
   runtimeCommandRejectEnvelopeSchema,
   runtimeCommandResultEnvelopeSchema,
@@ -1077,7 +1078,7 @@ function upsertWorkspaceBindings(
   );
   const ownerWorkspace = db.prepare(
     `SELECT workspace_id AS workspaceId
-     FROM workspace_owner_bindings
+     FROM workspace_leases
      WHERE runtime_workspace_binding_id = ? AND ended_at IS NULL
      LIMIT 1`,
   );
@@ -1137,7 +1138,7 @@ function listWorkspaceBindingAssignments(
   const read = db.prepare(
     `SELECT wob.workspace_id AS workspaceId
      FROM runtime_workspace_bindings rwb
-     LEFT JOIN workspace_owner_bindings wob
+     LEFT JOIN workspace_leases wob
        ON wob.runtime_workspace_binding_id = rwb.id
       AND wob.ended_at IS NULL
      WHERE rwb.runtime_id = ? AND rwb.id = ?
@@ -1217,8 +1218,8 @@ function requireRoutedContext(
   ) {
     sendError(
       ws,
-      "workspace_owner_binding_mismatch",
-      "Runtime message did not match the active Cockpit workspace owner binding.",
+      "workspace_lease_mismatch",
+      "Runtime message did not match the active Cockpit origin lease.",
     );
     return null;
   }
@@ -1261,7 +1262,7 @@ function bindingOwnsWorkspace(
       .prepare(
         `SELECT 1
          FROM runtime_workspace_bindings rwb
-         JOIN workspace_owner_bindings wob
+         JOIN workspace_leases wob
            ON wob.runtime_workspace_binding_id = rwb.id
           AND wob.ended_at IS NULL
          WHERE rwb.id = ?
@@ -1357,17 +1358,30 @@ function flushPendingRuntimeControlCommands(
     context.runtimeId,
     10,
   )) {
-    const envelope = serializeServerCommandEnvelope({
-      runtimeId: context.runtimeId,
-      workspaceBindingId: command.runtimeWorkspaceBindingId,
-      workspaceId: command.workspaceId,
-      projectId: command.projectId,
-      sessionId: command.sessionId,
-      commandId: command.commandId,
-      idempotencyKey: command.idempotencyKey,
-      sentAt: now,
-      payload,
-    });
+    let envelope: string;
+    try {
+      envelope = serializeServerCommandEnvelope({
+        runtimeId: context.runtimeId,
+        workspaceBindingId: command.runtimeWorkspaceBindingId,
+        workspaceId: command.workspaceId,
+        projectId: command.projectId,
+        sessionId: command.sessionId,
+        commandId: command.commandId,
+        idempotencyKey: command.idempotencyKey
+          ? optionalWireIdempotencyKey(command.idempotencyKey)
+          : undefined,
+        sentAt: now,
+        payload,
+      });
+    } catch {
+      markRuntimeControlCommandDeliveryAttempt(context.db, {
+        commandId: command.commandId,
+        runtimeId: context.runtimeId,
+        sent: false,
+        attemptedAt: now,
+      });
+      continue;
+    }
     try {
       ws.send(envelope);
       markRuntimeControlCommandDeliveryAttempt(context.db, {
@@ -1405,7 +1419,7 @@ function flushPendingCommands(
        FROM command_deliveries cd
        JOIN commands c ON c.id = cd.command_id
        JOIN runtime_workspace_bindings rb ON rb.id = cd.runtime_workspace_binding_id
-       JOIN workspace_owner_bindings wob
+       JOIN workspace_leases wob
          ON wob.runtime_workspace_binding_id = rb.id
         AND wob.workspace_id = c.workspace_id
         AND wob.ended_at IS NULL
@@ -1426,19 +1440,52 @@ function flushPendingCommands(
 
   for (const row of rows) {
     const messageId = createId("msg");
-    const envelope = serializeServerCommandEnvelope({
-      runtimeId: context.runtimeId,
-      workspaceBindingId: row.workspaceBindingId,
-      workspaceId: row.workspaceId,
-      projectId: row.projectId ?? undefined,
-      commandId: row.commandId,
-      idempotencyKey: row.idempotencyKey ?? undefined,
-      messageId,
-      sentAt: now,
-      payload: JSON.parse(row.payloadJson) as Parameters<
-        typeof createServerCommandEnvelope
-      >[0]["payload"],
-    });
+    let envelope: string;
+    try {
+      envelope = serializeServerCommandEnvelope({
+        runtimeId: context.runtimeId,
+        workspaceBindingId: row.workspaceBindingId,
+        workspaceId: row.workspaceId,
+        projectId: row.projectId ?? undefined,
+        commandId: row.commandId,
+        idempotencyKey: row.idempotencyKey
+          ? optionalWireIdempotencyKey(row.idempotencyKey)
+          : undefined,
+        messageId,
+        sentAt: now,
+        payload: JSON.parse(row.payloadJson) as Parameters<
+          typeof createServerCommandEnvelope
+        >[0]["payload"],
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      context.db.exec("BEGIN");
+      try {
+        context.db
+          .prepare(
+            `UPDATE command_deliveries
+             SET status = 'failed',
+                 attempt_count = attempt_count + 1,
+                 last_attempt_at = ?,
+                 reject_code = 'invalid_command_envelope',
+                 reject_message = ?,
+                 updated_at = ?
+             WHERE id = ? AND status = 'pending'`,
+          )
+          .run(now, message.slice(0, 500), now, row.deliveryId);
+        context.db
+          .prepare(
+            `UPDATE commands
+             SET status = 'rejected', updated_at = ?
+             WHERE id = ? AND status IN ('queued', 'delivered')`,
+          )
+          .run(now, row.commandId);
+        context.db.exec("COMMIT");
+      } catch {
+        context.db.exec("ROLLBACK");
+      }
+      continue;
+    }
 
     try {
       ws.send(envelope);
@@ -1524,7 +1571,7 @@ function flushPendingHumanResponses(
        FROM human_responses hres
        JOIN human_requests hreq ON hreq.id = hres.human_request_id
        JOIN runtime_workspace_bindings rb ON rb.id = hreq.runtime_workspace_binding_id
-       JOIN workspace_owner_bindings wob
+       JOIN workspace_leases wob
          ON wob.runtime_workspace_binding_id = rb.id
         AND wob.workspace_id = hreq.workspace_id
         AND wob.ended_at IS NULL

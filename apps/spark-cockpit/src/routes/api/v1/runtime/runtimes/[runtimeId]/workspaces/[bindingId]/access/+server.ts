@@ -7,7 +7,7 @@ import {
   createRuntimeWorkspaceBrowserAccess,
   RuntimeAccessTokenError,
   RuntimeEnrollmentError,
-} from "$lib/server/runtime-registration";
+} from "@zendev-lab/spark-coordination/runtime-registration";
 
 export const POST: RequestHandler = ({ params, request, locals, url }) => {
   const runtimeId = params.runtimeId;

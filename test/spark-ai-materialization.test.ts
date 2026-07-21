@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   materializeRouteModel,
@@ -129,7 +129,7 @@ function assertApi<TApi extends Api>(model: Model<TApi>, expected: TApi): void {
   if (model.api !== expected) throw new Error(`Mismatched api: ${model.api} expected ${expected}`);
 }
 
-void test("materializeRouteModel uses the route transport API and model id", () => {
+test("materializeRouteModel uses the route transport API and model id", () => {
   const profile = sampleProfile();
   const route = profile.routes[0] as ProviderRoute<"anthropic-messages">;
 
@@ -149,7 +149,7 @@ void test("materializeRouteModel uses the route transport API and model id", () 
   assert.doesNotThrow(() => assertApi(model, "anthropic-messages"));
 });
 
-void test("materializeRouteModel supports openai-responses routes", () => {
+test("materializeRouteModel supports openai-responses routes", () => {
   const profile = sampleProfile();
   const route = profile.routes[1] as ProviderRoute<"openai-responses">;
 
@@ -162,7 +162,7 @@ void test("materializeRouteModel supports openai-responses routes", () => {
   assert.doesNotThrow(() => assertApi(model, "openai-responses"));
 });
 
-void test("materializeRouteModel rejects routes that are not in the profile", () => {
+test("materializeRouteModel rejects routes that are not in the profile", () => {
   const profile = sampleProfile();
   const route: ProviderRoute<"anthropic-messages"> = {
     id: "foreign-route",
@@ -180,7 +180,7 @@ void test("materializeRouteModel rejects routes that are not in the profile", ()
   );
 });
 
-void test("retag helpers restore Spark-facing assistant identity", async () => {
+test("retag helpers restore Spark-facing assistant identity", async () => {
   const profile = sampleProfile();
   const identity = resolveSparkModelMessageIdentity(profile);
   const transportMessage = assistantMessage();
@@ -235,7 +235,7 @@ void test("retag helpers restore Spark-facing assistant identity", async () => {
   assert.equal((await stream.result()).provider, "baidu-oneapi");
 });
 
-void test("default retag identity is model-only spark-ai", () => {
+test("default retag identity is model-only spark-ai", () => {
   const profile = sampleProfile();
   delete profile.identity;
 

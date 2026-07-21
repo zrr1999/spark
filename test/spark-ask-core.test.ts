@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   askUser,
-  createPiAskFlowRequest,
-  createPiAskFlowResult,
-  isPiAskFlowGateBlocked,
-  runPiAskFlow,
+  createSparkAskFlowRequest,
+  createSparkAskFlowResult,
+  isSparkAskFlowGateBlocked,
+  runSparkAskFlow,
 } from "@zendev-lab/spark-ask";
-import { detectCopyLanguage } from "@zendev-lab/spark-extension-api";
+import { detectCopyLanguage } from "@zendev-lab/spark-core";
 
-void test("Spark asks are built from caller-provided context-specific questions", () => {
-  const request = createPiAskFlowRequest({
+test("Spark asks are built from caller-provided context-specific questions", () => {
+  const request = createSparkAskFlowRequest({
     flow: "svg-role-approval",
     mode: "approval",
     title: "Approve SVG role for animation planning",
@@ -35,13 +35,13 @@ void test("Spark asks are built from caller-provided context-specific questions"
   assert.match(request.context ?? "", /svg-role/);
 });
 
-void test("copy helpers only detect language; they do not create canned ask forms", () => {
+test("copy helpers only detect language; they do not create canned ask forms", () => {
   assert.equal(detectCopyLanguage("梳理下一步改进点"), "zh");
   assert.equal(detectCopyLanguage("Plan next work"), "en");
 });
 
-void test("approval flow without UI blocks instead of implicitly approving", async () => {
-  const request = createPiAskFlowRequest({
+test("approval flow without UI blocks instead of implicitly approving", async () => {
+  const request = createSparkAskFlowRequest({
     flow: "svg-role-approval",
     mode: "approval",
     title: "Approve SVG role for animation planning",
@@ -58,17 +58,17 @@ void test("approval flow without UI blocks instead of implicitly approving", asy
       },
     ],
   });
-  const result = await runPiAskFlow(request);
+  const result = await runSparkAskFlow(request);
   assert.equal(result.flow, "svg-role-approval");
   assert.equal(result.mode, "submit");
   assert.equal(result.status, "no_selection");
   assert.equal(result.nextAction, "block");
   assert.equal(result.answers.approval, undefined);
-  assert.equal(isPiAskFlowGateBlocked(result, request), true);
+  assert.equal(isSparkAskFlowGateBlocked(result, request), true);
 });
 
-void test("context-specific approval asks record explicit selections", async () => {
-  const request = createPiAskFlowRequest({
+test("context-specific approval asks record explicit selections", async () => {
+  const request = createSparkAskFlowRequest({
     flow: "svg-role-approval",
     mode: "approval",
     title: "Approve SVG role for animation planning",
@@ -85,7 +85,7 @@ void test("context-specific approval asks record explicit selections", async () 
       },
     ],
   });
-  const result = await runPiAskFlow(request, { select: async () => "Approve" });
+  const result = await runSparkAskFlow(request, { select: async () => "Approve" });
   assert.equal(result.flow, "svg-role-approval");
   assert.equal(result.mode, "submit");
   assert.equal(result.status, "answered");
@@ -93,7 +93,7 @@ void test("context-specific approval asks record explicit selections", async () 
   assert.equal(result.answers.approval?.values[0], "approve");
 });
 
-void test("ask_user prefers protocol interaction answers before legacy selectors", async () => {
+test("ask_user prefers protocol interaction answers before legacy selectors", async () => {
   let fallbackSelectCalls = 0;
   const result = await askUser(
     {
@@ -138,7 +138,7 @@ void test("ask_user prefers protocol interaction answers before legacy selectors
   assert.deepEqual(result.answers.route?.labels, ["Safe"]);
 });
 
-void test("async ask_user returns a durable pending handle without invoking legacy UI", async () => {
+test("async ask_user returns a durable pending handle without invoking legacy UI", async () => {
   let fallbackSelectCalls = 0;
   const result = await askUser(
     {
@@ -181,7 +181,7 @@ void test("async ask_user returns a durable pending handle without invoking lega
   assert.equal(result.nextAction, "resume");
 });
 
-void test("blocking ask_user keeps the interaction pending until the daemon answers", async () => {
+test("blocking ask_user keeps the interaction pending until the daemon answers", async () => {
   let resolveInteraction!: (value: {
     kind: "askFlow";
     requestId: string;
@@ -236,7 +236,7 @@ void test("blocking ask_user keeps the interaction pending until the daemon answ
   assert.deepEqual(result.answers.route?.values, ["safe"]);
 });
 
-void test("ask_user falls back to legacy selectors when protocol interaction is blocked", async () => {
+test("ask_user falls back to legacy selectors when protocol interaction is blocked", async () => {
   let fallbackSelectCalls = 0;
   const result = await askUser(
     {
@@ -275,7 +275,7 @@ void test("ask_user falls back to legacy selectors when protocol interaction is 
   assert.deepEqual(result.answers.route?.values, ["safe"]);
 });
 
-void test("ask_user converts protocol interaction failures into cancelled gate results", async () => {
+test("ask_user converts protocol interaction failures into cancelled gate results", async () => {
   let fallbackSelectCalls = 0;
   const warnings: string[] = [];
   const result = await askUser(
@@ -316,8 +316,8 @@ void test("ask_user converts protocol interaction failures into cancelled gate r
   assert.match(warnings[0] ?? "", /renderer crashed/);
 });
 
-void test("ask_flow uses protocol interaction answers and blocked fallback selectors", async () => {
-  const request = createPiAskFlowRequest({
+test("ask_flow uses protocol interaction answers and blocked fallback selectors", async () => {
+  const request = createSparkAskFlowRequest({
     flow: "protocol-route",
     mode: "decision",
     title: "Choose protocol route",
@@ -335,7 +335,7 @@ void test("ask_flow uses protocol interaction answers and blocked fallback selec
     ],
   });
 
-  const protocolResult = await runPiAskFlow(request, {
+  const protocolResult = await runSparkAskFlow(request, {
     interaction: async (protocolRequest) => {
       assert.equal(protocolRequest.kind, "askFlow");
       assert.equal(protocolRequest.metadata?.tool, "ask_flow");
@@ -354,7 +354,7 @@ void test("ask_flow uses protocol interaction answers and blocked fallback selec
   assert.deepEqual(protocolResult.answers.route?.values, ["safe"]);
 
   let fallbackSelectCalls = 0;
-  const fallbackResult = await runPiAskFlow(request, {
+  const fallbackResult = await runSparkAskFlow(request, {
     interaction: async (protocolRequest) => ({
       kind: "askFlow",
       requestId: protocolRequest.requestId,
@@ -371,8 +371,8 @@ void test("ask_flow uses protocol interaction answers and blocked fallback selec
   assert.deepEqual(fallbackResult.answers.route?.values, ["fast"]);
 });
 
-void test("async ask_flow returns pending and does not block approval gates", async () => {
-  const request = createPiAskFlowRequest({
+test("async ask_flow returns pending and does not block approval gates", async () => {
+  const request = createSparkAskFlowRequest({
     delivery: "async",
     flow: "async-approval",
     mode: "approval",
@@ -390,7 +390,7 @@ void test("async ask_flow returns pending and does not block approval gates", as
       },
     ],
   });
-  const result = await runPiAskFlow(request, {
+  const result = await runSparkAskFlow(request, {
     interaction: async (protocolRequest) => {
       assert.equal(protocolRequest.delivery, "async");
       return {
@@ -405,11 +405,11 @@ void test("async ask_flow returns pending and does not block approval gates", as
   assert.equal(result.status, "pending");
   assert.equal(result.humanRequestId, "hreq_flow_async");
   assert.equal(result.nextAction, "resume");
-  assert.equal(isPiAskFlowGateBlocked(result, request), false);
+  assert.equal(isSparkAskFlowGateBlocked(result, request), false);
 });
 
-void test("decision/approval asks expose no-selection as a blocking result envelope", async () => {
-  const request = createPiAskFlowRequest({
+test("decision/approval asks expose no-selection as a blocking result envelope", async () => {
+  const request = createSparkAskFlowRequest({
     flow: "custom",
     mode: "decision",
     title: "Dispatch roles?",
@@ -426,15 +426,15 @@ void test("decision/approval asks expose no-selection as a blocking result envel
       },
     ],
   });
-  const result = await runPiAskFlow(request, { select: async () => undefined });
+  const result = await runSparkAskFlow(request, { select: async () => undefined });
   assert.equal(result.status, "no_selection");
   assert.equal(result.cancelled, false);
   assert.equal(result.nextAction, "block");
-  assert.equal(isPiAskFlowGateBlocked(result, request), true);
+  assert.equal(isSparkAskFlowGateBlocked(result, request), true);
 });
 
-void test("partial decision asks block when a later required selection is missing", async () => {
-  const request = createPiAskFlowRequest({
+test("partial decision asks block when a later required selection is missing", async () => {
+  const request = createSparkAskFlowRequest({
     flow: "custom",
     mode: "decision",
     title: "Dispatch roles?",
@@ -462,7 +462,7 @@ void test("partial decision asks block when a later required selection is missin
     ],
   });
   let calls = 0;
-  const result = await runPiAskFlow(request, {
+  const result = await runSparkAskFlow(request, {
     select: async () => {
       calls += 1;
       if (calls === 1) return "Plan A";
@@ -473,11 +473,11 @@ void test("partial decision asks block when a later required selection is missin
   assert.equal(result.nextAction, "block");
   assert.deepEqual(result.answers.plan?.values, ["a"]);
   assert.equal(result.answers.approval, undefined);
-  assert.equal(isPiAskFlowGateBlocked(result, request), true);
+  assert.equal(isSparkAskFlowGateBlocked(result, request), true);
 });
 
-void test("slow decision asks wait for user answer instead of timing out", async () => {
-  const request = createPiAskFlowRequest({
+test("slow decision asks wait for user answer instead of timing out", async () => {
+  const request = createSparkAskFlowRequest({
     flow: "custom",
     mode: "approval",
     title: "Approve?",
@@ -494,16 +494,16 @@ void test("slow decision asks wait for user answer instead of timing out", async
       },
     ],
   });
-  const result = await runPiAskFlow(request, {
+  const result = await runSparkAskFlow(request, {
     select: () => new Promise((resolve) => setTimeout(() => resolve("Approve"), 20)),
   });
   assert.equal(result.status, "answered");
   assert.equal(result.nextAction, "resume");
-  assert.equal(isPiAskFlowGateBlocked(result, request), false);
+  assert.equal(isSparkAskFlowGateBlocked(result, request), false);
 });
 
-void test("cancelled decision asks are blocking gate results", () => {
-  const request = createPiAskFlowRequest({
+test("cancelled decision asks are blocking gate results", () => {
+  const request = createSparkAskFlowRequest({
     flow: "custom",
     mode: "decision",
     title: "Continue?",
@@ -520,7 +520,7 @@ void test("cancelled decision asks are blocking gate results", () => {
       },
     ],
   });
-  const result = createPiAskFlowResult({
+  const result = createSparkAskFlowResult({
     status: "cancelled",
     flow: request.flow,
     mode: "cancel",
@@ -529,11 +529,11 @@ void test("cancelled decision asks are blocking gate results", () => {
   });
   assert.equal(result.status, "cancelled");
   assert.equal(result.nextAction, "block");
-  assert.equal(isPiAskFlowGateBlocked(result, request), true);
+  assert.equal(isSparkAskFlowGateBlocked(result, request), true);
 });
 
-void test("multi-select decision select path parses explicit comma-separated selections", async () => {
-  const request = createPiAskFlowRequest({
+test("multi-select decision select path parses explicit comma-separated selections", async () => {
+  const request = createSparkAskFlowRequest({
     flow: "custom",
     mode: "decision",
     title: "Choose workstreams",
@@ -551,10 +551,10 @@ void test("multi-select decision select path parses explicit comma-separated sel
       },
     ],
   });
-  const result = await runPiAskFlow(request, { select: async () => "Docs, Runtime" });
+  const result = await runSparkAskFlow(request, { select: async () => "Docs, Runtime" });
   assert.equal(result.status, "answered");
   assert.equal(result.nextAction, "resume");
   assert.deepEqual(result.answers.streams?.values, ["docs", "runtime"]);
   assert.deepEqual(result.answers.streams?.labels, ["Docs", "Runtime"]);
-  assert.equal(isPiAskFlowGateBlocked(result, request), false);
+  assert.equal(isSparkAskFlowGateBlocked(result, request), false);
 });

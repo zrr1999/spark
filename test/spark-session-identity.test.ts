@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { TaskGraph, defaultTaskGraphStore } from "@zendev-lab/spark-tasks";
 
@@ -12,23 +12,21 @@ import {
   loadSparkGraph,
 } from "../packages/pi-extension/src/extension/session-state.ts";
 import {
-  sparkSessionKey,
-  sparkSessionOwnerKey,
-  sparkStateCwd,
-} from "../packages/pi-extension/src/extension/session-identity.ts";
-import {
   rebuildSessionIndex as rebuildSparkLoopSessionIndex,
   sessionGoalStorePath,
   sessionIndexStorePath,
   sessionLoopStorePath,
   setSessionGoal,
   setSessionLoop,
+  sparkSessionKey,
   sparkSessionKey as sparkLoopSessionKey,
+  sparkSessionOwnerKey,
+  sparkStateCwd,
   sparkStateCwd as sparkLoopStateCwd,
   sparkStateRootPath as sparkLoopStateRootPath,
-} from "../packages/spark-loop/src/index.ts";
+} from "@zendev-lab/spark-loop";
 
-void test("sparkSessionKey prefers host sessionId over sessionManager stubs", () => {
+test("sparkSessionKey prefers host sessionId over sessionManager stubs", () => {
   assert.equal(
     sparkSessionKey({
       sessionId: "sess_daemon_1",
@@ -48,7 +46,7 @@ void test("sparkSessionKey prefers host sessionId over sessionManager stubs", ()
   );
 });
 
-void test("sparkSessionKey accepts fully-qualified session manager leaf keys", () => {
+test("sparkSessionKey accepts fully-qualified session manager leaf keys", () => {
   assert.equal(
     sparkSessionKey({ sessionManager: { getLeafId: () => "session:5ad35e499eafe941" } }),
     "session:5ad35e499eafe941",
@@ -60,7 +58,7 @@ void test("sparkSessionKey accepts fully-qualified session manager leaf keys", (
   );
 });
 
-void test("spark-loop session identity prefers host sessionId over sessionManager stubs", () => {
+test("spark-loop session identity prefers host sessionId over sessionManager stubs", () => {
   assert.equal(
     sparkLoopSessionKey({
       sessionId: "sess_loop_1",
@@ -73,7 +71,7 @@ void test("spark-loop session identity prefers host sessionId over sessionManage
   );
 });
 
-void test("spark-loop session identity accepts fully-qualified session manager leaf keys", () => {
+test("spark-loop session identity accepts fully-qualified session manager leaf keys", () => {
   assert.equal(
     sparkLoopSessionKey({ sessionManager: { getLeafId: () => "session:5ad35e499eafe941" } }),
     "session:5ad35e499eafe941",
@@ -88,7 +86,7 @@ void test("spark-loop session identity accepts fully-qualified session manager l
   );
 });
 
-void test("Spark state helpers honor explicit sparkStateRoot", async () => {
+test("Spark state helpers honor explicit sparkStateRoot", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-state-root-context-"));
   try {
     const repo = join(dir, "repo");
@@ -115,7 +113,7 @@ void test("Spark state helpers honor explicit sparkStateRoot", async () => {
   }
 });
 
-void test("spark-loop state paths default to cwd/.spark", () => {
+test("spark-loop state paths default to cwd/.spark", () => {
   const cwd = join("workspace", "repo");
   const defaultRoot = join(cwd, ".spark");
 
@@ -131,7 +129,7 @@ void test("spark-loop state paths default to cwd/.spark", () => {
   );
 });
 
-void test("spark-loop goal, loop, and rebuilt index share explicit sparkStateRoot", async () => {
+test("spark-loop goal, loop, and rebuilt index share explicit sparkStateRoot", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-loop-state-root-context-"));
   try {
     const repo = join(dir, "repo");

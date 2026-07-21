@@ -25,9 +25,9 @@ Direct role/session calls do not create task attribution.
 ## Evidence and context
 
 - `ask` is the only structured question surface; cancellation is not approval.
-- `evidence` is an **agent-internal ledger** (not Cockpit/user UI): compact provenance-backed `record | trace | knowledge | document` notes. Prefer `format=json` bodies `{ summary, data? }`.
-- `artifact` owns product-facing deliverables only: `issue | pr | preview` (forge-backed ISSUE/PR; continuous md/mdx/html preview). PR work prefers an attached git worktree under `.spark/worktrees/`.
-- `memory` owns durable scoped memory, recall candidates (`recall` tool), and the `LearningStore` / `learning` tool. Reflection pipelines still ship from `@zendev-lab/spark-learnings` until moved.
+- `evidence` is an **agent-internal ledger** (not Cockpit/user UI): compact provenance-backed `record | trace | knowledge | document` notes. Prefer `format=json` bodies `{ summary, data? }`. Tool-result side channels publish `evidence.update` (not `artifact.update`).
+- `artifact` owns product-facing deliverables only: `issue | pr | preview` (forge-backed ISSUE/PR; continuous md/mdx/html preview). PR work prefers an attached git worktree under `.spark/worktrees/`. Product tool results publish `artifact.update`.
+- `memory` is the only public memory tool: `memory({ action, kind? })` with `kind: "entry" | "learning" | "candidate"` (default `entry`). Durable entries, evidence learnings, and recall candidates share this surface. Reflection pipelines also live in `@zendev-lab/spark-memory` (under `.spark/memory/reflections/`).
 - `context` lists/previews registered bounded providers and accepts no arbitrary provider prompt.
 
 ## Roles and sessions

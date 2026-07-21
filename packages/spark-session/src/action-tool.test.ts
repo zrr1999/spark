@@ -164,10 +164,12 @@ describe("persistent session channel routing", () => {
 
     const [requestMessage] = await mailStore.list(worker.sessionId, { includeAcked: true });
     expect(requestMessage?.originBinding).toEqual({
+      workspaceId: "workspace-qq",
       adapter: "qqbot",
       adapterId: "qq-main",
       adapterAccountIdentity: "channel-account:qqbot:main",
       externalKey: "qqbot:user:42",
+      recipient: "c2c:user:42",
     });
     expect(request).toHaveBeenCalledWith(
       "turn.submit",
@@ -403,12 +405,25 @@ describe("blocking session requests", () => {
     });
 
     continuationStarted = true;
-    const continued = await send(
-      { kind: "request", wait: "completed", timeoutMs: 1_000 },
-      request,
-      mailStore,
-      { now: () => now, sleep: async () => undefined },
-      "continue-terminal",
+    const continued = await executeSparkSessionAction(
+      {
+        action: "send",
+        toolCallId: "continue-terminal",
+        params: {
+          kind: "request",
+          wait: "completed",
+          invocationId: "inv_continue",
+          timeoutMs: 1_000,
+        },
+        signal,
+        ctx: { sessionId: origin.sessionId },
+      },
+      {
+        request: request as never,
+        mailStore: () => mailStore,
+        sleep: async () => undefined,
+        now: () => now,
+      },
     );
     expect(continued.content[0]?.text).toBe("continued response");
     expect(continued.details).toMatchObject({
@@ -416,20 +431,106 @@ describe("blocking session requests", () => {
       waitTimedOut: false,
       result: { status: "succeeded" },
     });
-    expect(request.mock.calls.filter(([method]) => method === "turn.submit")).toHaveLength(2);
+    expect(request.mock.calls.filter(([method]) => method === "turn.submit")).toHaveLength(1);
 
-    const repeated = await send(
-      { kind: "request", wait: "completed", timeoutMs: 1_000 },
-      request,
-      mailStore,
-      { now: () => now, sleep: async () => undefined },
-      "continue-repeat",
+    const repeated = await executeSparkSessionAction(
+      {
+        action: "send",
+        toolCallId: "continue-repeat",
+        params: {
+          kind: "request",
+          wait: "completed",
+          invocationId: "inv_continue",
+          timeoutMs: 1_000,
+        },
+        signal,
+        ctx: { sessionId: origin.sessionId },
+      },
+      {
+        request: request as never,
+        mailStore: () => mailStore,
+        sleep: async () => undefined,
+        now: () => now,
+      },
     );
     expect(repeated.content[0]?.text).toBe("continued response");
     expect(repeated.details).toMatchObject({
       invocationId: "inv_continue",
       result: { status: "succeeded" },
     });
+  });
+
+  it("continues a timed-out request by invocation id without mail or resubmission", async () => {
+    const continuationInvocationId = "inv_continueonly";
+    let terminalStatus = false;
+    let terminalReads = 0;
+    const request = vi.fn(async (method: string, params: unknown): Promise<unknown> => {
+      if (method === "turn.status") {
+        expect(params).toEqual({ invocationId: continuationInvocationId });
+        if (terminalStatus) terminalReads += 1;
+        return status(continuationInvocationId, terminalStatus ? "succeeded" : "running");
+      }
+      if (method === "turn.result") {
+        expect(params).toEqual({ invocationId: continuationInvocationId });
+        return {
+          invocationId: continuationInvocationId,
+          status: "succeeded",
+          assistantText: "continued without resubmission",
+          finishedAt: "2026-07-17T00:00:01.000Z",
+        };
+      }
+      throw new Error(`unexpected continuation RPC method: ${method} ${JSON.stringify(params)}`);
+    });
+    const mailStore = vi.fn(() => {
+      throw new Error("continuation must not access mail store");
+    });
+    let now = 0;
+    const continuation = async (timeoutMs: number, toolCallId: string) =>
+      await executeSparkSessionAction(
+        {
+          action: "send",
+          toolCallId,
+          params: {
+            kind: "request",
+            wait: "completed",
+            invocationId: continuationInvocationId,
+            timeoutMs,
+          },
+          signal,
+          ctx: { sessionId: origin.sessionId },
+        },
+        {
+          request: request as never,
+          mailStore,
+          now: () => now,
+          sleep: async (ms) => void (now += ms),
+        },
+      );
+
+    const timedOut = await continuation(1_000, "continuation-timeout");
+    expect(timedOut.details).toMatchObject({
+      invocationId: continuationInvocationId,
+      waitTimedOut: true,
+      status: { status: "running" },
+    });
+
+    terminalStatus = true;
+    const terminal = await continuation(1_000, "continuation-terminal");
+    const repeated = await continuation(1_000, "continuation-repeat");
+    expect(terminal.content[0]?.text).toBe("continued without resubmission");
+    expect(repeated.content[0]?.text).toBe("continued without resubmission");
+    expect(terminal.details).toMatchObject({
+      invocationId: continuationInvocationId,
+      waitTimedOut: false,
+    });
+    expect(repeated.details).toMatchObject({
+      invocationId: continuationInvocationId,
+      waitTimedOut: false,
+    });
+    expect(terminalReads).toBe(2);
+    expect(request.mock.calls.filter(([method]) => method === "turn.submit")).toHaveLength(0);
+    expect(request.mock.calls.filter(([method]) => method === "session.get")).toHaveLength(0);
+    expect(mailStore).not.toHaveBeenCalled();
   });
 
   it("returns terminal failure details", async () => {

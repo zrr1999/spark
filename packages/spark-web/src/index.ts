@@ -4,7 +4,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { isIP } from "node:net";
 
-import { writeJsonFileAtomic } from "@zendev-lab/spark-extension-api";
+import { writeJsonFileAtomic } from "@zendev-lab/spark-core";
 
 export type SparkWebContentExtractor = "direct" | "jina";
 

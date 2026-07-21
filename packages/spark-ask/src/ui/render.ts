@@ -4,9 +4,9 @@ import type { AskState, ExtendedOption } from "../state/state.ts";
 import { isSubmitTab } from "../state/state.ts";
 import {
   SENTINEL_LABELS,
-  type PiAskFlowAnswerEntry,
-  type PiAskFlowModeVal,
-  type PiAskFlowQuestion,
+  type SparkAskFlowAnswerEntry,
+  type SparkAskFlowModeVal,
+  type SparkAskFlowQuestion,
 } from "../schema.ts";
 
 function enforceLineWidths(lines: string[], width: number): string[] {
@@ -116,7 +116,7 @@ const L: Record<
       notes: string;
       submit: string;
     };
-    requestBanner: Record<PiAskFlowModeVal, string>;
+    requestBanner: Record<SparkAskFlowModeVal, string>;
   }
 > = {
   zh: {
@@ -173,14 +173,14 @@ const L: Record<
 
 export interface RenderInput {
   state: AskState;
-  questions: readonly PiAskFlowQuestion[];
+  questions: readonly SparkAskFlowQuestion[];
   optionsByTab: ReadonlyArray<readonly ExtendedOption[]>;
   theme: RenderTheme | PartialRenderTheme;
   width: number;
   language: AskUILanguage;
   title?: string;
   context?: string;
-  mode?: PiAskFlowModeVal;
+  mode?: SparkAskFlowModeVal;
   editorDraft?: string;
   notesDraft?: string;
 }
@@ -270,7 +270,7 @@ export function renderAskScreen(input: RenderInput): string[] {
 function renderQuestionTab(
   lines: string[],
   state: AskState,
-  question: PiAskFlowQuestion,
+  question: SparkAskFlowQuestion,
   options: readonly ExtendedOption[],
   theme: RenderTheme,
   width: number,
@@ -451,7 +451,7 @@ function padVisible(text: string, width: number): string {
 function renderSubmitTab(
   lines: string[],
   state: AskState,
-  questions: readonly PiAskFlowQuestion[],
+  questions: readonly SparkAskFlowQuestion[],
   theme: RenderTheme,
   width: number,
   labels: (typeof L)["en"],
@@ -549,7 +549,7 @@ function renderSubmitTab(
 
 function currentFooterHint(
   state: AskState,
-  questions: readonly PiAskFlowQuestion[],
+  questions: readonly SparkAskFlowQuestion[],
   optionsByTab: ReadonlyArray<readonly ExtendedOption[]>,
   labels: (typeof L)["en"],
 ): string {
@@ -565,7 +565,7 @@ function currentFooterHint(
   return labels.hints.single;
 }
 
-function formatAnswerBrief(answer: PiAskFlowAnswerEntry, labels: (typeof L)["en"]): string {
+function formatAnswerBrief(answer: SparkAskFlowAnswerEntry, labels: (typeof L)["en"]): string {
   switch (answer.kind) {
     case "option":
       return answer.labels?.[0] ?? answer.values[0] ?? "?";
@@ -588,7 +588,7 @@ export function normalizeRenderTheme(theme: PartialRenderTheme | undefined): Ren
   };
 }
 
-function countAnswered(state: AskState, questions: readonly PiAskFlowQuestion[]): number {
+function countAnswered(state: AskState, questions: readonly SparkAskFlowQuestion[]): number {
   let count = 0;
   for (const q of questions) {
     if (state.answers.has(q.id)) count++;

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { renderSparkFirstRunOnboarding } from "../apps/spark-tui/src/cli/onboarding.ts";
 import { createSparkPiParitySlashCommands } from "../apps/spark-tui/src/cli/pi-parity-commands.ts";
@@ -141,7 +141,7 @@ async function withAuthDir(fn: (dir: string, authPath: string) => Promise<void>)
   }
 }
 
-void test("SparkAuthStore persists OAuth credentials with restrictive file mode", async () => {
+test("SparkAuthStore persists OAuth credentials with restrictive file mode", async () => {
   await withAuthDir(async (_dir, authPath) => {
     const store = new SparkAuthStore({
       path: authPath,
@@ -168,7 +168,7 @@ void test("SparkAuthStore persists OAuth credentials with restrictive file mode"
   });
 });
 
-void test("SparkProviderAuthResolver handles env, stored API key, literal, and OAuth provider refs", async () => {
+test("SparkProviderAuthResolver handles env, stored API key, literal, and OAuth provider refs", async () => {
   await withAuthDir(async (_dir, authPath) => {
     const store = new SparkAuthStore({ path: authPath });
     await store.reload();
@@ -196,7 +196,7 @@ void test("SparkProviderAuthResolver handles env, stored API key, literal, and O
   });
 });
 
-void test("SparkProviderAuthResolver resolves Cursor env and stored API keys without status leakage", async () => {
+test("SparkProviderAuthResolver resolves Cursor env and stored API keys without status leakage", async () => {
   await withAuthDir(async (_dir, authPath) => {
     const registry = new SparkProviderRegistry();
     await registerCursorProvider(registry, { apiKey: "" });
@@ -238,7 +238,7 @@ void test("SparkProviderAuthResolver resolves Cursor env and stored API keys wit
   });
 });
 
-void test("native /login and /logout mutate Spark auth store and model availability", async () => {
+test("native /login and /logout mutate Spark auth store and model availability", async () => {
   await withAuthDir(async (dir, authPath) => {
     registerSparkOAuthProvider(testOAuthProvider());
     const store = new SparkAuthStore({ path: authPath });
@@ -277,7 +277,7 @@ void test("native /login and /logout mutate Spark auth store and model availabil
   });
 });
 
-void test("native /login api-key stores a provider key without echoing the secret", async () => {
+test("native /login api-key stores a provider key without echoing the secret", async () => {
   await withAuthDir(async (dir, authPath) => {
     const store = new SparkAuthStore({ path: authPath });
     await store.reload();
@@ -313,7 +313,7 @@ void test("native /login api-key stores a provider key without echoing the secre
   });
 });
 
-void test("first-run onboarding renders a no-credential setup guide", async () => {
+test("first-run onboarding renders a no-credential setup guide", async () => {
   await withAuthDir(async (dir, authPath) => {
     const store = new SparkAuthStore({ path: authPath });
     await store.reload();
@@ -347,7 +347,7 @@ void test("first-run onboarding renders a no-credential setup guide", async () =
   });
 });
 
-void test("daemon-backed /login stores API keys without exposing them in the transcript", async () => {
+test("daemon-backed /login stores API keys without exposing them in the transcript", async () => {
   const snapshot = authSnapshot({
     providerName: "cursor",
     label: "Cursor",
@@ -388,7 +388,7 @@ void test("daemon-backed /login stores API keys without exposing them in the tra
   );
 });
 
-void test("daemon-backed /login drives OAuth status and prompts through daemon RPC", async () => {
+test("daemon-backed /login drives OAuth status and prompts through daemon RPC", async () => {
   const snapshot = authSnapshot({
     providerName: "oauth-models",
     label: "OAuth Models",
@@ -463,7 +463,7 @@ void test("daemon-backed /login drives OAuth status and prompts through daemon R
   assert.match(transcript, /authorization accepted/);
 });
 
-void test("daemon-backed /login cancels OAuth when interactive input is dismissed", async () => {
+test("daemon-backed /login cancels OAuth when interactive input is dismissed", async () => {
   const snapshot = authSnapshot({
     providerName: "test-oauth",
     label: "Test OAuth",
@@ -513,7 +513,7 @@ void test("daemon-backed /login cancels OAuth when interactive input is dismisse
   assert.match(String(result), /OAuth login cancelled for Test OAuth/);
 });
 
-void test("daemon-backed /logout removes the OAuth credential reference", async () => {
+test("daemon-backed /logout removes the OAuth credential reference", async () => {
   const snapshot = authSnapshot({
     providerName: "oauth-models",
     label: "OAuth Models",
@@ -549,7 +549,7 @@ void test("daemon-backed /logout removes the OAuth credential reference", async 
   assert.match(String(result), /Removed stored Spark credential: test-oauth/);
 });
 
-void test("provider runner injects resolved apiKey without spark-ai depending on auth store", async () => {
+test("provider runner injects resolved apiKey without spark-ai depending on auth store", async () => {
   await withAuthDir(async (_dir, authPath) => {
     registerSparkOAuthProvider(testOAuthProvider());
     const store = new SparkAuthStore({ path: authPath });

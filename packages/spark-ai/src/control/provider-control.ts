@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 
 import type { OAuthProviderInterface } from "@earendil-works/pi-ai/oauth";
-import type { LeafCapabilityRequest, LeafCapabilityResult } from "@zendev-lab/spark-extension-api";
+import type { LeafCapabilityRequest, LeafCapabilityResult } from "@zendev-lab/spark-core";
 
 import { createProviderRegistryLeafRunner } from "../leaf-host-runner.ts";
 import {

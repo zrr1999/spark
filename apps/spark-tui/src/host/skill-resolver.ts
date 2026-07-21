@@ -6,13 +6,13 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
   defaultBuiltinSkillsDir,
-  defaultPiCueSkillsDir,
+  defaultSparkCueSkillsDir,
   parseSkillFrontmatter,
   type SparkSkillFrontmatter,
 } from "@zendev-lab/pi-extension/host-support";
 import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 
-export { defaultBuiltinSkillsDir, defaultPiCueSkillsDir, parseSkillFrontmatter };
+export { defaultBuiltinSkillsDir, defaultSparkCueSkillsDir, parseSkillFrontmatter };
 export type { SparkSkillFrontmatter };
 
 export type SparkSkillLayer = "builtin" | "workspace" | "user";
@@ -72,7 +72,7 @@ export class SparkSkillResolver {
     this.cwd = resolve(options.cwd);
     this.builtinDirs = options.builtinDirs?.map((dir) => resolvePath(dir, this.cwd)) ?? [
       defaultBuiltinSkillsDir(),
-      defaultPiCueSkillsDir(),
+      defaultSparkCueSkillsDir(),
     ];
     this.workspaceDir = resolvePath(
       options.workspaceDir ?? join(this.cwd, ".spark", "skills"),

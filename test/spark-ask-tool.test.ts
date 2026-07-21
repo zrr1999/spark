@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
-import type { ArtifactRef } from "@zendev-lab/spark-extension-api";
+import type { ArtifactRef } from "@zendev-lab/spark-core";
 import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
 import {
   createElaborationResult,
-  createPiAskFlowRequest,
-  replayablePiAskFlow,
+  createSparkAskFlowRequest,
+  replayableSparkAskFlow,
 } from "@zendev-lab/spark-ask";
 import {
   createSparkAskToolRequest,
@@ -47,7 +47,7 @@ function assertSparkToolDetails(details: unknown): asserts details is SparkToolD
   );
 }
 
-void test("impl_ask tool builds flow-native multi-question forms", () => {
+test("impl_ask tool builds flow-native multi-question forms", () => {
   const request = createSparkAskToolRequest({
     mode: "decision",
     title: "Plan next ask work",
@@ -93,7 +93,7 @@ void test("impl_ask tool builds flow-native multi-question forms", () => {
   assert.equal(request.questions[1]!.type, "freeform");
 });
 
-void test("impl_ask tool requires explicit questions", () => {
+test("impl_ask tool requires explicit questions", () => {
   assert.throws(
     () =>
       createSparkAskToolRequest({
@@ -105,7 +105,7 @@ void test("impl_ask tool requires explicit questions", () => {
   );
 });
 
-void test("impl_ask tool requires a context-specific title", () => {
+test("impl_ask tool requires a context-specific title", () => {
   assert.throws(
     () =>
       createSparkAskToolRequest({
@@ -133,7 +133,7 @@ void test("impl_ask tool requires a context-specific title", () => {
   );
 });
 
-void test("impl_ask tool rejects invalid explicit parameter shapes", () => {
+test("impl_ask tool rejects invalid explicit parameter shapes", () => {
   const validOption = {
     id: "safe",
     label: "Safe",
@@ -230,7 +230,7 @@ void test("impl_ask tool rejects invalid explicit parameter shapes", () => {
   );
 });
 
-void test("impl_ask question defaultValues are preserved", () => {
+test("impl_ask question defaultValues are preserved", () => {
   const request = createSparkAskToolRequest({
     mode: "decision",
     title: "Choose route",
@@ -258,7 +258,7 @@ void test("impl_ask question defaultValues are preserved", () => {
   assert.deepEqual(request.questions[0]!.defaultValues, ["safe"]);
 });
 
-void test("impl_ask tool uses fullscreen ask flow when custom UI is available", async () => {
+test("impl_ask tool uses fullscreen ask flow when custom UI is available", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-tool-fullscreen-"));
   try {
     let rendered = "";
@@ -321,7 +321,7 @@ void test("impl_ask tool uses fullscreen ask flow when custom UI is available", 
   }
 });
 
-void test("impl_ask custom fullscreen UI times out when done is never called", async () => {
+test("impl_ask custom fullscreen UI times out when done is never called", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-tool-fullscreen-timeout-"));
   try {
     const response = await runSparkAskTool(
@@ -372,7 +372,7 @@ void test("impl_ask custom fullscreen UI times out when done is never called", a
   }
 });
 
-void test("impl_ask headless no-UI decision returns blocked no-selection", async () => {
+test("impl_ask headless no-UI decision returns blocked no-selection", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-tool-headless-no-ui-"));
   try {
     const response = await runSparkAskTool(
@@ -404,7 +404,7 @@ void test("impl_ask headless no-UI decision returns blocked no-selection", async
   }
 });
 
-void test("impl_ask tool persists multi-question answers in one artifact", async () => {
+test("impl_ask tool persists multi-question answers in one artifact", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-tool-flow-"));
   try {
     const response = await runSparkAskTool(
@@ -478,7 +478,7 @@ void test("impl_ask tool persists multi-question answers in one artifact", async
   }
 });
 
-void test("impl_ask tool validates option descriptions for every question", () => {
+test("impl_ask tool validates option descriptions for every question", () => {
   assert.throws(
     () =>
       createSparkAskToolRequest({
@@ -500,7 +500,7 @@ void test("impl_ask tool validates option descriptions for every question", () =
   );
 });
 
-void test("impl_ask tool requires clear option descriptions", () => {
+test("impl_ask tool requires clear option descriptions", () => {
   assert.throws(
     () =>
       createSparkAskToolRequest({
@@ -521,7 +521,7 @@ void test("impl_ask tool requires clear option descriptions", () => {
   );
 });
 
-void test("impl_ask tool persists decision no-selection as a blocked artifact", async () => {
+test("impl_ask tool persists decision no-selection as a blocked artifact", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-tool-"));
   try {
     const response = await runSparkAskTool(
@@ -563,7 +563,7 @@ void test("impl_ask tool persists decision no-selection as a blocked artifact", 
   }
 });
 
-void test("impl_ask tool preserves custom decision text instead of reporting no-selection", async () => {
+test("impl_ask tool preserves custom decision text instead of reporting no-selection", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-tool-custom-"));
   try {
     const response = await runSparkAskTool(
@@ -611,7 +611,7 @@ void test("impl_ask tool preserves custom decision text instead of reporting no-
   }
 });
 
-void test("impl_ask tool multi-select decision persists explicit selections", async () => {
+test("impl_ask tool multi-select decision persists explicit selections", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-tool-"));
   try {
     const response = await runSparkAskTool(
@@ -653,8 +653,8 @@ void test("impl_ask tool multi-select decision persists explicit selections", as
   }
 });
 
-void test("replayable spark ask preserves prior selections in option descriptions", () => {
-  const request = createPiAskFlowRequest({
+test("replayable spark ask preserves prior selections in option descriptions", () => {
+  const request = createSparkAskFlowRequest({
     flow: "svg-animation-delivery",
     mode: "decision",
     title: "Choose SVG animation delivery mode",
@@ -716,7 +716,7 @@ void test("replayable spark ask preserves prior selections in option description
       },
     ],
   );
-  const replay = replayablePiAskFlow(request, elaborated);
+  const replay = replayableSparkAskFlow(request, elaborated);
   const chosen = replay.questions
     .find((question) => question.id === "delivery-mode")
     ?.options?.find((option) => option.value === "document_and_execute");

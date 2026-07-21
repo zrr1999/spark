@@ -1,4 +1,4 @@
-import type { ProjectRef } from "@zendev-lab/spark-extension-api";
+import type { ProjectRef } from "@zendev-lab/spark-core";
 import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/spark-tasks";
 import { normalizeProjectTitle } from "./spark-md-rendering.ts";
 

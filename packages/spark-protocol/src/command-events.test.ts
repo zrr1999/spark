@@ -63,6 +63,8 @@ describe("SparkCommand vocabulary", () => {
       "workspace.client.heartbeat",
       "workspace.client.release",
       "workspace.executor.ensure",
+      "workspace.transfer.pending",
+      "workspace.transfer.respond",
       "session.list",
       "session.get",
       "session.snapshot",

@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 import type {
   ExtensionInteractionRequest,
   ExtensionInteractionResponse,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 
 export type SparkHeadlessRoleRunStatus =
   | "queued"
@@ -32,6 +32,8 @@ export interface SparkHeadlessSessionRunInput {
   channelBinding?: {
     adapter: "feishu" | "infoflow" | "qqbot";
     externalKey: string;
+    workspaceId?: string;
+    recipient?: string;
     adapterId?: string;
     adapterAccountIdentity?: string;
   };

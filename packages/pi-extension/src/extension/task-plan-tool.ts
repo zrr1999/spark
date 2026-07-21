@@ -1,12 +1,6 @@
 import { Type } from "typebox";
 
-import type {
-  Task,
-  TaskKind,
-  TaskPlan,
-  TaskPlanItem,
-  TaskStatus,
-} from "@zendev-lab/spark-extension-api";
+import type { Task, TaskKind, TaskPlan, TaskPlanItem, TaskStatus } from "@zendev-lab/spark-core";
 import { type TaskPlanResult } from "@zendev-lab/spark-tasks";
 
 export function taskPlanSchema() {

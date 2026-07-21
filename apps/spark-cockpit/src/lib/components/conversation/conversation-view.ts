@@ -58,11 +58,56 @@ export function conversationPartsFromMessage(
     }
   }
 
-  if (parts.length === 0) return fallbackParts(message, displayText);
+  if (parts.length === 0) {
+    const fallback = fallbackParts(message, displayText);
+    return prependChannelQuotePart(message, fallback);
+  }
 
   // Keep tools flat here so timeline merge can attach results. Chain grouping
   // happens after cross-message merges in buildSessionTimeline.
-  return parts;
+  return prependChannelQuotePart(message, parts);
+}
+
+function prependChannelQuotePart(
+  message: SparkMessageView,
+  parts: ConversationPart[],
+): ConversationPart[] {
+  if (message.role !== "user") return parts;
+  if (parts.some((part) => part.type === "quote")) return parts;
+  const quote = channelQuoteFromMetadata(message.metadata);
+  return quote ? [quote, ...parts] : parts;
+}
+
+function channelQuoteFromMetadata(
+  metadata: SparkMessageView["metadata"],
+): Extract<ConversationPart, { type: "quote" }> | null {
+  if (!isRecord(metadata)) return null;
+  const channel = isRecord(metadata.channel) ? metadata.channel : undefined;
+  if (!channel) return null;
+  const reference = isRecord(channel.messageReference) ? channel.messageReference : undefined;
+  if (!reference) return null;
+  const preview =
+    typeof reference.preview === "string" && reference.preview.trim()
+      ? reference.preview.trim()
+      : "";
+  const messageId =
+    typeof reference.messageId === "string" && reference.messageId.trim()
+      ? reference.messageId.trim()
+      : "";
+  if (!preview && !messageId) return null;
+  const senderLabel =
+    (typeof reference.senderName === "string" && reference.senderName.trim()) ||
+    (typeof reference.senderId === "string" && reference.senderId.trim()) ||
+    null;
+  return {
+    type: "quote",
+    text: preview || "引用消息",
+    senderLabel,
+  };
+}
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isBudgetExhaustedMessage(message: SparkMessageView): boolean {
@@ -129,6 +174,7 @@ export function conversationPartText(parts: readonly ConversationPart[]) {
   return parts
     .flatMap((part) => {
       if (part.type === "text") return [part.text];
+      if (part.type === "quote") return [part.text];
       if (part.type === "reasoning") return [part.summary];
       if (part.type === "commentary") return [part.summary];
       if (part.type === "tool") return [part.summary || part.name];
@@ -415,8 +461,4 @@ function stringField(value: UnknownRecord, key: string) {
 
 function boundedLabel(value: string) {
   return value.length <= 80 ? value : `${value.slice(0, 77)}…`;
-}
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -1,4 +1,4 @@
-import type { ArtifactRef } from "@zendev-lab/spark-extension-api";
+import type { ArtifactRef } from "@zendev-lab/spark-core";
 import {
   runSparkAskTool,
   type SparkAskToolParams,

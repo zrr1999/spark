@@ -1,5 +1,5 @@
 import { error, json, type RequestHandler } from "@sveltejs/kit";
-import { ensureArtifactPreviewCache } from "$lib/server/artifact-cache";
+import { ensureArtifactPreviewCache } from "@zendev-lab/spark-coordination/artifact-cache";
 import { getDatabase } from "$lib/server/db";
 
 export const GET: RequestHandler = ({ locals, params }) => {

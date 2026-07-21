@@ -1,4 +1,4 @@
-import type { ProjectRef } from "@zendev-lab/spark-extension-api";
+import type { ProjectRef } from "@zendev-lab/spark-core";
 import {
   clearCurrentProjectRef,
   loadCurrentProjectState,
@@ -11,7 +11,7 @@ import {
   type SparkPlanningModeSource,
 } from "./current-project-state-schema.ts";
 import type { SparkActiveLensDriveState } from "./spark-drive-state.ts";
-import type { SparkSessionContext } from "./session-identity.ts";
+import type { SparkSessionContext } from "@zendev-lab/spark-loop";
 
 interface SparkActiveLensContext extends SparkSessionContext {
   sparkActiveLens?: SparkActiveLensDriveState;

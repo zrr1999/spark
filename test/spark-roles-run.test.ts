@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
-import type { ExtensionRoleRunner } from "@zendev-lab/spark-extension-api";
+import { test } from "vitest";
+import type { ExtensionRoleRunner } from "@zendev-lab/spark-core";
 import { TaskGraph } from "@zendev-lab/spark-tasks";
 
 import {
@@ -37,7 +37,7 @@ import {
   runSparkTask,
 } from "@zendev-lab/spark-runtime";
 
-void test("spark-roles builds fresh JSON Pi role args without accidental fork session reuse", () => {
+test("spark-roles builds fresh JSON Pi role args without accidental fork session reuse", () => {
   const args = buildRoleRunArgs({
     roleRef: "role:project-svg-assembler",
     launch: "fresh",
@@ -63,7 +63,7 @@ void test("spark-roles builds fresh JSON Pi role args without accidental fork se
   assert.equal(args.at(-1)?.includes("Instruction:\n\nImplement the task."), true);
 });
 
-void test("spark-roles includes resolved user model in JSON Pi role args", () => {
+test("spark-roles includes resolved user model in JSON Pi role args", () => {
   const args = buildRoleRunArgs({
     roleRef: "role:builtin-worker",
     launch: "fresh",
@@ -75,7 +75,7 @@ void test("spark-roles includes resolved user model in JSON Pi role args", () =>
   assert.deepEqual(args.slice(0, 5), ["--print", "--mode", "json", "--model", "openai/gpt-5.5"]);
 });
 
-void test("spark-roles can pass a role tool allowlist", () => {
+test("spark-roles can pass a role tool allowlist", () => {
   const args = buildRoleRunArgs({
     roleRef: "role:builtin-worker",
     launch: "fresh",
@@ -89,7 +89,7 @@ void test("spark-roles can pass a role tool allowlist", () => {
   assert.equal(args[index + 1], "graft_read,graft_write,graft_validate");
 });
 
-void test("spark-roles can launch ephemeral no-session role runs", () => {
+test("spark-roles can launch ephemeral no-session role runs", () => {
   const args = buildRoleRunArgs({
     roleRef: "role:builtin-reviewer",
     launch: "fresh",
@@ -122,7 +122,7 @@ void test("spark-roles can launch ephemeral no-session role runs", () => {
   );
 });
 
-void test("spark-roles builds forked JSON Pi role args only when forked launch is explicit", () => {
+test("spark-roles builds forked JSON Pi role args only when forked launch is explicit", () => {
   const args = buildRoleRunArgs({
     roleRef: "role:builtin-reviewer",
     launch: "forked",
@@ -144,7 +144,7 @@ void test("spark-roles builds forked JSON Pi role args only when forked launch i
   ]);
 });
 
-void test("spark-roles requires fork source for forked launch", () => {
+test("spark-roles requires fork source for forked launch", () => {
   assert.throws(
     () =>
       buildRoleRunArgs({
@@ -157,7 +157,7 @@ void test("spark-roles requires fork source for forked launch", () => {
   );
 });
 
-void test("spark-roles default registry ignores legacy agent-shaped role stores", async () => {
+test("spark-roles default registry ignores legacy agent-shaped role stores", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-no-legacy-stores-"));
   try {
     const currentRole = createRoleSpec({
@@ -193,7 +193,7 @@ void test("spark-roles default registry ignores legacy agent-shaped role stores"
   }
 });
 
-void test("spark-roles validates model names before saving settings", async () => {
+test("spark-roles validates model names before saving settings", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-model-validation-"));
   try {
     const fakePi = join(dir, "fake-pi.cjs");
@@ -224,7 +224,7 @@ void test("spark-roles validates model names before saving settings", async () =
   }
 });
 
-void test("spark-roles resolves role model settings with project and user precedence", async () => {
+test("spark-roles resolves role model settings with project and user precedence", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-model-settings-"));
   try {
     const userHome = join(dir, "home");
@@ -274,7 +274,7 @@ void test("spark-roles resolves role model settings with project and user preced
   }
 });
 
-void test("spark-roles persists user model settings under SPARK_HOME", async () => {
+test("spark-roles persists user model settings under SPARK_HOME", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-unified-home-"));
   const previousSparkHome = process.env.SPARK_HOME;
   process.env.SPARK_HOME = dir;
@@ -297,7 +297,7 @@ void test("spark-roles persists user model settings under SPARK_HOME", async () 
   }
 });
 
-void test("spark runtime role dispatch can run native roles without model settings", async () => {
+test("spark runtime role dispatch can run native roles without model settings", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-runtime-missing-model-"));
   const previousHome = process.env.SPARK_HOME;
   process.env.SPARK_HOME = join(dir, "home");
@@ -332,7 +332,7 @@ void test("spark runtime role dispatch can run native roles without model settin
   }
 });
 
-void test("spark runtime role dispatch times out hanging native executors", async () => {
+test("spark runtime role dispatch times out hanging native executors", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-runtime-timeout-cleanup-"));
   const runName = "timeout-cleanup-test";
   try {
@@ -363,7 +363,7 @@ void test("spark runtime role dispatch times out hanging native executors", asyn
   }
 });
 
-void test("runSparkTask records native timeout failure and leaves no active role-run", async () => {
+test("runSparkTask records native timeout failure and leaves no active role-run", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-task-runtime-timeout-cleanup-"));
   const runName = "task-timeout-cleanup-test";
   try {
@@ -418,7 +418,7 @@ void test("runSparkTask records native timeout failure and leaves no active role
   }
 });
 
-void test("spark runtime role dispatch inherits session model when no role model is saved", async () => {
+test("spark runtime role dispatch inherits session model when no role model is saved", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-runtime-session-model-"));
   const previousHome = process.env.SPARK_HOME;
   process.env.SPARK_HOME = join(dir, "home");
@@ -458,7 +458,7 @@ void test("spark runtime role dispatch inherits session model when no role model
   }
 });
 
-void test("spark runtime role dispatch passes per-run env and tool policy to injected executor", async () => {
+test("spark runtime role dispatch passes per-run env and tool policy to injected executor", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-runtime-env-tools-"));
   const previousHome = process.env.SPARK_HOME;
   process.env.SPARK_HOME = join(dir, "home");
@@ -507,7 +507,7 @@ void test("spark runtime role dispatch passes per-run env and tool policy to inj
   }
 });
 
-void test("spark runtime role dispatch passes per-run env and tool policy to injected executor", async () => {
+test("spark runtime role dispatch passes per-run env and tool policy to injected executor", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-runtime-injected-env-tools-"));
   const previousHome = process.env.SPARK_HOME;
   process.env.SPARK_HOME = join(dir, "home");
@@ -556,7 +556,7 @@ void test("spark runtime role dispatch passes per-run env and tool policy to inj
   }
 });
 
-void test("spark-roles rejects malformed role model settings stores", async () => {
+test("spark-roles rejects malformed role model settings stores", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-model-settings-invalid-"));
   try {
     const store = defaultProjectRoleModelSettingsStore(dir);
@@ -598,7 +598,7 @@ void test("spark-roles rejects malformed role model settings stores", async () =
   }
 });
 
-void test("spark-roles rejects role spec model frontmatter", () => {
+test("spark-roles rejects role spec model frontmatter", () => {
   assert.throws(
     () =>
       parseRoleSpecMarkdown(
@@ -624,7 +624,7 @@ function roleDepthTestEnv(depth?: string): NodeJS.ProcessEnv {
   return env;
 }
 
-void test("spark-roles runs daemon-native executor and records run metadata", async () => {
+test("spark-roles runs daemon-native executor and records run metadata", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-launcher-"));
   try {
     const result = await runRole({
@@ -657,7 +657,7 @@ void test("spark-roles runs daemon-native executor and records run metadata", as
   }
 });
 
-void test("runRole forwards noSession to native executor", async () => {
+test("runRole forwards noSession to native executor", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-no-session-native-"));
   try {
     let seenNoSession: boolean | undefined;
@@ -697,7 +697,7 @@ void test("runRole forwards noSession to native executor", async () => {
   }
 });
 
-void test("spark-roles daemon-native runs do not depend on stdin input control", async () => {
+test("spark-roles daemon-native runs do not depend on stdin input control", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-ignore-stdin-"));
   try {
     const result = await runRole({
@@ -723,7 +723,7 @@ void test("spark-roles daemon-native runs do not depend on stdin input control",
   }
 });
 
-void test("spark-roles preserves daemon-native stdout and JSONL results", async () => {
+test("spark-roles preserves daemon-native stdout and JSONL results", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-tail-capture-"));
   try {
     const result = await runRole({
@@ -761,7 +761,7 @@ void test("spark-roles preserves daemon-native stdout and JSONL results", async 
   }
 });
 
-void test("spark-roles decrements role run depth for daemon-native runs", async () => {
+test("spark-roles decrements role run depth for daemon-native runs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-depth-env-"));
   try {
     const depthExecutor: ExtensionRoleRunner = async (input) => ({
@@ -797,7 +797,7 @@ void test("spark-roles decrements role run depth for daemon-native runs", async 
   }
 });
 
-void test("spark-roles refuses to spawn when role run depth is exhausted", async () => {
+test("spark-roles refuses to spawn when role run depth is exhausted", async () => {
   await assert.rejects(
     runRole({
       runRef: "run:depth-exhausted-test",
@@ -823,7 +823,7 @@ void test("spark-roles refuses to spawn when role run depth is exhausted", async
   );
 });
 
-void test("spark-roles tracks and cancels active daemon-native runs", async () => {
+test("spark-roles tracks and cancels active daemon-native runs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-cancel-"));
   try {
     const run = runRole({
@@ -858,7 +858,7 @@ void test("spark-roles tracks and cancels active daemon-native runs", async () =
   }
 });
 
-void test("spark-roles delivers input through native role-run controller", async () => {
+test("spark-roles delivers input through native role-run controller", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-native-input-"));
   let received = "";
   try {
@@ -907,7 +907,7 @@ void test("spark-roles delivers input through native role-run controller", async
   }
 });
 
-void test("spark-roles enforces timeout control for daemon-native runs", async () => {
+test("spark-roles enforces timeout control for daemon-native runs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-timeout-"));
   try {
     await assert.rejects(
@@ -931,21 +931,21 @@ void test("spark-roles enforces timeout control for daemon-native runs", async (
   }
 });
 
-void test("spark-roles defaults omitted role launch but rejects unknown launches", () => {
+test("spark-roles defaults omitted role launch but rejects unknown launches", () => {
   assert.equal(normalizeRoleLaunchMode(undefined), "fresh");
   assert.equal(normalizeRoleLaunchMode("fresh"), "fresh");
   assert.equal(normalizeRoleLaunchMode("forked"), "forked");
   assert.throws(() => normalizeRoleLaunchMode("legacy-mode"), /unsupported role launch mode/);
 });
 
-void test("spark-roles parses JSONL tolerantly", () => {
+test("spark-roles parses JSONL tolerantly", () => {
   assert.deepEqual(parsePiJsonlEvents('{"type":"start"}\nnot-json\n{"type":"stop"}\n'), [
     { type: "start" },
     { type: "stop" },
   ]);
 });
 
-void test("spark-roles rejects legacy role aliases instead of normalizing them", () => {
+test("spark-roles rejects legacy role aliases instead of normalizing them", () => {
   assert.throws(
     () => normalizeRoleRef("agent:builtin-worker"),
     /legacy agent refs are not supported/,

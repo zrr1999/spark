@@ -8,7 +8,7 @@
 export { renderSparkActiveSystemPrompt } from "./extension/spark-active-injection.ts";
 export {
   defaultBuiltinSkillsDir,
-  defaultPiCueSkillsDir,
+  defaultSparkCueSkillsDir,
   parseSkillFrontmatter,
   renderBaseSystemPromptsCatalogPrompt,
   renderBaseSystemPromptsPrompt,
@@ -16,6 +16,6 @@ export {
   type SparkSkillFrontmatter,
 } from "./extension/spark-builtin-skills.ts";
 export { loadSparkMode } from "./extension/session-state.ts";
-export type { SparkSessionContext } from "./extension/session-identity.ts";
+export type { SparkSessionContext } from "@zendev-lab/spark-loop";
 export { createSparkRoleRegistry } from "./extension/spark-role-registry.ts";
-export { PiRolesReviewerRunner } from "./extension/reviewer-runner.ts";
+export { SparkRolesReviewerRunner } from "./extension/reviewer-runner.ts";

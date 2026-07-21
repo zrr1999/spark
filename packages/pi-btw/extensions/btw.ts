@@ -4,9 +4,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type {
   AgentSession,
   AgentSessionEvent,
-  ExtensionAPI,
-  ExtensionCommandContext,
-  ExtensionContext,
+  ExtensionAPI as SparkHostAPI,
+  ExtensionCommandContext as SparkHostCommandContext,
+  ExtensionContext as SparkHostContext,
   ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -62,7 +62,7 @@ type BtwRenderableTui = Pick<TUI, "requestRender">;
 type BtwKeybindings = {
   matches(data: string, keybinding: "tui.select.cancel"): boolean;
 };
-type SessionModel = NonNullable<ExtensionCommandContext["model"]>;
+type SessionModel = NonNullable<SparkHostCommandContext["model"]>;
 /**
  * Loose model reference parsed from `/btw:model <provider> <id> <api>` and persisted to
  * session entries. Resolved to a full SessionModel via ctx.modelRegistry.find(...).
@@ -250,7 +250,7 @@ function stripDynamicSystemPromptFooter(systemPrompt: string): string {
 }
 
 function createBtwResourceLoader(
-  ctx: ExtensionCommandContext,
+  ctx: SparkHostCommandContext,
   createExtensionRuntime: PiCodingAgentRuntime["createExtensionRuntime"],
   appendSystemPrompt: string[] = [BTW_SYSTEM_PROMPT],
 ): ResourceLoader {
@@ -346,7 +346,7 @@ function formatModelRef(model: Pick<SessionModel, "provider" | "id" | "api">): s
 }
 
 function buildBtwSeedState(
-  ctx: ExtensionCommandContext,
+  ctx: SparkHostCommandContext,
   thread: BtwDetails[],
   mode: BtwThreadMode,
   sessionModel: SessionModel | null,
@@ -916,7 +916,7 @@ function getCompletedExchangeCount(entries: BtwTranscript): number {
 
 function buildOverlayTranscript(
   entries: BtwTranscript,
-  theme: ExtensionContext["ui"]["theme"],
+  theme: SparkHostContext["ui"]["theme"],
 ): string[] {
   if (entries.length === 0) {
     return [theme.fg("dim", "No BTW thread yet. Ask a side question to start one.")];
@@ -1115,7 +1115,7 @@ function extractBtwHandoffThread(sessionRuntime: BtwSessionRuntime): BtwHandoffE
 }
 
 function saveVisibleBtwNote(
-  pi: ExtensionAPI,
+  pi: SparkHostAPI,
   details: BtwDetails,
   saveRequested: boolean,
   wasBusy: boolean,
@@ -1141,7 +1141,7 @@ function saveVisibleBtwNote(
 }
 
 function notify(
-  ctx: ExtensionContext | ExtensionCommandContext,
+  ctx: SparkHostContext | SparkHostCommandContext,
   message: string,
   level: "info" | "warning" | "error",
 ): void {
@@ -1155,7 +1155,7 @@ function getOverlayTitle(mode: BtwThreadMode): string {
 }
 
 function buildTranscriptBadge(
-  theme: ExtensionContext["ui"]["theme"],
+  theme: SparkHostContext["ui"]["theme"],
   label: string,
   background: "userMessageBg" | "toolPendingBg" | "customMessageBg",
   foreground: "accent" | "warning" | "success",
@@ -1177,7 +1177,7 @@ class BtwOverlayComponent extends Container implements Focusable {
   private readonly onDismissCallback: () => void;
   private readonly onUnfocusCallback: () => void;
   private readonly tui: BtwRenderableTui;
-  private readonly theme: ExtensionContext["ui"]["theme"];
+  private readonly theme: SparkHostContext["ui"]["theme"];
   private transcriptLines: string[] = [];
   private transcriptScrollOffset = 0;
   private transcriptViewportHeight = 8;
@@ -1199,7 +1199,7 @@ class BtwOverlayComponent extends Container implements Focusable {
 
   constructor(
     tui: BtwRenderableTui,
-    theme: ExtensionContext["ui"]["theme"],
+    theme: SparkHostContext["ui"]["theme"],
     keybindings: BtwKeybindings,
     readTranscriptEntries: () => BtwTranscript,
     getStatus: () => string | null,
@@ -1426,7 +1426,7 @@ class BtwOverlayComponent extends Container implements Focusable {
   }
 }
 
-export default async function (pi: ExtensionAPI) {
+export default async function (pi: SparkHostAPI) {
   const { buildSessionContext, createAgentSession, createExtensionRuntime, SessionManager } =
     await loadPiCodingAgentRuntime();
   let pendingThread: BtwDetails[] = [];
@@ -1437,10 +1437,10 @@ export default async function (pi: ExtensionAPI) {
   let overlayStatus: string | null = null;
   let overlayDraft = "";
   let overlayRuntime: OverlayRuntime | null = null;
-  let lastUiContext: ExtensionContext | ExtensionCommandContext | null = null;
+  let lastUiContext: SparkHostContext | SparkHostCommandContext | null = null;
   let activeBtwSession: BtwSessionRuntime | null = null;
 
-  function syncUi(ctx?: ExtensionContext | ExtensionCommandContext): void {
+  function syncUi(ctx?: SparkHostContext | SparkHostCommandContext): void {
     const activeCtx = ctx ?? lastUiContext;
     if (activeCtx?.hasUI) {
       activeCtx.ui.setWidget("btw", undefined);
@@ -1450,7 +1450,7 @@ export default async function (pi: ExtensionAPI) {
 
   function setOverlayStatus(
     status: string | null,
-    ctx?: ExtensionContext | ExtensionCommandContext,
+    ctx?: SparkHostContext | SparkHostCommandContext,
   ): void {
     overlayStatus = status;
     syncUi(ctx);
@@ -1516,7 +1516,7 @@ export default async function (pi: ExtensionAPI) {
   function handleBtwSessionEvent(
     sessionRuntime: BtwSessionRuntime,
     event: AgentSessionEvent,
-    ctx?: ExtensionContext | ExtensionCommandContext,
+    ctx?: SparkHostContext | SparkHostCommandContext,
   ): void {
     if (activeBtwSession?.session !== sessionRuntime.session || !overlayRuntime) {
       return;
@@ -1555,7 +1555,7 @@ export default async function (pi: ExtensionAPI) {
   }
 
   function subscribeOverlayToActiveBtwSession(
-    ctx?: ExtensionContext | ExtensionCommandContext,
+    ctx?: SparkHostContext | SparkHostCommandContext,
   ): void {
     const sessionRuntime = activeBtwSession;
     if (!sessionRuntime || sessionRuntime.subscriptions.size > 0) {
@@ -1592,7 +1592,7 @@ export default async function (pi: ExtensionAPI) {
   }
 
   async function resolveBtwModel(
-    ctx: ExtensionCommandContext,
+    ctx: SparkHostCommandContext,
     notifyOnFallback = false,
   ): Promise<ResolvedBtwModel> {
     if (btwModelOverride) {
@@ -1647,7 +1647,7 @@ export default async function (pi: ExtensionAPI) {
   }
 
   async function resolveBtwSettings(
-    ctx: ExtensionCommandContext,
+    ctx: SparkHostCommandContext,
     notifyOnFallback = false,
   ): Promise<ResolvedBtwSettings> {
     const resolvedModel = await resolveBtwModel(ctx, notifyOnFallback);
@@ -1688,7 +1688,7 @@ export default async function (pi: ExtensionAPI) {
   }
 
   async function setBtwModelOverride(
-    ctx: ExtensionCommandContext,
+    ctx: SparkHostCommandContext,
     nextModel: SessionModel | null,
   ): Promise<void> {
     btwModelOverride = nextModel;
@@ -1712,7 +1712,7 @@ export default async function (pi: ExtensionAPI) {
   }
 
   async function setBtwThinkingOverride(
-    ctx: ExtensionCommandContext,
+    ctx: SparkHostCommandContext,
     nextThinkingLevel: SessionThinkingLevel | null,
   ): Promise<void> {
     btwThinkingOverride = nextThinkingLevel;
@@ -1730,7 +1730,7 @@ export default async function (pi: ExtensionAPI) {
   }
 
   async function createBtwSubSession(
-    ctx: ExtensionCommandContext,
+    ctx: SparkHostCommandContext,
     mode: BtwThreadMode,
   ): Promise<BtwSessionRuntime> {
     const settings = await resolveBtwSettings(ctx, true);
@@ -1763,7 +1763,7 @@ export default async function (pi: ExtensionAPI) {
   }
 
   async function ensureBtwSession(
-    ctx: ExtensionCommandContext,
+    ctx: SparkHostCommandContext,
     mode: BtwThreadMode,
   ): Promise<BtwSessionRuntime | null> {
     const settings = await resolveBtwSettings(ctx);
@@ -1780,7 +1780,7 @@ export default async function (pi: ExtensionAPI) {
     return activeBtwSession;
   }
 
-  async function ensureOverlay(ctx: ExtensionCommandContext | ExtensionContext): Promise<void> {
+  async function ensureOverlay(ctx: SparkHostCommandContext | SparkHostContext): Promise<void> {
     if (!ctx.hasUI) {
       return;
     }
@@ -1889,7 +1889,7 @@ export default async function (pi: ExtensionAPI) {
   async function dispatchBtwCommand(
     name: string,
     args: string,
-    ctx: ExtensionCommandContext,
+    ctx: SparkHostCommandContext,
   ): Promise<boolean> {
     const trimmedArgs = args.trim();
 
@@ -2083,7 +2083,7 @@ export default async function (pi: ExtensionAPI) {
   }
 
   async function submitFromOverlay(
-    ctx: ExtensionCommandContext | ExtensionContext,
+    ctx: SparkHostCommandContext | SparkHostContext,
     value: string,
   ): Promise<void> {
     const question = value.trim();
@@ -2100,7 +2100,7 @@ export default async function (pi: ExtensionAPI) {
       return;
     }
 
-    const cmdCtx = ctx as ExtensionCommandContext;
+    const cmdCtx = ctx as SparkHostCommandContext;
     const btwCommand = parseOverlayBtwCommand(question);
     if (btwCommand) {
       setOverlayDraft("");
@@ -2115,7 +2115,7 @@ export default async function (pi: ExtensionAPI) {
   }
 
   async function resetThread(
-    ctx: ExtensionContext | ExtensionCommandContext,
+    ctx: SparkHostContext | SparkHostCommandContext,
     persist = true,
     mode: BtwThreadMode = "contextual",
   ): Promise<void> {
@@ -2132,7 +2132,7 @@ export default async function (pi: ExtensionAPI) {
     syncUi(ctx);
   }
 
-  async function restoreThread(ctx: ExtensionContext): Promise<void> {
+  async function restoreThread(ctx: SparkHostContext): Promise<void> {
     await disposeBtwSession();
     pendingThread = [];
     pendingMode = "contextual";
@@ -2202,7 +2202,7 @@ export default async function (pi: ExtensionAPI) {
   }
 
   async function runBtw(
-    ctx: ExtensionCommandContext,
+    ctx: SparkHostCommandContext,
     question: string,
     saveRequested: boolean,
     mode: BtwThreadMode,
@@ -2311,7 +2311,7 @@ export default async function (pi: ExtensionAPI) {
   }
 
   async function getBtwHandoffThread(
-    ctx: ExtensionCommandContext,
+    ctx: SparkHostCommandContext,
   ): Promise<{ sessionRuntime: BtwSessionRuntime | null; thread: BtwHandoffExchange[] }> {
     const sessionRuntime = activeBtwSession ?? (await ensureBtwSession(ctx, pendingMode));
     const thread = sessionRuntime ? extractBtwHandoffThread(sessionRuntime) : [];
@@ -2325,7 +2325,7 @@ export default async function (pi: ExtensionAPI) {
   }
 
   async function summarizeThread(
-    ctx: ExtensionCommandContext,
+    ctx: SparkHostCommandContext,
     thread: BtwHandoffExchange[],
   ): Promise<string> {
     const settings = await resolveBtwSettings(ctx, true);
@@ -2377,7 +2377,7 @@ export default async function (pi: ExtensionAPI) {
     }
   }
 
-  function sendThreadToMain(ctx: ExtensionCommandContext, content: string): void {
+  function sendThreadToMain(ctx: SparkHostCommandContext, content: string): void {
     if (ctx.isIdle()) {
       pi.sendUserMessage(content);
     } else {

@@ -21,10 +21,12 @@ import {
   type TextContent,
   type ThinkingContent,
 } from "@earendil-works/pi-ai";
+import { cappedExponentialCeiling, equalJitter } from "@zendev-lab/spark-retry";
 
 import { CURSOR_PROVIDER_API, CURSOR_PROVIDER_ID } from "./cursor-constants.ts";
 import { buildCursorModelSelection } from "./cursor-model-catalog.ts";
 import { sanitizeCursorDiscoveryError } from "./cursor-model-discovery.ts";
+import { classifyProviderFailure } from "./index.ts";
 
 export interface CursorSdkRuntime {
   Agent: {
@@ -135,41 +137,68 @@ async function runCursorStream(
         sandboxOptions: { enabled: true },
       },
     };
-    const createdAgent = await sdk.Agent.create(createOptions);
-    agent = createdAgent;
-    throwIfAborted(signal);
+    const maxRetries =
+      typeof options?.maxRetries === "number" && Number.isFinite(options.maxRetries)
+        ? Math.max(0, Math.floor(options.maxRetries))
+        : Number.MAX_SAFE_INTEGER;
+    let attempt = 0;
+    while (true) {
+      attempt += 1;
+      throwIfAborted(signal);
+      let streamed = false;
+      try {
+        const createdAgent = await sdk.Agent.create(createOptions);
+        agent = createdAgent;
+        throwIfAborted(signal);
 
-    const state = new CursorDeltaState(stream, partial);
-    const sendOptions: SendOptions = {
-      model: selection,
-      mode: "agent",
-      onDelta: ({ update }) => state.consume(update),
-    };
-    run = await createdAgent.send(buildCursorPrompt(context), sendOptions);
-    if (cancelRequested || signal?.aborted) {
-      cancelRun();
-      await cancelPromise;
-      throw new CursorStreamAbortError();
+        const state = new CursorDeltaState(stream, partial);
+        const sendOptions: SendOptions = {
+          model: selection,
+          mode: "agent",
+          onDelta: ({ update }) => {
+            streamed = true;
+            state.consume(update);
+          },
+        };
+        run = await createdAgent.send(buildCursorPrompt(context), sendOptions);
+        if (cancelRequested || signal?.aborted) {
+          cancelRun();
+          await cancelPromise;
+          throw new CursorStreamAbortError();
+        }
+        const resultOrAbort = await Promise.race([run.wait(), abortPromise]);
+        if (resultOrAbort === abortedMarker) {
+          await cancelPromise;
+          throw new CursorStreamAbortError();
+        }
+        const result = resultOrAbort;
+        if (cancelRequested || signal?.aborted || result.status === "cancelled") {
+          cancelRun();
+          await cancelPromise;
+          throw new CursorStreamAbortError(result.error?.message);
+        }
+        state.complete(result.result);
+        applyCursorUsage(partial, result.usage ?? run.usage);
+        if (result.status === "error") {
+          throw new Error(result.error?.message ?? "Cursor SDK run failed.");
+        }
+        partial.stopReason = "stop";
+        stream.push({ type: "done", reason: "stop", message: partial });
+        terminal = true;
+        return;
+      } catch (error) {
+        await disposeCursorAgent(agent);
+        agent = undefined;
+        run = undefined;
+        cancelPromise = undefined;
+        if (error instanceof CursorStreamAbortError || signal?.aborted) throw error;
+        const retriable =
+          !streamed && attempt <= maxRetries && classifyProviderFailure(error).policy.retriable;
+        if (!retriable) throw error;
+        const delayMs = equalJitter(cappedExponentialCeiling(attempt, 1_000, 60_000));
+        await sleepCursorRetry(delayMs, signal);
+      }
     }
-    const resultOrAbort = await Promise.race([run.wait(), abortPromise]);
-    if (resultOrAbort === abortedMarker) {
-      await cancelPromise;
-      throw new CursorStreamAbortError();
-    }
-    const result = resultOrAbort;
-    if (cancelRequested || signal?.aborted || result.status === "cancelled") {
-      cancelRun();
-      await cancelPromise;
-      throw new CursorStreamAbortError(result.error?.message);
-    }
-    state.complete(result.result);
-    applyCursorUsage(partial, result.usage ?? run.usage);
-    if (result.status === "error") {
-      throw new Error(result.error?.message ?? "Cursor SDK run failed.");
-    }
-    partial.stopReason = "stop";
-    stream.push({ type: "done", reason: "stop", message: partial });
-    terminal = true;
   } catch (error) {
     if (!terminal) {
       const aborted = error instanceof CursorStreamAbortError || signal?.aborted === true;
@@ -372,6 +401,38 @@ function sanitizeCursorProviderError(error: unknown, apiKey?: string): string {
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new CursorStreamAbortError();
+}
+
+async function sleepCursorRetry(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (ms <= 0) {
+    throwIfAborted(signal);
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new CursorStreamAbortError());
+    };
+    if (signal?.aborted) {
+      clearTimeout(timer);
+      reject(new CursorStreamAbortError());
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function disposeCursorAgent(agent: SDKAgent | undefined): Promise<void> {
+  if (!agent) return;
+  try {
+    await agent[Symbol.asyncDispose]();
+  } catch {
+    agent.close();
+  }
 }
 
 function findLatestUserIndex(messages: Message[]): number {

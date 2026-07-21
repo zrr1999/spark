@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { RuntimeWorkspaceOwnerConflictError } from "@zendev-lab/spark-coordination/runtime-registration";
+import { RuntimeWorkspaceLeaseConflictError } from "@zendev-lab/spark-coordination/runtime-registration";
 
 const mocks = vi.hoisted(() => ({
   registerRuntime: vi.fn(),
@@ -20,7 +20,7 @@ vi.mock("$lib/server/json", () => ({
   ) => Response.json({ error: { code, message, requestId } }, { status }),
 }));
 
-vi.mock("$lib/server/runtime-registration", async () => ({
+vi.mock("@zendev-lab/spark-coordination/runtime-registration", async () => ({
   ...(await vi.importActual("@zendev-lab/spark-coordination/runtime-registration")),
   registerRuntime: mocks.registerRuntime,
   registerRuntimeWorkspace: mocks.registerRuntimeWorkspace,
@@ -29,7 +29,7 @@ vi.mock("$lib/server/runtime-registration", async () => ({
 import { POST as registerRuntimePost } from "../../routes/api/v1/runtime/runtimes/register/+server";
 import { POST as registerWorkspacePost } from "../../routes/api/v1/runtime/runtimes/[runtimeId]/workspaces/register/+server";
 
-const conflict = new RuntimeWorkspaceOwnerConflictError({
+const conflict = new RuntimeWorkspaceLeaseConflictError({
   workspaceId: "ws_00000000000000000000000000000000",
   currentRuntimeId: "rt_00000000000000000000000000000000",
   currentBindingId: "rtwb_00000000000000000000000000000000",
@@ -38,7 +38,7 @@ const conflict = new RuntimeWorkspaceOwnerConflictError({
   occurredAt: "2026-07-15T00:00:00.000Z",
 });
 
-describe("runtime registration owner conflict routes", () => {
+describe("runtime registration lease conflict routes", () => {
   it("maps initial runtime registration conflict to HTTP 409", async () => {
     mocks.registerRuntime.mockImplementationOnce(() => {
       throw conflict;
@@ -67,7 +67,7 @@ describe("runtime registration owner conflict routes", () => {
       url,
     } as Parameters<typeof registerRuntimePost>[0])) as Response;
 
-    await expectOwnerConflictResponse(response, "req-runtime-conflict");
+    await expectLeaseConflictResponse(response, "req-runtime-conflict");
   });
 
   it("maps authenticated workspace registration conflict to HTTP 409", async () => {
@@ -97,16 +97,17 @@ describe("runtime registration owner conflict routes", () => {
       locals: { requestId: "req-workspace-conflict" },
     } as Parameters<typeof registerWorkspacePost>[0])) as Response;
 
-    await expectOwnerConflictResponse(response, "req-workspace-conflict");
+    await expectLeaseConflictResponse(response, "req-workspace-conflict");
   });
 });
 
-async function expectOwnerConflictResponse(response: Response, requestId: string): Promise<void> {
+async function expectLeaseConflictResponse(response: Response, requestId: string): Promise<void> {
   expect(response.status).toBe(409);
+  // Primary HTTP code is workspace_lease_conflict; aliasReasonCode remains WORKSPACE_OWNER_CONFLICT.
   await expect(response.json()).resolves.toEqual({
     error: {
-      code: "workspace_owner_conflict",
-      message: "Workspace already has an active daemon owner.",
+      code: "workspace_lease_conflict",
+      message: "Workspace already has an active origin lease.",
       requestId,
     },
   });

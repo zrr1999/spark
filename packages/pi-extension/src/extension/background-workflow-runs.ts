@@ -1,4 +1,4 @@
-import type { RunRef, TaskRef, ProjectRef } from "@zendev-lab/spark-extension-api";
+import type { RunRef, TaskRef, ProjectRef } from "@zendev-lab/spark-core";
 import type { WorkflowRunRecord } from "@zendev-lab/spark-workflows";
 import type {
   SparkBackgroundChildRunView,

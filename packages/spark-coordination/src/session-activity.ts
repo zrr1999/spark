@@ -527,12 +527,15 @@ function stableReportKey(report: SessionActivityReport) {
   if (
     report.kind !== "run.update" &&
     report.kind !== "task.update" &&
-    report.kind !== "artifact.update"
+    report.kind !== "artifact.update" &&
+    report.kind !== "evidence.update"
   ) {
     return null;
   }
   return `${report.kind}:${report.id}`;
 }
+
+const PRODUCT_ARTIFACT_KINDS = new Set(["issue", "pr", "preview"]);
 
 function loadArtifactReportsByCommand(
   db: DatabaseSync,
@@ -560,10 +563,11 @@ function loadArtifactReportsByCommand(
     const contentRef = parseJson(row.contentRefJson);
     const text = stringValue(contentRef, "assistantTextPreview");
     if (!text) return [];
+    const kindPrefix = PRODUCT_ARTIFACT_KINDS.has(row.kind) ? "artifact" : "evidence";
     return [
       {
         id: row.id,
-        kind: `artifact.${row.kind}`,
+        kind: `${kindPrefix}.${row.kind}`,
         title: row.title || "Daemon report",
         text,
         role: "assistant",
@@ -656,12 +660,41 @@ function reportFromDaemonPayload(
       const title = stringValue(artifact, "title") || artifactRef || "Artifact update";
       const status = stringValue(artifact, "status");
       const preview = stringValue(artifact, "preview");
+      const artifactKind = stringValue(artifact, "kind");
+      // Legacy tool side-channels used artifact.update for evidence kinds.
+      if (!PRODUCT_ARTIFACT_KINDS.has(artifactKind ?? "")) {
+        return {
+          id: artifactRef || row.id,
+          kind: "evidence.update",
+          title,
+          text: preview || (status ? `Evidence ${status}.` : "Evidence updated."),
+          role: stringValue(artifact, "producer"),
+          status,
+          createdAt: row.createdAt,
+        };
+      }
       return {
         id: artifactRef || row.id,
         kind: viewType,
         title,
         text: preview || (status ? `Artifact ${status}.` : "Artifact updated."),
         role: stringValue(artifact, "producer"),
+        status,
+        createdAt: row.createdAt,
+      };
+    }
+    if (viewType === "evidence.update") {
+      const evidence = recordValue(view, "evidence");
+      const evidenceRef = stringValue(evidence, "ref");
+      const title = stringValue(evidence, "title") || evidenceRef || "Evidence update";
+      const status = stringValue(evidence, "status");
+      const preview = stringValue(evidence, "preview");
+      return {
+        id: evidenceRef || row.id,
+        kind: viewType,
+        title,
+        text: preview || (status ? `Evidence ${status}.` : "Evidence updated."),
+        role: stringValue(evidence, "producer"),
         status,
         createdAt: row.createdAt,
       };

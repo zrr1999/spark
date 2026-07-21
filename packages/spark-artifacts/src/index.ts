@@ -1,7 +1,10 @@
 import { randomUUID, createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { mkdir, readFile, readdir, stat } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve } from "node:path";
+import { writeJsonFileAtomic, writeTextFileAtomic } from "@zendev-lab/spark-core";
 import { isProductArtifactKind } from "./product/types.ts";
+
+export { writeJsonFileAtomic, writeTextFileAtomic };
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -849,23 +852,6 @@ export function defaultArtifactCuration(
   return { status: "raw", retention: "task" };
 }
 
-export async function writeJsonFileAtomic(filePath: string, value: unknown): Promise<void> {
-  await writeTextFileAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-export async function writeTextFileAtomic(filePath: string, text: string): Promise<void> {
-  const dir = dirname(filePath);
-  await mkdir(dir, { recursive: true });
-  const tempPath = join(dir, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
-  try {
-    await writeFile(tempPath, text, "utf8");
-    await rename(tempPath, filePath);
-  } catch (error) {
-    await cleanupAtomicWriteTempFile(tempPath, error);
-    throw error;
-  }
-}
-
 function validateArtifactLink(link: unknown, index: number): void {
   if (!isRecord(link)) throw new ArtifactValidationError(`links[${index}] must be an object`);
   assertRefValue(link.from, "artifact", `links[${index}].from`);
@@ -1108,16 +1094,6 @@ function assertOptionalPositiveNumber(value: unknown, label: string): void {
 function assertOptionalBoolean(value: unknown, label: string): void {
   if (value !== undefined && typeof value !== "boolean") {
     throw new ArtifactValidationError(`${label} must be a boolean`);
-  }
-}
-
-async function cleanupAtomicWriteTempFile(tempPath: string, writeError: unknown): Promise<void> {
-  try {
-    await rm(tempPath, { force: true });
-  } catch (cleanupError) {
-    throw new Error(
-      `atomic write failed and temporary file cleanup also failed: ${tempPath}; write error: ${unknownErrorMessage(writeError)}; cleanup error: ${unknownErrorMessage(cleanupError)}`,
-    );
   }
 }
 

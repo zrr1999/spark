@@ -10,8 +10,8 @@ import { errorJson } from "$lib/server/json";
 import {
   registerRuntime,
   RuntimeEnrollmentError,
-  RuntimeWorkspaceOwnerConflictError,
-} from "$lib/server/runtime-registration";
+  RuntimeWorkspaceLeaseConflictError,
+} from "@zendev-lab/spark-coordination/runtime-registration";
 
 export const POST: RequestHandler = async ({ request, locals, url }) => {
   const parsed = runtimeRegistrationRequestSchema.safeParse(
@@ -32,7 +32,8 @@ export const POST: RequestHandler = async ({ request, locals, url }) => {
   try {
     registered = registerRuntime(getDatabase(), parsed.data, bearerToken(request));
   } catch (caught) {
-    if (caught instanceof RuntimeWorkspaceOwnerConflictError) {
+    if (caught instanceof RuntimeWorkspaceLeaseConflictError) {
+      // Primary wire code: workspace_lease_conflict (aliasReasonCode WORKSPACE_OWNER_CONFLICT).
       return errorJson(
         caught.reasonCode.toLowerCase(),
         caught.message,

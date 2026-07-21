@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   cueContractHarnessExitCode,
   runSparkCueContractHarness,
 } from "../scripts/spark-cue-contract-harness.mts";
 
-void test("cue contract harness reports a missing cued binary as a non-strict blocker", async () => {
+test("cue contract harness reports a missing cued binary as a non-strict blocker", async () => {
   const temp = await mkdtemp(join(tmpdir(), "spark-cue-contract-unit-"));
   const outputPath = join(temp, "report.json");
   try {

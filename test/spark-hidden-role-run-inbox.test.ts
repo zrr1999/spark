@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
-import type {
-  TaskRun,
-  TaskRunCompletionSummary,
-} from "../packages/spark-extension-api/src/index.ts";
+import type { TaskRun, TaskRunCompletionSummary } from "../packages/spark-core/src/index.ts";
 import { projectHiddenRoleRunInboxEntry } from "../packages/pi-extension/src/extension/role-run-completions.ts";
 
 const now = "2026-07-07T12:00:00.000Z";
@@ -39,7 +36,7 @@ function run(ownerSessionId = "session:current"): TaskRun {
   };
 }
 
-void test("background inbox hides acknowledged superseded failures on workspace startup", () => {
+test("background inbox hides acknowledged superseded failures on workspace startup", () => {
   const projection = projectHiddenRoleRunInboxEntry({
     run: run(),
     summary: summary("failed"),
@@ -58,7 +55,7 @@ void test("background inbox hides acknowledged superseded failures on workspace 
   assert.equal(projection.suppressedFromStartup, true);
 });
 
-void test("background inbox still surfaces unacknowledged active failure for attached workspace session", () => {
+test("background inbox still surfaces unacknowledged active failure for attached workspace session", () => {
   const projection = projectHiddenRoleRunInboxEntry({
     run: run(),
     summary: summary("failed"),
@@ -74,7 +71,7 @@ void test("background inbox still surfaces unacknowledged active failure for att
   assert.equal(projection.suppressedFromStartup, false);
 });
 
-void test("background inbox excludes different workspace session from startup projection", () => {
+test("background inbox excludes different workspace session from startup projection", () => {
   const projection = projectHiddenRoleRunInboxEntry({
     run: run("session:different"),
     summary: summary("failed"),
@@ -89,7 +86,7 @@ void test("background inbox excludes different workspace session from startup pr
   assert.equal(projection.suppressedFromStartup, true);
 });
 
-void test("run_status includeHistory preserves acknowledged historical failures", () => {
+test("run_status includeHistory preserves acknowledged historical failures", () => {
   const projection = projectHiddenRoleRunInboxEntry({
     run: run(),
     summary: summary("failed"),

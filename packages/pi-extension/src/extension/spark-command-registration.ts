@@ -5,7 +5,7 @@ import {
   loopContinuationPrompt,
 } from "@zendev-lab/spark-loop";
 import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/spark-tasks";
-import { nowIso, type ProjectRef } from "@zendev-lab/spark-extension-api";
+import { nowIso, type ProjectRef } from "@zendev-lab/spark-core";
 import type { SparkEntryIntent } from "./spark-entry.ts";
 import { applySparkEntryResolution } from "./spark-entry-application.ts";
 import { detectSparkProjectState, resolveSparkEntry } from "./spark-entry-resolution.ts";

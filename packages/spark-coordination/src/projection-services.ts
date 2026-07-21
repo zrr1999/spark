@@ -3,6 +3,7 @@ import {
   assertCockpitMayWriteScope,
   assertDaemonOwnsScope,
   createId,
+  optionalWireIdempotencyKey,
   type ArtifactProjectionPayload,
   type HumanRequestCreatedPayload,
   type HumanResponseAckPayload,
@@ -121,21 +122,24 @@ interface CreateWorkspaceInput {
   createdAt?: string;
 }
 
-export interface CreateWorkspaceWithOwnerBindingInput extends CreateWorkspaceInput {
+export interface CreateWorkspaceWithLeaseInput extends CreateWorkspaceInput {
   runtimeWorkspaceBindingId: string;
 }
 
+/** @deprecated Prefer {@link CreateWorkspaceWithLeaseInput}. */
+export type CreateWorkspaceWithOwnerBindingInput = CreateWorkspaceWithLeaseInput;
+
 export interface WorkspaceProjection {
   id: string;
+  /** @deprecated Prefer {@link WorkspaceProjection.leaseId}. */
   ownerBindingId: string;
+  /** Active Cockpit origin lease id. */
+  leaseId: string;
   createdAt: string;
   updatedAt: string;
 }
 
-export function createWorkspaceWithOwnerBinding(
-  db: DatabaseSync,
-  input: CreateWorkspaceWithOwnerBindingInput,
-) {
+export function createWorkspaceWithLease(db: DatabaseSync, input: CreateWorkspaceWithLeaseInput) {
   return withTransaction(db, () => {
     const binding = db
       .prepare("SELECT id FROM runtime_workspace_bindings WHERE id = ? AND status != 'archived'")
@@ -161,38 +165,49 @@ export function createWorkspaceWithOwnerBinding(
   });
 }
 
-export interface UnbindWorkspaceOwnerInput {
+/** @deprecated Prefer {@link createWorkspaceWithLease}. */
+export const createWorkspaceWithOwnerBinding = createWorkspaceWithLease;
+
+export interface UnbindWorkspaceLeaseInput {
   workspaceId: string;
   expectedRuntimeWorkspaceBindingId?: string;
   actorId?: string;
   endedAt?: string;
 }
 
-export type UnbindWorkspaceOwnerResult =
+export type UnbindWorkspaceLeaseResult =
   | {
       outcome: "unbound";
+      leaseId: string;
+      /** @deprecated Prefer {@link UnbindWorkspaceLeaseResult} `leaseId`. */
       ownerBindingId: string;
       runtimeWorkspaceBindingId: string;
       endedAt: string;
     }
   | { outcome: "already_unbound"; endedAt: string };
 
+/** @deprecated Prefer {@link UnbindWorkspaceLeaseInput}. */
+export type UnbindWorkspaceOwnerInput = UnbindWorkspaceLeaseInput;
+
+/** @deprecated Prefer {@link UnbindWorkspaceLeaseResult}. */
+export type UnbindWorkspaceOwnerResult = UnbindWorkspaceLeaseResult;
+
 /**
- * End only the Cockpit projection. The daemon-owned directory and its runtime
- * binding row remain intact so a reconnect can observe the unbound state and
- * the directory can later be attached to another Cockpit workspace.
+ * End only the Cockpit origin lease projection. The daemon-owned directory and its
+ * runtime binding row remain intact so a reconnect can observe the unbound state
+ * and the directory can later be attached to another Cockpit workspace.
  */
-export function unbindWorkspaceOwner(
+export function unbindWorkspaceLease(
   db: DatabaseSync,
-  input: UnbindWorkspaceOwnerInput,
-): UnbindWorkspaceOwnerResult {
+  input: UnbindWorkspaceLeaseInput,
+): UnbindWorkspaceLeaseResult {
   return withTransaction(db, () => {
     const endedAt = input.endedAt ?? nowIso();
     const active = db
       .prepare(
         `SELECT id,
                 runtime_workspace_binding_id AS runtimeWorkspaceBindingId
-         FROM workspace_owner_bindings
+         FROM workspace_leases
          WHERE workspace_id = ? AND ended_at IS NULL
          LIMIT 1`,
       )
@@ -202,34 +217,153 @@ export function unbindWorkspaceOwner(
       input.expectedRuntimeWorkspaceBindingId &&
       input.expectedRuntimeWorkspaceBindingId !== active.runtimeWorkspaceBindingId
     ) {
-      throw new Error("Workspace owner changed before the unbind request was applied.");
+      throw new Error("Workspace lease changed before the unbind request was applied.");
     }
 
     const updated = db
       .prepare(
-        `UPDATE workspace_owner_bindings
+        `UPDATE workspace_leases
          SET ended_at = ?
          WHERE id = ? AND ended_at IS NULL`,
       )
       .run(endedAt, active.id);
     if (updated.changes !== 1) {
-      throw new Error("Workspace owner changed before the unbind request was applied.");
+      throw new Error("Workspace lease changed before the unbind request was applied.");
     }
     appendEvent(db, {
       workspaceId: input.workspaceId,
       actorKind: "user",
       actorId: input.actorId ?? null,
-      kind: "workspace.owner_unbound",
-      subjectKind: "workspace_owner_binding",
+      kind: "workspace.lease_unbound",
+      subjectKind: "workspace_lease",
       subjectId: active.id,
       payload: { runtimeWorkspaceBindingId: active.runtimeWorkspaceBindingId },
       createdAt: endedAt,
     });
     return {
       outcome: "unbound",
+      leaseId: active.id,
       ownerBindingId: active.id,
       runtimeWorkspaceBindingId: active.runtimeWorkspaceBindingId,
       endedAt,
+    };
+  });
+}
+
+/** @deprecated Prefer {@link unbindWorkspaceLease}. */
+export const unbindWorkspaceOwner = unbindWorkspaceLease;
+
+export interface ArchiveWorkspaceInput {
+  workspaceId: string;
+  actorId?: string;
+  archivedAt?: string;
+}
+
+export type ArchiveWorkspaceResult =
+  | {
+      outcome: "archived";
+      workspaceId: string;
+      previousSlug: string;
+      archivedSlug: string;
+      archivedAt: string;
+      leaseUnbound: boolean;
+    }
+  | { outcome: "already_archived"; workspaceId: string; archivedAt: string }
+  | { outcome: "missing" };
+
+/**
+ * Remove a workspace from the Cockpit directory without deleting daemon-owned
+ * local directories or sessions. Archives the workspace row (freeing its slug)
+ * and ends any active Cockpit origin lease.
+ */
+export function archiveWorkspace(
+  db: DatabaseSync,
+  input: ArchiveWorkspaceInput,
+): ArchiveWorkspaceResult {
+  return withTransaction(db, () => {
+    const archivedAt = input.archivedAt ?? nowIso();
+    const workspace = db
+      .prepare(
+        `SELECT id,
+                slug,
+                status
+         FROM workspaces
+         WHERE id = ?
+         LIMIT 1`,
+      )
+      .get(input.workspaceId) as { id: string; slug: string; status: string } | undefined;
+    if (!workspace) return { outcome: "missing" };
+    if (workspace.status === "archived") {
+      return { outcome: "already_archived", workspaceId: workspace.id, archivedAt };
+    }
+
+    const activeLease = db
+      .prepare(
+        `SELECT id,
+                runtime_workspace_binding_id AS runtimeWorkspaceBindingId
+         FROM workspace_leases
+         WHERE workspace_id = ? AND ended_at IS NULL
+         LIMIT 1`,
+      )
+      .get(workspace.id) as { id: string; runtimeWorkspaceBindingId: string } | undefined;
+
+    let leaseUnbound = false;
+    if (activeLease) {
+      const updated = db
+        .prepare(
+          `UPDATE workspace_leases
+           SET ended_at = ?
+           WHERE id = ? AND ended_at IS NULL`,
+        )
+        .run(archivedAt, activeLease.id);
+      if (updated.changes === 1) {
+        leaseUnbound = true;
+        appendEvent(db, {
+          workspaceId: workspace.id,
+          actorKind: "user",
+          actorId: input.actorId ?? null,
+          kind: "workspace.lease_unbound",
+          subjectKind: "workspace_lease",
+          subjectId: activeLease.id,
+          payload: { runtimeWorkspaceBindingId: activeLease.runtimeWorkspaceBindingId },
+          createdAt: archivedAt,
+        });
+      }
+    }
+
+    // Free the human slug so a new workspace can reuse it after removal.
+    const archivedSlug = `archived-${workspace.id}`;
+    const archived = db
+      .prepare(
+        `UPDATE workspaces
+         SET status = 'archived',
+             slug = ?,
+             updated_at = ?
+         WHERE id = ? AND status = 'active'`,
+      )
+      .run(archivedSlug, archivedAt, workspace.id);
+    if (archived.changes !== 1) {
+      throw new Error("Workspace changed before the archive request was applied.");
+    }
+
+    appendEvent(db, {
+      workspaceId: workspace.id,
+      actorKind: "user",
+      actorId: input.actorId ?? null,
+      kind: "workspace.archived",
+      subjectKind: "workspace",
+      subjectId: workspace.id,
+      payload: { previousSlug: workspace.slug, archivedSlug },
+      createdAt: archivedAt,
+    });
+
+    return {
+      outcome: "archived",
+      workspaceId: workspace.id,
+      previousSlug: workspace.slug,
+      archivedSlug,
+      archivedAt,
+      leaseUnbound,
     };
   });
 }
@@ -369,7 +503,7 @@ function upsertWorkspaceProjection(
     });
   }
 
-  return { ...workspace, ownerBindingId };
+  return { ...workspace, ownerBindingId, leaseId: ownerBindingId };
 }
 
 function ensureActiveOwnerBinding(
@@ -382,7 +516,7 @@ function ensureActiveOwnerBinding(
   const activeWorkspaceForBinding = db
     .prepare(
       `SELECT workspace_id AS workspaceId
-       FROM workspace_owner_bindings
+       FROM workspace_leases
        WHERE runtime_workspace_binding_id = ? AND ended_at IS NULL
        LIMIT 1`,
     )
@@ -396,7 +530,7 @@ function ensureActiveOwnerBinding(
     .prepare(
       `SELECT id,
               runtime_workspace_binding_id AS runtimeWorkspaceBindingId
-       FROM workspace_owner_bindings
+       FROM workspace_leases
        WHERE workspace_id = ? AND ended_at IS NULL
        LIMIT 1`,
     )
@@ -405,18 +539,18 @@ function ensureActiveOwnerBinding(
     return active.id;
   }
   if (active && !options.replaceExisting) {
-    throw new Error(`Workspace already has an active runtime owner binding: ${workspaceId}`);
+    throw new Error(`Workspace already has an active origin lease: ${workspaceId}`);
   }
 
   db.prepare(
-    `UPDATE workspace_owner_bindings
+    `UPDATE workspace_leases
      SET ended_at = ?
      WHERE workspace_id = ? AND ended_at IS NULL`,
   ).run(timestamp, workspaceId);
 
   const ownerBindingId = createId("wob");
   db.prepare(
-    `INSERT INTO workspace_owner_bindings
+    `INSERT INTO workspace_leases
       (id, workspace_id, runtime_workspace_binding_id, owner_mode, started_at, ended_at, created_at)
      VALUES (?, ?, ?, 'primary', ?, NULL, ?)`,
   ).run(ownerBindingId, workspaceId, runtimeWorkspaceBindingId, timestamp, timestamp);
@@ -521,14 +655,14 @@ export function queueCommandForWorkspaceOwner(db: DatabaseSync, input: QueueComm
     const owner = db
       .prepare(
         `SELECT runtime_workspace_binding_id AS runtimeWorkspaceBindingId
-         FROM workspace_owner_bindings
+         FROM workspace_leases
          WHERE workspace_id = ? AND ended_at IS NULL
          LIMIT 1`,
       )
       .get(input.workspaceId) as { runtimeWorkspaceBindingId: string } | undefined;
 
     if (!owner) {
-      throw new Error(`Workspace has no active runtime owner binding: ${input.workspaceId}`);
+      throw new Error(`Workspace has no active origin lease: ${input.workspaceId}`);
     }
 
     const timestamp = input.createdAt ?? nowIso();
@@ -551,7 +685,7 @@ export function queueCommandForWorkspaceOwner(db: DatabaseSync, input: QueueComm
       input.payload.title ?? null,
       toJson(input.payload),
       input.requestedByUserId ?? null,
-      input.idempotencyKey ?? null,
+      optionalWireIdempotencyKey(input.idempotencyKey) ?? null,
       timestamp,
       timestamp,
     );
@@ -600,7 +734,7 @@ export function loadWorkspaceServerControl(
               rc.status AS runtimeStatus,
               rc.last_heartbeat_at AS lastHeartbeatAt,
               rc.updated_at AS runtimeUpdatedAt
-       FROM workspace_owner_bindings wob
+       FROM workspace_leases wob
        JOIN runtime_workspace_bindings rb ON rb.id = wob.runtime_workspace_binding_id
        JOIN runtime_connections rc ON rc.id = rb.runtime_id
        WHERE wob.workspace_id = ? AND wob.ended_at IS NULL

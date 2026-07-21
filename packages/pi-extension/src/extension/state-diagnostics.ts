@@ -9,7 +9,7 @@ import {
   type RunRef,
   type ProjectRef,
   type TaskRef,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import type { WorkflowRunStatus } from "@zendev-lab/spark-workflows";
 import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/spark-tasks";
 import { listSparkStateFiles, readJsonObject, statIfPresent } from "./state-housekeeping-files.ts";

@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { writeJsonFileAtomic } from "@zendev-lab/spark-extension-api";
+import { writeJsonFileAtomic } from "@zendev-lab/spark-core";
 import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 
 export type RecallScope = "user" | "workspace" | "repo";
 export type RecallCandidateStatus = "candidate" | "rejected";
+export type RecallCandidateKind = "explicit" | "stable_fact" | "open_item";
 
 export interface RecallCandidate {
   id: string;
@@ -13,6 +14,8 @@ export interface RecallCandidate {
   text: string;
   reason: string;
   evidenceRefs: string[];
+  kind?: RecallCandidateKind;
+  sourceSessionId?: string;
   status: RecallCandidateStatus;
   createdAt: string;
   updatedAt: string;
@@ -53,6 +56,8 @@ export class RecallStore {
     text: string;
     reason: string;
     evidenceRefs?: string[];
+    kind?: RecallCandidateKind;
+    sourceSessionId?: string;
   }): Promise<RecallCandidate> {
     const now = new Date().toISOString();
     const snapshot = await this.loadSnapshot();
@@ -62,6 +67,8 @@ export class RecallStore {
       text: requiredText(input.text, "text"),
       reason: requiredText(input.reason, "reason"),
       evidenceRefs: input.evidenceRefs ?? [],
+      kind: input.kind ?? "explicit",
+      ...(input.sourceSessionId?.trim() ? { sourceSessionId: input.sourceSessionId.trim() } : {}),
       status: "candidate",
       createdAt: now,
       updatedAt: now,
@@ -130,7 +137,7 @@ export function recallStorePath(
   if (explicitPath?.trim()) return explicitPath;
   return scope === "user"
     ? resolveSparkUserPaths().recallFile
-    : join(cwd, ".spark", "recall-candidates.json");
+    : join(cwd, ".spark", "memory", "recall-candidates.json");
 }
 
 export function defaultRecallStore(
@@ -191,6 +198,23 @@ function assertCandidate(
     throw new RecallStoreFormatError(
       filePath,
       `candidates[${index}].evidenceRefs must be a string array`,
+    );
+  }
+  if (
+    candidate.kind !== undefined &&
+    candidate.kind !== "explicit" &&
+    candidate.kind !== "stable_fact" &&
+    candidate.kind !== "open_item"
+  ) {
+    throw new RecallStoreFormatError(
+      filePath,
+      `candidates[${index}].kind must be explicit, stable_fact, or open_item`,
+    );
+  }
+  if (candidate.sourceSessionId !== undefined && typeof candidate.sourceSessionId !== "string") {
+    throw new RecallStoreFormatError(
+      filePath,
+      `candidates[${index}].sourceSessionId must be a string`,
     );
   }
   if (candidate.status !== "candidate" && candidate.status !== "rejected") {

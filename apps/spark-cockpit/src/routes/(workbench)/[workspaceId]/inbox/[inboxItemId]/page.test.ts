@@ -23,8 +23,8 @@ describe("inbox response detail", () => {
         data: {
           locale: "en",
           messages: getDictionary("en"),
-          activeWorkspace: { id: "ws_spore", slug: "spore", name: "Spore" },
-          workspaces: [{ id: "ws_spore", slug: "spore", name: "Spore" }],
+          activeWorkspace: { id: "ws_spore", slug: "spore", name: "Spore", localPath: null },
+          workspaces: [{ id: "ws_spore", slug: "spore", name: "Spore", localPath: null }],
           sessions: [],
           pendingAsk: null,
           sessionsAvailable: true,

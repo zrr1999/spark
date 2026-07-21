@@ -3,7 +3,10 @@ import { unbindRuntimeWorkspace } from "@zendev-lab/spark-coordination/runtime-r
 import { bearerTokenFromAuthorization } from "@zendev-lab/spark-system";
 import { getDatabase } from "$lib/server/db";
 import { errorJson } from "$lib/server/json";
-import { RuntimeAccessTokenError, RuntimeEnrollmentError } from "$lib/server/runtime-registration";
+import {
+  RuntimeAccessTokenError,
+  RuntimeEnrollmentError,
+} from "@zendev-lab/spark-coordination/runtime-registration";
 
 export const DELETE: RequestHandler = ({ params, request, locals }) => {
   const runtimeId = params.runtimeId;

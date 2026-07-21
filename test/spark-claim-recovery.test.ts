@@ -2,15 +2,15 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
-import type { RoleRef, RunRef } from "@zendev-lab/spark-extension-api";
+import type { RoleRef, RunRef } from "@zendev-lab/spark-core";
 import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
 import type { WorkflowRunStatusSummary } from "@zendev-lab/spark-workflows";
 import type { ActiveSparkRoleRunProcess } from "@zendev-lab/spark-runtime";
 import { TaskGraph } from "@zendev-lab/spark-tasks";
 import { evaluateSparkTaskClaimRecovery } from "../packages/pi-extension/src/extension/task-claim-recovery.ts";
-import { sessionDirectoryNameForKey } from "../packages/pi-extension/src/extension/session-directory-store.ts";
+import { sessionDirectoryNameForKey } from "@zendev-lab/spark-loop";
 
 const IDLE_WORKFLOW_STATUS: WorkflowRunStatusSummary = {
   manager: { status: "idle", updatedAt: "2026-06-17T00:00:00.000Z" },
@@ -50,7 +50,7 @@ function plannedTaskGraph() {
   return { graph, project, task };
 }
 
-void test("stale claim recovery refuses current-session claims", async () => {
+test("stale claim recovery refuses current-session claims", async () => {
   const { graph, project, task } = plannedTaskGraph();
   const currentSession = "session:current";
   const claimed = graph.claimTask(task.ref, {
@@ -75,7 +75,7 @@ void test("stale claim recovery refuses current-session claims", async () => {
   assert.equal(decision.reason, "current_session_claim");
 });
 
-void test("stale claim recovery refuses while an active role-run process exists", async () => {
+test("stale claim recovery refuses while an active role-run process exists", async () => {
   const { graph, project, task } = plannedTaskGraph();
   const claimed = graph.claimTask(task.ref, {
     kind: "main",
@@ -109,7 +109,7 @@ void test("stale claim recovery refuses while an active role-run process exists"
   assert.deepEqual(decision.evidence.activeRoleRunRefs, ["run:active"]);
 });
 
-void test("stale claim recovery allows needs_changes recovery when owner is inactive", async () => {
+test("stale claim recovery allows needs_changes recovery when owner is inactive", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-claim-recovery-owner-inactive-"));
   try {
     const { graph, project, task } = plannedTaskGraph();
@@ -145,7 +145,7 @@ void test("stale claim recovery allows needs_changes recovery when owner is inac
   }
 });
 
-void test("stale claim recovery refuses when owner activity is newer than needs_changes review", async () => {
+test("stale claim recovery refuses when owner activity is newer than needs_changes review", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-claim-recovery-owner-recent-"));
   try {
     const { graph, project, task } = plannedTaskGraph();

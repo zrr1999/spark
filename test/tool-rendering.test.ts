@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import { dirname, join } from "node:path";
-import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { expect, test } from "vitest";
 
 import { visibleWidth } from "@zendev-lab/spark-tui/text";
 
 import piAskExtension from "../packages/spark-ask/src/extension.ts";
-import { registerPiCueTools } from "../packages/spark-cue/src/index.ts";
+import { registerSparkCueTools } from "../packages/spark-cue/src/index.ts";
 import piGraftExtension from "../packages/spark-graft/src/extension.ts";
-import { registerPiRolesTools } from "../packages/spark-roles/src/extension.ts";
-import { registerPiSessionTool } from "../packages/spark-session/src/extension.ts";
+import { registerSparkRolesTools } from "../packages/spark-roles/src/extension.ts";
+import { registerSparkSessionTool } from "../packages/spark-session/src/extension.ts";
 import sparkExtension from "../packages/pi-extension/src/extension/index.ts";
 
 interface RenderTheme {
@@ -34,13 +34,12 @@ const plainTheme: RenderTheme = {
 };
 
 const snapshotDir = join(dirname(fileURLToPath(import.meta.url)), "snapshots");
-const textSnapshot = { serializers: [(value: unknown) => String(value)] };
 
-void test("Spark extension canonical facade tools render parameter-aware tool calls", (t) => {
+test("Spark extension canonical facade tools render parameter-aware tool calls", async () => {
   const tools = registerSparkToolsForRendering();
 
   assertAllToolsHaveCallRenderers(tools);
-  t.assert.fileSnapshot(
+  await expect(
     renderCallCases(tools, [
       { name: "task_read", args: { action: "workspace_status", view: "summary", limit: 5 } },
       { name: "task_read", args: { action: "project_list", status: "all" } },
@@ -58,9 +57,7 @@ void test("Spark extension canonical facade tools render parameter-aware tool ca
       { name: "goal", args: { action: "status" } },
       { name: "phase", args: { action: "plan", focus: "tighten tasks" } },
     ]),
-    join(snapshotDir, "tool-rendering-spark.txt"),
-    textSnapshot,
-  );
+  ).toMatchFileSnapshot(join(snapshotDir, "tool-rendering-spark.txt"));
   assert.equal(tools.has("patch"), false, "patch workflows are owned by spark-graft");
   assert.equal(tools.has("cue_exec"), false, "spark-cue is registered as its own extension");
   assert.deepEqual(
@@ -81,14 +78,14 @@ void test("Spark extension canonical facade tools render parameter-aware tool ca
   assertVisibleWidthAtMost(longTask, 80);
 });
 
-void test("standalone Pi ask, cue, and role tools render parameter-aware tool calls", (t) => {
+test("standalone Pi ask, cue, and role tools render parameter-aware tool calls", async () => {
   const askTools = new Map<string, RenderableToolConfig>();
   piAskExtension({
     registerTool: (config) => askTools.set(config.name, config),
   });
   assertAllToolsHaveCallRenderers(askTools);
   assert.deepEqual([...askTools.keys()].sort(), ["ask"]);
-  t.assert.fileSnapshot(
+  await expect(
     renderCallCases(askTools, [
       {
         name: "ask",
@@ -107,9 +104,7 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
         },
       },
     ]),
-    join(snapshotDir, "tool-rendering-ask.txt"),
-    textSnapshot,
-  );
+  ).toMatchFileSnapshot(join(snapshotDir, "tool-rendering-ask.txt"));
 
   const cueTools = registerCueToolsForRendering();
   assertAllToolsHaveCallRenderers(cueTools);
@@ -125,7 +120,7 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
     "script_eval",
     "script_run",
   ]);
-  t.assert.fileSnapshot(
+  await expect(
     renderCallCases(cueTools, [
       { name: "cue_jobs", args: { action: "status", id: "J12", tail_bytes: 4096 } },
       { name: "cue_jobs", args: { action: "list", status: "running", limit: 5 } },
@@ -167,9 +162,7 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
         },
       },
     ]),
-    join(snapshotDir, "tool-rendering-cue.txt"),
-    textSnapshot,
-  );
+  ).toMatchFileSnapshot(join(snapshotDir, "tool-rendering-cue.txt"));
 
   const longRun = renderCall(
     cueTools,
@@ -184,24 +177,22 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
   assertVisibleWidthAtMost(longRun, 80);
 
   const roleTools = new Map<string, RenderableToolConfig>();
-  registerPiRolesTools({
+  registerSparkRolesTools({
     registerTool: (config) => roleTools.set(config.name, config),
   });
   assertAllToolsHaveCallRenderers(roleTools);
   assert.deepEqual([...roleTools.keys()].sort(), ["role"]);
-  t.assert.fileSnapshot(
+  await expect(
     renderCallCases(roleTools, [
       { name: "role", args: { action: "list", source: "builtin" } },
       { name: "role", args: { action: "get", role: "worker" } },
       { name: "role", args: { action: "create", id: "repo-inspector" } },
       { name: "role", args: { action: "call", role: "worker" } },
     ]),
-    join(snapshotDir, "tool-rendering-role.txt"),
-    textSnapshot,
-  );
+  ).toMatchFileSnapshot(join(snapshotDir, "tool-rendering-role.txt"));
 
   const sessionTools = new Map<string, RenderableToolConfig>();
-  registerPiSessionTool({
+  registerSparkSessionTool({
     registerTool: (config) => sessionTools.set(config.name, config),
   });
   assertAllToolsHaveCallRenderers(sessionTools);
@@ -221,7 +212,7 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
   );
 
   const graftTools = registerGraftToolsForRendering();
-  t.assert.fileSnapshot(
+  await expect(
     renderCallCases(graftTools, [
       {
         name: "graft_repo",
@@ -232,9 +223,7 @@ void test("standalone Pi ask, cue, and role tools render parameter-aware tool ca
         },
       },
     ]),
-    join(snapshotDir, "tool-rendering-graft.txt"),
-    textSnapshot,
-  );
+  ).toMatchFileSnapshot(join(snapshotDir, "tool-rendering-graft.txt"));
 
   const longAsk = renderCall(
     askTools,
@@ -262,7 +251,7 @@ function registerSparkToolsForRendering(): Map<string, RenderableToolConfig> {
 
 function registerCueToolsForRendering(): Map<string, RenderableToolConfig> {
   const tools = new Map<string, RenderableToolConfig>();
-  registerPiCueTools({
+  registerSparkCueTools({
     registerTool: (config) => tools.set(config.name, config),
     on: () => undefined,
     getActiveTools: () => [...tools.keys()],

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
-import type { ExtensionRoleRunner } from "@zendev-lab/spark-extension-api";
+import type { ExtensionRoleRunner } from "@zendev-lab/spark-core";
 import {
   createRoleNativeExecutorResolver,
   resolveSparkSourceHeadlessExecutorSpecifier,
@@ -29,7 +29,7 @@ function fakeRequest() {
   };
 }
 
-void test("role native executor source fallback bypasses extension-loader package aliases", async () => {
+test("role native executor source fallback bypasses extension-loader package aliases", async () => {
   const specifier = resolveSparkSourceHeadlessExecutorSpecifier();
 
   assert.match(specifier, /\/apps\/spark-tui\/src\/headless-role-executor\.ts$/u);
@@ -37,7 +37,7 @@ void test("role native executor source fallback bypasses extension-loader packag
   assert.equal(typeof module.createSparkHeadlessRoleExecutor, "function");
 });
 
-void test("role native executor resolver prefers host-provided ctx.runRole", async () => {
+test("role native executor resolver prefers host-provided ctx.runRole", async () => {
   let loadCalls = 0;
   const provided: ExtensionRoleRunner = async (request) => ({
     record: { ...request.record, status: "succeeded" },
@@ -59,7 +59,7 @@ void test("role native executor resolver prefers host-provided ctx.runRole", asy
   assert.equal(loadCalls, 0);
 });
 
-void test("role native executor resolver creates a cached headless fallback", async () => {
+test("role native executor resolver creates a cached headless fallback", async () => {
   let loadCalls = 0;
   let factoryCalls = 0;
   let executorCalls = 0;
@@ -98,7 +98,7 @@ void test("role native executor resolver creates a cached headless fallback", as
   assert.equal(executorCalls, 1);
 });
 
-void test("role native executor resolver reports headless fallback load failures", async () => {
+test("role native executor resolver reports headless fallback load failures", async () => {
   const resolve = createRoleNativeExecutorResolver({
     loadHeadlessModule: async () => {
       throw new Error("missing headless package");

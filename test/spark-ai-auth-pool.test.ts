@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import { SparkAuthSlotPool, type SparkAuthPool } from "@zendev-lab/spark-ai";
 
@@ -33,7 +33,7 @@ function authPool(): SparkAuthPool {
   };
 }
 
-void test("SparkAuthSlotPool selects the highest-priority non-cooled slot", () => {
+test("SparkAuthSlotPool selects the highest-priority non-cooled slot", () => {
   const clock = new FakeClock();
   const pool = new SparkAuthSlotPool(authPool(), { clock, baseCooldownMs: 1_000 });
 
@@ -45,7 +45,7 @@ void test("SparkAuthSlotPool selects the highest-priority non-cooled slot", () =
   assert.equal(pool.snapshot().slots.find((slot) => slot.id === "main")?.inflight, 1);
 });
 
-void test("SparkAuthSlotPool cools failed rate-limit slots and chooses backup", () => {
+test("SparkAuthSlotPool cools failed rate-limit slots and chooses backup", () => {
   const clock = new FakeClock();
   const pool = new SparkAuthSlotPool(authPool(), { clock, baseCooldownMs: 1_000 });
 
@@ -63,7 +63,7 @@ void test("SparkAuthSlotPool cools failed rate-limit slots and chooses backup", 
   assert.equal(next.reason, "available");
 });
 
-void test("SparkAuthSlotPool fail-opens with the least-cooled slot when all slots are cooling", () => {
+test("SparkAuthSlotPool fail-opens with the least-cooled slot when all slots are cooling", () => {
   const clock = new FakeClock();
   const pool = new SparkAuthSlotPool(authPool(), { clock, baseCooldownMs: 1_000 });
 
@@ -78,7 +78,7 @@ void test("SparkAuthSlotPool fail-opens with the least-cooled slot when all slot
   assert.equal(selection.cooledDown, true);
 });
 
-void test("SparkAuthSlotPool applies capped exponential backoff", () => {
+test("SparkAuthSlotPool applies capped exponential backoff", () => {
   const clock = new FakeClock();
   const pool = new SparkAuthSlotPool(authPool(), {
     clock,
@@ -94,7 +94,7 @@ void test("SparkAuthSlotPool applies capped exponential backoff", () => {
   assert.equal(new Date(pool.snapshot().slots[0]!.cooldownUntil!).getTime() - clock.now(), 250);
 });
 
-void test("SparkAuthSlotPool success clears cooldown and consecutive failures", () => {
+test("SparkAuthSlotPool success clears cooldown and consecutive failures", () => {
   const clock = new FakeClock();
   const pool = new SparkAuthSlotPool(authPool(), { clock, baseCooldownMs: 1_000 });
 
@@ -110,7 +110,7 @@ void test("SparkAuthSlotPool success clears cooldown and consecutive failures", 
   assert.equal(main?.cooldownUntil, undefined);
 });
 
-void test("SparkAuthSlotPool snapshot exposes only slot ids and authRefHash", () => {
+test("SparkAuthSlotPool snapshot exposes only slot ids and authRefHash", () => {
   const pool = new SparkAuthSlotPool(authPool());
 
   const snapshot = pool.snapshot();

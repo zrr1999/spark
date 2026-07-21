@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   SparkHostRuntime,
@@ -7,7 +7,7 @@ import {
   loadPlugins,
 } from "../apps/spark-tui/src/host/index.ts";
 
-void test("loadPlugins invokes extension default factory with the host runtime", async () => {
+test("loadPlugins invokes extension default factory with the host runtime", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-plugin-loader-test" });
   const registry = new SparkProviderRegistry();
 
@@ -39,7 +39,7 @@ void test("loadPlugins invokes extension default factory with the host runtime",
   );
 });
 
-void test("loadPlugins invokes provider default factory with the provider registry", async () => {
+test("loadPlugins invokes provider default factory with the provider registry", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-plugin-loader-test" });
   const registry = new SparkProviderRegistry();
 
@@ -76,7 +76,7 @@ void test("loadPlugins invokes provider default factory with the provider regist
   assert.equal(registry.hasProvider("fake-provider"), true);
 });
 
-void test("loadPlugins isolates failures: one bad plugin does not stop the rest", async () => {
+test("loadPlugins isolates failures: one bad plugin does not stop the rest", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-plugin-loader-test" });
   const registry = new SparkProviderRegistry();
 
@@ -116,7 +116,7 @@ void test("loadPlugins isolates failures: one bad plugin does not stop the rest"
   );
 });
 
-void test("loadPlugins reports a clear error for modules without a default factory", async () => {
+test("loadPlugins reports a clear error for modules without a default factory", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-plugin-loader-test" });
   const registry = new SparkProviderRegistry();
 
@@ -132,11 +132,11 @@ void test("loadPlugins reports a clear error for modules without a default facto
   assert.equal(result.outcomes[0]!.ok, false);
   assert.match(
     result.outcomes[0]!.error ?? "",
-    /must default-export a function\(api: ExtensionAPI\)/,
+    /must default-export a function\(api: SparkHostAPI\)/,
   );
 });
 
-void test("loadPlugins waits for async default factories to settle", async () => {
+test("loadPlugins waits for async default factories to settle", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-plugin-loader-test" });
   const registry = new SparkProviderRegistry();
 

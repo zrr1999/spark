@@ -14,7 +14,7 @@
  *
  *   3. **Tool dispatch through the host.** On `toolcall_end` events the loop
  *      looks up the tool via `host.getTool(name)` and invokes its `execute`
- *      with the runtime's `ExtensionContext`. The `ToolResult` is appended
+ *      with the runtime's `SparkHostContext`. The `ToolResult` is appended
  *      to the message log before the next turn.
  *
  *   4. **Outbox drain.** Between turns we drain `host.drainOutbox()` and turn
@@ -57,10 +57,10 @@ import { createHash } from "node:crypto";
 
 import {
   resolveToolPolicy,
-  type ExtensionContext,
+  type SparkHostContext,
   type ResolvedToolPolicy,
   type ToolConfig,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 export { compactToolResultContent } from "./tool-result-compaction.ts";
 
 import {
@@ -115,6 +115,7 @@ import {
   summarizeToolResultContent,
   type SparkArtifactView,
   type SparkConversationPart,
+  type SparkEvidenceView,
   type SparkInteractionRequest,
   type SparkInteractionResponse,
   type SparkMessageView,
@@ -165,7 +166,7 @@ export interface SparkTurnHost {
   setSessionId?(sessionId: string | undefined): void;
   emit(event: string, payload: unknown): Promise<unknown[]>;
   getTool(name: string): SparkTurnRegisteredTool | undefined;
-  makeContext(extra?: Partial<ExtensionContext>): ExtensionContext;
+  makeContext(extra?: Partial<SparkHostContext>): SparkHostContext;
   requestInteraction(request: SparkInteractionRequest): Promise<SparkInteractionResponse>;
   listTools(): SparkTurnRegisteredTool[];
   drainOutbox(): SparkTurnOutboxEnvelope[];
@@ -934,7 +935,7 @@ export class SparkAgentLoop {
         return errorToolResult(toolCall, this.toolUnavailableMessage(toolCall.name, tool));
       }
 
-      const ctx: ExtensionContext = this.host.makeContext({
+      const ctx: SparkHostContext = this.host.makeContext({
         model: this.getModel(),
         sessionId: this.viewSessionId,
       });
@@ -1013,7 +1014,7 @@ export class SparkAgentLoop {
       details?: unknown;
       isError?: boolean;
     };
-    ctx: ExtensionContext;
+    ctx: SparkHostContext;
     decision: SparkToolResultRawRecoveryDecision;
     signal: AbortSignal;
   }): Promise<ToolResultRawRecoveryRecord | undefined> {
@@ -1506,14 +1507,22 @@ export class SparkAgentLoop {
         task,
       });
     }
-    for (const artifact of artifactViewsFromToolDetails(message.details, {
+    for (const entity of entityViewsFromToolDetails(message.details, {
       sourceTool: message.toolName,
       toolCallId: message.toolCallId,
     })) {
+      if (entity.type === "artifact") {
+        this.publishViewEvent({
+          version: SPARK_PROTOCOL_VERSION,
+          type: "artifact.update",
+          artifact: entity.artifact,
+        });
+        continue;
+      }
       this.publishViewEvent({
         version: SPARK_PROTOCOL_VERSION,
-        type: "artifact.update",
-        artifact,
+        type: "evidence.update",
+        evidence: entity.evidence,
       });
     }
   }
@@ -2435,19 +2444,27 @@ function taskViewsFromToolDetails(
   return tasks;
 }
 
-function artifactViewsFromToolDetails(
+function entityViewsFromToolDetails(
   details: unknown,
   metadata: Record<string, unknown>,
-): SparkArtifactView[] {
-  const artifacts: SparkArtifactView[] = [];
+): Array<
+  | { type: "artifact"; artifact: SparkArtifactView }
+  | { type: "evidence"; evidence: SparkEvidenceView }
+> {
+  const entities: Array<
+    | { type: "artifact"; artifact: SparkArtifactView }
+    | { type: "evidence"; evidence: SparkEvidenceView }
+  > = [];
   const seenRefs = new Set<string>();
   scanToolDetails(details, (candidate) => {
-    const artifact = artifactViewFromCandidate(candidate, metadata);
-    if (!artifact || seenRefs.has(artifact.ref)) return;
-    seenRefs.add(artifact.ref);
-    artifacts.push(artifact);
+    const entity = entityViewFromCandidate(candidate, metadata);
+    if (!entity) return;
+    const ref = entity.type === "artifact" ? entity.artifact.ref : entity.evidence.ref;
+    if (seenRefs.has(ref)) return;
+    seenRefs.add(ref);
+    entities.push(entity);
   });
-  return artifacts;
+  return entities;
 }
 
 function scanToolDetails(
@@ -2508,31 +2525,40 @@ function taskViewFromCandidate(
       ...stringArrayField(candidate, "outputArtifacts"),
       ...stringArrayField(candidate, "evidenceRefs"),
     ].filter(
-      (value, index, array) => value.startsWith("artifact:") && array.indexOf(value) === index,
+      (value, index, array) =>
+        (value.startsWith("artifact:") || value.startsWith("evidence:")) &&
+        array.indexOf(value) === index,
     ),
     metadata: jsonMetadata(metadata),
   };
 }
 
-function artifactViewFromCandidate(
+function entityViewFromCandidate(
   candidate: Record<string, unknown>,
   metadata: Record<string, unknown>,
-): SparkArtifactView | undefined {
-  const ref = stringField(candidate, "ref") ?? stringField(candidate, "artifactRef");
-  if (!ref?.startsWith("artifact:")) return undefined;
+):
+  | { type: "artifact"; artifact: SparkArtifactView }
+  | { type: "evidence"; evidence: SparkEvidenceView }
+  | undefined {
+  const ref =
+    stringField(candidate, "ref") ??
+    stringField(candidate, "artifactRef") ??
+    stringField(candidate, "evidenceRef");
+  if (!ref) return undefined;
+  const isEvidenceRef = ref.startsWith("evidence:");
+  const isArtifactRef = ref.startsWith("artifact:");
+  if (!isEvidenceRef && !isArtifactRef) return undefined;
+
+  const rawKind = stringField(candidate, "kind");
   const provenance = recordField(candidate, "provenance");
-  return {
+  const producer =
+    stringField(candidate, "producer") ?? stringField(provenance, "producer") ?? undefined;
+  const common = {
     version: SPARK_PROTOCOL_VERSION,
     ref,
     title: stringField(candidate, "title") ?? ref,
-    kind: artifactKind(stringField(candidate, "kind")),
-    format: artifactFormat(stringField(candidate, "format")),
     ...(stringField(candidate, "status") ? { status: stringField(candidate, "status") } : {}),
-    ...(stringField(candidate, "producer")
-      ? { producer: stringField(candidate, "producer") }
-      : stringField(provenance, "producer")
-        ? { producer: stringField(provenance, "producer") }
-        : {}),
+    ...(producer ? { producer } : {}),
     ...(isoStringField(candidate, "createdAt")
       ? { createdAt: isoStringField(candidate, "createdAt") }
       : {}),
@@ -2541,6 +2567,26 @@ function artifactViewFromCandidate(
       : {}),
     ...(stringField(candidate, "preview") ? { preview: stringField(candidate, "preview") } : {}),
     metadata: jsonMetadata(metadata),
+  };
+
+  if (isProductArtifactKind(rawKind) && isArtifactRef) {
+    return {
+      type: "artifact",
+      artifact: {
+        ...common,
+        kind: rawKind,
+        format: productArtifactFormat(stringField(candidate, "format")),
+      },
+    };
+  }
+
+  return {
+    type: "evidence",
+    evidence: {
+      ...common,
+      kind: evidenceKind(rawKind),
+      format: evidenceFormat(stringField(candidate, "format")),
+    },
   };
 }
 
@@ -2608,15 +2654,33 @@ function taskTodoStatus(value: string | undefined): SparkTaskTodoView["status"] 
   return "pending";
 }
 
-function artifactKind(value: string | undefined): SparkArtifactView["kind"] {
+function isProductArtifactKind(value: string | undefined): value is "issue" | "pr" | "preview" {
+  return value === "issue" || value === "pr" || value === "preview";
+}
+
+function evidenceKind(value: string | undefined): SparkEvidenceView["kind"] {
   if (value === "document" || value === "record" || value === "trace" || value === "knowledge") {
     return value;
   }
   return "other";
 }
 
-function artifactFormat(value: string | undefined): SparkArtifactView["format"] {
+function evidenceFormat(value: string | undefined): SparkEvidenceView["format"] {
   if (value === "markdown" || value === "json" || value === "text" || value === "blob") {
+    return value;
+  }
+  return "other";
+}
+
+function productArtifactFormat(value: string | undefined): SparkArtifactView["format"] {
+  if (
+    value === "markdown" ||
+    value === "json" ||
+    value === "text" ||
+    value === "mdx" ||
+    value === "html" ||
+    value === "blob"
+  ) {
     return value;
   }
   return "other";

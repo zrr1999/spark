@@ -123,6 +123,42 @@ describe("SparkInvocationStore", () => {
     }
   });
 
+  it("lists summaries from denormalized event cursors without scanning events", () => {
+    const { db, store } = createStore();
+    try {
+      const first = store.submit({
+        sessionId: "session-list",
+        prompt: "first",
+        now: "2026-07-14T00:00:00.000Z",
+      });
+      const second = store.submit({
+        sessionId: "session-list",
+        prompt: "second",
+        now: "2026-07-14T00:00:01.000Z",
+      });
+      for (let index = 0; index < 25; index += 1) {
+        store.appendEvent(first.invocationId, "delta", { index });
+      }
+      store.appendEvent(second.invocationId, "delta", { index: 0 });
+
+      const page = store.listSummaryPage({ limit: 10, offset: 0 });
+      expect(page.total).toBe(2);
+      expect(page.invocations).toEqual([
+        expect.objectContaining({
+          invocationId: second.invocationId,
+          eventCursor: 1,
+        }),
+        expect.objectContaining({
+          invocationId: first.invocationId,
+          eventCursor: 25,
+        }),
+      ]);
+      expect(store.latestEventSequence(first.invocationId)).toBe(25);
+    } finally {
+      db.close();
+    }
+  });
+
   it("fences concurrent invocations for the same session and sequences bounded events", () => {
     const { db, store } = createStore();
     try {

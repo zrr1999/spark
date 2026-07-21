@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { nowIso } from "@zendev-lab/spark-extension-api";
+import { nowIso } from "@zendev-lab/spark-core";
 import { JsonStoreFormatError, readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import {
   legacySessionLoopStorePath,

@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { normalizePiTaskStatusGroup } from "@zendev-lab/spark-tasks";
+import { normalizeSparkTaskStatusGroup } from "@zendev-lab/spark-tasks";
 import { sweepStaleInvocations, sweepStaleRuntimeConnections } from "./liveness.ts";
 import { loadWorkspaceServerControl } from "./projection-services";
 
@@ -47,7 +47,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function normalizeTaskStatus(status: string) {
-  const group = normalizePiTaskStatusGroup(status);
+  const group = normalizeSparkTaskStatusGroup(status);
   return group === "pending" ? "ready" : group;
 }
 
@@ -186,7 +186,7 @@ export function loadProjectCockpit(db: DatabaseSync, projectId: string) {
                 rb.status AS bindingStatus,
                 rc.name AS runtimeName,
                 rc.status AS runtimeStatus
-         FROM workspace_owner_bindings wob
+         FROM workspace_leases wob
          JOIN runtime_workspace_bindings rb ON rb.id = wob.runtime_workspace_binding_id
          JOIN runtime_connections rc ON rc.id = rb.runtime_id
          WHERE wob.workspace_id = ? AND wob.ended_at IS NULL

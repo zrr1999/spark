@@ -44,6 +44,6 @@ pnpm run preview
 pnpm run check:zellij-harness -- --session spark
 ```
 
-Node `>=26 <27` and pnpm `>=11 <12` are required. `.spark/` and `.learnings/` are local runtime state and should remain uncommitted unless explicitly exported.
+Node `>=26 <27` and pnpm `>=11 <12` are required. `.spark/` (including `.spark/memory/`) is local runtime state and should remain uncommitted unless explicitly exported. Legacy `.learnings/` directories are also ignored if present.
 
 Contracts and operator procedures are indexed in [`docs/README.md`](./docs/README.md). Repository-wide boundaries are in [`DESIGN.md`](./DESIGN.md) and [`AGENTS.md`](./AGENTS.md).

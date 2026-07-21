@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
-import { registerPiWorkflowTool } from "@zendev-lab/spark-workflows/extension";
+import { registerSparkWorkflowTool } from "@zendev-lab/spark-workflows/extension";
 import { workspaceWorkflowDir } from "@zendev-lab/spark-workflows";
 
 type ToolResult = {
@@ -22,7 +22,7 @@ interface ToolConfig {
   ): Promise<ToolResult>;
 }
 
-void test("workflow tool lists builtins and reads saved workspace scripts from controlled roots", async () => {
+test("workflow tool lists builtins and reads saved workspace scripts from controlled roots", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-workflows-tool-"));
   try {
     await mkdir(workspaceWorkflowDir(dir), { recursive: true });
@@ -38,7 +38,7 @@ void test("workflow tool lists builtins and reads saved workspace scripts from c
     );
 
     const tools = new Map<string, ToolConfig>();
-    registerPiWorkflowTool({
+    registerSparkWorkflowTool({
       registerTool: (config) => tools.set(config.name, config as ToolConfig),
     });
 
@@ -66,9 +66,9 @@ void test("workflow tool lists builtins and reads saved workspace scripts from c
   }
 });
 
-void test("workflow tool rejects inline/freeform selectors", async () => {
+test("workflow tool rejects inline/freeform selectors", async () => {
   const tools = new Map<string, ToolConfig>();
-  registerPiWorkflowTool({
+  registerSparkWorkflowTool({
     registerTool: (config) => tools.set(config.name, config as ToolConfig),
   });
 

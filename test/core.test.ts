@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { ArtifactStore, validateArtifact } from "@zendev-lab/spark-artifacts";
 import {
@@ -15,7 +15,7 @@ import {
   writeJsonFileAtomic,
   writeTextFileAtomic,
   type TaskPlan,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import { builtinRoleRef, createBuiltinRoles } from "@zendev-lab/spark-roles";
 import { TaskGraph } from "@zendev-lab/spark-tasks";
 import { renderSparkActiveSystemPrompt } from "../packages/pi-extension/src/extension/spark-active-injection.ts";
@@ -50,7 +50,7 @@ class TestJsonFormatError extends Error {
   }
 }
 
-void test("refs carry kind and id", () => {
+test("refs carry kind and id", () => {
   const ref = newRef("task", "abc");
   assert.equal(ref, "task:abc");
   assert.equal(refId(ref), "abc");
@@ -60,7 +60,7 @@ void test("refs carry kind and id", () => {
   assert.throws(() => refKind("agent:builtin-worker"), /unknown ref kind/);
 });
 
-void test("artifact contract validates persisted metadata shape", () => {
+test("artifact contract validates persisted metadata shape", () => {
   const ref = newRef("artifact", "contract");
   const projectRef = newRef("proj", "contract-project");
   const artifact = {
@@ -99,7 +99,7 @@ void test("artifact contract validates persisted metadata shape", () => {
   );
 });
 
-void test("artifact store defaults and filters curation lifecycle", async () => {
+test("artifact store defaults and filters curation lifecycle", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-artifact-curation-"));
   try {
     const store = new ArtifactStore({ rootDir: dir });
@@ -151,7 +151,7 @@ void test("artifact store defaults and filters curation lifecycle", async () => 
   }
 });
 
-void test("JSON and text file helpers keep optional read, formatting, and parse error semantics", async () => {
+test("JSON and text file helpers keep optional read, formatting, and parse error semantics", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-core-json-"));
   try {
     const filePath = join(dir, "nested", "state.json");
@@ -187,7 +187,7 @@ void test("JSON and text file helpers keep optional read, formatting, and parse 
   }
 });
 
-void test("task graph rejects cycles and cross-project dependencies", () => {
+test("task graph rejects cycles and cross-project dependencies", () => {
   const graph = new TaskGraph();
   const project = graph.createProject({ title: "Demo", description: "demo" });
   const otherProject = graph.createProject({ title: "Other", description: "other" });
@@ -217,7 +217,7 @@ void test("task graph rejects cycles and cross-project dependencies", () => {
   );
 });
 
-void test("task graph bootstraps one roadmap per project", () => {
+test("task graph bootstraps one roadmap per project", () => {
   const graph = new TaskGraph();
   const project = graph.createProject({ title: "Demo", description: "demo", purpose: "Ship v0" });
   assert.equal(project.purpose, "Ship v0");
@@ -227,7 +227,7 @@ void test("task graph bootstraps one roadmap per project", () => {
   assert.equal(reloaded.getProject(project.ref).roadmap.ref, "roadmap:main");
 });
 
-void test("task graph can update placeholder project titles without project lifecycle status", () => {
+test("task graph can update placeholder project titles without project lifecycle status", () => {
   const graph = new TaskGraph();
   const project = graph.createProject({ title: "「自定义输入」", description: "demo" });
   const updated = graph.updateProject(project.ref, {
@@ -240,13 +240,13 @@ void test("task graph can update placeholder project titles without project life
   assert.equal(isPlaceholderProjectTitle("Hypha v0"), false);
 });
 
-void test("generic task names are detectable and intentionally named tasks are preserved", () => {
+test("generic task names are detectable and intentionally named tasks are preserved", () => {
   assert.equal(isGenericTaskNameForTitle("capture-project-intent", "Capture project intent"), true);
   assert.equal(isGenericTaskNameForTitle("task-deadbeefcafebabe", "整理一下"), true);
   assert.equal(isGenericTaskNameForTitle("hypha-v0", "Capture project intent"), false);
 });
 
-void test("task graph plans multiple tasks without claiming them", () => {
+test("task graph plans multiple tasks without claiming them", () => {
   const graph = new TaskGraph();
   const project = graph.createProject({ title: "Demo", description: "demo" });
   const result = graph.planTasks(project.ref, [
@@ -276,7 +276,7 @@ void test("task graph plans multiple tasks without claiming them", () => {
   );
 });
 
-void test("ready tasks require completed dependencies and execution-ready plans", () => {
+test("ready tasks require completed dependencies and execution-ready plans", () => {
   const graph = new TaskGraph();
   const project = graph.createProject({ title: "Demo", description: "demo" });
   const a = graph.createTask({
@@ -300,7 +300,7 @@ void test("ready tasks require completed dependencies and execution-ready plans"
   );
 });
 
-void test("task role labels prefer active claim, finished attribution, then latest run", () => {
+test("task role labels prefer active claim, finished attribution, then latest run", () => {
   const graph = new TaskGraph();
   const project = graph.createProject({ title: "Demo", description: "demo" });
   const current = "session:current";
@@ -367,7 +367,7 @@ void test("task role labels prefer active claim, finished attribution, then late
   );
 });
 
-void test("Spark prompt stays short and tool-scoped", () => {
+test("Spark prompt stays short and tool-scoped", () => {
   const prompt = renderSparkActiveSystemPrompt("");
   assert.equal(prompt.includes("\n"), false);
   for (const tool of ["task_read", "task_write", "assign", "artifact", "ask", "role"]) {
@@ -385,7 +385,7 @@ void test("Spark prompt stays short and tool-scoped", () => {
   assert.ok(prompt.length < 260, `expected short standing prompt, got ${prompt.length}`);
 });
 
-void test("Spark prompt defaults to plan and changes for implementation mode", () => {
+test("Spark prompt defaults to plan and changes for implementation mode", () => {
   const defaultPrompt = renderSparkActiveSystemPrompt("");
   const planPrompt = renderSparkActiveSystemPrompt("", "plan");
   const implementPrompt = renderSparkActiveSystemPrompt("", "implement");
@@ -395,7 +395,7 @@ void test("Spark prompt defaults to plan and changes for implementation mode", (
   assert.match(implementPrompt, /\bimplement\b/);
 });
 
-void test("builtin Pi roles report blockers upward instead of asking interactively", () => {
+test("builtin Pi roles report blockers upward instead of asking interactively", () => {
   for (const role of createBuiltinRoles()) {
     assert.equal((role.allowedTools ?? []).includes("ask"), false);
     if (role.id === "reviewer") {
@@ -410,7 +410,7 @@ void test("builtin Pi roles report blockers upward instead of asking interactive
   }
 });
 
-void test("task graph maintains todos alongside a claimed current task", () => {
+test("task graph maintains todos alongside a claimed current task", () => {
   const graph = new TaskGraph();
   const project = graph.createProject({ title: "Demo", description: "demo" });
   assert.equal(graph.currentTask(project.ref), undefined);

@@ -5,7 +5,7 @@ import {
   createProject,
   createWorkspaceWithOwnerBinding,
   queueCommandForWorkspaceOwner,
-} from "./projection-services";
+} from "@zendev-lab/spark-coordination/projection-services";
 import { buildProjectTaskAssignCommandPayload } from "./project-task-assign";
 
 describe("project task assign command", () => {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   CURRENT_SPARK_EXTENSION_PROFILE_VERSION,
@@ -13,7 +13,7 @@ import {
   saveSparkConfig,
 } from "../apps/spark-tui/src/host/index.ts";
 
-void test("default Spark providers include shared Baidu OneAPI and OpenAI Codex adapters", () => {
+test("default Spark providers include shared Baidu OneAPI and OpenAI Codex adapters", () => {
   assert.deepEqual(DEFAULT_SPARK_CONFIG.providers, [
     "@zendev-lab/spark-ai/baidu-oneapi-provider",
     "@zendev-lab/spark-ai/openai-codex-provider",
@@ -33,7 +33,7 @@ void test("default Spark providers include shared Baidu OneAPI and OpenAI Codex 
   );
 });
 
-void test("Compact V2 config defaults to 40% reduction and current session model", () => {
+test("Compact V2 config defaults to 40% reduction and current session model", () => {
   const compact = DEFAULT_SPARK_CONFIG.compact;
   assert.ok(compact);
   assert.equal(compact.targetReduction, 0.4);
@@ -57,7 +57,7 @@ void test("Compact V2 config defaults to 40% reduction and current session model
   assert.equal(oneSided.compact?.fullThreshold, DEFAULT_SPARK_CONFIG.compact?.fullThreshold);
 });
 
-void test("legacy bundled extension profiles migrate to current defaults without Graft", () => {
+test("legacy bundled extension profiles migrate to current defaults without Graft", () => {
   const historical = [
     "@zendev-lab/spark-ask/extension",
     "@zendev-lab/spark-cue/extension",
@@ -76,7 +76,7 @@ void test("legacy bundled extension profiles migrate to current defaults without
   assert.equal(migrated.extensionProfileVersion, CURRENT_SPARK_EXTENSION_PROFILE_VERSION);
 });
 
-void test("legacy singleton facade recovers the canonical default extension profile", () => {
+test("legacy singleton facade recovers the canonical default extension profile", () => {
   const migrated = mergeSparkConfigWithDefault({
     extensions: ["@zendev-lab/spark-extension/extension"],
   });
@@ -84,7 +84,7 @@ void test("legacy singleton facade recovers the canonical default extension prof
   assert.deepEqual(migrated.extensions, [...DEFAULT_SPARK_EXTENSION_SPECS]);
 });
 
-void test("legacy facade plus custom extensions restores defaults and preserves custom entries", () => {
+test("legacy facade plus custom extensions restores defaults and preserves custom entries", () => {
   const migrated = mergeSparkConfigWithDefault({
     extensions: ["@zendev-lab/spark-extension/extension", "my-extension"],
   });
@@ -92,7 +92,7 @@ void test("legacy facade plus custom extensions restores defaults and preserves 
   assert.deepEqual(migrated.extensions, [...DEFAULT_SPARK_EXTENSION_SPECS, "my-extension"]);
 });
 
-void test("standalone Graft remains an explicit opt-in across profile migration", () => {
+test("standalone Graft remains an explicit opt-in across profile migration", () => {
   const migrated = mergeSparkConfigWithDefault({
     extensions: ["@zendev-lab/spark-graft/extension"],
   });
@@ -100,7 +100,7 @@ void test("standalone Graft remains an explicit opt-in across profile migration"
   assert.deepEqual(migrated.extensions, ["@zendev-lab/spark-graft/extension"]);
 });
 
-void test("loadSparkConfig returns default config when file is missing", async () => {
+test("loadSparkConfig returns default config when file is missing", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-config-missing-"));
   try {
     const path = join(dir, "config.json");
@@ -114,7 +114,7 @@ void test("loadSparkConfig returns default config when file is missing", async (
   }
 });
 
-void test("loadSparkConfig ignores malformed JSON and returns defaults", async () => {
+test("loadSparkConfig ignores malformed JSON and returns defaults", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-config-malformed-"));
   try {
     const path = join(dir, "config.json");
@@ -126,7 +126,7 @@ void test("loadSparkConfig ignores malformed JSON and returns defaults", async (
   }
 });
 
-void test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", async () => {
+test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-config-roundtrip-"));
   try {
     const path = join(dir, "config.json");
@@ -184,7 +184,7 @@ void test("loadSparkConfig + saveSparkConfig round-trip preserves user fields", 
   }
 });
 
-void test("mergeSparkConfigWithDefault restores bundled providers to legacy provider lists", () => {
+test("mergeSparkConfigWithDefault restores bundled providers to legacy provider lists", () => {
   const merged = mergeSparkConfigWithDefault({
     providers: ["@zendev-lab/spark-ai/baidu-oneapi-provider", "my-provider"],
   });
@@ -196,7 +196,7 @@ void test("mergeSparkConfigWithDefault restores bundled providers to legacy prov
   ]);
 });
 
-void test("mergeSparkConfigWithDefault migrates legacy activeProvider/activeModel to activeModelId", () => {
+test("mergeSparkConfigWithDefault migrates legacy activeProvider/activeModel to activeModelId", () => {
   const merged = mergeSparkConfigWithDefault({
     activeProvider: "baidu-oneapi",
     activeModel: "claude-opus-4.8",
@@ -207,7 +207,7 @@ void test("mergeSparkConfigWithDefault migrates legacy activeProvider/activeMode
   assert.equal(merged.activeModel, "claude-opus-4.8");
 });
 
-void test("mergeSparkConfigWithDefault tolerates missing keys, partial inputs, and bogus arrays", () => {
+test("mergeSparkConfigWithDefault tolerates missing keys, partial inputs, and bogus arrays", () => {
   const merged = mergeSparkConfigWithDefault({
     extensions: ["@zendev-lab/spark-cue", 42, ""],
     providers: undefined,

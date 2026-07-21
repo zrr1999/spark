@@ -12,11 +12,11 @@ import {
   isInsecureRemoteServerOrigin,
   isLoopbackServerOrigin,
 } from "$lib/server/daemon-registration-commands";
-import { createWorkspaceWithOwnerBinding } from "$lib/server/projection-services";
+import { createWorkspaceWithOwnerBinding } from "@zendev-lab/spark-coordination/projection-services";
 import {
   bindRuntimeRefreshTokenToWorkspace,
   createRuntimeEnrollmentToken,
-} from "$lib/server/runtime-registration";
+} from "@zendev-lab/spark-coordination/runtime-registration";
 import { slugifyWorkspaceIdentifier } from "$lib/slugify";
 import { workspaceSessionsPath } from "$lib/workspace-routes";
 import {

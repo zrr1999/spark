@@ -70,7 +70,9 @@
 <style>
   .ui-button {
     align-items: center;
+    border: 1px solid transparent;
     border-radius: var(--rounded-md);
+    box-sizing: border-box;
     cursor: pointer;
     display: inline-flex;
     font-family: var(--font-sans);
@@ -96,17 +98,18 @@
 
   .ui-button[data-variant="primary"] {
     background: var(--color-primary);
-    border: 0;
+    border-color: var(--color-primary);
     color: var(--color-on-primary);
   }
 
   .ui-button[data-variant="primary"]:not(:disabled):hover {
     background: var(--color-primary-hover);
+    border-color: var(--color-primary-hover);
   }
 
   .ui-button[data-variant="secondary"] {
     background: var(--color-surface);
-    border: 1px solid var(--color-border-strong);
+    border-color: var(--color-border-strong);
     color: var(--color-ink-muted);
   }
 
@@ -117,7 +120,7 @@
 
   .ui-button[data-variant="danger"] {
     background: var(--color-danger);
-    border: 0;
+    border-color: var(--color-danger);
     color: var(--color-on-primary);
   }
 
@@ -127,7 +130,7 @@
 
   .ui-button[data-variant="ghost"] {
     background: transparent;
-    border: 1px solid var(--color-border);
+    border-color: var(--color-border);
     color: var(--color-ink-muted);
   }
 

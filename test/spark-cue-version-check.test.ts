@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   __resetVersionCheckForTests,
@@ -19,7 +19,7 @@ function asClient(fake: FakeClient): CueClient {
   return fake as unknown as CueClient;
 }
 
-void test("compareSemver orders release tags numerically", () => {
+test("compareSemver orders release tags numerically", () => {
   const cases: Array<[left: string, right: string, expected: number, message?: string]> = [
     ["0.1.0", "0.1.0", 0],
     ["0.0.9", "0.1.0", -1],
@@ -36,7 +36,7 @@ void test("compareSemver orders release tags numerically", () => {
   }
 });
 
-void test("cued version cache follows SPARK_HOME", () => {
+test("cued version cache follows SPARK_HOME", () => {
   const previous = process.env.SPARK_HOME;
   process.env.SPARK_HOME = "/tmp/spark-cue-home";
   try {
@@ -47,7 +47,7 @@ void test("cued version cache follows SPARK_HOME", () => {
   }
 });
 
-void test("classifyDaemonVersion handles match, no-latest, outdated, and unknown cases", () => {
+test("classifyDaemonVersion handles match, no-latest, outdated, and unknown cases", () => {
   const cases = [
     {
       name: "reported daemon with unknown latest is silent",
@@ -101,7 +101,7 @@ void test("classifyDaemonVersion handles match, no-latest, outdated, and unknown
   }
 });
 
-void test("renderCuedVersionWarning renders only actionable warnings", () => {
+test("renderCuedVersionWarning renders only actionable warnings", () => {
   assert.equal(renderCuedVersionWarning({ kind: "match" }), null);
   assert.equal(renderCuedVersionWarning({ kind: "no-latest", daemon: { kind: "unknown" } }), null);
 
@@ -126,7 +126,7 @@ void test("renderCuedVersionWarning renders only actionable warnings", () => {
   assert.match(unknownRunning, /latest cue-shell release is 0\.1\.0/);
 });
 
-void test("checkCuedVersionAndWarn warns once when daemon is older than upstream", async () => {
+test("checkCuedVersionAndWarn warns once when daemon is older than upstream", async () => {
   __resetVersionCheckForTests();
   const messages: Array<{ message: string; level: string }> = [];
   const ctx = {
@@ -152,7 +152,7 @@ void test("checkCuedVersionAndWarn warns once when daemon is older than upstream
   assert.match(messages[0]?.message ?? "", /0\.0\.9.*0\.1\.0/);
 });
 
-void test("checkCuedVersionAndWarn warns when daemon hides version and upstream is known", async () => {
+test("checkCuedVersionAndWarn warns when daemon hides version and upstream is known", async () => {
   __resetVersionCheckForTests();
   const messages: string[] = [];
   const ctx = { ui: { notify: (msg: string) => messages.push(msg) } };
@@ -167,7 +167,7 @@ void test("checkCuedVersionAndWarn warns when daemon hides version and upstream 
   assert.match(messages[0] ?? "", /does not report its version/);
 });
 
-void test("checkCuedVersionAndWarn stays silent when upstream lookup fails and daemon reports", async () => {
+test("checkCuedVersionAndWarn stays silent when upstream lookup fails and daemon reports", async () => {
   __resetVersionCheckForTests();
   const messages: string[] = [];
   const ctx = { ui: { notify: (msg: string) => messages.push(msg) } };
@@ -181,7 +181,7 @@ void test("checkCuedVersionAndWarn stays silent when upstream lookup fails and d
   assert.deepEqual(messages, []);
 });
 
-void test("checkCuedVersionAndWarn stays silent when both daemon and upstream are unknown", async () => {
+test("checkCuedVersionAndWarn stays silent when both daemon and upstream are unknown", async () => {
   __resetVersionCheckForTests();
   const messages: string[] = [];
   const ctx = { ui: { notify: (msg: string) => messages.push(msg) } };
@@ -195,7 +195,7 @@ void test("checkCuedVersionAndWarn stays silent when both daemon and upstream ar
   assert.deepEqual(messages, []);
 });
 
-void test("checkCuedVersionAndWarn stays silent when daemon is at the latest release", async () => {
+test("checkCuedVersionAndWarn stays silent when daemon is at the latest release", async () => {
   __resetVersionCheckForTests();
   const messages: string[] = [];
   const ctx = { ui: { notify: (msg: string) => messages.push(msg) } };
@@ -209,7 +209,7 @@ void test("checkCuedVersionAndWarn stays silent when daemon is at the latest rel
   assert.deepEqual(messages, []);
 });
 
-void test("checkCuedVersionAndWarn falls back to console.warn without ui.notify", async () => {
+test("checkCuedVersionAndWarn falls back to console.warn without ui.notify", async () => {
   __resetVersionCheckForTests();
   const fake = asClient({
     async pingForVersion() {
@@ -230,7 +230,7 @@ void test("checkCuedVersionAndWarn falls back to console.warn without ui.notify"
   assert.match(captured[0] ?? "", /older than latest cue-shell release/);
 });
 
-void test("checkCuedVersionAndWarn swallows transport errors", async () => {
+test("checkCuedVersionAndWarn swallows transport errors", async () => {
   __resetVersionCheckForTests();
   const messages: string[] = [];
   const ctx = { ui: { notify: (msg: string) => messages.push(msg) } };
@@ -244,7 +244,7 @@ void test("checkCuedVersionAndWarn swallows transport errors", async () => {
   assert.deepEqual(messages, []);
 });
 
-void test("checkCuedVersionAndWarn swallows latest-lookup errors", async () => {
+test("checkCuedVersionAndWarn swallows latest-lookup errors", async () => {
   __resetVersionCheckForTests();
   const messages: string[] = [];
   const ctx = { ui: { notify: (msg: string) => messages.push(msg) } };
@@ -263,7 +263,7 @@ void test("checkCuedVersionAndWarn swallows latest-lookup errors", async () => {
   assert.deepEqual(messages, []);
 });
 
-void test("PI_CUE_NO_VERSION_CHECK disables the check entirely", async () => {
+test("PI_CUE_NO_VERSION_CHECK disables the check entirely", async () => {
   __resetVersionCheckForTests();
   const previous = process.env.PI_CUE_NO_VERSION_CHECK;
   process.env.PI_CUE_NO_VERSION_CHECK = "1";

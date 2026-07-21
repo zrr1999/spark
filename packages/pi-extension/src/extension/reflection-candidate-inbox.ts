@@ -1,1 +1,1 @@
-export * from "@zendev-lab/spark-learnings/reflection-candidate-inbox";
+export * from "@zendev-lab/spark-memory/reflection-candidate-inbox";

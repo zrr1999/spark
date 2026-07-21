@@ -11,7 +11,7 @@ import { readFile, stat } from "node:fs/promises";
 import { basename, relative, sep } from "node:path";
 import { Type } from "typebox";
 import { minimatch } from "minimatch";
-import type { ToolConfig, ToolPolicy } from "@zendev-lab/spark-extension-api";
+import type { ToolConfig, ToolPolicy } from "@zendev-lab/spark-core";
 
 import { walkTree } from "./gitignore-walker.ts";
 import {

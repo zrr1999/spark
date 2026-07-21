@@ -241,21 +241,25 @@ export function buildSessionWorkbenchView(input: {
     ...input.session.artifacts.map(sessionArtifact),
     ...reports.filter(isArtifactReport).map(activityArtifact),
   ]);
+  const evidence = deduplicateArtifacts([
+    ...(input.session.evidence ?? []).map(sessionEvidence),
+    ...artifacts.filter(
+      (artifact) => !SESSION_PRODUCT_ARTIFACT_KINDS.has(artifact.kind) && !artifact.canonicalChange,
+    ),
+    ...reports.filter(isEvidenceReport).map(activityEvidence),
+  ]);
 
   const productArtifacts = artifacts.filter((artifact) =>
     SESSION_PRODUCT_ARTIFACT_KINDS.has(artifact.kind),
   );
   const changeArtifacts = artifacts.filter((artifact) => artifact.canonicalChange);
-  const evidenceArtifacts = artifacts.filter(
-    (artifact) => !artifact.canonicalChange && !SESSION_PRODUCT_ARTIFACT_KINDS.has(artifact.kind),
-  );
 
   return {
     runs: sortByRecency(runs),
     tasks,
     artifacts: productArtifacts,
     changes: changeArtifacts,
-    evidence: evidenceArtifacts,
+    evidence,
     messages: [...(input.session.mailbox ?? [])]
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .map((message) => ({
@@ -482,6 +486,25 @@ function sessionArtifact(
   };
 }
 
+function sessionEvidence(
+  evidence: NonNullable<SparkSessionView["evidence"]>[number],
+): SessionWorkbenchArtifact {
+  return {
+    id: artifactId(evidence.ref),
+    ref: evidence.ref,
+    source: "session",
+    title: evidence.title,
+    kind: evidence.kind,
+    format: evidence.format,
+    status: nonEmpty(evidence.status),
+    producer: nonEmpty(evidence.producer),
+    createdAt: evidence.createdAt ?? null,
+    updatedAt: evidence.updatedAt ?? null,
+    preview: boundedText(evidence.preview, MAX_PREVIEW_CHARS),
+    canonicalChange: false,
+  };
+}
+
 function activityArtifact(report: SessionWorkbenchActivityReport): SessionWorkbenchArtifact {
   const kind =
     report.kind === "artifact.update" ? "artifact" : report.kind.slice("artifact.".length);
@@ -499,6 +522,28 @@ function activityArtifact(report: SessionWorkbenchActivityReport): SessionWorkbe
     updatedAt: report.createdAt,
     preview: boundedText(report.text, MAX_PREVIEW_CHARS),
     canonicalChange,
+  };
+}
+
+function activityEvidence(report: SessionWorkbenchActivityReport): SessionWorkbenchArtifact {
+  const kind =
+    report.kind === "evidence.update" ? "evidence" : report.kind.slice("evidence.".length);
+  return {
+    id: artifactId(report.id),
+    ref:
+      report.id.startsWith("evidence:") || report.id.startsWith("artifact:")
+        ? report.id
+        : `evidence:${report.id}`,
+    source: "activity",
+    title: report.title || report.id,
+    kind,
+    format: "text",
+    status: report.status,
+    producer: report.role,
+    createdAt: report.createdAt,
+    updatedAt: report.createdAt,
+    preview: boundedText(report.text, MAX_PREVIEW_CHARS),
+    canonicalChange: false,
   };
 }
 
@@ -542,6 +587,13 @@ function isArtifactReport(report: SessionWorkbenchActivityReport) {
   return (
     report.kind === "artifact.update" ||
     (report.kind.startsWith("artifact.") && report.kind.length > "artifact.".length)
+  );
+}
+
+function isEvidenceReport(report: SessionWorkbenchActivityReport) {
+  return (
+    report.kind === "evidence.update" ||
+    (report.kind.startsWith("evidence.") && report.kind.length > "evidence.".length)
   );
 }
 

@@ -19,7 +19,7 @@ vi.mock("$lib/server/json", () => ({
   ) => Response.json({ error: { code, message, requestId } }, { status }),
 }));
 
-vi.mock("$lib/server/runtime-registration", async () => ({
+vi.mock("@zendev-lab/spark-coordination/runtime-registration", async () => ({
   ...(await vi.importActual("@zendev-lab/spark-coordination/runtime-registration")),
   createRuntimeDeviceAuthorization: mocks.createRuntimeDeviceAuthorization,
 }));

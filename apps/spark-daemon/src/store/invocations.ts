@@ -423,11 +423,7 @@ export class SparkInvocationStore {
                 i.attempt_count,
                 i.error_code,
                 i.error_message,
-                COALESCE((
-                  SELECT MAX(e.sequence)
-                  FROM invocation_events e
-                  WHERE e.invocation_id = i.id
-                ), 0) AS event_cursor,
+                i.event_cursor,
                 i.created_at,
                 i.updated_at,
                 i.started_at,
@@ -731,12 +727,12 @@ export class SparkInvocationStore {
     try {
       const cursor = this.db
         .prepare(
-          `SELECT COALESCE(MAX(sequence), 0) AS sequence
-           FROM invocation_events
-           WHERE invocation_id = ?`,
+          `SELECT event_cursor AS sequence
+           FROM invocations
+           WHERE id = ?`,
         )
-        .get(invocationId) as { sequence: number };
-      const sequence = Number(cursor.sequence) + 1;
+        .get(invocationId) as { sequence: number } | undefined;
+      const sequence = Number(cursor?.sequence ?? 0) + 1;
       this.db
         .prepare(
           `INSERT INTO invocation_events
@@ -744,6 +740,14 @@ export class SparkInvocationStore {
            VALUES (?, ?, ?, ?, ?)`,
         )
         .run(invocationId, sequence, kind, JSON.stringify(payload), now);
+      this.db
+        .prepare(
+          `UPDATE invocations
+           SET event_cursor = ?,
+               updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(sequence, now, invocationId);
       this.db.exec("COMMIT");
       return { invocationId, sequence, kind, payload, createdAt: now };
     } catch (error) {
@@ -924,9 +928,9 @@ export class SparkInvocationStore {
     this.require(invocationId);
     const row = this.db
       .prepare(
-        `SELECT COALESCE(MAX(sequence), 0) AS sequence
-         FROM invocation_events
-         WHERE invocation_id = ?`,
+        `SELECT event_cursor AS sequence
+         FROM invocations
+         WHERE id = ?`,
       )
       .get(invocationId) as { sequence: number };
     return Number(row.sequence);

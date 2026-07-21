@@ -342,7 +342,7 @@ describe("session workbench projection", () => {
           },
           {
             id: "report-2",
-            kind: "artifact.document",
+            kind: "evidence.document",
             title: "Report mentioning diff",
             text: "A diff was produced.",
             role: "assistant",
@@ -391,7 +391,7 @@ describe("session workbench projection", () => {
           },
           {
             id: "artifact:reload-safe",
-            kind: "artifact.update",
+            kind: "evidence.update",
             title: "Reload-safe artifact",
             text: "Projected evidence.",
             role: "assistant",
@@ -415,7 +415,7 @@ describe("session workbench projection", () => {
       {
         id: "reload-safe",
         source: "activity",
-        kind: "artifact",
+        kind: "evidence",
         title: "Reload-safe artifact",
       },
     ]);
@@ -578,7 +578,7 @@ describe("session workbench projection", () => {
         reports: [
           {
             id: "same",
-            kind: "artifact.document",
+            kind: "evidence.document",
             title: "Fallback evidence",
             text: "fallback",
             role: "assistant",

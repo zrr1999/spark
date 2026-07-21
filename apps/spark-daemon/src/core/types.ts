@@ -9,8 +9,10 @@ import {
   CHANNEL_IMAGE_MAX_COUNT,
   CHANNEL_IMAGE_MAX_TOTAL_BYTES,
   normalizeChannelImage,
+  normalizeChannelMessageReference,
   type ChannelAdapterType,
   type ChannelImage,
+  type ChannelMessageReference,
   type InfoflowAttachment,
 } from "@zendev-lab/spark-channels";
 
@@ -24,6 +26,7 @@ export interface SparkDaemonChannelContext {
   senderName?: string;
   chatId?: string;
   messageId?: string;
+  messageReference?: ChannelMessageReference;
   eventType?: string;
   contentType?: string;
   attachments?: InfoflowAttachment[];
@@ -166,12 +169,14 @@ function parseChannelContext(value: unknown): SparkDaemonChannelContext | undefi
     : undefined;
   const attachments = parseInfoflowAttachments(record.attachments);
   const images = parseChannelImages(record.images);
+  const messageReference = normalizeChannelMessageReference(record.messageReference);
   return {
     externalKey,
     senderId: nonEmptyString(record.senderId)?.trim(),
     senderName: nonEmptyString(record.senderName)?.trim(),
     chatId: nonEmptyString(record.chatId)?.trim(),
     messageId: nonEmptyString(record.messageId)?.trim(),
+    ...(messageReference ? { messageReference } : {}),
     eventType: nonEmptyString(record.eventType)?.trim(),
     contentType: nonEmptyString(record.contentType)?.trim(),
     ...(attachments.length ? { attachments } : {}),

@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
 import { defaultTaskGraphStore, TaskGraph } from "@zendev-lab/spark-tasks";
-import type { ProjectRef } from "@zendev-lab/spark-extension-api";
+import type { ProjectRef } from "@zendev-lab/spark-core";
 
 import type {
   SparkCockpitArtifactSummary,

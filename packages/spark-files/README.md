@@ -3,7 +3,7 @@
 Working-tree file tools for Spark extension hosts: `read`, `write`, `edit`, `ls`,
 `grep`, and `find`. These give a Pi host the same coding-agent file surface as
 pi-coding-agent, but the implementation depends only on
-`@zendev-lab/spark-extension-api`, `typebox`, `diff`, `ignore`, and `minimatch` —
+`@zendev-lab/spark-core`, `typebox`, `diff`, `ignore`, and `minimatch` —
 no `@earendil-works/pi-coding-agent` runtime, no `@earendil-works/pi-tui`, and
 no `rg`/`fd`/`bash` subprocess.
 
@@ -45,13 +45,13 @@ spark-cue disables bash by policy.
 ## Usage
 
 ```ts
-import piFilesExtension, { registerPiFilesTools } from "@zendev-lab/spark-files";
+import piFilesExtension, { registerSparkFilesTools } from "@zendev-lab/spark-files";
 
 // As a default extension factory:
 piFilesExtension(pi);
 
 // Or register a subset:
-registerPiFilesTools(pi, { tools: ["read", "grep", "find"] });
+registerSparkFilesTools(pi, { tools: ["read", "grep", "find"] });
 ```
 
 Tools resolve their working directory from the extension context (`ctx.cwd`)

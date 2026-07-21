@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   acquireSparkDaemonLock,
   readSparkDaemonLock,
 } from "../apps/spark-daemon/src/core/index.ts";
 
-void test("Spark daemon lock acquires, rejects duplicate live lock, and releases owner lock", async () => {
+test("Spark daemon lock acquires, rejects duplicate live lock, and releases owner lock", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-daemon-lock-"));
   try {
     const runtimeDir = join(dir, "runtime");
@@ -31,7 +31,7 @@ void test("Spark daemon lock acquires, rejects duplicate live lock, and releases
   }
 });
 
-void test("Spark daemon lock recovers stale or malformed lock files", async () => {
+test("Spark daemon lock recovers stale or malformed lock files", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-daemon-stale-lock-"));
   try {
     const runtimeDir = join(dir, "runtime");

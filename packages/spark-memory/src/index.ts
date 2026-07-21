@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { writeJsonFileAtomic } from "@zendev-lab/spark-extension-api";
+import { writeJsonFileAtomic } from "@zendev-lab/spark-core";
 import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 
 export type SparkMemoryScope = "user" | "workspace" | "repo";
@@ -434,3 +434,8 @@ export {
 } from "./recall-store.ts";
 
 export * from "./learning-store.ts";
+export * from "./migrate-layout.ts";
+export * from "./reflection-candidate-inbox.ts";
+export * from "./reflection-in-session-scheduler.ts";
+export * from "./reflection-session-scanner.ts";
+export * from "./reflection-synthesis-engine.ts";

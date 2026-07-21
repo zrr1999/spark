@@ -1,8 +1,8 @@
 import {
   SENTINEL_LABELS,
-  type PiAskFlowAnswerEntry,
-  type PiAskFlowOption,
-  type PiAskFlowQuestion,
+  type SparkAskFlowAnswerEntry,
+  type SparkAskFlowOption,
+  type SparkAskFlowQuestion,
 } from "../schema.ts";
 
 /**
@@ -19,7 +19,7 @@ export interface AskState {
   /** Whether the notes editor is visible for the focused option. */
   notesVisible: boolean;
   /** Collected answers, keyed by question id. */
-  answers: ReadonlyMap<string, PiAskFlowAnswerEntry>;
+  answers: ReadonlyMap<string, SparkAskFlowAnswerEntry>;
   /** Multi-select checked option values for the current question. */
   multiSelectChecked: ReadonlySet<string>;
   /** Pre-submit notes for each question, keyed by question id. */
@@ -43,17 +43,17 @@ export interface AskState {
  */
 export interface ExtendedOption {
   kind: "option" | "other";
-  option?: PiAskFlowOption;
+  option?: SparkAskFlowOption;
   label: string;
   description?: string;
   preview?: string;
 }
 
 export function createInitialState(request: {
-  questions: PiAskFlowQuestion[];
-  priorAnswers?: Record<string, PiAskFlowAnswerEntry>;
+  questions: SparkAskFlowQuestion[];
+  priorAnswers?: Record<string, SparkAskFlowAnswerEntry>;
 }): AskState {
-  const answers = new Map<string, PiAskFlowAnswerEntry>();
+  const answers = new Map<string, SparkAskFlowAnswerEntry>();
   if (request.priorAnswers) {
     for (const [id, entry] of Object.entries(request.priorAnswers)) {
       answers.set(id, entry);
@@ -84,8 +84,8 @@ export function createInitialState(request: {
 }
 
 export function buildExtendedOptions(
-  question: PiAskFlowQuestion,
-  _answers: ReadonlyMap<string, PiAskFlowAnswerEntry>,
+  question: SparkAskFlowQuestion,
+  _answers: ReadonlyMap<string, SparkAskFlowAnswerEntry>,
 ): ExtendedOption[] {
   const opts: ExtendedOption[] = [];
 
@@ -109,8 +109,8 @@ export function buildExtendedOptions(
 }
 
 export function initialOptionIndex(
-  question: PiAskFlowQuestion | undefined,
-  answers: ReadonlyMap<string, PiAskFlowAnswerEntry>,
+  question: SparkAskFlowQuestion | undefined,
+  answers: ReadonlyMap<string, SparkAskFlowAnswerEntry>,
 ): number {
   if (!question || question.type === "multi") return 0;
   const answer = answers.get(question.id);
@@ -125,8 +125,8 @@ export function initialOptionIndex(
 }
 
 export function initialMultiSelectChecked(
-  question: PiAskFlowQuestion | undefined,
-  answers: ReadonlyMap<string, PiAskFlowAnswerEntry>,
+  question: SparkAskFlowQuestion | undefined,
+  answers: ReadonlyMap<string, SparkAskFlowAnswerEntry>,
 ): ReadonlySet<string> {
   if (!question || question.type !== "multi") return new Set();
   const answer = answers.get(question.id);
@@ -134,7 +134,7 @@ export function initialMultiSelectChecked(
   return new Set(values);
 }
 
-function optionIndexForValue(question: PiAskFlowQuestion, value: string | undefined): number {
+function optionIndexForValue(question: SparkAskFlowQuestion, value: string | undefined): number {
   if (!value) return -1;
   return question.options?.findIndex((option) => option.value === value) ?? -1;
 }
@@ -145,12 +145,12 @@ function computeHasPreview(option?: ExtendedOption): boolean {
 
 export function getCurrentQuestion(
   state: AskState,
-  questions: readonly PiAskFlowQuestion[],
-): PiAskFlowQuestion | undefined {
+  questions: readonly SparkAskFlowQuestion[],
+): SparkAskFlowQuestion | undefined {
   if (state.currentTab < 0 || state.currentTab >= questions.length) return undefined;
   return questions[state.currentTab];
 }
 
-export function isSubmitTab(state: AskState, questions: readonly PiAskFlowQuestion[]): boolean {
+export function isSubmitTab(state: AskState, questions: readonly SparkAskFlowQuestion[]): boolean {
   return state.currentTab >= questions.length;
 }

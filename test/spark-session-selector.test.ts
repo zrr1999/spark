@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import { visibleWidth } from "@zendev-lab/spark-tui/text";
 import type { Component } from "../apps/spark-tui/src/tui/pi-tui-adapter.ts";
@@ -110,7 +110,7 @@ const daemonSession: SparkSessionRegistryRecord = {
   updatedAt: "2026-07-13T04:00:00.000Z",
 };
 
-void test("Spark session selector renders new and daemon-managed session choices", () => {
+test("Spark session selector renders new and daemon-managed session choices", () => {
   const selected: string[] = [];
   const component = createSparkSessionSelectorComponent({
     sessions,
@@ -145,7 +145,7 @@ void test("Spark session selector renders new and daemon-managed session choices
   assert.deepEqual(selected, [CREATE_SPARK_SESSION_SELECTION]);
 });
 
-void test("Spark session selector uses the Cockpit fallback for untitled sessions", () => {
+test("Spark session selector uses the Cockpit fallback for untitled sessions", () => {
   const component = createSparkSessionSelectorComponent({
     sessions: [untitledSession],
     workspaceId: "workspace-1",
@@ -164,7 +164,7 @@ void test("Spark session selector uses the Cockpit fallback for untitled session
   );
 });
 
-void test("Spark session selector switches workspace groups horizontally", () => {
+test("Spark session selector switches workspace groups horizontally", () => {
   const selected: string[] = [];
   const component = createSparkSessionSelectorComponent({
     sessions: [
@@ -267,14 +267,14 @@ void test("Spark session selector switches workspace groups horizontally", () =>
   assert.deepEqual(selected, [daemonSession.sessionId]);
 });
 
-void test("isSelectableSparkSession matches the daemon default non-archived list", () => {
+test("isSelectableSparkSession matches the daemon default non-archived list", () => {
   assert.equal(isSelectableSparkSession(sessions[0] as SparkSessionRegistryRecord), true);
   assert.equal(isSelectableSparkSession(archivedSession), false);
   assert.equal(isSelectableSparkSession(channelBindingSession), true);
   assert.equal(isSelectableSparkSession(channelTitleSession), true);
 });
 
-void test("Spark session list text uses the same workspace groups as the selector", () => {
+test("Spark session list text uses the same workspace groups as the selector", () => {
   const text = formatSparkSessionListByWorkspace({
     sessions: [
       ...(sessions as SparkSessionRegistryRecord[]),
@@ -301,7 +301,7 @@ void test("Spark session list text uses the same workspace groups as the selecto
   assert.match(text, /Ops room • session-channel-bound • feishu/u);
 });
 
-void test("Spark session selector custom UI returns an existing daemon session", async () => {
+test("Spark session selector custom UI returns an existing daemon session", async () => {
   let overlayEnabled = false;
   let rendered = false;
   const customUi: SparkModelSelectorCustomUi = {

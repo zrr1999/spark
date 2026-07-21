@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { visibleWidth } from "@zendev-lab/spark-tui/text";
 
@@ -43,7 +43,7 @@ function makeBranchedRecord(store: SparkSessionStore): SparkSessionRecord {
   return record;
 }
 
-void test("session navigation builds Pi-style branch trees, labels, flatten rows, and branch paths", async () => {
+test("session navigation builds Pi-style branch trees, labels, flatten rows, and branch paths", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-nav-tree-"));
   try {
     const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
@@ -79,7 +79,7 @@ void test("session navigation builds Pi-style branch trees, labels, flatten rows
   }
 });
 
-void test("/sessions command supports list, branch, and switch subcommands", async () => {
+test("/sessions command supports list, branch, and switch subcommands", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-nav-command-"));
   try {
     const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
@@ -120,7 +120,7 @@ void test("/sessions command supports list, branch, and switch subcommands", asy
   }
 });
 
-void test("Spark session tree SelectList wrapper renders bounded rows and selects active row", async () => {
+test("Spark session tree SelectList wrapper renders bounded rows and selects active row", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-nav-tui-"));
   try {
     const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
@@ -155,7 +155,7 @@ void test("Spark session tree SelectList wrapper renders bounded rows and select
   }
 });
 
-void test("branch helpers treat orphan entries as roots and branch leaves", async () => {
+test("branch helpers treat orphan entries as roots and branch leaves", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-nav-orphan-"));
   try {
     const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });

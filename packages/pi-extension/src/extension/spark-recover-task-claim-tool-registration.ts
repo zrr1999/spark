@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import type { Task } from "@zendev-lab/spark-extension-api";
+import type { Task } from "@zendev-lab/spark-core";
 import { defaultTaskGraphStore } from "@zendev-lab/spark-tasks";
 import { activeSparkRoleRunProcessesForCwd } from "./background-runs.ts";
 import { currentSparkProject, sparkSessionKey } from "./session-state.ts";

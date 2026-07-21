@@ -5,7 +5,10 @@ import {
 import { json, type RequestHandler } from "@sveltejs/kit";
 import { getDatabase } from "$lib/server/db";
 import { errorJson } from "$lib/server/json";
-import { refreshRuntimeToken, RuntimeTokenRefreshError } from "$lib/server/runtime-registration";
+import {
+  refreshRuntimeToken,
+  RuntimeTokenRefreshError,
+} from "@zendev-lab/spark-coordination/runtime-registration";
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
   const runtimeId = params.runtimeId;

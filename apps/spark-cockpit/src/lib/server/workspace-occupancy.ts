@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { submitServerCommand } from "$lib/server/command-submission";
+import { submitServerCommand } from "@zendev-lab/spark-coordination/command-submission";
 
 export const cockpitOccupancyLeaseTtlMs = 60_000;
 

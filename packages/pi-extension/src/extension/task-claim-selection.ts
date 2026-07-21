@@ -1,4 +1,4 @@
-import type { Task, TaskRef, ProjectRef } from "@zendev-lab/spark-extension-api";
+import type { Task, TaskRef, ProjectRef } from "@zendev-lab/spark-core";
 import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/spark-tasks";
 import { isClaimOwnedBySession } from "./task-ownership.ts";
 

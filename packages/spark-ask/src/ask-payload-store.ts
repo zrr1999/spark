@@ -1,30 +1,30 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { writeJsonFileAtomic } from "@zendev-lab/spark-core";
 import {
-  validatePiAskFlowRequest,
-  type PiAskFlowAnswerEntry,
-  type PiAskFlowRequest,
-  type PiAskFlowResult,
+  validateSparkAskFlowRequest,
+  type SparkAskFlowAnswerEntry,
+  type SparkAskFlowRequest,
+  type SparkAskFlowResult,
 } from "./schema.ts";
 
 export interface StoredAskPayload {
-  request: PiAskFlowRequest;
-  result: PiAskFlowResult;
+  request: SparkAskFlowRequest;
+  result: SparkAskFlowResult;
   timestamp: number;
 }
 
-export class PiAskFlowPayloadStoreFormatError extends Error {
+export class SparkAskFlowPayloadStoreFormatError extends Error {
   readonly filePath: string;
 
   constructor(filePath: string, message: string) {
     super(`invalid Pi ask flow payload store: ${filePath}: ${message}`);
-    this.name = "PiAskFlowPayloadStoreFormatError";
+    this.name = "SparkAskFlowPayloadStoreFormatError";
     this.filePath = filePath;
   }
 }
 
-export class PiAskFlowPayloadStore {
+export class SparkAskFlowPayloadStore {
   /** Save the latest ask payload for the given cwd. */
   async save(cwd: string, payload: StoredAskPayload): Promise<void> {
     await writeJsonFileAtomic(askPayloadPath(cwd), payload);
@@ -53,7 +53,7 @@ function parseStoredAskPayload(text: string, filePath: string): StoredAskPayload
   try {
     raw = JSON.parse(text);
   } catch (error) {
-    throw new PiAskFlowPayloadStoreFormatError(
+    throw new SparkAskFlowPayloadStoreFormatError(
       filePath,
       `not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
     );
@@ -67,47 +67,47 @@ function assertStoredAskPayload(
   filePath: string,
 ): asserts value is StoredAskPayload {
   if (!isRecord(value)) {
-    throw new PiAskFlowPayloadStoreFormatError(filePath, "JSON root must be an object");
+    throw new SparkAskFlowPayloadStoreFormatError(filePath, "JSON root must be an object");
   }
-  assertPiAskFlowRequestShape(value.request, filePath);
-  const validation = validatePiAskFlowRequest(value.request);
+  assertSparkAskFlowRequestShape(value.request, filePath);
+  const validation = validateSparkAskFlowRequest(value.request);
   if (!validation.valid) {
-    throw new PiAskFlowPayloadStoreFormatError(
+    throw new SparkAskFlowPayloadStoreFormatError(
       filePath,
       `request is invalid: ${validation.error}${validation.details ? ` (${validation.details})` : ""}`,
     );
   }
-  assertPiAskFlowResult(value.result, filePath);
+  assertSparkAskFlowResult(value.result, filePath);
   if (typeof value.timestamp !== "number" || !Number.isFinite(value.timestamp)) {
-    throw new PiAskFlowPayloadStoreFormatError(filePath, "timestamp must be a finite number");
+    throw new SparkAskFlowPayloadStoreFormatError(filePath, "timestamp must be a finite number");
   }
 }
 
-function assertPiAskFlowRequestShape(
+function assertSparkAskFlowRequestShape(
   value: unknown,
   filePath: string,
-): asserts value is PiAskFlowRequest {
+): asserts value is SparkAskFlowRequest {
   if (!isRecord(value)) {
-    throw new PiAskFlowPayloadStoreFormatError(filePath, "request must be an object");
+    throw new SparkAskFlowPayloadStoreFormatError(filePath, "request must be an object");
   }
   if (!Array.isArray(value.questions)) {
-    throw new PiAskFlowPayloadStoreFormatError(filePath, "request.questions must be an array");
+    throw new SparkAskFlowPayloadStoreFormatError(filePath, "request.questions must be an array");
   }
   value.questions.forEach((question, index) => {
     if (!isRecord(question)) {
-      throw new PiAskFlowPayloadStoreFormatError(
+      throw new SparkAskFlowPayloadStoreFormatError(
         filePath,
         `request.questions[${index}] must be an object`,
       );
     }
     if (question.options !== undefined && !Array.isArray(question.options)) {
-      throw new PiAskFlowPayloadStoreFormatError(
+      throw new SparkAskFlowPayloadStoreFormatError(
         filePath,
         `request.questions[${index}].options must be an array`,
       );
     }
     if (question.defaultValues !== undefined && !isStringArray(question.defaultValues)) {
-      throw new PiAskFlowPayloadStoreFormatError(
+      throw new SparkAskFlowPayloadStoreFormatError(
         filePath,
         `request.questions[${index}].defaultValues must be a string array`,
       );
@@ -115,81 +115,90 @@ function assertPiAskFlowRequestShape(
   });
 }
 
-function assertPiAskFlowResult(value: unknown, filePath: string): asserts value is PiAskFlowResult {
+function assertSparkAskFlowResult(
+  value: unknown,
+  filePath: string,
+): asserts value is SparkAskFlowResult {
   if (!isRecord(value)) {
-    throw new PiAskFlowPayloadStoreFormatError(filePath, "result must be an object");
+    throw new SparkAskFlowPayloadStoreFormatError(filePath, "result must be an object");
   }
-  if (!isPiAskFlowResultStatus(value.status)) {
-    throw new PiAskFlowPayloadStoreFormatError(filePath, "result.status must be valid");
+  if (!isSparkAskFlowResultStatus(value.status)) {
+    throw new SparkAskFlowPayloadStoreFormatError(filePath, "result.status must be valid");
   }
-  if (!isPiAskFlowResultMode(value.mode)) {
-    throw new PiAskFlowPayloadStoreFormatError(filePath, "result.mode must be valid");
+  if (!isSparkAskFlowResultMode(value.mode)) {
+    throw new SparkAskFlowPayloadStoreFormatError(filePath, "result.mode must be valid");
   }
   if (typeof value.cancelled !== "boolean") {
-    throw new PiAskFlowPayloadStoreFormatError(filePath, "result.cancelled must be a boolean");
+    throw new SparkAskFlowPayloadStoreFormatError(filePath, "result.cancelled must be a boolean");
   }
   if (!isRecord(value.answers)) {
-    throw new PiAskFlowPayloadStoreFormatError(filePath, "result.answers must be an object");
+    throw new SparkAskFlowPayloadStoreFormatError(filePath, "result.answers must be an object");
   }
   for (const [questionId, answer] of Object.entries(value.answers)) {
-    assertPiAskFlowAnswerEntry(answer, filePath, `result.answers.${questionId}`);
+    assertSparkAskFlowAnswerEntry(answer, filePath, `result.answers.${questionId}`);
   }
   if (value.flow !== undefined && typeof value.flow !== "string") {
-    throw new PiAskFlowPayloadStoreFormatError(filePath, "result.flow must be a string");
+    throw new SparkAskFlowPayloadStoreFormatError(filePath, "result.flow must be a string");
   }
-  if (value.nextAction !== undefined && !isPiAskFlowNextAction(value.nextAction)) {
-    throw new PiAskFlowPayloadStoreFormatError(filePath, "result.nextAction must be valid");
+  if (value.nextAction !== undefined && !isSparkAskFlowNextAction(value.nextAction)) {
+    throw new SparkAskFlowPayloadStoreFormatError(filePath, "result.nextAction must be valid");
   }
 }
 
-function assertPiAskFlowAnswerEntry(
+function assertSparkAskFlowAnswerEntry(
   value: unknown,
   filePath: string,
   path: string,
-): asserts value is PiAskFlowAnswerEntry {
+): asserts value is SparkAskFlowAnswerEntry {
   if (!isRecord(value)) {
-    throw new PiAskFlowPayloadStoreFormatError(filePath, `${path} must be an object`);
+    throw new SparkAskFlowPayloadStoreFormatError(filePath, `${path} must be an object`);
   }
   if (typeof value.questionId !== "string" || !value.questionId) {
-    throw new PiAskFlowPayloadStoreFormatError(filePath, `${path}.questionId must be a string`);
+    throw new SparkAskFlowPayloadStoreFormatError(filePath, `${path}.questionId must be a string`);
   }
-  if (!isPiAskFlowAnswerKind(value.kind)) {
-    throw new PiAskFlowPayloadStoreFormatError(filePath, `${path}.kind must be valid`);
+  if (!isSparkAskFlowAnswerKind(value.kind)) {
+    throw new SparkAskFlowPayloadStoreFormatError(filePath, `${path}.kind must be valid`);
   }
   if (!isStringArray(value.values)) {
-    throw new PiAskFlowPayloadStoreFormatError(filePath, `${path}.values must be a string array`);
+    throw new SparkAskFlowPayloadStoreFormatError(
+      filePath,
+      `${path}.values must be a string array`,
+    );
   }
   if (value.labels !== undefined && !isStringArray(value.labels)) {
-    throw new PiAskFlowPayloadStoreFormatError(filePath, `${path}.labels must be a string array`);
+    throw new SparkAskFlowPayloadStoreFormatError(
+      filePath,
+      `${path}.labels must be a string array`,
+    );
   }
   if (value.customText !== undefined && typeof value.customText !== "string") {
-    throw new PiAskFlowPayloadStoreFormatError(filePath, `${path}.customText must be a string`);
+    throw new SparkAskFlowPayloadStoreFormatError(filePath, `${path}.customText must be a string`);
   }
   if (value.notes !== undefined && typeof value.notes !== "string") {
-    throw new PiAskFlowPayloadStoreFormatError(filePath, `${path}.notes must be a string`);
+    throw new SparkAskFlowPayloadStoreFormatError(filePath, `${path}.notes must be a string`);
   }
   if (value.preview !== undefined && typeof value.preview !== "string") {
-    throw new PiAskFlowPayloadStoreFormatError(filePath, `${path}.preview must be a string`);
+    throw new SparkAskFlowPayloadStoreFormatError(filePath, `${path}.preview must be a string`);
   }
 }
 
-function isPiAskFlowResultStatus(value: unknown): value is PiAskFlowResult["status"] {
+function isSparkAskFlowResultStatus(value: unknown): value is SparkAskFlowResult["status"] {
   return (
     value === "answered" || value === "pending" || value === "cancelled" || value === "no_selection"
   );
 }
 
-function isPiAskFlowResultMode(value: unknown): value is PiAskFlowResult["mode"] {
+function isSparkAskFlowResultMode(value: unknown): value is SparkAskFlowResult["mode"] {
   return value === "submit" || value === "elaborate" || value === "cancel";
 }
 
-function isPiAskFlowNextAction(
+function isSparkAskFlowNextAction(
   value: unknown,
-): value is NonNullable<PiAskFlowResult["nextAction"]> {
+): value is NonNullable<SparkAskFlowResult["nextAction"]> {
   return value === "resume" || value === "clarify_then_reask" || value === "block";
 }
 
-function isPiAskFlowAnswerKind(value: unknown): value is PiAskFlowAnswerEntry["kind"] {
+function isSparkAskFlowAnswerKind(value: unknown): value is SparkAskFlowAnswerEntry["kind"] {
   return value === "option" || value === "custom" || value === "multi" || value === "skipped";
 }
 
@@ -199,31 +208,4 @@ function isStringArray(value: unknown): value is string[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-async function writeJsonFileAtomic(filePath: string, value: unknown): Promise<void> {
-  const dir = dirname(filePath);
-  await mkdir(dir, { recursive: true });
-  const tempPath = join(dir, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
-  try {
-    await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-    await rename(tempPath, filePath);
-  } catch (error) {
-    await cleanupAtomicWriteTempFile(tempPath, error);
-    throw error;
-  }
-}
-
-async function cleanupAtomicWriteTempFile(tempPath: string, writeError: unknown): Promise<void> {
-  try {
-    await rm(tempPath, { force: true });
-  } catch (cleanupError) {
-    throw new Error(
-      `atomic write failed and temporary file cleanup also failed: ${tempPath}; write error: ${unknownErrorMessage(writeError)}; cleanup error: ${unknownErrorMessage(cleanupError)}`,
-    );
-  }
-}
-
-function unknownErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

@@ -1,19 +1,15 @@
 import { error, redirect } from "@sveltejs/kit";
 import { createId } from "@zendev-lab/spark-protocol";
 import {
-  getManagedSessionSnapshotForCockpit,
+  getProjectedManagedSessionForCockpit,
   getProjectedManagedSessionSnapshotForCockpit,
 } from "$lib/server/managed-sessions";
 import { getDatabase } from "$lib/server/db";
-import { latestEventCursor } from "$lib/server/events";
-import { loadSessionActivity } from "$lib/server/session-activity";
-import {
-  loadModelControlForCockpit,
-  loadProjectedModelControlForCockpit,
-} from "$lib/server/model-control";
+import { latestEventCursor } from "@zendev-lab/spark-coordination/events";
+import { loadSessionActivity } from "@zendev-lab/spark-coordination/session-activity";
+import { loadProjectedModelControlForCockpit } from "$lib/server/model-control";
 import { createCockpitSubmissionId } from "$lib/server/submission-idempotency";
 import type { PageServerLoad } from "./$types";
-import { SESSION_SNAPSHOT_PAGE_SIZE } from "../../../../lib/session-snapshot-window";
 import { workspaceIdForWorkbenchSession } from "../../../../lib/workbench-session-scope";
 import { workspaceSessionPath } from "../../../../lib/workspace-routes";
 import { actions as sessionsActions } from "../+page.server";
@@ -32,7 +28,12 @@ export async function _loadSessionPage(
   // invalidate and rebuild the freshly hydrated page.
   const eventCursor = latestEventCursor(db);
   const parentData = await parent();
-  const selected = parentData.sessions.find((session) => session.sessionId === params.sessionId);
+  const selectedFromRail = parentData.sessions.find(
+    (session) => session.sessionId === params.sessionId,
+  );
+  const projectedSelected =
+    selectedFromRail == null ? getProjectedManagedSessionForCockpit(params.sessionId) : null;
+  const selected = selectedFromRail ?? projectedSelected;
   const workspaceId = selected ? workspaceIdForWorkbenchSession(selected) : null;
   if (!selected || !workspaceId) {
     // Resolve scope before any session-specific RPC. Daemon-scoped sessions are
@@ -44,37 +45,30 @@ export async function _loadSessionPage(
     // detached registry record re-enter the rail through a direct URL.
     throw error(404, "Session not found");
   }
+  // When control is available, a missing rail entry means the live owner no
+  // longer admits this session into the workspace list.
+  if (!selectedFromRail && parentData.sessionControlAvailable) {
+    throw error(404, "Session not found");
+  }
   if (expectedWorkspaceId && workspaceId !== expectedWorkspaceId) {
     throw error(404, "Session not found");
   }
-  if (url?.pathname.startsWith("/sessions/")) {
+  // Legacy `/sessions/:id` (including paths.base prefixes) must land on the
+  // workspace-scoped URL. The workspace page passes expectedWorkspaceId so it
+  // does not redirect into itself.
+  if (!expectedWorkspaceId && parentData.activeWorkspace) {
     redirect(
       303,
-      `${workspaceSessionPath(parentData.activeWorkspace, selected.sessionId)}${url.search}`,
+      `${workspaceSessionPath(parentData.activeWorkspace, selected.sessionId)}${url?.search ?? ""}`,
     );
   }
-  const [snapshotWindow, modelControl] = parentData.sessionControlAvailable
-    ? await Promise.all([
-        getManagedSessionSnapshotForCockpit(params.sessionId, {
-          messageLimit: SESSION_SNAPSHOT_PAGE_SIZE,
-        }).then(
-          (snapshot) => snapshot ?? getProjectedManagedSessionSnapshotForCockpit(params.sessionId),
-        ),
-        // Catalog is daemon-global. Route it by workspace so a stale session
-        // registry entry cannot blank the model picker (settings/models works
-        // for the same reason). Session selection still comes from the snapshot.
-        loadModelControlForCockpit({ workspaceId }).then((control) =>
-          control.available ? control : loadProjectedModelControlForCockpit({ workspaceId }),
-        ),
-      ])
-    : await Promise.all([
-        Promise.resolve(getProjectedManagedSessionSnapshotForCockpit(params.sessionId)),
-        loadProjectedModelControlForCockpit({ workspaceId }),
-      ]);
+  // Always paint from the local projection. Live snapshot/catalog RPC is a
+  // navigation cliff under load; EventSource catches the conversation pane up.
+  const [snapshotWindow, modelControl] = await Promise.all([
+    Promise.resolve(getProjectedManagedSessionSnapshotForCockpit(params.sessionId)),
+    loadProjectedModelControlForCockpit({ workspaceId }),
+  ]);
   return {
-    sessions: parentData.sessions,
-    sessionsAvailable: parentData.sessionsAvailable,
-    sessionControlAvailable: parentData.sessionControlAvailable,
     selectedSessionId: selected.sessionId,
     sendSubmissionIdSeed: createId("idem"),
     selectedSession: selected,

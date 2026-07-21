@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import type { RoleRegistry } from "@zendev-lab/spark-roles";
-import { DependencyError } from "@zendev-lab/spark-extension-api";
+import { DependencyError } from "@zendev-lab/spark-core";
 import {
   collectNonConcreteTaskIssues,
   decideTaskPlanBeforeCreate,

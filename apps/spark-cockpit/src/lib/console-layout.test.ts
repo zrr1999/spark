@@ -11,7 +11,7 @@ const layoutServer = resolve(
 describe("console layout load", () => {
   it("skips remote session listing so settings pages stay local-fast", () => {
     const source = readFileSync(layoutServer, "utf8");
-    expect(source).toContain("isGlobalConsolePath");
+    expect(source).toContain("isControlPlanePath");
     expect(source).toContain("sessions: []");
     expect(source).not.toContain("listManagedSessionsForCockpit");
   });

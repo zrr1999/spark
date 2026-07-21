@@ -17,7 +17,7 @@ import {
   type TaskDependency,
   type TaskRef,
   type TaskRun,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import { TaskGraph } from "./graph.ts";
 import type {
   TaskGraphSnapshot,

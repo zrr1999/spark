@@ -15,7 +15,7 @@ import {
   type RunRef,
   type TaskRef,
   writeJsonFileAtomic,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 
 export const SPARK_ROLE_RUN_ARTIFACT_PREVIEW_METADATA_MAX_BYTES = 256 * 1024;
 

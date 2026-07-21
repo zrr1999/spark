@@ -14,7 +14,7 @@ spark daemon invocation cancel <invocation-id> --reason <text> --json
 spark daemon restart --yes
 ```
 
-Use `--token -` to read a one-line registration token from stdin. Browser/device login stores a private machine credential for connectivity and refresh only; every workspace registration consumes a fresh workspace token. A successful registration prints a separate one-time browser key for `/{slug}/login`. Mint additional workspace browser keys with `spark daemon workspace access create`. Cockpit-level remote login uses `spark cockpit access create` and `/login`. Remote Cockpit URLs require HTTPS unless both login and registration explicitly use `--allow-insecure-http` on a trusted private network.
+Use `--token -` to read a one-line registration token from stdin. Browser/device login stores a private machine credential for connectivity and refresh only; every workspace registration consumes a fresh workspace token. A successful registration prints a separate one-time browser key for `/{slug}/login`. Mint additional workspace browser keys on the Cockpit host with `spark cockpit workspace access create --workspace <id>` (list/revoke there too; name is display-only). Cockpit-level remote login uses `spark cockpit access create` and `/login`. Remote Cockpit URLs require HTTPS unless both login and registration explicitly use `--allow-insecure-http` on a trusted private network.
 
 The daemon owns workspace arbitration, persistent sessions, channels, SQLite invocations/events, per-session execution fencing, cancellation, timeout, restart recovery, and the runtime WebSocket uplink. Cockpit receives projections; it is not execution truth.
 

@@ -83,6 +83,12 @@ export type ConversationPart =
       kind: "budget_exhausted";
     }
   | {
+      /** Channel quote/reply preview shown above the user body. */
+      type: "quote";
+      text: string;
+      senderLabel?: string | null;
+    }
+  | {
       type: "unknown";
       label: string;
     };
@@ -140,3 +146,6 @@ export type ConversationPartLabels = {
   budgetExhausted: string;
   budgetExhaustedHint: string;
 };
+
+/** Result of a scroll-driven "load earlier history" request. */
+export type LoadEarlierOutcome = "loaded" | "busy" | "exhausted" | "error";

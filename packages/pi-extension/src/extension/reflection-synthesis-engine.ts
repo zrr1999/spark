@@ -1,1 +1,1 @@
-export * from "@zendev-lab/spark-learnings/reflection-synthesis-engine";
+export * from "@zendev-lab/spark-memory/reflection-synthesis-engine";

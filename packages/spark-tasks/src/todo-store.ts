@@ -10,7 +10,7 @@ import {
   type TaskRef,
   type TaskTodo,
   type TaskTodoStatus,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import { TaskGraph } from "./graph.ts";
 import type {
   LoadableTaskTodoStoreSnapshot,

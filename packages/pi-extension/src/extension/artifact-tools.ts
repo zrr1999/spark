@@ -1,5 +1,5 @@
 import { type Artifact } from "@zendev-lab/spark-artifacts";
-import { isRef, type ArtifactRef } from "@zendev-lab/spark-extension-api";
+import { isRef, type ArtifactRef } from "@zendev-lab/spark-core";
 
 export function normalizeArtifactLimit(value: unknown, fallback: number, field = "limit"): number {
   if (value === undefined || value === null) return fallback;

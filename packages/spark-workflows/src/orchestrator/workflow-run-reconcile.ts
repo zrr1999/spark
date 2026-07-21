@@ -1,4 +1,4 @@
-import type { RunRef } from "@zendev-lab/spark-extension-api";
+import type { RunRef } from "@zendev-lab/spark-core";
 import type { TaskGraph } from "@zendev-lab/spark-tasks";
 
 import {

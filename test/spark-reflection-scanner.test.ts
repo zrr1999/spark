@@ -2,18 +2,18 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   emptyReflectionScanCursor,
   loadReflectionScanCursor,
   reflectionScanCursorPath,
   saveReflectionScanCursor,
-  scanPiSessionHistory,
+  scanSparkSessionHistory,
   summarizeReflectionScan,
-} from "../packages/spark-learnings/src/reflection-session-scanner.ts";
+} from "../packages/spark-memory/src/reflection-session-scanner.ts";
 
-void test("reflection scanner extracts user/custom/summary observations and tolerates malformed lines", async () => {
+test("reflection scanner extracts user/custom/summary observations and tolerates malformed lines", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reflection-scan-"));
   try {
     const sessionDir = join(dir, "--Users-zhanrongrui-workspace-demo--");
@@ -62,7 +62,7 @@ void test("reflection scanner extracts user/custom/summary observations and tole
       "utf8",
     );
 
-    const result = await scanPiSessionHistory({
+    const result = await scanSparkSessionHistory({
       sessionRoot: dir,
       cursor: emptyReflectionScanCursor("2026-06-18T00:00:00.000Z"),
     });
@@ -80,7 +80,7 @@ void test("reflection scanner extracts user/custom/summary observations and tole
   }
 });
 
-void test("reflection scanner cursor prevents duplicate scans and recovers appended lines", async () => {
+test("reflection scanner cursor prevents duplicate scans and recovers appended lines", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reflection-cursor-"));
   try {
     const sessionDir = join(dir, "--Users-zhanrongrui-workspace-demo--");
@@ -103,7 +103,7 @@ void test("reflection scanner cursor prevents duplicate scans and recovers appen
       "utf8",
     );
 
-    const first = await scanPiSessionHistory({
+    const first = await scanSparkSessionHistory({
       sessionRoot: dir,
       cursor: emptyReflectionScanCursor(),
     });
@@ -112,7 +112,7 @@ void test("reflection scanner cursor prevents duplicate scans and recovers appen
     const cursorPath = reflectionScanCursorPath(dir);
     await saveReflectionScanCursor(cursorPath, first.cursor);
     const loaded = await loadReflectionScanCursor(cursorPath);
-    const second = await scanPiSessionHistory({ sessionRoot: dir, cursor: loaded });
+    const second = await scanSparkSessionHistory({ sessionRoot: dir, cursor: loaded });
     assert.equal(second.observations.length, 0);
     assert.equal(second.stats.linesScanned, 0);
 
@@ -127,7 +127,7 @@ void test("reflection scanner cursor prevents duplicate scans and recovers appen
         "\n",
       "utf8",
     );
-    const third = await scanPiSessionHistory({ sessionRoot: dir, cursor: second.cursor });
+    const third = await scanSparkSessionHistory({ sessionRoot: dir, cursor: second.cursor });
     assert.equal(third.observations.length, 1);
     assert.equal(third.observations[0]?.source.entryId, "u2");
   } finally {

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { defaultArtifactCacheRoot } from "./artifact-cache.js";
+import { defaultArtifactCacheRoot } from "@zendev-lab/spark-coordination/artifact-cache";
 
 const originalEnv = { ...process.env };
 

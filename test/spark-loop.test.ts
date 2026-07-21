@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   LOOP_CUSTOM_ENTRY_TYPE,
@@ -20,7 +20,7 @@ import {
   updateLoopStatus,
 } from "../packages/spark-loop/src/index.ts";
 
-void test("spark-loop creates, reconstructs, and clears loop state", () => {
+test("spark-loop creates, reconstructs, and clears loop state", () => {
   const loop = createLoop("Keep making progress", 100);
   assert.equal(loop.objective, "Keep making progress");
   assert.equal(loop.status, "active");
@@ -39,7 +39,7 @@ void test("spark-loop creates, reconstructs, and clears loop state", () => {
   assert.equal(reconstructLoop(entries).hasLoop, false);
 });
 
-void test("spark-loop lifecycle uses active and paused only and has no complete status", () => {
+test("spark-loop lifecycle uses active and paused only and has no complete status", () => {
   const loop = createLoop("Continue safely", 100);
   const paused = updateLoopStatus(loop, "paused");
   assert.equal(paused.ok, true);
@@ -54,7 +54,7 @@ void test("spark-loop lifecycle uses active and paused only and has no complete 
   assert.ok(["active", "paused"].includes(resumed.loop?.status ?? ""));
 });
 
-void test("spark-loop tick continues, waits, blocks, and never emits goal completion instructions", () => {
+test("spark-loop tick continues, waits, blocks, and never emits goal completion instructions", () => {
   const loop = createLoop("Run the next step", 100);
   const first = evaluateLoopTick({ loop, now: 101, reason: "start" });
   assert.equal(first.decision, "continue");
@@ -71,7 +71,7 @@ void test("spark-loop tick continues, waits, blocks, and never emits goal comple
   assert.match(blocked.message, /needs user decision/);
 });
 
-void test("spark-loop goal tool text is a compact summary, not pretty JSON", () => {
+test("spark-loop goal tool text is a compact summary, not pretty JSON", () => {
   const text = toToolText(createGoal("Reduce tool output noise", 100));
   assert.match(text, /Status: active/);
   assert.match(text, /Objective: Reduce tool output noise/);
@@ -79,7 +79,7 @@ void test("spark-loop goal tool text is a compact summary, not pretty JSON", () 
   assert.equal(toToolText(null), "No Spark goal is currently set.");
 });
 
-void test("spark-loop prompts remain parseable by loop id", () => {
+test("spark-loop prompts remain parseable by loop id", () => {
   const loop = createLoop("Ship a layered primitive", 100);
   const compact = compactLoopPrompt(loop);
   const full = loopContinuationPrompt(loop);
@@ -88,7 +88,7 @@ void test("spark-loop prompts remain parseable by loop id", () => {
   assert.equal(continuationLoopIdFromPrompt(full), loop.loopId);
 });
 
-void test("spark-loop result helpers reject empty objectives and concurrent loops", () => {
+test("spark-loop result helpers reject empty objectives and concurrent loops", () => {
   assert.equal(createLoopResult(null, "   ").ok, false);
   const current = createLoop("current", 100);
   const rejected = createLoopResult(current, "next");

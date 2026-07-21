@@ -6,7 +6,7 @@ import { Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import { test } from "vitest";
 
 import { TaskGraph } from "@zendev-lab/spark-tasks";
 
@@ -31,7 +31,7 @@ const PLAN = {
   askRefs: [],
 };
 
-void test("parseSparkCockpitCliArgs routes Cockpit coordination resources", () => {
+test("parseSparkCockpitCliArgs routes Cockpit coordination resources", () => {
   assert.deepEqual(parseSparkCockpitCliArgs(["status", "--json"]), {
     resource: "status",
     verb: "show",
@@ -57,7 +57,7 @@ void test("parseSparkCockpitCliArgs routes Cockpit coordination resources", () =
   );
 });
 
-void test("spark cockpit help documents surface, coordination, and excludes daemon execution controls", () => {
+test("spark cockpit help documents surface, coordination, and excludes daemon execution controls", () => {
   const help = sparkCockpitHelpText();
   assert.match(help, /spark cockpit - Spark cross-daemon coordination and Web cockpit/u);
   assert.match(help, /spark cockpit web start/u);
@@ -69,19 +69,65 @@ void test("spark cockpit help documents surface, coordination, and excludes daem
   assert.match(help, /spark cockpit workflow list/u);
   assert.match(help, /spark cockpit instance backup/u);
   assert.match(help, /spark cockpit access create/u);
+  assert.match(help, /spark cockpit workspace access create/u);
   assert.match(help, /spark cockpit instance inspect/u);
   assert.match(help, /spark cockpit instance restore/u);
   assert.match(help, /spark cockpit instance status/u);
   assert.match(help, /access\s+Mint, list, or revoke/u);
+  assert.match(help, /workspace access\s+Mint, list, or revoke/u);
   assert.doesNotMatch(help, /spark cockpit queue/u);
   assert.doesNotMatch(help, /spark cockpit events watch/u);
 });
 
-void test("spark-cockpit thin bin routes through the TypeScript surface entry", async () => {
+test("parseSparkCockpitCliArgs routes workspace access under workspace access", () => {
+  assert.deepEqual(
+    parseSparkCockpitCliArgs([
+      "workspace",
+      "access",
+      "create",
+      "--workspace",
+      "ws_11111111111141111111111111111111",
+      "--label",
+      "browser",
+      "--json",
+    ]),
+    {
+      resource: "workspace-access",
+      verb: "create",
+      json: true,
+      workspaceRef: "ws_11111111111141111111111111111111",
+      databasePath: undefined,
+      label: "browser",
+      tokenId: undefined,
+    },
+  );
+  assert.deepEqual(
+    parseSparkCockpitCliArgs([
+      "workspace",
+      "access",
+      "revoke",
+      "ws_11111111111141111111111111111111",
+      "watok_1",
+      "--json",
+    ]),
+    {
+      resource: "workspace-access",
+      verb: "revoke",
+      json: true,
+      workspaceRef: "ws_11111111111141111111111111111111",
+      databasePath: undefined,
+      label: undefined,
+      tokenId: "watok_1",
+    },
+  );
+});
+
+test("spark-cockpit thin bin routes through the TypeScript surface entry", async () => {
   const bin = fileURLToPath(new URL("../apps/spark-cockpit/bin/spark-cockpit", import.meta.url));
   const help = await runBin(bin, ["--help"]);
   assert.equal(help.code, 0);
   assert.match(help.stdout, /spark cockpit access create/u);
+  assert.match(help.stdout, /spark cockpit workspace access create/u);
   assert.match(help.stdout, /spark cockpit web start/u);
   assert.match(help.stdout, /access\s+Mint, list, or revoke/u);
 
@@ -98,7 +144,7 @@ void test("spark-cockpit thin bin routes through the TypeScript surface entry", 
   assert.match(`${missingWeb.stdout}${missingWeb.stderr}`, /Unknown spark cockpit web command/u);
 });
 
-void test("spark cockpit status/project/task/goal/artifact/review/workflow expose stable JSON", async () => {
+test("spark cockpit status/project/task/goal/artifact/review/workflow expose stable JSON", async () => {
   const fixture = fixtureCockpitOptions();
 
   const status = await handleSparkCockpitCliCommand(
@@ -219,7 +265,7 @@ void test("spark cockpit status/project/task/goal/artifact/review/workflow expos
   assert.equal(workflows.result.workflows[0]?.runRef, "run:workflow-a");
 });
 
-void test("spark cockpit status marks stale unrelated goals as non-current", async () => {
+test("spark cockpit status marks stale unrelated goals as non-current", async () => {
   const fixture = fixtureCockpitOptions();
   const other = fixture.graph.createProject({ title: "Other project", description: "Other" });
   const status = await handleSparkCockpitCliCommand(
@@ -247,7 +293,7 @@ void test("spark cockpit status marks stale unrelated goals as non-current", asy
   assert.equal(status.result.goal?.projectRef, other.ref);
 });
 
-void test("spark cockpit status scope distinguishes no project, no goal, and legacy unscoped goal", async () => {
+test("spark cockpit status scope distinguishes no project, no goal, and legacy unscoped goal", async () => {
   const emptyStatus = await handleSparkCockpitCliCommand(
     { resource: "status", verb: "show", json: true },
     { graph: new TaskGraph(), goal: null },
@@ -280,7 +326,7 @@ void test("spark cockpit status scope distinguishes no project, no goal, and leg
   assert.equal(legacyGoal.result.goal?.current, false);
 });
 
-void test("spark cockpit status treats an uninitialized workspace as empty coordination state", async () => {
+test("spark cockpit status treats an uninitialized workspace as empty coordination state", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cockpit-empty-"));
   try {
     const output: string[] = [];
@@ -302,7 +348,7 @@ void test("spark cockpit status treats an uninitialized workspace as empty coord
   }
 });
 
-void test("Cockpit coordination commands do not start an HTTP listener", async () => {
+test("Cockpit coordination commands do not start an HTTP listener", async () => {
   const fixture = fixtureCockpitOptions();
   const activeServers = () =>
     (process as NodeJS.Process & { _getActiveHandles(): unknown[] })
@@ -321,7 +367,7 @@ void test("Cockpit coordination commands do not start an HTTP listener", async (
   assert.equal(activeServers(), before);
 });
 
-void test("runSparkCockpitCliCommand prints JSON for Cockpit status and task list", async () => {
+test("runSparkCockpitCliCommand prints JSON for Cockpit status and task list", async () => {
   const fixture = fixtureCockpitOptions();
   const statusOutput: string[] = [];
   const statusCode = await runSparkCockpitCliCommand(
@@ -352,7 +398,7 @@ void test("runSparkCockpitCliCommand prints JSON for Cockpit status and task lis
   assert.equal(tasks.result.tasks.length, 3);
 });
 
-void test("spark cockpit assign crosses the real daemon RPC without starting HTTP", async () => {
+test("spark cockpit assign crosses the real daemon RPC without starting HTTP", async () => {
   const root = await mkdtemp(join(tmpdir(), "spark-cockpit-daemon-acceptance-"));
   const child = startCockpitAcceptanceDaemon(root);
   const activeServers = () =>
@@ -418,7 +464,7 @@ void test("spark cockpit assign crosses the real daemon RPC without starting HTT
   }
 });
 
-void test("spark cockpit assign submits through the daemon RPC without a side assignment store", async () => {
+test("spark cockpit assign submits through the daemon RPC without a side assignment store", async () => {
   const root = await mkdtemp(join(tmpdir(), "spark-cockpit-assign-"));
   const runtimeDir = join(root, "runtime");
   const submissions: unknown[] = [];

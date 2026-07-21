@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
-import { nowIso, type ProjectRef, type Task } from "@zendev-lab/spark-extension-api";
+import { nowIso, type ProjectRef, type Task } from "@zendev-lab/spark-core";
 import {
   defaultArtifactStore,
   type Artifact,
@@ -10,7 +10,7 @@ import {
 } from "@zendev-lab/spark-artifacts";
 import type { WorkflowRunStatusSummary } from "@zendev-lab/spark-workflows";
 import type { ActiveSparkRoleRunProcess } from "@zendev-lab/spark-runtime";
-import { sessionDirectoryNameForKey } from "./session-directory-store.ts";
+import { sessionDirectoryNameForKey } from "@zendev-lab/spark-loop";
 
 export type SparkTaskClaimRecoveryReason = "claim_expired" | "review_needs_changes_owner_inactive";
 

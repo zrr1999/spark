@@ -599,10 +599,11 @@ export function createQqbotTransport(
             eventType === "MESSAGE_CREATE"
           ) {
             const images = await materializeQqbotInboundImages(payload.d, options.fetchImpl);
-            onMessage?.({
+            const raw = {
               event_type: eventType,
               d: appendQqbotMaterializedImages(payload.d, images),
-            });
+            };
+            onMessage?.(await enrichQqbotChannelQuotePreview(api, resolveToken, raw));
           }
           if (isCurrentSocket()) await commitDurableSequence(payload);
         };
@@ -821,6 +822,68 @@ export async function materializeQqbotInboundImages(
       console.error(`[spark-channels] qqbot image skipped: ${error.message}`);
     },
   });
+}
+
+/**
+ * Guild/sub-channel only: when the event has a message_reference id but no
+ * preview text, fetch the referenced message before durable receipt.
+ */
+export async function enrichQqbotChannelQuotePreview(
+  api: Pick<QqbotApiClient, "getChannelMessage">,
+  resolveToken: () => Promise<string>,
+  raw: unknown,
+): Promise<unknown> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const record = raw as Record<string, unknown>;
+  const eventType =
+    typeof record.event_type === "string"
+      ? record.event_type.trim()
+      : typeof record.t === "string"
+        ? record.t.trim()
+        : "";
+  if (eventType !== "AT_MESSAGE_CREATE" && eventType !== "MESSAGE_CREATE") return raw;
+  const payload =
+    record.d && typeof record.d === "object" && !Array.isArray(record.d)
+      ? (record.d as Record<string, unknown>)
+      : record;
+  const channelId = typeof payload.channel_id === "string" ? payload.channel_id.trim() : "";
+  const reference =
+    payload.message_reference &&
+    typeof payload.message_reference === "object" &&
+    !Array.isArray(payload.message_reference)
+      ? (payload.message_reference as Record<string, unknown>)
+      : undefined;
+  if (!channelId || !reference) return raw;
+  const messageId =
+    (typeof reference.message_id === "string" && reference.message_id.trim()) ||
+    (typeof reference.messageId === "string" && reference.messageId.trim()) ||
+    "";
+  const existingPreview =
+    (typeof reference.content === "string" && reference.content.trim()) ||
+    (typeof reference.preview === "string" && reference.preview.trim()) ||
+    (typeof reference.text === "string" && reference.text.trim()) ||
+    "";
+  if (!messageId || existingPreview) return raw;
+  try {
+    const token = await resolveToken();
+    const fetched = await api.getChannelMessage(token, channelId, messageId);
+    const preview = typeof fetched?.content === "string" ? fetched.content.trim() : "";
+    if (!preview) return raw;
+    return {
+      ...record,
+      d: {
+        ...payload,
+        message_reference: {
+          ...reference,
+          content: preview,
+          ...(fetched?.author ? { author: fetched.author } : {}),
+          spark_quote_source: "fetched",
+        },
+      },
+    };
+  } catch {
+    return raw;
+  }
 }
 
 function qqbotImageSources(value: unknown): ChannelImageSource[] {

@@ -128,6 +128,7 @@ import {
   SparkDaemonHumanWaitRegistry,
   type SparkDaemonHumanWaitDeliveryResult,
 } from "./core/human-waits.ts";
+import { SparkDaemonLeaseTransferBroker } from "./core/lease-transfer.ts";
 import { executeSparkDaemonSessionControl } from "./session-control.ts";
 import {
   relocateSparkDaemonCockpit,
@@ -137,7 +138,7 @@ import {
 } from "./relocation.ts";
 import {
   parkSparkDaemonUplink,
-  preferSparkDaemonWorkspaceUplink,
+  preferSparkDaemonWorkspaceUplinkWithTransfer,
   sparkDaemonUplinkStatus,
   unparkSparkDaemonUplink,
 } from "./uplink.ts";
@@ -267,6 +268,9 @@ interface LocalRpcHandlerOptions {
   modelControl?: SparkDaemonModelControl;
   humanWaits?: SparkDaemonHumanWaitRegistry;
   respondHumanInteraction?: SparkDaemonHumanInteractionResponder;
+  leaseTransfers?: SparkDaemonLeaseTransferBroker;
+  onHumanRequestOutboxReady?: () => void;
+  getRuntimeIdForServer?: (serverUrl: string) => string | undefined;
   mailStore?: LocalRpcMailStore;
   notificationDeliveryQueue?: SessionNotificationDeliveryQueue;
   onStopRequested?: () => void;
@@ -382,10 +386,26 @@ type LocalRpcRequest =
   | {
       id: string;
       method: "uplink.prefer";
-      params: { workspace: string; serverUrl: string };
+      params: { workspace: string; serverUrl: string; force?: boolean };
       sparkCommand: SparkCommand;
     }
   | { id: string; method: "uplink.status"; sparkCommand: SparkCommand }
+  | {
+      id: string;
+      method: "workspace.transfer.pending";
+      params: { workspaceId?: string };
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "workspace.transfer.respond";
+      params: {
+        transferId: string;
+        decision: "accept" | "reject";
+        source?: "tui" | "cli";
+      };
+      sparkCommand: SparkCommand;
+    }
   | {
       id: string;
       method: "workspace.ensure-local";
@@ -569,6 +589,9 @@ export async function startLocalRpcServer(options: {
   modelControl?: SparkDaemonModelControl;
   humanWaits?: SparkDaemonHumanWaitRegistry;
   respondHumanInteraction?: SparkDaemonHumanInteractionResponder;
+  leaseTransfers?: SparkDaemonLeaseTransferBroker;
+  onHumanRequestOutboxReady?: () => void;
+  getRuntimeIdForServer?: (serverUrl: string) => string | undefined;
   mailStore?: LocalRpcMailStore;
 }): Promise<LocalRpcServer> {
   const socketPath = localRpcSocketPath(options.paths);
@@ -619,6 +642,13 @@ export async function startLocalRpcServer(options: {
         ...(options.humanWaits ? { humanWaits: options.humanWaits } : {}),
         ...(options.respondHumanInteraction
           ? { respondHumanInteraction: options.respondHumanInteraction }
+          : {}),
+        ...(options.leaseTransfers ? { leaseTransfers: options.leaseTransfers } : {}),
+        ...(options.onHumanRequestOutboxReady
+          ? { onHumanRequestOutboxReady: options.onHumanRequestOutboxReady }
+          : {}),
+        ...(options.getRuntimeIdForServer
+          ? { getRuntimeIdForServer: options.getRuntimeIdForServer }
           : {}),
         ...(options.onStopRequested ? { onStopRequested: options.onStopRequested } : {}),
         ...(options.onRestart ? { onRestart: options.onRestart } : {}),
@@ -860,7 +890,7 @@ export async function requestUplinkUnpark(
 
 export async function requestUplinkPrefer(
   paths: SparkPaths,
-  params: { workspace: string; serverUrl: string },
+  params: { workspace: string; serverUrl: string; force?: boolean },
 ): Promise<unknown> {
   return localRpcRequest(
     paths,
@@ -1317,12 +1347,66 @@ export async function handleLocalRpcLine(
         return { id: request.id, ok: true, result: profile };
       }
       case "uplink.prefer": {
-        const preferred = preferSparkDaemonWorkspaceUplink(paths, db, request.params);
+        const transfers = options.leaseTransfers ?? new SparkDaemonLeaseTransferBroker();
+        const preferred = await preferSparkDaemonWorkspaceUplinkWithTransfer(
+          paths,
+          db,
+          request.params,
+          {
+            transfers,
+            ...(options.humanWaits ? { humanWaits: options.humanWaits } : {}),
+            ...(options.onHumanRequestOutboxReady
+              ? { onOutboxReady: options.onHumanRequestOutboxReady }
+              : {}),
+            ...(options.getRuntimeIdForServer
+              ? { getRuntimeId: options.getRuntimeIdForServer }
+              : {}),
+            ...(request.params.force === true ? { force: true } : {}),
+          },
+        );
         if (preferred.previousServerUrl) {
           options.onUplinkReconfigure?.(preferred.previousServerUrl);
         }
         options.onUplinkReconfigure?.(preferred.serverUrl);
         return { id: request.id, ok: true, result: preferred };
+      }
+      case "workspace.transfer.pending": {
+        const transfers = options.leaseTransfers;
+        const pending = !transfers
+          ? []
+          : request.params.workspaceId
+            ? (() => {
+                const item = transfers.pendingForWorkspace(request.params.workspaceId!);
+                return item ? [item] : [];
+              })()
+            : transfers.listPending();
+        return {
+          id: request.id,
+          ok: true,
+          result: {
+            pending,
+            observedAt: new Date().toISOString(),
+          },
+        };
+      }
+      case "workspace.transfer.respond": {
+        const transfers = options.leaseTransfers;
+        if (!transfers) {
+          throw new Error("Lease transfer broker is not available on this daemon.");
+        }
+        const settlement = transfers.respond(
+          request.params.transferId,
+          request.params.decision,
+          request.params.source === "tui" || request.params.source === "cli"
+            ? request.params.source
+            : "unknown",
+        );
+        if (!settlement) {
+          throw new Error(
+            `Unknown or already settled lease transfer: ${request.params.transferId}`,
+          );
+        }
+        return { id: request.id, ok: true, result: settlement };
       }
       case "uplink.status":
         return {
@@ -1941,6 +2025,20 @@ function parseLocalRpcRequest(line: string): LocalRpcRequest {
   if (value.method === "uplink.status") {
     return withSparkCommand({ id: value.id, method: value.method });
   }
+  if (value.method === "workspace.transfer.pending") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: parseWorkspaceTransferPendingParams(value.params),
+    });
+  }
+  if (value.method === "workspace.transfer.respond") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: parseWorkspaceTransferRespondParams(value.params),
+    });
+  }
   if (value.method === "workspace.ensure-local") {
     return withSparkCommand({
       id: value.id,
@@ -2166,7 +2264,11 @@ function parseUplinkServerUrlParams(value: unknown): { serverUrl: string } {
   return { serverUrl: value.serverUrl.trim() };
 }
 
-function parseUplinkPreferParams(value: unknown): { workspace: string; serverUrl: string } {
+function parseUplinkPreferParams(value: unknown): {
+  workspace: string;
+  serverUrl: string;
+  force?: boolean;
+} {
   if (
     !isRecord(value) ||
     typeof value.workspace !== "string" ||
@@ -2176,7 +2278,39 @@ function parseUplinkPreferParams(value: unknown): { workspace: string; serverUrl
   ) {
     throw new Error("uplink prefer requires workspace and serverUrl.");
   }
-  return { workspace: value.workspace.trim(), serverUrl: value.serverUrl.trim() };
+  return {
+    workspace: value.workspace.trim(),
+    serverUrl: value.serverUrl.trim(),
+    ...(value.force === true ? { force: true } : {}),
+  };
+}
+
+function parseWorkspaceTransferPendingParams(value: unknown): { workspaceId?: string } {
+  if (value == null) return {};
+  if (!isRecord(value)) throw new Error("Invalid workspace.transfer.pending params.");
+  return typeof value.workspaceId === "string" && value.workspaceId.trim()
+    ? { workspaceId: value.workspaceId.trim() }
+    : {};
+}
+
+function parseWorkspaceTransferRespondParams(value: unknown): {
+  transferId: string;
+  decision: "accept" | "reject";
+  source?: "tui" | "cli";
+} {
+  if (
+    !isRecord(value) ||
+    typeof value.transferId !== "string" ||
+    !value.transferId.trim() ||
+    (value.decision !== "accept" && value.decision !== "reject")
+  ) {
+    throw new Error("workspace.transfer.respond requires transferId and decision.");
+  }
+  return {
+    transferId: value.transferId.trim(),
+    decision: value.decision,
+    ...(value.source === "tui" || value.source === "cli" ? { source: value.source } : {}),
+  };
 }
 
 function relocationResult(value: unknown): LocalWorkspaceRelocateResult {
@@ -2946,6 +3080,12 @@ function sparkDaemonWorkspace(value: unknown): SparkDaemonWorkspace {
     id: value.id,
     ...(typeof value.serverWorkspaceId === "string"
       ? { serverWorkspaceId: value.serverWorkspaceId }
+      : {}),
+    ...(typeof value.serverBindingId === "string"
+      ? { serverBindingId: value.serverBindingId }
+      : {}),
+    ...(value.cockpitBindingState === "bound" || value.cockpitBindingState === "unbound"
+      ? { cockpitBindingState: value.cockpitBindingState }
       : {}),
     serverUrl: value.serverUrl,
     localWorkspaceKey: value.localWorkspaceKey,

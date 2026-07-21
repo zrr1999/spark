@@ -3,23 +3,17 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { ArtifactStore } from "@zendev-lab/spark-artifacts";
-import type {
-  JsonValue,
-  RoleRef,
-  RunRef,
-  TaskRef,
-  ProjectRef,
-} from "@zendev-lab/spark-extension-api";
+import type { JsonValue, RoleRef, RunRef, TaskRef, ProjectRef } from "@zendev-lab/spark-core";
 import {
   collectRoleRunArtifactRetentionPlan,
   isRoleRunArtifactBody,
   readRoleRunArtifactPreview,
 } from "@zendev-lab/spark-runtime";
 
-void test("runtime role-run artifact body guard owns compact artifact shape", () => {
+test("runtime role-run artifact body guard owns compact artifact shape", () => {
   const valid = {
     schemaVersion: 1,
     runRef: "run:guard" as RunRef,
@@ -48,7 +42,7 @@ void test("runtime role-run artifact body guard owns compact artifact shape", ()
   );
 });
 
-void test("runtime role-run artifact preview owns bounded metadata reads", async () => {
+test("runtime role-run artifact preview owns bounded metadata reads", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-runtime-role-run-preview-"));
   try {
     const store = new ArtifactStore({ rootDir: join(dir, ".spark", "artifacts") });
@@ -97,7 +91,7 @@ void test("runtime role-run artifact preview owns bounded metadata reads", async
   }
 });
 
-void test("runtime role-run retention ignores legacy agent-run artifact kind", async () => {
+test("runtime role-run retention ignores legacy agent-run artifact kind", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-runtime-agent-run-retention-"));
   try {
     const artifactRoot = join(dir, ".spark", "artifacts");
@@ -137,7 +131,7 @@ void test("runtime role-run retention ignores legacy agent-run artifact kind", a
   }
 });
 
-void test("runtime role-run retention compacts historical transcript blobs without extension state", async () => {
+test("runtime role-run retention compacts historical transcript blobs without extension state", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-runtime-role-run-retention-"));
   try {
     const store = new ArtifactStore({

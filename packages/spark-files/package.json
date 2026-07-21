@@ -26,7 +26,7 @@
     "check": "vp check --no-fmt --no-lint ."
   },
   "dependencies": {
-    "@zendev-lab/spark-extension-api": "workspace:^",
+    "@zendev-lab/spark-core": "workspace:^",
     "diff": "^8.0.4",
     "ignore": "^7.0.5",
     "minimatch": "^10.2.5",

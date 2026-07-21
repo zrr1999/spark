@@ -1,1 +1,1 @@
-export * from "@zendev-lab/spark-learnings/reflection-in-session-scheduler";
+export * from "@zendev-lab/spark-memory/reflection-in-session-scheduler";

@@ -1,4 +1,4 @@
-import type { Project, ProjectRoadmap, RoadmapItem } from "@zendev-lab/spark-extension-api";
+import type { Project, ProjectRoadmap, RoadmapItem } from "@zendev-lab/spark-core";
 
 /** Read-only project roadmap excerpt for status/active context. Not a planning input. */
 export function renderProjectRoadmapContext(project: Project): string {

@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import type { RunRef } from "@zendev-lab/spark-extension-api";
+import type { RunRef } from "@zendev-lab/spark-core";
 import { defaultArtifactStore, type JsonValue } from "@zendev-lab/spark-artifacts";
 import { defaultSparkWorkflowRunStore } from "./spark-workflow-run-store.ts";
 import {

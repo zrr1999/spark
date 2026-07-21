@@ -266,7 +266,7 @@ describe("workspace settings slug guards", () => {
          FROM runtime_workspace_bindings
          WHERE id = (
            SELECT runtime_workspace_binding_id
-           FROM workspace_owner_bindings
+           FROM workspace_leases
            WHERE workspace_id = ? AND ended_at IS NULL
            LIMIT 1
          )`,

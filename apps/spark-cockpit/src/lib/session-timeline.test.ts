@@ -386,7 +386,7 @@ describe("session timeline", () => {
     expect(timeline.every((item) => item.status !== "error")).toBe(true);
   });
 
-  it("keeps only the latest stable run, task, and artifact projections", () => {
+  it("keeps only the latest stable run and task projections", () => {
     const reports = [
       ["run.update", "run:one"],
       ["task.update", "task:one"],
@@ -419,13 +419,10 @@ describe("session timeline", () => {
       reports,
     });
 
-    expect(timeline).toHaveLength(3);
-    expect(timeline.map((item) => item.body)).toEqual([
-      "Latest projection.",
-      "Latest projection.",
-      "Latest projection.",
-    ]);
-    expect(new Set(timeline.map((item) => item.id)).size).toBe(3);
+    // Artifact activity reports stay in the inspector/evidence lanes, not chat.
+    expect(timeline).toHaveLength(2);
+    expect(timeline.map((item) => item.body)).toEqual(["Latest projection.", "Latest projection."]);
+    expect(timeline.map((item) => item.id)).toEqual(["report:run:one", "report:task:one"]);
   });
 
   it("preserves repeated canonical messages by source ID instead of display text", () => {
@@ -871,7 +868,7 @@ describe("session timeline", () => {
     expect(JSON.stringify(timeline)).not.toContain("super-secret");
   });
 
-  it("projects artifact reports as navigable artifact parts", () => {
+  it("keeps artifact and evidence activity reports out of the conversation timeline", () => {
     const timeline = buildSessionTimeline({
       fallbackTimestamp: "2026-07-10T00:00:00.000Z",
       messages: [],
@@ -886,28 +883,22 @@ describe("session timeline", () => {
           status: "completed",
           createdAt: "2026-07-10T00:00:01.000Z",
         },
-      ],
-    });
-
-    expect(timeline).toHaveLength(1);
-    expect(timeline[0]).toMatchObject({
-      id: "report:art-focused-report",
-      body: "All focused checks passed.",
-      title: null,
-      parts: [
         {
-          type: "artifact",
-          artifactRef: "artifact:art-focused-report",
-          title: "Focused check report",
-          kind: "report",
-          state: "completed",
-          summary: "All focused checks passed.",
+          id: "artifact:tool-side-channel",
+          kind: "evidence.update",
+          title: "artifact:tool-side-channel",
+          text: "Evidence succeeded.",
+          role: "assistant",
+          status: "succeeded",
+          createdAt: "2026-07-10T00:00:02.000Z",
         },
       ],
     });
+
+    expect(timeline).toEqual([]);
   });
 
-  it("projects reload-safe task and artifact updates as structured cards", () => {
+  it("projects reload-safe task updates as structured cards without artifact bubbles", () => {
     const timeline = buildSessionTimeline({
       fallbackTimestamp: "2026-07-10T00:00:00.000Z",
       messages: [],
@@ -941,14 +932,6 @@ describe("session timeline", () => {
         title: "Review implementation",
         state: "running",
         summary: "Check focused tests.",
-      },
-      {
-        type: "artifact",
-        artifactRef: "artifact:check-report",
-        title: "Focused check report",
-        kind: "artifact",
-        state: "completed",
-        summary: "All checks passed.",
       },
     ]);
   });

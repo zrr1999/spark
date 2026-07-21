@@ -1,6 +1,14 @@
 import { join } from "node:path";
 
-import { type TaskRef } from "@zendev-lab/spark-extension-api";
+import { type TaskRef } from "@zendev-lab/spark-core";
+import {
+  legacyTodoDisplayNumberStorePath,
+  rebuildSessionIndex,
+  sanitizeStoreScope,
+  sessionTodoDisplayNumberStorePath,
+  sparkSessionKey,
+  type SparkSessionContext,
+} from "@zendev-lab/spark-loop";
 import {
   defaultTaskTodoStore,
   isDeletedSessionTodo,
@@ -8,16 +16,6 @@ import {
   type SessionTodoStatus,
 } from "@zendev-lab/spark-tasks";
 import { JsonStoreFormatError, readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
-import {
-  legacyTodoDisplayNumberStorePath,
-  rebuildSessionIndex,
-  sessionTodoDisplayNumberStorePath,
-} from "./session-directory-store.ts";
-import {
-  sanitizeStoreScope,
-  sparkSessionKey,
-  type SparkSessionContext,
-} from "./session-identity.ts";
 
 function independentTodoStorePath(cwd: string, ctx: SparkSessionContext | undefined): string {
   return join(cwd, ".spark", "session-todos", `${sanitizeStoreScope(sparkSessionKey(ctx))}.json`);

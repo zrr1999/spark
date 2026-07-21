@@ -1,13 +1,9 @@
 import { Type } from "typebox";
-import type {
-  ToolConfig,
-  ToolRenderComponent,
-  ToolRenderTheme,
-} from "@zendev-lab/spark-extension-api";
+import type { ToolConfig, ToolRenderComponent, ToolRenderTheme } from "@zendev-lab/spark-core";
 
-export type PiContextAction = "list" | "preview";
+export type SparkContextAction = "list" | "preview";
 
-export interface PiContextBundle {
+export interface SparkContextBundle {
   providerId: string;
   label: string;
   content: string;
@@ -17,7 +13,7 @@ export interface PiContextBundle {
   refs?: string[];
 }
 
-export interface PiContextProvider {
+export interface SparkContextProvider {
   id: string;
   label: string;
   description: string;
@@ -27,16 +23,18 @@ export interface PiContextProvider {
     ctx: unknown,
     budgetChars: number,
   ): Promise<
-    Omit<PiContextBundle, "providerId" | "label" | "budgetChars" | "truncated"> | string | undefined
+    | Omit<SparkContextBundle, "providerId" | "label" | "budgetChars" | "truncated">
+    | string
+    | undefined
   >;
 }
 
-export interface PiContextExtensionApi {
+export interface SparkContextHostApi {
   registerTool(config: ToolConfig): void;
 }
 
-export interface PiContextToolOptions {
-  providers: PiContextProvider[];
+export interface SparkContextToolOptions {
+  providers: SparkContextProvider[];
 }
 
 interface CompactContextProvider {
@@ -61,9 +59,9 @@ class ToolCallText implements ToolRenderComponent {
   }
 }
 
-export function registerPiContextTool(
-  pi: PiContextExtensionApi,
-  options: PiContextToolOptions,
+export function registerSparkContextTool(
+  pi: SparkContextHostApi,
+  options: SparkContextToolOptions,
 ): void {
   const providers = new Map(options.providers.map((provider) => [provider.id, provider]));
   pi.registerTool({
@@ -122,7 +120,7 @@ export function registerPiContextTool(
           renderProvider(provider, ctx, budgetChars ?? provider.defaultBudgetChars),
         ),
       );
-      const visible = bundles.filter((bundle): bundle is PiContextBundle => Boolean(bundle));
+      const visible = bundles.filter((bundle): bundle is SparkContextBundle => Boolean(bundle));
       return {
         content: [
           {
@@ -140,7 +138,7 @@ export function registerPiContextTool(
   });
 }
 
-function compactProvider(provider: PiContextProvider): CompactContextProvider {
+function compactProvider(provider: SparkContextProvider): CompactContextProvider {
   return {
     id: provider.id,
     label: provider.label,
@@ -151,10 +149,10 @@ function compactProvider(provider: PiContextProvider): CompactContextProvider {
 }
 
 async function renderProvider(
-  provider: PiContextProvider,
+  provider: SparkContextProvider,
   ctx: unknown,
   budgetChars: number,
-): Promise<PiContextBundle | undefined> {
+): Promise<SparkContextBundle | undefined> {
   const rendered = await provider.render(ctx, budgetChars);
   if (!rendered) return undefined;
   const content = typeof rendered === "string" ? rendered : rendered.content;
@@ -182,9 +180,9 @@ function truncateToBudget(
 }
 
 function selectProviders(
-  providers: Map<string, PiContextProvider>,
+  providers: Map<string, SparkContextProvider>,
   providerIds: unknown,
-): PiContextProvider[] {
+): SparkContextProvider[] {
   if (providerIds === undefined || providerIds === null) return [...providers.values()];
   if (!Array.isArray(providerIds)) throw new Error("context.providerIds must be an array");
   return providerIds.map((id, index) => {
@@ -196,7 +194,7 @@ function selectProviders(
   });
 }
 
-function normalizeContextAction(value: unknown): PiContextAction {
+function normalizeContextAction(value: unknown): SparkContextAction {
   if (value === "list" || value === "preview") return value;
   throw new Error("context.action must be list or preview");
 }

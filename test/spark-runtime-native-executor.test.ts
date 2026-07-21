@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { builtinRoleRef, RoleRegistry } from "@zendev-lab/spark-roles";
@@ -12,7 +12,7 @@ import {
   type SparkRoleInstructionExecutor,
 } from "@zendev-lab/spark-runtime";
 
-void test("runSparkTask can execute through a daemon-native role executor without spawning pi", async () => {
+test("runSparkTask can execute through a daemon-native role executor without spawning pi", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-native-role-executor-"));
   try {
     const graph = new TaskGraph();
@@ -81,7 +81,7 @@ void test("runSparkTask can execute through a daemon-native role executor withou
   }
 });
 
-void test("daemon-native role events arrive before the role executor settles", async () => {
+test("daemon-native role events arrive before the role executor settles", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-native-role-streaming-"));
   try {
     const releaseExecutor = Promise.withResolvers<void>();

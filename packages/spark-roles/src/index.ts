@@ -1,12 +1,13 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import type {
-  ExtensionRoleRunInputController,
-  ExtensionRoleRunner,
-} from "@zendev-lab/spark-extension-api";
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import {
+  stableId,
+  writeTextFileAtomic,
+  type ExtensionRoleRunInputController,
+  type ExtensionRoleRunner,
+} from "@zendev-lab/spark-core";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { resolveRoleNativeExecutor } from "./native-executor.ts";
-import { basename, dirname, extname, join, relative, sep } from "node:path";
+import { dirname, extname, join, relative, sep } from "node:path";
 import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 
 export type RoleSource = "builtin" | "extension" | "project" | "user";
@@ -743,7 +744,7 @@ async function writeRoleModelSettingsFile(
     Object.entries(roleModels).sort(([left], [right]) => left.localeCompare(right)),
   );
   await mkdir(dirname(filePath), { recursive: true });
-  await atomicWriteFile(
+  await writeTextFileAtomic(
     filePath,
     `${JSON.stringify({ version: 1, roleModels: sorted } satisfies RoleModelSettingsFile, null, 2)}\n`,
   );
@@ -800,30 +801,6 @@ function isNoMatchingModelOutput(output: string): boolean {
   return /no\s+models?\s+(?:found\s+)?matching\b/i.test(output);
 }
 
-async function atomicWriteFile(filePath: string, data: string): Promise<void> {
-  const tempPath = join(
-    dirname(filePath),
-    `.${basename(filePath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`,
-  );
-  try {
-    await writeFile(tempPath, data, "utf8");
-    await rename(tempPath, filePath);
-  } catch (error) {
-    await cleanupAtomicWriteTempFile(tempPath, error);
-    throw error;
-  }
-}
-
-async function cleanupAtomicWriteTempFile(tempPath: string, writeError: unknown): Promise<void> {
-  try {
-    await rm(tempPath, { force: true });
-  } catch (cleanupError) {
-    throw new Error(
-      `atomic write failed and temporary file cleanup also failed: ${tempPath}; write error: ${unknownErrorMessage(writeError)}; cleanup error: ${unknownErrorMessage(cleanupError)}`,
-    );
-  }
-}
-
 function unknownErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -877,10 +854,6 @@ export function validateRoleSpec(role: RoleSpec): void {
 
 function assertNonEmpty(value: string, label: string): void {
   if (!value.trim()) throw new Error(`${label} is required`);
-}
-
-function stableId(input: string): string {
-  return createHash("sha256").update(input).digest("hex").slice(0, 16);
 }
 
 function sanitizeRoleRefPart(value: string): string {

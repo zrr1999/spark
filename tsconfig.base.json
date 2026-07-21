@@ -24,29 +24,31 @@
       "@zendev-lab/spark-ask/extension": ["./packages/spark-ask/src/extension.ts"],
       "@zendev-lab/spark-context": ["./packages/spark-context/src/index.ts"],
       "@zendev-lab/spark-context/extension": ["./packages/spark-context/src/extension.ts"],
+      "@zendev-lab/spark-core": ["./packages/spark-core/src/index.ts"],
       "@zendev-lab/spark-cue": ["./packages/spark-cue/src/index.ts"],
       "@zendev-lab/spark-cue/extension": ["./packages/spark-cue/src/extension/index.ts"],
-      "@zendev-lab/spark-extension-api": ["./packages/spark-extension-api/src/index.ts"],
       "@zendev-lab/spark-files": ["./packages/spark-files/src/index.ts"],
       "@zendev-lab/spark-files/extension": ["./packages/spark-files/src/extension.ts"],
       "@zendev-lab/spark-graft": ["./packages/spark-graft/src/index.ts"],
       "@zendev-lab/spark-graft/extension": ["./packages/spark-graft/src/extension.ts"],
-      "@zendev-lab/spark-learnings": ["./packages/spark-learnings/src/index.ts"],
-      "@zendev-lab/spark-learnings/extension": ["./packages/spark-learnings/src/extension.ts"],
       "@zendev-lab/spark-loop": ["./packages/spark-loop/src/index.ts"],
       "@zendev-lab/spark-modes": ["./packages/spark-modes/src/index.ts"],
       "@zendev-lab/spark-memory": ["./packages/spark-memory/src/index.ts"],
       "@zendev-lab/spark-memory/extension": ["./packages/spark-memory/src/extension.ts"],
       "@zendev-lab/spark-memory/recall": ["./packages/spark-memory/src/recall-store.ts"],
-      "@zendev-lab/spark-memory/recall/extension": [
-        "./packages/spark-memory/src/recall-extension.ts"
-      ],
       "@zendev-lab/spark-memory/learning": ["./packages/spark-memory/src/learning-store.ts"],
-      "@zendev-lab/spark-memory/learning/extension": [
-        "./packages/spark-memory/src/learning-extension.ts"
+      "@zendev-lab/spark-memory/reflection-candidate-inbox": [
+        "./packages/spark-memory/src/reflection-candidate-inbox.ts"
       ],
-      "@zendev-lab/spark-recall": ["./packages/spark-recall/src/index.ts"],
-      "@zendev-lab/spark-recall/extension": ["./packages/spark-recall/src/extension.ts"],
+      "@zendev-lab/spark-memory/reflection-in-session-scheduler": [
+        "./packages/spark-memory/src/reflection-in-session-scheduler.ts"
+      ],
+      "@zendev-lab/spark-memory/reflection-session-scanner": [
+        "./packages/spark-memory/src/reflection-session-scanner.ts"
+      ],
+      "@zendev-lab/spark-memory/reflection-synthesis-engine": [
+        "./packages/spark-memory/src/reflection-synthesis-engine.ts"
+      ],
       "@zendev-lab/spark-repro": ["./packages/spark-repro/src/index.ts"],
       "@zendev-lab/spark-roles": ["./packages/spark-roles/src/index.ts"],
       "@zendev-lab/spark-roles/extension": ["./packages/spark-roles/src/extension.ts"],

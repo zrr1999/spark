@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
-import { after, test } from "node:test";
+import { afterAll as after, test } from "vitest";
 import { defaultSparkSessionRegistryRoot, SparkSessionRegistry } from "@zendev-lab/spark-session";
 import { normalizeChannelExternalKey, parseSparkAssignment } from "@zendev-lab/spark-protocol";
 import {
@@ -17,7 +17,7 @@ after(async () => {
   await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true })));
 });
 
-void test("assignment requires sessionId and preserves channel source", () => {
+test("assignment requires sessionId and preserves channel source", () => {
   const assignment = parseSparkAssignment({
     goal: "fix the flaky test",
     target: { sessionId: "sess_demo", workspaceId: "ws_1" },
@@ -29,7 +29,7 @@ void test("assignment requires sessionId and preserves channel source", () => {
   assert.throws(() => parseSparkAssignment({ goal: "x", target: {}, source: { kind: "cockpit" } }));
 });
 
-void test("session registry bind + channel inbound share one sessionId", async () => {
+test("session registry bind + channel inbound share one sessionId", async () => {
   const sparkHome = await mkdtemp(join(tmpdir(), "spark-assign-channels-"));
   roots.push(sparkHome);
   const registry = new SparkSessionRegistry({

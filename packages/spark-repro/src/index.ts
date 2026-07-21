@@ -1,4 +1,4 @@
-import { nowIso, type ArtifactRef } from "@zendev-lab/spark-extension-api";
+import { nowIso, type ArtifactRef } from "@zendev-lab/spark-core";
 
 export type SparkSessionPhase = "plan" | "implement";
 

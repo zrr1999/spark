@@ -1,5 +1,5 @@
 import { type TaskGraph } from "@zendev-lab/spark-tasks";
-import type { Project, ProjectRef, Task, TaskRef } from "@zendev-lab/spark-extension-api";
+import type { Project, ProjectRef, Task, TaskRef } from "@zendev-lab/spark-core";
 import { createId, parseSparkAssignment } from "@zendev-lab/spark-protocol";
 
 import {
@@ -13,6 +13,7 @@ import {
   type SparkCliOutput,
 } from "./shared.ts";
 import type { CockpitAccessCliResult } from "./access.ts";
+import type { WorkspaceAccessCliResult } from "./workspace-access.ts";
 import type {
   CockpitInstanceCliFailure,
   CockpitInstanceCliOptions,
@@ -39,7 +40,8 @@ export type SparkCockpitCliResource =
   | "workflow"
   | "assign"
   | "instance"
-  | "access";
+  | "access"
+  | "workspace-access";
 
 export interface SparkCockpitCliCommand {
   resource: SparkCockpitCliResource;
@@ -52,6 +54,7 @@ export interface SparkCockpitCliCommand {
   title?: string;
   role?: string;
   workspaceId?: string;
+  workspaceRef?: string;
   snapshotPath?: string;
   databasePath?: string;
   rollbackRoot?: string;
@@ -120,7 +123,8 @@ export type SparkCockpitCliResult =
   | { action: "workflow"; result: SparkCockpitWorkflowListResult }
   | { action: "assign"; result: SparkCockpitAssignResult }
   | { action: "instance"; result: CockpitInstanceCliResult }
-  | { action: "access"; result: CockpitAccessCliResult };
+  | { action: "access"; result: CockpitAccessCliResult }
+  | { action: "workspace-access"; result: WorkspaceAccessCliResult };
 
 export interface SparkCockpitAssignResult {
   plane: "cockpit";
@@ -319,6 +323,33 @@ export function parseSparkCockpitCliArgs(argv: string[]): SparkCockpitCliCommand
           readStringOption(parsed.options, "id")?.trim() ||
           (verb === "revoke" ? positionalSelector?.trim() : undefined),
       };
+    case "workspace": {
+      const [topic, operation, ...rest] = parsed.positionals;
+      if (topic !== "access") {
+        throw new Error(
+          "Usage: spark cockpit workspace access create|list|revoke --workspace <id> [...]",
+        );
+      }
+      const workspaceFromFlag = readStringOption(parsed.options, "workspace")?.trim();
+      const idFromFlag = readStringOption(parsed.options, "id")?.trim();
+      let workspaceRef = workspaceFromFlag;
+      let tokenId = idFromFlag;
+      if (!workspaceRef && rest[0]) {
+        workspaceRef = rest[0].trim();
+        if (operation === "revoke" && !tokenId && rest[1]) tokenId = rest[1].trim();
+      } else if (operation === "revoke" && !tokenId && rest[0]) {
+        tokenId = rest[0].trim();
+      }
+      return {
+        resource: "workspace-access",
+        verb: operation ?? "list",
+        json,
+        workspaceRef,
+        databasePath: readStringOption(parsed.options, "database")?.trim(),
+        label: readStringOption(parsed.options, "label")?.trim(),
+        tokenId,
+      };
+    }
     default:
       throw new Error(`unknown spark cockpit resource: ${resourceToken}`);
   }
@@ -351,6 +382,20 @@ export async function handleSparkCockpitCliCommand(
       action: "access",
       result: await handleCockpitAccessCliCommand({
         operation: command.verb ?? "list",
+        databasePath: command.databasePath,
+        label: command.label,
+        tokenId: command.tokenId,
+        json: command.json,
+      }),
+    };
+  }
+  if (command.resource === "workspace-access") {
+    const { handleWorkspaceAccessCliCommand } = await import("./workspace-access.ts");
+    return {
+      action: "workspace-access",
+      result: await handleWorkspaceAccessCliCommand({
+        operation: command.verb ?? "list",
+        workspaceRef: command.workspaceRef,
         databasePath: command.databasePath,
         label: command.label,
         tokenId: command.tokenId,
@@ -445,6 +490,9 @@ Usage:
   spark cockpit access create [--label <text>] [--database <path>] [--json]
   spark cockpit access list [--database <path>] [--json]
   spark cockpit access revoke --id <token-id> [--database <path>] [--json]
+  spark cockpit workspace access create --workspace <id> [--label <text>] [--database <path>] [--json]
+  spark cockpit workspace access list --workspace <id> [--database <path>] [--json]
+  spark cockpit workspace access revoke --workspace <id> --id <token-id> [--database <path>] [--json]
   spark cockpit instance status [--database <path>] [--json]
   spark cockpit instance backup [snapshot-path] [--database <path>] [--json]
   spark cockpit instance inspect <snapshot-path> [--json]
@@ -463,11 +511,15 @@ Commands:
   workflow            Query workflow runs
   assign              Queue work through the coordination plane
   access              Mint, list, or revoke Cockpit-level one-time browser keys
+  workspace access    Mint, list, or revoke workspace-level one-time browser keys (local DB)
   instance            Back up, inspect, restore, or diagnose a Cockpit instance
 
-Remote browser access is progressive: Cockpit keys via spark cockpit access create
-for /login, then workspace keys via spark daemon workspace access create for /{slug}/login.
+Remote browser access is progressive:
+  Cockpit keys  — spark cockpit access create → /login
+  Workspace keys — spark cockpit workspace access create --workspace <id>
+                   (registration may also print one key once)
 Access create mints a one-time Cockpit browser key for /login.
+Workspace access create mints a one-time workspace browser key for /{slug}/login.
 Instance restore replaces the complete Cockpit database and requires confirmation.
 Execution controls belong under spark daemon run/session/events.
 Cockpit coordinates across daemon execution planes; spark tui is the terminal presentation host.

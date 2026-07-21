@@ -8,10 +8,10 @@ import {
   type ProjectRef,
   type RoleRef,
   type Task,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import type { Artifact } from "@zendev-lab/spark-artifacts";
 import { readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
-import { sessionDirectoryNameForKey } from "./session-directory-store.ts";
+import { sessionDirectoryNameForKey } from "@zendev-lab/spark-loop";
 import type { SparkSessionGoal } from "./spark-session-goals.ts";
 import type {
   GoalReviewInput,

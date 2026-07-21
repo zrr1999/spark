@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
   createId,
@@ -170,7 +171,7 @@ export class RuntimeDeviceAuthorizationError extends Error {
   }
 }
 
-export interface RuntimeWorkspaceOwnerConflict {
+export interface RuntimeWorkspaceLeaseConflict {
   workspaceId: string;
   currentRuntimeId: string;
   currentBindingId: string;
@@ -179,15 +180,23 @@ export interface RuntimeWorkspaceOwnerConflict {
   occurredAt: string;
 }
 
-export class RuntimeWorkspaceOwnerConflictError extends Error {
-  readonly reasonCode = "WORKSPACE_OWNER_CONFLICT";
-  readonly conflict: RuntimeWorkspaceOwnerConflict;
+/** @deprecated Prefer {@link RuntimeWorkspaceLeaseConflict}. */
+export type RuntimeWorkspaceOwnerConflict = RuntimeWorkspaceLeaseConflict;
 
-  constructor(conflict: RuntimeWorkspaceOwnerConflict) {
-    super("Workspace already has an active daemon owner.");
+export class RuntimeWorkspaceLeaseConflictError extends Error {
+  readonly reasonCode = "WORKSPACE_LEASE_CONFLICT";
+  /** Wire/HTTP alias retained for older clients and ops docs. */
+  readonly aliasReasonCode = "WORKSPACE_OWNER_CONFLICT";
+  readonly conflict: RuntimeWorkspaceLeaseConflict;
+
+  constructor(conflict: RuntimeWorkspaceLeaseConflict) {
+    super("Workspace already has an active origin lease.");
     this.conflict = conflict;
   }
 }
+
+/** @deprecated Prefer {@link RuntimeWorkspaceLeaseConflictError}. */
+export class RuntimeWorkspaceOwnerConflictError extends RuntimeWorkspaceLeaseConflictError {}
 
 const runtimeAccessTokenTtlMs = 60 * 60 * 1000;
 const runtimeRefreshTokenTtlMs = 30 * 24 * 60 * 60 * 1000;
@@ -750,25 +759,22 @@ export function unbindRuntimeWorkspace(
         "WORKSPACE_BINDING_NOT_FOUND",
       );
     }
-    const owners = db
+    const leases = db
       .prepare(
         `SELECT id, workspace_id AS workspaceId
-         FROM workspace_owner_bindings
+         FROM workspace_leases
          WHERE runtime_workspace_binding_id = ? AND ended_at IS NULL`,
       )
       .all(input.bindingId) as Array<{ id: string; workspaceId: string }>;
-    for (const owner of owners) {
-      db.prepare("UPDATE workspace_owner_bindings SET ended_at = ? WHERE id = ?").run(
-        unboundAt,
-        owner.id,
-      );
+    for (const lease of leases) {
+      db.prepare("UPDATE workspace_leases SET ended_at = ? WHERE id = ?").run(unboundAt, lease.id);
       appendEvent(db, {
-        workspaceId: owner.workspaceId,
+        workspaceId: lease.workspaceId,
         actorKind: "runtime",
         actorId: input.runtimeId,
-        kind: "workspace.owner_unbound",
-        subjectKind: "workspace_owner_binding",
-        subjectId: owner.id,
+        kind: "workspace.lease_unbound",
+        subjectKind: "workspace_lease",
+        subjectId: lease.id,
         payload: { runtimeWorkspaceBindingId: input.bindingId },
         createdAt: unboundAt,
       });
@@ -776,13 +782,13 @@ export function unbindRuntimeWorkspace(
     return {
       runtimeId: input.runtimeId,
       bindingId: input.bindingId,
-      workspaceIds: owners.map(({ workspaceId }) => workspaceId),
+      workspaceIds: leases.map(({ workspaceId }) => workspaceId),
       unboundAt,
     };
   });
 }
 
-/** Mint a one-time workspace browser key for a binding owned by this runtime. */
+/** Mint a one-time workspace browser key for a binding leased by this runtime. */
 export function createRuntimeWorkspaceBrowserAccess(
   db: DatabaseSync,
   input: {
@@ -798,27 +804,27 @@ export function createRuntimeWorkspaceBrowserAccess(
     authenticateRuntimeAccessToken(db, input.runtimeId, input.runtimeToken, createdAt, [
       "runtime:connect",
     ]);
-    const owner = db
+    const lease = db
       .prepare(
-        `SELECT wob.workspace_id AS workspaceId
-         FROM workspace_owner_bindings wob
+        `SELECT wl.workspace_id AS workspaceId
+         FROM workspace_leases wl
          JOIN runtime_workspace_bindings rwb
-           ON rwb.id = wob.runtime_workspace_binding_id
-         WHERE wob.runtime_workspace_binding_id = ?
+           ON rwb.id = wl.runtime_workspace_binding_id
+         WHERE wl.runtime_workspace_binding_id = ?
            AND rwb.runtime_id = ?
-           AND wob.ended_at IS NULL
+           AND wl.ended_at IS NULL
          LIMIT 1`,
       )
       .get(input.bindingId, input.runtimeId) as { workspaceId: string } | undefined;
-    if (!owner) {
+    if (!lease) {
       throw new RuntimeEnrollmentError(
-        "Runtime workspace binding was not found or is not an active workspace owner.",
+        "Runtime workspace binding was not found or has no active workspace lease.",
         "WORKSPACE_BINDING_NOT_FOUND",
       );
     }
     return createRegisteredWorkspaceAuthorization(
       db,
-      owner.workspaceId,
+      lease.workspaceId,
       input.runtimeId,
       createdAt,
       input.label ?? "Daemon workspace browser access",
@@ -1203,7 +1209,14 @@ function prepareWorkspaceRegistration(
     )
     .get(runtimeId, workspaceRegistration.localWorkspaceKey) as { id: string } | undefined;
   const bindingId = existingBinding?.id ?? createId("rtwb");
-  assertWorkspaceOwnerAvailable(db, workspace.id, runtimeId, bindingId, now);
+  assertWorkspaceLeaseAvailable(
+    db,
+    workspace.id,
+    runtimeId,
+    bindingId,
+    now,
+    workspaceRegistration.localPath,
+  );
   return { workspace, bindingId, workspaceRegistration };
 }
 
@@ -1216,12 +1229,12 @@ function completeWorkspaceRegistration(
 ): RegisteredWorkspaceBinding | undefined {
   if (!prepared) return undefined;
 
-  // A workspace-scoped one-time token is an explicit Cockpit-owner grant for
+  // A workspace-scoped one-time token is an explicit Cockpit auth-owner grant for
   // this target workspace. It may move the same daemon-owned directory from a
-  // previous Cockpit workspace, while ordinary runtime credentials alone may
-  // not silently steal an existing owner projection.
+  // previous Cockpit workspace cache row, while ordinary runtime credentials alone
+  // may not silently steal an existing origin lease.
   if (workspaceGrant.enrollmentTokenId) {
-    endOtherOwnerBindingsForRuntimeBinding(db, prepared.bindingId, prepared.workspace.id, now);
+    endOtherLeasesForRuntimeBinding(db, prepared.bindingId, prepared.workspace.id, now);
   }
 
   upsertRegisteredWorkspaceBinding(
@@ -1231,7 +1244,7 @@ function completeWorkspaceRegistration(
     prepared.workspaceRegistration,
     now,
   );
-  ensureActiveOwnerBinding(db, prepared.workspace.id, runtimeId, prepared.bindingId, now);
+  ensureActiveLease(db, prepared.workspace.id, runtimeId, prepared.bindingId, now);
   const synced = syncWorkspaceIdentityFromLocalPath(
     db,
     prepared.workspace.id,
@@ -1263,16 +1276,16 @@ function completeWorkspaceRegistration(
   };
 }
 
-function endOtherOwnerBindingsForRuntimeBinding(
+function endOtherLeasesForRuntimeBinding(
   db: DatabaseSync,
   runtimeWorkspaceBindingId: string,
   targetWorkspaceId: string,
   endedAt: string,
 ): void {
-  const owners = db
+  const leases = db
     .prepare(
       `SELECT id, workspace_id AS workspaceId
-       FROM workspace_owner_bindings
+       FROM workspace_leases
        WHERE runtime_workspace_binding_id = ?
          AND workspace_id != ?
          AND ended_at IS NULL`,
@@ -1281,17 +1294,14 @@ function endOtherOwnerBindingsForRuntimeBinding(
     id: string;
     workspaceId: string;
   }>;
-  for (const owner of owners) {
-    db.prepare("UPDATE workspace_owner_bindings SET ended_at = ? WHERE id = ?").run(
-      endedAt,
-      owner.id,
-    );
+  for (const lease of leases) {
+    db.prepare("UPDATE workspace_leases SET ended_at = ? WHERE id = ?").run(endedAt, lease.id);
     appendEvent(db, {
-      workspaceId: owner.workspaceId,
+      workspaceId: lease.workspaceId,
       actorKind: "server",
-      kind: "workspace.owner_rebound",
-      subjectKind: "workspace_owner_binding",
-      subjectId: owner.id,
+      kind: "workspace.lease_rebound",
+      subjectKind: "workspace_lease",
+      subjectId: lease.id,
       payload: { runtimeWorkspaceBindingId, targetWorkspaceId },
       createdAt: endedAt,
     });
@@ -1390,47 +1400,107 @@ function upsertRegisteredWorkspaceBinding(
   );
 }
 
-function assertWorkspaceOwnerAvailable(
+function normalizeLeaseLocalPath(localPath: string | null | undefined): string | null {
+  const trimmed = localPath?.trim() ?? "";
+  if (!trimmed) return null;
+  return resolve(trimmed);
+}
+
+function resolveAttemptedLeaseLocalPath(
+  db: DatabaseSync,
+  attemptedBindingId: string,
+  attemptedLocalPath?: string | null,
+): string | null {
+  const fromAttempt = normalizeLeaseLocalPath(attemptedLocalPath);
+  if (fromAttempt) return fromAttempt;
+  const row = db
+    .prepare(
+      `SELECT local_path AS localPath
+       FROM runtime_workspace_bindings
+       WHERE id = ?
+       LIMIT 1`,
+    )
+    .get(attemptedBindingId) as { localPath: string | null } | undefined;
+  return normalizeLeaseLocalPath(row?.localPath);
+}
+
+function assertWorkspaceLeaseAvailable(
   db: DatabaseSync,
   workspaceId: string,
   attemptedRuntimeId: string,
   attemptedBindingId: string,
   occurredAt: string,
+  attemptedLocalPath?: string | null,
 ): void {
   const active = db
     .prepare(
       `SELECT wob.runtime_workspace_binding_id AS currentBindingId,
               rwb.runtime_id AS currentRuntimeId
-       FROM workspace_owner_bindings wob
+       FROM workspace_leases wob
        JOIN runtime_workspace_bindings rwb ON rwb.id = wob.runtime_workspace_binding_id
        WHERE wob.workspace_id = ? AND wob.ended_at IS NULL
        LIMIT 1`,
     )
     .get(workspaceId) as { currentBindingId: string; currentRuntimeId: string } | undefined;
-  if (!active || active.currentBindingId === attemptedBindingId) return;
+  if (active && active.currentBindingId !== attemptedBindingId) {
+    throw new RuntimeWorkspaceOwnerConflictError({
+      workspaceId,
+      currentRuntimeId: active.currentRuntimeId,
+      currentBindingId: active.currentBindingId,
+      attemptedRuntimeId,
+      attemptedBindingId,
+      occurredAt,
+    });
+  }
+
+  const localPath = resolveAttemptedLeaseLocalPath(db, attemptedBindingId, attemptedLocalPath);
+  if (!localPath) return;
+
+  const pathHolders = db
+    .prepare(
+      `SELECT wob.workspace_id AS workspaceId,
+              wob.runtime_workspace_binding_id AS currentBindingId,
+              rwb.runtime_id AS currentRuntimeId,
+              rwb.local_path AS localPath
+       FROM workspace_leases wob
+       JOIN runtime_workspace_bindings rwb ON rwb.id = wob.runtime_workspace_binding_id
+       WHERE wob.ended_at IS NULL
+         AND wob.runtime_workspace_binding_id != ?
+         AND rwb.local_path IS NOT NULL`,
+    )
+    .all(attemptedBindingId) as Array<{
+    workspaceId: string;
+    currentBindingId: string;
+    currentRuntimeId: string;
+    localPath: string;
+  }>;
+  const pathHolder = pathHolders.find(
+    (row) => normalizeLeaseLocalPath(row.localPath) === localPath,
+  );
+  if (!pathHolder) return;
 
   throw new RuntimeWorkspaceOwnerConflictError({
-    workspaceId,
-    currentRuntimeId: active.currentRuntimeId,
-    currentBindingId: active.currentBindingId,
+    workspaceId: pathHolder.workspaceId,
+    currentRuntimeId: pathHolder.currentRuntimeId,
+    currentBindingId: pathHolder.currentBindingId,
     attemptedRuntimeId,
     attemptedBindingId,
     occurredAt,
   });
 }
 
-function ensureActiveOwnerBinding(
+function ensureActiveLease(
   db: DatabaseSync,
   workspaceId: string,
   runtimeId: string,
   runtimeWorkspaceBindingId: string,
   now: string,
 ): void {
-  assertWorkspaceOwnerAvailable(db, workspaceId, runtimeId, runtimeWorkspaceBindingId, now);
+  assertWorkspaceLeaseAvailable(db, workspaceId, runtimeId, runtimeWorkspaceBindingId, now);
   const active = db
     .prepare(
       `SELECT 1 AS present
-       FROM workspace_owner_bindings
+       FROM workspace_leases
        WHERE workspace_id = ? AND ended_at IS NULL
        LIMIT 1`,
     )
@@ -1438,7 +1508,7 @@ function ensureActiveOwnerBinding(
   if (active) return;
 
   db.prepare(
-    `INSERT INTO workspace_owner_bindings
+    `INSERT INTO workspace_leases
       (id, workspace_id, runtime_workspace_binding_id, owner_mode, started_at, ended_at, created_at)
      VALUES (?, ?, ?, 'primary', ?, NULL, ?)`,
   ).run(createId("wob"), workspaceId, runtimeWorkspaceBindingId, now, now);
@@ -1452,22 +1522,22 @@ function withRuntimeRegistrationTransaction<T>(db: DatabaseSync, action: () => T
     return result;
   } catch (error) {
     db.exec("ROLLBACK");
-    if (error instanceof RuntimeWorkspaceOwnerConflictError) {
-      appendWorkspaceOwnerConflictAudit(db, error.conflict);
+    if (error instanceof RuntimeWorkspaceLeaseConflictError) {
+      appendWorkspaceLeaseConflictAudit(db, error.conflict);
     }
     throw error;
   }
 }
 
-function appendWorkspaceOwnerConflictAudit(
+function appendWorkspaceLeaseConflictAudit(
   db: DatabaseSync,
-  conflict: RuntimeWorkspaceOwnerConflict,
+  conflict: RuntimeWorkspaceLeaseConflict,
 ): void {
   appendEvent(db, {
     workspaceId: conflict.workspaceId,
     actorKind: "server",
-    kind: "workspace.owner_registration_conflict",
-    subjectKind: "workspace_owner_binding",
+    kind: "workspace.lease_registration_conflict",
+    subjectKind: "workspace_lease",
     subjectId: conflict.currentBindingId,
     createdAt: conflict.occurredAt,
     payload: {
@@ -1476,6 +1546,7 @@ function appendWorkspaceOwnerConflictAudit(
       attemptedRuntimeId: conflict.attemptedRuntimeId,
       attemptedBindingId: conflict.attemptedBindingId,
       outcome: "rejected",
+      aliasReasonCode: "WORKSPACE_OWNER_CONFLICT",
     },
   });
 }

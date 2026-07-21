@@ -28,7 +28,7 @@
     "@zendev-lab/spark-ai": "workspace:^",
     "@zendev-lab/spark-artifacts": "workspace:^",
     "@zendev-lab/spark-channels": "workspace:^",
-    "@zendev-lab/spark-extension-api": "workspace:^",
+    "@zendev-lab/spark-core": "workspace:^",
     "@zendev-lab/spark-host": "workspace:^",
     "@zendev-lab/spark-i18n": "workspace:^",
     "@zendev-lab/spark-modes": "workspace:^",

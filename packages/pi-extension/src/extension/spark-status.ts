@@ -1,10 +1,10 @@
-import type { Task, TaskStatus, ProjectRef } from "@zendev-lab/spark-extension-api";
+import type { Task, TaskStatus, ProjectRef } from "@zendev-lab/spark-core";
 import {
-  countPiTaskStatuses,
-  formatPiTaskStatusCounts,
-  isImportantPiTaskStatus,
+  countSparkTaskStatuses,
+  formatSparkTaskStatusCounts,
+  isImportantSparkTaskStatus,
   isUnfinishedTaskStatus,
-  sortPiTasksForStatusVisibility,
+  sortSparkTasksForStatusVisibility,
   type TaskGraph,
 } from "@zendev-lab/spark-tasks";
 import { renderSparkProjectKindDisplay } from "./project-kind-registry.ts";
@@ -45,11 +45,11 @@ export function normalizeSparkStatusLimit(params: Record<string, unknown>): numb
 }
 
 export function isImportantStatus(status: TaskStatus): boolean {
-  return isImportantPiTaskStatus(status);
+  return isImportantSparkTaskStatus(status);
 }
 
 export function sortTasksForStatusVisibility(tasks: Task[]): Task[] {
-  return sortPiTasksForStatusVisibility(tasks);
+  return sortSparkTasksForStatusVisibility(tasks);
 }
 
 export function shouldRenderProjectInSparkStatus(input: {
@@ -64,11 +64,11 @@ export function shouldRenderProjectInSparkStatus(input: {
 }
 
 export function countTaskStatuses(tasks: Task[]): Partial<Record<TaskStatus, number>> {
-  return countPiTaskStatuses(tasks);
+  return countSparkTaskStatuses(tasks);
 }
 
 export function formatTaskStatusCounts(counts: Partial<Record<TaskStatus, number>>): string {
-  return formatPiTaskStatusCounts(counts);
+  return formatSparkTaskStatusCounts(counts);
 }
 
 export function compactProjectSummaries(graph: TaskGraph, sessionKey: string) {

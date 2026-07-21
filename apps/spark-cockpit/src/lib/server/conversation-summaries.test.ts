@@ -5,7 +5,7 @@ import {
   createWorkspaceWithOwnerBinding,
   queueCommandForWorkspaceOwner,
   recordInvocationUpdate,
-} from "./projection-services";
+} from "@zendev-lab/spark-coordination/projection-services";
 import { conversationActivityStatus, loadConversationSummaries } from "./conversation-summaries";
 
 describe("conversation summaries", () => {

@@ -3,7 +3,7 @@ import {
   defaultLearningStore,
   type LearningLocation,
   type LearningRecord,
-} from "@zendev-lab/spark-learnings";
+} from "@zendev-lab/spark-memory";
 import { defaultArtifactStore, type Artifact } from "@zendev-lab/spark-artifacts";
 import {
   DependencyError,
@@ -16,7 +16,7 @@ import {
   type Task,
   type TaskCompletionReadiness,
   type TaskStatus,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import {
   defaultTaskGraphStore,
   isUnfinishedTaskStatus,

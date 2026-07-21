@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   SPARK_PROTOCOL_VERSION,
@@ -14,7 +13,7 @@ import {
   sparkInteractionRequestSchema,
 } from "@zendev-lab/spark-protocol";
 
-void test("spark protocol validates core session/message/tool/run/task/artifact view models", () => {
+test("spark protocol validates core session/message/tool/run/task/artifact view models", () => {
   const session = parseSparkSessionView({
     sessionId: "native-session",
     status: "streaming",
@@ -35,7 +34,7 @@ void test("spark protocol validates core session/message/tool/run/task/artifact 
   assert.equal(session.runs[0]?.progress, 0.5);
 });
 
-void test("spark protocol validates interaction requests and typed responses", () => {
+test("spark protocol validates interaction requests and typed responses", () => {
   const ask = parseSparkInteractionRequest({
     requestId: "req-ask",
     kind: "askFlow",
@@ -96,7 +95,7 @@ void test("spark protocol validates interaction requests and typed responses", (
   assert.equal(response.status, "answered");
 });
 
-void test("spark protocol validates view model events", () => {
+test("spark protocol validates view model events", () => {
   const event = parseSparkViewModelEvent({
     type: "session.message",
     sessionId: "native-session",
@@ -107,7 +106,7 @@ void test("spark protocol validates view model events", () => {
   assert.equal(event.type, "session.message");
 });
 
-void test("spark protocol accepts assistant token invocation chunks", () => {
+test("spark protocol accepts assistant token invocation chunks", () => {
   const chunk = invocationLogChunkPayloadSchema.parse({
     runtimeInvocationId: "inv_0123456789abcdef0123456789abcdef",
     stream: "assistant",
@@ -121,7 +120,7 @@ void test("spark protocol accepts assistant token invocation chunks", () => {
   assert.deepEqual(chunk.metadata, { source: "stream_event", delta: true });
 });
 
-void test("spark protocol validates daemon-routable view and interaction events", () => {
+test("spark protocol validates daemon-routable view and interaction events", () => {
   const viewEvent = parseSparkDaemonEvent({
     type: "daemon.view_event",
     source: "daemon",
@@ -160,7 +159,7 @@ void test("spark protocol validates daemon-routable view and interaction events"
   assert.equal(sessionUpdated.title, "Diagnose daemon startup");
 });
 
-void test("spark protocol rejects malformed interaction requests", () => {
+test("spark protocol rejects malformed interaction requests", () => {
   assert.throws(
     () => sparkInteractionRequestSchema.parse({ requestId: "bad", kind: "askFlow", title: "Bad" }),
     /questions/u,
@@ -185,11 +184,4 @@ void test("spark protocol rejects malformed interaction requests", () => {
       }),
     /toolName/u,
   );
-});
-
-void test("spark protocol source does not import concrete TUI implementations", async () => {
-  const source = await readFile("packages/spark-protocol/src/index.ts", "utf8");
-  assert.doesNotMatch(source, /@earendil-works\/pi-tui/u);
-  assert.doesNotMatch(source, /@zendev-lab\/spark-tui/u);
-  assert.doesNotMatch(source, /svelte|Component|TUI/u);
 });

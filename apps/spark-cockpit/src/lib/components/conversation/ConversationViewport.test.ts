@@ -74,7 +74,7 @@ describe("ConversationViewport component contract", () => {
     expect(longConversation.body).toContain('data-testid="conversation-turn-rail"');
   });
 
-  it("loads history near the top while preserving the visible message anchor", () => {
+  it("loads history by scrolling near the top without a manual fallback button", () => {
     const source = readFileSync(componentPath, "utf8");
 
     expect(source).toContain("LOAD_EARLIER_THRESHOLD = 96");
@@ -83,15 +83,20 @@ describe("ConversationViewport component contract", () => {
     expect(source).toContain("restoreConversationPrependAnchor(element, anchor)");
     expect(source).toContain("suspendFollow = true");
     expect(source).toContain("initialScrollComplete = $state(false)");
-    expect(source).toContain("!element || !initialScrollComplete || !hasEarlier || earlierFailed");
+    expect(source).toContain("!element || !initialScrollComplete || !hasEarlier");
     expect(source).toContain("continueFillingViewport");
     expect(source).toContain(
       "element.scrollHeight <= element.clientHeight + LOAD_EARLIER_THRESHOLD",
     );
     expect(source).toContain("event.deltaY < 0 && updateScrollState()");
-    expect(source).toContain("{#if earlierFailed && hasEarlier && onLoadEarlier}");
-    expect(source).toContain("if (!force && earlierFailed) return;");
+    expect(source).toContain('case "busy":');
+    expect(source).toContain("EARLIER_RETRY_COOLDOWN_MS");
+    expect(source).toContain("EARLIER_ERROR_COOLDOWN_MS");
     expect(source).toContain("cancelScheduledFollow();");
+    expect(source).not.toContain("history-fallback");
+    expect(source).not.toContain("earlierFailed");
+    expect(source).not.toContain("earlierLabel");
+    expect(source).not.toContain("earlierErrorLabel");
   });
 
   it("coalesces automatic stream following into one animation frame without smooth scrolling", () => {
@@ -105,7 +110,7 @@ describe("ConversationViewport component contract", () => {
     expect(source).not.toContain('initialScrollComplete ? "smooth"');
   });
 
-  it("does not require a manual history entry point during normal scrolling", () => {
+  it("does not render a manual history entry point", () => {
     const children = createRawSnippet(() => ({
       render: () => "<article>Latest message</article>",
     }));
@@ -114,13 +119,13 @@ describe("ConversationViewport component contract", () => {
         label: "Conversation",
         jumpToLatestLabel: "Latest",
         hasEarlier: true,
-        earlierLabel: "Show earlier messages (96)",
-        onLoadEarlier: async () => true,
+        onLoadEarlier: async () => "loaded" as const,
         children,
       },
     });
 
-    expect(body).not.toContain("Show earlier messages (96)");
-    expect(body).not.toMatch(/<button\b/u);
+    expect(body).not.toContain("Show earlier");
+    expect(body).not.toContain("history-fallback");
+    expect(body).not.toMatch(/显示更早/u);
   });
 });

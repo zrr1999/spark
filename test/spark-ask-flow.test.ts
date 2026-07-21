@@ -1,23 +1,23 @@
 import assert from "node:assert/strict";
 import { visibleWidth } from "@zendev-lab/spark-tui/text";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   buildExtendedOptions,
   createInitialState,
-  createPiAskFlowRequest,
-  isPiAskFlowGateBlocked,
-  PiAskFlowController,
+  createSparkAskFlowRequest,
+  isSparkAskFlowGateBlocked,
+  SparkAskFlowController,
   reduce,
   renderAskScreen,
-  runPiAskFlow,
+  runSparkAskFlow,
   SENTINEL_LABELS,
-  validatePiAskFlowRequest,
+  validateSparkAskFlowRequest,
   normalizeAskKey,
   printableAskText,
 } from "@zendev-lab/spark-ask";
 
-void test("spark ask automatically adds one custom fallback to every question type", () => {
+test("spark ask automatically adds one custom fallback to every question type", () => {
   const businessOptions = [
     { value: "self", label: "Myself" },
     { value: "team", label: "My team" },
@@ -41,7 +41,7 @@ void test("spark ask automatically adds one custom fallback to every question ty
   }
 });
 
-void test("ask flow render keeps all lines within terminal width", () => {
+test("ask flow render keeps all lines within terminal width", () => {
   const lines = renderAskScreen({
     state: {
       currentTab: 0,
@@ -112,7 +112,7 @@ void test("ask flow render keeps all lines within terminal width", () => {
   );
 });
 
-void test("ask flow render wraps long prompt and option copy", () => {
+test("ask flow render wraps long prompt and option copy", () => {
   const question = {
     id: "decision",
     prompt: "PROMPT_TOKEN ".repeat(12),
@@ -164,7 +164,7 @@ void test("ask flow render wraps long prompt and option copy", () => {
   );
 });
 
-void test("ask flow defaultValues initialize recommendations without answers", () => {
+test("ask flow defaultValues initialize recommendations without answers", () => {
   const multiQuestion = {
     id: "coverage",
     prompt: "Which outputs must be covered?",
@@ -289,8 +289,8 @@ void test("ask flow defaultValues initialize recommendations without answers", (
   assert.deepEqual([...replayState.multiSelectChecked], ["dns"]);
 });
 
-void test("ask flow rejects invalid defaultValues with actionable hints", () => {
-  const missingDefault = validatePiAskFlowRequest({
+test("ask flow rejects invalid defaultValues with actionable hints", () => {
+  const missingDefault = validateSparkAskFlowRequest({
     flow: "custom",
     mode: "decision",
     questions: [
@@ -310,7 +310,7 @@ void test("ask flow rejects invalid defaultValues with actionable hints", () => 
   assert.match(missingDefault.details ?? "", /defaultValues must match options\[\]\.value exactly/);
   assert.match(missingDefault.details ?? "", /valid values: fast, safe/);
 
-  const freeformDefault = validatePiAskFlowRequest({
+  const freeformDefault = validateSparkAskFlowRequest({
     flow: "custom",
     mode: "clarification",
     questions: [
@@ -326,7 +326,7 @@ void test("ask flow rejects invalid defaultValues with actionable hints", () => 
   assert.match(freeformDefault.details ?? "", /freeform questions do not accept defaultValues/);
   assert.match(freeformDefault.details ?? "", /put suggested text in prompt\/context/);
 
-  const singleMultiDefault = validatePiAskFlowRequest({
+  const singleMultiDefault = validateSparkAskFlowRequest({
     flow: "custom",
     mode: "decision",
     questions: [
@@ -345,7 +345,7 @@ void test("ask flow rejects invalid defaultValues with actionable hints", () => 
   assert.equal(singleMultiDefault.error, "invalid_default_value");
   assert.match(singleMultiDefault.details ?? "", /accept at most one default value/);
 
-  const reservedLabel = validatePiAskFlowRequest({
+  const reservedLabel = validateSparkAskFlowRequest({
     flow: "custom",
     mode: "decision",
     questions: [
@@ -364,8 +364,8 @@ void test("ask flow rejects invalid defaultValues with actionable hints", () => 
   assert.match(reservedLabel.details ?? "", /reserved option labels are UI affordances/);
 });
 
-void test("spark ask plain select path receives only business options", async () => {
-  const request = createPiAskFlowRequest({
+test("spark ask plain select path receives only business options", async () => {
+  const request = createSparkAskFlowRequest({
     flow: "custom",
     mode: "clarification",
     title: "Audience",
@@ -383,7 +383,7 @@ void test("spark ask plain select path receives only business options", async ()
     ],
   });
   const seenOptions: string[][] = [];
-  const result = await runPiAskFlow(request, {
+  const result = await runSparkAskFlow(request, {
     select: async (_title: string, options: string[]) => {
       seenOptions.push(options);
       return "My team";
@@ -400,8 +400,8 @@ void test("spark ask plain select path receives only business options", async ()
   });
 });
 
-void test("single-question ask_flow custom answer blocks a required decision gate", () => {
-  const request = createPiAskFlowRequest({
+test("single-question ask_flow custom answer blocks a required decision gate", () => {
+  const request = createSparkAskFlowRequest({
     flow: "custom",
     mode: "decision",
     title: "Dispatch roles?",
@@ -418,8 +418,8 @@ void test("single-question ask_flow custom answer blocks a required decision gat
       },
     ],
   });
-  const controller = new PiAskFlowController({ request, language: "en" });
-  let result: Awaited<ReturnType<typeof runPiAskFlow>> | undefined;
+  const controller = new SparkAskFlowController({ request, language: "en" });
+  let result: Awaited<ReturnType<typeof runSparkAskFlow>> | undefined;
   controller.run(
     { terminal: { columns: 100 }, requestRender() {} },
     {
@@ -450,7 +450,7 @@ void test("single-question ask_flow custom answer blocks a required decision gat
   });
 });
 
-void test("ask flow fullscreen keeps one custom fallback and omits chat fallback", () => {
+test("ask flow fullscreen keeps one custom fallback and omits chat fallback", () => {
   const question = {
     id: "route",
     prompt: "Which route?",
@@ -485,7 +485,7 @@ void test("ask flow fullscreen keeps one custom fallback and omits chat fallback
   assert.doesNotMatch(lines, /Chat about this/);
 });
 
-void test("ask flow Enter advances across questions and allows returning to edit", () => {
+test("ask flow Enter advances across questions and allows returning to edit", () => {
   const questions = [
     {
       id: "route",
@@ -506,8 +506,8 @@ void test("ask flow Enter advances across questions and allows returning to edit
       ],
     },
   ];
-  const controller = new PiAskFlowController({
-    request: createPiAskFlowRequest({ flow: "custom", mode: "clarification", questions }),
+  const controller = new SparkAskFlowController({
+    request: createSparkAskFlowRequest({ flow: "custom", mode: "clarification", questions }),
     language: "en",
   });
   const component = controller.run(
@@ -532,9 +532,9 @@ void test("ask flow Enter advances across questions and allows returning to edit
   assert.equal(controller.handleKey("enter", {}), true);
   assert.equal(controller.handleKey("ctrl+s", {}), true);
 
-  let result: Awaited<ReturnType<typeof runPiAskFlow>> | undefined;
-  const submitting = new PiAskFlowController({
-    request: createPiAskFlowRequest({ flow: "custom", mode: "clarification", questions }),
+  let result: Awaited<ReturnType<typeof runSparkAskFlow>> | undefined;
+  const submitting = new SparkAskFlowController({
+    request: createSparkAskFlowRequest({ flow: "custom", mode: "clarification", questions }),
     language: "en",
   });
   submitting.run(
@@ -560,7 +560,7 @@ void test("ask flow Enter advances across questions and allows returning to edit
   assert.deepEqual(result?.answers.scope.values, ["docs"]);
 });
 
-void test("ask flow focused custom fallback ignores terminal escape sequences", () => {
+test("ask flow focused custom fallback ignores terminal escape sequences", () => {
   assert.equal(printableAskText("\x1b[1;1:1A"), undefined);
   assert.equal(printableAskText("\x1b[1;1:1B"), undefined);
   assert.equal(printableAskText("\x1b[1;1:1C"), undefined);
@@ -571,7 +571,7 @@ void test("ask flow focused custom fallback ignores terminal escape sequences", 
   assert.equal(normalizeAskKey("\x1b[1;1:1D"), "left");
 });
 
-void test("ask flow focused custom fallback accepts direct typing", () => {
+test("ask flow focused custom fallback accepts direct typing", () => {
   const question = {
     id: "route",
     prompt: "Which route?",
@@ -581,9 +581,9 @@ void test("ask flow focused custom fallback accepts direct typing", () => {
       { value: "safe", label: "Safe" },
     ],
   };
-  let result: Awaited<ReturnType<typeof runPiAskFlow>> | undefined;
-  const controller = new PiAskFlowController({
-    request: createPiAskFlowRequest({
+  let result: Awaited<ReturnType<typeof runSparkAskFlow>> | undefined;
+  const controller = new SparkAskFlowController({
+    request: createSparkAskFlowRequest({
       flow: "custom",
       mode: "clarification",
       questions: [question],
@@ -618,7 +618,7 @@ void test("ask flow focused custom fallback accepts direct typing", () => {
   });
 });
 
-void test("ask flow focused custom fallback can navigate after direct typing", () => {
+test("ask flow focused custom fallback can navigate after direct typing", () => {
   const questions = [
     {
       id: "route",
@@ -639,9 +639,9 @@ void test("ask flow focused custom fallback can navigate after direct typing", (
       ],
     },
   ];
-  let result: Awaited<ReturnType<typeof runPiAskFlow>> | undefined;
-  const controller = new PiAskFlowController({
-    request: createPiAskFlowRequest({ flow: "custom", mode: "clarification", questions }),
+  let result: Awaited<ReturnType<typeof runSparkAskFlow>> | undefined;
+  const controller = new SparkAskFlowController({
+    request: createSparkAskFlowRequest({ flow: "custom", mode: "clarification", questions }),
     language: "en",
   });
   const component = controller.run(
@@ -681,7 +681,7 @@ void test("ask flow focused custom fallback can navigate after direct typing", (
   });
 });
 
-void test("ask flow custom draft commits with one Enter after returning to the row", () => {
+test("ask flow custom draft commits with one Enter after returning to the row", () => {
   const question = {
     id: "route",
     prompt: "Which route?",
@@ -691,9 +691,9 @@ void test("ask flow custom draft commits with one Enter after returning to the r
       { value: "safe", label: "Safe" },
     ],
   };
-  let result: Awaited<ReturnType<typeof runPiAskFlow>> | undefined;
-  const controller = new PiAskFlowController({
-    request: createPiAskFlowRequest({
+  let result: Awaited<ReturnType<typeof runSparkAskFlow>> | undefined;
+  const controller = new SparkAskFlowController({
+    request: createSparkAskFlowRequest({
       flow: "custom",
       mode: "clarification",
       questions: [question],
@@ -734,7 +734,7 @@ void test("ask flow custom draft commits with one Enter after returning to the r
   });
 });
 
-void test("ask flow optional freeform can be left blank and advances", () => {
+test("ask flow optional freeform can be left blank and advances", () => {
   const questions = [
     {
       id: "notes",
@@ -752,9 +752,9 @@ void test("ask flow optional freeform can be left blank and advances", () => {
       ],
     },
   ];
-  let result: Awaited<ReturnType<typeof runPiAskFlow>> | undefined;
-  const controller = new PiAskFlowController({
-    request: createPiAskFlowRequest({ flow: "custom", mode: "clarification", questions }),
+  let result: Awaited<ReturnType<typeof runSparkAskFlow>> | undefined;
+  const controller = new SparkAskFlowController({
+    request: createSparkAskFlowRequest({ flow: "custom", mode: "clarification", questions }),
     language: "en",
   });
   const component = controller.run(
@@ -784,19 +784,19 @@ void test("ask flow optional freeform can be left blank and advances", () => {
   assert.deepEqual(result?.answers.route.values, ["fast"]);
 });
 
-void test("ask flow accepts larger multi-question forms", () => {
+test("ask flow accepts larger multi-question forms", () => {
   const questions = Array.from({ length: 12 }, (_, index) => ({
     id: `q${index}`,
     prompt: `Question ${index}?`,
     type: "freeform" as const,
   }));
   assert.equal(
-    validatePiAskFlowRequest({ flow: "custom", mode: "clarification", questions }).valid,
+    validateSparkAskFlowRequest({ flow: "custom", mode: "clarification", questions }).valid,
     true,
   );
 });
 
-void test("ask flow focused preview renders in a right-side pane without excessive gap", () => {
+test("ask flow focused preview renders in a right-side pane without excessive gap", () => {
   const question = {
     id: "route",
     prompt: "Which route?",
@@ -841,7 +841,7 @@ void test("ask flow focused preview renders in a right-side pane without excessi
   assert.ok(gap > 0 && gap < 48, lines[optionLineIndex]);
 });
 
-void test("ask flow focused preview uses available side-by-side height before truncating", () => {
+test("ask flow focused preview uses available side-by-side height before truncating", () => {
   const longDescription =
     "This option description is intentionally long enough to wrap in the left column and create vertical space for the preview pane.";
   const question = {
@@ -882,7 +882,7 @@ void test("ask flow focused preview uses available side-by-side height before tr
   assert.ok(!lines.some((line) => line.includes("more lines")), lines.join("\n"));
 });
 
-void test("ask flow UI answer summaries use labels while structured answers keep ids", () => {
+test("ask flow UI answer summaries use labels while structured answers keep ids", () => {
   const question = {
     id: "route",
     prompt: "Which route?",
@@ -936,8 +936,8 @@ void test("ask flow UI answer summaries use labels while structured answers keep
   assert.doesNotMatch(lines, /safe_route_id/);
 });
 
-void test("spark ask selectWithCustom keeps custom affordance out of business options", async () => {
-  const request = createPiAskFlowRequest({
+test("spark ask selectWithCustom keeps custom affordance out of business options", async () => {
+  const request = createSparkAskFlowRequest({
     flow: "custom",
     mode: "clarification",
     title: "Audience",
@@ -955,7 +955,7 @@ void test("spark ask selectWithCustom keeps custom affordance out of business op
     ],
   });
   const seen: Array<{ options: string[]; customLabel: string }> = [];
-  const result = await runPiAskFlow(request, {
+  const result = await runSparkAskFlow(request, {
     selectWithCustom: async (_title: string, input: { options: string[]; customLabel: string }) => {
       seen.push(input);
       return { customText: "Language tooling engineers" };
@@ -971,8 +971,8 @@ void test("spark ask selectWithCustom keeps custom affordance out of business op
   });
 });
 
-void test("decision gates preserve unmatched custom text as a blocking answer", async () => {
-  const request = createPiAskFlowRequest({
+test("decision gates preserve unmatched custom text as a blocking answer", async () => {
+  const request = createSparkAskFlowRequest({
     flow: "custom",
     mode: "decision",
     title: "Dispatch roles?",
@@ -989,7 +989,7 @@ void test("decision gates preserve unmatched custom text as a blocking answer", 
       },
     ],
   });
-  const result = await runPiAskFlow(request, { select: async () => "maybe later" });
+  const result = await runSparkAskFlow(request, { select: async () => "maybe later" });
   assert.equal(result.status, "answered");
   assert.equal(result.nextAction, "block");
   assert.deepEqual(result.answers.answer, {
@@ -998,11 +998,11 @@ void test("decision gates preserve unmatched custom text as a blocking answer", 
     values: [],
     customText: "maybe later",
   });
-  assert.equal(isPiAskFlowGateBlocked(result, request), true);
+  assert.equal(isSparkAskFlowGateBlocked(result, request), true);
 });
 
-void test("a required freeform gate resumes with the operator's answer", async () => {
-  const request = createPiAskFlowRequest({
+test("a required freeform gate resumes with the operator's answer", async () => {
+  const request = createSparkAskFlowRequest({
     mode: "approval",
     questions: [
       {
@@ -1014,7 +1014,7 @@ void test("a required freeform gate resumes with the operator's answer", async (
     ],
   });
 
-  const result = await runPiAskFlow(request, {
+  const result = await runSparkAskFlow(request, {
     input: async () => "The focused checks passed.",
   });
 
@@ -1026,11 +1026,11 @@ void test("a required freeform gate resumes with the operator's answer", async (
     values: [],
     customText: "The focused checks passed.",
   });
-  assert.equal(isPiAskFlowGateBlocked(result, request), false);
+  assert.equal(isSparkAskFlowGateBlocked(result, request), false);
 });
 
-void test("interaction custom answer preserves a blocked gate nextAction", async () => {
-  const request = createPiAskFlowRequest({
+test("interaction custom answer preserves a blocked gate nextAction", async () => {
+  const request = createSparkAskFlowRequest({
     mode: "approval",
     questions: [
       {
@@ -1045,7 +1045,7 @@ void test("interaction custom answer preserves a blocked gate nextAction", async
       },
     ],
   });
-  const result = await runPiAskFlow(request, {
+  const result = await runSparkAskFlow(request, {
     interaction: async (interactionRequest) => ({
       kind: "askFlow",
       requestId: interactionRequest.requestId,
@@ -1059,11 +1059,11 @@ void test("interaction custom answer preserves a blocked gate nextAction", async
 
   assert.equal(result.status, "answered");
   assert.equal(result.nextAction, "block");
-  assert.equal(isPiAskFlowGateBlocked(result, request), true);
+  assert.equal(isSparkAskFlowGateBlocked(result, request), true);
 });
 
-void test("ask flow preserves the host timeout marker on a cancelled human wait", async () => {
-  const request = createPiAskFlowRequest({
+test("ask flow preserves the host timeout marker on a cancelled human wait", async () => {
+  const request = createSparkAskFlowRequest({
     mode: "decision",
     timeoutMs: 25,
     questions: [
@@ -1080,7 +1080,7 @@ void test("ask flow preserves the host timeout marker on a cancelled human wait"
     ],
   });
   let observedTimeoutMs: unknown;
-  const result = await runPiAskFlow(request, {
+  const result = await runSparkAskFlow(request, {
     interaction: async (interactionRequest) => {
       observedTimeoutMs = interactionRequest.timeoutMs;
       return {
@@ -1097,8 +1097,8 @@ void test("ask flow preserves the host timeout marker on a cancelled human wait"
   assert.equal(result.timedOut, true);
 });
 
-void test("multi-select decision select path blocks empty selections", async () => {
-  const request = createPiAskFlowRequest({
+test("multi-select decision select path blocks empty selections", async () => {
+  const request = createSparkAskFlowRequest({
     flow: "custom",
     mode: "decision",
     title: "Choose workstreams",
@@ -1115,9 +1115,9 @@ void test("multi-select decision select path blocks empty selections", async () 
       },
     ],
   });
-  const result = await runPiAskFlow(request, { select: async () => "" });
+  const result = await runSparkAskFlow(request, { select: async () => "" });
   assert.equal(result.status, "no_selection");
   assert.equal(result.nextAction, "block");
   assert.equal(result.answers.streams, undefined);
-  assert.equal(isPiAskFlowGateBlocked(result, request), true);
+  assert.equal(isSparkAskFlowGateBlocked(result, request), true);
 });

@@ -134,7 +134,7 @@ describe("session live events", () => {
       status: "idle",
       messages: [{ id: "msg_1", text: "Working" }],
       tasks: [{ ref: "task:1", title: "Inspect UI" }],
-      artifacts: [{ ref: "artifact:1", title: "UI diff" }],
+      evidence: [{ ref: "artifact:1", title: "UI diff" }],
     });
     expect(state.cursor).toBe("2026-07-13T08:00:00.000Z|evt_artifact");
   });

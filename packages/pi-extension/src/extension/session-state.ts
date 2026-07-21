@@ -3,7 +3,25 @@ import {
   defaultTaskTodoStore,
   type TaskGraph,
 } from "@zendev-lab/spark-tasks";
-import { sparkSessionKey, sparkStateCwd, type SparkSessionContext } from "./session-identity.ts";
+import {
+  currentSessionDirectoryName,
+  rebuildSessionIndex,
+  sanitizeStoreScope,
+  sessionDirectoryPath,
+  sessionHiddenRoleRunInboxStorePath,
+  sessionIndexStorePath,
+  sessionLoopStorePathV2,
+  sessionGoalStorePathV2,
+  sessionStateStorePath,
+  sessionTodoDisplayNumberStorePath,
+  sparkSessionKey,
+  sparkSessionOwnerKey,
+  sparkStateCwd,
+  sparkStateRootPath,
+  type SparkSessionContext,
+  type SparkSessionIndexEntry,
+  type SparkSessionIndexSnapshot,
+} from "@zendev-lab/spark-loop";
 
 export {
   clearCurrentProjectRef,
@@ -62,15 +80,13 @@ export {
   sessionTodoDisplayNumberStorePath,
   type SparkSessionIndexEntry,
   type SparkSessionIndexSnapshot,
-} from "./session-directory-store.ts";
-export {
   sanitizeStoreScope,
   sparkSessionKey,
   sparkSessionOwnerKey,
   sparkStateCwd,
   sparkStateRootPath,
   type SparkSessionContext,
-} from "./session-identity.ts";
+};
 
 export async function loadSparkGraph(
   cwd: string,

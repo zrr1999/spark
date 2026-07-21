@@ -1,5 +1,8 @@
 import { error, type RequestHandler } from "@sveltejs/kit";
-import { readArtifactPreviewContent, type ArtifactPreviewStatus } from "$lib/server/artifact-cache";
+import {
+  readArtifactPreviewContent,
+  type ArtifactPreviewStatus,
+} from "@zendev-lab/spark-coordination/artifact-cache";
 import { getDatabase } from "$lib/server/db";
 
 /**

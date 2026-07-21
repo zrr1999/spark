@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import type {
   CommandConfig,
-  ExtensionAPI,
-  ExtensionCommandContext,
-  ExtensionContext,
+  SparkHostAPI,
+  SparkHostCommandContext,
+  SparkHostContext,
   ExtensionUiNotifyLevel,
   ResolvedToolPolicy,
   ToolConfig,
   ToolInfo,
-} from "@zendev-lab/spark-extension-api";
-import { resolveToolPolicy } from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
+import { resolveToolPolicy } from "@zendev-lab/spark-core";
 
 import { SparkHostRuntime } from "../apps/spark-tui/src/host/runtime.ts";
 import type {
@@ -45,7 +45,7 @@ interface NormalizedOutboxEnvelope {
 }
 
 interface ContractDriver {
-  api: ExtensionAPI;
+  api: SparkHostAPI;
   notifications: Array<{ message: string; level?: ExtensionUiNotifyLevel }>;
   statuses: Array<{ key: string; text: string | undefined }>;
   emit(event: string, payload?: unknown): Promise<unknown[]>;
@@ -56,19 +56,19 @@ interface ContractDriver {
   setActiveTools(names: string[]): void;
   listCommands(): Array<{ name: string; command: RegisteredCommand }>;
   getCommand(name: string): RegisteredCommand | undefined;
-  makeCommandContext(): ExtensionCommandContext;
-  makeToolContext(): ExtensionContext;
+  makeCommandContext(): SparkHostCommandContext;
+  makeToolContext(): SparkHostContext;
   drainOutbox(): OutboxEnvelope[];
 }
 
-class PiExtensionApiAdapter implements ExtensionAPI {
+class PiExtensionApiAdapter implements SparkHostAPI {
   readonly notifications: Array<{ message: string; level?: ExtensionUiNotifyLevel }> = [];
   readonly statuses: Array<{ key: string; text: string | undefined }> = [];
   private readonly tools = new Map<string, RegisteredTool>();
   private readonly commands = new Map<string, RegisteredCommand>();
   private readonly listeners = new Map<
     string,
-    Array<(event: unknown, ctx: ExtensionContext) => unknown>
+    Array<(event: unknown, ctx: SparkHostContext) => unknown>
   >();
   private readonly outbox: OutboxEnvelope[] = [];
 
@@ -99,7 +99,7 @@ class PiExtensionApiAdapter implements ExtensionAPI {
     });
   }
 
-  on(event: string, handler: (event: unknown, ctx: ExtensionContext) => unknown): void {
+  on(event: string, handler: (event: unknown, ctx: SparkHostContext) => unknown): void {
     const list = this.listeners.get(event) ?? [];
     list.push(handler);
     this.listeners.set(event, list);
@@ -195,14 +195,14 @@ class PiExtensionApiAdapter implements ExtensionAPI {
     return this.commands.get(name);
   }
 
-  makeCommandContext(): ExtensionCommandContext {
+  makeCommandContext(): SparkHostCommandContext {
     return {
       ...this.makeContext(),
       sendUserMessage: async (content) => this.sendUserMessage(content, { deliverAs: "steer" }),
     };
   }
 
-  makeToolContext(): ExtensionContext {
+  makeToolContext(): SparkHostContext {
     return this.makeContext();
   }
 
@@ -210,7 +210,7 @@ class PiExtensionApiAdapter implements ExtensionAPI {
     return this.outbox.splice(0, this.outbox.length);
   }
 
-  private makeContext(): ExtensionContext {
+  private makeContext(): SparkHostContext {
     return {
       cwd: this.cwd,
       hasUI: this.hasUI,
@@ -282,7 +282,7 @@ function makePiAdapterDriver(): ContractDriver {
   };
 }
 
-function contractFixtureExtension(pi: ExtensionAPI): void {
+function contractFixtureExtension(pi: SparkHostAPI): void {
   pi.registerTool?.({
     name: "contract_echo",
     description: "Echo test tool",
@@ -440,7 +440,7 @@ function normalizeOutbox(envelope: OutboxEnvelope): NormalizedOutboxEnvelope {
   };
 }
 
-void test("ExtensionAPI contract fixture behaves the same on SparkHostRuntime and PiExtensionApiAdapter", async () => {
+test("SparkHostAPI contract fixture behaves the same on SparkHostRuntime and PiExtensionApiAdapter", async () => {
   const spark = await exercise(makeSparkDriver());
   const piAdapter = await exercise(makePiAdapterDriver());
 

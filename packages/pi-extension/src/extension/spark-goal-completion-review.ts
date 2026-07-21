@@ -6,7 +6,7 @@ import {
   type JsonValue,
   type ProjectRef,
   type RoleRef,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import { updateSessionGoalStatus, type SparkSessionGoal } from "./spark-session-goals.ts";
 import {
   goalCompletionProtocolBlockers,

@@ -1,7 +1,7 @@
 /**
- * Internal types backing the spark-tui native ExtensionAPI host.
+ * Internal types backing the spark-tui native SparkHostAPI host.
  *
- * Public-facing extension contracts come from `spark-extension-api`. The shapes
+ * Public-facing extension contracts come from `spark-core`. The shapes
  * declared here are private to the host runtime: they describe how registered
  * tools, commands, event listeners, and host-side message envelopes are kept
  * inside SparkHostRuntime. Extension authors should not import from this file.
@@ -9,14 +9,14 @@
 
 import type {
   CommandMetadata,
-  ExtensionContext,
-  ExtensionRuntimeMessageAuthority,
-  ExtensionRuntimeMessageTrust,
+  SparkHostContext,
+  SparkHostRuntimeMessageAuthority,
+  SparkHostRuntimeMessageTrust,
   ExtensionUi,
   ResolvedToolPolicy,
   ToolConfig,
   ToolInfo,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import type { SparkDaemonEvent, SparkViewModelEvent } from "@zendev-lab/spark-protocol";
 
 export interface SparkHostRegistryModel {
@@ -55,7 +55,7 @@ export interface RegisteredCommand {
     | Promise<Array<{ value: string; label: string; description?: string }> | null>;
   handler: (
     args: string,
-    ctx: ExtensionContext & {
+    ctx: SparkHostContext & {
       waitForIdle?: () => Promise<void>;
       sendUserMessage?: (content: string) => Promise<void>;
     },
@@ -74,7 +74,7 @@ export type BuiltinEventName =
 
 export type EventName = BuiltinEventName | (string & {});
 
-export type EventListener = (event: unknown, ctx: ExtensionContext) => unknown;
+export type EventListener = (event: unknown, ctx: SparkHostContext) => unknown;
 
 /**
  * Outbox slot for `pi.sendMessage(...)` and `pi.sendUserMessage(...)`. The
@@ -88,8 +88,8 @@ export interface OutboxEnvelope {
   content: string | Array<{ type: string; [key: string]: unknown }>;
   display?: boolean;
   details?: Record<string, unknown>;
-  authority?: ExtensionRuntimeMessageAuthority;
-  trust?: ExtensionRuntimeMessageTrust;
+  authority?: SparkHostRuntimeMessageAuthority;
+  trust?: SparkHostRuntimeMessageTrust;
   options: {
     deliverAs?: "steer" | "followUp" | "nextTurn";
     streamingBehavior?: "steer" | "followUp";
@@ -109,8 +109,8 @@ export interface SparkHostCustomMessage {
   content: string | Array<{ type: string; [key: string]: unknown }>;
   display?: boolean;
   details?: Record<string, unknown>;
-  authority?: ExtensionRuntimeMessageAuthority;
-  trust?: ExtensionRuntimeMessageTrust;
+  authority?: SparkHostRuntimeMessageAuthority;
+  trust?: SparkHostRuntimeMessageTrust;
 }
 
 export interface SparkHostUiTransport extends ExtensionUi {

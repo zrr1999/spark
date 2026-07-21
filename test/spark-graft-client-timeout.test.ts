@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { runDirectGraft } from "../packages/spark-graft/src/graft-client.ts";
 
@@ -11,7 +11,7 @@ async function writeExecutable(path: string, body: string): Promise<void> {
   await chmod(path, 0o755);
 }
 
-void test("runDirectGraft times out hung graft CLI processes", async () => {
+test("runDirectGraft times out hung graft CLI processes", async () => {
   const root = await mkdtemp(join(tmpdir(), "spark-graft-timeout-"));
   const previousGraftBin = process.env.GRAFT_BIN;
   try {
@@ -30,7 +30,7 @@ void test("runDirectGraft times out hung graft CLI processes", async () => {
   }
 });
 
-void test("runDirectGraft abort signal cancels a hung graft CLI process", async () => {
+test("runDirectGraft abort signal cancels a hung graft CLI process", async () => {
   const root = await mkdtemp(join(tmpdir(), "spark-graft-abort-"));
   const previousGraftBin = process.env.GRAFT_BIN;
   try {
@@ -52,7 +52,7 @@ void test("runDirectGraft abort signal cancels a hung graft CLI process", async 
   }
 });
 
-void test("runDirectGraft successful calls still complete before timeout", async () => {
+test("runDirectGraft successful calls still complete before timeout", async () => {
   const root = await mkdtemp(join(tmpdir(), "spark-graft-success-"));
   const previousGraftBin = process.env.GRAFT_BIN;
   try {

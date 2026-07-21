@@ -1,6 +1,6 @@
 # Cockpit instance relocation
 
-This is a feature-only procedure for moving one logical Cockpit instance to a new HTTPS origin. It is not an independent Cockpit registration or a workspace owner handoff. It does not authorize an operator to upload, restore, deploy, or switch the current `marrow-paddle` instance.
+This is a feature-only procedure for moving one logical Cockpit instance to a new HTTPS origin. It is not an independent Cockpit registration and it is not an origin-lease transfer. The daemon owns the workspace directory; Cockpit only holds an exclusive **active origin lease** while sessions **occupy** that directory. Relocation does not authorize an operator to upload, restore, deploy, or switch the current `marrow-paddle` instance.
 
 ## Stop conditions
 
@@ -14,7 +14,7 @@ Stop before mutation when any of these is true:
 - the source daemon has active work that the operator cannot observe through local daemon status;
 - any secret appears in CLI JSON, Cockpit persistence/cache/log, generic outbox, or artifacts.
 
-Do not retry a partially completed secret request. Do not use ordinary workspace registration to force a new owner.
+Do not retry a partially completed secret request. Do not use ordinary workspace registration to steal an active origin lease (`WORKSPACE_LEASE_CONFLICT`; alias `WORKSPACE_OWNER_CONFLICT`).
 
 ## Variables
 
@@ -29,6 +29,17 @@ export TARGET_ROLLBACK_ROOT=/srv/spark/backups/automatic
 ```
 
 Keep snapshots and deployment environment files mode `0600`. Never print runtime, refresh, remote-access, API, OAuth, or channel credentials.
+
+## Layers (ownership vs lease vs occupancy)
+
+| Layer | Means |
+|---|---|
+| Daemon directory ownership | Permanent; lives in daemon workspace state |
+| Origin lease | Which Cockpit origin currently projects the directory (`workspace_leases` + uplink `prefer`/`park`) |
+| Session occupancy | Interactive TUI / Cockpit workbench sessions that gate silent transfer |
+| DB lock pin | Same-`SPARK_HOME` SQLite open with 30s idle release — not directory ownership |
+
+Temporary borrow / lease transfer uses `spark daemon uplink park|unpark|prefer` and the transfer dialog (30s auto-authorize). Those paths never call relocate/preflight.
 
 ## 1. Preflight
 
@@ -80,7 +91,7 @@ export SPARK_COCKPIT_TRUST_PROXY=loopback
 spark cockpit
 ```
 
-Remote browser authority is progressive. After restore, mint a fresh Cockpit key with `spark cockpit access create`, then workspace keys with `spark daemon workspace access create` (or registration). Cockpit and workspace rotating refresh sessions stay separate. The reverse proxy must replace forwarding headers, preserve the public host, forward WebSocket upgrades, and leave streaming responses unbuffered. Verify:
+Remote browser authority is progressive. After restore, mint a fresh Cockpit key with `spark cockpit access create`, then workspace keys with `spark cockpit workspace access create --workspace <id>` (or use the one-time key printed by registration). Cockpit and workspace rotating refresh sessions stay separate. The reverse proxy must replace forwarding headers, preserve the public host, forward WebSocket upgrades, and leave streaming responses unbuffered. Verify:
 
 ```sh
 curl --fail --silent --show-error "$TARGET_URL/api/v1/runtime/relocation/metadata"
@@ -126,7 +137,7 @@ Use an authenticated HTTPS browser session for protected pages. Verify:
 
 Send one secret request to an HTTP test endpoint and require rejection with `daemonExecutionCount: 0`. Run a unique marker through HTTPS/WSS test credentials, then scan Cockpit SQLite, cache, logs, artifacts, events, audit payloads, durable commands, and generic outbox. Every target must report `matchCount: 0`; only daemon-owned provider/OAuth/channel credential targets may match.
 
-Attempt ordinary registration from a second daemon against the already-owned workspace. Require `WORKSPACE_OWNER_CONFLICT`, then query `workspace_owner_bindings` and require active owner count `1` with the original `bindingId`.
+Attempt ordinary registration from a second daemon against a directory that already holds an active origin lease. Require `WORKSPACE_LEASE_CONFLICT` (alias `WORKSPACE_OWNER_CONFLICT` / HTTP `workspace_lease_conflict`), then query `workspace_leases` and require active lease count `1` with the original `bindingId`.
 
 ## 7. Reverse relocation and rollback
 
@@ -154,10 +165,12 @@ spark cockpit instance status --database "$TARGET_DB" --json
 
 Require the target's pre-relocation `instanceId` and workspace/project/runtime table summary hashes to match the recorded preflight values. If the target database is unavailable before a return snapshot can be made, use the separately secured pre-cutover daemon config/SQLite backup as disaster recovery; this requires stopping the daemon and may interrupt work, so it is not the normal rollback path.
 
-## Owner handoff is separate
+## Origin lease transfer is separate
 
-Relocation preserves one logical Cockpit and one daemon owner. A future explicit `owner handoff` must not reuse ordinary registration. Before handoff it must check all five conditions: `draining`, `borrowed`, `active invocation`, `pending command`, and `one-time authorization`. Until that feature exists, any one of those conditions is a stop condition and `WORKSPACE_OWNER_CONFLICT` is final.
+Relocation preserves one logical Cockpit and one active origin lease for each daemon directory. Temporary moves between origins use uplink park/prefer and, when sessions occupy the workspace, the transfer confirmation (accept / reject / 30s auto-authorize). Prefer never invents credentials; cross-independent-`instanceId` still requires register on the target.
+
+Do not reuse ordinary registration or relocate/preflight for temporary borrow. While an active origin lease exists for a `local_path`, a second lease attempt is rejected with `WORKSPACE_LEASE_CONFLICT`.
 
 ## Evidence record
 
-Save secret-free command exit codes, JSON field summaries, snapshot SHA-256 values, source/target heartbeat counts, daemon PID, invocation terminal result, owner query, marker scan counts, and rollback summary hashes. Mark the operation complete only when every acceptance check passes. This document validates reusable capability only; it does not state that `marrow-paddle` was changed.
+Save secret-free command exit codes, JSON field summaries, snapshot SHA-256 values, source/target heartbeat counts, daemon PID, invocation terminal result, lease query, marker scan counts, and rollback summary hashes. Mark the operation complete only when every acceptance check passes. This document validates reusable capability only; it does not state that `marrow-paddle` was changed.

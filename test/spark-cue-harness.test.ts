@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import { runSparkCueHarness } from "../scripts/spark-cue-harness.mts";
 
-void test("spark cue harness reports blockers when cue-tui is missing", async () => {
+test("spark cue harness reports blockers when cue-tui is missing", async () => {
   const report = await runSparkCueHarness({
     strict: false,
     exercise: false,

@@ -108,6 +108,35 @@ describe("QqbotAdapter", () => {
     });
   });
 
+  it("parses message_reference into structured messageReference", () => {
+    const adapter = new QqbotAdapter({
+      id: "qqbot",
+      config: baseConfig,
+      transport: new FakeChannelTransport(),
+    });
+    const message = adapter.parseInbound({
+      event_type: "C2C_MESSAGE_CREATE",
+      d: {
+        id: "m-reply",
+        content: "继续",
+        author: { user_openid: "u1" },
+        message_reference: {
+          message_id: "m-source",
+          content: "被引用正文",
+          author: { user_openid: "bot", username: "Spark" },
+        },
+      },
+    });
+    expect(message?.text).toBe("继续");
+    expect(message?.messageReference).toEqual({
+      messageId: "m-source",
+      preview: "被引用正文",
+      senderId: "bot",
+      senderName: "Spark",
+      source: "embedded",
+    });
+  });
+
   it("keeps image-only C2C messages visible and passes materialized bytes", () => {
     const adapter = new QqbotAdapter({
       id: "qqbot",

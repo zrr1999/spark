@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   runSparkLeaf,
@@ -127,13 +127,13 @@ const baseRequest: SparkLeafRequest = {
   sessionModel: "baidu-oneapi/claude-opus-4.8",
 };
 
-void test("resolveLeafModelId prefers override, then session model, else undefined", () => {
+test("resolveLeafModelId prefers override, then session model, else undefined", () => {
   assert.equal(resolveLeafModelId({ ...baseRequest, model: "override/model" }), "override/model");
   assert.equal(resolveLeafModelId(baseRequest), "baidu-oneapi/claude-opus-4.8");
   assert.equal(resolveLeafModelId({ role: "r", brief: "b", input: "i" }), undefined);
 });
 
-void test("runSparkLeaf issues exactly one bounded completion with no tools", async () => {
+test("runSparkLeaf issues exactly one bounded completion with no tools", async () => {
   const calls: StreamCall[] = [];
   let bindingCalls = 0;
   const result = await runSparkLeaf(baseRequest, {
@@ -154,7 +154,7 @@ void test("runSparkLeaf issues exactly one bounded completion with no tools", as
   assert.match(calls[0]?.systemPrompt ?? "", /bounded Spark leaf capability/);
 });
 
-void test("runSparkLeaf resolves and reports the session-default model id", async () => {
+test("runSparkLeaf resolves and reports the session-default model id", async () => {
   const seen: Array<string | undefined> = [];
   const result = await runSparkLeaf(baseRequest, {
     resolveBinding: (_request, modelId) => {
@@ -168,7 +168,7 @@ void test("runSparkLeaf resolves and reports the session-default model id", asyn
   assert.equal(result.model, "claude-opus-4.8");
 });
 
-void test("runSparkLeaf resolves and reports an explicit override model id", async () => {
+test("runSparkLeaf resolves and reports an explicit override model id", async () => {
   const seen: Array<string | undefined> = [];
   const overrideProfile = sampleProfile({ id: "gpt-5.5" });
   const result = await runSparkLeaf(
@@ -186,7 +186,7 @@ void test("runSparkLeaf resolves and reports an explicit override model id", asy
   assert.equal(result.model, "gpt-5.5");
 });
 
-void test("runSparkLeaf is single-shot even when the model call fails with a failover-eligible error", async () => {
+test("runSparkLeaf is single-shot even when the model call fails with a failover-eligible error", async () => {
   // "ECONNRESET socket hang up" classifies as transient, which the resolver
   // would normally fail over on. The leaf must still call the stream once.
   const streamCalls = { count: 0 };
@@ -200,7 +200,7 @@ void test("runSparkLeaf is single-shot even when the model call fails with a fai
   assert.equal(streamCalls.count, 1);
 });
 
-void test("runSparkLeaf records a failed call as a route/auth-slot failure on the shared resolver", async () => {
+test("runSparkLeaf records a failed call as a route/auth-slot failure on the shared resolver", async () => {
   const streamCalls = { count: 0 };
   const binding = bindingFor(throwingStream(new Error("ECONNRESET socket hang up"), streamCalls));
 
@@ -218,7 +218,7 @@ void test("runSparkLeaf records a failed call as a route/auth-slot failure on th
   assert.notEqual(mainSlot?.health, "ok");
 });
 
-void test("runSparkLeaf records a successful call as a route/auth-slot success on the shared resolver", async () => {
+test("runSparkLeaf records a successful call as a route/auth-slot success on the shared resolver", async () => {
   const binding = bindingFor(stubStream("ok", []));
 
   const first = await runSparkLeaf(baseRequest, { resolveBinding: () => binding });
@@ -231,7 +231,7 @@ void test("runSparkLeaf records a successful call as a route/auth-slot success o
   assert.equal(mainSlot?.health, "ok");
 });
 
-void test("runSparkLeaf degrades without throwing when no model is resolvable", async () => {
+test("runSparkLeaf degrades without throwing when no model is resolvable", async () => {
   let bindingCalls = 0;
   const result = await runSparkLeaf(
     { role: "r", brief: "b", input: "i" },
@@ -248,13 +248,13 @@ void test("runSparkLeaf degrades without throwing when no model is resolvable", 
   assert.equal(bindingCalls, 0);
 });
 
-void test("runSparkLeaf degrades when the model binding is unavailable", async () => {
+test("runSparkLeaf degrades when the model binding is unavailable", async () => {
   const result = await runSparkLeaf(baseRequest, { resolveBinding: () => undefined });
   assert.equal(result.degraded, true);
   assert.equal(result.reasonCode, "model-binding-unavailable");
 });
 
-void test("runSparkLeaf degrade reasons are stable codes that never echo provider error text", async () => {
+test("runSparkLeaf degrade reasons are stable codes that never echo provider error text", async () => {
   const secret = "sk-super-secret-key-value";
   const streamCalls = { count: 0 };
   const result = await runSparkLeaf(baseRequest, {
@@ -268,7 +268,7 @@ void test("runSparkLeaf degrade reasons are stable codes that never echo provide
   assert.equal(result.text, "");
 });
 
-void test("runSparkLeaf degrades when aborted before execution", async () => {
+test("runSparkLeaf degrades when aborted before execution", async () => {
   const controller = new AbortController();
   controller.abort();
   let bindingCalls = 0;

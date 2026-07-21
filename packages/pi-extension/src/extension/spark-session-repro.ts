@@ -3,7 +3,7 @@
  * Legacy v1/v2 snapshots are migrated fail-closed into evidence-backed v3 requirements.
  */
 
-import type { ArtifactRef } from "@zendev-lab/spark-extension-api";
+import type { ArtifactRef } from "@zendev-lab/spark-core";
 import {
   DEFAULT_REPRO_STAGES,
   isReproRequirementSatisfied,
@@ -13,10 +13,13 @@ import {
   type SparkSessionRepro,
   type SparkSessionReproRetryState,
 } from "@zendev-lab/spark-repro";
-import { nowIso } from "@zendev-lab/spark-extension-api";
+import { nowIso } from "@zendev-lab/spark-core";
+import {
+  rebuildSessionIndex,
+  sessionReproStorePathV2,
+  type SparkSessionContext,
+} from "@zendev-lab/spark-loop";
 import { readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
-import { rebuildSessionIndex, sessionReproStorePathV2 } from "./session-directory-store.ts";
-import type { SparkSessionContext } from "./session-identity.ts";
 
 export * from "@zendev-lab/spark-repro";
 

@@ -651,7 +651,7 @@ function seedTargetBusinessData(db: DatabaseSync): void {
              'Target original', 'available', '{}', '{}', ?, ?)`,
   ).run(now, now);
   db.prepare(
-    `INSERT INTO workspace_owner_bindings
+    `INSERT INTO workspace_leases
       (id, workspace_id, runtime_workspace_binding_id, owner_mode, started_at, created_at)
      VALUES ('wob_target_original', 'ws_target_original', 'rtwb_target_original', 'primary', ?, ?)`,
   ).run(now, now);
@@ -682,7 +682,7 @@ function cockpitBusinessSummary(db: DatabaseSync): Record<string, unknown> {
       .prepare(
         `SELECT workspace_id AS workspaceId,
                 runtime_workspace_binding_id AS bindingId
-         FROM workspace_owner_bindings
+         FROM workspace_leases
          WHERE ended_at IS NULL
          ORDER BY workspace_id`,
       )
@@ -802,7 +802,7 @@ function workspaceIdForBinding(db: DatabaseSync, bindingId: string): string {
   const row = db
     .prepare(
       `SELECT workspace_id AS workspaceId
-       FROM workspace_owner_bindings
+       FROM workspace_leases
        WHERE runtime_workspace_binding_id = ? AND ended_at IS NULL`,
     )
     .get(bindingId) as { workspaceId: string | null } | undefined;

@@ -40,9 +40,10 @@ $SPARK_HOME/
 ├── role-model-settings.json       # Spark user role-to-model bindings
 ├── prompts/                       # user prompt templates
 ├── themes/                        # user themes
-├── learnings/                     # user learning artifacts
-├── memory/memory.json             # user Spark memory
-├── recall-candidates.json         # user recall candidates
+├── memory/
+│   ├── memory.json                # user Spark memory
+│   ├── learnings/                 # user learning artifacts
+│   └── recall-candidates.json     # user recall candidates
 ├── exports/                       # transcript exports
 ├── share/                         # shareable transcript exports
 ├── cursor-sdk-model-list.json     # Cursor model discovery cache
@@ -57,7 +58,7 @@ With `SPARK_HOME` unset, files are split by XDG ownership:
 
 ```text
 $XDG_CONFIG_HOME/spark/        config, auth, ask, role model settings, prompts, themes, keybindings, app TOML files
-$XDG_DATA_HOME/spark/          sessions, learnings, memory, recall, exports, share, workspaces, cockpit/, daemon/
+$XDG_DATA_HOME/spark/          sessions, memory/, exports, share, workspaces, cockpit/, daemon/
 $XDG_CACHE_HOME/spark/         model/release caches, cockpit/, daemon/
 $XDG_STATE_HOME/spark/         cockpit/, daemon/ state and logs
 $XDG_RUNTIME_DIR/spark/        cockpit/, daemon/ sockets and pid files (app state `run/` fallback)
@@ -75,7 +76,15 @@ $HOME/.agents/skills/
 $HOME/.agents/workflows/
 ```
 
-There is no `$SPARK_HOME/skills` or `$SPARK_HOME/workflows`. Project role and skill definitions remain under project `.agents/{roles,skills}`; Spark also retains workspace-specific `.spark/{skills,workflows}` layers. Workspace-owned Spark state remains under the workspace `.spark/`, and repository learnings remain under `.learnings/`.
+There is no `$SPARK_HOME/skills` or `$SPARK_HOME/workflows`. Project role and skill definitions remain under project `.agents/{roles,skills}`; Spark also retains workspace-specific `.spark/{skills,workflows}` layers. Workspace-owned Spark state remains under the workspace `.spark/`. Memory-related workspace state lives under `.spark/memory/`:
+
+```text
+.spark/memory/
+├── memory.json
+├── learnings/                 # replaces repository-root .learnings/
+├── recall-candidates.json     # replaces .spark/recall-candidates.json
+└── reflections/               # replaces .spark/reflections/
+```
 
 ## Retired variables
 
@@ -94,9 +103,23 @@ Explicit API path overrides remain available for embedded hosts and tests.
 
 ## Migration
 
-Spark does not automatically move credentials, SQLite databases, sessions, or user-authored files. Inspect old locations and deliberately copy data that should survive. Stop Spark daemon and Cockpit before copying mutable databases or runtime state.
+Spark does **not** automatically move credentials, SQLite databases, sessions, or unrelated user-authored files. Stop Spark daemon and Cockpit before copying mutable databases or runtime state.
+
+Memory-related layout migration **is** automatic and idempotent via `migrateSparkMemoryLayout` (triggered on memory `session_start` and memory tool access):
+
+| Old path | New path |
+|----------|----------|
+| `$dataRoot/learnings/` | `$dataRoot/memory/learnings/` |
+| `$dataRoot/recall-candidates.json` | `$dataRoot/memory/recall-candidates.json` |
+| `.learnings/` (workspace/repo) | `.spark/memory/learnings/` |
+| `.spark/recall-candidates.json` | `.spark/memory/recall-candidates.json` |
+| `.spark/reflections/` | `.spark/memory/reflections/` |
+
+Rename is preferred; cross-device moves fall back to copy+verify. If the target already exists and is non-empty, Spark merges directories or skips conflicting files and records the outcome.
 
 Public `$HOME/.agents/{roles,skills,workflows}` definitions should remain in place. Old component variables and Pi-specific locations may still identify migration sources, but they do not affect current path resolution.
+
+pi-memory Markdown import remains explicit: `memory({ action: "import_legacy", apply: false })` then `apply: true` after review.
 
 ## Inspecting paths
 

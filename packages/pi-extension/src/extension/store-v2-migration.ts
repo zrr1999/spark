@@ -1,7 +1,8 @@
 import { cp, mkdir, readdir, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
-import { nowIso } from "@zendev-lab/spark-extension-api";
+import { nowIso } from "@zendev-lab/spark-core";
+import { rebuildSessionIndex } from "@zendev-lab/spark-loop";
 import {
   TaskGraph,
   TaskGraphStore,
@@ -10,7 +11,6 @@ import {
 } from "@zendev-lab/spark-tasks";
 import { normalizeCurrentProjectStoreSnapshot } from "./current-project-state-schema.ts";
 import { readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
-import { rebuildSessionIndex } from "./session-directory-store.ts";
 import { rebuildWorkspaceReviewIndex } from "./subject-review-store.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
 

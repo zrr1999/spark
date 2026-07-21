@@ -57,6 +57,7 @@ describe("migrations", () => {
       "event_ingest_sequence",
       "workspace_access_tokens",
       "cockpit_access_tokens",
+      "workspace_leases",
     ]) {
       expect(tableExists(db, table)?.name).toBe(table);
     }
@@ -77,6 +78,8 @@ describe("migrations", () => {
       "runtime_device_authorizations_installation_pending_idx",
       "runtime_message_receipts_runtime_seen_idx",
       "events_created_id_idx",
+      "workspace_leases_one_active",
+      "workspace_leases_one_active_per_runtime_binding",
       "runtime_session_projections_scope_status_idx",
       "runtime_invocation_projections_session_status_idx",
       "runtime_invocation_event_projections_cursor_idx",
@@ -112,6 +115,7 @@ describe("migrations", () => {
       "0015",
       "0016",
       "0017",
+      "0018",
     ]);
 
     const bindingColumns = db
@@ -133,7 +137,7 @@ describe("migrations", () => {
       count: number;
     };
 
-    expect(migrationCount.count).toBe(17);
+    expect(migrationCount.count).toBe(18);
     db.close();
   });
 
@@ -230,7 +234,7 @@ describe("migrations", () => {
       db
         .prepare(
           `SELECT workspace_id AS workspaceId, ended_at AS endedAt
-           FROM workspace_owner_bindings
+           FROM workspace_leases
            ORDER BY started_at`,
         )
         .all(),
@@ -242,13 +246,19 @@ describe("migrations", () => {
       { workspaceId: "ws_22222222222242222222222222222222", endedAt: null },
     ]);
     expect(() =>
-      insertOwner.run(
-        "wob_33333333333343333333333333333333",
-        "ws_11111111111141111111111111111111",
-        bindingId,
-        "2026-07-20T00:00:00.000Z",
-        "2026-07-20T00:00:00.000Z",
-      ),
+      db
+        .prepare(
+          `INSERT INTO workspace_leases
+            (id, workspace_id, runtime_workspace_binding_id, owner_mode, started_at, created_at)
+           VALUES (?, ?, ?, 'primary', ?, ?)`,
+        )
+        .run(
+          "wob_33333333333343333333333333333333",
+          "ws_11111111111141111111111111111111",
+          bindingId,
+          "2026-07-20T00:00:00.000Z",
+          "2026-07-20T00:00:00.000Z",
+        ),
     ).toThrow(/UNIQUE constraint failed/);
     db.close();
   });

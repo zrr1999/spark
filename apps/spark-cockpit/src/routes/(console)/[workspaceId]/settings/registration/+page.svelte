@@ -329,12 +329,6 @@
     justify-content: space-between;
   }
 
-  .device-heading > div {
-    display: grid;
-    gap: 5px;
-  }
-
-  .device-heading p,
   .token-fallback summary small {
     color: var(--color-ink-subtle);
     font-size: 13px;

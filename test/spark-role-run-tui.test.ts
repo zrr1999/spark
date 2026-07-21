@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import type {
   Project,
@@ -12,7 +12,7 @@ import type {
   Task,
   TaskRef,
   TaskRun,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import { TaskGraph, defaultTaskGraphStore } from "@zendev-lab/spark-tasks";
 
 import sparkExtension from "../packages/pi-extension/src/extension/index.ts";
@@ -129,7 +129,7 @@ function taskRun(input: Partial<TaskRun> & { ref: RunRef }): TaskRun {
   };
 }
 
-void test("Spark role-run TUI renderer produces bounded board and status summaries", () => {
+test("Spark role-run TUI renderer produces bounded board and status summaries", () => {
   const running = taskRun({ ref: "run:aaaaaaaa11111111" as RunRef });
   const failed = taskRun({
     ref: "run:bbbbbbbb22222222" as RunRef,
@@ -169,7 +169,7 @@ void test("Spark role-run TUI renderer produces bounded board and status summari
   assert.match(lines.join("\n"), /(tool edit|non-terminal)/);
 });
 
-void test("Spark role-run completion message renderer supports compact and expanded details", () => {
+test("Spark role-run completion message renderer supports compact and expanded details", () => {
   const run = taskRun({
     ref: "run:cccccccc33333333" as RunRef,
     status: "succeeded",
@@ -192,7 +192,7 @@ void test("Spark role-run completion message renderer supports compact and expan
   assert.match(expanded, /completed/);
 });
 
-void test("Spark extension role-run surfaces are no-op safe without UI", async () => {
+test("Spark extension role-run surfaces are no-op safe without UI", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-role-run-tui-no-ui-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -243,7 +243,7 @@ void test("Spark extension role-run surfaces are no-op safe without UI", async (
   }
 });
 
-void test("Spark extension publishes role-run footer status, below-editor widget, and completion message", async () => {
+test("Spark extension publishes role-run footer status, below-editor widget, and completion message", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-role-run-tui-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });

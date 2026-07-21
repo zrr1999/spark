@@ -1,4 +1,4 @@
-import type { ProjectRef } from "@zendev-lab/spark-extension-api";
+import type { ProjectRef } from "@zendev-lab/spark-core";
 import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import type { SparkPlanningModeSource } from "./session-state.ts";
 

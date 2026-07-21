@@ -18,7 +18,7 @@ import {
   type TaskRef,
   type TaskRun,
   type TaskTodo,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import { createDefaultProjectRoadmap, normalizeProjectRoadmap, uniqueTaskRefs } from "./roadmap.ts";
 import type {
   ClaimTaskInput,

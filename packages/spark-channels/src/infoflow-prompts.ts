@@ -94,6 +94,7 @@ export type InfoflowMessageContext = Pick<
   | "senderName"
   | "chatId"
   | "messageId"
+  | "messageReference"
   | "eventType"
   | "contentType"
   | "attachments"
@@ -150,13 +151,21 @@ export function renderInfoflowMessageContextPrompt(
     lines.push(`attachments: ${encodePromptFact(message.attachments)}`);
     factCount += 1;
   }
+  if (message.messageReference) {
+    lines.push(`messageReference: ${encodePromptFact(message.messageReference)}`);
+    factCount += 1;
+  }
   if (factCount === 0) return undefined;
   lines.push("</infoflow_message_context>");
   return lines.join("\n");
 }
 
 function encodePromptFact(
-  value: string | string[] | NonNullable<IncomingMessage["attachments"]>,
+  value:
+    | string
+    | string[]
+    | NonNullable<IncomingMessage["attachments"]>
+    | NonNullable<IncomingMessage["messageReference"]>,
 ): string {
   // Keep platform-controlled display values inside the tagged data block even
   // when they contain tag-shaped text. JSON alone does not escape `<` or `>`.

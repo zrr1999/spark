@@ -55,6 +55,9 @@ export interface SparkAgentSessionRunOptions {
 
 const MAX_CONTEXT_OVERFLOW_COMPACTIONS = 5;
 const CONTEXT_OVERFLOW_COMPACT_BACKOFF_MS = [0, 500, 1_500, 4_000, 10_000] as const;
+/** Provider concurrency/rate-limit retries after the stream already failed closed. */
+const MAX_RATE_LIMIT_RETRIES = 5;
+const RATE_LIMIT_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 20_000] as const;
 const DAEMON_RESUME_NOTICE =
   "[Spark daemon resume] The previous attempt of this turn was interrupted mid-execution. Continue from the current session history. Do not repeat side effects that already completed.";
 
@@ -116,6 +119,19 @@ export class SparkAgentSession {
       beforeCount = this.loadPromptItems(record);
       outcome = await this.services.agentLoop.submitWithOutcome(prompt);
     }
+    let rateLimitAttempt = 0;
+    while (
+      outcome.status === "failed" &&
+      classifyProviderFailure(outcome.errorMessage).failureClass === "rate_limit" &&
+      rateLimitAttempt < MAX_RATE_LIMIT_RETRIES
+    ) {
+      await delay(RATE_LIMIT_BACKOFF_MS[rateLimitAttempt] ?? 20_000);
+      rateLimitAttempt += 1;
+      // Same as overflow recovery: drop the failed transient turn and resubmit
+      // from the last persisted session snapshot.
+      beforeCount = this.loadPromptItems(record);
+      outcome = await this.services.agentLoop.submitWithOutcome(prompt);
+    }
     const assistant = outcome.assistant;
 
     const newItems = this.services.agentLoop.getPromptItems().slice(beforeCount);
@@ -167,8 +183,20 @@ export class SparkAgentSession {
     this.services.runtime.setSessionId(options.sessionId);
     this.services.agentLoop.setViewSessionId(options.sessionId);
     this.services.agentLoop.replacePromptItems([]);
-    const beforeCount = this.services.agentLoop.getPromptItems().length;
-    const outcome = await this.services.agentLoop.submitWithOutcome(options.prompt);
+    let beforeCount = this.services.agentLoop.getPromptItems().length;
+    let outcome = await this.services.agentLoop.submitWithOutcome(options.prompt);
+    let rateLimitAttempt = 0;
+    while (
+      outcome.status === "failed" &&
+      classifyProviderFailure(outcome.errorMessage).failureClass === "rate_limit" &&
+      rateLimitAttempt < MAX_RATE_LIMIT_RETRIES
+    ) {
+      await delay(RATE_LIMIT_BACKOFF_MS[rateLimitAttempt] ?? 20_000);
+      rateLimitAttempt += 1;
+      this.services.agentLoop.replacePromptItems([]);
+      beforeCount = this.services.agentLoop.getPromptItems().length;
+      outcome = await this.services.agentLoop.submitWithOutcome(options.prompt);
+    }
     const assistant = outcome.assistant;
 
     return {
@@ -324,6 +352,7 @@ export class SparkAgentSession {
     if (!initialPreparation || initialPreparation.messagesToSummarize.length === 0) return false;
 
     let compactionEntry: SparkCompactionEntry | undefined;
+    let compactionSucceeded = false;
     let lifecycleStarted = false;
     try {
       lifecycleStarted = true;
@@ -357,13 +386,20 @@ export class SparkAgentSession {
       const estimatedTokensAfter = meterSparkContextTokens({
         messages: activeSessionReplayMessages(record),
       }).tokens;
+      const repeatedCompaction =
+        preparation.messagesToSummarize.length === 1 &&
+        preparation.messagesToSummarize[0]?.role === "compactionSummary";
+      const reductionRatio = measuredReductionRatio(estimatedTokensBefore, estimatedTokensAfter);
+      if (repeatedCompaction && reductionRatio < settings.minUsefulReduction) {
+        if (record.entries.at(-1)?.id === compactionEntry.id) record.entries.pop();
+        compactionEntry = undefined;
+        return false;
+      }
       if (compactionEntry.metadata) {
-        compactionEntry.metadata.measuredReductionRatio = measuredReductionRatio(
-          estimatedTokensBefore,
-          estimatedTokensAfter,
-        );
+        compactionEntry.metadata.measuredReductionRatio = reductionRatio;
       }
       await this.services.sessionStore.save(record);
+      compactionSucceeded = true;
       return true;
     } finally {
       if (lifecycleStarted) {
@@ -372,7 +408,11 @@ export class SparkAgentSession {
             reason,
             willRetry,
             sessionId: record.header.id,
-            ...(compactionEntry ? { compactionEntryId: compactionEntry.id } : {}),
+            compactType: "full",
+            succeeded: compactionSucceeded,
+            ...(compactionSucceeded && compactionEntry
+              ? { compactionEntryId: compactionEntry.id, compactionEntry }
+              : {}),
           });
         } catch {
           // The durable compaction already succeeded. A projection listener
@@ -388,12 +428,19 @@ function prepareForAutomaticCompaction(
   force: boolean,
   settings: SparkCompactionSettings = DEFAULT_SPARK_COMPACTION_SETTINGS,
 ): SparkCompactionPreparation | undefined {
-  const preparation = prepareSparkCompaction(record, undefined, settings);
-  if (!force || !preparation || preparation.messagesToSummarize.length > 0) return preparation;
-  return prepareSparkCompaction(record, undefined, {
-    ...settings,
-    keepRecentTokens: Math.max(1, Math.min(10_000, Math.floor(preparation.tokensBefore / 2))),
+  const preparation = prepareSparkCompaction(record, undefined, settings, {
+    allowCompactionLeaf: force,
   });
+  if (!force || !preparation || preparation.messagesToSummarize.length > 0) return preparation;
+  return prepareSparkCompaction(
+    record,
+    undefined,
+    {
+      ...settings,
+      keepRecentTokens: Math.max(1, Math.min(10_000, Math.floor(preparation.tokensBefore / 2))),
+    },
+    { allowCompactionLeaf: true },
+  );
 }
 
 function appendCompactionCheckpointMessages(

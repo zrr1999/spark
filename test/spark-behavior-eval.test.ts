@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import { evaluateSparkBehavior } from "@zendev-lab/spark-turn/behavior-eval";
 import { buildSparkPromptManifest } from "@zendev-lab/spark-turn/prompt-manifest";
@@ -24,7 +24,7 @@ function manifest() {
   });
 }
 
-void test("prompt manifest exposes diagnostics without retaining sensitive prompt/session data", () => {
+test("prompt manifest exposes diagnostics without retaining sensitive prompt/session data", () => {
   const result = manifest();
   const serialized = JSON.stringify(result);
 
@@ -42,7 +42,7 @@ void test("prompt manifest exposes diagnostics without retaining sensitive promp
   assert.doesNotMatch(serialized, /private-identity|secret prompt|user data|cache-key-containing/u);
 });
 
-void test("behavior eval reports tool precision, coverage, effects, outcome, and roundtrips", () => {
+test("behavior eval reports tool precision, coverage, effects, outcome, and roundtrips", () => {
   const passing = evaluateSparkBehavior(
     {
       id: "implement-and-test",
@@ -100,7 +100,7 @@ void test("behavior eval reports tool precision, coverage, effects, outcome, and
   );
 });
 
-void test("behavior eval checks selected skill allowlists, requirements, exclusions, and budget", () => {
+test("behavior eval checks selected skill allowlists, requirements, exclusions, and budget", () => {
   const result = evaluateSparkBehavior(
     {
       id: "skill-routing",

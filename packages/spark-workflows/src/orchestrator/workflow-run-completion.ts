@@ -3,7 +3,7 @@ import {
   type RunRef,
   type TaskRun,
   type TaskRunCompletionSummary,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 
 import type {
   WorkflowRunCompletionFollowUp,

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   evaluateDaemonReadiness,
@@ -20,7 +20,7 @@ function secretValues(report: SparkDaemonReadinessReport): unknown[] {
   return values;
 }
 
-void test("daemon readiness flags new failed invocations and disconnected websocket state", () => {
+test("daemon readiness flags new failed invocations and disconnected websocket state", () => {
   const report = evaluateDaemonReadiness(
     daemonStatus({
       invocations: { queued: 0, running: 1, succeeded: 20, failed: 3, cancelled: 0 },
@@ -66,7 +66,7 @@ void test("daemon readiness flags new failed invocations and disconnected websoc
   assert.deepEqual(secretValues(report), ["<redacted>", "<redacted>"]);
 });
 
-void test("daemon readiness reports missing invocation deltas without baseline", () => {
+test("daemon readiness reports missing invocation deltas without baseline", () => {
   const report = evaluateDaemonReadiness(
     daemonStatus({
       invocations: { queued: 0, running: 0, succeeded: 1, failed: 0, cancelled: 0 },
@@ -84,7 +84,7 @@ void test("daemon readiness reports missing invocation deltas without baseline",
   );
 });
 
-void test("daemon readiness keeps historical failures informational when baseline is unchanged", () => {
+test("daemon readiness keeps historical failures informational when baseline is unchanged", () => {
   const current = daemonStatus({
     observedAt: "2026-07-15T12:00:00.000Z",
     invocations: { queued: 0, running: 0, succeeded: 120, failed: 11, cancelled: 2 },
@@ -109,7 +109,7 @@ void test("daemon readiness keeps historical failures informational when baselin
   );
 });
 
-void test("daemon readiness warns only after queued and running age thresholds", () => {
+test("daemon readiness warns only after queued and running age thresholds", () => {
   const baseline = daemonStatus({
     observedAt: "2026-07-15T11:59:00.000Z",
     invocations: { queued: 1, running: 1, succeeded: 0, failed: 0, cancelled: 0 },
@@ -161,7 +161,7 @@ void test("daemon readiness warns only after queued and running age thresholds",
   );
 });
 
-void test("daemon readiness fails when daemon is not running", () => {
+test("daemon readiness fails when daemon is not running", () => {
   const report = evaluateDaemonReadiness(
     daemonStatus({
       running: false,
@@ -175,7 +175,7 @@ void test("daemon readiness fails when daemon is not running", () => {
   assert.equal(report.checks.find((check) => check.id === "websocketState")?.level, "warn");
 });
 
-void test("daemon readiness reports malformed current daemon envelopes as contract failures", () => {
+test("daemon readiness reports malformed current daemon envelopes as contract failures", () => {
   const report = evaluateDaemonReadiness({ action: "status", daemon: { running: true } });
 
   assert.equal(report.overall, "fail");
@@ -190,7 +190,7 @@ void test("daemon readiness reports malformed current daemon envelopes as contra
   );
 });
 
-void test("daemon readiness reports missing daemon.running with contract path", () => {
+test("daemon readiness reports missing daemon.running with contract path", () => {
   const report = evaluateDaemonReadiness({
     action: "status",
     daemon: {
@@ -206,7 +206,7 @@ void test("daemon readiness reports missing daemon.running with contract path", 
   );
 });
 
-void test("redactSecrets recursively replaces token secret and key values", () => {
+test("redactSecrets recursively replaces token secret and key values", () => {
   assert.deepEqual(
     redactSecrets({
       runtimeToken: "abc",

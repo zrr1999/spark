@@ -10,8 +10,8 @@ import {
   registerRuntimeWorkspace,
   RuntimeAccessTokenError,
   RuntimeEnrollmentError,
-  RuntimeWorkspaceOwnerConflictError,
-} from "$lib/server/runtime-registration";
+  RuntimeWorkspaceLeaseConflictError,
+} from "@zendev-lab/spark-coordination/runtime-registration";
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
   const runtimeId = params.runtimeId;
@@ -47,7 +47,8 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
       bearerToken(request),
     );
   } catch (caught) {
-    if (caught instanceof RuntimeWorkspaceOwnerConflictError) {
+    if (caught instanceof RuntimeWorkspaceLeaseConflictError) {
+      // Primary wire code: workspace_lease_conflict (aliasReasonCode WORKSPACE_OWNER_CONFLICT).
       return errorJson(
         caught.reasonCode.toLowerCase(),
         caught.message,

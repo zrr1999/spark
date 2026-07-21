@@ -5,11 +5,11 @@ import type {
   TaskClaim,
   TaskRun,
   TaskStatus,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import type { TaskGraph } from "./graph.ts";
 import { isUnfinishedTaskStatus } from "./internal.ts";
 
-export interface PiTaskDisplayIdentity {
+export interface SparkTaskDisplayIdentity {
   ref?: string | null;
   runtimeTaskId?: string | null;
   name?: string | null;
@@ -17,59 +17,59 @@ export interface PiTaskDisplayIdentity {
   status?: string | null;
 }
 
-export interface PiTaskDisplayLifecycle {
+export interface SparkTaskDisplayLifecycle {
   cancellation?: TaskCancellation | null;
   supersededBy?: readonly string[] | null;
 }
 
-export interface PiTaskActiveLineInput {
-  task: PiTaskDisplayIdentity & PiTaskDisplayLifecycle;
+export interface SparkTaskActiveLineInput {
+  task: SparkTaskDisplayIdentity & SparkTaskDisplayLifecycle;
   owner: string;
   readyFrontier?: boolean;
   plan?: string;
   lifecycleSuffix?: string;
 }
 
-export interface PiTaskSummaryLineInput extends PiTaskActiveLineInput {
+export interface SparkTaskSummaryLineInput extends SparkTaskActiveLineInput {
   kind?: string | null;
   ref?: string | null;
   claimed?: string;
   todos?: string;
 }
 
-export function piTaskDisplayHandle(task: PiTaskDisplayIdentity): string {
+export function sparkTaskDisplayHandle(task: SparkTaskDisplayIdentity): string {
   const handle = firstNonEmpty(task.name, task.runtimeTaskId, task.ref, "task");
   return handle.startsWith("@") ? handle : `@${handle}`;
 }
 
-export function piTaskDisplayTitle(task: PiTaskDisplayIdentity): string {
-  return `${piTaskDisplayHandle(task)}: ${task.title}`;
+export function sparkTaskDisplayTitle(task: SparkTaskDisplayIdentity): string {
+  return `${sparkTaskDisplayHandle(task)}: ${task.title}`;
 }
 
-export function formatPiTaskActiveStatusLine(input: PiTaskActiveLineInput): string {
+export function formatSparkTaskActiveStatusLine(input: SparkTaskActiveLineInput): string {
   const readyFrontierSuffix = input.readyFrontier ? " ready_frontier=yes" : "";
   const planSuffix = input.plan ? ` plan=${input.plan}` : "";
-  const lifecycleSuffix = input.lifecycleSuffix ?? piTaskLifecycleSuffix(input.task);
-  return `- [${input.task.status ?? "unknown"}] ${piTaskDisplayTitle(
+  const lifecycleSuffix = input.lifecycleSuffix ?? sparkTaskLifecycleSuffix(input.task);
+  return `- [${input.task.status ?? "unknown"}] ${sparkTaskDisplayTitle(
     input.task,
   )} owner=@${input.owner}${readyFrontierSuffix}${planSuffix}${lifecycleSuffix}`;
 }
 
-export function formatPiTaskSummaryStatusLine(input: PiTaskSummaryLineInput): string {
+export function formatSparkTaskSummaryStatusLine(input: SparkTaskSummaryLineInput): string {
   const readyFrontierSuffix = input.readyFrontier ? " ready_frontier=yes" : "";
   const planSuffix = input.plan ? ` plan=${input.plan}` : "";
-  const lifecycleSuffix = input.lifecycleSuffix ?? piTaskLifecycleSuffix(input.task);
+  const lifecycleSuffix = input.lifecycleSuffix ?? sparkTaskLifecycleSuffix(input.task);
   const ref = input.ref ?? input.task.ref;
   const refSuffix = ref ? ` (${ref})` : "";
   const kind = input.kind ?? "generic";
   const claimed = input.claimed ?? "no";
   const todos = input.todos ?? "0/0/0/0";
-  return `- [${input.task.status ?? "unknown"}] ${piTaskDisplayTitle(
+  return `- [${input.task.status ?? "unknown"}] ${sparkTaskDisplayTitle(
     input.task,
   )}${refSuffix} kind=${kind} owner=@${input.owner} claimed=${claimed} todos=${todos}${readyFrontierSuffix}${planSuffix}${lifecycleSuffix}`;
 }
 
-export function normalizePiTaskStatusGroup(status: string): TaskStatus | "other" {
+export function normalizeSparkTaskStatusGroup(status: string): TaskStatus | "other" {
   const normalized = status.toLowerCase().replaceAll("_", "-");
   if (["ready", "queued", "not-started"].includes(normalized)) return "ready";
   if (normalized === "pending") return "pending";
@@ -82,7 +82,7 @@ export function normalizePiTaskStatusGroup(status: string): TaskStatus | "other"
   return "other";
 }
 
-export function isImportantPiTaskStatus(status: TaskStatus): boolean {
+export function isImportantSparkTaskStatus(status: TaskStatus): boolean {
   return status !== "done" && status !== "cancelled";
 }
 
@@ -104,7 +104,7 @@ export function taskStatusVisibilityRank(status: TaskStatus): number {
   }
 }
 
-export function sortPiTasksForStatusVisibility(tasks: Task[]): Task[] {
+export function sortSparkTasksForStatusVisibility(tasks: Task[]): Task[] {
   return [...tasks].sort((a, b) => {
     const byStatus = taskStatusVisibilityRank(a.status) - taskStatusVisibilityRank(b.status);
     if (byStatus !== 0) return byStatus;
@@ -112,7 +112,7 @@ export function sortPiTasksForStatusVisibility(tasks: Task[]): Task[] {
   });
 }
 
-export function countPiTaskStatuses<T extends { status: TaskStatus }>(
+export function countSparkTaskStatuses<T extends { status: TaskStatus }>(
   tasks: readonly T[],
 ): Partial<Record<TaskStatus, number>> {
   const counts: Partial<Record<TaskStatus, number>> = {};
@@ -120,7 +120,7 @@ export function countPiTaskStatuses<T extends { status: TaskStatus }>(
   return counts;
 }
 
-export function formatPiTaskStatusCounts(counts: Partial<Record<string, number>>): string {
+export function formatSparkTaskStatusCounts(counts: Partial<Record<string, number>>): string {
   const order: TaskStatus[] = [
     "running",
     "blocked",
@@ -218,10 +218,10 @@ export function taskPlanSummary(task: Pick<Task, "plan">): "missing" | undefined
 }
 
 export function taskLifecycleSuffix(task: Pick<Task, "supersededBy" | "cancellation">): string {
-  return piTaskLifecycleSuffix(task);
+  return sparkTaskLifecycleSuffix(task);
 }
 
-function piTaskLifecycleSuffix(task: PiTaskDisplayLifecycle): string {
+function sparkTaskLifecycleSuffix(task: SparkTaskDisplayLifecycle): string {
   const parts: string[] = [];
   if (task.supersededBy && task.supersededBy.length > 0)
     parts.push(`supersededBy=${task.supersededBy.join(",")}`);

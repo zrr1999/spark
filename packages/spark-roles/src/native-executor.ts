@@ -1,4 +1,4 @@
-import type { ExtensionRoleRunner } from "@zendev-lab/spark-extension-api";
+import type { ExtensionRoleRunner } from "@zendev-lab/spark-core";
 import { realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";

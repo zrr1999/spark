@@ -7,6 +7,10 @@ import type {
   RoutedChannelInteractionEvent,
 } from "./interaction.ts";
 import type {
+  ChannelMessageReference,
+  ChannelMessageReferenceSource,
+} from "./message-reference.ts";
+import type {
   ChannelDeliveryFacts,
   ChannelDeliveryResult,
   ChannelMessageTarget,
@@ -14,6 +18,8 @@ import type {
 } from "./reply.ts";
 
 export type ChannelAdapterType = SparkChannelAdapter;
+
+export type { ChannelMessageReference, ChannelMessageReferenceSource };
 
 export interface IncomingMessage {
   /** Configured adapter instance that received this message. */
@@ -27,6 +33,8 @@ export interface IncomingMessage {
   chatId?: string;
   text: string;
   messageId?: string;
+  /** Structured quote/reply reference; separate from the user reply body. */
+  messageReference?: ChannelMessageReference;
   /** Infoflow platform event source (for example MESSAGE_RECEIVE / ALL_MESSAGE_FORWARD). */
   eventType?: string;
   /** Normalized Infoflow payload kind (text, markdown, richtext, mixed, image, file, voice). */
@@ -292,6 +300,7 @@ export interface FeishuInboundRaw {
   sender_id?: string;
   text: string;
   message_id?: string;
+  message_reference?: ChannelMessageReference;
 }
 
 export interface InfoflowInboundRaw {
@@ -300,6 +309,7 @@ export interface InfoflowInboundRaw {
   chat_type: InfoflowChatType;
   chat_id?: string;
   message_id?: string;
+  message_reference?: ChannelMessageReference;
   event_type?: string;
   content_type?: string;
   attachments?: InfoflowAttachment[];

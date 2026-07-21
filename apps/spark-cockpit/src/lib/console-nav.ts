@@ -1,70 +1,85 @@
 import type { IconName } from "./icons";
 
-export interface ConsoleNavLabels {
+export type ConsoleNavCopy = {
+  createWorkspace: string;
+  webAccess: string;
+  workspaceDetails: string;
+  channels: string;
+  registration: string;
   modelsProviders: string;
   invocationDiagnostics: string;
-  channels: string;
-  workspaceSettings: string;
-  registration: string;
-  webAccess: string;
-  createWorkspace: string;
-}
+};
 
-export interface ConsoleNavGroupLabels {
+export type ConsoleNavGroupCopy = {
   cockpit: string;
   daemon: string;
   workspace: string;
-}
+};
 
-export interface ConsoleNavItem {
+export type ConsoleNavItem = {
   href: string;
   label: string;
   icon: IconName;
-}
+};
 
-export interface ConsoleNavGroup {
-  id: keyof ConsoleNavGroupLabels;
+export type ConsoleNavGroup = {
+  id: keyof ConsoleNavGroupCopy;
   label: string;
   items: ConsoleNavItem[];
-}
+};
 
-/** Global control-plane / daemon settings — not tied to an active workspace. */
-export function isGlobalConsolePath(pathname: string): boolean {
-  if (pathname === "/workspaces/new" || pathname.startsWith("/workspaces/new/")) return true;
-  if (pathname === "/settings" || pathname.startsWith("/settings/")) return true;
+/** Independent control-plane settings — not tied to daemon or workspace. */
+export function isControlPlanePath(pathname: string): boolean {
+  if (pathname === "/workspaces/new" || pathname.startsWith("/workspaces/new/")) {
+    return true;
+  }
+  if (pathname === "/settings/access" || pathname.startsWith("/settings/access/")) {
+    return true;
+  }
   return false;
 }
 
-export function buildConsoleNavGroups(input: {
-  activeWorkspacePath: string;
-  hasActiveWorkspace: boolean;
-  includeWorkspaceNav?: boolean;
-  nav: ConsoleNavLabels;
-  groups: ConsoleNavGroupLabels;
-}): ConsoleNavGroup[] {
-  const workspaceRoute = (suffix: string) =>
-    input.activeWorkspacePath ? `${input.activeWorkspacePath}${suffix}` : "";
-  const includeWorkspaceNav =
-    input.includeWorkspaceNav ?? (input.hasActiveWorkspace && Boolean(input.activeWorkspacePath));
+/** @deprecated Prefer isControlPlanePath. */
+export function isGlobalConsolePath(pathname: string): boolean {
+  return isControlPlanePath(pathname);
+}
 
-  const groups: ConsoleNavGroup[] = [
-    {
+export const COCKPIT_SETTINGS_HREF = "/settings/access";
+
+export function buildConsoleNavGroups(input: {
+  nav: ConsoleNavCopy;
+  groups: ConsoleNavGroupCopy;
+  workspaceHrefPrefix: string | null;
+  includeControlPlaneNav?: boolean;
+  includeWorkspaceNav?: boolean;
+}): ConsoleNavGroup[] {
+  const includeControlPlaneNav = input.includeControlPlaneNav ?? true;
+  const includeWorkspaceNav = input.includeWorkspaceNav ?? true;
+  const groups: ConsoleNavGroup[] = [];
+
+  if (includeControlPlaneNav) {
+    groups.push({
       id: "cockpit",
       label: input.groups.cockpit,
       items: [
-        {
-          href: "/workspaces/new",
-          label: input.nav.createWorkspace,
-          icon: "plus",
-        },
-        {
-          href: "/settings/access",
-          label: input.nav.webAccess,
-          icon: "user",
-        },
+        { href: "/workspaces/new", label: input.nav.createWorkspace, icon: "plus" },
+        { href: COCKPIT_SETTINGS_HREF, label: input.nav.webAccess, icon: "user" },
       ],
-    },
-    {
+    });
+  }
+
+  if (includeWorkspaceNav && input.workspaceHrefPrefix) {
+    const prefix = input.workspaceHrefPrefix;
+    groups.push({
+      id: "workspace",
+      label: input.groups.workspace,
+      items: [
+        { href: `${prefix}/settings`, label: input.nav.workspaceDetails, icon: "folder" },
+        { href: `${prefix}/settings/channels`, label: input.nav.channels, icon: "activity" },
+        { href: `${prefix}/settings/registration`, label: input.nav.registration, icon: "play" },
+      ],
+    });
+    groups.push({
       id: "daemon",
       label: input.groups.daemon,
       items: [
@@ -73,30 +88,6 @@ export function buildConsoleNavGroups(input: {
           href: "/settings/invocations",
           label: input.nav.invocationDiagnostics,
           icon: "activity",
-        },
-      ],
-    },
-  ];
-
-  if (includeWorkspaceNav && input.hasActiveWorkspace && input.activeWorkspacePath) {
-    groups.push({
-      id: "workspace",
-      label: input.groups.workspace,
-      items: [
-        {
-          href: workspaceRoute("/settings"),
-          label: input.nav.workspaceSettings,
-          icon: "folder",
-        },
-        {
-          href: workspaceRoute("/settings/channels"),
-          label: input.nav.channels,
-          icon: "activity",
-        },
-        {
-          href: workspaceRoute("/settings/registration"),
-          label: input.nav.registration,
-          icon: "play",
         },
       ],
     });
@@ -147,7 +138,7 @@ export function isConsoleNavItemActive(input: { pathname: string; href: string }
 
 export function currentConsolePageLabel(input: {
   pathname: string;
-  nav: ConsoleNavLabels;
+  nav: ConsoleNavCopy;
   createWorkspaceFallback?: string;
 }): string {
   const segments = input.pathname.split("/").filter(Boolean);
@@ -168,7 +159,7 @@ export function currentConsolePageLabel(input: {
   if (segments[1] === "settings") {
     if (segments[2] === "registration") return input.nav.registration;
     if (segments[2] === "channels") return input.nav.channels;
-    return input.nav.workspaceSettings;
+    return input.nav.workspaceDetails;
   }
 
   return input.createWorkspaceFallback ?? input.nav.modelsProviders;

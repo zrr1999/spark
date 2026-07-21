@@ -1,97 +1,97 @@
 import { Type } from "typebox";
 import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
 import type {
-  ExtensionContext,
+  SparkHostContext,
   JsonValue,
   ToolConfig,
   ToolRenderComponent,
   ToolRenderTheme,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import {
   isUserAnsweredAskEvidenceArtifactBody,
   recordCanonicalAskEvidenceReceipt,
-  type PiAskEvidenceArtifactBody,
+  type SparkAskEvidenceArtifactBody,
 } from "./evidence.ts";
 
-export type PiAskAction = "ask" | "flow";
-export type PiAskAutoAnswerMode = "reviewer";
+export type SparkAskAction = "ask" | "flow";
+export type SparkAskAutoAnswerMode = "reviewer";
 export const DEFAULT_ASK_WAIT_TIMEOUT_MS = 60 * 60_000;
 /** @deprecated Use DEFAULT_ASK_WAIT_TIMEOUT_MS. */
 export const DEFAULT_ASK_REVIEWER_FALLBACK_AFTER_MS = DEFAULT_ASK_WAIT_TIMEOUT_MS;
 const MAX_ASK_WAIT_TIMEOUT_MS = 24 * 60 * 60_000;
 
-export interface PiAskActionToolApi {
+export interface SparkAskActionToolApi {
   registerTool(config: ToolConfig): void;
 }
 
-export interface PiAskActionToolOptions {
+export interface SparkAskActionToolOptions {
   resolveTool(name: "ask_user" | "ask_flow"): ToolConfig | undefined;
-  autoAnswer?: PiAskAutoAnswerResolver;
+  autoAnswer?: SparkAskAutoAnswerResolver;
 }
 
-export interface PiAskAutoAnswerRequest {
+export interface SparkAskAutoAnswerRequest {
   title?: string;
   mode?: string;
   context?: string;
   flow?: string;
-  questions: PiAskAutoAnswerQuestion[];
+  questions: SparkAskAutoAnswerQuestion[];
 }
 
-export interface PiAskAutoAnswerQuestion {
+export interface SparkAskAutoAnswerQuestion {
   id: string;
   prompt: string;
   header?: string;
   type?: string;
   required?: boolean;
   defaultValues?: string[];
-  options?: PiAskAutoAnswerOption[];
+  options?: SparkAskAutoAnswerOption[];
 }
 
-export interface PiAskAutoAnswerOption {
+export interface SparkAskAutoAnswerOption {
   value: string;
   label: string;
   description?: string;
   preview?: string;
 }
 
-export interface PiAskAutoAnswerEntry {
+export interface SparkAskAutoAnswerEntry {
   values?: string[];
   customText?: string;
   notes?: string;
   comment?: string;
 }
 
-export interface PiAskAutoAnswerResult {
-  answers?: Record<string, PiAskAutoAnswerEntry>;
+export interface SparkAskAutoAnswerResult {
+  answers?: Record<string, SparkAskAutoAnswerEntry>;
   blocked?: boolean;
   reason?: string;
 }
 
-export type PiAskAutoAnswerResolver = (
-  request: PiAskAutoAnswerRequest,
-  ctx: ExtensionContext,
-) => Promise<PiAskAutoAnswerResult> | PiAskAutoAnswerResult;
+export type SparkAskAutoAnswerResolver = (
+  request: SparkAskAutoAnswerRequest,
+  ctx: SparkHostContext,
+) => Promise<SparkAskAutoAnswerResult> | SparkAskAutoAnswerResult;
 
-export type PiAskAutoAnswerProvider = (
-  request: PiAskAutoAnswerRequest,
-  ctx: ExtensionContext,
-) => Promise<PiAskAutoAnswerResult | undefined> | PiAskAutoAnswerResult | undefined;
+export type SparkAskAutoAnswerProvider = (
+  request: SparkAskAutoAnswerRequest,
+  ctx: SparkHostContext,
+) => Promise<SparkAskAutoAnswerResult | undefined> | SparkAskAutoAnswerResult | undefined;
 
-const AUTO_ANSWER_PROVIDER_REGISTRY_KEY = "__zendevLabPiAskAutoAnswerProviders";
+const AUTO_ANSWER_PROVIDER_REGISTRY_KEY = "__zendevLabSparkAskAutoAnswerProviders";
 
-type GlobalWithPiAskAutoAnswerProviders = typeof globalThis & {
-  __zendevLabPiAskAutoAnswerProviders?: Map<string, PiAskAutoAnswerProvider>;
+type GlobalWithSparkAskAutoAnswerProviders = typeof globalThis & {
+  __zendevLabSparkAskAutoAnswerProviders?: Map<string, SparkAskAutoAnswerProvider>;
 };
 
-function autoAnswerProviderRegistry(): Map<string, PiAskAutoAnswerProvider> {
-  const globalObject = globalThis as GlobalWithPiAskAutoAnswerProviders;
+function autoAnswerProviderRegistry(): Map<string, SparkAskAutoAnswerProvider> {
+  const globalObject = globalThis as GlobalWithSparkAskAutoAnswerProviders;
   globalObject[AUTO_ANSWER_PROVIDER_REGISTRY_KEY] ??= new Map();
   return globalObject[AUTO_ANSWER_PROVIDER_REGISTRY_KEY];
 }
 
-export function registerPiAskAutoAnswerProvider(
+export function registerSparkAskAutoAnswerProvider(
   id: string,
-  provider: PiAskAutoAnswerProvider,
+  provider: SparkAskAutoAnswerProvider,
 ): () => void {
   const providers = autoAnswerProviderRegistry();
   providers.set(id, provider);
@@ -114,9 +114,9 @@ class ToolCallText implements ToolRenderComponent {
   }
 }
 
-export function registerPiAskActionTool(
-  pi: PiAskActionToolApi,
-  options: PiAskActionToolOptions,
+export function registerSparkAskActionTool(
+  pi: SparkAskActionToolApi,
+  options: SparkAskActionToolOptions,
 ): void {
   pi.registerTool({
     name: "ask",
@@ -237,28 +237,28 @@ export function registerPiAskActionTool(
   });
 }
 
-function normalizeAskAction(value: unknown): PiAskAction {
+function normalizeAskAction(value: unknown): SparkAskAction {
   if (value === undefined || value === null || value === "ask") return "ask";
   if (value === "flow") return "flow";
   throw new Error("ask.action must be ask or flow");
 }
 
-function normalizeAskAutoAnswerMode(value: unknown): PiAskAutoAnswerMode | undefined {
+function normalizeAskAutoAnswerMode(value: unknown): SparkAskAutoAnswerMode | undefined {
   if (value === undefined || value === null || value === false) return undefined;
   if (value === "reviewer") return "reviewer";
   throw new Error("ask.autoAnswer must be reviewer when provided");
 }
 
-function contextAutoAnswerMode(ctx: ExtensionContext): unknown {
+function contextAutoAnswerMode(ctx: SparkHostContext): unknown {
   return (ctx as { askAutoAnswer?: unknown }).askAutoAnswer;
 }
 
-function contextAutoAnswerResolver(ctx: ExtensionContext): PiAskAutoAnswerResolver | undefined {
+function contextAutoAnswerResolver(ctx: SparkHostContext): SparkAskAutoAnswerResolver | undefined {
   const resolver = (ctx as { askAutoAnswerResolver?: unknown }).askAutoAnswerResolver;
-  return typeof resolver === "function" ? (resolver as PiAskAutoAnswerResolver) : undefined;
+  return typeof resolver === "function" ? (resolver as SparkAskAutoAnswerResolver) : undefined;
 }
 
-function contextAskWaitTimeoutMs(ctx: ExtensionContext): number {
+function contextAskWaitTimeoutMs(ctx: SparkHostContext): number {
   const policy = ctx as {
     askWaitTimeoutMs?: unknown;
     askReviewerFallbackAfterMs?: unknown;
@@ -270,11 +270,11 @@ function contextAskWaitTimeoutMs(ctx: ExtensionContext): number {
   return Math.min(MAX_ASK_WAIT_TIMEOUT_MS, Math.max(1, Math.floor(value)));
 }
 
-function hasProtocolInteraction(ctx: ExtensionContext): boolean {
+function hasProtocolInteraction(ctx: SparkHostContext): boolean {
   return typeof ctx.ui?.interaction === "function";
 }
 
-function hasLegacyHumanInteraction(ctx: ExtensionContext): boolean {
+function hasLegacyHumanInteraction(ctx: SparkHostContext): boolean {
   return Boolean(
     ctx.ui &&
     (typeof ctx.ui.select === "function" ||
@@ -308,9 +308,9 @@ async function waitForReviewerFallback(timeoutMs: number, signal: AbortSignal): 
 }
 
 async function resolveAutoAnswerFromProviders(
-  request: PiAskAutoAnswerRequest,
-  ctx: ExtensionContext,
-): Promise<PiAskAutoAnswerResult | undefined> {
+  request: SparkAskAutoAnswerRequest,
+  ctx: SparkHostContext,
+): Promise<SparkAskAutoAnswerResult | undefined> {
   for (const provider of autoAnswerProviderRegistry().values()) {
     const answer = await provider(request, ctx);
     if (answer) return answer;
@@ -319,7 +319,7 @@ async function resolveAutoAnswerFromProviders(
 }
 
 function selectAskTarget(
-  action: PiAskAction,
+  action: SparkAskAction,
   params: Record<string, unknown>,
 ): "ask_user" | "ask_flow" {
   if (action === "flow") return "ask_flow";
@@ -348,12 +348,12 @@ function stripAdapterOnlyParams(params: Record<string, unknown>): Record<string,
 async function maybeRecordAskEvidence(
   params: Record<string, unknown>,
   result: Awaited<ReturnType<ToolConfig["execute"]>>,
-  ctx: ExtensionContext,
+  ctx: SparkHostContext,
 ) {
   if (params.recordAsEvidence !== true) return result;
   const cwd = typeof ctx.cwd === "string" ? ctx.cwd : undefined;
   if (!cwd) throw new Error("ask recordAsEvidence requires a workspace cwd");
-  const body: PiAskEvidenceArtifactBody = {
+  const body: SparkAskEvidenceArtifactBody = {
     schema: "spark.ask.evidence/v1",
     request: decodeAutoAnswerRequest(params),
     result: isRecord(result.details) ? (result.details.result ?? null) : null,
@@ -385,7 +385,7 @@ function hasPreview(value: unknown): boolean {
   return typeof value === "object" && value !== null && "preview" in value;
 }
 
-function decodeAutoAnswerRequest(params: Record<string, unknown>): PiAskAutoAnswerRequest {
+function decodeAutoAnswerRequest(params: Record<string, unknown>): SparkAskAutoAnswerRequest {
   return {
     title: optionalString(params.title),
     mode: optionalString(params.mode),
@@ -397,7 +397,7 @@ function decodeAutoAnswerRequest(params: Record<string, unknown>): PiAskAutoAnsw
   };
 }
 
-function decodeAutoAnswerQuestion(value: unknown): PiAskAutoAnswerQuestion {
+function decodeAutoAnswerQuestion(value: unknown): SparkAskAutoAnswerQuestion {
   const raw = isRecord(value) ? value : {};
   return {
     id: optionalString(raw.id) ?? "",
@@ -412,7 +412,7 @@ function decodeAutoAnswerQuestion(value: unknown): PiAskAutoAnswerQuestion {
   };
 }
 
-function decodeAutoAnswerOption(value: unknown): PiAskAutoAnswerOption {
+function decodeAutoAnswerOption(value: unknown): SparkAskAutoAnswerOption {
   const raw = isRecord(value) ? value : {};
   return {
     value: optionalString(raw.value) ?? "",
@@ -423,8 +423,8 @@ function decodeAutoAnswerOption(value: unknown): PiAskAutoAnswerOption {
 }
 
 function validateAutoAnswerResult(
-  request: PiAskAutoAnswerRequest,
-  result: PiAskAutoAnswerResult,
+  request: SparkAskAutoAnswerRequest,
+  result: SparkAskAutoAnswerResult,
 ): string | undefined {
   if (result.blocked) return result.reason || "reviewer auto-answer blocked";
   const answers = result.answers ?? {};
@@ -457,10 +457,10 @@ function validateAutoAnswerResult(
 }
 
 function withSyntheticAutoAnswerUi(
-  ctx: ExtensionContext,
-  request: PiAskAutoAnswerRequest,
-  answers: Record<string, PiAskAutoAnswerEntry>,
-): ExtensionContext {
+  ctx: SparkHostContext,
+  request: SparkAskAutoAnswerRequest,
+  answers: Record<string, SparkAskAutoAnswerEntry>,
+): SparkHostContext {
   let index = 0;
   const nextQuestion = () => request.questions[index++];
   const ui = {
@@ -478,8 +478,8 @@ function withSyntheticAutoAnswerUi(
 }
 
 function selectionChoice(
-  question: PiAskAutoAnswerQuestion | undefined,
-  answers: Record<string, PiAskAutoAnswerEntry>,
+  question: SparkAskAutoAnswerQuestion | undefined,
+  answers: Record<string, SparkAskAutoAnswerEntry>,
 ): { value?: string; customText?: string } | undefined {
   if (!question) return undefined;
   const answer = answers[question.id];
@@ -490,8 +490,8 @@ function selectionChoice(
 }
 
 function labelChoice(
-  question: PiAskAutoAnswerQuestion | undefined,
-  answers: Record<string, PiAskAutoAnswerEntry>,
+  question: SparkAskAutoAnswerQuestion | undefined,
+  answers: Record<string, SparkAskAutoAnswerEntry>,
 ): string | undefined {
   if (!question) return undefined;
   const answer = answers[question.id];
@@ -501,15 +501,15 @@ function labelChoice(
 }
 
 function freeformChoice(
-  question: PiAskAutoAnswerQuestion | undefined,
-  answers: Record<string, PiAskAutoAnswerEntry>,
+  question: SparkAskAutoAnswerQuestion | undefined,
+  answers: Record<string, SparkAskAutoAnswerEntry>,
 ): string | undefined {
   if (!question) return undefined;
   const answer = answers[question.id];
   return answer?.customText ?? answer?.notes ?? answer?.comment;
 }
 
-function labelsForValues(question: PiAskAutoAnswerQuestion, values: string[]): string[] {
+function labelsForValues(question: SparkAskAutoAnswerQuestion, values: string[]): string[] {
   const byValue = new Map((question.options ?? []).map((option) => [option.value, option.label]));
   return values.flatMap((value) => {
     const label = byValue.get(value);
@@ -544,7 +544,7 @@ function blockedAutoAnswerResult(params: Record<string, unknown>, reason: string
 
 function annotateAutoAnswerResult(
   result: Awaited<ReturnType<ToolConfig["execute"]>>,
-  autoAnswered: PiAskAutoAnswerResult,
+  autoAnswered: SparkAskAutoAnswerResult,
   humanTimeoutMs: number,
 ) {
   return {

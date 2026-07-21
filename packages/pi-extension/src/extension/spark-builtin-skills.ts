@@ -29,7 +29,7 @@ export function defaultBuiltinSkillsDir(): string {
   return resolve(hostDir, "../../skills");
 }
 
-export function defaultPiCueSkillsDir(): string {
+export function defaultSparkCueSkillsDir(): string {
   const hostDir = dirname(fileURLToPath(import.meta.url));
   const fromWorkspace = resolve(hostDir, "../../../spark-cue/skills");
   if (existsSync(fromWorkspace)) return fromWorkspace;
@@ -44,7 +44,7 @@ export function defaultPiCueSkillsDir(): string {
 }
 
 export function defaultBasePromptDirs(): string[] {
-  return [defaultBuiltinSkillsDir(), defaultPiCueSkillsDir()];
+  return [defaultBuiltinSkillsDir(), defaultSparkCueSkillsDir()];
 }
 
 export function defaultBasePromptFiles(): string[] {

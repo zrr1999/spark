@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { nowIso, type ArtifactRef } from "@zendev-lab/spark-extension-api";
+import { nowIso, type ArtifactRef } from "@zendev-lab/spark-core";
 import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import { JsonStoreFormatError, readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import {

@@ -11,7 +11,7 @@ import { formText } from "$lib/server/form-data";
 import {
   createRuntimeEnrollmentToken,
   revokeRuntimeEnrollmentToken,
-} from "$lib/server/runtime-registration";
+} from "@zendev-lab/spark-coordination/runtime-registration";
 import { loadWorkspaceRegistrationPage } from "@zendev-lab/spark-coordination/cockpit-queries";
 import { unbindWorkspaceOwner } from "@zendev-lab/spark-coordination/projection-services";
 import { workspacePath } from "$lib/workspace-routes";

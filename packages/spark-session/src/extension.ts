@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import type { ToolConfig, ToolRenderComponent } from "@zendev-lab/spark-extension-api";
+import type { ToolConfig, ToolRenderComponent } from "@zendev-lab/spark-core";
 import {
   executeSparkSessionAction,
   type SparkSessionAction,
@@ -7,7 +7,7 @@ import {
   type SparkSessionToolContext,
 } from "./action-tool.ts";
 
-export interface SparkSessionExtensionApi {
+export interface SparkSessionHostApi {
   registerTool(config: ToolConfig): void;
 }
 
@@ -15,8 +15,8 @@ export interface SparkSessionToolOptions {
   deps?: SparkSessionActionDeps;
 }
 
-export function registerPiSessionTool(
-  pi: SparkSessionExtensionApi,
+export function registerSparkSessionTool(
+  pi: SparkSessionHostApi,
   options: SparkSessionToolOptions = {},
 ): void {
   pi.registerTool({
@@ -30,7 +30,7 @@ export function registerPiSessionTool(
       "Use session create only when no existing division of labour owns the responsibility. role must be one concise stable responsibility label in the user's language and existing naming style, such as 运行维护, 前端体验, 质量验证, or Messaging Platforms. Put the concrete task only in session call/send; never use a task slug, implementation name, model name, deliverable, or temporary phase as the role.",
       "session list is paginated and labels each surface as local or channel plus activity as idle or running; use surface, activity, and adapter filters, then continue with offset when total exceeds the returned page.",
       "session send kind=notification persists without triggering the target session; it is the default and cannot wait for completion.",
-      "session send kind=request persists and submits one turn to an idle or running local target. wait=accepted is asynchronous and is the default; wait=completed polls the durable invocation through restart and returns its terminal response.",
+      "session send kind=request persists and submits one turn to an idle or running local target. wait=accepted is asynchronous and is the default; wait=completed polls the durable invocation through restart and returns its terminal response. After a completed wait times out, call send again with kind=request, wait=completed, and only invocationId/timeoutMs to continue waiting without resubmitting or writing mail.",
       "Message-platform sessions may use only list/get/send/inbox/read/ack. Their list/get/send targets are restricted to the current workspace, and sends require local targets.",
       "inbox/read/ack are current-session-only; inbox supports offset/limit pagination.",
     ],
@@ -88,6 +88,12 @@ export function registerPiSessionTool(
             "accepted | completed. Defaults to accepted; completed is valid only for request.",
         }),
       ),
+      invocationId: Type.Optional(
+        Type.String({
+          description:
+            "Accepted invocation to continue waiting for with action=send, kind=request, wait=completed; continuation skips mail and turn submission.",
+        }),
+      ),
       timeoutMs: Type.Optional(
         Type.Number({
           description: "Completed request wait timeout in milliseconds (1000-300000).",
@@ -113,6 +119,7 @@ export function registerPiSessionTool(
               : undefined,
           typeof args.kind === "string" ? `kind=${args.kind}` : undefined,
           typeof args.wait === "string" ? `wait=${args.wait}` : undefined,
+          typeof args.invocationId === "string" ? `invocation=${args.invocationId}` : undefined,
           typeof args.surface === "string" ? `surface=${args.surface}` : undefined,
           typeof args.activity === "string" ? `activity=${args.activity}` : undefined,
         ]
@@ -136,8 +143,8 @@ export function registerPiSessionTool(
   });
 }
 
-export default function sparkSessionExtension(api: SparkSessionExtensionApi): void {
-  registerPiSessionTool(api);
+export default function sparkSessionExtension(api: SparkSessionHostApi): void {
+  registerSparkSessionTool(api);
 }
 
 class SessionToolCallText implements ToolRenderComponent {

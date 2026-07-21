@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
-import type { ExtensionRoleRunner } from "@zendev-lab/spark-extension-api";
+import { test } from "vitest";
+import type { ExtensionRoleRunner } from "@zendev-lab/spark-core";
 
-import { registerPiRolesTools } from "../packages/spark-roles/src/extension.ts";
+import { registerSparkRolesTools } from "../packages/spark-roles/src/extension.ts";
 import { createDefaultRoleRegistry } from "../packages/spark-roles/src/index.ts";
 
 const DEFAULT_TEST_CWD = "/tmp/spark-roles-tool-default-cwd";
@@ -55,7 +55,7 @@ interface ToolConfig {
   }>;
 }
 
-void test("role spec tools list, get, and create project roles", async () => {
+test("role spec tools list, get, and create project roles", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-spec-tools-"));
   try {
     const tools = registerRoleToolsForTest();
@@ -88,7 +88,7 @@ void test("role spec tools list, get, and create project roles", async () => {
   }
 });
 
-void test("role action tool dispatches canonical list, get, and create actions", async () => {
+test("role action tool dispatches canonical list, get, and create actions", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-action-tool-"));
   try {
     const tools = registerRoleToolsForTest();
@@ -144,7 +144,7 @@ void test("role action tool dispatches canonical list, get, and create actions",
   }
 });
 
-void test("role action tool manages role model settings", async () => {
+test("role action tool manages role model settings", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-model-action-tool-"));
   const previousBindingHome = process.env.SPARK_HOME;
   process.env.SPARK_HOME = dir;
@@ -247,7 +247,7 @@ void test("role action tool manages role model settings", async () => {
   }
 });
 
-void test("builtin role prompts and direct-call tool copy stay host-neutral", () => {
+test("builtin role prompts and direct-call tool copy stay host-neutral", () => {
   const tools = registerRoleToolsForTest();
   const roleToolDescription = tools.get("role")?.description ?? "";
   assert.doesNotMatch(roleToolDescription, /Spark tasks or DAG runs/);
@@ -272,7 +272,7 @@ void test("builtin role prompts and direct-call tool copy stay host-neutral", ()
   assert.doesNotMatch(prompts, /Spark project or task/);
 });
 
-void test("role spec tools keep patch presets out of builtin role lookup", async () => {
+test("role spec tools keep patch presets out of builtin role lookup", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-no-patcher-"));
   try {
     const tools = registerRoleToolsForTest();
@@ -294,7 +294,7 @@ void test("role spec tools keep patch presets out of builtin role lookup", async
   }
 });
 
-void test("call_role launches fresh role runs", async () => {
+test("call_role launches fresh role runs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-tool-"));
   const previousBindingHome = process.env.SPARK_HOME;
   process.env.SPARK_HOME = dir;
@@ -371,7 +371,7 @@ void test("call_role launches fresh role runs", async () => {
   }
 });
 
-void test("call_role inherits the active session model when no role model is saved", async () => {
+test("call_role inherits the active session model when no role model is saved", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-session-model-"));
   const previousBindingHome = process.env.SPARK_HOME;
   process.env.SPARK_HOME = dir;
@@ -400,7 +400,7 @@ void test("call_role inherits the active session model when no role model is sav
   }
 });
 
-void test("call_role does not expose raw JSON protocol fragments as output", async () => {
+test("call_role does not expose raw JSON protocol fragments as output", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-protocol-fragment-"));
   const previousBindingHome = process.env.SPARK_HOME;
   process.env.SPARK_HOME = dir;
@@ -428,7 +428,7 @@ void test("call_role does not expose raw JSON protocol fragments as output", asy
   }
 });
 
-void test("call_role exposes empty delivery when JSON events have no final assistant message", async () => {
+test("call_role exposes empty delivery when JSON events have no final assistant message", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-roles-empty-delivery-"));
   const previousBindingHome = process.env.SPARK_HOME;
   process.env.SPARK_HOME = dir;
@@ -466,7 +466,7 @@ void test("call_role exposes empty delivery when JSON events have no final assis
   }
 });
 
-void test("call_role directs persistent continuity to the session tool", async () => {
+test("call_role directs persistent continuity to the session tool", async () => {
   const tools = registerRoleToolsForTest();
   await assert.rejects(
     executeCallRole(tools, {
@@ -478,7 +478,7 @@ void test("call_role directs persistent continuity to the session tool", async (
   );
 });
 
-void test("call_role rejects unknown launches instead of falling back to fresh", async () => {
+test("call_role rejects unknown launches instead of falling back to fresh", async () => {
   const tools = registerRoleToolsForTest();
   await assert.rejects(
     executeCallRole(tools, {
@@ -490,7 +490,7 @@ void test("call_role rejects unknown launches instead of falling back to fresh",
   );
 });
 
-void test("spark-roles tools require ctx cwd unless call_role cwd is explicit", async () => {
+test("spark-roles tools require ctx cwd unless call_role cwd is explicit", async () => {
   const tools = registerRoleToolsForTest();
 
   await assert.rejects(
@@ -542,7 +542,7 @@ void test("spark-roles tools require ctx cwd unless call_role cwd is explicit", 
   }
 });
 
-void test("spark-roles tools reject invalid explicit parameters instead of using defaults", async () => {
+test("spark-roles tools reject invalid explicit parameters instead of using defaults", async () => {
   const tools = registerRoleToolsForTest();
 
   await assert.rejects(
@@ -709,7 +709,9 @@ void test("spark-roles tools reject invalid explicit parameters instead of using
 
 function registerRoleToolsForTest(): Map<string, ToolConfig> {
   const tools = new Map<string, ToolConfig>();
-  registerPiRolesTools({ registerTool: (config) => tools.set(config.name, config as ToolConfig) });
+  registerSparkRolesTools({
+    registerTool: (config) => tools.set(config.name, config as ToolConfig),
+  });
   return tools;
 }
 

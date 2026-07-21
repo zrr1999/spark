@@ -1,6 +1,6 @@
 import { basename, dirname, join } from "node:path";
 
-import { stableId } from "@zendev-lab/spark-extension-api";
+import { stableId } from "@zendev-lab/spark-core";
 
 export interface SparkSessionContext {
   cwd?: string;

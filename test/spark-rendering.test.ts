@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import { SPARK_PROTOCOL_VERSION } from "@zendev-lab/spark-protocol";
 
@@ -35,7 +35,7 @@ function renderMessageContent(content: Parameters<SparkHostMessageRenderer>[0]["
   return typeof content === "string" ? content : JSON.stringify(content);
 }
 
-void test("SparkHostRuntime registers and exposes custom message renderers", () => {
+test("SparkHostRuntime registers and exposes custom message renderers", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-rendering" });
   const renderer: SparkHostMessageRenderer = (message) => ({
     render: () => [`rendered:${message.customType}:${renderMessageContent(message.content)}`],
@@ -55,7 +55,7 @@ void test("SparkHostRuntime registers and exposes custom message renderers", () 
   );
 });
 
-void test("SparkNativeSession appends streaming assistant chunks smoothly", () => {
+test("SparkNativeSession appends streaming assistant chunks smoothly", () => {
   const session = new SparkNativeSession();
   session.appendAssistantChunk("hello");
   session.appendAssistantChunk(" world");
@@ -67,7 +67,7 @@ void test("SparkNativeSession appends streaming assistant chunks smoothly", () =
   assert.equal(assistantMessages[0]!.streaming, false);
 });
 
-void test("SparkNativeSession responder context streams assistant chunks without duplicate final text", async () => {
+test("SparkNativeSession responder context streams assistant chunks without duplicate final text", async () => {
   const session = new SparkNativeSession(async (_input, context) => {
     context.appendAssistantChunk?.("hello");
     context.appendAssistantChunk?.(" world");
@@ -83,7 +83,7 @@ void test("SparkNativeSession responder context streams assistant chunks without
   assert.equal(assistantMessages[0]!.streaming, false);
 });
 
-void test("SparkNativeTuiApp folds tool output and toggles thinking/tool visibility", () => {
+test("SparkNativeTuiApp folds tool output and toggles thinking/tool visibility", () => {
   const session = new SparkNativeSession();
   session.addToolMessage({ toolName: "impl_status", text: "long tool output", status: "success" });
   session.addThinking("hidden reasoning trace");
@@ -103,7 +103,7 @@ void test("SparkNativeTuiApp folds tool output and toggles thinking/tool visibil
   assert.match(rendered, /thinking> hidden reasoning trace/);
 });
 
-void test("SparkNativeSession merges pending and completed tool previews by toolCallId", () => {
+test("SparkNativeSession merges pending and completed tool previews by toolCallId", () => {
   const session = new SparkNativeSession();
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
   session.addMessageView({
@@ -137,7 +137,7 @@ void test("SparkNativeSession merges pending and completed tool previews by tool
   assert.match(stripAnsi(app.render(80).join("\n")), /✓ tool:read \[succeeded\] — read ok/);
 });
 
-void test("SparkNativeTuiApp renders session, model, thinking, run, and queue state clearly", async () => {
+test("SparkNativeTuiApp renders session, model, thinking, run, and queue state clearly", async () => {
   const session = new SparkNativeSession(async () => await new Promise<string>(() => undefined));
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined, {
     statusContext: {
@@ -161,7 +161,7 @@ void test("SparkNativeTuiApp renders session, model, thinking, run, and queue st
     /session Fix renderer • model openai-codex\/gpt-5\.4 • thinking high • state running • queue steer=1 follow-up=1/,
   );
   assert.match(rendered, /Enter steer • Alt\+Enter follow-up • Esc stop • Alt\+Up restore queue/);
-  assert.match(rendered, /◆ Input queue · 2/);
+  assert.match(rendered, /◆ Input queue · local 2/);
   assert.match(rendered, /├─ 1\. steer · steer now/);
   assert.match(rendered, /└─ 2\. follow-up · then summarize/);
   assert.match(rendered, /Alt\+Up restore all/);
@@ -182,7 +182,7 @@ void test("SparkNativeTuiApp renders session, model, thinking, run, and queue st
   session.abort("test cleanup");
 });
 
-void test("SparkNativeTuiApp bounds queue rows and sanitizes inline image previews", async () => {
+test("SparkNativeTuiApp bounds queue rows and sanitizes inline image previews", async () => {
   const session = new SparkNativeSession(async () => await new Promise<string>(() => undefined));
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
 
@@ -199,7 +199,7 @@ void test("SparkNativeTuiApp bounds queue rows and sanitizes inline image previe
   }
 
   const rendered = stripAnsi(app.render(100).join("\n"));
-  assert.match(rendered, /◆ Input queue · 5/);
+  assert.match(rendered, /◆ Input queue · local 5/);
   assert.match(
     rendered,
     /1\. steer · <image name="preview\.png">\[inline image data omitted\]<\/image> inspect/,
@@ -211,7 +211,7 @@ void test("SparkNativeTuiApp bounds queue rows and sanitizes inline image previe
   session.abort("test cleanup");
 });
 
-void test("SparkNativeTuiApp uses custom message renderers and skips display=false custom messages", () => {
+test("SparkNativeTuiApp uses custom message renderers and skips display=false custom messages", () => {
   const session = new SparkNativeSession();
   session.addCustomMessage({
     customType: "status-update",
@@ -238,7 +238,7 @@ void test("SparkNativeTuiApp uses custom message renderers and skips display=fal
   assert.doesNotMatch(rendered, /hidden/);
 });
 
-void test("SparkNativeTuiApp renders native setStatus and setWidget surfaces", () => {
+test("SparkNativeTuiApp renders native setStatus and setWidget surfaces", () => {
   const session = new SparkNativeSession();
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
 
@@ -259,7 +259,7 @@ void test("SparkNativeTuiApp renders native setStatus and setWidget surfaces", (
   assert.doesNotMatch(rendered, /◆ Role runs/);
 });
 
-void test("Spark native UI transport bridges notify, status, widget, and custom", async () => {
+test("Spark native UI transport bridges notify, status, widget, and custom", async () => {
   const session = new SparkNativeSession();
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
   const ui = createSparkNativeUiTransport(app, session);
@@ -283,7 +283,7 @@ void test("Spark native UI transport bridges notify, status, widget, and custom"
   assert.match(rendered, /second line/);
 });
 
-void test("SparkNativeTuiApp records protocol cockpit state and renders Spark panels", async () => {
+test("SparkNativeTuiApp records protocol cockpit state and renders Spark panels", async () => {
   const session = new SparkNativeSession();
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
 
@@ -361,6 +361,7 @@ void test("SparkNativeTuiApp records protocol cockpit state and renders Spark pa
           },
         },
       ],
+      evidence: [],
       metadata: {},
     },
   });
@@ -390,7 +391,8 @@ void test("SparkNativeTuiApp records protocol cockpit state and renders Spark pa
     workflowRuns: 1,
     roleRuns: 1,
     tasks: 1,
-    artifacts: 2,
+    artifacts: 0,
+    evidence: 2,
     reviews: 2,
     graftItems: 1,
     interactions: 1,
@@ -423,10 +425,7 @@ void test("SparkNativeTuiApp records protocol cockpit state and renders Spark pa
   assert.equal(await app.submitInput("/artifacts"), "command");
   rendered = app.render(120).join("\n");
   assert.match(rendered, /Spark cockpit: artifacts/);
-  assert.match(
-    rendered,
-    /artifact:review-verdict \[record\/json\] producer=review status=approved Reviewer verdict/,
-  );
+  assert.match(rendered, /No artifact view-model updates have been published yet/);
 
   assert.equal(await app.submitInput("/reviews"), "command");
   rendered = app.render(120).join("\n");
@@ -442,7 +441,7 @@ void test("SparkNativeTuiApp records protocol cockpit state and renders Spark pa
   );
 });
 
-void test("SparkHostRuntime custom messages reach native registered message renderers", () => {
+test("SparkHostRuntime custom messages reach native registered message renderers", () => {
   const runtime = new SparkHostRuntime({ cwd: "/tmp/spark-rendering", hasUI: true });
   runtime.registerMessageRenderer("spark-role-run-completion", (message) => ({
     render: () => [
@@ -475,7 +474,7 @@ void test("SparkHostRuntime custom messages reach native registered message rend
   );
 });
 
-void test("SparkNativeTuiApp renders component widget factories natively", () => {
+test("SparkNativeTuiApp renders component widget factories natively", () => {
   const session = new SparkNativeSession();
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
 
@@ -496,7 +495,7 @@ void test("SparkNativeTuiApp renders component widget factories natively", () =>
   assert.doesNotMatch(rendered, /component factory is not supported/);
 });
 
-void test("SparkNativeTuiApp provides strikethrough fallback to component widgets", () => {
+test("SparkNativeTuiApp provides strikethrough fallback to component widgets", () => {
   const session = new SparkNativeSession();
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
 
@@ -513,7 +512,7 @@ void test("SparkNativeTuiApp provides strikethrough fallback to component widget
   assert.doesNotMatch(rendered, /widget render failed/);
 });
 
-void test("SparkNativeTuiApp dispatches app keybindings before editor input", async () => {
+test("SparkNativeTuiApp dispatches app keybindings before editor input", async () => {
   const session = new SparkNativeSession();
   const keybindings = new SparkKeybindings();
   let picked = 0;
@@ -531,7 +530,7 @@ void test("SparkNativeTuiApp dispatches app keybindings before editor input", as
   assert.equal(picked, 1);
 });
 
-void test("SparkNativeTuiApp installs Ctrl+O/Ctrl+T and cockpit keybindings", async () => {
+test("SparkNativeTuiApp installs Ctrl+O/Ctrl+T and cockpit keybindings", async () => {
   const session = new SparkNativeSession();
   const keybindings = new SparkKeybindings();
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined, { keybindings });
@@ -549,7 +548,7 @@ void test("SparkNativeTuiApp installs Ctrl+O/Ctrl+T and cockpit keybindings", as
   assert.equal(app.cockpitSnapshot().activePanel, "workflows");
 });
 
-void test("SparkNativeTuiApp handles local slash commands without submitting to responder", async () => {
+test("SparkNativeTuiApp handles local slash commands without submitting to responder", async () => {
   let responderCalls = 0;
   const session = new SparkNativeSession(() => {
     responderCalls += 1;
@@ -583,7 +582,7 @@ void test("SparkNativeTuiApp handles local slash commands without submitting to 
   assert.match(rendered, /daemon: running/);
 });
 
-void test("SparkNativeTuiApp /clear keeps the welcome banner and removes old transcript", async () => {
+test("SparkNativeTuiApp /clear keeps the welcome banner and removes old transcript", async () => {
   const session = new SparkNativeSession();
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
 
@@ -598,7 +597,7 @@ void test("SparkNativeTuiApp /clear keeps the welcome banner and removes old tra
   assert.match(rendered, /Spark native TUI is running/);
 });
 
-void test("SparkNativeTuiApp /stop aborts the active turn and discards late responses", async () => {
+test("SparkNativeTuiApp /stop aborts the active turn and discards late responses", async () => {
   let resolveResponse: ((value: string) => void) | undefined;
   let sawAbort = false;
   const session = new SparkNativeSession((_input, context) => {
@@ -629,7 +628,7 @@ void test("SparkNativeTuiApp /stop aborts the active turn and discards late resp
   assert.doesNotMatch(rendered, /late assistant response/);
 });
 
-void test("SparkNativeSession maps transcript to and from Spark session view models", () => {
+test("SparkNativeSession maps transcript to and from Spark session view models", () => {
   const session = new SparkNativeSession();
   session.addToolMessage({ toolName: "read", text: "ok", status: "success" });
   session.appendAssistantChunk("streaming");
@@ -662,6 +661,7 @@ void test("SparkNativeSession maps transcript to and from Spark session view mod
     runs: [],
     tasks: [],
     artifacts: [],
+    evidence: [],
     metadata: {},
   });
 
@@ -670,7 +670,7 @@ void test("SparkNativeSession maps transcript to and from Spark session view mod
   assert.equal(restored.messages[0]?.text, "from view");
 });
 
-void test("SparkNativeSession projects structured tool states without exposing raw input", () => {
+test("SparkNativeSession projects structured tool states without exposing raw input", () => {
   const session = new SparkNativeSession();
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
 
@@ -700,6 +700,7 @@ void test("SparkNativeSession projects structured tool states without exposing r
     runs: [],
     tasks: [],
     artifacts: [],
+    evidence: [],
     metadata: {},
   });
 
@@ -711,7 +712,7 @@ void test("SparkNativeSession projects structured tool states without exposing r
   assert.doesNotMatch(rendered, /raw output must stay hidden/);
 });
 
-void test("SparkNativeSession flattens display-safe conversation parts and merges tool lineage", () => {
+test("SparkNativeSession flattens display-safe conversation parts and merges tool lineage", () => {
   const session = new SparkNativeSession();
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
 
@@ -785,6 +786,7 @@ void test("SparkNativeSession flattens display-safe conversation parts and merge
     runs: [],
     tasks: [],
     artifacts: [],
+    evidence: [],
     metadata: {},
   });
 
@@ -801,7 +803,7 @@ void test("SparkNativeSession flattens display-safe conversation parts and merge
   assert.doesNotMatch(rendered, /raw README output|"token":"hidden"/);
 });
 
-void test("SparkNativeTuiApp keeps streaming thinking state visible while folded", () => {
+test("SparkNativeTuiApp keeps streaming thinking state visible while folded", () => {
   const session = new SparkNativeSession();
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
   session.addMessageView({
@@ -822,7 +824,7 @@ void test("SparkNativeTuiApp keeps streaming thinking state visible while folded
   assert.match(rendered, /thinking> private reasoning ▋/);
 });
 
-void test("SparkNativeSession orders view messages chronologically", () => {
+test("SparkNativeSession orders view messages chronologically", () => {
   const session = new SparkNativeSession();
   session.applySessionView({
     version: SPARK_PROTOCOL_VERSION,
@@ -852,6 +854,7 @@ void test("SparkNativeSession orders view messages chronologically", () => {
     runs: [],
     tasks: [],
     artifacts: [],
+    evidence: [],
     metadata: {},
   });
 
@@ -876,7 +879,7 @@ void test("SparkNativeSession orders view messages chronologically", () => {
   );
 });
 
-void test("SparkHostRuntime and native UI transport round-trip interaction protocol", async () => {
+test("SparkHostRuntime and native UI transport round-trip interaction protocol", async () => {
   const session = new SparkNativeSession();
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined, {
     interactionHandler: (request) => {
@@ -968,7 +971,7 @@ void test("SparkHostRuntime and native UI transport round-trip interaction proto
   assert.equal("approved" in approval ? approval.approved : false, true);
 });
 
-void test("native UI transport consumes view model events without concrete TUI protocol types", () => {
+test("native UI transport consumes view model events without concrete TUI protocol types", () => {
   const session = new SparkNativeSession();
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
   const ui = createSparkNativeUiTransport(app, session);
@@ -989,6 +992,7 @@ void test("native UI transport consumes view model events without concrete TUI p
       runs: [],
       tasks: [],
       artifacts: [],
+      evidence: [],
       metadata: {},
     },
   });
@@ -1050,15 +1054,15 @@ void test("native UI transport consumes view model events without concrete TUI p
   assert.doesNotMatch(narrow, /\(baidu-oneapi\)/);
 });
 
-void test("native UI transport prints task completion evidence summaries", () => {
+test("native UI transport prints task completion evidence summaries", () => {
   const session = new SparkNativeSession();
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
   const ui = createSparkNativeUiTransport(app, session);
 
   ui.publishView?.({
     version: SPARK_PROTOCOL_VERSION,
-    type: "artifact.update",
-    artifact: {
+    type: "evidence.update",
+    evidence: {
       version: SPARK_PROTOCOL_VERSION,
       ref: "artifact:review",
       title: "Review verdict",
@@ -1091,7 +1095,7 @@ void test("native UI transport prints task completion evidence summaries", () =>
   );
 });
 
-void test("native UI transport returns blocked protocol responses without handler", async () => {
+test("native UI transport returns blocked protocol responses without handler", async () => {
   const session = new SparkNativeSession();
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined);
   const ui = createSparkNativeUiTransport(app, session);
@@ -1116,7 +1120,7 @@ void test("native UI transport returns blocked protocol responses without handle
   );
 });
 
-void test("SparkNativeTuiApp /retry resubmits the previous user prompt", async () => {
+test("SparkNativeTuiApp /retry resubmits the previous user prompt", async () => {
   const prompts: string[] = [];
   const session = new SparkNativeSession((input) => {
     prompts.push(input);
@@ -1133,7 +1137,7 @@ void test("SparkNativeTuiApp /retry resubmits the previous user prompt", async (
   assert.match(app.render(100).join("\n"), /Retrying: first prompt/);
 });
 
-void test("Spark daemon native slash commands render invocation status and start summaries", async () => {
+test("Spark daemon native slash commands render invocation status and start summaries", async () => {
   let started = false;
   const session = new SparkNativeSession();
   const app = new SparkNativeTuiApp(fakeTui(), session, () => undefined, {

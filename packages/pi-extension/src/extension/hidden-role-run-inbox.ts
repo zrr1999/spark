@@ -1,11 +1,11 @@
-import type { RunRef } from "@zendev-lab/spark-extension-api";
-import { JsonStoreFormatError, readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
+import type { RunRef } from "@zendev-lab/spark-core";
 import {
   legacyHiddenRoleRunInboxStorePath,
   rebuildSessionIndex,
   sessionHiddenRoleRunInboxStorePath,
-} from "./session-directory-store.ts";
-import type { SparkSessionContext } from "./session-identity.ts";
+  type SparkSessionContext,
+} from "@zendev-lab/spark-loop";
+import { JsonStoreFormatError, readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 
 export interface HiddenRoleRunInboxState {
   version: 1;

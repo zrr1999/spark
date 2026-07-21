@@ -527,6 +527,12 @@ function insertInvocationEvents(db: DatabaseSync, invocationId: string, count: n
         now,
       );
     }
+    db.prepare(
+      `UPDATE invocations
+       SET event_cursor = ?,
+           updated_at = ?
+       WHERE id = ?`,
+    ).run(count, now, invocationId);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");

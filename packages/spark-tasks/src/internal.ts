@@ -23,7 +23,7 @@ import {
   type TaskRun,
   type TaskTodo,
   type TaskTodoStatus,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import type {
   CreateTaskTodoInput,
   NonConcreteTaskIssue,

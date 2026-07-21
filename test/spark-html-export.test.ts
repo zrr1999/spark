@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { createSparkPiParitySlashCommands } from "../apps/spark-tui/src/cli/pi-parity-commands.ts";
 import {
@@ -16,7 +16,7 @@ import type {
   SparkNativeSlashCommandContext,
 } from "../apps/spark-tui/src/native-tui.ts";
 
-void test("renderSparkTranscriptHtml is self-contained, theme-aware, and escapes transcript content", () => {
+test("renderSparkTranscriptHtml is self-contained, theme-aware, and escapes transcript content", () => {
   const html = renderSparkTranscriptHtml({
     title: "Unsafe transcript",
     cwd: "/tmp/project",
@@ -41,7 +41,7 @@ void test("renderSparkTranscriptHtml is self-contained, theme-aware, and escapes
   assert.doesNotMatch(html, /src="https?:/);
 });
 
-void test("/export html and /share write safe local HTML for visible and persisted Spark sessions", async () => {
+test("/export html and /share write safe local HTML for visible and persisted Spark sessions", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-html-export-"));
   try {
     const store = new SparkSessionStore({

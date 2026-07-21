@@ -1,0 +1,49 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "packageManager": "pnpm",
+  "testRunner": "vitest",
+  "plugins": ["@stryker-mutator/vitest-runner"],
+  "vitest": {
+    "configFile": "vitest.config.ts"
+  },
+  "mutator": {
+    "excludedMutations": ["StringLiteral"]
+  },
+  "ignorePatterns": ["reports", ".stryker-tmp"],
+  "reporters": ["clear-text", "progress", "html", "json"],
+  "htmlReporter": {
+    "fileName": "reports/mutation/index.html"
+  },
+  "jsonReporter": {
+    "fileName": "reports/mutation/mutation.json"
+  },
+  "incremental": true,
+  "incrementalFile": "reports/mutation/incremental.json",
+  "thresholds": {
+    "high": 90,
+    "low": 70,
+    "break": null
+  },
+  "timeoutMS": 20000,
+  "concurrency": 4,
+  "ignoreStatic": true,
+  "mutate": [
+    "src/channel-images.ts",
+    "src/infoflow-adapter.ts",
+    "src/infoflow-content.ts",
+    "src/infoflow-policy.ts",
+    "src/infoflow-prompts.ts",
+    "src/infoflow-sdk-outbound.ts",
+    "src/infoflow-text.ts",
+    "src/infoflow-transport.ts",
+    "src/qqbot-adapter.ts",
+    "src/qqbot-api.ts",
+    "src/qqbot-interaction.ts",
+    "src/qqbot-reply-stream.ts",
+    "src/qqbot-transport.ts",
+    "src/reconnect-delay.ts",
+    "src/registry.ts",
+    "src/reply.ts",
+    "src/text-ask.ts"
+  ]
+}

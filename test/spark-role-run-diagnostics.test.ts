@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { createSparkHeadlessRoleExecutor } from "../apps/spark-tui/src/headless-role-executor.ts";
 import {
@@ -14,7 +14,7 @@ import { buildRoleRunFailureDiagnostic } from "../packages/spark-runtime/src/ind
 
 type AssistantMessage = any;
 
-void test("empty-output anonymous role run failure records diagnostic artifact", () => {
+test("empty-output anonymous role run failure records diagnostic artifact", () => {
   const diagnostic = buildRoleRunFailureDiagnostic({
     result: {
       record: {
@@ -45,7 +45,7 @@ void test("empty-output anonymous role run failure records diagnostic artifact",
   assert.match(diagnostic.nextAction, /executor produced no stdout/);
 });
 
-void test("native model parity diagnostic reports provider mismatch", async () => {
+test("native model parity diagnostic reports provider mismatch", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-model-parity-diagnostic-"));
   try {
     const cwd = join(dir, "repo");
@@ -82,7 +82,7 @@ void test("native model parity diagnostic reports provider mismatch", async () =
   }
 });
 
-void test("role-run diagnostic output redacts secrets", () => {
+test("role-run diagnostic output redacts secrets", () => {
   const diagnostic = buildRoleRunFailureDiagnostic({
     result: {
       record: {
@@ -106,7 +106,7 @@ void test("role-run diagnostic output redacts secrets", () => {
   assert.match(text, /<redacted>/);
 });
 
-void test("anonymous diagnostics do not add persistent session selector entries", async () => {
+test("anonymous diagnostics do not add persistent session selector entries", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-anon-diagnostics-selector-"));
   try {
     const cwd = join(dir, "repo");

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   deriveSparkDriveMode,
@@ -11,7 +11,7 @@ import {
   type SparkDriveDescriptor,
 } from "../packages/pi-extension/src/extension/spark-drive-state.ts";
 
-void test("Spark drive registry centralizes modes, aliases, and rendering", () => {
+test("Spark drive registry centralizes modes, aliases, and rendering", () => {
   assert.deepEqual(SPARK_DRIVE_MODES, ["assist", "loop", "goal", "repro", "workflow"]);
   assert.deepEqual(sparkDriveRegistry.modes(), SPARK_DRIVE_MODES);
   assert.equal(normalizeSparkDriveMode("interactive"), "assist");
@@ -20,7 +20,7 @@ void test("Spark drive registry centralizes modes, aliases, and rendering", () =
   assert.equal(renderSparkDriveMode("workflow"), "workflow");
 });
 
-void test("Spark drive registry derives priority workflow > repro > goal > loop > assist", () => {
+test("Spark drive registry derives priority workflow > repro > goal > loop > assist", () => {
   assert.equal(deriveSparkDriveMode({}), "assist");
   assert.equal(deriveSparkDriveMode({ loop: { status: "active" } as never }), "loop");
   assert.equal(
@@ -42,7 +42,7 @@ void test("Spark drive registry derives priority workflow > repro > goal > loop 
   );
 });
 
-void test("explicit active lens drive overrides derived session state", () => {
+test("explicit active lens drive overrides derived session state", () => {
   assert.equal(
     deriveSparkDriveMode({
       activeLens: { drive: "goal" },
@@ -53,7 +53,7 @@ void test("explicit active lens drive overrides derived session state", () => {
   );
 });
 
-void test("new drives register through one descriptor object and one register call", () => {
+test("new drives register through one descriptor object and one register call", () => {
   type DemoDriveMode = "assist" | "demo";
   const demoDescriptor = {
     id: "demo",

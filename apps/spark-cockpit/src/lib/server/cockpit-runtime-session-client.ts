@@ -43,6 +43,8 @@ import { getDatabase } from "./db.ts";
 
 export type CockpitRuntimeSessionListRequest = SparkSessionListRequest & {
   runtimeId?: string;
+  /** Bound how long Cockpit waits for a live owner list before using projections. */
+  timeoutMs?: number;
 };
 
 export type CockpitRuntimeSessionCreateRequest = SparkSessionCreateRequest & {
@@ -50,7 +52,13 @@ export type CockpitRuntimeSessionCreateRequest = SparkSessionCreateRequest & {
   idempotencyKey?: string;
 };
 
-export type CockpitRuntimeSessionSnapshotRequest = Omit<SparkSessionSnapshotRequest, "sessionId">;
+export type CockpitRuntimeSessionSnapshotRequest = Omit<
+  SparkSessionSnapshotRequest,
+  "sessionId"
+> & {
+  /** Bound how long Cockpit waits for a live snapshot before using projections. */
+  timeoutMs?: number;
+};
 
 export interface CockpitRuntimeSessionListResult {
   sessions: SparkSessionRegistryRecord[];
@@ -135,7 +143,7 @@ async function listSessionsWithControlState(
   db: DatabaseSync,
   options: CockpitRuntimeSessionListRequest = {},
 ): Promise<CockpitRuntimeSessionListResult> {
-  const { runtimeId, ...request } = options;
+  const { runtimeId, timeoutMs, ...request } = options;
   const parsed = sparkSessionListRequestSchema.parse(request);
   let routes: RuntimeSessionRoute[];
   try {
@@ -154,7 +162,7 @@ async function listSessionsWithControlState(
   }
 
   const results = await Promise.allSettled(
-    routes.map((route) => listRouteSessions(db, route, parsed)),
+    routes.map((route) => listRouteSessions(db, route, parsed, timeoutMs)),
   );
   if (results.every((result) => result.status === "rejected")) {
     const stale = projectedSessions(db, parsed, runtimeId);
@@ -192,6 +200,7 @@ async function listRouteSessions(
   db: DatabaseSync,
   route: RuntimeSessionRoute,
   request: ReturnType<typeof sparkSessionListRequestSchema.parse>,
+  timeoutMs?: number,
 ): Promise<SparkSessionRegistryRecord[]> {
   const candidateSessionIds = listRuntimeSessionProjections(db, {
     runtimeId: route.runtimeId,
@@ -218,6 +227,7 @@ async function listRouteSessions(
           limit: 100,
         },
       },
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     });
     const page = parseSessionListPage(result);
     sessions.push(...page.sessions);
@@ -289,12 +299,14 @@ async function getSessionSnapshot(
   sessionId: string,
   options: CockpitRuntimeSessionSnapshotRequest = {},
 ): Promise<SessionSnapshotWindow> {
-  const request = sparkSessionSnapshotRequestSchema.parse({ sessionId, ...options });
+  const { timeoutMs, ...snapshotOptions } = options;
+  const request = sparkSessionSnapshotRequestSchema.parse({ sessionId, ...snapshotOptions });
   const route = requireOnlineRoute(db, runtimeSessionRouteForSession(db, sessionId));
   const result = await runRuntimeSessionControlCommand(db, {
     route,
     sessionId,
     payload: { kind: "session.snapshot.request", payload: publicJsonObject(request) },
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   });
   // The projection table intentionally stores only the display snapshot. Page
   // counts and cursors live in the exact command result and must not be rebuilt
@@ -513,7 +525,7 @@ function requireOnlineRoute(db: DatabaseSync, route: RuntimeSessionRoute): Runti
   if (!online) {
     throw new CockpitRuntimeSessionUnavailableError(
       route.scope === "workspace"
-        ? "The workspace owner daemon is not connected to Cockpit."
+        ? "The Spark daemon holding this origin lease is not connected to Cockpit."
         : "The selected Spark daemon runtime is not connected to Cockpit.",
     );
   }

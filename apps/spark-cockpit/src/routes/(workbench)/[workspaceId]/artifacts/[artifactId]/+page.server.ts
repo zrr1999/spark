@@ -5,7 +5,7 @@ import {
   prepareArtifactPreviewForWorkspace,
 } from "@zendev-lab/spark-coordination/cockpit-queries";
 import { getDatabase } from "$lib/server/db";
-import type { ArtifactPreviewStatus } from "$lib/server/artifact-cache";
+import type { ArtifactPreviewStatus } from "@zendev-lab/spark-coordination/artifact-cache";
 import type { Actions, PageServerLoad } from "./$types";
 
 export const load: PageServerLoad = ({ params }) => {

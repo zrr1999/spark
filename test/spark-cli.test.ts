@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 
 import {
   isNormalizedBaiduContextOverflow,
   normalizeBaiduOneApiEvent,
   normalizeBaiduOneApiMessage,
+  normalizeBaiduOneApiStream,
   remapBaiduOneApiPayload,
   resolveBaiduOneApiKey,
   streamBaiduOneApiAnthropic,
@@ -20,14 +21,14 @@ import type { SparkDaemonClientOptions } from "../apps/spark-tui/src/cli/daemon.
 import { SparkNativeSession } from "../apps/spark-tui/src/native-tui.ts";
 import sparkCliHostExtension from "../apps/spark-tui/src/spark-host-extension.ts";
 
-void test("parseSparkCliArgs treats positional args as the initial message", () => {
+test("parseSparkCliArgs treats positional args as the initial message", () => {
   assert.deepEqual(parseSparkCliArgs(["hello", "spark"]), {
     help: false,
     initialMessage: "hello spark",
   });
 });
 
-void test("runSparkCli rejects implicit TUI launch in non-interactive terminals", async () => {
+test("runSparkCli rejects implicit TUI launch in non-interactive terminals", async () => {
   const errors: string[] = [];
   const previousError = console.error;
   let ranTui = false;
@@ -123,7 +124,7 @@ function fakeHeadlessDaemonClient(
   } satisfies SparkDaemonClientOptions;
 }
 
-void test("runSparkCli keeps explicit print mode usable without an interactive terminal", async () => {
+test("runSparkCli keeps explicit print mode usable without an interactive terminal", async () => {
   const logs: string[] = [];
   const submissions: Array<{
     sessionId: string;
@@ -153,7 +154,7 @@ void test("runSparkCli keeps explicit print mode usable without an interactive t
   }
 });
 
-void test("runSparkCli JSON print emits documented JSONL event order", async () => {
+test("runSparkCli JSON print emits documented JSONL event order", async () => {
   const logs: string[] = [];
   const submissions: Array<{
     sessionId: string;
@@ -190,7 +191,7 @@ void test("runSparkCli JSON print emits documented JSONL event order", async () 
   }
 });
 
-void test("handleSparkRpcLine abort cancels the last submitted daemon turn", async () => {
+test("handleSparkRpcLine abort cancels the last submitted daemon turn", async () => {
   const writes: Record<string, unknown>[] = [];
   const submissions: Array<{
     sessionId: string;
@@ -257,7 +258,7 @@ void test("handleSparkRpcLine abort cancels the last submitted daemon turn", asy
   });
 });
 
-void test("handleSparkRpcLine abort reports no target without an invocation", async () => {
+test("handleSparkRpcLine abort reports no target without an invocation", async () => {
   const writes: Record<string, unknown>[] = [];
   await handleSparkRpcLine(
     JSON.stringify({ id: "abort-missing", type: "abort" }),
@@ -270,14 +271,14 @@ void test("handleSparkRpcLine abort reports no target without an invocation", as
   assert.match(String(writes[0]?.error), /abort requires invocationId/u);
 });
 
-void test("Baidu OneAPI payload keeps gateway model spelling", () => {
+test("Baidu OneAPI payload keeps gateway model spelling", () => {
   assert.deepEqual(remapBaiduOneApiPayload({ model: "claude-fable-5", x: 1 }, "Fable 5"), {
     model: "Fable 5",
     x: 1,
   });
 });
 
-void test("Baidu OneAPI payload forces adaptive thinking for gateway Opus models", () => {
+test("Baidu OneAPI payload forces adaptive thinking for gateway Opus models", () => {
   assert.deepEqual(
     remapBaiduOneApiPayload(
       {
@@ -295,7 +296,7 @@ void test("Baidu OneAPI payload forces adaptive thinking for gateway Opus models
   );
 });
 
-void test("Baidu OneAPI key resolver uses only dedicated auth identity", () => {
+test("Baidu OneAPI key resolver uses only dedicated auth identity", () => {
   const previousBaiduKey = process.env.BAIDU_ONEAPI_API_KEY;
   const previousOpenAiKey = process.env.OPENAI_API_KEY;
   try {
@@ -320,7 +321,7 @@ void test("Baidu OneAPI key resolver uses only dedicated auth identity", () => {
   }
 });
 
-void test("Baidu OneAPI normalizes only explicit context overflow errors for Pi recovery", async () => {
+test("Baidu OneAPI normalizes only explicit context overflow errors for Pi recovery", async () => {
   const base = {
     role: "assistant" as const,
     content: [],
@@ -342,7 +343,23 @@ void test("Baidu OneAPI normalizes only explicit context overflow errors for Pi 
     "Context window is full — reduce conversation history, tool/file output, or system prompt.";
   const normalized = normalizeBaiduOneApiMessage({ ...base, errorMessage: source });
   assert.equal(normalized.errorMessage, `context_length_exceeded: ${source}`);
+  assert.equal(normalized.errorMessage?.includes(source), true);
   assert.equal(isNormalizedBaiduContextOverflow(normalized), true);
+  assert.equal(
+    isNormalizedBaiduContextOverflow(
+      normalizeBaiduOneApiMessage({ ...base, errorMessage: "Maximum context length exceeded" }),
+    ),
+    true,
+  );
+  assert.equal(
+    isNormalizedBaiduContextOverflow(
+      normalizeBaiduOneApiMessage({
+        ...base,
+        errorMessage: "Prompt is too long for the context window",
+      }),
+    ),
+    true,
+  );
 
   const ordinary400 = normalizeBaiduOneApiMessage({
     ...base,
@@ -375,7 +392,61 @@ void test("Baidu OneAPI normalizes only explicit context overflow errors for Pi 
   assert.equal(isNormalizedBaiduContextOverflow(error.error), true);
 });
 
-void test("Baidu OneAPI adapters use upstream transport APIs but report baidu-oneapi", async () => {
+test("Baidu OneAPI stream wrapper normalizes done error and result paths for both transports", async () => {
+  const source =
+    "Context window is full — reduce conversation history, tool/file output, or system prompt.";
+  const base = {
+    role: "assistant" as const,
+    content: [],
+    api: "anthropic-messages" as never,
+    provider: "anthropic" as never,
+    model: "test",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "error" as const,
+    errorMessage: source,
+    timestamp: Date.now(),
+  };
+
+  for (const transport of ["anthropic-messages", "openai-responses"] as const) {
+    const upstream = {
+      async *[Symbol.asyncIterator]() {
+        yield { type: "done", reason: "stop", message: { ...base, api: transport } } as never;
+        yield { type: "error", reason: "error", error: { ...base, api: transport } } as never;
+      },
+      async result() {
+        return { ...base, api: transport };
+      },
+    };
+    const stream = normalizeBaiduOneApiStream(upstream as never);
+    const events = [];
+    for await (const event of stream) events.push(event);
+    assert.equal(events.length, 2);
+    assert.equal(events[0]?.type, "done");
+    assert.equal(events[1]?.type, "error");
+    if (events[0]?.type === "done") {
+      assert.equal(events[0].message.api, "baidu-oneapi");
+      assert.equal(isNormalizedBaiduContextOverflow(events[0].message), true);
+    }
+    if (events[1]?.type === "error") {
+      assert.equal(events[1].error.api, "baidu-oneapi");
+      assert.equal(isNormalizedBaiduContextOverflow(events[1].error), true);
+    }
+    const result = await stream.result();
+    assert.equal(result.api, "baidu-oneapi");
+    assert.equal(result.provider, "baidu-oneapi");
+    assert.equal(result.errorMessage?.includes(source), true);
+    assert.equal(isNormalizedBaiduContextOverflow(result), true);
+  }
+});
+
+test("Baidu OneAPI adapters use upstream transport APIs but report baidu-oneapi", async () => {
   const context = { messages: [], tools: [] };
   const baseModel = {
     name: "Baidu test model",
@@ -409,7 +480,7 @@ void test("Baidu OneAPI adapters use upstream transport APIs but report baidu-on
   }
 });
 
-void test("Spark CLI host lets ordinary input reach the agent without /spark wrapping", () => {
+test("Spark CLI host lets ordinary input reach the agent without /spark wrapping", () => {
   const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
   sparkCliHostExtension({
     on: (event, handler) => handlers.set(event, handler),
@@ -420,7 +491,7 @@ void test("Spark CLI host lets ordinary input reach the agent without /spark wra
   assert.deepEqual(result, { action: "continue" });
 });
 
-void test("Spark native session queues steering updates while processing", async () => {
+test("Spark native session queues steering updates while processing", async () => {
   let releaseFirst: ((value: string) => void) | undefined;
   const calls: string[] = [];
   const session = new SparkNativeSession(async (input) => {
@@ -452,7 +523,7 @@ void test("Spark native session queues steering updates while processing", async
   assert.match(calls[1] ?? "", /Steering 1:\nsecond/);
 });
 
-void test("Spark CLI host preserves slash commands and shell input", () => {
+test("Spark CLI host preserves slash commands and shell input", () => {
   const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
   sparkCliHostExtension({
     on: (event, handler) => handlers.set(event, handler),

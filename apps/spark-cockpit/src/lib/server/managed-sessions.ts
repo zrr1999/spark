@@ -3,7 +3,11 @@ import type {
   SparkSessionBindRequest,
   SparkSessionRegistryRecord,
 } from "@zendev-lab/spark-protocol";
-import { getRuntimeSessionProjection } from "@zendev-lab/spark-coordination/runtime-session-control";
+import {
+  getRuntimeSessionProjection,
+  listRuntimeSessionProjections,
+  listRuntimeSessionRoutes,
+} from "@zendev-lab/spark-coordination/runtime-session-control";
 import { RuntimeControlCommandError } from "@zendev-lab/spark-coordination/runtime-control";
 import { parseSessionSnapshotWindow, type SessionSnapshotWindow } from "../session-snapshot-window";
 
@@ -43,6 +47,31 @@ export type CockpitManagedSessionsList = {
   sessions: SparkSessionRegistryRecord[];
   error?: string;
 };
+
+/**
+ * Local projection-only session rail. Used so workbench navigation can paint
+ * before a live owner `session.list` round-trip finishes.
+ */
+export function listProjectedManagedSessionsForCockpit(
+  options: { workspaceId: string; includeArchived?: boolean },
+  database: DatabaseSync = getDatabase(),
+): CockpitManagedSessionsList {
+  const workspaceId = options.workspaceId.trim();
+  if (!workspaceId) {
+    return { available: true, controlAvailable: false, sessions: [] };
+  }
+  const sessions = listRuntimeSessionProjections(database, {
+    scope: "workspace",
+    workspaceId,
+    includeArchived: options.includeArchived,
+  })
+    .map((projection) => projection.session)
+    .filter(isCockpitWorkspaceSession);
+  const controlAvailable = listRuntimeSessionRoutes(database).some(
+    (route) => route.scope === "workspace" && route.workspaceId === workspaceId,
+  );
+  return { available: true, controlAvailable, sessions };
+}
 
 export async function listManagedSessionsForCockpit(
   options: CockpitRuntimeSessionListRequest = {},

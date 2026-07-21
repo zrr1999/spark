@@ -67,6 +67,7 @@ export type {
   ConversationPartLabels,
   ConversationTaskState,
   ConversationToolState,
+  LoadEarlierOutcome,
 } from "./types";
 export { default as ThinkingChainPart } from "./ThinkingChainPart.svelte";
 export { sessionStatusIdentity, sessionStatusUsage } from "./session-status";

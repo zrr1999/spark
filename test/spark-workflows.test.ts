@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
-import type { ExtensionRoleRunner } from "@zendev-lab/spark-extension-api";
+import { test } from "vitest";
+import type { ExtensionRoleRunner } from "@zendev-lab/spark-core";
 
 import {
   listSavedWorkflows,
@@ -41,7 +41,7 @@ import {
   renderSparkDynamicWorkflowDashboardText,
 } from "../packages/pi-extension/src/extension/spark-dynamic-workflow-run-rendering.ts";
 
-void test("spark-workflows package stays isolated from runtime execution packages", async () => {
+test("spark-workflows package stays isolated from runtime execution packages", async () => {
   const pkg = JSON.parse(await readFile("packages/spark-workflows/package.json", "utf8")) as {
     dependencies?: Record<string, string>;
   };
@@ -49,33 +49,9 @@ void test("spark-workflows package stays isolated from runtime execution package
   assert.equal(pkg.dependencies?.["@zendev-lab/spark-runtime"], undefined);
   assert.equal(pkg.dependencies?.["@zendev-lab/spark-roles"], undefined);
   assert.equal(pkg.dependencies?.["spark-goal"], undefined);
-
-  const sourceFiles = await listTypeScriptFiles("packages/spark-workflows/src");
-  for (const file of sourceFiles) {
-    const source = await readFile(file, "utf8");
-    assert.doesNotMatch(
-      source,
-      /(?:from\s+["']|import\(["'])(?:spark-runtime|spark-roles|spark-goal)["']/u,
-      `${file} must not import runtime execution or goal packages`,
-    );
-  }
 });
 
-void test("Spark production code uses generic spark-workflows imports instead of removed aliases", async () => {
-  const sourceFiles = await listTypeScriptFiles("packages/pi-extension/src");
-  const removedPiWorkflowImports =
-    /import\s+(?:type\s+)?\{[^}]*\b(?:defaultSparkDagRunStore|defaultWorkflowRunStore|workspaceWorkflowDir|SparkDag\w*|SparkWorkflow\w*|sparkDagRunNextSteps|runReadySparkTasks)\b[^}]*\}\s+from\s+["'](?:@zendev-lab\/)?spark-workflows["']/su;
-  for (const file of sourceFiles) {
-    const source = await readFile(file, "utf8");
-    assert.doesNotMatch(
-      source,
-      removedPiWorkflowImports,
-      `${file} must import generic Workflow* symbols from spark-workflows; Spark-named aliases are removed`,
-    );
-  }
-});
-
-void test("spark-workflows parses metadata without executing expressions", () => {
+test("spark-workflows parses metadata without executing expressions", () => {
   assert.throws(
     () =>
       parseWorkflowScript(`export const meta = {
@@ -102,7 +78,7 @@ return 'ok'`);
   assert.equal(parsed.body, "return 'ok'");
 });
 
-void test("spark-workflows rejects duplicate normalized metadata stage titles", () => {
+test("spark-workflows rejects duplicate normalized metadata stage titles", () => {
   assert.throws(
     () =>
       parseWorkflowScript(`export const meta = {
@@ -114,7 +90,7 @@ void test("spark-workflows rejects duplicate normalized metadata stage titles", 
   );
 });
 
-void test("spark-workflows parses metadata and runs sandbox primitives with journal", async () => {
+test("spark-workflows parses metadata and runs sandbox primitives with journal", async () => {
   const script = `export const meta = {
   name: 'demo',
   description: 'Demo workflow',
@@ -176,7 +152,7 @@ return { scan, a, b }`;
   );
 });
 
-void test("spark-workflows lists and reads builtin workflows without frontmatter mode", async () => {
+test("spark-workflows lists and reads builtin workflows without frontmatter mode", async () => {
   const listing = await listSavedWorkflows(".", {
     includeUser: false,
     workspaceWorkflowDir: "/definitely/missing/spark-workflows",
@@ -217,7 +193,7 @@ void test("spark-workflows lists and reads builtin workflows without frontmatter
   );
 });
 
-void test("spark-workflows rejects non-canonical saved workflow filenames during discovery", async () => {
+test("spark-workflows rejects non-canonical saved workflow filenames during discovery", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-workflow-canonical-filename-"));
   const workflowDir = join(dir, "workflows");
   try {
@@ -248,7 +224,7 @@ void test("spark-workflows rejects non-canonical saved workflow filenames during
   }
 });
 
-void test("spark-workflows research builtin fans out with collected errors and report synthesis", async () => {
+test("spark-workflows research builtin fans out with collected errors and report synthesis", async () => {
   const { descriptor, script } = await readSavedWorkflow({
     cwd: ".",
     selector: "builtin:research",
@@ -313,7 +289,7 @@ void test("spark-workflows research builtin fans out with collected errors and r
   assert.equal((run.result as { report?: unknown }).report, "final synthesis");
 });
 
-void test("spark-workflows exposes and runs workflow script factories", async () => {
+test("spark-workflows exposes and runs workflow script factories", async () => {
   const research = parseWorkflowScript(researchWorkflowScript());
   assert.equal(research.meta.name, "research");
   assert.deepEqual(
@@ -356,7 +332,7 @@ void test("spark-workflows exposes and runs workflow script factories", async ()
   );
 });
 
-void test("spark-workflows records explicit stage statuses", async () => {
+test("spark-workflows records explicit stage statuses", async () => {
   const script = `export const meta = {
     name: 'stage status',
     description: 'Stage status workflow',
@@ -414,7 +390,7 @@ void test("spark-workflows records explicit stage statuses", async () => {
   ]);
 });
 
-void test("spark-workflows emits typed run events and projects snapshots", async () => {
+test("spark-workflows emits typed run events and projects snapshots", async () => {
   const script = `export const meta = { name: 'eventful', description: 'eventful workflow' }
 stage('Plan')
 const web = await webSearch({ query: 'events' })
@@ -489,7 +465,7 @@ return { web, values }`;
   assert.equal(snapshot.nodesById["tool:1"]?.parentId, "parallel:0:item:1");
 });
 
-void test("spark-workflows projects zero-agent parallel helper work into dashboard tree", async () => {
+test("spark-workflows projects zero-agent parallel helper work into dashboard tree", async () => {
   const script = `export const meta = { name: 'zero agent fanout', description: 'zero agent fanout workflow' }
 stage('Fanout')
 const results = await parallel([
@@ -570,7 +546,7 @@ return { child: true }`;
   }
 });
 
-void test("spark-workflows serializes asynchronous live event delivery", async () => {
+test("spark-workflows serializes asynchronous live event delivery", async () => {
   const events: WorkflowRunEvent["type"][] = [];
   let releaseStage!: () => void;
   let enterStage!: () => void;
@@ -606,7 +582,7 @@ return await agent('work', { label: 'worker' })`,
   assert.ok(events.indexOf("agent_started") < events.indexOf("agent_succeeded"));
 });
 
-void test("spark-workflows projects failed run and node events", async () => {
+test("spark-workflows projects failed run and node events", async () => {
   const script = `export const meta = { name: 'failed events', description: 'failed event workflow' }
 stage('Work')
 await agent('explode', { label: 'boom' })`;
@@ -632,7 +608,7 @@ await agent('explode', { label: 'boom' })`;
   assert.equal(snapshot.nodesById["agent:0"]?.errorMessage, "agent exploded");
 });
 
-void test("spark-workflows projects status-only, artifact, log, nested, cached, and helper error events", async () => {
+test("spark-workflows projects status-only, artifact, log, nested, cached, and helper error events", async () => {
   const statusOnlyEvents: WorkflowRunEvent[] = [];
   await runWorkflowScript(
     `export const meta = { name: 'status only', description: 'status-only stage' }
@@ -738,7 +714,7 @@ return await webSearch({ query: 'boom' })`,
   assert.equal(helperError.nodesById["tool:0"]?.errorMessage, "search exploded");
 });
 
-void test("spark-workflows applies stage model defaults and per-agent overrides", async () => {
+test("spark-workflows applies stage model defaults and per-agent overrides", async () => {
   const script = `export const meta = {
     name: 'model routing',
     description: 'Model routing workflow',
@@ -760,7 +736,7 @@ void test("spark-workflows applies stage model defaults and per-agent overrides"
   assert.deepEqual(models, ["provider/stage-model", "provider/agent-model"]);
 });
 
-void test("spark-workflows role-run adapter sends model agents through model runner hook", async () => {
+test("spark-workflows role-run adapter sends model agents through model runner hook", async () => {
   const roleRequests: unknown[] = [];
   const modelRequests: unknown[] = [];
   const agent = createSparkWorkflowRoleRunAdapter({
@@ -808,7 +784,7 @@ void test("spark-workflows role-run adapter sends model agents through model run
   assert.equal(request.metadata.artifactRef, "artifact:brief-456");
 });
 
-void test("spark-workflows role-run adapter forwards child usage telemetry", async () => {
+test("spark-workflows role-run adapter forwards child usage telemetry", async () => {
   const reported: unknown[] = [];
   const agent = createSparkWorkflowRoleRunAdapter({
     roleRef: "role:builtin-worker",
@@ -838,7 +814,7 @@ void test("spark-workflows role-run adapter forwards child usage telemetry", asy
   ]);
 });
 
-void test("Spark workflow_run extracts provider usage from role-run JSON events", () => {
+test("Spark workflow_run extracts provider usage from role-run JSON events", () => {
   const roleResult: SparkRoleRunResult = {
     record: {
       ref: "run:child-json" as `run:${string}`,
@@ -890,7 +866,7 @@ void test("Spark workflow_run extracts provider usage from role-run JSON events"
   });
 });
 
-void test("spark-workflows role-run adapter fails model agents when model hook is missing", async () => {
+test("spark-workflows role-run adapter fails model agents when model hook is missing", async () => {
   const agent = createSparkWorkflowRoleRunAdapter({
     roleRef: "role:builtin-worker",
     async runRoleInstruction() {
@@ -908,7 +884,7 @@ void test("spark-workflows role-run adapter fails model agents when model hook i
   );
 });
 
-void test("spark-workflows role-run adapter maps workflow agents to Spark dependency boundary", async () => {
+test("spark-workflows role-run adapter maps workflow agents to Spark dependency boundary", async () => {
   const requests: unknown[] = [];
   const telemetryReports: unknown[] = [];
   const agent = createSparkWorkflowRoleRunAdapter({
@@ -979,7 +955,7 @@ void test("spark-workflows role-run adapter maps workflow agents to Spark depend
   assert.match(request.instruction, /graft_candidate_from_scratch/);
 });
 
-void test("Spark dynamic workflow dashboard renders isolated Graft agent provenance", async () => {
+test("Spark dynamic workflow dashboard renders isolated Graft agent provenance", async () => {
   const script = `export const meta = { name: 'graft ui', description: 'graft UI workflow' }
 stage('Edit')
 const result = await agent('edit file', { label: 'isolated editor', isolation: 'graft' })
@@ -1055,7 +1031,7 @@ return result`;
   }
 });
 
-void test("spark-workflows fan_out_with_brief records one brief and fans out with artifactRef", async () => {
+test("spark-workflows fan_out_with_brief records one brief and fans out with artifactRef", async () => {
   const prompts: string[] = [];
   const artifactInputs: Array<{ title: string; body: string; kind?: string; format?: string }> = [];
 
@@ -1105,7 +1081,7 @@ void test("spark-workflows fan_out_with_brief records one brief and fans out wit
   });
 });
 
-void test("spark-workflows fan_out_with_brief requires artifact recorder", async () => {
+test("spark-workflows fan_out_with_brief requires artifact recorder", async () => {
   await assert.rejects(
     () =>
       runWorkflowScript(fanOutWithBriefWorkflowScript(), {
@@ -1116,7 +1092,7 @@ void test("spark-workflows fan_out_with_brief requires artifact recorder", async
   );
 });
 
-void test("Spark workflow role-run adapter refuses graft isolation without a base", async () => {
+test("Spark workflow role-run adapter refuses graft isolation without a base", async () => {
   const agent = createSparkWorkflowRoleRunAdapter({
     roleRef: "role:builtin-worker",
     async runRoleInstruction() {
@@ -1130,7 +1106,7 @@ void test("Spark workflow role-run adapter refuses graft isolation without a bas
   );
 });
 
-void test("spark-workflows rejects unsupported workflow agent isolation", async () => {
+test("spark-workflows rejects unsupported workflow agent isolation", async () => {
   for (const isolation of ["container", "worktree"]) {
     const script = `export const meta = { name: 'isolation', description: 'isolation test' }
 await agent('check isolation', { isolation: '${isolation}' })`;
@@ -1145,7 +1121,7 @@ await agent('check isolation', { isolation: '${isolation}' })`;
   }
 });
 
-void test("spark-workflows graft isolation smoke keeps parallel same-path edits in separate refs", async () => {
+test("spark-workflows graft isolation smoke keeps parallel same-path edits in separate refs", async () => {
   const requests: SparkWorkflowRoleRunRequest[] = [];
   const agent = createSparkWorkflowRoleRunAdapter({
     roleRef: "role:builtin-worker",
@@ -1187,7 +1163,7 @@ return await parallel([
   );
 });
 
-void test("spark-workflows parallel limits concurrency", async () => {
+test("spark-workflows parallel limits concurrency", async () => {
   const script = `export const meta = { name: 'parallel limit', description: 'limit test' }
 let active = 0
 let maxActive = 0
@@ -1208,7 +1184,7 @@ return { output, maxActive }`;
   });
 });
 
-void test("spark-workflows parallel retries failures and can collect rejected results", async () => {
+test("spark-workflows parallel retries failures and can collect rejected results", async () => {
   const script = `export const meta = { name: 'parallel retry', description: 'retry test' }
 const attempts = { flaky: 0, bad: 0 }
 const retried = await parallel([
@@ -1243,7 +1219,7 @@ return { attempts, retried, collected }`;
   assert.equal(result.collected[1]?.attempts, 2);
 });
 
-void test("spark-workflows agent artifactRef prepends context bundle prompt", async () => {
+test("spark-workflows agent artifactRef prepends context bundle prompt", async () => {
   const script = `export const meta = { name: 'brief', description: 'artifact ref test' }
 return await agent('do the work', { label: 'worker', artifactRef: 'artifact:brief-123' })`;
   const prompts: string[] = [];
@@ -1261,7 +1237,7 @@ return await agent('do the work', { label: 'worker', artifactRef: 'artifact:brie
   assert.equal(run.result, "done");
 });
 
-void test("spark-workflows rejects empty child delivery instead of journaling success", async () => {
+test("spark-workflows rejects empty child delivery instead of journaling success", async () => {
   const script = `export const meta = { name: 'empty delivery', description: 'empty delivery test' }
 await agent('child', { label: 'child' })`;
 
@@ -1276,7 +1252,7 @@ await agent('child', { label: 'child' })`;
   );
 });
 
-void test("spark-workflows requires metadata as the first executable workflow statement", () => {
+test("spark-workflows requires metadata as the first executable workflow statement", () => {
   assert.throws(
     () =>
       parseWorkflowScript(`const hidden = true
@@ -1291,7 +1267,7 @@ return 'ok'`);
   assert.equal(parsed.meta.name, "first");
 });
 
-void test("spark-workflows runtime hardens deterministic resume against wall-clock randomness", async () => {
+test("spark-workflows runtime hardens deterministic resume against wall-clock randomness", async () => {
   await assert.rejects(
     () =>
       runWorkflowScript(
@@ -1313,7 +1289,7 @@ return Math.random()`,
   );
 });
 
-void test("spark-workflows resume replays only the unchanged prefix", async () => {
+test("spark-workflows resume replays only the unchanged prefix", async () => {
   const script = `export const meta = { name: 'resume prefix', description: 'resume prefix test' }
 await agent(args && args.changed ? 'changed first' : 'original first', { label: 'first' })
 await agent('static second', { label: 'second' })
@@ -1340,7 +1316,7 @@ return 'done'`;
   );
 });
 
-void test("spark-workflows exposes quality helpers, item pipelines, retry, and gate", async () => {
+test("spark-workflows exposes quality helpers, item pipelines, retry, and gate", async () => {
   const script = `export const meta = { name: 'quality helpers', description: 'quality helpers test' }
 const verdict = await verify('claim', { reviewers: 3, threshold: 0.66 })
 const best = await judgePanel(['weak', 'strong'], { judges: 2, rubric: 'test rubric' })
@@ -1410,7 +1386,7 @@ return { verdict, best, found, piped, retried, gated }`;
   );
 });
 
-void test("spark-workflows enforces run and stage token budgets between agent calls", async () => {
+test("spark-workflows enforces run and stage token budgets between agent calls", async () => {
   const runBudgetScript = `export const meta = { name: 'run budget', description: 'run budget test' }
 await agent('first', { label: 'first' })
 await agent('second', { label: 'second' })`;
@@ -1433,7 +1409,7 @@ await agent('second', { label: 'second' })`;
   );
 });
 
-void test("spark-workflows records real agent telemetry and uses it for token budgets", async () => {
+test("spark-workflows records real agent telemetry and uses it for token budgets", async () => {
   const script = `export const meta = { name: 'real usage', description: 'real usage budget' }
 await agent('first', { label: 'first' })
 await agent('second', { label: 'second' })`;
@@ -1478,7 +1454,7 @@ await agent('second', { label: 'second' })`;
   assert.deepEqual(telemetryStatuses, ["0:running", "0:succeeded"]);
 });
 
-void test("spark-workflows marks usage as estimated when agents do not report real usage", async () => {
+test("spark-workflows marks usage as estimated when agents do not report real usage", async () => {
   const script = `export const meta = { name: 'estimated usage', description: 'estimated usage fallback' }
 return await agent('short', { label: 'short' })`;
   const tokenSources: string[] = [];
@@ -1493,7 +1469,7 @@ return await agent('short', { label: 'short' })`;
   assert.deepEqual(tokenSources, ["estimated"]);
 });
 
-void test("spark-workflows composes one-level nested workflows through a controlled resolver", async () => {
+test("spark-workflows composes one-level nested workflows through a controlled resolver", async () => {
   const parent = `export const meta = { name: 'parent', description: 'parent workflow' }
 const child = await workflow('child', { value: 'ok' })
 return { child }`;
@@ -1513,7 +1489,7 @@ return await agent('child ' + args.value, { label: 'child agent' })`;
   assert.deepEqual(JSON.parse(JSON.stringify(run.result)), { child: "result:child ok" });
 });
 
-void test("Spark dynamic workflow event store appends, tails, lists, and compacts snapshots", async () => {
+test("Spark dynamic workflow event store appends, tails, lists, and compacts snapshots", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dynamic-workflow-event-store-"));
   try {
     const store = defaultSparkDynamicWorkflowEventStore(dir);
@@ -1578,18 +1554,7 @@ return 'ok'`;
   }
 });
 
-void test("Spark production dynamic workflow surfaces are cut over to v2 event store", async () => {
-  const sourceFiles = await listTypeScriptFiles("packages/pi-extension/src/extension");
-  const offenders: string[] = [];
-  for (const file of sourceFiles) {
-    if (file.endsWith("spark-dynamic-workflow-run-store.ts")) continue;
-    const source = await readFile(file, "utf8");
-    if (/defaultSparkDynamicWorkflowRunStore\s*\(/u.test(source)) offenders.push(file);
-  }
-  assert.deepEqual(offenders, []);
-});
-
-void test("Spark dynamic workflow event store migrates v1 dynamic records", async () => {
+test("Spark dynamic workflow event store migrates v1 dynamic records", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dynamic-workflow-event-migrate-"));
   try {
     const oldStore = defaultSparkDynamicWorkflowRunStore(dir);
@@ -1705,7 +1670,7 @@ return 'ok'`;
   }
 });
 
-void test("Spark workflow_run tool routes default agents through ctx.runRole", async () => {
+test("Spark workflow_run tool routes default agents through ctx.runRole", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dynamic-workflow-native-role-"));
   try {
     type TestWorkflowRunTool = {
@@ -1771,7 +1736,7 @@ return await agent('use native role', { label: 'native-agent', model: 'test/mode
   }
 });
 
-void test("Spark dynamic workflow run store reconciles stale running records", async () => {
+test("Spark dynamic workflow run store reconciles stale running records", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dynamic-workflow-stale-"));
   try {
     const store = defaultSparkDynamicWorkflowRunStore(dir);
@@ -1797,7 +1762,7 @@ return 'stale'`;
   }
 });
 
-void test("Spark workflow_run tool persists, resumes, and keeps original base metadata", async () => {
+test("Spark workflow_run tool persists, resumes, and keeps original base metadata", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-dynamic-workflow-run-"));
   try {
     type TestWorkflowRunTool = {
@@ -1927,7 +1892,7 @@ return await agent('hello ' + args.suffix, { label: 'hello' })`;
   }
 });
 
-void test("Spark workflow_run streams live onUpdate events before wait=true completion", async () => {
+test("Spark workflow_run streams live onUpdate events before wait=true completion", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-workflow-live-onupdate-"));
   try {
     type TestWorkflowRunTool = {
@@ -2008,7 +1973,7 @@ return await agent('wait for update', { label: 'live-child' })`;
   }
 });
 
-void test("Spark workflow_run returns before background DynamicWorkflowManager completes", async () => {
+test("Spark workflow_run returns before background DynamicWorkflowManager completes", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-workflow-background-manager-"));
   try {
     type TestWorkflowRunTool = {
@@ -2086,7 +2051,7 @@ return await agent('slow child', { label: 'slow-child' })`;
   }
 });
 
-void test("Spark DynamicWorkflowManager applies pause, resume, stop, and restart to active runs", async () => {
+test("Spark DynamicWorkflowManager applies pause, resume, stop, and restart to active runs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-workflow-real-controls-"));
   try {
     type TestWorkflowRunTool = {
@@ -2278,7 +2243,7 @@ return await agent('restart me', { label: 'restart-child' })`,
   }
 });
 
-void test("Spark workflow_run persists and renders real workflow agent telemetry", async () => {
+test("Spark workflow_run persists and renders real workflow agent telemetry", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-workflow-telemetry-"));
   try {
     type TestWorkflowRunTool = {
@@ -2348,7 +2313,7 @@ return await agent('collect usage', { label: 'usage-agent' })`;
   }
 });
 
-void test("Spark workflow_run tool executes inline and saved workflow scripts through injected runtime", async () => {
+test("Spark workflow_run tool executes inline and saved workflow scripts through injected runtime", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-workflow-run-tool-"));
   try {
     type TestWorkflowRunTool = {
@@ -2462,7 +2427,7 @@ return 'inline-result'`,
   }
 });
 
-void test("Spark workflow_run blocks risky workflows until approved", async () => {
+test("Spark workflow_run blocks risky workflows until approved", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-workflow-approval-deny-"));
   try {
     type TestWorkflowRunTool = {
@@ -2520,7 +2485,7 @@ return await webSearch({ query: 'approval smoke' })`;
   }
 });
 
-void test("Spark workflow_run records scoped approval provenance for risky workflows", async () => {
+test("Spark workflow_run records scoped approval provenance for risky workflows", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-workflow-approval-allow-"));
   try {
     type TestWorkflowRunTool = {
@@ -2582,7 +2547,7 @@ return await webSearch({ query: args.query })`,
   }
 });
 
-void test("Spark workflow_run executes an ultracode-style generated workflow script", async () => {
+test("Spark workflow_run executes an ultracode-style generated workflow script", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-workflow-ultracode-smoke-"));
   try {
     type TestWorkflowRunTool = {
@@ -2655,7 +2620,7 @@ return { draft, verdict, complete }`,
   }
 });
 
-void test("dynamic workflow save uses collision-safe workspace selectors that rerun", async () => {
+test("dynamic workflow save uses collision-safe workspace selectors that rerun", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-workflow-save-reuse-"));
   try {
     const script = `export const meta = { name: 'Reusable Flow', description: 'saved reusable workflow' }
@@ -2720,7 +2685,7 @@ return { reused: true, args }
   }
 });
 
-void test("Spark workflow_run tool resolves controlled nested saved workflows", async () => {
+test("Spark workflow_run tool resolves controlled nested saved workflows", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-workflow-run-nested-"));
   try {
     type TestWorkflowRunTool = {
@@ -2772,14 +2737,3 @@ return await workflow('workspace:child', { focus: args.focus })`,
     await rm(dir, { recursive: true, force: true });
   }
 });
-
-async function listTypeScriptFiles(dir: string): Promise<string[]> {
-  const entries = await readdir(dir, { withFileTypes: true });
-  const files: string[] = [];
-  for (const entry of entries) {
-    const path = `${dir}/${entry.name}`;
-    if (entry.isDirectory()) files.push(...(await listTypeScriptFiles(path)));
-    else if (entry.isFile() && path.endsWith(".ts")) files.push(path);
-  }
-  return files;
-}

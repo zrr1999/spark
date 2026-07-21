@@ -6,7 +6,7 @@ import {
   type TaskRunCompletionSummary,
   type TaskStatus,
   type ProjectRef,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/spark-tasks";
 import {
   loadHiddenRoleRunInboxState,
@@ -16,7 +16,7 @@ import {
   sparkSessionOwnerKey,
   sparkStateCwd,
   type SparkSessionContext,
-} from "./session-identity.ts";
+} from "@zendev-lab/spark-loop";
 import { loadSparkGraph } from "./session-state.ts";
 import { shortRoleLabel } from "./task-ownership.ts";
 import { truncateInline } from "./tool-rendering.ts";

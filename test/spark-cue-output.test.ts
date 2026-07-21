@@ -2,15 +2,15 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   CueError,
   defaultSocketPath,
   type JobInfo,
   type ScriptResult,
-  type PiCueExtensionApi,
-  type PiCueToolContext,
+  type SparkCueHostApi,
+  type SparkCueToolContext,
   normalizeCueBoolean,
   normalizeCueStderrForDisplay,
   normalizeCueTerminalOutput,
@@ -20,13 +20,13 @@ import {
   normalizeCueTimeoutSeconds,
   renderCueChainStatus,
   renderCueScriptResult,
-  registerPiCueTools,
+  registerSparkCueTools,
   resolveCueWorkingDirectory,
 } from "../packages/spark-cue/src/index.ts";
 
-type RegisteredPiCueTool = Parameters<PiCueExtensionApi["registerTool"]>[0];
+type RegisteredSparkCueTool = Parameters<SparkCueHostApi["registerTool"]>[0];
 
-void test("defaultSocketPath treats an empty XDG_RUNTIME_DIR as unset", () => {
+test("defaultSocketPath treats an empty XDG_RUNTIME_DIR as unset", () => {
   const previous = process.env.XDG_RUNTIME_DIR;
   process.env.XDG_RUNTIME_DIR = "";
   try {
@@ -37,15 +37,15 @@ void test("defaultSocketPath treats an empty XDG_RUNTIME_DIR as unset", () => {
   }
 });
 
-void test("normalizeCueTerminalOutput keeps final carriage-return frame", () => {
+test("normalizeCueTerminalOutput keeps final carriage-return frame", () => {
   assert.equal(normalizeCueTerminalOutput("Working 1\rWorking 2\rDone\n"), "Done\n");
 });
 
-void test("normalizeCueTerminalOutput preserves CRLF line content", () => {
+test("normalizeCueTerminalOutput preserves CRLF line content", () => {
   assert.equal(normalizeCueTerminalOutput("hello\r\n"), "hello\n");
 });
 
-void test("normalizeCueTerminalOutput collapses repeated spinner progress lines", () => {
+test("normalizeCueTerminalOutput collapses repeated spinner progress lines", () => {
   const output = [
     "⠋ Running hooks... vp check --fix...",
     "⠙ Running hooks... vp check --fix...",
@@ -59,7 +59,7 @@ void test("normalizeCueTerminalOutput collapses repeated spinner progress lines"
   );
 });
 
-void test("normalizeCueStderrForDisplay removes duplicated PTY merge note", () => {
+test("normalizeCueStderrForDisplay removes duplicated PTY merge note", () => {
   assert.equal(
     normalizeCueStderrForDisplay("[PTY: stdout and stderr are merged]\nhello\r\n", "hello\r\n"),
     "",
@@ -75,7 +75,7 @@ void test("normalizeCueStderrForDisplay removes duplicated PTY merge note", () =
   );
 });
 
-void test("renderCueScriptResult includes source, timeout, item identity, and status", () => {
+test("renderCueScriptResult includes source, timeout, item identity, and status", () => {
   const result = {
     scriptId: "script:one",
     source: { kind: "inline" },
@@ -127,7 +127,7 @@ void test("renderCueScriptResult includes source, timeout, item identity, and st
   assert.match(rendered, /\[stderr\]\nbad/);
 });
 
-void test("renderCueScriptResult compacts clean successful items", () => {
+test("renderCueScriptResult compacts clean successful items", () => {
   const result = {
     scriptId: "script:clean",
     source: { kind: "file", path: "build.cue" },
@@ -194,7 +194,7 @@ void test("renderCueScriptResult compacts clean successful items", () => {
   assert.match(rendered, /visible/);
 });
 
-void test("renderCueChainStatus reads each leaf output once and propagates failures", async () => {
+test("renderCueChainStatus reads each leaf output once and propagates failures", async () => {
   const outputRequests: Array<{ id: string; tailBytes?: number }> = [];
   const reader = {
     async jobOutput(id: string, tailBytes?: number) {
@@ -269,7 +269,7 @@ function chainJob(
   };
 }
 
-void test("spark-cue numeric and boolean normalizers reject invalid explicit values", () => {
+test("spark-cue numeric and boolean normalizers reject invalid explicit values", () => {
   assert.equal(normalizeCueTailBytes(undefined, 128), 128);
   assert.equal(normalizeCueTailBytes(4096), 4096);
   assert.throws(() => normalizeCueTailBytes("4096"), /tail_bytes must be a finite number/);
@@ -306,7 +306,7 @@ void test("spark-cue numeric and boolean normalizers reject invalid explicit val
   assert.throws(() => normalizeCueResourceNeeds({ gpu: " " }), /non-empty string/);
 });
 
-void test("resolveCueWorkingDirectory anchors explicit relative cwd to the Pi context cwd", () => {
+test("resolveCueWorkingDirectory anchors explicit relative cwd to the Pi context cwd", () => {
   assert.equal(
     resolveCueWorkingDirectory(".", "/tmp/pi-session", "/tmp/process-cwd"),
     "/tmp/pi-session",
@@ -325,7 +325,7 @@ void test("resolveCueWorkingDirectory anchors explicit relative cwd to the Pi co
   );
 });
 
-void test("spark-cue tools validate bad parameters before connecting to cued", async () => {
+test("spark-cue tools validate bad parameters before connecting to cued", async () => {
   const tools = registerCueToolsForTest();
   const execTool = tools.get("cue_exec");
   const runTool = tools.get("cue_run");
@@ -423,7 +423,7 @@ void test("spark-cue tools validate bad parameters before connecting to cued", a
   );
 });
 
-void test("cue_resources explains empty provider state", async () => {
+test("cue_resources explains empty provider state", async () => {
   const tools = registerCueToolsForTest();
   const resourceTool = tools.get("cue_resources");
   assert.ok(resourceTool);
@@ -441,7 +441,7 @@ void test("cue_resources explains empty provider state", async () => {
           return "No resource providers registered.\n";
         },
       },
-    } as unknown as PiCueToolContext,
+    } as unknown as SparkCueToolContext,
   );
 
   assert.match(result.content[0].text, /No resource providers registered/);
@@ -451,7 +451,7 @@ void test("cue_resources explains empty provider state", async () => {
   assert.match(String((result.details as { hint?: unknown }).hint), /resource provider/);
 });
 
-void test("script_eval renders a bounded inline code preview", () => {
+test("script_eval renders a bounded inline code preview", () => {
   const tools = registerCueToolsForTest();
   const evalTool = tools.get("script_eval");
   assert.ok(evalTool);
@@ -473,7 +473,7 @@ void test("script_eval renders a bounded inline code preview", () => {
   assert.doesNotMatch(rendered ?? "", /print\('sixth'\)/);
 });
 
-void test("script_run executes python through uv run and script_eval uses uv run --script", async () => {
+test("script_run executes python through uv run and script_eval uses uv run --script", async () => {
   const tools = registerCueToolsForTest();
   const runTool = tools.get("script_run");
   const evalTool = tools.get("script_eval");
@@ -499,7 +499,7 @@ void test("script_run executes python through uv run and script_eval uses uv run
     cwd: "/work",
     cueClient: fakeClient,
     env: { PATH: "/usr/bin" },
-  } as unknown as PiCueToolContext;
+  } as unknown as SparkCueToolContext;
 
   const defaultEval = await evalTool.execute(
     "call-default-python",
@@ -575,7 +575,7 @@ void test("script_run executes python through uv run and script_eval uses uv run
   );
 });
 
-void test("spark-cue tool descriptions match cue-shell chain operator contract", () => {
+test("spark-cue tool descriptions match cue-shell chain operator contract", () => {
   const tools = registerCueToolsForTest();
   const execTool = tools.get("cue_exec");
   const runTool = tools.get("cue_run");
@@ -599,7 +599,7 @@ void test("spark-cue tool descriptions match cue-shell chain operator contract",
   assert.match(scriptTool.description, /`\|\?\|`/);
 });
 
-void test("cue_jobs exposes chain IDs for status and wait", async () => {
+test("cue_jobs exposes chain IDs for status and wait", async () => {
   const jobsTool = registerCueToolsForTest().get("cue_jobs");
   assert.ok(jobsTool);
 
@@ -640,7 +640,7 @@ void test("cue_jobs exposes chain IDs for status and wait", async () => {
         return { stdout: "", stderr: "", truncated: false, stderrTruncated: false };
       },
     },
-  } as unknown as PiCueToolContext;
+  } as unknown as SparkCueToolContext;
 
   for (const action of ["status", "wait"] as const) {
     const result = await jobsTool.execute(
@@ -655,7 +655,7 @@ void test("cue_jobs exposes chain IDs for status and wait", async () => {
   }
 });
 
-void test("cue_schedule filters the cron statuses emitted by cue-shell", async () => {
+test("cue_schedule filters the cron statuses emitted by cue-shell", async () => {
   const scheduleTool = registerCueToolsForTest().get("cue_schedule");
   assert.ok(scheduleTool);
 
@@ -673,7 +673,7 @@ void test("cue_schedule filters the cron statuses emitted by cue-shell", async (
         ];
       },
     },
-  } as unknown as PiCueToolContext;
+  } as unknown as SparkCueToolContext;
 
   const failed = await scheduleTool.execute(
     "call-list-failed",
@@ -698,7 +698,7 @@ void test("cue_schedule filters the cron statuses emitted by cue-shell", async (
   );
 });
 
-void test("script_run and script_eval do not pass removed scope to RunScript", async () => {
+test("script_run and script_eval do not pass removed scope to RunScript", async () => {
   const tools = registerCueToolsForTest();
   const runTool = tools.get("script_run");
   const evalTool = tools.get("script_eval");
@@ -723,7 +723,7 @@ void test("script_run and script_eval do not pass removed scope to RunScript", a
       } satisfies ScriptResult;
     },
   };
-  const ctx = { cwd: dir, cueClient: fakeClient } as unknown as PiCueToolContext;
+  const ctx = { cwd: dir, cueClient: fakeClient } as unknown as SparkCueToolContext;
 
   const fileResult = await runTool.execute(
     "call-scope-run",
@@ -749,9 +749,9 @@ void test("script_run and script_eval do not pass removed scope to RunScript", a
   assert.equal(calls[1]?.scope, undefined);
 });
 
-function registerCueToolsForTest(): Map<string, RegisteredPiCueTool> {
-  const tools = new Map<string, RegisteredPiCueTool>();
-  registerPiCueTools({
+function registerCueToolsForTest(): Map<string, RegisteredSparkCueTool> {
+  const tools = new Map<string, RegisteredSparkCueTool>();
+  registerSparkCueTools({
     registerTool: (config) => tools.set(config.name, config),
     on: () => undefined,
     getActiveTools: () => [...tools.keys()],

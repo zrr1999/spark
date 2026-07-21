@@ -9,23 +9,23 @@
  */
 
 import {
-  PiAskFlowController,
+  SparkAskFlowController,
   createAskArtifactBody,
-  createPiAskFlowRequest,
-  createPiAskFlowResult,
-  isPiAskFlowArtifactBody,
-  isPiAskFlowGateBlocked,
-  normalizePiAskFlowResult,
-  replayPiAskFlow,
-  runPiAskFlow,
+  createSparkAskFlowRequest,
+  createSparkAskFlowResult,
+  isSparkAskFlowArtifactBody,
+  isSparkAskFlowGateBlocked,
+  normalizeSparkAskFlowResult,
+  replaySparkAskFlow,
+  runSparkAskFlow,
   summarizeAskResult,
-  type PiAskFlowBehaviour,
-  type PiAskFlowQuestionTypeVal,
-  type PiAskFlowRequest,
-  type PiAskFlowResult,
+  type SparkAskFlowBehaviour,
+  type SparkAskFlowQuestionTypeVal,
+  type SparkAskFlowRequest,
+  type SparkAskFlowResult,
 } from "@zendev-lab/spark-ask";
 import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
-import type { ArtifactRef, JsonValue } from "@zendev-lab/spark-extension-api";
+import type { ArtifactRef, JsonValue } from "@zendev-lab/spark-core";
 
 export const MIN_SPARK_ASK_OPTION_DESCRIPTION_LENGTH = 12;
 
@@ -40,7 +40,7 @@ export interface SparkAskToolQuestionParams {
   id: string;
   prompt: string;
   header?: string;
-  type?: PiAskFlowQuestionTypeVal;
+  type?: SparkAskFlowQuestionTypeVal;
   required?: boolean;
   defaultValues?: string[];
   options?: SparkAskToolOptionParams[];
@@ -52,22 +52,22 @@ export interface SparkAskToolParams {
   context?: string;
   flow?: string;
   questions: SparkAskToolQuestionParams[];
-  behaviour?: PiAskFlowBehaviour;
+  behaviour?: SparkAskFlowBehaviour;
 }
 
 export const DEFAULT_SPARK_ASK_CUSTOM_UI_TIMEOUT_MS = 60_000;
 
-export type SparkAskToolUi = NonNullable<Parameters<typeof runPiAskFlow>[1]> & {
+export type SparkAskToolUi = NonNullable<Parameters<typeof runSparkAskFlow>[1]> & {
   custom?: (...args: unknown[]) => unknown;
   /** Wall-clock timeout for custom fullscreen ask UI completion. Defaults to 60s; <=0 disables. */
   customTimeoutMs?: number;
 };
 
-export function createSparkAskToolRequest(params: SparkAskToolParams): PiAskFlowRequest {
+export function createSparkAskToolRequest(params: SparkAskToolParams): SparkAskFlowRequest {
   const questions = normalizeSparkAskToolQuestions(params);
   const title = normalizeSparkAskToolString(params.title, "title");
   if (!title) throw new Error("ask requires a context-specific title");
-  return createPiAskFlowRequest({
+  return createSparkAskFlowRequest({
     flow: normalizeSparkAskToolString(params.flow, "flow") ?? "custom",
     mode: normalizeSparkAskMode(params.mode),
     title,
@@ -116,7 +116,7 @@ export async function replaySparkAskTool(input: {
       details: { found: false },
     };
   }
-  if (!isPiAskFlowArtifactBody(artifact.body)) {
+  if (!isSparkAskFlowArtifactBody(artifact.body)) {
     return {
       content: [
         {
@@ -130,8 +130,11 @@ export async function replaySparkAskTool(input: {
 
   const request = artifact.body.request;
   const prior = artifact.body.result;
-  const result = normalizePiAskFlowResult(await replayPiAskFlow(request, prior, input.ui), request);
-  const blocked = isPiAskFlowGateBlocked(result, request);
+  const result = normalizeSparkAskFlowResult(
+    await replaySparkAskFlow(request, prior, input.ui),
+    request,
+  );
+  const blocked = isSparkAskFlowGateBlocked(result, request);
   const body = createAskArtifactBody(request, result, { blocked });
   const replayArtifact = await store.put({
     kind: "record",
@@ -160,7 +163,7 @@ export async function replaySparkAskTool(input: {
 }
 
 async function runAndPersistSparkAskRequest(
-  request: PiAskFlowRequest,
+  request: SparkAskFlowRequest,
   input: {
     cwd: string;
     ui?: SparkAskToolUi;
@@ -171,8 +174,11 @@ async function runAndPersistSparkAskRequest(
   content: Array<{ type: "text"; text: string }>;
   details: Record<string, unknown>;
 }> {
-  const result = normalizePiAskFlowResult(await runSparkAskToolRequest(request, input.ui), request);
-  const blocked = isPiAskFlowGateBlocked(result, request);
+  const result = normalizeSparkAskFlowResult(
+    await runSparkAskToolRequest(request, input.ui),
+    request,
+  );
+  const blocked = isSparkAskFlowGateBlocked(result, request);
   const body = createAskArtifactBody(request, result, { blocked });
   const artifact = await defaultArtifactStore(input.cwd).put({
     kind: "record",
@@ -200,7 +206,7 @@ async function runAndPersistSparkAskRequest(
 
 function sparkAskToolDetails(input: {
   artifactRef: ArtifactRef;
-  result: PiAskFlowResult;
+  result: SparkAskFlowResult;
   blocked: boolean;
   summary: string;
 }): Record<string, unknown> {
@@ -215,32 +221,32 @@ function sparkAskToolDetails(input: {
 }
 
 async function runSparkAskToolRequest(
-  request: PiAskFlowRequest,
+  request: SparkAskFlowRequest,
   ui: SparkAskToolUi | undefined,
-): Promise<PiAskFlowResult> {
+): Promise<SparkAskFlowResult> {
   if (ui?.custom) {
     const fullscreenResult = await runSparkAskFullscreen(request, ui.custom, ui.customTimeoutMs);
     if (fullscreenResult) return fullscreenResult;
   }
-  return runPiAskFlow(request, ui);
+  return runSparkAskFlow(request, ui);
 }
 
 async function runSparkAskFullscreen(
-  request: PiAskFlowRequest,
+  request: SparkAskFlowRequest,
   custom: NonNullable<SparkAskToolUi["custom"]>,
   timeoutMs: number | undefined,
-): Promise<PiAskFlowResult | undefined> {
+): Promise<SparkAskFlowResult | undefined> {
   let factoryStarted = false;
-  let resolveDone!: (result: PiAskFlowResult) => void;
-  const doneResult = new Promise<PiAskFlowResult>((resolve) => {
+  let resolveDone!: (result: SparkAskFlowResult) => void;
+  const doneResult = new Promise<SparkAskFlowResult>((resolve) => {
     resolveDone = resolve;
   });
-  const controller = new PiAskFlowController({ request, language: "en" });
+  const controller = new SparkAskFlowController({ request, language: "en" });
   const factory = (
     tui: unknown,
     theme: unknown,
     _keybindings: unknown,
-    done: (result: PiAskFlowResult) => void,
+    done: (result: SparkAskFlowResult) => void,
   ) => {
     factoryStarted = true;
     return controller.run(
@@ -262,7 +268,7 @@ async function runSparkAskFullscreen(
   return runSparkAskFullscreenWithTimeout(
     Promise.race([
       doneResult,
-      maybeResult.then((result) => (isPiAskFlowResultLike(result) ? result : undefined)),
+      maybeResult.then((result) => (isSparkAskFlowResultLike(result) ? result : undefined)),
     ]),
     request,
     timeoutMs,
@@ -270,17 +276,17 @@ async function runSparkAskFullscreen(
 }
 
 async function runSparkAskFullscreenWithTimeout(
-  result: Promise<PiAskFlowResult | undefined>,
-  request: PiAskFlowRequest,
+  result: Promise<SparkAskFlowResult | undefined>,
+  request: SparkAskFlowRequest,
   timeoutMs: number | undefined,
-): Promise<PiAskFlowResult | undefined> {
+): Promise<SparkAskFlowResult | undefined> {
   const normalizedTimeoutMs = normalizeSparkAskCustomUiTimeoutMs(timeoutMs);
   if (normalizedTimeoutMs <= 0) return await result;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       result,
-      new Promise<PiAskFlowResult>((resolve) => {
+      new Promise<SparkAskFlowResult>((resolve) => {
         timer = setTimeout(() => {
           resolve(createSparkAskCustomUiTimeoutResult(request));
         }, normalizedTimeoutMs);
@@ -292,8 +298,8 @@ async function runSparkAskFullscreenWithTimeout(
   }
 }
 
-function createSparkAskCustomUiTimeoutResult(request: PiAskFlowRequest): PiAskFlowResult {
-  return createPiAskFlowResult({
+function createSparkAskCustomUiTimeoutResult(request: SparkAskFlowRequest): SparkAskFlowResult {
+  return createSparkAskFlowResult({
     answers: {},
     flow: request.flow,
     mode: "cancel",
@@ -313,11 +319,13 @@ function isThenable(value: unknown): value is Promise<unknown> {
   return Boolean(value && typeof (value as Promise<unknown>).then === "function");
 }
 
-function isPiAskFlowResultLike(value: unknown): value is PiAskFlowResult {
+function isSparkAskFlowResultLike(value: unknown): value is SparkAskFlowResult {
   return Boolean(value && typeof value === "object" && "answers" in value && "status" in value);
 }
 
-function normalizeSparkAskToolQuestions(params: SparkAskToolParams): PiAskFlowRequest["questions"] {
+function normalizeSparkAskToolQuestions(
+  params: SparkAskToolParams,
+): SparkAskFlowRequest["questions"] {
   const rawQuestions = (params as { questions?: unknown }).questions;
   if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
     throw new Error("ask requires a non-empty questions[] array");
@@ -356,7 +364,7 @@ function normalizeDefaultValues(values: unknown, questionId: string): string[] |
 function normalizeSparkAskToolOptions(
   rawOptions: unknown,
   questionId: string,
-): PiAskFlowRequest["questions"][number]["options"] {
+): SparkAskFlowRequest["questions"][number]["options"] {
   if (!Array.isArray(rawOptions) || rawOptions.length < 2) {
     throw new Error(`ask question ${questionId} requires at least two clear, detailed options`);
   }
@@ -418,14 +426,14 @@ function normalizeSparkAskMode(
 function normalizeSparkAskQuestionType(
   type: unknown,
   questionId: string,
-): PiAskFlowQuestionTypeVal | undefined {
+): SparkAskFlowQuestionTypeVal | undefined {
   if (type === undefined || type === null) return undefined;
   if (type === "single" || type === "multi" || type === "preview" || type === "freeform")
     return type;
   throw new Error(`ask question ${questionId} type must be single, multi, preview, or freeform`);
 }
 
-function normalizeSparkAskBehaviour(value: unknown): PiAskFlowBehaviour | undefined {
+function normalizeSparkAskBehaviour(value: unknown): SparkAskFlowBehaviour | undefined {
   if (value === undefined || value === null) return undefined;
   if (!isRecord(value)) throw new Error("ask behaviour must be an object");
   return {

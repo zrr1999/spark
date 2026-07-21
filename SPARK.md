@@ -2,7 +2,7 @@
 description: "spark：以 Pi SDK 为内核，统一 TUI / Cockpit / 消息平台的本地智能开发编排"
 owner: zrr1999
 created: 2026-05-18
-updated: 2026-07-20
+updated: 2026-07-21
 inspired_by:
   - pi-sdk
   - cue-shell
@@ -34,11 +34,11 @@ inspired_by:
 
 - **内核（Pi SDK）**：`spark-ai`（`pi-ai`）、`spark-tui` / `spark-text`（`pi-tui`）、以及与 pi-ai 流形状对齐的 `spark-turn`。
 - **执行宿主**：`spark-host` + `spark-turn` 服务 TUI / headless / daemon；`apps/spark-daemon` 拥有会话、通道与 SQLite；`apps/spark-tui` 与 `apps/spark-cockpit` 是一等产品面。
-- **跨表面契约**：`spark-protocol`（含 ask 语义、action-bar、session view、human-interaction 生命周期）；`spark-extension-api` 是 Spark 原生扩展宿主契约（历史命名含 Pi，语义上已是 host-neutral）。
+- **跨表面契约**：`spark-protocol`（含 ask 语义、action-bar、session view、human-interaction 生命周期）；`spark-core`（由 `spark-extension-api` 重命名）是 Spark 宿主契约 + 轻量 primitives（`SparkHostAPI` 类型与依赖极轻的 helpers），不是复活已退场的能力袋 `spark-core`。
 - **能力包**：`spark-ask`、`spark-artifacts`、`spark-tasks`、`spark-roles`、`spark-cue`、`spark-channels`、`spark-coordination` 等；工具表面使用规范化 `tool({ action })`。
 - **Pi 产品兼容（冻结）**：`packages/pi-extension`（legacy facade，slated for retirement）、`packages/pi-btw`、以及各包上的 `"pi": { "extensions": ... }` 发现元数据。Spark 原生宿主通过显式 specifier 加载门面，不重新引入 Pi SDK package discovery。
 
-已退场的工作区包包括历史 `spark-core` 与 `spark-goal`。`spark-tasks`、`spark-learnings`、`spark-workflows` 仍是当前包。`pi-* -> spark-*` 反向依赖由边界检查守门。`.spark/` 磁盘格式不因包名迁移而改名。
+已退场的工作区包包括历史能力袋 `spark-core`（与现 `@zendev-lab/spark-core` 无关）、`spark-goal`、`spark-learnings` 与 `spark-recall`。`spark-tasks`、`spark-workflows` 仍是当前包；learning / recall / reflection 由 `spark-memory` 拥有。`pi-* -> spark-*` 反向依赖由边界检查守门。`.spark/` 磁盘格式不因包名迁移而改名（reflection 落盘路径统一到 `.spark/memory/reflections/` 除外）。
 
 ## 非目标
 
@@ -55,12 +55,11 @@ inspired_by:
 - 同一 ask 的“算不算有效回答 / gate 是否满足”在 TUI、Cockpit、通道结算路径上共用 `spark-protocol` 语义，表面只做 UI。
 - Slash / action catalog 继续以协议为源；Cockpit 与 TUI 只做 i18n 与执行。
 - 新功能默认可在 TUI 或 Cockpit 验证，消息通道按 channel policy 收窄；无需先在 Pi 产品里跑通。
-- Pi 产品加载路径可冻结：无新 `registerPi*` / `"pi.extensions"` 扩张；文档与边界检查区分 SDK 内核与产品兼容。
+- Pi 产品加载路径可冻结：无新 `"pi.extensions"` 扩张；文档与边界检查区分 SDK 内核与产品兼容。宿主契约公开名为 `SparkHostAPI`（`spark-core`）；ask/tasks/context 注册入口为 `registerSpark*`。
 - Project-bound 命令、任务图、ask、roles、cue 的既有成功信号仍成立，并通过测试与 `vp check` / `prek` 守门。
 
 ## 当前开放问题
 
-- `registerPi*` 与 `spark-extension-api` 中残留 Pi 命名的重命名节奏（是否与 pi-extension 退场同批）。
 - 完成证据门禁应严格到什么程度：对人工任务、审查/设计任务和角色执行/工作流任务是否采用不同要求。
 - 历史任务中被完成摘要覆盖的原始意图是否需要进一步从聊天记录、每日记忆或 Git 历史中恢复。
 
@@ -70,7 +69,7 @@ inspired_by:
 - 文档与 AGENTS 边界语言改为“Pi SDK 内核 + Pi 产品冻结”。
 - 后续可单独收缩 `pi-extension` 表面与 `"pi.extensions"` 元数据；该收缩不阻塞协议对齐。
 - 会话队列双层收敛：TUI 乐观层 ↔ daemon `pendingTurns` 真相；Cockpit 继续只投影 daemon。
-- `memory` owns durable scoped memory, recall candidates (`recall` tool), and the `LearningStore` / `learning` tool. Reflection pipelines still ship from `@zendev-lab/spark-learnings` until moved.
+- `memory` owns durable scoped memory, recall candidates (`recall` tool), the `LearningStore` / `learning` tool, and reflection pipelines (`.spark/memory/reflections/`).
 
 ## 修订记录
 
@@ -81,3 +80,6 @@ inspired_by:
 - 2026-06-16：更新默认研究模式、`/implement` 模式命名以及 Spark 组合 Pi 扩展能力的边界表述。
 - 2026-07-17：方向调整为以 Pi SDK 为内核、TUI/Cockpit/消息平台一等；Pi 产品宿主冻结并规划退场；跨表面交互协议以 `spark-protocol` 为源。
 - 2026-07-20：确认会话队列双层模型与 memory 统一吸收 recall/learning。
+- 2026-07-21：reflection 迁入 `spark-memory`；退役 `spark-learnings` / `spark-recall` 工作区包；reflection 落盘改为 `.spark/memory/reflections/`。
+- 2026-07-21：`spark-extension-api` 硬切重命名为 `@zendev-lab/spark-core`（宿主契约 + 轻量 primitives；非复活旧能力袋）。
+- 2026-07-21：清除 `ExtensionAPI` / 目标 `registerPi*` 技术债；宿主契约公开名为 `SparkHostAPI`，ask/tasks/context 注册入口为 `registerSpark*`。

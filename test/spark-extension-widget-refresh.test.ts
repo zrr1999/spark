@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import sparkExtension from "../packages/pi-extension/src/extension/index.ts";
 import type { SparkWidgetTheme, SparkWidgetTui } from "../packages/spark-host/src/spark-widget.ts";
@@ -13,7 +13,7 @@ import {
   listActiveSparkRoleRunProcesses,
   runSparkTask,
 } from "@zendev-lab/spark-runtime";
-import type { RunRef, TaskPlan } from "@zendev-lab/spark-extension-api";
+import type { RunRef, TaskPlan } from "@zendev-lab/spark-core";
 import { TaskGraph, defaultTaskGraphStore } from "@zendev-lab/spark-tasks";
 import { setSessionGoal, updateSessionGoalStatus } from "../packages/spark-loop/src/index.ts";
 
@@ -91,7 +91,7 @@ async function executeTool(
   return tool.execute("tool-call", params, new AbortController().signal, () => {}, ctx);
 }
 
-void test("Spark extension widget hides acknowledged and actionable DAG history", async () => {
+test("Spark extension widget hides acknowledged and actionable DAG history", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-extension-widget-dag-history-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -177,7 +177,7 @@ void test("Spark extension widget hides acknowledged and actionable DAG history"
   }
 });
 
-void test("Spark extension widget reconciles stale DAG records when an owned child run is still active", async () => {
+test("Spark extension widget reconciles stale DAG records when an owned child run is still active", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-extension-widget-dag-reconcile-"));
   let runPromise: Promise<unknown> | undefined;
   let activeRunRef: RunRef | undefined;
@@ -302,7 +302,7 @@ void test("Spark extension widget reconciles stale DAG records when an owned chi
   }
 });
 
-void test("Spark extension widget shows session goal without project state", async () => {
+test("Spark extension widget shows session goal without project state", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-extension-widget-goal-no-project-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });
@@ -354,7 +354,7 @@ void test("Spark extension widget shows session goal without project state", asy
   }
 });
 
-void test("Spark session_start creates .spark and shows session goal", async () => {
+test("Spark session_start creates .spark and shows session goal", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-extension-session-start-goal-"));
   try {
     const handlers = new Map<string, SparkEventHandler[]>();
@@ -405,7 +405,7 @@ void test("Spark session_start creates .spark and shows session goal", async () 
   }
 });
 
-void test("Spark extension refreshes SparkWidget after claim and TODO tools", async () => {
+test("Spark extension refreshes SparkWidget after claim and TODO tools", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-extension-widget-refresh-"));
   try {
     await mkdir(join(dir, ".spark"), { recursive: true });

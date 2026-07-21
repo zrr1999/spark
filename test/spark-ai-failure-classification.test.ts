@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   FAILURE_CLASS_POLICIES,
@@ -39,6 +39,16 @@ const cases: Array<{
   {
     name: "quota text maps to rate_limit",
     input: "quota exceeded for this account",
+    expected: "rate_limit",
+  },
+  {
+    name: "Cursor rate_limit_exceeded concurrency text maps to rate_limit",
+    input: "rate_limit_exceeded: Concurrency limit exceeded for account, please retry later",
+    expected: "rate_limit",
+  },
+  {
+    name: "underscored rate_limit code maps to rate_limit",
+    input: { errorMessage: "RATE_LIMIT: please retry later" },
     expected: "rate_limit",
   },
   {
@@ -88,7 +98,7 @@ const cases: Array<{
 ];
 
 for (const entry of cases) {
-  void test(`classifyProviderFailure: ${entry.name}`, () => {
+  test(`classifyProviderFailure: ${entry.name}`, () => {
     const result = classifyProviderFailure(entry.input);
     assert.equal(result.failureClass, entry.expected);
     assert.deepEqual(result.policy, FAILURE_CLASS_POLICIES[entry.expected]);
@@ -96,7 +106,7 @@ for (const entry of cases) {
   });
 }
 
-void test("classifyProviderFailure gives provider_mismatch non-retry policy", () => {
+test("classifyProviderFailure gives provider_mismatch non-retry policy", () => {
   const result = classifyProviderFailure(
     "Mismatched api: baidu-oneapi expected anthropic-messages",
   );
@@ -109,7 +119,7 @@ void test("classifyProviderFailure gives provider_mismatch non-retry policy", ()
   });
 });
 
-void test("classifyProviderFailure gives auth a cooldown+failover policy but not transient retry", () => {
+test("classifyProviderFailure gives auth a cooldown+failover policy but not transient retry", () => {
   const result = classifyProviderFailure({ status: 401, message: "invalid api key" });
 
   assert.equal(result.failureClass, "auth");

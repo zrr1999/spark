@@ -6,9 +6,9 @@ import { fileURLToPath } from "node:url";
 
 import { sparkNativeTuiStrings } from "@zendev-lab/spark-i18n/cli";
 import {
-  PiAskFlowController,
-  type PiAskFlowRequest,
-  type PiAskFlowResult,
+  SparkAskFlowController,
+  type SparkAskFlowRequest,
+  type SparkAskFlowResult,
   type RenderTheme as AskRenderTheme,
 } from "@zendev-lab/spark-ask";
 
@@ -43,6 +43,7 @@ import {
   type SparkActionView,
   type SparkArtifactView,
   type SparkConversationPartStatus,
+  type SparkEvidenceView,
   type SparkInteractionRequest,
   type SparkInteractionResponse,
   type SparkJsonObject,
@@ -54,7 +55,7 @@ import {
   type SparkToolCallView,
   type SparkViewModelEvent,
 } from "@zendev-lab/spark-protocol";
-import type { CommandMetadata, ExtensionCommandContext } from "@zendev-lab/spark-extension-api";
+import type { CommandMetadata, SparkHostCommandContext } from "@zendev-lab/spark-core";
 
 import type { SparkKeybindingContext, SparkKeybindings } from "./host/keybindings.ts";
 import {
@@ -214,8 +215,8 @@ export interface SparkNativeRuntimeCommandHost {
     >;
   }>;
   makeContext(
-    extra?: Partial<ExtensionCommandContext> & { setEditorText?: (text: string) => void },
-  ): ExtensionCommandContext & { setEditorText?: (text: string) => void };
+    extra?: Partial<SparkHostCommandContext> & { setEditorText?: (text: string) => void },
+  ): SparkHostCommandContext & { setEditorText?: (text: string) => void };
 }
 
 export interface SparkNativeRuntimeSlashCommandOptions {
@@ -280,6 +281,7 @@ interface SparkNativeCockpitState {
   readonly runs: Map<string, SparkRunView>;
   readonly tasks: Map<string, SparkTaskView>;
   readonly artifacts: Map<string, SparkArtifactView>;
+  readonly evidence: Map<string, SparkEvidenceView>;
   readonly interactions: Map<string, SparkInteractionRequest>;
 }
 
@@ -303,6 +305,7 @@ export interface SparkNativeCockpitSnapshot {
   roleRuns: number;
   tasks: number;
   artifacts: number;
+  evidence: number;
   reviews: number;
   graftItems: number;
   interactions: number;
@@ -335,6 +338,7 @@ function createSparkNativeCockpitState(): SparkNativeCockpitState {
     runs: new Map(),
     tasks: new Map(),
     artifacts: new Map(),
+    evidence: new Map(),
     interactions: new Map(),
   };
 }
@@ -493,6 +497,7 @@ export class SparkNativeSession {
       runs: [],
       tasks: [],
       artifacts: [],
+      evidence: [],
       metadata: {
         queuedCount: this.queuedFollowUps.length,
         daemonPendingCount: daemonPending.length,
@@ -1174,7 +1179,9 @@ function cockpitTaskDeepLink(taskRef: string): string {
   return `cockpit://tasks/${encodeURIComponent(taskRef)}`;
 }
 
-function isReviewArtifact(artifact: SparkArtifactView): boolean {
+function isReviewArtifact(
+  artifact: Pick<SparkArtifactView, "title" | "preview" | "producer" | "metadata">,
+): boolean {
   return (
     artifact.producer === "review" ||
     stringFromRecord(artifact.metadata, "producer") === "review" ||
@@ -2062,6 +2069,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
       roleRuns: [...this.cockpit.runs.values()].filter((run) => run.kind === "role").length,
       tasks: this.cockpit.tasks.size,
       artifacts: this.cockpit.artifacts.size,
+      evidence: this.cockpit.evidence.size,
       reviews: this.reviewItems().length,
       graftItems: this.graftItems().length,
       interactions: this.cockpit.interactions.size,
@@ -2468,12 +2476,12 @@ export class SparkNativeTuiApp implements Component, Focusable {
       });
     }
     const flowRequest = nativeAskFlowRequest(request);
-    const controller = new PiAskFlowController({
+    const controller = new SparkAskFlowController({
       request: flowRequest,
       language: nativeAskLanguage(),
     });
     let timedOut = false;
-    const resultPromise = this.custom<PiAskFlowResult>(
+    const resultPromise = this.custom<SparkAskFlowResult>(
       (tui, theme, _keybindings, done) => controller.run(tui, theme as AskRenderTheme, done),
       {
         overlay: true,
@@ -2486,7 +2494,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
         }, request.timeoutMs)
       : undefined;
     timeout?.unref?.();
-    let result: PiAskFlowResult;
+    let result: SparkAskFlowResult;
     try {
       result = await resultPromise;
     } finally {
@@ -2564,6 +2572,14 @@ export class SparkNativeTuiApp implements Component, Focusable {
       case "artifact.update":
         this.cockpit.artifacts.set(parsed.artifact.ref, parsed.artifact);
         break;
+      case "evidence.update":
+        this.cockpit.evidence.set(parsed.evidence.ref, parsed.evidence);
+        break;
+      default: {
+        const _exhaustive: never = parsed;
+        void _exhaustive;
+        break;
+      }
     }
     this.invalidate();
     this.tui.requestRender();
@@ -2586,10 +2602,42 @@ export class SparkNativeTuiApp implements Component, Focusable {
     this.cockpit.runs.clear();
     this.cockpit.tasks.clear();
     this.cockpit.artifacts.clear();
+    this.cockpit.evidence.clear();
     for (const run of view.runs) this.recordRunView(run, false);
     if (view.runs.length === 0) this.recordActiveRunStatus();
     for (const task of view.tasks) this.cockpit.tasks.set(task.ref, task);
-    for (const artifact of view.artifacts) this.cockpit.artifacts.set(artifact.ref, artifact);
+    for (const artifact of view.artifacts) {
+      if (artifact.kind === "issue" || artifact.kind === "pr" || artifact.kind === "preview") {
+        this.cockpit.artifacts.set(artifact.ref, artifact);
+      } else {
+        this.cockpit.evidence.set(artifact.ref, {
+          version: artifact.version,
+          ref: artifact.ref,
+          title: artifact.title,
+          kind:
+            artifact.kind === "document" ||
+            artifact.kind === "record" ||
+            artifact.kind === "trace" ||
+            artifact.kind === "knowledge"
+              ? artifact.kind
+              : "other",
+          format:
+            artifact.format === "markdown" ||
+            artifact.format === "json" ||
+            artifact.format === "text" ||
+            artifact.format === "blob"
+              ? artifact.format
+              : "other",
+          ...(artifact.status ? { status: artifact.status } : {}),
+          ...(artifact.producer ? { producer: artifact.producer } : {}),
+          ...(artifact.createdAt ? { createdAt: artifact.createdAt } : {}),
+          ...(artifact.updatedAt ? { updatedAt: artifact.updatedAt } : {}),
+          ...(artifact.preview ? { preview: artifact.preview } : {}),
+          metadata: artifact.metadata,
+        });
+      }
+    }
+    for (const evidence of view.evidence ?? []) this.cockpit.evidence.set(evidence.ref, evidence);
   }
 
   private recordRunView(run: SparkRunView, includeUsage = true): void {
@@ -2644,7 +2692,8 @@ export class SparkNativeTuiApp implements Component, Focusable {
       stringFromRecord(task.metadata, "outcome");
     if (metadataStatus) return metadataStatus;
     for (const ref of task.artifactRefs) {
-      const artifact = this.cockpit.artifacts.get(ref);
+      const artifact =
+        this.cockpit.artifacts.get(ref) ?? this.cockpit.evidence.get(ref) ?? undefined;
       if (!artifact || !isReviewArtifact(artifact)) continue;
       return (
         stringFromRecord(artifact.metadata, "outcome") ??
@@ -2887,6 +2936,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
     const prefix = this.messagePrefix(message);
     const body = message.text || " ";
     const suffix = message.streaming ? " ▋" : "";
+    const quoteLines = message.role === "user" ? this.renderChannelQuoteLines(message, width) : [];
     const lines =
       message.role === "assistant"
         ? this.renderPrefixedLines(
@@ -2895,7 +2945,20 @@ export class SparkNativeTuiApp implements Component, Focusable {
             width,
           )
         : this.renderPrefixedBlock(prefix, `${body}${suffix}`, width);
-    return this.styleRoleLines(message.role, lines);
+    return this.styleRoleLines(message.role, [...quoteLines, ...lines]);
+  }
+
+  private renderChannelQuoteLines(message: SparkNativeMessage, width: number): string[] {
+    const quote = channelQuotePreviewFromDetails(message.details);
+    if (!quote) return [];
+    const label = quote.senderLabel
+      ? this.renderTheme.fg("dim", `│ ${quote.senderLabel}`)
+      : this.renderTheme.fg("dim", "│");
+    const body = this.renderTheme.fg("dim", `│ ${quote.text}`);
+    return [
+      truncateToWidth(label, width),
+      ...wrapTextWithAnsi(body, width).map((line) => truncateToWidth(line, width)),
+    ];
   }
 
   private renderToolMessage(message: SparkNativeMessage, width: number): string[] {
@@ -3066,7 +3129,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
       `├─ Workflow picker/progress: ${snapshot.workflows} option(s), ${snapshot.workflowRuns} workflow run(s)`,
       `├─ Role-run board: ${snapshot.roleRuns} role run(s), ${snapshot.interactions} interaction(s)`,
       `├─ Task/project board: ${snapshot.tasks} tracked task(s)`,
-      `├─ Artifacts panel: ${snapshot.artifacts} artifact(s), ${snapshot.reviews} review item(s)`,
+      `├─ Artifacts panel: ${snapshot.artifacts} product artifact(s), ${snapshot.evidence} evidence item(s), ${snapshot.reviews} review item(s)`,
       `└─ Graft provenance/patch status: ${snapshot.graftItems} item(s)`,
     ];
   }
@@ -3219,7 +3282,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
   }
 
   private reviewItems(): string[] {
-    const artifactItems = [...this.cockpit.artifacts.values()]
+    const artifactItems = [...this.cockpit.artifacts.values(), ...this.cockpit.evidence.values()]
       .filter(isReviewArtifact)
       .map((artifact) => {
         const outcome =
@@ -3246,7 +3309,10 @@ export class SparkNativeTuiApp implements Component, Focusable {
 
   private graftItems(): string[] {
     const records: string[] = [];
-    for (const artifact of this.cockpit.artifacts.values()) {
+    for (const artifact of [
+      ...this.cockpit.artifacts.values(),
+      ...this.cockpit.evidence.values(),
+    ]) {
       const summary = graftSummaryFromRecord(artifact.metadata);
       if (
         summary ||
@@ -3637,6 +3703,25 @@ function userSenderLabelFromDetails(
   return value.replace(/\s+/gu, " ").replaceAll(">", "›").slice(0, 48);
 }
 
+function channelQuotePreviewFromDetails(
+  details: Record<string, unknown> | undefined,
+): { text: string; senderLabel?: string } | undefined {
+  const channel = recordFromValue(details?.channel);
+  const reference = recordFromValue(channel?.messageReference);
+  if (!reference) return undefined;
+  const preview = stringFromRecord(reference, "preview");
+  const messageId = stringFromRecord(reference, "messageId");
+  if (!preview && !messageId) return undefined;
+  const senderLabel =
+    stringFromRecord(reference, "senderName") ?? stringFromRecord(reference, "senderId");
+  return {
+    text: (preview || "引用消息").replace(/\s+/gu, " ").slice(0, 240),
+    ...(senderLabel
+      ? { senderLabel: senderLabel.replace(/\s+/gu, " ").replaceAll(">", "›").slice(0, 48) }
+      : {}),
+  };
+}
+
 function recordFromValue(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -3652,7 +3737,7 @@ function compactSessionSenderId(sessionId: string): string {
 
 function nativeAskFlowRequest(
   request: Extract<SparkInteractionRequest, { kind: "askFlow" }>,
-): PiAskFlowRequest {
+): SparkAskFlowRequest {
   return {
     title: request.title,
     ...(request.prompt ? { context: request.prompt } : {}),
@@ -3687,7 +3772,7 @@ function nativeAskFlowRequest(
   };
 }
 
-function nativeAskAnswers(result: PiAskFlowResult): SparkJsonObject {
+function nativeAskAnswers(result: SparkAskFlowResult): SparkJsonObject {
   return Object.fromEntries(
     Object.entries(result.answers).map(([questionId, answer]) => [
       questionId,

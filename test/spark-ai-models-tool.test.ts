@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { registerSparkModelsTool } from "../packages/spark-ai/src/models-extension.ts";
-import type { ToolConfig } from "@zendev-lab/spark-extension-api";
+import type { ToolConfig } from "@zendev-lab/spark-core";
 
 interface FakeModel {
   provider: string;
@@ -69,7 +69,7 @@ async function executeModels(
   } as unknown as Parameters<ToolConfig["execute"]>[4]);
 }
 
-void test("models registers one standalone tool", () => {
+test("models registers one standalone tool", () => {
   const tools = registerTools();
   assert.deepEqual([...tools.keys()], ["models"]);
   assert.deepEqual(tools.get("models")?.policy, {
@@ -81,7 +81,7 @@ void test("models registers one standalone tool", () => {
   });
 });
 
-void test("models lists available models by default", async () => {
+test("models lists available models by default", async () => {
   const result = await executeModels({});
   const text = result.content[0]?.text ?? "";
   assert.match(text, /Available models \(2\)/);
@@ -91,7 +91,7 @@ void test("models lists available models by default", async () => {
   assert.equal(result.details?.count, 2);
 });
 
-void test("models can include unavailable registered models with auth column", async () => {
+test("models can include unavailable registered models with auth column", async () => {
   const result = await executeModels({ includeUnavailable: true });
   const text = result.content[0]?.text ?? "";
   assert.match(text, /Registered models \(3\)/);
@@ -101,7 +101,7 @@ void test("models can include unavailable registered models with auth column", a
   assert.equal(result.details?.count, 3);
 });
 
-void test("models supports provider, query, and limit filters", async () => {
+test("models supports provider, query, and limit filters", async () => {
   const result = await executeModels({ provider: "openai", query: "mini", limit: 1 });
   const text = result.content[0]?.text ?? "";
   assert.match(text, /Available models \(1; provider=openai, query="mini"\)/);
@@ -111,7 +111,7 @@ void test("models supports provider, query, and limit filters", async () => {
   assert.equal(result.details?.totalMatched, 1);
 });
 
-void test("models reports a clear host capability error when modelRegistry is missing", async () => {
+test("models reports a clear host capability error when modelRegistry is missing", async () => {
   const tool = registerTools().get("models");
   assert.ok(tool, "models tool should be registered");
   await assert.rejects(

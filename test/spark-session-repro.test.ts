@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 
-import type { ArtifactRef } from "@zendev-lab/spark-extension-api";
+import type { ArtifactRef } from "@zendev-lab/spark-core";
 import {
   DEFAULT_REPRO_STAGES,
   advanceReproStage,
@@ -26,12 +26,12 @@ import {
 
 const artifactRef = (id: string) => `artifact:${id}` as ArtifactRef;
 
-void describe("SparkSessionRepro evidence-backed state machine", () => {
+describe("SparkSessionRepro evidence-backed state machine", () => {
   function makeRepro(): SparkSessionRepro {
     return createSparkSessionRepro("test-session");
   }
 
-  void it("starts a v3 research-first setup with stable typed requirements", () => {
+  it("starts a v3 research-first setup with stable typed requirements", () => {
     const repro = makeRepro();
     const setup = currentReproStage(repro);
 
@@ -61,14 +61,14 @@ void describe("SparkSessionRepro evidence-backed state machine", () => {
     );
   });
 
-  void it("preserves an optional user-supplied reproduction objective", () => {
+  it("preserves an optional user-supplied reproduction objective", () => {
     const repro = createSparkSessionRepro("test-session", undefined, {
       objective: "进行正经的复现对齐工作",
     });
     assert.equal(repro.objective, "进行正经的复现对齐工作");
   });
 
-  void it("derives readiness from evidence, user decisions, and validation proof", () => {
+  it("derives readiness from evidence, user decisions, and validation proof", () => {
     let repro = makeRepro();
     repro = record(repro, "repro-contract-frozen", {
       kind: "evidence",
@@ -108,7 +108,7 @@ void describe("SparkSessionRepro evidence-backed state machine", () => {
     assert.equal(scaffold?.currentPhase, "implement");
   });
 
-  void it("rejects proof kinds that do not match the stable requirement", () => {
+  it("rejects proof kinds that do not match the stable requirement", () => {
     const repro = makeRepro();
     assert.throws(
       () =>
@@ -120,7 +120,7 @@ void describe("SparkSessionRepro evidence-backed state machine", () => {
     );
   });
 
-  void it("keeps the legacy satisfy helper fail-closed", () => {
+  it("keeps the legacy satisfy helper fail-closed", () => {
     const repro = makeRepro();
     assert.equal(satisfyAcceptanceCondition(repro, "repro-contract-frozen"), undefined);
     assert.equal(
@@ -140,7 +140,7 @@ void describe("SparkSessionRepro evidence-backed state machine", () => {
     assert.equal(isReproRequirementSatisfied(updated!.stages[0]!.acceptance[0]!), true);
   });
 
-  void it("derives gates from proof and cannot force-pass an incomplete stage", () => {
+  it("derives gates from proof and cannot force-pass an incomplete stage", () => {
     const repro = { ...makeRepro(), currentStageIndex: 2, currentPhase: "implement" as const };
     const blocked = evaluateStageGate(repro);
     assert.equal(blocked.passed, false);
@@ -161,7 +161,7 @@ void describe("SparkSessionRepro evidence-backed state machine", () => {
     ]);
   });
 
-  void it("migrates legacy setup facts but not bare booleans or agent-authored decisions", async () => {
+  it("migrates legacy setup facts but not bare booleans or agent-authored decisions", async () => {
     const dir = await mkdtemp(join(tmpdir(), "spark-repro-phase-migration-"));
     try {
       const current = makeRepro();
@@ -234,7 +234,7 @@ void describe("SparkSessionRepro evidence-backed state machine", () => {
   });
 
   for (const version of [1, 2] as const) {
-    void it(`reopens incomplete legacy v${version} snapshots that claimed completion`, async () => {
+    it(`reopens incomplete legacy v${version} snapshots that claimed completion`, async () => {
       const dir = await mkdtemp(join(tmpdir(), `spark-repro-v${version}-fail-closed-`));
       try {
         const current = makeRepro();
@@ -303,7 +303,7 @@ void describe("SparkSessionRepro evidence-backed state machine", () => {
     });
   }
 
-  void it("keeps the five-stage gate topology", () => {
+  it("keeps the five-stage gate topology", () => {
     assert.equal(DEFAULT_REPRO_STAGES.length, 5);
     assert.equal(DEFAULT_REPRO_STAGES[0]?.gate, undefined);
     assert.equal(DEFAULT_REPRO_STAGES[2]?.gate?.id, "gate-A");

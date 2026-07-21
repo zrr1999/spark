@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   CURRENT_SPARK_SESSION_VERSION,
@@ -11,7 +11,7 @@ import {
   workspaceSessionHash,
 } from "../apps/spark-tui/src/host/index.ts";
 
-void test("SparkSessionStore uses ~/.spark-style sessions root and workspace hash, never ~/.pi", async () => {
+test("SparkSessionStore uses ~/.spark-style sessions root and workspace hash, never ~/.pi", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-path-"));
   try {
     const sparkHome = join(dir, ".spark");
@@ -30,7 +30,7 @@ void test("SparkSessionStore uses ~/.spark-style sessions root and workspace has
   }
 });
 
-void test("SparkSessionStore save/load round-trips current Pi JSONL header and entries", async () => {
+test("SparkSessionStore save/load round-trips current Pi JSONL header and entries", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-roundtrip-"));
   try {
     const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
@@ -79,7 +79,7 @@ void test("SparkSessionStore save/load round-trips current Pi JSONL header and e
   }
 });
 
-void test("SparkSessionStore resolves session refs and creates parent-linked forks", async () => {
+test("SparkSessionStore resolves session refs and creates parent-linked forks", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-fork-"));
   try {
     const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
@@ -107,7 +107,7 @@ void test("SparkSessionStore resolves session refs and creates parent-linked for
   }
 });
 
-void test("SparkSessionStore lists sessions and returns the most recently modified session", async () => {
+test("SparkSessionStore lists sessions and returns the most recently modified session", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-list-"));
   try {
     const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
@@ -140,7 +140,7 @@ void test("SparkSessionStore lists sessions and returns the most recently modifi
   }
 });
 
-void test("SparkSessionStore atomic save leaves only jsonl session files", async () => {
+test("SparkSessionStore atomic save leaves only jsonl session files", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-atomic-"));
   try {
     const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
@@ -159,7 +159,7 @@ void test("SparkSessionStore atomic save leaves only jsonl session files", async
   }
 });
 
-void test("parseSparkSessionEntries skips malformed JSONL but requires a valid session header", () => {
+test("parseSparkSessionEntries skips malformed JSONL but requires a valid session header", () => {
   const parsed = parseSparkSessionEntries(
     [
       JSON.stringify({ type: "session", id: "s1", timestamp: "t", cwd: "/tmp" }),

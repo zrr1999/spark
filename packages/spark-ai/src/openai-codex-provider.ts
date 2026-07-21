@@ -1,6 +1,6 @@
 import { createProvider, getModels, openAICodexResponsesApi } from "@earendil-works/pi-ai/compat";
 
-import { registerPiAiProvider } from "./pi-provider-adapter.ts";
+import { registerSparkAiProvider } from "./spark-provider-adapter.ts";
 import type { ProviderRegistrationAPI } from "./provider-registry.ts";
 
 export const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
@@ -28,7 +28,7 @@ export default function registerOpenAICodexProvider(api: ProviderRegistrationAPI
     models: getModels(OPENAI_CODEX_PROVIDER_ID),
     api: openAICodexResponsesApi(),
   });
-  registerPiAiProvider(api, provider, {
+  registerSparkAiProvider(api, provider, {
     authRef: `oauth:${OPENAI_CODEX_PROVIDER_ID}`,
     api: OPENAI_CODEX_API,
     baseUrl: OPENAI_CODEX_BASE_URL,

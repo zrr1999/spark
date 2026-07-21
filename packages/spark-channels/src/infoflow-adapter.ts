@@ -19,6 +19,7 @@ import {
   type ChannelMessageTarget,
   type ChannelReplyCapability,
 } from "./reply.ts";
+import { normalizeChannelMessageReference } from "./message-reference.ts";
 
 export interface InfoflowAdapterOptions {
   id: string;
@@ -120,6 +121,7 @@ export class InfoflowAdapter implements ChannelAdapter {
       ...(groupId ? { chatId: groupId } : {}),
       text: payload.text,
       messageId: payload.message_id,
+      ...(payload.message_reference ? { messageReference: payload.message_reference } : {}),
       ...(payload.event_type ? { eventType: payload.event_type } : {}),
       ...(payload.content_type ? { contentType: payload.content_type } : {}),
       ...(payload.attachments?.length ? { attachments: payload.attachments } : {}),
@@ -213,6 +215,9 @@ function parseInfoflowInbound(raw: unknown): InfoflowInboundRaw {
     chat_type: resolvedType,
     ...(typeof record.chat_id === "string" ? { chat_id: record.chat_id } : {}),
     ...(typeof record.message_id === "string" ? { message_id: record.message_id } : {}),
+    ...(normalizeChannelMessageReference(record.message_reference)
+      ? { message_reference: normalizeChannelMessageReference(record.message_reference) }
+      : {}),
     ...(typeof record.event_type === "string" ? { event_type: record.event_type } : {}),
     ...(typeof record.content_type === "string" ? { content_type: record.content_type } : {}),
     ...(Array.isArray(record.attachments)

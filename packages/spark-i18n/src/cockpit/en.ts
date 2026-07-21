@@ -150,6 +150,7 @@ const messages = {
       daemon: "Daemon",
       workspace: "Workspace",
     },
+    openCockpitSettings: "Control plane settings",
   },
   invocationDiagnostics: {
     navLabel: "Invocation diagnostics",
@@ -225,6 +226,14 @@ const messages = {
       catalogEyebrow: "Available workspaces",
       catalogTitle: "All workspaces",
       connectionSettings: "Daemon connection",
+      removeWorkspace: "Remove",
+      removeConfirmTitle: "Remove workspace?",
+      removeConfirmBody:
+        "This removes “{name}” from the Cockpit directory and disconnects its daemon binding. Local directories and sessions on the machine are kept; you can create and connect again later.",
+      removeConfirmAction: "Remove workspace",
+      removeCancel: "Cancel",
+      removeMissing: "That workspace could not be found.",
+      removeDone: "Removed workspace /{name}.",
       webAccess: "Browser access",
       signIn: "Sign in",
       openWorkspace: "Open",
@@ -433,7 +442,7 @@ const messages = {
     emptyTitle: "No conversations yet",
     emptyBody:
       "Choose or start a workspace conversation, then tell Spark what you want to accomplish.",
-    daemonUnavailableTitle: "Workspace owner is not connected",
+    daemonUnavailableTitle: "Origin lease holder is not connected",
     daemonUnavailableBody:
       "The daemon that owns this workspace is not connected to this Cockpit. Cached conversations remain available; reconnect it to create, archive, or send messages.",
     createTitle: "Start a conversation",
@@ -546,7 +555,7 @@ const messages = {
       startFailed: "Could not start the conversation. Try again.",
       retryTurn: "Retry",
       retryingTurn: "Retrying…",
-      retryUnavailable: "Retry is unavailable while the workspace owner or model is offline.",
+      retryUnavailable: "Retry is unavailable while the origin lease holder or model is offline.",
       timelineTitle: "Conversation",
       timelineEmpty:
         "Spark replies and execution progress will appear here after you send a message.",
@@ -749,7 +758,7 @@ const messages = {
           "show-hotkeys": "Keyboard shortcuts",
         },
         reasons: {
-          ownerOffline: "The workspace owner is offline.",
+          ownerOffline: "The origin lease holder is offline.",
           noModel: "No configured model is available.",
           modelUpdating: "A model update is already in progress.",
           thinkingUpdating: "A thinking-level update is already in progress.",
@@ -1106,10 +1115,10 @@ const messages = {
       workspaceContext: "Workspace",
       agentContext: "Agents chat",
       runtimeContext: "Runtime",
-      noOwnerContext: "No Spark daemon owner",
+      noOwnerContext: "No Spark daemon origin lease",
       readyState: "Spark is ready to handle agent-oriented workspace requests.",
       busyState: "Spark is working. New messages will be queued as follow-ups.",
-      offlineState: "Messages need an available Spark daemon owner before they can run.",
+      offlineState: "Messages need an available Spark daemon origin lease before they can run.",
       emptyAssistantTitle: "Spark agents chat",
       emptyAssistantBody:
         "Ask for reviewer, planner, or worker help. Spark will execute through the owning workspace daemon.",
@@ -1157,9 +1166,9 @@ const messages = {
         "Model, mode, and permission controls are visible placeholders for the agents chat UI and will be wired to runtime capabilities later.",
       keyboardHint: "Enter sends · Shift+Enter adds a newline",
       unavailableBody: "Bring the owning Spark daemon online to send this agents-scoped message.",
-      noOwnerButton: "No Spark daemon owner",
+      noOwnerButton: "No Spark daemon origin lease",
       unavailableButton: "Workspace unavailable",
-      ownerPrefix: "Owner:",
+      ownerPrefix: "Lease:",
       suggestions: [
         "Design a reviewer workflow for this workspace",
         "Compare reviewer, planner, and worker responsibilities",
@@ -1531,7 +1540,7 @@ const messages = {
     title: "Open this workspace",
     lede: "Enter a one-time key issued for {workspace}. It does not grant access to other workspaces or Cockpit settings.",
     unconfigured:
-      "No active workspace access key is available. Ask an operator to run spark daemon workspace access create.",
+      "No active workspace access key is available. Ask an operator to run spark cockpit workspace access create --workspace <id>.",
     tokenLabel: "One-time workspace key",
     tokenPlaceholder: "spark_workspace_auth_…",
     action: "Continue",

@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
-import { stableId } from "../packages/spark-extension-api/src/index.ts";
-import { callLeafOrDegrade } from "../packages/spark-extension-api/src/index.ts";
+import { stableId } from "../packages/spark-core/src/index.ts";
+import { callLeafOrDegrade } from "../packages/spark-core/src/index.ts";
 import { DEFAULT_SPARK_PROVIDER_SPECS } from "../packages/spark-ai/src/control/provider-catalog.ts";
 import { parseSparkCliArgs, parseSparkCliCommand } from "../apps/spark-tui/src/cli.ts";
 import { saveSessionPhase } from "../packages/pi-extension/src/extension/current-project-state.ts";
@@ -131,7 +131,7 @@ function fakeProviderModule(
   };
 }
 
-void test("parseSparkCliArgs keeps help separate from initial message", () => {
+test("parseSparkCliArgs keeps help separate from initial message", () => {
   assert.deepEqual(parseSparkCliArgs(["--help"]), { help: true });
   assert.deepEqual(parseSparkCliArgs(["build", "this"]), {
     help: false,
@@ -139,7 +139,7 @@ void test("parseSparkCliArgs keeps help separate from initial message", () => {
   });
 });
 
-void test("parseSparkCliCommand preserves explicit tui session options", () => {
+test("parseSparkCliCommand preserves explicit tui session options", () => {
   assert.deepEqual(
     parseSparkCliCommand(["--session-id", "abc123", "--session-dir", "/tmp/spark-home"]),
     {
@@ -149,7 +149,7 @@ void test("parseSparkCliCommand preserves explicit tui session options", () => {
   );
 });
 
-void test("createSparkCliHostServices constructs runtime, extensions, provider registry, sessions, skills, and agent loop", async () => {
+test("createSparkCliHostServices constructs runtime, extensions, provider registry, sessions, skills, and agent loop", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-bootstrap-"));
   try {
     const cwd = join(dir, "repo");
@@ -237,7 +237,7 @@ void test("createSparkCliHostServices constructs runtime, extensions, provider r
   }
 });
 
-void test("native host selects at most three request skills dynamically and clears them next submit", async () => {
+test("native host selects at most three request skills dynamically and clears them next submit", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-dynamic-skills-"));
   try {
     const cwd = join(dir, "repo");
@@ -280,7 +280,7 @@ void test("native host selects at most three request skills dynamically and clea
   }
 });
 
-void test("native host keeps prompt phase and executable tool profile on one loaded state", async () => {
+test("native host keeps prompt phase and executable tool profile on one loaded state", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-phase-profile-"));
   try {
     const captured: Parameters<typeof fakeProviderModule>[0] = {};
@@ -306,7 +306,7 @@ void test("native host keeps prompt phase and executable tool profile on one loa
   }
 });
 
-void test("background turns use a driver profile and the next user submit restores persisted plan", async () => {
+test("background turns use a driver profile and the next user submit restores persisted plan", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-background-driver-profile-"));
   try {
     const backgroundToolUse = assistant("run background write");
@@ -395,7 +395,7 @@ void test("background turns use a driver profile and the next user submit restor
   }
 });
 
-void test("native submit preparation rejects concurrent submits before request context can race", async () => {
+test("native submit preparation rejects concurrent submits before request context can race", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-submit-preparation-race" });
   let releasePrepare: () => void = () => undefined;
   const prepareGate = new Promise<void>((resolve) => {
@@ -444,7 +444,7 @@ void test("native submit preparation rejects concurrent submits before request c
   assert.deepEqual(loop.getLastPromptManifest()?.selectedSkills, ["request-a"]);
 });
 
-void test("native submit preparation does not start while a trigger turn is in pre-stream lifecycle", async () => {
+test("native submit preparation does not start while a trigger turn is in pre-stream lifecycle", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-trigger-before-prepare-race" });
   let releaseBackground: () => void = () => undefined;
   const backgroundGate = new Promise<void>((resolve) => {
@@ -498,7 +498,7 @@ void test("native submit preparation does not start while a trigger turn is in p
   assert.equal(loop.getState(), "idle");
 });
 
-void test("trigger turns queued during user preparation are deferred without entering the user prompt", async () => {
+test("trigger turns queued during user preparation are deferred without entering the user prompt", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-trigger-during-prepare-race" });
   let releasePrepare: () => void = () => undefined;
   const prepareGate = new Promise<void>((resolve) => {
@@ -557,7 +557,7 @@ void test("trigger turns queued during user preparation are deferred without ent
   assert.equal(loop.getState(), "idle");
 });
 
-void test("completed user submit clears selected skills before an agent_end background turn", async () => {
+test("completed user submit clears selected skills before an agent_end background turn", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-background-skill-clear-"));
   try {
     const cwd = join(dir, "repo");
@@ -606,7 +606,7 @@ void test("completed user submit clears selected skills before an agent_end back
   }
 });
 
-void test("native host honors config extensions for explicit Graft opt-in and full disable", async () => {
+test("native host honors config extensions for explicit Graft opt-in and full disable", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-config-extensions-"));
   try {
     const graftServices = await createSparkCliHostServices({
@@ -633,7 +633,7 @@ void test("native host honors config extensions for explicit Graft opt-in and fu
   }
 });
 
-void test("native host installs explicit session manager before extension load", async () => {
+test("native host installs explicit session manager before extension load", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-session-manager-order-"));
   try {
     const cwd = join(dir, "repo");
@@ -675,7 +675,7 @@ void test("native host installs explicit session manager before extension load",
   }
 });
 
-void test("native host registers spark-files working-tree tools via the builtin extension set", async () => {
+test("native host registers spark-files working-tree tools via the builtin extension set", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-spark-files-"));
   try {
     const cwd = join(dir, "repo");
@@ -725,7 +725,7 @@ void test("native host registers spark-files working-tree tools via the builtin 
   }
 });
 
-void test("native host registers spark-ai models tool and exposes Spark model registry context", async () => {
+test("native host registers spark-ai models tool and exposes Spark model registry context", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-spark-ai-models-"));
   try {
     const cwd = join(dir, "repo");
@@ -778,7 +778,7 @@ void test("native host registers spark-ai models tool and exposes Spark model re
   }
 });
 
-void test("createSparkCliHostServices loads config from explicit sparkHome by default", async () => {
+test("createSparkCliHostServices loads config from explicit sparkHome by default", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-home-config-"));
   try {
     const cwd = join(dir, "repo");
@@ -804,7 +804,7 @@ void test("createSparkCliHostServices loads config from explicit sparkHome by de
   }
 });
 
-void test("provider registry workflow model runner completes in-process without role runs", async () => {
+test("provider registry workflow model runner completes in-process without role runs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-workflow-model-runner-"));
   try {
     const cwd = join(dir, "repo");
@@ -839,7 +839,7 @@ void test("provider registry workflow model runner completes in-process without 
   }
 });
 
-void test("provider registry workflow model runner rejects unknown provider and model targets", async () => {
+test("provider registry workflow model runner rejects unknown provider and model targets", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-workflow-model-runner-unknown-"));
   try {
     const cwd = join(dir, "repo");
@@ -878,7 +878,7 @@ void test("provider registry workflow model runner rejects unknown provider and 
   }
 });
 
-void test("host ctx.runLeaf delegates to a single-shot spark-ai leaf and reports the model", async () => {
+test("host ctx.runLeaf delegates to a single-shot spark-ai leaf and reports the model", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-runleaf-"));
   try {
     const cwd = join(dir, "repo");
@@ -919,7 +919,7 @@ void test("host ctx.runLeaf delegates to a single-shot spark-ai leaf and reports
   }
 });
 
-void test("host ctx.runLeaf degrades without throwing for an unknown model override", async () => {
+test("host ctx.runLeaf degrades without throwing for an unknown model override", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-runleaf-degrade-"));
   try {
     const cwd = join(dir, "repo");
@@ -950,7 +950,7 @@ void test("host ctx.runLeaf degrades without throwing for an unknown model overr
   }
 });
 
-void test("callLeafOrDegrade returns host-unsupported when a host omits runLeaf, without throwing", async () => {
+test("callLeafOrDegrade returns host-unsupported when a host omits runLeaf, without throwing", async () => {
   const result = await callLeafOrDegrade(
     {},
     { role: "web-researcher", brief: "synthesize", input: "data" },
@@ -960,7 +960,7 @@ void test("callLeafOrDegrade returns host-unsupported when a host omits runLeaf,
   assert.equal(result.text, "");
 });
 
-void test("callLeafOrDegrade delegates to a present host runLeaf", async () => {
+test("callLeafOrDegrade delegates to a present host runLeaf", async () => {
   let calls = 0;
   const result = await callLeafOrDegrade(
     {
@@ -976,7 +976,7 @@ void test("callLeafOrDegrade delegates to a present host runLeaf", async () => {
   assert.equal(result.text, "synthesized");
 });
 
-void test("spark-tui-app package keeps pi-coding-agent out of runtime dependencies", async () => {
+test("spark-tui-app package keeps pi-coding-agent out of runtime dependencies", async () => {
   const pkg = JSON.parse(await readFile("apps/spark-tui/package.json", "utf8")) as {
     dependencies?: Record<string, string>;
   };

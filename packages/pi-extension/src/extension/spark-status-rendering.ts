@@ -1,7 +1,7 @@
 import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import {
-  formatPiTaskActiveStatusLine,
-  formatPiTaskSummaryStatusLine,
+  formatSparkTaskActiveStatusLine,
+  formatSparkTaskSummaryStatusLine,
   isUnfinishedTaskStatus,
 } from "@zendev-lab/spark-tasks";
 import type {
@@ -9,7 +9,7 @@ import type {
   TaskRef,
   TaskRunCompletionSummary,
   TaskStatus,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import type { WorkflowRunControl, WorkflowRunStatusSummary } from "@zendev-lab/spark-workflows";
 import { renderSparkProjectKindDisplay } from "./project-kind-registry.ts";
 import { appendRecentRoleRunCompletionLines } from "./role-run-completions.ts";
@@ -287,7 +287,7 @@ function renderTaskScopedStatus(input: SparkStatusRenderInput):
   const current = project.ref === input.currentProject?.ref;
   const lines = [
     `Spark task status: @${task.name} [${task.status}]`,
-    `  ${formatPiTaskActiveStatusLine({
+    `  ${formatSparkTaskActiveStatusLine({
       task,
       owner,
       readyFrontier,
@@ -768,7 +768,7 @@ function appendTaskStatusLines(
     });
     if (input.view === "active") {
       lines.push(
-        `  ${formatPiTaskActiveStatusLine({
+        `  ${formatSparkTaskActiveStatusLine({
           task,
           owner,
           readyFrontier: input.readyTaskRefs.has(task.ref),
@@ -786,7 +786,7 @@ function appendTaskStatusLines(
     }
     const taskSummary = input.graph.todoSummary(task.ref);
     lines.push(
-      `  ${formatPiTaskSummaryStatusLine({
+      `  ${formatSparkTaskSummaryStatusLine({
         task,
         owner,
         ref: task.ref,

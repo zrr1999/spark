@@ -1,4 +1,5 @@
 import { createDefaultChannelExternalKey } from "./external-key.ts";
+import { normalizeChannelMessageReference } from "./message-reference.ts";
 import type {
   ChannelAdapter,
   ChannelTransport,
@@ -90,6 +91,7 @@ export class FeishuAdapter implements ChannelAdapter {
       chatId,
       text: payload.text,
       messageId: payload.message_id,
+      ...(payload.message_reference ? { messageReference: payload.message_reference } : {}),
       raw,
     };
   }
@@ -113,12 +115,65 @@ function parseFeishuInbound(raw: unknown): FeishuInboundRaw {
   if (typeof text !== "string") {
     throw new Error("feishu inbound payload requires text");
   }
+  const messageReference = extractFeishuMessageReference(record);
   return {
     chat_id: chatId,
     text,
     ...(typeof record.sender_id === "string" ? { sender_id: record.sender_id } : {}),
     ...(typeof record.message_id === "string" ? { message_id: record.message_id } : {}),
+    ...(messageReference ? { message_reference: messageReference } : {}),
   };
+}
+
+function extractFeishuMessageReference(
+  record: Record<string, unknown>,
+): FeishuInboundRaw["message_reference"] {
+  const parentId =
+    (typeof record.parent_id === "string" && record.parent_id.trim()) ||
+    (typeof record.parentId === "string" && record.parentId.trim()) ||
+    "";
+  const explicit = normalizeChannelMessageReference(record.message_reference);
+  if (explicit) return explicit;
+  const reply =
+    record.reply && typeof record.reply === "object" && !Array.isArray(record.reply)
+      ? (record.reply as Record<string, unknown>)
+      : record.quote && typeof record.quote === "object" && !Array.isArray(record.quote)
+        ? (record.quote as Record<string, unknown>)
+        : undefined;
+  if (reply) {
+    return normalizeChannelMessageReference({
+      messageId:
+        (typeof reply.message_id === "string" && reply.message_id.trim()) ||
+        (typeof reply.messageId === "string" && reply.messageId.trim()) ||
+        (typeof reply.id === "string" && reply.id.trim()) ||
+        parentId ||
+        undefined,
+      preview:
+        (typeof reply.text === "string" && reply.text.trim()) ||
+        (typeof reply.content === "string" && reply.content.trim()) ||
+        (typeof reply.preview === "string" && reply.preview.trim()) ||
+        undefined,
+      senderId:
+        (typeof reply.sender_id === "string" && reply.sender_id.trim()) ||
+        (typeof reply.senderId === "string" && reply.senderId.trim()) ||
+        undefined,
+      senderName:
+        (typeof reply.sender_name === "string" && reply.sender_name.trim()) ||
+        (typeof reply.senderName === "string" && reply.senderName.trim()) ||
+        undefined,
+      source:
+        typeof reply.text === "string" ||
+        typeof reply.content === "string" ||
+        typeof reply.preview === "string"
+          ? "embedded"
+          : "unknown",
+    });
+  }
+  if (!parentId) return undefined;
+  return normalizeChannelMessageReference({
+    messageId: parentId,
+    source: "unknown",
+  });
 }
 
 function createDefaultFeishuTransport(config: FeishuAdapterConfig): ChannelTransport {

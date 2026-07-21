@@ -1,4 +1,4 @@
-import type { CommandMetadata } from "@zendev-lab/spark-extension-api";
+import type { CommandMetadata } from "@zendev-lab/spark-core";
 import type { ReviewerRunner } from "./reviewer-runner.ts";
 import type { SparkEntryApplicationDeps } from "./spark-entry-application.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";

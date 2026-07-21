@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import piAskExtension from "../packages/spark-ask/src/extension.ts";
 import piCueExtension from "../packages/spark-cue/src/index.ts";
 import piGraftExtension from "../packages/spark-graft/src/extension.ts";
 import { SparkHostRuntime } from "../apps/spark-tui/src/host/runtime.ts";
 
-void test("SparkHostRuntime accepts piCueExtension(pi) without throwing", () => {
+test("SparkHostRuntime accepts piCueExtension(pi) without throwing", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-cross" });
   assert.doesNotThrow(() => piCueExtension(host));
   const toolNames = host.getAllTools().map((tool) => tool.name);
@@ -15,7 +15,7 @@ void test("SparkHostRuntime accepts piCueExtension(pi) without throwing", () => 
   assert.ok(toolNames.length >= 5, "spark-cue registers multiple tools");
 });
 
-void test("SparkHostRuntime accepts piGraftExtension(pi) and records its tools", () => {
+test("SparkHostRuntime accepts piGraftExtension(pi) and records its tools", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-cross" });
   assert.doesNotThrow(() => piGraftExtension(host as never));
   const commandNames = host.listCommands().map((entry) => entry.name);
@@ -36,7 +36,7 @@ void test("SparkHostRuntime accepts piGraftExtension(pi) and records its tools",
   assert.equal(host.getTool("graft_cli_exec")?.policy.effect, "unknown");
 });
 
-void test("SparkHostRuntime accepts piAskExtension(pi) and registers canonical ask tool", () => {
+test("SparkHostRuntime accepts piAskExtension(pi) and registers canonical ask tool", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-cross" });
   assert.doesNotThrow(() => piAskExtension(host));
   const toolNames = host.getAllTools().map((tool) => tool.name);
@@ -45,7 +45,7 @@ void test("SparkHostRuntime accepts piAskExtension(pi) and registers canonical a
   assert.ok(!toolNames.includes("ask_flow"));
 });
 
-void test("SparkHostRuntime survives a session_start event from spark-graft", async () => {
+test("SparkHostRuntime survives a session_start event from spark-graft", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-cross" });
   piGraftExtension(host as never);
   // spark-graft registers an on("session_start") handler that defensively reads

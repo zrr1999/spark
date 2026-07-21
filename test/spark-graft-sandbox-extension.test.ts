@@ -1,27 +1,27 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
-  registerPiGraftExtension,
-  registerPiGraftSandboxExtension,
-  type PiGraftExtensionApi,
-  type PiGraftSessionContext,
-  type PiGraftToolContext,
-  type PiGraftToolDefinition,
-  type PiGraftToolResult,
+  registerSparkGraftExtension,
+  registerSparkGraftSandboxExtension,
+  type SparkGraftHostApi,
+  type SparkGraftSessionContext,
+  type SparkGraftToolContext,
+  type SparkGraftToolDefinition,
+  type SparkGraftToolResult,
 } from "../packages/spark-graft/src/index.ts";
 
 const SANDBOX_STATE_ENTRY = "spark-graft-sandbox-state";
 
 type ExtensionHandler = (event: unknown, ctx: unknown) => unknown;
 
-type SessionStartHandler = (event: unknown, ctx: PiGraftSessionContext) => unknown;
+type SessionStartHandler = (event: unknown, ctx: SparkGraftSessionContext) => unknown;
 
 function createFakePi(initialEntries: unknown[] = []) {
-  const tools = new Map<string, PiGraftToolDefinition>();
+  const tools = new Map<string, SparkGraftToolDefinition>();
   const entries = [...initialEntries];
   const handlers = new Map<string, ExtensionHandler[]>();
-  const pi: PiGraftExtensionApi = {
+  const pi: SparkGraftHostApi = {
     on(event, handler) {
       handlers.set(event, [...(handlers.get(event) ?? []), handler as ExtensionHandler]);
     },
@@ -36,27 +36,27 @@ function createFakePi(initialEntries: unknown[] = []) {
 }
 
 async function executeTool(
-  tool: PiGraftToolDefinition | undefined,
+  tool: SparkGraftToolDefinition | undefined,
   name: string,
   params: Record<string, unknown>,
-  ctx: PiGraftToolContext,
-): Promise<PiGraftToolResult> {
+  ctx: SparkGraftToolContext,
+): Promise<SparkGraftToolResult> {
   assert.ok(tool, `expected ${name} to be registered`);
   return tool.execute(name, params, undefined, undefined, ctx);
 }
 
 async function emitSessionStart(
   handlers: Map<string, ExtensionHandler[]>,
-  ctx: PiGraftSessionContext,
+  ctx: SparkGraftSessionContext,
 ): Promise<void> {
   for (const handler of handlers.get("session_start") ?? []) {
     await (handler as SessionStartHandler)({ reason: "startup" }, ctx);
   }
 }
 
-void test("normal spark-graft entrypoint does not register sandbox or built-in file overrides", () => {
+test("normal spark-graft entrypoint does not register sandbox or built-in file overrides", () => {
   const { pi, tools } = createFakePi();
-  registerPiGraftExtension(pi);
+  registerSparkGraftExtension(pi);
 
   assert.equal(tools.has("graft_read"), true);
   assert.equal(tools.has("graft_sandbox_enter"), false);
@@ -74,9 +74,9 @@ void test("normal spark-graft entrypoint does not register sandbox or built-in f
   assert.equal(tools.get("graft_read")?.executionMode, undefined);
 });
 
-void test("sandbox stateful tools request sequential execution to avoid scratch races", () => {
+test("sandbox stateful tools request sequential execution to avoid scratch races", () => {
   const { pi, tools } = createFakePi();
-  registerPiGraftSandboxExtension(pi);
+  registerSparkGraftSandboxExtension(pi);
 
   const statefulTools = [
     "graft_sandbox_enter",
@@ -97,9 +97,9 @@ void test("sandbox stateful tools request sequential execution to avoid scratch 
   }
 });
 
-void test("sandbox file overrides expose explicit prompt metadata", () => {
+test("sandbox file overrides expose explicit prompt metadata", () => {
   const { pi, tools } = createFakePi();
-  registerPiGraftSandboxExtension(pi);
+  registerSparkGraftSandboxExtension(pi);
 
   for (const toolName of ["read", "write", "edit", "grep", "find", "ls"]) {
     const tool = tools.get(toolName);
@@ -117,7 +117,7 @@ void test("sandbox file overrides expose explicit prompt metadata", () => {
   }
 });
 
-void test("sandbox entrypoint layers sandbox state tools over normal spark-graft", async () => {
+test("sandbox entrypoint layers sandbox state tools over normal spark-graft", async () => {
   const restoredState = {
     active: true,
     repoRoot: "/repo",
@@ -140,7 +140,7 @@ void test("sandbox entrypoint layers sandbox state tools over normal spark-graft
     { type: "custom", customType: SANDBOX_STATE_ENTRY, data: { state: restoredState } },
   ];
   const { pi, tools, entries, handlers } = createFakePi(initialEntries);
-  registerPiGraftSandboxExtension(pi);
+  registerSparkGraftSandboxExtension(pi);
 
   assert.equal(tools.has("graft_read"), true);
   assert.equal(tools.has("graft_sandbox_enter"), true);
@@ -213,7 +213,7 @@ void test("sandbox entrypoint layers sandbox state tools over normal spark-graft
   assert.deepEqual(inactiveStatus.details?.profile, status.details?.profile);
 });
 
-void test("sandbox tool-call guardrails block obvious shell file I/O bypasses", async () => {
+test("sandbox tool-call guardrails block obvious shell file I/O bypasses", async () => {
   const restoredState = {
     active: true,
     repoRoot: "/repo",
@@ -228,7 +228,7 @@ void test("sandbox tool-call guardrails block obvious shell file I/O bypasses", 
   const { pi, handlers, entries } = createFakePi([
     { type: "custom", customType: SANDBOX_STATE_ENTRY, data: { state: restoredState } },
   ]);
-  registerPiGraftSandboxExtension(pi);
+  registerSparkGraftSandboxExtension(pi);
   await emitSessionStart(handlers, { cwd: "/repo", sessionManager: { getEntries: () => entries } });
   const toolCallHandlers = handlers.get("tool_call") ?? [];
   assert.ok(toolCallHandlers.length > 0, "expected sandbox tool_call guardrail handler");
@@ -253,7 +253,7 @@ void test("sandbox tool-call guardrails block obvious shell file I/O bypasses", 
   );
 });
 
-void test("sandbox file overrides reject path escapes before graft execution", async () => {
+test("sandbox file overrides reject path escapes before graft execution", async () => {
   const restoredState = {
     active: true,
     repoRoot: "/repo",
@@ -268,7 +268,7 @@ void test("sandbox file overrides reject path escapes before graft execution", a
   const { pi, tools, entries, handlers } = createFakePi([
     { type: "custom", customType: SANDBOX_STATE_ENTRY, data: { state: restoredState } },
   ]);
-  registerPiGraftSandboxExtension(pi);
+  registerSparkGraftSandboxExtension(pi);
   await emitSessionStart(handlers, { cwd: "/repo", sessionManager: { getEntries: () => entries } });
 
   await assert.rejects(

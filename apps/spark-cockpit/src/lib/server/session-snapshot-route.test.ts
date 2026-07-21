@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   snapshot: vi.fn(),
+  projected: vi.fn(),
 }));
 
 vi.mock("$lib/server/managed-sessions", () => ({
   getManagedSessionForCockpit: mocks.get,
   getManagedSessionSnapshotForCockpit: mocks.snapshot,
+  getProjectedManagedSessionForCockpit: mocks.projected,
 }));
 
 vi.mock("$lib/session-snapshot-window", () => ({
@@ -36,6 +38,7 @@ function requestEvent(sessionId: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.projected.mockReturnValue(null);
   mocks.snapshot.mockResolvedValue({
     snapshot: {
       sessionId: workspaceSession.sessionId,
@@ -107,5 +110,15 @@ describe("session snapshot route scope", () => {
 
     expect(response.status).toBe(404);
     expect(mocks.snapshot).not.toHaveBeenCalled();
+  });
+
+  it("admits a projected workspace session when live get is unavailable", async () => {
+    mocks.projected.mockReturnValue(workspaceSession);
+    mocks.get.mockResolvedValue(null);
+
+    const response = await GET(requestEvent(workspaceSession.sessionId));
+
+    expect(response.status).toBe(200);
+    expect(mocks.snapshot).toHaveBeenCalledWith(workspaceSession.sessionId, { messageLimit: 80 });
   });
 });

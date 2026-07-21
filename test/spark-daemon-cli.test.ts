@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   SparkDaemonLocalRpcError,
@@ -36,12 +36,12 @@ import {
 import { loadSparkHeadlessSessionModule } from "../apps/spark-daemon/src/spark/session-run.ts";
 import { CREATE_SPARK_SESSION_SELECTION } from "../apps/spark-tui/src/tui/session-selector.ts";
 
-void test("Spark daemon loads headless session executor from workspace package source", async () => {
+test("Spark daemon loads headless session executor from workspace package source", async () => {
   const module = await loadSparkHeadlessSessionModule();
   assert.equal(typeof module.createSparkHeadlessSessionExecutor, "function");
 });
 
-void test("native TUI client delivers daemon-owned human interaction responses", async () => {
+test("native TUI client delivers daemon-owned human interaction responses", async () => {
   const requests: Array<{ method: string; params: unknown }> = [];
   const result = await clientRespondHumanInteraction(
     {
@@ -85,7 +85,7 @@ void test("native TUI client delivers daemon-owned human interaction responses",
   assert.equal(result.returnedToTool, true);
 });
 
-void test("a not-found Ask race retries the same answer without reopening the interaction", async () => {
+test("a not-found Ask race retries the same answer without reopening the interaction", async () => {
   const request = parseSparkInteractionRequest({
     requestId: "interaction-race",
     kind: "askFlow",
@@ -151,7 +151,7 @@ void test("a not-found Ask race retries the same answer without reopening the in
   assert.equal(new Set(responseIds).size, 1);
 });
 
-void test("a persistently undelivered Ask stays visible and reopens after bounded retries", async () => {
+test("a persistently undelivered Ask stays visible and reopens after bounded retries", async () => {
   const request = parseSparkInteractionRequest({
     requestId: "interaction-reopen",
     kind: "askFlow",
@@ -219,7 +219,7 @@ void test("a persistently undelivered Ask stays visible and reopens after bounde
   assert.match(notifications[0] ?? "", /keeping it open for retry/u);
 });
 
-void test("parseSparkCliCommand routes daemon and print commands without changing default TUI parsing", () => {
+test("parseSparkCliCommand routes daemon and print commands without changing default TUI parsing", () => {
   assert.deepEqual(parseSparkCliCommand(["build", "this"]), {
     kind: "tui",
     initialMessage: "build this",
@@ -324,7 +324,7 @@ void test("parseSparkCliCommand routes daemon and print commands without changin
   );
 });
 
-void test("daemon channel status is read from daemon local RPC client", async () => {
+test("daemon channel status is read from daemon local RPC client", async () => {
   let calls = 0;
   const result = await handleSparkDaemonCliCommand(
     { action: "channel", subcommand: "status", json: true, workspaceId: "ws_demo" },
@@ -356,7 +356,7 @@ void test("daemon channel status is read from daemon local RPC client", async ()
   assert.match(result.result.text, /channels workspace=ws_demo running/u);
 });
 
-void test("daemon channel reload is an explicit daemon local RPC operation", async () => {
+test("daemon channel reload is an explicit daemon local RPC operation", async () => {
   let workspaceId = "";
   const result = await handleSparkDaemonCliCommand(
     { action: "channel", subcommand: "reload", json: true, workspaceId: "ws_demo" },
@@ -387,7 +387,7 @@ void test("daemon channel reload is an explicit daemon local RPC operation", asy
   assert.equal(result.result.state, "running");
 });
 
-void test("daemon managed session commands wait for the daemon-owned RPC client", async () => {
+test("daemon managed session commands wait for the daemon-owned RPC client", async () => {
   const calls: string[] = [];
   const session = {
     sessionId: "sess_rpc",
@@ -484,7 +484,7 @@ void test("daemon managed session commands wait for the daemon-owned RPC client"
   ]);
 });
 
-void test("daemon managed session mutation fails explicitly when daemon RPC is unavailable", async () => {
+test("daemon managed session mutation fails explicitly when daemon RPC is unavailable", async () => {
   const managedSessions: NonNullable<SparkDaemonClientOptions["managedSessions"]> = {
     create: async () => {
       throw new Error("Spark daemon is offline");
@@ -518,7 +518,7 @@ void test("daemon managed session mutation fails explicitly when daemon RPC is u
   );
 });
 
-void test("spark daemon session inbox lists, reads, and acknowledges durable mail", async () => {
+test("spark daemon session inbox lists, reads, and acknowledges durable mail", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-mail-"));
   const sparkHome = join(dir, "spark-home");
   try {
@@ -606,7 +606,7 @@ void test("spark daemon session inbox lists, reads, and acknowledges durable mai
   }
 });
 
-void test("daemon sessions list --all-workspaces shows persistent sessions across workspace dirs", async () => {
+test("daemon sessions list --all-workspaces shows persistent sessions across workspace dirs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-daemon-all-sessions-"));
   const sparkHome = join(dir, "spark-home");
   try {
@@ -649,7 +649,7 @@ void test("daemon sessions list --all-workspaces shows persistent sessions acros
   }
 });
 
-void test("daemon session list defaults to live attachable workspace clients", async () => {
+test("daemon session list defaults to live attachable workspace clients", async () => {
   const client = {
     now: () => Date.parse("2026-07-08T00:02:00.000Z"),
     workspaceList: async () => ({
@@ -736,7 +736,7 @@ void test("daemon session list defaults to live attachable workspace clients", a
   assert.doesNotMatch(list.text, /wcl-old-a/u);
 });
 
-void test("daemon sessions plural alias routes to live list", () => {
+test("daemon sessions plural alias routes to live list", () => {
   assert.deepEqual(parseSparkDaemonCliArgs(["sessions", "list", "--json"]), {
     action: "sessions",
     subcommand: "list",
@@ -759,7 +759,7 @@ void test("daemon sessions plural alias routes to live list", () => {
   });
 });
 
-void test("daemon session list history flag preserves persisted session listing", async () => {
+test("daemon session list history flag preserves persisted session listing", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-daemon-plane-sessions-"));
   const sparkHome = join(dir, "spark-home");
   try {
@@ -915,7 +915,7 @@ void test("daemon session list history flag preserves persisted session listing"
   }
 });
 
-void test("daemon run and events plane commands expose stable JSON resources", async () => {
+test("daemon run and events plane commands expose stable JSON resources", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-daemon-plane-runs-"));
   try {
     const paths = testDaemonPaths(dir);
@@ -1042,7 +1042,7 @@ function daemonViewEventFixture(id: string, text: string) {
   };
 }
 
-void test("parseSparkCliCommand parses Pi-compatible global modes and resource commands", () => {
+test("parseSparkCliCommand parses Pi-compatible global modes and resource commands", () => {
   assert.deepEqual(parseSparkCliCommand(["--mode", "json", "--print", "hello"]), {
     kind: "print",
     prompt: "hello",
@@ -1071,7 +1071,7 @@ void test("parseSparkCliCommand parses Pi-compatible global modes and resource c
   });
 });
 
-void test("parseSparkDaemonCliArgs parses daemon IPC commands", async () => {
+test("parseSparkDaemonCliArgs parses daemon IPC commands", async () => {
   assert.deepEqual(parseSparkDaemonCliArgs([]), { action: "service", argv: [] });
   assert.deepEqual(parseSparkDaemonCliArgs(["--help"]), { action: "help" });
   assert.deepEqual(parseSparkDaemonCliArgs(["submit", "--session", "s1", "-p", "hello"]), {
@@ -1233,7 +1233,7 @@ void test("parseSparkDaemonCliArgs parses daemon IPC commands", async () => {
   });
 });
 
-void test("parseSparkDaemonCliArgs normalizes bounded relative invocation windows", () => {
+test("parseSparkDaemonCliArgs normalizes bounded relative invocation windows", () => {
   const originalNow = Date.now;
   Date.now = () => Date.parse("2026-07-15T12:00:00.000Z");
   try {
@@ -1290,7 +1290,7 @@ void test("parseSparkDaemonCliArgs normalizes bounded relative invocation window
   }
 });
 
-void test("daemon CLI handlers use invocation-based Spark daemon local IPC", async () => {
+test("daemon CLI handlers use invocation-based Spark daemon local IPC", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-daemon-cli-"));
   try {
     const paths = testDaemonPaths(dir);
@@ -1387,7 +1387,7 @@ void test("daemon CLI handlers use invocation-based Spark daemon local IPC", asy
   }
 });
 
-void test("runSparkDaemonCliCommand delegates service commands", async () => {
+test("runSparkDaemonCliCommand delegates service commands", async () => {
   const calls: string[][] = [];
   const code = await runSparkDaemonCliCommand(
     { action: "service", argv: ["workspace", "ls", "--json"] },
@@ -1404,7 +1404,7 @@ void test("runSparkDaemonCliCommand delegates service commands", async () => {
   assert.deepEqual(calls, [["workspace", "ls", "--json"]]);
 });
 
-void test("runSparkDaemonCliCommand prints JSON when requested", async () => {
+test("runSparkDaemonCliCommand prints JSON when requested", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-daemon-cli-output-"));
   try {
     const paths = testDaemonPaths(dir);
@@ -1442,7 +1442,7 @@ type CapturedLocalRpcRequest = {
   sparkCommand?: unknown;
 };
 
-void test("turn submit retries an ambiguous local RPC close with one stable idempotency key", async () => {
+test("turn submit retries an ambiguous local RPC close with one stable idempotency key", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-turn-admission-retry-"));
   const paths = testDaemonPaths(dir);
   const requests: CapturedLocalRpcRequest[] = [];
@@ -1494,7 +1494,7 @@ void test("turn submit retries an ambiguous local RPC close with one stable idem
   }
 });
 
-void test("turn submit periodically recovers daemon service without changing the request", async () => {
+test("turn submit periodically recovers daemon service without changing the request", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-turn-admission-recovery-"));
   const paths = testDaemonPaths(dir);
   const inputs: Array<{ idempotencyKey?: string }> = [];
@@ -1556,7 +1556,7 @@ void test("turn submit periodically recovers daemon service without changing the
   }
 });
 
-void test("turn submit retries a bound successor's starting response with the same request", async () => {
+test("turn submit retries a bound successor's starting response with the same request", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-turn-start-"));
   const paths = testDaemonPaths(dir);
   const requests: CapturedLocalRpcRequest[] = [];
@@ -1616,7 +1616,7 @@ void test("turn submit retries a bound successor's starting response with the sa
   }
 });
 
-void test("turn submit does not retry a daemon validation error", async () => {
+test("turn submit does not retry a daemon validation error", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-turn-admission-validation-"));
   const paths = testDaemonPaths(dir);
   const requests: CapturedLocalRpcRequest[] = [];
@@ -1658,7 +1658,7 @@ void test("turn submit does not retry a daemon validation error", async () => {
   }
 });
 
-void test("native responder can cancel turn admission during retry backoff", async () => {
+test("native responder can cancel turn admission during retry backoff", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-turn-admission-cancel-"));
   const paths = testDaemonPaths(dir);
   const requests: CapturedLocalRpcRequest[] = [];
@@ -1737,7 +1737,7 @@ function runningDaemonStatus() {
   };
 }
 
-void test("handleSparkRpcLine always routes prompt/state through daemon IPC", async () => {
+test("handleSparkRpcLine always routes prompt/state through daemon IPC", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-daemon-rpc-"));
   try {
     const writes: Record<string, unknown>[] = [];
@@ -1803,7 +1803,7 @@ void test("handleSparkRpcLine always routes prompt/state through daemon IPC", as
   }
 });
 
-void test("Spark TUI and headless print attach and release workspace clients", async () => {
+test("Spark TUI and headless print attach and release workspace clients", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-workspace-client-"));
   try {
     const paths = testDaemonPaths(dir);
@@ -2172,7 +2172,7 @@ void test("Spark TUI and headless print attach and release workspace clients", a
   }
 });
 
-void test("native TUI session gate exits without creating an implicit session", async () => {
+test("native TUI session gate exits without creating an implicit session", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-session-cancel-"));
   try {
     const base = createWorkspaceAttachTestDeps(dir, { existingSessionIds: new Set() });
@@ -2220,7 +2220,7 @@ void test("native TUI session gate exits without creating an implicit session", 
   }
 });
 
-void test("native TUI selects an existing daemon session and restores its snapshot", async () => {
+test("native TUI selects an existing daemon session and restores its snapshot", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-session-select-"));
   try {
     const base = createWorkspaceAttachTestDeps(dir, { existingSessionIds: new Set() });
@@ -2320,7 +2320,7 @@ void test("native TUI selects an existing daemon session and restores its snapsh
   }
 });
 
-void test("native /sessions reopens the startup selector and attaches the selected session", async () => {
+test("native /sessions reopens the startup selector and attaches the selected session", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-session-reselect-"));
   try {
     const base = createWorkspaceAttachTestDeps(dir, { existingSessionIds: new Set() });
@@ -2434,7 +2434,7 @@ void test("native /sessions reopens the startup selector and attaches the select
   }
 });
 
-void test("native TUI lists all daemon sessions and routes a cross-workspace selection", async () => {
+test("native TUI lists all daemon sessions and routes a cross-workspace selection", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-all-sessions-"));
   try {
     const base = createWorkspaceAttachTestDeps(dir, { existingSessionIds: new Set() });
@@ -2559,7 +2559,7 @@ void test("native TUI lists all daemon sessions and routes a cross-workspace sel
   }
 });
 
-void test("native TUI explicit session attach requires matching workspace", async () => {
+test("native TUI explicit session attach requires matching workspace", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-workspace-attach-"));
   try {
     const { daemonClient, createHostServices } = createWorkspaceAttachTestDeps(dir, {
@@ -2612,7 +2612,7 @@ void test("native TUI explicit session attach requires matching workspace", asyn
   }
 });
 
-void test("native TUI accepts durable session-dir session id and hydrates project cockpit", async () => {
+test("native TUI accepts durable session-dir session id and hydrates project cockpit", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-durable-attach-"));
   const stateRoot = join(dir, ".spark");
   const now = "2026-06-19T00:00:00.000Z";
@@ -2693,7 +2693,7 @@ void test("native TUI accepts durable session-dir session id and hydrates projec
   }
 });
 
-void test("native TUI attach corresponds to daemon workspace client record", async () => {
+test("native TUI attach corresponds to daemon workspace client record", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-control-plane-attach-"));
   try {
     const { daemonClient, createHostServices, emitted } = createWorkspaceAttachTestDeps(dir, {
@@ -3016,7 +3016,7 @@ function createWorkspaceAttachTestDeps(
   return { daemonClient, createHostServices, emitted };
 }
 
-void test("native TUI model selection and following turn share one managed session", async () => {
+test("native TUI model selection and following turn share one managed session", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-session-model-"));
   try {
     const sessionPath = join(
@@ -3206,7 +3206,7 @@ void test("native TUI model selection and following turn share one managed sessi
   }
 });
 
-void test("Spark native responder retries an ACK loss with the same idempotency key", async () => {
+test("Spark native responder retries an ACK loss with the same idempotency key", async () => {
   const submissions: Array<{ sessionId: string; prompt: string; idempotencyKey?: string }> = [];
   const responder = createSparkDaemonNativeResponder(
     {
@@ -3238,7 +3238,7 @@ void test("Spark native responder retries an ACK loss with the same idempotency 
   assert.equal(submissions[0]?.idempotencyKey, "idem_native_submit_1");
 });
 
-void test("production TUI Shift+Tab overrides extension shortcut and updates session thinking", async () => {
+test("production TUI Shift+Tab overrides extension shortcut and updates session thinking", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-cli-session-thinking-"));
   try {
     const base = createWorkspaceAttachTestDeps(dir, { existingSessionIds: new Set() });
@@ -3359,7 +3359,7 @@ void test("production TUI Shift+Tab overrides extension shortcut and updates ses
   }
 });
 
-void test("Spark native responder streams daemon view events as assistant chunks", async () => {
+test("Spark native responder streams daemon view events as assistant chunks", async () => {
   const chunks: string[] = [];
   const viewEvents: unknown[] = [];
   const responder = createSparkDaemonNativeResponder(
@@ -3428,7 +3428,7 @@ void test("Spark native responder streams daemon view events as assistant chunks
   );
 });
 
-void test("Spark native responder pauses event polling for a visible interaction handler", async () => {
+test("Spark native responder pauses event polling for a visible interaction handler", async () => {
   const requests: string[] = [];
   let interactionFinished = false;
   const responder = createSparkDaemonNativeResponder(
@@ -3505,7 +3505,7 @@ void test("Spark native responder pauses event polling for a visible interaction
   assert.equal(interactionFinished, true);
 });
 
-void test("Spark native responder retries completion status transport failures without resubmitting", async () => {
+test("Spark native responder retries completion status transport failures without resubmitting", async () => {
   let submitCalls = 0;
   const statusInvocationIds: string[] = [];
   const retryDelays: number[] = [];
@@ -3554,7 +3554,7 @@ void test("Spark native responder retries completion status transport failures w
   assert.deepEqual(retryDelays, [50, 100, 200]);
 });
 
-void test("Spark native responder retries stream and terminal status from stable invocation state", async () => {
+test("Spark native responder retries stream and terminal status from stable invocation state", async () => {
   let submitCalls = 0;
   const streamCursors: number[] = [];
   const statusInvocationIds: string[] = [];
@@ -3659,7 +3659,7 @@ void test("Spark native responder retries stream and terminal status from stable
   assert.deepEqual(chunks, ["done"]);
 });
 
-void test("Spark native responder does not retry remote or protocol read failures", async () => {
+test("Spark native responder does not retry remote or protocol read failures", async () => {
   let remoteStatusCalls = 0;
   let remoteSubmitCalls = 0;
   const remoteRetryDelays: number[] = [];
@@ -3725,7 +3725,7 @@ void test("Spark native responder does not retry remote or protocol read failure
   assert.deepEqual(protocolRetryDelays, []);
 });
 
-void test("Spark native responder bounds completion read retries by deadline and abort signal", async () => {
+test("Spark native responder bounds completion read retries by deadline and abort signal", async () => {
   let clock = 0;
   let deadlineSubmitCalls = 0;
   let deadlineStatusCalls = 0;
@@ -3796,7 +3796,7 @@ void test("Spark native responder bounds completion read retries by deadline and
   assert.equal(abortStatusCalls, 1);
 });
 
-void test("Spark native responder accepts an empty terminal page and ignores non-daemon payloads", async () => {
+test("Spark native responder accepts an empty terminal page and ignores non-daemon payloads", async () => {
   const chunks: string[] = [];
   let streamCalls = 0;
   const responder = createSparkDaemonNativeResponder(
@@ -3845,7 +3845,7 @@ void test("Spark native responder accepts an empty terminal page and ignores non
   assert.deepEqual(chunks, []);
 });
 
-void test("Spark native responder aborts before polling the invocation stream", async () => {
+test("Spark native responder aborts before polling the invocation stream", async () => {
   const controller = new AbortController();
   controller.abort(new Error("user stopped"));
   let streamCalls = 0;
@@ -3888,7 +3888,7 @@ void test("Spark native responder aborts before polling the invocation stream", 
   assert.equal(streamCalls, 0);
 });
 
-void test("Spark native responder enforces the stream deadline after a live page", async () => {
+test("Spark native responder enforces the stream deadline after a live page", async () => {
   const responder = createSparkDaemonNativeResponder(
     {
       turnSubmit: async () => ({
@@ -3920,7 +3920,7 @@ void test("Spark native responder enforces the stream deadline after a live page
   );
 });
 
-void test("Spark native responder reconnects from its durable cursor without duplicate terminal rendering", async () => {
+test("Spark native responder reconnects from its durable cursor without duplicate terminal rendering", async () => {
   const chunks: string[] = [];
   const cursors: number[] = [];
   let streamAttempt = 0;
@@ -4014,7 +4014,7 @@ void test("Spark native responder reconnects from its durable cursor without dup
   );
 });
 
-void test("Spark native responder drains 10,000 bounded invocation events without status arrays", async () => {
+test("Spark native responder drains 10,000 bounded invocation events without status arrays", async () => {
   const invocationId = "inv_0123456789abcdef0123456789abcdef";
   const events = Array.from({ length: 10_000 }, (_, index) => ({
     invocationId,
@@ -4101,7 +4101,7 @@ void test("Spark native responder drains 10,000 bounded invocation events withou
   );
 });
 
-void test("Spark native responder ensures its workspace session once before submission", async () => {
+test("Spark native responder ensures its workspace session once before submission", async () => {
   const calls: string[] = [];
   const sessions: Array<{
     sessionId: string;
@@ -4182,7 +4182,7 @@ void test("Spark native responder ensures its workspace session once before subm
   ]);
 });
 
-void test("Spark native responder submits prompts through daemon IPC", async () => {
+test("Spark native responder submits prompts through daemon IPC", async () => {
   const calls: Array<{ sessionId: string; prompt: string }> = [];
   const idempotencyKeys: string[] = [];
   const responder = createSparkDaemonNativeResponder(

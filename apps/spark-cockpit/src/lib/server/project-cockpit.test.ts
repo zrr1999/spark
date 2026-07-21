@@ -10,8 +10,8 @@ import {
   recordCommandReject,
   recordInvocationLogChunk,
   recordInvocationUpdate,
-} from "./projection-services";
-import { loadProjectCockpit } from "./project-cockpit";
+} from "@zendev-lab/spark-coordination/projection-services";
+import { loadProjectCockpit } from "@zendev-lab/spark-coordination/project-cockpit";
 
 function offsetIso(baseIso: string, offsetMs: number) {
   return new Date(Date.parse(baseIso) + offsetMs).toISOString();

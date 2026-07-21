@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   SparkAuthStore,
@@ -66,7 +66,7 @@ async function withSparkHome(fn: (sparkHome: string) => Promise<void>): Promise<
   }
 }
 
-void test("Spark auth mutations reload and merge across store instances", async () => {
+test("Spark auth mutations reload and merge across store instances", async () => {
   await withSparkHome(async (sparkHome) => {
     const path = join(sparkHome, "auth.json");
     const first = new SparkAuthStore({ path });
@@ -82,7 +82,7 @@ void test("Spark auth mutations reload and merge across store instances", async 
   });
 });
 
-void test("provider control lists auth safely and patches only the default model fields", async () => {
+test("provider control lists auth safely and patches only the default model fields", async () => {
   await withSparkHome(async (sparkHome) => {
     const configPath = join(sparkHome, "config.json");
     await writeFile(
@@ -125,7 +125,7 @@ void test("provider control lists auth safely and patches only the default model
   });
 });
 
-void test("legacy provider config still exposes the bundled OpenAI Codex catalog", async () => {
+test("legacy provider config still exposes the bundled OpenAI Codex catalog", async () => {
   await withSparkHome(async (sparkHome) => {
     await writeFile(
       join(sparkHome, "config.json"),
@@ -158,7 +158,7 @@ void test("legacy provider config still exposes the bundled OpenAI Codex catalog
   });
 });
 
-void test("provider control reports malformed config and refuses a destructive patch", async () => {
+test("provider control reports malformed config and refuses a destructive patch", async () => {
   await withSparkHome(async (sparkHome) => {
     const configPath = join(sparkHome, "config.json");
     await writeFile(configPath, "{broken-json\n");
@@ -177,7 +177,7 @@ void test("provider control reports malformed config and refuses a destructive p
   });
 });
 
-void test("OAuth broker exposes only interaction state and prepareModel refreshes durably", async () => {
+test("OAuth broker exposes only interaction state and prepareModel refreshes durably", async () => {
   await withSparkHome(async (sparkHome) => {
     let refreshCount = 0;
     const oauthProvider: SparkOAuthProviderInterface = {

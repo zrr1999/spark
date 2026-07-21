@@ -231,6 +231,7 @@ export interface StartSparkDaemonOptions {
   onReady?: (runtime: {
     channelIngress: DaemonChannelIngressRuntime | null;
     respondHumanInteraction: SparkDaemonHumanInteractionResponder;
+    flushHumanRequestOutbox: () => void;
   }) => void | Promise<void>;
   /** Publish process-local execution fences while a restart is draining. */
   onDrainProgress?: (progress: SparkDaemonDrainProgress) => void;
@@ -545,6 +546,7 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
       await options.onReady?.({
         channelIngress,
         respondHumanInteraction: (wait, input) => humanInteractions.respond(wait, input),
+        flushHumanRequestOutbox,
       });
     }
     // Prepare channel transports while their synchronous inbound gate remains

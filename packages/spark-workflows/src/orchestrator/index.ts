@@ -10,7 +10,7 @@ import {
   type TaskRunCompletionSummary,
   type ProjectRef,
   writeJsonFileAtomic,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import type { TaskGraph } from "@zendev-lab/spark-tasks";
 
 import {
@@ -40,7 +40,7 @@ import {
 export {
   DEFAULT_READY_TASK_MAX_CONCURRENCY,
   DEFAULT_READY_TASK_TIMEOUT_MS,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 export { workflowRunNextSteps } from "./workflow-run-completion.ts";
 export { WorkflowRunStoreFormatError } from "./workflow-run-serialization.ts";
 export type {

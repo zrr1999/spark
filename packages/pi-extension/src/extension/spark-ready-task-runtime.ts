@@ -1,6 +1,6 @@
 import type { RoleRegistry } from "@zendev-lab/spark-roles";
 import type { ArtifactStore } from "@zendev-lab/spark-artifacts";
-import type { RoleRef } from "@zendev-lab/spark-extension-api";
+import type { RoleRef } from "@zendev-lab/spark-core";
 import {
   killActiveSparkRoleRunProcesses,
   runSparkTask,

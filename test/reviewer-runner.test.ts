@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   createRoleSpec,
@@ -12,7 +12,7 @@ import {
 } from "@zendev-lab/spark-roles";
 import { TaskGraph } from "@zendev-lab/spark-tasks";
 import {
-  PiRolesReviewerRunner,
+  SparkRolesReviewerRunner,
   buildReadOnlyReviewerSystemPrompt,
   capReviewerThinkingLevel,
   parseAskAutoAnswerResult,
@@ -43,7 +43,7 @@ function reviewTaskInput(): TaskReviewInput {
   };
 }
 
-void test("ask auto-answer parser skips leading protocol wrappers", () => {
+test("ask auto-answer parser skips leading protocol wrappers", () => {
   const result = parseAskAutoAnswerResult(
     [
       '{"type":"session","id":"leading-event"}',
@@ -71,7 +71,7 @@ void test("ask auto-answer parser skips leading protocol wrappers", () => {
   assert.equal(result.answers?.mode?.notes, "clear");
 });
 
-void test("reviewer verdict parser maps task approval verdicts", () => {
+test("reviewer verdict parser maps task approval verdicts", () => {
   const input = reviewTaskInput();
   const verdict = parseReviewerVerdictForInput(
     input,
@@ -88,7 +88,7 @@ void test("reviewer verdict parser maps task approval verdicts", () => {
   assert.equal(verdict.confidence, "high");
 });
 
-void test("reviewer instruction and verdict parser support tool_approval subject", () => {
+test("reviewer instruction and verdict parser support tool_approval subject", () => {
   const input = {
     targetKind: "tool_approval" as const,
     cwd: process.cwd(),
@@ -113,7 +113,7 @@ void test("reviewer instruction and verdict parser support tool_approval subject
   assert.equal(verdict.summary, "risky");
 });
 
-void test("reviewer verdict parser tolerates trailing JSON event wrappers", () => {
+test("reviewer verdict parser tolerates trailing JSON event wrappers", () => {
   const input = reviewTaskInput();
   const verdict = parseReviewerVerdictForInput(
     input,
@@ -128,7 +128,7 @@ void test("reviewer verdict parser tolerates trailing JSON event wrappers", () =
   assert.equal(verdict.summary, "looks good {with brace text}");
 });
 
-void test("reviewer verdict parser skips leading JSON protocol events", () => {
+test("reviewer verdict parser skips leading JSON protocol events", () => {
   const input = reviewTaskInput();
   const verdict = parseReviewerVerdictForInput(
     input,
@@ -144,7 +144,7 @@ void test("reviewer verdict parser skips leading JSON protocol events", () => {
   assert.equal(verdict.summary, "verdict after events");
 });
 
-void test("reviewer verdict parser extracts verdict from assistant message content", () => {
+test("reviewer verdict parser extracts verdict from assistant message content", () => {
   const input = reviewTaskInput();
   const verdict = parseReviewerVerdictForInput(
     input,
@@ -163,7 +163,7 @@ void test("reviewer verdict parser extracts verdict from assistant message conte
   assert.equal(verdict.summary, "verdict in content");
 });
 
-void test("reviewer verdict parser extracts verdict from agent_end messages", () => {
+test("reviewer verdict parser extracts verdict from agent_end messages", () => {
   const input = reviewTaskInput();
   const verdict = parseReviewerVerdictForInput(
     input,
@@ -188,7 +188,7 @@ void test("reviewer verdict parser extracts verdict from agent_end messages", ()
   assert.equal(verdict.summary, "verdict in final message");
 });
 
-void test("reviewer verdict parser maps goal remaining-work verdicts", () => {
+test("reviewer verdict parser maps goal remaining-work verdicts", () => {
   const verdict = parseReviewerVerdictForInput(
     {
       targetKind: "goal",
@@ -222,7 +222,7 @@ void test("reviewer verdict parser maps goal remaining-work verdicts", () => {
   assert.equal(verdict.objectiveSatisfied, false);
 });
 
-void test("goal reviewer approval requires explicit evidence and objective semantic gates", () => {
+test("goal reviewer approval requires explicit evidence and objective semantic gates", () => {
   const input: GoalReviewInput = {
     targetKind: "goal",
     cwd: process.cwd(),
@@ -275,7 +275,7 @@ void test("goal reviewer approval requires explicit evidence and objective seman
   assert.equal(approved.objectiveSatisfied, true);
 });
 
-void test("goal reviewer rejects an approved verdict when any requirement is missing", () => {
+test("goal reviewer rejects an approved verdict when any requirement is missing", () => {
   const input: GoalReviewInput = {
     targetKind: "goal",
     cwd: process.cwd(),
@@ -321,7 +321,7 @@ void test("goal reviewer rejects an approved verdict when any requirement is mis
   assert.match(verdict.blockers.join("\n"), /requirement validated is missing/);
 });
 
-void test("goal reviewer rejects unresolved work and verified requirements without evidence", () => {
+test("goal reviewer rejects unresolved work and verified requirements without evidence", () => {
   const base: GoalReviewInput = {
     targetKind: "goal",
     cwd: process.cwd(),
@@ -360,7 +360,7 @@ void test("goal reviewer rejects unresolved work and verified requirements witho
   assert.match(verdict.blockers.join("\n"), /unresolved: verify the rollback path/);
 });
 
-void test("goal reviewer approves only an evidence-mapped fully resolved protocol", () => {
+test("goal reviewer approves only an evidence-mapped fully resolved protocol", () => {
   const input: GoalReviewInput = {
     targetKind: "goal",
     cwd: process.cwd(),
@@ -406,7 +406,7 @@ void test("goal reviewer approves only an evidence-mapped fully resolved protoco
   assert.equal(verdict.achieved, true);
 });
 
-void test("reviewer verdict parser normalizes common outcome aliases", () => {
+test("reviewer verdict parser normalizes common outcome aliases", () => {
   const input = reviewTaskInput();
   const verdict = parseReviewerVerdictForInput(
     input,
@@ -438,7 +438,7 @@ void test("reviewer verdict parser normalizes common outcome aliases", () => {
   );
 });
 
-void test("reviewer instruction and system prompt enforce read-only verdict boundary", () => {
+test("reviewer instruction and system prompt enforce read-only verdict boundary", () => {
   const input = reviewTaskInput();
   const prompt = buildReadOnlyReviewerSystemPrompt("Base reviewer prompt.");
   const instruction = renderReviewerInstruction(input);
@@ -461,7 +461,7 @@ void test("reviewer instruction and system prompt enforce read-only verdict boun
   assert.equal(reviewerInputFingerprint(input), reviewerInputFingerprint(input));
 });
 
-void test("task reviewer instruction scopes task finish independently from sibling project work", () => {
+test("task reviewer instruction scopes task finish independently from sibling project work", () => {
   const instruction = renderReviewerInstruction(reviewTaskInput());
 
   assert.match(instruction, /For targetKind=task, review only the selected task's requestedStatus/);
@@ -474,7 +474,7 @@ void test("task reviewer instruction scopes task finish independently from sibli
   );
 });
 
-void test("goal reviewer instruction still gates completion on unfinished project work", () => {
+test("goal reviewer instruction still gates completion on unfinished project work", () => {
   const instruction = renderReviewerInstruction({
     targetKind: "goal",
     cwd: process.cwd(),
@@ -512,7 +512,7 @@ void test("goal reviewer instruction still gates completion on unfinished projec
   assert.match(instruction, /"unresolved": \[\]/);
 });
 
-void test("goal reviewer instruction does not treat missing current project as completion", () => {
+test("goal reviewer instruction does not treat missing current project as completion", () => {
   const input: GoalReviewInput = {
     targetKind: "goal",
     cwd: process.cwd(),
@@ -551,7 +551,7 @@ void test("goal reviewer instruction does not treat missing current project as c
   assert.match(instruction, /Concrete inspected evidence covers/);
 });
 
-void test("reviewer verdict parser reports missing verdict objects clearly", () => {
+test("reviewer verdict parser reports missing verdict objects clearly", () => {
   const input = reviewTaskInput();
   assert.throws(
     () =>
@@ -566,7 +566,7 @@ void test("reviewer verdict parser reports missing verdict objects clearly", () 
   );
 });
 
-void test("reviewer thinking cap defaults to medium without raising lower host settings", () => {
+test("reviewer thinking cap defaults to medium without raising lower host settings", () => {
   assert.equal(capReviewerThinkingLevel(undefined), "medium");
   assert.equal(capReviewerThinkingLevel("off"), "off");
   assert.equal(capReviewerThinkingLevel("minimal"), "minimal");
@@ -579,10 +579,10 @@ void test("reviewer thinking cap defaults to medium without raising lower host s
 function approvedReviewerNativeExecutor(
   capture?: (
     request: Parameters<
-      NonNullable<ConstructorParameters<typeof PiRolesReviewerRunner>[0]["nativeExecutor"]>
+      NonNullable<ConstructorParameters<typeof SparkRolesReviewerRunner>[0]["nativeExecutor"]>
     >[0],
   ) => void,
-): NonNullable<ConstructorParameters<typeof PiRolesReviewerRunner>[0]["nativeExecutor"]> {
+): NonNullable<ConstructorParameters<typeof SparkRolesReviewerRunner>[0]["nativeExecutor"]> {
   return async (request) => {
     capture?.(request);
     return {
@@ -605,10 +605,10 @@ function approvedReviewerNativeExecutor(
 function askAnswerNativeExecutor(
   capture?: (
     request: Parameters<
-      NonNullable<ConstructorParameters<typeof PiRolesReviewerRunner>[0]["nativeExecutor"]>
+      NonNullable<ConstructorParameters<typeof SparkRolesReviewerRunner>[0]["nativeExecutor"]>
     >[0],
   ) => void,
-): NonNullable<ConstructorParameters<typeof PiRolesReviewerRunner>[0]["nativeExecutor"]> {
+): NonNullable<ConstructorParameters<typeof SparkRolesReviewerRunner>[0]["nativeExecutor"]> {
   return async (request) => {
     capture?.(request);
     return {
@@ -626,20 +626,20 @@ function askAnswerNativeExecutor(
 
 const reviewerRunnerTestEnv = { ...process.env, [ROLE_RUN_DEPTH_ENV]: "4" };
 
-void test("PiRolesReviewerRunner resolves reviewer model from role model settings", async () => {
+test("SparkRolesReviewerRunner resolves reviewer model from role model settings", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reviewer-runner-model-settings-"));
   try {
     await defaultProjectRoleModelSettingsStore(dir).save("role:builtin-reviewer", "test/reviewer");
     let captured:
       | Awaited<
           Parameters<
-            NonNullable<ConstructorParameters<typeof PiRolesReviewerRunner>[0]["nativeExecutor"]>
+            NonNullable<ConstructorParameters<typeof SparkRolesReviewerRunner>[0]["nativeExecutor"]>
           >[0]
         >
       | undefined;
 
     const input = { ...reviewTaskInput(), cwd: dir };
-    const runner = new PiRolesReviewerRunner({
+    const runner = new SparkRolesReviewerRunner({
       registry: new RoleRegistry(),
       cwd: dir,
       timeoutMs: 15_000,
@@ -680,12 +680,12 @@ void test("PiRolesReviewerRunner resolves reviewer model from role model setting
   }
 });
 
-void test("PiRolesReviewerRunner strips reviewer role orchestration and interaction tools", async () => {
+test("SparkRolesReviewerRunner strips reviewer role orchestration and interaction tools", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reviewer-runner-tool-gate-"));
   try {
     let captured:
       | Parameters<
-          NonNullable<ConstructorParameters<typeof PiRolesReviewerRunner>[0]["nativeExecutor"]>
+          NonNullable<ConstructorParameters<typeof SparkRolesReviewerRunner>[0]["nativeExecutor"]>
         >[0]
       | undefined;
 
@@ -722,7 +722,7 @@ void test("PiRolesReviewerRunner strips reviewer role orchestration and interact
     const registry = new RoleRegistry();
     registry.add(projectReviewer);
 
-    const runner = new PiRolesReviewerRunner({
+    const runner = new SparkRolesReviewerRunner({
       registry,
       cwd: dir,
       reviewerRoleRef: projectReviewer.ref,
@@ -743,14 +743,14 @@ void test("PiRolesReviewerRunner strips reviewer role orchestration and interact
   }
 });
 
-void test("PiRolesReviewerRunner auto-answer decrements role depth for reviewer child runs", async () => {
+test("SparkRolesReviewerRunner auto-answer decrements role depth for reviewer child runs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reviewer-ask-depth-"));
   const previousDepth = process.env[ROLE_RUN_DEPTH_ENV];
   try {
     let capturedDepth: string | undefined;
     process.env[ROLE_RUN_DEPTH_ENV] = "2";
 
-    const runner = new PiRolesReviewerRunner({
+    const runner = new SparkRolesReviewerRunner({
       registry: new RoleRegistry(),
       cwd: dir,
       timeoutMs: 15_000,
@@ -780,7 +780,7 @@ void test("PiRolesReviewerRunner auto-answer decrements role depth for reviewer 
   }
 });
 
-void test("PiRolesReviewerRunner auto-answer reports exhausted role depth before spawning", async () => {
+test("SparkRolesReviewerRunner auto-answer reports exhausted role depth before spawning", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reviewer-ask-depth-exhausted-"));
   const previousDepth = process.env[ROLE_RUN_DEPTH_ENV];
   try {
@@ -799,7 +799,7 @@ void test("PiRolesReviewerRunner auto-answer reports exhausted role depth before
     await chmod(fakePi, 0o755);
     process.env[ROLE_RUN_DEPTH_ENV] = "0";
 
-    const runner = new PiRolesReviewerRunner({
+    const runner = new SparkRolesReviewerRunner({
       registry: new RoleRegistry(),
       cwd: dir,
       timeoutMs: 15_000,
@@ -835,17 +835,17 @@ void test("PiRolesReviewerRunner auto-answer reports exhausted role depth before
   }
 });
 
-void test("PiRolesReviewerRunner runs reviewer gates in fresh mode even with parent session context", async () => {
+test("SparkRolesReviewerRunner runs reviewer gates in fresh mode even with parent session context", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-reviewer-runner-"));
   try {
     let captured:
       | Parameters<
-          NonNullable<ConstructorParameters<typeof PiRolesReviewerRunner>[0]["nativeExecutor"]>
+          NonNullable<ConstructorParameters<typeof SparkRolesReviewerRunner>[0]["nativeExecutor"]>
         >[0]
       | undefined;
 
     const input = { ...reviewTaskInput(), cwd: dir, forkFromSession: "session:parent" };
-    const runner = new PiRolesReviewerRunner({
+    const runner = new SparkRolesReviewerRunner({
       registry: new RoleRegistry(),
       cwd: dir,
       timeoutMs: 15_000,

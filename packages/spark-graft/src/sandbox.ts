@@ -5,10 +5,10 @@ import { resolve } from "node:path";
 import { Type } from "typebox";
 
 import {
-  registerPiGraftExtension,
-  type PiGraftExtensionApi,
-  type PiGraftSessionContext,
-  type PiGraftToolContext,
+  registerSparkGraftExtension,
+  type SparkGraftHostApi,
+  type SparkGraftSessionContext,
+  type SparkGraftToolContext,
 } from "./extension.ts";
 import {
   GraftCliError,
@@ -26,7 +26,7 @@ const SANDBOX_FILE_PROMPT_GUIDELINES = [
   "Sandbox grep/find/ls prefer the Graft-native tree backend when available and fall back to temporary materialized base state plus tracked scratch changes; they never read the Git working tree directly.",
 ];
 
-export interface PiGraftSandboxState {
+export interface SparkGraftSandboxState {
   active: true;
   repoRoot: string;
   repoId: string;
@@ -96,9 +96,9 @@ function workspaceIdFromEnvelope(envelope: JsonRecord | undefined): string | und
   return match?.[1];
 }
 
-function restoreSandboxState(ctx: PiGraftSessionContext): PiGraftSandboxState | undefined {
+function restoreSandboxState(ctx: SparkGraftSessionContext): SparkGraftSandboxState | undefined {
   const entries = ctx.sessionManager?.getBranch?.() ?? ctx.sessionManager?.getEntries?.() ?? [];
-  let state: PiGraftSandboxState | undefined;
+  let state: SparkGraftSandboxState | undefined;
   for (const entry of entries) {
     if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== SANDBOX_STATE_ENTRY) {
       continue;
@@ -168,8 +168,8 @@ function restoreSandboxState(ctx: PiGraftSessionContext): PiGraftSandboxState | 
 }
 
 function registerSandboxState(
-  pi: PiGraftExtensionApi,
-  state: PiGraftSandboxState | undefined,
+  pi: SparkGraftHostApi,
+  state: SparkGraftSandboxState | undefined,
 ): void {
   pi.appendEntry?.(SANDBOX_STATE_ENTRY, { state: state ?? null });
 }
@@ -195,7 +195,7 @@ function sandboxProfileDetails(): Record<string, unknown> {
   };
 }
 
-function sandboxSummary(state: PiGraftSandboxState | undefined): string {
+function sandboxSummary(state: SparkGraftSandboxState | undefined): string {
   if (!state) {
     return [
       "GRAFT SANDBOX INACTIVE",
@@ -223,18 +223,18 @@ function sandboxSummary(state: PiGraftSandboxState | undefined): string {
   ].join("\n");
 }
 
-function requireSandboxState(state: PiGraftSandboxState | undefined): PiGraftSandboxState {
+function requireSandboxState(state: SparkGraftSandboxState | undefined): SparkGraftSandboxState {
   if (!state) {
     throw new Error("Graft sandbox is inactive; run graft_sandbox_enter before file operations.");
   }
   return state;
 }
 
-function sandboxSourceArgv(state: PiGraftSandboxState): string[] {
+function sandboxSourceArgv(state: SparkGraftSandboxState): string[] {
   return state.lastScratch ? ["--from", state.lastScratch] : ["--base", state.base];
 }
 
-function sandboxSourceLabel(state: PiGraftSandboxState): string {
+function sandboxSourceLabel(state: SparkGraftSandboxState): string {
   return state.lastScratch ? `scratch ${state.lastScratch}` : `base ${state.base}`;
 }
 
@@ -284,11 +284,11 @@ function uniqueStrings(values: string[]): string[] {
 }
 
 function updateSandboxState(
-  pi: PiGraftExtensionApi,
-  state: PiGraftSandboxState,
-  updates: Partial<PiGraftSandboxState>,
-): PiGraftSandboxState {
-  const next: PiGraftSandboxState = {
+  pi: SparkGraftHostApi,
+  state: SparkGraftSandboxState,
+  updates: Partial<SparkGraftSandboxState>,
+): SparkGraftSandboxState {
+  const next: SparkGraftSandboxState = {
     ...state,
     ...updates,
     changedPaths: uniqueStrings([...(state.changedPaths ?? []), ...(updates.changedPaths ?? [])]),
@@ -405,7 +405,7 @@ function applyExactTextEdits(
 }
 
 async function readSandboxFile(
-  state: PiGraftSandboxState,
+  state: SparkGraftSandboxState,
   path: string,
 ): Promise<{
   content: string;
@@ -519,11 +519,11 @@ function sandboxTreeBackendPreference(): SandboxTreeBackendPreference {
   return "auto";
 }
 
-function sandboxTreeSourceArgv(state: PiGraftSandboxState): string[] {
+function sandboxTreeSourceArgv(state: SparkGraftSandboxState): string[] {
   return state.lastScratch ? ["--from", state.lastScratch] : ["--base", state.base];
 }
 
-function sandboxTreeCacheKey(state: PiGraftSandboxState): string {
+function sandboxTreeCacheKey(state: SparkGraftSandboxState): string {
   return [
     state.workspace,
     state.workspaceId ?? "",
@@ -563,7 +563,7 @@ function parseFindPaths(stdout: string): string[] {
   ).sort((left, right) => left.localeCompare(right));
 }
 
-async function sandboxBasePaths(state: PiGraftSandboxState): Promise<{
+async function sandboxBasePaths(state: SparkGraftSandboxState): Promise<{
   paths: string[];
   cacheHit: boolean;
   execution?: unknown;
@@ -626,7 +626,7 @@ function treeEntryPaths(result: JsonRecord | undefined): string[] {
 }
 
 async function sandboxNativeVisiblePaths(
-  state: PiGraftSandboxState,
+  state: SparkGraftSandboxState,
   options: { basePath?: string; globRegex?: RegExp } = {},
 ): Promise<SandboxVisiblePaths> {
   const argv = ["tree", "list", ...sandboxTreeSourceArgv(state)];
@@ -642,7 +642,7 @@ async function sandboxNativeVisiblePaths(
 }
 
 async function sandboxMaterializedVisiblePaths(
-  state: PiGraftSandboxState,
+  state: SparkGraftSandboxState,
   options: { basePath?: string; globRegex?: RegExp } = {},
   fallback?: { attemptedBackend: SandboxTreeBackend; fallbackReason: string },
 ): Promise<SandboxVisiblePaths> {
@@ -664,7 +664,7 @@ async function sandboxMaterializedVisiblePaths(
 }
 
 async function sandboxVisiblePaths(
-  state: PiGraftSandboxState,
+  state: SparkGraftSandboxState,
   options: { basePath?: string; glob?: string; globRegex?: RegExp } = {},
 ): Promise<SandboxVisiblePaths> {
   const preference = sandboxTreeBackendPreference();
@@ -681,7 +681,10 @@ async function sandboxVisiblePaths(
   }
 }
 
-async function readSandboxBaseTextFile(state: PiGraftSandboxState, path: string): Promise<string> {
+async function readSandboxBaseTextFile(
+  state: SparkGraftSandboxState,
+  path: string,
+): Promise<string> {
   const run = await runGraftJson(state.workspace, [
     "run",
     "--cwd",
@@ -773,7 +776,7 @@ function safeTreeMetadata(value: JsonRecord | undefined): JsonRecord {
 }
 
 async function sandboxNativeMetadata(
-  state: PiGraftSandboxState,
+  state: SparkGraftSandboxState,
   path: string,
 ): Promise<{ metadata: JsonRecord; backend: SandboxTreeBackend; execution: unknown }> {
   const run = await runGraftJson(state.workspace, [
@@ -790,7 +793,7 @@ async function sandboxNativeMetadata(
 }
 
 async function sandboxMaterializedMetadata(
-  state: PiGraftSandboxState,
+  state: SparkGraftSandboxState,
   path: string,
   fallback?: { attemptedBackend: SandboxTreeBackend; fallbackReason: string },
 ): Promise<{
@@ -820,7 +823,7 @@ async function sandboxMaterializedMetadata(
 }
 
 async function sandboxFileMetadata(
-  state: PiGraftSandboxState,
+  state: SparkGraftSandboxState,
   path: string,
 ): Promise<{
   metadata: JsonRecord;
@@ -857,7 +860,7 @@ function metadataSummary(metadata: JsonRecord): string {
 }
 
 async function sandboxNativeGrep(
-  state: PiGraftSandboxState,
+  state: SparkGraftSandboxState,
   options: { pattern: string; basePath?: string; glob?: string; limit: number },
 ): Promise<SandboxNativeGrepResult> {
   const argv = ["tree", "grep", ...sandboxTreeSourceArgv(state), options.pattern];
@@ -877,7 +880,7 @@ async function sandboxNativeGrep(
 }
 
 async function sandboxMaterializedGrep(
-  state: PiGraftSandboxState,
+  state: SparkGraftSandboxState,
   options: {
     pattern: string;
     basePath?: string;
@@ -966,7 +969,7 @@ function commandTextFromToolCall(event: unknown): { toolName?: string; text: str
 
 function sandboxBypassReason(
   event: unknown,
-  state: PiGraftSandboxState | undefined,
+  state: SparkGraftSandboxState | undefined,
 ): string | undefined {
   if (!state?.guardrails.blockShellFileIo) return undefined;
   const { toolName, text } = commandTextFromToolCall(event);
@@ -990,13 +993,13 @@ function sandboxBypassReason(
   ].join(" ");
 }
 
-export function registerPiGraftSandboxExtension(pi: PiGraftExtensionApi): void {
-  registerPiGraftExtension(pi);
+export function registerSparkGraftSandboxExtension(pi: SparkGraftHostApi): void {
+  registerSparkGraftExtension(pi);
 
-  let sandboxState: PiGraftSandboxState | undefined;
+  let sandboxState: SparkGraftSandboxState | undefined;
   let lastCwd: string | undefined;
 
-  pi.on("session_start", (_event: unknown, ctx: PiGraftSessionContext) => {
+  pi.on("session_start", (_event: unknown, ctx: SparkGraftSessionContext) => {
     lastCwd = ctx.cwd;
     sandboxState = restoreSandboxState(ctx);
   });
@@ -1413,7 +1416,7 @@ export function registerPiGraftSandboxExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = ctx?.cwd ?? lastCwd ?? process.cwd();
       const repoRoot = resolve(cwd, optionalStringParam(params, "repo") ?? ".");
@@ -1732,6 +1735,6 @@ export function registerPiGraftSandboxExtension(pi: PiGraftExtensionApi): void {
   });
 }
 
-export default function piGraftSandboxExtension(pi: PiGraftExtensionApi): void {
-  registerPiGraftSandboxExtension(pi);
+export default function piGraftSandboxExtension(pi: SparkGraftHostApi): void {
+  registerSparkGraftSandboxExtension(pi);
 }

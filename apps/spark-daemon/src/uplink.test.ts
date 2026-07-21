@@ -7,12 +7,14 @@ import {
   desiredUplinkServerUrls,
   parkSparkDaemonUplink,
   preferSparkDaemonWorkspaceUplink,
+  preferSparkDaemonWorkspaceUplinkWithTransfer,
   sparkDaemonUplinkStatus,
+  SparkDaemonLeaseTransferBroker,
   unparkSparkDaemonUplink,
 } from "./uplink.js";
 import { upsertSparkDaemonServerProfile } from "./server-profiles.js";
 import { openSparkDaemonDatabase } from "./store/schema.js";
-import { getWorkspaceById, registerWorkspace } from "./store/workspaces.js";
+import { attachWorkspaceClient, getWorkspaceById, registerWorkspace } from "./store/workspaces.js";
 
 const roots: string[] = [];
 
@@ -111,6 +113,128 @@ describe("daemon uplink park/prefer", () => {
     expect(preferred.previousServerUrl).toBe(prod);
     expect(preferred.serverUrl).toBe(local);
     expect(getWorkspaceById(db, workspace.id)?.serverUrl).toBe(local);
+    db.close();
+  });
+
+  it("waits for transfer consent when interactive sessions occupy the workspace", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-uplink-transfer-"));
+    roots.push(root);
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+        configFile: join(root, "config", "daemon.toml"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const workspacePath = join(root, "spark");
+    mkdirSync(workspacePath, { recursive: true });
+    const prod = "https://prod.example/";
+    const local = "http://127.0.0.1:5173/";
+    await upsertSparkDaemonServerProfile(paths, {
+      serverUrl: prod,
+      runtimeId: "rt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      runtimeToken: "spark_rt_access_11111111111111111111111111111111",
+    });
+    await upsertSparkDaemonServerProfile(paths, {
+      serverUrl: local,
+      runtimeId: "rt_cccccccccccccccccccccccccccccccc",
+      runtimeToken: "spark_rt_access_22222222222222222222222222222222",
+    });
+    const workspace = registerWorkspace(db, {
+      serverUrl: prod,
+      localPath: workspacePath,
+      localWorkspaceKey: "spark",
+      displayName: "spark",
+      serverBindingId: "rtwb_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      serverWorkspaceId: "ws_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    });
+    attachWorkspaceClient(db, {
+      workspaceId: workspace.id,
+      clientId: "wcl-tui-1",
+      kind: "interactive",
+      metadata: { surface: "tui" },
+    });
+
+    const transfers = new SparkDaemonLeaseTransferBroker();
+    const preferPromise = preferSparkDaemonWorkspaceUplinkWithTransfer(
+      paths,
+      db,
+      { workspace: workspace.id, serverUrl: local },
+      { transfers, timeoutMs: 5_000 },
+    );
+    const pending = transfers.pendingForWorkspace(workspace.id);
+    expect(pending).toMatchObject({
+      workspaceId: workspace.id,
+      targetServerUrl: local,
+    });
+    transfers.respond(pending!.transferId, "accept", "tui");
+    const preferred = await preferPromise;
+    expect(preferred.serverUrl).toBe(local);
+    expect(preferred.transfer).toMatchObject({ decision: "accept", source: "tui" });
+    expect(getWorkspaceById(db, workspace.id)?.serverUrl).toBe(local);
+    db.close();
+  });
+
+  it("rejects occupied prefer when an occupying session denies transfer", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-uplink-transfer-deny-"));
+    roots.push(root);
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+        configFile: join(root, "config", "daemon.toml"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const workspacePath = join(root, "spark");
+    mkdirSync(workspacePath, { recursive: true });
+    const prod = "https://prod.example/";
+    const local = "http://127.0.0.1:5173/";
+    await upsertSparkDaemonServerProfile(paths, {
+      serverUrl: prod,
+      runtimeId: "rt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      runtimeToken: "spark_rt_access_11111111111111111111111111111111",
+    });
+    await upsertSparkDaemonServerProfile(paths, {
+      serverUrl: local,
+      runtimeId: "rt_cccccccccccccccccccccccccccccccc",
+      runtimeToken: "spark_rt_access_22222222222222222222222222222222",
+    });
+    const workspace = registerWorkspace(db, {
+      serverUrl: prod,
+      localPath: workspacePath,
+      localWorkspaceKey: "spark",
+      displayName: "spark",
+      serverBindingId: "rtwb_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      serverWorkspaceId: "ws_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    });
+    attachWorkspaceClient(db, {
+      workspaceId: workspace.id,
+      clientId: "wcl-cockpit-1",
+      kind: "interactive",
+      metadata: { surface: "cockpit" },
+    });
+
+    const transfers = new SparkDaemonLeaseTransferBroker();
+    const preferPromise = preferSparkDaemonWorkspaceUplinkWithTransfer(
+      paths,
+      db,
+      { workspace: workspace.id, serverUrl: local },
+      { transfers, timeoutMs: 5_000 },
+    );
+    const pending = transfers.pendingForWorkspace(workspace.id)!;
+    transfers.respond(pending.transferId, "reject", "cockpit");
+    await expect(preferPromise).rejects.toThrow(/rejected by an occupying session/);
+    expect(getWorkspaceById(db, workspace.id)?.serverUrl).toBe(prod);
     db.close();
   });
 });

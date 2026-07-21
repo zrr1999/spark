@@ -454,10 +454,11 @@ describe("session activity projection", () => {
       }),
       expect.objectContaining({
         id: "art_ui",
-        kind: "artifact.trace",
+        kind: "evidence.trace",
         role: "assistant",
         status: "blocked",
         text: "Blocked: missing browser evidence.",
+        title: "Role run report",
       }),
     ]);
     db.close();
@@ -970,7 +971,7 @@ describe("session activity projection", () => {
       }),
       {
         id: "artifact:reload-report",
-        kind: "artifact.update",
+        kind: "evidence.update",
         title: "Reload report",
         text: "The persisted activity projection is available.",
         role: "spark-runtime",

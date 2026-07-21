@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   createSparkDaemonModelAuthClient,
@@ -58,7 +58,7 @@ const snapshot: SparkModelControlSnapshot = {
   ],
 };
 
-void test("daemon model picker exposes only available models and preserves the default", () => {
+test("daemon model picker exposes only available models and preserves the default", () => {
   const state = daemonSnapshotToPickerState(snapshot);
 
   assert.deepEqual(
@@ -69,7 +69,7 @@ void test("daemon model picker exposes only available models and preserves the d
   assert.equal(state.items[0]?.active, true);
 });
 
-void test("daemon model picker prefers the persisted session model over the global default", () => {
+test("daemon model picker prefers the persisted session model over the global default", () => {
   const state = daemonSnapshotToPickerState({
     ...snapshot,
     session: {
@@ -83,7 +83,7 @@ void test("daemon model picker prefers the persisted session model over the glob
   assert.equal(state.items[1]?.active, true);
 });
 
-void test("daemon model resolution requires provider when a model id is ambiguous", () => {
+test("daemon model resolution requires provider when a model id is ambiguous", () => {
   assert.deepEqual(resolveDaemonModelSelection(snapshot, "provider-b/model-a"), {
     providerName: "provider-b",
     modelId: "model-a",
@@ -91,7 +91,7 @@ void test("daemon model resolution requires provider when a model id is ambiguou
   assert.throws(() => resolveDaemonModelSelection(snapshot, "model-a"), /Ambiguous Spark model/u);
 });
 
-void test("bound daemon model control keeps session and global model RPCs distinct", async () => {
+test("bound daemon model control keeps session and global model RPCs distinct", async () => {
   const calls: Array<{ method: string; params: unknown }> = [];
   const lifecycle: string[] = [];
   let ensureCalls = 0;

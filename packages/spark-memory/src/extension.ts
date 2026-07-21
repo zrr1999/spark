@@ -4,11 +4,11 @@ import { basename, dirname, join } from "node:path";
 import { Type } from "typebox";
 import {
   callLeafOrDegrade,
-  type ExtensionContext,
+  type SparkHostContext,
   type ToolConfig,
   type ToolRenderComponent,
   type ToolRenderTheme,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 import {
   assertNoSecrets,
@@ -22,7 +22,18 @@ import {
   type SparkMemoryScope,
   type SparkMemoryStorePaths,
 } from "./index.ts";
-import { registerPiRecallTool } from "./recall-extension.ts";
+import {
+  runSparkCompactionCandidatePipeline,
+  type SparkCompactionCandidatePipelineOptions,
+  type SparkCompactionCandidatePipelineResult,
+} from "./compaction-candidates.ts";
+import {
+  executeMemoryCandidateAction,
+  executeMemoryLearningAction,
+  normalizeMemoryKind,
+  type SparkMemoryKind,
+} from "./memory-kinds.ts";
+import { migrateSparkMemoryLayout } from "./migrate-layout.ts";
 import type { RecallStorePaths } from "./recall-store.ts";
 
 export type SparkMemoryAction =
@@ -31,7 +42,18 @@ export type SparkMemoryAction =
   | "search"
   | "status"
   | "forget"
-  | "import_legacy";
+  | "import_legacy"
+  | "record"
+  | "record_candidate"
+  | "list"
+  | "read"
+  | "mark_stale"
+  | "supersede"
+  | "reject"
+  | "export_markdown"
+  | "import_markdown";
+
+export type { SparkMemoryKind };
 
 export interface SparkMemoryExtensionApi {
   registerTool(config: ToolConfig): void;
@@ -54,6 +76,10 @@ export interface SparkMemoryToolOptions {
   storePaths?: SparkMemoryStorePaths;
   compatMemoryDir?: string;
   recallStorePaths?: RecallStorePaths;
+  /** @internal Test/host seam for the asynchronous post-compact pipeline. */
+  runCompactionCandidatePipeline?: (
+    options: SparkCompactionCandidatePipelineOptions,
+  ) => Promise<SparkCompactionCandidatePipelineResult>;
 }
 
 type LegacyMemoryTarget = "long_term" | "daily" | "scratchpad" | "list";
@@ -91,7 +117,6 @@ export function registerSparkMemoryTool(
   registerIfAvailable(pi, scratchpadTool(options));
   registerIfAvailable(pi, memorySearchTool(options));
   registerIfAvailable(pi, memoryStatusTool(options));
-  registerPiRecallTool(pi, { storePaths: options.recallStorePaths });
 }
 
 type RegisteredToolInspection =
@@ -142,40 +167,72 @@ function memoryTool(options: SparkMemoryToolOptions): ToolConfig {
     name: "memory",
     label: "Memory",
     description:
-      "Unified explicit Spark memory capability. Remember, recall, search, inspect status, forget scoped entries, or import legacy pi-memory Markdown files.",
+      "Unified explicit Spark memory capability. Use kind=entry (default) for durable entries, kind=learning for evidence-backed learnings, and kind=candidate for recall candidates.",
     promptGuidelines: [
       renderSparkMemoryPolicy(),
-      "Keep learning and recall tools stable; use memory when the user asks for unified durable memory.",
+      'Use memory({ action, kind: "entry" | "learning" | "candidate" }). kind defaults to entry.',
       "Memory writes are explicit and secret-scanned. Do not store credentials or hidden chain-of-thought.",
       'Use memory({ action: "import_legacy", apply: false }) to preview pi-memory Markdown import before applying it.',
     ],
     parameters: Type.Object({
       action: Type.String({
-        description: "remember | recall | search | status | forget | import_legacy",
+        description:
+          "entry: remember|recall|search|status|forget|import_legacy; learning: record|list|read|search|mark_stale|supersede|reject|export_markdown|import_markdown; candidate: record|list|search|reject",
       }),
+      kind: Type.Optional(Type.String({ description: "entry (default) | learning | candidate" })),
       scope: Type.Optional(Type.String({ description: "user | workspace | repo" })),
+      location: Type.Optional(Type.String({ description: "user | workspace | repo (learning)" })),
       category: Type.Optional(
         Type.String({
-          description: "failure | correction | insight | preference | convention | tool-quirk",
+          description:
+            "entry: failure|correction|insight|preference|convention|tool-quirk; learning: pattern|gotcha|decision|workflow|tool|project",
         }),
       ),
-      text: Type.Optional(Type.String({ description: "Memory text for action=remember." })),
+      text: Type.Optional(Type.String({ description: "Memory/candidate text." })),
+      title: Type.Optional(
+        Type.String({ description: "Learning title for kind=learning record." }),
+      ),
+      statement: Type.Optional(
+        Type.String({ description: "Learning statement for kind=learning record." }),
+      ),
       reason: Type.Optional(
-        Type.String({ description: "Why to remember, why to forget, or why to import." }),
+        Type.String({ description: "Why to remember, forget, reject, or import." }),
       ),
       evidenceRefs: Type.Optional(Type.Array(Type.String())),
       tags: Type.Optional(Type.Array(Type.String())),
       query: Type.Optional(
         Type.String({ description: "Keyword query for search/recall filtering." }),
       ),
-      id: Type.Optional(Type.String({ description: "Memory entry id for forget." })),
+      id: Type.Optional(Type.String({ description: "Entry/candidate/learning id." })),
+      ref: Type.Optional(Type.String({ description: "Learning artifact ref." })),
       includeForgotten: Type.Optional(Type.Boolean()),
+      includeRejected: Type.Optional(Type.Boolean()),
+      includeCandidates: Type.Optional(Type.Boolean()),
+      includeInactive: Type.Optional(Type.Boolean()),
       limit: Type.Optional(Type.Number()),
+      maxChars: Type.Optional(Type.Number()),
+      status: Type.Optional(Type.Any({ description: "Learning status or status list." })),
+      applicability: Type.Optional(Type.String()),
+      nonApplicability: Type.Optional(Type.String()),
+      rationale: Type.Optional(Type.String()),
+      sourcePaths: Type.Optional(Type.Array(Type.String())),
+      sourceHash: Type.Optional(Type.String()),
+      sourceContent: Type.Optional(Type.String()),
+      dependsOn: Type.Optional(Type.Array(Type.String())),
+      supersedes: Type.Optional(Type.Array(Type.String())),
+      contradictedBy: Type.Optional(Type.Array(Type.String())),
+      confidence: Type.Optional(Type.Number()),
+      supersededBy: Type.Optional(Type.Array(Type.String())),
+      tag: Type.Optional(Type.String()),
+      outputPath: Type.Optional(Type.String()),
+      inputPath: Type.Optional(Type.String()),
       sourceDir: Type.Optional(
         Type.String({ description: "Legacy pi-memory directory for action=import_legacy." }),
       ),
       apply: Type.Optional(
-        Type.Boolean({ description: "For action=import_legacy: false previews, true imports." }),
+        Type.Boolean({
+          description: "For import_legacy/import_markdown: false previews, true imports.",
+        }),
       ),
     }),
     renderCall(args, theme) {
@@ -183,7 +240,20 @@ function memoryTool(options: SparkMemoryToolOptions): ToolConfig {
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = requiredCwd(ctx);
-      const action = normalizeMemoryAction(params.action);
+      await migrateSparkMemoryLayout({ cwd });
+      const kind = normalizeMemoryKind(params.kind);
+      if (kind === "candidate") {
+        return executeMemoryCandidateAction({
+          params,
+          cwd,
+          storePaths: options.recallStorePaths,
+        });
+      }
+      if (kind === "learning") {
+        return executeMemoryLearningAction({ params, cwd });
+      }
+
+      const action = normalizeMemoryEntryAction(params.action);
       const scope = normalizeOptionalScope(params.scope) ?? "workspace";
       const store = defaultSparkMemoryStore(cwd, scope, options.storePaths);
 
@@ -453,7 +523,7 @@ function memorySearchTool(options: SparkMemoryToolOptions): ToolConfig {
 
       const leaf =
         candidates.length > 0
-          ? await callLeafOrDegrade(ctx as ExtensionContext, {
+          ? await callLeafOrDegrade(ctx as SparkHostContext, {
               role: "memory-reranker",
               brief:
                 "Rerank the memory candidates for relevance to the query. Return only a JSON array of 1-based candidate numbers in best-to-worst order; include only candidates worth returning.",
@@ -545,6 +615,7 @@ export function registerSparkMemoryCheckpointEvents(
   pi.on?.("session_start", async (_event, ctx) => {
     const cwd = optionalCwd(ctx);
     if (!cwd) return;
+    await migrateSparkMemoryLayout({ cwd });
     pi.sendMessage?.(
       {
         customType: "spark-memory-policy",
@@ -586,6 +657,25 @@ export function registerSparkMemoryCheckpointEvents(
       pi.sendMessage?.(message, { deliverAs: "nextTurn", triggerTurn: false });
     }
     return { sparkMemoryCheckpoint: checkpoint, message };
+  });
+
+  pi.on?.("session_compact", (event, ctx) => {
+    const cwd = optionalCwd(ctx);
+    const compact = successfulFullCompaction(event);
+    if (!cwd || !compact) return;
+    const runPipeline =
+      options.runCompactionCandidatePipeline ?? runSparkCompactionCandidatePipeline;
+    queueMicrotask(() => {
+      void runPipeline({
+        cwd,
+        sessionId: compact.sessionId,
+        summary: compact.summary,
+        details: compact.details,
+      }).catch(() => {
+        // Compact is already durable. Candidate review/write failures are
+        // background diagnostics and must not alter its foreground outcome.
+      });
+    });
   });
 }
 
@@ -655,7 +745,9 @@ function renderStatus(summary: {
   ].join("\n");
 }
 
-function normalizeMemoryAction(value: unknown): SparkMemoryAction {
+function normalizeMemoryEntryAction(
+  value: unknown,
+): "remember" | "recall" | "search" | "status" | "forget" | "import_legacy" {
   if (
     value === "remember" ||
     value === "recall" ||
@@ -667,7 +759,7 @@ function normalizeMemoryAction(value: unknown): SparkMemoryAction {
     return value;
   }
   throw new Error(
-    "memory.action must be remember, recall, search, status, forget, or import_legacy",
+    "memory.action for kind=entry must be remember, recall, search, status, forget, or import_legacy",
   );
 }
 
@@ -720,6 +812,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+function successfulFullCompaction(
+  event: unknown,
+): { sessionId?: string; summary: unknown; details?: unknown } | undefined {
+  if (
+    !isRecord(event) ||
+    event.succeeded !== true ||
+    event.compactType !== "full" ||
+    !isRecord(event.compactionEntry)
+  )
+    return undefined;
+  const entry = event.compactionEntry;
+  if (entry.type !== undefined && entry.type !== "compaction") return undefined;
+  const summary = entry.summary;
+  if (typeof summary !== "string" || !summary.trim()) return undefined;
+  const sessionId =
+    typeof event.sessionId === "string" && event.sessionId.trim() ? event.sessionId : undefined;
+  return { ...(sessionId ? { sessionId } : {}), summary, details: entry.details };
+}
+
 function optionalCwd(ctx: unknown): string | undefined {
   const cwd =
     typeof (ctx as { cwd?: unknown })?.cwd === "string" ? (ctx as { cwd: string }).cwd : "";
@@ -737,9 +848,12 @@ function renderMemoryCall(
   theme: ToolRenderTheme,
 ): ToolRenderComponent {
   const action = typeof args.action === "string" ? args.action : "?";
+  const kind = typeof args.kind === "string" ? args.kind : undefined;
   const scope = typeof args.scope === "string" ? args.scope : undefined;
   const category = typeof args.category === "string" ? args.category : undefined;
-  const text = ["memory", `action=${action}`, scope, category].filter(Boolean).join(" ");
+  const text = ["memory", kind ? `kind=${kind}` : undefined, `action=${action}`, scope, category]
+    .filter(Boolean)
+    .join(" ");
   return new ToolCallText(theme.bold ? theme.bold(text) : text);
 }
 

@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { nowIso, type Project } from "@zendev-lab/spark-extension-api";
+import { nowIso, type Project } from "@zendev-lab/spark-core";
 import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import { currentSparkProject, loadSparkGraph, sparkSessionOwnerKey } from "./session-state.ts";
 import {

@@ -12,7 +12,10 @@ import {
   type SparkSessionMailDeliveryReceipt,
 } from "@zendev-lab/spark-session";
 import { resolveSparkPaths } from "@zendev-lab/spark-system";
-import { requestSparkDaemonLocalRpcWire } from "@zendev-lab/spark-system/daemon-local-rpc";
+import {
+  requestSparkDaemonLocalRpcWire,
+  SparkDaemonLocalRpcUnavailableError,
+} from "@zendev-lab/spark-system/daemon-local-rpc";
 import {
   createDaemonSessionRegistry,
   handleLocalRpcLine,
@@ -28,6 +31,7 @@ import { openSparkDaemonDatabase } from "./store/schema.js";
 import {
   ensureLocalWorkspace,
   listWorkspaces,
+  registerWorkspace,
   resolveWorkspaceLocalPath,
   WorkspacePathConflictError,
 } from "./store/workspaces.js";
@@ -41,6 +45,57 @@ import type {
 } from "./channels/ingress.ts";
 
 describe("Spark daemon local RPC", () => {
+  it("preserves Cockpit binding ids across workspace.list RPC serialization", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-binding-"));
+    const workspacePath = join(root, "workspace");
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    try {
+      mkdirSync(workspacePath);
+      registerWorkspace(db, {
+        serverUrl: "http://127.0.0.1:5173/",
+        localPath: realpathSync(workspacePath),
+        displayName: "spark server",
+        serverBindingId: "rtwb_33333333333341113333333333333333",
+        serverWorkspaceId: "ws_22222222222241112222222222222222",
+      });
+
+      const response = await handleLocalRpcLine(
+        JSON.stringify({ id: "rpc_list", method: "workspace.list", params: {} }),
+        paths,
+        db,
+        undefined,
+      );
+
+      expect(response).toMatchObject({
+        id: "rpc_list",
+        ok: true,
+        result: {
+          workspaces: [
+            expect.objectContaining({
+              displayName: "spark server",
+              serverBindingId: "rtwb_33333333333341113333333333333333",
+              serverWorkspaceId: "ws_22222222222241112222222222222222",
+              cockpitBindingState: "bound",
+            }),
+          ],
+        },
+      });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("parses drain progress strictly without inventing malformed status", () => {
     expect(
       parseSparkDaemonLifecycleSnapshot({
@@ -178,6 +233,26 @@ describe("Spark daemon local RPC", () => {
           prompt: "one durable turn",
         },
       });
+      const accepted = {
+        invocationId: invocation.invocationId,
+        status: "queued" as const,
+        acceptedAt: invocation.createdAt,
+      };
+      const shortWait = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "continuation_short_wait",
+          method: "turn.status",
+          params: { invocationId: accepted.invocationId },
+        }),
+        paths,
+        db,
+        undefined,
+        options,
+      );
+      expect(shortWait).toMatchObject({
+        ok: true,
+        result: { invocationId: accepted.invocationId, status: "queued" },
+      });
       expect(store.claimNext("continuation-worker")?.invocationId).toBe(invocation.invocationId);
       store.complete(invocation.invocationId, {
         status: "succeeded",
@@ -237,6 +312,33 @@ describe("Spark daemon local RPC", () => {
       });
     } finally {
       db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a pre-admission connection failure without manufacturing an invocation id", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-pre-admission-"));
+    const socketPath = join(root, "missing.sock");
+    try {
+      const failure = await requestSparkDaemonLocalRpcWire<unknown>(
+        {
+          id: "pre_admission_failure",
+          method: "turn.submit",
+          params: {
+            sessionId: "session-never-admitted",
+            prompt: "must not be admitted",
+            idempotencyKey: "pre-admission-never-committed",
+          },
+        },
+        { socketPath, connectTimeoutMs: 10, responseTimeoutMs: 10 },
+      ).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(SparkDaemonLocalRpcUnavailableError);
+      expect(failure).not.toHaveProperty("invocationId");
+      expect(String(failure)).not.toMatch(/inv_[a-f0-9]{32}/u);
+    } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });

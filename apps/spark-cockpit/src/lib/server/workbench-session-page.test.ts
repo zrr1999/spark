@@ -15,13 +15,16 @@ vi.mock("$lib/server/managed-sessions", () => ({
   createManagedSessionForCockpit: vi.fn(),
   getManagedSessionForCockpit: mocks.get,
   getManagedSessionSnapshotForCockpit: mocks.snapshot,
+  getProjectedManagedSessionForCockpit: mocks.get,
   getProjectedManagedSessionSnapshotForCockpit: mocks.projectedSnapshot,
   listManagedSessionsForCockpit: mocks.list,
 }));
 
 vi.mock("$lib/server/db", () => ({ getDatabase: () => ({}) }));
-vi.mock("$lib/server/events", () => ({ latestEventCursor: () => null }));
-vi.mock("$lib/server/session-activity", () => ({ loadSessionActivity: mocks.activity }));
+vi.mock("@zendev-lab/spark-coordination/events", () => ({ latestEventCursor: () => null }));
+vi.mock("@zendev-lab/spark-coordination/session-activity", () => ({
+  loadSessionActivity: mocks.activity,
+}));
 vi.mock("$lib/server/model-control", () => ({
   loadModelControlForCockpit: mocks.modelControl,
   loadProjectedModelControlForCockpit: mocks.projectedModelControl,
@@ -36,7 +39,7 @@ vi.mock("$lib/server/submission-idempotency", () => ({
 }));
 vi.mock("../../routes/(workbench)/sessions/+page.server", () => ({ actions: {} }));
 
-import { load } from "../../routes/(workbench)/sessions/[sessionId]/+page.server";
+import { _loadSessionPage } from "../../routes/(workbench)/sessions/[sessionId]/+page.server";
 
 const workspaceSession = {
   sessionId: "sess_workspace",
@@ -97,27 +100,59 @@ describe("workbench session page scope", () => {
       sessionControlAvailable: true,
     });
 
-    const result = await load({
-      params: { sessionId: workspaceSession.sessionId },
-      parent,
-    } as never);
+    const result = await _loadSessionPage(
+      {
+        params: { sessionId: workspaceSession.sessionId },
+        parent,
+      } as never,
+      "ws_current",
+    );
 
     expect(result).toMatchObject({
-      sessions: [workspaceSession, channelSession],
       selectedSessionId: workspaceSession.sessionId,
       sendSubmissionIdSeed: expect.stringMatching(/^idem_/),
     });
+    expect(result).not.toHaveProperty("sessions");
     expect(parent).toHaveBeenCalledOnce();
     expect(mocks.list).not.toHaveBeenCalled();
     expect(mocks.get).not.toHaveBeenCalled();
-    expect(mocks.snapshot).toHaveBeenCalledWith(workspaceSession.sessionId, {
-      messageLimit: 32,
-    });
-    expect(mocks.modelControl).toHaveBeenCalledWith({ workspaceId: "ws_current" });
+    expect(mocks.projectedSnapshot).toHaveBeenCalledWith(workspaceSession.sessionId);
+    expect(mocks.snapshot).not.toHaveBeenCalled();
+    expect(mocks.modelControl).not.toHaveBeenCalled();
+    expect(mocks.projectedModelControl).toHaveBeenCalledWith({ workspaceId: "ws_current" });
     expect(mocks.activity).toHaveBeenCalledWith(
       {},
       expect.objectContaining({ workspaceId: "ws_current" }),
     );
+  });
+
+  it("paints from the projected snapshot without waiting on live RPC", async () => {
+    mocks.projectedSnapshot.mockReturnValue({
+      snapshot: { sessionId: workspaceSession.sessionId, messages: [] },
+      history: { earlierMessages: 0, laterMessages: 0, hasEarlierMessages: false },
+    });
+    const parent = vi.fn().mockResolvedValue({
+      sessions: [workspaceSession],
+      sessionsAvailable: true,
+      activeWorkspace: { id: "ws_current" },
+      sessionControlAvailable: true,
+    });
+
+    const result = await _loadSessionPage(
+      {
+        params: { sessionId: workspaceSession.sessionId },
+        parent,
+      } as never,
+      "ws_current",
+    );
+
+    expect(result.sessionSnapshot).toEqual({
+      sessionId: workspaceSession.sessionId,
+      messages: [],
+    });
+    expect(mocks.snapshot).not.toHaveBeenCalled();
+    expect(mocks.modelControl).not.toHaveBeenCalled();
+    expect(mocks.projectedModelControl).toHaveBeenCalledWith({ workspaceId: "ws_current" });
   });
 
   it("does not expose a daemon-global direct URL", async () => {
@@ -129,7 +164,7 @@ describe("workbench session page scope", () => {
     });
 
     await expect(
-      load({ params: { sessionId: daemonSession.sessionId }, parent } as never),
+      _loadSessionPage({ params: { sessionId: daemonSession.sessionId }, parent } as never),
     ).rejects.toMatchObject({ status: 404 });
     expect(mocks.snapshot).not.toHaveBeenCalled();
     expect(mocks.modelControl).not.toHaveBeenCalled();
@@ -145,7 +180,10 @@ describe("workbench session page scope", () => {
     });
 
     await expect(
-      load({ params: { sessionId: otherWorkspaceSession.sessionId }, parent } as never),
+      _loadSessionPage({
+        params: { sessionId: otherWorkspaceSession.sessionId },
+        parent,
+      } as never),
     ).rejects.toMatchObject({ status: 404 });
     expect(mocks.snapshot).not.toHaveBeenCalled();
     expect(mocks.modelControl).not.toHaveBeenCalled();
@@ -160,16 +198,19 @@ describe("workbench session page scope", () => {
       sessionControlAvailable: false,
     });
 
-    const result = await load({
-      params: { sessionId: workspaceSession.sessionId },
-      parent,
-    } as never);
+    const result = await _loadSessionPage(
+      {
+        params: { sessionId: workspaceSession.sessionId },
+        parent,
+      } as never,
+      "ws_current",
+    );
 
     expect(result).toMatchObject({
       selectedSession: workspaceSession,
-      sessionControlAvailable: false,
       canAssign: false,
     });
+    expect(result).not.toHaveProperty("sessionControlAvailable");
     expect(mocks.snapshot).not.toHaveBeenCalled();
     expect(mocks.modelControl).not.toHaveBeenCalled();
     expect(mocks.projectedSnapshot).toHaveBeenCalledWith(workspaceSession.sessionId);

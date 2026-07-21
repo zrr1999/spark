@@ -622,6 +622,7 @@ describe("Spark daemon CLI", () => {
       const listCapture = createCliIo();
       await expect(main(["ws", "ls", "--json", "--no-service"], listCapture.io)).resolves.toBe(0);
       const [workspace] = JSON.parse(listCapture.stdout()) as Array<{
+        id: string;
         slug: string;
         name: string;
         serverUrl: string;
@@ -631,6 +632,7 @@ describe("Spark daemon CLI", () => {
         lastStatusChangedAt: string;
       }>;
       expect(workspace).toMatchObject({
+        id: expect.stringMatching(/^rtwb_/),
         slug: "workspace",
         name: "workspace",
         serverUrl: "http://127.0.0.1:5173/",
@@ -642,9 +644,12 @@ describe("Spark daemon CLI", () => {
 
       const textListCapture = createCliIo();
       await expect(main(["ws", "ls", "--no-service"], textListCapture.io)).resolves.toBe(0);
+      expect(textListCapture.stdout()).toContain("ID");
+      expect(textListCapture.stdout()).toContain("NAME");
       expect(textListCapture.stdout()).toContain("PROJECTS");
       expect(textListCapture.stdout()).toContain("INBOX");
       expect(textListCapture.stdout()).toContain("LAST SESSION");
+      expect(textListCapture.stdout()).toContain(workspace.id);
       expect(textListCapture.stdout()).toContain("~/caller/workspace");
       expect(textListCapture.stdout()).toContain("—");
       expect(textListCapture.stdout()).not.toContain(realWorkspacePath);
@@ -1676,9 +1681,9 @@ describe("Spark daemon CLI", () => {
         await expect(
           main(["ws", "show", "Spark Dev", "--no-service"], ambiguousCapture.io),
         ).resolves.toBe(1);
-        expect(ambiguousCapture.stderr()).toContain("Ambiguous workspace name");
-        expect(ambiguousCapture.stderr()).toContain("Spark Dev@http://127.0.0.1:5173/");
-        expect(ambiguousCapture.stderr()).toContain("Spark Dev@http://127.0.0.1:5174/");
+        expect(ambiguousCapture.stderr()).toContain("Ambiguous workspace: Spark Dev.");
+        expect(ambiguousCapture.stderr()).toContain("Use ");
+        expect(ambiguousCapture.stderr()).toMatch(/rtwb_/u);
 
         const showCapture = createCliIo();
         await expect(
@@ -2004,7 +2009,7 @@ describe("Spark daemon CLI", () => {
 
       const stopCapture = createCliIo();
       await expect(main(["ws", "stop", "--yes"], stopCapture.io)).resolves.toBe(1);
-      expect(stopCapture.stderr()).toContain("Pass a workspace name or --workspace <name>");
+      expect(stopCapture.stderr()).toContain("Pass a workspace id or --workspace <id>");
 
       const explicitStopCapture = createCliIo({
         startService: () => ({
@@ -2561,7 +2566,7 @@ describe("Spark daemon CLI", () => {
     await withTempSparkEnv(async () => {
       await expect(main(["ws", "reconcile"], capture.io)).resolves.toBe(1);
       expect(capture.stderr()).toContain(
-        "Usage: spark daemon workspace <register|relocate|access|ls|show|stop>",
+        "Usage: spark daemon workspace <register|relocate|ls|show|stop>",
       );
     });
   });

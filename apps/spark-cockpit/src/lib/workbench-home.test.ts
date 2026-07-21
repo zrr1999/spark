@@ -20,7 +20,7 @@ describe("workbench home workspace directory", () => {
     expect(page).not.toContain("manageConnections");
     expect(page).not.toContain('href="/login"');
     expect(layout).toContain("isWorkspaceDirectory");
-    expect(layout).toContain("skip remote session listing");
+    expect(layout).toContain("!isWorkspaceDirectory && activeWorkspaceId");
     expect(layout).not.toContain('href="/login"');
 
     const shell = readFileSync(join(root, "+layout.svelte"), "utf8");

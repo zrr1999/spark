@@ -85,7 +85,14 @@
       <div class="message-content">
         {#if item.title && item.title !== item.body}<h2>{item.title}</h2>{/if}
         {#each visibleParts as part, partIndex (`${item.id}:${part.type}:${partIndex}`)}
-          {#if part.type === "text"}
+          {#if part.type === "quote"}
+            <blockquote class="user-quote">
+              {#if part.senderLabel}
+                <span class="user-quote-sender">{part.senderLabel}</span>
+              {/if}
+              <p class="user-quote-text">{part.text}</p>
+            </blockquote>
+          {:else if part.type === "text"}
             {#if item.actor === "spark" || item.actor === "session"}
               <div class="assistant-content">
                 <AgentMdxStream source={part.text} streaming={part.streaming} />
@@ -281,6 +288,29 @@
     color: var(--color-ink-muted);
     font-size: 14px;
     line-height: 1.6;
+    margin: 0;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  .user-quote {
+    border-left: 3px solid var(--color-border);
+    color: var(--color-ink-subtle);
+    display: grid;
+    gap: 4px;
+    margin: 0 0 8px;
+    padding: 2px 0 2px 10px;
+  }
+
+  .user-quote-sender {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+
+  .user-quote-text {
+    font-size: 12px;
+    line-height: 1.5;
     margin: 0;
     overflow-wrap: anywhere;
     white-space: pre-wrap;

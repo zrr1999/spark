@@ -32,7 +32,11 @@ export interface SparkUserPaths {
   userAgentsSkillsDir: string;
   promptTemplatesDir: string;
   themesDir: string;
+  /** User memory tree root: `$dataRoot/memory`. */
+  memoryDir: string;
+  /** User learnings under the memory tree: `$dataRoot/memory/learnings`. */
   learningsDir: string;
+  /** User recall candidates: `$dataRoot/memory/recall-candidates.json`. */
   recallFile: string;
   memoryFile: string;
   agentDir: string;
@@ -128,8 +132,9 @@ export function resolveSparkUserPaths(options: ResolveSparkHomeOptions = {}): Sp
     userAgentsSkillsDir: join(home, ".agents", "skills"),
     promptTemplatesDir: join(configRoot, "prompts"),
     themesDir: join(configRoot, "themes"),
-    learningsDir: join(dataRoot, "learnings"),
-    recallFile: join(dataRoot, "recall-candidates.json"),
+    memoryDir: join(dataRoot, "memory"),
+    learningsDir: join(dataRoot, "memory", "learnings"),
+    recallFile: join(dataRoot, "memory", "recall-candidates.json"),
     memoryFile: join(dataRoot, "memory", "memory.json"),
     agentDir,
     keybindingsFile: join(agentDir, "keybindings.json"),

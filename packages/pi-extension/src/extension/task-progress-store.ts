@@ -1,4 +1,4 @@
-import type { TaskRef } from "@zendev-lab/spark-extension-api";
+import type { TaskRef } from "@zendev-lab/spark-core";
 import type { TaskGraph, TaskGraphStore } from "@zendev-lab/spark-tasks";
 
 export async function mergeTaskProgressIntoStore(

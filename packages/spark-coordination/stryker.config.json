@@ -1,0 +1,49 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "packageManager": "pnpm",
+  "testRunner": "vitest",
+  "plugins": ["@stryker-mutator/vitest-runner"],
+  "vitest": {
+    "configFile": "vitest.config.ts"
+  },
+  "mutator": {
+    "excludedMutations": ["StringLiteral"]
+  },
+  "ignorePatterns": ["reports", ".stryker-tmp"],
+  "reporters": ["clear-text", "progress", "html", "json"],
+  "htmlReporter": {
+    "fileName": "reports/mutation/index.html"
+  },
+  "jsonReporter": {
+    "fileName": "reports/mutation/mutation.json"
+  },
+  "incremental": true,
+  "incrementalFile": "reports/mutation/incremental.json",
+  "thresholds": {
+    "high": 90,
+    "low": 70,
+    "break": null
+  },
+  "timeoutMS": 20000,
+  "concurrency": 4,
+  "ignoreStatic": true,
+  "mutate": [
+    "src/agents-product.ts",
+    "src/approval-center.ts",
+    "src/artifact-cache.ts",
+    "src/cockpit-access.ts",
+    "src/cockpit-queries.ts",
+    "src/events.ts",
+    "src/liveness.ts",
+    "src/project-cockpit.ts",
+    "src/projection-services.ts",
+    "src/runtime-control.ts",
+    "src/runtime-model-channel-control.ts",
+    "src/runtime-registration.ts",
+    "src/runtime-session-control.ts",
+    "src/runtime-ws.ts",
+    "src/session-activity.ts",
+    "src/workspace-access.ts",
+    "src/workspace-identity.ts"
+  ]
+}

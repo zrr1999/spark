@@ -15,6 +15,8 @@ import {
   channelIngressIdempotencyKey,
   createChannelIngressController,
   createDaemonChannelIngressRuntime,
+  enrichInboundMessageReferenceFromSession,
+  findChannelMessagePreviewById,
   loadDaemonChannelsConfig,
   migrateLegacyChannelsConfig,
   workspaceChannelsConfigPath,
@@ -417,6 +419,11 @@ describe("channel ingress", () => {
           adapterId: "feishu",
           recipient: "oc_demo",
         },
+        channelContext: {
+          externalKey: "feishu:chat:oc_demo",
+          chatId: "oc_demo",
+          messageId: "m1",
+        },
       },
     ]);
     await expect(registry.get(session.sessionId)).resolves.toMatchObject({ status: "running" });
@@ -752,6 +759,63 @@ describe("channel ingress", () => {
       log.mockRestore();
     }
     await runtime.stop();
+  });
+});
+
+describe("channel quote enrichment", () => {
+  it("finds prior channel message text by platform messageId", () => {
+    expect(
+      findChannelMessagePreviewById(
+        [
+          {
+            version: 1,
+            id: "1",
+            role: "user",
+            text: "先说一声",
+            status: "done",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            metadata: { channel: { messageId: "m-old" } },
+          },
+          {
+            version: 1,
+            id: "2",
+            role: "assistant",
+            text: "收到",
+            status: "done",
+            createdAt: "2026-01-01T00:00:01.000Z",
+            metadata: { channel: { messageId: "m-bot" } },
+          },
+        ],
+        "m-bot",
+      ),
+    ).toBe("收到");
+  });
+
+  it("enriches inbound messageReference preview from session history", async () => {
+    const session = {
+      sessionId: "sess_quote",
+      status: "ready" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      scope: { kind: "workspace" as const, workspaceId: "ws" },
+      workspaceId: "ws",
+      bindings: [],
+      sessionPath: "/tmp/does-not-exist-for-enrich.jsonl",
+    };
+    const enriched = await enrichInboundMessageReferenceFromSession({
+      message: {
+        adapter: "qqbot",
+        externalKey: "qqbot:c2c:u1",
+        text: "继续",
+        messageId: "m-new",
+        messageReference: { messageId: "m-bot", source: "unknown" },
+      },
+      session,
+      sparkHome: "/tmp/spark-quote-enrich",
+      getSession: async () => session,
+    });
+    // Missing transcript leaves the reference intact without inventing preview.
+    expect(enriched.messageReference).toEqual({ messageId: "m-bot", source: "unknown" });
   });
 });
 

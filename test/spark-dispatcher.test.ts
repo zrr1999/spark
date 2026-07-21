@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   helpText,
@@ -8,7 +8,7 @@ import {
   runSparkDispatcher,
 } from "../apps/spark-cli/src/cli.ts";
 
-void test("parseSparkDispatcherArgs routes default, tui, daemon, cockpit, sessions, and print commands", () => {
+test("parseSparkDispatcherArgs routes default, tui, daemon, cockpit, sessions, and print commands", () => {
   assert.deepEqual(parseSparkDispatcherArgs([]), {
     kind: "dispatch",
     target: "tui",
@@ -84,7 +84,7 @@ void test("parseSparkDispatcherArgs routes default, tui, daemon, cockpit, sessio
   });
 });
 
-void test("parseSparkDispatcherArgs keeps help/version local and rejects unknown subcommands", () => {
+test("parseSparkDispatcherArgs keeps help/version local and rejects unknown subcommands", () => {
   assert.deepEqual(parseSparkDispatcherArgs(["--help"]), { kind: "help" });
   assert.deepEqual(parseSparkDispatcherArgs(["version"]), { kind: "version" });
   const command = parseSparkDispatcherArgs(["build", "this"]);
@@ -93,7 +93,7 @@ void test("parseSparkDispatcherArgs keeps help/version local and rejects unknown
   assert.match(command.kind === "error" ? command.message : "", /spark tui build this/u);
 });
 
-void test("spark paths reports one SPARK_HOME without dispatching or writing", async () => {
+test("spark paths reports one SPARK_HOME without dispatching or writing", async () => {
   const previousSparkHome = process.env.SPARK_HOME;
   const root = `/tmp/spark-paths-${process.pid}-${Date.now()}`;
   const stdout: string[] = [];
@@ -137,13 +137,13 @@ void test("spark paths reports one SPARK_HOME without dispatching or writing", a
   }
 });
 
-void test("dispatcher resolves daemon plane through spark-tui adapter", () => {
+test("dispatcher resolves daemon plane through spark-tui adapter", () => {
   const command = resolveTargetCommand("daemon");
   assert.match(command.command, /spark-tui(?:$|\/bin\/spark-tui$)/u);
   assert.deepEqual(command.args, ["daemon"]);
 });
 
-void test("runSparkDispatcher invokes injected launcher with the selected target", async () => {
+test("runSparkDispatcher invokes injected launcher with the selected target", async () => {
   const calls: Array<{ target: string; argv: string[] }> = [];
   const code = await runSparkDispatcher(
     ["daemon", "workspace", "ls"],
@@ -160,7 +160,7 @@ void test("runSparkDispatcher invokes injected launcher with the selected target
   assert.deepEqual(calls, [{ target: "daemon", argv: ["workspace", "ls"] }]);
 });
 
-void test("runSparkDispatcher fails fast for non-TTY TUI while preserving headless shims", async () => {
+test("runSparkDispatcher fails fast for non-TTY TUI while preserving headless shims", async () => {
   const stderr: string[] = [];
   const calls: Array<{ target: string; argv: string[] }> = [];
   const io = {
@@ -199,7 +199,7 @@ void test("runSparkDispatcher fails fast for non-TTY TUI while preserving headle
   ]);
 });
 
-void test("runSparkDispatcher generates a daemon session id for spark bg", async () => {
+test("runSparkDispatcher generates a daemon session id for spark bg", async () => {
   const calls: Array<{ target: string; argv: string[] }> = [];
   const code = await runSparkDispatcher(
     ["bg", "ship", "it"],
@@ -221,7 +221,7 @@ void test("runSparkDispatcher generates a daemon session id for spark bg", async
   assert.deepEqual(calls[0]?.argv.slice(3), ["ship", "it"]);
 });
 
-void test("runSparkDispatcher renders help and unknown-command diagnostics without dispatching", async () => {
+test("runSparkDispatcher renders help and unknown-command diagnostics without dispatching", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const launcher = {

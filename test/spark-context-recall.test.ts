@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
-import { registerPiContextTool } from "@zendev-lab/spark-context/extension";
-import { registerPiRecallTool } from "@zendev-lab/spark-recall/extension";
+import { registerSparkContextTool } from "@zendev-lab/spark-context/extension";
+import { registerSparkMemoryTool } from "@zendev-lab/spark-memory/extension";
 
 type ToolResult = {
   content: Array<{ type: "text"; text: string }>;
@@ -29,9 +29,9 @@ interface ToolConfig {
   ): Promise<ToolResult>;
 }
 
-void test("context tool lists and previews registered providers within budgets", async () => {
+test("context tool lists and previews registered providers within budgets", async () => {
   const tools = new Map<string, ToolConfig>();
-  registerPiContextTool(
+  registerSparkContextTool(
     { registerTool: (config) => tools.set(config.name, config as ToolConfig) },
     {
       providers: [
@@ -74,18 +74,20 @@ void test("context tool lists and previews registered providers within budgets",
   );
 });
 
-void test("recall tool records, searches, lists, and rejects explicit scoped candidates", async () => {
+test("memory kind=candidate records, searches, lists, and rejects scoped candidates", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-recall-tool-"));
   try {
     const tools = new Map<string, ToolConfig>();
-    registerPiRecallTool({
+    registerSparkMemoryTool({
       registerTool: (config) => tools.set(config.name, config as ToolConfig),
+      getAllTools: () => [...tools.keys()].map((name) => ({ name })),
     });
 
     const recorded = await executeTool(
       tools,
-      "recall",
+      "memory",
       {
+        kind: "candidate",
         action: "record_candidate",
         scope: "workspace",
         text: "Prefer explicit candidate recall over automatic memory writes.",
@@ -100,24 +102,24 @@ void test("recall tool records, searches, lists, and rejects explicit scoped can
 
     const searched = await executeTool(
       tools,
-      "recall",
-      { action: "search", scope: "workspace", query: "candidate recall" },
+      "memory",
+      { kind: "candidate", action: "search", scope: "workspace", query: "candidate recall" },
       dir,
     );
     assert.match(toolText(searched), /explicit candidate recall/);
 
     const rejected = await executeTool(
       tools,
-      "recall",
-      { action: "reject", scope: "workspace", id, reason: "No longer needed." },
+      "memory",
+      { kind: "candidate", action: "reject", scope: "workspace", id, reason: "No longer needed." },
       dir,
     );
     assert.match(toolText(rejected), /Rejected recall candidate/);
 
     const listed = await executeTool(
       tools,
-      "recall",
-      { action: "list", scope: "workspace", includeRejected: true },
+      "memory",
+      { kind: "candidate", action: "list", scope: "workspace", includeRejected: true },
       dir,
     );
     assert.match(toolText(listed), /\[rejected\]/);
@@ -126,20 +128,24 @@ void test("recall tool records, searches, lists, and rejects explicit scoped can
   }
 });
 
-void test("recall tool uses injected host-owned store paths", async () => {
+test("memory kind=candidate uses injected host-owned store paths", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-recall-paths-"));
   try {
     const explicitPath = join(dir, "recall", "workspace.json");
     const tools = new Map<string, ToolConfig>();
-    registerPiRecallTool(
-      { registerTool: (config) => tools.set(config.name, config as ToolConfig) },
-      { storePaths: { workspace: explicitPath } },
+    registerSparkMemoryTool(
+      {
+        registerTool: (config) => tools.set(config.name, config as ToolConfig),
+        getAllTools: () => [...tools.keys()].map((name) => ({ name })),
+      },
+      { recallStorePaths: { workspace: explicitPath } },
     );
 
     await executeTool(
       tools,
-      "recall",
+      "memory",
       {
+        kind: "candidate",
         action: "record_candidate",
         scope: "workspace",
         text: "Use a host-owned recall store path.",
@@ -152,9 +158,12 @@ void test("recall tool uses injected host-owned store paths", async () => {
       candidates?: Array<{ text?: string }>;
     };
     assert.equal(stored.candidates?.[0]?.text, "Use a host-owned recall store path.");
-    await assert.rejects(() => readFile(join(dir, ".spark", "recall-candidates.json"), "utf8"), {
-      code: "ENOENT",
-    });
+    await assert.rejects(
+      () => readFile(join(dir, ".spark", "memory", "recall-candidates.json"), "utf8"),
+      {
+        code: "ENOENT",
+      },
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -35,7 +35,8 @@
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint . && vp test run",
-    "test": "vp test run"
+    "test": "vp test run",
+    "test:mutation": "stryker run"
   },
   "dependencies": {
     "@zendev-lab/spark-protocol": "workspace:*",
@@ -44,6 +45,8 @@
     "ws": "catalog:"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "catalog:",
+    "@stryker-mutator/vitest-runner": "catalog:",
     "@types/ws": "catalog:",
     "@zendev-lab/spark-db": "workspace:*",
     "typescript": "catalog:",

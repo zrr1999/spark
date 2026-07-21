@@ -1,4 +1,4 @@
-import type { RunRef } from "@zendev-lab/spark-extension-api";
+import type { RunRef } from "@zendev-lab/spark-core";
 
 export function compactInline(value: string): string {
   const normalized = value.replace(/\s+/gu, " ").trim();

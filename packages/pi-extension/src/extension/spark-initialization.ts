@@ -2,8 +2,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
-import { detectCopyLanguage } from "@zendev-lab/spark-extension-api";
-import type { CopyLanguage } from "@zendev-lab/spark-extension-api";
+import { detectCopyLanguage } from "@zendev-lab/spark-core";
+import type { CopyLanguage } from "@zendev-lab/spark-core";
 import { builtinRoleRef } from "@zendev-lab/spark-roles";
 import {
   newRef,
@@ -13,7 +13,7 @@ import {
   type JsonValue,
   type SparkRunTrace,
   type ProjectRef,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import { defaultTaskGraphStore, TaskGraph, type TaskTodoSummary } from "@zendev-lab/spark-tasks";
 import { pathExists, readActiveSparkMd, shouldMaterializeSparkMd } from "./spark-activation.ts";
 import {

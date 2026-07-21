@@ -1,7 +1,7 @@
 import { error as httpError, fail, redirect } from "@sveltejs/kit";
 import { createId } from "@zendev-lab/spark-protocol";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
-import { titleFromPrompt } from "$lib/server/agents-product";
+import { titleFromPrompt } from "@zendev-lab/spark-coordination/agents-product";
 import {
   cancelConversationTurnForCockpit,
   submitConversationTurnForCockpit,
@@ -55,7 +55,13 @@ export async function _loadSessionsPage(
   const workspaceId = parentData.activeWorkspace?.id ?? null;
   const modelControl = workspaceId
     ? parentData.sessionControlAvailable
-      ? await loadModelControlForCockpit({ workspaceId })
+      ? await loadProjectedModelControlForCockpit({ workspaceId }).then(async (projected) =>
+          projected.available
+            ? projected
+            : loadModelControlForCockpit({ workspaceId }).then((control) =>
+                control.available ? control : projected,
+              ),
+        )
       : await loadProjectedModelControlForCockpit({ workspaceId })
     : { available: false, snapshot: { providers: [], diagnostics: [] } };
   return {

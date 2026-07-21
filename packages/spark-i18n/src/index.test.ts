@@ -151,6 +151,7 @@ describe("Cockpit dictionaries", () => {
     expect(zh.layout.nav.models).toBe("模型服务商");
     expect(zh.console.nav.registration).toBe("工作空间连接");
     expect(zh.console.navGroups.daemon).toBe("守护进程");
+    expect(zh.console.openCockpitSettings).toBe("控制平面设置");
     expect(zh.modelSettings.title).toBe("模型服务商");
     expect(zh.settings.enrollment.title).toBe("工作空间连接");
     expect(en.modelSettings.actions.defaultUpdated).toBe("Default model updated.");

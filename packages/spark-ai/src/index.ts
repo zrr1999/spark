@@ -987,8 +987,15 @@ function chooseFailureClass(input: NormalizedProviderFailure): FailureClass {
     return "auth";
   }
   if (input.status === 429) return "rate_limit";
-  if (/rate limit|too many requests|quota exceeded|insufficient quota/u.test(text))
+  // Cursor/OpenAI-style codes use underscores (`rate_limit_exceeded`) and often
+  // report account concurrency as a rate limit rather than a hard failure.
+  if (
+    /rate[_\s-]?limit|too many requests|quota exceeded|insufficient quota|concurrency limit|please retry later/u.test(
+      text,
+    )
+  ) {
     return "rate_limit";
+  }
   if (input.status && (input.status === 408 || input.status === 409 || input.status >= 500)) {
     return "transient";
   }
@@ -1351,8 +1358,8 @@ export {
   OPENAI_CODEX_PROVIDER_ID,
   default as registerOpenAICodexProvider,
 } from "./openai-codex-provider.ts";
-export { piAiProviderConfig, registerPiAiProvider } from "./pi-provider-adapter.ts";
-export type { PiProviderAdapterOptions } from "./pi-provider-adapter.ts";
+export { piAiProviderConfig, registerSparkAiProvider } from "./spark-provider-adapter.ts";
+export type { SparkProviderAdapterOptions } from "./spark-provider-adapter.ts";
 export {
   CURSOR_API_KEY_ENV,
   CURSOR_PROVIDER_API,

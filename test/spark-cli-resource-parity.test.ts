@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   SparkAgentSession,
@@ -13,7 +13,7 @@ import {
 } from "../apps/spark-tui/src/index.ts";
 import { loadSparkConfig } from "../apps/spark-tui/src/host/config.ts";
 
-void test("Spark resource manager installs, lists, updates, and removes local packages", async () => {
+test("Spark resource manager installs, lists, updates, and removes local packages", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-resource-parity-"));
   const configPath = join(dir, "config.json");
   const packageRoot = join(dir, "packages");
@@ -74,7 +74,7 @@ void test("Spark resource manager installs, lists, updates, and removes local pa
   }
 });
 
-void test("Spark resource manager records npm and git installs through explicit command runners", async () => {
+test("Spark resource manager records npm and git installs through explicit command runners", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-resource-package-runners-"));
   const configPath = join(dir, "config.json");
   const packageRoot = join(dir, "packages");
@@ -132,7 +132,7 @@ void test("Spark resource manager records npm and git installs through explicit 
   }
 });
 
-void test("spark-tui app exports native SDK building blocks", () => {
+test("spark-tui app exports native SDK building blocks", () => {
   assert.equal(typeof SparkHostRuntime, "function");
   assert.equal(typeof SparkAgentSession, "function");
   assert.equal(typeof handleSparkRpcLine, "function");

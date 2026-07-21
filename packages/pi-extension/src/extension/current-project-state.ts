@@ -4,7 +4,13 @@ import {
   DEFAULT_READY_TASK_MAX_CONCURRENCY,
   type ProjectRef,
   type TaskRef,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
+import {
+  legacyCurrentProjectStorePath,
+  rebuildSessionIndex,
+  sessionStateStorePath,
+  type SparkSessionContext,
+} from "@zendev-lab/spark-loop";
 import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import {
   normalizeCurrentProjectStoreSnapshot,
@@ -13,12 +19,6 @@ import {
   type SparkRunStrategy,
 } from "./current-project-state-schema.ts";
 import { readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
-import {
-  legacyCurrentProjectStorePath,
-  rebuildSessionIndex,
-  sessionStateStorePath,
-} from "./session-directory-store.ts";
-import type { SparkSessionContext } from "./session-identity.ts";
 
 export type {
   CurrentProjectStoreSnapshot,

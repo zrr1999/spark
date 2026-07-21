@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { truncateToWidth } from "@zendev-lab/spark-tui/text";
-import type { ExtensionRoleRunner } from "@zendev-lab/spark-extension-api";
+import type { ExtensionRoleRunner } from "@zendev-lab/spark-core";
 import { Type } from "typebox";
 import {
   createDefaultRoleRegistry,
@@ -25,11 +25,11 @@ import {
   type WritableRoleSource,
 } from "./index.ts";
 
-export interface PiRolesExtensionApi {
-  registerTool(config: PiRolesToolConfig): void;
+export interface SparkRolesHostApi {
+  registerTool(config: SparkRolesToolConfig): void;
 }
 
-interface PiRolesToolConfig {
+interface SparkRolesToolConfig {
   name: string;
   label?: string;
   description: string;
@@ -47,7 +47,7 @@ interface PiRolesToolConfig {
     onUpdate: (update: { content: Array<{ type: "text"; text: string }> }) => void,
     ctx: {
       cwd?: string;
-      model?: PiRolesSessionModel;
+      model?: SparkRolesSessionModel;
       runRole?: ExtensionRoleRunner;
       ui?: {
         notify?: (message: string, level?: string) => void;
@@ -60,7 +60,7 @@ interface PiRolesToolConfig {
   }>;
 }
 
-interface PiRolesSessionModel {
+interface SparkRolesSessionModel {
   provider?: unknown;
   id?: unknown;
 }
@@ -96,12 +96,12 @@ export interface CallRoleToolParams {
   model?: string;
 }
 
-export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
-  const roleActionTools = new Map<string, PiRolesToolConfig>();
-  const registerRoleActionTool = (config: PiRolesToolConfig): void => {
+export function registerSparkRolesTools(pi: SparkRolesHostApi): void {
+  const roleActionTools = new Map<string, SparkRolesToolConfig>();
+  const registerRoleActionTool = (config: SparkRolesToolConfig): void => {
     roleActionTools.set(config.name, config);
   };
-  const registerPublicRoleTool = (config: PiRolesToolConfig): void => {
+  const registerPublicRoleTool = (config: SparkRolesToolConfig): void => {
     roleActionTools.set(config.name, config);
     pi.registerTool(config);
   };
@@ -135,7 +135,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       );
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const cwd = requiredPiRolesCwd(ctx, "list_roles");
+      const cwd = requiredSparkRolesCwd(ctx, "list_roles");
       const includeUser = normalizeOptionalBoolean(
         params.includeUser,
         false,
@@ -184,7 +184,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       );
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const cwd = requiredPiRolesCwd(ctx, "get_role");
+      const cwd = requiredSparkRolesCwd(ctx, "get_role");
       const registry = createDefaultRoleRegistry();
       const includeUser = normalizeOptionalBoolean(
         params.includeUser,
@@ -239,7 +239,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       );
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const cwd = requiredPiRolesCwd(ctx, "create_role");
+      const cwd = requiredSparkRolesCwd(ctx, "create_role");
       rejectRoleSpecModelFields(params, "create_role");
       const source = normalizeWritableRoleSource(params.source);
       const proposal: RoleSpecProposal = {
@@ -308,7 +308,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
     },
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const p = normalizeCallRoleToolParams(params);
-      const cwd = p.cwd ?? requiredPiRolesCwd(ctx, "call_role");
+      const cwd = p.cwd ?? requiredSparkRolesCwd(ctx, "call_role");
       const registry = createDefaultRoleRegistry();
       await hydrateDefaultRoleRegistry(registry, cwd, { includeUser: p.includeUser });
       const role = registry.select(p.role);
@@ -399,7 +399,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       );
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const cwd = requiredPiRolesCwd(ctx, "role model_list");
+      const cwd = requiredSparkRolesCwd(ctx, "role model_list");
       const source = normalizeOptionalRoleModelSettingsSource(
         params.source,
         "role model_list source",
@@ -429,7 +429,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       return renderToolCall("role_model_get", [formatStringArg(args.role)], theme);
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const cwd = requiredPiRolesCwd(ctx, "role model_get");
+      const cwd = requiredSparkRolesCwd(ctx, "role model_get");
       const role = await selectRoleForModelAction(cwd, params, "role model_get");
       const resolved = await resolveRoleModelForRole(cwd, role);
       const text = resolved
@@ -461,7 +461,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       );
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const cwd = requiredPiRolesCwd(ctx, "role model_set");
+      const cwd = requiredSparkRolesCwd(ctx, "role model_set");
       const role = await selectRoleForModelAction(cwd, params, "role model_set");
       const model = normalizeRequiredString(params.model, "role model_set model");
       await validateRoleModel({
@@ -497,7 +497,7 @@ export function registerPiRolesTools(pi: PiRolesExtensionApi): void {
       );
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const cwd = requiredPiRolesCwd(ctx, "role model_delete");
+      const cwd = requiredSparkRolesCwd(ctx, "role model_delete");
       const role = await selectRoleForModelAction(cwd, params, "role model_delete");
       const source = normalizeRoleModelSettingsSource(params.source, "role model_delete source");
       const store = roleModelSettingsStoreForSource(cwd, source);
@@ -693,12 +693,12 @@ function rejectRoleSpecModelFields(params: Record<string, unknown>, toolName: st
   }
 }
 
-function requiredPiRolesCwd(ctx: { cwd?: string }, toolName: string): string {
+function requiredSparkRolesCwd(ctx: { cwd?: string }, toolName: string): string {
   if (typeof ctx.cwd === "string" && ctx.cwd.trim()) return ctx.cwd;
   throw new Error(`${toolName} requires ctx.cwd or an explicit cwd parameter.`);
 }
 
-function sessionModelName(model: PiRolesSessionModel | undefined): string | undefined {
+function sessionModelName(model: SparkRolesSessionModel | undefined): string | undefined {
   const provider = typeof model?.provider === "string" ? model.provider.trim() : "";
   const id = typeof model?.id === "string" ? model.id.trim() : "";
   return provider && id ? `${provider}/${id}` : undefined;
@@ -1046,6 +1046,6 @@ function tailText(value: string, maxLength: number): string {
   return `…${value.slice(value.length - maxLength)}`;
 }
 
-export default function piRolesExtension(pi: PiRolesExtensionApi): void {
-  registerPiRolesTools(pi);
+export default function piRolesExtension(pi: SparkRolesHostApi): void {
+  registerSparkRolesTools(pi);
 }

@@ -5,7 +5,7 @@ import type {
   TaskRef,
   TaskStatus,
   ProjectRef,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import type {
   WorkflowRunAcknowledgeResult,
   WorkflowRunControlStatus,

@@ -2,6 +2,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { stdin as processStdin, stdout as processStdout } from "node:process";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
 import { sparkTuiCliStrings, sparkTuiPiParityStrings } from "@zendev-lab/spark-i18n/cli";
@@ -986,6 +987,14 @@ export async function runSparkCli(
         kind: "interactive",
         displayName: tuiCliStrings.interactiveDisplayName,
         metadata: { surface: "tui" },
+        onLeaseTransferPrompt: async (transfer) => {
+          console.error(
+            `\nLease transfer requested for “${transfer.workspaceDisplayName}” → ${transfer.targetServerUrl}`,
+          );
+          console.error("Accept within 30s or it auto-authorizes. [y] transfer / [n] keep");
+          const answer = await readLeaseTransferAnswer();
+          return answer;
+        },
       });
       try {
         const createHostServices = options.createHostServices ?? createSparkCliHostServices;
@@ -1804,6 +1813,19 @@ function writeRpc(value: Record<string, unknown>): void {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function readLeaseTransferAnswer(): Promise<"accept" | "reject" | void> {
+  if (!processStdin.isTTY) return undefined;
+  const rl = createInterface({ input: processStdin, output: processStdout });
+  try {
+    const line = (await rl.question("> ")).trim().toLowerCase();
+    if (line === "y" || line === "yes" || line === "accept" || line === "transfer") return "accept";
+    if (line === "n" || line === "no" || line === "reject" || line === "deny") return "reject";
+    return undefined;
+  } finally {
+    rl.close();
+  }
 }
 
 function printHelp(): void {

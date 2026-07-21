@@ -30,6 +30,7 @@ export {
   QqbotRequestTimeoutError,
   resolveQqbotApiBase,
   type QqbotApiClient,
+  type QqbotChannelMessage,
   type QqbotInteractionAckCode,
   type QqbotImageUploadSource,
   type QqbotMediaUploadResponse,
@@ -53,6 +54,7 @@ export {
 } from "./qqbot-policy.ts";
 export {
   createQqbotTransport,
+  enrichQqbotChannelQuotePreview,
   type QqbotGatewayCursor,
   type QqbotTransportOptions,
 } from "./qqbot-transport.ts";
@@ -168,6 +170,12 @@ export {
   parseChannelsConfig,
 } from "./registry.ts";
 export { FakeChannelTransport } from "./transport.ts";
+export {
+  mergeChannelMessageReference,
+  normalizeChannelMessageReference,
+  type ChannelMessageReference,
+  type ChannelMessageReferenceSource,
+} from "./message-reference.ts";
 export type {
   ChannelAdapter,
   ChannelAdapterConfig,

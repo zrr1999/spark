@@ -3,7 +3,7 @@ import {
   registerExtensionRole,
   type RoleSpec,
 } from "@zendev-lab/spark-roles";
-import type { ToolPolicy } from "@zendev-lab/spark-extension-api";
+import type { ToolPolicy } from "@zendev-lab/spark-core";
 import { Type } from "typebox";
 
 import {
@@ -16,9 +16,9 @@ import {
 } from "./graft-client.ts";
 
 const STATE_ENTRY = "spark-graft-state";
-export const PI_GRAFT_PATCHER_ROLE_ID = "patcher";
-export const PI_GRAFT_PATCHER_ROLE_REF = "role:extension-patcher";
-export const PI_GRAFT_PATCHER_ALLOWED_TOOLS = [
+export const SPARK_GRAFT_PATCHER_ROLE_ID = "patcher";
+export const SPARK_GRAFT_PATCHER_ROLE_REF = "role:extension-patcher";
+export const SPARK_GRAFT_PATCHER_ALLOWED_TOOLS = [
   "graft_help",
   "graft_init",
   "graft_status",
@@ -44,7 +44,7 @@ export const PI_GRAFT_PATCHER_ALLOWED_TOOLS = [
   "graft_repo",
   "graft_cli_exec",
 ] as const;
-type PiGraftToolName = (typeof PI_GRAFT_PATCHER_ALLOWED_TOOLS)[number];
+type SparkGraftToolName = (typeof SPARK_GRAFT_PATCHER_ALLOWED_TOOLS)[number];
 
 const GRAFT_READ_TOOL_POLICY = {
   effect: "read",
@@ -95,14 +95,14 @@ const GRAFT_TOOL_POLICIES = {
   graft_materialize: GRAFT_LOCAL_WRITE_TOOL_POLICY,
   graft_repo: GRAFT_LOCAL_WRITE_TOOL_POLICY,
   graft_cli_exec: GRAFT_UNKNOWN_TOOL_POLICY,
-} as const satisfies Record<PiGraftToolName, ToolPolicy>;
+} as const satisfies Record<SparkGraftToolName, ToolPolicy>;
 const GRAFT_REPO_ACTIONS = ["add", "list", "sync", "lock", "update"] as const;
 const DEFAULT_GRAFT_LIST_LIMIT = 10;
 const DEFAULT_GRAFT_DOCTOR_SAMPLE_LIMIT = 3;
 
-export function createPiGraftPatcherRoleSpec(): RoleSpec {
+export function createSparkGraftPatcherRoleSpec(): RoleSpec {
   return createExtensionRoleSpec({
-    id: PI_GRAFT_PATCHER_ROLE_ID,
+    id: SPARK_GRAFT_PATCHER_ROLE_ID,
     description:
       "Graft-owned patcher role for scratch/candidate/validation/materialization workflows.",
     systemPrompt: [
@@ -111,19 +111,19 @@ export function createPiGraftPatcherRoleSpec(): RoleSpec {
       "Do not edit the working tree directly; create or update Graft scratches, promote candidates, validate, and report candidate or patch refs with evidence.",
       "If the requested patch is ambiguous, underspecified, contradictory, or missing success criteria, stop and report the blocker upward instead of asking interactively or changing files.",
     ].join("\n"),
-    allowedTools: [...PI_GRAFT_PATCHER_ALLOWED_TOOLS],
+    allowedTools: [...SPARK_GRAFT_PATCHER_ALLOWED_TOOLS],
     origin: { kind: "extension", note: "spark-graft" },
   });
 }
 
-export interface PiGraftCurrentModel {
+export interface SparkGraftCurrentModel {
   id?: string;
   provider?: string;
 }
 
-export interface PiGraftSessionContext {
+export interface SparkGraftSessionContext {
   cwd?: string;
-  model?: PiGraftCurrentModel;
+  model?: SparkGraftCurrentModel;
   sessionManager?: {
     getBranch?: () => unknown[];
     getEntries?: () => unknown[];
@@ -131,7 +131,7 @@ export interface PiGraftSessionContext {
   };
 }
 
-export interface PiGraftToolContext extends PiGraftSessionContext {
+export interface SparkGraftToolContext extends SparkGraftSessionContext {
   cwd: string;
   ui?: {
     input?: (prompt: string, defaultValue?: string) => Promise<string | undefined>;
@@ -139,12 +139,12 @@ export interface PiGraftToolContext extends PiGraftSessionContext {
   };
 }
 
-export interface PiGraftToolResult {
+export interface SparkGraftToolResult {
   content: Array<{ type: "text"; text: string }>;
   details?: Record<string, unknown>;
 }
 
-export interface PiGraftToolDefinition {
+export interface SparkGraftToolDefinition {
   name: string;
   label: string;
   description: string;
@@ -159,28 +159,28 @@ export interface PiGraftToolDefinition {
   executionMode?: "sequential" | "parallel";
   renderCall?: (
     args: Record<string, unknown>,
-    theme: PiGraftToolRenderTheme,
+    theme: SparkGraftToolRenderTheme,
     context: unknown,
-  ) => PiGraftToolCallComponent;
+  ) => SparkGraftToolCallComponent;
   execute: (
     toolCallId: string,
     params: Record<string, unknown>,
     signal?: AbortSignal,
     onUpdate?: unknown,
-    ctx?: PiGraftToolContext,
-  ) => Promise<PiGraftToolResult>;
+    ctx?: SparkGraftToolContext,
+  ) => Promise<SparkGraftToolResult>;
 }
 
-export interface PiGraftToolRenderTheme {
+export interface SparkGraftToolRenderTheme {
   fg?: (color: string, text: string) => string;
   bold?: (text: string) => string;
 }
 
-export interface PiGraftToolCallComponent {
+export interface SparkGraftToolCallComponent {
   render(width: number): string[];
 }
 
-class PiGraftToolCallText implements PiGraftToolCallComponent {
+class SparkGraftToolCallText implements SparkGraftToolCallComponent {
   private readonly text: string;
 
   constructor(text: string) {
@@ -193,18 +193,18 @@ class PiGraftToolCallText implements PiGraftToolCallComponent {
   }
 }
 
-export interface PiGraftExtensionApi {
+export interface SparkGraftHostApi {
   on(
     event: "session_start",
-    handler: (event: unknown, ctx: PiGraftSessionContext) => unknown,
+    handler: (event: unknown, ctx: SparkGraftSessionContext) => unknown,
   ): void;
   on(event: string, handler: (event: unknown, ctx: unknown) => unknown): void;
-  registerTool(definition: PiGraftToolDefinition): void;
+  registerTool(definition: SparkGraftToolDefinition): void;
   appendEntry?: (customType: string, data?: unknown) => void;
 }
 
-function registerGraftTool(pi: PiGraftExtensionApi, definition: PiGraftToolDefinition): void {
-  const policy = GRAFT_TOOL_POLICIES[definition.name as PiGraftToolName];
+function registerGraftTool(pi: SparkGraftHostApi, definition: SparkGraftToolDefinition): void {
+  const policy = GRAFT_TOOL_POLICIES[definition.name as SparkGraftToolName];
   if (!policy) throw new Error(`missing canonical Graft tool policy for ${definition.name}`);
   pi.registerTool({ ...definition, policy });
 }
@@ -340,7 +340,7 @@ async function directCliJson(
   return { envelope, execution };
 }
 
-function restoreState(ctx: PiGraftSessionContext): ActiveGraftScratchState | undefined {
+function restoreState(ctx: SparkGraftSessionContext): ActiveGraftScratchState | undefined {
   const entries = ctx.sessionManager?.getBranch?.() ?? ctx.sessionManager?.getEntries?.() ?? [];
   let state: ActiveGraftScratchState | undefined;
   for (const entry of entries) {
@@ -383,7 +383,7 @@ function stateSummary(state: ActiveGraftScratchState | undefined): string {
   ].join("\n");
 }
 
-function registerState(pi: PiGraftExtensionApi, state: ActiveGraftScratchState | undefined): void {
+function registerState(pi: SparkGraftHostApi, state: ActiveGraftScratchState | undefined): void {
   pi.appendEntry?.(STATE_ENTRY, { state: state ?? null });
 }
 
@@ -551,7 +551,7 @@ function formatEnvelope(envelope: JsonRecord): string {
 function envelopeToolResult(
   envelope: JsonRecord,
   details: Record<string, unknown> = {},
-): PiGraftToolResult {
+): SparkGraftToolResult {
   return {
     content: [{ type: "text", text: formatEnvelope(envelope) }],
     details: { envelope, ...details },
@@ -941,7 +941,7 @@ function stateForCwd(
 }
 
 function toolCwd(
-  ctx: PiGraftToolContext | undefined,
+  ctx: SparkGraftToolContext | undefined,
   state: ActiveGraftScratchState | undefined,
   fallbackCwd: string | undefined,
 ): string {
@@ -1076,8 +1076,8 @@ function requireResultStringArray(result: unknown, context: string, field: strin
   return value;
 }
 
-export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
-  registerExtensionRole(createPiGraftPatcherRoleSpec());
+export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
+  registerExtensionRole(createSparkGraftPatcherRoleSpec());
 
   let activeState: ActiveGraftScratchState | undefined;
   let lastCwd: string | undefined;
@@ -1088,7 +1088,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
     return activeState;
   }
 
-  pi.on("session_start", (_event: unknown, ctx: PiGraftSessionContext) => {
+  pi.on("session_start", (_event: unknown, ctx: SparkGraftSessionContext) => {
     lastCwd = ctx.cwd;
     activeState = restoreState(ctx);
   });
@@ -1108,7 +1108,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const topic = optionalStringParam(params, "topic");
@@ -1145,7 +1145,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = optionalStringParam(params, "cwd") ?? toolCwd(ctx, activeState, lastCwd);
       const argv = ["--json", "workspace", "init"];
@@ -1168,7 +1168,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       _params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const state = stateForCwd(activeState, cwd);
@@ -1206,7 +1206,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const { envelope, execution } = await directCliJson(cwd, ["--json", "workspace", "ps"]);
@@ -1244,7 +1244,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const argv = ["--json", "workspace", "doctor"];
@@ -1278,7 +1278,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const base = optionalStringParam(params, "base");
@@ -1320,7 +1320,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const previousState = stateForCwd(activeState, cwd);
@@ -1364,7 +1364,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const previousState = stateForCwd(activeState, cwd);
@@ -1432,7 +1432,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       if (
         "oldText" in params ||
@@ -1487,7 +1487,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const previousState = stateForCwd(activeState, cwd);
@@ -1532,7 +1532,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const state = stateForCwd(activeState, cwd);
@@ -1566,7 +1566,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const state = stateForCwd(activeState, cwd);
@@ -1596,7 +1596,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const state = stateForCwd(activeState, cwd);
@@ -1630,7 +1630,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const lease = optionalStringParam(params, "lease");
@@ -1678,7 +1678,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const previousState = stateForCwd(activeState, cwd);
@@ -1739,7 +1739,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const state = stateForCwd(activeState, cwd);
@@ -1779,7 +1779,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const state = stateForCwd(activeState, cwd);
@@ -1820,7 +1820,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const state = stateForCwd(activeState, cwd);
@@ -1852,7 +1852,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const state = stateForCwd(activeState, cwd);
@@ -1885,7 +1885,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       if ("property" in params)
@@ -1918,7 +1918,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       if ("property" in params) throw new Error("graft_search property was renamed to constraint.");
@@ -1953,7 +1953,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const cwd = toolCwd(ctx, activeState, lastCwd);
       const state = stateForCwd(activeState, cwd);
@@ -2017,7 +2017,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const action = enumParam(params, "action", "list", GRAFT_REPO_ACTIONS);
       if ("cwd" in params && typeof params.cwd !== "string")
@@ -2061,7 +2061,7 @@ export function registerPiGraftExtension(pi: PiGraftExtensionApi): void {
       params: Record<string, unknown>,
       _signal?: AbortSignal,
       _onUpdate?: unknown,
-      ctx?: PiGraftToolContext,
+      ctx?: SparkGraftToolContext,
     ) {
       const argv = cliArgvParam(params);
       if ("cwd" in params && typeof params.cwd !== "string")
@@ -2079,13 +2079,13 @@ const GRAFT_TOOL_CALL_PATH_MAX_LENGTH = 60;
 function renderGraftToolCall(
   toolName: string,
   parts: Array<string | undefined>,
-  theme: PiGraftToolRenderTheme,
-): PiGraftToolCallComponent {
+  theme: SparkGraftToolRenderTheme,
+): SparkGraftToolCallComponent {
   const title =
     theme.fg?.("toolTitle", theme.bold?.(`${toolName} `) ?? `${toolName} `) ?? `${toolName} `;
   const renderedParts = parts.filter((part): part is string => Boolean(part));
   const renderedArgs = theme.fg?.("muted", renderedParts.join(" ")) ?? renderedParts.join(" ");
-  return new PiGraftToolCallText(`${title}${renderedArgs}`.trimEnd());
+  return new SparkGraftToolCallText(`${title}${renderedArgs}`.trimEnd());
 }
 
 function formatGraftStringArg(
@@ -2100,6 +2100,6 @@ function formatGraftStringArg(
   return `${options.prefix ?? ""}${rendered}`;
 }
 
-export default function piGraftExtension(pi: PiGraftExtensionApi): void {
-  registerPiGraftExtension(pi);
+export default function piGraftExtension(pi: SparkGraftHostApi): void {
+  registerSparkGraftExtension(pi);
 }

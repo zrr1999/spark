@@ -7,9 +7,12 @@ import {
   queueCommandForWorkspaceOwner,
   recordHumanRequestFromRuntime,
   recordHumanResponse,
-} from "./projection-services";
+} from "@zendev-lab/spark-coordination/projection-services";
 import { hashSecret } from "./auth";
-import { attachRuntimeWebSocket, authenticateRuntimeToken } from "./runtime-ws";
+import {
+  attachRuntimeWebSocket,
+  authenticateRuntimeToken,
+} from "@zendev-lab/spark-coordination/runtime-ws";
 import type { DatabaseSync } from "node:sqlite";
 import type { RawData } from "ws";
 
@@ -377,7 +380,7 @@ describe("runtime WebSocket handling", () => {
     const ownerBinding = db
       .prepare(
         `SELECT runtime_workspace_binding_id AS runtimeWorkspaceBindingId
-         FROM workspace_owner_bindings
+         FROM workspace_leases
          WHERE workspace_id = ?`,
       )
       .get(workspace.id) as { runtimeWorkspaceBindingId: string };

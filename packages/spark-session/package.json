@@ -19,15 +19,18 @@
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint . && vp test run",
-    "test": "vp test run"
+    "test": "vp test run",
+    "test:mutation": "stryker run"
   },
   "dependencies": {
-    "@zendev-lab/spark-extension-api": "workspace:^",
+    "@zendev-lab/spark-core": "workspace:^",
     "@zendev-lab/spark-protocol": "workspace:^",
     "@zendev-lab/spark-system": "workspace:^",
     "typebox": "catalog:"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "catalog:",
+    "@stryker-mutator/vitest-runner": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   },

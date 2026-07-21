@@ -14,7 +14,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import piFilesExtension, {
   truncateHead,
@@ -89,12 +89,12 @@ async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   }
 }
 
-void test("spark-files exposes one tool per file operation", () => {
+test("spark-files exposes one tool per file operation", () => {
   const tools = collectTools(piFilesExtension);
   assert.deepEqual([...tools.keys()].sort(), ["edit", "find", "grep", "ls", "read", "write"]);
 });
 
-void test("paginated reads reconstruct a version-consistent file without gaps", async () => {
+test("paginated reads reconstruct a version-consistent file without gaps", async () => {
   await withTempDir(async (dir) => {
     const read = collectTools(piFilesExtension).get("read")!;
     const lines = Array.from({ length: 8 }, (_, index) => `snapshot-line-${index + 1}`);
@@ -136,7 +136,7 @@ void test("paginated reads reconstruct a version-consistent file without gaps", 
   });
 });
 
-void test("read exposes model-visible version, anchors, and continuation", async () => {
+test("read exposes model-visible version, anchors, and continuation", async () => {
   await withTempDir(async (dir) => {
     const read = collectTools(piFilesExtension).get("read")!;
     const lines = Array.from({ length: 6 }, (_, index) => `line${index + 1}`);
@@ -163,7 +163,7 @@ void test("read exposes model-visible version, anchors, and continuation", async
   });
 });
 
-void test("read returns stable content versions and copyable anchors across windows", async () => {
+test("read returns stable content versions and copyable anchors across windows", async () => {
   await withTempDir(async (dir) => {
     const read = collectTools(piFilesExtension).get("read")!;
     const path = join(dir, "anchored.txt");
@@ -199,7 +199,7 @@ void test("read returns stable content versions and copyable anchors across wind
   });
 });
 
-void test("read reports BOM and CRLF metadata while rendering logical anchors", async () => {
+test("read reports BOM and CRLF metadata while rendering logical anchors", async () => {
   await withTempDir(async (dir) => {
     const read = collectTools(piFilesExtension).get("read")!;
     const path = join(dir, "windows.txt");
@@ -234,7 +234,7 @@ void test("read reports BOM and CRLF metadata while rendering logical anchors", 
   });
 });
 
-void test("read reports CR-only and mixed line endings with one logical-anchor format", async () => {
+test("read reports CR-only and mixed line endings with one logical-anchor format", async () => {
   await withTempDir(async (dir) => {
     const read = collectTools(piFilesExtension).get("read")!;
     const crOnly = "alpha\rbeta\rgamma\r";
@@ -276,7 +276,7 @@ void test("read reports CR-only and mixed line endings with one logical-anchor f
   });
 });
 
-void test("read reports a missing file as an error result", async () => {
+test("read reports a missing file as an error result", async () => {
   await withTempDir(async (dir) => {
     const read = collectTools(piFilesExtension).get("read")!;
     const result = await read.execute("c", { path: "missing.txt" }, undefined, noop, { cwd: dir });
@@ -285,7 +285,7 @@ void test("read reports a missing file as an error result", async () => {
   });
 });
 
-void test("read rejects invalid UTF-8 instead of returning replacement characters", async () => {
+test("read rejects invalid UTF-8 instead of returning replacement characters", async () => {
   await withTempDir(async (dir) => {
     const read = collectTools(piFilesExtension).get("read")!;
     await writeFile(join(dir, "binary.dat"), Buffer.from([0xff, 0xfe, 0x00]));
@@ -297,7 +297,7 @@ void test("read rejects invalid UTF-8 instead of returning replacement character
   });
 });
 
-void test("read truncates by line limit with a continuation notice", async () => {
+test("read truncates by line limit with a continuation notice", async () => {
   await withTempDir(async (dir) => {
     const read = collectTools(piFilesExtension).get("read")!;
     const total = DEFAULT_MAX_LINES + 50;
@@ -309,7 +309,7 @@ void test("read truncates by line limit with a continuation notice", async () =>
   });
 });
 
-void test("read applies the byte limit to the final anchored output", async () => {
+test("read applies the byte limit to the final anchored output", async () => {
   await withTempDir(async (dir) => {
     const read = collectTools(piFilesExtension).get("read")!;
     const lines = Array.from(
@@ -338,7 +338,7 @@ void test("read applies the byte limit to the final anchored output", async () =
   });
 });
 
-void test("write creates parent directories with a create-only precondition", async () => {
+test("write creates parent directories with a create-only precondition", async () => {
   await withTempDir(async (dir) => {
     const write = collectTools(piFilesExtension).get("write")!;
     const result = await write.execute(
@@ -357,7 +357,7 @@ void test("write creates parent directories with a create-only precondition", as
   });
 });
 
-void test("write atomically replaces an existing file and preserves its mode", async () => {
+test("write atomically replaces an existing file and preserves its mode", async () => {
   await withTempDir(async (dir) => {
     const tools = collectTools(piFilesExtension);
     const read = tools.get("read")!;
@@ -396,7 +396,7 @@ void test("write atomically replaces an existing file and preserves its mode", a
   });
 });
 
-void test("write refuses to replace a symbolic-link target", async () => {
+test("write refuses to replace a symbolic-link target", async () => {
   await withTempDir(async (dir) => {
     const write = collectTools(piFilesExtension).get("write")!;
     const target = join(dir, "target.txt");
@@ -420,7 +420,7 @@ void test("write refuses to replace a symbolic-link target", async () => {
   });
 });
 
-void test("atomic replacement detaches one hard-link name without mutating its sibling", async () => {
+test("atomic replacement detaches one hard-link name without mutating its sibling", async () => {
   await withTempDir(async (dir) => {
     const tools = collectTools(piFilesExtension);
     const read = tools.get("read")!;
@@ -459,7 +459,7 @@ void test("atomic replacement detaches one hard-link name without mutating its s
   });
 });
 
-void test("versioned write recovers from an external conflict after refreshing the snapshot", async () => {
+test("versioned write recovers from an external conflict after refreshing the snapshot", async () => {
   await withTempDir(async (dir) => {
     const tools = collectTools(piFilesExtension);
     const read = tools.get("read")!;
@@ -539,7 +539,7 @@ void test("versioned write recovers from an external conflict after refreshing t
   });
 });
 
-void test("write supports create-only expectedVersion for new files", async () => {
+test("write supports create-only expectedVersion for new files", async () => {
   await withTempDir(async (dir) => {
     const write = collectTools(piFilesExtension).get("write")!;
     const created = await write.execute(
@@ -565,7 +565,7 @@ void test("write supports create-only expectedVersion for new files", async () =
   });
 });
 
-void test("concurrent create-only writes commit exactly one file", async () => {
+test("concurrent create-only writes commit exactly one file", async () => {
   await withTempDir(async (dir) => {
     const write = collectTools(piFilesExtension).get("write")!;
     const results = await Promise.all(
@@ -588,7 +588,7 @@ void test("concurrent create-only writes commit exactly one file", async () => {
   });
 });
 
-void test("concurrent writes with one expectedVersion commit exactly one replacement", async () => {
+test("concurrent writes with one expectedVersion commit exactly one replacement", async () => {
   await withTempDir(async (dir) => {
     const tools = collectTools(piFilesExtension);
     const read = tools.get("read")!;
@@ -625,7 +625,7 @@ void test("concurrent writes with one expectedVersion commit exactly one replace
   });
 });
 
-void test("concurrent writes through a symlinked parent share one version lock", async () => {
+test("concurrent writes through a symlinked parent share one version lock", async () => {
   await withTempDir(async (dir) => {
     const tools = collectTools(piFilesExtension);
     const read = tools.get("read")!;
@@ -666,7 +666,7 @@ void test("concurrent writes through a symlinked parent share one version lock",
   });
 });
 
-void test("a queued write can be aborted without blocking the path mutex", async () => {
+test("a queued write can be aborted without blocking the path mutex", async () => {
   await withTempDir(async (dir) => {
     const write = collectTools(piFilesExtension).get("write")!;
     const first = write.execute(
@@ -695,7 +695,7 @@ void test("a queued write can be aborted without blocking the path mutex", async
   });
 });
 
-void test("edit applies multiple disjoint replacements and emits a diff", async () => {
+test("edit applies multiple disjoint replacements and emits a diff", async () => {
   await withTempDir(async (dir) => {
     const edit = collectTools(piFilesExtension).get("edit")!;
     await writeFile(join(dir, "code.ts"), "const a = 1;\nconst b = 2;\nconst c = 3;\n", "utf-8");
@@ -723,7 +723,7 @@ void test("edit applies multiple disjoint replacements and emits a diff", async 
   });
 });
 
-void test("edit rejects a direct symbolic-link target before reading it", async () => {
+test("edit rejects a direct symbolic-link target before reading it", async () => {
   await withTempDir(async (dir) => {
     const edit = collectTools(piFilesExtension).get("edit")!;
     const target = join(dir, "edit-target.txt");
@@ -746,7 +746,7 @@ void test("edit rejects a direct symbolic-link target before reading it", async 
   });
 });
 
-void test("edit rejects duplicate, missing, and overlapping edits", async () => {
+test("edit rejects duplicate, missing, and overlapping edits", async () => {
   await withTempDir(async (dir) => {
     const edit = collectTools(piFilesExtension).get("edit")!;
     await writeFile(join(dir, "dup.txt"), "x\nx\n", "utf-8");
@@ -791,7 +791,7 @@ void test("edit rejects duplicate, missing, and overlapping edits", async () => 
   });
 });
 
-void test("edit fuzzy-matches smart quotes and trailing whitespace", async () => {
+test("edit fuzzy-matches smart quotes and trailing whitespace", async () => {
   await withTempDir(async (dir) => {
     const edit = collectTools(piFilesExtension).get("edit")!;
     await writeFile(join(dir, "smart.txt"), "say \u201Chello\u201D now   \n", "utf-8");
@@ -807,7 +807,7 @@ void test("edit fuzzy-matches smart quotes and trailing whitespace", async () =>
   });
 });
 
-void test("ls lists alphabetically with directory suffixes", async () => {
+test("ls lists alphabetically with directory suffixes", async () => {
   await withTempDir(async (dir) => {
     const ls = collectTools(piFilesExtension).get("ls")!;
     await mkdir(join(dir, "subdir"));
@@ -818,7 +818,7 @@ void test("ls lists alphabetically with directory suffixes", async () => {
   });
 });
 
-void test("ls summarizes large directories when shorter", async () => {
+test("ls summarizes large directories when shorter", async () => {
   await withTempDir(async (dir) => {
     const ls = collectTools(piFilesExtension).get("ls")!;
     await mkdir(join(dir, "many"));
@@ -838,7 +838,7 @@ void test("ls summarizes large directories when shorter", async () => {
   });
 });
 
-void test("grep returns path:line: matches and respects .gitignore", async () => {
+test("grep returns path:line: matches and respects .gitignore", async () => {
   await withTempDir(async (dir) => {
     const grep = collectTools(piFilesExtension).get("grep")!;
     await writeFile(join(dir, ".gitignore"), "ignored.txt\n", "utf-8");
@@ -850,7 +850,7 @@ void test("grep returns path:line: matches and respects .gitignore", async () =>
   });
 });
 
-void test("grep groups large same-file match output with per-file overflow", async () => {
+test("grep groups large same-file match output with per-file overflow", async () => {
   await withTempDir(async (dir) => {
     const grep = collectTools(piFilesExtension).get("grep")!;
     await writeFile(
@@ -869,7 +869,7 @@ void test("grep groups large same-file match output with per-file overflow", asy
   });
 });
 
-void test("grep supports literal mode, context lines, and no-match", async () => {
+test("grep supports literal mode, context lines, and no-match", async () => {
   await withTempDir(async (dir) => {
     const grep = collectTools(piFilesExtension).get("grep")!;
     await writeFile(join(dir, "f.txt"), "a\nb.c\nd\n", "utf-8");
@@ -889,7 +889,7 @@ void test("grep supports literal mode, context lines, and no-match", async () =>
   });
 });
 
-void test("find groups large results by directory when shorter", async () => {
+test("find groups large results by directory when shorter", async () => {
   await withTempDir(async (dir) => {
     const find = collectTools(piFilesExtension).get("find")!;
     await mkdir(join(dir, "src"));
@@ -905,7 +905,7 @@ void test("find groups large results by directory when shorter", async () => {
   });
 });
 
-void test("find matches globs over a gitignore-aware walk", async () => {
+test("find matches globs over a gitignore-aware walk", async () => {
   await withTempDir(async (dir) => {
     const find = collectTools(piFilesExtension).get("find")!;
     await mkdir(join(dir, "src"));
@@ -924,11 +924,12 @@ void test("find matches globs over a gitignore-aware walk", async () => {
   });
 });
 
-void test("walkTree skips node_modules/.git and honors limit", async () => {
+test("walkTree skips node_modules/.git and honors limit", async () => {
   await withTempDir(async (dir) => {
+    // Directory names alone drive the hard skips; avoid writing under `.git/`
+    // (some environments refuse opens inside any `.git` path).
     await mkdir(join(dir, ".git"));
     await mkdir(join(dir, "node_modules"));
-    await writeFile(join(dir, ".git/config"), "", "utf-8");
     await writeFile(join(dir, "node_modules/x.js"), "", "utf-8");
     await writeFile(join(dir, "one.txt"), "", "utf-8");
     await writeFile(join(dir, "two.txt"), "", "utf-8");
@@ -938,14 +939,14 @@ void test("walkTree skips node_modules/.git and honors limit", async () => {
   });
 });
 
-void test("truncateHead reports first-line-exceeds-limit", () => {
+test("truncateHead reports first-line-exceeds-limit", () => {
   const big = "x".repeat(DEFAULT_MAX_BYTES + 10);
   const result = truncateHead(big);
   assert.equal(result.firstLineExceedsLimit, true);
   assert.equal(result.content, "");
 });
 
-void test("truncateHead preserves CR-only and mixed separators", () => {
+test("truncateHead preserves CR-only and mixed separators", () => {
   assert.deepEqual(truncateHead("one\rtwo\rthree", { maxLines: 2 }), {
     content: "one\rtwo",
     truncated: true,
@@ -965,13 +966,13 @@ void test("truncateHead preserves CR-only and mixed separators", () => {
   );
 });
 
-void test("truncateLine caps long lines", () => {
+test("truncateLine caps long lines", () => {
   const { text: capped, wasTruncated } = truncateLine("y".repeat(600));
   assert.equal(wasTruncated, true);
   assert.match(capped, /\.\.\. \[truncated\]$/);
 });
 
-void test("applyEditsToNormalizedContent + generateDiffString produce a line-numbered diff", () => {
+test("applyEditsToNormalizedContent + generateDiffString produce a line-numbered diff", () => {
   const { baseContent, newContent } = applyEditsToNormalizedContent(
     "a\nb\nc\n",
     [{ oldText: "b", newText: "B" }],

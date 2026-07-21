@@ -11,6 +11,7 @@ import {
   channelDeliveryFailureOutcome,
   channelDeliveryNotSent,
   channelDeliveryOutcomeUnknown,
+  normalizeChannelMessageReference,
 } from "@zendev-lab/spark-channels";
 import {
   CHANNEL_REPLY_TERMINAL_PRESENTED_ERROR_CODE,
@@ -710,6 +711,10 @@ function parseInboundPayload(value: unknown): InboundPayload {
       ...(optionalString(rawMessage.messageId)
         ? { messageId: optionalString(rawMessage.messageId) }
         : {}),
+      ...(() => {
+        const messageReference = normalizeChannelMessageReference(rawMessage.messageReference);
+        return messageReference ? { messageReference } : {};
+      })(),
       ...(optionalString(rawMessage.eventType)
         ? { eventType: optionalString(rawMessage.eventType) }
         : {}),

@@ -17,6 +17,7 @@ import { channelDeliveryNotSent, type ChannelDeliveryResult } from "./reply.ts";
 import { scheduledReconnectDelayWithJitter } from "./reconnect-delay.ts";
 import { renderTextChannelAskRequest } from "./text-ask.ts";
 import type { ChannelConnectionState, ChannelTransport, InfoflowAdapterConfig } from "./types.ts";
+import type { ChannelMessageReference } from "./message-reference.ts";
 
 export const DEFAULT_INFOFLOW_API_HOST = "https://api.im.baidu.com";
 /** Nykore/OpenClaw-aligned default gateway host for WS endpoint allocation. */
@@ -53,6 +54,7 @@ export type InfoflowNormalizedInbound = {
   chat_type: "private" | "group";
   chat_id?: string;
   message_id?: string;
+  message_reference?: ChannelMessageReference;
   event_type?: string;
   content_type?: string;
   attachments?: InfoflowAttachment[];
@@ -684,6 +686,7 @@ export function normalizeInfoflowSdkEvent(
       text,
       chat_type: "private",
       ...(messageId != null ? { message_id: scalarString(messageId) } : {}),
+      ...(content.messageReference ? { message_reference: content.messageReference } : {}),
       ...(eventType != null ? { event_type: scalarString(eventType) } : {}),
       ...(content.contentType ? { content_type: content.contentType } : {}),
       ...(content.attachments.length > 0 ? { attachments: content.attachments } : {}),
@@ -739,6 +742,7 @@ export function normalizeInfoflowSdkEvent(
       chat_type: "group",
       chat_id: groupId,
       ...(messageId != null ? { message_id: scalarString(messageId) } : {}),
+      ...(content.messageReference ? { message_reference: content.messageReference } : {}),
       ...(eventType != null ? { event_type: scalarString(eventType) } : {}),
       ...(content.contentType ? { content_type: content.contentType } : {}),
       ...(content.attachments.length > 0 ? { attachments: content.attachments } : {}),
@@ -808,6 +812,7 @@ export function normalizeInfoflowInbound(
     text,
     chat_type: "private",
     ...(messageId != null ? { message_id: scalarString(messageId) } : {}),
+    ...(content.messageReference ? { message_reference: content.messageReference } : {}),
     ...(eventType != null ? { event_type: scalarString(eventType) } : {}),
     ...(content.contentType ? { content_type: content.contentType } : {}),
     ...(content.attachments.length > 0 ? { attachments: content.attachments } : {}),

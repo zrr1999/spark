@@ -12,6 +12,8 @@
 import {
   channelDeliveryNotSent,
   ChannelRegistry,
+  mergeChannelMessageReference,
+  normalizeChannelMessageReference,
   parseChannelsConfig,
   type ChannelAdapterType,
   type ChannelAskRequest,
@@ -32,8 +34,14 @@ import {
   type IncomingMessage,
   type RoutedChannelInteractionEvent,
 } from "@zendev-lab/spark-channels";
-import { parseSparkAssignment, type SparkAssignment } from "@zendev-lab/spark-protocol";
-import { writePrivateFile } from "@zendev-lab/spark-system";
+import {
+  parseSparkAssignment,
+  type SparkAssignment,
+  type SparkMessageView,
+  type SparkSessionRegistryRecord,
+} from "@zendev-lab/spark-protocol";
+import { loadSparkSessionSnapshot } from "@zendev-lab/spark-session";
+import { resolveSparkPaths, writePrivateFile } from "@zendev-lab/spark-system";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -328,7 +336,7 @@ export function createChannelIngressController(input: {
   config: ChannelsConfig;
   hooks: ChannelIngressHooks;
   sessionRegistry?: Pick<DaemonSessionRegistry, "resolveBinding"> &
-    Partial<Pick<DaemonSessionRegistry, "recordTurnQueued" | "recordTurnSettled">>;
+    Partial<Pick<DaemonSessionRegistry, "get" | "recordTurnQueued" | "recordTurnSettled">>;
   workspaceId: string;
   createTransport?: ChannelRegistryOptions["createTransport"];
   createWorkspaceTransport?: DaemonChannelTransportFactory;
@@ -418,15 +426,21 @@ export function createChannelIngressController(input: {
         title: channelSessionTitle(message),
       },
     });
-    const channel = message.adapter;
-    const rawGoal = message.text.trim();
+    const enrichedMessage = await enrichInboundMessageReferenceFromSession({
+      message,
+      session,
+      getSession: sessionRegistry.get?.bind(sessionRegistry),
+      sparkHome: input.sparkHome,
+    });
+    const channel = enrichedMessage.adapter;
+    const rawGoal = enrichedMessage.text.trim();
     const assignment = parseSparkAssignment({
       goal: rawGoal,
       target: { sessionId: session.sessionId, workspaceId: input.workspaceId },
       source: {
         kind: "channel",
         channel,
-        ...(message.messageId ? { externalRef: message.messageId } : {}),
+        ...(enrichedMessage.messageId ? { externalRef: enrichedMessage.messageId } : {}),
       },
     });
     let admission: void | "duplicate";
@@ -438,9 +452,9 @@ export function createChannelIngressController(input: {
         source: {
           kind: "channel",
           channel,
-          ...(message.messageId ? { externalRef: message.messageId } : {}),
+          ...(enrichedMessage.messageId ? { externalRef: enrichedMessage.messageId } : {}),
         },
-        externalKey: message.externalKey,
+        externalKey: enrichedMessage.externalKey,
         adapterAccountIdentity: incomingAdapter.adapterAccountIdentity,
         channelReply: {
           workspaceId: input.workspaceId,
@@ -448,21 +462,23 @@ export function createChannelIngressController(input: {
           adapterId: incomingAdapter.adapterId,
           recipient: replyRecipient,
         },
-        ...(channel === "infoflow" || channel === "qqbot"
-          ? { channelContext: channelContextFromIncoming(message) }
-          : {}),
+        channelContext: channelContextFromIncoming(enrichedMessage),
       });
     } catch (error) {
       try {
         const target: ChannelReplyTarget = {
           recipient: replyRecipient,
-          ...(message.senderId?.trim() ? { senderId: message.senderId.trim() } : {}),
-          ...(message.messageId?.trim() ? { messageId: message.messageId.trim() } : {}),
+          ...(enrichedMessage.senderId?.trim()
+            ? { senderId: enrichedMessage.senderId.trim() }
+            : {}),
+          ...(enrichedMessage.messageId?.trim()
+            ? { messageId: enrichedMessage.messageId.trim() }
+            : {}),
           ...(rawGoal ? { preview: rawGoal.slice(0, 240) } : {}),
         };
         const deliveryIdentity = channelFailureReplyDeliveryId(
           {
-            ...message,
+            ...enrichedMessage,
             adapterId: incomingAdapter.adapterId,
             adapterAccountIdentity: incomingAdapter.adapterAccountIdentity,
           },
@@ -752,6 +768,7 @@ function channelContextFromIncoming(message: IncomingMessage): SparkDaemonChanne
     ...(message.senderName?.trim() ? { senderName: message.senderName.trim() } : {}),
     ...(message.chatId?.trim() ? { chatId: message.chatId.trim() } : {}),
     ...(message.messageId?.trim() ? { messageId: message.messageId.trim() } : {}),
+    ...(message.messageReference ? { messageReference: message.messageReference } : {}),
     ...(message.eventType?.trim() ? { eventType: message.eventType.trim() } : {}),
     ...(message.contentType?.trim() ? { contentType: message.contentType.trim() } : {}),
     ...(message.attachments?.length ? { attachments: message.attachments } : {}),
@@ -761,6 +778,72 @@ function channelContextFromIncoming(message: IncomingMessage): SparkDaemonChanne
       : {}),
     ...(typeof message.mentionedSelf === "boolean" ? { mentionedSelf: message.mentionedSelf } : {}),
   };
+}
+
+export async function enrichInboundMessageReferenceFromSession(input: {
+  message: IncomingMessage;
+  session: SparkSessionRegistryRecord;
+  getSession?: (sessionId: string) => Promise<SparkSessionRegistryRecord | undefined>;
+  sparkHome: string;
+}): Promise<IncomingMessage> {
+  const reference = normalizeChannelMessageReference(input.message.messageReference);
+  if (!reference?.messageId?.trim() || reference.preview?.trim()) {
+    return reference && reference !== input.message.messageReference
+      ? { ...input.message, messageReference: reference }
+      : input.message;
+  }
+  try {
+    const record =
+      (input.getSession ? await input.getSession(input.session.sessionId) : undefined) ??
+      input.session;
+    const paths = resolveSparkPaths({ app: "daemon", sparkHome: input.sparkHome });
+    const sessionsRoot = paths.piAgentDir
+      ? join(paths.piAgentDir, "sessions")
+      : join(input.sparkHome, "sessions");
+    const snapshot = await loadSparkSessionSnapshot({
+      sessionsRoot,
+      session: record,
+    });
+    const preview = findChannelMessagePreviewById(snapshot.messages, reference.messageId);
+    if (!preview) return { ...input.message, messageReference: reference };
+    return {
+      ...input.message,
+      messageReference: mergeChannelMessageReference(reference, {
+        ...reference,
+        preview,
+        source: "session",
+      }),
+    };
+  } catch {
+    return { ...input.message, messageReference: reference };
+  }
+}
+
+export function findChannelMessagePreviewById(
+  messages: readonly SparkMessageView[],
+  platformMessageId: string,
+): string | undefined {
+  const target = platformMessageId.trim();
+  if (!target) return undefined;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message) continue;
+    const channel =
+      message.metadata &&
+      typeof message.metadata === "object" &&
+      !Array.isArray(message.metadata) &&
+      "channel" in message.metadata &&
+      message.metadata.channel &&
+      typeof message.metadata.channel === "object" &&
+      !Array.isArray(message.metadata.channel)
+        ? (message.metadata.channel as Record<string, unknown>)
+        : undefined;
+    if (typeof channel?.messageId === "string" && channel.messageId.trim() === target) {
+      const text = message.text.trim();
+      if (text) return text;
+    }
+  }
+  return undefined;
 }
 
 function channelReplyRecipient(message: IncomingMessage): string | undefined {
@@ -812,7 +895,8 @@ type WorkspaceSlot = {
 export function createDaemonChannelIngressRuntime(input: {
   sparkHome: string;
   hooks: ChannelIngressHooks;
-  sessionRegistry?: Pick<DaemonSessionRegistry, "resolveBinding">;
+  sessionRegistry?: Pick<DaemonSessionRegistry, "resolveBinding"> &
+    Partial<Pick<DaemonSessionRegistry, "get">>;
   /** @deprecated Ignored; pass workspaceId to status/configure/reload/notify. */
   workspaceId?: string;
   createTransport?: ChannelRegistryOptions["createTransport"];

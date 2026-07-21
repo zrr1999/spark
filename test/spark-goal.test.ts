@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
-import { test } from "node:test";
+import { test } from "vitest";
 
 import {
   compactContinuationPrompt,
@@ -12,7 +12,7 @@ import {
   validateObjective,
 } from "@zendev-lab/spark-loop";
 
-void test("spark-loop package owns goal primitives and stays isolated from workflow packages", async () => {
+test("spark-loop package owns goal primitives and stays isolated from workflow packages", async () => {
   const pkg = JSON.parse(await readFile("packages/spark-loop/package.json", "utf8")) as {
     dependencies?: Record<string, string>;
   };
@@ -35,7 +35,7 @@ void test("spark-loop package owns goal primitives and stays isolated from workf
   }
 });
 
-void test("spark-loop goal helpers create goals and continuation prompts", () => {
+test("spark-loop goal helpers create goals and continuation prompts", () => {
   assert.equal(validateObjective("  ship feature  "), null);
   const goal = createGoal("  ship feature  ", 123);
   assert.equal(goal.objective, "ship feature");
@@ -49,7 +49,7 @@ void test("spark-loop goal helpers create goals and continuation prompts", () =>
   assert.equal(response.goal?.status, "active");
 });
 
-void test("spark-loop exposes non-completing loop primitives alongside goal helpers", () => {
+test("spark-loop exposes non-completing loop primitives alongside goal helpers", () => {
   const loop = createLoop("Continue without completing", 123);
   const tick = evaluateLoopTick({ loop, now: 124, reason: "start" });
 

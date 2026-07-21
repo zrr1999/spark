@@ -144,6 +144,12 @@ export interface QqbotApiClient {
     content: string,
     msgId?: string,
   ): Promise<QqbotMessageResponse>;
+  /** Guild/sub-channel only: fetch one message by id for quote preview enrichment. */
+  getChannelMessage(
+    accessToken: string,
+    channelId: string,
+    messageId: string,
+  ): Promise<QqbotChannelMessage | undefined>;
   sendC2CStreamMessage(
     accessToken: string,
     openid: string,
@@ -154,6 +160,15 @@ export interface QqbotApiClient {
     interactionId: string,
     code?: QqbotInteractionAckCode,
   ): Promise<void>;
+}
+
+export interface QqbotChannelMessage {
+  id?: string;
+  content?: string;
+  author?: {
+    id?: string;
+    username?: string;
+  };
 }
 
 interface TokenCacheEntry {
@@ -490,6 +505,20 @@ export function createQqbotApiClient(
           ...(msgId ? { msg_id: msgId } : {}),
         },
       );
+    },
+    async getChannelMessage(accessToken, channelId, messageId) {
+      const trimmedChannel = channelId.trim();
+      const trimmedMessage = messageId.trim();
+      if (!trimmedChannel || !trimmedMessage) return undefined;
+      try {
+        return await apiRequest<QqbotChannelMessage>(
+          accessToken,
+          "GET",
+          `/channels/${encodeURIComponent(trimmedChannel)}/messages/${encodeURIComponent(trimmedMessage)}`,
+        );
+      } catch {
+        return undefined;
+      }
     },
     async sendC2CStreamMessage(accessToken, openid, req) {
       useMessageSequence(req.msg_id, req.msg_seq);

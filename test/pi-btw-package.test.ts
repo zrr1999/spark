@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { DEFAULT_SPARK_CONFIG } from "../apps/spark-tui/src/host/config.ts";
@@ -17,7 +17,7 @@ async function readPackageJson(path: string): Promise<PackageJson> {
   return JSON.parse(await readFile(path, "utf8")) as PackageJson;
 }
 
-void test("root Pi manifest exposes vendored pi-btw without enabling it in spark-cli defaults", async () => {
+test("root Pi manifest exposes vendored pi-btw without enabling it in spark-cli defaults", async () => {
   const root = await readPackageJson("package.json");
 
   assert.equal(root.dependencies?.["@zendev-lab/pi-btw"], "workspace:^");
@@ -27,7 +27,7 @@ void test("root Pi manifest exposes vendored pi-btw without enabling it in spark
   assert.ok(!DEFAULT_SPARK_CONFIG.extensions.includes("./packages/pi-btw/extensions/btw.ts"));
 });
 
-void test("pi-btw package keeps upstream extension, skill, and host-specific dependency boundary explicit", async () => {
+test("pi-btw package keeps upstream extension, skill, and host-specific dependency boundary explicit", async () => {
   const pkg = await readPackageJson("packages/pi-btw/package.json");
 
   assert.deepEqual(pkg.pi?.extensions, ["./extensions/btw.ts"]);
@@ -40,7 +40,7 @@ void test("pi-btw package keeps upstream extension, skill, and host-specific dep
   assert.equal(pkg.dependencies?.["@earendil-works/pi-tui"], undefined);
 });
 
-void test("spark-cue package ships prompt text without registering it as a skill", async () => {
+test("spark-cue package ships prompt text without registering it as a skill", async () => {
   const pkg = await readPackageJson("packages/spark-cue/package.json");
 
   assert.deepEqual(pkg.pi?.extensions, ["./src/extension/index.ts"]);
@@ -48,7 +48,7 @@ void test("spark-cue package ships prompt text without registering it as a skill
   assert.ok(pkg.files?.includes("skills/**/*"));
 });
 
-void test("pi-btw side sessions do not hardcode bash as an enabled tool", async () => {
+test("pi-btw side sessions do not hardcode bash as an enabled tool", async () => {
   const source = await readFile("packages/pi-btw/extensions/btw.ts", "utf8");
 
   assert.doesNotMatch(source, /tools:\s*\[[^\]]*["']bash["']/u);

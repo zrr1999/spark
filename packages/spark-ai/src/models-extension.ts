@@ -1,8 +1,4 @@
-import type {
-  ToolConfig,
-  ToolRenderComponent,
-  ToolRenderTheme,
-} from "@zendev-lab/spark-extension-api";
+import type { ToolConfig, ToolRenderComponent, ToolRenderTheme } from "@zendev-lab/spark-core";
 import { Type } from "typebox";
 
 export interface SparkModelsExtensionApi {

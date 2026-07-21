@@ -131,7 +131,7 @@ export function runtimeSessionRouteForWorkspace(
     .prepare(
       `SELECT rwb.runtime_id AS runtimeId,
               rwb.id AS runtimeWorkspaceBindingId
-       FROM workspace_owner_bindings wob
+       FROM workspace_leases wob
        JOIN runtime_workspace_bindings rwb ON rwb.id = wob.runtime_workspace_binding_id
        WHERE wob.workspace_id = ? AND wob.ended_at IS NULL
        LIMIT 1`,
@@ -139,8 +139,8 @@ export function runtimeSessionRouteForWorkspace(
     .get(workspaceId) as { runtimeId: string; runtimeWorkspaceBindingId: string } | undefined;
   if (!row) {
     throw new RuntimeControlCommandError(
-      "Workspace has no active daemon owner.",
-      "WORKSPACE_OWNER_UNAVAILABLE",
+      "Workspace has no active origin lease.",
+      "WORKSPACE_LEASE_UNAVAILABLE",
     );
   }
   return { ...row, scope: "workspace", workspaceId };
@@ -164,7 +164,7 @@ export function listRuntimeSessionRoutes(db: DatabaseSync): RuntimeSessionRoute[
       `SELECT wob.workspace_id AS workspaceId,
               rwb.runtime_id AS runtimeId,
               rwb.id AS runtimeWorkspaceBindingId
-       FROM workspace_owner_bindings wob
+       FROM workspace_leases wob
        JOIN runtime_workspace_bindings rwb ON rwb.id = wob.runtime_workspace_binding_id
        JOIN runtime_connections rc ON rc.id = rwb.runtime_id
        JOIN runtime_sessions rs ON rs.runtime_id = rc.id

@@ -65,7 +65,8 @@ export interface RuntimeConnectionView {
   updatedAt: string;
 }
 
-export interface OwnerBindingView {
+/** Active Cockpit origin lease projection for a workspace directory. */
+export interface LeaseBindingView {
   id: string;
   workspaceId: string;
   runtimeWorkspaceBindingId: string;
@@ -75,6 +76,9 @@ export interface OwnerBindingView {
   runtimeName: string;
   runtimeStatus: string;
 }
+
+/** @deprecated Prefer {@link LeaseBindingView}. */
+export type OwnerBindingView = LeaseBindingView;
 
 export interface PendingWorkspaceBindingSetup {
   name: string;
@@ -109,7 +113,7 @@ export function loadWorkbenchLayout(
               w.name,
               rwb.local_path AS localPath
        FROM workspaces w
-       LEFT JOIN workspace_owner_bindings wob
+       LEFT JOIN workspace_leases wob
          ON wob.workspace_id = w.id AND wob.ended_at IS NULL
        LEFT JOIN runtime_workspace_bindings rwb
          ON rwb.id = wob.runtime_workspace_binding_id
@@ -190,7 +194,7 @@ export function loadWorkbenchHome(
        LEFT JOIN projects p ON p.workspace_id = w.id
        LEFT JOIN inbox_items ii ON ii.workspace_id = w.id
        LEFT JOIN artifacts a ON a.workspace_id = w.id
-       LEFT JOIN workspace_owner_bindings wob
+       LEFT JOIN workspace_leases wob
          ON wob.workspace_id = w.id
         AND wob.ended_at IS NULL
        LEFT JOIN runtime_workspace_bindings rb ON rb.id = wob.runtime_workspace_binding_id
@@ -224,7 +228,7 @@ export function loadWorkbenchHome(
     workspaces: input.forceWorkspaceCreate ? [] : workspaces,
     redirectWorkspace: workspaces.length > 0 && !input.forceWorkspaceCreate ? workspaces[0] : null,
     runnerBindings: listAllRuntimeWorkspaceBindings(db),
-    ownerBindings: listOwnerBindings(db),
+    ownerBindings: listWorkspaceLeases(db),
     targetRunnerBinding: input.pendingWorkspaceSetup
       ? resolvePendingWorkspaceBinding(db, input.pendingWorkspaceSetup)
       : null,
@@ -250,13 +254,13 @@ export function loadWorkspaceDashboard(db: DatabaseSync, workspaceRouteId: strin
     workspaces: [workspace],
     pendingInboxCount,
     workspaceControl: loadWorkspaceServerControl(db, workspace.id),
-    // A workspace page describes its active owner, not every daemon that has
+    // A workspace page describes its active origin lease, not every daemon that has
     // ever connected to this Cockpit. Global runtime inventory belongs on the
     // registration/binding surface; mixing it into workspace health makes an
     // unrelated online daemon look capable of controlling this workspace.
     runnerConnections: listOwnerRuntimeConnections(db, workspace.id),
     runnerBindings: listOwnerRuntimeWorkspaceBindings(db, workspace.id),
-    ownerBindings: listOwnerBindings(db, workspace.id),
+    ownerBindings: listWorkspaceLeases(db, workspace.id),
     recentEvents: listRecentWorkspaceEvents(db, workspace.id),
     connectedSessionCount: countConnectedRuntimeSessions(db),
   };
@@ -893,7 +897,7 @@ export function loadWorkspaceSettings(db: DatabaseSync, workspaceRouteId: string
               w.updated_at AS updatedAt,
               rwb.local_path AS localPath
        FROM workspaces w
-       LEFT JOIN workspace_owner_bindings wob
+       LEFT JOIN workspace_leases wob
          ON wob.workspace_id = w.id AND wob.ended_at IS NULL
        LEFT JOIN runtime_workspace_bindings rwb
          ON rwb.id = wob.runtime_workspace_binding_id
@@ -950,7 +954,7 @@ export function updateWorkspaceSettings(
          updated_at = ?
      WHERE id = (
        SELECT runtime_workspace_binding_id
-       FROM workspace_owner_bindings
+       FROM workspace_leases
        WHERE workspace_id = ? AND ended_at IS NULL
        LIMIT 1
      )`,
@@ -987,7 +991,7 @@ export function loadWorkspaceRegistration(db: DatabaseSync, workspaceRouteId: st
               w.updated_at AS updatedAt,
               rwb.local_path AS localPath
        FROM workspaces w
-       LEFT JOIN workspace_owner_bindings wob
+       LEFT JOIN workspace_leases wob
          ON wob.workspace_id = w.id AND wob.ended_at IS NULL
        LEFT JOIN runtime_workspace_bindings rwb
          ON rwb.id = wob.runtime_workspace_binding_id
@@ -1120,7 +1124,7 @@ function listOwnerRuntimeWorkspaceBindings(db: DatabaseSync, workspaceId: string
               rc.status AS runtimeStatus
        FROM runtime_workspace_bindings rb
        JOIN runtime_connections rc ON rc.id = rb.runtime_id
-       LEFT JOIN workspace_owner_bindings wob
+       LEFT JOIN workspace_leases wob
          ON wob.runtime_workspace_binding_id = rb.id
         AND wob.ended_at IS NULL
        WHERE wob.workspace_id = ?
@@ -1141,7 +1145,7 @@ function listOwnerRuntimeConnections(db: DatabaseSync, workspaceId: string) {
               rc.updated_at AS updatedAt
        FROM runtime_connections rc
        JOIN runtime_workspace_bindings rb ON rb.runtime_id = rc.id
-       JOIN workspace_owner_bindings wob
+       JOIN workspace_leases wob
          ON wob.runtime_workspace_binding_id = rb.id
         AND wob.ended_at IS NULL
        WHERE wob.workspace_id = ?
@@ -1150,7 +1154,7 @@ function listOwnerRuntimeConnections(db: DatabaseSync, workspaceId: string) {
     .all(workspaceId) as unknown as RuntimeConnectionView[];
 }
 
-function listOwnerBindings(db: DatabaseSync, workspaceId?: string) {
+function listWorkspaceLeases(db: DatabaseSync, workspaceId?: string) {
   const where = workspaceId ? "AND wob.workspace_id = ?" : "";
   const args = workspaceId ? [workspaceId] : [];
   return db
@@ -1163,7 +1167,7 @@ function listOwnerBindings(db: DatabaseSync, workspaceId?: string) {
               rb.display_name AS bindingName,
               rc.name AS runtimeName,
               rc.status AS runtimeStatus
-       FROM workspace_owner_bindings wob
+       FROM workspace_leases wob
        JOIN workspaces w ON w.id = wob.workspace_id
        JOIN runtime_workspace_bindings rb ON rb.id = wob.runtime_workspace_binding_id
        JOIN runtime_connections rc ON rc.id = rb.runtime_id
@@ -1171,8 +1175,11 @@ function listOwnerBindings(db: DatabaseSync, workspaceId?: string) {
          ${where}
        ORDER BY wob.started_at DESC`,
     )
-    .all(...args) as unknown as OwnerBindingView[];
+    .all(...args) as unknown as LeaseBindingView[];
 }
+
+/** @deprecated Prefer {@link listWorkspaceLeases}. */
+export const listOwnerBindings = listWorkspaceLeases;
 
 function listRecentWorkspaceEvents(db: DatabaseSync, workspaceId: string) {
   return db
@@ -1285,7 +1292,7 @@ function readActiveOwnerLocalPath(db: DatabaseSync, workspaceId: string): string
   const row = db
     .prepare(
       `SELECT rwb.local_path AS localPath
-       FROM workspace_owner_bindings wob
+       FROM workspace_leases wob
        JOIN runtime_workspace_bindings rwb
          ON rwb.id = wob.runtime_workspace_binding_id
        WHERE wob.workspace_id = ? AND wob.ended_at IS NULL

@@ -1,5 +1,6 @@
 import type { ChannelImage } from "./channel-images.ts";
 import type { InfoflowAttachment } from "./infoflow-content.ts";
+import type { ChannelMessageReference } from "./message-reference.ts";
 
 /** Normalized QQ Bot inbound scene for policy + external keys. */
 export type QqbotChatType = "c2c" | "group" | "channel";
@@ -13,6 +14,7 @@ export interface QqbotNormalizedInbound {
   chatId?: string;
   text: string;
   messageId?: string;
+  messageReference?: ChannelMessageReference;
   eventType?: string;
   mentionedSelf?: boolean;
   mentions?: string[];

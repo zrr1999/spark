@@ -5,7 +5,7 @@ import {
   type RoadmapItemRef,
   type RoadmapRef,
   type TaskRef,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 
 export function createDefaultProjectRoadmap(title: string, now = nowIso()): ProjectRoadmap {
   return {

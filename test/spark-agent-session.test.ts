@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   SparkAgentSession,
@@ -74,7 +74,7 @@ function fakeTui(): TUI {
   } as unknown as TUI;
 }
 
-void test("channel-facing assistant text excludes thinking, tool arguments, and commentary", () => {
+test("channel-facing assistant text excludes thinking, tool arguments, and commentary", () => {
   assert.equal(
     assistantMessageToFinalAnswerText({
       content: [
@@ -96,7 +96,7 @@ void test("channel-facing assistant text excludes thinking, tool arguments, and 
   );
 });
 
-void test("channel-facing assistant text does not turn a tool-use preamble into a reply", () => {
+test("channel-facing assistant text does not turn a tool-use preamble into a reply", () => {
   assert.equal(
     assistantMessageToFinalAnswerText({
       stopReason: "toolUse",
@@ -109,7 +109,7 @@ void test("channel-facing assistant text does not turn a tool-use preamble into 
   );
 });
 
-void test("session replay retains runtime authority without promoting legacy custom data", () => {
+test("session replay retains runtime authority without promoting legacy custom data", () => {
   const entries = [
     {
       type: "custom_message" as const,
@@ -168,7 +168,7 @@ void test("session replay retains runtime authority without promoting legacy cus
   assert.match(testContentText(lowered[1]?.content), /<spark_runtime_data trust="untrusted"/u);
 });
 
-void test("SparkAgentSession persists and resumes JSONL sessions", async () => {
+test("SparkAgentSession persists and resumes JSONL sessions", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-"));
   try {
     const cwd = join(dir, "repo");
@@ -231,7 +231,7 @@ void test("SparkAgentSession persists and resumes JSONL sessions", async () => {
   }
 });
 
-void test("SparkAgentSession compacts persisted history and retries context overflow with backoff", async () => {
+test("SparkAgentSession compacts persisted history and retries context overflow with backoff", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-overflow-"));
   try {
     const cwd = join(dir, "repo");
@@ -292,7 +292,120 @@ void test("SparkAgentSession compacts persisted history and retries context over
   }
 });
 
-void test("SparkAgentSession compacts an over-budget persisted session before its provider call", async () => {
+test("SparkAgentSession compacts a compacted leaf again after repeated context overflow", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-repeated-overflow-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(cwd, { recursive: true });
+    let providerCalls = 0;
+    const overflow = "Your input exceeds the context window of this model.";
+    const services = await makeFakeServices(
+      { cwd, sparkHome },
+      {
+        contextWindow: 1_000_000,
+        maxTokens: 4_096,
+        streamSimple: ({ messages }) => {
+          providerCalls += 1;
+          if (providerCalls <= 2) throw new Error(overflow);
+          return assistant(`recovered-twice:${messages?.length ?? 0}`);
+        },
+      },
+      { compactKeepRecentTokens: 20_000 },
+    );
+    const record = services.sessionStore.createSession({ id: "repeated-overflow-session" });
+    for (let index = 0; index < 16; index += 1) {
+      services.sessionStore.appendMessage(record, {
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `${index}:${"history ".repeat(160)}`,
+      });
+    }
+    await services.sessionStore.save(record);
+
+    const result = await new SparkAgentSession(services).run({
+      sessionId: record.header.id,
+      prompt: "continue after repeated overflow",
+    });
+
+    assert.equal(providerCalls, 3);
+    assert.equal(result.outcome?.status, "completed");
+    const saved = await services.sessionStore.load(record.path);
+    const savedCompactions = saved.entries.filter((entry) => entry.type === "compaction");
+    assert.equal(savedCompactions.length, 2);
+    const latestSummary = savedCompactions.at(-1)?.summary;
+    assert.equal(typeof latestSummary, "string");
+    assert.equal(latestSummary?.includes("Previous summary:"), false);
+    assert.equal((latestSummary?.length ?? Number.POSITIVE_INFINITY) < 2_000, true);
+    const persistedMessages = saved.entries.filter((entry) => entry.type === "message");
+    assert.equal(
+      persistedMessages.filter(
+        (entry) =>
+          entry.message.role === "user" &&
+          entry.message.content === "continue after repeated overflow",
+      ).length,
+      1,
+    );
+    assert.equal(
+      persistedMessages.some((entry) => JSON.stringify(entry.message).includes(overflow)),
+      false,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("SparkAgentSession stops repeated overflow retry when compaction has no useful yield", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-no-yield-overflow-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(cwd, { recursive: true });
+    let providerCalls = 0;
+    const services = await makeFakeServices(
+      { cwd, sparkHome },
+      {
+        contextWindow: 1_000_000,
+        maxTokens: 4_096,
+        streamSimple: () => {
+          providerCalls += 1;
+          throw new Error("Your input exceeds the context window of this model.");
+        },
+      },
+    );
+    const record = services.sessionStore.createSession({ id: "no-yield-overflow-session" });
+    const firstMessage = services.sessionStore.appendMessage(record, {
+      role: "user",
+      content: "old context",
+    });
+    record.entries.push({
+      type: "compaction",
+      id: "short-summary",
+      parentId: record.entries.at(-1)?.id ?? null,
+      timestamp: new Date().toISOString(),
+      summary: "already compacted",
+      firstKeptEntryId: firstMessage,
+      tokensBefore: 10,
+    });
+    await services.sessionStore.save(record);
+
+    const result = await new SparkAgentSession(services).run({
+      sessionId: record.header.id,
+      prompt: "still too large",
+    });
+
+    assert.equal(providerCalls, 1);
+    assert.equal(result.outcome?.status, "failed");
+    const saved = await services.sessionStore.load(record.path);
+    assert.deepEqual(
+      saved.entries.filter((entry) => entry.type === "compaction").map((entry) => entry.id),
+      ["short-summary"],
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("SparkAgentSession compacts an over-budget persisted session before its provider call", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-preflight-"));
   try {
     const cwd = join(dir, "repo");
@@ -356,7 +469,7 @@ void test("SparkAgentSession compacts an over-budget persisted session before it
   }
 });
 
-void test("SparkAgentSession persists and consumes a micro pass without forcing full compaction", async () => {
+test("SparkAgentSession persists and consumes a micro pass without forcing full compaction", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-micro-"));
   try {
     const cwd = join(dir, "repo");
@@ -420,7 +533,7 @@ void test("SparkAgentSession persists and consumes a micro pass without forcing 
   }
 });
 
-void test("SparkAgentSession full escalation summarizes the persisted micro replay once", async () => {
+test("SparkAgentSession full escalation summarizes the persisted micro replay once", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-micro-full-"));
   try {
     const cwd = join(dir, "repo");
@@ -489,7 +602,7 @@ void test("SparkAgentSession full escalation summarizes the persisted micro repl
   }
 });
 
-void test("SparkAgentSession meters only the compacted replay on the active branch", async () => {
+test("SparkAgentSession meters only the compacted replay on the active branch", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-replay-meter-"));
   try {
     const cwd = join(dir, "repo");
@@ -588,7 +701,7 @@ void test("SparkAgentSession meters only the compacted replay on the active bran
   }
 });
 
-void test("SparkAgentSession projects loop view events into native TUI transport", async () => {
+test("SparkAgentSession projects loop view events into native TUI transport", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-native-ui-"));
   try {
     const cwd = join(dir, "repo");
@@ -613,7 +726,7 @@ void test("SparkAgentSession projects loop view events into native TUI transport
   }
 });
 
-void test("Spark headless role executor supports forked session runs", async () => {
+test("Spark headless role executor supports forked session runs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-headless-role-fork-"));
   try {
     const cwd = join(dir, "repo");
@@ -685,7 +798,7 @@ void test("Spark headless role executor supports forked session runs", async () 
   }
 });
 
-void test("Spark headless role executor forwards live events through onEvent", async () => {
+test("Spark headless role executor forwards live events through onEvent", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-headless-role-events-"));
   try {
     const cwd = join(dir, "repo");
@@ -731,7 +844,7 @@ void test("Spark headless role executor forwards live events through onEvent", a
   }
 });
 
-void test("Spark headless role executor routes input control into a follow-up turn", async () => {
+test("Spark headless role executor routes input control into a follow-up turn", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-headless-role-input-control-"));
   try {
     const cwd = join(dir, "repo");
@@ -799,7 +912,7 @@ void test("Spark headless role executor routes input control into a follow-up tu
   }
 });
 
-void test("daemon native reviewer noSession does not persist session file", async () => {
+test("daemon native reviewer noSession does not persist session file", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-headless-role-anon-"));
   try {
     const cwd = join(dir, "repo");
@@ -842,7 +955,7 @@ void test("daemon native reviewer noSession does not persist session file", asyn
   }
 });
 
-void test("persistent native role run writes workspace session file", async () => {
+test("persistent native role run writes workspace session file", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-headless-role-persistent-"));
   try {
     const cwd = join(dir, "repo");
@@ -878,7 +991,7 @@ void test("persistent native role run writes workspace session file", async () =
   }
 });
 
-void test("anonymous role run is excluded from workspace session selector", async () => {
+test("anonymous role run is excluded from workspace session selector", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-headless-role-selector-"));
   try {
     const cwd = join(dir, "repo");
@@ -925,7 +1038,7 @@ void test("anonymous role run is excluded from workspace session selector", asyn
   }
 });
 
-void test("anonymous role run artifact records sessionPersistence", async () => {
+test("anonymous role run artifact records sessionPersistence", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-headless-role-artifact-"));
   try {
     const cwd = join(dir, "repo");
@@ -973,10 +1086,25 @@ async function listSessionFileNames(sessionDir: string): Promise<string[]> {
 async function makeFakeServices(
   options: SparkCliHostServicesOptions,
   fake: FakeProviderOptions = {},
+  testOptions: { compactKeepRecentTokens?: number } = {},
 ) {
   const config: SparkConfig = {
     extensions: [],
     providers: ["fake-provider"],
+    ...(testOptions.compactKeepRecentTokens === undefined
+      ? {}
+      : {
+          compact: {
+            enabled: true,
+            microThreshold: 0.75,
+            fullThreshold: 0.9,
+            targetReduction: 0.4,
+            minUsefulReduction: 0.05,
+            compactModel: "current",
+            reserveTokens: 16_384,
+            keepRecentTokens: testOptions.compactKeepRecentTokens,
+          },
+        }),
   };
   if (options.sparkHome) {
     await mkdir(options.sparkHome, { recursive: true });

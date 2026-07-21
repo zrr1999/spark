@@ -58,7 +58,7 @@ export function resolveWorkspaceDirectoryDisplayName(input: {
 }
 
 /**
- * Keep workspaces.name/slug and the active owner binding display_name aligned
+ * Keep workspaces.name/slug and the active lease binding display_name aligned
  * with the bound local directory. Reserved or colliding slugs keep the current slug.
  */
 export function syncWorkspaceIdentityFromLocalPath(
@@ -103,7 +103,7 @@ export function syncWorkspaceIdentityFromLocalPath(
          updated_at = ?
      WHERE id = (
        SELECT runtime_workspace_binding_id
-       FROM workspace_owner_bindings
+       FROM workspace_leases
        WHERE workspace_id = ? AND ended_at IS NULL
        LIMIT 1
      )`,

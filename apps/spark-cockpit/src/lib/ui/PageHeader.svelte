@@ -90,4 +90,11 @@
   .ui-page-actions {
     margin-left: auto;
   }
+
+  .ui-page-actions {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-xs);
+  }
 </style>

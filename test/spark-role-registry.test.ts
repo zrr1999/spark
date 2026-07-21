@@ -2,28 +2,28 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import { builtinRoleIds, createBuiltinRoles } from "@zendev-lab/spark-roles";
-import { PI_GRAFT_PATCHER_ROLE_REF, registerPiGraftExtension } from "@zendev-lab/spark-graft";
+import { SPARK_GRAFT_PATCHER_ROLE_REF, registerSparkGraftExtension } from "@zendev-lab/spark-graft";
 import { createSparkRoleRegistry } from "../packages/pi-extension/src/extension/spark-role-registry.ts";
 
-interface MinimalPiGraftApi {
+interface MinimalSparkGraftApi {
   on(event: "session_start", handler: (event: unknown, ctx: { cwd?: string }) => unknown): void;
   registerTool(tool: { name: string }): void;
 }
 
-function minimalPiGraftApi(): MinimalPiGraftApi {
+function minimalSparkGraftApi(): MinimalSparkGraftApi {
   return {
     on() {},
     registerTool() {},
   };
 }
 
-void test("Spark role registries keep patcher out of builtin roles", async () => {
-  const staticPiRoles = createBuiltinRoles("2026-06-04T00:00:00.000Z");
+test("Spark role registries keep patcher out of builtin roles", async () => {
+  const staticSparkRoles = createBuiltinRoles("2026-06-04T00:00:00.000Z");
   assert.equal(
-    staticPiRoles.some(
+    staticSparkRoles.some(
       (role) => role.ref === "role:builtin-spark-patcher" || role.id === "patcher",
     ),
     false,
@@ -44,14 +44,14 @@ void test("Spark role registries keep patcher out of builtin roles", async () =>
   }
 });
 
-void test("Spark role registries include spark-graft patcher only as an extension role", async () => {
-  registerPiGraftExtension(minimalPiGraftApi());
+test("Spark role registries include spark-graft patcher only as an extension role", async () => {
+  registerSparkGraftExtension(minimalSparkGraftApi());
   const dir = await mkdtemp(join(tmpdir(), "spark-role-registry-extension-"));
   try {
     const registry = await createSparkRoleRegistry(dir);
     const patcher = registry.select("patcher", { source: "extension" });
 
-    assert.equal(patcher.ref, PI_GRAFT_PATCHER_ROLE_REF);
+    assert.equal(patcher.ref, SPARK_GRAFT_PATCHER_ROLE_REF);
     assert.equal(patcher.source, "extension");
     assert.deepEqual(
       registry.list({ source: "builtin" }).map((role) => role.id),

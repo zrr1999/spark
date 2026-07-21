@@ -4,6 +4,7 @@ These files are current contracts or operator procedures. Product and package im
 
 - [`specs/command-planes.md`](./specs/command-planes.md): canonical CLI planes and placement rules.
 - [`specs/configuration-and-paths.md`](./specs/configuration-and-paths.md): `SPARK_HOME` and XDG path layout, precedence, and migration policy.
+- [`specs/compact-v2.md`](./specs/compact-v2.md): compaction thresholds, token sources, repeated-overflow bounds, and Memory handoff.
 - [`specs/tools.md`](./specs/tools.md): public agent-facing tools and commands.
 - [`specs/sessions-and-channels.md`](./specs/sessions-and-channels.md): persistent sessions, origins, mail, and channel policy.
 - [`specs/human-interaction.md`](./specs/human-interaction.md): ask/approval waits, status vocabulary, and correlation.
@@ -19,5 +20,5 @@ These files are current contracts or operator procedures. Product and package im
 Spark uses “runtime” in three unrelated senses; do not conflate them:
 
 1. **`@zendev-lab/spark-runtime`** — task → role execution adapter.
-2. **`SparkHostRuntime` (`spark-host`)** — ExtensionAPI host instance for tools/commands/events.
+2. **`SparkHostRuntime` (`spark-host`)** — SparkHostAPI host instance for tools/commands/events.
 3. **Coordination “runtime”** — a registered remote daemon peer (`runtime-registration`, `runtime-session-control`, `runtime-ws`).

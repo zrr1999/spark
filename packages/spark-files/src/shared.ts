@@ -5,7 +5,7 @@
  * structured `details`, and the host renders them.
  */
 
-import type { ExtensionContext } from "@zendev-lab/spark-extension-api";
+import type { SparkHostContext } from "@zendev-lab/spark-core";
 
 export interface ToolTextContent {
   type: "text";
@@ -23,7 +23,7 @@ export function text(value: string): ToolTextContent {
 }
 
 /** Resolve the working directory for a tool call from the extension context. */
-export function resolveToolCwd(ctx: ExtensionContext | undefined): string {
+export function resolveToolCwd(ctx: SparkHostContext | undefined): string {
   const cwd = ctx?.cwd;
   return typeof cwd === "string" && cwd.length > 0 ? cwd : process.cwd();
 }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   CURRENT_SPARK_COMPACTION_SUMMARY_VERSION,
@@ -55,7 +55,7 @@ const tinyKeepSettings: SparkCompactionSettings = {
   keepRecentTokens: 1,
 };
 
-void test("Spark Compact V2 defaults and outcome metadata are stable", () => {
+test("Spark Compact V2 defaults and outcome metadata are stable", () => {
   assert.equal(DEFAULT_SPARK_COMPACTION_SETTINGS.targetReduction, 0.4);
   assert.equal(DEFAULT_SPARK_COMPACTION_SETTINGS.compactModel, "current");
   assert.equal(
@@ -85,7 +85,7 @@ void test("Spark Compact V2 defaults and outcome metadata are stable", () => {
   );
 });
 
-void test("Smart fixed summary validates, renders, selects current model, and falls back", async () => {
+test("Smart fixed summary validates, renders, selects current model, and falls back", async () => {
   const fixture = JSON.parse(
     await readFile(join(process.cwd(), "test/fixtures/smart-compaction-summary.json"), "utf8"),
   ) as any;
@@ -132,7 +132,7 @@ void test("Smart fixed summary validates, renders, selects current model, and fa
   }
 });
 
-void test("Compact V2 scheduler performs one micro pass and schedules full escalation", () => {
+test("Compact V2 scheduler performs one micro pass and schedules full escalation", () => {
   const messages = [
     {
       role: "user",
@@ -159,7 +159,7 @@ void test("Compact V2 scheduler performs one micro pass and schedules full escal
   assert.equal(passes[1]?.fallbackReason, undefined);
 });
 
-void test("Compact V2 scheduler skips below-threshold and already-compacted input", () => {
+test("Compact V2 scheduler skips below-threshold and already-compacted input", () => {
   assert.deepEqual(scheduleSparkCompaction([{ role: "user", content: "small" }], 10_000), []);
   const record = compactableRecord(
     new SparkSessionStore({ cwd: "/tmp", sparkHome: "/tmp/.spark" }),
@@ -176,7 +176,42 @@ void test("Compact V2 scheduler skips below-threshold and already-compacted inpu
   assert.equal(prepareSparkCompaction(record), undefined);
 });
 
-void test("Spark compaction uses Pi default trigger settings", () => {
+test("Compact V2 forced overflow preparation can compact an existing compaction leaf", () => {
+  const record = compactableRecord(
+    new SparkSessionStore({ cwd: "/tmp", sparkHome: "/tmp/.spark" }),
+  );
+  const firstKeptEntryId = record.entries[0]!.id;
+  record.entries.push({
+    type: "compaction",
+    id: "last-compaction",
+    parentId: record.entries.at(-1)?.id ?? null,
+    timestamp: new Date().toISOString(),
+    summary: "Conversation summary:\nNo prior history to summarize.",
+    firstKeptEntryId,
+    tokensBefore: 1_000,
+  });
+
+  assert.equal(prepareSparkCompaction(record), undefined);
+  const noUsefulCut = prepareSparkCompaction(record, undefined, tinyKeepSettings, {
+    allowCompactionLeaf: true,
+  });
+  assert.equal(noUsefulCut, undefined);
+
+  const compactionLeaf = record.entries.at(-1)!;
+  assert.equal(compactionLeaf.type, "compaction");
+  if (compactionLeaf.type !== "compaction") throw new Error("expected compaction leaf");
+  compactionLeaf.summary = "already compacted";
+  const forced = prepareSparkCompaction(record, undefined, tinyKeepSettings, {
+    allowCompactionLeaf: true,
+  });
+  assert.ok(forced);
+  assert.equal(forced.previousSummary, undefined);
+  assert.equal(forced.messagesToSummarize.length, 1);
+  assert.equal(forced.messagesToSummarize[0]?.role, "compactionSummary");
+  assert.equal(forced.firstKeptEntryId, "last-compaction");
+});
+
+test("Spark compaction uses Pi default trigger settings", () => {
   assert.deepEqual(DEFAULT_SPARK_COMPACTION_SETTINGS, {
     enabled: true,
     microThreshold: 0.75,
@@ -195,7 +230,7 @@ void test("Spark compaction uses Pi default trigger settings", () => {
   );
 });
 
-void test("Spark token meter rejects zero provider usage for a non-empty replay", () => {
+test("Spark token meter rejects zero provider usage for a non-empty replay", () => {
   const messages = [{ role: "user", content: "persisted conversation context" }];
 
   const reported = meterSparkContextTokens({ messages, reportedTokens: 300, tokenize: () => 100 });
@@ -222,7 +257,7 @@ void test("Spark token meter rejects zero provider usage for a non-empty replay"
   });
 });
 
-void test("isomorphic micro-compaction repeats without pass state and protects exact tools", () => {
+test("isomorphic micro-compaction repeats without pass state and protects exact tools", () => {
   const repeated = Array.from({ length: 200 }, () => "same log line").join("\n");
   const messages = [
     { role: "toolResult", toolName: "cue_exec", content: [{ type: "text", text: repeated }] },
@@ -248,7 +283,7 @@ void test("isomorphic micro-compaction repeats without pass state and protects e
   assert.equal("round" in second, false);
 });
 
-void test("micro-compaction records low-yield abort without mutating input", () => {
+test("micro-compaction records low-yield abort without mutating input", () => {
   const messages = [
     { role: "toolResult", toolName: "cue_exec", content: [{ type: "text", text: "short output" }] },
   ];
@@ -262,7 +297,7 @@ void test("micro-compaction records low-yield abort without mutating input", () 
   assert.deepEqual(result.messages, messages);
 });
 
-void test("Spark compaction token estimates follow chars/4 heuristic for native messages", () => {
+test("Spark compaction token estimates follow chars/4 heuristic for native messages", () => {
   assert.equal(estimateSparkTokens({ role: "user", content: "12345678" }), 2);
   assert.equal(
     estimateSparkTokens({
@@ -282,7 +317,7 @@ void test("Spark compaction token estimates follow chars/4 heuristic for native 
   });
 });
 
-void test("prepareSparkCompaction finds first kept entry and split-turn prefix", async () => {
+test("prepareSparkCompaction finds first kept entry and split-turn prefix", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-compaction-prepare-"));
   try {
     const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
@@ -305,7 +340,7 @@ void test("prepareSparkCompaction finds first kept entry and split-turn prefix",
   }
 });
 
-void test("compactSparkSessionRecord appends Pi-compatible compaction entry", async () => {
+test("compactSparkSessionRecord appends Pi-compatible compaction entry", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-compaction-append-"));
   try {
     const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
@@ -352,7 +387,7 @@ void test("compactSparkSessionRecord appends Pi-compatible compaction entry", as
   }
 });
 
-void test("deterministic compaction preserves signals across the whole summarized history", async () => {
+test("deterministic compaction preserves signals across the whole summarized history", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-compaction-coverage-"));
   try {
     const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
@@ -377,7 +412,7 @@ void test("deterministic compaction preserves signals across the whole summarize
   }
 });
 
-void test("sessionEntriesToAgentMessages rebuilds compacted context with summary and kept messages", async () => {
+test("sessionEntriesToAgentMessages rebuilds compacted context with summary and kept messages", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-compaction-session-context-"));
   try {
     const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
@@ -413,7 +448,7 @@ void test("sessionEntriesToAgentMessages rebuilds compacted context with summary
   }
 });
 
-void test("compactSparkVisibleTranscript persists a compaction entry and returns kept messages", async () => {
+test("compactSparkVisibleTranscript persists a compaction entry and returns kept messages", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-visible-compact-"));
   try {
     const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
@@ -450,7 +485,7 @@ void test("compactSparkVisibleTranscript persists a compaction entry and returns
   }
 });
 
-void test("navigateSparkSessionBranchWithSummary appends Pi-style branch summary at target", async () => {
+test("navigateSparkSessionBranchWithSummary appends Pi-style branch summary at target", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-branch-summary-"));
   try {
     const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
@@ -509,13 +544,17 @@ void test("navigateSparkSessionBranchWithSummary appends Pi-style branch summary
   }
 });
 
-void test("native /compact and /tree summarize commands use persisted compaction helpers", async () => {
+test("native /compact and /tree summarize commands use persisted compaction helpers", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-compact-slash-"));
   try {
     const cwd = join(dir, "repo");
     const store = new SparkSessionStore({ cwd, sparkHome: join(dir, ".spark") });
     const runtime = new SparkHostRuntime({ cwd });
     sparkMemoryExtension(runtime);
+    let compactLifecycleEvent: unknown;
+    runtime.on("session_compact", (event) => {
+      compactLifecycleEvent = event;
+    });
     await defaultSparkMemoryStore(cwd, "workspace").remember({
       scope: "workspace",
       category: "insight",
@@ -554,6 +593,17 @@ void test("native /compact and /tree summarize commands use persisted compaction
     assert.match(compactedText, /Spark memory checkpoint/);
     assert.match(compactedText, /Compact handoff should preserve Spark memory checkpoints/);
     assert.equal(runtime.peekOutbox().length, 0);
+    assert.deepEqual(
+      compactLifecycleEvent && typeof compactLifecycleEvent === "object"
+        ? {
+            compactType: (compactLifecycleEvent as { compactType?: unknown }).compactType,
+            succeeded: (compactLifecycleEvent as { succeeded?: unknown }).succeeded,
+            entryType: (compactLifecycleEvent as { compactionEntry?: { type?: unknown } })
+              .compactionEntry?.type,
+          }
+        : undefined,
+      { compactType: "full", succeeded: true, entryType: "compaction" },
+    );
 
     const record = compactableRecord(store);
     await store.save(record);
@@ -571,7 +621,7 @@ void test("native /compact and /tree summarize commands use persisted compaction
   }
 });
 
-void test("entriesToMessages includes custom messages and branch summaries but not compaction entries", async () => {
+test("entriesToMessages includes custom messages and branch summaries but not compaction entries", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-compaction-messages-"));
   try {
     const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });

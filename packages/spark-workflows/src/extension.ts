@@ -1,14 +1,10 @@
 import { Type } from "typebox";
-import type {
-  ToolConfig,
-  ToolRenderComponent,
-  ToolRenderTheme,
-} from "@zendev-lab/spark-extension-api";
+import type { ToolConfig, ToolRenderComponent, ToolRenderTheme } from "@zendev-lab/spark-core";
 import { listSavedWorkflows, readSavedWorkflow, type WorkflowDescriptor } from "./index.ts";
 
-export type PiWorkflowAction = "list" | "read";
+export type SparkWorkflowAction = "list" | "read";
 
-export interface PiWorkflowExtensionApi {
+export interface SparkWorkflowHostApi {
   registerTool(config: ToolConfig): void;
 }
 
@@ -26,7 +22,7 @@ class ToolCallText implements ToolRenderComponent {
   }
 }
 
-export function registerPiWorkflowTool(pi: PiWorkflowExtensionApi): void {
+export function registerSparkWorkflowTool(pi: SparkWorkflowHostApi): void {
   pi.registerTool({
     name: "workflow",
     label: "Workflow",
@@ -102,8 +98,8 @@ export function registerPiWorkflowTool(pi: PiWorkflowExtensionApi): void {
   });
 }
 
-export default function piWorkflowExtension(pi: PiWorkflowExtensionApi): void {
-  registerPiWorkflowTool(pi);
+export default function piWorkflowExtension(pi: SparkWorkflowHostApi): void {
+  registerSparkWorkflowTool(pi);
 }
 
 function renderWorkflowList(workflows: WorkflowDescriptor[], total: number): string {
@@ -122,7 +118,7 @@ function renderWorkflowList(workflows: WorkflowDescriptor[], total: number): str
   return lines.join("\n");
 }
 
-function normalizeWorkflowAction(value: unknown): PiWorkflowAction {
+function normalizeWorkflowAction(value: unknown): SparkWorkflowAction {
   if (value === "list" || value === "read") return value;
   throw new Error("workflow.action must be list or read");
 }

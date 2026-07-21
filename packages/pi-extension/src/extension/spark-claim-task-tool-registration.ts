@@ -9,7 +9,7 @@ import {
   type TaskPlan,
   type ProjectRef,
   type TaskTodo,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 import {
   defaultTaskGraphStore,
   isUnfinishedTaskStatus,

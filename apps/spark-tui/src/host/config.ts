@@ -2,7 +2,7 @@
  * SparkConfig — the on-disk schema for the effective Spark `config.json`.
  *
  * Two parallel plugin lists:
- *   - `extensions[]` — module specifiers loaded as ExtensionAPI plugins
+ *   - `extensions[]` — module specifiers loaded as SparkHostAPI plugins
  *   - `providers[]`  — additional module specifiers loaded as
  *                      ProviderRegistrationAPI plugins. Spark always merges
  *                      its bundled Baidu OneAPI and OpenAI Codex adapters.

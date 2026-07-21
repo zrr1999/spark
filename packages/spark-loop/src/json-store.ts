@@ -1,7 +1,7 @@
 import {
   readJsonFileOptional as readCoreJsonFileOptional,
   writeJsonFileAtomic as writeCoreJsonFileAtomic,
-} from "@zendev-lab/spark-extension-api";
+} from "@zendev-lab/spark-core";
 
 export class JsonStoreFormatError extends Error {
   readonly filePath: string;
