@@ -9,6 +9,7 @@ import {
   createSparkCliHostServices,
   sessionEntriesToAgentMessages,
   sessionEntriesToPromptItems,
+  type SparkCliHostServices,
   type SparkCliHostServicesOptions,
   type SparkConfig,
 } from "../apps/spark-tui/src/host/index.ts";
@@ -595,7 +596,7 @@ test("SparkAgentSession full escalation summarizes the persisted micro replay on
     );
     assert.equal(
       full?.type === "compaction" ? full.metadata?.fallbackReason : undefined,
-      "deterministic_requested",
+      "model_unavailable",
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -1086,7 +1087,10 @@ async function listSessionFileNames(sessionDir: string): Promise<string[]> {
 async function makeFakeServices(
   options: SparkCliHostServicesOptions,
   fake: FakeProviderOptions = {},
-  testOptions: { compactKeepRecentTokens?: number } = {},
+  testOptions: {
+    compactKeepRecentTokens?: number;
+    runCompactionModel?: SparkCliHostServices["runCompactionModel"];
+  } = {},
 ) {
   const config: SparkConfig = {
     extensions: [],
@@ -1110,13 +1114,17 @@ async function makeFakeServices(
     await mkdir(options.sparkHome, { recursive: true });
     await writeFile(join(options.sparkHome, "config.json"), `${JSON.stringify(config)}\n`, "utf8");
   }
-  return await createSparkCliHostServices({
+  const services = await createSparkCliHostServices({
     ...options,
     config,
     extensions: [],
     providers: ["fake-provider"],
     providerImporter: async () => fakeProviderModule(fake),
   });
+  // Tests opt into Smart compact explicitly; default bootstrap runner would call the
+  // fake provider and change overflow/providerCall expectations.
+  services.runCompactionModel = testOptions.runCompactionModel;
+  return services;
 }
 
 function fakeProviderModule(fake: FakeProviderOptions = {}) {

@@ -3219,7 +3219,11 @@ export class SparkNativeTuiApp implements Component, Focusable {
 
   private renderArtifactCockpit(): string[] {
     const lines = ["◆ Spark cockpit: artifacts"];
-    for (const artifact of [...this.cockpit.artifacts.values()].slice(0, MAX_COCKPIT_PANEL_ROWS)) {
+    const rows = [...this.cockpit.artifacts.values(), ...this.cockpit.evidence.values()].slice(
+      0,
+      MAX_COCKPIT_PANEL_ROWS,
+    );
+    for (const artifact of rows) {
       const producer = artifact.producer ? ` producer=${artifact.producer}` : "";
       const status = artifact.status ? ` status=${artifact.status}` : "";
       lines.push(

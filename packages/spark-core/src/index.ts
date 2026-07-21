@@ -651,9 +651,18 @@ export function refId(ref: AnyRef | string): string {
 }
 
 export function isRefKind(value: string): value is RefKind {
-  return ["spark", "proj", "task", "role", "artifact", "run", "review", "ask", "cue-job"].includes(
-    value,
-  );
+  return [
+    "spark",
+    "proj",
+    "task",
+    "role",
+    "artifact",
+    "evidence",
+    "run",
+    "review",
+    "ask",
+    "cue-job",
+  ].includes(value);
 }
 
 export function isRef<K extends RefKind>(value: string, kind?: K): value is Ref<K> {

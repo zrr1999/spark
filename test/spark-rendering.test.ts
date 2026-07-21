@@ -425,7 +425,11 @@ test("SparkNativeTuiApp records protocol cockpit state and renders Spark panels"
   assert.equal(await app.submitInput("/artifacts"), "command");
   rendered = app.render(120).join("\n");
   assert.match(rendered, /Spark cockpit: artifacts/);
-  assert.match(rendered, /No artifact view-model updates have been published yet/);
+  assert.match(
+    rendered,
+    /artifact:review-verdict \[record\/json\] producer=review status=approved/,
+  );
+  assert.match(rendered, /artifact:graft-patch \[record\/json\] producer=task status=candidate/);
 
   assert.equal(await app.submitInput("/reviews"), "command");
   rendered = app.render(120).join("\n");
