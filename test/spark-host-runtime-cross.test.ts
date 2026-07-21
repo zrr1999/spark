@@ -24,16 +24,15 @@ test("SparkHostRuntime accepts piGraftExtension(pi) and records its tools", () =
     false,
   );
   const toolNames = host.getAllTools().map((tool) => tool.name);
-  assert.ok(toolNames.includes("graft_status"));
-  assert.ok(toolNames.includes("graft_doctor"));
-  assert.deepEqual(host.getTool("graft_status")?.policy, {
-    effect: "read",
+  assert.ok(toolNames.includes("graft"));
+  assert.deepEqual([...toolNames], ["graft"]);
+  assert.deepEqual(host.getTool("graft")?.policy, {
+    effect: "local_write",
     executionMode: "sequential",
     domains: ["graft"],
     phases: [],
     approval: "none",
   });
-  assert.equal(host.getTool("graft_cli_exec")?.policy.effect, "unknown");
 });
 
 test("SparkHostRuntime accepts piAskExtension(pi) and registers canonical ask tool", () => {

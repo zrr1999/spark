@@ -58,7 +58,8 @@ test("normal spark-graft entrypoint does not register sandbox or built-in file o
   const { pi, tools } = createFakePi();
   registerSparkGraftExtension(pi);
 
-  assert.equal(tools.has("graft_read"), true);
+  assert.equal(tools.has("graft"), true);
+  assert.equal(tools.has("graft_read"), false);
   assert.equal(tools.has("graft_sandbox_enter"), false);
   assert.equal(tools.has("graft_sandbox_status"), false);
   assert.equal(tools.has("graft_sandbox_exit"), false);
@@ -71,7 +72,7 @@ test("normal spark-graft entrypoint does not register sandbox or built-in file o
   assert.equal(tools.has("read"), false);
   assert.equal(tools.has("write"), false);
   assert.equal(tools.has("edit"), false);
-  assert.equal(tools.get("graft_read")?.executionMode, undefined);
+  assert.equal(tools.get("graft")?.executionMode, undefined);
 });
 
 test("sandbox stateful tools request sequential execution to avoid scratch races", () => {
@@ -92,7 +93,7 @@ test("sandbox stateful tools request sequential execution to avoid scratch races
     assert.equal(tools.get(toolName)?.executionMode, "sequential", toolName);
   }
 
-  for (const toolName of ["graft_read", "graft_sandbox_status", "grep", "find", "ls"]) {
+  for (const toolName of ["graft", "graft_sandbox_status", "grep", "find", "ls"]) {
     assert.equal(tools.get(toolName)?.executionMode, undefined, toolName);
   }
 });
@@ -142,7 +143,8 @@ test("sandbox entrypoint layers sandbox state tools over normal spark-graft", as
   const { pi, tools, entries, handlers } = createFakePi(initialEntries);
   registerSparkGraftSandboxExtension(pi);
 
-  assert.equal(tools.has("graft_read"), true);
+  assert.equal(tools.has("graft"), true);
+  assert.equal(tools.has("graft_read"), false);
   assert.equal(tools.has("graft_sandbox_enter"), true);
   assert.equal(tools.has("graft_sandbox_status"), true);
   assert.equal(tools.has("graft_sandbox_exit"), true);

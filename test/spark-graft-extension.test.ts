@@ -59,6 +59,15 @@ async function executeTool(
   return tool.execute(name, params, undefined, undefined, ctx);
 }
 
+async function executeGraftAction(
+  tools: Map<string, SparkGraftToolDefinition>,
+  action: string,
+  params: Record<string, unknown>,
+  ctx: SparkGraftToolContext,
+): Promise<SparkGraftToolResult> {
+  return executeTool(tools.get("graft"), "graft", { ...params, action }, ctx);
+}
+
 function createFakePi() {
   const tools = new Map<string, SparkGraftToolDefinition>();
   const entries: unknown[] = [];
@@ -109,7 +118,7 @@ function envTest(name: string, callback: (t: TestContext) => Promise<void>): voi
 type SimpleGraftRouteCase = {
   name: string;
   tempPrefix: string;
-  toolName: string;
+  action: string;
   params?: (paths: { dir: string; project: string }) => Record<string, unknown>;
   ctx?: (paths: { dir: string; project: string }) => SparkGraftToolContext;
   mockOutput: string;
@@ -136,9 +145,9 @@ async function assertSimpleGraftRoute(route: SimpleGraftRouteCase): Promise<void
       const { pi, tools } = createFakePi();
       registerSparkGraftExtension(pi);
       const paths = { dir, project };
-      const result = await executeTool(
-        tools.get(route.toolName),
-        route.toolName,
+      const result = await executeGraftAction(
+        tools,
+        route.action,
         route.params?.(paths) ?? {},
         route.ctx?.(paths) ?? { cwd: dir },
       );
@@ -195,65 +204,15 @@ test("spark-graft registers the final high-frequency direct tool set and extensi
   assert.deepEqual([...handlers.keys()], ["session_start"]);
   assert.equal("registerCommand" in pi, false);
   assert.equal(tools.has("graft_patch"), false);
-  assert.deepEqual(
-    [...tools.keys()],
-    [
-      "graft_help",
-      "graft_init",
-      "graft_status",
-      "graft_ps",
-      "graft_doctor",
-      "graft_scratch_open",
-      "graft_read",
-      "graft_write",
-      "graft_edit",
-      "graft_delete",
-      "graft_scratch_diff",
-      "graft_scratch_drop",
-      "graft_scratch_pin",
-      "graft_scratch_unpin",
-      "graft_candidate_from_scratch",
-      "graft_validate",
-      "graft_admit",
-      "graft_show",
-      "graft_evidence",
-      "graft_candidates",
-      "graft_search",
-      "graft_materialize",
-      "graft_repo",
-      "graft_cli_exec",
-    ],
-  );
-  const readTools = new Set([
-    "graft_help",
-    "graft_status",
-    "graft_ps",
-    "graft_scratch_diff",
-    "graft_show",
-    "graft_evidence",
-    "graft_candidates",
-    "graft_search",
-  ]);
-  for (const [name, tool] of tools) {
-    const effect =
-      name === "graft_cli_exec"
-        ? undefined
-        : name === "graft_scratch_drop"
-          ? "destructive"
-          : readTools.has(name)
-            ? "read"
-            : "local_write";
-    assert.deepEqual(
-      tool.policy,
-      {
-        ...(effect ? { effect } : {}),
-        executionMode: "sequential",
-        domains: ["graft"],
-        approval: "none",
-      },
-      `${name} must declare a canonical Graft policy`,
-    );
-  }
+  assert.deepEqual([...tools.keys()], ["graft"]);
+  const graft = tools.get("graft");
+  assert.ok(graft);
+  assert.deepEqual(graft.policy, {
+    effect: "local_write",
+    executionMode: "sequential",
+    domains: ["graft"],
+    approval: "none",
+  });
 });
 
 test("spark-graft lifecycle prerequisite errors point to the next tool", async () => {
@@ -262,39 +221,31 @@ test("spark-graft lifecycle prerequisite errors point to the next tool", async (
   const ctx = { cwd: "/tmp/spark-graft-lifecycle-errors" };
 
   await assert.rejects(
-    () =>
-      executeTool(tools.get("graft_validate"), "graft_validate", { target: "scratch:abc" }, ctx),
+    () => executeGraftAction(tools, "validate", { target: "scratch:abc" }, ctx),
     /graft_validate accepts candidate:\/patch: refs[\s\S]*next: run graft_candidate_from_scratch[\s\S]*graft_validate/,
   );
   await assert.rejects(
-    () => executeTool(tools.get("graft_validate"), "graft_validate", { target: "tree:abc" }, ctx),
+    () => executeGraftAction(tools, "validate", { target: "tree:abc" }, ctx),
     /graft_validate accepts candidate:\/patch: refs[\s\S]*create one from a scratch with graft_candidate_from_scratch/,
   );
   await assert.rejects(
-    () => executeTool(tools.get("graft_materialize"), "graft_materialize", {}, ctx),
+    () => executeGraftAction(tools, "materialize", {}, ctx),
     /graft_materialize requires patch[\s\S]*next: run graft_admit[\s\S]*patch: ref/,
   );
   await assert.rejects(
-    () =>
-      executeTool(
-        tools.get("graft_materialize"),
-        "graft_materialize",
-        { patch: "candidate:abc" },
-        ctx,
-      ),
+    () => executeGraftAction(tools, "materialize", { patch: "candidate:abc" }, ctx),
     /graft_materialize requires an admitted patch: ref[\s\S]*next: run graft_admit\(\{ candidate: "candidate:abc" \}\)/,
   );
   await assert.rejects(
-    () => executeTool(tools.get("graft_admit"), "graft_admit", { candidate: "scratch:abc" }, ctx),
+    () => executeGraftAction(tools, "admit", { candidate: "scratch:abc" }, ctx),
     /graft_admit accepts candidate: refs[\s\S]*next: run graft_candidate_from_scratch/,
   );
   await assert.rejects(
-    () => executeTool(tools.get("graft_show"), "graft_show", {}, ctx),
+    () => executeGraftAction(tools, "show", {}, ctx),
     /graft_show requires target[\s\S]*next: pass a candidate:\/patch: ref/,
   );
   await assert.rejects(
-    () =>
-      executeTool(tools.get("graft_evidence"), "graft_evidence", { subject: "scratch:abc" }, ctx),
+    () => executeGraftAction(tools, "evidence", { subject: "scratch:abc" }, ctx),
     /graft_evidence accepts candidate:\/patch: refs[\s\S]*next: run graft_candidate_from_scratch/,
   );
 });
@@ -340,12 +291,7 @@ envTest("graft_ps renders a bounded workspace sample with an expansion hint", as
   try {
     const { pi, tools } = createFakePi();
     registerSparkGraftExtension(pi);
-    const bounded = await executeTool(
-      tools.get("graft_ps"),
-      "graft_ps",
-      { limit: 2 },
-      { cwd: dir },
-    );
+    const bounded = await executeGraftAction(tools, "ps", { limit: 2 }, { cwd: dir });
     assert.match(bounded.content[0].text, /graft workspace ps/);
     assert.match(bounded.content[0].text, /socket_state: missing/);
     assert.match(bounded.content[0].text, /workspaces_hidden_missing: 1/);
@@ -364,9 +310,9 @@ envTest("graft_ps renders a bounded workspace sample with an expansion hint", as
       truncated: true,
     });
 
-    const expanded = await executeTool(
-      tools.get("graft_ps"),
-      "graft_ps",
+    const expanded = await executeGraftAction(
+      tools,
+      "ps",
       { limit: 1, includeAll: true },
       { cwd: dir },
     );
@@ -409,12 +355,7 @@ envTest("graft_doctor buckets problems and samples each class", async () => {
   try {
     const { pi, tools } = createFakePi();
     registerSparkGraftExtension(pi);
-    const bounded = await executeTool(
-      tools.get("graft_doctor"),
-      "graft_doctor",
-      { limit: 1 },
-      { cwd: dir },
-    );
+    const bounded = await executeGraftAction(tools, "doctor", { limit: 1 }, { cwd: dir });
     assert.match(bounded.content[0].text, /graft workspace doctor/);
     assert.match(bounded.content[0].text, /registry: \/tmp\/graft-home\/registry\.toml/);
     assert.match(bounded.content[0].text, /problems: 5 total across 3 class\(es\)/);
@@ -438,9 +379,9 @@ envTest("graft_doctor buckets problems and samples each class", async () => {
       hidden: 2,
     });
 
-    const expanded = await executeTool(
-      tools.get("graft_doctor"),
-      "graft_doctor",
+    const expanded = await executeGraftAction(
+      tools,
+      "doctor",
       { limit: 1, includeAll: true },
       { cwd: dir },
     );
@@ -468,7 +409,7 @@ envTest("graft_help defaults to the maintained agent workflow topic", async () =
   try {
     const { pi, tools } = createFakePi();
     registerSparkGraftExtension(pi);
-    const result = await executeTool(tools.get("graft_help"), "graft_help", {}, { cwd: dir });
+    const result = await executeGraftAction(tools, "help", {}, { cwd: dir });
     assert.match(result.content[0].text, /Recommended workflow for agents and spark-graft tools/);
     assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
       "--cwd",
@@ -485,20 +426,19 @@ envTest("graft_help defaults to the maintained agent workflow topic", async () =
   }
 });
 
-test("graft_cli_exec validates argv before daemon work", async () => {
+test("graft action=cli_exec validates argv before daemon work", async () => {
   const { pi, tools } = createFakePi();
   registerSparkGraftExtension(pi);
-  const cliExec = tools.get("graft_cli_exec");
   await assert.rejects(
     () =>
-      executeTool(cliExec, "graft_cli_exec", { argv: [] }, { cwd: "/tmp/spark-graft-no-daemon" }),
+      executeGraftAction(tools, "cli_exec", { argv: [] }, { cwd: "/tmp/spark-graft-no-daemon" }),
     /argv must be a non-empty string array/,
   );
   await assert.rejects(
     () =>
-      executeTool(
-        cliExec,
-        "graft_cli_exec",
+      executeGraftAction(
+        tools,
+        "cli_exec",
         { argv: "status" },
         { cwd: "/tmp/spark-graft-no-daemon" },
       ),
@@ -506,9 +446,9 @@ test("graft_cli_exec validates argv before daemon work", async () => {
   );
   await assert.rejects(
     () =>
-      executeTool(
-        cliExec,
-        "graft_cli_exec",
+      executeGraftAction(
+        tools,
+        "cli_exec",
         { argv: ["status", 1] },
         { cwd: "/tmp/spark-graft-no-daemon" },
       ),
@@ -516,9 +456,9 @@ test("graft_cli_exec validates argv before daemon work", async () => {
   );
   await assert.rejects(
     () =>
-      executeTool(
-        cliExec,
-        "graft_cli_exec",
+      executeGraftAction(
+        tools,
+        "cli_exec",
         { argv: ["property", "list"] },
         { cwd: "/tmp/spark-graft-no-daemon" },
       ),
@@ -526,9 +466,9 @@ test("graft_cli_exec validates argv before daemon work", async () => {
   );
   await assert.rejects(
     () =>
-      executeTool(
-        cliExec,
-        "graft_cli_exec",
+      executeGraftAction(
+        tools,
+        "cli_exec",
         { argv: ["scratch", "read", "--base", "graft:empty", "note.txt"] },
         { cwd: "/tmp/spark-graft-no-daemon" },
       ),
@@ -536,9 +476,9 @@ test("graft_cli_exec validates argv before daemon work", async () => {
   );
   await assert.rejects(
     () =>
-      executeTool(
-        cliExec,
-        "graft_cli_exec",
+      executeGraftAction(
+        tools,
+        "cli_exec",
         { argv: ["patch", "materialize", "patch:abc"] },
         { cwd: "/tmp/spark-graft-no-daemon" },
       ),
@@ -560,9 +500,9 @@ test("graft_cli_exec allows canonical patch incoming argv", async () => {
   try {
     const { pi, tools } = createFakePi();
     registerSparkGraftExtension(pi);
-    const result = await executeTool(
-      tools.get("graft_cli_exec"),
-      "graft_cli_exec",
+    const result = await executeGraftAction(
+      tools,
+      "cli_exec",
       { argv: ["patch", "incoming"] },
       { cwd: dir },
     );
@@ -588,7 +528,7 @@ test("simple spark-graft tools use graft --json CLI routes", async () => {
     {
       name: "graft_ps",
       tempPrefix: "spark-graft-ps-",
-      toolName: "graft_ps",
+      action: "ps",
       mockOutput: `printf '{"message":"ps direct"}\n'`,
       expectedText: /ps direct/,
       expectedArgv: ({ dir }) => ["--cwd", dir, "--json", "workspace", "ps"],
@@ -596,7 +536,7 @@ test("simple spark-graft tools use graft --json CLI routes", async () => {
     {
       name: "graft_init",
       tempPrefix: "spark-graft-init-",
-      toolName: "graft_init",
+      action: "init",
       params: ({ project }) => ({ cwd: project }),
       mockOutput: `printf '{"status":"ok","message":"initialized mock"}\n'`,
       expectedText: /initialized mock/,
@@ -606,7 +546,7 @@ test("simple spark-graft tools use graft --json CLI routes", async () => {
     {
       name: "graft_doctor",
       tempPrefix: "spark-graft-doctor-",
-      toolName: "graft_doctor",
+      action: "doctor",
       params: () => ({ rebuildRegistry: true }),
       mockOutput: `printf '{"message":"doctor ok"}\n'`,
       expectedText: /doctor ok/,
@@ -622,7 +562,7 @@ test("simple spark-graft tools use graft --json CLI routes", async () => {
     {
       name: "graft_validate",
       tempPrefix: "spark-graft-validate-cli-",
-      toolName: "graft_validate",
+      action: "validate",
       params: () => ({ target: "candidate:abc" }),
       ctx: ({ project }) => ({ cwd: project }),
       mockOutput: `printf '{"message":"validation completed"}\n'`,
@@ -639,7 +579,7 @@ test("simple spark-graft tools use graft --json CLI routes", async () => {
     {
       name: "graft_admit",
       tempPrefix: "spark-graft-admit-cli-",
-      toolName: "graft_admit",
+      action: "admit",
       params: () => ({ candidate: "candidate:abc", required: ["tests_pass"] }),
       ctx: ({ project }) => ({ cwd: project }),
       mockOutput: `printf '{"message":"admitted","patch_id":"patch:abc"}\n'`,
@@ -658,7 +598,7 @@ test("simple spark-graft tools use graft --json CLI routes", async () => {
     {
       name: "graft_show",
       tempPrefix: "spark-graft-show-cli-",
-      toolName: "graft_show",
+      action: "show",
       params: () => ({ target: "patch:abc", evidence: true, change: true }),
       ctx: ({ project }) => ({ cwd: project }),
       mockOutput: `printf '{"message":"patch details"}\n'`,
@@ -677,7 +617,7 @@ test("simple spark-graft tools use graft --json CLI routes", async () => {
     {
       name: "graft_search",
       tempPrefix: "spark-graft-search-cli-",
-      toolName: "graft_search",
+      action: "search",
       params: () => ({ constraint: "tests_pass", hasEvidence: "tests_pass" }),
       ctx: ({ project }) => ({ cwd: project }),
       mockOutput: `printf '{"message":"found patches"}\n'`,
@@ -697,7 +637,7 @@ test("simple spark-graft tools use graft --json CLI routes", async () => {
     {
       name: "graft_candidates",
       tempPrefix: "spark-graft-candidates-cli-",
-      toolName: "graft_candidates",
+      action: "candidates",
       params: () => ({ constraint: "tests_pass", failed: true }),
       ctx: ({ project }) => ({ cwd: project }),
       mockOutput: `printf '{"message":"candidate list"}\n'`,
@@ -715,7 +655,7 @@ test("simple spark-graft tools use graft --json CLI routes", async () => {
     {
       name: "graft_materialize",
       tempPrefix: "spark-graft-materialize-cli-",
-      toolName: "graft_materialize",
+      action: "materialize",
       params: () => ({ patch: "patch:abc", dryRun: true }),
       ctx: ({ project }) => ({ cwd: project }),
       mockOutput: `printf '{"message":"materialization dry-run"}\n'`,
@@ -733,7 +673,7 @@ test("simple spark-graft tools use graft --json CLI routes", async () => {
     {
       name: "graft_status",
       tempPrefix: "spark-graft-status-cli-",
-      toolName: "graft_status",
+      action: "status",
       ctx: ({ project }) => ({ cwd: project }),
       mockOutput: `printf '{"message":"status","result":{"status":"ok","daemon":"graftd"}}\n'`,
       expectedText: /graftd: ok/,
@@ -742,8 +682,8 @@ test("simple spark-graft tools use graft --json CLI routes", async () => {
     {
       name: "graft_repo list",
       tempPrefix: "spark-graft-repo-list-",
-      toolName: "graft_repo",
-      params: () => ({ action: "list" }),
+      action: "repo",
+      params: () => ({ repoAction: "list" }),
       mockOutput: `printf '{"message":"spark present .graft/repos/spark local"}\n'`,
       expectedText: /spark/,
       expectedArgv: ({ dir }) => ["--cwd", dir, "--json", "repo", "list"],
@@ -751,9 +691,9 @@ test("simple spark-graft tools use graft --json CLI routes", async () => {
     {
       name: "graft_repo add",
       tempPrefix: "spark-graft-repo-add-",
-      toolName: "graft_repo",
+      action: "repo",
       params: () => ({
-        action: "add",
+        repoAction: "add",
         repoId: "spark",
         url: "/repos/spark",
         defaultBranch: "main",
@@ -784,17 +724,15 @@ test("graft candidates/search use constraint terminology", async () => {
   const { pi, tools } = createFakePi();
   registerSparkGraftExtension(pi);
 
-  const candidates = tools.get("graft_candidates");
-  const search = tools.get("graft_search");
-  assert.ok(candidates);
-  assert.ok(search);
+  const graft = tools.get("graft");
+  assert.ok(graft);
 
   await assert.rejects(
-    () => executeTool(candidates, "graft_candidates", { property: "tests_pass" }, { cwd: "/tmp" }),
+    () => executeGraftAction(tools, "candidates", { property: "tests_pass" }, { cwd: "/tmp" }),
     /property was renamed to constraint/,
   );
   await assert.rejects(
-    () => executeTool(search, "graft_search", { property: "tests_pass" }, { cwd: "/tmp" }),
+    () => executeGraftAction(tools, "search", { property: "tests_pass" }, { cwd: "/tmp" }),
     /property was renamed to constraint/,
   );
 });
@@ -803,10 +741,10 @@ test("spark-graft tools require explicit cwd or restored session state", async (
   const { pi, tools } = createFakePi();
   registerSparkGraftExtension(pi);
 
-  const status = tools.get("graft_status");
-  assert.ok(status, "expected graft_status tool to be registered");
+  const status = tools.get("graft");
+  assert.ok(status, "expected graft tool to be registered");
   await assert.rejects(
-    () => status.execute("graft_status", {}),
+    () => status!.execute("graft", { action: "status" }),
     /spark-graft tools require a cwd context or restored session state/,
   );
 });
@@ -837,39 +775,19 @@ esac`,
     registerSparkGraftExtension(pi);
     const ctx = { cwd: project };
 
-    const opened = await executeTool(
-      tools.get("graft_scratch_open"),
-      "graft_scratch_open",
-      { base: "graft:empty" },
-      ctx,
-    );
+    const opened = await executeGraftAction(tools, "scratch_open", { base: "graft:empty" }, ctx);
     assert.match(opened.content[0].text, /scratch:open/);
 
-    const pinned = await executeTool(tools.get("graft_scratch_pin"), "graft_scratch_pin", {}, ctx);
+    const pinned = await executeGraftAction(tools, "scratch_pin", {}, ctx);
     assert.match(pinned.content[0].text, /lease:one/);
 
-    const diff = await executeTool(
-      tools.get("graft_scratch_diff"),
-      "graft_scratch_diff",
-      { from: "scratch:old" },
-      ctx,
-    );
+    const diff = await executeGraftAction(tools, "scratch_diff", { from: "scratch:old" }, ctx);
     assert.match(diff.content[0].text, /note\.txt/);
 
-    const unpinned = await executeTool(
-      tools.get("graft_scratch_unpin"),
-      "graft_scratch_unpin",
-      { lease: "lease:one" },
-      ctx,
-    );
+    const unpinned = await executeGraftAction(tools, "scratch_unpin", { lease: "lease:one" }, ctx);
     assert.match(unpinned.content[0].text, /scratch:open/);
 
-    const dropped = await executeTool(
-      tools.get("graft_scratch_drop"),
-      "graft_scratch_drop",
-      {},
-      ctx,
-    );
+    const dropped = await executeGraftAction(tools, "scratch_drop", {}, ctx);
     assert.match(dropped.content[0].text, /Dropped graft scratch scratch:open/);
 
     assert.deepEqual((await readFile(argvFile, "utf8")).trim().split("\n"), [
@@ -915,9 +833,9 @@ esac`,
       registerSparkGraftExtension(pi);
       const ctx = { cwd: project };
 
-      const written = await executeTool(
-        tools.get("graft_write"),
-        "graft_write",
+      const written = await executeGraftAction(
+        tools,
+        "write",
         { path: "note.txt", content: "env\n" },
         ctx,
       );
@@ -927,12 +845,7 @@ esac`,
         "candidate:env",
       );
 
-      const opened = await executeTool(
-        tools.get("graft_scratch_open"),
-        "graft_scratch_open",
-        {},
-        ctx,
-      );
+      const opened = await executeGraftAction(tools, "scratch_open", {}, ctx);
       assert.match(opened.content[0].text, /candidate:env/);
       assert.equal((opened.details?.state as { base?: string } | undefined)?.base, "candidate:env");
 
@@ -959,9 +872,9 @@ envTest("graft scratch tools require base, from, lastScratch, or GRAFT_BASE_REF"
     const { pi, tools } = createFakePi();
     registerSparkGraftExtension(pi);
     await assert.rejects(
-      executeTool(
-        tools.get("graft_write"),
-        "graft_write",
+      executeGraftAction(
+        tools,
+        "write",
         { path: "note.txt", content: "missing\n" },
         { cwd: "/tmp/spark-graft-missing-env" },
       ),
@@ -1000,17 +913,17 @@ esac`,
     registerSparkGraftExtension(pi);
     const ctx = { cwd: project };
 
-    const written = await executeTool(
-      tools.get("graft_write"),
-      "graft_write",
+    const written = await executeGraftAction(
+      tools,
+      "write",
       { base: "graft:empty", path: "note.txt", content: "alpha\nbeta\n" },
       ctx,
     );
     assert.match(written.content[0].text, /scratch:write/);
 
-    const edited = await executeTool(
-      tools.get("graft_edit"),
-      "graft_edit",
+    const edited = await executeGraftAction(
+      tools,
+      "edit",
       {
         from: "scratch:write",
         path: "note.txt",
@@ -1771,9 +1684,9 @@ envTest("graft_candidate_from_scratch maps expected to CLI --expect flags", asyn
   try {
     const { pi, tools } = createFakePi();
     registerSparkGraftExtension(pi);
-    const result = await executeTool(
-      tools.get("graft_candidate_from_scratch"),
-      "graft_candidate_from_scratch",
+    const result = await executeGraftAction(
+      tools,
+      "candidate_from_scratch",
       { scratch: "scratch:abc", expected: ["tests_pass"] },
       { cwd: project },
     );
@@ -1833,15 +1746,15 @@ envTest(
       for (const handler of handlers.get("session_start") ?? []) {
         await handler({}, toolCtx);
       }
-      const help = await executeTool(tools.get("graft_help"), "graft_help", {}, toolCtx);
+      const help = await executeGraftAction(tools, "help", {}, toolCtx);
       assert.match(help.content[0].text, /Recommended workflow for agents and spark-graft tools/);
 
-      const init = await executeTool(tools.get("graft_init"), "graft_init", {}, toolCtx);
+      const init = await executeGraftAction(tools, "init", {}, toolCtx);
       assert.match(init.content[0].text, /initialized|already initialized/);
 
-      const seedNote = await executeTool(
-        tools.get("graft_write"),
-        "graft_write",
+      const seedNote = await executeGraftAction(
+        tools,
+        "write",
         { base: "graft:empty", path: "note.txt", content: "alpha\nbeta\n" },
         toolCtx,
       );
@@ -1851,9 +1764,9 @@ envTest(
       );
       assert.match(scratchNote, /^scratch:[0-9a-f]+$/);
 
-      const seedRemove = await executeTool(
-        tools.get("graft_write"),
-        "graft_write",
+      const seedRemove = await executeGraftAction(
+        tools,
+        "write",
         { from: scratchNote, path: "remove.txt", content: "remove me\n" },
         toolCtx,
       );
@@ -1862,9 +1775,9 @@ envTest(
         "expected seed remove write to return a scratch id",
       );
 
-      const seedCandidateResult = await executeTool(
-        tools.get("graft_candidate_from_scratch"),
-        "graft_candidate_from_scratch",
+      const seedCandidateResult = await executeGraftAction(
+        tools,
+        "candidate_from_scratch",
         { scratch: scratchSeed, message: "spark-graft-seed" },
         toolCtx,
       );
@@ -1874,9 +1787,9 @@ envTest(
       );
       assert.match(seedCandidate, /^candidate:[0-9a-f]+$/);
 
-      const write = await executeTool(
-        tools.get("graft_write"),
-        "graft_write",
+      const write = await executeGraftAction(
+        tools,
+        "write",
         { base: seedCandidate, path: "added.txt", content: "added\n" },
         toolCtx,
       );
@@ -1886,9 +1799,9 @@ envTest(
       );
       assert.match(scratchWrite, /^scratch:[0-9a-f]+$/);
 
-      const read = await executeTool(
-        tools.get("graft_read"),
-        "graft_read",
+      const read = await executeGraftAction(
+        tools,
+        "read",
         { from: scratchWrite, path: "note.txt" },
         toolCtx,
       );
@@ -1900,9 +1813,9 @@ envTest(
         /^scratch:/,
       );
 
-      const edit = await executeTool(
-        tools.get("graft_edit"),
-        "graft_edit",
+      const edit = await executeGraftAction(
+        tools,
+        "edit",
         {
           from: scratchWrite,
           path: "note.txt",
@@ -1916,9 +1829,9 @@ envTest(
         "expected graft_edit details.result.scratch to be a string",
       );
 
-      const deleteResult = await executeTool(
-        tools.get("graft_delete"),
-        "graft_delete",
+      const deleteResult = await executeGraftAction(
+        tools,
+        "delete",
         { from: scratchEdit, path: "remove.txt" },
         toolCtx,
       );
@@ -1928,9 +1841,9 @@ envTest(
       );
       assert.match(deleteResult.content[0].text, /remove\.txt/);
 
-      const candidateResult = await executeTool(
-        tools.get("graft_candidate_from_scratch"),
-        "graft_candidate_from_scratch",
+      const candidateResult = await executeGraftAction(
+        tools,
+        "candidate_from_scratch",
         { scratch: scratchDelete, message: "spark-graft-candidate" },
         toolCtx,
       );
@@ -1946,53 +1859,38 @@ envTest(
         assert.ok(changedPaths.includes(path), `expected changed path ${path}`);
       }
 
-      const validate = await executeTool(
-        tools.get("graft_validate"),
-        "graft_validate",
-        { target: candidate },
-        toolCtx,
-      );
+      const validate = await executeGraftAction(tools, "validate", { target: candidate }, toolCtx);
       assert.match(validate.content[0].text, /validation completed/);
 
-      const admit = await executeTool(
-        tools.get("graft_admit"),
-        "graft_admit",
-        { candidate },
-        toolCtx,
-      );
+      const admit = await executeGraftAction(tools, "admit", { candidate }, toolCtx);
       assert.match(admit.content[0].text, /admitted|patch/i);
       const admitEnvelope = admit.details?.envelope;
       assert.ok(isRecord(admitEnvelope), "expected admit envelope");
       const patch = requiredString(admitEnvelope.patch_id, "expected admitted patch id");
 
-      const show = await executeTool(
-        tools.get("graft_show"),
-        "graft_show",
+      const show = await executeGraftAction(
+        tools,
+        "show",
         { target: patch, evidence: true, change: true },
         toolCtx,
       );
       assert.match(show.content[0].text, /patch/i);
 
-      const evidence = await executeTool(
-        tools.get("graft_evidence"),
-        "graft_evidence",
-        { subject: patch },
-        toolCtx,
-      );
+      const evidence = await executeGraftAction(tools, "evidence", { subject: patch }, toolCtx);
       assert.ok(isRecord(evidence.details?.envelope), "expected evidence envelope");
       assert.match(evidence.content[0].text, /evidence|ValidPatch|property:/i);
 
-      const materialize = await executeTool(
-        tools.get("graft_materialize"),
-        "graft_materialize",
+      const materialize = await executeGraftAction(
+        tools,
+        "materialize",
         { patch, dryRun: true },
         toolCtx,
       );
       assert.match(materialize.content[0].text, /materialization dry-run/);
 
-      const exported = await executeTool(
-        tools.get("graft_cli_exec"),
-        "graft_cli_exec",
+      const exported = await executeGraftAction(
+        tools,
+        "cli_exec",
         { argv: ["registry", "export", join(dir, "registry.json")] },
         toolCtx,
       );

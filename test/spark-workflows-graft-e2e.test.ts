@@ -72,6 +72,15 @@ async function executeTool(
   return tool.execute(name, params, undefined, undefined, ctx);
 }
 
+async function executeGraftAction(
+  tools: Map<string, SparkGraftToolDefinition>,
+  action: string,
+  params: Record<string, unknown>,
+  ctx: SparkGraftToolContext,
+): Promise<SparkGraftToolResult> {
+  return executeTool(tools.get("graft"), "graft", { ...params, action }, ctx);
+}
+
 async function binaryAvailable(path: string): Promise<boolean> {
   try {
     await execFileAsync(path, ["--help"], { timeout: 5_000 });
@@ -87,12 +96,7 @@ async function readCandidateContent(
   ctx: SparkGraftToolContext,
 ): Promise<string> {
   const tools = createFakeSparkGraftTools().tools;
-  const read = await executeTool(
-    tools.get("graft_read"),
-    "graft_read",
-    { base: candidate, path },
-    ctx,
-  );
+  const read = await executeGraftAction(tools, "read", { base: candidate, path }, ctx);
   return read.content[0].text;
 }
 
@@ -139,14 +143,14 @@ test("workflow graft isolation E2E creates separate candidates for parallel same
     };
     for (const handler of seed.handlers.get("session_start") ?? []) await handler({}, toolCtx);
     const seedTools = seed.tools;
-    const help = await executeTool(seedTools.get("graft_help"), "graft_help", {}, toolCtx);
+    const help = await executeGraftAction(seedTools, "help", {}, toolCtx);
     assert.match(help.content[0].text, /Recommended workflow for agents and spark-graft tools/);
-    const init = await executeTool(seedTools.get("graft_init"), "graft_init", {}, toolCtx);
+    const init = await executeGraftAction(seedTools, "init", {}, toolCtx);
     assert.match(init.content[0].text, /initialized|already initialized/);
 
-    const seedWrite = await executeTool(
-      seedTools.get("graft_write"),
-      "graft_write",
+    const seedWrite = await executeGraftAction(
+      seedTools,
+      "write",
       { base: "graft:empty", path: "same.txt", content: "seed\n" },
       toolCtx,
     );
@@ -154,9 +158,9 @@ test("workflow graft isolation E2E creates separate candidates for parallel same
       detailsResult(seedWrite).scratch,
       "expected seed write to return a scratch id",
     );
-    const seedCandidateResult = await executeTool(
-      seedTools.get("graft_candidate_from_scratch"),
-      "graft_candidate_from_scratch",
+    const seedCandidateResult = await executeGraftAction(
+      seedTools,
+      "candidate_from_scratch",
       { scratch: seedScratch, message: "seed same-path base" },
       toolCtx,
     );
@@ -176,9 +180,9 @@ test("workflow graft isolation E2E creates separate candidates for parallel same
         assertGraftPolicy(request, seedCandidate);
         const label = labelFromInstruction(request.instruction);
         const childTools = createFakeSparkGraftTools().tools;
-        const write = await executeTool(
-          childTools.get("graft_write"),
-          "graft_write",
+        const write = await executeGraftAction(
+          childTools,
+          "write",
           { path: "same.txt", content: `${label}\n` },
           toolCtx,
         );
@@ -186,9 +190,9 @@ test("workflow graft isolation E2E creates separate candidates for parallel same
           detailsResult(write).scratch,
           `expected ${label} write to return scratch`,
         );
-        const candidateResult = await executeTool(
-          childTools.get("graft_candidate_from_scratch"),
-          "graft_candidate_from_scratch",
+        const candidateResult = await executeGraftAction(
+          childTools,
+          "candidate_from_scratch",
           { scratch, message: `workflow graft isolation ${label}` },
           toolCtx,
         );

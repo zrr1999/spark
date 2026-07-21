@@ -18,33 +18,35 @@ import {
 const STATE_ENTRY = "spark-graft-state";
 export const SPARK_GRAFT_PATCHER_ROLE_ID = "patcher";
 export const SPARK_GRAFT_PATCHER_ROLE_REF = "role:extension-patcher";
-export const SPARK_GRAFT_PATCHER_ALLOWED_TOOLS = [
-  "graft_help",
-  "graft_init",
-  "graft_status",
-  "graft_ps",
-  "graft_doctor",
-  "graft_scratch_open",
-  "graft_read",
-  "graft_write",
-  "graft_edit",
-  "graft_delete",
-  "graft_scratch_diff",
-  "graft_scratch_drop",
-  "graft_scratch_pin",
-  "graft_scratch_unpin",
-  "graft_candidate_from_scratch",
-  "graft_validate",
-  "graft_admit",
-  "graft_show",
-  "graft_evidence",
-  "graft_candidates",
-  "graft_search",
-  "graft_materialize",
-  "graft_repo",
-  "graft_cli_exec",
+export const SPARK_GRAFT_ACTIONS = [
+  "help",
+  "init",
+  "status",
+  "ps",
+  "doctor",
+  "scratch_open",
+  "read",
+  "write",
+  "edit",
+  "delete",
+  "scratch_diff",
+  "scratch_drop",
+  "scratch_pin",
+  "scratch_unpin",
+  "candidate_from_scratch",
+  "validate",
+  "admit",
+  "show",
+  "evidence",
+  "candidates",
+  "search",
+  "materialize",
+  "repo",
+  "cli_exec",
 ] as const;
-type SparkGraftToolName = (typeof SPARK_GRAFT_PATCHER_ALLOWED_TOOLS)[number];
+export type SparkGraftAction = (typeof SPARK_GRAFT_ACTIONS)[number];
+/** Canonical public tool surface is `graft({ action })`. */
+export const SPARK_GRAFT_PATCHER_ALLOWED_TOOLS = ["graft"] as const;
 
 const GRAFT_READ_TOOL_POLICY = {
   effect: "read",
@@ -70,32 +72,34 @@ const GRAFT_UNKNOWN_TOOL_POLICY = {
   approval: "none",
 } as const satisfies ToolPolicy;
 
-const GRAFT_TOOL_POLICIES = {
-  graft_help: GRAFT_READ_TOOL_POLICY,
-  graft_init: GRAFT_LOCAL_WRITE_TOOL_POLICY,
-  graft_status: GRAFT_READ_TOOL_POLICY,
-  graft_ps: GRAFT_READ_TOOL_POLICY,
-  graft_doctor: GRAFT_LOCAL_WRITE_TOOL_POLICY,
-  graft_scratch_open: GRAFT_LOCAL_WRITE_TOOL_POLICY,
-  graft_read: GRAFT_LOCAL_WRITE_TOOL_POLICY,
-  graft_write: GRAFT_LOCAL_WRITE_TOOL_POLICY,
-  graft_edit: GRAFT_LOCAL_WRITE_TOOL_POLICY,
-  graft_delete: GRAFT_LOCAL_WRITE_TOOL_POLICY,
-  graft_scratch_diff: GRAFT_READ_TOOL_POLICY,
-  graft_scratch_drop: GRAFT_DESTRUCTIVE_TOOL_POLICY,
-  graft_scratch_pin: GRAFT_LOCAL_WRITE_TOOL_POLICY,
-  graft_scratch_unpin: GRAFT_LOCAL_WRITE_TOOL_POLICY,
-  graft_candidate_from_scratch: GRAFT_LOCAL_WRITE_TOOL_POLICY,
-  graft_validate: GRAFT_LOCAL_WRITE_TOOL_POLICY,
-  graft_admit: GRAFT_LOCAL_WRITE_TOOL_POLICY,
-  graft_show: GRAFT_READ_TOOL_POLICY,
-  graft_evidence: GRAFT_READ_TOOL_POLICY,
-  graft_candidates: GRAFT_READ_TOOL_POLICY,
-  graft_search: GRAFT_READ_TOOL_POLICY,
-  graft_materialize: GRAFT_LOCAL_WRITE_TOOL_POLICY,
-  graft_repo: GRAFT_LOCAL_WRITE_TOOL_POLICY,
-  graft_cli_exec: GRAFT_UNKNOWN_TOOL_POLICY,
-} as const satisfies Record<SparkGraftToolName, ToolPolicy>;
+const GRAFT_ACTION_POLICIES = {
+  help: GRAFT_READ_TOOL_POLICY,
+  init: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  status: GRAFT_READ_TOOL_POLICY,
+  ps: GRAFT_READ_TOOL_POLICY,
+  doctor: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  scratch_open: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  read: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  write: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  edit: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  delete: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  scratch_diff: GRAFT_READ_TOOL_POLICY,
+  scratch_drop: GRAFT_DESTRUCTIVE_TOOL_POLICY,
+  scratch_pin: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  scratch_unpin: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  candidate_from_scratch: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  validate: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  admit: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  show: GRAFT_READ_TOOL_POLICY,
+  evidence: GRAFT_READ_TOOL_POLICY,
+  candidates: GRAFT_READ_TOOL_POLICY,
+  search: GRAFT_READ_TOOL_POLICY,
+  materialize: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  repo: GRAFT_LOCAL_WRITE_TOOL_POLICY,
+  cli_exec: GRAFT_UNKNOWN_TOOL_POLICY,
+} as const satisfies Record<SparkGraftAction, ToolPolicy>;
+/** Unified tool policy: mixed actions fail closed to sequential local_write. */
+const GRAFT_CANONICAL_TOOL_POLICY = GRAFT_LOCAL_WRITE_TOOL_POLICY;
 const GRAFT_REPO_ACTIONS = ["add", "list", "sync", "lock", "update"] as const;
 const DEFAULT_GRAFT_LIST_LIMIT = 10;
 const DEFAULT_GRAFT_DOCTOR_SAMPLE_LIMIT = 3;
@@ -203,10 +207,131 @@ export interface SparkGraftHostApi {
   appendEntry?: (customType: string, data?: unknown) => void;
 }
 
-function registerGraftTool(pi: SparkGraftHostApi, definition: SparkGraftToolDefinition): void {
-  const policy = GRAFT_TOOL_POLICIES[definition.name as SparkGraftToolName];
-  if (!policy) throw new Error(`missing canonical Graft tool policy for ${definition.name}`);
-  pi.registerTool({ ...definition, policy });
+function graftActionFromToolName(name: string): SparkGraftAction {
+  if (!name.startsWith("graft_")) {
+    throw new Error(`internal Graft handler must use graft_* name, got ${name}`);
+  }
+  const action = name.slice("graft_".length);
+  if (!(SPARK_GRAFT_ACTIONS as readonly string[]).includes(action)) {
+    throw new Error(`unknown Graft action derived from ${name}`);
+  }
+  return action as SparkGraftAction;
+}
+
+function normalizeGraftAction(value: unknown): SparkGraftAction {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`graft.action must be one of: ${SPARK_GRAFT_ACTIONS.join(", ")}`);
+  }
+  const action = value.trim();
+  if (!(SPARK_GRAFT_ACTIONS as readonly string[]).includes(action)) {
+    throw new Error(`graft.action must be one of: ${SPARK_GRAFT_ACTIONS.join(", ")}`);
+  }
+  return action as SparkGraftAction;
+}
+
+function registerCanonicalGraftTool(
+  pi: SparkGraftHostApi,
+  handlers: readonly SparkGraftToolDefinition[],
+): void {
+  const byAction = new Map<SparkGraftAction, SparkGraftToolDefinition>();
+  for (const handler of handlers) {
+    const action = graftActionFromToolName(handler.name);
+    if (byAction.has(action)) throw new Error(`duplicate Graft action handler: ${action}`);
+    const policy = GRAFT_ACTION_POLICIES[action];
+    if (!policy) throw new Error(`missing canonical Graft action policy for ${action}`);
+    byAction.set(action, { ...handler, policy });
+  }
+  for (const action of SPARK_GRAFT_ACTIONS) {
+    if (!byAction.has(action)) throw new Error(`missing Graft action handler: ${action}`);
+  }
+
+  pi.registerTool({
+    name: "graft",
+    label: "Graft",
+    description: [
+      "Canonical Graft capability.",
+      `Use graft({ action }) where action is one of: ${SPARK_GRAFT_ACTIONS.join(" | ")}.`,
+      "Scratch/candidate/validation/materialization workflows stay Graft-backed; do not edit the working tree directly.",
+      "For action=repo, pass repoAction (add|list|sync|lock|update) instead of a nested action field.",
+    ].join(" "),
+    promptGuidelines: [
+      "Prefer graft({ action }) over any legacy graft_* tool names.",
+      "Pass base for the first scratch op from a materialized ref; pass from to continue an existing scratch; never both.",
+      "Use action=repo with repoAction for repository config/cache/lock workflows.",
+    ],
+    policy: GRAFT_CANONICAL_TOOL_POLICY,
+    parameters: Type.Object({
+      action: Type.String({ description: SPARK_GRAFT_ACTIONS.join(" | ") }),
+      topic: Type.Optional(Type.String()),
+      command: Type.Optional(Type.Array(Type.String())),
+      cwd: Type.Optional(Type.String()),
+      registerOnly: Type.Optional(Type.Boolean()),
+      limit: Type.Optional(Type.Number()),
+      includeAll: Type.Optional(Type.Boolean()),
+      rebuildRegistry: Type.Optional(Type.Boolean()),
+      base: Type.Optional(Type.String()),
+      from: Type.Optional(Type.String()),
+      path: Type.Optional(Type.String()),
+      content: Type.Optional(Type.String()),
+      edits: Type.Optional(Type.Any()),
+      scratch: Type.Optional(Type.String()),
+      message: Type.Optional(Type.String()),
+      admit: Type.Optional(Type.Boolean()),
+      dryRun: Type.Optional(Type.Boolean()),
+      candidate: Type.Optional(Type.String()),
+      patch: Type.Optional(Type.String()),
+      query: Type.Optional(Type.String()),
+      repoAction: Type.Optional(
+        Type.String({ description: "For action=repo: add | list | sync | lock | update." }),
+      ),
+      repoId: Type.Optional(Type.String()),
+      url: Type.Optional(Type.String()),
+      defaultBranch: Type.Optional(Type.String()),
+      argv: Type.Optional(Type.Array(Type.String())),
+    }),
+    renderCall(args, theme) {
+      const action = typeof args.action === "string" ? args.action : "?";
+      const handler = byAction.get(action as SparkGraftAction);
+      if (handler?.renderCall) {
+        const handlerArgs =
+          action === "repo"
+            ? {
+                ...args,
+                action: typeof args.repoAction === "string" ? args.repoAction : "list",
+              }
+            : args;
+        return handler.renderCall(handlerArgs, theme, {});
+      }
+      return renderGraftToolCall(
+        "graft",
+        [
+          formatGraftStringArg(action, { prefix: "action=" }),
+          formatGraftStringArg(args.path, {
+            prefix: "path=",
+            maxLength: GRAFT_TOOL_CALL_PATH_MAX_LENGTH,
+          }),
+          formatGraftStringArg(args.repoAction, { prefix: "repoAction=" }),
+          formatGraftStringArg(args.scratch, { prefix: "scratch=" }),
+          formatGraftStringArg(args.from, { prefix: "from=" }),
+          formatGraftStringArg(args.base, { prefix: "base=" }),
+        ],
+        theme,
+      );
+    },
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const action = normalizeGraftAction(params.action);
+      const handler = byAction.get(action);
+      if (!handler) throw new Error(`graft.action handler missing: ${action}`);
+      const handlerParams =
+        action === "repo"
+          ? {
+              ...params,
+              action: typeof params.repoAction === "string" ? params.repoAction : "list",
+            }
+          : params;
+      return handler.execute(toolCallId, handlerParams, signal, onUpdate, ctx);
+    },
+  });
 }
 
 export interface ActiveGraftScratchState {
@@ -1078,6 +1203,10 @@ function requireResultStringArray(result: unknown, context: string, field: strin
 
 export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
   registerExtensionRole(createSparkGraftPatcherRoleSpec());
+  const graftHandlers: SparkGraftToolDefinition[] = [];
+  const defineGraftTool = (definition: SparkGraftToolDefinition): void => {
+    graftHandlers.push(definition);
+  };
 
   let activeState: ActiveGraftScratchState | undefined;
   let lastCwd: string | undefined;
@@ -1093,7 +1222,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     activeState = restoreState(ctx);
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_help",
     label: "Graft Help",
     description: "Show maintained Graft workflow or command help.",
@@ -1130,7 +1259,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_init",
     label: "Graft Init",
     description: "Initialize or register a Graft workspace.",
@@ -1158,7 +1287,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_status",
     label: "Graft Status",
     description: "Inspect spark-graft convenience state and graftd status.",
@@ -1188,7 +1317,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_ps",
     label: "Graft Ps",
     description:
@@ -1221,7 +1350,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_doctor",
     label: "Graft Doctor",
     description:
@@ -1261,7 +1390,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_scratch_open",
     label: "Graft Scratch Open",
     description: "Open a base ref as a daemon scratch and remember it as lastScratch.",
@@ -1301,7 +1430,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_read",
     label: "Graft Read",
     description: "Read a UTF-8 file from a graft scratch as LINE#HASH text.",
@@ -1350,7 +1479,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_write",
     label: "Graft Write",
     description: "Write a UTF-8 file into a graft scratch.",
@@ -1396,7 +1525,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_edit",
     label: "Graft Edit",
     description: "Apply strict LINE#HASH edits into a graft scratch.",
@@ -1474,7 +1603,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_delete",
     label: "Graft Delete",
     description: "Delete a file from a graft scratch.",
@@ -1517,7 +1646,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_scratch_diff",
     label: "Graft Scratch Diff",
     description: "Show changed paths between two daemon scratch ids.",
@@ -1554,7 +1683,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_scratch_drop",
     label: "Graft Scratch Drop",
     description: "Drop an unpinned daemon scratch.",
@@ -1584,7 +1713,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_scratch_pin",
     label: "Graft Scratch Pin",
     description: "Pin a daemon scratch and return a lease.",
@@ -1618,7 +1747,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_scratch_unpin",
     label: "Graft Scratch Unpin",
     description: "Release a daemon scratch lease.",
@@ -1650,7 +1779,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_candidate_from_scratch",
     label: "Graft Candidate From Scratch",
     description: "Create a candidate from a scratch id.",
@@ -1719,7 +1848,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_validate",
     label: "Graft Validate",
     description: "Validate a candidate or patch.",
@@ -1760,7 +1889,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_admit",
     label: "Graft Admit",
     description: "Admit a validated candidate as a patch.",
@@ -1806,7 +1935,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_show",
     label: "Graft Show",
     description: "Show a candidate or patch summary.",
@@ -1840,7 +1969,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_evidence",
     label: "Graft Evidence",
     description: "List evidence for a candidate or patch.",
@@ -1869,7 +1998,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_candidates",
     label: "Graft Candidates",
     description: "List unadmitted candidates.",
@@ -1901,7 +2030,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_search",
     label: "Graft Search",
     description: "Search admitted patches.",
@@ -1936,7 +2065,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_materialize",
     label: "Graft Materialize",
     description: "Plan or materialize an admitted patch target into an isolated inspection state.",
@@ -1973,13 +2102,13 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_repo",
     label: "Graft Repo",
     description:
       "Manage Graft configured repositories through the current repo add/list/sync/lock/update workflow.",
     parameters: Type.Object({
-      action: Type.Optional(
+      repoAction: Type.Optional(
         Type.String({ description: "Action: add, list, sync, lock, or update. Default: list." }),
       ),
       repoId: Type.Optional(
@@ -1996,9 +2125,10 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     }),
     renderCall(args, theme) {
       return renderGraftToolCall(
-        "graft_repo",
+        "graft",
         [
-          formatGraftStringArg(args.action, { prefix: "action=", fallback: "list" }),
+          formatGraftStringArg("repo", { prefix: "action=" }),
+          formatGraftStringArg(args.action, { prefix: "repoAction=", fallback: "list" }),
           formatGraftStringArg(args.repoId, { prefix: "repo=" }),
           formatGraftStringArg(args.url, {
             prefix: "url=",
@@ -2045,7 +2175,7 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
     },
   });
 
-  registerGraftTool(pi, {
+  defineGraftTool({
     name: "graft_cli_exec",
     label: "Graft CLI Exec",
     description:
@@ -2071,6 +2201,8 @@ export function registerSparkGraftExtension(pi: SparkGraftHostApi): void {
       return { content: [{ type: "text", text }], details };
     },
   });
+
+  registerCanonicalGraftTool(pi, graftHandlers);
 }
 
 const GRAFT_TOOL_CALL_DEFAULT_ARG_MAX_LENGTH = 80;

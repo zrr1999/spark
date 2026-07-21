@@ -684,7 +684,7 @@ function isWorkflowShellTool(tool: string): boolean {
 }
 
 function isWorkflowWriteTool(tool: string): boolean {
-  return /^(edit|write|apply_patch|graft_write|graft_edit|graft_delete|artifact|artifactRecord)$/u.test(
+  return /^(edit|write|apply_patch|graft|graft_write|graft_edit|graft_delete|artifact|artifactRecord)$/u.test(
     tool,
   );
 }

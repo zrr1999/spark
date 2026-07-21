@@ -215,9 +215,10 @@ test("standalone Pi ask, cue, and role tools render parameter-aware tool calls",
   await expect(
     renderCallCases(graftTools, [
       {
-        name: "graft_repo",
+        name: "graft",
         args: {
-          action: "add",
+          action: "repo",
+          repoAction: "add",
           repoId: "spark",
           url: "https://github.com/zrr1999/spark.git",
         },

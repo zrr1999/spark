@@ -1,6 +1,7 @@
 export {
   default,
   createSparkGraftPatcherRoleSpec,
+  SPARK_GRAFT_ACTIONS,
   SPARK_GRAFT_PATCHER_ALLOWED_TOOLS,
   SPARK_GRAFT_PATCHER_ROLE_ID,
   SPARK_GRAFT_PATCHER_ROLE_REF,
@@ -20,6 +21,7 @@ export type {
   RunDirectGraftOptions,
 } from "./graft-client.ts";
 export type {
+  SparkGraftAction,
   SparkGraftHostApi,
   SparkGraftSessionContext,
   SparkGraftToolContext,

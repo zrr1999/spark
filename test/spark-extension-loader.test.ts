@@ -152,7 +152,8 @@ test("SparkExtensionLoader loads builtin factories through explicit imports", as
   assert.ok(tools.includes("fetch_content"));
   assert.ok(tools.includes("get_search_content"));
   assert.ok(!tools.includes("list_roles"));
-  assert.ok(tools.includes("graft_status"));
+  assert.ok(tools.includes("graft"));
+  assert.ok(!tools.includes("graft_status"));
   assert.ok(!tools.includes("graft_patch"));
   assert.ok(!tools.includes("patch"));
   assert.ok(!tools.includes("task"));
