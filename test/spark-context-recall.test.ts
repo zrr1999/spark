@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
 
-import { registerSparkContextTool } from "@zendev-lab/spark-context/extension";
+import { registerSparkContextTool } from "@zendev-lab/spark-host/context";
 import { registerSparkMemoryTool } from "@zendev-lab/spark-memory/extension";
 
 type ToolResult = {

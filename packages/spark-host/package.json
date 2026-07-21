@@ -12,6 +12,7 @@
   "type": "module",
   "exports": {
     ".": "./src/runtime.ts",
+    "./context": "./src/context-tool.ts",
     "./headless-loader": "./src/headless-loader.ts",
     "./keybindings": "./src/keybindings.ts",
     "./system-prompt": "./src/system-prompt.ts",
@@ -32,6 +33,7 @@
     "@zendev-lab/spark-system": "workspace:^",
     "@zendev-lab/spark-tasks": "workspace:^",
     "@zendev-lab/spark-text": "workspace:^",
-    "@zendev-lab/spark-workflows": "workspace:^"
+    "@zendev-lab/spark-workflows": "workspace:^",
+    "typebox": "catalog:"
   }
 }

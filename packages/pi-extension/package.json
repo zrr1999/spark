@@ -24,7 +24,6 @@
   "dependencies": {
     "@zendev-lab/spark-artifacts": "workspace:^",
     "@zendev-lab/spark-ask": "workspace:^",
-    "@zendev-lab/spark-context": "workspace:^",
     "@zendev-lab/spark-core": "workspace:^",
     "@zendev-lab/spark-host": "workspace:^",
     "@zendev-lab/spark-i18n": "workspace:^",
