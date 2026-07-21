@@ -415,7 +415,7 @@ describe("session live events", () => {
             startedAt: "2026-07-13T08:00:00.000Z",
           },
         ],
-        tasks: [{ ref: "task:1", title: "Task", status: "in_progress" }],
+        tasks: [{ ref: "task:1", title: "Task", status: "running" }],
       }),
     });
 
@@ -476,7 +476,7 @@ describe("session live events", () => {
       view: parseSparkSessionView({
         sessionId: "sess_current",
         updatedAt: "2026-07-13T08:00:02.000Z",
-        tasks: [{ ref: "task:1", title: "Task", status: "in_progress" }],
+        tasks: [{ ref: "task:1", title: "Task", status: "running" }],
       }),
     });
 
@@ -488,7 +488,7 @@ describe("session live events", () => {
       }),
     });
 
-    expect(state.view?.tasks).toMatchObject([{ ref: "task:1", status: "in_progress" }]);
+    expect(state.view?.tasks).toMatchObject([{ ref: "task:1", status: "running" }]);
   });
 
   it("allows a blocked task to resume in a newer snapshot", () => {
@@ -505,11 +505,11 @@ describe("session live events", () => {
       view: parseSparkSessionView({
         sessionId: "sess_current",
         updatedAt: "2026-07-13T08:00:01.000Z",
-        tasks: [{ ref: "task:1", title: "Task", status: "in_progress" }],
+        tasks: [{ ref: "task:1", title: "Task", status: "running" }],
       }),
     });
 
-    expect(state.view?.tasks).toMatchObject([{ ref: "task:1", status: "in_progress" }]);
+    expect(state.view?.tasks).toMatchObject([{ ref: "task:1", status: "running" }]);
   });
 
   it("accepts an ordered streaming revision even when its projection is shorter", () => {
