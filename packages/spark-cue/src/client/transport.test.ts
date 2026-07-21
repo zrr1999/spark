@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
 
-import { resolveCueTransport } from "../packages/spark-cue/src/cue-client.ts";
+import { resolveCueTransport } from "./cue-client.ts";
 
 test("resolveCueTransport times out hung resolver commands", async () => {
   const root = await mkdtemp(join(tmpdir(), "spark-cue-resolver-timeout-"));

@@ -8,8 +8,8 @@ import {
   compareSemver,
   defaultCuedVersionCachePath,
   renderCuedVersionWarning,
-} from "../packages/spark-cue/src/index.ts";
-import type { CueClient } from "../packages/spark-cue/src/index.ts";
+} from "./index.ts";
+import type { CueClient } from "./index.ts";
 
 interface FakeClient {
   pingForVersion: () => Promise<string | null>;

@@ -1,4 +1,3 @@
-/** Public cue-shell client entry (compat path for deep imports). */
 export {
   CueClient,
   CueError,
@@ -11,7 +10,7 @@ export {
   DEFAULT_CUE_CONNECT_TIMEOUT_MS,
   isSensitiveCueEnvKey,
   isRetryableCueTransportError,
-} from "./client/cue-client.ts";
+} from "./cue-client.ts";
 export type {
   CueOperationKey,
   CueResolvedTransport,
@@ -21,10 +20,10 @@ export type {
   JobOutputResult,
   JobResult,
   JobStatus,
-  JobStateChangedEvent,
   OutputEncoding,
   ResourceNeeds,
   ScriptItemSummary,
   ScriptResult,
   StartJobResult,
-} from "./client/cue-client.ts";
+  JobStateChangedEvent,
+} from "./cue-client.ts";

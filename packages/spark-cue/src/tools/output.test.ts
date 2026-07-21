@@ -22,7 +22,7 @@ import {
   renderCueScriptResult,
   registerSparkCueTools,
   resolveCueWorkingDirectory,
-} from "../packages/spark-cue/src/index.ts";
+} from "../index.ts";
 
 type RegisteredSparkCueTool = Parameters<SparkCueHostApi["registerTool"]>[0];
 

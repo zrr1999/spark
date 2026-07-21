@@ -15,7 +15,7 @@ import {
   type SparkCueHostApi,
   registerSparkCueTools,
   resolveCueTransport,
-} from "../packages/spark-cue/src/index.ts";
+} from "../index.ts";
 
 type CueFrame = Record<string, unknown>;
 type RegisteredSparkCueTool = Parameters<SparkCueHostApi["registerTool"]>[0];
@@ -2862,9 +2862,7 @@ test("cue preserves structured cancellation reasons across lists, chains, and ev
       }
     },
     async (client) => {
-      const event = new Promise<
-        import("../packages/spark-cue/src/cue-client.ts").JobStateChangedEvent
-      >((resolve) => {
+      const event = new Promise<import("./cue-client.ts").JobStateChangedEvent>((resolve) => {
         client.onEvent("jobs", (payload) => {
           if ("JobStateChanged" in payload) resolve(payload.JobStateChanged);
         });

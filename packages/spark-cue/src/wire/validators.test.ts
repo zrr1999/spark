@@ -5,7 +5,7 @@ import {
   validateCueErrorPayload,
   validateCueEventPayload,
   validateCueOkPayload,
-} from "../packages/spark-cue/src/cue-wire-validators.ts";
+} from "./validators.ts";
 
 type Path = Array<string | number>;
 type PayloadValidator = (value: unknown) => unknown;
