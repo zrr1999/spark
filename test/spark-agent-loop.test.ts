@@ -27,7 +27,6 @@ type AssistantMessage = any;
 type AssistantMessageEvent = any;
 type Context = any;
 type Model = any;
-type Message = any;
 type ToolCall = any;
 
 const TEST_MODEL: Model = {
@@ -42,6 +41,23 @@ const TEST_MODEL: Model = {
   contextWindow: 8000,
   maxTokens: 4000,
 };
+
+import type { Message, ToolResultMessage } from "@zendev-lab/spark-turn";
+
+function asToolResult(message: Message | undefined): ToolResultMessage | undefined {
+  return message?.role === "toolResult" ? message : undefined;
+}
+
+function toolResultText(message: ToolResultMessage | undefined): string {
+  const part = message?.content[0];
+  return part && typeof part === "object" && "text" in part && typeof part.text === "string"
+    ? part.text
+    : "";
+}
+
+function asAssistant(message: Message | undefined): AssistantMessage | undefined {
+  return message?.role === "assistant" ? message : undefined;
+}
 
 test("Spark prompt IR retains runtime authority until provider lowering", () => {
   const item = sparkRuntimePromptItem({
@@ -527,11 +543,13 @@ test("SparkAgentLoop applies one phase profile to schemas, manifests, and dispat
 
   assert.equal(implementExecutions, 0);
   assert.deepEqual(schemaToolNames[0], ["plan_probe", "unphased_probe"]);
-  const rejected = loop
-    .getMessages()
-    .find((message) => message.role === "toolResult" && message.toolCallId === "tc-phase-forged");
+  const rejected = asToolResult(
+    loop
+      .getMessages()
+      .find((message) => message.role === "toolResult" && message.toolCallId === "tc-phase-forged"),
+  );
   assert.equal(rejected?.isError, true);
-  assert.match(rejected?.content[0]?.text ?? "", /phase-inactive tool: implement_action/u);
+  assert.match(toolResultText(rejected), /phase-inactive tool: implement_action/u);
 
   loop.setCurrentPhase("implement");
   assert.equal(loop.getCurrentPhase(), "implement");
@@ -539,9 +557,13 @@ test("SparkAgentLoop applies one phase profile to schemas, manifests, and dispat
 
   assert.equal(implementExecutions, 1);
   assert.deepEqual(schemaToolNames[2], ["implement_action", "unphased_probe"]);
-  const allowed = loop
-    .getMessages()
-    .find((message) => message.role === "toolResult" && message.toolCallId === "tc-phase-allowed");
+  const allowed = asToolResult(
+    loop
+      .getMessages()
+      .find(
+        (message) => message.role === "toolResult" && message.toolCallId === "tc-phase-allowed",
+      ),
+  );
   assert.equal(allowed?.isError, false);
   assert.deepEqual(manifestToolNames, schemaToolNames);
   assert.deepEqual(lifecycleSources, ["agentLoop", "agentLoop", "agentLoop", "agentLoop"]);
@@ -598,11 +620,13 @@ test("SparkAgentLoop rechecks phase availability after async approval", async ()
   await loop.submit("approve then switch phase");
 
   assert.equal(executions, 0);
-  const result = loop
-    .getMessages()
-    .find((message) => message.role === "toolResult" && message.toolCallId === toolCall.id);
+  const result = asToolResult(
+    loop
+      .getMessages()
+      .find((message) => message.role === "toolResult" && message.toolCallId === toolCall.id),
+  );
   assert.equal(result?.isError, true);
-  assert.match(result?.content[0]?.text ?? "", /phase-inactive tool: approved_implement_action/u);
+  assert.match(toolResultText(result), /phase-inactive tool: approved_implement_action/u);
 });
 
 test("SparkAgentLoop forwards getReasoning into stream options.reasoning", async () => {
@@ -1072,7 +1096,7 @@ test("SparkAgentLoop emits exactly one agent_end for terminal outcomes", async (
         `${entry.name} should return its terminal stop reason`,
       );
       assert.equal(
-        loop.getMessages().at(-1)?.stopReason,
+        asAssistant(loop.getMessages().at(-1))?.stopReason,
         entry.expectedStopReason,
         `${entry.name} should persist its terminal stop reason`,
       );
@@ -1327,11 +1351,13 @@ test("SparkAgentLoop keeps a thrown tool error inside the execution chain and co
   await loop.submit("recover after a tool error");
 
   const transcript = loop.getMessages();
-  const toolResult = transcript.find(
-    (message) => message.role === "toolResult" && message.toolCallId === toolCall.id,
+  const toolResult = asToolResult(
+    transcript.find(
+      (message) => message.role === "toolResult" && message.toolCallId === toolCall.id,
+    ),
   );
   assert.equal(toolResult?.isError, true);
-  assert.match(toolResult?.content[0]?.text ?? "", /cue transport failed/u);
+  assert.match(toolResultText(toolResult), /cue transport failed/u);
   assert.equal(transcript.at(-1)?.role, "assistant");
   assert.equal(
     (transcript.at(-1)?.content[0] as { text?: string } | undefined)?.text,
@@ -1416,7 +1442,7 @@ test("SparkAgentLoop runs an explicitly safe read batch concurrently and commits
     ["tc-alpha", "tc-beta"],
   );
   assert.deepEqual(
-    results.map((message) => message.content[0]?.text),
+    results.map((message) => toolResultText(message)),
     ["result:tc-alpha", "result:tc-beta"],
   );
   assert.deepEqual(
@@ -1656,7 +1682,9 @@ test("SparkAgentLoop isolates failures inside a parallel read batch", async () =
   await loop.submit("run fallible reads");
 
   assert.deepEqual(executed, ["tc-fail", "tc-ok"]);
-  const results = loop.getMessages().filter((message) => message.role === "toolResult");
+  const results = loop
+    .getMessages()
+    .filter((message): message is ToolResultMessage => message.role === "toolResult");
   assert.deepEqual(
     results.map((message) => [message.toolCallId, message.isError]),
     [
@@ -1664,8 +1692,8 @@ test("SparkAgentLoop isolates failures inside a parallel read batch", async () =
       ["tc-ok", false],
     ],
   );
-  assert.match(results[0]?.content[0]?.text ?? "", /read failed independently/);
-  assert.equal(results[1]?.content[0]?.text, "ok:tc-ok");
+  assert.match(toolResultText(results[0]), /read failed independently/);
+  assert.equal(toolResultText(results[1]), "ok:tc-ok");
 });
 
 test("SparkAgentLoop publishes ordered display-safe conversation parts without tool payloads", async () => {
@@ -2164,12 +2192,14 @@ test(
     assert.equal(loop.getState(), "idle");
     assert.equal(artifactCalls, 1, "raw recovery must not recursively persist itself");
     assert.equal(artifactAborted, true);
-    const results = loop.getMessages().filter((message) => message.role === "toolResult");
+    const results = loop
+      .getMessages()
+      .filter((message): message is ToolResultMessage => message.role === "toolResult");
     assert.equal(results.length, 1);
     assert.equal(results[0]?.toolCallId, toolCall.id);
     assert.equal(results[0]?.isError, false);
-    assert.match(results[0]?.content[0]?.text ?? "", /\[4497 blank lines collapsed\]/u);
-    assert.doesNotMatch(results[0]?.content[0]?.text ?? "", /\[recovery\]/u);
+    assert.match(toolResultText(results[0]), /\[4497 blank lines collapsed\]/u);
+    assert.doesNotMatch(toolResultText(results[0]), /\[recovery\]/u);
   },
 );
 
@@ -3174,7 +3204,9 @@ test("SparkAgentLoop pairs every sequential tool call with an aborted result", a
 
   assert.equal(outcome.status, "aborted");
   assert.equal(secondExecutions, 0);
-  const results = loop.getMessages().filter((message) => message.role === "toolResult");
+  const results = loop
+    .getMessages()
+    .filter((message): message is ToolResultMessage => message.role === "toolResult");
   assert.deepEqual(
     results.map((message) => message.toolCallId),
     ["tc-abort-first", "tc-abort-later"],
@@ -3183,7 +3215,7 @@ test("SparkAgentLoop pairs every sequential tool call with an aborted result", a
     results.map((message) => message.isError),
     [true, true],
   );
-  assert.match(results[1]?.content[0]?.text ?? "", /skipped because the agent was aborted/u);
+  assert.match(toolResultText(results[1]), /skipped because the agent was aborted/u);
 });
 
 test("SparkAgentLoop refuses concurrent submit while in flight", async () => {

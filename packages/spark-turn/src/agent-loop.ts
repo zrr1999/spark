@@ -39,41 +39,45 @@
 export type SparkTurnContentPart = { type: string; [key: string]: unknown };
 export type SparkTurnUserContent = string | Array<{ type: string }>;
 
-// Spark-turn deliberately uses loose structural aliases here: the turn loop is
-// host-neutral, while concrete model/message schemas still come from the active
-// stream provider (currently pi-ai in spark-tui). Follow-up host extraction can
-// tighten these once every entrypoint shares the same type boundary.
-export type Model<_TId extends string = string> = any;
-export type Tool = any;
-export type ToolCall = any;
-export type Message = any;
-export type AssistantMessage = any;
-export type ToolResultMessage = any;
-export type Context = any;
-export type StreamOptions = any;
-export type AssistantMessageEvent = any;
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  Context,
+  Message,
+  Model,
+  StreamOptions,
+  Tool,
+  ToolCall,
+  ToolResultMessage,
+  UserMessage,
+} from "@zendev-lab/spark-ai";
+
+export type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  Context,
+  Message,
+  Model,
+  StreamOptions,
+  Tool,
+  ToolCall,
+  ToolResultMessage,
+  UserMessage,
+} from "@zendev-lab/spark-ai";
 
 import { createHash } from "node:crypto";
 
-import {
-  resolveToolPolicy,
-  isTaskStatus,
-  type SparkHostContext,
-  type ResolvedToolPolicy,
-  type ToolConfig,
-} from "@zendev-lab/spark-core";
+import type { SparkHostContext } from "@zendev-lab/spark-core";
 export { compactToolResultContent } from "./tool-result-compaction.ts";
 
 import {
   compactToolResultContent,
   shouldRecordRawToolResultArtifact,
   type SparkToolResultRawRecoveryDecision,
-  type SparkToolResultRawRecoveryPath,
 } from "./tool-result-compaction.ts";
 import {
   cloneSparkPromptItem,
   lowerSparkPromptItems,
-  sparkPromptItemFromProviderMessage,
   sparkPromptItemText,
   sparkRuntimePromptItem,
   type SparkPromptItem,
@@ -111,22 +115,70 @@ export type {
 } from "./prompt-manifest.ts";
 import {
   SPARK_PROTOCOL_VERSION,
-  sparkTextPhaseFromSignature,
-  summarizeToolCallArguments,
-  summarizeToolResultContent,
   type SparkAgentLoopEventType,
-  type SparkArtifactView,
-  type SparkConversationPart,
-  type SparkEvidenceView,
   type SparkInteractionRequest,
   type SparkInteractionResponse,
   type SparkMessageView,
   type SparkRunOutcomeStatus,
   type SparkRunView,
-  type SparkTaskTodoView,
-  type SparkTaskView,
   type SparkViewModelEvent,
 } from "@zendev-lab/spark-protocol";
+
+import {
+  appendRawRecoveryHint,
+  artifactRefFromToolResult,
+  collectToolCalls,
+  errorToolResult,
+  isPlainRecord,
+  mergeToolResultDetails,
+  normalizeApprovalMethod,
+  normalizeApprovalRejectAction,
+  rawToolOutputProducer,
+  rawToolResultArtifactBody,
+  rawToolResultRecoveryPath,
+  resolvedRegisteredToolPolicy,
+  safeSelectedSkills,
+  toToolDefinition,
+  toolRequiresApproval,
+  type ToolResultRawRecoveryRecord,
+} from "./tool-dispatch.ts";
+import {
+  asProviderMessageItem,
+  beforeAgentStartPromptItems,
+  loopTerminalAssistant,
+  normalizePositiveInteger,
+  normalizeTimeoutMs,
+  numberField,
+  orderedParallelMap,
+  relayAbort,
+  runWithAbort,
+  runWithTimeout,
+  safeGetModel,
+  throwIfSignalAborted,
+} from "./run-turns.ts";
+import {
+  assistantToMessageView,
+  entityViewsFromToolDetails,
+  jsonMetadata,
+  messageToView,
+  nextViewMessageId,
+  runStatusForStopReason,
+  taskViewsFromToolDetails,
+  toolCallToMessageView,
+  toolResultToMessageView,
+  toolUpdateToMessageView,
+} from "./view-projection.ts";
+import { displaySafeAssistantText } from "./conversation-parts.ts";
+import type {
+  SparkToolApprovalMethod,
+  SparkToolApprovalRejectAction,
+  SparkTurnRegisteredTool,
+} from "./turn-types.ts";
+export type {
+  SparkToolApprovalMethod,
+  SparkToolApprovalRejectAction,
+  SparkTurnRegisteredTool,
+} from "./turn-types.ts";
 
 export type SparkAgentStreamFunction = (
   model: Model<string>,
@@ -139,13 +191,6 @@ export type SparkAgentStreamFunction = (
 export type SparkAgentLoopState = "idle" | "streaming" | "tooling" | "aborting";
 export type SparkAgentPhase = "plan" | "implement";
 export type SparkAgentLifecycleSource = "agentLoop" | "triggerTurn";
-
-export interface SparkTurnRegisteredTool {
-  config: ToolConfig;
-  /** Host-resolved immutable policy. Compatibility hosts may omit it. */
-  policy?: ResolvedToolPolicy;
-  active: boolean;
-}
 
 export interface SparkTurnOutboxEnvelope {
   kind: "custom" | "user";
@@ -183,12 +228,6 @@ export const DEFAULT_SPARK_AGENT_LOOP_STREAM_IDLE_TIMEOUT_MS = 45 * 60_000;
 export const DEFAULT_SPARK_AGENT_LOOP_TOOL_TIMEOUT_MS = 300_000;
 export const DEFAULT_SPARK_AGENT_LOOP_INTERACTION_TIMEOUT_MS = 60_000;
 export const DEFAULT_SPARK_AGENT_LOOP_MAX_PARALLEL_TOOL_CALLS = 4;
-
-/** How a session satisfies `requiresApproval` tool gates. Default: `auto`. */
-export type SparkToolApprovalMethod = "skip" | "human" | "auto";
-
-/** When `auto` review does not approve: escalate to ask, or deny the tool call. */
-export type SparkToolApprovalRejectAction = "ask" | "deny";
 
 export type SparkToolApprovalReviewOutcome = "approved" | "needs_changes" | "blocked";
 
@@ -469,11 +508,7 @@ export class SparkAgentLoop {
 
   /** Replace the message log when resuming a persisted Spark session. */
   replaceMessages(messages: readonly Message[]): void {
-    this.replacePromptItems(
-      messages.map((message) =>
-        sparkPromptItemFromProviderMessage(message as Record<string, unknown> & { role: string }),
-      ),
-    );
+    this.replacePromptItems(messages.map((message) => asProviderMessageItem(message)));
   }
 
   /** Replace the host-owned prompt log when replaying a persisted session. */
@@ -535,12 +570,12 @@ export class SparkAgentLoop {
     // `nextTurn` runtime context must accompany the next real user prompt. It
     // is deliberately not consumed by extension-triggered background turns.
     this.drainOutboxIntoMessages({ includeNextTurn: true });
-    const userMessage: Message = {
+    const userMessage: UserMessage = {
       role: "user",
-      content,
+      content: content as UserMessage["content"],
       timestamp: Date.now(),
     };
-    this.promptItems.push(sparkPromptItemFromProviderMessage(userMessage));
+    this.promptItems.push(asProviderMessageItem(userMessage));
     this.publish({ type: "user_message", message: userMessage });
     this.currentAbortReason = undefined;
 
@@ -588,7 +623,7 @@ export class SparkAgentLoop {
       lifecycleSource?: SparkAgentLifecycleSource;
     } = {},
   ): Promise<SparkRunOutcome> {
-    let lastAssistant: AssistantMessage;
+    let lastAssistant: AssistantMessage | undefined;
     let roundtrips = 0;
     let agentEndPayload:
       | { messages: AssistantMessage[]; errorMessage?: string; outcome?: SparkRunOutcome }
@@ -611,7 +646,7 @@ export class SparkAgentLoop {
         "error",
         message,
       );
-      this.promptItems.push(sparkPromptItemFromProviderMessage(terminalAssistant));
+      this.promptItems.push(asProviderMessageItem(terminalAssistant));
       return finishAgentTurn({
         status: "failed",
         assistant: terminalAssistant,
@@ -626,7 +661,7 @@ export class SparkAgentLoop {
         "aborted",
         message,
       );
-      this.promptItems.push(sparkPromptItemFromProviderMessage(terminalAssistant));
+      this.promptItems.push(asProviderMessageItem(terminalAssistant));
       return finishAgentTurn({
         status: "aborted",
         assistant: terminalAssistant,
@@ -657,15 +692,15 @@ export class SparkAgentLoop {
           sessionId: this.viewSessionId,
           ...this.promptCacheOptions,
         });
-        const context: Context = {
+        const context = {
           systemPrompt: this.systemPrompt || undefined,
           systemPromptStable: promptCache.stablePrompt || undefined,
           systemPromptDynamic: promptCache.dynamicPrompt || undefined,
           promptCacheKey: promptCache.promptCacheKey,
           promptCache,
-          messages: lowerSparkPromptItems(this.promptItems),
+          messages: lowerSparkPromptItems(this.promptItems) as Message[],
           tools,
-        };
+        } as Context;
 
         let assistant: AssistantMessage;
         try {
@@ -753,7 +788,7 @@ export class SparkAgentLoop {
           return fail(message);
         }
 
-        this.promptItems.push(sparkPromptItemFromProviderMessage(assistant));
+        this.promptItems.push(asProviderMessageItem(assistant));
         lastAssistant = assistant;
         this.publish({ type: "turn_complete", assistant, reason: assistant.stopReason });
         await this.host.emit("turn_end", { message: assistant, toolResults: [] });
@@ -791,7 +826,7 @@ export class SparkAgentLoop {
         this.transition("tooling");
         const toolResults = await this.dispatchToolCalls(toolCalls, abortController.signal);
         for (const result of toolResults) {
-          this.promptItems.push(sparkPromptItemFromProviderMessage(result));
+          this.promptItems.push(asProviderMessageItem(result));
           this.publish({ type: "tool_result", message: result });
           this.publishEntityViewsForToolResult(result);
         }
@@ -1008,9 +1043,9 @@ export class SparkAgentLoop {
           role: "toolResult",
           toolCallId: toolCall.id,
           toolName: toolCall.name,
-          content: rawRecovery
+          content: (rawRecovery
             ? appendRawRecoveryHint(compacted.content, rawRecovery.readHint)
-            : compacted.content,
+            : compacted.content) as ToolResultMessage["content"],
           details: mergeToolResultDetails(result.details, compacted.details, rawRecovery),
           isError: result.isError ?? false,
           timestamp: Date.now(),
@@ -1259,12 +1294,12 @@ export class SparkAgentLoop {
           typeof envelope.content === "string"
             ? envelope.content
             : envelope.content.map((part) => ("text" in part ? String(part.text) : "")).join("");
-        const message: Message = {
+        const message: UserMessage = {
           role: "user",
           content,
           timestamp: envelope.enqueuedAt,
         };
-        this.promptItems.push(sparkPromptItemFromProviderMessage(message));
+        this.promptItems.push(asProviderMessageItem(message));
         this.publish({ type: "user_message", message });
         appended += 1;
       } else {
@@ -1578,260 +1613,11 @@ export class SparkAgentLoop {
   }
 }
 
-interface ToolResultRawRecoveryRecord {
-  artifactRef: string;
-  reason: "lossy_compaction" | "error_compaction";
-  omittedChars: number;
-  bodyChars: number;
-  recoveryPath: SparkToolResultRawRecoveryPath;
-  readHint: string;
-}
-
 function sameMessageProjection(
   previous: SparkMessageView | undefined,
   next: SparkMessageView,
 ): boolean {
   return previous !== undefined && JSON.stringify(previous) === JSON.stringify(next);
-}
-
-function mergeToolResultDetails(
-  originalDetails: unknown,
-  compaction: ReturnType<typeof compactToolResultContent>["details"],
-  rawRecovery: ToolResultRawRecoveryRecord | undefined,
-): unknown {
-  if (!compaction && !rawRecovery) return originalDetails;
-  return {
-    ...(isPlainRecord(originalDetails) ? originalDetails : {}),
-    ...(compaction ? { toolResultCompaction: compaction } : {}),
-    ...(rawRecovery
-      ? {
-          toolResultRawRecovery: {
-            artifactRef: rawRecovery.artifactRef,
-            reason: rawRecovery.reason,
-            omittedChars: rawRecovery.omittedChars,
-            bodyChars: rawRecovery.bodyChars,
-            recoveryPath: rawRecovery.recoveryPath,
-            readHint: rawRecovery.readHint,
-          },
-        }
-      : {}),
-  };
-}
-
-function rawToolResultRecoveryPath(artifactRef: string): SparkToolResultRawRecoveryPath {
-  return {
-    kind: "artifact",
-    artifactRef,
-    readTool: "evidence",
-    readArgs: { action: "read", artifactRef, maxChars: 20_000 },
-  };
-}
-
-function appendRawRecoveryHint(
-  content: Array<{ type: string; text?: string; [key: string]: unknown }>,
-  hint: string,
-): Array<{ type: string; text?: string; [key: string]: unknown }> {
-  const index = content.findLastIndex(
-    (part) => part.type === "text" && typeof part.text === "string",
-  );
-  const hintText = `[recovery] ${hint}`;
-  if (index < 0) return [...content, { type: "text", text: hintText }];
-  return content.map((part, partIndex) =>
-    partIndex === index ? { ...part, text: `${part.text}\n\n${hintText}` } : part,
-  );
-}
-
-function rawToolResultArtifactBody(
-  content: Array<{ type: string; text?: string; [key: string]: unknown }>,
-): { format: "text" | "json"; body: string | Record<string, unknown>; bodyChars: number } {
-  if (content.length === 1 && content[0]?.type === "text" && typeof content[0].text === "string") {
-    return { format: "text", body: content[0].text, bodyChars: content[0].text.length };
-  }
-  const body = { schemaVersion: 1, content: jsonSafe(content) };
-  return { format: "json", body, bodyChars: JSON.stringify(body).length };
-}
-
-function rawToolOutputProducer(toolName: string): "spark" | "cue" {
-  return toolName.startsWith("cue_") || toolName === "script_run" || toolName === "script_eval"
-    ? "cue"
-    : "spark";
-}
-
-function artifactRefFromToolResult(result: {
-  content?: unknown;
-  details?: unknown;
-}): string | undefined {
-  const details = isPlainRecord(result.details) ? result.details : undefined;
-  const refs = isPlainRecord(details?.refs) ? details.refs : undefined;
-  const fromRefs = stringField(refs, "artifactRef");
-  if (fromRefs?.startsWith("artifact:")) return fromRefs;
-  const artifact = isPlainRecord(details?.artifact) ? details.artifact : undefined;
-  const fromArtifact = stringField(artifact, "ref");
-  if (fromArtifact?.startsWith("artifact:")) return fromArtifact;
-  const text = Array.isArray(result.content)
-    ? result.content
-        .map((part) => (isPlainRecord(part) && typeof part.text === "string" ? part.text : ""))
-        .join("\n")
-    : "";
-  return text.match(/artifact:[A-Za-z0-9._:-]+/u)?.[0];
-}
-
-function jsonSafe(value: unknown, seen = new WeakSet<object>()): unknown {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
-    return value;
-  }
-  if (typeof value === "bigint") return value.toString();
-  if (typeof value === "undefined") return null;
-  if (typeof value === "function") return "[Function]";
-  if (typeof value === "symbol")
-    return value.description ? `[Symbol:${value.description}]` : "[Symbol]";
-  if (value instanceof Date) return value.toISOString();
-  if (!value || typeof value !== "object") return null;
-  if (seen.has(value)) return "[Circular]";
-  seen.add(value);
-  if (Array.isArray(value)) return value.map((item) => jsonSafe(item, seen));
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).map(([key, child]) => [
-      key,
-      jsonSafe(child, seen),
-    ]),
-  );
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function normalizeTimeoutMs(value: number | undefined, fallback: number): number {
-  if (value === undefined) return fallback;
-  if (!Number.isFinite(value)) return fallback;
-  const normalized = Math.floor(value);
-  return normalized > 0 ? normalized : 0;
-}
-
-function normalizePositiveInteger(value: number | undefined, fallback: number): number {
-  if (value === undefined || !Number.isFinite(value)) return fallback;
-  return Math.max(1, Math.floor(value));
-}
-
-async function orderedParallelMap<T, R>(
-  values: readonly T[],
-  concurrency: number,
-  map: (value: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(values.length);
-  let nextIndex = 0;
-  const worker = async (): Promise<void> => {
-    while (nextIndex < values.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await map(values[index]!, index);
-    }
-  };
-  const workerCount = Math.min(concurrency, values.length);
-  await Promise.all(Array.from({ length: workerCount }, async () => await worker()));
-  return results;
-}
-
-async function runWithTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  message: string,
-  onTimeout?: (error: Error) => void,
-): Promise<T> {
-  if (timeoutMs <= 0) return await promise;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => {
-          const error = new Error(message);
-          error.name = "SparkAgentLoopTimeoutError";
-          onTimeout?.(error);
-          reject(error);
-        }, timeoutMs);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-async function runWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  throwIfSignalAborted(signal);
-  let onAbort: (() => void) | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
-        onAbort = () => reject(abortSignalError(signal));
-        signal.addEventListener("abort", onAbort, { once: true });
-      }),
-    ]);
-  } finally {
-    if (onAbort) signal.removeEventListener("abort", onAbort);
-  }
-}
-
-function throwIfSignalAborted(signal: AbortSignal): void {
-  if (signal.aborted) throw abortSignalError(signal);
-}
-
-function abortSignalError(signal: AbortSignal): Error {
-  const reason = (signal as { reason?: unknown }).reason;
-  if (reason instanceof Error) return reason;
-  const error = new Error(typeof reason === "string" && reason ? reason : "operation aborted");
-  error.name = "AbortError";
-  return error;
-}
-
-function relayAbort(source: AbortSignal, target: AbortController): () => void {
-  const abort = () => target.abort((source as { reason?: unknown }).reason);
-  if (source.aborted) abort();
-  else source.addEventListener("abort", abort, { once: true });
-  return () => source.removeEventListener("abort", abort);
-}
-
-function beforeAgentStartPromptItems(result: unknown): SparkPromptItem[] {
-  if (!result || typeof result !== "object") return [];
-  const record = result as { message?: unknown; messages?: unknown };
-  const messages = Array.isArray(record.messages) ? record.messages : [record.message];
-  return messages.flatMap((message) => {
-    if (!message || typeof message !== "object") return [];
-    const content = (message as { content?: unknown }).content;
-    if (typeof content !== "string" || !content.trim()) return [];
-    const authorityValue = (message as { authority?: unknown }).authority;
-    const trustValue = (message as { trust?: unknown }).trust;
-    const controlIsExplicitlyTrusted =
-      authorityValue === "runtime_control" && trustValue === "trusted";
-    const authority = controlIsExplicitlyTrusted ? "runtime_control" : "runtime_data";
-    const trust =
-      controlIsExplicitlyTrusted || (authorityValue === "runtime_data" && trustValue === "trusted")
-        ? "trusted"
-        : "untrusted";
-    const customType = (message as { customType?: unknown }).customType;
-    const details = (message as { details?: unknown }).details;
-    return [
-      sparkRuntimePromptItem({
-        authority,
-        trust,
-        visibility: (message as { display?: unknown }).display === false ? "hidden" : "visible",
-        // before_agent_start is regenerated from current host state on every turn.
-        persistence: "transient",
-        content,
-        ...(typeof customType === "string" && customType ? { customType } : {}),
-        ...(isPlainRecord(details) ? { details } : {}),
-        timestamp: Date.now(),
-      }),
-    ];
-  });
 }
 
 export function splitSparkSystemPrompt(systemPrompt: string): {
@@ -1937,7 +1723,7 @@ interface SparkRunUsageTotals {
 
 function assistantRunUsage(
   assistant: AssistantMessage,
-  model: Model<string>,
+  model: Model<string> | undefined,
 ): SparkRunUsageTotals | undefined {
   const usage = (assistant as { usage?: unknown }).usage;
   if (!usage || typeof usage !== "object") return undefined;
@@ -1961,7 +1747,7 @@ function assistantRunUsage(
     numberField(usage, "totalTokens") ||
     inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
   const promptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
-  const contextWindow = numberField(model, "contextWindow");
+  const contextWindow = model ? numberField(model, "contextWindow") : undefined;
   if (
     inputTokens === 0 &&
     outputTokens === 0 &&
@@ -2020,688 +1806,6 @@ function formatAssistantUsageSummary(assistant: AssistantMessage): string | unde
   const cacheWrite = numberField(usage, "cacheWrite") ?? numberField(usage, "cacheWriteTokens");
   if (cacheRead === undefined && cacheWrite === undefined) return undefined;
   return `cache read=${cacheRead ?? 0} write=${cacheWrite ?? 0}`;
-}
-
-function loopTerminalAssistant(
-  previous: { api: string; provider: string; model: string } | undefined,
-  model: Model<string>,
-  stopReason: "error" | "aborted",
-  errorMessage: string,
-): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [],
-    api: previous?.api ?? model?.api ?? "unknown",
-    provider: previous?.provider ?? model?.provider ?? "spark",
-    model: previous?.model ?? model?.id ?? "unknown",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason,
-    errorMessage,
-    timestamp: Date.now(),
-  };
-}
-
-function safeGetModel(getModel: () => Model<string>): Model<string> {
-  try {
-    return getModel();
-  } catch {
-    return undefined;
-  }
-}
-
-function numberField(value: object, field: string): number | undefined {
-  const raw = (value as Record<string, unknown>)[field];
-  return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
-}
-
-function collectToolCalls(message: AssistantMessage): ToolCall[] {
-  if (!Array.isArray(message.content)) return [];
-  return message.content.filter(
-    (part: SparkTurnContentPart) => part.type === "toolCall",
-  ) as ToolCall[];
-}
-
-function resolvedRegisteredToolPolicy(tool: SparkTurnRegisteredTool): ResolvedToolPolicy {
-  const policy = tool.policy ?? resolveToolPolicy(tool.config);
-  if (!legacyApprovalPolicyRequiresApproval(tool.config) || policy.approval === "required") {
-    return policy;
-  }
-  return Object.freeze({
-    ...policy,
-    executionMode: "sequential",
-    approval: "required",
-  });
-}
-
-function toolRequiresApproval(tool: SparkTurnRegisteredTool): boolean {
-  return resolvedRegisteredToolPolicy(tool).approval === "required";
-}
-
-function legacyApprovalPolicyRequiresApproval(config: ToolConfig): boolean {
-  const approvalPolicy = (config as { approvalPolicy?: unknown }).approvalPolicy;
-  if (approvalPolicy === true || approvalPolicy === "always") return true;
-  return Boolean(
-    approvalPolicy &&
-    typeof approvalPolicy === "object" &&
-    (approvalPolicy as { mode?: unknown }).mode === "always",
-  );
-}
-
-function safeSelectedSkills(
-  getSelectedSkills: (() => readonly string[]) | undefined,
-): readonly string[] {
-  if (!getSelectedSkills) return [];
-  try {
-    const selected = getSelectedSkills();
-    return Array.isArray(selected)
-      ? selected.filter((entry): entry is string => typeof entry === "string")
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-function normalizeApprovalMethod(
-  value: SparkToolApprovalMethod | undefined,
-): SparkToolApprovalMethod {
-  if (value === "skip" || value === "human" || value === "auto") return value;
-  return "auto";
-}
-
-function normalizeApprovalRejectAction(
-  value: SparkToolApprovalRejectAction | undefined,
-): SparkToolApprovalRejectAction {
-  if (value === "ask" || value === "deny") return value;
-  return "ask";
-}
-
-function toToolDefinition(config: ToolConfig): Tool {
-  return {
-    name: config.name,
-    description: config.description,
-    parameters: config.parameters as Tool["parameters"],
-  };
-}
-
-function errorToolResult(toolCall: ToolCall, message: string): ToolResultMessage {
-  return {
-    role: "toolResult",
-    toolCallId: toolCall.id,
-    toolName: toolCall.name,
-    content: [{ type: "text", text: message }],
-    isError: true,
-    timestamp: Date.now(),
-  };
-}
-
-let viewMessageCounter = 0;
-
-function nextViewMessageId(sessionId: string, role: string): string {
-  viewMessageCounter += 1;
-  return `${sessionId}:message:${role}:${Date.now().toString(36)}:${viewMessageCounter}`;
-}
-
-function messageToView(message: Message, id: string): SparkMessageView {
-  const role = message.role === "toolResult" ? "tool" : message.role;
-  return {
-    version: SPARK_PROTOCOL_VERSION,
-    id,
-    role: isSparkMessageRole(role) ? role : "custom",
-    text: contentToText((message as { content?: unknown }).content),
-    status: "done",
-    createdAt: timestampToIso((message as { timestamp?: unknown }).timestamp),
-    metadata: jsonMetadata({ sourceRole: message.role }),
-  };
-}
-
-function assistantToMessageView(
-  assistant: AssistantMessage,
-  id: string,
-  status: SparkMessageView["status"],
-): SparkMessageView {
-  const displayText = displaySafeAssistantText(assistant.content);
-  const errorMessage =
-    status === "error" && typeof assistant.errorMessage === "string"
-      ? assistant.errorMessage.trim()
-      : "";
-  return {
-    version: SPARK_PROTOCOL_VERSION,
-    id,
-    role: "assistant",
-    text: displayText || errorMessage,
-    status,
-    createdAt: timestampToIso((assistant as { timestamp?: unknown }).timestamp),
-    parts: assistantConversationParts(assistant.content, id, status),
-    metadata: jsonMetadata({
-      api: (assistant as { api?: unknown }).api,
-      provider: (assistant as { provider?: unknown }).provider,
-      model: (assistant as { model?: unknown }).model,
-      stopReason: assistant.stopReason,
-      ...(errorMessage ? { errorMessage } : {}),
-      usage: (assistant as { usage?: unknown }).usage,
-    }),
-  };
-}
-
-function toolCallToMessageView(toolCall: ToolCall): SparkMessageView {
-  const id = `tool-call:${toolCall.id}`;
-  const summary = summarizeToolCallArguments(toolCall.arguments);
-  return {
-    version: SPARK_PROTOCOL_VERSION,
-    id,
-    role: "tool",
-    text: summary ?? `calling ${toolCall.name}`,
-    status: "pending",
-    toolCallId: toolCall.id,
-    toolName: toolCall.name,
-    parts: [
-      {
-        id: `${id}:part:0`,
-        type: "tool-call",
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-        status: "pending",
-        ...(summary ? { summary } : {}),
-        metadata: {},
-      },
-    ],
-    metadata: { kind: "tool_call" },
-  };
-}
-
-function toolResultToMessageView(message: ToolResultMessage): SparkMessageView {
-  const id = `tool-call:${message.toolCallId}`;
-  const summary =
-    summarizeToolResultContent(message.content) ??
-    `${message.toolName} ${message.isError ? "failed" : "completed"}`;
-  return {
-    version: SPARK_PROTOCOL_VERSION,
-    id,
-    role: "tool",
-    text: summary,
-    // Tool failure is process state, not a terminal conversation failure.
-    // The tool-result part retains status=failed for the execution chain.
-    status: "done",
-    toolCallId: message.toolCallId,
-    toolName: message.toolName,
-    createdAt: timestampToIso((message as { timestamp?: unknown }).timestamp),
-    parts: [
-      {
-        id: `${id}:part:0`,
-        type: "tool-result",
-        toolCallId: message.toolCallId,
-        toolName: message.toolName,
-        status: message.isError ? "failed" : "complete",
-        summary,
-        metadata: {},
-      },
-    ],
-    metadata: { kind: "tool_result" },
-  };
-}
-
-function toolUpdateToMessageView(
-  toolCall: ToolCall,
-  update: { content: Array<{ type: "text"; text: string }> },
-): SparkMessageView {
-  const id = `tool-call:${toolCall.id}`;
-  const summary = summarizeToolResultContent(update.content) ?? `${toolCall.name} running`;
-  return {
-    version: SPARK_PROTOCOL_VERSION,
-    id,
-    role: "tool",
-    text: summary,
-    status: "streaming",
-    toolCallId: toolCall.id,
-    toolName: toolCall.name,
-    updatedAt: new Date().toISOString(),
-    parts: [
-      {
-        id: `${id}:part:0`,
-        type: "tool-call",
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-        status: "running",
-        summary,
-        metadata: {},
-      },
-    ],
-    metadata: { kind: "tool_progress" },
-  };
-}
-
-function assistantConversationParts(
-  content: unknown,
-  messageId: string,
-  messageStatus: SparkMessageView["status"],
-): SparkConversationPart[] {
-  const partStatus = messageStatusToPartStatus(messageStatus);
-  if (typeof content === "string") {
-    return [
-      {
-        id: `${messageId}:part:0`,
-        type: "text",
-        text: content,
-        status: partStatus,
-        metadata: {},
-      },
-    ];
-  }
-  if (!Array.isArray(content)) return [];
-
-  return content.flatMap((value, index): SparkConversationPart[] => {
-    if (!value || typeof value !== "object") return [];
-    const part = value as Record<string, unknown>;
-    const id = `${messageId}:part:${index}`;
-    if (part.type === "text" && typeof part.text === "string") {
-      const phase = sparkTextPhaseFromSignature(part.textSignature);
-      return [
-        {
-          id,
-          type: "text",
-          text: part.text,
-          status: partStatus,
-          ...(phase ? { phase } : {}),
-          metadata: {},
-        },
-      ];
-    }
-    if (part.type === "thinking") {
-      const redacted = part.redacted === true;
-      if (!redacted && typeof part.thinking !== "string") return [];
-      return [
-        {
-          id,
-          type: "thinking",
-          text: redacted ? "" : String(part.thinking),
-          status: partStatus,
-          ...(redacted ? { redacted: true } : {}),
-          metadata: {},
-        },
-      ];
-    }
-    if (
-      part.type === "toolCall" &&
-      typeof part.id === "string" &&
-      part.id &&
-      typeof part.name === "string" &&
-      part.name
-    ) {
-      const summary = summarizeToolCallArguments(part.arguments);
-      return [
-        {
-          id,
-          type: "tool-call",
-          toolCallId: part.id,
-          toolName: part.name,
-          status: "pending",
-          ...(summary ? { summary } : {}),
-          metadata: {},
-        },
-      ];
-    }
-    return [];
-  });
-}
-
-function messageStatusToPartStatus(
-  status: SparkMessageView["status"],
-): SparkConversationPart["status"] {
-  switch (status) {
-    case "pending":
-      return "pending";
-    case "streaming":
-      return "streaming";
-    case "error":
-      return "failed";
-    case "done":
-      return "complete";
-  }
-}
-
-function displaySafeAssistantText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .flatMap((value): string[] => {
-      if (!value || typeof value !== "object") return [];
-      const part = value as Record<string, unknown>;
-      // Tool calls and thinking belong in structured `parts`, not the prose `text`
-      // field. Embedding `[tool call: …]` here leaks into Infoflow answer bodies and
-      // Cockpit markdown fallbacks.
-      if (
-        part.type === "text" &&
-        typeof part.text === "string" &&
-        sparkTextPhaseFromSignature(part.textSignature) !== "commentary"
-      ) {
-        return [part.text];
-      }
-      return [];
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
-function runStatusForStopReason(reason: AssistantMessage["stopReason"]): SparkRunView["status"] {
-  if (reason === "toolUse") return "running";
-  if (reason === "aborted") return "cancelled";
-  if (reason === "error") return "failed";
-  return "succeeded";
-}
-
-function isSparkMessageRole(role: string): role is SparkMessageView["role"] {
-  return (
-    role === "system" ||
-    role === "user" ||
-    role === "assistant" ||
-    role === "tool" ||
-    role === "thinking" ||
-    role === "custom"
-  );
-}
-
-function contentToText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) {
-    if (content === undefined || content === null) return "";
-    if (
-      typeof content === "number" ||
-      typeof content === "boolean" ||
-      typeof content === "bigint"
-    ) {
-      return String(content);
-    }
-    return JSON.stringify(content) ?? "";
-  }
-  return content
-    .map((part) => {
-      if (!part || typeof part !== "object") return String(part);
-      if ("type" in part && part.type === "text" && "text" in part) return String(part.text);
-      if ("type" in part && part.type === "toolCall" && "name" in part) {
-        return `[tool call: ${String(part.name)}]`;
-      }
-      return JSON.stringify(part);
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
-function timestampToIso(timestamp: unknown): string | undefined {
-  if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) return undefined;
-  return new Date(timestamp).toISOString();
-}
-
-function jsonMetadata(record: Record<string, unknown>): SparkMessageView["metadata"] {
-  try {
-    return JSON.parse(JSON.stringify(record)) as SparkMessageView["metadata"];
-  } catch {
-    return {};
-  }
-}
-
-function taskViewsFromToolDetails(
-  details: unknown,
-  metadata: Record<string, unknown>,
-): SparkTaskView[] {
-  const tasks: SparkTaskView[] = [];
-  const seenRefs = new Set<string>();
-  scanToolDetails(details, (candidate) => {
-    const task = taskViewFromCandidate(candidate, metadata);
-    if (!task || seenRefs.has(task.ref)) return;
-    seenRefs.add(task.ref);
-    tasks.push(task);
-  });
-  return tasks;
-}
-
-function entityViewsFromToolDetails(
-  details: unknown,
-  metadata: Record<string, unknown>,
-): Array<
-  | { type: "artifact"; artifact: SparkArtifactView }
-  | { type: "evidence"; evidence: SparkEvidenceView }
-> {
-  const entities: Array<
-    | { type: "artifact"; artifact: SparkArtifactView }
-    | { type: "evidence"; evidence: SparkEvidenceView }
-  > = [];
-  const seenRefs = new Set<string>();
-  scanToolDetails(details, (candidate) => {
-    const entity = entityViewFromCandidate(candidate, metadata);
-    if (!entity) return;
-    const ref = entity.type === "artifact" ? entity.artifact.ref : entity.evidence.ref;
-    if (seenRefs.has(ref)) return;
-    seenRefs.add(ref);
-    entities.push(entity);
-  });
-  return entities;
-}
-
-function scanToolDetails(
-  value: unknown,
-  visit: (candidate: Record<string, unknown>) => void,
-): void {
-  const seen = new Set<object>();
-  const stack: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
-  let visited = 0;
-  while (stack.length > 0 && visited < 200) {
-    const current = stack.pop()!;
-    if (!current.value || typeof current.value !== "object") continue;
-    if (seen.has(current.value)) continue;
-    seen.add(current.value);
-    visited += 1;
-    if (Array.isArray(current.value)) {
-      if (current.depth >= 5) continue;
-      for (const item of current.value.slice(0, 50))
-        stack.push({ value: item, depth: current.depth + 1 });
-      continue;
-    }
-    const record = current.value as Record<string, unknown>;
-    visit(record);
-    if (current.depth >= 5) continue;
-    for (const [key, child] of Object.entries(record)) {
-      if (key === "body" || key === "content" || key === "text" || key === "summary") continue;
-      stack.push({ value: child, depth: current.depth + 1 });
-    }
-  }
-}
-
-function taskViewFromCandidate(
-  candidate: Record<string, unknown>,
-  metadata: Record<string, unknown>,
-): SparkTaskView | undefined {
-  const ref = stringField(candidate, "ref");
-  if (!ref?.startsWith("task:")) return undefined;
-  const title = stringField(candidate, "title") ?? stringField(candidate, "name") ?? ref;
-  const rawStatus = stringField(candidate, "status");
-  const status = isTaskStatus(rawStatus) ? rawStatus : "pending";
-  return {
-    version: SPARK_PROTOCOL_VERSION,
-    ref,
-    title,
-    status,
-    ...(stringField(candidate, "name") ? { name: stringField(candidate, "name") } : {}),
-    ...(stringField(candidate, "description")
-      ? { description: stringField(candidate, "description") }
-      : {}),
-    ...(stringField(candidate, "kind") ? { kind: stringField(candidate, "kind") } : {}),
-    ...(stringField(candidate, "owner") ? { owner: stringField(candidate, "owner") } : {}),
-    ...(stringField(candidate, "projectRef")
-      ? { projectRef: stringField(candidate, "projectRef") }
-      : {}),
-    todos: taskTodosFromCandidate(candidate),
-    runRefs: stringArrayField(candidate, "runRefs"),
-    artifactRefs: [
-      ...stringArrayField(candidate, "artifactRefs"),
-      ...stringArrayField(candidate, "outputArtifacts"),
-      ...stringArrayField(candidate, "evidenceRefs"),
-    ].filter(
-      (value, index, array) =>
-        (value.startsWith("artifact:") || value.startsWith("evidence:")) &&
-        array.indexOf(value) === index,
-    ),
-    metadata: jsonMetadata(metadata),
-  };
-}
-
-function entityViewFromCandidate(
-  candidate: Record<string, unknown>,
-  metadata: Record<string, unknown>,
-):
-  | { type: "artifact"; artifact: SparkArtifactView }
-  | { type: "evidence"; evidence: SparkEvidenceView }
-  | undefined {
-  const ref =
-    stringField(candidate, "ref") ??
-    stringField(candidate, "artifactRef") ??
-    stringField(candidate, "evidenceRef");
-  if (!ref) return undefined;
-  const isEvidenceRef = ref.startsWith("evidence:");
-  const isArtifactRef = ref.startsWith("artifact:");
-  if (!isEvidenceRef && !isArtifactRef) return undefined;
-
-  const rawKind = stringField(candidate, "kind");
-  const provenance = recordField(candidate, "provenance");
-  const producer =
-    stringField(candidate, "producer") ?? stringField(provenance, "producer") ?? undefined;
-  const common = {
-    version: SPARK_PROTOCOL_VERSION,
-    ref,
-    title: stringField(candidate, "title") ?? ref,
-    ...(stringField(candidate, "status") ? { status: stringField(candidate, "status") } : {}),
-    ...(producer ? { producer } : {}),
-    ...(isoStringField(candidate, "createdAt")
-      ? { createdAt: isoStringField(candidate, "createdAt") }
-      : {}),
-    ...(isoStringField(candidate, "updatedAt")
-      ? { updatedAt: isoStringField(candidate, "updatedAt") }
-      : {}),
-    ...(stringField(candidate, "preview") ? { preview: stringField(candidate, "preview") } : {}),
-    metadata: jsonMetadata(metadata),
-  };
-
-  if (isProductArtifactKind(rawKind) && isArtifactRef) {
-    return {
-      type: "artifact",
-      artifact: {
-        ...common,
-        kind: rawKind,
-        format: productArtifactFormat(stringField(candidate, "format")),
-      },
-    };
-  }
-
-  return {
-    type: "evidence",
-    evidence: {
-      ...common,
-      kind: evidenceKind(rawKind),
-      format: evidenceFormat(stringField(candidate, "format")),
-    },
-  };
-}
-
-function taskTodosFromCandidate(candidate: Record<string, unknown>): SparkTaskTodoView[] {
-  const todosRecord = recordField(candidate, "todos");
-  const rawTodos: unknown[] = Array.isArray(candidate.todos)
-    ? candidate.todos
-    : todosRecord && Array.isArray(todosRecord.items)
-      ? todosRecord.items
-      : [];
-  return rawTodos.flatMap((todo, index): SparkTaskTodoView[] => {
-    if (!todo || typeof todo !== "object") return [];
-    const record = todo as Record<string, unknown>;
-    const content =
-      stringField(record, "content") ?? stringField(record, "title") ?? stringField(record, "text");
-    if (!content) return [];
-    return [
-      {
-        id: stringField(record, "id") ?? `todo-${index + 1}`,
-        content,
-        status: taskTodoStatus(stringField(record, "status")),
-        notes: stringArrayField(record, "notes"),
-      },
-    ];
-  });
-}
-
-function stringField(record: Record<string, unknown> | undefined, key: string): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function isoStringField(record: Record<string, unknown>, key: string): string | undefined {
-  const value = stringField(record, key);
-  return value && !Number.isNaN(Date.parse(value)) ? value : undefined;
-}
-
-function stringArrayField(record: Record<string, unknown>, key: string): string[] {
-  const value = record[key];
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
-}
-
-function recordField(
-  record: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> | undefined {
-  const value = record[key];
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function taskTodoStatus(value: string | undefined): SparkTaskTodoView["status"] {
-  if (
-    value === "pending" ||
-    value === "in_progress" ||
-    value === "blocked" ||
-    value === "done" ||
-    value === "cancelled"
-  ) {
-    return value;
-  }
-  return "pending";
-}
-
-function isProductArtifactKind(value: string | undefined): value is "issue" | "pr" | "preview" {
-  return value === "issue" || value === "pr" || value === "preview";
-}
-
-function evidenceKind(value: string | undefined): SparkEvidenceView["kind"] {
-  if (value === "document" || value === "record" || value === "trace" || value === "knowledge") {
-    return value;
-  }
-  return "other";
-}
-
-function evidenceFormat(value: string | undefined): SparkEvidenceView["format"] {
-  if (value === "markdown" || value === "json" || value === "text" || value === "blob") {
-    return value;
-  }
-  return "other";
-}
-
-function productArtifactFormat(value: string | undefined): SparkArtifactView["format"] {
-  if (
-    value === "markdown" ||
-    value === "json" ||
-    value === "text" ||
-    value === "mdx" ||
-    value === "html" ||
-    value === "blob"
-  ) {
-    return value;
-  }
-  return "other";
 }
 
 export { SparkAgentLoop as SparkTurnRunner };

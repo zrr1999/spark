@@ -184,9 +184,9 @@ test("runSparkHeadlessSession never submits when cancellation wins during bootst
 
 function terminalAssistant(stopReason: "error" | "aborted", errorMessage: string) {
   return {
-    role: "assistant",
-    content: [],
-    api: "openai-completions",
+    role: "assistant" as const,
+    content: [] as const,
+    api: "openai-completions" as const,
     provider: "test",
     model: "test-model",
     usage: {
@@ -205,10 +205,15 @@ function terminalAssistant(stopReason: "error" | "aborted", errorMessage: string
 
 function terminalOutcome(assistant: ReturnType<typeof terminalAssistant>): SparkRunOutcome {
   return assistant.stopReason === "aborted"
-    ? { status: "aborted", assistant, roundtrips: 0, reason: assistant.errorMessage }
+    ? {
+        status: "aborted",
+        assistant: assistant as unknown as SparkRunOutcome["assistant"],
+        roundtrips: 0,
+        reason: assistant.errorMessage,
+      }
     : {
         status: "failed",
-        assistant,
+        assistant: assistant as unknown as SparkRunOutcome["assistant"],
         roundtrips: 0,
         errorMessage: assistant.errorMessage,
       };

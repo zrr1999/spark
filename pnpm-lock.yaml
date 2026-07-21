@@ -949,6 +949,9 @@ importers:
 
   packages/spark-turn:
     dependencies:
+      '@zendev-lab/spark-ai':
+        specifier: workspace:^
+        version: link:../spark-ai
       '@zendev-lab/spark-core':
         specifier: workspace:^
         version: link:../spark-core

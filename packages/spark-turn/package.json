@@ -22,6 +22,7 @@
     "check": "vp check --no-fmt --no-lint ."
   },
   "dependencies": {
+    "@zendev-lab/spark-ai": "workspace:^",
     "@zendev-lab/spark-core": "workspace:^",
     "@zendev-lab/spark-protocol": "workspace:^"
   }
