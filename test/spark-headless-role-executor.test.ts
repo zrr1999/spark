@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { loadSparkHeadlessSessionModule } from "../packages/spark-host/src/headless-loader.ts";
 import { runSparkHeadlessSession } from "../apps/spark-tui/src/headless-role-executor.ts";
 import type { SparkRunOutcome } from "../apps/spark-tui/src/host/index.ts";
+
+void test("daemon headless loader resolves the real worker module and provider dependencies", async () => {
+  const headless = await loadSparkHeadlessSessionModule();
+
+  assert.equal(typeof headless.createSparkHeadlessRoleExecutor, "function");
+  assert.equal(typeof headless.createSparkHeadlessSessionExecutor, "function");
+});
 
 void test("runSparkHeadlessSession times out a never-resolving agent turn", async () => {
   const unsubscribed: string[] = [];
@@ -81,7 +89,7 @@ void test("runSparkHeadlessSession times out a never-resolving agent turn", asyn
   assert.deepEqual(capturedServiceOptions?.allowedTools, ["session"]);
   assert.equal(capturedServiceOptions?.sparkStateRoot, undefined);
   assert.equal(capturedServiceOptions?.approvalMethod, "auto");
-  assert.equal(capturedServiceOptions?.streamTimeoutMs, undefined);
+  assert.equal(capturedServiceOptions?.streamTimeoutMs, 0);
   assert.equal(capturedServiceOptions?.toolTimeoutMs, undefined);
   assert.equal(capturedServiceOptions?.interactionTimeoutMs, undefined);
   assert.deepEqual(unsubscribed.sort(), ["agentLoop", "runtime"]);

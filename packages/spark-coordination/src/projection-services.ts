@@ -629,14 +629,15 @@ export function loadWorkspaceServerControl(
     : [];
   const executor = normalizeExecutorProjection(snapshot?.executor);
   const snapshotControl = normalizeSnapshotControl(snapshot?.control);
+  const foreignOccupied = hasForeignInteractiveOccupancy(borrowed, workspaceClients);
   const derivedReason =
     connectionStatus === "disconnected"
       ? "daemon_disconnected"
-      : borrowed.borrowed
+      : foreignOccupied
         ? "workspace_borrowed"
         : undefined;
   const serverMutationAllowed =
-    connectionStatus === "connected" && !borrowed.borrowed && snapshotControl.serverMutationAllowed;
+    connectionStatus === "connected" && !foreignOccupied && snapshotControl.serverMutationAllowed;
   const reason = serverMutationAllowed ? undefined : (derivedReason ?? snapshotControl.reason);
   const message = serverMutationAllowed
     ? "Server commands may mutate this workspace."
@@ -718,20 +719,96 @@ function latestWorkspaceSnapshotPayload(
 
 function normalizeBorrowedState(value: unknown): WorkspaceBorrowedState {
   if (!isRecord(value)) {
-    return { borrowed: false, interactiveClientCount: 0, borrowedByClientIds: [] };
+    return {
+      borrowed: false,
+      occupied: false,
+      interactiveClientCount: 0,
+      borrowedByClientIds: [],
+      sessions: [],
+    };
   }
   const borrowedByClientIds = Array.isArray(value.borrowedByClientIds)
     ? value.borrowedByClientIds.filter((item): item is string => typeof item === "string")
     : [];
+  const sessions = normalizeOccupancySessions(value.sessions, borrowedByClientIds);
+  const occupied =
+    value.occupied === true ||
+    value.borrowed === true ||
+    sessions.length > 0 ||
+    borrowedByClientIds.length > 0;
   return {
-    borrowed: value.borrowed === true,
+    borrowed: occupied,
+    occupied,
     interactiveClientCount:
       typeof value.interactiveClientCount === "number" && value.interactiveClientCount >= 0
         ? Math.floor(value.interactiveClientCount)
-        : borrowedByClientIds.length,
+        : Math.max(sessions.length, borrowedByClientIds.length),
     borrowedByClientIds,
+    sessions,
     ...(typeof value.since === "string" ? { since: value.since } : {}),
   };
+}
+
+function normalizeOccupancySessions(
+  value: unknown,
+  borrowedByClientIds: string[],
+): WorkspaceBorrowedState["sessions"] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => {
+      if (!isRecord(item)) return [];
+      const clientId = typeof item.clientId === "string" ? item.clientId : null;
+      const sessionId =
+        typeof item.sessionId === "string" && item.sessionId.trim()
+          ? item.sessionId.trim()
+          : clientId;
+      if (!clientId || !sessionId) return [];
+      const surface =
+        item.surface === "tui" || item.surface === "cockpit" || item.surface === "unknown"
+          ? item.surface
+          : "tui";
+      const kind =
+        item.kind === "interactive" || item.kind === "headless" || item.kind === "executor"
+          ? item.kind
+          : "interactive";
+      return [
+        {
+          sessionId,
+          clientId,
+          kind,
+          surface,
+          ...(typeof item.displayName === "string" ? { displayName: item.displayName } : {}),
+          ...(typeof item.attachedAt === "string" ? { attachedAt: item.attachedAt } : {}),
+          ...(typeof item.lastSeenAt === "string" ? { lastSeenAt: item.lastSeenAt } : {}),
+          ...(typeof item.leaseExpiresAt === "string"
+            ? { leaseExpiresAt: item.leaseExpiresAt }
+            : {}),
+        },
+      ];
+    });
+  }
+  return borrowedByClientIds.map((clientId) => ({
+    sessionId: clientId,
+    clientId,
+    kind: "interactive" as const,
+    surface: "tui" as const,
+  }));
+}
+
+/** Blocks Cockpit mutations when a non-cockpit interactive session holds occupancy. */
+function hasForeignInteractiveOccupancy(
+  borrowed: WorkspaceBorrowedState,
+  workspaceClients: unknown,
+): boolean {
+  if (borrowed.sessions.some((session) => session.surface !== "cockpit")) return true;
+  if (borrowed.sessions.length > 0) return false;
+  if (!borrowed.borrowed) return false;
+  if (!Array.isArray(workspaceClients)) return true;
+  const interactive = workspaceClients.filter(
+    (client): client is Record<string, unknown> =>
+      isRecord(client) && client.kind === "interactive" && client.status === "connected",
+  );
+  if (interactive.length === 0) return borrowed.borrowed;
+  return interactive.some((client) => client.surface !== "cockpit");
 }
 
 function normalizeExecutorProjection(value: unknown): ExecutorClientProjection {
@@ -774,7 +851,7 @@ function normalizeSnapshotControl(value: unknown): {
 function workspaceControlMessage(reason: string | undefined): string {
   switch (reason) {
     case "workspace_borrowed":
-      return "Workspace is borrowed by an open TUI client; server actions are snapshot-only until it releases the workspace.";
+      return "Workspace is occupied by another interactive session; server actions are snapshot-only until it releases.";
     case "daemon_disconnected":
       return "Workspace daemon is disconnected; server actions are snapshot-only until it reconnects.";
     default:

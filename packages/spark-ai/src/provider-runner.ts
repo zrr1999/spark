@@ -8,7 +8,6 @@ import type {
   ThinkingContent,
   ToolCall,
 } from "@earendil-works/pi-ai";
-import { clampOpenAIPromptCacheKey } from "@earendil-works/pi-ai/api/openai-prompt-cache";
 
 import {
   materializeRouteModel,
@@ -56,6 +55,7 @@ export interface SparkWorkflowModelRunResponse {
  * operator cancellation.
  */
 export const SPARK_PROVIDER_TRANSPORT_MAX_RETRIES = Number.MAX_SAFE_INTEGER;
+const OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH = 64;
 
 export function createProviderRegistryStreamFunction(
   registry: SparkProviderRegistry,
@@ -215,7 +215,7 @@ function withPiAiOpenAiResponsesPromptCacheBridge(
   ) {
     return options;
   }
-  const key = clampOpenAIPromptCacheKey(promptCacheKeyFromOptions(options));
+  const key = clampOpenAiPromptCacheKey(promptCacheKeyFromOptions(options));
   if (!key) return options;
   const onPayload = options?.onPayload;
   return {
@@ -242,6 +242,14 @@ function promptCacheKeyFromOptions(options: StreamOptions | undefined): string |
   const metadata = (options as { metadata?: Record<string, unknown> } | undefined)?.metadata;
   const metadataKey = metadata?.prompt_cache_key;
   return typeof metadataKey === "string" && metadataKey.trim() ? metadataKey.trim() : undefined;
+}
+
+function clampOpenAiPromptCacheKey(key: string | undefined): string | undefined {
+  if (key === undefined) return undefined;
+  const chars = Array.from(key);
+  return chars.length <= OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH
+    ? key
+    : chars.slice(0, OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH).join("");
 }
 
 function withResolvedApiKey(

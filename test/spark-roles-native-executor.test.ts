@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ExtensionRoleRunner } from "@zendev-lab/spark-extension-api";
-import { createRoleNativeExecutorResolver } from "../packages/spark-roles/src/native-executor.ts";
+import {
+  createRoleNativeExecutorResolver,
+  resolveSparkSourceHeadlessExecutorSpecifier,
+} from "../packages/spark-roles/src/native-executor.ts";
 
 function fakeRequest() {
   return {
@@ -25,6 +28,14 @@ function fakeRequest() {
     timeoutMs: 1_000,
   };
 }
+
+void test("role native executor source fallback bypasses extension-loader package aliases", async () => {
+  const specifier = resolveSparkSourceHeadlessExecutorSpecifier();
+
+  assert.match(specifier, /\/apps\/spark-tui\/src\/headless-role-executor\.ts$/u);
+  const module = await import(specifier);
+  assert.equal(typeof module.createSparkHeadlessRoleExecutor, "function");
+});
 
 void test("role native executor resolver prefers host-provided ctx.runRole", async () => {
   let loadCalls = 0;
@@ -52,8 +63,10 @@ void test("role native executor resolver creates a cached headless fallback", as
   let loadCalls = 0;
   let factoryCalls = 0;
   let executorCalls = 0;
+  let loadedSpecifier: string | undefined;
   const resolve = createRoleNativeExecutorResolver({
-    loadHeadlessModule: async () => {
+    loadHeadlessModule: async (options) => {
+      loadedSpecifier = options?.moduleSpecifier;
       loadCalls += 1;
       return {
         createSparkHeadlessSessionExecutor: () => async () => ({}),
@@ -80,6 +93,7 @@ void test("role native executor resolver creates a cached headless fallback", as
   const result = await first(fakeRequest());
   assert.equal(result.stdout, "fallback");
   assert.equal(loadCalls, 1);
+  assert.match(loadedSpecifier ?? "", /\/apps\/spark-tui\/src\/headless-role-executor\.ts$/u);
   assert.equal(factoryCalls, 1);
   assert.equal(executorCalls, 1);
 });

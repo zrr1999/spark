@@ -524,12 +524,88 @@ describe("projection services", () => {
         payload: { kind: "task.start.request", title: "Start MVP task" },
         createdAt: now,
       }),
-    ).toThrow(/borrowed by an open TUI client/);
+    ).toThrow(/occupied by another interactive session/);
 
     const commandCount = db.prepare("SELECT COUNT(*) AS count FROM commands").get() as {
       count: number;
     };
     expect(commandCount.count).toBe(0);
+    db.close();
+  });
+
+  it("keeps cockpit-only occupancy mutable while still reporting occupied sessions", () => {
+    const { db, runtimeWorkspaceBindingId, now } = setupRuntimeBinding();
+    const workspace = createWorkspaceWithOwnerBinding(db, {
+      slug: "local-default",
+      name: "Local default",
+      runtimeWorkspaceBindingId,
+      createdAt: now,
+    });
+
+    appendEvent(db, {
+      workspaceId: workspace.id,
+      actorKind: "runtime",
+      actorId: runtimeWorkspaceBindingId,
+      kind: "workspace.snapshot.received",
+      subjectKind: "runtime_workspace_binding",
+      subjectId: runtimeWorkspaceBindingId,
+      payload: {
+        displayName: "Local default",
+        status: "available",
+        borrowed: {
+          borrowed: true,
+          occupied: true,
+          interactiveClientCount: 1,
+          borrowedByClientIds: ["wcl-cockpit"],
+          sessions: [
+            {
+              sessionId: "wcl-cockpit",
+              clientId: "wcl-cockpit",
+              kind: "interactive",
+              surface: "cockpit",
+              displayName: "Cockpit workbench",
+              attachedAt: now,
+              lastSeenAt: now,
+            },
+          ],
+          since: now,
+        },
+        workspaceClients: [
+          {
+            clientId: "wcl-cockpit",
+            kind: "interactive",
+            status: "connected",
+            surface: "cockpit",
+            sessionId: "wcl-cockpit",
+            attachedAt: now,
+            lastSeenAt: now,
+          },
+        ],
+        control: {
+          mode: "full",
+          serverMutationAllowed: true,
+        },
+      },
+      createdAt: now,
+    });
+
+    const control = loadWorkspaceServerControl(db, workspace.id);
+    expect(control.borrowed).toMatchObject({
+      borrowed: true,
+      occupied: true,
+      sessions: [expect.objectContaining({ surface: "cockpit", clientId: "wcl-cockpit" })],
+    });
+    expect(control.control).toMatchObject({
+      mode: "full",
+      serverMutationAllowed: true,
+    });
+    expect(() =>
+      queueCommandForWorkspaceOwner(db, {
+        workspaceId: workspace.id,
+        payload: { kind: "task.start.request", title: "Start MVP task" },
+        createdAt: now,
+      }),
+    ).not.toThrow();
     db.close();
   });
 

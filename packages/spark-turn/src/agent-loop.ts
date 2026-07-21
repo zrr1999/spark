@@ -173,7 +173,9 @@ export interface SparkTurnHost {
   publishView(event: SparkViewModelEvent): void;
 }
 
-export const DEFAULT_SPARK_AGENT_LOOP_STREAM_TIMEOUT_MS = 600_000;
+export const DEFAULT_SPARK_AGENT_LOOP_STREAM_TIMEOUT_MS = 0;
+/** Abort a model stream only after this long with no stream events (hang detection). */
+export const DEFAULT_SPARK_AGENT_LOOP_STREAM_IDLE_TIMEOUT_MS = 45 * 60_000;
 export const DEFAULT_SPARK_AGENT_LOOP_TOOL_TIMEOUT_MS = 300_000;
 export const DEFAULT_SPARK_AGENT_LOOP_INTERACTION_TIMEOUT_MS = 60_000;
 export const DEFAULT_SPARK_AGENT_LOOP_MAX_PARALLEL_TOOL_CALLS = 4;
@@ -246,8 +248,13 @@ export interface SparkAgentLoopOptions {
   promptCache?: SparkPromptCacheOptions;
   /** Privacy-safe per-round prompt/tool diagnostics. Enabled by default. */
   promptManifest?: SparkPromptManifestOptions;
-  /** Wall-clock timeout for one model stream pass. Defaults to 10 minutes; <=0 disables. */
+  /** Wall-clock timeout for one model stream pass. Defaults to disabled (0); <=0 disables. */
   streamTimeoutMs?: number;
+  /**
+   * Abort a model stream after this long with no stream events.
+   * Defaults to 45 minutes; <=0 disables idle hang detection.
+   */
+  streamIdleTimeoutMs?: number;
   /** Wall-clock timeout for one tool execution. Defaults to 5 minutes; <=0 disables. */
   toolTimeoutMs?: number;
   /** Wall-clock timeout for one host interaction/approval wait. Defaults to 60s; <=0 disables. */
@@ -297,6 +304,7 @@ export class SparkAgentLoop {
   private readonly streamFunction: SparkAgentStreamFunction;
   private readonly getModel: () => Model<string>;
   private readonly streamTimeoutMs: number;
+  private readonly streamIdleTimeoutMs: number;
   private readonly toolTimeoutMs: number;
   private readonly interactionTimeoutMs: number;
   private readonly maxParallelToolCalls: number;
@@ -345,6 +353,10 @@ export class SparkAgentLoop {
     this.streamTimeoutMs = normalizeTimeoutMs(
       options.streamTimeoutMs,
       DEFAULT_SPARK_AGENT_LOOP_STREAM_TIMEOUT_MS,
+    );
+    this.streamIdleTimeoutMs = normalizeTimeoutMs(
+      options.streamIdleTimeoutMs,
+      DEFAULT_SPARK_AGENT_LOOP_STREAM_IDLE_TIMEOUT_MS,
     );
     this.toolTimeoutMs = normalizeTimeoutMs(
       options.toolTimeoutMs,
@@ -680,12 +692,19 @@ export class SparkAgentLoop {
             prompt_cache_key: promptCache.promptCacheKey,
             ...(reasoning !== undefined ? { reasoning } : {}),
           } as StreamOptions);
-          assistant = await runWithTimeout(
-            this.consumeAssistantStream(stream),
-            this.streamTimeoutMs,
-            `Spark agent model stream timed out after ${this.streamTimeoutMs}ms`,
-            (error) => abortController.abort(error),
-          );
+          const consume = this.consumeAssistantStream(stream, abortController);
+          assistant =
+            this.streamTimeoutMs > 0
+              ? await runWithTimeout(
+                  consume,
+                  this.streamTimeoutMs,
+                  `Spark agent model stream timed out after ${this.streamTimeoutMs}ms`,
+                  (error) => {
+                    (error as Error & { code?: string }).code ??= "STREAM_WALL_TIMEOUT";
+                    abortController.abort(error);
+                  },
+                )
+              : await consume;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           if (
@@ -845,15 +864,61 @@ export class SparkAgentLoop {
 
   private async consumeAssistantStream(
     stream: ReturnType<SparkAgentStreamFunction>,
+    abortController: AbortController,
   ): Promise<AssistantMessage> {
-    let assistant: AssistantMessage;
-    for await (const event of stream) {
-      this.publish({ type: "stream_event", event });
-      if (event.type === "done" || event.type === "error") {
-        assistant = event.type === "done" ? event.message : event.error;
+    let assistant;
+    const idleMs = this.streamIdleTimeoutMs;
+    if (idleMs <= 0) {
+      for await (const event of stream) {
+        this.publish({ type: "stream_event", event });
+        if (event.type === "done" || event.type === "error") {
+          assistant = event.type === "done" ? event.message : event.error;
+        }
       }
+      return assistant ?? (await stream.result());
     }
-    return assistant ?? (await stream.result());
+
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    let rejectIdle: ((error: Error) => void) | undefined;
+    const clearIdle = () => {
+      if (idleTimer !== undefined) {
+        clearTimeout(idleTimer);
+        idleTimer = undefined;
+      }
+    };
+    const armIdle = () => {
+      clearIdle();
+      idleTimer = setTimeout(() => {
+        const error = Object.assign(
+          new Error(`Spark agent model stream idle for ${idleMs}ms with no events`),
+          { name: "SparkAgentLoopIdleTimeoutError", code: "STREAM_IDLE_TIMEOUT" },
+        );
+        abortController.abort(error);
+        rejectIdle?.(error);
+      }, idleMs);
+      idleTimer.unref?.();
+    };
+
+    try {
+      armIdle();
+      const idleWatch = new Promise<never>((_resolve, reject) => {
+        rejectIdle = reject;
+      });
+      const consume = (async () => {
+        for await (const event of stream) {
+          armIdle();
+          this.publish({ type: "stream_event", event });
+          if (event.type === "done" || event.type === "error") {
+            assistant = event.type === "done" ? event.message : event.error;
+          }
+        }
+        return assistant ?? (await stream.result());
+      })();
+      return await Promise.race([consume, idleWatch]);
+    } finally {
+      clearIdle();
+      rejectIdle = undefined;
+    }
   }
 
   private async dispatchToolCall(

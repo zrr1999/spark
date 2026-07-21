@@ -1344,6 +1344,10 @@ export async function attachSparkWorkspaceClient(
     client,
   );
   const leaseTtlMs = options.leaseTtlMs ?? 60_000;
+  const metadata =
+    options.kind === "interactive"
+      ? { surface: "tui", ...(options.metadata ?? {}) }
+      : options.metadata;
   const attached = await clientWorkspaceClientAttach(
     {
       workspaceId: workspace.id,
@@ -1351,7 +1355,7 @@ export async function attachSparkWorkspaceClient(
       kind: options.kind,
       displayName: options.displayName ?? defaultWorkspaceClientDisplayName(options.kind),
       leaseTtlMs,
-      ...(options.metadata ? { metadata: options.metadata } : {}),
+      ...(metadata ? { metadata } : {}),
     },
     client,
   );

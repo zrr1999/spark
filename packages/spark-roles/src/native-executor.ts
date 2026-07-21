@@ -1,4 +1,7 @@
 import type { ExtensionRoleRunner } from "@zendev-lab/spark-extension-api";
+import { realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   loadSparkHeadlessSessionModule,
   type SparkHeadlessSessionModule,
@@ -6,6 +9,7 @@ import {
 
 export interface RoleNativeExecutorResolverDeps {
   loadHeadlessModule?: typeof loadSparkHeadlessSessionModule;
+  moduleSpecifier?: string;
 }
 
 export type RoleNativeExecutorResolver = (input: {
@@ -31,7 +35,9 @@ async function loadFallbackHeadlessRoleExecutor(
   const loadHeadlessModule = deps.loadHeadlessModule ?? loadSparkHeadlessSessionModule;
   let module: SparkHeadlessSessionModule;
   try {
-    module = await loadHeadlessModule();
+    module = await loadHeadlessModule({
+      moduleSpecifier: deps.moduleSpecifier ?? resolveSparkSourceHeadlessExecutorSpecifier(),
+    });
   } catch (error) {
     return failedRoleExecutor(
       `daemon-native role executor load failed: ${unknownErrorMessage(error)}`,
@@ -61,6 +67,22 @@ async function loadFallbackHeadlessRoleExecutor(
   }
 
   return async (request) => await (executor as ExtensionRoleRunner)(request);
+}
+
+/**
+ * Resolve the monorepo source executor from the Spark roles package itself.
+ *
+ * Pi's extension loader aliases the `@earendil-works/pi-ai` package root to
+ * its compatibility entrypoint for legacy extensions. Loading Spark's native
+ * host through that jiti graph makes nested modern `pi-ai` imports inherit the
+ * broad alias and corrupts subpaths. A real source file URL keeps the native
+ * executor on Node's ESM resolver, where package export maps remain authoritative.
+ */
+export function resolveSparkSourceHeadlessExecutorSpecifier(): string {
+  const rolesDirectory = dirname(realpathSync(new URL(import.meta.url)));
+  return pathToFileURL(
+    join(rolesDirectory, "../../../apps/spark-tui/src/headless-role-executor.ts"),
+  ).href;
 }
 
 function failedRoleExecutor(reason: string): ExtensionRoleRunner {

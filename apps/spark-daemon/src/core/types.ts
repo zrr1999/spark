@@ -42,6 +42,8 @@ export interface SparkDaemonSessionRunTask {
   /** Thinking/reasoning intensity frozen when this turn is enqueued. */
   thinkingLevel?: string;
   reset?: boolean;
+  /** Set when a successor daemon resumes an interrupted running turn. */
+  resumeFromInterrupt?: boolean;
   actor?: string;
   note?: string;
   input?: string;
@@ -108,6 +110,8 @@ export function validateSparkDaemonTask(value: unknown): SparkDaemonTask {
     model: nonEmptyString(task.model),
     thinkingLevel: nonEmptyString(task.thinkingLevel),
     reset: typeof task.reset === "boolean" ? task.reset : undefined,
+    resumeFromInterrupt:
+      typeof task.resumeFromInterrupt === "boolean" ? task.resumeFromInterrupt : undefined,
     actor: nonEmptyString(task.actor),
     note: nonEmptyString(task.note),
     input: nonEmptyString(task.input),

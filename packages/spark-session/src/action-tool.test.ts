@@ -357,6 +357,81 @@ describe("blocking session requests", () => {
     expect(request).not.toHaveBeenCalledWith("turn.cancel", expect.anything(), expect.anything());
   });
 
+  it("continues the same accepted invocation after a wait timeout and returns the terminal result exactly once", async () => {
+    const mailStore = await createMailStore();
+    let now = 0;
+    let statusCalls = 0;
+    let continuationStarted = false;
+    const request = baseRequest((method, params) => {
+      if (method === "turn.submit") {
+        return {
+          invocationId: "inv_continue",
+          status: "queued",
+          acceptedAt: "2026-07-17T00:00:00.000Z",
+        };
+      }
+      if (method === "turn.status") {
+        statusCalls += 1;
+        return status(
+          "inv_continue",
+          continuationStarted && statusCalls >= 2 ? "succeeded" : "running",
+        );
+      }
+      if (method === "turn.result") {
+        expect(params).toEqual({ invocationId: "inv_continue" });
+        return {
+          invocationId: "inv_continue",
+          status: "succeeded",
+          assistantText: "continued response",
+          finishedAt: "2026-07-17T00:00:01.000Z",
+        };
+      }
+      throw new Error(`unexpected RPC method: ${method}`);
+    });
+
+    const timedOut = await send(
+      { kind: "request", wait: "completed", timeoutMs: 1_000 },
+      request,
+      mailStore,
+      { now: () => now, sleep: async (ms) => void (now += ms) },
+      "continue-timeout",
+    );
+    expect(timedOut.details).toMatchObject({
+      invocationId: "inv_continue",
+      waitTimedOut: true,
+      status: { status: "running" },
+    });
+
+    continuationStarted = true;
+    const continued = await send(
+      { kind: "request", wait: "completed", timeoutMs: 1_000 },
+      request,
+      mailStore,
+      { now: () => now, sleep: async () => undefined },
+      "continue-terminal",
+    );
+    expect(continued.content[0]?.text).toBe("continued response");
+    expect(continued.details).toMatchObject({
+      invocationId: "inv_continue",
+      waitTimedOut: false,
+      result: { status: "succeeded" },
+    });
+    expect(request.mock.calls.filter(([method]) => method === "turn.submit")).toHaveLength(2);
+
+    const repeated = await send(
+      { kind: "request", wait: "completed", timeoutMs: 1_000 },
+      request,
+      mailStore,
+      { now: () => now, sleep: async () => undefined },
+      "continue-repeat",
+    );
+    expect(repeated.content[0]?.text).toBe("continued response");
+    expect(repeated.details).toMatchObject({
+      invocationId: "inv_continue",
+      result: { status: "succeeded" },
+    });
+  });
+
   it("returns terminal failure details", async () => {
     const mailStore = await createMailStore();
     const request = baseRequest((method) => {

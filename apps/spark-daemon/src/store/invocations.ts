@@ -17,7 +17,9 @@ export type SparkInvocationTerminalStatus = Extract<
 
 export const SPARK_INVOCATION_INTERRUPTED_ERROR_CODE = "DAEMON_EXECUTION_INTERRUPTED";
 export const SPARK_INVOCATION_INTERRUPTED_ERROR_MESSAGE =
-  "The daemon exited while this invocation was running. Its external side effects may be incomplete or already applied; inspect them before retrying manually.";
+  "The daemon exited while this invocation was running. The successor daemon will resume this turn from persisted session state.";
+
+export const SPARK_INVOCATION_RESUME_SOURCE_KIND = "invocation.resume";
 
 export interface SparkInvocationRecord {
   invocationId: string;
@@ -154,7 +156,7 @@ export const MAX_INVOCATION_EVENT_PAGE_LIMIT = 500;
 
 const allowedTransitions: Record<SparkInvocationStatus, readonly SparkInvocationStatus[]> = {
   queued: ["running", "failed", "cancelled"],
-  running: ["succeeded", "failed", "cancelled"],
+  running: ["queued", "succeeded", "failed", "cancelled"],
   succeeded: [],
   failed: [],
   cancelled: [],
@@ -639,6 +641,55 @@ export class SparkInvocationStore {
           now,
         ).changes,
     );
+  }
+
+  /**
+   * Requeue a crashed `running` invocation so the successor daemon can resume
+   * the same turn against persisted session state.
+   */
+  requeueForResume(invocationId: string, now = new Date().toISOString()): SparkInvocationRecord {
+    const current = this.require(invocationId);
+    if (current.status !== "running") {
+      throw new Error(`Invocation resume conflict: ${invocationId} is ${current.status}`);
+    }
+    assertTransition(current.status, "queued");
+    const nextTask = markTaskForResume(current.task);
+    const changes = Number(
+      this.db
+        .prepare(
+          `UPDATE invocations
+           SET status = 'queued',
+               worker_id = NULL,
+               claimed_at = NULL,
+               started_at = NULL,
+               finished_at = NULL,
+               cancel_reason = NULL,
+               error_code = NULL,
+               error_message = NULL,
+               result_json = NULL,
+               source_kind = ?,
+               task_json = ?,
+               updated_at = ?
+           WHERE id = ? AND status = 'running'`,
+        )
+        .run(
+          SPARK_INVOCATION_RESUME_SOURCE_KIND,
+          nextTask === undefined ? null : JSON.stringify(nextTask),
+          now,
+          invocationId,
+        ).changes,
+    );
+    if (changes !== 1) throw new Error(`Invocation resume conflict: ${invocationId}`);
+    this.appendEvent(
+      invocationId,
+      "invocation.resume_queued",
+      {
+        reason: SPARK_INVOCATION_INTERRUPTED_ERROR_CODE,
+        message: SPARK_INVOCATION_INTERRUPTED_ERROR_MESSAGE,
+      },
+      now,
+    );
+    return this.require(invocationId);
   }
 
   complete(invocationId: string, input: CompleteSparkInvocationInput): SparkInvocationRecord {
@@ -1198,10 +1249,17 @@ function assertIdempotentSubmission(
 export function isRetryableInvocationError(errorCode: string | undefined): boolean {
   return (
     errorCode === "EXECUTOR_TIMEOUT" ||
+    errorCode === "STREAM_IDLE_TIMEOUT" ||
+    errorCode === "STREAM_WALL_TIMEOUT" ||
     errorCode === "EXECUTION_TRANSIENT" ||
     errorCode === "DELIVERY_FAILED" ||
     errorCode === SPARK_INVOCATION_INTERRUPTED_ERROR_CODE
   );
+}
+
+function markTaskForResume(task: unknown): unknown {
+  if (!task || typeof task !== "object" || Array.isArray(task)) return task;
+  return { ...(task as Record<string, unknown>), resumeFromInterrupt: true };
 }
 
 function isInvocationStatus(value: string): value is SparkInvocationStatus {

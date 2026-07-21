@@ -46,6 +46,33 @@ export interface SparkAgentSessionRunOptions {
   forkFromSession?: string;
   /** Display-safe metadata persisted on this turn's submitted user message only. */
   messageMetadata?: Record<string, unknown>;
+  /**
+   * When true, the turn continues after a daemon/process interrupt. The model is
+   * told to resume from persisted session state without redoing completed work.
+   */
+  resumeFromInterrupt?: boolean;
+}
+
+const MAX_CONTEXT_OVERFLOW_COMPACTIONS = 5;
+const CONTEXT_OVERFLOW_COMPACT_BACKOFF_MS = [0, 500, 1_500, 4_000, 10_000] as const;
+const DAEMON_RESUME_NOTICE =
+  "[Spark daemon resume] The previous attempt of this turn was interrupted mid-execution. Continue from the current session history. Do not repeat side effects that already completed.";
+
+function delay(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}
+
+function promptWithResumeNotice(
+  prompt: UserMessage["content"],
+  resumeFromInterrupt: boolean | undefined,
+): UserMessage["content"] {
+  if (!resumeFromInterrupt) return prompt;
+  if (typeof prompt === "string") return `${DAEMON_RESUME_NOTICE}\n\n${prompt}`;
+  return [{ type: "text", text: DAEMON_RESUME_NOTICE }, ...prompt];
 }
 
 export interface SparkAgentSessionRunResult {
@@ -69,20 +96,25 @@ export class SparkAgentSession {
     const record = await this.loadOrCreateRecord(options);
     this.services.runtime.setSessionId(record.header.id);
     this.services.agentLoop.setViewSessionId(record.header.id);
-    await this.tryPreflightCompaction(record, options.prompt);
+    const prompt = promptWithResumeNotice(options.prompt, options.resumeFromInterrupt);
+    await this.tryPreflightCompaction(record, prompt);
     let beforeCount = this.loadPromptItems(record);
-    let outcome = await this.services.agentLoop.submitWithOutcome(options.prompt);
+    let outcome = await this.services.agentLoop.submitWithOutcome(prompt);
 
-    if (
+    let compactAttempt = 0;
+    while (
       outcome.status === "failed" &&
       classifyProviderFailure(outcome.errorMessage).failureClass === "context_overflow" &&
-      (await this.tryCompact(record, "context_overflow", true, true))
+      compactAttempt < MAX_CONTEXT_OVERFLOW_COMPACTIONS
     ) {
+      await delay(CONTEXT_OVERFLOW_COMPACT_BACKOFF_MS[compactAttempt] ?? 10_000);
+      if (!(await this.tryCompact(record, "context_overflow", true, true))) break;
+      compactAttempt += 1;
       // The failed attempt only exists in the loop's transient prompt state.
       // Reload from the persisted compacted record so the user prompt and
       // provider error are neither duplicated nor written into session history.
       beforeCount = this.loadPromptItems(record);
-      outcome = await this.services.agentLoop.submitWithOutcome(options.prompt);
+      outcome = await this.services.agentLoop.submitWithOutcome(prompt);
     }
     const assistant = outcome.assistant;
 

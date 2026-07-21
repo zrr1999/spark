@@ -148,6 +148,99 @@ describe("Spark daemon local RPC", () => {
     }
   });
 
+  it("replays one accepted turn by id through terminal result without resubmission", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-continuation-"));
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const lifecycle = new SparkDaemonLifecycle({}, { initiallyServing: true });
+    const options = {
+      isReady: () => lifecycle.isServing,
+      getLifecycle: () => lifecycle.snapshot(),
+    };
+    try {
+      const store = new SparkInvocationStore(db);
+      const invocation = store.submit({
+        sessionId: "session-continuation",
+        prompt: "one durable turn",
+        idempotencyKey: "continuation-once",
+        task: {
+          type: "session.run",
+          sessionId: "session-continuation",
+          prompt: "one durable turn",
+        },
+      });
+      expect(store.claimNext("continuation-worker")?.invocationId).toBe(invocation.invocationId);
+      store.complete(invocation.invocationId, {
+        status: "succeeded",
+        result: { assistantText: "one terminal answer" },
+      });
+
+      expect(
+        store.submit({
+          sessionId: "session-continuation",
+          prompt: "one durable turn",
+          idempotencyKey: "continuation-once",
+          task: {
+            type: "session.run",
+            sessionId: "session-continuation",
+            prompt: "one durable turn",
+          },
+        }).invocationId,
+      ).toBe(invocation.invocationId);
+      expect(
+        store.list(100).filter((item) => item.idempotencyKey === "continuation-once"),
+      ).toHaveLength(1);
+
+      const status = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "continuation_status",
+          method: "turn.status",
+          params: { invocationId: invocation.invocationId },
+        }),
+        paths,
+        db,
+        undefined,
+        options,
+      );
+      expect(status).toMatchObject({
+        ok: true,
+        result: { invocationId: invocation.invocationId, status: "succeeded" },
+      });
+
+      const result = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "continuation_result",
+          method: "turn.result",
+          params: { invocationId: invocation.invocationId },
+        }),
+        paths,
+        db,
+        undefined,
+        options,
+      );
+      expect(result).toMatchObject({
+        ok: true,
+        result: {
+          invocationId: invocation.invocationId,
+          status: "succeeded",
+          assistantText: "one terminal answer",
+        },
+      });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps turn observation and cancellation available while admission is closed", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-starting-"));
     const paths = resolveSparkPaths({

@@ -11,6 +11,8 @@ import {
   type WorkspaceBorrowedState,
   type WorkspaceClientKind,
   type WorkspaceClientProjection,
+  type WorkspaceOccupancySession,
+  type WorkspaceSessionSurface,
 } from "@zendev-lab/spark-protocol";
 import { asciiSlug } from "@zendev-lab/spark-system";
 
@@ -1114,6 +1116,18 @@ export function isBorrowedWorkspace(
   return workspaceBorrowedState(db, workspaceId, now).borrowed;
 }
 
+/**
+ * Policy gate for Cockpit/runtime mutations: foreign interactive sessions block,
+ * cockpit-only occupancy does not (same Cockpit holds the origin lease).
+ */
+export function isMutationBlockingBorrowedWorkspace(
+  db: DatabaseSync,
+  workspaceId: string,
+  now = new Date().toISOString(),
+): boolean {
+  return isForeignInteractiveOccupiedWorkspace(db, workspaceId, now);
+}
+
 export function isUserDetachedWorkspace(workspace: SparkDaemonWorkspace): boolean {
   return workspace.diagnostics.userDetached === true;
 }
@@ -1404,26 +1418,79 @@ function workspaceBorrowedState(
 
 function borrowedStateFromClients(clients: SparkDaemonWorkspaceClient[]): WorkspaceBorrowedState {
   const interactiveClients = clients.filter((client) => client.kind === "interactive");
+  const sessions = interactiveClients.map(occupancySessionFromClient);
   const since = interactiveClients
     .map((client) => client.attachedAt)
     .sort((a, b) => a.localeCompare(b))[0];
+  const occupied = interactiveClients.length > 0;
   return {
-    borrowed: interactiveClients.length > 0,
+    borrowed: occupied,
+    occupied,
     interactiveClientCount: interactiveClients.length,
     borrowedByClientIds: interactiveClients.map((client) => client.id),
+    sessions,
     ...(since ? { since } : {}),
   };
 }
 
 function workspaceClientProjection(client: SparkDaemonWorkspaceClient): WorkspaceClientProjection {
+  const surface = workspaceClientSurface(client);
+  const sessionId = workspaceClientSessionId(client);
   return {
     clientId: client.id,
     kind: client.kind,
     status: client.status,
     ...(client.displayName ? { displayName: client.displayName } : {}),
+    surface,
+    sessionId,
     attachedAt: client.attachedAt,
     lastSeenAt: client.lastSeenAt,
+    ...(client.leaseExpiresAt ? { leaseExpiresAt: client.leaseExpiresAt } : {}),
   };
+}
+
+function occupancySessionFromClient(client: SparkDaemonWorkspaceClient): WorkspaceOccupancySession {
+  return {
+    sessionId: workspaceClientSessionId(client),
+    clientId: client.id,
+    kind: client.kind,
+    surface: workspaceClientSurface(client),
+    ...(client.displayName ? { displayName: client.displayName } : {}),
+    attachedAt: client.attachedAt,
+    lastSeenAt: client.lastSeenAt,
+    ...(client.leaseExpiresAt ? { leaseExpiresAt: client.leaseExpiresAt } : {}),
+  };
+}
+
+export function workspaceClientSurface(client: {
+  metadata: Record<string, unknown>;
+}): WorkspaceSessionSurface {
+  const surface = client.metadata.surface;
+  if (surface === "tui" || surface === "cockpit" || surface === "unknown") return surface;
+  // Legacy interactive clients (pre-surface metadata) were TUI leases.
+  return "tui";
+}
+
+export function workspaceClientSessionId(client: {
+  id: string;
+  metadata: Record<string, unknown>;
+}): string {
+  const sessionId = client.metadata.sessionId;
+  return typeof sessionId === "string" && sessionId.trim() ? sessionId.trim() : client.id;
+}
+
+/** Interactive occupancy that blocks Cockpit server mutations (non-cockpit surfaces). */
+export function isForeignInteractiveOccupiedWorkspace(
+  db: DatabaseSync,
+  workspaceId: string,
+  now = new Date().toISOString(),
+): boolean {
+  return listWorkspaceClients(db, workspaceId, now).some(
+    (client) =>
+      client.status === "connected" &&
+      client.kind === "interactive" &&
+      workspaceClientSurface(client) !== "cockpit",
+  );
 }
 
 function executorProjectionForClient(

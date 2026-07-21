@@ -256,9 +256,9 @@ const messages = {
       daemonConnected: "Spark daemon 已连接",
       daemonDisconnected: "Spark daemon 离线",
       workspaceNotBorrowed: "可以开始新工作",
-      borrowedByOneTuiClient: "正由 1 个终端会话使用",
+      borrowedByOneTuiClient: "正由 1 个会话使用",
       borrowedByTuiClientsPrefix: "已被",
-      tuiClients: "个终端会话使用",
+      tuiClients: "个会话使用",
       noBackgroundExecutor: "当前空闲",
       backgroundExecutorStarting: "正在启动",
       backgroundExecutorUnhealthy: "运行异常",
@@ -270,7 +270,7 @@ const messages = {
       serverControlEnabled: "可以远程执行",
       snapshotOnlyMode: "当前只读",
       workspaceBorrowedSnapshotOnly:
-        "另一个终端会话正在使用此工作空间。关闭或释放后，才可从 Cockpit 执行操作。",
+        "另一个交互会话正在使用此工作空间。关闭或释放后，才可从 Cockpit 执行操作。",
       daemonDisconnectedSnapshotOnly:
         "Spark daemon 当前离线。重新连接后，才可从 Cockpit 执行操作。",
     },

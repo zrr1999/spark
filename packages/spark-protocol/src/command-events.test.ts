@@ -116,6 +116,9 @@ describe("SparkCommand vocabulary", () => {
     expect(Object.keys(runtimeServerCommandKindToSparkCommandKind)).toEqual([
       "daemon.status.request",
       "workspace.snapshot.request",
+      "workspace.client.attach.request",
+      "workspace.client.heartbeat.request",
+      "workspace.client.release.request",
       "project.create.request",
       "task.start.request",
       "assignment.create.request",

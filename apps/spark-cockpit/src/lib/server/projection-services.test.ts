@@ -276,7 +276,7 @@ describe("projection services", () => {
         payload: { kind: "task.start.request", title: "Start MVP task" },
         createdAt: now,
       }),
-    ).toThrow(/borrowed by an open TUI client/);
+    ).toThrow(/occupied by another interactive session/);
 
     const commandCount = db.prepare("SELECT COUNT(*) AS count FROM commands").get() as {
       count: number;

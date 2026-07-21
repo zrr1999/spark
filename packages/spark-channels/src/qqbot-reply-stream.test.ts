@@ -156,6 +156,39 @@ describe("qqbot C2C reply stream", () => {
     });
   });
 
+  it("sends a separate follow-up when replace would mutate a delivered prefix", async () => {
+    const sendC2CStreamMessage = vi.fn().mockResolvedValue({ id: "stream-1" });
+    const sendFollowUpMarkdown = vi.fn(async (_text: string) => undefined);
+    const reserveFollowUpSeqs = vi.fn(() => true);
+    const scheduler = createManualScheduler();
+    const stream = createQqbotC2CReplyStream({
+      api: { sendC2CStreamMessage } as unknown as QqbotApiClient,
+      resolveToken: async () => "token",
+      openid: "user-1",
+      messageId: "source-1",
+      reserveFinalSeq: () => 4,
+      reserveFollowUpSeqs,
+      sendFollowUpMarkdown,
+      flushDelayMs: 1,
+      keepaliveDelayMs: 60_000,
+      schedule: scheduler.schedule,
+      cancelSchedule: scheduler.cancelSchedule,
+    });
+
+    stream.appendText("先问一下");
+    scheduler.flushPending(1);
+    await vi.waitFor(() => expect(sendC2CStreamMessage).toHaveBeenCalledTimes(1));
+    stream.replaceText?.("你选了选项 A，接下来这样处理。");
+    await stream.complete();
+
+    expect(sendC2CStreamMessage.mock.calls.at(-1)?.[2]).toMatchObject({
+      input_state: 10,
+      content_raw: "先问一下\n",
+    });
+    expect(reserveFollowUpSeqs).toHaveBeenCalledWith(1);
+    expect(sendFollowUpMarkdown).toHaveBeenCalledWith("你选了选项 A，接下来这样处理。");
+  });
+
   it("keepalives during tool waits and delivers the tail after timeout-like gaps", async () => {
     const sendC2CStreamMessage = vi.fn().mockResolvedValue({ id: "stream-1" });
     const scheduler = createManualScheduler();

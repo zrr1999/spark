@@ -2956,19 +2956,7 @@ function sparkDaemonWorkspace(value: unknown): SparkDaemonWorkspace {
     diagnostics: value.diagnostics,
     ...(isRecord(value.borrowed)
       ? {
-          borrowed: {
-            borrowed: value.borrowed.borrowed === true,
-            interactiveClientCount:
-              typeof value.borrowed.interactiveClientCount === "number"
-                ? value.borrowed.interactiveClientCount
-                : 0,
-            borrowedByClientIds: Array.isArray(value.borrowed.borrowedByClientIds)
-              ? value.borrowed.borrowedByClientIds.filter(
-                  (clientId): clientId is string => typeof clientId === "string",
-                )
-              : [],
-            ...(typeof value.borrowed.since === "string" ? { since: value.borrowed.since } : {}),
-          },
+          borrowed: parseBorrowedState(value.borrowed),
         }
       : {}),
     ...(Array.isArray(value.workspaceClients)
@@ -3028,6 +3016,70 @@ function sparkDaemonWorkspace(value: unknown): SparkDaemonWorkspace {
   return profile ? { ...workspace, profile } : workspace;
 }
 
+function parseBorrowedState(
+  value: Record<string, unknown>,
+): NonNullable<SparkDaemonWorkspace["borrowed"]> {
+  const borrowedByClientIds = Array.isArray(value.borrowedByClientIds)
+    ? value.borrowedByClientIds.filter(
+        (clientId): clientId is string => typeof clientId === "string",
+      )
+    : [];
+  const sessions = Array.isArray(value.sessions)
+    ? value.sessions.flatMap((item): NonNullable<SparkDaemonWorkspace["borrowed"]>["sessions"] => {
+        if (!isRecord(item)) return [];
+        const clientId = typeof item.clientId === "string" ? item.clientId : null;
+        const sessionId =
+          typeof item.sessionId === "string" && item.sessionId.trim()
+            ? item.sessionId.trim()
+            : clientId;
+        if (!clientId || !sessionId) return [];
+        const surface =
+          item.surface === "tui" || item.surface === "cockpit" || item.surface === "unknown"
+            ? item.surface
+            : ("tui" as const);
+        const kind =
+          item.kind === "interactive" || item.kind === "headless" || item.kind === "executor"
+            ? item.kind
+            : ("interactive" as const);
+        return [
+          {
+            sessionId,
+            clientId,
+            kind,
+            surface,
+            ...(typeof item.displayName === "string" ? { displayName: item.displayName } : {}),
+            ...(typeof item.attachedAt === "string" ? { attachedAt: item.attachedAt } : {}),
+            ...(typeof item.lastSeenAt === "string" ? { lastSeenAt: item.lastSeenAt } : {}),
+            ...(typeof item.leaseExpiresAt === "string"
+              ? { leaseExpiresAt: item.leaseExpiresAt }
+              : {}),
+          },
+        ];
+      })
+    : borrowedByClientIds.map((clientId) => ({
+        sessionId: clientId,
+        clientId,
+        kind: "interactive" as const,
+        surface: "tui" as const,
+      }));
+  const occupied =
+    value.occupied === true ||
+    value.borrowed === true ||
+    sessions.length > 0 ||
+    borrowedByClientIds.length > 0;
+  return {
+    borrowed: occupied,
+    occupied,
+    interactiveClientCount:
+      typeof value.interactiveClientCount === "number"
+        ? value.interactiveClientCount
+        : sessions.length,
+    borrowedByClientIds,
+    sessions,
+    ...(typeof value.since === "string" ? { since: value.since } : {}),
+  };
+}
+
 function sparkDaemonWorkspaceClient(value: unknown): SparkDaemonWorkspaceClient {
   if (
     !isRecord(value) ||
@@ -3070,8 +3122,13 @@ function workspaceClientProjection(
     kind: value.kind,
     status: value.status,
     ...(typeof value.displayName === "string" ? { displayName: value.displayName } : {}),
+    ...(value.surface === "tui" || value.surface === "cockpit" || value.surface === "unknown"
+      ? { surface: value.surface }
+      : {}),
+    ...(typeof value.sessionId === "string" ? { sessionId: value.sessionId } : {}),
     ...(typeof value.attachedAt === "string" ? { attachedAt: value.attachedAt } : {}),
     ...(typeof value.lastSeenAt === "string" ? { lastSeenAt: value.lastSeenAt } : {}),
+    ...(typeof value.leaseExpiresAt === "string" ? { leaseExpiresAt: value.leaseExpiresAt } : {}),
   };
 }
 

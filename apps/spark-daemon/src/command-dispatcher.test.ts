@@ -209,6 +209,26 @@ describe("Spark daemon command dispatcher", () => {
         workspaceAccess: { borrowed: true },
       }).accepted,
     ).toBe(true);
+
+    const attach = sparkCommandFromServerCommandEnvelope(
+      createServerCommandEnvelope({
+        ...route,
+        commandId: "cmd_22222222222222222222222222222222",
+        payload: {
+          kind: "workspace.client.attach.request",
+          payload: { clientId: "wcl_cockpit", kind: "interactive" },
+        },
+      }),
+    );
+    expect(
+      decideSparkDaemonCommandPolicy({
+        command: attach,
+        workspaceBindingId: route.workspaceBindingId,
+        knownWorkspaceBindingIds,
+        workspaceAccess: { borrowed: true },
+      }).accepted,
+    ).toBe(true);
+
     expect(
       decideSparkDaemonCommandPolicy({
         command: task,

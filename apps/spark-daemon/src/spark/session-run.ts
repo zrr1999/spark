@@ -661,6 +661,7 @@ export async function executeSparkDaemonSessionRunTask(
     ...(task.model ? { model: task.model } : {}),
     ...(task.thinkingLevel ? { thinkingLevel: task.thinkingLevel } : {}),
     reset: task.reset,
+    ...(task.resumeFromInterrupt ? { resumeFromInterrupt: true } : {}),
     signal: context.signal,
     // The daemon scheduler is the single execution-time budget owner. It can
     // pause that budget while awaiting a human response; adding the headless

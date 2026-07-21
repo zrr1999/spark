@@ -26,9 +26,16 @@ export interface ConsumedCockpitAccessToken {
 }
 
 export class CockpitAccessTokenError extends Error {
+  readonly reasonCode:
+    | "COCKPIT_ACCESS_TOKEN_REQUIRED"
+    | "COCKPIT_ACCESS_TOKEN_INVALID"
+    | "COCKPIT_ACCESS_TOKEN_USED"
+    | "COCKPIT_ACCESS_TOKEN_REVOKED"
+    | "COCKPIT_ACCESS_TOKEN_EXPIRED";
+
   constructor(
     message: string,
-    readonly reasonCode:
+    reasonCode:
       | "COCKPIT_ACCESS_TOKEN_REQUIRED"
       | "COCKPIT_ACCESS_TOKEN_INVALID"
       | "COCKPIT_ACCESS_TOKEN_USED"
@@ -36,6 +43,7 @@ export class CockpitAccessTokenError extends Error {
       | "COCKPIT_ACCESS_TOKEN_EXPIRED",
   ) {
     super(message);
+    this.reasonCode = reasonCode;
   }
 }
 

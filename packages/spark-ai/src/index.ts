@@ -972,7 +972,7 @@ function chooseFailureClass(input: NormalizedProviderFailure): FailureClass {
   if (input.stopReason === "aborted") return "aborted";
   if (/mismatched api:/u.test(text)) return "provider_mismatch";
   if (
-    /context[_ -]?(window|length|overflow)|maximum context|prompt is too long|too many tokens/u.test(
+    /context[_ -]?(window|length|overflow)|maximum context|prompt is too long|too many tokens|context window is full|请精简对话历史|缩小工具\/?文件输出/u.test(
       text,
     )
   ) {
@@ -993,7 +993,9 @@ function chooseFailureClass(input: NormalizedProviderFailure): FailureClass {
     return "transient";
   }
   if (
-    /econnreset|etimedout|timeout|socket hang up|temporary|temporarily|network error/u.test(text)
+    /econnreset|etimedout|timeout|socket hang up|temporary|temporarily|network error|overloaded|try again later|servers are currently overloaded/u.test(
+      text,
+    )
   ) {
     return "transient";
   }

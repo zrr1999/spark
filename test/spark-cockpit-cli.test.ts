@@ -57,9 +57,10 @@ void test("parseSparkCockpitCliArgs routes Cockpit coordination resources", () =
   );
 });
 
-void test("spark cockpit help documents coordination resources and excludes daemon execution controls", () => {
+void test("spark cockpit help documents surface, coordination, and excludes daemon execution controls", () => {
   const help = sparkCockpitHelpText();
-  assert.match(help, /spark cockpit - Spark cross-daemon coordination CLI/u);
+  assert.match(help, /spark cockpit - Spark cross-daemon coordination and Web cockpit/u);
+  assert.match(help, /spark cockpit web start/u);
   assert.match(help, /spark cockpit project list/u);
   assert.match(help, /spark cockpit task list/u);
   assert.match(help, /spark cockpit goal status/u);
@@ -71,8 +72,30 @@ void test("spark cockpit help documents coordination resources and excludes daem
   assert.match(help, /spark cockpit instance inspect/u);
   assert.match(help, /spark cockpit instance restore/u);
   assert.match(help, /spark cockpit instance status/u);
+  assert.match(help, /access\s+Mint, list, or revoke/u);
   assert.doesNotMatch(help, /spark cockpit queue/u);
   assert.doesNotMatch(help, /spark cockpit events watch/u);
+});
+
+void test("spark-cockpit thin bin routes through the TypeScript surface entry", async () => {
+  const bin = fileURLToPath(new URL("../apps/spark-cockpit/bin/spark-cockpit", import.meta.url));
+  const help = await runBin(bin, ["--help"]);
+  assert.equal(help.code, 0);
+  assert.match(help.stdout, /spark cockpit access create/u);
+  assert.match(help.stdout, /spark cockpit web start/u);
+  assert.match(help.stdout, /access\s+Mint, list, or revoke/u);
+
+  const unknown = await runBin(bin, ["access", "not-a-real-op", "--json"]);
+  assert.notEqual(unknown.code, 0);
+  assert.doesNotMatch(unknown.stderr, /Unknown spark cockpit command: access/u);
+  assert.match(
+    `${unknown.stdout}${unknown.stderr}`,
+    /unknown spark cockpit access operation|create, list, or revoke/iu,
+  );
+
+  const missingWeb = await runBin(bin, ["web", "not-a-real-op"]);
+  assert.notEqual(missingWeb.code, 0);
+  assert.match(`${missingWeb.stdout}${missingWeb.stderr}`, /Unknown spark cockpit web command/u);
 });
 
 void test("spark cockpit status/project/task/goal/artifact/review/workflow expose stable JSON", async () => {
@@ -471,6 +494,27 @@ type AcceptanceInvocation = {
   prompt?: string;
   task?: unknown;
 };
+
+async function runBin(
+  bin: string,
+  args: string[],
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      resolve({ code, stdout, stderr });
+    });
+  });
+}
 
 function startCockpitAcceptanceDaemon(root: string): ChildProcess {
   return spawn(

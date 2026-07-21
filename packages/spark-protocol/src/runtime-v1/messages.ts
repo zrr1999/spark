@@ -35,20 +35,38 @@ export const runtimeConnectionProjectionSchema = z.object({
 
 export const workspaceClientKindSchema = z.enum(["interactive", "headless", "executor"]);
 export const workspaceClientStatusSchema = z.enum(["connected", "disconnected"]);
+export const workspaceSessionSurfaceSchema = z.enum(["tui", "cockpit", "unknown"]);
 
 export const workspaceClientProjectionSchema = z.object({
   clientId: z.string().min(1),
   kind: workspaceClientKindSchema,
   status: workspaceClientStatusSchema,
   displayName: z.string().min(1).optional(),
+  surface: workspaceSessionSurfaceSchema.optional(),
+  sessionId: z.string().min(1).optional(),
   attachedAt: isoDateTimeSchema.optional(),
   lastSeenAt: isoDateTimeSchema.optional(),
+  leaseExpiresAt: isoDateTimeSchema.optional(),
+});
+
+export const workspaceOccupancySessionSchema = z.object({
+  sessionId: z.string().min(1),
+  clientId: z.string().min(1),
+  kind: workspaceClientKindSchema,
+  surface: workspaceSessionSurfaceSchema,
+  displayName: z.string().min(1).optional(),
+  attachedAt: isoDateTimeSchema.optional(),
+  lastSeenAt: isoDateTimeSchema.optional(),
+  leaseExpiresAt: isoDateTimeSchema.optional(),
 });
 
 export const workspaceBorrowedStateSchema = z.object({
   borrowed: z.boolean(),
+  /** Alias of interactive occupancy; true when ≥1 interactive session is connected. */
+  occupied: z.boolean().optional(),
   interactiveClientCount: z.number().int().nonnegative().default(0),
   borrowedByClientIds: z.array(z.string().min(1)).default([]),
+  sessions: z.array(workspaceOccupancySessionSchema).default([]),
   since: isoDateTimeSchema.optional(),
 });
 
@@ -652,7 +670,9 @@ export type RuntimeConnectionProjectionStatus = z.infer<
 export type RuntimeConnectionProjection = z.infer<typeof runtimeConnectionProjectionSchema>;
 export type WorkspaceClientKind = z.infer<typeof workspaceClientKindSchema>;
 export type WorkspaceClientStatus = z.infer<typeof workspaceClientStatusSchema>;
+export type WorkspaceSessionSurface = z.infer<typeof workspaceSessionSurfaceSchema>;
 export type WorkspaceClientProjection = z.infer<typeof workspaceClientProjectionSchema>;
+export type WorkspaceOccupancySession = z.infer<typeof workspaceOccupancySessionSchema>;
 export type WorkspaceBorrowedState = z.infer<typeof workspaceBorrowedStateSchema>;
 export type ExecutorClientState = z.infer<typeof executorClientStateSchema>;
 export type ExecutorClientProjection = z.infer<typeof executorClientProjectionSchema>;

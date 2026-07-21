@@ -17,17 +17,17 @@ describe("workspace control display", () => {
             mode: "snapshot_only",
             reason: "workspace_borrowed",
             serverMutationAllowed: false,
-            message: "Workspace is borrowed by an open TUI client.",
+            message: "Workspace is occupied by another interactive session.",
           },
         },
         en,
       ),
     ).toEqual({
       connectionLabel: "Spark daemon connected",
-      borrowedLabel: "In use by 1 terminal session",
+      borrowedLabel: "In use by 1 session",
       executorLabel: "Running · 2 active invocations · 3 active agents",
       controlLabel:
-        "A terminal session is using this workspace. Close or release it before running actions from Cockpit.",
+        "Another interactive session is using this workspace. Close or release it before running actions from Cockpit.",
     });
   });
 

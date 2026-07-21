@@ -113,8 +113,10 @@ import {
 } from "./store/invocations.ts";
 import {
   applyCockpitWorkspaceBindingAssignments,
+  attachWorkspaceClient,
   getWorkspaceById,
-  isBorrowedWorkspace,
+  heartbeatWorkspaceClient,
+  isMutationBlockingBorrowedWorkspace,
   isUserDetachedWorkspace,
   listWorkspaces,
   listWorkspacesForServer,
@@ -122,6 +124,7 @@ import {
   markSparkDaemonServerDisconnected,
   reconcileWorkspaces,
   reconcileWorkspacesForServer,
+  releaseWorkspaceClient,
   resolveWorkspaceLocalPath,
   sparkDaemonServerStatusSummaries,
   workspaceBindingBelongsToServer,
@@ -1788,7 +1791,7 @@ async function executeClaimedCommand(
     workspaceAccess: commandWorkspace
       ? {
           detached: isUserDetachedWorkspace(commandWorkspace),
-          borrowed: isBorrowedWorkspace(context.db, commandWorkspace.id),
+          borrowed: isMutationBlockingBorrowedWorkspace(context.db, commandWorkspace.id),
         }
       : undefined,
   });
@@ -1835,27 +1838,10 @@ async function executeClaimedCommand(
     if (workspace && command.workspaceId) {
       sendJson(
         ws,
-        workspaceSnapshot(
-          {
-            displayName: workspace.displayName,
-            status: workspace.status,
-            projects: [],
-            unresolvedInboxCount: 0,
-            activeInvocationCount: workspace.executor?.activeInvocationCount ?? 0,
-            activeAgentCount: workspace.executor?.activeAgentCount ?? 0,
-            ...(workspace.borrowed ? { borrowed: workspace.borrowed } : {}),
-            workspaceClients: workspace.workspaceClients ?? [],
-            ...(workspace.executor ? { executor: workspace.executor } : {}),
-            control: {
-              mode: workspace.borrowed?.borrowed ? "snapshot_only" : "full",
-              ...(workspace.borrowed?.borrowed ? { reason: "borrowed" } : {}),
-              serverMutationAllowed: workspace.borrowed?.borrowed !== true,
-            },
-            latestArtifactIds: [],
-            resources: [],
-          },
-          { ...route, workspaceBindingId: workspace.serverBindingId ?? workspace.id },
-        ),
+        workspaceSnapshot(workspaceSnapshotPayloadForDaemon(context.db, workspace), {
+          ...route,
+          workspaceBindingId: workspace.serverBindingId ?? workspace.id,
+        }),
       );
     }
     sendJson(
@@ -1877,6 +1863,18 @@ async function executeClaimedCommand(
         route,
       ),
     );
+    return;
+  }
+
+  if (isWorkspaceClientOccupancyKind(sparkCommand.kind)) {
+    await handleWorkspaceClientOccupancyCommand({
+      ws,
+      context,
+      command,
+      sparkCommand,
+      route,
+      commandWorkspace,
+    });
     return;
   }
 
@@ -2217,6 +2215,196 @@ function isRuntimeSessionControlKind(
     kind === "turn.status.request" ||
     kind === "turn.stream.subscribe"
   );
+}
+
+function isWorkspaceClientOccupancyKind(
+  kind: SparkCommand["kind"],
+): kind is
+  | "workspace.client.attach.request"
+  | "workspace.client.heartbeat.request"
+  | "workspace.client.release.request" {
+  return (
+    kind === "workspace.client.attach.request" ||
+    kind === "workspace.client.heartbeat.request" ||
+    kind === "workspace.client.release.request"
+  );
+}
+
+async function handleWorkspaceClientOccupancyCommand(input: {
+  ws: ServerSocket;
+  context: MessageContext;
+  command: ReturnType<typeof serverCommandEnvelopeSchema.parse>;
+  sparkCommand: SparkCommand;
+  route: ReturnType<typeof commandRoute>;
+  commandWorkspace: ReturnType<typeof getWorkspaceById>;
+}): Promise<void> {
+  const { ws, context, command, sparkCommand, route, commandWorkspace } = input;
+  if (!commandWorkspace) {
+    sendJson(
+      ws,
+      commandReject(
+        {
+          reasonCode: "UNKNOWN_WORKSPACE_BINDING",
+          message: "Workspace client occupancy requires a known workspace binding.",
+          retryable: false,
+        },
+        route,
+      ),
+    );
+    return;
+  }
+
+  try {
+    const client =
+      sparkCommand.kind === "workspace.client.attach.request"
+        ? attachWorkspaceClient(
+            context.db,
+            parseWorkspaceClientAttachPayload(sparkCommand.payload, commandWorkspace.id),
+          )
+        : sparkCommand.kind === "workspace.client.heartbeat.request"
+          ? heartbeatWorkspaceClient(
+              context.db,
+              parseWorkspaceClientHeartbeatPayload(sparkCommand.payload),
+            )
+          : releaseWorkspaceClient(
+              context.db,
+              parseWorkspaceClientReleasePayload(sparkCommand.payload),
+            );
+
+    const refreshed = getWorkspaceById(context.db, commandWorkspace.id);
+    sendJson(ws, commandAck({ accepted: true }, route));
+    if (refreshed && command.workspaceId) {
+      sendJson(
+        ws,
+        workspaceSnapshot(workspaceSnapshotPayloadForDaemon(context.db, refreshed), {
+          ...route,
+          workspaceBindingId: refreshed.serverBindingId ?? refreshed.id,
+        }),
+      );
+    }
+    sendJson(
+      ws,
+      commandResult(
+        {
+          status: "succeeded",
+          result: {
+            clientId: client.id,
+            workspaceId: client.workspaceId,
+            kind: client.kind,
+            status: client.status,
+            ...(client.displayName ? { displayName: client.displayName } : {}),
+            attachedAt: client.attachedAt,
+            lastSeenAt: client.lastSeenAt,
+            ...(client.leaseExpiresAt ? { leaseExpiresAt: client.leaseExpiresAt } : {}),
+          },
+          completedAt: new Date().toISOString(),
+        },
+        route,
+      ),
+    );
+  } catch (error) {
+    sendJson(
+      ws,
+      commandReject(
+        {
+          reasonCode: "WORKSPACE_CLIENT_OCCUPANCY_FAILED",
+          message: error instanceof Error ? error.message : String(error),
+          retryable: false,
+        },
+        route,
+      ),
+    );
+  }
+}
+
+function workspaceSnapshotPayloadForDaemon(
+  db: DatabaseSync,
+  workspace: NonNullable<ReturnType<typeof getWorkspaceById>>,
+) {
+  const mutationBlocked = isMutationBlockingBorrowedWorkspace(db, workspace.id);
+  return {
+    displayName: workspace.displayName,
+    status: workspace.status,
+    projects: [],
+    unresolvedInboxCount: 0,
+    activeInvocationCount: workspace.executor?.activeInvocationCount ?? 0,
+    activeAgentCount: workspace.executor?.activeAgentCount ?? 0,
+    ...(workspace.borrowed ? { borrowed: workspace.borrowed } : {}),
+    workspaceClients: workspace.workspaceClients ?? [],
+    ...(workspace.executor ? { executor: workspace.executor } : {}),
+    control: {
+      mode: mutationBlocked ? ("snapshot_only" as const) : ("full" as const),
+      ...(mutationBlocked ? { reason: "borrowed" } : {}),
+      serverMutationAllowed: !mutationBlocked,
+    },
+    latestArtifactIds: [],
+    resources: [],
+  };
+}
+
+function parseWorkspaceClientAttachPayload(
+  payload: Record<string, unknown>,
+  workspaceId: string,
+): Parameters<typeof attachWorkspaceClient>[1] {
+  const kind =
+    payload.kind === "interactive" || payload.kind === "headless" || payload.kind === "executor"
+      ? payload.kind
+      : "interactive";
+  const clientId = typeof payload.clientId === "string" ? payload.clientId : undefined;
+  const displayName = typeof payload.displayName === "string" ? payload.displayName : undefined;
+  const leaseTtlMs =
+    typeof payload.leaseTtlMs === "number" && Number.isFinite(payload.leaseTtlMs)
+      ? Math.max(0, Math.floor(payload.leaseTtlMs))
+      : undefined;
+  const baseMetadata =
+    typeof payload.metadata === "object" &&
+    payload.metadata !== null &&
+    !Array.isArray(payload.metadata)
+      ? { ...(payload.metadata as Record<string, unknown>) }
+      : {};
+  const sessionId =
+    typeof payload.sessionId === "string" && payload.sessionId.trim()
+      ? payload.sessionId.trim()
+      : typeof baseMetadata.sessionId === "string" && baseMetadata.sessionId.trim()
+        ? baseMetadata.sessionId.trim()
+        : (clientId ?? `wcl_${createId("msg").slice(4)}`);
+  // Runtime WSS occupancy is always a Cockpit browser session unit.
+  const metadata = {
+    ...baseMetadata,
+    surface: "cockpit",
+    sessionId,
+  };
+  return {
+    workspaceId,
+    ...(clientId ? { clientId } : { clientId: sessionId }),
+    kind,
+    ...(displayName ? { displayName } : { displayName: "Cockpit workbench" }),
+    ...(leaseTtlMs !== undefined ? { leaseTtlMs } : {}),
+    metadata,
+  };
+}
+
+function parseWorkspaceClientHeartbeatPayload(
+  payload: Record<string, unknown>,
+): Parameters<typeof heartbeatWorkspaceClient>[1] {
+  if (typeof payload.clientId !== "string" || !payload.clientId.trim()) {
+    throw new Error("workspace.client.heartbeat.request requires clientId.");
+  }
+  return {
+    clientId: payload.clientId.trim(),
+    ...(typeof payload.leaseTtlMs === "number" && Number.isFinite(payload.leaseTtlMs)
+      ? { leaseTtlMs: Math.max(0, Math.floor(payload.leaseTtlMs)) }
+      : {}),
+  };
+}
+
+function parseWorkspaceClientReleasePayload(
+  payload: Record<string, unknown>,
+): Parameters<typeof releaseWorkspaceClient>[1] {
+  if (typeof payload.clientId !== "string" || !payload.clientId.trim()) {
+    throw new Error("workspace.client.release.request requires clientId.");
+  }
+  return { clientId: payload.clientId.trim() };
 }
 
 function sessionIdForModel(command: SparkCommand): string | undefined {

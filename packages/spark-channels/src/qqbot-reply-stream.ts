@@ -47,6 +47,14 @@ export function createQqbotC2CReplyStream(options: QqbotC2CReplyStreamOptions): 
     ((handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>));
 
   let answer = "";
+  /** Last body successfully accepted by QQ; later replace frames must keep this prefix. */
+  let committedAnswer = "";
+  /**
+   * When tool/ask rounds produce a final body that would mutate the delivered
+   * prefix (QQ error 40007), keep the stream on the committed body and deliver
+   * the real answer as a separate passive markdown follow-up.
+   */
+  let separateFinal: string | undefined;
   let index = 0;
   let streamMsgId: string | undefined;
   let msgSeq: number | undefined;
@@ -76,6 +84,7 @@ export function createQqbotC2CReplyStream(options: QqbotC2CReplyStreamOptions): 
         ...(streamMsgId ? { stream_msg_id: streamMsgId } : {}),
       });
       deliveredFrame = true;
+      committedAnswer = content;
       index += 1;
       const nextId = response.id?.trim();
       if (nextId) streamMsgId = nextId;
@@ -178,15 +187,50 @@ export function createQqbotC2CReplyStream(options: QqbotC2CReplyStreamOptions): 
     }
   };
 
+  const finalizeWithSeparateFollowUp = async (followUpText: string) => {
+    clearPending();
+    clearKeepalive();
+    const canSendFollowUp = Boolean(options.sendFollowUpMarkdown && options.reserveFollowUpSeqs);
+    if (!canSendFollowUp || !options.reserveFollowUpSeqs!(1)) {
+      const cause = new Error(
+        "qqbot c2c stream cannot replace a delivered prefix and has no follow-up budget",
+      );
+      throw deliveredFrame ? channelDeliveryOutcomeUnknown(cause) : channelDeliveryNotSent(cause);
+    }
+    // Close the already-visible stream on its committed body, then send the
+    // true post-ask / post-tool answer as a new passive markdown message.
+    const terminalBody = committedAnswer.trim() ? committedAnswer : "…";
+    try {
+      await enqueueFlush(true, terminalBody);
+    } catch (error) {
+      throw error ?? lastFlushError;
+    }
+    await options.sendFollowUpMarkdown!(followUpText);
+  };
+
   return {
     answerMode: "inline",
     appendText(delta) {
       if (finished || !delta) return;
+      if (separateFinal !== undefined) {
+        separateFinal += delta;
+        return;
+      }
       answer += delta;
       scheduleFlush();
     },
     replaceText(text) {
       if (finished) return;
+      if (deliveredFrame && !preservesQqbotStreamPrefix(committedAnswer, text)) {
+        // QQ rejects replace frames that mutate an already-sent prefix
+        // (`已下发内容前缀不可修改` / 40007). Common after blocking asks.
+        separateFinal = text;
+        answer = committedAnswer;
+        clearPending();
+        armKeepalive();
+        return;
+      }
+      separateFinal = undefined;
       answer = text;
       scheduleFlush();
     },
@@ -195,23 +239,41 @@ export function createQqbotC2CReplyStream(options: QqbotC2CReplyStreamOptions): 
     // idle-out the platform stream before final delivery.
     notifyToolStart() {
       armKeepalive();
+      if (separateFinal !== undefined) return;
       if (!answer.trim()) return;
       void enqueueFlush(false, answer, true).catch(() => undefined);
     },
     notifyToolResult() {
       armKeepalive();
+      if (separateFinal !== undefined) return;
       if (!answer.trim()) return;
       void enqueueFlush(false, answer, true).catch(() => undefined);
     },
     async complete() {
+      if (separateFinal !== undefined) {
+        await finalizeWithSeparateFollowUp(separateFinal);
+        return;
+      }
       await finalizeWithOptionalFollowUps(answer);
     },
     async fail(message) {
       const failureText = message.trim() || "处理失败，请稍后重试";
+      if (separateFinal !== undefined) {
+        await finalizeWithSeparateFollowUp(failureText);
+        return;
+      }
       if (!answer.trim()) answer = failureText;
       await finalizeWithOptionalFollowUps(answer);
     },
   };
+}
+
+/** QQ stream updates must keep the previously delivered body as a prefix. */
+export function preservesQqbotStreamPrefix(committed: string, next: string): boolean {
+  const previous = committed.trimEnd();
+  if (!previous) return true;
+  const candidate = next.trimEnd();
+  return candidate === previous || candidate.startsWith(previous);
 }
 
 export function tryCreateQqbotC2CReplyStream(input: {

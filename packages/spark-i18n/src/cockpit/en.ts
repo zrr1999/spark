@@ -257,9 +257,9 @@ const messages = {
       daemonConnected: "Spark daemon connected",
       daemonDisconnected: "Spark daemon offline",
       workspaceNotBorrowed: "Ready for new work",
-      borrowedByOneTuiClient: "In use by 1 terminal session",
+      borrowedByOneTuiClient: "In use by 1 session",
       borrowedByTuiClientsPrefix: "In use by",
-      tuiClients: "terminal sessions",
+      tuiClients: "sessions",
       noBackgroundExecutor: "Idle",
       backgroundExecutorStarting: "Starting",
       backgroundExecutorUnhealthy: "Execution issue",
@@ -271,7 +271,7 @@ const messages = {
       serverControlEnabled: "Remote actions available",
       snapshotOnlyMode: "Read-only for now",
       workspaceBorrowedSnapshotOnly:
-        "A terminal session is using this workspace. Close or release it before running actions from Cockpit.",
+        "Another interactive session is using this workspace. Close or release it before running actions from Cockpit.",
       daemonDisconnectedSnapshotOnly:
         "The Spark daemon is offline. Reconnect it before running actions from Cockpit.",
     },

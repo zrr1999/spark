@@ -106,8 +106,10 @@ export interface SparkCliHostServicesOptions {
   modelPicker?: SparkModelPicker;
   systemPrompt?: string;
   noPromptTemplates?: boolean;
-  /** Per-model-stream deadline; <=0 disables it. */
+  /** Per-model-stream wall-clock deadline; <=0 disables it. Default disabled. */
   streamTimeoutMs?: number;
+  /** Abort a model stream after this long with no events; <=0 disables. */
+  streamIdleTimeoutMs?: number;
   /** Per-tool execution deadline; <=0 disables it. */
   toolTimeoutMs?: number;
   /** Per-interaction/approval deadline; <=0 disables it. */
@@ -300,6 +302,7 @@ export async function createSparkCliHostServices(
     getReasoning: () => config.activeThinkingLevel,
     systemPrompt: initialPromptState.systemPrompt,
     streamTimeoutMs: options.streamTimeoutMs,
+    streamIdleTimeoutMs: options.streamIdleTimeoutMs,
     toolTimeoutMs: options.toolTimeoutMs,
     interactionTimeoutMs: options.interactionTimeoutMs,
     prepareUserSubmit: async (request) => {

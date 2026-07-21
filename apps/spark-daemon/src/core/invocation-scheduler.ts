@@ -96,18 +96,15 @@ export class SparkInvocationScheduler {
   }
 
   recover(now?: string): number {
-    // A crashed session.run has an uncertain external side-effect boundary.
-    // Fail closed and require the existing explicit retry flow. Route the
-    // terminal transition through the same completion hook so a channel user
-    // also receives a durable failure notice after process recovery.
+    // Successor daemon resumes interrupted turns against persisted session state.
+    // Invalid task payloads still fail closed because they cannot be reclaimed.
     let recovered = 0;
     while (true) {
       const running = this.store.listPage({ status: "running", limit: 100 }).invocations;
       if (running.length === 0) return recovered;
       for (const invocation of running) {
-        let task: SparkDaemonTask;
         try {
-          task = validateSparkDaemonTask(invocation.task);
+          validateSparkDaemonTask(invocation.task);
         } catch {
           this.store.complete(invocation.invocationId, {
             status: "failed",
@@ -118,12 +115,7 @@ export class SparkInvocationScheduler {
           recovered += 1;
           continue;
         }
-        this.completeInvocation(invocation, task, {
-          status: "failed",
-          errorCode: SPARK_INVOCATION_INTERRUPTED_ERROR_CODE,
-          errorMessage: SPARK_INVOCATION_INTERRUPTED_ERROR_MESSAGE,
-          ...(now ? { now } : {}),
-        });
+        this.store.requeueForResume(invocation.invocationId, now);
         recovered += 1;
       }
     }

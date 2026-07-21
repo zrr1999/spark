@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { SparkHeadlessUserContent } from "@zendev-lab/spark-host/headless-loader";
+import { classifyProviderFailure } from "@zendev-lab/spark-ai";
 import { join } from "node:path";
 import type {
   ExtensionInteractionRequest,
@@ -83,6 +84,8 @@ export interface SparkHeadlessSessionRunInput {
   model?: string;
   thinkingLevel?: string;
   reset?: boolean;
+  /** Continue a turn after daemon/process interrupt using persisted session state. */
+  resumeFromInterrupt?: boolean;
   signal?: AbortSignal;
   timeoutMs?: number;
   sparkHome?: string;
@@ -163,6 +166,10 @@ export async function runSparkHeadlessSession(
     hasUI: false,
     ...(input.interaction ? { ui: { interaction: input.interaction } } : {}),
     ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
+    // Daemon scheduler owns wall-clock execution budget. Model streams use idle
+    // hang detection instead of a short hard stream deadline so long tool/model
+    // turns can finish, and interrupted work can resume after restart.
+    streamTimeoutMs: 0,
     // A daemon-owned human interaction may wait until the user responds. Model
     // streams and tool calls keep their normal per-operation deadlines so a
     // genuinely wedged provider or tool cannot occupy the session forever.
@@ -204,6 +211,7 @@ export async function runSparkHeadlessSession(
         sessionId: input.sessionId,
         prompt: input.prompt,
         reset: input.reset,
+        ...(input.resumeFromInterrupt ? { resumeFromInterrupt: true } : {}),
         ...(input.messageMetadata ? { messageMetadata: input.messageMetadata } : {}),
       }),
       input.timeoutMs,
@@ -521,7 +529,7 @@ function assertSuccessfulHeadlessSessionOutcome(
   }
   if (outcome.status === "completed") return;
   const detail = outcome.status === "aborted" ? outcome.reason.trim() : outcome.errorMessage.trim();
-  throw new Error(`Spark headless session ${outcome.status}${detail ? `: ${detail}` : ""}`);
+  throw headlessSessionFailureError(outcome.status, detail);
 }
 
 function assertSuccessfulHeadlessSessionAssistant(
@@ -538,7 +546,24 @@ function assertSuccessfulHeadlessSessionAssistant(
 
   const detail = assistant.errorMessage?.trim();
   const outcome = assistant.stopReason === "error" ? "failed" : "aborted";
-  throw new Error(`Spark headless session ${outcome}${detail ? `: ${detail}` : ""}`);
+  throw headlessSessionFailureError(outcome, detail ?? "");
+}
+
+function headlessSessionFailureError(
+  status: "failed" | "aborted",
+  detail: string,
+): Error & { code?: string } {
+  const error = new Error(
+    `Spark headless session ${status}${detail ? `: ${detail}` : ""}`,
+  ) as Error & { code?: string };
+  if (/stream idle for \d+ms/i.test(detail)) {
+    error.code = "STREAM_IDLE_TIMEOUT";
+  } else if (/stream timed out after \d+ms/i.test(detail)) {
+    error.code = "STREAM_WALL_TIMEOUT";
+  } else if (classifyProviderFailure(detail).policy.retriable) {
+    error.code = "EXECUTION_TRANSIENT";
+  }
+  return error;
 }
 
 function headlessSessionId(input: SparkHeadlessRoleInstructionInput): string {

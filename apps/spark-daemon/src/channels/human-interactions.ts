@@ -345,8 +345,8 @@ export function parseInfoflowTextAskAnswers(
     ...(option.description ? { description: option.description } : {}),
   }));
 
-  const indexed = /^(\d{1,2})$/u.exec(trimmed);
-  if (indexed) {
+  const indexed = /^(\d{1,2})(?:[.。、)）\s].*)?$/u.exec(trimmed);
+  if (indexed && options.length > 0) {
     const option = options[Number(indexed[1]) - 1];
     if (option) return { [question.id]: option.value };
   }

@@ -16,6 +16,7 @@ import {
   getWorkspaceById,
   getWorkspaceByPath,
   isBorrowedWorkspace,
+  isMutationBlockingBorrowedWorkspace,
   listWorkspaceClients,
   listWorkspaces,
   markSparkDaemonServerConnected,
@@ -384,11 +385,23 @@ describe("Spark daemon workspace store", () => {
       expect(getWorkspaceById(db, workspace.id)).toMatchObject({
         borrowed: {
           borrowed: true,
+          occupied: true,
           interactiveClientCount: 2,
           borrowedByClientIds: expect.arrayContaining(["wcl-tui-1", "wcl-tui-2"]),
+          sessions: expect.arrayContaining([
+            expect.objectContaining({
+              clientId: "wcl-tui-1",
+              surface: "tui",
+              kind: "interactive",
+            }),
+          ]),
         },
         workspaceClients: expect.arrayContaining([
-          expect.objectContaining({ clientId: "wcl-tui-1", kind: "interactive" }),
+          expect.objectContaining({
+            clientId: "wcl-tui-1",
+            kind: "interactive",
+            surface: "tui",
+          }),
           expect.objectContaining({ clientId: "exec-local-1", kind: "executor" }),
         ]),
         executor: expect.objectContaining({ state: "online", clientId: "exec-local-1" }),
@@ -404,9 +417,52 @@ describe("Spark daemon workspace store", () => {
       releaseWorkspaceClient(db, { clientId: "wcl-tui-2", now: "2026-05-26T00:03:00.000Z" });
       expect(getWorkspaceById(db, workspace.id)?.borrowed).toMatchObject({
         borrowed: false,
+        occupied: false,
         interactiveClientCount: 0,
         borrowedByClientIds: [],
+        sessions: [],
       });
+    });
+  });
+
+  it("treats cockpit interactive sessions as occupancy without mutation-blocking borrow", () => {
+    withSparkDaemonWorkspaceStore(({ db, root }) => {
+      const workspace = registerWorkspace(db, {
+        localPath: root,
+        displayName: "Local default",
+      });
+
+      attachWorkspaceClient(db, {
+        workspaceId: workspace.id,
+        clientId: "wcl-cockpit-1",
+        kind: "interactive",
+        displayName: "Cockpit workbench",
+        metadata: { surface: "cockpit", sessionId: "wcl-cockpit-1" },
+        now: "2026-05-26T00:00:00.000Z",
+      });
+
+      expect(isBorrowedWorkspace(db, workspace.id)).toBe(true);
+      expect(isMutationBlockingBorrowedWorkspace(db, workspace.id)).toBe(false);
+      expect(getWorkspaceById(db, workspace.id)?.borrowed).toMatchObject({
+        occupied: true,
+        sessions: [
+          expect.objectContaining({
+            clientId: "wcl-cockpit-1",
+            surface: "cockpit",
+            sessionId: "wcl-cockpit-1",
+          }),
+        ],
+      });
+
+      attachWorkspaceClient(db, {
+        workspaceId: workspace.id,
+        clientId: "wcl-tui-1",
+        kind: "interactive",
+        displayName: "Spark TUI",
+        metadata: { surface: "tui" },
+        now: "2026-05-26T00:01:00.000Z",
+      });
+      expect(isMutationBlockingBorrowedWorkspace(db, workspace.id)).toBe(true);
     });
   });
 

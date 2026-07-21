@@ -43,6 +43,9 @@ export interface SparkDaemonCommandPolicyDecision {
 
 const borrowedWorkspaceAllowedKinds = new Set<SparkCommandKind>([
   "workspace.snapshot.request",
+  "workspace.client.attach.request",
+  "workspace.client.heartbeat.request",
+  "workspace.client.release.request",
   "diagnostics.request",
   "invocation.cancel.request",
 ]);

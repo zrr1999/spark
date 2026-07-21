@@ -33,9 +33,16 @@ export interface ConsumedWorkspaceAccessToken {
 }
 
 export class WorkspaceAccessTokenError extends Error {
+  readonly reasonCode:
+    | "WORKSPACE_ACCESS_TOKEN_REQUIRED"
+    | "WORKSPACE_ACCESS_TOKEN_INVALID"
+    | "WORKSPACE_ACCESS_TOKEN_USED"
+    | "WORKSPACE_ACCESS_TOKEN_REVOKED"
+    | "WORKSPACE_ACCESS_TOKEN_EXPIRED";
+
   constructor(
     message: string,
-    readonly reasonCode:
+    reasonCode:
       | "WORKSPACE_ACCESS_TOKEN_REQUIRED"
       | "WORKSPACE_ACCESS_TOKEN_INVALID"
       | "WORKSPACE_ACCESS_TOKEN_USED"
@@ -43,6 +50,7 @@ export class WorkspaceAccessTokenError extends Error {
       | "WORKSPACE_ACCESS_TOKEN_EXPIRED",
   ) {
     super(message);
+    this.reasonCode = reasonCode;
   }
 }
 

@@ -252,6 +252,69 @@ describe("daemon channel human interactions", () => {
     }
   });
 
+  it("maps Infoflow replies like '1.' or option labels onto ask options", async () => {
+    const db = daemonDatabase();
+    try {
+      const waits = new SparkDaemonHumanWaitRegistry(db);
+      waits.register({
+        humanRequestId: "hreq_infoflow_label",
+        workspaceBindingId: "rtwb_1",
+        workspaceId: "ws_1",
+        delivery: "blocking",
+        kind: "ask_user",
+        title: "Route",
+        prompt: "Pick one",
+        questions: [
+          {
+            id: "route",
+            type: "single",
+            prompt: "Pick one",
+            required: true,
+            options: [
+              { value: "fast", label: "Fast", description: "Prefer latency." },
+              { value: "safe", label: "Safe", description: "Prefer safety." },
+            ],
+          },
+        ],
+        context: {
+          channel: {
+            workspaceId: "ws_1",
+            adapterId: "infoflow",
+            recipient: "alice",
+            actorId: "alice",
+          },
+        },
+      });
+
+      await expect(
+        settleChannelAskTextReply(
+          waits,
+          {
+            workspaceId: "ws_1",
+            recipient: "alice",
+            message: {
+              adapter: "infoflow",
+              externalKey: "infoflow:default:alice",
+              senderId: "alice",
+              text: "1. Fast",
+              messageId: "msg_dotted",
+            },
+          },
+          { runtimeId: "rt_test" },
+        ),
+      ).resolves.toBe("settled");
+
+      const stored = db
+        .prepare(
+          "SELECT response_json AS responseJson FROM daemon_human_waits WHERE human_request_id = ?",
+        )
+        .get("hreq_infoflow_label") as { responseJson: string };
+      expect(JSON.parse(stored.responseJson)).toMatchObject({ answers: { route: "fast" } });
+    } finally {
+      db.close();
+    }
+  });
+
   it("settles an Infoflow freeform ask from ordinary private text without starting another turn", async () => {
     const db = daemonDatabase();
     try {

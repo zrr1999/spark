@@ -295,6 +295,9 @@ export const localRpcMethodToSparkCommandKind = {
 export const runtimeServerCommandKindOptions = [
   "daemon.status.request",
   "workspace.snapshot.request",
+  "workspace.client.attach.request",
+  "workspace.client.heartbeat.request",
+  "workspace.client.release.request",
   "project.create.request",
   "task.start.request",
   "assignment.create.request",
@@ -340,6 +343,18 @@ export interface RuntimeServerCommandSpecification {
 export const runtimeServerCommandSpecifications = {
   "daemon.status.request": daemonReadCommand(),
   "workspace.snapshot.request": workspaceReadCommand(),
+  "workspace.client.attach.request": workspaceMutationCommand({
+    allowBorrowed: true,
+    allowDetached: true,
+  }),
+  "workspace.client.heartbeat.request": workspaceMutationCommand({
+    allowBorrowed: true,
+    allowDetached: true,
+  }),
+  "workspace.client.release.request": workspaceMutationCommand({
+    allowBorrowed: true,
+    allowDetached: true,
+  }),
   "project.create.request": workspaceMutationCommand(),
   "task.start.request": workspaceMutationCommand(),
   "assignment.create.request": workspaceMutationCommand(),

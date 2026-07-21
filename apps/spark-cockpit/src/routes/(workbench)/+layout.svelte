@@ -18,6 +18,10 @@
     workspaceSwitcherHref as buildWorkspaceSwitcherHref,
   } from "$lib/workbench-nav";
   import { workbenchSessionIdFromPath, workspacePath } from "$lib/workspace-routes";
+  import {
+    readOrCreateOccupancyClientId,
+    startWorkspaceOccupancyHeartbeat,
+  } from "$lib/workspace-occupancy-client";
 
   interface SessionRecord extends CockpitSearchSession {
     activityUpdatedAt?: string;
@@ -54,6 +58,15 @@
       lastWorkbenchPath = pathname;
       mobileSidebarOpen = false;
     }
+  });
+
+  $effect(() => {
+    const workspaceId = activeWorkspaceId;
+    if (!browser || !workspaceId || isWorkspaceDirectory) return;
+
+    const clientId = readOrCreateOccupancyClientId();
+    if (!clientId) return;
+    return startWorkspaceOccupancyHeartbeat({ workspaceId, clientId });
   });
 
   $effect(() => {

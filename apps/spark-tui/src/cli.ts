@@ -985,6 +985,7 @@ export async function runSparkCli(
       const lease = await attachSparkWorkspaceClient(daemonClient, {
         kind: "interactive",
         displayName: tuiCliStrings.interactiveDisplayName,
+        metadata: { surface: "tui" },
       });
       try {
         const createHostServices = options.createHostServices ?? createSparkCliHostServices;

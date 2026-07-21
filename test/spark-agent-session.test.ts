@@ -231,7 +231,7 @@ void test("SparkAgentSession persists and resumes JSONL sessions", async () => {
   }
 });
 
-void test("SparkAgentSession compacts persisted history and retries a context overflow once", async () => {
+void test("SparkAgentSession compacts persisted history and retries context overflow with backoff", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-overflow-"));
   try {
     const cwd = join(dir, "repo");

@@ -21,7 +21,7 @@ function harness(
 }
 
 describe("SparkInvocationScheduler", () => {
-  it("fails uncertain running rows closed while continuing queued work after restart", async () => {
+  it("requeues interrupted running turns for resume while continuing queued work after restart", async () => {
     const executions: string[] = [];
     const executeTask: SparkDaemonTaskExecutor = async (task) => {
       executions.push(task.prompt);
@@ -42,34 +42,23 @@ describe("SparkInvocationScheduler", () => {
       expect(store.claimNext("dead-worker")?.invocationId).toBe(interrupted.invocationId);
       expect(scheduler.recover("2026-07-14T00:00:00.000Z")).toBe(1);
       expect(store.require(interrupted.invocationId)).toMatchObject({
-        status: "failed",
-        attemptCount: 1,
-        errorCode: "DAEMON_EXECUTION_INTERRUPTED",
-        errorMessage: expect.stringContaining("inspect them before retrying manually"),
+        status: "queued",
+        sourceKind: "invocation.resume",
+        task: expect.objectContaining({ resumeFromInterrupt: true }),
       });
       expect(store.require(queued.invocationId).status).toBe("queued");
 
       expect(scheduler.processBatch()).toBe(true);
       await scheduler.wait();
-      expect(executions).toEqual(["already queued"]);
+      expect(new Set(executions)).toEqual(new Set(["recover me", "already queued"]));
       expect(store.require(interrupted.invocationId)).toMatchObject({
-        status: "failed",
-        attemptCount: 1,
+        status: "succeeded",
+        attemptCount: 2,
+        sourceKind: "invocation.resume",
       });
       expect(store.require(queued.invocationId)).toMatchObject({
         status: "succeeded",
         attemptCount: 1,
-      });
-
-      const retry = store.retry(interrupted.invocationId, "2026-07-14T00:00:30.000Z");
-      expect(scheduler.processBatch()).toBe(true);
-      await scheduler.wait();
-      expect(executions).toEqual(["already queued", "recover me"]);
-      expect(store.require(retry.invocationId)).toMatchObject({
-        status: "succeeded",
-        attemptCount: 1,
-        sourceKind: "invocation.retry",
-        sourceRef: interrupted.invocationId,
       });
       const terminalRows = store.list();
       expect(scheduler.recover("2026-07-14T00:01:00.000Z")).toBe(0);

@@ -47,6 +47,19 @@ const cases: Array<{
     expected: "context_overflow",
   },
   {
+    name: "Chinese context overflow maps to context_overflow",
+    input: {
+      errorMessage:
+        'OpenAI API error (400): {"message":"请精简对话历史或缩小工具/文件输出后重试。(Context window is full)"}',
+    },
+    expected: "context_overflow",
+  },
+  {
+    name: "overloaded text maps to transient",
+    input: "Our servers are currently overloaded. Please try again later.",
+    expected: "transient",
+  },
+  {
     name: "Mismatched api maps to provider_mismatch",
     input: new Error("Mismatched api: baidu-oneapi expected openai-responses"),
     expected: "provider_mismatch",

@@ -13,7 +13,6 @@ import {
   type SparkCliOutput,
 } from "./shared.ts";
 import type { CockpitAccessCliResult } from "./access.ts";
-import { handleCockpitAccessCliCommand } from "./access.ts";
 import type {
   CockpitInstanceCliFailure,
   CockpitInstanceCliOptions,
@@ -347,6 +346,7 @@ export async function handleSparkCockpitCliCommand(
     };
   }
   if (command.resource === "access") {
+    const { handleCockpitAccessCliCommand } = await import("./access.ts");
     return {
       action: "access",
       result: await handleCockpitAccessCliCommand({
@@ -423,7 +423,64 @@ function readCockpitInstanceFailure(error: unknown): CockpitInstanceCliFailure |
 }
 
 export function sparkCockpitHelpText(): string {
-  return `spark cockpit - Spark cross-daemon coordination CLI\n\nUsage:\n  spark cockpit status [--json]\n  spark cockpit project list [--json]\n  spark cockpit project status <project-ref> [--json]\n  spark cockpit task list [--project <project-ref>] [--json]\n  spark cockpit task status <task-ref> [--json]\n  spark cockpit goal status [--json]\n  spark cockpit artifact list [--json]\n  spark cockpit review list [--json]\n  spark cockpit workflow list [--json]\n  spark cockpit assign --session <session-id> --goal <text> [--title <text>] [--role <role>] [--workspace <id>] [--json]\n  spark cockpit access create [--label <text>] [--database <path>] [--json]\n  spark cockpit access list [--database <path>] [--json]\n  spark cockpit access revoke --id <token-id> [--database <path>] [--json]\n  spark cockpit instance status [--database <path>] [--json]\n  spark cockpit instance backup [snapshot-path] [--database <path>] [--json]\n  spark cockpit instance inspect <snapshot-path> [--json]\n  spark cockpit instance restore <snapshot-path> [--database <path>] [--rollback-root <path>] [--yes] [--json]\n\nThese commands use Cockpit coordination without starting the Web host.\nAccess create mints a one-time Cockpit browser key for /login.\nInstance restore replaces the complete Cockpit database and requires confirmation.\nExecution controls belong under spark daemon run/session/events.\n`;
+  return `spark cockpit - Spark cross-daemon coordination and Web cockpit
+
+Usage:
+  spark cockpit
+  spark cockpit start
+  spark cockpit web start [--json]
+  spark cockpit web status [--json]
+  spark cockpit web stop [--json]
+  spark cockpit web logs [--lines <n>] [--json]
+  spark cockpit status [--json]
+  spark cockpit project list [--json]
+  spark cockpit project status <project-ref> [--json]
+  spark cockpit task list [--project <project-ref>] [--json]
+  spark cockpit task status <task-ref> [--json]
+  spark cockpit goal status [--json]
+  spark cockpit artifact list [--json]
+  spark cockpit review list [--json]
+  spark cockpit workflow list [--json]
+  spark cockpit assign --session <session-id> --goal <text> [--title <text>] [--role <role>] [--workspace <id>] [--json]
+  spark cockpit access create [--label <text>] [--database <path>] [--json]
+  spark cockpit access list [--database <path>] [--json]
+  spark cockpit access revoke --id <token-id> [--database <path>] [--json]
+  spark cockpit instance status [--database <path>] [--json]
+  spark cockpit instance backup [snapshot-path] [--database <path>] [--json]
+  spark cockpit instance inspect <snapshot-path> [--json]
+  spark cockpit instance restore <snapshot-path> [--database <path>] [--rollback-root <path>] [--yes] [--json]
+  spark cockpit --help
+
+Commands:
+  (no command)|start  Start the built production Cockpit Web host
+  web                 Start, inspect, stop, or locate logs for the background Web cockpit
+  status              Show cross-daemon coordination status
+  project             Query projects
+  task                Query tasks
+  goal                Query the active goal
+  artifact            Query artifacts
+  review              Query reviews
+  workflow            Query workflow runs
+  assign              Queue work through the coordination plane
+  access              Mint, list, or revoke Cockpit-level one-time browser keys
+  instance            Back up, inspect, restore, or diagnose a Cockpit instance
+
+Remote browser access is progressive: Cockpit keys via spark cockpit access create
+for /login, then workspace keys via spark daemon workspace access create for /{slug}/login.
+Access create mints a one-time Cockpit browser key for /login.
+Instance restore replaces the complete Cockpit database and requires confirmation.
+Execution controls belong under spark daemon run/session/events.
+Cockpit coordinates across daemon execution planes; spark tui is the terminal presentation host.
+
+Production start environment:
+  HOST=0.0.0.0                         Intentionally listen on all interfaces
+  PORT=5174                            Override the default port
+  SPARK_COCKPIT_PUBLIC_URL=https://spark.example.com
+                                        Canonical public origin for a custom domain
+  SPARK_COCKPIT_PUBLIC_URL=auto        Derive the origin from a trusted proxy request
+  SPARK_COCKPIT_TRUST_PROXY=loopback   Trust forwarded headers from a loopback proxy
+  SPARK_COCKPIT_PROXY_HOPS=1           Select the client entry in X-Forwarded-For
+`;
 }
 
 type LoadedCockpitState = SparkCockpitCoordinationState;
