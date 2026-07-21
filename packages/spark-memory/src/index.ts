@@ -420,3 +420,17 @@ function assertEntry(
     throw new SparkMemoryStoreFormatError(filePath, `entries[${index}] timestamps must be strings`);
   }
 }
+
+export {
+  RecallStore,
+  RecallStoreFormatError,
+  defaultRecallStore,
+  recallStorePath,
+  type RecallCandidate,
+  type RecallCandidateStatus,
+  type RecallScope,
+  type RecallStorePaths,
+  type RecallStoreSnapshot,
+} from "./recall-store.ts";
+
+export * from "./learning-store.ts";

@@ -2,6 +2,12 @@
 
 The daemon owns persistent conversations. TUI, Cockpit, local RPC, and channel adapters use one registry and invocation scheduler; they do not maintain parallel session state machines.
 
+## Session turn admission (dual layer)
+
+- **Daemon `pendingTurns`** is the durable, cross-surface admission truth (`queued` / `running` invocations). Cockpit SessionQueue projects only this list.
+- **TUI `queuedFollowUps`** is an optimistic local layer for steer coalesce, follow-up turns, and editor restore before / until `turn.submit` is acknowledged. It must not invent a second durable admission list.
+- When both are present, UI may show local unacked items plus daemon `pendingTurns`; after ack, drop the matching optimistic row and trust the daemon projection.
+
 ## Role and session boundary
 
 - `role` owns reusable definitions, model settings, and fresh anonymous calls.

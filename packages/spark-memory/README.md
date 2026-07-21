@@ -8,17 +8,21 @@ This package is intentionally conservative:
 - Default prompt behavior is policy-only. Hosts should inject guidance about how to use memory tools, not entry bodies, unless a user opts into a cache-aware snapshot.
 - Writes run a secret scanner before persistence.
 - Compact/checkpoint handoff is explicit via `SparkMemoryStore.checkpoint()` and the extension wires policy-only `session_start` plus hidden `session_before_compact` checkpoint messages when the host supports extension events. The checkpoint is queued with `deliverAs: "nextTurn"` so it rides the next real user prompt instead of triggering an extra post-compaction request.
-- Existing `learning` and `recall` tools remain public compatibility surfaces; `spark-memory` provides the unifying owner direction and shared store/search primitives.
+- LearningStore / `learning` tool and recall candidates live in this package; `@zendev-lab/spark-learnings` / `@zendev-lab/spark-recall` are compatibility facades (reflection still under learnings).
 - If a Pi host already registered pi-memory tool names, Spark skips duplicate aliases and retries after startup so coexistence does not break Pi startup.
 
 ## Unified `memory` actions
 
 - `remember` — record an active memory entry.
-- `recall` — list active entries, optionally filtered by category/query.
+- `recall` (memory action) — list active durable entries, optionally filtered by category/query.
 - `search` — keyword score active entries.
 - `status` — show store path and counts.
 - `forget` — mark an entry forgotten with a reason.
 - `import_legacy` — preview/apply import from legacy pi-memory Markdown files. Use `apply: false` first.
+
+## Recall candidates
+
+`registerSparkMemoryTool` also registers the canonical `recall` tool for scoped candidates (`record_candidate` / `list` / `search` / `reject`). Storage remains `.spark/recall-candidates.json` (workspace/repo) and the user recall file under Spark user paths.
 
 ## pi-memory compatibility tools
 

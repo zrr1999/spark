@@ -29,12 +29,13 @@ describe("workspace registration page contract", () => {
     expect(source).toContain("overflow-wrap: anywhere");
   });
 
-  it("keeps daemon registration and browser authorization as separate one-time grants", () => {
+  it("keeps daemon registration without workspace browser-access minting", () => {
     const source = readFileSync(pagePath, "utf8");
 
     expect(source).toContain('action="?/createEnrollmentToken"');
-    expect(source).toContain('action="?/createWorkspaceAccessToken"');
-    expect(source).toContain("form.workspaceAccessToken");
+    expect(source).not.toContain('action="?/createWorkspaceAccessToken"');
+    expect(source).not.toContain("form.workspaceAccessToken");
+    expect(source).not.toContain("t.access.");
     expect(source).not.toContain("workspaceRegisterCommand");
     expect(source).not.toContain("device-commands");
   });

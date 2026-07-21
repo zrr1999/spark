@@ -2,7 +2,6 @@
   import { browser } from "$app/environment";
   import { invalidateAll } from "$app/navigation";
   import { page } from "$app/state";
-  import GlobalAskDialog from "$lib/GlobalAskDialog.svelte";
   import Icon from "$lib/Icon.svelte";
   import {
     parsePendingAskEvent,
@@ -39,11 +38,12 @@
   );
   let settingsHref = $derived(settingsHubHref(data.activeWorkspace?.slug));
   let selectedSessionId = $derived(workbenchSessionIdFromPath(page.url.pathname));
+  let isWorkspaceDirectory = $derived(page.url.pathname === "/");
   let sidebarSessions = $derived((data.sessions ?? []) as SessionRecord[]);
   let navItems = $derived(
     buildWorkbenchNavItems({
       activeWorkspacePath,
-      hasActiveWorkspace: Boolean(data.activeWorkspace),
+      hasActiveWorkspace: Boolean(data.activeWorkspace) && !isWorkspaceDirectory,
       nav: t.nav,
     }),
   );
@@ -151,7 +151,7 @@
 
 <div class="shell">
   <CockpitTopbar
-    activeWorkspace={data.activeWorkspace}
+    activeWorkspace={isWorkspaceDirectory ? null : data.activeWorkspace}
     {common}
     layout={t}
     navigationControls="workbench-sidebar"
@@ -159,64 +159,68 @@
     onToggleNavigation={() => (mobileSidebarOpen = !mobileSidebarOpen)}
     sessions={sidebarSessions}
     sessionMessages={data.messages.sessions}
+    showNavigationToggle={!isWorkspaceDirectory}
+    showWorkspaceMenu={!isWorkspaceDirectory}
     workspaceHref={workspaceSwitcherHref}
     workspaces={workspaceOptions}
   />
 
-  <div class="shell-body">
-    {#if mobileSidebarOpen}
-      <button
-        class="mobile-sidebar-backdrop"
-        type="button"
-        aria-label={t.aria.closeWorkspaceNavigation}
-        onclick={closeMobileSidebar}
-      ></button>
-    {/if}
+  <div class="shell-body" class:directory-mode={isWorkspaceDirectory}>
+    {#if !isWorkspaceDirectory}
+      {#if mobileSidebarOpen}
+        <button
+          class="mobile-sidebar-backdrop"
+          type="button"
+          aria-label={t.aria.closeWorkspaceNavigation}
+          onclick={closeMobileSidebar}
+        ></button>
+      {/if}
 
-    <aside
-      class="sidebar"
-      class:mobile-open={mobileSidebarOpen}
-      id="workbench-sidebar"
-      aria-label={t.aria.workspaceNavigation}
-    >
-      <WorkbenchSessionRail
-        sessions={sidebarSessions}
-        workspaces={workspaceOptions}
-        activeWorkspaceId={data.activeWorkspace?.id ?? null}
-        selectedSessionId={selectedSessionId}
-        sessionsAvailable={data.sessionsAvailable}
-        sessionControlAvailable={data.sessionControlAvailable}
-        locale={data.locale}
-        {common}
-        messages={{
-          newSession: data.messages.sessions.newSession,
-          searchPlaceholder: data.messages.sessions.searchPlaceholder,
-          emptyTitle: data.messages.sessions.emptyTitle,
-          daemonUnavailableTitle: data.messages.sessions.daemonUnavailableTitle,
-          daemonUnavailableBody: data.messages.sessions.daemonUnavailableBody,
-          listLabel: data.messages.sessions.listLabel,
-          untitledConversation: data.messages.sessions.untitledConversation,
-          unknownWorkspace: data.messages.sessions.unknownWorkspace,
-          channelSessionBadge: data.messages.sessions.channelSessionBadge,
-          channelLabels: data.messages.sessions.channelLabels,
-          sessionTypes: data.messages.sessions.sessionTypes,
-          archiveSubmit: data.messages.sessions.archiveSubmit,
-        }}
-      />
+      <aside
+        class="sidebar"
+        class:mobile-open={mobileSidebarOpen}
+        id="workbench-sidebar"
+        aria-label={t.aria.workspaceNavigation}
+      >
+        <WorkbenchSessionRail
+          sessions={sidebarSessions}
+          workspaces={workspaceOptions}
+          activeWorkspaceId={data.activeWorkspace?.id ?? null}
+          selectedSessionId={selectedSessionId}
+          sessionsAvailable={data.sessionsAvailable}
+          sessionControlAvailable={data.sessionControlAvailable}
+          locale={data.locale}
+          {common}
+          messages={{
+            newSession: data.messages.sessions.newSession,
+            searchPlaceholder: data.messages.sessions.searchPlaceholder,
+            emptyTitle: data.messages.sessions.emptyTitle,
+            daemonUnavailableTitle: data.messages.sessions.daemonUnavailableTitle,
+            daemonUnavailableBody: data.messages.sessions.daemonUnavailableBody,
+            listLabel: data.messages.sessions.listLabel,
+            untitledConversation: data.messages.sessions.untitledConversation,
+            unknownWorkspace: data.messages.sessions.unknownWorkspace,
+            channelSessionBadge: data.messages.sessions.channelSessionBadge,
+            channelLabels: data.messages.sessions.channelLabels,
+            sessionTypes: data.messages.sessions.sessionTypes,
+            archiveSubmit: data.messages.sessions.archiveSubmit,
+          }}
+        />
 
-      <nav class="secondary-nav" aria-label={t.aria.workspaceNavigation}>
-        {#each navItems as item}
-          <a class="nav-link" class:active={isActive(item.href)} href={item.href}>
-            <Icon name={item.icon} size={18} />
-            <span>{item.label}</span>
+        <nav class="secondary-nav" aria-label={t.aria.workspaceNavigation}>
+          {#each navItems as item}
+            <a class="nav-link" class:active={isActive(item.href)} href={item.href}>
+              <Icon name={item.icon} size={18} />
+              <span>{item.label}</span>
+            </a>
+          {/each}
+          <a class="nav-link" href={settingsHref}>
+            <Icon name="settings" size={18} stroke={2.2} />
+            <span>{t.user.settings}</span>
           </a>
-        {/each}
-        <a class="nav-link" href={settingsHref}>
-          <Icon name="settings" size={18} stroke={2.2} />
-          <span>{t.user.settings}</span>
-        </a>
-      </nav>
-    </aside>
+        </nav>
+      </aside>
+    {/if}
 
     <div class="workspace">
       <main class="content">
@@ -225,15 +229,6 @@
     </div>
   </div>
 </div>
-
-{#if data.pendingAsk}
-  {#key data.pendingAsk.id}
-    <GlobalAskDialog
-      ask={data.pendingAsk}
-      messages={data.messages.inboxDetail}
-    />
-  {/key}
-{/if}
 
 <style>
   :global(body) {
@@ -258,6 +253,10 @@
     display: grid;
     grid-template-columns: 260px minmax(0, 1fr);
     min-height: 0;
+  }
+
+  .shell-body.directory-mode {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .sidebar {

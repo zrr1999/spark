@@ -1,5 +1,4 @@
 import { realpathSync } from "node:fs";
-import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import type {
   ExtensionInteractionRequest,
@@ -85,9 +84,8 @@ export function resolveSparkHeadlessExecutorSpecifier(
     return moduleSpecifier;
   }
   try {
-    const require = createRequire(import.meta.url);
-    const resolved = require.resolve(moduleSpecifier);
-    const real = realpathSync(resolved);
+    const resolved = import.meta.resolve(moduleSpecifier);
+    const real = realpathSync(new URL(resolved));
     return pathToFileURL(real).href;
   } catch {
     return moduleSpecifier;

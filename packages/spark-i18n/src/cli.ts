@@ -231,8 +231,12 @@ const NATIVE_TUI: Record<SparkLanguage, SparkNativeTuiStrings> = {
       { name: "workflows", description: "open the workflow cockpit panel" },
       { name: "runs", description: "open the run cockpit panel" },
       { name: "tasks", description: "open the task cockpit panel" },
-      { name: "artifacts", description: "open the artifact/evidence cockpit panel" },
-      { name: "evidence", description: "open the artifact/evidence cockpit panel" },
+      { name: "artifacts", description: "open the Cockpit artifacts panel (issue/pr/preview)" },
+      {
+        name: "evidence",
+        description:
+          "deprecated alias; opens product Artifacts (issue/pr/preview), not the internal evidence ledger",
+      },
       { name: "reviews", description: "open the reviewer verdict cockpit panel" },
       { name: "graft", description: "open the Graft provenance cockpit panel" },
       { name: "exit", description: "exit the native TUI" },
@@ -330,8 +334,11 @@ const NATIVE_TUI: Record<SparkLanguage, SparkNativeTuiStrings> = {
       { name: "workflows", description: "打开 workflow cockpit panel" },
       { name: "runs", description: "打开 run cockpit panel" },
       { name: "tasks", description: "打开 task cockpit panel" },
-      { name: "artifacts", description: "打开 artifact/evidence cockpit panel" },
-      { name: "evidence", description: "打开 artifact/evidence cockpit panel" },
+      { name: "artifacts", description: "打开 Cockpit 产物面板（issue/pr/preview）" },
+      {
+        name: "evidence",
+        description: "已弃用别名；打开产品 Artifacts（issue/pr/preview），不是内部 evidence 账本",
+      },
       { name: "reviews", description: "打开 reviewer verdict cockpit panel" },
       { name: "graft", description: "打开 Graft provenance cockpit panel" },
       { name: "exit", description: "退出 native TUI" },

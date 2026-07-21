@@ -35,6 +35,16 @@
       "@zendev-lab/spark-learnings/extension": ["./packages/spark-learnings/src/extension.ts"],
       "@zendev-lab/spark-loop": ["./packages/spark-loop/src/index.ts"],
       "@zendev-lab/spark-modes": ["./packages/spark-modes/src/index.ts"],
+      "@zendev-lab/spark-memory": ["./packages/spark-memory/src/index.ts"],
+      "@zendev-lab/spark-memory/extension": ["./packages/spark-memory/src/extension.ts"],
+      "@zendev-lab/spark-memory/recall": ["./packages/spark-memory/src/recall-store.ts"],
+      "@zendev-lab/spark-memory/recall/extension": [
+        "./packages/spark-memory/src/recall-extension.ts"
+      ],
+      "@zendev-lab/spark-memory/learning": ["./packages/spark-memory/src/learning-store.ts"],
+      "@zendev-lab/spark-memory/learning/extension": [
+        "./packages/spark-memory/src/learning-extension.ts"
+      ],
       "@zendev-lab/spark-recall": ["./packages/spark-recall/src/index.ts"],
       "@zendev-lab/spark-recall/extension": ["./packages/spark-recall/src/extension.ts"],
       "@zendev-lab/spark-repro": ["./packages/spark-repro/src/index.ts"],

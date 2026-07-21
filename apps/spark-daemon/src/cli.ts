@@ -60,6 +60,10 @@ import {
   requestWorkspaceList,
   requestWorkspaceRegister,
   requestWorkspaceRelocate,
+  requestUplinkPark,
+  requestUplinkUnpark,
+  requestUplinkPrefer,
+  requestUplinkStatus,
   requestWorkspaceStop,
   startLocalRpcServer,
 } from "./local-rpc.js";
@@ -199,6 +203,8 @@ export async function main(argv = process.argv.slice(2), io: CliIo = defaultIo):
       case "workspace":
       case "ws":
         return await workspace(paths, subcommand, rest, io);
+      case "uplink":
+        return await uplink(paths, subcommand, rest, io);
       case "daemon":
         return await daemon(paths, subcommand, rest, io);
       default:
@@ -1511,6 +1517,174 @@ async function workspaceAccessCommand(
   return 0;
 }
 
+async function uplink(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  subcommand: string | undefined,
+  args: string[],
+  io: CliIo,
+): Promise<number> {
+  if (
+    helpRequested(args) ||
+    subcommand === "help" ||
+    subcommand === "--help" ||
+    subcommand === "-h"
+  ) {
+    printUplinkHelp(io);
+    return 0;
+  }
+  prepareSparkDaemonState(paths);
+  if (subcommand === "park") {
+    return await uplinkParkCommand(paths, args, io);
+  }
+  if (subcommand === "unpark") {
+    return await uplinkUnparkCommand(paths, args, io);
+  }
+  if (subcommand === "prefer") {
+    return await uplinkPreferCommand(paths, args, io);
+  }
+  if (subcommand === "status" || subcommand === undefined) {
+    return await uplinkStatusCommand(paths, args, io);
+  }
+  throw new Error("Usage: spark daemon uplink <park|unpark|prefer|status>");
+}
+
+async function uplinkParkCommand(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  args: string[],
+  io: CliIo,
+): Promise<number> {
+  const flags = parseFlags(args);
+  const serverUrl = flags["server-url"] ?? positionalArgs(args)[0];
+  if (!serverUrl) {
+    throw new Error("Usage: spark daemon uplink park --server-url <origin>");
+  }
+  const profile = await requestWorkspaceService(paths, io, async () =>
+    (
+      (io as { parkUplinkInService?: typeof requestUplinkPark }).parkUplinkInService ??
+      requestUplinkPark
+    )(paths, { serverUrl }),
+  );
+  if (flags.json === "true") {
+    io.stdout.write(`${JSON.stringify({ action: "uplink-park", profile }, null, 2)}\n`);
+    return 0;
+  }
+  io.stdout.write(`✓ Uplink parked for ${serverUrl}\n`);
+  return 0;
+}
+
+async function uplinkUnparkCommand(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  args: string[],
+  io: CliIo,
+): Promise<number> {
+  const flags = parseFlags(args);
+  const serverUrl = flags["server-url"] ?? positionalArgs(args)[0];
+  if (!serverUrl) {
+    throw new Error("Usage: spark daemon uplink unpark --server-url <origin>");
+  }
+  const profile = await requestWorkspaceService(paths, io, async () =>
+    (
+      (io as { unparkUplinkInService?: typeof requestUplinkUnpark }).unparkUplinkInService ??
+      requestUplinkUnpark
+    )(paths, { serverUrl }),
+  );
+  if (flags.json === "true") {
+    io.stdout.write(`${JSON.stringify({ action: "uplink-unpark", profile }, null, 2)}\n`);
+    return 0;
+  }
+  io.stdout.write(`✓ Uplink unparked for ${serverUrl}\n`);
+  return 0;
+}
+
+async function uplinkPreferCommand(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  args: string[],
+  io: CliIo,
+): Promise<number> {
+  const flags = parseFlags(args);
+  const serverUrl = flags["server-url"];
+  const workspace = flags.workspace ?? positionalArgs(args)[0];
+  if (!serverUrl || !workspace) {
+    throw new Error(
+      "Usage: spark daemon uplink prefer --workspace <name|id> --server-url <origin>",
+    );
+  }
+  const preferred = await requestWorkspaceService(paths, io, async () =>
+    (
+      (io as { preferUplinkInService?: typeof requestUplinkPrefer }).preferUplinkInService ??
+      requestUplinkPrefer
+    )(paths, { workspace, serverUrl }),
+  );
+  if (flags.json === "true") {
+    io.stdout.write(`${JSON.stringify({ action: "uplink-prefer", preferred }, null, 2)}\n`);
+    return 0;
+  }
+  const row = preferred as {
+    previousServerUrl?: string;
+    serverUrl?: string;
+    workspace?: { displayName?: string };
+  };
+  io.stdout.write(
+    `✓ Workspace preferred onto ${row.serverUrl ?? serverUrl}\n` +
+      `  workspace ${row.workspace?.displayName ?? workspace}\n` +
+      `  previous  ${row.previousServerUrl ?? "—"}\n`,
+  );
+  return 0;
+}
+
+async function uplinkStatusCommand(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  args: string[],
+  io: CliIo,
+): Promise<number> {
+  const flags = parseFlags(args);
+  const status = await requestWorkspaceService(paths, io, async () =>
+    (
+      (io as { uplinkStatusInService?: typeof requestUplinkStatus }).uplinkStatusInService ??
+      requestUplinkStatus
+    )(paths),
+  );
+  if (flags.json === "true") {
+    io.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
+    return 0;
+  }
+  const payload = status as {
+    origins?: Array<{
+      serverUrl: string;
+      parked: boolean;
+      desired: boolean;
+      runnable: boolean;
+      workspaceCount: number;
+    }>;
+  };
+  const origins = payload.origins ?? [];
+  if (origins.length === 0) {
+    io.stdout.write("No Cockpit uplink profiles.\n");
+    return 0;
+  }
+  for (const origin of origins) {
+    io.stdout.write(
+      `${origin.serverUrl}  parked=${origin.parked}  desired=${origin.desired}  runnable=${origin.runnable}  workspaces=${origin.workspaceCount}\n`,
+    );
+  }
+  return 0;
+}
+
+function printUplinkHelp(io: CliIo): void {
+  io.stdout.write(`Usage: spark daemon uplink <command>
+
+Commands:
+  park --server-url <origin>
+  unpark --server-url <origin>
+  prefer --workspace <name|id> --server-url <origin>
+  status [--json]
+
+Park stops dialing an origin without deleting credentials. Prefer rebinds one
+workspace onto another already-registered origin (temporary borrow). Never uses
+relocate/preflight.
+`);
+}
+
 async function relocateWorkspaceCommand(
   paths: ReturnType<typeof resolveSparkPaths>,
   args: string[],
@@ -2464,6 +2638,10 @@ Commands:
   workspace ls [--json] [--all] [--full]
   workspace show [name] [--workspace <name>] [--json]
   workspace stop <name> [--workspace <name>] [--yes]
+  uplink park --server-url <origin>
+  uplink unpark --server-url <origin>
+  uplink prefer --workspace <name|id> --server-url <origin>
+  uplink status [--json]
   ws
   status
   start
@@ -2474,6 +2652,8 @@ Commands:
 Example:
   spark daemon login --server-url http://127.0.0.1:5173
   spark daemon workspace register . --server-url http://127.0.0.1:5173 --token <workspace-token> --name <ws>
+  spark daemon uplink park --server-url https://prod.example/
+  spark daemon uplink prefer --workspace spark --server-url http://127.0.0.1:5173/
 `);
 }
 

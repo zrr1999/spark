@@ -1963,7 +1963,7 @@ void test("SparkAgentLoop records raw trace artifact for large lossy compacted t
     assert.match(text, /\[recovery\] Full raw tool output saved as artifact:/);
     assert.match(
       text,
-      /artifact\(\{ action: "read", artifactRef: "artifact:[^"]+", maxChars: 20000 \}\)/,
+      /evidence\(\{ action: "read", artifactRef: "artifact:[^"]+", maxChars: 20000 \}\)/,
     );
     assert.equal((toolResult as { toolCallId?: string }).toolCallId, toolCallEnvelope.id);
     assert.equal((toolResult as { toolName?: string }).toolName, toolCallEnvelope.name);
@@ -1976,7 +1976,7 @@ void test("SparkAgentLoop records raw trace artifact for large lossy compacted t
     assert.deepEqual(recovery.recoveryPath, {
       kind: "artifact",
       artifactRef: recovery.artifactRef,
-      readTool: "artifact",
+      readTool: "evidence",
       readArgs: { action: "read", artifactRef: recovery.artifactRef, maxChars: 20_000 },
     });
 
@@ -1993,7 +1993,7 @@ void test("SparkAgentLoop records raw trace artifact for large lossy compacted t
     );
     assert.equal(await store.getBody(recovery.artifactRef), noisyOutput);
 
-    const artifactTool = host.getTool("artifact");
+    const artifactTool = host.getTool("evidence");
     assert.ok(artifactTool);
     const readResult = await artifactTool.config.execute(
       "read-raw-output",
@@ -2091,7 +2091,7 @@ void test("SparkAgentLoop offloads failed long output while preserving diagnosti
     assert.equal(result.isError, true);
     assert.match(text, /fatal: command failed/u);
     assert.match(text, /exit code: 7/u);
-    assert.match(text, /artifact\(\{ action: "read"/u);
+    assert.match(text, /evidence\(\{ action: "read"/u);
     assert.equal(result.details.toolResultRawRecovery.reason, "error_compaction");
     const store = defaultArtifactStore(dir);
     const artifact = await store.get(result.details.toolResultRawRecovery.artifactRef);
@@ -2110,7 +2110,7 @@ void test(
     let artifactStarted = false;
     let artifactAborted = false;
     host.registerTool({
-      name: "artifact",
+      name: "evidence",
       description: "raw recovery sink that deliberately never resolves",
       parameters: { type: "object" },
       policy: { effect: "local_write", executionMode: "sequential", approval: "none" },

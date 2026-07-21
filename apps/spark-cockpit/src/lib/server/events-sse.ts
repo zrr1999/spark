@@ -7,6 +7,7 @@ import {
   serializeEventRow,
   type EventCursor,
 } from "@zendev-lab/spark-coordination/events";
+import { getDatabase, pinDatabase, unpinDatabase } from "./db";
 
 const encoder = new TextEncoder();
 const pollIntervalMs = 200;
@@ -15,17 +16,34 @@ const eventBatchSize = 100;
 const maxBatchesPerFlush = 8;
 
 export interface CockpitEventStreamOptions {
-  db: DatabaseSync;
   request: Request;
   url: URL;
   sweepLivenessIfDue: (db: DatabaseSync) => void;
   workspaceId?: string | null;
+  /** Optional injected DB (tests). Defaults to the pinned Cockpit database. */
+  db?: DatabaseSync;
 }
 
 export function createCockpitEventStreamResponse(options: CockpitEventStreamOptions): Response {
+  // Extra pin beyond the request hook: the hook unpins when the response is
+  // returned, but the SSE stream keeps reading the DB until abort/cancel.
+  // Injected `db` (unit tests) skips the process lock pin.
+  const usesPinnedDb = !options.db;
+  if (usesPinnedDb) {
+    pinDatabase();
+  }
+  const db = options.db ?? getDatabase();
   let cursor = parseCursor(options.url.searchParams.get("cursor"));
   let closed = false;
   let interval: ReturnType<typeof setInterval> | undefined;
+  let released = false;
+  const releasePin = () => {
+    if (released) return;
+    released = true;
+    if (usesPinnedDb) {
+      unpinDatabase();
+    }
+  };
 
   const stream = new ReadableStream({
     start(controller) {
@@ -38,8 +56,8 @@ export function createCockpitEventStreamResponse(options: CockpitEventStreamOpti
         enqueue(encodeSseMessage(event, data, id));
       };
       const flushEvents = () => {
-        options.sweepLivenessIfDue(options.db);
-        const drained = drainEventBatches(options.db, cursor, {
+        options.sweepLivenessIfDue(db);
+        const drained = drainEventBatches(db, cursor, {
           batchSize: eventBatchSize,
           maxBatches: maxBatchesPerFlush,
           workspaceId: options.workspaceId,
@@ -57,6 +75,7 @@ export function createCockpitEventStreamResponse(options: CockpitEventStreamOpti
         if (closed) return;
         closed = true;
         if (interval) clearInterval(interval);
+        releasePin();
         try {
           controller.close();
         } catch {
@@ -75,6 +94,7 @@ export function createCockpitEventStreamResponse(options: CockpitEventStreamOpti
     cancel() {
       closed = true;
       if (interval) clearInterval(interval);
+      releasePin();
     },
   });
 

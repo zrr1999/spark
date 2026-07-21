@@ -14,85 +14,90 @@ import {
   workspaceSessionCookieName,
   workspaceSessionRefreshCookieName,
 } from "$lib/server/auth";
-import { getDatabase } from "$lib/server/db";
+import { getDatabase, pinDatabase, unpinDatabase } from "$lib/server/db";
 import { presentCockpitServerError } from "$lib/server/error-presentation";
 import { INVOCATION_ROUTE_UNAVAILABLE_ERROR_CODE } from "$lib/error-codes";
 import { localeCookieName, resolveRequestLocale } from "$lib/i18n";
 import { remoteAccessDecision } from "$lib/server/remote-access";
 
 export const handle: Handle = async ({ event, resolve }) => {
-  event.locals.requestId = createId("msg");
-  const db = getDatabase();
+  pinDatabase();
+  try {
+    event.locals.requestId = createId("msg");
+    const db = getDatabase();
 
-  event.locals.sessionToken = event.cookies.get(sessionCookieName) ?? null;
-  let cockpitSession = getCurrentCockpitSession(db, event.locals.sessionToken);
-  if (!cockpitSession) {
-    const refreshed = refreshCockpitSession(
-      db,
-      event.cookies.get(sessionRefreshCookieName) ?? null,
-    );
-    if (refreshed) {
-      setCockpitSessionCookies(event.cookies, refreshed, {
-        secure: event.url.protocol === "https:",
-      });
-      event.locals.sessionToken = refreshed.sessionToken;
-      cockpitSession = refreshed;
+    event.locals.sessionToken = event.cookies.get(sessionCookieName) ?? null;
+    let cockpitSession = getCurrentCockpitSession(db, event.locals.sessionToken);
+    if (!cockpitSession) {
+      const refreshed = refreshCockpitSession(
+        db,
+        event.cookies.get(sessionRefreshCookieName) ?? null,
+      );
+      if (refreshed) {
+        setCockpitSessionCookies(event.cookies, refreshed, {
+          secure: event.url.protocol === "https:",
+        });
+        event.locals.sessionToken = refreshed.sessionToken;
+        cockpitSession = refreshed;
+      }
     }
-  }
 
-  event.locals.workspaceSessionToken = event.cookies.get(workspaceSessionCookieName) ?? null;
-  let workspaceSession = getCurrentWorkspaceSession(db, event.locals.workspaceSessionToken);
-  if (!workspaceSession) {
-    const refreshed = refreshWorkspaceSession(
-      db,
-      event.cookies.get(workspaceSessionRefreshCookieName) ?? null,
-    );
-    if (refreshed) {
-      setWorkspaceSessionCookies(event.cookies, refreshed, {
-        secure: event.url.protocol === "https:",
-      });
-      event.locals.workspaceSessionToken = refreshed.sessionToken;
-      workspaceSession = refreshed;
+    event.locals.workspaceSessionToken = event.cookies.get(workspaceSessionCookieName) ?? null;
+    let workspaceSession = getCurrentWorkspaceSession(db, event.locals.workspaceSessionToken);
+    if (!workspaceSession) {
+      const refreshed = refreshWorkspaceSession(
+        db,
+        event.cookies.get(workspaceSessionRefreshCookieName) ?? null,
+      );
+      if (refreshed) {
+        setWorkspaceSessionCookies(event.cookies, refreshed, {
+          secure: event.url.protocol === "https:",
+        });
+        event.locals.workspaceSessionToken = refreshed.sessionToken;
+        workspaceSession = refreshed;
+      }
     }
-  }
-  event.locals.workspaceId = workspaceSession?.workspaceId ?? null;
+    event.locals.workspaceId = workspaceSession?.workspaceId ?? null;
 
-  const clientAddress = getClientAddress(event);
-  const decision = remoteAccessDecision({ url: event.url, clientAddress });
-  if (decision.required && !cockpitSession && !workspaceSession) {
-    return remoteAccessRequiredResponse(event, "cockpit");
-  }
-  if (
-    decision.required &&
-    cockpitSession &&
-    !workspaceSession &&
-    isRemoteWorkspaceDataPath(event.url.pathname)
-  ) {
-    const slug = workspaceSlugFromPath(event.url.pathname);
-    if (slug) {
-      return remoteAccessRequiredResponse(event, "workspace", slug);
+    const clientAddress = getClientAddress(event);
+    const decision = remoteAccessDecision({ url: event.url, clientAddress });
+    if (decision.required && !cockpitSession && !workspaceSession) {
+      return remoteAccessRequiredResponse(event, "cockpit");
     }
-  }
-  if (
-    decision.required &&
-    workspaceSession &&
-    !workspaceSessionAllowsRequest(db, workspaceSession.workspaceId, event.url.pathname)
-  ) {
-    // Cockpit owner sessions may still use control-plane routes.
-    if (!cockpitSession || isRemoteWorkspaceDataPath(event.url.pathname)) {
-      return workspaceAccessForbiddenResponse(workspaceSession.workspaceSlug);
+    if (
+      decision.required &&
+      cockpitSession &&
+      !workspaceSession &&
+      isRemoteWorkspaceDataPath(event.url.pathname)
+    ) {
+      const slug = workspaceSlugFromPath(event.url.pathname);
+      if (slug) {
+        return remoteAccessRequiredResponse(event, "workspace", slug);
+      }
     }
+    if (
+      decision.required &&
+      workspaceSession &&
+      !workspaceSessionAllowsRequest(db, workspaceSession.workspaceId, event.url.pathname)
+    ) {
+      // Cockpit owner sessions may still use control-plane routes.
+      if (!cockpitSession || isRemoteWorkspaceDataPath(event.url.pathname)) {
+        return workspaceAccessForbiddenResponse(workspaceSession.workspaceSlug);
+      }
+    }
+
+    const locale = resolveRequestLocale({
+      requestedLocale: event.url.searchParams.get("lang"),
+      cookieLocale: event.cookies.get(localeCookieName),
+      acceptLanguage: event.request.headers.get("accept-language"),
+    });
+
+    return await resolve(event, {
+      transformPageChunk: ({ html }) => html.replace("%spark.locale%", locale),
+    });
+  } finally {
+    unpinDatabase();
   }
-
-  const locale = resolveRequestLocale({
-    requestedLocale: event.url.searchParams.get("lang"),
-    cookieLocale: event.cookies.get(localeCookieName),
-    acceptLanguage: event.request.headers.get("accept-language"),
-  });
-
-  return resolve(event, {
-    transformPageChunk: ({ html }) => html.replace("%spark.locale%", locale),
-  });
 };
 
 export const handleError: HandleServerError = ({ error, event, status, message }) => {

@@ -3,7 +3,6 @@
   import type { AppMessages } from "$lib/i18n";
   import SparkLogo from "$lib/SparkLogo.svelte";
   import { workspaceAvatarStyle, workspaceInitial } from "$lib/workspace-avatar";
-  import { workspaceSessionsPath } from "$lib/workspace-routes";
   import CockpitSearch from "./CockpitSearch.svelte";
   import type { CockpitSearchSession, CockpitSearchWorkspace } from "./cockpit-search";
 
@@ -16,6 +15,8 @@
     onToggleNavigation: () => void;
     sessions?: CockpitSearchSession[];
     sessionMessages: AppMessages["sessions"];
+    showNavigationToggle?: boolean;
+    showWorkspaceMenu?: boolean;
     workspaceHref: (workspace: CockpitSearchWorkspace) => string;
     workspaces?: CockpitSearchWorkspace[];
   }
@@ -29,6 +30,8 @@
     onToggleNavigation,
     sessions = [],
     sessionMessages,
+    showNavigationToggle = true,
+    showWorkspaceMenu = true,
     workspaceHref,
     workspaces = [],
   }: Props = $props();
@@ -38,7 +41,7 @@
   let activeWorkspaceLabel = $derived(
     activeWorkspace?.name ?? layout.user.workspaceSection,
   );
-  let homeHref = $derived(activeWorkspace ? workspaceSessionsPath(activeWorkspace) : "/");
+  let homeHref = $derived("/");
 
   function toggleAccountMenu(event: MouseEvent) {
     event.stopPropagation();
@@ -65,16 +68,18 @@
 
 <header class="cockpit-topbar">
   <div class="topbar-brand">
-    <button
-      class="navigation-toggle"
-      type="button"
-      aria-controls={navigationControls}
-      aria-expanded={navigationExpanded}
-      aria-label={layout.aria.workspaceNavigation}
-      onclick={onToggleNavigation}
-    >
-      <Icon name={navigationExpanded ? "close" : "menu"} size={18} stroke={2.2} />
-    </button>
+    {#if showNavigationToggle}
+      <button
+        class="navigation-toggle"
+        type="button"
+        aria-controls={navigationControls}
+        aria-expanded={navigationExpanded}
+        aria-label={layout.aria.workspaceNavigation}
+        onclick={onToggleNavigation}
+      >
+        <Icon name={navigationExpanded ? "close" : "menu"} size={18} stroke={2.2} />
+      </button>
+    {/if}
     <a class="brand-mark" href={homeHref} aria-label={layout.aria.home}>
       <SparkLogo size={32} />
       <span class="brand-name">{layout.brand.name}</span>
@@ -90,84 +95,88 @@
     {sessionMessages}
   />
 
-  <div
-    class="account-menu"
-    class:open={accountMenuOpen}
-    bind:this={accountMenuElement}
-  >
-    <button
-      class="user-menu"
-      aria-controls="cockpit-workspace-menu"
-      aria-expanded={accountMenuOpen}
-      aria-haspopup="menu"
-      aria-label={layout.aria.workspaceMenu}
-      onclick={toggleAccountMenu}
-      type="button"
-    >
-      <span
-        class="workspace-avatar workspace-switcher-avatar"
-        style={workspaceAvatarStyle(activeWorkspace)}
-        aria-hidden="true"
-      >
-        {workspaceInitial(activeWorkspace)}
-      </span>
-      <span class="user-copy">{activeWorkspaceLabel}</span>
-      <Icon name="chevron-down" size={14} stroke={2.4} />
-    </button>
-
+  {#if showWorkspaceMenu}
     <div
-      class="account-popover"
-      id="cockpit-workspace-menu"
-      role="menu"
-      aria-label={layout.aria.workspaceMenu}
-      aria-hidden={!accountMenuOpen}
-      tabindex="-1"
+      class="account-menu"
+      class:open={accountMenuOpen}
+      bind:this={accountMenuElement}
     >
-      <div class="account-menu-label">{layout.user.switchWorkspace}</div>
-      {#if workspaces.length === 0}
-        <div class="account-menu-empty">{layout.user.noWorkspaces}</div>
-      {:else}
-        <div class="workspace-list">
-          {#each workspaces as workspace}
-            <a
-              class="account-menu-item"
-              class:selected={workspace.id === activeWorkspace?.id}
-              href={workspaceHref(workspace)}
-              onclick={closeAccountMenu}
-              role="menuitem"
-            >
-              <span
-                class="workspace-avatar"
-                style={workspaceAvatarStyle(workspace)}
-                aria-hidden="true"
-              >
-                {workspaceInitial(workspace)}
-              </span>
-              <span class="workspace-item-copy">
-                <strong>{workspace.name}</strong>
-                {#if workspace.id === activeWorkspace?.id}
-                  <small>{layout.user.currentWorkspace}</small>
-                {/if}
-              </span>
-              {#if workspace.id === activeWorkspace?.id}
-                <Icon name="check" size={15} stroke={2.4} />
-              {/if}
-            </a>
-          {/each}
-        </div>
-      {/if}
-
-      <a
-        class="account-menu-item create-item"
-        href="/workspaces/new"
-        onclick={closeAccountMenu}
-        role="menuitem"
+      <button
+        class="user-menu"
+        aria-controls="cockpit-workspace-menu"
+        aria-expanded={accountMenuOpen}
+        aria-haspopup="menu"
+        aria-label={layout.aria.workspaceMenu}
+        onclick={toggleAccountMenu}
+        type="button"
       >
-        <Icon name="plus" size={16} stroke={2.3} />
-        <span>{layout.user.createWorkspace}</span>
-      </a>
+        <span
+          class="workspace-avatar workspace-switcher-avatar"
+          style={workspaceAvatarStyle(activeWorkspace)}
+          aria-hidden="true"
+        >
+          {workspaceInitial(activeWorkspace)}
+        </span>
+        <span class="user-copy">{activeWorkspaceLabel}</span>
+        <Icon name="chevron-down" size={14} stroke={2.4} />
+      </button>
+
+      <div
+        class="account-popover"
+        id="cockpit-workspace-menu"
+        role="menu"
+        aria-label={layout.aria.workspaceMenu}
+        aria-hidden={!accountMenuOpen}
+        tabindex="-1"
+      >
+        <div class="account-menu-label">{layout.user.switchWorkspace}</div>
+        {#if workspaces.length === 0}
+          <div class="account-menu-empty">{layout.user.noWorkspaces}</div>
+        {:else}
+          <div class="workspace-list">
+            {#each workspaces as workspace}
+              <a
+                class="account-menu-item"
+                class:selected={workspace.id === activeWorkspace?.id}
+                href={workspaceHref(workspace)}
+                onclick={closeAccountMenu}
+                role="menuitem"
+              >
+                <span
+                  class="workspace-avatar"
+                  style={workspaceAvatarStyle(workspace)}
+                  aria-hidden="true"
+                >
+                  {workspaceInitial(workspace)}
+                </span>
+                <span class="workspace-item-copy">
+                  <strong>{workspace.name}</strong>
+                  {#if workspace.id === activeWorkspace?.id}
+                    <small>{layout.user.currentWorkspace}</small>
+                  {/if}
+                </span>
+                {#if workspace.id === activeWorkspace?.id}
+                  <Icon name="check" size={15} stroke={2.4} />
+                {/if}
+              </a>
+            {/each}
+          </div>
+        {/if}
+
+        <a
+          class="account-menu-item create-item"
+          href="/workspaces/new"
+          onclick={closeAccountMenu}
+          role="menuitem"
+        >
+          <Icon name="plus" size={16} stroke={2.3} />
+          <span>{layout.user.createWorkspace}</span>
+        </a>
+      </div>
     </div>
-  </div>
+  {:else}
+    <div class="topbar-trailing" aria-hidden="true"></div>
+  {/if}
 </header>
 
 <style>
@@ -186,6 +195,11 @@
     padding: 0 14px 0 16px;
     position: relative;
     z-index: 60;
+  }
+
+  .topbar-trailing {
+    justify-self: end;
+    min-width: 0;
   }
 
   .topbar-brand {

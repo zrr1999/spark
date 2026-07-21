@@ -36,11 +36,14 @@ void test("session tool exposes persistent lifecycle, calls, classification, and
     assert.match(schema, new RegExp(action));
   }
   assert.match(tool.description, /Canonical persistent session capability/u);
+  assert.match(tool.description, /NOT the Cockpit conversation list/u);
   const prompt = tool.promptGuidelines?.join(" ") ?? "";
   assert.match(prompt, /MUST list same-workspace local sessions/u);
   assert.match(prompt, /compare roles semantically/u);
   assert.match(prompt, /only when no existing division of labour owns/u);
   assert.match(prompt, /user's language and existing naming style/u);
+  assert.match(prompt, /Cockpit workspace conversations/u);
+  assert.match(prompt, /separate projection/u);
   assert.doesNotMatch(prompt, /runtime-ops|verifier/u);
 });
 

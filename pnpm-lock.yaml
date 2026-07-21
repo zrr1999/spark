@@ -6,6 +6,12 @@ settings:
 
 catalogs:
   default:
+    '@stryker-mutator/core':
+      specifier: 9.6.1
+      version: 9.6.1
+    '@stryker-mutator/vitest-runner':
+      specifier: 9.6.1
+      version: 9.6.1
     '@types/ws':
       specifier: ^8.18.1
       version: 8.18.1
@@ -604,6 +610,12 @@ importers:
         specifier: ^0.28.7
         version: 0.28.17
     devDependencies:
+      '@stryker-mutator/core':
+        specifier: 'catalog:'
+        version: 9.6.1(@types/node@26.1.1)
+      '@stryker-mutator/vitest-runner':
+        specifier: 'catalog:'
+        version: 9.6.1(@stryker-mutator/core@9.6.1(@types/node@26.1.1))(vitest@4.1.9)
       typescript:
         specifier: 'catalog:'
         version: 6.0.3
@@ -687,6 +699,9 @@ importers:
       '@zendev-lab/spark-extension-api':
         specifier: workspace:^
         version: link:../spark-extension-api
+      '@zendev-lab/spark-memory':
+        specifier: workspace:^
+        version: link:../spark-memory
       '@zendev-lab/spark-system':
         specifier: workspace:^
         version: link:../spark-system
@@ -705,6 +720,9 @@ importers:
 
   packages/spark-memory:
     dependencies:
+      '@zendev-lab/spark-artifacts':
+        specifier: workspace:^
+        version: link:../spark-artifacts
       '@zendev-lab/spark-extension-api':
         specifier: workspace:^
         version: link:../spark-extension-api
@@ -727,6 +745,12 @@ importers:
         specifier: ^4.1.5
         version: 4.4.3
     devDependencies:
+      '@stryker-mutator/core':
+        specifier: 'catalog:'
+        version: 9.6.1(@types/node@26.1.1)
+      '@stryker-mutator/vitest-runner':
+        specifier: 'catalog:'
+        version: 9.6.1(@stryker-mutator/core@9.6.1(@types/node@26.1.1))(vitest@4.1.9)
       typescript:
         specifier: 'catalog:'
         version: 6.0.3
@@ -736,15 +760,9 @@ importers:
 
   packages/spark-recall:
     dependencies:
-      '@zendev-lab/spark-extension-api':
+      '@zendev-lab/spark-memory':
         specifier: workspace:^
-        version: link:../spark-extension-api
-      '@zendev-lab/spark-system':
-        specifier: workspace:^
-        version: link:../spark-system
-      typebox:
-        specifier: 'catalog:'
-        version: 1.3.6
+        version: link:../spark-memory
 
   packages/spark-repro:
     dependencies:
@@ -762,10 +780,10 @@ importers:
   packages/spark-retry:
     devDependencies:
       '@stryker-mutator/core':
-        specifier: 9.6.1
+        specifier: 'catalog:'
         version: 9.6.1(@types/node@26.1.1)
       '@stryker-mutator/vitest-runner':
-        specifier: 9.6.1
+        specifier: 'catalog:'
         version: 9.6.1(@stryker-mutator/core@9.6.1(@types/node@26.1.1))(vitest@4.1.9)
       typescript:
         specifier: 'catalog:'
@@ -834,6 +852,12 @@ importers:
 
   packages/spark-system:
     devDependencies:
+      '@stryker-mutator/core':
+        specifier: 'catalog:'
+        version: 9.6.1(@types/node@26.1.1)
+      '@stryker-mutator/vitest-runner':
+        specifier: 'catalog:'
+        version: 9.6.1(@stryker-mutator/core@9.6.1(@types/node@26.1.1))(vitest@4.1.9)
       typescript:
         specifier: 'catalog:'
         version: 6.0.3

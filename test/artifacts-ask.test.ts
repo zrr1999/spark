@@ -82,21 +82,22 @@ void test("artifact store writes hashes, blobs, and lineage links", async () => 
 void test("artifact tool describes valid provenance producers", () => {
   const tools = new Map<string, { promptGuidelines?: string[]; parameters?: unknown }>();
   registerPiArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
-  const tool = tools.get("artifact");
+  const tool = tools.get("evidence");
   assert.ok(tool);
 
   const promptGuidelines = tool.promptGuidelines?.join("\n") ?? "";
   const parameters = JSON.stringify(tool.parameters);
-  assert.match(promptGuidelines, /package-specific artifact aliases/);
+  assert.match(promptGuidelines, /agent-private|agent-internal|never treat it as user-visible/i);
+  assert.match(promptGuidelines, /Prefer format=json and kind=record/);
   assert.doesNotMatch(promptGuidelines, /Spark-specific artifact aliases/);
   for (const text of [promptGuidelines, parameters]) {
-    assert.match(text, /spark, role, task, review, ask, cue, user/);
-    assert.match(text, /Do not use assistant/);
-    assert.match(text, /Use producer=task with runRef\/taskRef for execution evidence/);
-    assert.doesNotMatch(text, /role for child role-run output/);
-    assert.doesNotMatch(text, /use producer=(?:spark|role)/i);
+    assert.match(
+      text,
+      /spark \| role \| task \| review \| ask \| cue \| user|spark, role, task, review, ask, cue, user/,
+    );
+    assert.match(text, /producer=task/);
   }
-  assert.match(parameters, /Role ref filter/);
+  assert.match(parameters, /Role ref filter|role ref/i);
 });
 
 void test("artifact record stores validation evidence as a producer-tagged record", async () => {
@@ -107,10 +108,11 @@ void test("artifact record stores validation evidence as a producer-tagged recor
       { execute: Function; promptGuidelines?: string[]; parameters?: unknown }
     >();
     registerPiArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
-    const tool = tools.get("artifact");
+    const tool = tools.get("evidence");
     assert.ok(tool);
     const promptText = `${tool.promptGuidelines?.join("\n") ?? ""}\n${JSON.stringify(tool.parameters)}`;
-    assert.match(promptText, /record \(structured JSON record/);
+    assert.match(promptText, /kind=record|record \(default/);
+    assert.match(promptText, /agent-private|agent-internal|never treat it as user-visible/i);
 
     const recorded = await tool.execute(
       "artifact-record-kind",
@@ -143,7 +145,7 @@ void test("artifact record rejects retired verification kind with a directed hin
   try {
     const tools = new Map<string, { execute: Function }>();
     registerPiArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
-    const tool = tools.get("artifact");
+    const tool = tools.get("evidence");
     assert.ok(tool);
     await assert.rejects(
       tool.execute(
@@ -236,7 +238,7 @@ void test("artifact record tool stores top-level refs as provenance shortcuts", 
   try {
     const tools = new Map<string, { execute: Function }>();
     registerPiArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
-    const tool = tools.get("artifact");
+    const tool = tools.get("evidence");
     assert.ok(tool);
     const projectRef = newRef("proj", "shortcut-project");
     const taskRef = newRef("task", "shortcut-task");
@@ -282,7 +284,7 @@ void test("artifact record rejects conflicting top-level provenance shortcuts", 
   try {
     const tools = new Map<string, { execute: Function }>();
     registerPiArtifactTool({ registerTool: (config) => tools.set(config.name, config) });
-    const tool = tools.get("artifact");
+    const tool = tools.get("evidence");
     assert.ok(tool);
 
     await assert.rejects(

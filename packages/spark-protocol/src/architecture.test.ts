@@ -157,14 +157,13 @@ describe("server command delivery", () => {
 });
 
 describe("state ownership", () => {
-  it("classifies daemon-owned and cockpit outbox scopes", () => {
-    expect(DAEMON_OWNED_SCOPES).toContain("task_graph");
-    expect(COCKPIT_OUTBOX_SCOPES).toContain("commands");
+  it("guards writers by ownership without mirroring constant lists", () => {
     expect(isDaemonOwnedScope("artifacts")).toBe(true);
+    expect(isDaemonOwnedScope("task_graph")).toBe(true);
     expect(isDaemonOwnedScope("commands")).toBe(false);
-  });
+    expect(DAEMON_OWNED_SCOPES.length).toBeGreaterThan(0);
+    expect(COCKPIT_OUTBOX_SCOPES.length).toBeGreaterThan(0);
 
-  it("guards Cockpit writers against daemon-owned scopes", () => {
     expect(() => assertCockpitMayWriteScope("commands")).not.toThrow();
     expect(() => assertCockpitMayWriteScope("human_responses")).not.toThrow();
     expect(() => assertCockpitMayWriteScope("human_requests")).toThrow(/daemon-owned/u);

@@ -987,7 +987,7 @@ function desiredSparkDaemonUplinks(
     const serverUrl = normalizeSparkDaemonServerUrl(workspace.serverUrl);
     if (desired.has(serverUrl)) continue;
     const profile = profiles.get(serverUrl);
-    if (!profile) continue;
+    if (!profile || profile.parked) continue;
     const config = sparkDaemonConfigForServerProfile(identity, profile);
     if (!canAttemptServerConnection(config)) continue;
     desired.set(serverUrl, {
@@ -1008,6 +1008,7 @@ function sparkDaemonServerProfileFingerprint(profile: SparkDaemonServerProfile):
     profile.refreshToken ?? null,
     profile.refreshTokenExpiresAt ?? null,
     profile.webSocketUrl ?? null,
+    profile.parked === true,
   ]);
 }
 

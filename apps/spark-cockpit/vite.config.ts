@@ -46,21 +46,34 @@ async function handleRuntimeWebSocketUpgrade(
   head: Buffer,
   runtimeId: string,
 ) {
+  let releasePin: (() => void) | undefined;
   try {
-    const [{ getDatabase }, { attachRuntimeWebSocket, authenticateRuntimeToken }] =
-      await Promise.all([
-        server.ssrLoadModule("/src/lib/server/db.ts"),
-        server.ssrLoadModule("/src/lib/server/runtime-ws.ts"),
-      ]);
+    const [
+      { getDatabase, pinDatabase, unpinDatabase },
+      { attachRuntimeWebSocket, authenticateRuntimeToken },
+    ] = await Promise.all([
+      server.ssrLoadModule("/src/lib/server/db.ts"),
+      server.ssrLoadModule("/src/lib/server/runtime-ws.ts"),
+    ]);
+
+    pinDatabase();
+    let pinHeld = true;
+    releasePin = () => {
+      if (!pinHeld) return;
+      pinHeld = false;
+      unpinDatabase();
+    };
 
     const db = getDatabase();
     const tokenId = authenticateRuntimeToken(db, runtimeId, request.headers.authorization);
     if (!tokenId) {
+      releasePin();
       rejectUpgrade(socket, "401 Unauthorized");
       return;
     }
 
     wss.handleUpgrade(request, socket, head, (ws) => {
+      ws.on("close", releasePin!);
       attachRuntimeWebSocket(ws, {
         db,
         runtimeId,
@@ -68,6 +81,7 @@ async function handleRuntimeWebSocketUpgrade(
       });
     });
   } catch (error) {
+    releasePin?.();
     server.config.logger.error(
       `Runtime WebSocket upgrade failed: ${
         error instanceof Error ? (error.stack ?? error.message) : String(error)

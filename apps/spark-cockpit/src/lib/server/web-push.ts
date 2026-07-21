@@ -7,6 +7,7 @@ import {
   serializeEventRow,
   type EventCursor,
 } from "./events";
+import { withDatabase } from "./db";
 import {
   notificationFromCockpitEvent,
   sanitizeNotificationPayload,
@@ -138,31 +139,74 @@ export async function dispatchNotificationsForEventBatch(input: {
 }
 
 export function startWebPushEventDispatcher(input: {
-  db: DatabaseSync;
   intervalMs?: number;
+  /** Backoff when no Push subscription is stored (default 5 minutes). */
+  noSubscriptionBackoffMs?: number;
   env?: Record<string, string | undefined>;
   sender?: WebPushSender;
+  /** Optional tick hook for tests (after each withDatabase tick settles). */
+  onTickSettled?: (info: { hadSubscription: boolean; intervalMs: number }) => void;
 }): () => void {
-  let cursor = latestEventCursor(input.db);
+  const activeIntervalMs = input.intervalMs ?? 5_000;
+  const backoffIntervalMs = input.noSubscriptionBackoffMs ?? 5 * 60_000;
+  let cursor: EventCursor | null = null;
+  let cursorInitialized = false;
   let running = false;
-  const tick = () => {
-    if (running) return;
-    running = true;
-    void dispatchNotificationsForEventBatch({
-      db: input.db,
-      cursor,
-      env: input.env,
-      sender: input.sender,
-    })
-      .then((result) => {
-        cursor = result.cursor;
-      })
-      .finally(() => {
-        running = false;
-      });
+  let stopped = false;
+  let currentIntervalMs = activeIntervalMs;
+  let interval: ReturnType<typeof setInterval> | undefined;
+
+  const schedule = (ms: number) => {
+    if (interval) clearInterval(interval);
+    currentIntervalMs = ms;
+    if (stopped) return;
+    interval = setInterval(() => {
+      void tick();
+    }, ms);
   };
-  const interval = setInterval(tick, input.intervalMs ?? 5_000);
-  return () => clearInterval(interval);
+
+  const tick = async () => {
+    if (running || stopped) return;
+    running = true;
+    let hadSubscription = false;
+    try {
+      await withDatabase(async (db) => {
+        if (!cursorInitialized) {
+          cursor = latestEventCursor(db);
+          cursorInitialized = true;
+        }
+        const subscription = loadWebPushSubscription(db);
+        hadSubscription = Boolean(subscription);
+        if (!subscription) {
+          if (currentIntervalMs !== backoffIntervalMs) {
+            schedule(backoffIntervalMs);
+          }
+          return;
+        }
+        if (currentIntervalMs !== activeIntervalMs) {
+          schedule(activeIntervalMs);
+        }
+        const result = await dispatchNotificationsForEventBatch({
+          db,
+          cursor,
+          env: input.env,
+          sender: input.sender,
+        });
+        cursor = result.cursor;
+      });
+    } finally {
+      running = false;
+      input.onTickSettled?.({ hadSubscription, intervalMs: currentIntervalMs });
+    }
+  };
+
+  schedule(activeIntervalMs);
+  void tick();
+  return () => {
+    stopped = true;
+    if (interval) clearInterval(interval);
+    interval = undefined;
+  };
 }
 
 function defaultWebPushSender(config: WebPushConfig): WebPushSender {

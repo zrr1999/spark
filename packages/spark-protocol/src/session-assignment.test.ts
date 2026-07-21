@@ -105,4 +105,30 @@ describe("session ownership protocol", () => {
       sparkSessionListRequestSchema.parse({ scope: { kind: "daemon" }, limit: 101 }),
     ).toThrow();
   });
+
+  it("rejects mismatched workspace ids and normalizes list legacy workspaceId", () => {
+    expect(() =>
+      parseSparkSessionRegistryRecord({
+        sessionId: "sess_mismatch",
+        scope: { kind: "workspace", workspaceId: "ws_a" },
+        workspaceId: "ws_b",
+        createdAt: "2026-07-10T06:00:00.000Z",
+        updatedAt: "2026-07-10T06:00:01.000Z",
+      }),
+    ).toThrow(/workspaceId must match scope.workspaceId/u);
+
+    expect(
+      sparkSessionListRequestSchema.parse({
+        workspaceId: "ws_legacy_list",
+        limit: 10,
+      }),
+    ).toMatchObject({
+      scope: { kind: "workspace", workspaceId: "ws_legacy_list" },
+      workspaceId: "ws_legacy_list",
+      limit: 10,
+    });
+
+    expect(() => sparkSessionListRequestSchema.parse(null)).toThrow();
+    expect(() => sparkSessionListRequestSchema.parse([])).toThrow();
+  });
 });

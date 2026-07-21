@@ -952,9 +952,9 @@ export class SparkAgentLoop {
     decision: SparkToolResultRawRecoveryDecision;
     signal: AbortSignal;
   }): Promise<ToolResultRawRecoveryRecord | undefined> {
-    if (input.toolCall.name === "artifact") return undefined;
-    const artifactTool = this.host.getTool("artifact");
-    if (!artifactTool || !this.isToolAvailable(artifactTool)) return undefined;
+    if (input.toolCall.name === "artifact" || input.toolCall.name === "evidence") return undefined;
+    const evidenceTool = this.host.getTool("evidence") ?? this.host.getTool("artifact");
+    if (!evidenceTool || !this.isToolAvailable(evidenceTool)) return undefined;
     const rawBody = rawToolResultArtifactBody(input.result.content);
     const artifactAbort = new AbortController();
     const cleanupAbort = relayAbort(input.signal, artifactAbort);
@@ -962,7 +962,7 @@ export class SparkAgentLoop {
       throwIfSignalAborted(artifactAbort.signal);
       const recorded = await runWithTimeout(
         runWithAbort(
-          artifactTool.config.execute(
+          evidenceTool.config.execute(
             `internal-raw-output:${input.toolCall.id}`,
             {
               action: "record",
@@ -995,7 +995,7 @@ export class SparkAgentLoop {
         omittedChars: input.decision.omittedChars ?? 0,
         bodyChars: rawBody.bodyChars,
         recoveryPath,
-        readHint: `Full raw tool output saved as ${artifactRef}; recover with artifact({ action: "read", artifactRef: "${artifactRef}", maxChars: 20000 })`,
+        readHint: `Full raw tool output saved as ${artifactRef}; recover with evidence({ action: "read", artifactRef: "${artifactRef}", maxChars: 20000 })`,
       };
     } catch {
       // Raw recovery must never make the original tool call fail. The compacted
@@ -1531,7 +1531,7 @@ function rawToolResultRecoveryPath(artifactRef: string): SparkToolResultRawRecov
   return {
     kind: "artifact",
     artifactRef,
-    readTool: "artifact",
+    readTool: "evidence",
     readArgs: { action: "read", artifactRef, maxChars: 20_000 },
   };
 }

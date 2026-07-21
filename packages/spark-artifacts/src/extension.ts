@@ -30,12 +30,13 @@ import {
   type JsonValue,
   type Provenance,
 } from "./index.ts";
+import { registerProductArtifactTool } from "./product/extension.ts";
 
 export interface PiArtifactsExtensionApi {
   registerTool(config: ToolConfig): void;
 }
 
-type ArtifactAction =
+type EvidenceAction =
   | "record"
   | "list"
   | "read"
@@ -46,11 +47,11 @@ type ArtifactAction =
   | "supersede";
 type ArtifactListView = "ref-only" | "summary";
 
-const DEFAULT_ARTIFACT_READ_PREVIEW_CHARS = 1_500;
+const DEFAULT_ARTIFACT_READ_PREVIEW_CHARS = 800;
 const ARTIFACT_PRODUCER_DESCRIPTION =
-  "Artifact producer must be one of: spark, role, task, review, ask, cue, user. Do not use assistant; use task for parent-session work/evidence, review for reviewer verdicts, ask for ask results, cue for cue-shell execution output, or user for user-supplied material. Use producer=task with runRef/taskRef for execution evidence.";
+  "producer: spark | role | task | review | ask | cue | user. Prefer producer=task (+ runRef/taskRef) for execution notes; ask/review/cue when that capability owns the write.";
 const ARTIFACT_KIND_DESCRIPTION =
-  "Artifact kind is the role/domain-agnostic shape of the artifact, never who produced it (use producer) or its lifecycle (use status). One of: document (prose/markdown deliverable: charter, research, plan), record (structured JSON record of a decision/answer/event; origin via producer ask/review/task), trace (prunable execution output/transcript), knowledge (reusable learning entry).";
+  "Internal ledger kinds only: record (default; one JSON fact/decision/result), trace (prunable raw output), knowledge (learning capability), document (rare long prose). Not user-facing; product ISSUE/PR/preview use artifact.";
 
 class ToolCallText implements ToolRenderComponent {
   private readonly text: string;
@@ -66,17 +67,18 @@ class ToolCallText implements ToolRenderComponent {
   }
 }
 
-export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
+/** Register the agent-internal evidence ledger tool (`evidence`). */
+export function registerEvidenceTool(pi: PiArtifactsExtensionApi): void {
   pi.registerTool({
-    name: "artifact",
-    label: "Artifact",
+    name: "evidence",
+    label: "Evidence",
     description:
-      "Record, list, read, link, compact, or curate artifact/evidence records with strict provenance.",
+      "Agent-internal ledger only (not Cockpit/user UI). Compact provenance-backed notes for other tools and later turns. Product ISSUE/PR/preview use artifact.",
     promptGuidelines: [
-      "Use artifact as the canonical evidence/artifact tool; do not use package-specific artifact aliases.",
-      "Use action=list/read for inspection, action=record for bounded evidence writes, and action=compact only with dryRun reviewed first.",
-      "Use artifact curation to keep only essence artifacts visible by default: raw is noisy evidence, candidate is possible essence, curated is durable signal, archived/superseded is hidden unless explicitly requested.",
-      "Every recorded artifact needs concrete provenance; do not use artifacts as arbitrary scratch memory.",
+      "evidence is agent-private: never treat it as user-visible content; Cockpit shows only artifact (issue/pr/preview).",
+      "Prefer format=json and kind=record with a compact body: { summary: string, data?: object }. Use kind=trace for raw/prunable tool dumps.",
+      "Keep titles short; keep bodies small. Do not write long markdown essays into evidence.",
+      "Use list/read to recover prior notes; use record to append. promote/archive/supersede only when curating durable ask/learning contracts.",
       ARTIFACT_KIND_DESCRIPTION,
       ARTIFACT_PRODUCER_DESCRIPTION,
     ],
@@ -84,8 +86,13 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
       action: Type.String({
         description: "record | list | read | link | compact | promote | archive | supersede",
       }),
-      artifactRef: Type.Optional(Type.String({ description: "Artifact ref for read/link." })),
-      from: Type.Optional(Type.String({ description: "Source artifact ref for link." })),
+      artifactRef: Type.Optional(
+        Type.String({
+          description: "Evidence ref (evidence:… or legacy artifact:…) for read/link.",
+        }),
+      ),
+      evidenceRef: Type.Optional(Type.String({ description: "Alias of artifactRef." })),
+      from: Type.Optional(Type.String({ description: "Source evidence ref for link." })),
       to: Type.Optional(Type.String({ description: "Target ref for link." })),
       relation: Type.Optional(
         Type.String({
@@ -94,109 +101,101 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
       ),
       kind: Type.Optional(
         Type.String({
-          description: "Artifact kind filter or record kind. " + ARTIFACT_KIND_DESCRIPTION,
+          description:
+            "record | trace | knowledge | document. Default for new writes: record. " +
+            ARTIFACT_KIND_DESCRIPTION,
         }),
       ),
-      title: Type.Optional(Type.String({ description: "Artifact title for action=record." })),
-      format: Type.Optional(
-        Type.String({ description: "markdown | json | text for action=record." }),
+      title: Type.Optional(Type.String({ description: "Short title for action=record." })),
+      format: Type.Optional(Type.String({ description: "Prefer json; also markdown | text." })),
+      body: Type.Optional(
+        Type.Any({
+          description:
+            "Prefer compact JSON: { summary: string, data?: object }. Avoid large prose.",
+        }),
       ),
-      body: Type.Optional(Type.Any({ description: "Artifact body for action=record." })),
       curation: Type.Optional(
         Type.Any({
           description:
-            "Optional curation metadata for action=record. status: raw | candidate | curated | archived | superseded; retention: ephemeral | task | project | durable.",
+            "Optional. status: raw | candidate | curated | archived | superseded; retention: ephemeral | task | project | durable. Default raw/ephemeral for traces.",
         }),
       ),
       provenance: Type.Optional(
         Type.Any({
           description:
-            "Strict provenance object for action=record. Required shape includes provenance.producer. " +
+            "Required for record. Must include provenance.producer. " +
             ARTIFACT_PRODUCER_DESCRIPTION,
         }),
       ),
-      links: Type.Optional(
-        Type.Array(Type.Any({ description: "Typed artifact links for action=record." })),
-      ),
+      links: Type.Optional(Type.Array(Type.Any({ description: "Typed links for action=record." }))),
       producer: Type.Optional(
         Type.String({
-          description:
-            "Provenance producer filter for action=list. " + ARTIFACT_PRODUCER_DESCRIPTION,
+          description: "Filter for list. " + ARTIFACT_PRODUCER_DESCRIPTION,
         }),
       ),
       projectRef: Type.Optional(
         Type.String({
-          description:
-            "Project ref filter for action=list, or provenance shortcut for action=record.",
+          description: "Project ref filter or provenance shortcut.",
         }),
       ),
       taskRef: Type.Optional(
         Type.String({
-          description: "Task ref filter for action=list, or provenance shortcut for action=record.",
+          description: "Task ref filter or provenance shortcut.",
         }),
       ),
       roleRef: Type.Optional(
         Type.String({
-          description: "Role ref filter for action=list, or provenance shortcut for action=record.",
+          description: "Role ref filter or provenance shortcut.",
         }),
       ),
-      linkedTo: Type.Optional(Type.String({ description: "Target ref filter for action=list." })),
+      linkedTo: Type.Optional(Type.String({ description: "Target ref filter for list." })),
       curationStatus: Type.Optional(
-        Type.String({ description: "Curation status filter for action=list/promote." }),
+        Type.String({ description: "Curation status filter for list/promote." }),
       ),
       retention: Type.Optional(
         Type.String({
-          description: "Retention filter or update: ephemeral | task | project | durable.",
+          description: "ephemeral | task | project | durable",
         }),
       ),
       includeRaw: Type.Optional(
         Type.Boolean({
-          description: "Include artifacts marked raw in action=list. Default false.",
+          description: "Include raw entries in list. Default false.",
         }),
       ),
       includeArchived: Type.Optional(
         Type.Boolean({
-          description:
-            "Include artifacts marked archived/superseded in action=list. Default false.",
+          description: "Include archived/superseded in list. Default false.",
         }),
       ),
-      reason: Type.Optional(
-        Type.String({ description: "Curation reason for action=promote/archive/supersede." }),
-      ),
-      limit: Type.Optional(
-        Type.Number({ description: "Maximum rows for action=list. Default: 20." }),
-      ),
+      reason: Type.Optional(Type.String({ description: "Reason for promote/archive/supersede." })),
+      limit: Type.Optional(Type.Number({ description: "Max rows for list. Default 20." })),
       view: Type.Optional(
         Type.String({
-          description: "List view for action=list: ref-only | summary.",
+          description: "list view: ref-only (default) | summary",
         }),
       ),
       maxChars: Type.Optional(
         Type.Number({
-          description: "Maximum body chars for action=read. Default: 1500.",
+          description: "Max body chars for read. Default 800.",
         }),
       ),
-      dryRun: Type.Optional(
-        Type.Boolean({ description: "Preview action=compact. Default: true." }),
-      ),
+      dryRun: Type.Optional(Type.Boolean({ description: "Preview compact. Default true." })),
       inlineBodyThresholdBytes: Type.Optional(
-        Type.Number({ description: "Metadata compaction threshold for action=compact." }),
+        Type.Number({ description: "Compaction threshold." }),
       ),
-      bodyPreviewChars: Type.Optional(
-        Type.Number({ description: "Metadata preview chars for action=compact." }),
-      ),
+      bodyPreviewChars: Type.Optional(Type.Number({ description: "Compaction preview chars." })),
     }),
     renderCall(args, theme) {
-      return renderArtifactCall(args, theme);
+      return renderEvidenceCall(args, theme);
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const cwd = requireCwd(ctx, "artifact");
+      const cwd = requireCwd(ctx, "evidence");
       const store = defaultArtifactStore(cwd);
       const action = normalizeAction(params.action);
 
       if (action === "list") {
         const limit = normalizeLimit(params.limit, 20, "limit");
-        const view = normalizeArtifactListView(params.view);
+        const view = normalizeArtifactListView(params.view ?? "ref-only");
         const artifacts = await store.list({
           kind: normalizeOptionalArtifactKind(params.kind, "kind"),
           producer: normalizeOptionalProducer(params.producer, "producer"),
@@ -212,13 +211,13 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
         const newest = artifacts.slice().reverse();
         const visible = newest.slice(0, limit);
         const lines = [
-          `Artifacts: ${artifacts.length}${visible.length < artifacts.length ? ` (showing ${visible.length})` : ""}`,
+          `Evidence ledger: ${artifacts.length}${visible.length < artifacts.length ? ` (showing ${visible.length})` : ""}`,
           ...visible.map((artifact) => renderArtifactListLine(artifact, view)),
         ];
-        if (visible.length === 0) lines.push("- No artifacts.");
+        if (visible.length === 0) lines.push("- (empty)");
         if (visible.length < artifacts.length)
-          lines.push(`- … ${artifacts.length - visible.length} more artifact(s)`);
-        return toolResult("artifact", action, lines.join("\n"), {
+          lines.push(`- … ${artifacts.length - visible.length} more`);
+        return toolResult("evidence", action, lines.join("\n"), {
           count: artifacts.length,
           shown: visible.length,
           view,
@@ -227,7 +226,10 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
       }
 
       if (action === "read") {
-        const artifactRef = normalizeArtifactRef(params.artifactRef, "artifactRef");
+        const artifactRef = normalizeArtifactRef(
+          params.evidenceRef ?? params.artifactRef,
+          "artifactRef",
+        );
         const artifact = await store.get(artifactRef);
         const body = await store.getBody(artifactRef);
         const maxChars = normalizeLimit(
@@ -239,17 +241,14 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
         const truncated = renderedBody.length < body.length;
         const lines = [
           `${artifact.ref} [${artifact.kind}] ${artifact.title}`,
-          `format=${artifact.format} producer=${artifact.provenance.producer} curation=${renderCurationLabel(artifact)} updated=${artifact.updatedAt}`,
+          `producer=${artifact.provenance.producer} updated=${artifact.updatedAt}`,
           "",
           renderedBody,
         ];
         if (truncated) {
-          lines.push(
-            "",
-            `… truncated ${body.length - renderedBody.length} char(s); increase maxChars for a larger bounded preview`,
-          );
+          lines.push("", `… truncated ${body.length - renderedBody.length} char(s)`);
         }
-        return toolResult("artifact", action, lines.join("\n"), {
+        return toolResult("evidence", action, lines.join("\n"), {
           artifact: compactArtifactDetail(artifact),
           bodyChars: body.length,
           shownChars: renderedBody.length,
@@ -258,9 +257,9 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
       }
 
       if (action === "record") {
-        const kind = normalizeArtifactKind(params.kind, "kind");
+        const kind = normalizeArtifactKind(params.kind ?? "record", "kind");
         const title = normalizeRequiredString(params.title, "title");
-        const format = normalizeArtifactFormat(params.format, "format");
+        const format = normalizeArtifactFormat(params.format ?? "json", "format");
         const body = normalizeArtifactBody(params.body, format);
         const provenance = normalizeRecordProvenance(params);
         const links = normalizeArtifactLinks(params.links);
@@ -275,33 +274,39 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
           curation,
         });
         return toolResult(
-          "artifact",
+          "evidence",
           action,
-          `Recorded artifact ${artifact.ref} [${artifact.kind}] ${artifact.title}`,
+          `Recorded ${artifact.ref} [${artifact.kind}] ${artifact.title}`,
           {
             changed: true,
-            refs: { artifactRef: artifact.ref },
-            artifact: compactArtifactDetail(artifact),
+            refs: { artifactRef: artifact.ref, evidenceRef: artifact.ref },
+            artifact: compactArtifactSummaryDetail(artifact),
           },
         );
       }
 
       if (action === "link") {
-        const from = normalizeArtifactRef(params.from ?? params.artifactRef, "from");
+        const from = normalizeArtifactRef(
+          params.from ?? params.evidenceRef ?? params.artifactRef,
+          "from",
+        );
         const to = normalizeRequiredRef(params.to, "to") as ArtifactLink["to"];
         const relation = normalizeArtifactRelation(params.relation, "relation");
         const existing = await store.get(from);
         const links = [...existing.links.map(({ from: _from, ...link }) => link), { to, relation }];
         const artifact = await store.update(from, { links });
-        return toolResult("artifact", action, `Linked ${from} -> ${to} (${relation})`, {
+        return toolResult("evidence", action, `Linked ${from} -> ${to} (${relation})`, {
           changed: true,
-          refs: { artifactRef: artifact.ref, targetRef: to },
+          refs: { artifactRef: artifact.ref, evidenceRef: artifact.ref, targetRef: to },
           artifact: compactArtifactDetail(artifact),
         });
       }
 
       if (action === "promote") {
-        const artifactRef = normalizeArtifactRef(params.artifactRef, "artifactRef");
+        const artifactRef = normalizeArtifactRef(
+          params.evidenceRef ?? params.artifactRef,
+          "artifactRef",
+        );
         const existing = await store.get(artifactRef);
         const status =
           normalizeOptionalCurationStatus(params.curationStatus, "curationStatus") ?? "curated";
@@ -318,15 +323,18 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
           reason: normalizeRequiredString(params.reason, "reason"),
         };
         const artifact = await store.update(artifactRef, { curation });
-        return toolResult("artifact", action, `Promoted ${artifact.ref} to ${status}`, {
+        return toolResult("evidence", action, `Promoted ${artifact.ref} to ${status}`, {
           changed: true,
-          refs: { artifactRef: artifact.ref },
+          refs: { artifactRef: artifact.ref, evidenceRef: artifact.ref },
           artifact: compactArtifactDetail(artifact),
         });
       }
 
       if (action === "archive") {
-        const artifactRef = normalizeArtifactRef(params.artifactRef, "artifactRef");
+        const artifactRef = normalizeArtifactRef(
+          params.evidenceRef ?? params.artifactRef,
+          "artifactRef",
+        );
         const existing = await store.get(artifactRef);
         const curation: ArtifactCuration = {
           ...(existing.curation ?? {}),
@@ -338,15 +346,18 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
           reason: normalizeRequiredString(params.reason, "reason"),
         };
         const artifact = await store.update(artifactRef, { curation });
-        return toolResult("artifact", action, `Archived ${artifact.ref}`, {
+        return toolResult("evidence", action, `Archived ${artifact.ref}`, {
           changed: true,
-          refs: { artifactRef: artifact.ref },
+          refs: { artifactRef: artifact.ref, evidenceRef: artifact.ref },
           artifact: compactArtifactDetail(artifact),
         });
       }
 
       if (action === "supersede") {
-        const artifactRef = normalizeArtifactRef(params.artifactRef, "artifactRef");
+        const artifactRef = normalizeArtifactRef(
+          params.evidenceRef ?? params.artifactRef,
+          "artifactRef",
+        );
         const replacementRef = normalizeArtifactRef(params.to, "to");
         const existing = await store.get(artifactRef);
         const supersededBy = [...(existing.curation?.supersededBy ?? [])];
@@ -359,9 +370,13 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
           supersededBy,
         };
         const artifact = await store.update(artifactRef, { curation });
-        return toolResult("artifact", action, `Superseded ${artifact.ref} by ${replacementRef}`, {
+        return toolResult("evidence", action, `Superseded ${artifact.ref} by ${replacementRef}`, {
           changed: true,
-          refs: { artifactRef: artifact.ref, supersededBy: replacementRef },
+          refs: {
+            artifactRef: artifact.ref,
+            evidenceRef: artifact.ref,
+            supersededBy: replacementRef,
+          },
           artifact: compactArtifactDetail(artifact),
         });
       }
@@ -378,7 +393,7 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
         ),
       });
       const lines = [
-        `Artifact metadata compaction ${compacted.dryRun ? "preview" : "applied"}: scanned=${compacted.scanned} candidates=${compacted.candidates.length} compacted=${compacted.compacted}`,
+        `Evidence metadata compaction ${compacted.dryRun ? "preview" : "applied"}: scanned=${compacted.scanned} candidates=${compacted.candidates.length} compacted=${compacted.compacted}`,
         `metadataBytesBefore=${compacted.metadataBytesBefore} metadataBytesAfter=${compacted.metadataBytesAfter} reclaimableBytes=${compacted.reclaimableBytes}`,
       ];
       for (const candidate of compacted.candidates.slice(0, 20)) {
@@ -388,7 +403,7 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
       }
       if (compacted.candidates.length > 20)
         lines.push(`- … ${compacted.candidates.length - 20} more candidate(s)`);
-      return toolResult("artifact", action, lines.join("\n"), {
+      return toolResult("evidence", action, lines.join("\n"), {
         changed: !compacted.dryRun && compacted.compacted > 0,
         dryRun: compacted.dryRun,
         compaction: compacted,
@@ -397,29 +412,38 @@ export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
   });
 }
 
+export { registerProductArtifactTool } from "./product/extension.ts";
+
+export function registerPiArtifactTool(pi: PiArtifactsExtensionApi): void {
+  registerEvidenceTool(pi);
+  registerProductArtifactTool(pi);
+}
+
 export default function sparkArtifactsExtension(pi: ExtensionAPI): void {
   if (!pi.registerTool) throw new Error("spark-artifacts extension requires registerTool support");
   registerPiArtifactTool({ registerTool: (config) => pi.registerTool?.(config) });
 }
 
-function renderArtifactCall(
+function renderEvidenceCall(
   args: Record<string, unknown>,
   theme: ToolRenderTheme,
 ): ToolRenderComponent {
   const action = typeof args.action === "string" ? args.action : "?";
   const target =
-    typeof args.artifactRef === "string"
-      ? args.artifactRef
-      : typeof args.from === "string"
-        ? args.from
-        : undefined;
-  const text = ["artifact", `action=${action}`, target].filter(Boolean).join(" ");
+    typeof args.evidenceRef === "string"
+      ? args.evidenceRef
+      : typeof args.artifactRef === "string"
+        ? args.artifactRef
+        : typeof args.from === "string"
+          ? args.from
+          : undefined;
+  const text = ["evidence", `action=${action}`, target].filter(Boolean).join(" ");
   return new ToolCallText(theme.bold ? theme.bold(text) : text);
 }
 
 function toolResult(
-  tool: "artifact",
-  action: ArtifactAction,
+  tool: "evidence",
+  action: EvidenceAction,
   text: string,
   details: Record<string, unknown> = {},
 ): { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> } {
@@ -429,20 +453,20 @@ function toolResult(
   };
 }
 
+/** Lean agent-ledger detail (no blob paths / hashes — those are store internals). */
 function compactArtifactDetail(artifact: Artifact): Record<string, unknown> {
   return {
     ref: artifact.ref,
     kind: artifact.kind,
     title: artifact.title,
     format: artifact.format,
-    curation: artifact.curation,
-    provenance: artifact.provenance,
-    links: artifact.links,
-    hash: artifact.hash,
-    blobPath: artifact.blobPath,
+    producer: artifact.provenance.producer,
+    projectRef: artifact.provenance.projectRef,
+    taskRef: artifact.provenance.taskRef,
+    roleRef: artifact.provenance.roleRef,
+    runRef: artifact.provenance.runRef,
+    curation: artifact.curation?.status ?? "raw",
     bodySize: artifact.bodySize,
-    bodyTruncated: artifact.bodyTruncated,
-    createdAt: artifact.createdAt,
     updatedAt: artifact.updatedAt,
   };
 }
@@ -452,14 +476,10 @@ function compactArtifactSummaryDetail(artifact: Artifact): Record<string, unknow
     ref: artifact.ref,
     kind: artifact.kind,
     title: artifact.title,
-    format: artifact.format,
-    curation: artifact.curation,
     producer: artifact.provenance.producer,
     projectRef: artifact.provenance.projectRef,
     taskRef: artifact.provenance.taskRef,
-    roleRef: artifact.provenance.roleRef,
-    bodySize: artifact.bodySize,
-    bodyTruncated: artifact.bodyTruncated,
+    curation: artifact.curation?.status ?? "raw",
     updatedAt: artifact.updatedAt,
   };
 }
@@ -488,7 +508,7 @@ function formatValidValuesError(
   return hint ? `${message}. Hint: ${hint}` : message;
 }
 
-function normalizeAction(value: unknown): ArtifactAction {
+function normalizeAction(value: unknown): EvidenceAction {
   if (
     value === "record" ||
     value === "list" ||
@@ -502,12 +522,12 @@ function normalizeAction(value: unknown): ArtifactAction {
     return value;
   }
   throw new Error(
-    "artifact.action must be record, list, read, link, compact, promote, archive, or supersede",
+    "evidence.action must be record, list, read, link, compact, promote, archive, or supersede",
   );
 }
 
 function normalizeArtifactListView(value: unknown): ArtifactListView {
-  if (value === undefined || value === null) return "summary";
+  if (value === undefined || value === null) return "ref-only";
   if (value === "ref-only" || value === "summary") return value;
   throw new Error("view must be ref-only or summary");
 }
@@ -719,7 +739,9 @@ function normalizeArtifactLinks(value: unknown): Omit<ArtifactLink, "from">[] | 
 
 function normalizeArtifactRef(value: unknown, field: string): ArtifactRef {
   const ref = normalizeRequiredRef(value, field);
-  if (!ref.startsWith("artifact:")) throw new Error(`${field} must be an artifact ref`);
+  if (!ref.startsWith("artifact:") && !ref.startsWith("evidence:")) {
+    throw new Error(`${field} must be an evidence: or artifact: ref`);
+  }
   return ref as ArtifactRef;
 }
 

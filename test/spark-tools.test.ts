@@ -6484,7 +6484,7 @@ void test("canonical task project_use creates the first Spark project when graph
   }
 });
 
-void test("artifact tool lists and reads artifacts through the canonical facade", async () => {
+void test("evidence tool lists and reads evidence through the canonical facade", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-artifacts-"));
   try {
     await writeEmptySparkProject(dir);
@@ -6498,15 +6498,23 @@ void test("artifact tool lists and reads artifacts through the canonical facade"
     });
     const { tools } = registerSparkToolsForTest();
 
-    const listed = await executeSparkTool(tools, "artifact", ctx, {
+    const listed = await executeSparkTool(tools, "evidence", ctx, {
       action: "list",
       kind: "document",
     });
-    assert.match(toolText(listed), new RegExp(`${artifact.ref}.*Facade research note`));
+    assert.match(toolText(listed), new RegExp(`- ${artifact.ref}`));
+    assert.doesNotMatch(toolText(listed), /Facade research note/);
     assert.equal((listed.details as { count?: number }).count, 1);
-    assert.equal((listed.details as { view?: string }).view, "summary");
+    assert.equal((listed.details as { view?: string }).view, "ref-only");
 
-    const refOnly = await executeSparkTool(tools, "artifact", ctx, {
+    const summary = await executeSparkTool(tools, "evidence", ctx, {
+      action: "list",
+      kind: "document",
+      view: "summary",
+    });
+    assert.match(toolText(summary), new RegExp(`${artifact.ref}.*Facade research note`));
+
+    const refOnly = await executeSparkTool(tools, "evidence", ctx, {
       action: "list",
       kind: "document",
       view: "ref-only",
@@ -6514,12 +6522,15 @@ void test("artifact tool lists and reads artifacts through the canonical facade"
     assert.match(toolText(refOnly), new RegExp(`- ${artifact.ref}`));
     assert.doesNotMatch(toolText(refOnly), /Facade research note/);
 
-    const read = await executeSparkTool(tools, "artifact", ctx, {
+    const read = await executeSparkTool(tools, "evidence", ctx, {
       action: "read",
       artifactRef: artifact.ref,
     });
     assert.match(toolText(read), /Facade research note/);
-    assert.match(toolText(read), /artifact body/);
+    assert.match(
+      toolText(read),
+      /Recorded evidence|evidence body|Facade research note|artifact body/,
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -6540,16 +6551,16 @@ void test("artifact tool rejects invalid explicit filters", async () => {
     const { tools } = registerSparkToolsForTest();
 
     await assert.rejects(
-      () => executeSparkTool(tools, "artifact", ctx, { action: "list", kind: "note" }),
+      () => executeSparkTool(tools, "evidence", ctx, { action: "list", kind: "note" }),
       /kind must be a valid artifact kind; valid values: document, record, trace, knowledge; received: note/,
     );
     await assert.rejects(
-      () => executeSparkTool(tools, "artifact", ctx, { action: "list", producer: "agent" }),
+      () => executeSparkTool(tools, "evidence", ctx, { action: "list", producer: "agent" }),
       /producer must be a valid artifact producer; valid values: spark, role, task, review, ask, cue, user; received: agent.*producer=task.*runRef\/taskRef/,
     );
     await assert.rejects(
       () =>
-        executeSparkTool(tools, "artifact", ctx, {
+        executeSparkTool(tools, "evidence", ctx, {
           action: "record",
           kind: "plan-draft",
           title: "Draft",
@@ -6561,7 +6572,7 @@ void test("artifact tool rejects invalid explicit filters", async () => {
     );
     await assert.rejects(
       () =>
-        executeSparkTool(tools, "artifact", ctx, {
+        executeSparkTool(tools, "evidence", ctx, {
           action: "link",
           from: artifact.ref,
           to: "task:demo",
@@ -6570,25 +6581,25 @@ void test("artifact tool rejects invalid explicit filters", async () => {
       /relation must be a valid artifact link relation; valid values: parent, input, output, review-of, answer-to, trace-of, derived-from; received: review/,
     );
     await assert.rejects(
-      () => executeSparkTool(tools, "artifact", ctx, { action: "list", projectRef: "project:one" }),
+      () => executeSparkTool(tools, "evidence", ctx, { action: "list", projectRef: "project:one" }),
       /projectRef must be a proj: ref/,
     );
     await assert.rejects(
-      () => executeSparkTool(tools, "artifact", ctx, { action: "list", limit: 1.5 }),
+      () => executeSparkTool(tools, "evidence", ctx, { action: "list", limit: 1.5 }),
       /limit must be a positive integer/,
     );
     await assert.rejects(
-      () => executeSparkTool(tools, "artifact", ctx, { action: "list", view: "unsupported" }),
+      () => executeSparkTool(tools, "evidence", ctx, { action: "list", view: "unsupported" }),
       /view must be ref-only or summary/,
     );
 
     await assert.rejects(
       () =>
-        executeSparkTool(tools, "artifact", ctx, {
+        executeSparkTool(tools, "evidence", ctx, {
           action: "read",
           artifactRef: "note:one",
         }),
-      /artifactRef must be an artifact ref/,
+      /artifactRef must be an evidence: or artifact: ref/,
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -8695,13 +8706,13 @@ void test("structured status and list facades default to compact text summaries"
     assert.match(toolText(workflowList), /Workflows:/);
     assert.ok(workflowList.details);
 
-    const artifactList = await executeSparkTool(tools, "artifact", ctx, {
+    const artifactList = await executeSparkTool(tools, "evidence", ctx, {
       action: "list",
       limit: 5,
       view: "summary",
     });
     assertToolTextIsCompactSummary(artifactList);
-    assert.match(toolText(artifactList), /Artifacts:/);
+    assert.match(toolText(artifactList), /Evidence ledger:/);
     assert.ok(artifactList.details);
 
     const learningList = await executeSparkTool(tools, "learning", ctx, {
@@ -12594,12 +12605,14 @@ void test("impl_state role_run_artifact_compact apply writes replacement summary
     assert.ok(after.transcriptRetention?.exportPath);
     assert.equal(existsSync(join(dir, after.transcriptRetention.exportPath)), true);
 
-    const fetched = await executeSparkTool(tools, "artifact", ctx, {
+    const fetched = await executeSparkTool(tools, "evidence", ctx, {
       action: "read",
       artifactRef: roleRun.ref,
+      maxChars: 4_000,
     });
     assert.match(toolText(fetched), /Historical role-run transcript worker-large-apply/);
-    assert.match(toolText(fetched), /transcriptRetention/);
+    // Retention metadata lives on the store record, not in the compact body text agents read.
+    assert.ok(after.transcriptRetention?.fullTranscriptDeletedAt);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

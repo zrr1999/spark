@@ -6,6 +6,7 @@
   "author": "zrr1999",
   "files": [
     "src/**/*.ts",
+    "!src/**/*.test.ts",
     "skills/**/*",
     "README.md"
   ],

@@ -49,7 +49,7 @@ export interface SparkToolResultRawRecoveryDecision {
 export interface SparkToolResultRawRecoveryPath {
   kind: "artifact";
   artifactRef: string;
-  readTool: "artifact";
+  readTool: "artifact" | "evidence";
   readArgs: {
     action: "read";
     artifactRef: string;

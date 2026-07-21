@@ -19,20 +19,24 @@ const labels: SessionInspectorLabels = {
   ariaLabel: "SESSION_INSPECTOR",
   tabs: {
     summary: "SUMMARY_TAB",
+    artifacts: "ARTIFACTS_TAB",
     changes: "CHANGES_TAB",
     tasks: "TASKS_TAB",
-    mailbox: "MAILBOX_TAB",
+    messages: "MESSAGES_TAB",
   },
   summaryHeading: "SUMMARY_HEADING",
+  artifactsHeading: "ARTIFACTS_HEADING",
   tasksHeading: "TASKS_HEADING",
   changesHeading: "CHANGES_HEADING",
-  mailboxHeading: "MAILBOX_HEADING",
+  messagesHeading: "MESSAGES_HEADING",
   noTasksTitle: "NO_TASKS",
   noTasksBody: "NO_TASKS_BODY",
+  noArtifactsTitle: "NO_ARTIFACTS",
+  noArtifactsBody: "NO_ARTIFACTS_BODY",
   noChangesTitle: "NO_CHANGES",
   noChangesBody: "NO_CHANGES_BODY",
-  noMailboxTitle: "NO_MAILBOX",
-  noMailboxBody: "NO_MAILBOX_BODY",
+  noMessagesTitle: "NO_MESSAGES",
+  noMessagesBody: "NO_MESSAGES_BODY",
   noSessionTodoTitle: "NO_SESSION_TODO",
   noSessionTodoBody: "NO_SESSION_TODO_BODY",
   noActiveSessionTodo: "NO_ACTIVE_SESSION_TODO",
@@ -43,17 +47,17 @@ const labels: SessionInspectorLabels = {
   openSessionTodo: "OPEN_SESSION_TODO",
   sessionTodoPending: "TODO_WAITING",
   sessionTodoInProgress: "TODO_IN_PROGRESS",
-  mailFrom: "FROM",
-  mailRequest: "REQUEST",
-  mailQuestion: "QUESTION",
-  mailNotification: "NOTIFICATION",
-  mailUnread: "UNREAD",
-  mailRead: "READ",
-  mailAcknowledged: "ACKNOWLEDGED",
-  mailDeliveryPending: "DELIVERY_PENDING",
-  mailDeliveryDelivered: "DELIVERY_DELIVERED",
-  mailDeliveryFailed: "DELIVERY_FAILED",
-  mailDeliveryUncertain: "DELIVERY_UNCERTAIN",
+  messageFrom: "FROM",
+  messageRequest: "REQUEST",
+  messageQuestion: "QUESTION",
+  messageNotification: "NOTIFICATION",
+  messageUnread: "UNREAD",
+  messageRead: "READ",
+  messageAcknowledged: "ACKNOWLEDGED",
+  messageDeliveryPending: "DELIVERY_PENDING",
+  messageDeliveryDelivered: "DELIVERY_DELIVERED",
+  messageDeliveryFailed: "DELIVERY_FAILED",
+  messageDeliveryUncertain: "DELIVERY_UNCERTAIN",
   sessionId: "SESSION_ID",
   sessionStatus: "SESSION_STATUS",
   workingDirectory: "WORKING_DIRECTORY",
@@ -67,9 +71,10 @@ function workbenchView(sessionTodo: SessionWorkbenchSessionTodo | null): Session
   return {
     runs: [],
     tasks: [],
+    artifacts: [],
     changes: [],
     evidence: [],
-    mailbox: [],
+    messages: [],
     sessionTodo,
     context: {
       sessionId: "sess-inspector",
@@ -90,7 +95,7 @@ describe("SessionInspector component contract", () => {
     expect(() => compile(source, { filename: componentPath, generate: "server" })).not.toThrow();
   });
 
-  it("renders the four focused coding-session tabs with TODO pinned above", () => {
+  it("renders the focused coding-session tabs with TODO pinned above", () => {
     const source = readFileSync(componentPath, "utf8");
 
     expect(source).toContain('role="tablist"');
@@ -99,8 +104,10 @@ describe("SessionInspector component contract", () => {
     expect(source).toContain('id: "changes"');
     expect(source).not.toContain('id: "todos"');
     expect(source).toContain('id: "tasks"');
-    expect(source).toContain('id: "mailbox"');
+    expect(source).toContain('id: "artifacts"');
+    expect(source).toContain('id: "messages"');
     expect(source).toContain('class="session-todo-rail"');
+    expect(source).not.toContain('id: "mailbox"');
     expect(source).not.toContain('id: "evidence"');
     expect(source).not.toContain('id: "context"');
     expect(source).not.toContain("view.runs");
@@ -110,14 +117,17 @@ describe("SessionInspector component contract", () => {
     expect(source).toContain("view.tasks");
     expect(source).toContain("view.changes");
     expect(source).toContain("view.sessionTodo");
-    expect(source).toContain("view.mailbox");
+    expect(source).toContain("view.artifacts");
+    expect(source).toContain("view.messages");
     expect(source).toContain("view.context");
     expect(source).toContain("labels.noTasksTitle");
     expect(source).toContain("labels.noTasksBody");
+    expect(source).toContain("labels.noArtifactsTitle");
+    expect(source).toContain("labels.noArtifactsBody");
     expect(source).toContain("labels.noChangesTitle");
     expect(source).toContain("labels.noChangesBody");
-    expect(source).toContain("labels.noMailboxTitle");
-    expect(source).toContain("labels.noMailboxBody");
+    expect(source).toContain("labels.noMessagesTitle");
+    expect(source).toContain("labels.noMessagesBody");
     expect(source).toContain("justify-content: center");
   });
 
@@ -194,9 +204,9 @@ describe("SessionInspector component contract", () => {
     expect(body).not.toContain('href="#message:');
   });
 
-  it("renders channel delivery separately from mailbox read state", () => {
+  it("renders channel delivery separately from message read state", () => {
     const view = workbenchView(null);
-    view.mailbox = [
+    view.messages = [
       {
         id: "mail:uncertain",
         fromSessionId: "sess-worker",
@@ -222,14 +232,14 @@ describe("SessionInspector component contract", () => {
         view,
         labels,
         instanceId: "inspector-mail-delivery",
-        initialTab: "mailbox",
+        initialTab: "messages",
       },
     }).body;
 
     expect(body).toContain("DELIVERY_UNCERTAIN");
     expect(body).toContain("UNREAD");
-    expect(body).toContain("mail-delivery-status uncertain");
-    expect(body).toContain("mail-read-status unread");
+    expect(body).toContain("message-delivery-status uncertain");
+    expect(body).toContain("message-read-status unread");
   });
 
   it("names tabs, panels, and headings from the inspector instance", () => {

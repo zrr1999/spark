@@ -3,6 +3,7 @@ import {
   buildConsoleNavGroups,
   currentConsolePageLabel,
   isConsoleNavItemActive,
+  isGlobalConsolePath,
   type ConsoleNavGroupLabels,
   type ConsoleNavLabels,
 } from "./console-nav";
@@ -13,6 +14,7 @@ const nav: ConsoleNavLabels = {
   channels: "Message platforms",
   workspaceSettings: "Basics",
   registration: "Runtime registration",
+  webAccess: "Browser access",
   createWorkspace: "Create workspace",
 };
 
@@ -23,10 +25,11 @@ const groups: ConsoleNavGroupLabels = {
 };
 
 describe("console nav", () => {
-  it("builds console groups with workspace items when a workspace is active", () => {
+  it("keeps control-plane items global and workspace connection under workspace", () => {
     const result = buildConsoleNavGroups({
       activeWorkspacePath: "/local",
       hasActiveWorkspace: true,
+      includeWorkspaceNav: true,
       nav,
       groups,
     });
@@ -38,7 +41,7 @@ describe("console nav", () => {
     ]);
     expect(result[0]?.items.map((item) => item.href)).toEqual([
       "/workspaces/new",
-      "/local/settings/registration",
+      "/settings/access",
     ]);
     expect(result[1]?.items.map((item) => item.href)).toEqual([
       "/settings/models",
@@ -47,18 +50,30 @@ describe("console nav", () => {
     expect(result[2]?.items.map((item) => item.href)).toEqual([
       "/local/settings",
       "/local/settings/channels",
+      "/local/settings/registration",
     ]);
   });
 
-  it("omits workspace group and registration when no workspace is active", () => {
+  it("hides workspace nav on global control-plane pages", () => {
     const result = buildConsoleNavGroups({
-      activeWorkspacePath: "",
-      hasActiveWorkspace: false,
+      activeWorkspacePath: "/local",
+      hasActiveWorkspace: true,
+      includeWorkspaceNav: false,
       nav,
       groups,
     });
     expect(result.map((group) => group.id)).toEqual(["cockpit", "daemon"]);
-    expect(result[0]?.items.map((item) => item.href)).toEqual(["/workspaces/new"]);
+    expect(result[0]?.items.map((item) => item.href)).toEqual([
+      "/workspaces/new",
+      "/settings/access",
+    ]);
+  });
+
+  it("identifies global console paths", () => {
+    expect(isGlobalConsolePath("/settings/access")).toBe(true);
+    expect(isGlobalConsolePath("/settings/invocations")).toBe(true);
+    expect(isGlobalConsolePath("/workspaces/new")).toBe(true);
+    expect(isGlobalConsolePath("/local/settings/registration")).toBe(false);
   });
 
   it("keeps Cockpit, daemon, and workspace active states distinct", () => {
@@ -67,6 +82,9 @@ describe("console nav", () => {
     );
     expect(isConsoleNavItemActive({ pathname: "/settings/models", href: "/workspaces/new" })).toBe(
       false,
+    );
+    expect(isConsoleNavItemActive({ pathname: "/settings/access", href: "/settings/access" })).toBe(
+      true,
     );
     expect(isConsoleNavItemActive({ pathname: "/settings/models", href: "/settings/models" })).toBe(
       true,
@@ -95,6 +113,7 @@ describe("console nav", () => {
     expect(currentConsolePageLabel({ pathname: "/local/settings/channels", nav })).toBe(
       "Message platforms",
     );
+    expect(currentConsolePageLabel({ pathname: "/settings/access", nav })).toBe("Browser access");
     expect(currentConsolePageLabel({ pathname: "/settings/models", nav })).toBe(
       "Models & providers",
     );

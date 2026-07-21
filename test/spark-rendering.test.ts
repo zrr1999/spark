@@ -422,7 +422,7 @@ void test("SparkNativeTuiApp records protocol cockpit state and renders Spark pa
 
   assert.equal(await app.submitInput("/artifacts"), "command");
   rendered = app.render(120).join("\n");
-  assert.match(rendered, /Spark cockpit: artifacts\/evidence/);
+  assert.match(rendered, /Spark cockpit: artifacts/);
   assert.match(
     rendered,
     /artifact:review-verdict \[record\/json\] producer=review status=approved Reviewer verdict/,

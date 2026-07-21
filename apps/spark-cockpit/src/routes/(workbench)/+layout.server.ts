@@ -17,6 +17,7 @@ import {
 import type { LayoutServerLoad } from "./$types";
 
 export const load: LayoutServerLoad = async ({ cookies, locals, url }) => {
+  const isWorkspaceDirectory = url.pathname === "/";
   const selectedSessionId = workbenchSessionIdFromPath(url.pathname);
   const sessionsPath = workbenchSessionsPathFromPathname(url.pathname);
   const projectedSelectedSession = selectedSessionId
@@ -34,12 +35,14 @@ export const load: LayoutServerLoad = async ({ cookies, locals, url }) => {
     authorizedWorkspaceId: locals?.workspaceId ?? null,
   });
   const activeWorkspaceId = layout.activeWorkspace?.id ?? null;
-  const managedSessions = activeWorkspaceId
-    ? await listManagedSessionsForCockpit({
-        scope: { kind: "workspace", workspaceId: activeWorkspaceId },
-        workspaceId: activeWorkspaceId,
-      })
-    : { available: true, controlAvailable: false, sessions: [] };
+  // Home is a workspace picker: skip remote session listing so `/` stays local-SQLite fast.
+  const managedSessions =
+    !isWorkspaceDirectory && activeWorkspaceId
+      ? await listManagedSessionsForCockpit({
+          scope: { kind: "workspace", workspaceId: activeWorkspaceId },
+          workspaceId: activeWorkspaceId,
+        })
+      : { available: true, controlAvailable: false, sessions: [] };
   const selectedSession = selectedSessionId
     ? (managedSessions.sessions.find((session) => session.sessionId === selectedSessionId) ??
       (managedSessions.controlAvailable ? null : projectedSelectedSession))

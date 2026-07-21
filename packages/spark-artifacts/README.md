@@ -1,20 +1,31 @@
 # spark-artifacts
 
-Reusable artifact/evidence storage for Spark capability hosts.
+Product artifacts (`issue` / `pr` / `preview`) for users, plus an **agent-internal evidence ledger** that is not shown in Cockpit.
 
-`@zendev-lab/spark-artifacts` owns content-addressed artifact metadata, blobs, provenance, links, the canonical `artifact` tool, and the safe `spark.ui.v1` Generative UI parser used by Cockpit artifact rendering.
+## Two surfaces
 
-Import Generative UI types and parsing from `@zendev-lab/spark-artifacts/generative-ui`.
+| Surface | Tool | Kinds | User-visible? | On-disk |
+|---|---|---|---|---|
+| **Product artifacts** | `artifact` | `issue`, `pr`, `preview` | Yes (Cockpit `/artifacts`) | `.spark/artifacts/` |
+| **Internal evidence** | `evidence` | `record` (default), `trace`, `knowledge`, `document` | No | `.spark/artifacts/` (compat); `defaultEvidenceStore` can use `.spark/evidence/` |
 
-Prefer constructing `ArtifactStore` with an explicit `rootDir` owned by the host package. The exported `defaultArtifactStore(cwd)` reads `.spark/artifacts/`.
+- ISSUE/PR sync from GitHub (`gh`) or GitLab (`glab`).
+- PR create prefers a git worktree under `.spark/worktrees/pr-…`.
+- Preview artifacts are continuously updated (version + progress).
 
-## Curation lifecycle
+### Evidence (agent-only)
 
-Artifacts are cheap to record but expensive to keep in the default working set. New writes receive curation metadata so callers can separate noisy evidence from durable essence:
+Prefer compact JSON notes:
 
-- `raw` — high-volume evidence/traces/review records; hidden by the `artifact` tool's default list.
-- `candidate` — possible essence that may be promoted after synthesis.
-- `curated` — durable signal worth keeping visible by default.
-- `archived` / `superseded` — retained for provenance but hidden unless requested.
+```json
+{ "summary": "one-line fact", "data": { } }
+```
 
-Retention hints (`ephemeral`, `task`, `project`, `durable`) describe how long an artifact should matter. Use `artifact({ action: "promote" | "archive" | "supersede", ... })` to keep the artifact set focused without deleting provenance.
+Do not write long markdown essays into evidence. Use `artifact` for anything the user should see.
+
+Import Generative UI from `@zendev-lab/spark-artifacts/generative-ui`.
+Import product helpers from `@zendev-lab/spark-artifacts/product` or the package root.
+
+- `defaultProductArtifactStore(cwd)` → `.spark/artifacts/` (product kinds only)
+- `defaultEvidenceStore(cwd)` → `.spark/evidence/` (+ legacy `.spark/artifacts/` reads)
+- `defaultArtifactStore(cwd)` / `evidence` tool → historical evidence root `.spark/artifacts/` (compat with ask/runtime)

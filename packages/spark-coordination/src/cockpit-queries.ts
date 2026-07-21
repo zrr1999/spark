@@ -6,6 +6,18 @@ import { loadWorkspaceServerControl } from "./projection-services.ts";
 import { listRuntimeEnrollmentTokens } from "./runtime-registration.ts";
 import { loadWorkspaceByRouteId } from "./routing.ts";
 import { hashSecret } from "./security.ts";
+import {
+  isReservedWorkbenchPathSegment,
+  resolveWorkspaceDirectoryDisplayName,
+} from "./workspace-identity.ts";
+
+export {
+  isReservedWorkbenchPathSegment,
+  reservedWorkbenchPathSegments,
+  resolveWorkspaceDirectoryDisplayName,
+  syncWorkspaceIdentityFromLocalPath,
+  workspaceIdentityFromLocalPath,
+} from "./workspace-identity.ts";
 
 export type RuntimeConnectionStatus = "online" | "offline" | "draining" | "disabled";
 export type RuntimeWorkspaceStatus =
@@ -19,6 +31,8 @@ export interface WorkbenchWorkspaceSummary {
   id: string;
   slug: string;
   name: string;
+  /** Active owner-binding directory; null until a daemon directory is connected. */
+  localPath: string | null;
 }
 
 export interface WorkspaceFullRow extends WorkbenchWorkspaceSummary {
@@ -90,11 +104,18 @@ export function loadWorkbenchLayout(
 ) {
   const workspaces = db
     .prepare(
-      `SELECT id, slug, name
-       FROM workspaces
-       WHERE status = 'active'
-         AND (? IS NULL OR id = ?)
-       ORDER BY updated_at DESC, created_at DESC`,
+      `SELECT w.id,
+              w.slug,
+              w.name,
+              rwb.local_path AS localPath
+       FROM workspaces w
+       LEFT JOIN workspace_owner_bindings wob
+         ON wob.workspace_id = w.id AND wob.ended_at IS NULL
+       LEFT JOIN runtime_workspace_bindings rwb
+         ON rwb.id = wob.runtime_workspace_binding_id
+       WHERE w.status = 'active'
+         AND (? IS NULL OR w.id = ?)
+       ORDER BY w.updated_at DESC, w.created_at DESC`,
     )
     .all(
       options.authorizedWorkspaceId ?? null,
@@ -116,8 +137,27 @@ export function loadWorkbenchLayout(
       (options.authorizedWorkspaceId ? null : loadWorkspaceByRouteId(db, preferredSlug)) ??
       null)
     : null;
-  const activeWorkspace = pathWorkspace ?? preferredWorkspace ?? workspaces[0] ?? null;
+  const activeWorkspace =
+    workbenchWorkspaceSummary(pathWorkspace, workspaces) ??
+    workbenchWorkspaceSummary(preferredWorkspace, workspaces) ??
+    workspaces[0] ??
+    null;
   return { activeWorkspace, workspaces };
+}
+
+function workbenchWorkspaceSummary(
+  workspace: { id: string; slug: string; name: string; localPath?: string | null } | null,
+  workspaces: WorkbenchWorkspaceSummary[],
+): WorkbenchWorkspaceSummary | null {
+  if (!workspace) return null;
+  const fromList = workspaces.find((item) => item.id === workspace.id);
+  if (fromList) return fromList;
+  return {
+    id: workspace.id,
+    slug: workspace.slug,
+    name: workspace.name,
+    localPath: workspace.localPath ?? null,
+  };
 }
 
 export function loadWorkbenchHome(
@@ -299,8 +339,22 @@ export function getCurrentUserIdBySessionToken(db: DatabaseSync, sessionToken: s
 }
 
 export function loadArtifactsPage(db: DatabaseSync, workspaceRouteId: string) {
+  return loadArtifactKindPage(db, workspaceRouteId, ["issue", "pr", "preview"]);
+}
+
+/** Internal evidence projection (document/record/knowledge); not a user-facing Cockpit page. */
+export function loadEvidencePage(db: DatabaseSync, workspaceRouteId: string) {
+  return loadArtifactKindPage(db, workspaceRouteId, ["document", "record", "knowledge"]);
+}
+
+function loadArtifactKindPage(
+  db: DatabaseSync,
+  workspaceRouteId: string,
+  kinds: readonly string[],
+) {
   const workspace = loadWorkspaceByRouteId(db, workspaceRouteId);
   if (!workspace) return null;
+  const placeholders = kinds.map(() => "?").join(", ");
   const artifacts = db
     .prepare(
       `SELECT a.id,
@@ -337,10 +391,11 @@ export function loadArtifactsPage(db: DatabaseSync, workspaceRouteId: string) {
          GROUP BY artifact_id
        ) cache ON cache.artifact_id = a.id
        WHERE a.workspace_id = ?
+         AND a.kind IN (${placeholders})
        GROUP BY a.id
        ORDER BY a.created_at DESC`,
     )
-    .all(workspace.id) as Array<{
+    .all(workspace.id, ...kinds) as Array<{
     id: string;
     scope: string;
     kind: string;
@@ -828,16 +883,21 @@ export function loadWorkspaceSettings(db: DatabaseSync, workspaceRouteId: string
   if (!routeWorkspace) return null;
   return db
     .prepare(
-      `SELECT id,
-              slug,
-              name,
-              description,
-              status,
-              settings_json AS settingsJson,
-              created_at AS createdAt,
-              updated_at AS updatedAt
-       FROM workspaces
-       WHERE id = ?
+      `SELECT w.id,
+              w.slug,
+              w.name,
+              w.description,
+              w.status,
+              w.settings_json AS settingsJson,
+              w.created_at AS createdAt,
+              w.updated_at AS updatedAt,
+              rwb.local_path AS localPath
+       FROM workspaces w
+       LEFT JOIN workspace_owner_bindings wob
+         ON wob.workspace_id = w.id AND wob.ended_at IS NULL
+       LEFT JOIN runtime_workspace_bindings rwb
+         ON rwb.id = wob.runtime_workspace_binding_id
+       WHERE w.id = ?
        LIMIT 1`,
     )
     .get(routeWorkspace.id) as
@@ -850,6 +910,7 @@ export function loadWorkspaceSettings(db: DatabaseSync, workspaceRouteId: string
         settingsJson: string;
         createdAt: string;
         updatedAt: string;
+        localPath: string | null;
       }
     | undefined;
 }
@@ -870,6 +931,11 @@ export function updateWorkspaceSettings(
     )
     .get(input.slug, input.workspaceId) as { id: string } | undefined;
   if (duplicate) return "duplicate_slug";
+  const now = new Date().toISOString();
+  const displayName = resolveWorkspaceDirectoryDisplayName({
+    localPath: readActiveOwnerLocalPath(db, input.workspaceId),
+    displayName: input.name,
+  });
   db.prepare(
     `UPDATE workspaces
      SET name = ?,
@@ -877,7 +943,18 @@ export function updateWorkspaceSettings(
          description = ?,
          updated_at = ?
      WHERE id = ?`,
-  ).run(input.name, input.slug, input.description, new Date().toISOString(), input.workspaceId);
+  ).run(displayName, input.slug, input.description, now, input.workspaceId);
+  db.prepare(
+    `UPDATE runtime_workspace_bindings
+     SET display_name = ?,
+         updated_at = ?
+     WHERE id = (
+       SELECT runtime_workspace_binding_id
+       FROM workspace_owner_bindings
+       WHERE workspace_id = ? AND ended_at IS NULL
+       LIMIT 1
+     )`,
+  ).run(displayName, now, input.workspaceId);
   return "ok";
 }
 
@@ -901,15 +978,20 @@ export function loadWorkspaceRegistration(db: DatabaseSync, workspaceRouteId: st
   if (!routeWorkspace) return null;
   return db
     .prepare(
-      `SELECT id,
-              slug,
-              name,
-              description,
-              status,
-              created_at AS createdAt,
-              updated_at AS updatedAt
-       FROM workspaces
-       WHERE id = ?
+      `SELECT w.id,
+              w.slug,
+              w.name,
+              w.description,
+              w.status,
+              w.created_at AS createdAt,
+              w.updated_at AS updatedAt,
+              rwb.local_path AS localPath
+       FROM workspaces w
+       LEFT JOIN workspace_owner_bindings wob
+         ON wob.workspace_id = w.id AND wob.ended_at IS NULL
+       LEFT JOIN runtime_workspace_bindings rwb
+         ON rwb.id = wob.runtime_workspace_binding_id
+       WHERE w.id = ?
        LIMIT 1`,
     )
     .get(routeWorkspace.id) as
@@ -921,6 +1003,7 @@ export function loadWorkspaceRegistration(db: DatabaseSync, workspaceRouteId: st
         status: "active" | "archived";
         createdAt: string;
         updatedAt: string;
+        localPath: string | null;
       }
     | undefined;
 }
@@ -1198,24 +1281,18 @@ function findOnlyAvailableWorkspaceBindingForRuntime(
   return rows.length === 1 ? (rows[0] ?? null) : null;
 }
 
-export const reservedWorkbenchPathSegments = [
-  "api",
-  "setup",
-  "logout",
-  "workspaces",
-  "settings",
-  "sessions",
-  "agents",
-  "projects",
-  "inbox",
-  "repos",
-  "artifacts",
-] as const;
-
-const reservedTopLevelSegments = new Set<string>(reservedWorkbenchPathSegments);
-
-export function isReservedWorkbenchPathSegment(segment: string): boolean {
-  return reservedTopLevelSegments.has(segment.trim().toLowerCase());
+function readActiveOwnerLocalPath(db: DatabaseSync, workspaceId: string): string | null {
+  const row = db
+    .prepare(
+      `SELECT rwb.local_path AS localPath
+       FROM workspace_owner_bindings wob
+       JOIN runtime_workspace_bindings rwb
+         ON rwb.id = wob.runtime_workspace_binding_id
+       WHERE wob.workspace_id = ? AND wob.ended_at IS NULL
+       LIMIT 1`,
+    )
+    .get(workspaceId) as { localPath: string | null } | undefined;
+  return row?.localPath ?? null;
 }
 
 function workspaceIdFromPath(pathname: string) {

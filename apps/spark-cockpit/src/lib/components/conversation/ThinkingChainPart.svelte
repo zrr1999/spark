@@ -4,7 +4,6 @@
   import ToolCallPart from "./ToolCallPart.svelte";
   import {
     isVisibleThinkingChain,
-    thinkingChainHasTerminalIssue,
     thinkingChainNeedsFailureSummary,
     visibleThinkingChainSteps,
   } from "./thinking-chain-view";
@@ -23,10 +22,20 @@
 
   let { state: chainState, steps, labels, statusLabel, active = false }: Props = $props();
   let visibleSteps = $derived(visibleThinkingChainSteps(steps));
-  let hasTerminalIssue = $derived(thinkingChainHasTerminalIssue(steps));
   let needsFailureSummary = $derived(thinkingChainNeedsFailureSummary(steps));
   let shouldRender = $derived(isVisibleThinkingChain(chainState, steps));
   let expanded = $state(false);
+  let userToggled = $state(false);
+
+  // Cursor/Codex: open while the turn is executing, fold shut when it finishes.
+  $effect(() => {
+    if (chainState === "streaming" || active) {
+      expanded = true;
+      userToggled = false;
+      return;
+    }
+    if (!userToggled) expanded = false;
+  });
 
   function stepStatus(step: ConversationChainStep): "complete" | "active" | "pending" {
     if (step.type === "reasoning" || step.type === "commentary") {
@@ -46,6 +55,7 @@
   function toggleExpanded(event: MouseEvent) {
     event.preventDefault();
     expanded = !expanded;
+    userToggled = true;
   }
 </script>
 
@@ -58,19 +68,13 @@
       <span class="chain-label">
         {chainState === "streaming" ? labels.chainStreaming : labels.chain}
       </span>
-      {#if hasTerminalIssue}
-        <span class="chain-issue">{statusLabel("failed")}</span>
-      {/if}
       <span class="disclosure" aria-hidden="true"><Icon name="chevron-down" size={11} /></span>
     </summary>
     {#if expanded}
       <div class="chain-steps">
         {#each visibleSteps as step, index (`${step.type}:${index}:${step.type === "tool" ? step.callId : "r"}`)}
           {@const presentationStatus = stepStatus(step)}
-          <div
-            class="chain-step {step.type} {presentationStatus}"
-            style={`--chain-step-delay: ${index * 90}ms`}
-          >
+          <div class="chain-step {step.type} {presentationStatus}">
             <span class="step-rail" aria-hidden="true">
               <span class="step-icon"><Icon name={stepIcon(step)} size={13} stroke={2} /></span>
             </span>
@@ -177,12 +181,6 @@
     white-space: nowrap;
   }
 
-  .chain-issue {
-    color: var(--color-danger-strong, var(--color-danger));
-    flex: 0 0 auto;
-    font-size: 10px;
-  }
-
   details[open] .disclosure {
     transform: rotate(180deg);
   }
@@ -199,11 +197,6 @@
     gap: 9px;
     grid-template-columns: 18px minmax(0, 1fr);
     min-width: 0;
-  }
-
-  details[open] .chain-step {
-    animation: chain-step-reveal 360ms ease-out both;
-    animation-delay: var(--chain-step-delay);
   }
 
   .step-rail {
@@ -278,22 +271,10 @@
     }
   }
 
-  @keyframes chain-step-reveal {
-    from {
-      opacity: 0;
-      transform: translateY(8px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
   @media (prefers-reduced-motion: reduce) {
     .chain-icon.streaming,
     .chain-step.active .step-icon,
-    .disclosure,
-    details[open] .chain-step {
+    .disclosure {
       animation: none;
       transition: none;
     }

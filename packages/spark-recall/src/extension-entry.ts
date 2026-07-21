@@ -1,3 +1,4 @@
-import piRecallExtension from "./extension.ts";
+import sparkMemoryExtension from "@zendev-lab/spark-memory/extension";
 
-export default piRecallExtension;
+/** @deprecated Load `@zendev-lab/spark-memory` instead; recall is registered there. */
+export default sparkMemoryExtension;

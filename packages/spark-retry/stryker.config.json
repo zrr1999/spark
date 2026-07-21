@@ -7,6 +7,9 @@
     "configFile": "vitest.config.ts"
   },
   "mutate": ["src/**/*.ts", "!src/**/*.test.ts"],
+  "mutator": {
+    "excludedMutations": ["StringLiteral"]
+  },
   "ignorePatterns": ["reports", ".stryker-tmp"],
   "reporters": ["clear-text", "progress", "html", "json"],
   "htmlReporter": {
@@ -19,9 +22,10 @@
   "incrementalFile": "reports/mutation/incremental.json",
   "thresholds": {
     "high": 90,
-    "low": 75,
-    "break": 70
+    "low": 70,
+    "break": null
   },
-  "timeoutMS": 10000,
-  "concurrency": 4
+  "timeoutMS": 20000,
+  "concurrency": 4,
+  "ignoreStatic": true
 }

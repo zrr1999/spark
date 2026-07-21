@@ -1,12 +1,10 @@
-import { loadConversationSummaries } from "$lib/server/conversation-summaries";
-import { getDatabase } from "$lib/server/db";
-import { listManagedSessionsForCockpit } from "$lib/server/managed-sessions";
 import { loadShellWorkspaceLayout } from "$lib/server/shell-layout";
-import { workspaceSessionsForWorkbench } from "$lib/workbench-session-scope";
+import { isGlobalConsolePath } from "$lib/console-nav";
 import type { LayoutServerLoad } from "./$types";
 
-export const load: LayoutServerLoad = async ({ cookies, locals, url }) => {
-  const managedSessions = await listManagedSessionsForCockpit();
+export const load: LayoutServerLoad = ({ cookies, locals, url }) => {
+  // Console settings pages are local-SQLite / daemon-RPC only. Skip remote
+  // session listing so /settings/invocations and siblings stay fast.
   const layout = loadShellWorkspaceLayout({
     cookies,
     pathname: url.pathname,
@@ -16,10 +14,8 @@ export const load: LayoutServerLoad = async ({ cookies, locals, url }) => {
   });
   return {
     ...layout,
-    sessions: workspaceSessionsForWorkbench(
-      loadConversationSummaries(getDatabase(), managedSessions.sessions),
-      layout.activeWorkspace?.id,
-    ),
-    sessionsAvailable: managedSessions.available,
+    sessions: [],
+    sessionsAvailable: true,
+    isGlobalConsole: isGlobalConsolePath(url.pathname),
   };
 };

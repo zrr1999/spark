@@ -47,6 +47,7 @@ export function loadPendingWorkbenchAsk(
       id: detail.id,
       workspaceId: detail.workspaceId,
       workspaceSlug: detail.workspaceSlug,
+      sessionId: detail.sessionId ?? item.sessionId ?? null,
       title: detail.title,
       prompt: detail.prompt,
       questions: parseHumanQuestions(detail.questionsJson),

@@ -34,6 +34,8 @@ const columns = [
   { id: "other", label: "Other" },
 ] as const;
 
+const PRODUCT_ARTIFACT_KINDS = new Set(["issue", "pr", "preview"]);
+
 export function buildProjectTaskBoard(input: {
   tasks: readonly ProjectTaskBoardTask[];
   artifacts: readonly ProjectTaskBoardArtifact[];
@@ -45,8 +47,10 @@ export function buildProjectTaskBoard(input: {
     const columnId = columns.some((column) => column.id === task.statusGroup)
       ? task.statusGroup
       : "other";
+    // Only product artifacts (issue/pr/preview) are user-visible; internal evidence stays off the board.
     const evidenceArtifacts = [...(task.outputArtifactIds ?? []), ...(task.inputArtifactIds ?? [])]
       .flatMap((artifactId) => artifactById.get(artifactId) ?? [])
+      .filter((artifact) => PRODUCT_ARTIFACT_KINDS.has(artifact.kind))
       .slice(0, 3);
     const cards = grouped.get(columnId) ?? [];
     cards.push({

@@ -35,6 +35,10 @@ import {
 } from "./runtime-control.ts";
 import { hashSecret } from "./security.ts";
 import {
+  resolveWorkspaceDirectoryDisplayName,
+  syncWorkspaceIdentityFromLocalPath,
+} from "./workspace-identity.ts";
+import {
   recordRuntimeEphemeralSecretProjection,
   recordRuntimeModelChannelProjection,
   registerRuntimeEphemeralSecretDispatcher,
@@ -997,20 +1001,28 @@ function handleWorkspaceSnapshot(
 
   context.db.exec("BEGIN");
   try {
+    const binding = context.db
+      .prepare(
+        `SELECT local_path AS localPath
+         FROM runtime_workspace_bindings
+         WHERE id = ? AND runtime_id = ?
+         LIMIT 1`,
+      )
+      .get(runtimeWorkspaceBindingId, context.runtimeId) as
+      | { localPath: string | null }
+      | undefined;
+    const displayName = resolveWorkspaceDirectoryDisplayName({
+      localPath: binding?.localPath,
+      displayName: payload.displayName,
+    });
     context.db
       .prepare(
         `UPDATE runtime_workspace_bindings
          SET display_name = ?, status = ?, last_snapshot_at = ?, updated_at = ?
          WHERE id = ? AND runtime_id = ?`,
       )
-      .run(
-        payload.displayName,
-        payload.status,
-        now,
-        now,
-        runtimeWorkspaceBindingId,
-        context.runtimeId,
-      );
+      .run(displayName, payload.status, now, now, runtimeWorkspaceBindingId, context.runtimeId);
+    syncWorkspaceIdentityFromLocalPath(context.db, workspaceId, binding?.localPath, now);
 
     appendEvent(context.db, {
       workspaceId,
@@ -1041,7 +1053,7 @@ function upsertWorkspaceBindings(
   }
 
   const findExisting = db.prepare(
-    `SELECT id
+    `SELECT id, local_path AS localPath
      FROM runtime_workspace_bindings
      WHERE runtime_id = ? AND (local_workspace_key = ? OR id = ?)
      ORDER BY CASE WHEN local_workspace_key = ? THEN 0 ELSE 1 END
@@ -1063,6 +1075,12 @@ function upsertWorkspaceBindings(
          updated_at = ?
      WHERE id = ? AND runtime_id = ?`,
   );
+  const ownerWorkspace = db.prepare(
+    `SELECT workspace_id AS workspaceId
+     FROM workspace_owner_bindings
+     WHERE runtime_workspace_binding_id = ? AND ended_at IS NULL
+     LIMIT 1`,
+  );
 
   for (const binding of bindings) {
     const existing = findExisting.get(
@@ -1070,12 +1088,18 @@ function upsertWorkspaceBindings(
       binding.localWorkspaceKey,
       binding.bindingId,
       binding.localWorkspaceKey,
-    ) as { id: string } | undefined;
+    ) as { id: string; localPath: string | null } | undefined;
+    const localPath = binding.localPath ?? existing?.localPath ?? null;
+    const displayName = resolveWorkspaceDirectoryDisplayName({
+      localPath,
+      displayName: binding.displayName,
+    });
+    const bindingId = existing?.id ?? binding.bindingId;
     if (existing) {
       update.run(
         binding.localWorkspaceKey,
         binding.localPath ?? null,
-        binding.displayName,
+        displayName,
         binding.status,
         JSON.stringify(binding.capabilities),
         JSON.stringify(binding.diagnostics),
@@ -1083,21 +1107,24 @@ function upsertWorkspaceBindings(
         existing.id,
         runtimeId,
       );
-      continue;
+    } else {
+      insert.run(
+        binding.bindingId,
+        runtimeId,
+        binding.localWorkspaceKey,
+        binding.localPath ?? null,
+        displayName,
+        binding.status,
+        JSON.stringify(binding.capabilities),
+        JSON.stringify(binding.diagnostics),
+        now,
+        now,
+      );
     }
-
-    insert.run(
-      binding.bindingId,
-      runtimeId,
-      binding.localWorkspaceKey,
-      binding.localPath ?? null,
-      binding.displayName,
-      binding.status,
-      JSON.stringify(binding.capabilities),
-      JSON.stringify(binding.diagnostics),
-      now,
-      now,
-    );
+    const owner = ownerWorkspace.get(bindingId) as { workspaceId: string } | undefined;
+    if (owner) {
+      syncWorkspaceIdentityFromLocalPath(db, owner.workspaceId, localPath, now);
+    }
   }
 }
 

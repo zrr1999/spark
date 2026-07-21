@@ -953,7 +953,7 @@ describe("session timeline", () => {
     ]);
   });
 
-  it("merges an interaction request and response without calling an answer approved", () => {
+  it("merges an ask interaction request and response as an ask tool part", () => {
     const timeline = buildSessionTimeline({
       fallbackTimestamp: "2026-07-10T00:00:00.000Z",
       messages: [],
@@ -985,12 +985,17 @@ describe("session timeline", () => {
     expect(timeline).toHaveLength(1);
     expect(timeline[0]?.parts).toEqual([
       {
-        type: "approval",
-        requestId: "ask-1",
-        title: "Choose the next step",
-        state: "resolved",
-        kind: "askFlow",
-        summary: "Continue with the focused fix?",
+        type: "chain",
+        state: "complete",
+        steps: [
+          {
+            type: "tool",
+            callId: "ask-1",
+            name: "ask",
+            state: "completed",
+            summary: "Operator response recorded.",
+          },
+        ],
       },
     ]);
   });

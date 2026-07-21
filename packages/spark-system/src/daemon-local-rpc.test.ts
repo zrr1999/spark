@@ -196,6 +196,48 @@ describe("Spark daemon local RPC transport", () => {
       await fixture.close();
     }
   });
+
+  it("honors an already-aborted signal and invalid JSON payloads", async () => {
+    const fixture = await rpcFixture((_request, socket) => {
+      socket.end("{not-json}\n");
+    });
+    const aborted = new AbortController();
+    aborted.abort();
+
+    try {
+      const abortedError = await requestSparkDaemonLocalRpcWire(
+        { id: "aborted", method: "daemon.status" },
+        { socketPath: fixture.socketPath, signal: aborted.signal },
+      ).catch((cause: unknown) => cause);
+      expect(abortedError).toMatchObject({ name: "AbortError" });
+
+      const invalid = await requestSparkDaemonLocalRpcWire(
+        { id: "invalid-json", method: "daemon.status" },
+        { socketPath: fixture.socketPath },
+      ).catch((cause: unknown) => cause);
+      expect(invalid).toBeInstanceOf(Error);
+      expect(String(invalid)).toMatch(/JSON|Unexpected|property/i);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("rejects mismatched response ids that are not unknown parse failures", async () => {
+    const fixture = await rpcFixture((_request, socket) => {
+      socket.end(`${JSON.stringify({ id: "other-id", ok: true, result: "nope" })}\n`);
+    });
+
+    try {
+      const error = await requestSparkDaemonLocalRpcWire(
+        { id: "expected-id", method: "daemon.status" },
+        { socketPath: fixture.socketPath },
+      ).catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(SparkDaemonLocalRpcError);
+      expect(String(error)).toMatch(/id/i);
+    } finally {
+      await fixture.close();
+    }
+  });
 });
 
 async function rpcFixture(

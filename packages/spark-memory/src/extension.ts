@@ -22,6 +22,8 @@ import {
   type SparkMemoryScope,
   type SparkMemoryStorePaths,
 } from "./index.ts";
+import { registerPiRecallTool } from "./recall-extension.ts";
+import type { RecallStorePaths } from "./recall-store.ts";
 
 export type SparkMemoryAction =
   | "remember"
@@ -51,6 +53,7 @@ export interface SparkMemoryExtensionApi {
 export interface SparkMemoryToolOptions {
   storePaths?: SparkMemoryStorePaths;
   compatMemoryDir?: string;
+  recallStorePaths?: RecallStorePaths;
 }
 
 type LegacyMemoryTarget = "long_term" | "daily" | "scratchpad" | "list";
@@ -88,6 +91,7 @@ export function registerSparkMemoryTool(
   registerIfAvailable(pi, scratchpadTool(options));
   registerIfAvailable(pi, memorySearchTool(options));
   registerIfAvailable(pi, memoryStatusTool(options));
+  registerPiRecallTool(pi, { storePaths: options.recallStorePaths });
 }
 
 type RegisteredToolInspection =

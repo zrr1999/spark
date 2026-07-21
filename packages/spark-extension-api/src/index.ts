@@ -555,6 +555,7 @@ export type RefKind =
   | "task"
   | "role"
   | "artifact"
+  | "evidence"
   | "run"
   | "review"
   | "ask"
@@ -566,7 +567,9 @@ export type SparkRef = Ref<"spark">;
 export type ProjectRef = Ref<"proj">;
 export type TaskRef = Ref<"task">;
 export type RoleRef = Ref<"role">;
-export type ArtifactRef = Ref<"artifact">;
+/** Stable artifact identity; evidence writes may use `evidence:` while remaining artifact-shaped. */
+export type ArtifactRef = Ref<"artifact"> | Ref<"evidence">;
+export type EvidenceRef = Ref<"evidence">;
 export type RunRef = Ref<"run">;
 export type ReviewRef = Ref<"review">;
 export type AskRef = Ref<"ask">;
@@ -578,6 +581,7 @@ export type AnyRef =
   | TaskRef
   | RoleRef
   | ArtifactRef
+  | EvidenceRef
   | RunRef
   | ReviewRef
   | AskRef

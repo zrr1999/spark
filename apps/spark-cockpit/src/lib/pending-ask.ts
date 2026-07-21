@@ -9,6 +9,8 @@ export interface PendingWorkbenchAsk {
   id: string;
   workspaceId: string;
   workspaceSlug: string;
+  /** Session that owns this human ask wait; null when not session-scoped. */
+  sessionId: string | null;
   title: string;
   prompt: string;
   questions: HumanQuestion[];

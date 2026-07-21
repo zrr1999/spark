@@ -6,6 +6,7 @@ export interface ConsoleNavLabels {
   channels: string;
   workspaceSettings: string;
   registration: string;
+  webAccess: string;
   createWorkspace: string;
 }
 
@@ -27,36 +28,41 @@ export interface ConsoleNavGroup {
   items: ConsoleNavItem[];
 }
 
+/** Global control-plane / daemon settings — not tied to an active workspace. */
+export function isGlobalConsolePath(pathname: string): boolean {
+  if (pathname === "/workspaces/new" || pathname.startsWith("/workspaces/new/")) return true;
+  if (pathname === "/settings" || pathname.startsWith("/settings/")) return true;
+  return false;
+}
+
 export function buildConsoleNavGroups(input: {
   activeWorkspacePath: string;
   hasActiveWorkspace: boolean;
+  includeWorkspaceNav?: boolean;
   nav: ConsoleNavLabels;
   groups: ConsoleNavGroupLabels;
 }): ConsoleNavGroup[] {
   const workspaceRoute = (suffix: string) =>
     input.activeWorkspacePath ? `${input.activeWorkspacePath}${suffix}` : "";
-
-  const cockpitItems: ConsoleNavItem[] = [
-    {
-      href: "/workspaces/new",
-      label: input.nav.createWorkspace,
-      icon: "plus",
-    },
-  ];
-
-  if (input.hasActiveWorkspace && input.activeWorkspacePath) {
-    cockpitItems.push({
-      href: workspaceRoute("/settings/registration"),
-      label: input.nav.registration,
-      icon: "play",
-    });
-  }
+  const includeWorkspaceNav =
+    input.includeWorkspaceNav ?? (input.hasActiveWorkspace && Boolean(input.activeWorkspacePath));
 
   const groups: ConsoleNavGroup[] = [
     {
       id: "cockpit",
       label: input.groups.cockpit,
-      items: cockpitItems,
+      items: [
+        {
+          href: "/workspaces/new",
+          label: input.nav.createWorkspace,
+          icon: "plus",
+        },
+        {
+          href: "/settings/access",
+          label: input.nav.webAccess,
+          icon: "user",
+        },
+      ],
     },
     {
       id: "daemon",
@@ -72,7 +78,7 @@ export function buildConsoleNavGroups(input: {
     },
   ];
 
-  if (input.hasActiveWorkspace && input.activeWorkspacePath) {
+  if (includeWorkspaceNav && input.hasActiveWorkspace && input.activeWorkspacePath) {
     groups.push({
       id: "workspace",
       label: input.groups.workspace,
@@ -87,6 +93,11 @@ export function buildConsoleNavGroups(input: {
           label: input.nav.channels,
           icon: "activity",
         },
+        {
+          href: workspaceRoute("/settings/registration"),
+          label: input.nav.registration,
+          icon: "play",
+        },
       ],
     });
   }
@@ -99,6 +110,10 @@ export function isConsoleNavItemActive(input: { pathname: string; href: string }
 
   if (input.href === "/settings") {
     return input.pathname === "/settings";
+  }
+
+  if (input.href === "/settings/access") {
+    return input.pathname === input.href || input.pathname.startsWith(`${input.href}/`);
   }
 
   if (input.href.endsWith("/settings/channels") || input.href === "/settings/channels") {
@@ -139,6 +154,7 @@ export function currentConsolePageLabel(input: {
   const top = segments[0] ?? "";
 
   if (top === "settings") {
+    if (segments[1] === "access") return input.nav.webAccess;
     if (segments[1] === "channels") return input.nav.channels;
     if (segments[1] === "models") return input.nav.modelsProviders;
     if (segments[1] === "invocations") return input.nav.invocationDiagnostics;

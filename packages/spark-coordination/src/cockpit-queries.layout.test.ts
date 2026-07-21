@@ -8,11 +8,14 @@ import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
 import {
   isReservedWorkbenchPathSegment,
   loadArtifactDetailPage,
+  loadArtifactsPage,
+  loadEvidencePage,
   loadInboxDetailPage,
   loadInboxPage,
   loadWorkbenchLayout,
   loadWorkspaceDashboard,
   loadWorkspaceRegistrationPage,
+  loadWorkspaceSettings,
   resolvePendingWorkspaceBinding,
   resolvePendingWorkspaceRuntimeState,
   updateWorkspaceSettings,
@@ -164,6 +167,7 @@ describe("loadWorkspaceRegistrationPage", () => {
 
     expect(page?.runnerBindings).toHaveLength(1);
     expect(page?.runnerBindings[0]?.localPath).toBe("/Users/test/workspaces/spore");
+    expect(page?.workspace.localPath).toBe("/Users/test/workspaces/spore");
     db.close();
   });
 });
@@ -229,9 +233,106 @@ describe("workspace settings slug guards", () => {
     ).toBe("duplicate_slug");
     db.close();
   });
+
+  it("exposes owner-binding localPath and keeps name aligned with the directory", () => {
+    const { db, workspace } = setupWorkspace("spore");
+    const settings = loadWorkspaceSettings(db, "spore");
+    expect(settings?.localPath).toBe("/Users/test/workspaces/spore");
+
+    const layout = loadWorkbenchLayout(db, "/spore/settings");
+    expect(layout.activeWorkspace).toMatchObject({
+      slug: "spore",
+      name: "spore",
+      localPath: "/Users/test/workspaces/spore",
+    });
+
+    expect(
+      updateWorkspaceSettings(db, {
+        workspaceId: workspace.id,
+        name: "renamed-away-from-path",
+        slug: "spore",
+        description: null,
+      }),
+    ).toBe("ok");
+
+    const updated = loadWorkspaceSettings(db, "spore");
+    expect(updated).toMatchObject({
+      name: "spore",
+      localPath: "/Users/test/workspaces/spore",
+    });
+    const binding = db
+      .prepare(
+        `SELECT display_name AS displayName
+         FROM runtime_workspace_bindings
+         WHERE id = (
+           SELECT runtime_workspace_binding_id
+           FROM workspace_owner_bindings
+           WHERE workspace_id = ? AND ended_at IS NULL
+           LIMIT 1
+         )`,
+      )
+      .get(workspace.id) as { displayName: string };
+    expect(binding.displayName).toBe("spore");
+    db.close();
+  });
 });
 
 describe("artifact conversation provenance", () => {
+  it("lists only issue/pr/preview on the workspace artifacts page", () => {
+    const { db, workspace, bindingId } = setupWorkspace("spore");
+    const now = "2026-07-09T04:00:00.000Z";
+    db.prepare(
+      `INSERT INTO artifacts
+        (id, workspace_id, project_id, scope, kind, title, format, source,
+         runtime_workspace_binding_id, invocation_id, human_request_id,
+         content_ref_json, provenance_json, created_at, updated_at)
+       VALUES
+         ('art_trace', ?, NULL, 'workspace', 'trace', 'Run dump', 'json',
+          'runtime', ?, NULL, NULL, '{}', '{}', ?, ?),
+         ('art_doc', ?, NULL, 'workspace', 'document', 'Plan', 'markdown',
+          'runtime', ?, NULL, NULL, '{}', '{}', ?, ?),
+         ('art_preview', ?, NULL, 'workspace', 'preview', 'UI draft', 'markdown',
+          'runtime', ?, NULL, NULL, '{}', '{}', ?, ?)`,
+    ).run(
+      workspace.id,
+      bindingId,
+      now,
+      now,
+      workspace.id,
+      bindingId,
+      now,
+      now,
+      workspace.id,
+      bindingId,
+      now,
+      now,
+    );
+
+    const page = loadArtifactsPage(db, "spore");
+    expect(page?.artifacts.map((artifact) => artifact.id)).toEqual(["art_preview"]);
+    db.close();
+  });
+
+  it("lists document/record/knowledge via the internal evidence query (not a user page)", () => {
+    const { db, workspace, bindingId } = setupWorkspace("spore");
+    const now = "2026-07-09T04:00:00.000Z";
+    db.prepare(
+      `INSERT INTO artifacts
+        (id, workspace_id, project_id, scope, kind, title, format, source,
+         runtime_workspace_binding_id, invocation_id, human_request_id,
+         content_ref_json, provenance_json, created_at, updated_at)
+       VALUES
+         ('art_trace', ?, NULL, 'workspace', 'trace', 'Run dump', 'json',
+          'runtime', ?, NULL, NULL, '{}', '{}', ?, ?),
+         ('art_doc', ?, NULL, 'workspace', 'document', 'Plan', 'markdown',
+          'runtime', ?, NULL, NULL, '{}', '{}', ?, ?)`,
+    ).run(workspace.id, bindingId, now, now, workspace.id, bindingId, now, now);
+
+    const page = loadEvidencePage(db, "spore");
+    expect(page?.artifacts.map((artifact) => artifact.id)).toEqual(["art_doc"]);
+    db.close();
+  });
+
   it("links an invocation artifact back to its owning conversation", () => {
     const { db, workspace, bindingId } = setupWorkspace("spore");
     const sessionId = "sess_artifact_context";

@@ -225,7 +225,7 @@ describe("session workbench projection", () => {
     expect(view.sessionTodo).toBeNull();
   });
 
-  it("projects session mail newest-first with durable read state", () => {
+  it("projects session messages newest-first with durable read state", () => {
     const view = buildSessionWorkbenchView({
       session: session({
         mailbox: [
@@ -263,7 +263,7 @@ describe("session workbench projection", () => {
       }),
     });
 
-    expect(view.mailbox).toMatchObject([
+    expect(view.messages).toMatchObject([
       {
         id: "mail:newer",
         status: "unread",
@@ -298,6 +298,32 @@ describe("session workbench projection", () => {
 
     expect(view.changes.map((artifact) => artifact.id)).toEqual(["canonical-diff"]);
     expect(view.evidence.map((artifact) => artifact.id)).toEqual(["looks-like-diff"]);
+  });
+
+  it("puts issue/pr/preview into session artifacts, not evidence", () => {
+    const view = buildSessionWorkbenchView({
+      session: session({
+        artifacts: [
+          {
+            ref: "artifact:pr-1",
+            title: "Open PR",
+            kind: "pr",
+            format: "json",
+            preview: '{"number":1}',
+          },
+          {
+            ref: "artifact:note-1",
+            title: "Internal note",
+            kind: "record",
+            format: "json",
+            preview: '{"summary":"hidden"}',
+          },
+        ],
+      }),
+    });
+
+    expect(view.artifacts.map((artifact) => artifact.id)).toEqual(["pr-1"]);
+    expect(view.evidence.map((artifact) => artifact.id)).toEqual(["note-1"]);
   });
 
   it("maps canonical activity artifact kinds without inferring Git state from prose", () => {

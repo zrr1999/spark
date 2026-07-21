@@ -668,4 +668,72 @@ describe("SparkDaemonHumanInteractionBroker", () => {
       db.close();
     }
   });
+
+  it("projects toolApproval as a blocking ask and maps approve answers back", async () => {
+    const db = new DatabaseSync(":memory:");
+    migrateSparkDaemonDatabase(db);
+    seedHumanRoute(db);
+    const waits = new SparkDaemonHumanWaitRegistry(db);
+    const broker = new SparkDaemonHumanInteractionBroker({
+      db,
+      waits,
+      getRuntimeId: primaryRuntimeId,
+    });
+
+    try {
+      const pendingResponse = broker.interact(
+        parseSparkInteractionRequest({
+          requestId: "tool-approval-1",
+          kind: "toolApproval",
+          title: "Approve tool: cue_exec",
+          toolName: "cue_exec",
+          toolCallId: "call-1",
+          reason: "Shell command requires approval",
+          approveLabel: "Approve",
+          rejectLabel: "Reject",
+          source: "daemon",
+          metadata: { source: "test" },
+        }),
+        {
+          ...interactionContext(),
+          sessionSource: "tui",
+        },
+      );
+
+      await vi.waitFor(() => expect(waits.listPending()).toHaveLength(1));
+      const wait = waits.listPending()[0]!;
+      expect(wait).toMatchObject({
+        interactionRequestId: "tool-approval-1",
+        delivery: "blocking",
+        kind: "ask_user",
+        title: "Approve tool: cue_exec",
+      });
+      expect(wait.context).toMatchObject({
+        interactionKind: "toolApproval",
+        toolApproval: { toolName: "cue_exec", toolCallId: "call-1" },
+      });
+
+      await expect(
+        broker.respond(wait, {
+          status: "answered",
+          answers: {
+            approval: {
+              values: ["approve"],
+              labels: ["Approve"],
+            },
+          },
+          responseArtifactRefs: [],
+        }),
+      ).resolves.toMatchObject({ outcome: "accepted", returnedToTool: true });
+
+      await expect(pendingResponse).resolves.toMatchObject({
+        kind: "toolApproval",
+        requestId: "tool-approval-1",
+        status: "answered",
+        approved: true,
+      });
+    } finally {
+      db.close();
+    }
+  });
 });

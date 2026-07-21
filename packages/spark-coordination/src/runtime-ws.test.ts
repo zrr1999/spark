@@ -392,7 +392,7 @@ describe("runtime WebSocket handling", () => {
       display_name: string;
       localPath: string | null;
     };
-    expect(binding.display_name).toBe("Local default");
+    expect(binding.display_name).toBe("local-default");
     expect(binding.localPath).toBe("/Users/test/workspaces/local-default");
     db.close();
   });
@@ -448,7 +448,7 @@ describe("runtime WebSocket handling", () => {
     expect(bindingRows).toEqual([
       {
         id: workspaceBindingId,
-        displayName: "Local default after reconnect",
+        displayName: "local-default",
         localPath: "/Users/test/workspaces/local-default",
       },
     ]);
@@ -1635,7 +1635,7 @@ describe("runtime WebSocket handling", () => {
       title: string;
     };
 
-    expect(binding.displayName).toBe("Local default renamed");
+    expect(binding.displayName).toBe("local-default");
     expect(binding.lastSnapshotAt).not.toBeNull();
     expect(inboxCount.count).toBe(1);
     expect(taskCount.count).toBe(1);

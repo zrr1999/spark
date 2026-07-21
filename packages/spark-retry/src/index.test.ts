@@ -19,9 +19,15 @@ describe("cappedExponentialCeiling", () => {
 
   it("rejects invalid timing inputs", () => {
     expect(() => cappedExponentialCeiling(Number.NaN, 100, 5_000)).toThrow(RangeError);
+    expect(() => cappedExponentialCeiling(1, -1, 5_000)).toThrow(
+      /baseMs must be a finite non-negative number/u,
+    );
+    expect(() => cappedExponentialCeiling(1, 100, -5_000)).toThrow(
+      /maxMs must be a finite non-negative number/u,
+    );
     expect(() =>
       cappedExponentialCeiling(1, 100, 5_000, { exponentCap: Number.POSITIVE_INFINITY }),
-    ).toThrow(RangeError);
+    ).toThrow(/options\.exponentCap must be a finite non-negative number/u);
   });
 });
 
@@ -35,8 +41,8 @@ describe("scheduledCeiling", () => {
     expect(scheduledCeiling(10, ceilings)).toBe(5_000);
   });
 
-  it("rejects an empty schedule", () => {
-    expect(() => scheduledCeiling(1, [])).toThrow(RangeError);
+  it("rejects an empty schedule with a specific error", () => {
+    expect(() => scheduledCeiling(1, [])).toThrow(/ceilings must contain at least one value/u);
   });
 });
 
@@ -51,6 +57,8 @@ describe("equalJitter", () => {
 
   it("supports a zero ceiling and rejects a non-finite sample", () => {
     expect(equalJitter(0, () => 0.5)).toBe(0);
-    expect(() => equalJitter(100, () => Number.NaN)).toThrow(RangeError);
+    expect(() => equalJitter(100, () => Number.NaN)).toThrow(
+      /random\(\) must return a finite number/u,
+    );
   });
 });

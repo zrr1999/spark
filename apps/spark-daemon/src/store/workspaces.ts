@@ -286,6 +286,52 @@ export function registerWorkspace(
   });
 }
 
+/**
+ * Point an existing daemon workspace at another Cockpit origin (prefer / temporary borrow).
+ * Does not register or relocate credentials — the target profile must already exist.
+ */
+export function rebindWorkspaceServerUrl(
+  db: DatabaseSync,
+  options: { workspaceId: string; serverUrl: string; now?: string },
+): { workspace: SparkDaemonWorkspace; previousServerUrl: string } {
+  const workspace = getWorkspaceById(db, options.workspaceId);
+  if (!workspace) {
+    throw new Error(`Unknown workspace: ${options.workspaceId}`);
+  }
+  const serverUrl = options.serverUrl;
+  const previousServerUrl = workspace.serverUrl;
+  if (previousServerUrl === serverUrl) {
+    return { workspace, previousServerUrl };
+  }
+  assertWorkspaceSlotAvailable(
+    db,
+    serverUrl,
+    workspace.localPath,
+    workspace.localWorkspaceKey,
+    workspace.id,
+  );
+  const now = options.now ?? new Date().toISOString();
+  return withSparkDaemonTransaction(db, () => {
+    db.prepare(
+      `UPDATE workspaces
+       SET server_url = ?,
+           updated_at = ?
+       WHERE id = ?`,
+    ).run(serverUrl, now, workspace.id);
+    const serverId = ensureSparkDaemonServer(db, serverUrl, now);
+    db.prepare(
+      `UPDATE daemon_workspaces
+       SET server_id = ?
+       WHERE id = ?`,
+    ).run(serverId, workspace.id);
+    const updated = getWorkspaceById(db, workspace.id);
+    if (!updated) {
+      throw new Error(`Workspace ${options.workspaceId} disappeared during uplink prefer.`);
+    }
+    return { workspace: updated, previousServerUrl };
+  });
+}
+
 export function ensureLocalWorkspace(
   db: DatabaseSync,
   options: EnsureLocalWorkspaceOptions,
@@ -768,28 +814,11 @@ export function getWorkspaceByPath(
   db: DatabaseSync,
   localPath: string,
 ): SparkDaemonWorkspace | null {
-  const row = db
-    .prepare(
-      `SELECT id,
-              server_url AS serverUrl,
-              local_workspace_key AS localWorkspaceKey,
-              display_name AS displayName,
-              local_path AS localPath,
-              status,
-              capabilities_json AS capabilitiesJson,
-              diagnostics_json AS diagnosticsJson,
-              profile_source_kind AS profileSourceKind,
-              profile_ref AS profileRef,
-              profile_commit AS profileCommit,
-              profile_imported_at AS profileImportedAt,
-              updated_at AS updatedAt
-       FROM workspaces
-       WHERE local_path = ?
-       ORDER BY CASE WHEN server_url = '' THEN 0 ELSE 1 END, updated_at DESC
-       LIMIT 1`,
-    )
-    .get(normalizeLocalPath(localPath)) as WorkspaceRow | undefined;
-  return row ? mapWorkspaceRow(row, db) : null;
+  const matches = listWorkspaces(db).filter(
+    (workspace) => workspace.localPath === normalizeLocalPath(localPath),
+  );
+  if (matches.length === 0) return null;
+  return pickPreferredSamePathWorkspace(matches);
 }
 
 function assertWorkspaceSlotAvailable(
@@ -1093,6 +1122,10 @@ export function reconcileWorkspaces(
   db: DatabaseSync,
   now = new Date().toISOString(),
 ): SparkDaemonWorkspace[] {
+  // Legacy installs could leave one local-path row per server_url. Daemon identity
+  // is path-unique; collapse duplicates before status repair so CLI/list surfaces
+  // one workspace per checkout.
+  consolidateSamePathWorkspacesUnlocked(db, now);
   const workspaces = listWorkspaces(db);
   const update = db.prepare(
     `UPDATE workspaces
@@ -1117,6 +1150,90 @@ export function reconcileWorkspaces(
     updateSparkDaemonWorkspaceStatus(db, workspace.id, status, diagnostics, now);
     return { ...workspace, status, diagnostics, updatedAt: now };
   });
+}
+
+/**
+ * Collapse legacy same-path workspace rows onto one daemon identity.
+ * Prefers a Cockpit-bound projection over an empty local-only duplicate.
+ */
+export function consolidateSamePathWorkspaces(
+  db: DatabaseSync,
+  now = new Date().toISOString(),
+): SparkDaemonWorkspace[] {
+  return withSparkDaemonTransaction(db, () => consolidateSamePathWorkspacesUnlocked(db, now));
+}
+
+function consolidateSamePathWorkspacesUnlocked(
+  db: DatabaseSync,
+  now: string,
+): SparkDaemonWorkspace[] {
+  const byPath = new Map<string, SparkDaemonWorkspace[]>();
+  for (const workspace of listWorkspaces(db)) {
+    const group = byPath.get(workspace.localPath) ?? [];
+    group.push(workspace);
+    byPath.set(workspace.localPath, group);
+  }
+
+  const survivors: SparkDaemonWorkspace[] = [];
+  for (const group of byPath.values()) {
+    if (group.length === 1) {
+      survivors.push(group[0]!);
+      continue;
+    }
+    const preferred = pickPreferredSamePathWorkspace(group);
+    for (const duplicate of group) {
+      if (duplicate.id === preferred.id) continue;
+      mergeWorkspaceDuplicateInto(db, preferred.id, duplicate.id, now);
+    }
+    const survivor = getWorkspaceById(db, preferred.id);
+    if (survivor) survivors.push(survivor);
+  }
+  return survivors;
+}
+
+function pickPreferredSamePathWorkspace(workspaces: SparkDaemonWorkspace[]): SparkDaemonWorkspace {
+  return [...workspaces].sort((left, right) => {
+    const scoreDelta = samePathWorkspaceScore(right) - samePathWorkspaceScore(left);
+    if (scoreDelta !== 0) return scoreDelta;
+    const updatedDelta = right.updatedAt.localeCompare(left.updatedAt);
+    if (updatedDelta !== 0) return updatedDelta;
+    return left.id.localeCompare(right.id);
+  })[0]!;
+}
+
+function samePathWorkspaceScore(workspace: SparkDaemonWorkspace): number {
+  let score = 0;
+  if (workspace.serverWorkspaceId) score += 8;
+  if (workspace.serverUrl) score += 4;
+  if (workspace.cockpitBindingState === "bound") score += 2;
+  if (workspace.status === "available") score += 1;
+  return score;
+}
+
+function mergeWorkspaceDuplicateInto(
+  db: DatabaseSync,
+  survivorId: string,
+  duplicateId: string,
+  now: string,
+): void {
+  db.prepare(
+    `UPDATE invocations
+     SET workspace_binding_id = ?, updated_at = ?
+     WHERE workspace_binding_id = ?`,
+  ).run(survivorId, now, duplicateId);
+  db.prepare(
+    `UPDATE daemon_human_waits
+     SET workspace_binding_id = ?, updated_at = ?
+     WHERE workspace_binding_id = ?`,
+  ).run(survivorId, now, duplicateId);
+  db.prepare(
+    `UPDATE daemon_workspace_clients
+     SET workspace_id = ?
+     WHERE workspace_id = ?`,
+  ).run(survivorId, duplicateId);
+  db.prepare("DELETE FROM daemon_workspace_grants WHERE daemon_workspace_id = ?").run(duplicateId);
+  db.prepare("DELETE FROM daemon_workspaces WHERE id = ?").run(duplicateId);
+  db.prepare("DELETE FROM workspaces WHERE id = ?").run(duplicateId);
 }
 
 export function reconcileWorkspacesForServer(

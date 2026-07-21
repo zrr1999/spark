@@ -1,12 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
 import { appendEvent } from "@zendev-lab/spark-coordination/projection-services";
+import {
+  closeDatabase,
+  databasePinCountForTests,
+  getDatabase,
+  pinDatabase,
+  unpinDatabase,
+} from "./db";
 import {
   deleteWebPushSubscription,
   dispatchNotificationsForEventBatch,
   dispatchWebPushNotification,
   loadWebPushSubscription,
   saveWebPushSubscription,
+  startWebPushEventDispatcher,
   webPushPublicConfig,
   type WebPushSender,
 } from "./web-push";
@@ -20,6 +31,15 @@ const env = {
   SPARK_COCKPIT_VAPID_PRIVATE_KEY: "private-key",
   SPARK_COCKPIT_VAPID_SUBJECT: "mailto:ops@example.test",
 };
+const originalEnv = { ...process.env };
+const roots: string[] = [];
+
+afterEach(() => {
+  closeDatabase();
+  process.env = { ...originalEnv };
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  vi.useRealTimers();
+});
 
 describe("web push notifications", () => {
   it("stores and removes a single-user PushManager subscription", () => {
@@ -129,5 +149,36 @@ describe("web push notifications", () => {
     ]);
     expect(result.cursor?.id).toMatch(/^evt_/);
     db.close();
+  });
+
+  it("pins the Cockpit DB per tick and backs off when no subscription is stored", async () => {
+    vi.useFakeTimers();
+    const root = mkdtempSync(join(tmpdir(), "spark-cockpit-web-push-dispatch-"));
+    roots.push(root);
+    process.env = { ...originalEnv, SPARK_HOME: root };
+
+    const settlements: Array<{ hadSubscription: boolean; intervalMs: number }> = [];
+    const stop = startWebPushEventDispatcher({
+      intervalMs: 5_000,
+      noSubscriptionBackoffMs: 300_000,
+      env,
+      onTickSettled: (info) => settlements.push(info),
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settlements[0]).toEqual({ hadSubscription: false, intervalMs: 300_000 });
+    expect(databasePinCountForTests()).toBe(0);
+
+    pinDatabase();
+    saveWebPushSubscription(getDatabase(), subscription);
+    unpinDatabase();
+
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(settlements.at(-1)).toEqual({ hadSubscription: true, intervalMs: 5_000 });
+    expect(databasePinCountForTests()).toBe(0);
+
+    stop();
+    closeDatabase();
+    vi.useRealTimers();
   });
 });

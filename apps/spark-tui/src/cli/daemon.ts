@@ -780,6 +780,7 @@ export function parseSparkDaemonCliArgs(argv: string[]): SparkDaemonCliCommand {
     case "login":
     case "workspace":
     case "ws":
+    case "uplink":
       return { action: "service", argv };
     case "restart":
     case "logs":

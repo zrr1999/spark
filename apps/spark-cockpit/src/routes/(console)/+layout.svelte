@@ -5,6 +5,7 @@
     buildConsoleNavGroups,
     currentConsolePageLabel,
     isConsoleNavItemActive,
+    isGlobalConsolePath,
   } from "$lib/console-nav";
   import CockpitTopbar from "$lib/shell/CockpitTopbar.svelte";
   import type { CockpitSearchSession } from "$lib/shell/cockpit-search";
@@ -19,6 +20,9 @@
   let searchSessions = $derived((data.sessions ?? []) as CockpitSearchSession[]);
   let mobileNavigationOpen = $state(false);
   let lastConsolePath = $state("");
+  let isGlobalConsole = $derived(
+    data.isGlobalConsole ?? isGlobalConsolePath(page.url.pathname),
+  );
   let activeWorkspacePath = $derived(
     data.activeWorkspace ? workspacePath(data.activeWorkspace) : "",
   );
@@ -28,12 +32,14 @@
     channels: t.nav.channels,
     workspaceSettings: consoleMessages.nav.workspaceDetails,
     registration: consoleMessages.nav.registration,
+    webAccess: consoleMessages.nav.webAccess,
     createWorkspace: t.user.createWorkspace,
   });
   let navGroups = $derived(
     buildConsoleNavGroups({
       activeWorkspacePath,
       hasActiveWorkspace: Boolean(data.activeWorkspace),
+      includeWorkspaceNav: !isGlobalConsole && Boolean(data.activeWorkspace),
       nav: navLabels,
       groups: {
         cockpit: consoleMessages.navGroups.cockpit,
@@ -80,7 +86,7 @@
 
 <div class="console-shell">
   <CockpitTopbar
-    activeWorkspace={data.activeWorkspace}
+    activeWorkspace={isGlobalConsole ? null : data.activeWorkspace}
     common={data.messages.common}
     layout={t}
     navigationControls="console-navigation"
@@ -88,6 +94,7 @@
     onToggleNavigation={() => (mobileNavigationOpen = !mobileNavigationOpen)}
     sessions={searchSessions}
     sessionMessages={data.messages.sessions}
+    showWorkspaceMenu={!isGlobalConsole}
     workspaceHref={workspaceSwitcherHref}
     workspaces={workspaceOptions}
   />

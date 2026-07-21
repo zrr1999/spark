@@ -13,7 +13,7 @@ describe("ThinkingChainPart component contract", () => {
     expect(() => compile(source, { filename: componentPath, generate: "server" })).not.toThrow();
   });
 
-  it("keeps execution details collapsed by default, including during active work", () => {
+  it("opens while executing and folds shut when complete, without staggered reveal", () => {
     const source = readFileSync(componentPath, "utf8");
 
     expect(source).toContain('class="thinking-chain {chainState}"');
@@ -21,19 +21,23 @@ describe("ThinkingChainPart component contract", () => {
     expect(source).toContain("let expanded = $state(false)");
     expect(source).toContain("onclick={toggleExpanded}");
     expect(source).toContain("expanded = !expanded");
+    expect(source).toContain("userToggled = true");
     expect(source).toContain("{#if expanded}");
-    expect(source).toContain('statusLabel("failed")');
+    expect(source).toContain('if (chainState === "streaming" || active)');
+    expect(source).toContain("expanded = true");
+    expect(source).toContain("if (!userToggled) expanded = false");
+    expect(source).not.toContain('statusLabel("failed")');
+    expect(source).not.toContain("chain-issue");
+    expect(source).not.toContain("index * 90");
+    expect(source).not.toContain("chain-step-reveal");
+    expect(source).not.toContain("--chain-step-delay");
     expect(source).toContain("margin-inline: 0 auto");
     expect(source).toContain("min-height: 22px");
     expect(source).toContain("{statusLabel}");
     expect(source).toContain('class="chain-step {step.type} {presentationStatus}"');
     expect(source).toContain("stepStatus(step)");
-    expect(source).toContain("index * 90");
     expect(source).toContain("grid-template-columns: 18px minmax(0, 1fr)");
-    expect(source).toContain("chain-step-reveal");
     expect(source).toContain("animation: chain-pulse");
-    expect(source).not.toContain("expanded = true");
-    expect(source).not.toContain("active && chainState");
     expect(source).toContain("@media (hover: hover) and (pointer: fine)");
     expect(source).toContain(":global(.conversation-message:hover)");
     expect(source).not.toContain("pointer-events: none");

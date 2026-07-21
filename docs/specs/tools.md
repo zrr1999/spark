@@ -25,8 +25,9 @@ Direct role/session calls do not create task attribution.
 ## Evidence and context
 
 - `ask` is the only structured question surface; cancellation is not approval.
-- `artifact` stores provenance-backed `document | record | trace | knowledge` evidence and lifecycle curation.
-- `learning`, `recall`, and `memory` remain distinct: evidence-backed rules, explicit candidates, and explicit durable memory.
+- `evidence` is an **agent-internal ledger** (not Cockpit/user UI): compact provenance-backed `record | trace | knowledge | document` notes. Prefer `format=json` bodies `{ summary, data? }`.
+- `artifact` owns product-facing deliverables only: `issue | pr | preview` (forge-backed ISSUE/PR; continuous md/mdx/html preview). PR work prefers an attached git worktree under `.spark/worktrees/`.
+- `memory` owns durable scoped memory, recall candidates (`recall` tool), and the `LearningStore` / `learning` tool. Reflection pipelines still ship from `@zendev-lab/spark-learnings` until moved.
 - `context` lists/previews registered bounded providers and accepts no arbitrary provider prompt.
 
 ## Roles and sessions

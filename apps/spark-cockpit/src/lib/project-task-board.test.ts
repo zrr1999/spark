@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 import { buildProjectTaskBoard } from "./project-task-board";
 
 describe("project task board", () => {
-  it("groups ready/claimed/done/blocked tasks, marks ready-frontier assign actions, and links evidence", () => {
+  it("groups ready/claimed/done/blocked tasks, marks ready-frontier assign actions, and links product artifacts only", () => {
     const board = buildProjectTaskBoard({
       canAssign: true,
       artifacts: [
-        { id: "artifact-plan", title: "Plan evidence", kind: "record", format: "json" },
-        { id: "artifact-build", title: "Build output", kind: "document", format: "markdown" },
+        { id: "artifact-plan", title: "Plan note", kind: "record", format: "json" },
+        { id: "artifact-build", title: "Build PR", kind: "pr", format: "json" },
+        { id: "artifact-issue", title: "Tracking issue", kind: "issue", format: "json" },
       ],
       tasks: [
         {
@@ -22,7 +23,7 @@ describe("project task board", () => {
           title: "Build",
           statusGroup: "ready",
           readyFrontier: true,
-          inputArtifactIds: ["artifact-plan"],
+          inputArtifactIds: ["artifact-plan", "artifact-issue"],
           outputArtifactIds: ["artifact-build"],
         },
         {
@@ -51,8 +52,8 @@ describe("project task board", () => {
     expect(board[0]?.cards[0]).toMatchObject({
       assignable: true,
       evidenceArtifacts: [
-        { id: "artifact-build", title: "Build output" },
-        { id: "artifact-plan", title: "Plan evidence" },
+        { id: "artifact-build", title: "Build PR" },
+        { id: "artifact-issue", title: "Tracking issue" },
       ],
     });
   });

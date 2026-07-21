@@ -135,6 +135,12 @@ import {
   type SparkDaemonRelocationRequest,
   type SparkDaemonRelocationResult,
 } from "./relocation.ts";
+import {
+  parkSparkDaemonUplink,
+  preferSparkDaemonWorkspaceUplink,
+  sparkDaemonUplinkStatus,
+  unparkSparkDaemonUplink,
+} from "./uplink.ts";
 
 export {
   createDaemonSessionRegistry,
@@ -367,6 +373,19 @@ type LocalRpcRequest =
       params: LocalWorkspaceRelocateRequest;
       sparkCommand: SparkCommand;
     }
+  | {
+      id: string;
+      method: "uplink.park" | "uplink.unpark";
+      params: { serverUrl: string };
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "uplink.prefer";
+      params: { workspace: string; serverUrl: string };
+      sparkCommand: SparkCommand;
+    }
+  | { id: string; method: "uplink.status"; sparkCommand: SparkCommand }
   | {
       id: string;
       method: "workspace.ensure-local";
@@ -817,6 +836,47 @@ export async function requestWorkspaceRelocate(
   );
 }
 
+export async function requestUplinkPark(
+  paths: SparkPaths,
+  params: { serverUrl: string },
+): Promise<unknown> {
+  return localRpcRequest(
+    paths,
+    { id: localRequestId(), method: "uplink.park", params },
+    (value) => value,
+  );
+}
+
+export async function requestUplinkUnpark(
+  paths: SparkPaths,
+  params: { serverUrl: string },
+): Promise<unknown> {
+  return localRpcRequest(
+    paths,
+    { id: localRequestId(), method: "uplink.unpark", params },
+    (value) => value,
+  );
+}
+
+export async function requestUplinkPrefer(
+  paths: SparkPaths,
+  params: { workspace: string; serverUrl: string },
+): Promise<unknown> {
+  return localRpcRequest(
+    paths,
+    { id: localRequestId(), method: "uplink.prefer", params },
+    (value) => value,
+  );
+}
+
+export async function requestUplinkStatus(paths: SparkPaths): Promise<unknown> {
+  return localRpcRequest(
+    paths,
+    { id: localRequestId(), method: "uplink.status" },
+    (value) => value,
+  );
+}
+
 export async function requestWorkspaceEnsureLocal(
   paths: SparkPaths,
   params: LocalWorkspaceEnsureLocalRequest,
@@ -1245,6 +1305,30 @@ export async function handleLocalRpcLine(
             request.params,
             { onUplinkReconfigure: options.onUplinkReconfigure },
           ),
+        };
+      case "uplink.park": {
+        const profile = await parkSparkDaemonUplink(paths, request.params.serverUrl);
+        options.onUplinkReconfigure?.(profile.serverUrl);
+        return { id: request.id, ok: true, result: profile };
+      }
+      case "uplink.unpark": {
+        const profile = await unparkSparkDaemonUplink(paths, request.params.serverUrl);
+        options.onUplinkReconfigure?.(profile.serverUrl);
+        return { id: request.id, ok: true, result: profile };
+      }
+      case "uplink.prefer": {
+        const preferred = preferSparkDaemonWorkspaceUplink(paths, db, request.params);
+        if (preferred.previousServerUrl) {
+          options.onUplinkReconfigure?.(preferred.previousServerUrl);
+        }
+        options.onUplinkReconfigure?.(preferred.serverUrl);
+        return { id: request.id, ok: true, result: preferred };
+      }
+      case "uplink.status":
+        return {
+          id: request.id,
+          ok: true,
+          result: sparkDaemonUplinkStatus(paths, db),
         };
       case "workspace.register": {
         // A workspace-scoped one-time token is explicit authority to move the
@@ -1840,6 +1924,23 @@ function parseLocalRpcRequest(line: string): LocalRpcRequest {
       params: parseLocalWorkspaceRelocateParams(value.params),
     });
   }
+  if (value.method === "uplink.park" || value.method === "uplink.unpark") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: parseUplinkServerUrlParams(value.params),
+    });
+  }
+  if (value.method === "uplink.prefer") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: parseUplinkPreferParams(value.params),
+    });
+  }
+  if (value.method === "uplink.status") {
+    return withSparkCommand({ id: value.id, method: value.method });
+  }
   if (value.method === "workspace.ensure-local") {
     return withSparkCommand({
       id: value.id,
@@ -2056,6 +2157,26 @@ function parseLocalWorkspaceRelocateParams(value: unknown): LocalWorkspaceReloca
     toServerUrl: value.toServerUrl,
     ...(typeof value.fromServerUrl === "string" ? { fromServerUrl: value.fromServerUrl } : {}),
   };
+}
+
+function parseUplinkServerUrlParams(value: unknown): { serverUrl: string } {
+  if (!isRecord(value) || typeof value.serverUrl !== "string" || !value.serverUrl.trim()) {
+    throw new Error("uplink park/unpark requires serverUrl.");
+  }
+  return { serverUrl: value.serverUrl.trim() };
+}
+
+function parseUplinkPreferParams(value: unknown): { workspace: string; serverUrl: string } {
+  if (
+    !isRecord(value) ||
+    typeof value.workspace !== "string" ||
+    !value.workspace.trim() ||
+    typeof value.serverUrl !== "string" ||
+    !value.serverUrl.trim()
+  ) {
+    throw new Error("uplink prefer requires workspace and serverUrl.");
+  }
+  return { workspace: value.workspace.trim(), serverUrl: value.serverUrl.trim() };
 }
 
 function relocationResult(value: unknown): LocalWorkspaceRelocateResult {

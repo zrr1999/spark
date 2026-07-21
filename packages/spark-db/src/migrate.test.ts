@@ -359,4 +359,22 @@ describe("migrations", () => {
     expect(logSchema.sql).toContain("'tool'");
     db.close();
   });
+
+  it("rejects a migration set without bootstrap 0001", () => {
+    const db = openMemoryDatabase();
+    expect(() => migrate(db, [{ version: "0002", name: "later", sql: "select 1;" }])).toThrow(
+      /Missing bootstrap migration 0001/u,
+    );
+    db.close();
+  });
+
+  it("loads sorted sql migrations with version and name parts", () => {
+    const migrations = loadMigrations();
+    expect(migrations.length).toBeGreaterThan(1);
+    expect(migrations[0]?.version).toBe("0001");
+    expect(migrations.every((migration) => migration.sql.length > 0)).toBe(true);
+    expect(migrations.map((migration) => migration.version)).toEqual(
+      [...migrations].map((migration) => migration.version).sort(),
+    );
+  });
 });

@@ -189,7 +189,7 @@ export function buildSessionTimeline(input: {
       title: null,
       status: conversationItemStatus(message.status, message.role, parts),
       timestamp: message.createdAt ?? input.fallbackTimestamp,
-      meta: message.role === "assistant" || message.role === "user" ? null : message.role,
+      meta: conversationRoleMeta(message.role),
       senderLabel:
         actor === "session"
           ? sessionSenderLabel(message.metadata)
@@ -278,7 +278,7 @@ export function buildSessionTimeline(input: {
       title: actor !== "spark" || hasStructuredReportPart ? null : report.title,
       status: conversationItemStatus(report.status, report.message?.role, parts),
       timestamp: report.createdAt,
-      meta: report.role && !["assistant", "user"].includes(report.role) ? report.role : null,
+      meta: conversationRoleMeta(report.role),
       senderLabel:
         actor === "session" && report.message
           ? sessionSenderLabel(report.message.metadata)
@@ -311,6 +311,15 @@ function isInternalExecutionFailureReport(report: SessionTimelineReport): boolea
 
 function conversationSystemMessageVisible(message: SparkMessageView): boolean {
   return message.metadata.conversationVisible === true;
+}
+
+/** Raw protocol roles like `tool` / `thinking` are process noise, not user-facing meta. */
+function conversationRoleMeta(role: string | null | undefined): string | null {
+  if (!role) return null;
+  if (role === "assistant" || role === "user" || role === "tool" || role === "thinking") {
+    return null;
+  }
+  return role;
 }
 
 function conversationItemStatus(
@@ -427,8 +436,8 @@ function mergeConsecutiveSparkMessages(items: SessionTimelineItem[]) {
 function shouldMergeSparkTurn(previous: SessionTimelineItem, next: SessionTimelineItem): boolean {
   if (previous.actor !== "spark" || next.actor !== "spark") return false;
   if (!previous.id.startsWith("message:") || !next.id.startsWith("message:")) return false;
-  if (hasProcessParts(previous.parts) || hasProcessParts(next.parts)) return true;
-  return next.meta === "tool" || next.meta === "thinking";
+  // Fold tool/thinking process into the surrounding assistant turn.
+  return hasProcessParts(previous.parts) || hasProcessParts(next.parts);
 }
 
 function hasProcessParts(parts: readonly ConversationPart[]): boolean {
@@ -637,26 +646,52 @@ function conversationPartsFromReport(report: SessionTimelineReport): Conversatio
   }
 
   if (report.kind === "daemon.interaction.request") {
+    const interactionKind = report.interaction?.kind ?? "";
+    const requestId = report.interaction?.requestId ?? report.id;
+    if (isAskInteractionKind(interactionKind)) {
+      return [
+        {
+          type: "tool",
+          callId: requestId,
+          name: "ask",
+          state: "running",
+          summary: report.text.trim() ? report.text : report.title,
+        },
+      ];
+    }
     return [
       {
         type: "approval",
-        requestId: report.interaction?.requestId ?? report.id,
+        requestId,
         title: report.title,
         state: "requested",
-        kind: report.interaction?.kind ?? undefined,
+        kind: interactionKind || undefined,
         summary: report.text.trim() ? report.text : undefined,
       },
     ];
   }
 
   if (report.kind === "daemon.interaction.response") {
+    const interactionKind = report.interaction?.kind ?? "";
+    const requestId = report.interaction?.requestId ?? report.id;
+    if (isAskInteractionKind(interactionKind)) {
+      return [
+        {
+          type: "tool",
+          callId: requestId,
+          name: "ask",
+          state: interactionResponseToolState(report.status),
+          summary: report.text.trim() ? report.text : report.title,
+        },
+      ];
+    }
     return [
       {
         type: "approval",
-        requestId: report.interaction?.requestId ?? report.id,
+        requestId,
         title: report.title,
         state: interactionResponseState(report.status),
-        kind: report.interaction?.kind ?? undefined,
+        kind: interactionKind || undefined,
         summary: report.text.trim() ? report.text : undefined,
       },
     ];
@@ -726,6 +761,25 @@ function taskReportState(status: string | null): ConversationTaskState {
   if (["cancelled", "canceled"].includes(normalized)) return "cancelled";
   if (["running", "in_progress", "claimed"].includes(normalized)) return "running";
   return "pending";
+}
+
+function isAskInteractionKind(kind: string): boolean {
+  const normalized = kind.trim().toLocaleLowerCase().replaceAll("-", "_");
+  return (
+    normalized === "ask" ||
+    normalized === "ask_user" ||
+    normalized === "askflow" ||
+    normalized === "ask_flow"
+  );
+}
+
+function interactionResponseToolState(status: string | null): ConversationToolState {
+  const normalized = normalizedStatus(status);
+  if (["cancelled", "canceled"].includes(normalized)) return "cancelled";
+  if (["blocked", "error", "failed", "rejected", "denied"].includes(normalized)) {
+    return "failed";
+  }
+  return "completed";
 }
 
 function interactionResponseState(status: string | null): ConversationApprovalState {

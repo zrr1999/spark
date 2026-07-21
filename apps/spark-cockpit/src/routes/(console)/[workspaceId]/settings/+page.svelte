@@ -10,6 +10,7 @@
   let workspaceForm = $derived(
     form?.intent === "workspaceSettings" ? form : null,
   );
+  let hasLocalPath = $derived(Boolean(data.workspace.localPath?.trim()));
 
   function formatRelative(value: string | null) {
     return formatRelativeTime(value, data.locale, common);
@@ -34,8 +35,29 @@
 
   <Panel ariaLabel={t.workspace.title}>
     <form class="workspace-form" method="POST" action="?/updateWorkspace">
-      <Field id="workspace-name" label={t.workspace.name} required>
-        <Input id="workspace-name" name="name" value={data.workspace.name} required />
+      <div class="wide-field">
+        <Field id="workspace-local-path" label={t.workspace.localPath} hint={t.workspace.localPathHint}>
+          <Input
+            id="workspace-local-path"
+            value={data.workspace.localPath ?? t.workspace.localPathPending}
+            readonly
+            class={hasLocalPath ? "" : "path-pending"}
+          />
+        </Field>
+      </div>
+      <Field
+        id="workspace-name"
+        label={t.workspace.name}
+        hint={hasLocalPath ? t.workspace.nameHint : t.workspace.nameHintEditable}
+        required={!hasLocalPath}
+      >
+        <Input
+          id="workspace-name"
+          name="name"
+          value={data.workspace.name}
+          required
+          readonly={hasLocalPath}
+        />
       </Field>
       <Field id="workspace-slug" label={t.workspace.slug} hint={t.workspace.slugHint} required>
         <Input id="workspace-slug" name="slug" value={data.workspace.slug} required />
@@ -112,6 +134,11 @@
     color: var(--color-warning-strong);
     font-size: var(--text-body);
     padding: var(--spacing-sm);
+  }
+
+  :global(.path-pending) {
+    color: var(--color-ink-subtle);
+    font-style: italic;
   }
 
   @media (max-width: 640px) {

@@ -9,10 +9,12 @@ import {
   applyCockpitWorkspaceBindingAssignments,
   attachWorkspace,
   attachWorkspaceClient,
+  consolidateSamePathWorkspaces,
   ensureLocalWorkspace,
   ensureWorkspaceExecutorClient,
   heartbeatWorkspaceClient,
   getWorkspaceById,
+  getWorkspaceByPath,
   isBorrowedWorkspace,
   listWorkspaceClients,
   listWorkspaces,
@@ -576,6 +578,67 @@ describe("Spark daemon workspace store", () => {
           localPath: root,
         }),
       ).toThrow(/already bound as spark/);
+    });
+  });
+
+  it("consolidates legacy same-path workspace duplicates onto the Cockpit-bound identity", () => {
+    withSparkDaemonWorkspaceStore(({ db, root }) => {
+      const local = ensureLocalWorkspace(db, {
+        localPath: root,
+        displayName: "zendev-lab",
+      });
+      // Simulate a pre-guard install that inserted a second row for the same
+      // checkout on another server_url (UNIQUE is per server_url+path).
+      const remoteId = "rtwb_749f5757322e43cda1234c31de02f91b";
+      const now = "2026-07-14T09:37:44.129Z";
+      db.prepare(
+        `INSERT INTO workspaces
+          (id, server_url, local_workspace_key, display_name, local_path, status,
+           capabilities_json, diagnostics_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'available', '{}', '{}', ?, ?)`,
+      ).run(
+        remoteId,
+        "http://marrow-paddle.bcc-szzj.baidu.com:8080/",
+        "zendev-lab",
+        "zendev-lab",
+        local.localPath,
+        now,
+        now,
+      );
+      db.prepare(
+        `INSERT INTO daemon_servers (id, server_url, first_registered_at)
+         VALUES (?, ?, ?)`,
+      ).run("rnsrv_remote", "http://marrow-paddle.bcc-szzj.baidu.com:8080/", now);
+      db.prepare(
+        `INSERT INTO daemon_workspaces
+          (id, server_id, server_workspace_id, server_binding_id, name, slug, local_path,
+           registered_at, last_known_status, last_known_offline_reason, last_status_changed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'available', NULL, ?)`,
+      ).run(
+        remoteId,
+        "rnsrv_remote",
+        "ws_aa269169763c4b2c911d19770252b2c5",
+        remoteId,
+        "zendev-lab",
+        "zendev-lab",
+        local.localPath,
+        now,
+        now,
+      );
+
+      expect(listWorkspaces(db)).toHaveLength(2);
+      expect(getWorkspaceByPath(db, root)?.id).toBe(remoteId);
+
+      const reconciled = reconcileWorkspaces(db, "2026-07-20T12:30:00.000Z");
+      expect(reconciled).toHaveLength(1);
+      expect(reconciled[0]).toMatchObject({
+        id: remoteId,
+        serverUrl: "http://marrow-paddle.bcc-szzj.baidu.com:8080/",
+        serverWorkspaceId: "ws_aa269169763c4b2c911d19770252b2c5",
+      });
+      expect(listWorkspaces(db)).toHaveLength(1);
+      expect(getWorkspaceById(db, local.id)).toBeNull();
+      expect(consolidateSamePathWorkspaces(db)).toHaveLength(1);
     });
   });
 

@@ -221,7 +221,14 @@ export interface ReviewerRunResult {
   record: ReviewerRunRecord;
 }
 
-const REVIEWER_LOW_COST_READ_TOOLS = new Set(["read", "grep", "find", "task_read", "artifact"]);
+const REVIEWER_LOW_COST_READ_TOOLS = new Set([
+  "read",
+  "grep",
+  "find",
+  "task_read",
+  "artifact",
+  "evidence",
+]);
 
 export interface AskAutoAnswerInput {
   cwd: string;

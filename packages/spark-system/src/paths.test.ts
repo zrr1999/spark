@@ -60,6 +60,25 @@ describe("Spark path resolution", () => {
     expect(daemon.cacheDir).toBe("/xdg/cache/spark/daemon");
     expect(daemon.stateDir).toBe("/xdg/state/spark/daemon");
     expect(daemon.runtimeDir).toBe("/xdg/runtime/spark/daemon");
+    expect(daemon.artifactBlobsDir).toBe("/xdg/data/spark/daemon/artifacts/blobs/sha256");
+    expect(daemon.piAgentDir).toBe("/xdg/data/spark/daemon/pi-agent");
+
+    const cockpit = resolveSparkPaths({ app: "cockpit", env, cwd: "/" });
+    expect(cockpit.artifactBlobsDir).toBe("/xdg/cache/spark/cockpit/artifacts/blobs/sha256");
+    expect(cockpit.piAgentDir).toBeUndefined();
+  });
+
+  it("trims SPARK_HOME and empty XDG overrides", () => {
+    const user = resolveSparkUserPaths({
+      env: {
+        HOME: home,
+        SPARK_HOME: "  /srv/spark-trimmed  ",
+        XDG_CONFIG_HOME: "   ",
+      },
+      cwd: "/",
+    });
+    expect(user.dataRoot).toBe("/srv/spark-trimmed");
+    expect(user.configRoot).toBe("/srv/spark-trimmed");
   });
 
   it("uses one categorized tree when SPARK_HOME is set", () => {

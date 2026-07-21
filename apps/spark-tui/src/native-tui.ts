@@ -48,6 +48,7 @@ import {
   type SparkJsonObject,
   type SparkMessageView,
   type SparkRunView,
+  type SparkSessionPendingTurn,
   type SparkSessionView,
   type SparkTaskView,
   type SparkToolCallView,
@@ -158,6 +159,8 @@ export interface SparkNativeQueueSummary {
   total: number;
   steer: number;
   followUp: number;
+  /** Daemon-admitted turns still queued or running (durable truth). */
+  daemonPending: number;
 }
 
 export interface SparkNativeAbortResult {
@@ -338,7 +341,10 @@ function createSparkNativeCockpitState(): SparkNativeCockpitState {
 
 export class SparkNativeSession {
   readonly messages: SparkNativeMessage[] = [];
+  /** Optimistic local queue (steer/followUp) until turn.submit ack / drain. */
   private readonly queuedFollowUps: SparkNativeQueuedInput[] = [];
+  /** Durable daemon admission projection; undefined until a snapshot supplies it. */
+  private daemonPendingTurns: SparkSessionPendingTurn[] | undefined;
   private readonly responder: SparkNativeResponder;
   private lastSubmittedInput: { text: string; submissionId: string } | undefined;
   private processing = false;
@@ -365,18 +371,23 @@ export class SparkNativeSession {
   }
 
   get canStopOrRestore(): boolean {
-    return this.processing || this.queuedFollowUps.length > 0;
+    return this.processing || this.queuedFollowUps.length > 0 || this.daemonQueuedCount() > 0;
   }
 
   get queuedCount(): number {
-    return this.queuedFollowUps.length;
+    return this.queuedFollowUps.length + this.daemonQueuedCount();
   }
 
-  /** Ordered, detached queue state suitable for rendering without mutation authority. */
+  /** Ordered, detached local optimistic queue for rendering without mutation authority. */
   get queuedInputs(): readonly Pick<SparkNativeQueuedInput, "text" | "mode">[] {
     return Object.freeze(
       this.queuedFollowUps.map((input) => Object.freeze({ text: input.text, mode: input.mode })),
     );
+  }
+
+  /** Durable daemon pending turns from the last applied session snapshot. */
+  get daemonPending(): readonly SparkSessionPendingTurn[] {
+    return Object.freeze([...(this.daemonPendingTurns ?? [])]);
   }
 
   get queueSummary(): SparkNativeQueueSummary {
@@ -386,7 +397,13 @@ export class SparkNativeSession {
       if (input.mode === "steer") steer += 1;
       else followUp += 1;
     }
-    return { total: steer + followUp, steer, followUp };
+    const daemonPending = this.daemonPendingTurns?.length ?? 0;
+    return {
+      total: steer + followUp + daemonPending,
+      steer,
+      followUp,
+      daemonPending,
+    };
   }
 
   async submit(
@@ -462,21 +479,24 @@ export class SparkNativeSession {
   }
 
   toSessionView(sessionId: string = "native"): SparkSessionView {
-    const status = this.processing
-      ? "streaming"
-      : this.queuedFollowUps.length > 0
-        ? "queued"
-        : "idle";
+    const localPending = this.localOptimisticPendingTurns();
+    const daemonPending = this.daemonPendingTurns ?? [];
+    const pendingTurns = [...localPending, ...daemonPending];
+    const status = this.processing ? "streaming" : pendingTurns.length > 0 ? "queued" : "idle";
     return {
       version: SPARK_PROTOCOL_VERSION,
       sessionId,
       status,
+      pendingTurns,
       messages: this.messages.map((message, index) => nativeMessageToView(message, index)),
       tools: [],
       runs: [],
       tasks: [],
       artifacts: [],
-      metadata: { queuedCount: this.queuedFollowUps.length },
+      metadata: {
+        queuedCount: this.queuedFollowUps.length,
+        daemonPendingCount: daemonPending.length,
+      },
     };
   }
 
@@ -494,6 +514,10 @@ export class SparkNativeSession {
       else messages.push(this.normalizeMessage(projected));
     }
     this.messages.splice(0, this.messages.length, ...messages);
+    if (view.pendingTurns !== undefined) {
+      this.daemonPendingTurns = view.pendingTurns.map((turn) => ({ ...turn }));
+      this.reconcileOptimisticQueueAgainstDaemon();
+    }
     this.sortMessagesChronologically();
     this.trimTranscript();
     this.emitChange();
@@ -673,6 +697,37 @@ export class SparkNativeSession {
       text: formatSteeringSubmission(steeringInputs),
       submissionId: next.submissionId,
     };
+  }
+
+  private daemonQueuedCount(): number {
+    return (this.daemonPendingTurns ?? []).filter((turn) => turn.status === "queued").length;
+  }
+
+  private localOptimisticPendingTurns(): SparkSessionPendingTurn[] {
+    const createdAt = new Date().toISOString();
+    return this.queuedFollowUps.map((input) => ({
+      invocationId: input.submissionId,
+      prompt: input.text,
+      status: "queued" as const,
+      createdAt,
+    }));
+  }
+
+  /**
+   * Drop optimistic local rows once the daemon reports a matching queued/running
+   * prompt (exact text). Steer coalesce remains local-only until submit.
+   */
+  private reconcileOptimisticQueueAgainstDaemon(): void {
+    const admitted = new Set(
+      (this.daemonPendingTurns ?? []).map((turn) => turn.prompt.trim()).filter(Boolean),
+    );
+    if (admitted.size === 0) return;
+    for (let index = this.queuedFollowUps.length - 1; index >= 0; index -= 1) {
+      const entry = this.queuedFollowUps[index];
+      if (entry && admitted.has(entry.text.trim())) {
+        this.queuedFollowUps.splice(index, 1);
+      }
+    }
   }
 
   private trimTranscript(): void {
@@ -2791,21 +2846,35 @@ export class SparkNativeTuiApp implements Component, Focusable {
 
   private renderInputQueue(width: number): string[] {
     const queued = this.session.queuedInputs;
-    if (queued.length === 0) return [];
+    const daemonPending = this.session.daemonPending;
+    if (queued.length === 0 && daemonPending.length === 0) return [];
 
     const visible = queued.slice(0, MAX_NATIVE_QUEUE_ITEMS);
     const hidden = queued.length - visible.length;
     const lines = [
-      this.renderTheme.bold(this.renderTheme.fg("accent", `◆ Input queue · ${queued.length}`)),
+      this.renderTheme.bold(
+        this.renderTheme.fg(
+          "accent",
+          `◆ Input queue · local ${queued.length}` +
+            (daemonPending.length > 0 ? ` · daemon ${daemonPending.length}` : ""),
+        ),
+      ),
       this.renderTheme.fg("muted", "│ Enter steer · Alt+Enter follow-up · Alt+Up restore all"),
     ];
     for (const [index, input] of visible.entries()) {
-      const isLast = index === visible.length - 1 && hidden === 0;
+      const isLast = index === visible.length - 1 && hidden === 0 && daemonPending.length === 0;
       const marker = isLast ? "└─" : "├─";
       const mode = input.mode === "followUp" ? "follow-up" : "steer";
       lines.push(`${marker} ${index + 1}. ${mode} · ${compactNativeQueuePreview(input.text)}`);
     }
-    if (hidden > 0) lines.push(`└─ … +${hidden} more`);
+    if (hidden > 0) {
+      lines.push(`${daemonPending.length > 0 ? "├─" : "└─"} … +${hidden} more local`);
+    }
+    for (const [index, turn] of daemonPending.entries()) {
+      const isLast = index === daemonPending.length - 1;
+      const marker = isLast ? "└─" : "├─";
+      lines.push(`${marker} daemon ${turn.status} · ${compactNativeQueuePreview(turn.prompt)}`);
+    }
     return lines.map((line) => truncateToWidth(line, width));
   }
 
@@ -2997,7 +3066,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
       `├─ Workflow picker/progress: ${snapshot.workflows} option(s), ${snapshot.workflowRuns} workflow run(s)`,
       `├─ Role-run board: ${snapshot.roleRuns} role run(s), ${snapshot.interactions} interaction(s)`,
       `├─ Task/project board: ${snapshot.tasks} tracked task(s)`,
-      `├─ Artifact/evidence panel: ${snapshot.artifacts} artifact(s), ${snapshot.reviews} review item(s)`,
+      `├─ Artifacts panel: ${snapshot.artifacts} artifact(s), ${snapshot.reviews} review item(s)`,
       `└─ Graft provenance/patch status: ${snapshot.graftItems} item(s)`,
     ];
   }
@@ -3086,7 +3155,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
   }
 
   private renderArtifactCockpit(): string[] {
-    const lines = ["◆ Spark cockpit: artifacts/evidence"];
+    const lines = ["◆ Spark cockpit: artifacts"];
     for (const artifact of [...this.cockpit.artifacts.values()].slice(0, MAX_COCKPIT_PANEL_ROWS)) {
       const producer = artifact.producer ? ` producer=${artifact.producer}` : "";
       const status = artifact.status ? ` status=${artifact.status}` : "";
@@ -3096,7 +3165,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
       if (artifact.preview) lines.push(`│  ${artifact.preview}`);
     }
     if (lines.length === 1)
-      lines.push("└─ No artifact/evidence view-model updates have been published yet.");
+      lines.push("└─ No artifact view-model updates have been published yet.");
     return lines;
   }
 

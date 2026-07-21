@@ -3,7 +3,10 @@ import type { SparkJsonObject, SparkSessionView } from "@zendev-lab/spark-protoc
 const MAX_OUTPUT_CHARS = 4_000;
 const MAX_PREVIEW_CHARS = 8_000;
 
-export type SessionInspectorTab = "summary" | "changes" | "tasks" | "mailbox";
+export type SessionInspectorTab = "summary" | "artifacts" | "changes" | "tasks" | "messages";
+
+/** Product-facing artifact kinds shown in the session sidebar. */
+export const SESSION_PRODUCT_ARTIFACT_KINDS = new Set(["issue", "pr", "preview"]);
 
 export interface SessionWorkbenchActivityCommand {
   id: string;
@@ -122,7 +125,8 @@ export interface SessionWorkbenchContext {
   updatedAt: string | null;
 }
 
-export interface SessionWorkbenchMailMessage {
+/** Cross-session agent-to-agent messages (not human ask / inbox). */
+export interface SessionWorkbenchMessage {
   id: string;
   fromSessionId: string;
   kind: "request" | "question" | "notification";
@@ -141,12 +145,19 @@ export interface SessionWorkbenchMailMessage {
   } | null;
 }
 
+/** @deprecated Use SessionWorkbenchMessage. */
+export type SessionWorkbenchMailMessage = SessionWorkbenchMessage;
+
 export interface SessionWorkbenchView {
   runs: SessionWorkbenchRun[];
   tasks: SessionWorkbenchTask[];
+  /** Product artifacts (issue / pr / preview) bound to this session. */
+  artifacts: SessionWorkbenchArtifact[];
   changes: SessionWorkbenchArtifact[];
+  /** Agent-internal evidence; not rendered in the session sidebar. */
   evidence: SessionWorkbenchArtifact[];
-  mailbox: SessionWorkbenchMailMessage[];
+  /** Cross-session agent messages (renamed from mailbox). */
+  messages: SessionWorkbenchMessage[];
   sessionTodo: SessionWorkbenchSessionTodo | null;
   context: SessionWorkbenchContext;
 }
@@ -155,15 +166,18 @@ export interface SessionInspectorLabels {
   ariaLabel: string;
   tabs: Record<SessionInspectorTab, string>;
   summaryHeading: string;
+  artifactsHeading: string;
   tasksHeading: string;
   changesHeading: string;
-  mailboxHeading: string;
+  messagesHeading: string;
   noTasksTitle: string;
   noTasksBody: string;
+  noArtifactsTitle: string;
+  noArtifactsBody: string;
   noChangesTitle: string;
   noChangesBody: string;
-  noMailboxTitle: string;
-  noMailboxBody: string;
+  noMessagesTitle: string;
+  noMessagesBody: string;
   noSessionTodoTitle: string;
   noSessionTodoBody: string;
   noActiveSessionTodo: string;
@@ -174,17 +188,17 @@ export interface SessionInspectorLabels {
   openSessionTodo: string;
   sessionTodoPending: string;
   sessionTodoInProgress: string;
-  mailFrom: string;
-  mailRequest: string;
-  mailQuestion: string;
-  mailNotification: string;
-  mailUnread: string;
-  mailRead: string;
-  mailAcknowledged: string;
-  mailDeliveryPending: string;
-  mailDeliveryDelivered: string;
-  mailDeliveryFailed: string;
-  mailDeliveryUncertain: string;
+  messageFrom: string;
+  messageRequest: string;
+  messageQuestion: string;
+  messageNotification: string;
+  messageUnread: string;
+  messageRead: string;
+  messageAcknowledged: string;
+  messageDeliveryPending: string;
+  messageDeliveryDelivered: string;
+  messageDeliveryFailed: string;
+  messageDeliveryUncertain: string;
   sessionId: string;
   sessionStatus: string;
   workingDirectory: string;
@@ -228,12 +242,21 @@ export function buildSessionWorkbenchView(input: {
     ...reports.filter(isArtifactReport).map(activityArtifact),
   ]);
 
+  const productArtifacts = artifacts.filter((artifact) =>
+    SESSION_PRODUCT_ARTIFACT_KINDS.has(artifact.kind),
+  );
+  const changeArtifacts = artifacts.filter((artifact) => artifact.canonicalChange);
+  const evidenceArtifacts = artifacts.filter(
+    (artifact) => !artifact.canonicalChange && !SESSION_PRODUCT_ARTIFACT_KINDS.has(artifact.kind),
+  );
+
   return {
     runs: sortByRecency(runs),
     tasks,
-    changes: artifacts.filter((artifact) => artifact.canonicalChange),
-    evidence: artifacts.filter((artifact) => !artifact.canonicalChange),
-    mailbox: [...(input.session.mailbox ?? [])]
+    artifacts: productArtifacts,
+    changes: changeArtifacts,
+    evidence: evidenceArtifacts,
+    messages: [...(input.session.mailbox ?? [])]
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .map((message) => ({
         id: message.id,

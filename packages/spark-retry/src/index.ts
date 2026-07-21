@@ -23,7 +23,6 @@ export function cappedExponentialCeiling(
       ? uncappedExponent
       : Math.min(uncappedExponent, nonNegativeInteger(options.exponentCap, "options.exponentCap"));
 
-  if (normalizedBase === 0) return 0;
   return Math.min(normalizedMax, normalizedBase * 2 ** exponent);
 }
 

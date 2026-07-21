@@ -2,7 +2,7 @@
 description: "spark：以 Pi SDK 为内核，统一 TUI / Cockpit / 消息平台的本地智能开发编排"
 owner: zrr1999
 created: 2026-05-18
-updated: 2026-07-17
+updated: 2026-07-20
 inspired_by:
   - pi-sdk
   - cue-shell
@@ -45,7 +45,8 @@ inspired_by:
 - 不将本仓库泛化为公开模板或通用项目管理产品。
 - 不剥离或重写 Pi SDK 内核去“去 Pi 化”；退场对象是 Pi **产品**宿主，不是 `pi-ai` / `pi-tui`。
 - 不为 Pi 产品宿主新增一等能力；不长期保留双重公开工具表面。
-- 不把 TUI 进程内 follow-up 队列与 daemon `pendingTurns` 盲目合并；不把 Cockpit 专用 notice/error part 未经设计提升进协议。
+- 不把 TUI 进程内 follow-up 队列与 daemon `pendingTurns` 盲目合并成单一数组；采用双层模型：daemon `pendingTurns` 是跨表面耐久真相，TUI `queuedFollowUps` 只保留未 ack 的乐观 steer/followUp（合并、编辑器恢复），ack 后以 daemon 投影为准。
+- 不把 Cockpit 专用 notice/error part 未经设计提升进协议。
 - 不复制 OpenSpec/OpenArc 的完整文件树或重型流程。
 - 不让结构化提问成为用户必须直接操作的独立产品面。
 
@@ -68,6 +69,8 @@ inspired_by:
 - 继续对齐跨表面 ask / gate / submit 语义；Cockpit 已改用协议 option `value` 与 `parseSparkAskChoice`。
 - 文档与 AGENTS 边界语言改为“Pi SDK 内核 + Pi 产品冻结”。
 - 后续可单独收缩 `pi-extension` 表面与 `"pi.extensions"` 元数据；该收缩不阻塞协议对齐。
+- 会话队列双层收敛：TUI 乐观层 ↔ daemon `pendingTurns` 真相；Cockpit 继续只投影 daemon。
+- `memory` owns durable scoped memory, recall candidates (`recall` tool), and the `LearningStore` / `learning` tool. Reflection pipelines still ship from `@zendev-lab/spark-learnings` until moved.
 
 ## 修订记录
 
@@ -77,3 +80,4 @@ inspired_by:
 - 2026-06-15：统一正式中文表述，保留必要代码标识符和兼容性术语。
 - 2026-06-16：更新默认研究模式、`/implement` 模式命名以及 Spark 组合 Pi 扩展能力的边界表述。
 - 2026-07-17：方向调整为以 Pi SDK 为内核、TUI/Cockpit/消息平台一等；Pi 产品宿主冻结并规划退场；跨表面交互协议以 `spark-protocol` 为源。
+- 2026-07-20：确认会话队列双层模型与 memory 统一吸收 recall/learning。

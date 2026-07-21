@@ -1,7 +1,7 @@
 # spark-recall
 
-Controlled lightweight recall capability for Spark extension hosts.
+Deprecated compatibility facade. Recall candidates and the `recall` tool now live in [`@zendev-lab/spark-memory`](../spark-memory).
 
-`@zendev-lab/spark-recall` is not `.learnings/` and not automatic memory. It records explicit `user | workspace | repo` scoped recall candidates for review/search, and keeps them separate from task truth and evidence-backed learnings.
+Import from `@zendev-lab/spark-memory` (or `@zendev-lab/spark-memory/recall`) for new code. This package re-exports the same store and tool registration APIs.
 
-New hosts should inject explicit `RecallStore` paths or `registerPiRecallTool(..., { storePaths })` paths for user/workspace/repo scopes. `defaultRecallStore(cwd, scope)` writes `.spark/recall-candidates.json`.
+`registerSparkMemoryTool` already registers `recall` alongside `memory`; do not load both extension entries.

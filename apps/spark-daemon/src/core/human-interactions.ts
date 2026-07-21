@@ -36,6 +36,7 @@ export interface SparkDaemonHumanInteractionContext {
 
 export interface SparkDaemonHumanInteractionOpened {
   wait: SparkDaemonHumanWaitRecord;
+  /** Channel / keyboard projection always receives an ask-shaped request. */
   request: Extract<SparkInteractionRequest, { kind: "askFlow" }>;
   channel?: SparkDaemonHumanInteractionContext["channel"];
   callbackOptions: Array<{
@@ -149,10 +150,11 @@ export class SparkDaemonHumanInteractionBroker {
     context: SparkDaemonHumanInteractionContext,
   ): Promise<SparkInteractionResponse> {
     const request = parseSparkInteractionRequest(rawRequest);
-    if (request.kind !== "askFlow") {
+    const durable = normalizeDurableHumanInteraction(request);
+    if (!durable) {
       return createBlockedInteractionResponse(
         request,
-        "Daemon-backed interaction transport currently supports askFlow only.",
+        "Daemon-backed interaction transport currently supports askFlow and toolApproval only.",
       );
     }
 
@@ -170,10 +172,11 @@ export class SparkDaemonHumanInteractionBroker {
     const humanRequestId = createId("hreq");
     const messageId = createId("msg");
     const invocationId = runtimeInvocationId(context.invocationId);
-    const callbackOptions = createCallbackOptions(request);
-    const delivery = request.delivery ?? "blocking";
+    const callbackOptions = createCallbackOptions(durable.ask);
+    const delivery = durable.ask.delivery ?? "blocking";
     const prompt =
-      request.prompt?.trim() || request.questions.map((question) => question.prompt).join("\n");
+      durable.ask.prompt?.trim() ||
+      durable.ask.questions.map((question) => question.prompt).join("\n");
     const contextPayload = {
       interactionKind: request.kind,
       interactionRequestId: request.requestId,
@@ -183,6 +186,15 @@ export class SparkDaemonHumanInteractionBroker {
       ...(context.sessionSource ? { sessionSource: context.sessionSource } : {}),
       cockpitProjected,
       delivery,
+      ...(request.kind === "toolApproval"
+        ? {
+            toolApproval: {
+              toolName: request.toolName,
+              ...(request.toolCallId ? { toolCallId: request.toolCallId } : {}),
+              ...(request.reason ? { reason: request.reason } : {}),
+            },
+          }
+        : {}),
       ...(context.channel ? { channel: context.channel } : {}),
       ...(callbackOptions.length > 0
         ? {
@@ -199,15 +211,17 @@ export class SparkDaemonHumanInteractionBroker {
           }
         : {}),
     };
+    const toolCallId =
+      context.toolCallId ?? (request.kind === "toolApproval" ? request.toolCallId : undefined);
     const payload = {
       kind: "ask_user" as const,
       delivery,
       interactionRequestId: request.requestId,
       sessionId: context.sessionId,
-      ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}),
-      title: request.title,
+      ...(toolCallId ? { toolCallId } : {}),
+      title: durable.ask.title,
       prompt,
-      questions: request.questions.map((question) => ({
+      questions: durable.ask.questions.map((question) => ({
         id: question.id,
         type: question.type,
         prompt: question.prompt,
@@ -251,10 +265,10 @@ export class SparkDaemonHumanInteractionBroker {
         workspaceBindingId: route?.workspaceBindingId ?? context.workspaceBindingId,
         workspaceId: route?.workspaceId ?? context.workspaceId,
         projectId: context.projectId,
-        toolCallId: context.toolCallId,
+        toolCallId,
         delivery,
         kind: "ask_user",
-        title: request.title,
+        title: durable.ask.title,
         prompt,
         questions: payload.questions,
         context: contextPayload,
@@ -268,7 +282,7 @@ export class SparkDaemonHumanInteractionBroker {
       try {
         await this.options.onRequestOpened({
           wait: registration.wait,
-          request,
+          request: durable.ask,
           ...(context.channel ? { channel: context.channel } : {}),
           callbackOptions,
         });
@@ -299,7 +313,7 @@ export class SparkDaemonHumanInteractionBroker {
         "Daemon failed to attach the blocking ask continuation.",
       );
     }
-    const timeoutResponseId = request.timeoutMs ? createId("hres") : undefined;
+    const timeoutResponseId = durable.ask.timeoutMs ? createId("hres") : undefined;
     const cancel = (humanResponseId?: string) => {
       void this.respond(registration.wait, {
         ...(humanResponseId ? { humanResponseId } : {}),
@@ -314,19 +328,42 @@ export class SparkDaemonHumanInteractionBroker {
       registration.response,
       context.signal,
       () => cancel(),
-      request.timeoutMs && timeoutResponseId
-        ? { timeoutMs: request.timeoutMs, cancel: () => cancel(timeoutResponseId) }
+      durable.ask.timeoutMs && timeoutResponseId
+        ? { timeoutMs: durable.ask.timeoutMs, cancel: () => cancel(timeoutResponseId) }
         : undefined,
     );
     const timedOut =
       response.status === "cancelled" && response.humanResponseId === timeoutResponseId;
+    const answers = sparkJsonObjectSchema.parse(response.answers);
+    if (request.kind === "toolApproval") {
+      const approved =
+        response.status === "answered" && isToolApprovalAnswerApproved(answers, durable.ask);
+      return {
+        version: SPARK_PROTOCOL_VERSION,
+        kind: "toolApproval",
+        requestId: request.requestId,
+        status: response.status === "answered" ? "answered" : "cancelled",
+        approved,
+        message: approved
+          ? undefined
+          : response.status === "answered"
+            ? `tool "${request.toolName}" was rejected`
+            : undefined,
+        metadata: {
+          delivery: "blocking",
+          humanResponseId: response.humanResponseId,
+          humanRequestId,
+          ...(timedOut ? { timedOut: true } : {}),
+        },
+      };
+    }
     return {
       version: SPARK_PROTOCOL_VERSION,
       kind: "askFlow",
       requestId: request.requestId,
       humanRequestId,
       status: response.status === "answered" ? "answered" : "cancelled",
-      answers: sparkJsonObjectSchema.parse(response.answers),
+      answers,
       nextAction: response.status === "answered" ? "resume" : "cancel",
       metadata: {
         delivery: "blocking",
@@ -337,8 +374,74 @@ export class SparkDaemonHumanInteractionBroker {
   }
 }
 
+type DurableAskFlowRequest = Extract<SparkInteractionRequest, { kind: "askFlow" }>;
+
+function normalizeDurableHumanInteraction(
+  request: SparkInteractionRequest,
+): { ask: DurableAskFlowRequest } | null {
+  if (request.kind === "askFlow") return { ask: request };
+  if (request.kind !== "toolApproval") return null;
+  const approveValue = "approve";
+  const rejectValue = "reject";
+  const prompt =
+    request.reason?.trim() || request.prompt?.trim() || `Approve tool "${request.toolName}"?`;
+  return {
+    ask: parseSparkInteractionRequest({
+      version: request.version,
+      kind: "askFlow",
+      requestId: request.requestId,
+      title: request.title,
+      prompt,
+      delivery: "blocking",
+      mode: "approval",
+      source: request.source,
+      questions: [
+        {
+          id: "approval",
+          type: "single",
+          required: true,
+          prompt,
+          options: [
+            { value: approveValue, label: request.approveLabel },
+            { value: rejectValue, label: request.rejectLabel },
+          ],
+        },
+      ],
+      metadata: {
+        ...request.metadata,
+        projectedFrom: "toolApproval",
+        toolName: request.toolName,
+        ...(request.toolCallId ? { toolCallId: request.toolCallId } : {}),
+      },
+    }) as DurableAskFlowRequest,
+  };
+}
+
+function isToolApprovalAnswerApproved(
+  answers: Record<string, unknown>,
+  ask: DurableAskFlowRequest,
+): boolean {
+  const questionId = ask.questions[0]?.id ?? "approval";
+  const approveValue = ask.questions[0]?.options[0]?.value ?? "approve";
+  const raw = answers[questionId];
+  if (typeof raw === "string") return raw === approveValue || raw === "approve";
+  if (Array.isArray(raw)) {
+    return raw.some((value) => value === approveValue || value === "approve");
+  }
+  if (raw && typeof raw === "object") {
+    const record = raw as Record<string, unknown>;
+    const values = record.values;
+    if (Array.isArray(values)) {
+      return values.some((value) => value === approveValue || value === "approve");
+    }
+    const value = record.value ?? record.selected ?? record.choice;
+    if (typeof value === "string") return value === approveValue || value === "approve";
+  }
+  return false;
+}
+
 function createCallbackOptions(
-  request: Extract<SparkInteractionRequest, { kind: "askFlow" }>,
+  request: DurableAskFlowRequest,
 ): SparkDaemonHumanInteractionOpened["callbackOptions"] {
   if (request.questions.length !== 1) return [];
   const question = request.questions[0]!;

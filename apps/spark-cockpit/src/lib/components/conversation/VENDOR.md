@@ -64,9 +64,10 @@ ideas above were translated to Svelte 5 components that use Cockpit's scoped CSS
   blocks now use the Response/Streamdown implementation instead of the legacy block parser.
 - Replaced upstream tool-state vocabulary with Spark states and expose only display-safe tool name,
   status, summary, and reference fields.
-- Ported Chain of Thought's full-width collapsible header, status-aware step rail, staggered reveal,
-  and streaming auto-open behavior into `ThinkingChainPart`. Search-result and image primitives stay
-  out until the daemon exposes canonical display-safe data for them.
+- Ported Chain of Thought's full-width collapsible header, status-aware step rail, and
+  streaming auto-open / complete auto-collapse behavior into `ThinkingChainPart`. Staggered
+  step reveal and summary failure badges are intentionally omitted. Search-result and image
+  primitives stay out until the daemon exposes canonical display-safe data for them.
 - Added a bounded live region, keyboard composer submission, IME-safe Enter handling, an accessible
   slash-command listbox, jump-to-latest, message copy, reduced-motion behavior, and Spark i18n labels
   supplied by the route shell. The composer keeps a Header/Body/command-surface/Footer split while

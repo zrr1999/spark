@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { configureCockpitPublicUrl } from "../src/lib/server/public-url.js";
-import { closeDatabase, getDatabase } from "../src/lib/server/db.js";
+import { closeDatabase, getDatabase, pinDatabase, unpinDatabase } from "../src/lib/server/db.js";
 import { attachRuntimeWebSocket, authenticateRuntimeToken } from "../src/lib/server/runtime-ws.js";
 import { startWebPushEventDispatcher } from "../src/lib/server/web-push.js";
 import { WebSocketServer } from "ws";
@@ -29,22 +29,37 @@ server.on("upgrade", (request, socket, head) => {
     return;
   }
 
-  const db = getDatabase();
-  const tokenId = authenticateRuntimeToken(db, runtimeId, request.headers.authorization);
-  if (!tokenId) {
-    socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-    socket.destroy();
-    return;
-  }
+  pinDatabase();
+  let pinHeld = true;
+  const releasePin = () => {
+    if (!pinHeld) return;
+    pinHeld = false;
+    unpinDatabase();
+  };
 
-  wss.handleUpgrade(request, socket, head, (ws) => {
-    attachRuntimeWebSocket(ws, {
-      db,
-      runtimeId,
-      remoteAddress: request.socket.remoteAddress,
-      secureTransport: runtimeUpgradeIsSecure(request, publicUrl.trustedProxy),
+  try {
+    const db = getDatabase();
+    const tokenId = authenticateRuntimeToken(db, runtimeId, request.headers.authorization);
+    if (!tokenId) {
+      releasePin();
+      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      ws.on("close", releasePin);
+      attachRuntimeWebSocket(ws, {
+        db,
+        runtimeId,
+        remoteAddress: request.socket.remoteAddress,
+        secureTransport: runtimeUpgradeIsSecure(request, publicUrl.trustedProxy),
+      });
     });
-  });
+  } catch (error) {
+    releasePin();
+    throw error;
+  }
 });
 
 function runtimeUpgradeIsSecure(request: IncomingMessage, trustedProxy: boolean): boolean {
@@ -56,7 +71,7 @@ function runtimeUpgradeIsSecure(request: IncomingMessage, trustedProxy: boolean)
   return protocol?.trim().toLowerCase() === "https";
 }
 
-const stopWebPushDispatcher = startWebPushEventDispatcher({ db: getDatabase() });
+const stopWebPushDispatcher = startWebPushEventDispatcher({});
 server.on("close", () => {
   stopWebPushDispatcher();
   closeDatabase();

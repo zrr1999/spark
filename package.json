@@ -30,7 +30,7 @@
     "format": "vp fmt . --write",
     "test": "node --experimental-strip-types --test \"test/*.test.ts\"",
     "test:file": "node --experimental-strip-types --test",
-    "test:mutation": "pnpm --filter @zendev-lab/spark-retry run test:mutation",
+    "test:mutation": "node scripts/run-leaf-mutation.mjs",
     "build": "pnpm --filter @zendev-lab/spark-daemon run build && pnpm --filter @zendev-lab/spark-cockpit run build",
     "preview": "pnpm --filter @zendev-lab/spark-cockpit run dev",
     "publish": "pnpm run check && pnpm run build && pnpm -r --filter @zendev-lab/spark-repro --filter @zendev-lab/spark-retry --filter './apps/*' --filter @zendev-lab/pi-extension publish --access public",

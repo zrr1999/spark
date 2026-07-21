@@ -30,11 +30,16 @@ export interface SparkDaemonServerProfile {
   refreshToken?: string;
   refreshTokenExpiresAt?: string;
   webSocketUrl?: string;
+  /** When true, supervisor skips dialing this origin (temporary park). */
+  parked?: boolean;
 }
 
 interface PersistedServerProfiles {
   version: typeof serverProfilesFileVersion;
-  profiles: Record<string, Partial<Record<ServerProfileCredentialKey, string>>>;
+  profiles: Record<
+    string,
+    Partial<Record<ServerProfileCredentialKey, string>> & { parked?: boolean }
+  >;
 }
 
 interface ServerProfilesLockOwner {
@@ -287,6 +292,7 @@ function readPersistedServerProfiles(paths: SparkPaths): Map<string, SparkDaemon
     const profile = normalizeServerProfile({
       serverUrl: storedServerUrl,
       ...readCredentialFields(storedProfile, file, storedServerUrl),
+      ...(storedProfile.parked === true ? { parked: true } : {}),
     });
     if (profiles.has(profile.serverUrl)) {
       throw new Error(`Duplicate Spark daemon server profile for ${profile.serverUrl} in ${file}.`);
@@ -311,7 +317,10 @@ function writePersistedServerProfiles(
   for (const [serverUrl, profile] of [...profiles].sort(([left], [right]) =>
     left.localeCompare(right),
   )) {
-    storedProfiles[serverUrl] = pickCredentialFields(profile);
+    storedProfiles[serverUrl] = {
+      ...pickCredentialFields(profile),
+      ...(profile.parked ? { parked: true } : {}),
+    };
   }
   const contents = `${JSON.stringify(
     {
@@ -506,6 +515,7 @@ function normalizeServerProfile(profile: SparkDaemonServerProfile): SparkDaemonS
   return {
     serverUrl: normalizeSparkDaemonServerUrl(profile.serverUrl),
     ...pickCredentialFields(profile),
+    ...(profile.parked ? { parked: true } : {}),
   };
 }
 

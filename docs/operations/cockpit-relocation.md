@@ -54,7 +54,7 @@ Required fields are `instanceId`, `database.sha256`, `database.sizeBytes`, `sche
 
 ## 3. Stop, back up, and restore target
 
-Stop the target Cockpit process and verify that no process holds its instance lock. The service command is deployment-specific; for a user service:
+Stop the target Cockpit process **or** wait until its database lock is free. Cockpit opens SQLite on demand with a 30s idle release after the last consumer (HTTP request, SSE stream, runtime WebSocket, or web-push tick) unpins. HTTP may keep listening while the lock is idle; restore must still refuse while any consumer holds the lock (active browsers or runtime WSS). The service command is deployment-specific; for a user service:
 
 ```sh
 systemctl --user stop spark-cockpit

@@ -7,7 +7,7 @@
   import type {
     SessionInspectorLabels,
     SessionInspectorTab,
-    SessionWorkbenchMailMessage,
+    SessionWorkbenchMessage,
     SessionWorkbenchTask,
     SessionWorkbenchView,
   } from "$lib/session-workbench";
@@ -29,13 +29,14 @@
   let activeTab = $state<SessionInspectorTab>(untrack(() => initialTab));
   let tabs = $derived<{ id: SessionInspectorTab; label: string; icon: IconName }[]>([
     { id: "summary", label: labels.tabs.summary, icon: "activity" },
+    { id: "artifacts", label: labels.tabs.artifacts, icon: "artifacts" },
     { id: "changes", label: labels.tabs.changes, icon: "repos" },
     { id: "tasks", label: labels.tabs.tasks, icon: "folder" },
-    { id: "mailbox", label: labels.tabs.mailbox, icon: "inbox" },
+    { id: "messages", label: labels.tabs.messages, icon: "spark" },
   ]);
   let taskGroups = $derived(groupTasksByProject(view.tasks));
-  let unreadMailCount = $derived(
-    view.mailbox.filter((message) => message.status === "unread").length,
+  let unreadMessageCount = $derived(
+    view.messages.filter((message) => message.status === "unread").length,
   );
 
   function statusClass(status: string) {
@@ -48,25 +49,25 @@
     return statusLabel(status);
   }
 
-  function mailKindLabel(kind: "request" | "question" | "notification") {
-    if (kind === "request") return labels.mailRequest;
-    if (kind === "question") return labels.mailQuestion;
-    return labels.mailNotification;
+  function messageKindLabel(kind: "request" | "question" | "notification") {
+    if (kind === "request") return labels.messageRequest;
+    if (kind === "question") return labels.messageQuestion;
+    return labels.messageNotification;
   }
 
-  function mailStatusLabel(status: "unread" | "read" | "acknowledged") {
-    if (status === "unread") return labels.mailUnread;
-    if (status === "read") return labels.mailRead;
-    return labels.mailAcknowledged;
+  function messageStatusLabel(status: "unread" | "read" | "acknowledged") {
+    if (status === "unread") return labels.messageUnread;
+    if (status === "read") return labels.messageRead;
+    return labels.messageAcknowledged;
   }
 
-  function mailDeliveryLabel(
-    status: NonNullable<SessionWorkbenchMailMessage["channelDelivery"]>["status"],
+  function messageDeliveryLabel(
+    status: NonNullable<SessionWorkbenchMessage["channelDelivery"]>["status"],
   ) {
-    if (status === "pending") return labels.mailDeliveryPending;
-    if (status === "delivered") return labels.mailDeliveryDelivered;
-    if (status === "failed") return labels.mailDeliveryFailed;
-    return labels.mailDeliveryUncertain;
+    if (status === "pending") return labels.messageDeliveryPending;
+    if (status === "delivered") return labels.messageDeliveryDelivered;
+    if (status === "failed") return labels.messageDeliveryFailed;
+    return labels.messageDeliveryUncertain;
   }
 
   function compactTimestamp(value: string) {
@@ -170,9 +171,9 @@
       >
         <Icon name={tab.icon} size={16} />
         <span>{tab.label}</span>
-        {#if tab.id === "mailbox" && unreadMailCount > 0}
-          <span class="tab-count" aria-label={`${unreadMailCount} ${labels.mailUnread}`}>
-            {unreadMailCount > 99 ? "99+" : unreadMailCount}
+        {#if tab.id === "messages" && unreadMessageCount > 0}
+          <span class="tab-count" aria-label={`${unreadMessageCount} ${labels.messageUnread}`}>
+            {unreadMessageCount > 99 ? "99+" : unreadMessageCount}
           </span>
         {/if}
       </button>
@@ -224,6 +225,43 @@
         </dl>
       </section>
 
+    {:else if activeTab === "artifacts"}
+      {#if view.artifacts.length === 0}
+        <EmptyState
+          title={labels.noArtifactsTitle}
+          body={labels.noArtifactsBody}
+          icon="artifacts"
+          compact
+        />
+      {:else}
+        <section class="inspector-section" aria-labelledby={headingId("artifacts")}>
+          <h2 id={headingId("artifacts")}>{labels.artifactsHeading}</h2>
+          <div class="card-list">
+            {#each view.artifacts as artifact (artifact.id)}
+              <article class="inspector-card artifact-card">
+                <header class="card-header">
+                  <div class="card-title">
+                    <Icon name="artifacts" size={16} />
+                    <div>
+                      <h3>{artifact.title}</h3>
+                      <p>{artifact.kind} · {artifact.format}</p>
+                      <code class="artifact-ref">{artifact.ref}</code>
+                    </div>
+                  </div>
+                  {#if artifact.status}
+                    <span class={`status-pill ${statusClass(artifact.status)}`}>
+                      {statusLabel(artifact.status)}
+                    </span>
+                  {/if}
+                </header>
+                {#if artifact.preview}
+                  <pre class="artifact-preview">{artifact.preview}</pre>
+                {/if}
+              </article>
+            {/each}
+          </div>
+        </section>
+      {/if}
     {:else if activeTab === "changes"}
       {#if view.changes.length === 0}
         <EmptyState title={labels.noChangesTitle} body={labels.noChangesBody} icon="repos" compact />
@@ -324,40 +362,46 @@
           {/if}
         </section>
       {/if}
-    {:else if activeTab === "mailbox"}
-      {#if view.mailbox.length === 0}
-        <EmptyState title={labels.noMailboxTitle} body={labels.noMailboxBody} icon="inbox" compact />
+    {:else if activeTab === "messages"}
+      {#if view.messages.length === 0}
+        <EmptyState
+          title={labels.noMessagesTitle}
+          body={labels.noMessagesBody}
+          icon="spark"
+          compact
+        />
       {:else}
-        <section class="inspector-section" aria-labelledby={headingId("mailbox")}>
-          <h2 id={headingId("mailbox")}>{labels.mailboxHeading}</h2>
+        <section class="inspector-section" aria-labelledby={headingId("messages")}>
+          <h2 id={headingId("messages")}>{labels.messagesHeading}</h2>
           <div class="card-list">
-            {#each view.mailbox as message (message.id)}
-              <article class="inspector-card mailbox-card">
+            {#each view.messages as message (message.id)}
+              <article class="inspector-card message-card">
                 <header class="card-header">
                   <div class="card-title">
-                    <Icon name={message.kind === "request" ? "inbox" : "spark"} size={16} />
+                    <Icon name="spark" size={16} />
                     <div>
                       <h3>{message.subject ?? message.intent}</h3>
                       <p>
-                        {mailKindLabel(message.kind)} · {labels.mailFrom} {message.fromSessionId}
+                        {messageKindLabel(message.kind)} · {labels.messageFrom}
+                        {message.fromSessionId}
                       </p>
                     </div>
                   </div>
-                  <div class="mail-statuses">
+                  <div class="message-statuses">
                     {#if message.channelDelivery}
                       <span
-                        class={`status-pill mail-delivery-status ${statusClass(message.channelDelivery.status)}`}
+                        class={`status-pill message-delivery-status ${statusClass(message.channelDelivery.status)}`}
                       >
-                        {mailDeliveryLabel(message.channelDelivery.status)}
+                        {messageDeliveryLabel(message.channelDelivery.status)}
                       </span>
                     {/if}
-                    <span class={`status-pill mail-read-status ${statusClass(message.status)}`}>
-                      {mailStatusLabel(message.status)}
+                    <span class={`status-pill message-read-status ${statusClass(message.status)}`}>
+                      {messageStatusLabel(message.status)}
                     </span>
                   </div>
                 </header>
                 {#if message.body}
-                  <p class="card-summary mail-body">{message.body}</p>
+                  <p class="card-summary message-body">{message.body}</p>
                 {/if}
                 <time datetime={message.createdAt} title={message.createdAt}>
                   {compactTimestamp(message.createdAt)}
@@ -613,12 +657,12 @@
     overflow-wrap: anywhere;
   }
 
-  .mailbox-card time {
+  .message-card time {
     color: var(--color-ink-subtle);
     font-size: var(--text-caption);
   }
 
-  .mail-statuses {
+  .message-statuses {
     display: flex;
     flex-wrap: wrap;
     gap: var(--spacing-xxs);
@@ -630,7 +674,7 @@
     color: var(--color-warning);
   }
 
-  .mail-body {
+  .message-body {
     display: -webkit-box;
     line-clamp: 4;
     overflow: hidden;

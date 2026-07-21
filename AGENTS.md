@@ -35,7 +35,7 @@ Target package topology follows type-first names:
 | `pnpm run check:daemon-readiness`        | Emit the Spark daemon readiness audit report                     |
 | `pnpm run check:zellij-harness`          | Emit the native TUI/zellij harness capability audit report       |
 | `pnpm test`                              | Root Node tests only (`test/*.test.ts`)                          |
-| `pnpm run test:mutation`                 | Opt-in Stryker pilot for `@zendev-lab/spark-retry`               |
+| `pnpm run test:mutation`                 | Leaf-package mutation CE (`retry`/`protocol`/`db`/`system`)      |
 | `pnpm run build`                         | Build the Spark daemon CLI and Spark Cockpit web app             |
 | `pnpm run preview`                       | Start the local Spark Cockpit dev server                         |
 | `spark cockpit`                          | Start the built Spark Cockpit production server through the CLI   |
@@ -46,6 +46,7 @@ Target package topology follows type-first names:
 
 - `.github/workflows/ci-static-checks.yml` — prek + `setup-vp` + full prek pass (matches sixbones pattern).
 - `.github/workflows/ci-verify.yml` — `pnpm install` + `pnpm run check`.
+- `.github/workflows/ci-mutation.yml` — weekly/manual leaf-package mutation CE (non-blocking).
 - `.github/workflows/ci-pr-checks.yml` — PR title validation (zendev).
 - `.github/workflows/ci-typos.yml` — spellcheck with `_typos.toml`.
 

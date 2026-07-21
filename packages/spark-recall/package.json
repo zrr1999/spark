@@ -1,11 +1,12 @@
 {
   "name": "@zendev-lab/spark-recall",
   "version": "0.1.0",
-  "description": "Controlled scoped recall candidate capability for Spark extension hosts.",
+  "description": "Deprecated facade: recall candidates live in @zendev-lab/spark-memory. This package re-exports for compatibility.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [
     "src/**/*.ts",
+    "!src/**/*.test.ts",
     "README.md"
   ],
   "type": "module",
@@ -20,13 +21,9 @@
     "check": "vp check --no-fmt --no-lint ."
   },
   "dependencies": {
-    "@zendev-lab/spark-extension-api": "workspace:^",
-    "@zendev-lab/spark-system": "workspace:^",
-    "typebox": "catalog:"
+    "@zendev-lab/spark-memory": "workspace:^"
   },
   "pi": {
-    "extensions": [
-      "./src/extension-entry.ts"
-    ]
+    "extensions": []
   }
 }

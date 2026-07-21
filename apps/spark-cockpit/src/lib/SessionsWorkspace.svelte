@@ -1,6 +1,7 @@
 <script lang="ts">
   import { enhance } from "$app/forms";
   import { goto, invalidateAll } from "$app/navigation";
+  import { page } from "$app/state";
   import {
     Composer,
     ConversationViewport,
@@ -32,7 +33,9 @@
   } from "$lib/channel-session-title";
   import { visibleSessionStatus } from "$lib/conversation-status";
   import Icon from "$lib/Icon.svelte";
-  import { formatRelativeTime, statusLabel as getStatusLabel } from "$lib/i18n";
+  import { formatRelativeTime, statusLabel as getStatusLabel, type AppMessages } from "$lib/i18n";
+  import SessionAskPanel from "$lib/SessionAskPanel.svelte";
+  import type { PendingWorkbenchAsk } from "$lib/pending-ask";
   import SessionInspector from "$lib/SessionInspector.svelte";
   import {
     cancelledTurnIdFromActionResult,
@@ -261,6 +264,15 @@
 
   let selected = $derived(
     sessions.find((session) => session.sessionId === selectedSessionId) ?? null,
+  );
+  let sessionPendingAsk = $derived.by(() => {
+    const ask = (page.data as { pendingAsk?: PendingWorkbenchAsk | null }).pendingAsk;
+    if (!ask?.sessionId || !selected?.sessionId) return null;
+    return ask.sessionId === selected.sessionId ? ask : null;
+  });
+  let askDetailMessages = $derived(
+    (page.data as { messages?: { inboxDetail?: AppMessages["inboxDetail"] } }).messages
+      ?.inboxDetail ?? null,
   );
   let liveSessionView = $state<SparkSessionView | null>(untrack(() => sessionView));
   let liveSessionHistory = $state<SessionSnapshotHistory | null>(
@@ -594,20 +606,24 @@
     ariaLabel: copy.inspectorAria,
     tabs: {
       summary: copy.summaryTab,
+      artifacts: copy.artifactsTab,
       changes: copy.changesTab,
       tasks: copy.tasksTab,
-      mailbox: copy.mailboxTab,
+      messages: copy.messagesTab,
     },
     summaryHeading: copy.summaryHeading,
+    artifactsHeading: copy.artifactsHeading,
     tasksHeading: copy.tasksHeading,
     changesHeading: copy.changesHeading,
-    mailboxHeading: copy.mailboxHeading,
+    messagesHeading: copy.messagesHeading,
     noTasksTitle: copy.noTasksTitle,
     noTasksBody: copy.noTasksBody,
+    noArtifactsTitle: copy.noArtifactsTitle,
+    noArtifactsBody: copy.noArtifactsBody,
     noChangesTitle: copy.noChangesTitle,
     noChangesBody: copy.noChangesBody,
-    noMailboxTitle: copy.noMailboxTitle,
-    noMailboxBody: copy.noMailboxBody,
+    noMessagesTitle: copy.noMessagesTitle,
+    noMessagesBody: copy.noMessagesBody,
     noSessionTodoTitle: copy.noSessionTodoTitle,
     noSessionTodoBody: copy.noSessionTodoBody,
     noActiveSessionTodo: copy.noActiveSessionTodo,
@@ -618,17 +634,17 @@
     openSessionTodo: copy.openSessionTodo,
     sessionTodoPending: copy.sessionTodoPending,
     sessionTodoInProgress: copy.sessionTodoInProgress,
-    mailFrom: copy.mailFrom,
-    mailRequest: copy.mailRequest,
-    mailQuestion: copy.mailQuestion,
-    mailNotification: copy.mailNotification,
-    mailUnread: copy.mailUnread,
-    mailRead: copy.mailRead,
-    mailAcknowledged: copy.mailAcknowledged,
-    mailDeliveryPending: copy.mailDeliveryPending,
-    mailDeliveryDelivered: copy.mailDeliveryDelivered,
-    mailDeliveryFailed: copy.mailDeliveryFailed,
-    mailDeliveryUncertain: copy.mailDeliveryUncertain,
+    messageFrom: copy.messageFrom,
+    messageRequest: copy.messageRequest,
+    messageQuestion: copy.messageQuestion,
+    messageNotification: copy.messageNotification,
+    messageUnread: copy.messageUnread,
+    messageRead: copy.messageRead,
+    messageAcknowledged: copy.messageAcknowledged,
+    messageDeliveryPending: copy.messageDeliveryPending,
+    messageDeliveryDelivered: copy.messageDeliveryDelivered,
+    messageDeliveryFailed: copy.messageDeliveryFailed,
+    messageDeliveryUncertain: copy.messageDeliveryUncertain,
     sessionId: copy.sessionId,
     sessionStatus: copy.sessionStatus,
     workingDirectory: copy.workingDirectory,
@@ -2320,6 +2336,9 @@
           {/snippet}
           {#snippet header()}
             <div class="composer-runtime-header">
+              {#if sessionPendingAsk && askDetailMessages}
+                <SessionAskPanel ask={sessionPendingAsk} messages={askDetailMessages} />
+              {/if}
               {#if liveSessionView?.cwd}
                 <SessionStatusBar
                   labels={statusBarLabels}

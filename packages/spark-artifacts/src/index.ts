@@ -1,11 +1,16 @@
 import { randomUUID, createHash } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { isProductArtifactKind } from "./product/types.ts";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
-export type ArtifactRef = `artifact:${string}` & { readonly __kind?: "artifact" };
+export type ArtifactRef = (`artifact:${string}` | `evidence:${string}`) & {
+  readonly __kind?: "artifact" | "evidence";
+};
+/** Prefer `evidence:` for new evidence writes; legacy evidence may still use `artifact:`. */
+export type EvidenceRef = `evidence:${string}` & { readonly __kind?: "evidence" };
 export type ProjectRef = `proj:${string}` & { readonly __kind?: "proj" };
 export type TaskRef = `task:${string}` & { readonly __kind?: "task" };
 export type RoleRef = `role:${string}` & { readonly __kind?: "role" };
@@ -15,6 +20,7 @@ export type AskRef = `ask:${string}` & { readonly __kind?: "ask" };
 export type CueJobRef = `cue-job:${string}` & { readonly __kind?: "cue-job" };
 export type LinkableRef =
   | ArtifactRef
+  | EvidenceRef
   | ProjectRef
   | TaskRef
   | RoleRef
@@ -46,16 +52,15 @@ export interface Provenance {
 }
 
 /**
- * Artifact kind is a small, role/domain-agnostic axis describing what an
- * artifact *is* by shape, never who produced it (use `producer`) or its
- * lifecycle stage (use `status`/body):
- * - document: prose/markdown deliverable (charter, research write-up, plan).
- * - record: structured (JSON) record of one decision/answer/event; distinguish
- *   origin via producer (ask/review/task/...).
- * - trace: prunable execution output/transcript (execution transcript, cue run).
- * - knowledge: reusable learning entry owned by the learning capability.
+ * Agent-internal evidence kinds (not Cockpit/user content). Product artifacts are
+ * issue|pr|preview in `./product/`.
+ *
+ * Prefer compact JSON `record` notes. Keep `trace` for prunable raw output.
+ * `knowledge` is owned by the learning capability; `document` is rare long prose.
  */
 export type ArtifactKind = "document" | "record" | "trace" | "knowledge";
+/** @deprecated Prefer EvidenceKind — ArtifactKind remains for compatibility. */
+export type EvidenceKind = ArtifactKind;
 
 export const ARTIFACT_KINDS = [
   "document",
@@ -182,6 +187,8 @@ export interface PutArtifactInput<T extends JsonValue | string = JsonValue | str
 
 export interface ArtifactStoreOptions {
   rootDir: string;
+  /** Optional legacy evidence root (typically `.spark/artifacts`) read as fallback. */
+  legacyRootDir?: string;
   inlineBodyThresholdBytes?: number;
   bodyPreviewChars?: number;
 }
@@ -302,12 +309,14 @@ export function canonicalArtifactKindForPersistedKind(value: unknown): ArtifactK
 
 export class ArtifactStore {
   readonly rootDir: string;
+  readonly legacyRootDir?: string;
   readonly blobDir: string;
   readonly inlineBodyThresholdBytes: number;
   readonly bodyPreviewChars: number;
 
   constructor(options: ArtifactStoreOptions) {
     this.rootDir = options.rootDir;
+    this.legacyRootDir = options.legacyRootDir;
     this.blobDir = join(options.rootDir, "blobs");
     this.inlineBodyThresholdBytes =
       options.inlineBodyThresholdBytes ?? DEFAULT_INLINE_BODY_THRESHOLD_BYTES;
@@ -367,12 +376,12 @@ export class ArtifactStore {
   }
 
   async update<T extends JsonValue | string>(
-    ref: ArtifactRef,
+    ref: ArtifactRef | EvidenceRef,
     patch: Partial<Omit<PutArtifactInput<T>, "ref">>,
   ): Promise<Artifact<T>> {
     const existing = await this.get<T>(ref);
     return this.put<T>({
-      ref,
+      ref: asArtifactRef(ref),
       kind: patch.kind ?? existing.kind,
       title: patch.title ?? existing.title,
       format: patch.format ?? existing.format,
@@ -384,7 +393,7 @@ export class ArtifactStore {
   }
 
   async get<T extends JsonValue | string = JsonValue | string>(
-    ref: ArtifactRef,
+    ref: ArtifactRef | EvidenceRef,
   ): Promise<Artifact<T>> {
     const artifact = await this.readMetadata<T>(ref);
     if (artifact.bodyTruncated && artifact.blobPath) {
@@ -397,18 +406,26 @@ export class ArtifactStore {
     return artifact;
   }
 
-  async getBody(ref: ArtifactRef): Promise<string> {
+  async getBody(ref: ArtifactRef | EvidenceRef): Promise<string> {
     const artifact = await this.readMetadata(ref);
     if (artifact.blobPath) {
-      const blobPath = resolveArtifactBlobPath(this.rootDir, artifact.blobPath);
-      if (!blobPath) throw new Error(`artifact blob path escapes artifact store: ${artifact.ref}`);
-      return readFile(blobPath, "utf8");
+      for (const root of this.evidenceRoots()) {
+        const blobPath = resolveArtifactBlobPath(root, artifact.blobPath);
+        if (!blobPath) continue;
+        try {
+          return await readFile(blobPath, "utf8");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+          throw error;
+        }
+      }
+      throw new Error(`artifact blob path escapes artifact store: ${artifact.ref}`);
     }
     return serializeArtifactBody(artifact.format, artifact.body);
   }
 
   async tryGet<T extends JsonValue | string = JsonValue | string>(
-    ref: ArtifactRef,
+    ref: ArtifactRef | EvidenceRef,
   ): Promise<Artifact<T> | null> {
     try {
       return await this.get<T>(ref);
@@ -419,42 +436,71 @@ export class ArtifactStore {
   }
 
   async list(filter: ArtifactQuery = {}): Promise<Artifact[]> {
-    await mkdir(this.rootDir, { recursive: true });
-    const entries = await readdir(this.rootDir, { withFileTypes: true });
-    const artifacts: Artifact[] = [];
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      const artifact = await readArtifactMetadataFile(join(this.rootDir, entry.name));
-      if (!matchesQuery(artifact, filter)) continue;
-      artifacts.push(artifact);
+    const { artifacts, diagnostics } = await this.listWithDiagnostics(filter);
+    const fatal = diagnostics.find((diagnostic) => diagnostic.reason !== undefined);
+    if (fatal) {
+      throw new ArtifactStoreFormatError(
+        fatal.filePath,
+        fatal.message.replace(`${fatal.filePath}: `, ""),
+        (fatal.reason as "invalid_json" | "invalid_metadata") ?? "invalid_metadata",
+      );
     }
-    return artifacts.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    if (diagnostics.length > 0) {
+      throw new ArtifactStoreFormatError(
+        diagnostics[0]!.filePath,
+        diagnostics[0]!.message.replace(`${diagnostics[0]!.filePath}: `, ""),
+        "invalid_metadata",
+      );
+    }
+    return artifacts;
   }
 
   async listWithDiagnostics(
     filter: ArtifactQuery = {},
   ): Promise<ArtifactListWithDiagnosticsResult> {
     await mkdir(this.rootDir, { recursive: true });
-    const entries = await readdir(this.rootDir, { withFileTypes: true });
+    const roots = this.evidenceRoots();
     const artifacts: Artifact[] = [];
     const diagnostics: ArtifactListDiagnostic[] = [];
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      const filePath = join(this.rootDir, entry.name);
-      let artifact: Artifact;
+    const seen = new Set<string>();
+    for (const root of roots) {
+      let entries;
       try {
-        artifact = await readArtifactMetadataFile(filePath);
+        entries = await readdir(root, { withFileTypes: true });
       } catch (error) {
-        diagnostics.push(artifactListDiagnostic(filePath, error));
-        continue;
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
       }
-      if (!matchesQuery(artifact, filter)) continue;
-      artifacts.push(artifact);
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+        const filePath = join(root, entry.name);
+        let artifact: Artifact;
+        try {
+          artifact = await readArtifactMetadataFile(filePath);
+        } catch (error) {
+          // Product issue/pr/preview files may share a legacy root; skip quietly.
+          if (isSkippableNonEvidenceMetadata(error)) continue;
+          diagnostics.push(artifactListDiagnostic(filePath, error));
+          continue;
+        }
+        if (seen.has(artifact.ref)) continue;
+        seen.add(artifact.ref);
+        if (!matchesQuery(artifact, filter)) continue;
+        artifacts.push(artifact);
+      }
     }
     return {
       artifacts: artifacts.sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
       diagnostics,
     };
+  }
+
+  private evidenceRoots(): string[] {
+    const roots = [this.rootDir];
+    if (this.legacyRootDir && this.legacyRootDir !== this.rootDir) {
+      roots.push(this.legacyRootDir);
+    }
+    return roots;
   }
 
   async linksTo(targetRef: string): Promise<ArtifactLink[]> {
@@ -485,15 +531,26 @@ export class ArtifactStore {
     });
   }
 
-  pathFor(ref: ArtifactRef): string {
+  pathFor(ref: ArtifactRef | EvidenceRef): string {
     return join(this.rootDir, `${refId(ref)}.json`);
   }
 
   private async readMetadata<T extends JsonValue | string = JsonValue | string>(
-    ref: ArtifactRef,
+    ref: ArtifactRef | EvidenceRef,
   ): Promise<Artifact<T>> {
-    return (await readArtifactMetadataFile(this.pathFor(ref))) as Artifact<T>;
+    try {
+      return (await readArtifactMetadataFile(this.pathFor(ref))) as Artifact<T>;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !this.legacyRootDir) throw error;
+      const legacyPath = join(this.legacyRootDir, `${refId(ref)}.json`);
+      return (await readArtifactMetadataFile(legacyPath)) as Artifact<T>;
+    }
   }
+}
+
+function isSkippableNonEvidenceMetadata(error: unknown): boolean {
+  if (!(error instanceof ArtifactStoreFormatError)) return false;
+  return /product (?:issue|pr|preview) skipped/u.test(error.message);
 }
 
 function artifactListDiagnostic(filePath: string, error: unknown): ArtifactListDiagnostic {
@@ -503,9 +560,29 @@ function artifactListDiagnostic(filePath: string, error: unknown): ArtifactListD
   return { filePath, message: unknownErrorMessage(error) };
 }
 
+/**
+ * Internal evidence store used by the `evidence` tool. New writes go to
+ * `.spark/evidence`; legacy evidence under `.spark/artifacts` remains readable.
+ * Product issue/pr/preview also live under `.spark/artifacts` (kind-filtered).
+ */
+export function defaultEvidenceStore(cwd: string): ArtifactStore {
+  return new ArtifactStore({
+    rootDir: join(cwd, ".spark", "evidence"),
+    legacyRootDir: join(cwd, ".spark", "artifacts"),
+  });
+}
+
+/**
+ * Historical evidence root under `.spark/artifacts`. Prefer `defaultEvidenceStore`
+ * for new tool/host wiring; kept so existing ask/learning/runtime call sites
+ * continue writing the same on-disk path.
+ */
 export function defaultArtifactStore(cwd: string): ArtifactStore {
   return new ArtifactStore({ rootDir: join(cwd, ".spark", "artifacts") });
 }
+
+/** @deprecated Alias for ArtifactStore (internal evidence). */
+export type EvidenceStore = ArtifactStore;
 
 export async function readArtifactMetadataFile(filePath: string): Promise<Artifact> {
   const text = await readFile(filePath, "utf8");
@@ -517,6 +594,13 @@ export async function readArtifactMetadataFile(filePath: string): Promise<Artifa
       filePath,
       `invalid JSON: ${unknownErrorMessage(error)}`,
       "invalid_json",
+    );
+  }
+  if (isRecord(raw) && isProductArtifactKind(raw.kind)) {
+    throw new ArtifactStoreFormatError(
+      filePath,
+      `kind must be a valid artifact kind (product ${String(raw.kind)} skipped)`,
+      "invalid_metadata",
     );
   }
   const metadata = normalizePersistedArtifactMetadata(raw);
@@ -659,7 +743,7 @@ export async function compactArtifactMetadata(
 
 export function validateArtifact(artifact: unknown): asserts artifact is Artifact {
   if (!isRecord(artifact)) throw new ArtifactValidationError("artifact metadata must be an object");
-  assertRefValue(artifact.ref, "artifact", "artifact ref");
+  assertEvidenceRefValue(artifact.ref, "artifact ref");
   if (!isArtifactKind(artifact.kind)) {
     throw new ArtifactValidationError("kind must be a valid artifact kind");
   }
@@ -718,6 +802,25 @@ export function isArtifactProducer(value: unknown): value is ArtifactProducer {
 export function newArtifactRef(id: string = randomUUID()): ArtifactRef {
   if (!id || id.includes(":")) throw new ArtifactValidationError(`invalid artifact id: ${id}`);
   return `artifact:${id}` as ArtifactRef;
+}
+
+/** Prefer for new evidence writes. Legacy callers may still use newArtifactRef. */
+export function newEvidenceRef(id: string = randomUUID()): EvidenceRef {
+  if (!id || id.includes(":")) throw new ArtifactValidationError(`invalid evidence id: ${id}`);
+  return `evidence:${id}` as EvidenceRef;
+}
+
+export function asArtifactRef(ref: ArtifactRef | EvidenceRef): ArtifactRef {
+  return ref as ArtifactRef;
+}
+
+function assertEvidenceRefValue(value: unknown, label: string): void {
+  if (typeof value !== "string" || !isRef(value)) {
+    throw new ArtifactValidationError(`${label} must be a valid evidence or artifact ref`);
+  }
+  if (!value.startsWith("artifact:") && !value.startsWith("evidence:")) {
+    throw new ArtifactValidationError(`${label} must be evidence:… or artifact:…`);
+  }
 }
 
 export function refId(ref: string): string {
@@ -974,7 +1077,7 @@ function assertOptionalRefValue(value: unknown, kind: string, label: string): vo
 function assertOptionalArtifactRefArray(value: unknown, label: string): void {
   if (value === undefined) return;
   if (!Array.isArray(value)) throw new ArtifactValidationError(`${label} must be an array`);
-  value.forEach((entry, index) => assertRefValue(entry, "artifact", `${label}[${index}]`));
+  value.forEach((entry, index) => assertEvidenceRefValue(entry, `${label}[${index}]`));
 }
 
 function assertString(value: unknown, label: string): void {
@@ -1025,3 +1128,46 @@ function unknownErrorMessage(error: unknown): string {
 async function fileSize(path: string): Promise<number> {
   return (await stat(path)).size;
 }
+
+export {
+  PRODUCT_ARTIFACT_KINDS,
+  PRODUCT_ARTIFACT_FORMATS,
+  ProductArtifactStore,
+  ProductArtifactValidationError,
+  applyWorktreeToPrBody,
+  attachPrWorktree,
+  defaultProductArtifactStore,
+  isProductArtifactBody,
+  isProductArtifactFormat,
+  isProductArtifactKind,
+  issueBodyFromSnapshot,
+  newProductArtifactRef,
+  parseForgeUrl,
+  prBodyFromSnapshot,
+  prWorktreePath,
+  removePrWorktree,
+  syncForgeIssue,
+  syncForgePr,
+  type AttachPrWorktreeInput,
+  type AttachPrWorktreeResult,
+  type CommandRunner,
+  type ForgeHost,
+  type ForgeIssueSnapshot,
+  type ForgePrSnapshot,
+  type ForgeSyncOptions,
+  type IssueArtifactBody,
+  type PrArtifactBody,
+  type PreviewArtifactBody,
+  type PreviewContentFormat,
+  type PreviewProgress,
+  type ProductArtifact,
+  type ProductArtifactBody,
+  type ProductArtifactFormat,
+  type ProductArtifactKind,
+  type ProductArtifactQuery,
+  type ProductArtifactRef,
+  type ProductArtifactStoreOptions,
+  type PutProductArtifactInput,
+  type WorktreeCommandRunner,
+  type WorktreeStatus,
+} from "./product/index.ts";

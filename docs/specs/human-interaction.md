@@ -9,6 +9,15 @@ Canonical contract for structured human asks and approvals across daemon, Cockpi
 - **`spark-ask`** owns only the in-turn terminal UI state machine (tabs, drafts, focus). It must not become a second durable store.
 - **Channels** (e.g. QQ buttons) project and settle the same daemon wait; they do not invent terminal statuses.
 
+## Supported interaction kinds (daemon broker)
+
+The durable daemon broker currently settles:
+
+- `askFlow` — structured questions (primary Cockpit / channel path)
+- `toolApproval` — approve/reject a tool call (projected as a single-choice ask wait, then mapped back to a `toolApproval` response)
+
+Other protocol kinds (`confirmation`, `diffApproval`, `modelSelect`, `workflowPicker`) remain host/TUI-local until a broker path exists. Do not assume Cockpit inbox can settle them.
+
 ## Status vocabulary
 
 Use the shared enums from `@zendev-lab/spark-protocol` (`human-interaction.ts`):
@@ -34,9 +43,11 @@ Stable ids must travel together:
 
 Whether an answer “counts” (option selected or non-empty custom text) is defined once by `hasSparkAskAnswerContent` / `parseSparkAskChoice` in `spark-protocol` (`ask-semantics.ts`).
 
-- TUI (`spark-ask`) re-exports those helpers for the flow controller.
-- Cockpit (`pending-ask`) builds UI-shaped answers but calls the shared content check.
+- TUI (`spark-ask`) re-exports those helpers for the flow controller and presents asks as an in-turn overlay.
+- Cockpit shows pending asks inline in the owning session (timeline `ask` tool part + composer `SessionAskPanel`); the workspace Inbox page remains the list/detail fallback. There is no global ask dialog.
 - Approval-center builds decision payloads with the shared response status enum; it does not re-derive answer content rules.
+
+Cross-session agent-to-agent traffic is **messages** (session inspector tab), not Inbox. Inbox is only agent→user human asks.
 
 ## Related
 

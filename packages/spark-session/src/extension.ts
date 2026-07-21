@@ -23,9 +23,10 @@ export function registerPiSessionTool(
     name: "session",
     label: "Session",
     description:
-      "Canonical persistent session capability for long-lived staff roles. Reuse sessions by stable division of labour, manage lifecycle and bindings, submit tasks, or send durable requests and notifications.",
+      "Canonical persistent session capability for long-lived staff roles (daemon-local session registry). This is NOT the Cockpit conversation list at /{workspace}/sessions — do not archive or create registry sessions to tidy Cockpit UI conversations. Reuse sessions by stable division of labour, manage lifecycle and bindings, submit tasks, or send durable requests and notifications.",
     promptGuidelines: [
       "A persistent session represents a long-lived division of labour, never one task. Before create, you MUST list same-workspace local sessions and compare roles semantically; reuse the closest owner with session call/send even when task wording, technology, or language differs.",
+      "Cockpit workspace conversations (browser UI under /{workspace}/sessions) are a separate projection. session list/archive only touches the Spark session registry; they will not remove or rename Cockpit chat rows. To clean Cockpit chats, use the page archive control or the runtime session-control API with that page's session IDs.",
       "Use session create only when no existing division of labour owns the responsibility. role must be one concise stable responsibility label in the user's language and existing naming style, such as 运行维护, 前端体验, 质量验证, or Messaging Platforms. Put the concrete task only in session call/send; never use a task slug, implementation name, model name, deliverable, or temporary phase as the role.",
       "session list is paginated and labels each surface as local or channel plus activity as idle or running; use surface, activity, and adapter filters, then continue with offset when total exceeds the returned page.",
       "session send kind=notification persists without triggering the target session; it is the default and cannot wait for completion.",
