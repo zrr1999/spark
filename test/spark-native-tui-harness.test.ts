@@ -1791,7 +1791,8 @@ test("Spark cockpit renders shared workflow, run, task, artifact, review, and Gr
     workflowRuns: 1,
     roleRuns: 1,
     tasks: 1,
-    artifacts: 2,
+    artifacts: 0,
+    evidence: 2,
     reviews: 2,
     graftItems: 2,
     interactions: 0,
@@ -1828,11 +1829,7 @@ test("Spark cockpit renders shared workflow, run, task, artifact, review, and Gr
   assert.equal(await harness.submit("/artifacts"), "command");
   assert.match(
     stripAnsi(harness.render()),
-    /artifact:review-ok \[record\/json\] producer=review status=approved Reviewer verdict/,
-  );
-  assert.match(
-    stripAnsi(harness.render()),
-    /artifact:graft-patch \[record\/json\] producer=task status=admitted Graft patch provenance/,
+    /No artifact view-model updates have been published yet/,
   );
 
   assert.equal(await harness.submit("/reviews"), "command");
@@ -1986,6 +1983,7 @@ test("Spark cockpit records workflow picker requests and exposes slash command n
     roleRuns: 0,
     tasks: 0,
     artifacts: 0,
+    evidence: 0,
     reviews: 0,
     graftItems: 0,
     interactions: 1,

@@ -205,7 +205,7 @@
   }
 
   function cancelScheduledNavigationUpdate() {
-    if (navigationAnimationFrame !== undefined) return;
+    if (navigationAnimationFrame === undefined) return;
     cancelAnimationFrame(navigationAnimationFrame);
     navigationAnimationFrame = undefined;
   }
