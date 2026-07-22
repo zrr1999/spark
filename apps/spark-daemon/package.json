@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@core-workspace/infoflow-sdk-nodejs": "2026.6.12-beta.1",
+    "@orpc/server": "catalog:",
     "@zendev-lab/spark-ai": "workspace:^",
     "@zendev-lab/spark-artifacts": "workspace:^",
     "@zendev-lab/spark-channels": "workspace:^",

@@ -20,6 +20,7 @@ import { createDaemonSessionRegistry, type DaemonSessionRegistry } from "../sess
 import { SparkChannelDeliveryStore } from "../store/channel-deliveries.ts";
 import { resolveWorkspaceLocalPath } from "../store/workspaces.js";
 import { handleLocalRpcLine } from "./dispatch.ts";
+import { startLocalRpcOrpcServer, type LocalRpcOrpcServer } from "./orpc-server.ts";
 import {
   localRpcSocketPath,
   type LocalDaemonRestartResult,
@@ -77,6 +78,29 @@ export async function startLocalRpcServer(options: {
     store: notificationDeliveryStore,
     outbox: createDaemonChannelDeliveryOutbox(notificationDeliveryStore),
   } satisfies SessionNotificationDeliveryQueue;
+  const handlerOptions: LocalRpcHandlerOptions = {
+    sessionRegistry,
+    mailStore,
+    notificationDeliveryQueue,
+    ...(options.channelIngress ? { channelIngress: options.channelIngress } : {}),
+    ...(options.modelControl ? { modelControl: options.modelControl } : {}),
+    ...(options.humanWaits ? { humanWaits: options.humanWaits } : {}),
+    ...(options.respondHumanInteraction
+      ? { respondHumanInteraction: options.respondHumanInteraction }
+      : {}),
+    ...(options.leaseTransfers ? { leaseTransfers: options.leaseTransfers } : {}),
+    ...(options.onHumanRequestOutboxReady
+      ? { onHumanRequestOutboxReady: options.onHumanRequestOutboxReady }
+      : {}),
+    ...(options.getRuntimeIdForServer
+      ? { getRuntimeIdForServer: options.getRuntimeIdForServer }
+      : {}),
+    ...(options.onStopRequested ? { onStopRequested: options.onStopRequested } : {}),
+    ...(options.onRestart ? { onRestart: options.onRestart } : {}),
+    ...(options.onUplinkReconfigure ? { onUplinkReconfigure: options.onUplinkReconfigure } : {}),
+    ...(options.getLifecycle ? { getLifecycle: options.getLifecycle } : {}),
+    ...(options.isReady ? { isReady: options.isReady } : {}),
+  };
   const server = createServer((socket) => {
     if (closing) {
       socket.destroy();
@@ -91,31 +115,7 @@ export async function startLocalRpcServer(options: {
       options.db,
       options.onStop,
       options.eventBus,
-      {
-        sessionRegistry,
-        mailStore,
-        notificationDeliveryQueue,
-        ...(options.channelIngress ? { channelIngress: options.channelIngress } : {}),
-        ...(options.modelControl ? { modelControl: options.modelControl } : {}),
-        ...(options.humanWaits ? { humanWaits: options.humanWaits } : {}),
-        ...(options.respondHumanInteraction
-          ? { respondHumanInteraction: options.respondHumanInteraction }
-          : {}),
-        ...(options.leaseTransfers ? { leaseTransfers: options.leaseTransfers } : {}),
-        ...(options.onHumanRequestOutboxReady
-          ? { onHumanRequestOutboxReady: options.onHumanRequestOutboxReady }
-          : {}),
-        ...(options.getRuntimeIdForServer
-          ? { getRuntimeIdForServer: options.getRuntimeIdForServer }
-          : {}),
-        ...(options.onStopRequested ? { onStopRequested: options.onStopRequested } : {}),
-        ...(options.onRestart ? { onRestart: options.onRestart } : {}),
-        ...(options.onUplinkReconfigure
-          ? { onUplinkReconfigure: options.onUplinkReconfigure }
-          : {}),
-        ...(options.getLifecycle ? { getLifecycle: options.getLifecycle } : {}),
-        ...(options.isReady ? { isReady: options.isReady } : {}),
-      },
+      handlerOptions,
       {
         onRequestStart: (request) => {
           state.pending += 1;
@@ -147,6 +147,19 @@ export async function startLocalRpcServer(options: {
     server.listen(socketPath);
   });
 
+  let orpcServer: LocalRpcOrpcServer | undefined;
+  try {
+    orpcServer = await startLocalRpcOrpcServer({
+      paths: options.paths,
+      db: options.db,
+      ...(options.onStop ? { onStop: options.onStop } : {}),
+      handlerOptions,
+    });
+  } catch (error) {
+    // oRPC is additive; legacy local-rpc must still start if the parallel socket fails.
+    console.error("[spark-daemon] failed to start local-rpc oRPC socket", error);
+  }
+
   return {
     socketPath,
     close: () => {
@@ -173,7 +186,8 @@ export async function startLocalRpcServer(options: {
       }, options.forceCloseTimeoutMs ?? 5_000);
       forceClose.unref();
       const requestsSettled = Promise.allSettled([...inFlightRequests]);
-      closePromise = Promise.allSettled([transportClosed, requestsSettled])
+      const orpcClosed = orpcServer?.close() ?? Promise.resolve();
+      closePromise = Promise.allSettled([transportClosed, requestsSettled, orpcClosed])
         .then(([transport]) => {
           if (transport.status === "rejected") throw transport.reason;
         })
