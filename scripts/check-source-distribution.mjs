@@ -100,9 +100,11 @@ export async function validateSourceDistribution(workspaces, rootManifest, optio
   const failures = [];
   const names = new Set();
   for (const workspace of workspaces) {
-    failures.push(...validateWorkspaceIdentity(workspace, names));
-    failures.push(...validateWorkspaceMetadata(workspace.manifest));
-    failures.push(...(await validateWorkspaceBins(workspace, options.requireBuiltBins === true)));
+    failures.push(
+      ...validateWorkspaceIdentity(workspace, names),
+      ...validateWorkspaceMetadata(workspace.manifest),
+      ...(await validateWorkspaceBins(workspace, options.requireBuiltBins === true)),
+    );
   }
   failures.push(...validateRootManifest(rootManifest));
   return failures;

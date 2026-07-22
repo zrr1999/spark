@@ -1164,7 +1164,7 @@ async function runSparkDaemonServerConnection(
   if (options.signal?.aborted) return;
 
   await new Promise<void>((resolvePromise, reject) => {
-    let runtimeSessionId: string | undefined;
+    const runtimeSession = { id: undefined as string | undefined };
     let heartbeat: NodeJS.Timeout | undefined;
     let tokenRefresh: NodeJS.Timeout | undefined;
     let intentionalClose = false;
@@ -1377,10 +1377,10 @@ async function runSparkDaemonServerConnection(
           flushNextInvocationEvent();
         },
         get runtimeSessionId() {
-          return runtimeSessionId;
+          return runtimeSession.id;
         },
         setRuntimeSessionId(value) {
-          runtimeSessionId = value;
+          runtimeSession.id = value;
         },
         ensureHeartbeat(intervalMs) {
           unregisterHumanRequestOutboxTarget ??= registerHumanRequestOutboxFlush(
@@ -1397,11 +1397,11 @@ async function runSparkDaemonServerConnection(
             ws,
             options,
             runtimeId,
-            () => runtimeSessionId,
+            runtimeSession,
             serverUrl,
             intervalMs,
           );
-          sendHeartbeat(ws, options.db, runtimeId, runtimeSessionId, serverUrl);
+          sendHeartbeat(ws, options.db, runtimeId, runtimeSession.id, serverUrl);
         },
       }).catch((error: unknown) => {
         logDaemonError(runtimeId, error);
@@ -1463,12 +1463,12 @@ function startDaemonHeartbeatTimer(
   ws: WebSocket,
   options: SparkDaemonServerConnectionOptions,
   runtimeId: string,
-  getRuntimeSessionId: () => string | undefined,
+  runtimeSession: { id: string | undefined },
   serverUrl: string | null,
   intervalMs: number,
 ): NodeJS.Timeout {
   return setInterval(
-    () => flushDaemonHeartbeat(ws, options, runtimeId, getRuntimeSessionId(), serverUrl),
+    () => flushDaemonHeartbeat(ws, options, runtimeId, runtimeSession.id, serverUrl),
     intervalMs,
   );
 }
