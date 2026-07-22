@@ -24,6 +24,10 @@ export const sparkTurnSubmitRequestSchema = z.object({
   sessionId: z.string().min(1),
   prompt: z.string(),
   idempotencyKey: z.string().min(1).optional(),
+  model: z
+    .string()
+    .regex(/^[^/\s]+\/.+$/u)
+    .optional(),
   reset: z.boolean().optional(),
   originBinding: sparkTurnOriginBindingSchema.optional(),
 });

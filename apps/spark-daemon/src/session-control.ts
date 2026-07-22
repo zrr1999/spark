@@ -245,7 +245,7 @@ export async function executeSparkDaemonSessionControl(
       // Dynamic defaults are frozen only for the first admission. A retry of
       // the same wire request returns above before a concurrent model/thinking
       // change can manufacture an idempotency conflict.
-      const model = await effectiveTurnModel(options, parsed.sessionId);
+      const model = await effectiveTurnModel(options, parsed.sessionId, parsed.model);
       const thinkingLevel = await effectiveTurnThinkingLevel(options, parsed.sessionId);
       await options.sessionRegistry?.recordTurnQueued(parsed.sessionId);
       let submitted;
@@ -569,7 +569,18 @@ function parseTurnSubmitPayload(payload: Record<string, unknown>, sessionId?: st
 async function effectiveTurnModel(
   options: SparkDaemonSessionControlOptions,
   sessionId: string,
+  requestedModel?: string,
 ): Promise<string | undefined> {
+  if (requestedModel) {
+    if (
+      !requestedModel.includes("/") ||
+      requestedModel.startsWith("/") ||
+      requestedModel.endsWith("/")
+    ) {
+      throw new Error(`Invalid frozen Spark model: ${requestedModel}`);
+    }
+    return requestedModel;
+  }
   if (!options.modelControl) return undefined;
   const effectiveSessionId = await inheritedSideThreadSettingOwner(
     options.sessionRegistry,

@@ -53,6 +53,7 @@ function encodeFrame(message: CueFrame): Buffer {
 }
 
 function sendFrame(socket: Socket, message: CueFrame): void {
+  if (socket.destroyed || !socket.writable) return;
   socket.write(encodeFrame(message));
 }
 
@@ -145,6 +146,9 @@ async function startCueServer(
   const handshakes: CueFrame[] = [];
   let connectionCount = 0;
   const server = net.createServer((socket) => {
+    socket.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EPIPE") server.emit("error", error);
+    });
     connectionCount += 1;
     const connection = connectionCount;
     let buffer = Buffer.alloc(0);

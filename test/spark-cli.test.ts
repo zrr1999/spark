@@ -14,6 +14,7 @@ import {
 import {
   handleSparkRpcLine,
   parseSparkCliArgs,
+  parseSparkCliCommand,
   runSparkCli,
   type SparkRpcState,
 } from "../apps/spark-tui/src/cli.ts";
@@ -535,4 +536,176 @@ test("Spark CLI host preserves slash commands and shell input", () => {
   assert.deepEqual(handlers.get("input")?.({ text: "!git status", source: "interactive" }, {}), {
     action: "continue",
   });
+});
+
+// ---- --wait flag tests ----
+
+test("parseSparkCliCommand parses --wait flag into print command options", () => {
+  const cmd = parseSparkCliCommand(["--print", "--wait", "hello"]);
+  assert.equal(cmd.kind, "print");
+  if (cmd.kind === "print") {
+    assert.equal(cmd.prompt, "hello");
+    assert.equal(cmd.options?.wait, true);
+  }
+});
+
+test("parseSparkCliCommand parses -w short flag", () => {
+  const cmd = parseSparkCliCommand(["-p", "-w", "hello"]);
+  assert.equal(cmd.kind, "print");
+  if (cmd.kind === "print") {
+    assert.equal(cmd.options?.wait, true);
+  }
+});
+
+test("parseSparkCliCommand without --wait has no wait option", () => {
+  const cmd = parseSparkCliCommand(["--print", "hello"]);
+  assert.equal(cmd.kind, "print");
+  if (cmd.kind === "print") {
+    assert.equal(cmd.options?.wait, undefined);
+  }
+});
+
+test("runSparkCli --wait returns 0 on succeeded invocation", async () => {
+  const logs: string[] = [];
+  const submissions: Array<{
+    sessionId: string;
+    prompt: string;
+    reset?: boolean;
+    idempotencyKey?: string;
+  }> = [];
+  const previousLog = console.log;
+  const daemonClient: SparkDaemonClientOptions = {
+    ...fakeHeadlessDaemonClient(submissions),
+    turnStatus: async (_paths, input) => ({
+      invocationId: input.invocationId,
+      status: "succeeded" as const,
+      createdAt: "2026-07-21T00:00:00.000Z",
+      updatedAt: "2026-07-21T00:00:01.000Z",
+      finishedAt: "2026-07-21T00:00:01.000Z",
+      eventCursor: 0,
+    }),
+  };
+  // Mock turn.result via the control request path
+  (daemonClient as Record<string, unknown>).controlRequest = async () => ({
+    invocationId: "inv_turn",
+    status: "succeeded",
+    assistantText: "result text",
+  });
+
+  try {
+    console.log = (...args: unknown[]) => logs.push(args.map(String).join(" "));
+    const code = await runSparkCli(["--print", "--wait", "hello"], {
+      daemonClient,
+      terminal: { stdinIsTTY: false, stdoutIsTTY: false },
+    });
+    assert.equal(code, 0);
+    assert.match(logs.join("\n"), /succeeded|result text/u);
+  } finally {
+    console.log = previousLog;
+  }
+});
+
+test("runSparkCli --wait returns 1 on failed invocation", async () => {
+  const logs: string[] = [];
+  const submissions: Array<{
+    sessionId: string;
+    prompt: string;
+    reset?: boolean;
+    idempotencyKey?: string;
+  }> = [];
+  const previousLog = console.log;
+  const daemonClient: SparkDaemonClientOptions = {
+    ...fakeHeadlessDaemonClient(submissions),
+    turnStatus: async (_paths, input) => ({
+      invocationId: input.invocationId,
+      status: "failed" as const,
+      createdAt: "2026-07-21T00:00:00.000Z",
+      updatedAt: "2026-07-21T00:00:01.000Z",
+      finishedAt: "2026-07-21T00:00:01.000Z",
+      eventCursor: 0,
+      error: { code: "model_error", message: "model refused" },
+    }),
+  };
+  (daemonClient as Record<string, unknown>).controlRequest = async () => ({
+    invocationId: "inv_turn",
+    status: "failed",
+    error: { code: "model_error", message: "model refused", retryable: false },
+  });
+
+  try {
+    console.log = (...args: unknown[]) => logs.push(args.map(String).join(" "));
+    const code = await runSparkCli(["--print", "--wait", "hello"], {
+      daemonClient,
+      terminal: { stdinIsTTY: false, stdoutIsTTY: false },
+    });
+    assert.equal(code, 1);
+    assert.match(logs.join("\n"), /failed|model refused/u);
+  } finally {
+    console.log = previousLog;
+  }
+});
+
+test("runSparkCli --wait returns 2 on cancelled invocation", async () => {
+  const logs: string[] = [];
+  const submissions: Array<{
+    sessionId: string;
+    prompt: string;
+    reset?: boolean;
+    idempotencyKey?: string;
+  }> = [];
+  const previousLog = console.log;
+  const daemonClient: SparkDaemonClientOptions = {
+    ...fakeHeadlessDaemonClient(submissions),
+    turnStatus: async (_paths, input) => ({
+      invocationId: input.invocationId,
+      status: "cancelled" as const,
+      createdAt: "2026-07-21T00:00:00.000Z",
+      updatedAt: "2026-07-21T00:00:01.000Z",
+      finishedAt: "2026-07-21T00:00:01.000Z",
+      cancelReason: "user requested",
+      eventCursor: 0,
+    }),
+  };
+  (daemonClient as Record<string, unknown>).controlRequest = async () => ({
+    invocationId: "inv_turn",
+    status: "cancelled",
+  });
+
+  try {
+    console.log = (...args: unknown[]) => logs.push(args.map(String).join(" "));
+    const code = await runSparkCli(["--print", "--wait", "hello"], {
+      daemonClient,
+      terminal: { stdinIsTTY: false, stdoutIsTTY: false },
+    });
+    assert.equal(code, 2);
+    assert.match(logs.join("\n"), /cancelled/u);
+  } finally {
+    console.log = previousLog;
+  }
+});
+
+test("runSparkCli without --wait still returns queued ACK immediately", async () => {
+  const logs: string[] = [];
+  const submissions: Array<{
+    sessionId: string;
+    prompt: string;
+    reset?: boolean;
+    idempotencyKey?: string;
+  }> = [];
+  const previousLog = console.log;
+  const daemonClient = fakeHeadlessDaemonClient(submissions);
+
+  try {
+    console.log = (...args: unknown[]) => logs.push(args.map(String).join(" "));
+    const code = await runSparkCli(["--print", "hello"], {
+      daemonClient,
+      terminal: { stdinIsTTY: false, stdoutIsTTY: false },
+    });
+    assert.equal(code, 0);
+    assert.equal(submissions.length, 1);
+    // Should contain invocationId from the queued ACK, not a wait result
+    assert.match(logs.join("\n"), /inv_turn/u);
+  } finally {
+    console.log = previousLog;
+  }
 });
