@@ -450,9 +450,19 @@ export async function restart(
   const previousPid = readRunningPid(paths);
   if (!previousPid) return await startStoppedDaemon(paths, flags, io);
 
-  let requested: Awaited<ReturnType<typeof requestDaemonRestart>> | undefined;
+  const requested = await requestDrainRestart(paths, io);
+  if (requested)
+    return await reportRequestedDaemonRestart(paths, previousPid, flags, io, requested);
+
+  return await restartWithoutDrainSupport(paths, previousPid, flags, io);
+}
+
+async function requestDrainRestart(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  io: CliIo,
+): Promise<Awaited<ReturnType<typeof requestDaemonRestart>> | undefined> {
   try {
-    requested = await (io.daemonRestartFromService ?? requestDaemonRestart)(paths);
+    return await (io.daemonRestartFromService ?? requestDaemonRestart)(paths);
   } catch (error) {
     if (error instanceof LocalRpcUnavailableError) {
       // The request may have reached the daemon even if its ACK was lost.
@@ -464,11 +474,16 @@ export async function restart(
       );
     }
     if (!isRestartRpcUnsupported(error)) throw error;
+    return undefined;
   }
+}
 
-  if (requested)
-    return await reportRequestedDaemonRestart(paths, previousPid, flags, io, requested);
-
+async function restartWithoutDrainSupport(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  previousPid: number,
+  flags: Record<string, string>,
+  io: CliIo,
+): Promise<number> {
   // Compatibility path for a daemon that predates drain restart or whose
   // local socket is already unusable. This preserves the old stop/start repair
   // behavior, but cannot promise active invocation continuity.
@@ -672,7 +687,7 @@ async function waitForDaemonReady(
     );
     observedLifecycle = readiness.lifecycle;
     if (readiness.pid !== undefined) return readiness.pid;
-    nextProgressAt = reportRestartProgress(
+    nextProgressAt = reportRestartProgress({
       paths,
       previousPid,
       currentPid,
@@ -681,7 +696,7 @@ async function waitForDaemonReady(
       observedTerminal,
       observedLifecycle,
       nextProgressAt,
-    );
+    });
     replacementDeadline = assertReplacementStillExpected(
       previousPid,
       observedTerminal,
@@ -781,16 +796,26 @@ function isServingDaemonState(state: SparkDaemonLifecycleSnapshot["state"]): boo
   return state === "running" || state === "draining";
 }
 
-function reportRestartProgress(
-  paths: ReturnType<typeof resolveSparkPaths>,
-  previousPid: number | null,
-  currentPid: number | null,
-  io: CliIo,
-  expectedRestart: ExpectedDaemonRestart | undefined,
-  observedTerminal: ReturnType<typeof readSparkDaemonRestartTerminal>,
-  observedLifecycle: SparkDaemonLifecycleSnapshot | undefined,
-  nextProgressAt: number,
-): number {
+function reportRestartProgress(input: {
+  paths: ReturnType<typeof resolveSparkPaths>;
+  previousPid: number | null;
+  currentPid: number | null;
+  io: CliIo;
+  expectedRestart: ExpectedDaemonRestart | undefined;
+  observedTerminal: ReturnType<typeof readSparkDaemonRestartTerminal>;
+  observedLifecycle: SparkDaemonLifecycleSnapshot | undefined;
+  nextProgressAt: number;
+}): number {
+  const {
+    paths,
+    previousPid,
+    currentPid,
+    io,
+    expectedRestart,
+    observedTerminal,
+    observedLifecycle,
+    nextProgressAt,
+  } = input;
   if (!expectedRestart || Date.now() < nextProgressAt) return nextProgressAt;
   const activeRestart = readSparkDaemonActiveRestart(paths);
   const restartState =

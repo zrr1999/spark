@@ -22,43 +22,63 @@ export async function readSourceWorkspaces(root = process.cwd()) {
   return workspaces.sort((left, right) => left.manifest.name.localeCompare(right.manifest.name));
 }
 
-export async function validateSourceDistribution(workspaces, rootManifest, options = {}) {
+function validateWorkspaceIdentity(workspace, names) {
   const failures = [];
-  const names = new Set();
-  for (const workspace of workspaces) {
-    const { manifest } = workspace;
-    if (typeof manifest.name !== "string" || manifest.name.length === 0) {
-      failures.push(`${workspace.manifestPath}: package name is required`);
-    } else if (names.has(manifest.name)) {
-      failures.push(`${manifest.name}: duplicate workspace package name`);
-    } else {
-      names.add(manifest.name);
-    }
-    if (manifest.private !== true) {
-      failures.push(`${manifest.name}: source-distributed workspace must be private`);
-    }
-    if (manifest.publishConfig !== undefined) {
-      failures.push(
-        `${manifest.name}: source-distributed workspace must not declare publishConfig`,
-      );
-    }
-    const bins =
-      typeof manifest.bin === "string" ? { [manifest.name]: manifest.bin } : manifest.bin;
-    for (const target of Object.values(bins ?? {})) {
-      if (typeof target !== "string") {
-        failures.push(`${manifest.name}: bin targets must be strings`);
-        continue;
-      }
-      try {
-        await access(resolve(dirname(workspace.manifestPath), target));
-      } catch {
-        const buildScript = manifest.scripts?.build;
-        if (options.requireBuiltBins || typeof buildScript !== "string" || !buildScript.trim()) {
-          failures.push(`${manifest.name}: bin target does not exist: ${target}`);
-        }
-      }
-    }
+  const { manifest } = workspace;
+  if (typeof manifest.name !== "string" || manifest.name.length === 0) {
+    failures.push(`${workspace.manifestPath}: package name is required`);
+  } else if (names.has(manifest.name)) {
+    failures.push(`${manifest.name}: duplicate workspace package name`);
+  } else {
+    names.add(manifest.name);
   }
+  return failures;
+}
+
+function validateWorkspaceMetadata(manifest) {
+  const failures = [];
+  if (manifest.private !== true) {
+    failures.push(`${manifest.name}: source-distributed workspace must be private`);
+  }
+  if (manifest.publishConfig !== undefined) {
+    failures.push(`${manifest.name}: source-distributed workspace must not declare publishConfig`);
+  }
+  return failures;
+}
+
+function binTargets(manifest) {
+  return Object.values(
+    typeof manifest.bin === "string" ? { [manifest.name]: manifest.bin } : (manifest.bin ?? {}),
+  );
+}
+
+async function validateBinTarget(workspace, target, requireBuiltBins) {
+  const { manifest } = workspace;
+  if (typeof target !== "string") return `${manifest.name}: bin targets must be strings`;
+
+  try {
+    await access(resolve(dirname(workspace.manifestPath), target));
+    return undefined;
+  } catch {
+    const buildScript = manifest.scripts?.build;
+    const canBeBuilt = typeof buildScript === "string" && buildScript.trim().length > 0;
+    return requireBuiltBins || !canBeBuilt
+      ? `${manifest.name}: bin target does not exist: ${target}`
+      : undefined;
+  }
+}
+
+async function validateWorkspaceBins(workspace, requireBuiltBins) {
+  const results = await Promise.all(
+    binTargets(workspace.manifest).map((target) =>
+      validateBinTarget(workspace, target, requireBuiltBins),
+    ),
+  );
+  return results.filter((failure) => failure !== undefined);
+}
+
+function validateRootManifest(rootManifest) {
+  const failures = [];
 
   if (rootManifest.private !== true) failures.push("root workspace must remain private");
   if (rootManifest.publishConfig !== undefined) {
@@ -73,6 +93,18 @@ export async function validateSourceDistribution(workspaces, rootManifest, optio
   ) {
     failures.push("root test:source-distribution must run the canonical source smoke");
   }
+  return failures;
+}
+
+export async function validateSourceDistribution(workspaces, rootManifest, options = {}) {
+  const failures = [];
+  const names = new Set();
+  for (const workspace of workspaces) {
+    failures.push(...validateWorkspaceIdentity(workspace, names));
+    failures.push(...validateWorkspaceMetadata(workspace.manifest));
+    failures.push(...(await validateWorkspaceBins(workspace, options.requireBuiltBins === true)));
+  }
+  failures.push(...validateRootManifest(rootManifest));
   return failures;
 }
 

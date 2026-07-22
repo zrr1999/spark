@@ -10,7 +10,7 @@ import { RPCLink } from "@orpc/client/message-port";
 import {
   sparkLocalRpcOrpcLiveMethods,
   sparkLocalRpcOrpcMethodPaths,
-  type SparkLocalRpcOrpcLiveMethod,
+  type SparkLocalRpcOrpcMethod,
 } from "@zendev-lab/spark-protocol/local-rpc-orpc-contract";
 import {
   isSparkSideThreadErrorCode,
@@ -32,7 +32,7 @@ export function sparkDaemonOrpcSocketPath(
   return join(paths.runtimeDir, "daemon-orpc.sock");
 }
 
-export function isSparkDaemonOrpcLiveMethod(method: string): method is SparkLocalRpcOrpcLiveMethod {
+export function isSparkDaemonOrpcLiveMethod(method: string): method is SparkLocalRpcOrpcMethod {
   return (sparkLocalRpcOrpcLiveMethods as readonly string[]).includes(method);
 }
 
@@ -114,7 +114,7 @@ export function isSparkDaemonSideThreadOrpcError(
 
 export async function invokeSparkDaemonOrpcLiveMethod(
   client: SparkDaemonOrpcClient,
-  method: SparkLocalRpcOrpcLiveMethod,
+  method: SparkLocalRpcOrpcMethod,
   params: unknown = {},
 ): Promise<unknown> {
   const path = sparkLocalRpcOrpcMethodPaths[method];

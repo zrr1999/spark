@@ -48,6 +48,8 @@ import {
   legacySparkDaemonQueueRoot,
   type SparkDaemonDrainProgress,
   type SparkDaemonHumanInteractionOpened,
+  type SparkDaemonTask,
+  type SparkInvocationSchedulerOptions,
 } from "./core/index.ts";
 import { SparkDaemonHumanWaitRegistry } from "./core/human-waits.ts";
 import type { DaemonSessionRegistry } from "./session-registry.ts";
@@ -55,7 +57,12 @@ import { SparkInvocationScheduler } from "./core/invocation-scheduler.ts";
 import { recoverInterruptedRuntimeCommandReceipts } from "./runtime-command-receipts.ts";
 import { migrateLegacyQueueHistory } from "./store/legacy-queue-migration.ts";
 import { SparkChannelDeliveryStore } from "./store/channel-deliveries.ts";
-import { SparkInvocationStore, type SparkInvocationEvent } from "./store/invocations.ts";
+import {
+  SparkInvocationStore,
+  type CompleteSparkInvocationInput,
+  type SparkInvocationEvent,
+  type SparkInvocationRecord,
+} from "./store/invocations.ts";
 import {
   getWorkspaceById,
   isUserDetachedWorkspace,
@@ -96,6 +103,73 @@ import {
 } from "./daemon.ts";
 
 export async function startSparkDaemon(options: StartSparkDaemonOptions): Promise<void> {
+  const runtime = await createPreparedDaemonRuntime(options);
+  try {
+    await prepareDaemonServing(runtime);
+    if (options.once && !runtime.runtimeSignal.aborted) {
+      await runDaemonOnce(runtime);
+      return;
+    }
+    await runSparkDaemonUplinkSupervisor(daemonServerConnectionOptions(runtime));
+  } finally {
+    await cleanupPreparedDaemonRuntime(runtime);
+  }
+}
+
+interface InvocationEventHub {
+  emit(event: SparkInvocationEvent): Promise<void>;
+  register(sink: (event: SparkInvocationEvent) => void | Promise<void>): () => boolean;
+}
+
+interface ServingLoopGate {
+  promise: Promise<boolean>;
+  settle(committed: boolean): void;
+}
+
+interface DaemonServingLoops {
+  scheduler?: Promise<void>;
+  channelDelivery?: Promise<void>;
+  channelReply?: Promise<void>;
+  notification?: Promise<void>;
+}
+
+interface RestartDrainController {
+  dispose(): void;
+  wait(): Promise<void> | undefined;
+}
+
+interface PreparedDaemonRuntime {
+  options: StartSparkDaemonOptions;
+  runtimeShutdown: AbortController;
+  runtimeSignal: AbortSignal;
+  removeShutdownForwarder: () => void;
+  invocationRegistry: SparkDaemonInvocationRegistry;
+  humanWaits: SparkDaemonHumanWaitRegistry;
+  channelDeliveryStore: SparkChannelDeliveryStore;
+  channelDeliveryOutbox: DaemonChannelDeliveryOutbox;
+  channelIngress: DaemonChannelIngressRuntime | null;
+  shutdownChannelIngress: ReturnType<typeof createChannelIngressShutdown>;
+  admission: { open: boolean };
+  closeRestartAdmission: () => void;
+  flushHumanRequestOutbox: () => void;
+  humanInteractions: SparkDaemonHumanInteractionBroker;
+  registerHumanRequestOutboxTarget: (flush: () => void) => () => boolean;
+  eventHub: InvocationEventHub;
+  invocationStore: SparkInvocationStore;
+  channelReplyDeliveryStore: ChannelReplyDeliveryStore;
+  scheduler: SparkInvocationScheduler | null;
+  mailStore: SparkSessionMailStore;
+  servingGate: ServingLoopGate;
+  loops: DaemonServingLoops;
+  restartDrain: RestartDrainController;
+  stopScheduler: () => void;
+  stopDirectInvocations: () => void;
+  stopChannelIngress: () => void;
+}
+
+async function createPreparedDaemonRuntime(
+  options: StartSparkDaemonOptions,
+): Promise<PreparedDaemonRuntime> {
   const { runtimeShutdown, runtimeSignal, removeShutdownForwarder } =
     createDaemonRuntimeSignal(options);
   if (options.managePidFile !== false) writePrivateFile(options.paths.pidFile, `${process.pid}\n`);
@@ -116,9 +190,9 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
     channelDeliveryOutbox,
   );
   const shutdownChannelIngress = createChannelIngressShutdown(channelIngress, options);
-  let channelAdmissionOpen = false;
+  const admission = { open: false };
   channelIngress?.setInboundHandler?.(({ workspaceId, message }) => {
-    if (!channelAdmissionOpen) {
+    if (!admission.open) {
       throw new Error("Spark daemon channel admission is closed during startup or drain");
     }
     channelDeliveryOutbox.enqueueInbound({ workspaceId, message });
@@ -139,135 +213,123 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
     flushHumanRequestOutbox,
     humanRequestOutboxTargets,
   });
-  const invocationEventTargets = new Set<(event: SparkInvocationEvent) => void | Promise<void>>();
-  const registerInvocationEventTarget = (
-    sink: (event: SparkInvocationEvent) => void | Promise<void>,
-  ) => {
-    invocationEventTargets.add(sink);
-    return () => invocationEventTargets.delete(sink);
-  };
-  const emitInvocationEvent = async (event: SparkInvocationEvent) => {
-    await Promise.all([
-      options.localEventSink?.(parseSparkDaemonEvent(event.payload)),
-      ...[...invocationEventTargets].map(async (sink) => await sink(event)),
-    ]);
-  };
+  const eventHub = createInvocationEventHub(options);
   const invocationStore = new SparkInvocationStore(options.db);
   const channelReplyDeliveryStore = new ChannelReplyDeliveryStore(options.db, invocationStore);
   channelReplyDeliveryStore.recoverInterrupted();
   recoverInterruptedRuntimeCommandReceipts(options.db);
+  await migrateLegacyInvocationHistory(options);
+  const userPaths = resolveSparkUserPaths({ sparkHome: options.sparkHome });
+  const scheduler = createDaemonScheduler({
+    options,
+    runtimeSignal,
+    admission,
+    invocationStore,
+    channelDeliveryStore,
+    channelIngress,
+    channelReplyDeliveryStore,
+    humanInteractions,
+    eventHub,
+    controlSparkHome: userPaths.configRoot,
+    channelsSparkHome: userPaths.dataRoot,
+  });
+  const closeRestartAdmission = () => {
+    admission.open = false;
+    scheduler?.beginDrain();
+    invocationRegistry.beginDrain();
+  };
+  registerDrainAdmissionGate(options, closeRestartAdmission);
+  const restartDrain = createRestartDrainController({
+    options,
+    scheduler,
+    invocationRegistry,
+    runtimeShutdown,
+    shutdownChannelIngress,
+    closeRestartAdmission,
+  });
+  const servingGate = createServingLoopGate();
+  const stopScheduler = () => scheduler?.stop();
+  const stopDirectInvocations = () => invocationRegistry.stop();
+  const stopChannelIngress = () => void shutdownChannelIngress("runtime-abort");
+  runtimeSignal.addEventListener("abort", stopScheduler, { once: true });
+  runtimeSignal.addEventListener("abort", stopDirectInvocations, { once: true });
+  runtimeSignal.addEventListener("abort", stopChannelIngress, { once: true });
+  return {
+    options,
+    runtimeShutdown,
+    runtimeSignal,
+    removeShutdownForwarder,
+    invocationRegistry,
+    humanWaits,
+    channelDeliveryStore,
+    channelDeliveryOutbox,
+    channelIngress,
+    shutdownChannelIngress,
+    admission,
+    closeRestartAdmission,
+    flushHumanRequestOutbox,
+    humanInteractions,
+    registerHumanRequestOutboxTarget,
+    eventHub,
+    invocationStore,
+    channelReplyDeliveryStore,
+    scheduler,
+    mailStore:
+      options.mailStore ??
+      new SparkSessionMailStore({
+        sparkHome: userPaths.dataRoot,
+      }),
+    servingGate,
+    loops: {},
+    restartDrain,
+    stopScheduler,
+    stopDirectInvocations,
+    stopChannelIngress,
+  };
+}
+
+function createInvocationEventHub(options: StartSparkDaemonOptions): InvocationEventHub {
+  const invocationEventTargets = new Set<(event: SparkInvocationEvent) => void | Promise<void>>();
+  return {
+    register(sink) {
+      invocationEventTargets.add(sink);
+      return () => invocationEventTargets.delete(sink);
+    },
+    async emit(event) {
+      await Promise.all([
+        options.localEventSink?.(parseSparkDaemonEvent(event.payload)),
+        ...[...invocationEventTargets].map(async (sink) => await sink(event)),
+      ]);
+    },
+  };
+}
+
+async function migrateLegacyInvocationHistory(options: StartSparkDaemonOptions): Promise<void> {
   if (options.runScheduler !== false) {
     await migrateLegacyQueueHistory({
       db: options.db,
       queueRoot: legacySparkDaemonQueueRoot({ paths: options.paths }),
     });
   }
-  const userPaths = resolveSparkUserPaths({ sparkHome: options.sparkHome });
-  const scheduler =
-    options.runScheduler === false
-      ? null
-      : new SparkInvocationScheduler({
-          store: invocationStore,
-          executeTask:
-            options.executeInvocation ??
-            createChannelAwareTaskExecutor({
-              paths: options.paths,
-              cwd: process.cwd(),
-              controlSparkHome: userPaths.configRoot,
-              channelsSparkHome: userPaths.dataRoot,
-              ...(options.modelControl ? { modelControl: options.modelControl } : {}),
-              ...(options.sessionRegistry ? { sessionRegistry: options.sessionRegistry } : {}),
-              channelIngress: {
-                openReplyStream: async (workspaceId, adapterId, target, streamOptions) =>
-                  await channelIngress?.openReplyStream(
-                    workspaceId,
-                    adapterId,
-                    target,
-                    streamOptions,
-                  ),
-                sendReply: async (workspaceId, adapterId, input) => {
-                  if (!channelIngress) throw new Error("channel ingress is unavailable");
-                  return await channelIngress.sendReply(workspaceId, adapterId, input);
-                },
-              },
-              channelReplyDelivery: channelReplyDeliveryStore,
-              interact: (request, task, context) =>
-                humanInteractions.interact(request, {
-                  sessionId: task.sessionId,
-                  invocationId: context.invocationId,
-                  sessionSource: sessionSourceForTask(task),
-                  workspaceBindingId: task.workspaceBindingId,
-                  workspaceId: task.workspaceId,
-                  projectId: task.projectId,
-                  signal: context.signal,
-                  ...(task.channelReply
-                    ? {
-                        channel: {
-                          workspaceId: task.channelReply.workspaceId,
-                          adapterId: task.channelReply.adapterId,
-                          recipient: task.channelReply.recipient,
-                          ...(task.channelContext?.senderId
-                            ? { actorId: task.channelContext.senderId }
-                            : {}),
-                          ...(task.channelContext?.messageId
-                            ? { messageId: task.channelContext.messageId }
-                            : {}),
-                        },
-                      }
-                    : {}),
-                }),
-            }),
-          completeInvocation: (invocation, task, completion) => {
-            const completed = completeInvocationWithChannelDelivery(
-              {
-                db: options.db,
-                invocations: invocationStore,
-                deliveries: channelDeliveryStore,
-              },
-              invocation,
-              task,
-              completion,
-            );
-            if (options.sessionRegistry) {
-              void notifySessionRequestCompletion(
-                {
-                  invocationStore,
-                  sessionRegistry: options.sessionRegistry,
-                  ...(options.modelControl ? { modelControl: options.modelControl } : {}),
-                  resolveWorkspaceCwd: (workspaceId) =>
-                    resolveWorkspaceLocalPath(options.db, workspaceId),
-                  canAdmit: () => channelAdmissionOpen && !runtimeSignal.aborted,
-                },
-                { invocation, task, completion },
-              ).catch((error) => {
-                console.error("[spark-daemon] session request completion notify failed", error);
-              });
-            }
-            return completed;
-          },
-          emitEvent: emitInvocationEvent,
-          concurrency: options.schedulerConcurrency,
-          taskTimeoutMs: options.invocationTimeoutMs,
-          initiallyAccepting: false,
-        });
-  let schedulerLoop: Promise<void> | undefined;
-  const runSchedulerLoop = async () => {
-    while (!runtimeSignal.aborted) {
-      const didWork = scheduler?.processBatch() ?? false;
-      if (!didWork) await delayUnlessAborted(options.schedulerPollIntervalMs ?? 250, runtimeSignal);
-    }
-  };
-  const stopScheduler = () => scheduler?.stop();
-  const stopDirectInvocations = () => invocationRegistry.stop();
-  runtimeSignal.addEventListener("abort", stopScheduler, { once: true });
-  runtimeSignal.addEventListener("abort", stopDirectInvocations, { once: true });
-  const closeRestartAdmission = () => {
-    channelAdmissionOpen = false;
-    scheduler?.beginDrain();
-    invocationRegistry.beginDrain();
-  };
+}
+
+function registerDrainAdmissionGate(
+  options: StartSparkDaemonOptions,
+  closeRestartAdmission: () => void,
+): void {
   if (options.drainSignal?.aborted) closeRestartAdmission();
   else options.drainSignal?.addEventListener("abort", closeRestartAdmission, { once: true });
+}
+
+function createRestartDrainController(input: {
+  options: StartSparkDaemonOptions;
+  scheduler: SparkInvocationScheduler | null;
+  invocationRegistry: SparkDaemonInvocationRegistry;
+  runtimeShutdown: AbortController;
+  shutdownChannelIngress: ReturnType<typeof createChannelIngressShutdown>;
+  closeRestartAdmission: () => void;
+}): RestartDrainController {
+  const { options, scheduler, invocationRegistry, runtimeShutdown, shutdownChannelIngress } = input;
   let restartDrain: Promise<void> | undefined;
   let drainProgressTimer: ReturnType<typeof setInterval> | undefined;
   let drainStage: SparkDaemonDrainProgress["stage"] = "active-work";
@@ -296,7 +358,7 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
     }
   };
   const beginRestartDrain = () => {
-    closeRestartAdmission();
+    input.closeRestartAdmission();
     publishDrainProgress();
     if (options.onDrainProgress && !drainProgressTimer) {
       drainProgressTimer = setInterval(publishDrainProgress, 1_000);
@@ -322,15 +384,16 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
   };
   if (options.restartSignal?.aborted) beginRestartDrain();
   else options.restartSignal?.addEventListener("abort", beginRestartDrain, { once: true });
+  return {
+    dispose() {
+      options.restartSignal?.removeEventListener("abort", beginRestartDrain);
+      if (drainProgressTimer) clearInterval(drainProgressTimer);
+    },
+    wait: () => restartDrain,
+  };
+}
 
-  const mailStore =
-    options.mailStore ??
-    new SparkSessionMailStore({
-      sparkHome: userPaths.dataRoot,
-    });
-  let notificationReconcileLoop: Promise<void> | undefined;
-  let channelDeliveryReconcileLoop: Promise<void> | undefined;
-  let channelReplyReconcileLoop: Promise<void> | undefined;
+function createServingLoopGate(): ServingLoopGate {
   let resolveServingLoopGate!: (committed: boolean) => void;
   let servingLoopGateSettled = false;
   const servingLoopGate = new Promise<boolean>((resolve) => {
@@ -341,145 +404,270 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
     servingLoopGateSettled = true;
     resolveServingLoopGate(committed);
   };
-  const stopChannelIngress = () => void shutdownChannelIngress("runtime-abort");
-  runtimeSignal.addEventListener("abort", stopChannelIngress, { once: true });
+  return { promise: servingLoopGate, settle: settleServingLoopGate };
+}
 
-  try {
-    if (!runtimeSignal.aborted) {
-      await options.onReady?.({
-        channelIngress,
-        respondHumanInteraction: (wait, input) => humanInteractions.respond(wait, input),
-        flushHumanRequestOutbox,
-      });
-    }
-    // Prepare channel transports while their synchronous inbound gate remains
-    // closed. A message delivered during start is rejected for platform replay
-    // and cannot create a durable invocation before the final successor CAS.
-    if (channelIngress && !runtimeSignal.aborted && !options.drainSignal?.aborted) {
-      await startPreparedChannelIngress(channelIngress, options);
-    }
-
-    if (!runtimeSignal.aborted && !options.drainSignal?.aborted) {
-      // Prepare recovery and every serving loop before publishing Completed.
-      // Loops wait on servingLoopGate, so activating the in-memory gates below
-      // cannot process an event before the synchronous filesystem CAS.
-      scheduler?.recover();
-      scheduler?.activateAdmission();
-      invocationRegistry.activateAdmission();
-      channelAdmissionOpen = true;
-    }
-    if (scheduler && !options.once) {
-      schedulerLoop = servingLoopGate.then(async (committed) => {
-        if (committed && !runtimeSignal.aborted) await runSchedulerLoop();
-      });
-    }
-    if (channelIngress && !options.once) {
-      channelDeliveryReconcileLoop = servingLoopGate.then(async (committed) => {
-        if (!committed || runtimeSignal.aborted) return;
-        await runChannelDeliveryReconcileLoop(
-          channelDeliveryStore,
-          channelIngress,
-          runtimeSignal,
-          options.channelDeliveryReconcileIntervalMs ?? 250,
-        );
-      });
-      channelReplyReconcileLoop = servingLoopGate.then(async (committed) => {
-        if (!committed || runtimeSignal.aborted) return;
-        await runChannelReplyReconcileLoop(
-          channelReplyDeliveryStore,
-          channelIngress,
-          runtimeSignal,
-          options.notificationReconcileIntervalMs ?? 1_000,
-        );
-      });
-    }
-    if (channelIngress && options.sessionRegistry && !options.once) {
-      notificationReconcileLoop = servingLoopGate.then(async (committed) => {
-        if (!committed || runtimeSignal.aborted) return;
-        await runNotificationReconcileLoop(
-          mailStore,
-          options.sessionRegistry!,
-          channelIngress,
-          channelDeliveryStore,
-          channelDeliveryOutbox,
-          runtimeSignal,
-          options.notificationReconcileIntervalMs ?? 1_000,
-        );
-      });
-    }
-    // No JavaScript callback can run between opening the synchronous gates and
-    // this CAS. If explicit stop wins, onServing aborts the runtime and we close
-    // every gate again before releasing the loop promises.
-    if (!runtimeSignal.aborted && !options.drainSignal?.aborted) {
-      try {
-        options.onServing?.();
-      } catch (error) {
-        closeRestartAdmission();
-        runtimeShutdown.abort(error);
-        settleServingLoopGate(false);
-        throw error;
-      }
-    }
-    const servingCommitted = !runtimeSignal.aborted && !options.drainSignal?.aborted;
-    if (!servingCommitted) closeRestartAdmission();
-    settleServingLoopGate(servingCommitted);
-    if (options.once && !runtimeSignal.aborted) {
-      if (scheduler) {
-        scheduler.processBatch();
-        await scheduler.wait();
-      }
-      if (channelIngress && !runtimeSignal.aborted) {
-        await reconcileDaemonChannelDeliveries(
-          {
-            store: channelDeliveryStore,
-            channelIngress,
-            workerId: `daemon-once:${process.pid}`,
-          },
-          { limit: 100 },
-        );
-      }
-      await runSparkDaemonServerConnectionsOnce({
-        ...options,
-        signal: runtimeSignal,
-        invocationRegistry,
-        humanWaits,
-        channelIngress: channelIngress ?? undefined,
-        registerInvocationEventTarget,
-        registerHumanRequestOutboxTarget,
-      });
-      return;
-    }
-
-    await runSparkDaemonUplinkSupervisor({
-      ...options,
-      signal: runtimeSignal,
-      invocationRegistry,
-      humanWaits,
-      channelIngress: channelIngress ?? undefined,
-      registerInvocationEventTarget,
-      registerHumanRequestOutboxTarget,
+async function prepareDaemonServing(runtime: PreparedDaemonRuntime): Promise<void> {
+  const { options, runtimeSignal, channelIngress } = runtime;
+  if (!runtimeSignal.aborted) {
+    await options.onReady?.({
+      channelIngress,
+      respondHumanInteraction: (wait, input) => runtime.humanInteractions.respond(wait, input),
+      flushHumanRequestOutbox: runtime.flushHumanRequestOutbox,
     });
-  } finally {
-    settleServingLoopGate(false);
-    removeShutdownForwarder();
-    options.drainSignal?.removeEventListener("abort", closeRestartAdmission);
-    options.restartSignal?.removeEventListener("abort", beginRestartDrain);
-    runtimeSignal.removeEventListener("abort", stopScheduler);
-    runtimeSignal.removeEventListener("abort", stopDirectInvocations);
-    runtimeSignal.removeEventListener("abort", stopChannelIngress);
-    if (drainProgressTimer) clearInterval(drainProgressTimer);
-    await shutdownChannelIngress("daemon-finally");
-    scheduler?.stop();
-    await scheduler?.wait();
-    await restartDrain;
-    await schedulerLoop;
-    await channelDeliveryReconcileLoop;
-    await notificationReconcileLoop;
-    await channelReplyReconcileLoop;
-    if (options.managePidFile !== false && existsSync(options.paths.pidFile)) {
-      rmSync(options.paths.pidFile, { force: true });
+  }
+  if (channelIngress && canOpenDaemonAdmission(runtime)) {
+    await startPreparedChannelIngress(channelIngress, options);
+  }
+  if (canOpenDaemonAdmission(runtime)) activateDaemonAdmission(runtime);
+  startDaemonServingLoops(runtime);
+  commitDaemonServingFence(runtime);
+}
+
+function canOpenDaemonAdmission(runtime: PreparedDaemonRuntime): boolean {
+  return !runtime.runtimeSignal.aborted && !runtime.options.drainSignal?.aborted;
+}
+
+function activateDaemonAdmission(runtime: PreparedDaemonRuntime): void {
+  runtime.scheduler?.recover();
+  runtime.scheduler?.activateAdmission();
+  runtime.invocationRegistry.activateAdmission();
+  runtime.admission.open = true;
+}
+
+function startDaemonServingLoops(runtime: PreparedDaemonRuntime): void {
+  const { scheduler, channelIngress, options, runtimeSignal, servingGate, loops } = runtime;
+  if (scheduler && !options.once) {
+    loops.scheduler = servingGate.promise.then(async (committed) => {
+      if (committed && !runtimeSignal.aborted) await runSchedulerLoop(runtime);
+    });
+  }
+  if (channelIngress && !options.once) {
+    loops.channelDelivery = servingGate.promise.then(async (committed) => {
+      if (!committed || runtimeSignal.aborted) return;
+      await runChannelDeliveryReconcileLoop(
+        runtime.channelDeliveryStore,
+        channelIngress,
+        runtimeSignal,
+        options.channelDeliveryReconcileIntervalMs ?? 250,
+      );
+    });
+    loops.channelReply = servingGate.promise.then(async (committed) => {
+      if (!committed || runtimeSignal.aborted) return;
+      await runChannelReplyReconcileLoop(
+        runtime.channelReplyDeliveryStore,
+        channelIngress,
+        runtimeSignal,
+        options.notificationReconcileIntervalMs ?? 1_000,
+      );
+    });
+  }
+  if (channelIngress && options.sessionRegistry && !options.once) {
+    loops.notification = servingGate.promise.then(async (committed) => {
+      if (!committed || runtimeSignal.aborted) return;
+      await runNotificationReconcileLoop(
+        runtime.mailStore,
+        options.sessionRegistry!,
+        channelIngress,
+        runtime.channelDeliveryStore,
+        runtime.channelDeliveryOutbox,
+        runtimeSignal,
+        options.notificationReconcileIntervalMs ?? 1_000,
+      );
+    });
+  }
+}
+
+function commitDaemonServingFence(runtime: PreparedDaemonRuntime): void {
+  if (canOpenDaemonAdmission(runtime)) {
+    try {
+      runtime.options.onServing?.();
+    } catch (error) {
+      runtime.closeRestartAdmission();
+      runtime.runtimeShutdown.abort(error);
+      runtime.servingGate.settle(false);
+      throw error;
     }
   }
+  const servingCommitted = canOpenDaemonAdmission(runtime);
+  if (!servingCommitted) runtime.closeRestartAdmission();
+  runtime.servingGate.settle(servingCommitted);
+}
+
+async function runSchedulerLoop(runtime: PreparedDaemonRuntime): Promise<void> {
+  while (!runtime.runtimeSignal.aborted) {
+    const didWork = runtime.scheduler?.processBatch() ?? false;
+    if (!didWork) {
+      await delayUnlessAborted(
+        runtime.options.schedulerPollIntervalMs ?? 250,
+        runtime.runtimeSignal,
+      );
+    }
+  }
+}
+
+async function runDaemonOnce(runtime: PreparedDaemonRuntime): Promise<void> {
+  const { scheduler, channelIngress, runtimeSignal } = runtime;
+  if (scheduler) {
+    scheduler.processBatch();
+    await scheduler.wait();
+  }
+  if (channelIngress && !runtimeSignal.aborted) {
+    await reconcileDaemonChannelDeliveries(
+      {
+        store: runtime.channelDeliveryStore,
+        channelIngress,
+        workerId: `daemon-once:${process.pid}`,
+      },
+      { limit: 100 },
+    );
+  }
+  await runSparkDaemonServerConnectionsOnce(daemonServerConnectionOptions(runtime));
+}
+
+function daemonServerConnectionOptions(
+  runtime: PreparedDaemonRuntime,
+): SparkDaemonServerConnectionOptions {
+  return {
+    ...runtime.options,
+    signal: runtime.runtimeSignal,
+    invocationRegistry: runtime.invocationRegistry,
+    humanWaits: runtime.humanWaits,
+    channelIngress: runtime.channelIngress ?? undefined,
+    registerInvocationEventTarget: (sink) => runtime.eventHub.register(sink),
+    registerHumanRequestOutboxTarget: runtime.registerHumanRequestOutboxTarget,
+  };
+}
+
+async function cleanupPreparedDaemonRuntime(runtime: PreparedDaemonRuntime): Promise<void> {
+  const { options, runtimeSignal } = runtime;
+  runtime.servingGate.settle(false);
+  runtime.removeShutdownForwarder();
+  options.drainSignal?.removeEventListener("abort", runtime.closeRestartAdmission);
+  runtime.restartDrain.dispose();
+  runtimeSignal.removeEventListener("abort", runtime.stopScheduler);
+  runtimeSignal.removeEventListener("abort", runtime.stopDirectInvocations);
+  runtimeSignal.removeEventListener("abort", runtime.stopChannelIngress);
+  await runtime.shutdownChannelIngress("daemon-finally");
+  runtime.scheduler?.stop();
+  await runtime.scheduler?.wait();
+  await runtime.restartDrain.wait();
+  await runtime.loops.scheduler;
+  await runtime.loops.channelDelivery;
+  await runtime.loops.notification;
+  await runtime.loops.channelReply;
+  if (options.managePidFile !== false && existsSync(options.paths.pidFile)) {
+    rmSync(options.paths.pidFile, { force: true });
+  }
+}
+
+function createDaemonScheduler(input: {
+  options: StartSparkDaemonOptions;
+  runtimeSignal: AbortSignal;
+  admission: { open: boolean };
+  invocationStore: SparkInvocationStore;
+  channelDeliveryStore: SparkChannelDeliveryStore;
+  channelIngress: DaemonChannelIngressRuntime | null;
+  channelReplyDeliveryStore: ChannelReplyDeliveryStore;
+  humanInteractions: SparkDaemonHumanInteractionBroker;
+  eventHub: InvocationEventHub;
+  controlSparkHome: string;
+  channelsSparkHome: string;
+}): SparkInvocationScheduler | null {
+  if (input.options.runScheduler === false) return null;
+  const { options } = input;
+  return new SparkInvocationScheduler({
+    store: input.invocationStore,
+    executeTask:
+      options.executeInvocation ??
+      createChannelAwareTaskExecutor({
+        paths: options.paths,
+        cwd: process.cwd(),
+        controlSparkHome: input.controlSparkHome,
+        channelsSparkHome: input.channelsSparkHome,
+        ...(options.modelControl ? { modelControl: options.modelControl } : {}),
+        ...(options.sessionRegistry ? { sessionRegistry: options.sessionRegistry } : {}),
+        channelIngress: {
+          openReplyStream: async (workspaceId, adapterId, target, streamOptions) =>
+            await input.channelIngress?.openReplyStream(
+              workspaceId,
+              adapterId,
+              target,
+              streamOptions,
+            ),
+          sendReply: async (workspaceId, adapterId, sendInput) => {
+            if (!input.channelIngress) throw new Error("channel ingress is unavailable");
+            return await input.channelIngress.sendReply(workspaceId, adapterId, sendInput);
+          },
+        },
+        channelReplyDelivery: input.channelReplyDeliveryStore,
+        interact: (request, task, context) =>
+          input.humanInteractions.interact(request, {
+            sessionId: task.sessionId,
+            invocationId: context.invocationId,
+            sessionSource: sessionSourceForTask(task),
+            workspaceBindingId: task.workspaceBindingId,
+            workspaceId: task.workspaceId,
+            projectId: task.projectId,
+            signal: context.signal,
+            ...(task.channelReply
+              ? {
+                  channel: {
+                    workspaceId: task.channelReply.workspaceId,
+                    adapterId: task.channelReply.adapterId,
+                    recipient: task.channelReply.recipient,
+                    ...(task.channelContext?.senderId
+                      ? { actorId: task.channelContext.senderId }
+                      : {}),
+                    ...(task.channelContext?.messageId
+                      ? { messageId: task.channelContext.messageId }
+                      : {}),
+                  },
+                }
+              : {}),
+          }),
+      }),
+    completeInvocation: (invocation, task, completion) =>
+      completeScheduledInvocation(input, invocation, task, completion),
+    emitEvent: (event) => input.eventHub.emit(event),
+    concurrency: options.schedulerConcurrency,
+    taskTimeoutMs: options.invocationTimeoutMs,
+    initiallyAccepting: false,
+  });
+}
+
+function completeScheduledInvocation(
+  input: Parameters<typeof createDaemonScheduler>[0],
+  invocation: SparkInvocationRecord,
+  task: SparkDaemonTask,
+  completion: CompleteSparkInvocationInput,
+): ReturnType<NonNullable<SparkInvocationSchedulerOptions["completeInvocation"]>> {
+  const completed = completeInvocationWithChannelDelivery(
+    {
+      db: input.options.db,
+      invocations: input.invocationStore,
+      deliveries: input.channelDeliveryStore,
+    },
+    invocation,
+    task,
+    completion,
+  );
+  if (input.options.sessionRegistry) {
+    void notifySessionRequestCompletion(
+      {
+        invocationStore: input.invocationStore,
+        sessionRegistry: input.options.sessionRegistry,
+        ...(input.options.modelControl ? { modelControl: input.options.modelControl } : {}),
+        resolveWorkspaceCwd: (workspaceId) =>
+          resolveWorkspaceLocalPath(input.options.db, workspaceId),
+        canAdmit: () => input.admission.open && !input.runtimeSignal.aborted,
+      },
+      { invocation, task, completion },
+    ).catch((error) => {
+      console.error("[spark-daemon] session request completion notify failed", error);
+    });
+  }
+  return completed;
 }
 
 function createDaemonRuntimeSignal(options: StartSparkDaemonOptions): {
@@ -794,7 +982,7 @@ function shouldReplaceUplink(
   forceServerUrl: string | undefined,
   serverUrl: string,
 ): boolean {
-  if (!next || next.fingerprint !== current.fingerprint) return true;
+  if (next?.fingerprint !== current.fingerprint) return true;
   if (forceServerUrl === undefined) return false;
   return forceServerUrl === "" || normalizeSparkDaemonServerUrl(forceServerUrl) === serverUrl;
 }
@@ -1205,8 +1393,12 @@ async function runSparkDaemonServerConnection(
           if (heartbeat) {
             return;
           }
-          heartbeat = setInterval(
-            () => flushDaemonHeartbeat(ws, options, runtimeId, runtimeSessionId, serverUrl),
+          heartbeat = startDaemonHeartbeatTimer(
+            ws,
+            options,
+            runtimeId,
+            () => runtimeSessionId,
+            serverUrl,
             intervalMs,
           );
           sendHeartbeat(ws, options.db, runtimeId, runtimeSessionId, serverUrl);
@@ -1265,6 +1457,20 @@ function flushDaemonHeartbeat(
 ): void {
   sendHeartbeat(ws, options.db, runtimeId, runtimeSessionId, serverUrl);
   flushPendingHumanRequests(ws, options.humanWaits, runtimeId, serverUrl);
+}
+
+function startDaemonHeartbeatTimer(
+  ws: WebSocket,
+  options: SparkDaemonServerConnectionOptions,
+  runtimeId: string,
+  getRuntimeSessionId: () => string | undefined,
+  serverUrl: string | null,
+  intervalMs: number,
+): NodeJS.Timeout {
+  return setInterval(
+    () => flushDaemonHeartbeat(ws, options, runtimeId, getRuntimeSessionId(), serverUrl),
+    intervalMs,
+  );
 }
 
 async function delayUnlessAborted(ms: number, signal: AbortSignal | undefined): Promise<void> {

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, rm, stat } from "node:fs/promises";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { checkSourceDistribution } from "./check-source-distribution.mjs";
@@ -30,6 +31,34 @@ async function run(command, args, options = {}) {
   }
 }
 
+function asError(error) {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+async function runWithCleanup(operation, cleanup, message) {
+  let result;
+  let operationFailure;
+  try {
+    result = await operation();
+  } catch (error) {
+    operationFailure = asError(error);
+  }
+
+  let cleanupFailure;
+  try {
+    await cleanup();
+  } catch (error) {
+    cleanupFailure = asError(error);
+  }
+
+  if (operationFailure && cleanupFailure) {
+    throw new AggregateError([operationFailure, cleanupFailure], message);
+  }
+  if (operationFailure) throw operationFailure;
+  if (cleanupFailure) throw cleanupFailure;
+  return result;
+}
+
 async function smokeBuiltDaemon(runtimeDirectory) {
   const dispatcher = resolve(root, "apps/spark-cli/bin/spark");
   await stat(resolve(root, "apps/spark-daemon/dist/migrations/0001_initial.sql"));
@@ -39,38 +68,35 @@ async function smokeBuiltDaemon(runtimeDirectory) {
     SPARK_REPO_ROOT: join(runtimeDirectory, "missing-repository-root"),
   };
   let startAttempted = false;
-  let started = false;
-  try {
-    startAttempted = true;
-    const start = await run(dispatcher, ["daemon", "start", "--json"], {
-      env: environment,
-    });
-    started = true;
-    const startResult = JSON.parse(start.stdout);
-    const instanceId = startResult.daemon?.lifecycle?.process?.instanceId;
-    if (startResult.daemon?.running !== true || typeof instanceId !== "string") {
-      throw new Error("Built daemon did not report a running process identity");
-    }
-    const status = await run(dispatcher, ["daemon", "status", "--json"], {
-      env: environment,
-    });
-    const statusResult = JSON.parse(status.stdout);
-    if (
-      statusResult.daemon?.running !== true ||
-      statusResult.daemon?.lifecycle?.process?.instanceId !== instanceId
-    ) {
-      throw new Error("Source dispatcher did not reach the built daemon identity");
-    }
-    await stat(join(environment.SPARK_HOME, "apps/daemon/data/daemon.sqlite"));
-  } finally {
-    if (startAttempted) {
-      try {
-        await run(dispatcher, ["daemon", "stop", "--yes"], { env: environment });
-      } catch (error) {
-        if (started) throw error;
+  await runWithCleanup(
+    async () => {
+      startAttempted = true;
+      const start = await run(dispatcher, ["daemon", "start", "--json"], {
+        env: environment,
+      });
+      const startResult = JSON.parse(start.stdout);
+      const instanceId = startResult.daemon?.lifecycle?.process?.instanceId;
+      if (startResult.daemon?.running !== true || typeof instanceId !== "string") {
+        throw new Error("Built daemon did not report a running process identity");
       }
-    }
-  }
+      const status = await run(dispatcher, ["daemon", "status", "--json"], {
+        env: environment,
+      });
+      const statusResult = JSON.parse(status.stdout);
+      if (
+        statusResult.daemon?.running !== true ||
+        statusResult.daemon?.lifecycle?.process?.instanceId !== instanceId
+      ) {
+        throw new Error("Source dispatcher did not reach the built daemon identity");
+      }
+      await stat(join(environment.SPARK_HOME, "apps/daemon/data/daemon.sqlite"));
+    },
+    async () => {
+      if (!startAttempted) return;
+      await run(dispatcher, ["daemon", "stop", "--yes"], { env: environment });
+    },
+    "Built daemon smoke failed and its process could not be stopped",
+  );
 }
 
 async function availablePort() {
@@ -140,32 +166,69 @@ async function smokeCockpit(runtimeDirectory) {
   child.once("exit", (code, signal) => {
     state.exit = code ?? signal ?? "unknown";
   });
-  try {
-    await waitForCockpit(`http://127.0.0.1:${port}/api/v1/health`, state);
-  } catch (error) {
-    throw new Error(`${String(error)}\n${state.stderr.trim()}`.trim(), { cause: error });
-  } finally {
-    child.kill("SIGTERM");
-    const stopped = await waitForChildExit(child, 2_000);
-    if (!stopped) {
+  await runWithCleanup(
+    async () => {
+      try {
+        await waitForCockpit(`http://127.0.0.1:${port}/api/v1/health`, state);
+      } catch (error) {
+        throw new Error(`${String(error)}\n${state.stderr.trim()}`.trim(), { cause: error });
+      }
+    },
+    async () => {
+      child.kill("SIGTERM");
+      const stopped = await waitForChildExit(child, 2_000);
+      if (stopped) return;
       child.kill("SIGKILL");
-      await waitForChildExit(child, 2_000);
+      const killed = await waitForChildExit(child, 2_000);
+      if (!killed) throw new Error(`Cockpit process ${child.pid ?? "unknown"} did not stop`);
+    },
+    "Cockpit smoke failed and its process could not be stopped",
+  );
+}
+
+async function createPrivateTemporaryRoot() {
+  // Spark daemon IPC uses a Unix socket. Darwin's short sun_path limit rules out its usual
+  // /var/folders TMPDIR, so use the sticky /tmp parent there and secure the new random child.
+  const parent = process.platform === "darwin" ? "/tmp" : tmpdir();
+  const directory = await mkdtemp(join(parent, "spk-src-")); // NOSONAR -- atomically created, owner-checked, and forced to 0700 below.
+  try {
+    await chmod(directory, 0o700);
+    const details = await lstat(directory);
+    const expectedOwner = process.getuid?.();
+    if (!details.isDirectory() || details.isSymbolicLink()) {
+      throw new Error(`Temporary runtime root is not a real directory: ${directory}`);
     }
+    if (expectedOwner !== undefined && details.uid !== expectedOwner) {
+      throw new Error(`Temporary runtime root is not owned by the current user: ${directory}`);
+    }
+    if (process.platform !== "win32" && (details.mode & 0o077) !== 0) {
+      throw new Error(`Temporary runtime root permissions are not private: ${directory}`);
+    }
+    return directory;
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true });
+    throw error;
   }
 }
 
-const temporaryRoot = await mkdtemp("/tmp/spk-src-");
-try {
-  const { workspaces } = await checkSourceDistribution(root);
-  await run("pnpm", ["run", "build"], { timeout: 300_000 });
-  await checkSourceDistribution(root, { requireBuiltBins: true });
-  await run(resolve(root, "apps/spark-cli/bin/spark"), ["--help"]);
-  await run(resolve(root, "apps/spark-tui/bin/spark-tui"), ["--help"]);
-  await smokeBuiltDaemon(temporaryRoot);
-  await smokeCockpit(temporaryRoot);
-  console.log(
-    `Source distribution smoke passed for ${workspaces.length} private workspaces, built daemon, dispatcher, TUI, and Cockpit.`,
+async function smokeSourceDistribution() {
+  const temporaryRoot = await createPrivateTemporaryRoot();
+  await runWithCleanup(
+    async () => {
+      const { workspaces } = await checkSourceDistribution(root);
+      await run("pnpm", ["run", "build"], { timeout: 300_000 });
+      await checkSourceDistribution(root, { requireBuiltBins: true });
+      await run(resolve(root, "apps/spark-cli/bin/spark"), ["--help"]);
+      await run(resolve(root, "apps/spark-tui/bin/spark-tui"), ["--help"]);
+      await smokeBuiltDaemon(temporaryRoot);
+      await smokeCockpit(temporaryRoot);
+      console.log(
+        `Source distribution smoke passed for ${workspaces.length} private workspaces, built daemon, dispatcher, TUI, and Cockpit.`,
+      );
+    },
+    () => rm(temporaryRoot, { recursive: true, force: true }),
+    "Source distribution smoke failed and its private runtime root could not be removed",
   );
-} finally {
-  await rm(temporaryRoot, { recursive: true, force: true });
 }
+
+await smokeSourceDistribution();

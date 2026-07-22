@@ -431,5 +431,3 @@ export type SparkLocalRpcOrpcMethod = keyof typeof sparkLocalRpcOrpcMethodPaths;
 export const sparkLocalRpcOrpcLiveMethods = Object.keys(
   sparkLocalRpcOrpcMethodPaths,
 ) as SparkLocalRpcOrpcMethod[];
-
-export type SparkLocalRpcOrpcLiveMethod = SparkLocalRpcOrpcMethod;
