@@ -2,7 +2,7 @@ import { error, fail, redirect } from "@sveltejs/kit";
 import {
   hasActiveWorkspaceAccessTokens,
   WorkspaceAccessTokenError,
-} from "@zendev-lab/spark-coordination/workspace-access";
+} from "@zendev-lab/spark-cockpit-coordination/workspace-access";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import {
   exchangeWorkspaceAccessToken,

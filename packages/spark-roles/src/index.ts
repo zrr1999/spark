@@ -1538,3 +1538,6 @@ function abortSignalReason(signal: AbortSignal | undefined): string {
   if (typeof reason === "string" && reason.trim()) return reason.trim();
   return "abort";
 }
+
+export { createSparkRoleRegistry } from "./spark-role-registry.ts";
+export * from "./reviewer-runner.ts";

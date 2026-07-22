@@ -44,10 +44,10 @@ jobs:
           path: |
             packages/spark-retry/reports/mutation/
             packages/spark-protocol/reports/mutation/
-            packages/spark-db/reports/mutation/
+            packages/spark-cockpit-db/reports/mutation/
             packages/spark-system/reports/mutation/
             packages/spark-channels/reports/mutation/
-            packages/spark-coordination/reports/mutation/
+            packages/spark-cockpit-coordination/reports/mutation/
             packages/spark-session/reports/mutation/
             packages/spark-artifacts/reports/mutation/
             packages/spark-repro/reports/mutation/

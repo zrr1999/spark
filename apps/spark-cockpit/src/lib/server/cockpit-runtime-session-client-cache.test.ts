@@ -1,6 +1,6 @@
-import { createWorkspaceWithOwnerBinding } from "@zendev-lab/spark-coordination/projection-services";
-import { RuntimeControlCommandError } from "@zendev-lab/spark-coordination/runtime-control";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { createWorkspaceWithOwnerBinding } from "@zendev-lab/spark-cockpit-coordination/projection-services";
+import { RuntimeControlCommandError } from "@zendev-lab/spark-cockpit-coordination/runtime-control";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import { describe, expect, it } from "vitest";
 import {
@@ -84,6 +84,7 @@ describe("cockpit runtime session cache", () => {
       runs: [],
       tasks: [],
       artifacts: [],
+      evidence: [],
       metadata: {},
     };
     db.prepare(

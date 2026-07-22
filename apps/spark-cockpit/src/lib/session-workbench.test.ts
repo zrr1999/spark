@@ -42,7 +42,7 @@ describe("session workbench projection", () => {
             ref: "task:build",
             projectRef: "project:cockpit",
             title: "Build the inspector",
-            status: "claimed",
+            status: "running",
             owner: "worker",
             todos: [
               { id: "todo-1", content: "Project state", status: "done", notes: [] },

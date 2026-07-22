@@ -4,13 +4,17 @@ import type { ModeRegistry } from "./registry.ts";
 import type { Mode, ModeRenderContext } from "./types.ts";
 
 /**
- * Canonical `mode` action tool primitive. The tool is the override/switch path
- * (not a mandatory gate): the agent calls `mode({ action })` to change the
- * current lens, and the tool returns the new mode's requirements as its result.
+ * Canonical action-tool primitive for operating lenses. The tool is the
+ * override/switch path (not a mandatory gate): the agent calls
+ * `toolName({ action })` to change the current lens, and the tool returns the
+ * new mode's requirements as its result.
+ *
+ * Spark native hosts register this as `phase` (see pi-extension
+ * `registerSparkPhaseTool`); the library default remains `mode` for host-
+ * neutral callers. Render as `phase action=<value>` / `mode action=<value>`.
  *
  * `action` is validated against the registered mode ids plus the reserved
- * `status` action. Per the canonical tool convention this renders as
- * `mode action=<value>`.
+ * `status` action.
  */
 export const MODE_TOOL_STATUS_ACTION = "status" as const;
 

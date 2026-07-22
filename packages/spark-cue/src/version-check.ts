@@ -40,7 +40,7 @@ import process from "node:process";
 
 import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 
-import type { CueClient } from "./cue-client.ts";
+import type { CueClient } from "./client/cue-client.ts";
 
 export type DaemonVersion = { kind: "reported"; version: string } | { kind: "unknown" };
 
@@ -147,8 +147,9 @@ export async function checkAndWarn(
       reported !== null && reported.length > 0
         ? { kind: "reported", version: reported }
         : { kind: "unknown" };
-  } catch {
+  } catch (error) {
     // Don't promote transport errors into version warnings.
+    console.debug("[spark-cue] version check ping failed; skipping warning", error);
     return null;
   }
 
@@ -174,7 +175,8 @@ async function resolveLatest(override: VersionCheckOptions["latest"]): Promise<s
     if (typeof override === "function") {
       try {
         return await override();
-      } catch {
+      } catch (error) {
+        console.debug("[spark-cue] version check latest override failed", error);
         return null;
       }
     }
@@ -230,7 +232,8 @@ async function readCache(path: string): Promise<CacheEntry | null> {
       return { url: data.url, tag: data.tag, fetchedAt: data.fetchedAt };
     }
     return null;
-  } catch {
+  } catch (error) {
+    console.debug(`[spark-cue] version cache read failed for ${path}`, error);
     return null;
   }
 }
@@ -239,8 +242,9 @@ async function writeCache(path: string, entry: CacheEntry): Promise<void> {
   try {
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, JSON.stringify(entry), "utf-8");
-  } catch {
+  } catch (error) {
     // Best-effort; a read-only HOME just means we'll re-fetch next time.
+    console.debug(`[spark-cue] version cache write failed for ${path}`, error);
   }
 }
 
@@ -259,7 +263,8 @@ async function httpGetReleaseTag(url: string): Promise<string | null> {
     const data = (await response.json()) as { tag_name?: unknown };
     if (typeof data.tag_name !== "string" || data.tag_name.length === 0) return null;
     return normalizeTag(data.tag_name);
-  } catch {
+  } catch (error) {
+    console.debug(`[spark-cue] latest release fetch failed for ${url}`, error);
     return null;
   } finally {
     clearTimeout(timer);

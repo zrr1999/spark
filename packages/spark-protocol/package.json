@@ -26,7 +26,8 @@
     "./runtime-v1/messages": "./src/runtime-v1/messages.ts",
     "./runtime-v1/registration": "./src/runtime-v1/registration.ts",
     "./state-ownership": "./src/state-ownership.ts",
-    "./version": "./src/version.ts"
+    "./version": "./src/version.ts",
+    "./local-rpc-orpc-contract": "./src/local-rpc-orpc-contract.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -37,6 +38,8 @@
     "test:mutation": "stryker run"
   },
   "dependencies": {
+    "@orpc/contract": "catalog:",
+    "@zendev-lab/spark-core": "workspace:^",
     "zod": "^4.1.5"
   },
   "devDependencies": {

@@ -1,0 +1,42 @@
+{
+  "name": "@zendev-lab/spark-cockpit-db",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cockpit-private SQLite migrations, database client, and Node SQLite dialect.",
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "package.json",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "vp check --no-fmt --no-lint . && node --experimental-strip-types scripts/check-schema-types.mjs && vp test run",
+    "check:schema-types": "node --experimental-strip-types scripts/check-schema-types.mjs",
+    "generate:types": "node --experimental-strip-types scripts/generate-types.mjs",
+    "test": "vp test run",
+    "test:mutation": "stryker run"
+  },
+  "dependencies": {
+    "@zendev-lab/spark-system": "workspace:*",
+    "kysely": "^0.28.7"
+  },
+  "devDependencies": {
+    "@stryker-mutator/core": "catalog:",
+    "@stryker-mutator/vitest-runner": "catalog:",
+    "@types/better-sqlite3": "^7.6.13",
+    "better-sqlite3": "^12.11.1",
+    "kysely-codegen": "^0.20.0",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=26.0.0 <27"
+  }
+}

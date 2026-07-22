@@ -1,5 +1,5 @@
 import type { SparkSessionRegistryRecord } from "@zendev-lab/spark-protocol";
-import { RuntimeControlCommandError } from "@zendev-lab/spark-coordination/runtime-control";
+import { RuntimeControlCommandError } from "@zendev-lab/spark-cockpit-coordination/runtime-control";
 import { describe, expect, it, vi } from "vitest";
 import {
   archiveManagedSessionForCockpit,

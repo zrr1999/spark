@@ -10,7 +10,7 @@ import {
   type SparkSessionRegistryRecord,
   type SparkThinkingLevel,
 } from "@zendev-lab/spark-protocol";
-import type { RuntimeEphemeralSecretRequestContext } from "@zendev-lab/spark-coordination/runtime-model-channel-control";
+import type { RuntimeEphemeralSecretRequestContext } from "@zendev-lab/spark-cockpit-coordination/runtime-model-channel-control";
 import { createCockpitRuntimeModelChannelClient } from "./cockpit-runtime-model-channel-client.ts";
 
 export interface CockpitModelControlClient {

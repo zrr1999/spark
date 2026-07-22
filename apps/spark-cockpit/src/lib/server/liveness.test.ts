@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import {
   sweepStaleInvocations,
   sweepStaleRuntimeConnections,
-} from "@zendev-lab/spark-coordination/liveness";
+} from "@zendev-lab/spark-cockpit-coordination/liveness";
 import {
   createProject,
   createWorkspaceWithOwnerBinding,
-} from "@zendev-lab/spark-coordination/projection-services";
+} from "@zendev-lab/spark-cockpit-coordination/projection-services";
 
 describe("runtime liveness", () => {
   it("marks stale online runtimes offline and appends an event", () => {

@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
-import { appendEvent } from "@zendev-lab/spark-coordination/projection-services";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
+import { appendEvent } from "@zendev-lab/spark-cockpit-coordination/projection-services";
 import {
   cursorFromEvent,
   encodeSseMessage,
   loadEventBatch,
   serializeEventRow,
-} from "@zendev-lab/spark-coordination/events";
+} from "@zendev-lab/spark-cockpit-coordination/events";
 
 describe("event streaming helpers", () => {
   it("loads events in cursor order and encodes SSE messages", () => {

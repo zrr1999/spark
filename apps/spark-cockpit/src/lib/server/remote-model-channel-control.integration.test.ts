@@ -35,13 +35,13 @@ import { acknowledgeRuntimeCommandTerminal } from "../../../../spark-daemon/src/
 import { createDaemonSessionRegistry } from "../../../../spark-daemon/src/session-registry.ts";
 import { openSparkDaemonDatabase } from "../../../../spark-daemon/src/store/schema.ts";
 import { registerWorkspace } from "../../../../spark-daemon/src/store/workspaces.ts";
-import { createWorkspaceWithOwnerBinding } from "../../../../../packages/spark-coordination/src/projection-services.ts";
 import {
   attachRuntimeWebSocket,
   authenticateRuntimeToken,
-} from "../../../../../packages/spark-coordination/src/runtime-ws.ts";
-import { hashSecret } from "../../../../../packages/spark-coordination/src/security.ts";
-import { migrate, openMemoryDatabase } from "../../../../../packages/spark-db/src/index.ts";
+  createWorkspaceWithOwnerBinding,
+  hashSecret,
+} from "@zendev-lab/spark-cockpit-coordination";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import { createOwnerSession, getCurrentUserId } from "./auth.ts";
 import { createCockpitRuntimeModelChannelClient } from "./cockpit-runtime-model-channel-client.ts";
 import { createCockpitRuntimeSessionClient } from "./cockpit-runtime-session-client.ts";

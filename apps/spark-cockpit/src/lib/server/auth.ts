@@ -1,9 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
-import { consumeCockpitAccessToken } from "@zendev-lab/spark-coordination/cockpit-access";
+import { consumeCockpitAccessToken } from "@zendev-lab/spark-cockpit-coordination/cockpit-access";
 import {
   consumeWorkspaceAccessToken,
   type ConsumedWorkspaceAccessToken,
-} from "@zendev-lab/spark-coordination/workspace-access";
+} from "@zendev-lab/spark-cockpit-coordination/workspace-access";
 import { createId } from "@zendev-lab/spark-protocol";
 import type { Cookies } from "@sveltejs/kit";
 import type { DatabaseSync } from "node:sqlite";

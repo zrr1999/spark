@@ -9,14 +9,13 @@ Spark and the repository root Pi profile do not load this extension by default. 
 `@zendev-lab/spark-graft` does not edit the working tree directly and does not speak graftd's socket protocol. Its TypeScript `graft-client` bridge is a thin process wrapper over `graft --json <argv>`: the Rust `graft` CLI remains the only wire translator, resolving socket location, daemon startup, typed daemon ops, daemon-owned `cli_exec`, and local routing internally. Tools shape convenient parameters into CLI argv/stdin and parse the JSON envelope/result:
 
 ```text
-graft_help / graft_init / graft_doctor                                      -> workflow/bootstrap/diagnostics
-graft_scratch_open { base?: "graft:empty" | "candidate:..." | ... }         -> scratch:a
-graft_write/read/edit/delete { base?: "graft:empty" | "candidate:..." | ... } -> scratch:b
-graft_write/read/edit/delete { from: "scratch:b" }                         -> scratch:c/d/...
-graft_scratch_diff/drop/pin/unpin                                           -> daemon scratch lifecycle
-graft_candidate_from_scratch { scratch: "scratch:d" }                      -> candidate:...
-graft_validate / graft_admit / graft_show / graft_evidence / graft_materialize -> evidence / patch inspection
-graft_repo { action: "add" | "list" | "sync" | "lock" | "update" }          -> managed repo config/cache/lock workflow
+graft({ action: "help"|"init"|"doctor"|... })                              -> workflow/bootstrap/diagnostics
+graft({ action: "scratch_open", base? })                                   -> scratch:a
+graft({ action: "write"|"read"|"edit"|"delete", base?|from? })             -> scratch:b/c/...
+graft({ action: "scratch_diff"|"scratch_drop"|"scratch_pin"|"scratch_unpin" }) -> daemon scratch lifecycle
+graft({ action: "candidate_from_scratch", scratch })                       -> candidate:...
+graft({ action: "validate"|"admit"|"show"|"evidence"|"materialize" })      -> evidence / patch inspection
+graft({ action: "repo", repoAction: "add"|"list"|"sync"|"lock"|"update" }) -> managed repo config/cache/lock workflow
 ```
 
 The extension keeps only convenience metadata (`base`, `lastScratch`, `lastCandidate`, and `lastPatch`) so later tool calls can omit `from`/`scratch` in the same workspace. That state is not the protocol entrance: every scratch tool accepts explicit `base` or `from`, and every result includes the returned scratch id in `details.result.scratch` for the next call. Pass `base` only for the first operation from a materialized ref; pass `from` only when continuing an existing scratch. Never pass both in one scratch tool call. When a workflow agent sets `GRAFT_BASE_REF`, the first `graft_scratch_open`/`graft_read`/`graft_write`/`graft_edit`/`graft_delete` call may omit `base`; the CLI resolves the env ref exactly like `--base`, while explicit `base` wins and explicit `from` ignores the env ref. Rename has no separate operation yet; express it as `graft_delete` for the old path followed by `graft_write` for the new path.
@@ -33,7 +32,7 @@ spark-graft also registers the explicit extension role `role:extension-patcher` 
 
 ### Normal mode vs sandbox replacement mode
 
-The default spark-graft entrypoint (`@zendev-lab/spark-graft/extension`) is ordinary explicit graft tooling: it registers `graft_*` tools and does **not** override Pi's built-in `read`, `write`, `edit`, `grep`, `find`, or `ls` tools.
+The default spark-graft entrypoint (`@zendev-lab/spark-graft/extension`) is ordinary explicit graft tooling: it registers the canonical `graft({ action })` tool and does **not** override Pi's built-in `read`, `write`, `edit`, `grep`, `find`, or `ls` tools.
 
 The opt-in sandbox entrypoint (`@zendev-lab/spark-graft/sandbox`, or this repo's `packages/spark-graft/src/sandbox-entry.ts` during local development) is the file-tool replacement profile. Load it only when you want file operations to enter the Graft lifecycle. It registers sandbox lifecycle helpers plus tools named exactly `read`, `write`, `edit`, `grep`, `find`, and `ls`; with `--no-builtin-tools`, those names still work because they come from the sandbox extension rather than Pi built-ins.
 
@@ -74,10 +73,10 @@ Exit/reload behavior is profile-level, not per-tool-call. After `graft_sandbox_e
 
 These tools do not override Pi built-ins. Each scratch tool accepts either `base` (first operation) or `from` (continue a returned scratch), matching CLI `graft scratch ... --base/--from`. If neither is provided and there is no remembered `lastScratch`, `GRAFT_BASE_REF` is used as the implicit first-operation base; if it is absent or blank, the tool fails loudly. Treat selectors as mutually exclusive: do not include `base` once you have a `scratch:*` id to pass as `from`.
 
-- `graft_read` — read a UTF-8 text file and return `LINE#HASH:` anchors; `details.result.scratch` is the source scratch id.
-- `graft_write` — write complete UTF-8 text content and return a new scratch id.
-- `graft_edit` — apply strict hashline edits and return a new scratch id.
-- `graft_delete` — delete a file and return a new scratch id.
+- `graft({ action: "read" })` — read a UTF-8 text file and return `LINE#HASH:` anchors; `details.result.scratch` is the source scratch id.
+- `graft({ action: "write" })` — write complete UTF-8 text content and return a new scratch id.
+- `graft({ action: "edit" })` — apply strict hashline edits and return a new scratch id.
+- `graft({ action: "delete" })` — delete a file and return a new scratch id.
 
 `graft_edit` intentionally rejects legacy `oldText`/`newText` exact replacement. Call `graft_read` first, then use anchors from its output. Supported edit operations are `replace`, `append`, and `prepend`.
 

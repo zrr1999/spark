@@ -4,7 +4,7 @@ import {
   createServerCommandEnvelope,
   runtimeProtocolVersion,
 } from "@zendev-lab/spark-protocol";
-import { openMemoryDatabase } from "@zendev-lab/spark-db";
+import { openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import {
   acknowledgeRuntimeCommandTerminal,
   acknowledgeRuntimeCommandTerminalForRoute,

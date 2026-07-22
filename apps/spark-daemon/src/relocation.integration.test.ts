@@ -24,16 +24,16 @@ import {
   openDatabase,
   openMemoryDatabase,
   restoreCockpitSnapshot,
-} from "@zendev-lab/spark-db";
+} from "@zendev-lab/spark-cockpit-db";
 import {
   createRuntimeEnrollmentToken,
   preflightRuntimeRelocation,
   registerRuntime,
-} from "@zendev-lab/spark-coordination/runtime-registration";
+} from "@zendev-lab/spark-cockpit-coordination/runtime-registration";
 import {
   attachRuntimeWebSocket,
   authenticateRuntimeToken,
-} from "@zendev-lab/spark-coordination/runtime-ws";
+} from "@zendev-lab/spark-cockpit-coordination/runtime-ws";
 import { resolveSparkPaths, type SparkPaths } from "@zendev-lab/spark-system";
 
 import { createSparkDaemonUplinkControl, startSparkDaemon } from "./daemon.ts";

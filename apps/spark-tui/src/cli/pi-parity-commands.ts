@@ -30,6 +30,7 @@ import {
 import {
   compactSparkVisibleTranscript,
   navigateSparkSessionBranchWithSummary,
+  renderSparkSmartCompactionPrompt,
 } from "../host/compaction.ts";
 import { listOAuthProviderSummaries } from "../host/auth.ts";
 import {
@@ -602,8 +603,26 @@ async function handleCompactCommand(
   const checkpointMessages = compactCheckpointMessagesFromEvents(beforeCompactResults);
   const messagesForCompaction =
     checkpointMessages.length > 0 ? [...messages, ...checkpointMessages] : messages;
+  const activeModel = services.providerRegistry.getActive();
+  const settings = services.config.compact ?? undefined;
   const result = await compactSparkVisibleTranscript(services.sessionStore, messagesForCompaction, {
     customInstructions,
+    ...(settings ? { settings } : {}),
+    ...(services.runCompactionModel
+      ? {
+          smart: {
+            ...(activeModel
+              ? { currentModel: `${activeModel.providerName}/${activeModel.modelId}` }
+              : {}),
+            runModel: async ({ model, preparation }) =>
+              await services.runCompactionModel!({
+                model,
+                prompt: renderSparkSmartCompactionPrompt(preparation, customInstructions),
+                maxTokens: 4096,
+              }),
+          },
+        }
+      : {}),
   });
   if (!result) return "Nothing to compact (visible transcript is too small).";
 

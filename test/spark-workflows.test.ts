@@ -950,9 +950,9 @@ test("spark-workflows role-run adapter maps workflow agents to Spark dependency 
   assert.match(request.instruction, /Isolation: graft/);
   assert.match(request.instruction, /Briefing artifact: artifact:brief-123/);
   assert.match(request.instruction, /Environment keys: GRAFT_BASE_REF/);
-  assert.match(request.instruction, /Allowed tools: graft_help,graft_status/);
+  assert.match(request.instruction, /Allowed tools: graft/);
   assert.match(request.instruction, /Graft isolation is active/);
-  assert.match(request.instruction, /graft_candidate_from_scratch/);
+  assert.match(request.instruction, /candidate_from_scratch/);
 });
 
 test("Spark dynamic workflow dashboard renders isolated Graft agent provenance", async () => {

@@ -1,7 +1,7 @@
 import { error as httpError, fail, redirect } from "@sveltejs/kit";
 import { createId } from "@zendev-lab/spark-protocol";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
-import { titleFromPrompt } from "@zendev-lab/spark-coordination/agents-product";
+import { titleFromPrompt } from "@zendev-lab/spark-cockpit-coordination/agents-product";
 import {
   cancelConversationTurnForCockpit,
   submitConversationTurnForCockpit,
@@ -350,9 +350,11 @@ export const actions = {
       });
     }
 
+    // Cancel must not wait for a live `session.get`. Workspace admission uses
+    // the local projection; `turn.cancel` remains the daemon-owned gate.
     let session;
     try {
-      session = await getManagedSessionForCockpit(sessionId);
+      session = getProjectedManagedSessionForCockpit(sessionId);
     } catch (caught) {
       const error = caught instanceof Error ? caught.message : t.cancelTurnFailed;
       return fail(400, {

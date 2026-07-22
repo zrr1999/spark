@@ -1,4 +1,5 @@
 import type {
+  ExtensionAskFlowInteractionResponse,
   ExtensionInteractionRequest,
   ExtensionInteractionResponse,
 } from "@zendev-lab/spark-core";
@@ -467,7 +468,7 @@ function createSparkAskFlowInteractionRequest(
 
 function piAskFlowResultFromInteractionResponse(
   request: SparkAskFlowRequest,
-  response: ExtensionInteractionResponse,
+  response: ExtensionAskFlowInteractionResponse,
 ): SparkAskFlowResult {
   return createSparkAskFlowResult({
     answers: normalizeSparkAskFlowInteractionAnswers(request, response.answers),
@@ -620,11 +621,12 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   );
 }
 
-function isSparkAskFlowResultLike(value: unknown): value is SparkAskFlowResult {
+export function isSparkAskFlowResultLike(value: unknown): value is SparkAskFlowResult {
   return Boolean(
     value &&
     typeof value === "object" &&
     "answers" in value &&
+    "status" in value &&
     "mode" in value &&
     "cancelled" in value,
   );

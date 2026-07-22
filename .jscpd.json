@@ -1,0 +1,21 @@
+{
+  "threshold": 5,
+  "reporters": ["console", "html"],
+  "output": "./reports/jscpd",
+  "ignore": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.svelte-kit/**",
+    "**/reports/**",
+    "**/coverage/**",
+    "**/pnpm-lock.yaml",
+    "**/*.test.ts",
+    "**/*.integration.test.ts",
+    "**/fixtures/**",
+    "**/__fixtures__/**",
+    "**/generated-types.ts",
+    "**/migrations/**"
+  ],
+  "absolute": true,
+  "gitignore": true
+}

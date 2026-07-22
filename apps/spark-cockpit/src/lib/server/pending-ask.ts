@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import { loadInboxDetailPage, loadInboxPage } from "@zendev-lab/spark-coordination/cockpit-queries";
+import {
+  loadInboxDetailPage,
+  loadInboxPage,
+} from "@zendev-lab/spark-cockpit-coordination/cockpit-queries";
 import { parseHumanQuestions, type PendingWorkbenchAsk } from "../pending-ask";
 import { workspacePath } from "../workspace-routes";
 

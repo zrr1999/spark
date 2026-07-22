@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import {
   createId,
   runtimeProtocolVersion,
@@ -11,15 +11,13 @@ import {
   type ServerCommandEnvelope,
 } from "@zendev-lab/spark-protocol";
 import { resolveSparkPaths } from "@zendev-lab/spark-system";
-import { createWorkspaceWithOwnerBinding } from "../../../packages/spark-coordination/src/projection-services.ts";
-import {
-  requireRuntimeControlCommand,
-  submitRuntimeControlCommand,
-} from "../../../packages/spark-coordination/src/runtime-control.ts";
 import {
   attachRuntimeWebSocket,
+  createWorkspaceWithOwnerBinding,
+  requireRuntimeControlCommand,
+  submitRuntimeControlCommand,
   type RuntimeWebSocketConnection,
-} from "../../../packages/spark-coordination/src/runtime-ws.ts";
+} from "@zendev-lab/spark-cockpit-coordination";
 import {
   handleCommand,
   handleServerMessage,

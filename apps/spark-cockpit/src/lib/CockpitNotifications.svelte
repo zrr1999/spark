@@ -6,7 +6,7 @@
     serializeNotificationPreference,
     type CockpitNotificationPayload,
   } from "$lib/cockpit-notifications";
-  import type { SerializedEvent } from "@zendev-lab/spark-coordination/events";
+  import type { SerializedEvent } from "@zendev-lab/spark-cockpit-coordination/events";
   import { onMount } from "svelte";
 
   let supported = $state(false);

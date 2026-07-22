@@ -13,7 +13,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./strings": "./src/strings.ts",
-    "./daemon-local-rpc": "./src/daemon-local-rpc.ts"
+    "./daemon-local-rpc": "./src/daemon-local-rpc.ts",
+    "./daemon-local-rpc-orpc": "./src/daemon-local-rpc-orpc.ts",
+    "./socket-message-port": "./src/socket-message-port.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -23,7 +25,14 @@
     "test": "vp test run",
     "test:mutation": "stryker run"
   },
+  "dependencies": {
+    "@orpc/client": "catalog:",
+    "@zendev-lab/spark-protocol": "workspace:^",
+    "zod": "^4.1.5"
+  },
   "devDependencies": {
+    "@orpc/contract": "catalog:",
+    "@orpc/server": "catalog:",
     "@stryker-mutator/core": "catalog:",
     "@stryker-mutator/vitest-runner": "catalog:",
     "typescript": "catalog:",

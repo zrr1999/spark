@@ -86,7 +86,7 @@ vi.mock("$lib/server/model-control", () => ({
   setSessionThinkingLevelForCockpit: mocks.setSessionThinkingLevelForCockpit,
 }));
 
-vi.mock("@zendev-lab/spark-coordination/agents-product", () => ({
+vi.mock("@zendev-lab/spark-cockpit-coordination/agents-product", () => ({
   titleFromPrompt: (prompt: string) => {
     const normalized = prompt.replace(/\s+/g, " ").trim();
     return normalized.length > 80 ? `${normalized.slice(0, 77)}…` : normalized;
@@ -523,12 +523,14 @@ describe("session conversation actions", () => {
   });
 
   it("rejects every session mutation action for daemon-global conversations", async () => {
-    mocks.getManagedSessionForCockpit.mockResolvedValue({
+    const globalSession = {
       ...session,
       sessionId: "sess_global",
-      scope: { kind: "daemon", daemonId: "daemon-local" },
+      scope: { kind: "daemon" as const, daemonId: "daemon-local" },
       workspaceId: undefined,
-    });
+    };
+    mocks.getProjectedManagedSessionForCockpit.mockReturnValue(globalSession);
+    mocks.getManagedSessionForCockpit.mockResolvedValue(globalSession);
 
     for (const [name, values] of [
       ["cancelTurn", { sessionId: "sess_global", turnId: "turn_global" }],
@@ -682,7 +684,8 @@ describe("session conversation actions", () => {
       cancelledTurnId: "inv_conversation",
       values: { sessionId: "sess_conversation", turnId: "inv_conversation" },
     });
-    expect(mocks.getManagedSessionForCockpit).toHaveBeenCalledWith("sess_conversation");
+    expect(mocks.getProjectedManagedSessionForCockpit).toHaveBeenCalledWith("sess_conversation");
+    expect(mocks.getManagedSessionForCockpit).not.toHaveBeenCalled();
     expect(mocks.cancelConversationTurnForCockpit).toHaveBeenCalledWith({
       sessionId: "sess_conversation",
       turnId: "inv_conversation",
@@ -713,6 +716,8 @@ describe("session conversation actions", () => {
       cancelledTurnId: "inv_queued",
       values: { sessionId: "sess_conversation", turnId: "inv_queued" },
     });
+    expect(mocks.getProjectedManagedSessionForCockpit).toHaveBeenCalledWith("sess_conversation");
+    expect(mocks.getManagedSessionForCockpit).not.toHaveBeenCalled();
     expect(mocks.cancelConversationTurnForCockpit).toHaveBeenCalledWith({
       sessionId: "sess_conversation",
       turnId: "inv_queued",
@@ -784,9 +789,9 @@ describe("session conversation actions", () => {
   });
 
   it("rejects a missing or archived session before requesting cancellation", async () => {
-    mocks.getManagedSessionForCockpit
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ ...session, status: "archived" });
+    mocks.getProjectedManagedSessionForCockpit
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce({ ...session, status: "archived" });
 
     await expect(
       requireAction("cancelTurn")(

@@ -12,7 +12,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./extension": "./src/extension.ts"
+    "./extension": "./src/extension.ts",
+    "./reviewer-runner": "./src/reviewer-runner.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -25,6 +26,7 @@
     "@zendev-lab/spark-host": "workspace:^",
     "@zendev-lab/spark-system": "workspace:^",
     "@zendev-lab/spark-tui": "workspace:^",
+    "es-toolkit": "catalog:",
     "typebox": "catalog:"
   },
   "pi": {

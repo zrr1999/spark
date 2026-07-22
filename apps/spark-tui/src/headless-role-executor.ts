@@ -1,6 +1,5 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { SparkHeadlessUserContent } from "@zendev-lab/spark-host/headless-loader";
-import { classifyProviderFailure } from "@zendev-lab/spark-ai";
+import { classifyProviderFailure, type AssistantMessage } from "@zendev-lab/spark-ai";
 import { join } from "node:path";
 import type {
   ExtensionInteractionRequest,

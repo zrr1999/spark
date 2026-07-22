@@ -1,12 +1,12 @@
 import { json, type RequestHandler } from "@sveltejs/kit";
-import { unbindRuntimeWorkspace } from "@zendev-lab/spark-coordination/runtime-registration";
+import { unbindRuntimeWorkspace } from "@zendev-lab/spark-cockpit-coordination/runtime-registration";
 import { bearerTokenFromAuthorization } from "@zendev-lab/spark-system";
 import { getDatabase } from "$lib/server/db";
 import { errorJson } from "$lib/server/json";
 import {
   RuntimeAccessTokenError,
   RuntimeEnrollmentError,
-} from "@zendev-lab/spark-coordination/runtime-registration";
+} from "@zendev-lab/spark-cockpit-coordination/runtime-registration";
 
 export const DELETE: RequestHandler = ({ params, request, locals }) => {
   const runtimeId = params.runtimeId;

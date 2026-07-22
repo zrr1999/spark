@@ -7,7 +7,7 @@ import {
   denyRuntimeDeviceAuthorization,
   getRuntimeDeviceAuthorizationForApproval,
   RuntimeDeviceAuthorizationError,
-} from "@zendev-lab/spark-coordination/runtime-registration";
+} from "@zendev-lab/spark-cockpit-coordination/runtime-registration";
 import type { Actions, PageServerLoad } from "./$types";
 
 export const load: PageServerLoad = ({ cookies, locals, url }) => {

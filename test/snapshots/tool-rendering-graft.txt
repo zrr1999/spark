@@ -1,2 +1,2 @@
-# graft_repo
-graft_repo action=add repo=spark url=https://github.com/zrr1999/spark.git
+# graft
+graft action=repo repoAction=add repo=spark url=https://github.com/zrr1999/spark.git

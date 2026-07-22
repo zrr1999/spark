@@ -1,0 +1,31 @@
+{
+  "name": "@zendev-lab/spark-cockpit-i18n",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cockpit-private localization catalogs for Spark Cockpit UI copy.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "vp check --no-fmt --no-lint . && vp test run",
+    "test": "vp test run"
+  },
+  "dependencies": {
+    "@zendev-lab/spark-i18n": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=26.0.0 <27"
+  }
+}

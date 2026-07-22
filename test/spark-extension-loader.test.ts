@@ -25,7 +25,7 @@ test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin exten
     "@zendev-lab/spark-session/extension",
     "@zendev-lab/spark-web/extension",
     "@zendev-lab/spark-graft/extension",
-    "@zendev-lab/pi-extension/extension",
+    "@zendev-lab/spark-extension/extension",
   ];
   const defaultExpected = builtinExpected.filter(
     (specifier) => specifier !== "@zendev-lab/spark-graft/extension",
@@ -102,16 +102,27 @@ test("published Spark TUI resolves builtins through declared package exports", a
   assert.match(loaderSource, /await import\("@zendev-lab\/spark-graft\/extension"\)/u);
 });
 
-test("Spark command policy is owned by pi-extension, not spark-host", async () => {
+test("Spark host-support is owned by spark-extension, not spark-host or TUI→pi-extension", async () => {
+  const sparkExtensionPackage = JSON.parse(
+    await readFile(new URL("../packages/spark-extension/package.json", import.meta.url), "utf8"),
+  ) as { exports?: Record<string, string>; dependencies?: Record<string, string> };
   const piPackage = JSON.parse(
     await readFile(new URL("../packages/pi-extension/package.json", import.meta.url), "utf8"),
   ) as { exports?: Record<string, string> };
   const hostPackage = JSON.parse(
     await readFile(new URL("../packages/spark-host/package.json", import.meta.url), "utf8"),
   ) as { dependencies?: Record<string, string>; exports?: Record<string, string> };
+  const tuiPackage = JSON.parse(
+    await readFile(new URL("../apps/spark-tui/package.json", import.meta.url), "utf8"),
+  ) as { dependencies?: Record<string, string> };
 
+  assert.equal(sparkExtensionPackage.exports?.["./host-support"], "./src/host-support.ts");
+  assert.equal(sparkExtensionPackage.exports?.["./extension"], "./src/extension.ts");
+  assert.ok(sparkExtensionPackage.dependencies?.["@zendev-lab/pi-extension"]);
   assert.equal(piPackage.exports?.["./host-support"], "./src/host-support.ts");
   assert.equal(hostPackage.dependencies?.["@zendev-lab/pi-extension"], undefined);
+  assert.equal(tuiPackage.dependencies?.["@zendev-lab/pi-extension"], undefined);
+  assert.ok(tuiPackage.dependencies?.["@zendev-lab/spark-extension"]);
   assert.equal(hostPackage.exports?.["./spark-command-registration"], undefined);
   assert.equal(hostPackage.exports?.["./spark-command-workflow-registration"], undefined);
 });
@@ -130,7 +141,7 @@ test("SparkExtensionLoader loads builtin factories through explicit imports", as
       "@zendev-lab/spark-session/extension",
       "@zendev-lab/spark-web/extension",
       "@zendev-lab/spark-graft/extension",
-      "@zendev-lab/pi-extension/extension",
+      "@zendev-lab/spark-extension/extension",
     ],
   }).load();
 
@@ -152,7 +163,8 @@ test("SparkExtensionLoader loads builtin factories through explicit imports", as
   assert.ok(tools.includes("fetch_content"));
   assert.ok(tools.includes("get_search_content"));
   assert.ok(!tools.includes("list_roles"));
-  assert.ok(tools.includes("graft_status"));
+  assert.ok(tools.includes("graft"));
+  assert.ok(!tools.includes("graft_status"));
   assert.ok(!tools.includes("graft_patch"));
   assert.ok(!tools.includes("patch"));
   assert.ok(!tools.includes("task"));

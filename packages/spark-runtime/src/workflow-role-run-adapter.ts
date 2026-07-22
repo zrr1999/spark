@@ -5,24 +5,7 @@ import type {
   WorkflowAgentRunner,
 } from "@zendev-lab/spark-workflows";
 
-export const SPARK_WORKFLOW_GRAFT_ISOLATION_TOOLS = [
-  "graft_help",
-  "graft_status",
-  "graft_scratch_open",
-  "graft_read",
-  "graft_write",
-  "graft_edit",
-  "graft_delete",
-  "graft_scratch_diff",
-  "graft_scratch_pin",
-  "graft_scratch_unpin",
-  "graft_candidate_from_scratch",
-  "graft_validate",
-  "graft_admit",
-  "graft_show",
-  "graft_evidence",
-  "graft_materialize",
-] as const;
+export const SPARK_WORKFLOW_GRAFT_ISOLATION_TOOLS = ["graft"] as const;
 
 export interface SparkWorkflowGraftRefs {
   scratchRefs: string[];
@@ -251,9 +234,9 @@ function applyWorkflowIsolationPolicy(
 
 function appendGraftIsolationInstruction(lines: string[]): void {
   lines.push(
-    "- Graft isolation is active: use graft_read/graft_write/graft_edit/graft_delete for file reads and edits; do not use direct read/write/edit shell file operations.",
+    '- Graft isolation is active: use graft({ action: "read"|"write"|"edit"|"delete" }) for file reads and edits; do not use direct read/write/edit shell file operations.',
     "- GRAFT_BASE_REF is already set for the first Graft scratch operation; omit base unless the task explicitly requires a different base, and pass returned scratch ids through from for subsequent edits.",
-    "- Create a Graft candidate with graft_candidate_from_scratch before reporting editable results; include scratch:, candidate:, and patch: refs that you created or validated.",
+    '- Create a Graft candidate with graft({ action: "candidate_from_scratch" }) before reporting editable results; include scratch:, candidate:, and patch: refs that you created or validated.',
   );
 }
 

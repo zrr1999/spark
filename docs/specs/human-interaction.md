@@ -54,3 +54,14 @@ Cross-session agent-to-agent traffic is **messages** (session inspector tab), no
 - [`tools.md`](./tools.md) — `ask` is the only structured question surface; cancellation is not approval.
 - [`turn.md`](./turn.md) — daemon is execution truth; transports are adapters.
 - [`sessions-and-channels.md`](./sessions-and-channels.md) — session mail `question` is a different cross-session wait primitive from tool-level human waits.
+
+## Two ID systems and where each applies
+
+Spark keeps exactly two identity vocabularies. Do not add a third.
+
+| System | Shape | Owner | Use for |
+| --- | --- | --- | --- |
+| Domain refs | `kind:id` (e.g. `task:…`, `proj:…`, `evidence:…`) | `@zendev-lab/spark-core` (`RefKind`, `newRef`) | In-process task graphs, memory, tools, artifacts, agent-facing state |
+| Wire ids | `prefix_hex` (e.g. `sess_<32 hex>`, `inv_<32 hex>`, `hreq_<32 hex>`) | `@zendev-lab/spark-protocol` (`refs.ts` / `createId`) | Daemon persistence, Cockpit, local RPC, runtime WebSocket envelopes |
+
+Translate at the boundary when a surface must speak both (for example projecting a domain `task:` ref into a protocol task view that still carries the same `task:` ref string today, versus minting a new `task_<hex>` for a daemon row). Interaction correlation uses wire-style ids (`humanRequestId`, `interactionRequestId`) as documented above; domain `ask:` refs remain graph-local.

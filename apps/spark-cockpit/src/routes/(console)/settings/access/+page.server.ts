@@ -3,7 +3,7 @@ import {
   createCockpitAccessToken,
   listCockpitAccessTokens,
   revokeCockpitAccessToken,
-} from "@zendev-lab/spark-coordination/cockpit-access";
+} from "@zendev-lab/spark-cockpit-coordination/cockpit-access";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import { ensureCurrentOwnerSession } from "$lib/server/auth";
 import { getDatabase } from "$lib/server/db";

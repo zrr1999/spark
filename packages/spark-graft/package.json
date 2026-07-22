@@ -30,6 +30,7 @@
   "dependencies": {
     "@zendev-lab/spark-core": "workspace:^",
     "@zendev-lab/spark-roles": "workspace:^",
+    "es-toolkit": "catalog:",
     "typebox": "catalog:"
   },
   "pi": {

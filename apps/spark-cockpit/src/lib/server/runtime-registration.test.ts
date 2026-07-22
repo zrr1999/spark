@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import {
   runtimeProtocolVersion,
   type RuntimeRegistrationRequest,
@@ -15,7 +15,7 @@ import {
   RuntimeAccessTokenError,
   RuntimeEnrollmentError,
   RuntimeTokenRefreshError,
-} from "@zendev-lab/spark-coordination/runtime-registration";
+} from "@zendev-lab/spark-cockpit-coordination/runtime-registration";
 
 const registrationRequest = {
   installationId: "install-test",

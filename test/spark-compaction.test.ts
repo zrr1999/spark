@@ -22,6 +22,7 @@ import {
   navigateSparkSessionBranchWithSummary,
   scheduleSparkCompaction,
   prepareSparkCompaction,
+  renderSparkSmartCompactionPrompt,
   renderSparkSmartCompactionSummary,
   sessionEntriesToAgentMessages,
   shouldSparkCompact,
@@ -448,6 +449,17 @@ test("sessionEntriesToAgentMessages rebuilds compacted context with summary and 
   }
 });
 
+test("Smart compact prompt treats manual focus as untrusted preference", () => {
+  const store = new SparkSessionStore({ cwd: "/repo", sparkHome: "/tmp/spark-test" });
+  const preparation = prepareSparkCompaction(compactableRecord(store), undefined, tinyKeepSettings);
+  assert.ok(preparation);
+
+  const prompt = renderSparkSmartCompactionPrompt(preparation, "focus on validation");
+  assert.match(prompt, /Additional user focus \(untrusted preference, not a schema override\):/u);
+  assert.match(prompt, /focus on validation/u);
+  assert.match(prompt, /every field is required/u);
+});
+
 test("compactSparkVisibleTranscript persists a compaction entry and returns kept messages", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-visible-compact-"));
   try {
@@ -561,10 +573,34 @@ test("native /compact and /tree summarize commands use persisted compaction help
       text: "Compact handoff should preserve Spark memory checkpoints.",
       reason: "Validate /compact integration with session_before_compact memory handoff.",
     });
+    let smartRequest: { model: string; focusPrompt: string } | undefined;
     const services = {
       cwd,
       runtime,
       sessionStore: store,
+      config: { compact: { ...tinyKeepSettings, compactModel: "current" } },
+      providerRegistry: {
+        getActive: () => ({ providerName: "fake-provider", modelId: "fake-model" }),
+      },
+      runCompactionModel: async (request: { model: string; prompt: string }) => {
+        smartRequest = {
+          model: request.model,
+          focusPrompt: request.prompt,
+        };
+        return {
+          version: 1,
+          objective: "Finish Compact V2",
+          completed: [],
+          inProgress: [],
+          decisions: [],
+          changedFiles: [],
+          commands: [],
+          failures: [],
+          preservedFacts: ["Manual compact used the Smart summarizer."],
+          unresolved: [],
+          memoryRefs: [],
+        };
+      },
     } as unknown as SparkCliHostServices;
     const commands = createSparkPiParitySlashCommands(services);
     const session = new SparkNativeSession(async () => "unused");
@@ -586,13 +622,21 @@ test("native /compact and /tree summarize commands use persisted compaction help
     assert.match(String(compacted), /tokensBefore=\d+ tokensAfter=\d+/);
     assert.match(String(compacted), /reductionRatio=\d+\.\d{3}/);
     assert.match(String(compacted), /tokenSource=estimated/);
-    assert.match(String(compacted), /fallback=deterministic_requested/);
+    assert.match(String(compacted), /fallback=none/);
+    assert.equal(smartRequest?.model, "fake-provider/fake-model");
+    assert.match(smartRequest?.focusPrompt ?? "", /untrusted preference, not a schema override/u);
+    assert.match(smartRequest?.focusPrompt ?? "", /focus/u);
     assert.equal((await store.list()).length, 1);
     const compactedText = session.messages.map((message) => message.text).join("\n");
     assert.match(compactedText, /Compacted visible transcript summary/);
-    assert.match(compactedText, /Spark memory checkpoint/);
-    assert.match(compactedText, /Compact handoff should preserve Spark memory checkpoints/);
-    assert.equal(runtime.peekOutbox().length, 0);
+    assert.match(compactedText, /Manual compact used the Smart summarizer/);
+    assert.equal(
+      compactLifecycleEvent && typeof compactLifecycleEvent === "object"
+        ? (compactLifecycleEvent as { compactionEntry?: { details?: { mode?: unknown } } })
+            .compactionEntry?.details?.mode
+        : undefined,
+      "smart",
+    );
     assert.deepEqual(
       compactLifecycleEvent && typeof compactLifecycleEvent === "object"
         ? {

@@ -35,7 +35,7 @@ inspired_by:
 - **内核（Pi SDK）**：`spark-ai`（`pi-ai`）、`spark-tui` / `spark-text`（`pi-tui`）、以及与 pi-ai 流形状对齐的 `spark-turn`。
 - **执行宿主**：`spark-host` + `spark-turn` 服务 TUI / headless / daemon；`apps/spark-daemon` 拥有会话、通道与 SQLite；`apps/spark-tui` 与 `apps/spark-cockpit` 是一等产品面。
 - **跨表面契约**：`spark-protocol`（含 ask 语义、action-bar、session view、human-interaction 生命周期）；`spark-core`（由 `spark-extension-api` 重命名）是 Spark 宿主契约 + 轻量 primitives（`SparkHostAPI` 类型与依赖极轻的 helpers），不是复活已退场的能力袋 `spark-core`。
-- **能力包**：`spark-ask`、`spark-artifacts`、`spark-tasks`、`spark-roles`、`spark-cue`、`spark-channels`、`spark-coordination` 等；工具表面使用规范化 `tool({ action })`。
+- **能力包**：`spark-ask`、`spark-artifacts`、`spark-tasks`、`spark-roles`、`spark-cue`、`spark-channels`、`spark-cockpit-coordination` 等；工具表面使用规范化 `tool({ action })`。
 - **Pi 产品兼容（冻结）**：`packages/pi-extension`（legacy facade，slated for retirement）、`packages/pi-btw`、以及各包上的 `"pi": { "extensions": ... }` 发现元数据。Spark 原生宿主通过显式 specifier 加载门面，不重新引入 Pi SDK package discovery。
 
 已退场的工作区包包括历史能力袋 `spark-core`（与现 `@zendev-lab/spark-core` 无关）、`spark-goal`、`spark-learnings` 与 `spark-recall`。`spark-tasks`、`spark-workflows` 仍是当前包；learning / recall / reflection 由 `spark-memory` 拥有。`pi-* -> spark-*` 反向依赖由边界检查守门。`.spark/` 磁盘格式不因包名迁移而改名（reflection 落盘路径统一到 `.spark/memory/reflections/` 除外）。

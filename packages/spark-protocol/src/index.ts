@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TASK_STATUSES } from "@zendev-lab/spark-core";
 import { sparkModelRefSchema, sparkThinkingLevelSchema } from "./model-control.ts";
 
 export * from "./action-bars.ts";
@@ -9,8 +10,10 @@ export * from "./command-events.ts";
 export * from "./command-sources.ts";
 export * from "./display-error.ts";
 export * from "./errors.ts";
+export * from "./host-events.ts";
 export * from "./human-interaction.ts";
 export * from "./invocation-lifecycle.ts";
+export * from "./local-rpc-orpc-contract.ts";
 export * from "./model-control.ts";
 export * from "./model-control-client.ts";
 export * from "./refs.ts";
@@ -228,7 +231,7 @@ export const sparkTaskViewSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
   kind: z.string().optional(),
-  status: z.string().min(1),
+  status: z.enum(TASK_STATUSES),
   owner: z.string().optional(),
   projectRef: sparkRefSchema.optional(),
   todos: z.array(sparkTaskTodoViewSchema).default([]),

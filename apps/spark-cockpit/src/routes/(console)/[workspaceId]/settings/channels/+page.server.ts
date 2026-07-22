@@ -1,5 +1,5 @@
 import { error as kitError, fail } from "@sveltejs/kit";
-import { loadWorkspaceSettings } from "@zendev-lab/spark-coordination/cockpit-queries";
+import { loadWorkspaceSettings } from "@zendev-lab/spark-cockpit-coordination/cockpit-queries";
 import {
   isMessagePlatformAdapter,
   workspaceMessagePlatformConnections,

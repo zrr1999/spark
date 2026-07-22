@@ -1,5 +1,8 @@
 name: "CI - Static Checks"
 
+# PR static lane: prek hooks except vp-check. Full `vp check` already runs inside
+# `pnpm run check` on ci-verify.yml; skipping here avoids duplicate typecheck/format
+# work on every PR while keeping local pre-commit vp-check intact.
 on:
   pull_request:
     branches:
@@ -39,3 +42,6 @@ jobs:
           cache: true
 
       - uses: j178/prek-action@v2
+        with:
+          # Keep --all-files (action default) but skip vp-check; see workflow header.
+          extra-args: "--all-files --skip vp-check"

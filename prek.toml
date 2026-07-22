@@ -48,10 +48,10 @@ repo = "local"
 hooks = [
   {
     id = "pi-boundary-check",
-    name = "pi package boundary check",
-    entry = "node scripts/check-pi-boundaries.mjs",
+    name = "package boundary check (dependency-cruiser)",
+    entry = "pnpm run check:boundaries",
     language = "system",
-    pass_filenames = true,
+    pass_filenames = false,
     stages = ["pre-commit"]
   },
   {

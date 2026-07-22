@@ -1,5 +1,16 @@
 import { z } from "zod";
 
+/**
+ * Daemon / Cockpit / local-RPC wire ids (`prefix_hex`, e.g. `sess_<32 hex>`,
+ * `task_<32 hex>`, `inv_<32 hex>`).
+ *
+ * This vocabulary is owned by spark-protocol for transport and persistence
+ * envelopes. It is intentionally separate from spark-core's agent/domain refs
+ * (`kind:id`, e.g. `task:…` — see `RefKind` / `newRef` in `@zendev-lab/spark-core`).
+ * Do not invent a third id scheme; translate at the boundary when a surface
+ * must speak both.
+ */
+
 export const idPrefixSchema = z.enum([
   "usr",
   "sess",

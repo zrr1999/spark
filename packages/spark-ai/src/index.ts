@@ -12,9 +12,17 @@ export type {
   Api,
   AssistantMessage,
   AssistantMessageEvent,
+  Context,
+  Message,
   Model,
+  StreamOptions,
+  Tool,
+  ToolCall,
+  ToolResultMessage,
   Usage,
+  UserMessage,
 } from "@earendil-works/pi-ai";
+export type { OAuthLoginCallbacks } from "@earendil-works/pi-ai/oauth";
 
 export type SparkModelId = string;
 export type ProviderRouteId = string;

@@ -2,13 +2,12 @@ import {
   enumLabel,
   formatByteSize as sharedFormatByteSize,
   formatRelativeTime as sharedFormatRelativeTime,
-  getCockpitDictionary,
   matchLocale,
   parseAcceptLanguage,
   resolveRequestLocale,
-  type CockpitMessages,
   type SparkLocale,
 } from "@zendev-lab/spark-i18n";
+import { getCockpitDictionary, type CockpitMessages } from "@zendev-lab/spark-cockpit-i18n";
 
 export const locales = ["en", "zh-CN"] as const;
 export type Locale = SparkLocale;

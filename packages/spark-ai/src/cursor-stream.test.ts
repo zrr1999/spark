@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import type { Api, Model } from "@earendil-works/pi-ai";
 
@@ -18,7 +18,7 @@ const model = {
   maxTokens: 8192,
 } as Model<Api>;
 
-void test("cursor stream retries concurrency rate limits before any deltas", async () => {
+test("cursor stream retries concurrency rate limits before any deltas", async () => {
   let creates = 0;
   const sdk: CursorSdkRuntime = {
     Agent: {
@@ -72,7 +72,7 @@ void test("cursor stream retries concurrency rate limits before any deltas", asy
   );
 });
 
-void test("cursor stream does not retry fatal provider errors", async () => {
+test("cursor stream does not retry fatal provider errors", async () => {
   let creates = 0;
   const sdk: CursorSdkRuntime = {
     Agent: {

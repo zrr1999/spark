@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import {
   createProject,
   createWorkspaceWithOwnerBinding,
   queueCommandForWorkspaceOwner,
-} from "@zendev-lab/spark-coordination/projection-services";
+} from "@zendev-lab/spark-cockpit-coordination/projection-services";
 import { buildProjectTaskAssignCommandPayload } from "./project-task-assign";
 
 describe("project task assign command", () => {

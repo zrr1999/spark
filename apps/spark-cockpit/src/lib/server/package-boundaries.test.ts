@@ -37,12 +37,12 @@ describe("package boundaries", () => {
     expect(directSql).toEqual([]);
   });
 
-  it("keeps Cockpit UI outside lib/server from importing spark-db directly", () => {
+  it("keeps Cockpit UI outside lib/server from importing spark-cockpit-db directly", () => {
     const uiFiles = collectSourceFiles(join(webRoot, "src")).filter(
       (file) => !file.includes("/src/lib/server/"),
     );
     const violations = uiFiles.filter((file) =>
-      /from\s+["']@zendev-lab\/spark-db/u.test(readFileSync(file, "utf8")),
+      /from\s+["']@zendev-lab\/spark-cockpit-db/u.test(readFileSync(file, "utf8")),
     );
     expect(violations).toEqual([]);
   });
@@ -65,7 +65,7 @@ describe("package boundaries", () => {
 
   it("keeps artifact fallback out of daemon/local workspace files", () => {
     const agentsProduct = readFileSync(
-      join(repoRoot, "packages/spark-coordination/src/agents-product.ts"),
+      join(repoRoot, "packages/spark-cockpit-coordination/src/agents-product.ts"),
       "utf8",
     );
     expect(agentsProduct).not.toContain('resolveSparkPaths({ app: "daemon" })');
@@ -95,7 +95,10 @@ describe("package boundaries", () => {
   });
 
   it("keeps client session mutations behind daemon local RPC", () => {
-    const clientRoots = [join(webRoot, "src"), join(repoRoot, "packages/spark-coordination/src")];
+    const clientRoots = [
+      join(webRoot, "src"),
+      join(repoRoot, "packages/spark-cockpit-coordination/src"),
+    ];
     const violations = clientRoots.flatMap((root) =>
       collectSourceFiles(root)
         .filter((file) => !file.endsWith(".test.ts"))

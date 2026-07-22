@@ -6,7 +6,7 @@ import {
   loadEventBatch,
   serializeEventRow,
   type EventCursor,
-} from "@zendev-lab/spark-coordination/events";
+} from "@zendev-lab/spark-cockpit-coordination/events";
 import { withDatabase } from "./db";
 import {
   notificationFromCockpitEvent,

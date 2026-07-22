@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
-import { createWorkspaceWithOwnerBinding } from "@zendev-lab/spark-coordination/projection-services";
+import { createWorkspaceWithOwnerBinding } from "@zendev-lab/spark-cockpit-coordination/projection-services";
 import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ getDatabase: vi.fn() }));

@@ -160,6 +160,7 @@ test("async ask_user returns a durable pending handle without invoking legacy UI
     },
     {
       interaction: async (request) => {
+        assert.equal(request.kind, "askFlow");
         assert.equal(request.delivery, "async");
         return {
           kind: "askFlow",
@@ -212,6 +213,7 @@ test("blocking ask_user keeps the interaction pending until the daemon answers",
     },
     {
       interaction: async (request) => {
+        assert.equal(request.kind, "askFlow");
         assert.equal(request.delivery, "blocking");
         requestId = request.requestId;
         return await interaction;
@@ -392,6 +394,7 @@ test("async ask_flow returns pending and does not block approval gates", async (
   });
   const result = await runSparkAskFlow(request, {
     interaction: async (protocolRequest) => {
+      assert.equal(protocolRequest.kind, "askFlow");
       assert.equal(protocolRequest.delivery, "async");
       return {
         kind: "askFlow",

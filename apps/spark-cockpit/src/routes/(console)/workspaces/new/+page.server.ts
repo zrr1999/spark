@@ -3,7 +3,7 @@ import {
   isReservedWorkbenchPathSegment,
   loadWorkbenchHome,
   resolvePendingWorkspaceBinding,
-} from "@zendev-lab/spark-coordination/cockpit-queries";
+} from "@zendev-lab/spark-cockpit-coordination/cockpit-queries";
 import { getRequestDictionary, localeCookieName, type AppMessages } from "$lib/i18n";
 import { ensureCurrentOwnerSession } from "$lib/server/auth";
 import { getDatabase } from "$lib/server/db";
@@ -12,11 +12,11 @@ import {
   isInsecureRemoteServerOrigin,
   isLoopbackServerOrigin,
 } from "$lib/server/daemon-registration-commands";
-import { createWorkspaceWithOwnerBinding } from "@zendev-lab/spark-coordination/projection-services";
+import { createWorkspaceWithOwnerBinding } from "@zendev-lab/spark-cockpit-coordination/projection-services";
 import {
   bindRuntimeRefreshTokenToWorkspace,
   createRuntimeEnrollmentToken,
-} from "@zendev-lab/spark-coordination/runtime-registration";
+} from "@zendev-lab/spark-cockpit-coordination/runtime-registration";
 import { slugifyWorkspaceIdentifier } from "$lib/slugify";
 import { workspaceSessionsPath } from "$lib/workspace-routes";
 import {

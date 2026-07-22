@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
-import { appendEvent } from "@zendev-lab/spark-coordination/projection-services";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
+import { appendEvent } from "@zendev-lab/spark-cockpit-coordination/projection-services";
 import type { DatabaseSync } from "node:sqlite";
 
 import { createCockpitEventStreamResponse } from "./events-sse";

@@ -1,9 +1,9 @@
-import { preflightRuntimeRelocation } from "@zendev-lab/spark-coordination/runtime-registration";
+import { preflightRuntimeRelocation } from "@zendev-lab/spark-cockpit-coordination/runtime-registration";
 import {
   RuntimeRelocationPreflightError,
   RuntimeTokenRefreshError,
-} from "@zendev-lab/spark-coordination/runtime-registration";
-import { readCockpitInstanceId } from "@zendev-lab/spark-db";
+} from "@zendev-lab/spark-cockpit-coordination/runtime-registration";
+import { readCockpitInstanceId } from "@zendev-lab/spark-cockpit-db";
 
 import { getDatabase } from "./db";
 

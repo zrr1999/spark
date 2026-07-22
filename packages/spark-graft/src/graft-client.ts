@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { delay } from "es-toolkit";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | JsonRecord;
 export interface JsonRecord {
@@ -101,7 +102,7 @@ export async function runDirectGraft(
       }
       if (result.code !== 0) {
         if (isGraftWriterLockFailure(result.stderr) && attempt < GRAFT_WRITER_LOCK_RETRY_ATTEMPTS) {
-          await sleep(GRAFT_WRITER_LOCK_RETRY_BASE_MS * 2 ** (attempt - 1));
+          await delay(GRAFT_WRITER_LOCK_RETRY_BASE_MS * 2 ** (attempt - 1));
           continue;
         }
         throw new GraftCliError({
@@ -239,10 +240,6 @@ function abortSignalReason(signal: AbortSignal | undefined): string {
 
 function isGraftWriterLockFailure(stderr: string): boolean {
   return /another graft writer holds the lock|\.registry\.lock/u.test(stderr);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function formatDirectOutput(execution: DirectGraftExecution): string {

@@ -18,3 +18,7 @@ Non-responsibilities:
 - does not schedule ready tasks or own workflow-run state
 - does not register tools or slash commands (`@zendev-lab/pi-extension` owns the facade)
 - does not make plain loop a completion authority; reviewer-gated completion is a goal-layer policy
+
+## Package boundary (vs spark-host)
+
+See [MERGE-EVAL.md](./MERGE-EVAL.md): keep `spark-loop` as a separate leaf. It is intentionally not folded into `@zendev-lab/spark-host`.

@@ -1,11 +1,11 @@
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import { describe, expect, it } from "vitest";
 import {
   createWorkspaceWithOwnerBinding,
   queueCommandForWorkspaceOwner,
   recordInvocationUpdate,
-} from "@zendev-lab/spark-coordination/projection-services";
+} from "@zendev-lab/spark-cockpit-coordination/projection-services";
 import { conversationActivityStatus, loadConversationSummaries } from "./conversation-summaries";
 
 describe("conversation summaries", () => {

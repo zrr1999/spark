@@ -1,7 +1,7 @@
 {
   "name": "@zendev-lab/spark-context",
   "version": "0.1.0",
-  "description": "Registered context provider and bounded context preview capability for Spark extension hosts.",
+  "description": "Compatibility re-export of Spark context tooling owned by spark-host.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [
@@ -21,7 +21,6 @@
     "check": "vp check --no-fmt --no-lint ."
   },
   "dependencies": {
-    "@zendev-lab/spark-core": "workspace:^",
-    "typebox": "catalog:"
+    "@zendev-lab/spark-host": "workspace:^"
   }
 }

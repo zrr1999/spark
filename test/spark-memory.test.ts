@@ -68,11 +68,12 @@ test("spark memory rejects likely secrets before persistence", async () => {
   }
 });
 
-test("spark memory extension registers policy-only memory tool", async () => {
+test("spark memory extension registers only the canonical memory tool by default", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-memory-tool-"));
   try {
     const api = new FakeApi();
     sparkMemoryExtension(api, { storePaths: { workspace: join(dir, "memory.json") } });
+    assert.deepEqual([...api.tools.keys()], ["memory"]);
     const tool = api.tools.get("memory");
     assert.ok(tool);
     assert.match(tool.promptGuidelines?.join("\n") ?? "", /policy-only/i);
@@ -140,6 +141,7 @@ test("spark memory extension covers pi-memory compatibility workflows", async ()
     sparkMemoryExtension(api, {
       compatMemoryDir: compatDir,
       storePaths: { workspace: join(dir, "spark-memory.json") },
+      enablePiCompatAliases: true,
     });
 
     for (const toolName of [
@@ -302,7 +304,7 @@ test("memory_search semantic/deep use one listwise rerank leaf over keyword cand
     }
 
     const api = new FakeApi();
-    sparkMemoryExtension(api, { compatMemoryDir: compatDir });
+    sparkMemoryExtension(api, { compatMemoryDir: compatDir, enablePiCompatAliases: true });
     const memorySearch = api.tools.get("memory_search")!;
 
     let keywordLeafCalls = 0;

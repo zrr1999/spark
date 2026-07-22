@@ -22,7 +22,8 @@
     "access": "public"
   },
   "scripts": {
-    "check": "vp check --no-fmt --no-lint ."
+    "check": "vp check --no-fmt --no-lint . && vp test run",
+    "test": "vp test run"
   },
   "dependencies": {
     "@cursor/sdk": "1.0.23",
@@ -31,5 +32,9 @@
     "@zendev-lab/spark-retry": "workspace:^",
     "@zendev-lab/spark-system": "workspace:^",
     "typebox": "catalog:"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

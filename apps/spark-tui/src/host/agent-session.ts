@@ -1,7 +1,11 @@
 /** Persisted Spark agent session facade shared by TUI/daemon-style callers. */
 
-import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai";
-import { classifyProviderFailure } from "@zendev-lab/spark-ai";
+import {
+  classifyProviderFailure,
+  type AssistantMessage,
+  type Message,
+  type UserMessage,
+} from "@zendev-lab/spark-ai";
 import { sparkTextPhaseFromSignature } from "@zendev-lab/spark-protocol";
 import {
   SPARK_PROMPT_ITEM_METADATA_KEY,
@@ -19,11 +23,12 @@ import {
   CURRENT_SPARK_COMPACTION_SUMMARY_VERSION,
   DEFAULT_SPARK_COMPACTION_SETTINGS,
   compactSparkSessionRecord,
-  deterministicSparkCompactionSummary,
   meterSparkContextTokens,
   prepareSparkCompaction,
+  renderSparkSmartCompactionPrompt,
   scheduleSparkCompaction,
   shouldSparkCompact,
+  smartSparkCompactionSummaryWithFallback,
   type SparkCompactionScheduleResult,
   type SparkCompactionSettings,
   type SparkCompactionPreparation,
@@ -373,16 +378,23 @@ export class SparkAgentSession {
       // describes the request before compaction and cannot be compared with a
       // newly estimated compacted replay.
       const estimatedTokensBefore = meterSparkContextTokens({ messages: replayBefore }).tokens;
-      compactionEntry = await compactSparkSessionRecord(
-        record,
-        preparation,
-        deterministicSparkCompactionSummary,
-        {
-          tokenSource: beforeMeter.tokenSource,
-          measuredReductionRatio: 0,
-          fallbackReason: "deterministic_requested",
-        },
-      );
+      const attempt = await smartSparkCompactionSummaryWithFallback(preparation, {
+        model: settings.compactModel,
+        currentModel: activeSparkModelId(this.services),
+        runModel: this.services.runCompactionModel
+          ? async ({ model, preparation: input }) =>
+              await this.services.runCompactionModel!({
+                model,
+                prompt: renderSparkSmartCompactionPrompt(input),
+                maxTokens: smartCompactionMaxTokens(input),
+              })
+          : undefined,
+      });
+      compactionEntry = await compactSparkSessionRecord(record, preparation, () => attempt.result, {
+        tokenSource: beforeMeter.tokenSource,
+        measuredReductionRatio: 0,
+        ...(attempt.fallbackReason ? { fallbackReason: attempt.fallbackReason } : {}),
+      });
       const estimatedTokensAfter = meterSparkContextTokens({
         messages: activeSessionReplayMessages(record),
       }).tokens;
@@ -421,6 +433,25 @@ export class SparkAgentSession {
       }
     }
   }
+}
+
+function activeSparkModelId(services: SparkCliHostServices): string | undefined {
+  const active = services.providerRegistry.getActive();
+  return active ? `${active.providerName}/${active.modelId}` : undefined;
+}
+
+function smartCompactionMaxTokens(preparation: SparkCompactionPreparation): number {
+  const repeated =
+    preparation.messagesToSummarize.length === 1 &&
+    preparation.messagesToSummarize[0]?.role === "compactionSummary";
+  if (!repeated) return 4096;
+  return Math.max(
+    256,
+    Math.min(
+      4096,
+      Math.floor(preparation.tokensBefore * (1 - preparation.settings.targetReduction)),
+    ),
+  );
 }
 
 function prepareForAutomaticCompaction(

@@ -1,10 +1,10 @@
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import {
   createWorkspaceWithOwnerBinding,
   recordHumanRequestFromRuntime,
   recordHumanResponse,
-} from "@zendev-lab/spark-coordination/projection-services";
+} from "@zendev-lab/spark-cockpit-coordination/projection-services";
 import { describe, expect, it } from "vitest";
 import { loadPendingWorkbenchAsk } from "./pending-ask";
 

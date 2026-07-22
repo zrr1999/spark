@@ -53,7 +53,7 @@ async function handleRuntimeWebSocketUpgrade(
       { attachRuntimeWebSocket, authenticateRuntimeToken },
     ] = await Promise.all([
       server.ssrLoadModule("/src/lib/server/db.ts"),
-      server.ssrLoadModule("@zendev-lab/spark-coordination/runtime-ws"),
+      server.ssrLoadModule("@zendev-lab/spark-cockpit-coordination/runtime-ws"),
     ]);
 
     pinDatabase();

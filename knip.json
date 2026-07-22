@@ -1,0 +1,40 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/**/*.{mjs,mts,ts,js}", "bin/**/*"],
+      "project": ["scripts/**/*.{mjs,mts,ts,js}", "test/**/*.ts"]
+    },
+    "apps/*": {
+      "entry": [
+        "src/**/*.{ts,js,svelte}",
+        "bin/**/*",
+        "scripts/**/*.{mjs,ts,js}",
+        "{svelte,vite,vitest}.config.*"
+      ],
+      "project": ["src/**/*.{ts,js,svelte}", "scripts/**/*.{mjs,ts,js}"]
+    },
+    "packages/*": {
+      "entry": [
+        "src/index.ts",
+        "src/**/index.ts",
+        "src/extension*.ts",
+        "src/**/*extension*.ts",
+        "src/**/extension-entry.ts",
+        "{vitest,stryker}.config.*",
+        "scripts/**/*.{mjs,ts,js}"
+      ],
+      "project": ["src/**/*.{ts,js}", "scripts/**/*.{mjs,ts,js}"]
+    }
+  },
+  "ignore": [
+    "**/dist/**",
+    "**/.svelte-kit/**",
+    "**/reports/**",
+    "**/coverage/**",
+    "**/*.test.ts",
+    "**/*.integration.test.ts"
+  ],
+  "ignoreBinaries": ["vp", "prek", "spark", "spark-daemon", "spark-tui"],
+  "ignoreDependencies": ["@cursor/sdk-*"]
+}

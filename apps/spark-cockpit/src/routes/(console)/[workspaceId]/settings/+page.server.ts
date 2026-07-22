@@ -3,7 +3,7 @@ import {
   isReservedWorkbenchPathSegment,
   loadWorkspaceSettings,
   updateWorkspaceSettings,
-} from "@zendev-lab/spark-coordination/cockpit-queries";
+} from "@zendev-lab/spark-cockpit-coordination/cockpit-queries";
 import { getRequestDictionary, localeCookieName } from "$lib/i18n";
 import { ensureCurrentOwnerSession } from "$lib/server/auth";
 import { getDatabase } from "$lib/server/db";

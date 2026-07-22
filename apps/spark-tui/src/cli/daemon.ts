@@ -42,6 +42,10 @@ import {
   SparkDaemonLocalRpcRemoteError,
   SparkDaemonLocalRpcUnavailableError,
 } from "@zendev-lab/spark-system/daemon-local-rpc";
+import {
+  createSparkDaemonOrpcClient,
+  isSparkDaemonOrpcLiveMethod,
+} from "@zendev-lab/spark-system/daemon-local-rpc-orpc";
 
 import {
   exportSparkSessionRecord,
@@ -2247,7 +2251,60 @@ export async function requestSparkDaemonControl<T>(
   const paths = resolveSparkDaemonClientPaths(client);
   await clientEnsureRunning(client);
   if (client.controlRequest) return (await client.controlRequest(method, params)) as T;
+  if (isSparkDaemonOrpcLiveMethod(method)) {
+    try {
+      return await requestSparkDaemonControlViaOrpc<T>(method, params, paths);
+    } catch {
+      // Fall back to the legacy line-delimited socket when oRPC is unavailable.
+    }
+  }
   return await localRpcRequest<T>(paths, localRpcWireRequest(method, params));
+}
+
+async function requestSparkDaemonControlViaOrpc<T>(
+  method: string,
+  params: unknown,
+  paths: Pick<ReturnType<typeof resolveSparkPaths>, "runtimeDir">,
+): Promise<T> {
+  const handle = await createSparkDaemonOrpcClient({ paths });
+  try {
+    const input = (params ?? {}) as Record<string, unknown>;
+    switch (method) {
+      case "daemon.status":
+        return (await handle.client.daemon.status({})) as T;
+      case "daemon.stop":
+        return (await handle.client.daemon.stop({})) as T;
+      case "daemon.restart":
+        return (await handle.client.daemon.restart({})) as T;
+      case "workspace.list":
+        return (await handle.client.workspace.list({})) as T;
+      case "workspace.ensure-local":
+        return (await handle.client.workspace.ensureLocal(
+          input as { localPath: string; displayName?: string; localWorkspaceKey?: string },
+        )) as T;
+      case "uplink.status":
+        return (await handle.client.uplink.status({})) as T;
+      case "model.catalog":
+        return (await handle.client.model.catalog(input as { sessionId?: string })) as T;
+      case "turn.status":
+        return (await handle.client.turn.status(input as { invocationId: string })) as T;
+      case "turn.result":
+        return (await handle.client.turn.result(input as { invocationId: string })) as T;
+      case "invocation.list":
+        return (await handle.client.invocation.list(input)) as T;
+      case "session.list":
+        return (await handle.client.session.list(input)) as T;
+      case "channel.status":
+        return (await handle.client.channel.status(input as { workspaceId: string })) as T;
+      default: {
+        const _exhaustive: never = method as never;
+        void _exhaustive;
+        throw new Error(`oRPC live method not wired in TUI client: ${method}`);
+      }
+    }
+  } finally {
+    handle.close();
+  }
 }
 
 export interface SparkDaemonHumanInteractionRespondInput {

@@ -1,7 +1,7 @@
 {
   "name": "@zendev-lab/pi-extension",
   "version": "0.1.0",
-  "description": "Legacy Pi-compatible extension facade; slated for retirement as Spark-native hosts absorb its policy surface.",
+  "description": "Pi-compatible thin facade over Spark extension policy; Spark-native hosts use @zendev-lab/spark-extension.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [
@@ -24,7 +24,6 @@
   "dependencies": {
     "@zendev-lab/spark-artifacts": "workspace:^",
     "@zendev-lab/spark-ask": "workspace:^",
-    "@zendev-lab/spark-context": "workspace:^",
     "@zendev-lab/spark-core": "workspace:^",
     "@zendev-lab/spark-host": "workspace:^",
     "@zendev-lab/spark-i18n": "workspace:^",
@@ -37,6 +36,7 @@
     "@zendev-lab/spark-tasks": "workspace:^",
     "@zendev-lab/spark-text": "workspace:^",
     "@zendev-lab/spark-workflows": "workspace:^",
+    "es-toolkit": "catalog:",
     "typebox": "catalog:"
   }
 }

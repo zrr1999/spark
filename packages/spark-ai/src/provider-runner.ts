@@ -39,6 +39,7 @@ export interface SparkWorkflowModelRunRequest {
   label: string;
   phase?: string;
   model?: string;
+  maxTokens?: number;
   metadata?: Record<string, unknown>;
 }
 
@@ -128,7 +129,7 @@ export function createProviderRegistryWorkflowModelRunner(
       selection,
       context,
       {
-        maxTokens: 4096,
+        maxTokens: positiveInteger(request.maxTokens) ?? 4096,
       },
       runnerOptions,
     );
@@ -226,6 +227,12 @@ function withPiAiOpenAiResponsesPromptCacheBridge(
       return replacement ?? payloadWithKey;
     },
   } as StreamOptions;
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

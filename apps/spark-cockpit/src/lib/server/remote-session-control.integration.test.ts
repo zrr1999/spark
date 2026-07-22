@@ -30,12 +30,12 @@ import { createDaemonSessionRegistry } from "../../../../spark-daemon/src/sessio
 import { SparkInvocationStore } from "../../../../spark-daemon/src/store/invocations.ts";
 import { openSparkDaemonDatabase } from "../../../../spark-daemon/src/store/schema.ts";
 import { registerWorkspace } from "../../../../spark-daemon/src/store/workspaces.ts";
-import { createWorkspaceWithOwnerBinding } from "../../../../../packages/spark-coordination/src/projection-services.ts";
-import { migrate, openMemoryDatabase } from "../../../../../packages/spark-db/src/index.ts";
 import {
   attachRuntimeWebSocket,
+  createWorkspaceWithOwnerBinding,
   type RuntimeWebSocketConnection,
-} from "../../../../../packages/spark-coordination/src/runtime-ws.ts";
+} from "@zendev-lab/spark-cockpit-coordination";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import { createCockpitRuntimeSessionClient } from "./cockpit-runtime-session-client.ts";
 
 const now = "2026-07-15T00:00:00.000Z";

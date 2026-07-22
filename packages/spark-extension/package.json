@@ -1,0 +1,28 @@
+{
+  "name": "@zendev-lab/spark-extension",
+  "version": "0.1.0",
+  "description": "Spark-native extension host boundary. Thin facade over capability packages and the Pi-compatible policy surface.",
+  "license": "MIT",
+  "author": "zrr1999",
+  "files": [
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    "./extension": "./src/extension.ts",
+    "./host-support": "./src/host-support.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "vp check --no-fmt --no-lint ."
+  },
+  "dependencies": {
+    "@zendev-lab/pi-extension": "workspace:^",
+    "@zendev-lab/spark-host": "workspace:^",
+    "@zendev-lab/spark-roles": "workspace:^"
+  }
+}

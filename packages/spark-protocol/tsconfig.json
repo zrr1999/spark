@@ -11,7 +11,6 @@
     "isolatedModules": true,
     "allowSyntheticDefaultImports": true,
     "types": ["node", "vitest/globals"],
-    "rootDir": "src",
     "noEmit": true
   },
   "include": ["src/**/*.ts"]

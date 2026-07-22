@@ -17,7 +17,13 @@ import type {
   ToolConfig,
   ToolInfo,
 } from "@zendev-lab/spark-core";
-import type { SparkDaemonEvent, SparkViewModelEvent } from "@zendev-lab/spark-protocol";
+import type {
+  SparkDaemonEvent,
+  SparkHostBuiltinEventName,
+  SparkHostBuiltinEventPayloadMap,
+  SparkViewModelEvent,
+} from "@zendev-lab/spark-protocol";
+import { SPARK_HOST_BUILTIN_EVENT_NAMES } from "@zendev-lab/spark-protocol";
 
 export interface SparkHostRegistryModel {
   provider: string;
@@ -62,19 +68,21 @@ export interface RegisteredCommand {
   ) => void | Promise<void>;
 }
 
-export type BuiltinEventName =
-  | "session_start"
-  | "agent_end"
-  | "turn_start"
-  | "turn_end"
-  | "tool_call"
-  | "tool_result"
-  | "user_message"
-  | "assistant_message";
+/** @deprecated Prefer `SparkHostBuiltinEventName` from spark-protocol. */
+export type BuiltinEventName = SparkHostBuiltinEventName;
 
-export type EventName = BuiltinEventName | (string & {});
+export const BUILTIN_EVENT_NAMES = SPARK_HOST_BUILTIN_EVENT_NAMES;
 
-export type EventListener = (event: unknown, ctx: SparkHostContext) => unknown;
+export type EventName = SparkHostBuiltinEventName | (string & {});
+
+export type BuiltinEventPayloadMap = SparkHostBuiltinEventPayloadMap;
+
+export type EventListener<E extends EventName = EventName> = E extends SparkHostBuiltinEventName
+  ? (event: BuiltinEventPayloadMap[E], ctx: SparkHostContext) => unknown
+  : (event: unknown, ctx: SparkHostContext) => unknown;
+
+/** Stored listener type (payload erased) for the runtime registry map. */
+export type RegisteredEventListener = (event: unknown, ctx: SparkHostContext) => unknown;
 
 /**
  * Outbox slot for `pi.sendMessage(...)` and `pi.sendUserMessage(...)`. The
@@ -129,7 +137,7 @@ export interface SparkHostSessionManagerStub {
 
 export type RegisteredToolMap = Map<string, RegisteredTool>;
 export type RegisteredCommandMap = Map<string, RegisteredCommand>;
-export type EventListenerMap = Map<EventName, EventListener[]>;
+export type EventListenerMap = Map<EventName, RegisteredEventListener[]>;
 
 export type ToolRegistrationListener = (info: ToolInfo) => void;
 export type SparkDaemonEventListener = (event: SparkDaemonEvent) => void;

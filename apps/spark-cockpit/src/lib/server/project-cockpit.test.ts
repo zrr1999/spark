@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import {
   createProject,
   createWorkspaceWithOwnerBinding,
@@ -10,8 +10,8 @@ import {
   recordCommandReject,
   recordInvocationLogChunk,
   recordInvocationUpdate,
-} from "@zendev-lab/spark-coordination/projection-services";
-import { loadProjectCockpit } from "@zendev-lab/spark-coordination/project-cockpit";
+} from "@zendev-lab/spark-cockpit-coordination/projection-services";
+import { loadProjectCockpit } from "@zendev-lab/spark-cockpit-coordination/project-cockpit";
 
 function offsetIso(baseIso: string, offsetMs: number) {
   return new Date(Date.parse(baseIso) + offsetMs).toISOString();

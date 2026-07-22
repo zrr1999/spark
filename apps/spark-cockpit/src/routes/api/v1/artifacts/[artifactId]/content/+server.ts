@@ -2,7 +2,7 @@ import { error, type RequestHandler } from "@sveltejs/kit";
 import {
   readArtifactPreviewContent,
   type ArtifactPreviewStatus,
-} from "@zendev-lab/spark-coordination/artifact-cache";
+} from "@zendev-lab/spark-cockpit-coordination/artifact-cache";
 import { getDatabase } from "$lib/server/db";
 
 /**

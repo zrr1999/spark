@@ -7,8 +7,8 @@ import {
   getRuntimeSessionProjection,
   listRuntimeSessionProjections,
   listRuntimeSessionRoutes,
-} from "@zendev-lab/spark-coordination/runtime-session-control";
-import { RuntimeControlCommandError } from "@zendev-lab/spark-coordination/runtime-control";
+} from "@zendev-lab/spark-cockpit-coordination/runtime-session-control";
+import { RuntimeControlCommandError } from "@zendev-lab/spark-cockpit-coordination/runtime-control";
 import { parseSessionSnapshotWindow, type SessionSnapshotWindow } from "../session-snapshot-window";
 
 import {

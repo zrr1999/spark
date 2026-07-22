@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import {
   createWorkspaceWithOwnerBinding,
   submitRuntimeControlCommand,
-} from "@zendev-lab/spark-coordination";
+} from "@zendev-lab/spark-cockpit-coordination";
 import { conversationTurnIdempotencyKey } from "./conversation-submission";
 
 describe("Cockpit conversation runtime idempotency contract", () => {

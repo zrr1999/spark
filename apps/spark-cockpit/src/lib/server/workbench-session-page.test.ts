@@ -21,8 +21,8 @@ vi.mock("$lib/server/managed-sessions", () => ({
 }));
 
 vi.mock("$lib/server/db", () => ({ getDatabase: () => ({}) }));
-vi.mock("@zendev-lab/spark-coordination/events", () => ({ latestEventCursor: () => null }));
-vi.mock("@zendev-lab/spark-coordination/session-activity", () => ({
+vi.mock("@zendev-lab/spark-cockpit-coordination/events", () => ({ latestEventCursor: () => null }));
+vi.mock("@zendev-lab/spark-cockpit-coordination/session-activity", () => ({
   loadSessionActivity: mocks.activity,
 }));
 vi.mock("$lib/server/model-control", () => ({

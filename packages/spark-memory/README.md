@@ -10,7 +10,7 @@ This package is intentionally conservative:
 - Compact/checkpoint handoff is explicit via `SparkMemoryStore.checkpoint()` and the extension wires policy-only `session_start` plus hidden `session_before_compact` checkpoint messages when the host supports extension events. The checkpoint is queued with `deliverAs: "nextTurn"` so it rides the next real user prompt instead of triggering an extra post-compaction request.
 - A successful full compact with Smart structured details schedules background `stable_fact` and `open_item` recall candidates. Open items remain candidates; stable facts enter durable Memory only when directly associated `artifact:`/`evidence:` refs resolve locally. Review, evidence, and write failures never alter the completed compact.
 - LearningStore, recall candidates, and reflection pipelines all live in this package (former `spark-learnings` / `spark-recall` packages are removed).
-- If a Pi host already registered pi-memory tool names, Spark skips duplicate aliases and retries after startup so coexistence does not break Pi startup.
+- If a Pi host already registered pi-memory tool names, Spark skips duplicate aliases and retries after startup so coexistence does not break Pi startup. Spark native hosts do not register these aliases unless `enablePiCompatAliases` is set.
 
 ## Unified `memory` actions
 
@@ -37,7 +37,9 @@ Session reflection scan/synthesis writes under `.spark/memory/reflections/` (can
 
 ## pi-memory compatibility tools
 
-Spark also registers compatibility aliases when the names are not already owned by `pi-memory`:
+Pi-memory aliases are **opt-in** via `enablePiCompatAliases: true` (the Pi product
+entrypoint `extension-entry.ts` enables them; Spark native hosts leave them off).
+When enabled and the names are not already owned by `pi-memory`:
 
 - `memory_write` — write `MEMORY.md` or append a daily log.
 - `memory_read` — read `MEMORY.md`, `SCRATCHPAD.md`, one daily log, or list daily logs.

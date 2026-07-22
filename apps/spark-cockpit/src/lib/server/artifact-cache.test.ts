@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseSparkUiSource } from "@zendev-lab/spark-artifacts/generative-ui";
 import { createId, runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
-import { migrate, openMemoryDatabase } from "@zendev-lab/spark-db";
+import { migrate, openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import {
   buildArtifactSparkUiReplay,
   generatedUiArtifactLinks,
@@ -14,12 +14,12 @@ import {
 import {
   createWorkspaceWithOwnerBinding,
   recordArtifactProjection,
-} from "@zendev-lab/spark-coordination/projection-services";
+} from "@zendev-lab/spark-cockpit-coordination/projection-services";
 import {
   ensureArtifactPreviewCache,
   MAX_PREVIEW_BYTES,
   readArtifactPreviewContent,
-} from "@zendev-lab/spark-coordination/artifact-cache";
+} from "@zendev-lab/spark-cockpit-coordination/artifact-cache";
 
 function setupWorkspace() {
   const db = openMemoryDatabase();

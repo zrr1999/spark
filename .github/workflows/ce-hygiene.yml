@@ -1,0 +1,53 @@
+name: "CE - Hygiene Reports"
+
+on:
+  schedule:
+    # Tuesdays 04:17 UTC (day after mutation CE)
+    - cron: "17 4 * * 2"
+  workflow_dispatch:
+
+concurrency:
+  group: ce-hygiene-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  hygiene-reports:
+    name: hygiene-reports
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Knip unused report
+        run: |
+          mkdir -p reports
+          pnpm exec knip --no-progress --no-config-hints --reporter json > reports/knip-report.json || true
+
+      - name: jscpd duplication report
+        run: pnpm exec jscpd --config .jscpd.json apps packages || true
+
+      - name: Upload hygiene CE reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hygiene-ce-reports
+          path: |
+            reports/knip-report.json
+            reports/jscpd/
+          if-no-files-found: ignore
+          retention-days: 14

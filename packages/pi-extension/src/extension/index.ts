@@ -1,5 +1,5 @@
 import { registerSparkAskAutoAnswerProvider } from "@zendev-lab/spark-ask";
-import { registerSparkContextTool } from "@zendev-lab/spark-context/extension";
+import { registerSparkContextTool } from "@zendev-lab/spark-host/context";
 import {
   registerSparkTaskTool,
   registerSparkTodoTool,

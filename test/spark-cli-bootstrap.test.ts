@@ -618,7 +618,7 @@ test("native host honors config extensions for explicit Graft opt-in and full di
       },
     });
     assert.equal(
-      graftServices.runtime.getAllTools().some((tool) => tool.name === "graft_read"),
+      graftServices.runtime.getAllTools().some((tool) => tool.name === "graft"),
       true,
     );
 

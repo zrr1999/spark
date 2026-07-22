@@ -4,9 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
 
-import { builtinRoleIds, createBuiltinRoles } from "@zendev-lab/spark-roles";
+import {
+  builtinRoleIds,
+  createBuiltinRoles,
+  createSparkRoleRegistry,
+} from "@zendev-lab/spark-roles";
 import { SPARK_GRAFT_PATCHER_ROLE_REF, registerSparkGraftExtension } from "@zendev-lab/spark-graft";
-import { createSparkRoleRegistry } from "../packages/pi-extension/src/extension/spark-role-registry.ts";
 
 interface MinimalSparkGraftApi {
   on(event: "session_start", handler: (event: unknown, ctx: { cwd?: string }) => unknown): void;

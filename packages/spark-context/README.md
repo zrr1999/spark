@@ -1,5 +1,13 @@
 # spark-context
 
-Registered context provider capability for Spark extension hosts.
+Compatibility re-export package. Context provider tooling now lives in
+`@zendev-lab/spark-host/context`.
 
-`@zendev-lab/spark-context` exposes bounded `context` actions for listing and previewing registered providers. Providers own their content and budgets; callers cannot inject arbitrary system prompt text through this package.
+Prefer:
+
+```ts
+import { registerSparkContextTool } from "@zendev-lab/spark-host/context";
+```
+
+This package remains only so existing publish/dependency graphs and Pi-facade
+imports keep resolving until callers migrate.

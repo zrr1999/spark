@@ -12,6 +12,7 @@ import {
   refKind,
   refId,
   isRef,
+  isRefKind,
   writeJsonFileAtomic,
   writeTextFileAtomic,
   type TaskPlan,
@@ -58,6 +59,15 @@ test("refs carry kind and id", () => {
   assert.equal(isRef(ref, "role"), false);
   assert.equal(isRef("agent:builtin-worker"), false);
   assert.throws(() => refKind("agent:builtin-worker"), /unknown ref kind/);
+
+  // evidence is a first-class RefKind (ArtifactRef may be evidence:…); isRefKind must accept it
+  assert.equal(isRefKind("evidence"), true);
+  const evidenceRef = newRef("evidence", "proof");
+  assert.equal(evidenceRef, "evidence:proof");
+  assert.equal(isRef(evidenceRef), true);
+  assert.equal(isRef(evidenceRef, "evidence"), true);
+  assert.equal(isRef("evidence:proof", "artifact"), false);
+  assert.equal(refKind(evidenceRef), "evidence");
 });
 
 test("artifact contract validates persisted metadata shape", () => {

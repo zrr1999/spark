@@ -3,7 +3,7 @@
 ## Boundaries
 
 - `apps/spark-daemon` is execution truth and local arbitration. Local RPC and runtime WebSocket transports enter the same SQLite invocation scheduler and headless session executor.
-- `packages/spark-coordination` owns server coordination and Cockpit query/projection APIs. Cockpit projections are not task, run, artifact, ask, review, or invocation execution truth.
+- `packages/spark-cockpit-coordination` owns server coordination and Cockpit query/projection APIs. Cockpit projections are not task, run, artifact, ask, review, or invocation execution truth.
 - Reusable capabilities live in `packages/spark-*`; app adapters translate into owner APIs instead of reading another owner's stores.
 - `packages/pi-extension` is a host facade. It must remain usable without importing Spark app packages.
 - Generated UI is artifact-backed data, never executable MDX, JS, JSX, imports, exports, or raw HTML.

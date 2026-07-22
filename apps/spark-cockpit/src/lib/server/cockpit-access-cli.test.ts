@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, it } from "vitest";
 
-import { migrate, openDatabase } from "@zendev-lab/spark-db";
+import { migrate, openDatabase } from "@zendev-lab/spark-cockpit-db";
 
 import { handleCockpitAccessCliCommand } from "./cockpit-access-cli.ts";
 
