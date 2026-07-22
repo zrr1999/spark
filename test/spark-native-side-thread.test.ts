@@ -125,6 +125,34 @@ test("native /btw reports invalid subcommands without making a daemon mutation",
   assert.equal(calls.length, 0);
 });
 
+test("native /btw rejects inherited object names as unknown subcommands", async () => {
+  const calls: Array<{ method: string; input: Record<string, unknown> }> = [];
+  const btw = createSparkNativeSideThreadSlashCommands({
+    parentSessionId: () => "session:parent",
+    client: clientFixture(calls),
+  }).btw!;
+
+  for (const command of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
+    const result = await btw.handler(command, {} as never);
+    assert.match(result ?? "", new RegExp(`unknown subcommand: ${command.toLowerCase()}`, "u"));
+  }
+  assert.equal(calls.length, 0);
+});
+
+test("native /btw splits a long whitespace-delimited prompt without a backtracking regex", async () => {
+  const calls: Array<{ method: string; input: Record<string, unknown> }> = [];
+  const btw = createSparkNativeSideThreadSlashCommands({
+    parentSessionId: () => "session:parent",
+    client: clientFixture(calls),
+  }).btw!;
+  const prompt = "inspect the daemon boundary";
+
+  await btw.handler(`ask${" \t".repeat(20_000)}${prompt}`, {} as never);
+
+  assert.equal(calls.at(-1)?.method, "submit");
+  assert.equal(calls.at(-1)?.input.prompt, prompt);
+});
+
 test("native /btw reuses an unresolved submit key after a lost response", async () => {
   const calls: Array<{ method: string; input: Record<string, unknown> }> = [];
   const originalClient = clientFixture(calls);

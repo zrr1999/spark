@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/spark-artifacts",
   "version": "0.1.0",
+  "private": true,
   "description": "Product artifacts (issue/pr/preview) and internal evidence storage for Spark capability hosts.",
   "license": "MIT",
   "author": "zrr1999",
@@ -15,9 +16,6 @@
     "./extension": "./src/extension.ts",
     "./generative-ui": "./src/generative-ui.ts",
     "./product": "./src/product/index.ts"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint . && vp test run",

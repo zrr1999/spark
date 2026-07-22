@@ -143,3 +143,8 @@ export type SparkSideThreadHandoffRequest = z.infer<typeof sparkSideThreadHandof
 export type SparkSideThreadSubmitResult = z.infer<typeof sparkSideThreadSubmitResultSchema>;
 export type SparkSideThreadHandoffResult = z.infer<typeof sparkSideThreadHandoffResultSchema>;
 export type SparkSideThreadErrorCode = z.infer<typeof sparkSideThreadErrorCodeSchema>;
+
+/** True only for Side Thread failures that are safe to expose across a transport boundary. */
+export function isSparkSideThreadErrorCode(value: unknown): value is SparkSideThreadErrorCode {
+  return sparkSideThreadErrorCodeSchema.safeParse(value).success;
+}

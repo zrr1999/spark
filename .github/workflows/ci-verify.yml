@@ -34,3 +34,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm run check
+
+      - name: Source distribution smoke
+        run: pnpm run test:source-distribution

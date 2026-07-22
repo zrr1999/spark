@@ -5,8 +5,10 @@ import {
   runtimeHelloEnvelopeSchema,
 } from "@zendev-lab/spark-protocol";
 import { bearerTokenFromAuthorization } from "@zendev-lab/spark-system";
-import { registerRuntimeControlDispatcher } from "../runtime-control.ts";
-import { RuntimeControlCommandError } from "../runtime-control.ts";
+import {
+  registerRuntimeControlDispatcher,
+  RuntimeControlCommandError,
+} from "../runtime-control.ts";
 import { hashSecret } from "../security.ts";
 import {
   recordRuntimeEphemeralSecretProjection,

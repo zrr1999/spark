@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/spark-cli",
   "version": "0.1.0",
+  "private": true,
   "description": "Thin dispatcher for the root spark command; routes public spark subcommands to Spark app surfaces.",
   "license": "MIT",
   "author": "zrr1999",
@@ -13,9 +14,6 @@
     "README.md"
   ],
   "type": "module",
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
     "check": "vp check --no-fmt --no-lint ."
   },

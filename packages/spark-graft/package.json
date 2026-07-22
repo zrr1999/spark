@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/spark-graft",
   "version": "0.1.0",
+  "private": true,
   "description": "Spark extension package for graft daemon scratch and candidate workflows.",
   "keywords": [
     "graft",
@@ -20,9 +21,6 @@
     "./extension": "./src/extension.ts",
     "./sandbox": "./src/sandbox-entry.ts",
     "./graft-client": "./src/graft-client.ts"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint ."

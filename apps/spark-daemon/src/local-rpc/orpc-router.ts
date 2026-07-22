@@ -5,10 +5,11 @@
  * `handleLocalRpcLine` dispatch used by daemon.sock so behavior stays unified.
  */
 import type { DatabaseSync } from "node:sqlite";
-import { implement } from "@orpc/server";
+import { ORPCError, implement } from "@orpc/server";
 import { sparkLocalRpcOrpcContract } from "@zendev-lab/spark-protocol/local-rpc-orpc-contract";
+import { isSparkSideThreadErrorCode } from "@zendev-lab/spark-protocol/side-thread";
 import type { SparkPaths } from "@zendev-lab/spark-system";
-import { invokeLegacyLocalRpc } from "./orpc-bridge.ts";
+import { invokeLegacyLocalRpc, legacyLocalRpcErrorCode } from "./orpc-bridge.ts";
 import type { LocalRpcHandlerOptions } from "./types.ts";
 
 export interface CreateLocalRpcOrpcRouterOptions {
@@ -30,6 +31,20 @@ export function createLocalRpcOrpcRouter(input: CreateLocalRpcOrpcRouterOptions)
       ...(onStop ? { onStop } : {}),
       handlerOptions,
     });
+
+  const invokeSideThread = async (method: string, params: unknown = {}) => {
+    try {
+      return await invoke(method, params);
+    } catch (error) {
+      const code = legacyLocalRpcErrorCode(error);
+      if (isSparkSideThreadErrorCode(code)) {
+        throw new ORPCError(code, {
+          message: error instanceof Error ? error.message : "Side Thread request failed.",
+        });
+      }
+      throw new ORPCError("INTERNAL_SERVER_ERROR");
+    }
+  };
 
   return os.router({
     daemon: {
@@ -157,22 +172,22 @@ export function createLocalRpcOrpcRouter(input: CreateLocalRpcOrpcRouterOptions)
     },
     sideThread: {
       ensure: os.sideThread.ensure.handler(async ({ input: params }) =>
-        invoke("side-thread.ensure", params),
+        invokeSideThread("side-thread.ensure", params),
       ),
       snapshot: os.sideThread.snapshot.handler(async ({ input: params }) =>
-        invoke("side-thread.snapshot", params),
+        invokeSideThread("side-thread.snapshot", params),
       ),
       submit: os.sideThread.submit.handler(async ({ input: params }) =>
-        invoke("side-thread.submit", params),
+        invokeSideThread("side-thread.submit", params),
       ),
       reset: os.sideThread.reset.handler(async ({ input: params }) =>
-        invoke("side-thread.reset", params),
+        invokeSideThread("side-thread.reset", params),
       ),
       configure: os.sideThread.configure.handler(async ({ input: params }) =>
-        invoke("side-thread.configure", params),
+        invokeSideThread("side-thread.configure", params),
       ),
       handoff: os.sideThread.handoff.handler(async ({ input: params }) =>
-        invoke("side-thread.handoff", params),
+        invokeSideThread("side-thread.handoff", params),
       ),
     },
     model: {

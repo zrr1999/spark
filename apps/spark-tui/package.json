@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/spark-tui-app",
   "version": "0.1.0",
+  "private": true,
   "description": "Standalone Spark-first TUI app built through the Spark TUI boundary.",
   "license": "MIT",
   "author": "zrr1999",
@@ -16,9 +17,6 @@
   "exports": {
     ".": "./src/index.ts",
     "./headless-role-executor": "./src/headless-role-executor.ts"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint ."

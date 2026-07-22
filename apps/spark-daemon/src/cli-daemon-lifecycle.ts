@@ -319,56 +319,85 @@ export async function stop(
   const cancelledRestart = cancelSparkDaemonRestartSuccessor(paths);
   const pid = readRunningPid(paths);
   if (!pid) {
-    // The service label remains the source of truth during a managed handoff.
-    if (process.platform === "darwin") {
-      const service = (io.stopService ?? stopSparkDaemonService)(paths);
-      if (service) {
-        io.stdout.write(`${service.detail}\n`);
-        return 0;
-      }
-      io.stderr.write(
-        "Failed to unregister the Spark daemon launchd service; it may remain registered.\n",
-      );
-      return 1;
-    }
-    if (cancelledRestart) {
-      io.stdout.write("Cancelled pending Spark daemon restart.\n");
-      return 0;
-    }
-    io.stdout.write("Spark daemon is not running.\n");
-    return 0;
+    return stopWithoutPid(paths, io, cancelledRestart);
   }
 
   try {
     await (io.daemonStopFromService ?? requestDaemonStop)(paths);
-    if (process.platform === "darwin") {
-      const service = (io.stopService ?? stopSparkDaemonService)(paths);
-      if (service) {
-        io.stdout.write(`${service.detail}\n`);
-        return 0;
-      }
-      io.stderr.write(
-        "Spark daemon stopped accepting RPC, but its launchd service may remain registered.\n",
-      );
-      return 1;
-    }
-    io.stdout.write(`Stopped Spark daemon process ${pid}.\n`);
-    return 0;
+    return reportStoppedDaemon(paths, pid, io);
   } catch (error) {
     if (!(error instanceof LocalRpcUnavailableError)) {
       throw error;
     }
   }
 
+  return stopUnreachableDaemon(paths, pid, io);
+}
+
+function stopWithoutPid(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  io: CliIo,
+  cancelledRestart: boolean,
+): number {
+  // The service label remains the source of truth during a managed handoff.
+  if (process.platform === "darwin") {
+    return reportStoppedService(
+      paths,
+      io,
+      "Failed to unregister the Spark daemon launchd service; it may remain registered.\n",
+    );
+  }
+  io.stdout.write(
+    cancelledRestart
+      ? "Cancelled pending Spark daemon restart.\n"
+      : "Spark daemon is not running.\n",
+  );
+  return 0;
+}
+
+function reportStoppedDaemon(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  pid: number,
+  io: CliIo,
+): number {
+  if (process.platform === "darwin") {
+    return reportStoppedService(
+      paths,
+      io,
+      "Spark daemon stopped accepting RPC, but its launchd service may remain registered.\n",
+    );
+  }
+  io.stdout.write(`Stopped Spark daemon process ${pid}.\n`);
+  return 0;
+}
+
+function stopUnreachableDaemon(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  pid: number,
+  io: CliIo,
+): number {
   const service = (io.stopService ?? stopSparkDaemonService)(paths);
   if (service) {
     io.stdout.write(`${service.detail}\n`);
     return 0;
   }
-
   io.stderr.write(
     `Spark daemon process ${pid} could not be reached and its ownership could not be verified; no signal was sent.\n`,
   );
+  return 1;
+}
+
+function reportStoppedService(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  io: CliIo,
+  failureMessage: string,
+): number {
+  const service = (io.stopService ?? stopSparkDaemonService)(paths);
+  if (service) {
+    io.stdout.write(`${service.detail}\n`);
+    return 0;
+  }
+  io.stderr.write(failureMessage);
   return 1;
 }
 
@@ -419,16 +448,7 @@ export async function restart(
   }
 
   const previousPid = readRunningPid(paths);
-  if (!previousPid) {
-    clearSparkDaemonRestartFenceForExplicitStart(paths);
-    const service = startSparkDaemonProcess(paths, io);
-    io.stdout.write(`${service.detail}\n`);
-    if (flags.wait === "true" && flags["no-wait"] !== "true") {
-      const readyPid = await waitForDaemonReady(paths, null, io);
-      io.stdout.write(`Spark daemon is ready as process ${readyPid}.\n`);
-    }
-    return 0;
-  }
+  if (!previousPid) return await startStoppedDaemon(paths, flags, io);
 
   let requested: Awaited<ReturnType<typeof requestDaemonRestart>> | undefined;
   try {
@@ -446,25 +466,8 @@ export async function restart(
     if (!isRestartRpcUnsupported(error)) throw error;
   }
 
-  if (requested) {
-    io.stdout.write(
-      `Spark daemon restart requested at ${requested.requestedAt}; draining active invocations.\n`,
-    );
-    // Async is the safe default for daemon-hosted callers: waiting for the
-    // replacement from inside an active invocation would deadlock the drain.
-    if (flags.wait !== "true" || flags["no-wait"] === "true") {
-      io.stdout.write("Replacement will start after active work finishes.\n");
-      return 0;
-    }
-
-    const replacementPid = await waitForDaemonReady(paths, previousPid, io, {
-      restartId: requested.restartId,
-      targetInstanceId: requested.targetInstanceId,
-      targetGeneration: requested.targetGeneration,
-    });
-    io.stdout.write(`Spark daemon restarted as process ${replacementPid}.\n`);
-    return 0;
-  }
+  if (requested)
+    return await reportRequestedDaemonRestart(paths, previousPid, flags, io, requested);
 
   // Compatibility path for a daemon that predates drain restart or whose
   // local socket is already unusable. This preserves the old stop/start repair
@@ -493,6 +496,50 @@ export async function restart(
     const replacementPid = await waitForDaemonReady(paths, previousPid, io);
     io.stdout.write(`Spark daemon restarted as process ${replacementPid}.\n`);
   }
+  return 0;
+}
+
+function shouldWaitForDaemon(flags: Record<string, string>): boolean {
+  return flags.wait === "true" && flags["no-wait"] !== "true";
+}
+
+async function startStoppedDaemon(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  flags: Record<string, string>,
+  io: CliIo,
+): Promise<number> {
+  clearSparkDaemonRestartFenceForExplicitStart(paths);
+  const service = startSparkDaemonProcess(paths, io);
+  io.stdout.write(`${service.detail}\n`);
+  if (shouldWaitForDaemon(flags)) {
+    const readyPid = await waitForDaemonReady(paths, null, io);
+    io.stdout.write(`Spark daemon is ready as process ${readyPid}.\n`);
+  }
+  return 0;
+}
+
+async function reportRequestedDaemonRestart(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  previousPid: number,
+  flags: Record<string, string>,
+  io: CliIo,
+  requested: Awaited<ReturnType<typeof requestDaemonRestart>>,
+): Promise<number> {
+  io.stdout.write(
+    `Spark daemon restart requested at ${requested.requestedAt}; draining active invocations.\n`,
+  );
+  // Async is the safe default for daemon-hosted callers: waiting for the
+  // replacement from inside an active invocation would deadlock the drain.
+  if (!shouldWaitForDaemon(flags)) {
+    io.stdout.write("Replacement will start after active work finishes.\n");
+    return 0;
+  }
+  const replacementPid = await waitForDaemonReady(paths, previousPid, io, {
+    restartId: requested.restartId,
+    targetInstanceId: requested.targetInstanceId,
+    targetGeneration: requested.targetGeneration,
+  });
+  io.stdout.write(`Spark daemon restarted as process ${replacementPid}.\n`);
   return 0;
 }
 
@@ -557,14 +604,16 @@ async function sendRestartHelperMessage(message: Record<string, string>): Promis
   });
 }
 
+type RestartIntentCommitSource = "ipc" | "durable" | "cancelled";
+
 async function waitForRestartIntentCommit(
   paths: ReturnType<typeof resolveSparkPaths>,
   previousPid: number,
   restartId: string,
-): Promise<"ipc" | "durable" | "cancelled"> {
-  return await new Promise<"ipc" | "durable" | "cancelled">((resolve) => {
+): Promise<RestartIntentCommitSource> {
+  return await new Promise<RestartIntentCommitSource>((resolve) => {
     let settled = false;
-    const finish = (result: "ipc" | "durable" | "cancelled") => {
+    const finish = (result: RestartIntentCommitSource) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
@@ -594,15 +643,17 @@ async function waitForRestartIntentCommit(
   });
 }
 
+type ExpectedDaemonRestart = {
+  restartId: string;
+  targetInstanceId: string;
+  targetGeneration: string;
+};
+
 async function waitForDaemonReady(
   paths: ReturnType<typeof resolveSparkPaths>,
   previousPid: number | null,
   io: CliIo,
-  expectedRestart?: {
-    restartId: string;
-    targetInstanceId: string;
-    targetGeneration: string;
-  },
+  expectedRestart?: ExpectedDaemonRestart,
 ): Promise<number> {
   const progressIntervalMs = 5_000;
   let nextProgressAt = Date.now() + progressIntervalMs;
@@ -611,95 +662,170 @@ async function waitForDaemonReady(
   let observedLifecycle: SparkDaemonLifecycleSnapshot | undefined;
   while (true) {
     const currentPid = readRunningPid(paths);
-    if (expectedRestart && previousPid !== null && !observedTerminal) {
-      observedTerminal = readSparkDaemonRestartTerminal(paths, {
-        previousPid,
-        restartId: expectedRestart.restartId,
-      });
-      if (observedTerminal?.state === "cancelled") {
-        throw new Error(`Spark daemon restart ${expectedRestart.restartId} was cancelled.`);
-      }
-    }
-
-    // An exact local-RPC identity is stronger readiness evidence than the
-    // pidfile projection. During handoff the pidfile/identity pair can be
-    // briefly absent while the accepted successor is already serving. Probe
-    // unconditionally for exact restarts so that projection race cannot leave
-    // --wait spinning forever.
-    if (expectedRestart || (currentPid && currentPid !== previousPid)) {
-      try {
-        const status = await (io.daemonStatusFromService ?? requestDaemonStatus)(paths);
-        observedLifecycle = status.lifecycle;
-        const identity = status.lifecycle.process;
-        const targetInstanceId =
-          observedTerminal?.state === "completed"
-            ? observedTerminal.targetInstanceId
-            : expectedRestart?.targetInstanceId;
-        const targetGeneration =
-          observedTerminal?.state === "completed"
-            ? observedTerminal.targetGeneration
-            : expectedRestart?.targetGeneration;
-        const exactAcceptedSuccessor = Boolean(
-          expectedRestart &&
-          identity !== undefined &&
-          identity.pid !== previousPid &&
-          identity.instanceId === targetInstanceId &&
-          identity.generation === targetGeneration &&
-          identity.acceptedRestartId === expectedRestart.restartId,
-        );
-        if (
-          (!expectedRestart && status.lifecycle.state === "running") ||
-          (exactAcceptedSuccessor &&
-            (status.lifecycle.state === "running" || status.lifecycle.state === "draining"))
-        ) {
-          return expectedRestart ? identity!.pid : currentPid!;
-        }
-        if (
-          expectedRestart &&
-          identity?.pid !== previousPid &&
-          identity?.acceptedRestartId &&
-          identity.acceptedRestartId !== expectedRestart.restartId &&
-          (status.lifecycle.state === "running" || status.lifecycle.state === "draining")
-        ) {
-          throw new Error(
-            `Spark daemon restart ${expectedRestart.restartId} was superseded by ${identity.acceptedRestartId}.`,
-          );
-        }
-      } catch (error) {
-        if (!isRetryableDaemonReadinessRpcError(error)) throw error;
-      }
-    }
-    if (expectedRestart && Date.now() >= nextProgressAt) {
-      const activeRestart = readSparkDaemonActiveRestart(paths);
-      const restartState =
-        observedTerminal?.state ??
-        (activeRestart?.restartId === expectedRestart.restartId
-          ? activeRestart.state
-          : "awaiting-successor");
-      io.stdout.write(
-        `Spark daemon restart ${expectedRestart.restartId}: ${restartState}; ` +
-          `predecessor pid ${previousPid}; observed pid ${currentPid ?? "none"}; ` +
-          `target generation ${expectedRestart.targetGeneration}` +
-          `${formatRestartDrainBlockers(observedLifecycle)}.\n`,
-      );
-      nextProgressAt = Date.now() + progressIntervalMs;
-    }
-    if (
-      previousPid === null ||
-      !isProcessAlive(previousPid) ||
-      observedTerminal?.state === "completed"
-    ) {
-      replacementDeadline ??= Date.now() + 30_000;
-      if (Date.now() >= replacementDeadline) {
-        throw new Error(
-          previousPid === null
-            ? "Spark daemon did not become ready within 30 seconds."
-            : `Spark daemon process ${previousPid} exited, but its replacement did not become ready within 30 seconds.`,
-        );
-      }
-    }
+    observedTerminal = readRestartTerminal(paths, previousPid, expectedRestart, observedTerminal);
+    const readiness = await probeDaemonReadiness(
+      paths,
+      previousPid,
+      io,
+      expectedRestart,
+      observedTerminal,
+    );
+    observedLifecycle = readiness.lifecycle;
+    if (readiness.pid !== undefined) return readiness.pid;
+    nextProgressAt = reportRestartProgress(
+      paths,
+      previousPid,
+      currentPid,
+      io,
+      expectedRestart,
+      observedTerminal,
+      observedLifecycle,
+      nextProgressAt,
+    );
+    replacementDeadline = assertReplacementStillExpected(
+      previousPid,
+      observedTerminal,
+      replacementDeadline,
+    );
     await delay(50);
   }
+}
+
+function readRestartTerminal(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  previousPid: number | null,
+  expectedRestart: ExpectedDaemonRestart | undefined,
+  observedTerminal: ReturnType<typeof readSparkDaemonRestartTerminal>,
+): ReturnType<typeof readSparkDaemonRestartTerminal> {
+  if (!expectedRestart || previousPid === null || observedTerminal) return observedTerminal;
+  const terminal = readSparkDaemonRestartTerminal(paths, {
+    previousPid,
+    restartId: expectedRestart.restartId,
+  });
+  if (terminal?.state === "cancelled") {
+    throw new Error(`Spark daemon restart ${expectedRestart.restartId} was cancelled.`);
+  }
+  return terminal;
+}
+
+async function probeDaemonReadiness(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  previousPid: number | null,
+  io: CliIo,
+  expectedRestart: ExpectedDaemonRestart | undefined,
+  observedTerminal: ReturnType<typeof readSparkDaemonRestartTerminal>,
+): Promise<{ lifecycle?: SparkDaemonLifecycleSnapshot; pid?: number }> {
+  const currentPid = readRunningPid(paths);
+  if (!expectedRestart && (!currentPid || currentPid === previousPid)) return {};
+  try {
+    const status = await (io.daemonStatusFromService ?? requestDaemonStatus)(paths);
+    const lifecycle = status.lifecycle;
+    const identity = lifecycle.process;
+    if (!expectedRestart && lifecycle.state === "running" && currentPid !== null) {
+      return { lifecycle, pid: currentPid };
+    }
+    const acceptedSuccessor = isExpectedDaemonSuccessor(
+      identity,
+      previousPid,
+      expectedRestart,
+      observedTerminal,
+    );
+    if (acceptedSuccessor && isServingDaemonState(lifecycle.state)) {
+      return { lifecycle, pid: identity!.pid };
+    }
+    assertRestartWasNotSuperseded(identity, previousPid, expectedRestart, lifecycle.state);
+    return { lifecycle };
+  } catch (error) {
+    if (!isRetryableDaemonReadinessRpcError(error)) throw error;
+    return {};
+  }
+}
+
+function isExpectedDaemonSuccessor(
+  identity: SparkDaemonLifecycleSnapshot["process"],
+  previousPid: number | null,
+  expectedRestart: ExpectedDaemonRestart | undefined,
+  observedTerminal: ReturnType<typeof readSparkDaemonRestartTerminal>,
+): boolean {
+  if (!expectedRestart || !identity || identity.pid === previousPid) return false;
+  const target = observedTerminal?.state === "completed" ? observedTerminal : expectedRestart;
+  return (
+    identity.instanceId === target.targetInstanceId &&
+    identity.generation === target.targetGeneration &&
+    identity.acceptedRestartId === expectedRestart.restartId
+  );
+}
+
+function assertRestartWasNotSuperseded(
+  identity: SparkDaemonLifecycleSnapshot["process"],
+  previousPid: number | null,
+  expectedRestart: ExpectedDaemonRestart | undefined,
+  state: SparkDaemonLifecycleSnapshot["state"],
+): void {
+  if (
+    !expectedRestart ||
+    !identity ||
+    identity.pid === previousPid ||
+    !identity.acceptedRestartId ||
+    identity.acceptedRestartId === expectedRestart.restartId ||
+    !isServingDaemonState(state)
+  ) {
+    return;
+  }
+  throw new Error(
+    `Spark daemon restart ${expectedRestart.restartId} was superseded by ${identity.acceptedRestartId}.`,
+  );
+}
+
+function isServingDaemonState(state: SparkDaemonLifecycleSnapshot["state"]): boolean {
+  return state === "running" || state === "draining";
+}
+
+function reportRestartProgress(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  previousPid: number | null,
+  currentPid: number | null,
+  io: CliIo,
+  expectedRestart: ExpectedDaemonRestart | undefined,
+  observedTerminal: ReturnType<typeof readSparkDaemonRestartTerminal>,
+  observedLifecycle: SparkDaemonLifecycleSnapshot | undefined,
+  nextProgressAt: number,
+): number {
+  if (!expectedRestart || Date.now() < nextProgressAt) return nextProgressAt;
+  const activeRestart = readSparkDaemonActiveRestart(paths);
+  const restartState =
+    observedTerminal?.state ??
+    (activeRestart?.restartId === expectedRestart.restartId
+      ? activeRestart.state
+      : "awaiting-successor");
+  io.stdout.write(
+    `Spark daemon restart ${expectedRestart.restartId}: ${restartState}; ` +
+      `predecessor pid ${previousPid}; observed pid ${currentPid ?? "none"}; ` +
+      `target generation ${expectedRestart.targetGeneration}` +
+      `${formatRestartDrainBlockers(observedLifecycle)}.\n`,
+  );
+  return Date.now() + 5_000;
+}
+
+function assertReplacementStillExpected(
+  previousPid: number | null,
+  observedTerminal: ReturnType<typeof readSparkDaemonRestartTerminal>,
+  replacementDeadline: number | undefined,
+): number | undefined {
+  if (
+    previousPid !== null &&
+    isProcessAlive(previousPid) &&
+    observedTerminal?.state !== "completed"
+  ) {
+    return replacementDeadline;
+  }
+  const deadline = replacementDeadline ?? Date.now() + 30_000;
+  if (Date.now() < deadline) return deadline;
+  throw new Error(
+    previousPid === null
+      ? "Spark daemon did not become ready within 30 seconds."
+      : `Spark daemon process ${previousPid} exited, but its replacement did not become ready within 30 seconds.`,
+  );
 }
 
 function formatRestartDrainBlockers(lifecycle: SparkDaemonLifecycleSnapshot | undefined): string {

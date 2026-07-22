@@ -77,7 +77,7 @@ test("root Pi extension list and native builtins both expose self-extension tool
   );
 });
 
-test("published Spark TUI resolves builtins through declared package exports", async () => {
+test("source-distributed Spark TUI resolves builtins through declared package exports", async () => {
   const tuiPackage = JSON.parse(
     await readFile(new URL("../apps/spark-tui/package.json", import.meta.url), "utf8"),
   ) as { dependencies?: Record<string, string> };
@@ -90,7 +90,7 @@ test("published Spark TUI resolves builtins through declared package exports", a
     const packageName = specifier.split("/").slice(0, 2).join("/");
     assert.ok(
       tuiPackage.dependencies?.[packageName],
-      `${packageName} must be a runtime dependency of the published TUI`,
+      `${packageName} must be a runtime dependency of the source-distributed TUI`,
     );
     assert.match(loaderSource, new RegExp(`from ["']${specifier.replaceAll("/", "\\/")}["']`, "u"));
   }

@@ -30,9 +30,6 @@
     "./version": "./src/version.ts",
     "./local-rpc-orpc-contract": "./src/local-rpc-orpc-contract.ts"
   },
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
     "check": "vp check --no-fmt --no-lint . && vp test run",
     "test": "vp test run",

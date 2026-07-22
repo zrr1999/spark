@@ -13,6 +13,7 @@ import { sparkModelControlSnapshotSchema } from "./model-control.ts";
 import { isoDateTimeSchema } from "./refs.ts";
 import {
   sparkSideThreadConfigureRequestSchema,
+  sparkSideThreadErrorCodeOptions,
   sparkSideThreadEnsureRequestSchema,
   sparkSideThreadHandoffRequestSchema,
   sparkSideThreadHandoffResultSchema,
@@ -30,6 +31,29 @@ const invocationIdInputSchema = z.object({ invocationId: z.string().min(1) });
 const sessionIdInputSchema = z.object({ sessionId: z.string().min(1) });
 const providerNameInputSchema = z.object({ providerName: z.string().min(1) });
 const flowIdInputSchema = z.object({ flowId: z.string().min(1) });
+
+/**
+ * The only legacy local-RPC error codes the oRPC Side Thread surface may
+ * expose. All other bridge failures must be normalized to oRPC INTERNAL.
+ */
+export const sparkLocalRpcSideThreadOrpcErrors = {
+  side_thread_parent_not_found: { status: 404 },
+  side_thread_parent_archived: { status: 409 },
+  side_thread_nesting_forbidden: { status: 409 },
+  side_thread_scope_mismatch: { status: 409 },
+  side_thread_not_found: { status: 404 },
+  side_thread_archived: { status: 409 },
+  side_thread_generation_conflict: { status: 409 },
+  side_thread_head_conflict: { status: 409 },
+  side_thread_idempotency_conflict: { status: 409 },
+  side_thread_direct_submit_forbidden: { status: 403 },
+  side_thread_mutation_forbidden: { status: 403 },
+  side_thread_busy: { status: 409 },
+  side_thread_drain_timeout: { status: 408 },
+  side_thread_transcript_invalid: { status: 500 },
+  side_thread_model_unavailable: { status: 422 },
+  side_thread_handoff_too_large: { status: 413 },
+} as const satisfies Record<(typeof sparkSideThreadErrorCodeOptions)[number], { status: number }>;
 
 export const sparkLocalRpcDaemonStatusResultSchema = z.object({
   lifecycle: z.object({
@@ -76,6 +100,15 @@ function procedure(
   output: z.ZodType = unknownResultSchema,
 ) {
   return oc.route({ method, path }).input(input).output(output);
+}
+
+function sideThreadProcedure(
+  method: "GET" | "POST",
+  path: `/${string}`,
+  input: z.ZodType,
+  output: z.ZodType,
+) {
+  return procedure(method, path, input, output).errors(sparkLocalRpcSideThreadOrpcErrors);
 }
 
 export const sparkLocalRpcOrpcContract = {
@@ -242,37 +275,37 @@ export const sparkLocalRpcOrpcContract = {
     },
   },
   sideThread: {
-    ensure: procedure(
+    ensure: sideThreadProcedure(
       "POST",
       "/side-thread/ensure",
       sparkSideThreadEnsureRequestSchema,
       sparkSideThreadSnapshotSchema,
     ),
-    snapshot: procedure(
+    snapshot: sideThreadProcedure(
       "GET",
       "/side-thread/snapshot",
       sparkSideThreadSnapshotRequestSchema,
       sparkSideThreadSnapshotSchema,
     ),
-    submit: procedure(
+    submit: sideThreadProcedure(
       "POST",
       "/side-thread/submit",
       sparkSideThreadSubmitRequestSchema,
       sparkSideThreadSubmitResultSchema,
     ),
-    reset: procedure(
+    reset: sideThreadProcedure(
       "POST",
       "/side-thread/reset",
       sparkSideThreadResetRequestSchema,
       sparkSideThreadSnapshotSchema,
     ),
-    configure: procedure(
+    configure: sideThreadProcedure(
       "POST",
       "/side-thread/configure",
       sparkSideThreadConfigureRequestSchema,
       sparkSideThreadSnapshotSchema,
     ),
-    handoff: procedure(
+    handoff: sideThreadProcedure(
       "POST",
       "/side-thread/handoff",
       sparkSideThreadHandoffRequestSchema,
@@ -400,6 +433,3 @@ export const sparkLocalRpcOrpcLiveMethods = Object.keys(
 ) as SparkLocalRpcOrpcMethod[];
 
 export type SparkLocalRpcOrpcLiveMethod = SparkLocalRpcOrpcMethod;
-
-/** @deprecated Use SparkLocalRpcOrpcMethod — spike alias retained for callers. */
-export type SparkLocalRpcOrpcSpikeMethod = SparkLocalRpcOrpcMethod;

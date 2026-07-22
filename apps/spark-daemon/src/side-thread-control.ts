@@ -28,7 +28,9 @@ import {
 import {
   createSparkDaemonSideThreadTranscript,
   loadSparkDaemonSideThreadExchanges,
+  pruneSparkDaemonSideThreadRetiredGenerations,
   projectSparkDaemonSideThreadSnapshot,
+  removeUnreferencedSparkDaemonSideThreadTranscript,
   renderSparkDaemonSideThreadHandoffPrompt,
 } from "./side-thread-transcript.ts";
 import { SparkInvocationStore, type SparkInvocationRecord } from "./store/invocations.ts";
@@ -77,6 +79,7 @@ export async function executeSparkDaemonSideThreadControl(
             parent,
             sessionId,
             mode,
+            1,
           );
           child = await requireRegistry(options).ensureSideThread({
             parentSessionId: parent.sessionId,
@@ -391,13 +394,50 @@ async function resetSideThreadGeneration(
     parent,
     child.sessionId,
     mode,
+    expectedGeneration + 1,
   );
-  return await requireRegistry(options).resetSideThread({
-    sessionId: child.sessionId,
-    expectedGeneration,
-    sessionPath,
-    mode,
-  });
+  let reset: SparkSessionRegistryRecord;
+  try {
+    reset = await requireRegistry(options).resetSideThread({
+      sessionId: child.sessionId,
+      expectedGeneration,
+      sessionPath,
+      mode,
+    });
+  } catch (error) {
+    await cleanupFailedSideThreadReset(
+      options,
+      parent,
+      child.sessionId,
+      sessionPath,
+      expectedGeneration + 1,
+    );
+    throw error;
+  }
+  await pruneSparkDaemonSideThreadRetiredGenerations(options, parent, reset);
+  return reset;
+}
+
+async function cleanupFailedSideThreadReset(
+  options: SparkDaemonSessionControlOptions,
+  parent: SparkSessionRegistryRecord,
+  sessionId: string,
+  sessionPath: string,
+  generation: number,
+): Promise<void> {
+  try {
+    const current = await requireRegistry(options).get(sessionId);
+    if (current?.sessionPath === sessionPath) return;
+    await removeUnreferencedSparkDaemonSideThreadTranscript(
+      options,
+      parent,
+      sessionId,
+      sessionPath,
+      generation,
+    );
+  } catch {
+    // Preserve the caller's reset error; a later maintenance pass can recover an orphan safely.
+  }
 }
 
 function assertSideThreadIdle(store: SparkInvocationStore, sessionId: string): void {
@@ -584,7 +624,7 @@ function result(
   invocationId?: string,
 ): SparkDaemonSideThreadControlResult {
   return {
-    result: JSON.parse(JSON.stringify(value)) as Record<string, SparkProtocolJsonValue>,
+    result: structuredClone(value) as Record<string, SparkProtocolJsonValue>,
     ...(invocationId ? { invocationId } : {}),
   };
 }

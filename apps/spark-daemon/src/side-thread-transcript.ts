@@ -1,9 +1,11 @@
-import { join } from "node:path";
 import { existsSync } from "node:fs";
+import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 
 import { SparkSessionStore, type SparkSessionEntry } from "@zendev-lab/spark-host/session-store";
 import {
   sparkSideThreadSnapshotSchema,
+  sparkSideThreadExchangeSchema,
   type SparkModelRef,
   type SparkSessionRegistryRecord,
   type SparkSideThreadErrorCode,
@@ -25,6 +27,24 @@ const MAX_EXCHANGE_USER_BYTES = 2 * 1024;
 const MAX_EXCHANGE_ASSISTANT_BYTES = 8 * 1024;
 const MAX_PENDING_PROMPT_BYTES = 2 * 1024;
 const MAX_FALLBACK_REASON_BYTES = 1_024;
+const SIDE_THREAD_INDEX_VERSION = 1;
+const RETAINED_RETIRED_GENERATIONS = 2;
+
+interface SideThreadTranscriptIndex {
+  version: typeof SIDE_THREAD_INDEX_VERSION;
+  identity: {
+    parentSessionId: string;
+    sessionId: string;
+    generation: number;
+    transcriptPath: string;
+  };
+  checkpoint: {
+    offset: number;
+    modifiedAtMs: number;
+    inode: number;
+  };
+  exchanges: SparkSideThreadExchange[];
+}
 
 /**
  * Create a native transcript for one Side Thread generation.
@@ -38,6 +58,7 @@ export async function createSparkDaemonSideThreadTranscript(
   parent: SparkSessionRegistryRecord,
   sessionId: string,
   mode: SparkSideThreadMode,
+  generation = 1,
 ): Promise<string> {
   const sessionsRoot = requireSessionsRoot(options);
   const cwd = parent.cwd?.trim();
@@ -65,6 +86,7 @@ export async function createSparkDaemonSideThreadTranscript(
   store.appendCustomEntry(record, SIDE_THREAD_SEED_BOUNDARY, {
     parentSessionId: parent.sessionId,
     mode,
+    generation,
   });
   await store.save(record);
   return record.path;
@@ -100,6 +122,26 @@ export async function projectSparkDaemonSideThreadSnapshot(
 ): Promise<SparkSideThreadSnapshot> {
   const relation = requireSideThreadRelation(child);
   const exchanges = await loadSparkDaemonSideThreadExchanges(options, child);
+  const { end, requestedStart } = projectionWindow(exchanges, page);
+  const pendingTurns = pendingSideThreadTurns(options, child);
+  const modelState = await projectedModelState(options.modelControl, parent, child);
+  const initialVisible = exchanges.slice(requestedStart, end).map(projectExchange);
+  return fitSnapshotProjection({
+    parent,
+    child,
+    relation,
+    exchanges,
+    requestedStart,
+    visible: initialVisible,
+    pendingTurns,
+    modelState,
+  });
+}
+
+function projectionWindow(
+  exchanges: readonly SparkSideThreadExchange[],
+  page: { beforeExchangeId?: string; limit?: number },
+): { end: number; requestedStart: number } {
   const end = page.beforeExchangeId
     ? exchanges.findIndex((exchange) => exchange.id === page.beforeExchangeId)
     : exchanges.length;
@@ -109,13 +151,16 @@ export async function projectSparkDaemonSideThreadSnapshot(
       `side-thread cursor is no longer available: ${page.beforeExchangeId}`,
     );
   }
-
   const limit = Math.min(100, Math.max(1, page.limit ?? DEFAULT_EXCHANGE_LIMIT));
-  const requestedStart = Math.max(0, end - limit);
-  let firstVisibleIndex = requestedStart;
-  let visible = exchanges.slice(requestedStart, end).map(projectExchange);
+  return { end, requestedStart: Math.max(0, end - limit) };
+}
+
+function pendingSideThreadTurns(
+  options: SparkDaemonSessionControlOptions,
+  child: SparkSessionRegistryRecord,
+) {
   const pending = new SparkInvocationStore(options.db).listPendingForSession(child.sessionId);
-  const pendingTurns = pending.map((invocation) => {
+  return pending.map((invocation) => {
     const prompt = boundedUtf8(invocation.prompt ?? "", MAX_PENDING_PROMPT_BYTES);
     return {
       invocationId: invocation.invocationId,
@@ -128,8 +173,14 @@ export async function projectSparkDaemonSideThreadSnapshot(
         : {}),
     };
   });
-  const running = pending.some((invocation) => invocation.status === "running");
-  const rawModelState = await effectiveModelState(options.modelControl, parent, child);
+}
+
+async function projectedModelState(
+  modelControl: SparkDaemonModelControl | undefined,
+  parent: SparkSessionRegistryRecord,
+  child: SparkSessionRegistryRecord,
+) {
+  const rawModelState = await effectiveModelState(modelControl, parent, child);
   const fallbackReason = rawModelState.fallbackReason
     ? boundedUtf8(rawModelState.fallbackReason, MAX_FALLBACK_REASON_BYTES)
     : undefined;
@@ -137,13 +188,35 @@ export async function projectSparkDaemonSideThreadSnapshot(
     ...rawModelState,
     ...(fallbackReason ? { fallbackReason: fallbackReason.value } : {}),
   };
-  const contentTruncated =
-    visible.some(
-      (exchange) => exchange.userTruncated === true || exchange.assistantTruncated === true,
-    ) ||
-    pendingTurns.some((turn) => turn.promptTruncated === true) ||
-    fallbackReason?.truncated === true;
+  return { modelState, fallbackReasonTruncated: fallbackReason?.truncated === true };
+}
 
+function fitSnapshotProjection({
+  parent,
+  child,
+  relation,
+  exchanges,
+  requestedStart,
+  visible: initialVisible,
+  pendingTurns,
+  modelState: projectedModel,
+}: {
+  parent: SparkSessionRegistryRecord;
+  child: SparkSessionRegistryRecord;
+  relation: ReturnType<typeof requireSideThreadRelation>;
+  exchanges: readonly SparkSideThreadExchange[];
+  requestedStart: number;
+  visible: SparkSideThreadExchange[];
+  pendingTurns: ReturnType<typeof pendingSideThreadTurns>;
+  modelState: Awaited<ReturnType<typeof projectedModelState>>;
+}): SparkSideThreadSnapshot {
+  let firstVisibleIndex = requestedStart;
+  let visible = initialVisible;
+  const contentTruncated = hasTruncatedProjectionContent(
+    visible,
+    pendingTurns,
+    projectedModel.fallbackReasonTruncated,
+  );
   while (true) {
     const projectionTruncated = contentTruncated || firstVisibleIndex > requestedStart;
     const candidate = sparkSideThreadSnapshotSchema.parse({
@@ -151,7 +224,7 @@ export async function projectSparkDaemonSideThreadSnapshot(
       sessionId: child.sessionId,
       generation: relation.generation,
       mode: relation.mode,
-      status: running ? "running" : pending.length > 0 ? "queued" : "idle",
+      status: sideThreadSnapshotStatus(pendingTurns),
       pendingTurns,
       exchanges: visible,
       ...(exchanges.at(-1)?.id ? { headExchangeId: exchanges.at(-1)!.id } : {}),
@@ -160,7 +233,7 @@ export async function projectSparkDaemonSideThreadSnapshot(
       ...(firstVisibleIndex > 0 && visible[0]?.id ? { nextBeforeExchangeId: visible[0].id } : {}),
       ...(child.model ? { modelOverride: child.model } : {}),
       ...(child.thinkingLevel ? { thinkingOverride: child.thinkingLevel } : {}),
-      ...modelState,
+      ...projectedModel.modelState,
     });
     if (encodedBytes(candidate) <= MAX_SNAPSHOT_BYTES) return candidate;
     if (visible.length <= 1) {
@@ -174,6 +247,27 @@ export async function projectSparkDaemonSideThreadSnapshot(
   }
 }
 
+function hasTruncatedProjectionContent(
+  exchanges: readonly SparkSideThreadExchange[],
+  pendingTurns: ReturnType<typeof pendingSideThreadTurns>,
+  fallbackReasonTruncated: boolean,
+): boolean {
+  return (
+    exchanges.some(
+      (exchange) => exchange.userTruncated === true || exchange.assistantTruncated === true,
+    ) ||
+    pendingTurns.some((turn) => turn.promptTruncated === true) ||
+    fallbackReasonTruncated
+  );
+}
+
+function sideThreadSnapshotStatus(
+  pendingTurns: ReturnType<typeof pendingSideThreadTurns>,
+): "running" | "queued" | "idle" {
+  if (pendingTurns.some((turn) => turn.status === "running")) return "running";
+  return pendingTurns.length > 0 ? "queued" : "idle";
+}
+
 export async function loadSparkDaemonSideThreadExchanges(
   options: SparkDaemonSessionControlOptions,
   child: SparkSessionRegistryRecord,
@@ -185,19 +279,52 @@ export async function loadSparkDaemonSideThreadExchanges(
       `side thread ${child.sessionId} has no native transcript`,
     );
   }
+  const identity = sideThreadTranscriptIdentity(child, sessionPath);
+  const checkpoint = await transcriptCheckpoint(sessionPath);
+  const indexed = await loadSideThreadTranscriptIndex(sessionPath, identity, checkpoint);
+  if (indexed) return indexed;
+  return await rebuildSideThreadTranscriptIndex(options, child, identity);
+}
+
+async function rebuildSideThreadTranscriptIndex(
+  options: SparkDaemonSessionControlOptions,
+  child: SparkSessionRegistryRecord,
+  identity: SideThreadTranscriptIndex["identity"],
+): Promise<SparkSideThreadExchange[]> {
+  const sessionPath = child.sessionPath!;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const before = await transcriptCheckpoint(sessionPath);
+    const exchanges = await exchangesFromDurableTranscript(options, child, identity);
+    const after = await transcriptCheckpoint(sessionPath);
+    if (!sameTranscriptCheckpoint(before, after)) {
+      // A writer won the race. Retry once, then return the durable view without
+      // publishing a checkpoint whose offset we did not observe atomically.
+      if (attempt === 0) continue;
+      return exchanges;
+    }
+    await saveSideThreadTranscriptIndex(sessionPath, {
+      version: SIDE_THREAD_INDEX_VERSION,
+      identity,
+      checkpoint: after,
+      exchanges,
+    });
+    return exchanges;
+  }
+  throw transcriptError("side_thread_transcript_invalid", "unreachable transcript rebuild state");
+}
+
+async function exchangesFromDurableTranscript(
+  options: SparkDaemonSessionControlOptions,
+  child: SparkSessionRegistryRecord,
+  identity: SideThreadTranscriptIndex["identity"],
+): Promise<SparkSideThreadExchange[]> {
+  const sessionPath = child.sessionPath!;
   const record = await new SparkSessionStore({
-    cwd: child.cwd,
+    cwd: child.cwd!,
     sessionsRoot: requireSessionsRoot(options),
   }).load(sessionPath);
-  const boundaryIndex = record.entries.findLastIndex(
-    (entry) => entry.type === "custom" && entry.customType === SIDE_THREAD_SEED_BOUNDARY,
-  );
-  if (boundaryIndex < 0) {
-    throw transcriptError(
-      "side_thread_transcript_invalid",
-      `side thread ${child.sessionId} is missing its seed boundary`,
-    );
-  }
+  assertSideThreadTranscriptRecord(record, identity);
+  const boundaryIndex = sideThreadSeedBoundaryIndex(record.entries);
   const sideThreadEntryIds = new Set(
     record.entries.slice(boundaryIndex + 1).map((entry) => entry.id),
   );
@@ -227,6 +354,306 @@ export async function loadSparkDaemonSideThreadExchanges(
     pendingUser = undefined;
   }
   return exchanges;
+}
+
+/**
+ * Best-effort retirement of verified, old native generations. JSONL remains
+ * authoritative; index sidecars are deleted only beside an already verified
+ * transcript path. Unknown/legacy generations are retained conservatively.
+ */
+export async function pruneSparkDaemonSideThreadRetiredGenerations(
+  options: SparkDaemonSessionControlOptions,
+  parent: SparkSessionRegistryRecord,
+  current: SparkSessionRegistryRecord,
+): Promise<void> {
+  const relation = requireSideThreadRelation(current);
+  const currentPath = current.sessionPath;
+  if (!currentPath || !current.cwd) return;
+  const retainFromGeneration = Math.max(1, relation.generation - RETAINED_RETIRED_GENERATIONS);
+  const directory = dirname(currentPath);
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch {
+    return;
+  }
+  const store = new SparkSessionStore({
+    cwd: current.cwd,
+    sessionsRoot: requireSessionsRoot(options),
+  });
+  for (const name of names) {
+    if (!name.endsWith(".jsonl")) continue;
+    const candidatePath = join(directory, name);
+    if (resolve(candidatePath) === resolve(currentPath)) continue;
+    try {
+      const record = await store.load(candidatePath);
+      const generation = verifiedSideThreadTranscriptGeneration(record, {
+        parentSessionId: parent.sessionId,
+        sessionId: current.sessionId,
+      });
+      if (generation === undefined || generation >= retainFromGeneration) continue;
+      await removeVerifiedSideThreadTranscriptArtifacts(store, candidatePath, {
+        parentSessionId: parent.sessionId,
+        sessionId: current.sessionId,
+        generation,
+      });
+    } catch {
+      // Retention must never make a committed registry generation unavailable.
+    }
+  }
+}
+
+/** Remove one newly created generation only after rechecking its identity. */
+export async function removeUnreferencedSparkDaemonSideThreadTranscript(
+  options: SparkDaemonSessionControlOptions,
+  parent: SparkSessionRegistryRecord,
+  sessionId: string,
+  sessionPath: string,
+  generation: number,
+): Promise<void> {
+  try {
+    const cwd = parent.cwd;
+    if (!cwd) return;
+    const store = new SparkSessionStore({
+      cwd,
+      sessionsRoot: requireSessionsRoot(options),
+    });
+    const record = await store.load(sessionPath);
+    const verifiedGeneration = verifiedSideThreadTranscriptGeneration(record, {
+      parentSessionId: parent.sessionId,
+      sessionId,
+    });
+    if (verifiedGeneration !== generation) return;
+    await removeVerifiedSideThreadTranscriptArtifacts(store, sessionPath, {
+      parentSessionId: parent.sessionId,
+      sessionId,
+      generation,
+    });
+  } catch {
+    // Caller is already handling the registry failure. Cleanup is deliberately best effort.
+  }
+}
+
+function sideThreadTranscriptIdentity(
+  child: SparkSessionRegistryRecord,
+  sessionPath: string,
+): SideThreadTranscriptIndex["identity"] {
+  const relation = requireSideThreadRelation(child);
+  return {
+    parentSessionId: relation.parentSessionId,
+    sessionId: child.sessionId,
+    generation: relation.generation,
+    transcriptPath: resolve(sessionPath),
+  };
+}
+
+async function transcriptCheckpoint(
+  sessionPath: string,
+): Promise<SideThreadTranscriptIndex["checkpoint"]> {
+  const metadata = await stat(sessionPath);
+  return { offset: metadata.size, modifiedAtMs: metadata.mtimeMs, inode: metadata.ino };
+}
+
+function sameTranscriptCheckpoint(
+  left: SideThreadTranscriptIndex["checkpoint"],
+  right: SideThreadTranscriptIndex["checkpoint"],
+): boolean {
+  return (
+    left.offset === right.offset &&
+    left.modifiedAtMs === right.modifiedAtMs &&
+    left.inode === right.inode
+  );
+}
+
+function sideThreadIndexPath(sessionPath: string): string {
+  return `${sessionPath}.side-thread-index.json`;
+}
+
+async function loadSideThreadTranscriptIndex(
+  sessionPath: string,
+  identity: SideThreadTranscriptIndex["identity"],
+  checkpoint: SideThreadTranscriptIndex["checkpoint"],
+): Promise<SparkSideThreadExchange[] | undefined> {
+  try {
+    const raw = JSON.parse(await readFile(sideThreadIndexPath(sessionPath), "utf8")) as unknown;
+    const index = parseSideThreadTranscriptIndex(raw);
+    if (!index) return undefined;
+    if (JSON.stringify(index.identity) !== JSON.stringify(identity)) return undefined;
+    if (!sameTranscriptCheckpoint(index.checkpoint, checkpoint)) return undefined;
+    return index.exchanges;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseSideThreadTranscriptIndex(value: unknown): SideThreadTranscriptIndex | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.version !== SIDE_THREAD_INDEX_VERSION) return undefined;
+  const identity = record.identity;
+  const checkpoint = record.checkpoint;
+  if (!identity || typeof identity !== "object" || Array.isArray(identity)) return undefined;
+  if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint)) return undefined;
+  const identityRecord = identity as Record<string, unknown>;
+  const checkpointRecord = checkpoint as Record<string, unknown>;
+  const generation = identityRecord.generation;
+  if (
+    typeof identityRecord.parentSessionId !== "string" ||
+    typeof identityRecord.sessionId !== "string" ||
+    typeof generation !== "number" ||
+    !Number.isInteger(generation) ||
+    generation < 1 ||
+    typeof identityRecord.transcriptPath !== "string" ||
+    typeof checkpointRecord.offset !== "number" ||
+    checkpointRecord.offset < 0 ||
+    typeof checkpointRecord.modifiedAtMs !== "number" ||
+    checkpointRecord.modifiedAtMs < 0 ||
+    typeof checkpointRecord.inode !== "number" ||
+    checkpointRecord.inode < 0 ||
+    !Array.isArray(record.exchanges)
+  ) {
+    return undefined;
+  }
+  try {
+    return {
+      version: SIDE_THREAD_INDEX_VERSION,
+      identity: {
+        parentSessionId: identityRecord.parentSessionId,
+        sessionId: identityRecord.sessionId,
+        generation,
+        transcriptPath: identityRecord.transcriptPath,
+      },
+      checkpoint: {
+        offset: checkpointRecord.offset,
+        modifiedAtMs: checkpointRecord.modifiedAtMs,
+        inode: checkpointRecord.inode,
+      },
+      exchanges: record.exchanges.map((exchange) => sparkSideThreadExchangeSchema.parse(exchange)),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function saveSideThreadTranscriptIndex(
+  sessionPath: string,
+  index: SideThreadTranscriptIndex,
+): Promise<void> {
+  const path = sideThreadIndexPath(sessionPath);
+  const temporaryPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(temporaryPath, `${JSON.stringify(index)}\n`, "utf8");
+    await rename(temporaryPath, path);
+  } catch {
+    await unlink(temporaryPath).catch(() => undefined);
+    // Indexing is an optimization only. Durable JSONL remains available to rebuild later.
+  }
+}
+
+function assertSideThreadTranscriptRecord(
+  record: Awaited<ReturnType<SparkSessionStore["load"]>>,
+  identity: SideThreadTranscriptIndex["identity"],
+): void {
+  const verifiedGeneration = verifiedSideThreadTranscriptGeneration(record, identity);
+  if (
+    record.header.id !== identity.sessionId ||
+    record.header.visibility !== "internal" ||
+    record.header.purpose !== "side_thread" ||
+    (verifiedGeneration !== identity.generation &&
+      !matchesLegacyActiveSideThreadTranscript(record, identity))
+  ) {
+    throw transcriptError(
+      "side_thread_transcript_invalid",
+      `side thread ${identity.sessionId} transcript identity does not match its registry generation`,
+    );
+  }
+}
+
+/**
+ * Before generation-aware indexes existed, the active registry path was the
+ * only generation identity and the seed boundary omitted `generation`.
+ * Accept that exact legacy shape for reads; retirement and cleanup continue to
+ * require an explicitly verified generation and therefore never delete it.
+ */
+function matchesLegacyActiveSideThreadTranscript(
+  record: Awaited<ReturnType<SparkSessionStore["load"]>>,
+  identity: Pick<SideThreadTranscriptIndex["identity"], "parentSessionId" | "sessionId">,
+): boolean {
+  if (
+    record.header.id !== identity.sessionId ||
+    record.header.visibility !== "internal" ||
+    record.header.purpose !== "side_thread"
+  ) {
+    return false;
+  }
+  const boundaryIndex = sideThreadSeedBoundaryIndex(record.entries);
+  const boundary = record.entries[boundaryIndex];
+  if (boundary?.type !== "custom" || !boundary.data || typeof boundary.data !== "object") {
+    return false;
+  }
+  const data = boundary.data as Record<string, unknown>;
+  return data.parentSessionId === identity.parentSessionId && !("generation" in data);
+}
+
+function sideThreadSeedBoundaryIndex(entries: readonly SparkSessionEntry[]): number {
+  const boundaryIndex = entries.findLastIndex(
+    (entry) => entry.type === "custom" && entry.customType === SIDE_THREAD_SEED_BOUNDARY,
+  );
+  if (boundaryIndex < 0) {
+    throw transcriptError(
+      "side_thread_transcript_invalid",
+      "side thread is missing its seed boundary",
+    );
+  }
+  return boundaryIndex;
+}
+
+function verifiedSideThreadTranscriptGeneration(
+  record: Awaited<ReturnType<SparkSessionStore["load"]>>,
+  identity: Pick<SideThreadTranscriptIndex["identity"], "parentSessionId" | "sessionId">,
+): number | undefined {
+  if (
+    record.header.id !== identity.sessionId ||
+    record.header.visibility !== "internal" ||
+    record.header.purpose !== "side_thread"
+  ) {
+    return undefined;
+  }
+  const boundaryIndex = sideThreadSeedBoundaryIndex(record.entries);
+  const boundary = record.entries[boundaryIndex];
+  if (boundary?.type !== "custom" || !boundary.data || typeof boundary.data !== "object") {
+    return undefined;
+  }
+  const data = boundary.data as Record<string, unknown>;
+  return data.parentSessionId === identity.parentSessionId &&
+    typeof data.generation === "number" &&
+    Number.isInteger(data.generation) &&
+    data.generation > 0
+    ? data.generation
+    : undefined;
+}
+
+async function removeVerifiedSideThreadTranscriptArtifacts(
+  store: SparkSessionStore,
+  sessionPath: string,
+  identity: Pick<
+    SideThreadTranscriptIndex["identity"],
+    "parentSessionId" | "sessionId" | "generation"
+  >,
+): Promise<void> {
+  const name = basename(sessionPath);
+  if (
+    !name.endsWith(".jsonl") ||
+    resolve(join(dirname(sessionPath), name)) !== resolve(sessionPath) ||
+    resolve(dirname(sessionPath)) !== resolve(store.sessionDir)
+  ) {
+    return;
+  }
+  const record = await store.load(sessionPath);
+  if (verifiedSideThreadTranscriptGeneration(record, identity) !== identity.generation) return;
+  await unlink(sessionPath);
+  await unlink(sideThreadIndexPath(sessionPath)).catch(() => undefined);
 }
 
 export function renderSparkDaemonSideThreadHandoffPrompt(

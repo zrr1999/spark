@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/spark-turn",
   "version": "0.1.0",
+  "private": true,
   "description": "Host-neutral Spark model/tool turn loop.",
   "license": "MIT",
   "author": "zrr1999",
@@ -15,9 +16,6 @@
     "./behavior-eval": "./src/behavior-eval.ts",
     "./prompt-manifest": "./src/prompt-manifest.ts",
     "./side-thread": "./src/side-thread.ts"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint . && vp test run",

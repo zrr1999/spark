@@ -46,12 +46,16 @@ export function createSparkNativeSideThreadSlashCommands(options: {
   parentSessionId: () => string;
   client: SparkNativeSideThreadClient;
 }): SparkNativeSlashCommandMap {
-  let unresolvedSubmit: { fingerprint: string; idempotencyKey: string } | undefined;
-  let unresolvedHandoff: { fingerprint: string; idempotencyKey: string } | undefined;
+  const pendingOperations: SideThreadPendingOperations = {};
   const read = async () =>
     await options.client.ensure({
       parentSessionId: requireParentSessionId(options.parentSessionId),
     });
+  const commandHandlers = createSideThreadCommandHandlers({
+    client: options.client,
+    read,
+    pendingOperations,
+  });
   return {
     btw: {
       description: "open and control the daemon-owned read-only side thread",
@@ -70,112 +74,153 @@ export function createSparkNativeSideThreadSlashCommands(options: {
           .map((value) => ({ value, label: value })),
       handler: async (rawArgs) => {
         const { command, rest } = splitCommand(rawArgs);
-        if (!command || command === "show" || command === "open")
-          return formatSideThread(await read());
-
-        if (command === "ask" || command === "send") {
-          if (!rest) return sideThreadUsage("ask requires a question");
-          const snapshot = await read();
-          const fingerprint = JSON.stringify([snapshot.parentSessionId, snapshot.generation, rest]);
-          const idempotencyKey = reusableOperationKey(unresolvedSubmit, fingerprint);
-          unresolvedSubmit = { fingerprint, idempotencyKey };
-          const result = await options.client
-            .submit({
-              parentSessionId: snapshot.parentSessionId,
-              expectedGeneration: snapshot.generation,
-              prompt: rest,
-              idempotencyKey,
-            })
-            .then((accepted) => {
-              unresolvedSubmit = undefined;
-              return accepted;
-            });
-          return `Side thread question accepted (read-only).\n${formatSideThread(result.snapshot)}`;
-        }
-
-        if (command === "reset") {
-          const mode = parseMode(rest || "contextual");
-          if (!mode) return sideThreadUsage("reset mode must be contextual or tangent");
-          const snapshot = await read();
-          return formatSideThread(
-            await options.client.reset({
-              parentSessionId: snapshot.parentSessionId,
-              expectedGeneration: snapshot.generation,
-              mode,
-            }),
-          );
-        }
-
-        if (command === "handoff") {
-          const { command: kind, rest: instructions } = splitCommand(rest);
-          if (kind !== "full" && kind !== "summary") {
-            return sideThreadUsage("handoff kind must be full or summary");
-          }
-          const snapshot = await read();
-          if (!snapshot.headExchangeId) {
-            return "Side thread has no completed exchange to hand off yet.";
-          }
-          const fingerprint = JSON.stringify([
-            snapshot.parentSessionId,
-            snapshot.generation,
-            snapshot.headExchangeId,
-            kind,
-            instructions,
-          ]);
-          const idempotencyKey = reusableOperationKey(unresolvedHandoff, fingerprint);
-          unresolvedHandoff = { fingerprint, idempotencyKey };
-          const result = await options.client
-            .handoff({
-              parentSessionId: snapshot.parentSessionId,
-              expectedGeneration: snapshot.generation,
-              expectedHeadExchangeId: snapshot.headExchangeId,
-              kind,
-              ...(instructions ? { instructions } : {}),
-              idempotencyKey,
-            })
-            .then((accepted) => {
-              unresolvedHandoff = undefined;
-              return accepted;
-            });
-          return `Side-thread ${kind} handoff accepted by the parent.\n${formatSideThread(result.snapshot)}`;
-        }
-
-        if (command === "model") {
-          const snapshot = await read();
-          const modelOverride = parseModelOverride(rest);
-          if (modelOverride === undefined) {
-            return sideThreadUsage("model must be inherit or <provider>/<model-id>");
-          }
-          return formatSideThread(
-            await options.client.configure({
-              parentSessionId: snapshot.parentSessionId,
-              expectedGeneration: snapshot.generation,
-              modelOverride,
-            }),
-          );
-        }
-
-        if (command === "thinking") {
-          const snapshot = await read();
-          const thinkingOverride = parseThinkingOverride(rest);
-          if (thinkingOverride === undefined) {
-            return sideThreadUsage(
-              "thinking must be inherit, off, minimal, low, medium, high, or xhigh",
-            );
-          }
-          return formatSideThread(
-            await options.client.configure({
-              parentSessionId: snapshot.parentSessionId,
-              expectedGeneration: snapshot.generation,
-              thinkingOverride,
-            }),
-          );
-        }
-
-        return sideThreadUsage(`unknown subcommand: ${command}`);
+        if (isSideThreadReadCommand(command)) return formatSideThread(await read());
+        const action = Object.hasOwn(commandHandlers, command)
+          ? commandHandlers[command]
+          : undefined;
+        return action ? await action(rest) : sideThreadUsage(`unknown subcommand: ${command}`);
       },
     },
   };
+}
+
+type SideThreadPendingOperation = { fingerprint: string; idempotencyKey: string };
+type SideThreadPendingOperations = {
+  submit?: SideThreadPendingOperation;
+  handoff?: SideThreadPendingOperation;
+};
+type SideThreadCommandHandler = (rest: string) => Promise<string>;
+
+function createSideThreadCommandHandlers({
+  client,
+  read,
+  pendingOperations,
+}: {
+  client: SparkNativeSideThreadClient;
+  read: () => Promise<SparkSideThreadSnapshot>;
+  pendingOperations: SideThreadPendingOperations;
+}): Record<string, SideThreadCommandHandler> {
+  return {
+    ask: async (rest) => await submitSideThreadQuestion(client, read, pendingOperations, rest),
+    send: async (rest) => await submitSideThreadQuestion(client, read, pendingOperations, rest),
+    reset: async (rest) => await resetSideThread(client, read, rest),
+    handoff: async (rest) => await handoffSideThread(client, read, pendingOperations, rest),
+    model: async (rest) => await configureSideThreadModel(client, read, rest),
+    thinking: async (rest) => await configureSideThreadThinking(client, read, rest),
+  };
+}
+
+async function submitSideThreadQuestion(
+  client: SparkNativeSideThreadClient,
+  read: () => Promise<SparkSideThreadSnapshot>,
+  pendingOperations: SideThreadPendingOperations,
+  prompt: string,
+): Promise<string> {
+  if (!prompt) return sideThreadUsage("ask requires a question");
+  const snapshot = await read();
+  const fingerprint = JSON.stringify([snapshot.parentSessionId, snapshot.generation, prompt]);
+  const idempotencyKey = reusableOperationKey(pendingOperations.submit, fingerprint);
+  pendingOperations.submit = { fingerprint, idempotencyKey };
+  const result = await client.submit({
+    parentSessionId: snapshot.parentSessionId,
+    expectedGeneration: snapshot.generation,
+    prompt,
+    idempotencyKey,
+  });
+  pendingOperations.submit = undefined;
+  return `Side thread question accepted (read-only).\n${formatSideThread(result.snapshot)}`;
+}
+
+async function resetSideThread(
+  client: SparkNativeSideThreadClient,
+  read: () => Promise<SparkSideThreadSnapshot>,
+  value: string,
+): Promise<string> {
+  const mode = parseMode(value || "contextual");
+  if (!mode) return sideThreadUsage("reset mode must be contextual or tangent");
+  const snapshot = await read();
+  return formatSideThread(
+    await client.reset({
+      parentSessionId: snapshot.parentSessionId,
+      expectedGeneration: snapshot.generation,
+      mode,
+    }),
+  );
+}
+
+async function handoffSideThread(
+  client: SparkNativeSideThreadClient,
+  read: () => Promise<SparkSideThreadSnapshot>,
+  pendingOperations: SideThreadPendingOperations,
+  value: string,
+): Promise<string> {
+  const { command: kind, rest: instructions } = splitCommand(value);
+  if (kind !== "full" && kind !== "summary") {
+    return sideThreadUsage("handoff kind must be full or summary");
+  }
+  const snapshot = await read();
+  if (!snapshot.headExchangeId) return "Side thread has no completed exchange to hand off yet.";
+  const fingerprint = JSON.stringify([
+    snapshot.parentSessionId,
+    snapshot.generation,
+    snapshot.headExchangeId,
+    kind,
+    instructions,
+  ]);
+  const idempotencyKey = reusableOperationKey(pendingOperations.handoff, fingerprint);
+  pendingOperations.handoff = { fingerprint, idempotencyKey };
+  const result = await client.handoff({
+    parentSessionId: snapshot.parentSessionId,
+    expectedGeneration: snapshot.generation,
+    expectedHeadExchangeId: snapshot.headExchangeId,
+    kind,
+    ...(instructions ? { instructions } : {}),
+    idempotencyKey,
+  });
+  pendingOperations.handoff = undefined;
+  return `Side-thread ${kind} handoff accepted by the parent.\n${formatSideThread(result.snapshot)}`;
+}
+
+async function configureSideThreadModel(
+  client: SparkNativeSideThreadClient,
+  read: () => Promise<SparkSideThreadSnapshot>,
+  value: string,
+): Promise<string> {
+  const modelOverride = parseModelOverride(value);
+  if (modelOverride === undefined) {
+    return sideThreadUsage("model must be inherit or <provider>/<model-id>");
+  }
+  const snapshot = await read();
+  return formatSideThread(
+    await client.configure({
+      parentSessionId: snapshot.parentSessionId,
+      expectedGeneration: snapshot.generation,
+      modelOverride,
+    }),
+  );
+}
+
+async function configureSideThreadThinking(
+  client: SparkNativeSideThreadClient,
+  read: () => Promise<SparkSideThreadSnapshot>,
+  value: string,
+): Promise<string> {
+  const thinkingOverride = parseThinkingOverride(value);
+  if (thinkingOverride === undefined) {
+    return sideThreadUsage("thinking must be inherit, off, minimal, low, medium, high, or xhigh");
+  }
+  const snapshot = await read();
+  return formatSideThread(
+    await client.configure({
+      parentSessionId: snapshot.parentSessionId,
+      expectedGeneration: snapshot.generation,
+      thinkingOverride,
+    }),
+  );
+}
+
+function isSideThreadReadCommand(command: string): boolean {
+  return !command || command === "show" || command === "open";
 }
 
 function reusableOperationKey(
@@ -193,8 +238,13 @@ function requireParentSessionId(resolve: () => string): string {
 }
 
 function splitCommand(input: string): { command: string; rest: string } {
-  const match = /^(\S+)(?:\s+([\s\S]*))?$/u.exec(input.trim());
-  return { command: match?.[1]?.toLowerCase() ?? "", rest: match?.[2]?.trim() ?? "" };
+  const trimmed = input.trim();
+  let separator = 0;
+  while (separator < trimmed.length && trimmed[separator]?.trim()) separator += 1;
+  return {
+    command: trimmed.slice(0, separator).toLowerCase(),
+    rest: trimmed.slice(separator).trim(),
+  };
 }
 
 function parseMode(value: string): SparkSideThreadMode | undefined {

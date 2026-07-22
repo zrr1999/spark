@@ -29,18 +29,17 @@
  * `emit("session_start", ...)`, and assert observable state.
  */
 
-import type {
-  CommandConfig,
-  SparkHostAPI,
-  SparkHostContext,
-  SparkHostRuntimeMessage,
-  ExtensionUi,
-  LeafCapabilityRunner,
-  ExtensionRoleRunner,
-  ToolConfig,
-  ToolInfo,
-} from "@zendev-lab/spark-core";
 import {
+  type CommandConfig,
+  type SparkHostAPI,
+  type SparkHostContext,
+  type SparkHostRuntimeMessage,
+  type SparkHostHookOptions,
+  type ExtensionUi,
+  type LeafCapabilityRunner,
+  type ExtensionRoleRunner,
+  type ToolConfig,
+  type ToolInfo,
   resolveToolPolicy,
   type ResolvedToolPolicy,
   type ToolEffect,
@@ -105,9 +104,9 @@ export interface SparkHostRuntimeOptions {
    * When present, this host instance must never advertise or dispatch a tool
    * whose declared effect is outside this allowlist. An unknown declaration is
    * deliberately denied: callers opt into capability classes, never names.
-   * Extension lifecycle listeners do not yet declare effects, so any explicit
-   * effect allowlist also suppresses their dispatch rather than treating an
-   * unclassified hook as read-only.
+   * Lifecycle listeners must declare their effects to dispatch under this
+   * allowlist. An omitted or malformed declaration remains unknown and is
+   * deliberately denied rather than treated as read-only.
    */
   allowedToolEffects?: readonly ToolEffect[];
   hasUI?: boolean;
@@ -126,6 +125,16 @@ const NOT_IMPLEMENTED = (name: string): Error =>
     `SparkHostRuntime.${name} is not implemented yet; this surface lives in a follow-up task. ` +
       "If you hit this in extension code, file a follow-up against the active CLI rework project.",
   );
+
+const TOOL_EFFECTS = new Set<ToolEffect>(["read", "local_write", "external_write", "destructive"]);
+
+function resolveHookEffects(
+  options: SparkHostHookOptions | undefined,
+): readonly ToolEffect[] | undefined {
+  const effects = options?.effects;
+  if (!effects?.length || effects.some((effect) => !TOOL_EFFECTS.has(effect))) return undefined;
+  return Object.freeze([...new Set(effects)]);
+}
 
 export class SparkHostRuntime implements SparkHostAPI {
   readonly cwd: string;
@@ -233,10 +242,14 @@ export class SparkHostRuntime implements SparkHostAPI {
     handler: E extends SparkHostBuiltinEventName
       ? (event: BuiltinEventPayloadMap[E], ctx: SparkHostContext) => unknown
       : EventListener,
+    options?: SparkHostHookOptions,
   ): void => {
     const key = event as EventName;
     const list = this.listeners.get(key) ?? [];
-    list.push(handler as RegisteredEventListener);
+    list.push({
+      handler: handler as RegisteredEventListener["handler"],
+      effects: resolveHookEffects(options),
+    });
     this.listeners.set(key, list);
   };
 
@@ -387,23 +400,28 @@ export class SparkHostRuntime implements SparkHostAPI {
     event: E,
     payload?: E extends SparkHostBuiltinEventName ? BuiltinEventPayloadMap[E] : unknown,
   ): Promise<unknown[]> {
-    // Extension lifecycle hooks can perform arbitrary persistence or external
-    // work and currently carry no effect declaration. Restricted hosts fail
-    // closed here; host-owned session compaction itself continues to run.
-    if (this.allowedToolEffects) return [];
     const listeners = this.listeners.get(event as EventName);
     if (!listeners?.length) return [];
     const ctx = this.makeContext();
     const results: unknown[] = [];
     for (const listener of listeners) {
+      if (!this.isHookDispatchAllowed(listener)) continue;
       try {
-        const value = listener(payload, ctx);
+        const value = listener.handler(payload, ctx);
         results.push(value instanceof Promise ? await value : value);
       } catch (error) {
         results.push({ error });
       }
     }
     return results;
+  }
+
+  private isHookDispatchAllowed(listener: RegisteredEventListener): boolean {
+    if (!this.allowedToolEffects) return true;
+    return (
+      listener.effects !== undefined &&
+      listener.effects.every((effect) => this.allowedToolEffects!.has(effect))
+    );
   }
 
   /**

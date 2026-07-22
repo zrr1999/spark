@@ -9,5 +9,5 @@ Prefer:
 import { registerSparkContextTool } from "@zendev-lab/spark-host/context";
 ```
 
-This package remains only so existing publish/dependency graphs and Pi-facade
+This package remains only so existing workspace dependency graphs and Pi-facade
 imports keep resolving until callers migrate.

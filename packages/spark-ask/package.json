@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/spark-ask",
   "version": "0.1.0",
+  "private": true,
   "description": "Structured ask_user and ask_flow primitives for Spark extension hosts.",
   "license": "MIT",
   "author": "zrr1999",
@@ -13,9 +14,6 @@
   "exports": {
     ".": "./src/index.ts",
     "./extension": "./src/extension.ts"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint ."

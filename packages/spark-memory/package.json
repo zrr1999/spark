@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/spark-memory",
   "version": "0.1.0",
+  "private": true,
   "description": "Unified Spark memory capability with explicit scoped entries, keyword search, and policy-only prompting.",
   "license": "MIT",
   "author": "zrr1999",
@@ -20,9 +21,6 @@
     "./reflection-in-session-scheduler": "./src/reflection-in-session-scheduler.ts",
     "./reflection-session-scanner": "./src/reflection-session-scanner.ts",
     "./reflection-synthesis-engine": "./src/reflection-synthesis-engine.ts"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint ."

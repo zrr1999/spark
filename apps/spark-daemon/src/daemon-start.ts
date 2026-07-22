@@ -47,6 +47,7 @@ import {
   SparkDaemonHumanInteractionBroker,
   legacySparkDaemonQueueRoot,
   type SparkDaemonDrainProgress,
+  type SparkDaemonHumanInteractionOpened,
 } from "./core/index.ts";
 import { SparkDaemonHumanWaitRegistry } from "./core/human-waits.ts";
 import type { DaemonSessionRegistry } from "./session-registry.ts";
@@ -95,11 +96,8 @@ import {
 } from "./daemon.ts";
 
 export async function startSparkDaemon(options: StartSparkDaemonOptions): Promise<void> {
-  const runtimeShutdown = new AbortController();
-  const forwardShutdown = () => runtimeShutdown.abort(options.signal?.reason);
-  if (options.signal?.aborted) forwardShutdown();
-  else options.signal?.addEventListener("abort", forwardShutdown, { once: true });
-  const runtimeSignal = runtimeShutdown.signal;
+  const { runtimeShutdown, runtimeSignal, removeShutdownForwarder } =
+    createDaemonRuntimeSignal(options);
   if (options.managePidFile !== false) writePrivateFile(options.paths.pidFile, `${process.pid}\n`);
   // Local execution truth is established independently of the optional
   // Cockpit projection. This also repairs status left by older daemons that
@@ -117,18 +115,7 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
     options,
     channelDeliveryOutbox,
   );
-  let channelShutdown: Promise<void> | undefined;
-  const shutdownChannelIngress = (
-    reason: "restart-drain" | "runtime-abort" | "daemon-finally",
-  ): Promise<void> => {
-    if (!channelIngress) return Promise.resolve();
-    if (channelShutdown) return channelShutdown;
-    console.error(`[spark-daemon] channel ingress stopping reason=${reason}`);
-    channelShutdown = channelIngress.stop().catch((error: unknown) => {
-      logDaemonError(options.config.runtimeId ?? "unknown", error);
-    });
-    return channelShutdown;
-  };
+  const shutdownChannelIngress = createChannelIngressShutdown(channelIngress, options);
   let channelAdmissionOpen = false;
   channelIngress?.setInboundHandler?.(({ workspaceId, message }) => {
     if (!channelAdmissionOpen) {
@@ -140,71 +127,17 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
   const flushHumanRequestOutbox = () => {
     for (const flush of humanRequestOutboxTargets) flush();
   };
-  const getRuntimeIdForServer = (serverUrl: string) => {
-    try {
-      const runtimeId = getSparkDaemonServerProfile(options.paths, serverUrl)?.runtimeId;
-      if (runtimeId) return runtimeId;
-    } catch {
-      // Fall through to the already-loaded compatibility config.
-    }
-    const fallback = sparkDaemonServerProfileFromConfig(options.config);
-    return fallback?.serverUrl === normalizeSparkDaemonServerUrl(serverUrl)
-      ? fallback.runtimeId
-      : undefined;
-  };
+  const getRuntimeIdForServer = createRuntimeIdForServer(options);
   const getRuntimeId = (route: { serverUrl: string }) => getRuntimeIdForServer(route.serverUrl);
-  const onChannelInteraction: NonNullable<ChannelIngressHooks["onInteraction"]> = async (input) => {
-    if (!channelIngress) return;
-    try {
-      await settleChannelAskInteraction(channelIngress, humanWaits, input, {
-        getRuntimeId(wait) {
-          const workspace = wait.workspaceBindingId
-            ? getWorkspaceById(options.db, wait.workspaceBindingId)
-            : null;
-          return workspace?.serverUrl ? getRuntimeIdForServer(workspace.serverUrl) : undefined;
-        },
-        deliveryOutbox: channelDeliveryOutbox,
-      });
-    } finally {
-      flushHumanRequestOutbox();
-    }
-  };
-  channelIngress?.setInteractionHandler?.(onChannelInteraction);
-  const onChannelTextAsk: NonNullable<ChannelIngressHooks["onTextAskReply"]> = async (input) => {
-    try {
-      return await settleChannelAskTextReply(humanWaits, input, {
-        getRuntimeId(wait) {
-          const workspace = wait.workspaceBindingId
-            ? getWorkspaceById(options.db, wait.workspaceBindingId)
-            : null;
-          return workspace?.serverUrl ? getRuntimeIdForServer(workspace.serverUrl) : undefined;
-        },
-      });
-    } finally {
-      flushHumanRequestOutbox();
-    }
-  };
-  channelIngress?.setTextAskHandler?.(onChannelTextAsk);
-  const registerHumanRequestOutboxTarget = (flush: () => void) => {
-    humanRequestOutboxTargets.add(flush);
-    return () => humanRequestOutboxTargets.delete(flush);
-  };
-  const humanInteractions = new SparkDaemonHumanInteractionBroker({
-    db: options.db,
-    waits: humanWaits,
+  const { humanInteractions, registerHumanRequestOutboxTarget } = configureHumanInteractions({
+    options,
+    channelIngress,
+    humanWaits,
+    channelDeliveryOutbox,
     getRuntimeId,
-    onOutboxReady: flushHumanRequestOutbox,
-    onRequestOpened: (input) => {
-      if (!channelIngress) return;
-      void projectChannelAsk(channelIngress, input, channelDeliveryOutbox).catch(
-        (error: unknown) => {
-          console.error(
-            "[spark-daemon] channel ask outbox enqueue failed; Cockpit request remains pending",
-            error,
-          );
-        },
-      );
-    },
+    getRuntimeIdForServer,
+    flushHumanRequestOutbox,
+    humanRequestOutboxTargets,
   });
   const invocationEventTargets = new Set<(event: SparkInvocationEvent) => void | Promise<void>>();
   const registerInvocationEventTarget = (
@@ -528,7 +461,7 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
     });
   } finally {
     settleServingLoopGate(false);
-    options.signal?.removeEventListener("abort", forwardShutdown);
+    removeShutdownForwarder();
     options.drainSignal?.removeEventListener("abort", closeRestartAdmission);
     options.restartSignal?.removeEventListener("abort", beginRestartDrain);
     runtimeSignal.removeEventListener("abort", stopScheduler);
@@ -547,6 +480,138 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
       rmSync(options.paths.pidFile, { force: true });
     }
   }
+}
+
+function createDaemonRuntimeSignal(options: StartSparkDaemonOptions): {
+  runtimeShutdown: AbortController;
+  runtimeSignal: AbortSignal;
+  removeShutdownForwarder: () => void;
+} {
+  const runtimeShutdown = new AbortController();
+  const forwardShutdown = () => runtimeShutdown.abort(options.signal?.reason);
+  if (options.signal?.aborted) forwardShutdown();
+  else options.signal?.addEventListener("abort", forwardShutdown, { once: true });
+  return {
+    runtimeShutdown,
+    runtimeSignal: runtimeShutdown.signal,
+    removeShutdownForwarder: () => options.signal?.removeEventListener("abort", forwardShutdown),
+  };
+}
+
+function createChannelIngressShutdown(
+  channelIngress: DaemonChannelIngressRuntime | null,
+  options: StartSparkDaemonOptions,
+): (reason: "restart-drain" | "runtime-abort" | "daemon-finally") => Promise<void> {
+  let channelShutdown: Promise<void> | undefined;
+  return (reason) => {
+    if (!channelIngress) return Promise.resolve();
+    if (channelShutdown) return channelShutdown;
+    console.error(`[spark-daemon] channel ingress stopping reason=${reason}`);
+    channelShutdown = channelIngress.stop().catch((error: unknown) => {
+      logDaemonError(options.config.runtimeId ?? "unknown", error);
+    });
+    return channelShutdown;
+  };
+}
+
+function createRuntimeIdForServer(
+  options: Pick<StartSparkDaemonOptions, "paths" | "config">,
+): (serverUrl: string) => string | undefined {
+  return (serverUrl) => {
+    try {
+      const runtimeId = getSparkDaemonServerProfile(options.paths, serverUrl)?.runtimeId;
+      if (runtimeId) return runtimeId;
+    } catch {
+      // Fall through to the already-loaded compatibility config.
+    }
+    const fallback = sparkDaemonServerProfileFromConfig(options.config);
+    if (fallback?.serverUrl !== normalizeSparkDaemonServerUrl(serverUrl)) return undefined;
+    return fallback.runtimeId;
+  };
+}
+
+function configureHumanInteractions(input: {
+  options: StartSparkDaemonOptions;
+  channelIngress: DaemonChannelIngressRuntime | null;
+  humanWaits: SparkDaemonHumanWaitRegistry;
+  channelDeliveryOutbox: DaemonChannelDeliveryOutbox;
+  getRuntimeId: (route: { serverUrl: string }) => string | undefined;
+  getRuntimeIdForServer: (serverUrl: string) => string | undefined;
+  flushHumanRequestOutbox: () => void;
+  humanRequestOutboxTargets: Set<() => void>;
+}): {
+  humanInteractions: SparkDaemonHumanInteractionBroker;
+  registerHumanRequestOutboxTarget: (flush: () => void) => () => boolean;
+} {
+  const { channelIngress, humanWaits, channelDeliveryOutbox } = input;
+  channelIngress?.setInteractionHandler?.(async (interaction) => {
+    await handleChannelInteraction(input, interaction);
+  });
+  channelIngress?.setTextAskHandler?.(async (reply) => await handleChannelTextAsk(input, reply));
+  const registerHumanRequestOutboxTarget = (flush: () => void) => {
+    input.humanRequestOutboxTargets.add(flush);
+    return () => input.humanRequestOutboxTargets.delete(flush);
+  };
+  const humanInteractions = new SparkDaemonHumanInteractionBroker({
+    db: input.options.db,
+    waits: humanWaits,
+    getRuntimeId: input.getRuntimeId,
+    onOutboxReady: input.flushHumanRequestOutbox,
+    onRequestOpened: (request) =>
+      projectChannelAskRequest(channelIngress, request, channelDeliveryOutbox),
+  });
+  return { humanInteractions, registerHumanRequestOutboxTarget };
+}
+
+async function handleChannelInteraction(
+  input: Parameters<typeof configureHumanInteractions>[0],
+  interaction: Parameters<NonNullable<ChannelIngressHooks["onInteraction"]>>[0],
+): Promise<void> {
+  if (!input.channelIngress) return;
+  try {
+    await settleChannelAskInteraction(input.channelIngress, input.humanWaits, interaction, {
+      getRuntimeId: (wait) => runtimeIdForHumanWait(input, wait.workspaceBindingId),
+      deliveryOutbox: input.channelDeliveryOutbox,
+    });
+  } finally {
+    input.flushHumanRequestOutbox();
+  }
+}
+
+async function handleChannelTextAsk(
+  input: Parameters<typeof configureHumanInteractions>[0],
+  reply: Parameters<NonNullable<ChannelIngressHooks["onTextAskReply"]>>[0],
+): Promise<ReturnType<NonNullable<ChannelIngressHooks["onTextAskReply"]>>> {
+  try {
+    return await settleChannelAskTextReply(input.humanWaits, reply, {
+      getRuntimeId: (wait) => runtimeIdForHumanWait(input, wait.workspaceBindingId),
+    });
+  } finally {
+    input.flushHumanRequestOutbox();
+  }
+}
+
+function runtimeIdForHumanWait(
+  input: Parameters<typeof configureHumanInteractions>[0],
+  workspaceBindingId: string | undefined,
+): string | undefined {
+  if (!workspaceBindingId) return undefined;
+  const workspace = getWorkspaceById(input.options.db, workspaceBindingId);
+  return workspace?.serverUrl ? input.getRuntimeIdForServer(workspace.serverUrl) : undefined;
+}
+
+function projectChannelAskRequest(
+  channelIngress: DaemonChannelIngressRuntime | null,
+  request: SparkDaemonHumanInteractionOpened,
+  channelDeliveryOutbox: DaemonChannelDeliveryOutbox,
+): void {
+  if (!channelIngress) return;
+  void projectChannelAsk(channelIngress, request, channelDeliveryOutbox).catch((error: unknown) => {
+    console.error(
+      "[spark-daemon] channel ask outbox enqueue failed; Cockpit request remains pending",
+      error,
+    );
+  });
 }
 
 async function runChannelReplyReconcileLoop(
@@ -723,6 +788,17 @@ interface ActiveSparkDaemonUplink {
   done: Promise<void>;
 }
 
+function shouldReplaceUplink(
+  current: ActiveSparkDaemonUplink,
+  next: DesiredSparkDaemonUplink | undefined,
+  forceServerUrl: string | undefined,
+  serverUrl: string,
+): boolean {
+  if (!next || next.fingerprint !== current.fingerprint) return true;
+  if (forceServerUrl === undefined) return false;
+  return forceServerUrl === "" || normalizeSparkDaemonServerUrl(forceServerUrl) === serverUrl;
+}
+
 /**
  * Keep one independently reconnecting projection uplink per Cockpit origin.
  * Workspace rows choose the Cockpit; daemon.toml only supplies daemon identity
@@ -754,12 +830,7 @@ async function runSparkDaemonUplinkSupervisor(
 
     for (const [serverUrl, current] of active) {
       const next = desired.get(serverUrl);
-      if (
-        !next ||
-        next.fingerprint !== current.fingerprint ||
-        (forceServerUrl !== undefined &&
-          (forceServerUrl === "" || normalizeSparkDaemonServerUrl(forceServerUrl) === serverUrl))
-      ) {
+      if (shouldReplaceUplink(current, next, forceServerUrl, serverUrl)) {
         current.controller.abort(new Error(`Spark Cockpit uplink reconfigured for ${serverUrl}`));
       }
     }
@@ -971,7 +1042,7 @@ async function runSparkDaemonServerConnection(
       detachHumanRequestOutboxTarget();
       options.signal?.removeEventListener("abort", requestShutdown);
       if (error) {
-        reject(error);
+        reject(error instanceof Error ? error : new Error("Spark daemon connection rejected."));
         return;
       }
       resolvePromise();
@@ -988,7 +1059,7 @@ async function runSparkDaemonServerConnection(
         return;
       }
       await Promise.race([
-        Promise.allSettled([...activeHandlers]),
+        Promise.allSettled(activeHandlers),
         delay(options.drainTimeoutMs ?? 30_000),
       ]);
     };
@@ -1108,7 +1179,7 @@ async function runSparkDaemonServerConnection(
         },
         onIngestAck(ackOf) {
           const inFlight = inFlightInvocationEvent;
-          if (!inFlight || inFlight.messageId !== ackOf) return;
+          if (inFlight?.messageId !== ackOf) return;
           invocationStore.acknowledgeDelivery(
             deliveryDestination,
             inFlight.invocationId,
@@ -1124,19 +1195,20 @@ async function runSparkDaemonServerConnection(
           runtimeSessionId = value;
         },
         ensureHeartbeat(intervalMs) {
-          if (!unregisterHumanRequestOutboxTarget) {
-            unregisterHumanRequestOutboxTarget = options.registerHumanRequestOutboxTarget?.(() =>
-              flushPendingHumanRequests(ws, options.humanWaits, runtimeId, serverUrl),
-            );
-          }
+          unregisterHumanRequestOutboxTarget ??= registerHumanRequestOutboxFlush(
+            options,
+            ws,
+            runtimeId,
+            serverUrl,
+          );
           flushPendingHumanRequests(ws, options.humanWaits, runtimeId, serverUrl);
           if (heartbeat) {
             return;
           }
-          heartbeat = setInterval(() => {
-            sendHeartbeat(ws, options.db, runtimeId, runtimeSessionId, serverUrl);
-            flushPendingHumanRequests(ws, options.humanWaits, runtimeId, serverUrl);
-          }, intervalMs);
+          heartbeat = setInterval(
+            () => flushDaemonHeartbeat(ws, options, runtimeId, runtimeSessionId, serverUrl),
+            intervalMs,
+          );
           sendHeartbeat(ws, options.db, runtimeId, runtimeSessionId, serverUrl);
         },
       }).catch((error: unknown) => {
@@ -1171,6 +1243,28 @@ async function runSparkDaemonServerConnection(
       settle();
     });
   });
+}
+
+function registerHumanRequestOutboxFlush(
+  options: SparkDaemonServerConnectionOptions,
+  ws: WebSocket,
+  runtimeId: string,
+  serverUrl: string | null,
+): (() => void) | undefined {
+  return options.registerHumanRequestOutboxTarget?.(() =>
+    flushPendingHumanRequests(ws, options.humanWaits, runtimeId, serverUrl),
+  );
+}
+
+function flushDaemonHeartbeat(
+  ws: WebSocket,
+  options: SparkDaemonServerConnectionOptions,
+  runtimeId: string,
+  runtimeSessionId: string | undefined,
+  serverUrl: string | null,
+): void {
+  sendHeartbeat(ws, options.db, runtimeId, runtimeSessionId, serverUrl);
+  flushPendingHumanRequests(ws, options.humanWaits, runtimeId, serverUrl);
 }
 
 async function delayUnlessAborted(ms: number, signal: AbortSignal | undefined): Promise<void> {

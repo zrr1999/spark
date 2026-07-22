@@ -287,7 +287,7 @@ function normalizeSessionRef(sessionRef: string): string {
   return trimmed.startsWith("session:") ? trimmed.slice("session:".length) : trimmed;
 }
 function cloneSessionEntry(entry: SparkSessionEntry): SparkSessionEntry {
-  return JSON.parse(JSON.stringify(entry)) as SparkSessionEntry;
+  return structuredClone(entry);
 }
 function extractTextContent(message: SparkSessionMessage): string {
   if (typeof message.content === "string") return message.content;

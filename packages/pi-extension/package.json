@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/pi-extension",
   "version": "0.1.0",
+  "private": true,
   "description": "Pi-compatible thin facade over Spark extension policy; Spark-native hosts use @zendev-lab/spark-extension.",
   "license": "MIT",
   "author": "zrr1999",
@@ -14,9 +15,6 @@
   "exports": {
     "./extension": "./src/extension/index.ts",
     "./host-support": "./src/host-support.ts"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint ."

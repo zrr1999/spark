@@ -25,12 +25,6 @@ This package is a [pi](https://github.com/earendil-works/pi-mono) extension that
 
 ## Install in the Pi product
 
-### From npm (after publish)
-
-```bash
-pi install npm:@zendev-lab/pi-btw
-```
-
 ### From git
 
 ```bash
@@ -48,6 +42,8 @@ Then reload pi:
 ```bash
 pi install /absolute/path/to/pi-btw
 ```
+
+Spark v0.1 is repository/source-distributed; this compatibility package is not published as an npm package.
 
 ## Usage
 

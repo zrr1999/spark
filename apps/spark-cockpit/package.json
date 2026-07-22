@@ -1,14 +1,12 @@
 {
   "name": "@zendev-lab/spark-cockpit",
   "version": "0.1.0",
+  "private": true,
   "description": "Spark Cockpit SvelteKit web application.",
   "bin": {
     "spark-cockpit": "./bin/spark-cockpit"
   },
   "type": "module",
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
     "dev": "vp dev --host 127.0.0.1",
     "build": "vp build",

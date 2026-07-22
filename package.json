@@ -21,8 +21,9 @@
   },
   "type": "module",
   "scripts": {
-    "check": "pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && pnpm run check:architecture && pnpm run check:boundaries && node scripts/check-doc-terminology.mjs && pnpm run check:static && vp test run --config vitest.root.config.ts && pnpm -r --filter './packages/*' --filter './apps/*' run check && pnpm --filter @zendev-lab/spark-cockpit run test && pnpm --filter @zendev-lab/spark-daemon run test",
+    "check": "pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && pnpm run check:architecture && pnpm run check:distribution && pnpm run check:boundaries && node scripts/check-doc-terminology.mjs && pnpm run check:static && vp test run --config vitest.root.config.ts && pnpm -r --filter './packages/*' --filter './apps/*' run check && pnpm --filter @zendev-lab/spark-cockpit run test && pnpm --filter @zendev-lab/spark-daemon run test",
     "check:architecture": "node scripts/check-architecture-ratchets.mjs",
+    "check:distribution": "node scripts/check-source-distribution.mjs",
     "check:static": "vp fmt . --check && vp lint --quiet && vp check --no-fmt --no-lint",
     "check:static:fix": "vp fmt . --write && vp lint --fix --quiet && vp check --no-fmt --no-lint",
     "check:boundaries": "depcruise --config .dependency-cruiser.cjs apps packages test",
@@ -41,7 +42,7 @@
     "test:mutation": "node scripts/run-leaf-mutation.mjs",
     "build": "pnpm --filter @zendev-lab/spark-daemon run build && pnpm --filter @zendev-lab/spark-cockpit run build",
     "preview": "pnpm --filter @zendev-lab/spark-cockpit run dev",
-    "publish": "pnpm run check && pnpm run build && pnpm -r --filter @zendev-lab/spark-repro --filter @zendev-lab/spark-retry --filter './apps/*' --filter @zendev-lab/pi-extension publish --access public",
+    "test:source-distribution": "node scripts/smoke-source-distribution.mjs",
     "prepare": "prek install --hook-type commit-msg --hook-type pre-commit"
   },
   "dependencies": {

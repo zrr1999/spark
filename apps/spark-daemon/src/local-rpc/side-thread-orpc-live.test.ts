@@ -7,6 +7,7 @@ import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import {
   createSparkDaemonOrpcClient,
   invokeSparkDaemonOrpcLiveMethod,
+  isSparkDaemonSideThreadOrpcError,
 } from "@zendev-lab/spark-system/daemon-local-rpc-orpc";
 import { describe, expect, it, vi } from "vitest";
 
@@ -84,16 +85,46 @@ describe("Side Thread local-rpc oRPC integration", () => {
           expect.objectContaining({ sessionId: "parent-session" }),
         ]);
 
-        resetSideThread.mockRejectedValueOnce(new Error("injected registry write failure"));
-        await expect(
-          invokeSparkDaemonOrpcLiveMethod(handle.client, "side-thread.reset", {
+        const generationConflict = await invokeSparkDaemonOrpcLiveMethod(
+          handle.client,
+          "side-thread.reset",
+          {
+            parentSessionId: "parent-session",
+            expectedGeneration: 99,
+            mode: "tangent",
+          },
+        ).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        expect(isSparkDaemonSideThreadOrpcError(generationConflict)).toBe(true);
+        if (isSparkDaemonSideThreadOrpcError(generationConflict)) {
+          expect(generationConflict.code).toBe("side_thread_generation_conflict");
+        }
+
+        resetSideThread.mockRejectedValueOnce(
+          Object.assign(new Error("injected registry write failure"), {
+            code: "legacy_internal_detail",
+          }),
+        );
+        const unknownLegacyFailure = await invokeSparkDaemonOrpcLiveMethod(
+          handle.client,
+          "side-thread.reset",
+          {
             parentSessionId: "parent-session",
             expectedGeneration: 1,
             mode: "tangent",
-          }),
-        ).rejects.toThrow("Internal server error");
-        expect(resetSideThread).toHaveBeenCalledTimes(1);
+          },
+        ).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        expect(isSparkDaemonSideThreadOrpcError(unknownLegacyFailure)).toBe(false);
+        expect(unknownLegacyFailure).toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+        expect(String(unknownLegacyFailure)).not.toContain("legacy_internal_detail");
+        expect(String(unknownLegacyFailure)).not.toContain("injected registry write failure");
 
+        expect(resetSideThread).toHaveBeenCalledTimes(1);
         const afterFailure = sparkSideThreadSnapshotSchema.parse(
           await invokeSparkDaemonOrpcLiveMethod(handle.client, "side-thread.snapshot", {
             parentSessionId: "parent-session",

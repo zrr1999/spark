@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/spark-channels",
   "version": "0.1.0",
+  "private": true,
   "description": "Spark IM channel adapters (Feishu, Infoflow, QQ Bot): I/O-only ingress and explicit outbound notify.",
   "license": "MIT",
   "author": "zrr1999",
@@ -12,9 +13,6 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint . && vp test run",

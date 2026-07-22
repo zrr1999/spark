@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/spark-host",
   "version": "0.1.0",
+  "private": true,
   "description": "Host-neutral Spark ExtensionAPI runtime and host services.",
   "license": "MIT",
   "author": "zrr1999",
@@ -22,9 +23,6 @@
     "./spark-widget": "./src/spark-widget.ts",
     "./spark-widget-controller": "./src/spark-widget-controller.ts",
     "./types": "./src/types.ts"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint ."

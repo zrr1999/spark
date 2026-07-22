@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/spark-cue",
   "version": "0.1.0",
+  "private": true,
   "description": "Spark extension package that adds cue-shell as a durable, observable execution backend.",
   "license": "MIT",
   "author": "zrr1999",
@@ -14,9 +15,6 @@
   "exports": {
     ".": "./src/index.ts",
     "./extension": "./src/extension/index.ts"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint . && vp test run",

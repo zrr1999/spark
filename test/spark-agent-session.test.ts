@@ -470,7 +470,7 @@ test("SparkAgentSession stops repeated overflow retry when compaction has no use
   }
 });
 
-test("restricted SparkAgentSession compacts without running unclassified lifecycle hooks", async () => {
+test("restricted SparkAgentSession runs declared reads but skips unclassified lifecycle writes", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-preflight-"));
   try {
     const cwd = join(dir, "repo");
@@ -487,6 +487,14 @@ test("restricted SparkAgentSession compacts without running unclassified lifecyc
           return assistant("continued after preflight compaction");
         },
       },
+    );
+    let readLifecycleHooks = 0;
+    services.runtime.on(
+      "session_compact",
+      () => {
+        readLifecycleHooks += 1;
+      },
+      { effects: ["read"] },
     );
     services.runtime.on("session_compact", async () => {
       await writeFile(join(cwd, "forbidden-lifecycle-write"), "must not run", "utf8");
@@ -518,6 +526,7 @@ test("restricted SparkAgentSession compacts without running unclassified lifecyc
 
     assert.equal(providerCalls, 1);
     assert.equal(result.outcome?.status, "completed");
+    assert.equal(readLifecycleHooks, 1);
     assert.equal((await readdir(cwd)).includes("forbidden-lifecycle-write"), false);
     const saved = await services.sessionStore.load(record.path);
     const compactions = saved.entries.filter((entry) => entry.type === "compaction");

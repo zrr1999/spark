@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/spark-web",
   "version": "0.1.0",
+  "private": true,
   "description": "Native Spark web search and content fetch capability with safe URL checks and recoverable content cache.",
   "license": "MIT",
   "author": "zrr1999",
@@ -13,9 +14,6 @@
   "exports": {
     ".": "./src/index.ts",
     "./extension": "./src/extension.ts"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint ."

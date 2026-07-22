@@ -14,6 +14,15 @@ export interface InvokeLegacyLocalRpcOptions {
   handlerOptions?: LocalRpcHandlerOptions;
 }
 
+/** Read a legacy error code without treating it as safe for a new transport. */
+export function legacyLocalRpcErrorCode(error: unknown): string | undefined {
+  return error &&
+    typeof error === "object" &&
+    typeof (error as { code?: unknown }).code === "string"
+    ? (error as { code: string }).code
+    : undefined;
+}
+
 export async function invokeLegacyLocalRpc(
   method: string,
   params: unknown,

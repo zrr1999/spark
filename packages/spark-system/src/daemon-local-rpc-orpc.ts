@@ -12,6 +12,10 @@ import {
   sparkLocalRpcOrpcMethodPaths,
   type SparkLocalRpcOrpcLiveMethod,
 } from "@zendev-lab/spark-protocol/local-rpc-orpc-contract";
+import {
+  isSparkSideThreadErrorCode,
+  type SparkSideThreadErrorCode,
+} from "@zendev-lab/spark-protocol/side-thread";
 import { resolveSparkPaths, type SparkPaths } from "./paths.ts";
 import { createSocketMessagePort, type SocketMessagePortLike } from "./socket-message-port.ts";
 
@@ -90,6 +94,24 @@ export interface SparkDaemonOrpcClientHandle {
   close(): void;
 }
 
+/** A typed Side Thread domain error returned by the daemon oRPC surface. */
+export type SparkDaemonSideThreadOrpcError = Error & { code: SparkSideThreadErrorCode };
+
+/**
+ * Narrows a client rejection to the Side Thread errors explicitly declared in
+ * the protocol contract. oRPC INTERNAL and transport failures intentionally do
+ * not pass this check.
+ */
+export function isSparkDaemonSideThreadOrpcError(
+  error: unknown,
+): error is SparkDaemonSideThreadOrpcError {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    isSparkSideThreadErrorCode((error as { code?: unknown }).code)
+  );
+}
+
 export async function invokeSparkDaemonOrpcLiveMethod(
   client: SparkDaemonOrpcClient,
   method: SparkLocalRpcOrpcLiveMethod,
@@ -107,7 +129,7 @@ export async function invokeSparkDaemonOrpcLiveMethod(
     current = (current as Record<string, unknown>)[segment];
   }
   if (typeof current !== "function") {
-    throw new Error(`oRPC client path for ${method} is not callable`);
+    throw new TypeError(`oRPC client path for ${method} is not callable`);
   }
   return await (current as (input: unknown) => Promise<unknown>)(params ?? {});
 }

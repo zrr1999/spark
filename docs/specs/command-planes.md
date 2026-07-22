@@ -58,11 +58,13 @@ Adopt a library only when it removes a maintained Spark mechanism or supplies a 
 
 Prefer finishing the existing foundations before introducing overlapping frameworks: oRPC for typed local transport, Vite+ for formatting/lint/type checks, dependency-cruiser for package boundaries, prek for local gates, Vitest/fast-check/Stryker for behavior assurance, and Knip/jscpd for non-blocking debt discovery. Knip, duplicate-code, and complexity reports remain advisory until their dynamic-entry false positives are classified and a reviewed baseline can be ratcheted. Do not introduce another durable scheduler, job broker, ORM, agent graph, or transport schema generator unless an isolated experiment proves the daemon/SQLite and current protocol boundaries cannot meet a measured requirement.
 
-## Open publish-surface risk
+## Distribution model
 
-The root publish command currently selects public apps including `spark-cockpit`, while that app depends on Cockpit-private `workspace:*` packages. A repository build therefore does not prove that a clean registry install has a resolvable dependency closure. Until this is decided, Spark must not describe the Cockpit package set as publish-ready.
+Spark v0.1 is repository/source-distributed. Every workspace is private, no workspace declares `publishConfig`, and the root has no registry publish command. A checkout installs, checks, builds, and runs the complete product; Cockpit and its implementation packages are not a separate registry surface.
 
-Resolve the boundary explicitly by choosing one model: keep Cockpit source-distributed/private and remove it from the public package set; publish and support its complete transitive package closure; or produce a self-contained bundled Cockpit artifact. The selected model needs a clean temporary-directory `pnpm pack`/install/start smoke test in the release gate. Do not make private packages public one by one merely to silence the current publish command.
+This is an explicit fail-closed decision, not a claim that TypeScript source packages are publish-ready. The current CLI, TUI, and shared packages expose `.ts` files, while Node refuses type stripping inside `node_modules`; publishing the previous hand-maintained subset would also omit dynamic assets such as daemon database migrations. `pnpm run check:distribution` prevents a package from becoming public accidentally.
+
+`pnpm run test:source-distribution` builds the checkout, starts the built daemon with bundled migrations, verifies its process identity through the source dispatcher, exercises the TUI entry point, and probes the built Cockpit health route under an isolated `SPARK_HOME`; `ci-verify` runs this smoke after the full check. A future registry distribution must first define compiled JavaScript/declaration outputs, include runtime assets, and pass a clean package-only install/start smoke; individual packages must not be made public ad hoc.
 
 ## Canonical examples
 

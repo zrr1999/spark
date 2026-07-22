@@ -40,6 +40,7 @@ Inside an agent host, ordinary input is lightweight by default. `/plan` creates 
 pnpm install
 pnpm run check
 pnpm run build
+pnpm run test:source-distribution
 pnpm run preview
 pnpm run check:zellij-harness -- --session spark
 ```

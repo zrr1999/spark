@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/spark-daemon",
   "version": "0.1.0",
+  "private": true,
   "description": "Spark daemon service for workspace execution.",
   "bin": {
     "spark-daemon": "./dist/cli.js"
@@ -11,9 +12,6 @@
     "README.md"
   ],
   "type": "module",
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
     "build": "node scripts/build-cli.mjs",
     "check": "vp check --no-fmt --no-lint .",

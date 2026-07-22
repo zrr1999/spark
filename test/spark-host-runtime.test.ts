@@ -229,6 +229,53 @@ test("SparkHostRuntime suppresses unclassified lifecycle hooks under an effect a
   assert.equal(compactHooks, 0);
 });
 
+test("SparkHostRuntime dispatches only declared lifecycle effects allowed by policy", async () => {
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-host-runtime-hook-effects-test",
+    allowedToolEffects: ["read"],
+  });
+  const invoked: string[] = [];
+  host.on(
+    "session_start",
+    () => {
+      invoked.push("read");
+      return "read-result";
+    },
+    { effects: ["read"] },
+  );
+  host.on("session_start", () => invoked.push("local-write"), { effects: ["local_write"] });
+  host.on("session_start", () => invoked.push("network"), { effects: ["external_write"] });
+  host.on("session_start", () => invoked.push("unknown"));
+
+  assert.deepEqual(await host.emit("session_start", { reason: "test" }), ["read-result"]);
+  assert.deepEqual(invoked, ["read"]);
+});
+
+test("SparkHostRuntime keeps lifecycle dispatch behavior unchanged without an effect allowlist", async () => {
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-host-runtime-hook-effects-unrestricted",
+  });
+  const invoked: string[] = [];
+  host.on("session_start", () => {
+    invoked.push("unknown");
+    return "unknown-result";
+  });
+  host.on(
+    "session_start",
+    () => {
+      invoked.push("write");
+      return "write-result";
+    },
+    { effects: ["local_write"] },
+  );
+
+  assert.deepEqual(await host.emit("session_start", { reason: "test" }), [
+    "unknown-result",
+    "write-result",
+  ]);
+  assert.deepEqual(invoked, ["unknown", "write"]);
+});
+
 test("SparkHostRuntime registerCommand adds numeric suffix for duplicate names", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
   let aCalled = 0;

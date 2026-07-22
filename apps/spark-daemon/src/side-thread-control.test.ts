@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { openMemoryDatabase } from "@zendev-lab/spark-cockpit-db";
 import { SparkSessionStore } from "@zendev-lab/spark-host/session-store";
@@ -369,6 +369,152 @@ describe("daemon Side Thread control", () => {
     }
   });
 
+  it("uses a rebuildable transcript index and safely recovers stale or corrupt sidecars", async () => {
+    const fixture = await createFixture();
+    try {
+      const ensured = await ensure(fixture);
+      const child = await fixture.sessionRegistry.get(ensured.sessionId);
+      const record = await fixture.store.load(child!.sessionPath!);
+      fixture.store.appendMessage(record, { role: "user", content: "first indexed question" });
+      fixture.store.appendMessage(record, {
+        role: "assistant",
+        content: "first indexed answer",
+        stopReason: "stop",
+      });
+      await fixture.store.save(record);
+
+      const first = await sideThreadSnapshot(fixture);
+      const indexPath = `${child!.sessionPath}.side-thread-index.json`;
+      expect(first.exchanges).toHaveLength(1);
+      expect(existsSync(indexPath)).toBe(true);
+
+      const load = vi.spyOn(SparkSessionStore.prototype, "load");
+      load.mockClear();
+      await expect(sideThreadSnapshot(fixture)).resolves.toMatchObject({
+        exchanges: [expect.objectContaining({ assistant: "first indexed answer" })],
+      });
+      expect(load).not.toHaveBeenCalled();
+
+      writeFileSync(indexPath, "{not-json", "utf8");
+      await expect(sideThreadSnapshot(fixture)).resolves.toMatchObject({
+        exchanges: [expect.objectContaining({ assistant: "first indexed answer" })],
+      });
+      expect(load).toHaveBeenCalled();
+
+      const updated = await fixture.store.load(child!.sessionPath!);
+      fixture.store.appendMessage(updated, { role: "user", content: "second indexed question" });
+      fixture.store.appendMessage(updated, {
+        role: "assistant",
+        content: "second indexed answer",
+        stopReason: "stop",
+      });
+      await fixture.store.save(updated);
+      await expect(sideThreadSnapshot(fixture)).resolves.toMatchObject({
+        exchanges: [
+          expect.objectContaining({ assistant: "first indexed answer" }),
+          expect.objectContaining({ assistant: "second indexed answer" }),
+        ],
+      });
+      load.mockRestore();
+    } finally {
+      fixture.close();
+    }
+  });
+
+  it("rebuilds a legacy generation-less transcript after a daemon upgrade", async () => {
+    const fixture = await createFixture();
+    try {
+      const ensured = await ensure(fixture);
+      const child = await fixture.sessionRegistry.get(ensured.sessionId);
+      const record = await fixture.store.load(child!.sessionPath!);
+      const boundary = record.entries.find(
+        (entry) =>
+          entry.type === "custom" && entry.customType === "spark.side-thread.seed-boundary",
+      );
+      expect(boundary).toBeDefined();
+      if (boundary?.type !== "custom" || !boundary.data || typeof boundary.data !== "object") {
+        throw new Error("expected a Side Thread seed boundary");
+      }
+      delete (boundary.data as Record<string, unknown>).generation;
+      fixture.store.appendMessage(record, { role: "user", content: "legacy question" });
+      fixture.store.appendMessage(record, {
+        role: "assistant",
+        content: "legacy answer",
+        stopReason: "stop",
+      });
+      await fixture.store.save(record);
+
+      await expect(sideThreadSnapshot(fixture)).resolves.toMatchObject({
+        generation: 1,
+        exchanges: [expect.objectContaining({ assistant: "legacy answer" })],
+      });
+      expect(
+        JSON.parse(readFileSync(`${child!.sessionPath}.side-thread-index.json`, "utf8")),
+      ).toMatchObject({ identity: { generation: 1 } });
+
+      const mismatched = await fixture.store.load(child!.sessionPath!);
+      const mismatchedBoundary = mismatched.entries.find(
+        (entry) =>
+          entry.type === "custom" && entry.customType === "spark.side-thread.seed-boundary",
+      );
+      if (
+        mismatchedBoundary?.type !== "custom" ||
+        !mismatchedBoundary.data ||
+        typeof mismatchedBoundary.data !== "object"
+      ) {
+        throw new Error("expected a Side Thread seed boundary");
+      }
+      (mismatchedBoundary.data as Record<string, unknown>).generation = 2;
+      await fixture.store.save(mismatched);
+      await expect(sideThreadSnapshot(fixture)).rejects.toMatchObject({
+        code: "side_thread_transcript_invalid",
+      });
+    } finally {
+      fixture.close();
+    }
+  });
+
+  it("retains the current generation plus two verified retired transcript generations", async () => {
+    const fixture = await createFixture();
+    try {
+      const ensured = await ensure(fixture);
+      const paths = [(await fixture.sessionRegistry.get(ensured.sessionId))!.sessionPath!];
+      for (let generation = 1; generation <= 4; generation += 1) {
+        const reset = await resetSideThread(fixture, generation);
+        paths.push((await fixture.sessionRegistry.get(reset.sessionId))!.sessionPath!);
+      }
+      expect(paths.map(existsSync)).toEqual([false, false, true, true, true]);
+      expect(paths.slice(0, 2).map((path) => existsSync(`${path}.side-thread-index.json`))).toEqual(
+        [false, false],
+      );
+    } finally {
+      fixture.close();
+    }
+  });
+
+  it("removes an unreferenced new transcript when registry reset persistence fails", async () => {
+    const fixture = await createFixture();
+    try {
+      const ensured = await ensure(fixture);
+      const child = await fixture.sessionRegistry.get(ensured.sessionId);
+      const oldPath = child!.sessionPath!;
+      vi.spyOn(fixture.sessionRegistry, "resetSideThread").mockRejectedValueOnce(
+        new Error("injected registry persistence failure"),
+      );
+
+      await expect(resetSideThread(fixture, 1)).rejects.toThrow(
+        "injected registry persistence failure",
+      );
+      const transcriptNames = readdirSync(dirname(oldPath))
+        .filter((name) => name.endsWith(`_${ensured.sessionId}.jsonl`))
+        .sort();
+      expect(transcriptNames).toEqual([basename(oldPath)]);
+      expect(existsSync(oldPath)).toBe(true);
+    } finally {
+      fixture.close();
+    }
+  });
+
   it("validates model overrides and inherits parent settings after clearing them", async () => {
     const fixture = await createFixture();
     const effectiveModel = vi.fn(async (sessionId?: string) =>
@@ -522,6 +668,35 @@ async function ensure(fixture: Awaited<ReturnType<typeof createFixture>>) {
       await executeSparkDaemonSideThreadControl(fixture.options, {
         kind: "side-thread.ensure.request",
         payload: { parentSessionId: fixture.parentSessionId, mode: "contextual" },
+      })
+    ).result,
+  );
+}
+
+async function sideThreadSnapshot(fixture: Awaited<ReturnType<typeof createFixture>>) {
+  return sparkSideThreadSnapshotSchema.parse(
+    (
+      await executeSparkDaemonSideThreadControl(fixture.options, {
+        kind: "side-thread.snapshot.request",
+        payload: { parentSessionId: fixture.parentSessionId },
+      })
+    ).result,
+  );
+}
+
+async function resetSideThread(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+  expectedGeneration: number,
+) {
+  return sparkSideThreadSnapshotSchema.parse(
+    (
+      await executeSparkDaemonSideThreadControl(fixture.options, {
+        kind: "side-thread.reset.request",
+        payload: {
+          parentSessionId: fixture.parentSessionId,
+          expectedGeneration,
+          mode: "tangent",
+        },
       })
     ).result,
   );

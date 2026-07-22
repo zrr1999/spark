@@ -2,7 +2,9 @@ import {
   createId,
   normalizeServerCommandForExecution,
   serverCommandEnvelopeSchema,
+  type RuntimeCommandResultPayload,
   type SparkCommand,
+  type SparkProtocolJsonValue,
 } from "@zendev-lab/spark-protocol";
 import { sparkCommandFromServerCommandEnvelope } from "./command-dispatcher.ts";
 import {
@@ -43,11 +45,33 @@ import {
   workspaceSummaries,
 } from "./store/workspaces.js";
 
+type ClaimedCommand = ReturnType<typeof serverCommandEnvelopeSchema.parse>;
+
+interface ClaimedCommandExecution {
+  ws: ServerSocket;
+  command: ClaimedCommand;
+  context: MessageContext;
+  route: ReturnType<typeof commandRoute>;
+  commandWorkspace: ReturnType<typeof getWorkspaceById>;
+  sparkCommand: SparkCommand;
+}
+
 export async function executeClaimedCommand(
   ws: ServerSocket,
-  command: ReturnType<typeof serverCommandEnvelopeSchema.parse>,
+  command: ClaimedCommand,
   context: MessageContext,
 ): Promise<void> {
+  const admitted = admitClaimedCommand({ ws, command, context });
+  if (!admitted) return;
+  await executeAcceptedClaimedCommand(admitted);
+}
+
+function admitClaimedCommand(input: {
+  ws: ServerSocket;
+  command: ClaimedCommand;
+  context: MessageContext;
+}): ClaimedCommandExecution | undefined {
+  const { ws, command, context } = input;
   const knownWorkspaceBindingIds = new Set(
     (context.serverUrl
       ? listWorkspacesForServer(context.db, context.serverUrl)
@@ -84,8 +108,7 @@ export async function executeClaimedCommand(
     );
     return;
   }
-  let sparkCommand = sparkCommandFromServerCommandEnvelope(command);
-  let commandForBridge = command;
+  const sparkCommand = sparkCommandFromServerCommandEnvelope(command);
   const policy = decideCommandPolicy({
     command: sparkCommand,
     runtimeId: command.runtimeId,
@@ -116,294 +139,358 @@ export async function executeClaimedCommand(
     return;
   }
 
-  if (sparkCommand.kind === "daemon.status.request") {
-    const completedAt = new Date().toISOString();
-    const result = daemonStatusProjection(context);
-    sendJson(ws, commandAck({ accepted: true }, route));
-    sendJson(
-      ws,
-      commandResult(
-        {
-          status: "succeeded",
-          result,
-          projection: { kind: "daemon.status", data: result },
-          completedAt,
-        },
-        route,
-      ),
-    );
-    return;
-  }
+  return { ws, command, context, route, commandWorkspace, sparkCommand };
+}
 
-  if (sparkCommand.kind === "workspace.snapshot.request") {
-    sendJson(ws, commandAck({ accepted: true }, route));
-    const workspace = command.workspaceBindingId
-      ? getWorkspaceById(context.db, command.workspaceBindingId)
-      : null;
-    if (workspace && command.workspaceId) {
-      sendJson(
-        ws,
-        workspaceSnapshot(workspaceSnapshotPayloadForDaemon(context.db, workspace), {
-          ...route,
-          workspaceBindingId: workspace.serverBindingId ?? workspace.id,
-        }),
-      );
-    }
-    sendJson(
-      ws,
-      commandResult(
-        {
-          status: "succeeded",
-          result: { refreshed: Boolean(workspace) },
-          projection: {
-            kind: "workspace.snapshot",
-            data: {
-              ...(workspace?.id || command.workspaceBindingId
-                ? { workspaceBindingId: workspace?.id ?? command.workspaceBindingId }
-                : {}),
-            },
-          },
-          completedAt: new Date().toISOString(),
-        },
-        route,
-      ),
-    );
-    return;
-  }
-
-  if (isWorkspaceClientOccupancyKind(sparkCommand.kind)) {
-    await handleWorkspaceClientOccupancyCommand({
-      ws,
-      context,
-      command,
-      sparkCommand,
-      route,
-      commandWorkspace,
-    });
-    return;
+async function executeAcceptedClaimedCommand(input: ClaimedCommandExecution): Promise<void> {
+  const { sparkCommand } = input;
+  switch (sparkCommand.kind) {
+    case "daemon.status.request":
+      sendDaemonStatusResult(input);
+      return;
+    case "workspace.snapshot.request":
+      sendWorkspaceSnapshotResult(input);
+      return;
+    case "workspace.client.attach.request":
+    case "workspace.client.heartbeat.request":
+    case "workspace.client.release.request":
+      await handleWorkspaceClientOccupancyCommand(input);
+      return;
+    case "diagnostics.request":
+      sendDiagnosticsResult(input);
+      return;
+    case "invocation.cancel.request":
+      await handleInvocationCancelCommand(input);
+      return;
   }
 
   if (isSparkDaemonModelChannelPublicKind(sparkCommand.kind)) {
-    const executed = await executeSparkDaemonModelChannelPublicControl(
-      {
-        modelControl: context.modelControl,
-        channelIngress: context.channelIngress,
-        sessionRegistry: context.sessionRegistry,
-        sparkHome: context.sparkHome,
-      },
-      {
-        kind: sparkCommand.kind,
-        scope: command.workspaceBindingId ? "workspace" : "daemon",
-        workspaceId: command.workspaceId,
-        payload: sparkCommand.payload,
-      },
-    );
-    sendJson(ws, commandAck({ accepted: true }, route));
-    sendJson(
-      ws,
-      commandResult(
-        {
-          status: "succeeded",
-          result: executed.result,
-          ...(executed.projection ? { projection: executed.projection } : {}),
-          completedAt: new Date().toISOString(),
-        },
-        route,
-      ),
-    );
+    await handleModelChannelCommand(input);
     return;
   }
 
   if (isRuntimeSessionControlKind(sparkCommand.kind)) {
-    const scope = command.workspaceBindingId ? "workspace" : "daemon";
-    const executed = await executeSparkDaemonSessionControl(
-      {
-        paths: context.paths,
-        db: context.db,
-        sessionRegistry: context.sessionRegistry,
-        modelControl: context.modelControl,
-        actor: "spark-daemon-runtime-ws",
-      },
-      {
-        kind: sparkCommand.kind,
-        scope,
-        workspaceId: command.workspaceId,
-        workspaceBindingId: command.workspaceBindingId,
-        sessionId: command.sessionId,
-        idempotencyKey: command.idempotencyKey,
-        payload: sparkCommand.payload,
-      },
-    );
-    const resultRoute = {
-      ...route,
-      ...(command.sessionId ? { sessionId: command.sessionId } : {}),
-      ...(executed.invocationId ? { invocationId: executed.invocationId } : {}),
-    };
-    sendJson(
-      ws,
-      commandAck(
-        {
-          accepted: true,
-          ...(executed.invocationId ? { invocationId: executed.invocationId } : {}),
-        },
-        resultRoute,
-      ),
-    );
-    sendJson(
-      ws,
-      commandResult(
-        {
-          status: "succeeded",
-          result: executed.result,
-          ...(executed.projection ? { projection: executed.projection } : {}),
-          completedAt: new Date().toISOString(),
-        },
-        resultRoute,
-      ),
-    );
+    await handleRuntimeSessionControlCommand(input);
     return;
   }
 
   if (isRuntimeSideThreadControlKind(sparkCommand.kind)) {
-    const scope = command.workspaceBindingId ? "workspace" : "daemon";
-    const executed = await executeSparkDaemonSideThreadControl(
+    await handleRuntimeSideThreadControlCommand(input);
+    return;
+  }
+
+  await handleTaskOrAssignmentCommand(input);
+}
+
+function sendDaemonStatusResult({ ws, context, route }: ClaimedCommandExecution): void {
+  const completedAt = new Date().toISOString();
+  const result = daemonStatusProjection(context);
+  sendJson(ws, commandAck({ accepted: true }, route));
+  sendJson(
+    ws,
+    commandResult(
       {
-        paths: context.paths,
-        db: context.db,
-        sessionRegistry: context.sessionRegistry,
-        modelControl: context.modelControl,
-        actor: "spark-daemon-runtime-ws",
+        status: "succeeded",
+        result,
+        projection: { kind: "daemon.status", data: result },
+        completedAt,
       },
+      route,
+    ),
+  );
+}
+
+function sendWorkspaceSnapshotResult({
+  ws,
+  command,
+  context,
+  route,
+}: ClaimedCommandExecution): void {
+  const workspace = command.workspaceBindingId
+    ? getWorkspaceById(context.db, command.workspaceBindingId)
+    : null;
+  sendJson(ws, commandAck({ accepted: true }, route));
+  if (workspace && command.workspaceId) {
+    sendJson(
+      ws,
+      workspaceSnapshot(workspaceSnapshotPayloadForDaemon(context.db, workspace), {
+        ...route,
+        workspaceBindingId: workspace.serverBindingId ?? workspace.id,
+      }),
+    );
+  }
+  const workspaceBindingId = workspace?.id ?? command.workspaceBindingId;
+  sendJson(
+    ws,
+    commandResult(
       {
-        kind: sparkCommand.kind,
-        scope,
-        workspaceId: command.workspaceId,
-        workspaceBindingId: command.workspaceBindingId,
-        payload: sparkCommand.payload,
+        status: "succeeded",
+        result: { refreshed: Boolean(workspace) },
+        projection: {
+          kind: "workspace.snapshot",
+          data: workspaceBindingId ? { workspaceBindingId } : {},
+        },
+        completedAt: new Date().toISOString(),
       },
-    );
-    const resultRoute = {
-      ...route,
-      ...(command.sessionId ? { sessionId: command.sessionId } : {}),
-      ...(executed.invocationId ? { invocationId: executed.invocationId } : {}),
-    };
-    sendJson(
-      ws,
-      commandAck(
-        {
-          accepted: true,
-          ...(executed.invocationId ? { invocationId: executed.invocationId } : {}),
-        },
-        resultRoute,
-      ),
-    );
-    sendJson(
-      ws,
-      commandResult(
-        {
-          status: "succeeded",
-          result: executed.result,
-          completedAt: new Date().toISOString(),
-        },
-        resultRoute,
-      ),
-    );
+      route,
+    ),
+  );
+}
+
+async function handleModelChannelCommand(input: ClaimedCommandExecution): Promise<void> {
+  const { ws, command, context, route, sparkCommand } = input;
+  if (!isSparkDaemonModelChannelPublicKind(sparkCommand.kind)) return;
+  const executed = await executeSparkDaemonModelChannelPublicControl(
+    {
+      modelControl: context.modelControl,
+      channelIngress: context.channelIngress,
+      sessionRegistry: context.sessionRegistry,
+      sparkHome: context.sparkHome,
+    },
+    {
+      kind: sparkCommand.kind,
+      scope: command.workspaceBindingId ? "workspace" : "daemon",
+      workspaceId: command.workspaceId,
+      payload: sparkCommand.payload,
+    },
+  );
+  sendJson(ws, commandAck({ accepted: true }, route));
+  sendJson(
+    ws,
+    commandResult(
+      {
+        status: "succeeded",
+        result: executed.result,
+        ...(executed.projection ? { projection: executed.projection } : {}),
+        completedAt: new Date().toISOString(),
+      },
+      route,
+    ),
+  );
+}
+
+async function handleRuntimeSessionControlCommand(input: ClaimedCommandExecution): Promise<void> {
+  const { ws, command, context, route, sparkCommand } = input;
+  if (!isRuntimeSessionControlKind(sparkCommand.kind)) return;
+  const executed = await executeSparkDaemonSessionControl(
+    daemonSessionControlDependencies(context),
+    {
+      kind: sparkCommand.kind,
+      scope: daemonControlScope(command),
+      workspaceId: command.workspaceId,
+      workspaceBindingId: command.workspaceBindingId,
+      sessionId: command.sessionId,
+      idempotencyKey: command.idempotencyKey,
+      payload: sparkCommand.payload,
+    },
+  );
+  sendControlledCommandResult({ ws, command, route, executed, includeProjection: true });
+}
+
+async function handleRuntimeSideThreadControlCommand(
+  input: ClaimedCommandExecution,
+): Promise<void> {
+  const { ws, command, context, route, sparkCommand } = input;
+  if (!isRuntimeSideThreadControlKind(sparkCommand.kind)) return;
+  const executed = await executeSparkDaemonSideThreadControl(
+    daemonSessionControlDependencies(context),
+    {
+      kind: sparkCommand.kind,
+      scope: daemonControlScope(command),
+      workspaceId: command.workspaceId,
+      workspaceBindingId: command.workspaceBindingId,
+      payload: sparkCommand.payload,
+    },
+  );
+  sendControlledCommandResult({ ws, command, route, executed, includeProjection: false });
+}
+
+function daemonSessionControlDependencies(context: MessageContext) {
+  return {
+    paths: context.paths,
+    db: context.db,
+    sessionRegistry: context.sessionRegistry,
+    modelControl: context.modelControl,
+    actor: "spark-daemon-runtime-ws" as const,
+  };
+}
+
+function daemonControlScope(command: ClaimedCommand): "workspace" | "daemon" {
+  return command.workspaceBindingId ? "workspace" : "daemon";
+}
+
+function sendControlledCommandResult(input: {
+  ws: ServerSocket;
+  command: ClaimedCommand;
+  route: ReturnType<typeof commandRoute>;
+  executed: {
+    result: Record<string, SparkProtocolJsonValue>;
+    invocationId?: string;
+    projection?: RuntimeCommandResultPayload["projection"];
+  };
+  includeProjection: boolean;
+}): void {
+  const { ws, command, route, executed, includeProjection } = input;
+  const resultRoute = {
+    ...route,
+    ...(command.sessionId ? { sessionId: command.sessionId } : {}),
+    ...(executed.invocationId ? { invocationId: executed.invocationId } : {}),
+  };
+  sendJson(
+    ws,
+    commandAck(
+      {
+        accepted: true,
+        ...(executed.invocationId ? { invocationId: executed.invocationId } : {}),
+      },
+      resultRoute,
+    ),
+  );
+  sendJson(
+    ws,
+    commandResult(
+      {
+        status: "succeeded",
+        result: executed.result,
+        ...(includeProjection && executed.projection ? { projection: executed.projection } : {}),
+        completedAt: new Date().toISOString(),
+      },
+      resultRoute,
+    ),
+  );
+}
+
+function sendDiagnosticsResult({
+  ws,
+  context,
+  route,
+  sparkCommand,
+}: ClaimedCommandExecution): void {
+  const invocationId = createId("inv");
+  const invocationRoute = { ...route, invocationId };
+  sendJson(ws, commandAck({ accepted: true, invocationId }, invocationRoute));
+  sendJson(
+    ws,
+    invocationLogChunk(
+      {
+        runtimeInvocationId: invocationId,
+        stream: "system",
+        sequence: 1,
+        content: JSON.stringify({
+          paths: context.paths,
+          workspaces: workspaceSummaries(context.db, context.serverUrl),
+        }),
+      },
+      invocationRoute,
+    ),
+  );
+  sendJson(
+    ws,
+    invocationUpdated(
+      {
+        runtimeInvocationId: invocationId,
+        status: "succeeded",
+        completedAt: new Date().toISOString(),
+        payload: { commandKind: sparkCommand.kind },
+      },
+      invocationRoute,
+    ),
+  );
+  sendJson(
+    ws,
+    commandResult(
+      {
+        status: "succeeded",
+        result: { invocationId },
+        completedAt: new Date().toISOString(),
+      },
+      invocationRoute,
+    ),
+  );
+}
+
+async function handleInvocationCancelCommand(input: ClaimedCommandExecution): Promise<void> {
+  const { ws, command, context, route, sparkCommand } = input;
+  const invocationId = runtimeInvocationIdForCancel(sparkCommand.payload);
+  if (!invocationId) {
+    sendJson(ws, commandRejectForUnknownInvocation(route, command.messageId));
     return;
   }
-
-  if (sparkCommand.kind === "diagnostics.request") {
-    const invocationId = createId("inv");
-    sendJson(ws, commandAck({ accepted: true, invocationId }, { ...route, invocationId }));
-    sendJson(
-      ws,
-      invocationLogChunk(
-        {
-          runtimeInvocationId: invocationId,
-          stream: "system",
-          sequence: 1,
-          content: JSON.stringify({
-            paths: context.paths,
-            workspaces: workspaceSummaries(context.db, context.serverUrl),
-          }),
-        },
-        { ...route, invocationId },
-      ),
-    );
-    sendJson(
-      ws,
-      invocationUpdated(
-        {
-          runtimeInvocationId: invocationId,
-          status: "succeeded",
-          completedAt: new Date().toISOString(),
-          payload: { commandKind: sparkCommand.kind },
-        },
-        { ...route, invocationId },
-      ),
-    );
-    sendJson(
-      ws,
-      commandResult(
-        {
-          status: "succeeded",
-          result: { invocationId },
-          completedAt: new Date().toISOString(),
-        },
-        { ...route, invocationId },
-      ),
-    );
+  const cancelReason = "Spark daemon invocation cancellation requested by server command.";
+  const registryCancelled = context.invocationRegistry?.cancel(invocationId, cancelReason) ?? false;
+  const result = await context.cancelSparkInvocation({ invocationId, reason: cancelReason });
+  if (!result.cancelled && !registryCancelled) {
+    sendJson(ws, commandRejectForUnknownInvocation(route, command.messageId));
     return;
   }
+  const invocationRoute = { ...route, invocationId };
+  sendJson(ws, commandAck({ accepted: true, invocationId }, invocationRoute));
+  sendJson(
+    ws,
+    invocationUpdated(
+      {
+        runtimeInvocationId: invocationId,
+        status: "cancelled",
+        completedAt: new Date().toISOString(),
+        terminalReason: result.cancelled ? result.message : cancelReason,
+        payload: { commandKind: sparkCommand.kind },
+      },
+      invocationRoute,
+    ),
+  );
+  sendJson(
+    ws,
+    commandResult(
+      {
+        status: "succeeded",
+        result: { invocationId, cancelled: true, message: result.message },
+        completedAt: new Date().toISOString(),
+      },
+      invocationRoute,
+    ),
+  );
+}
 
-  if (sparkCommand.kind === "invocation.cancel.request") {
-    const invocationId = runtimeInvocationIdForCancel(sparkCommand.payload);
-    if (!invocationId) {
-      sendJson(ws, commandRejectForUnknownInvocation(route, command.messageId));
-      return;
-    }
-    const cancelReason = "Spark daemon invocation cancellation requested by server command.";
-    const registryCancelled =
-      context.invocationRegistry?.cancel(invocationId, cancelReason) ?? false;
-    const result = await context.cancelSparkInvocation({
-      invocationId,
-      reason: cancelReason,
-    });
-    if (!result.cancelled && !registryCancelled) {
-      sendJson(ws, commandRejectForUnknownInvocation(route, command.messageId));
-      return;
-    }
-    sendJson(ws, commandAck({ accepted: true, invocationId }, { ...route, invocationId }));
-    sendJson(
-      ws,
-      invocationUpdated(
-        {
-          runtimeInvocationId: invocationId,
-          status: "cancelled",
-          completedAt: new Date().toISOString(),
-          terminalReason: result.cancelled ? result.message : cancelReason,
-          payload: { commandKind: sparkCommand.kind },
-        },
-        { ...route, invocationId },
-      ),
-    );
-    sendJson(
-      ws,
-      commandResult(
-        {
-          status: "succeeded",
-          result: { invocationId, cancelled: true, message: result.message },
-          completedAt: new Date().toISOString(),
-        },
-        { ...route, invocationId },
-      ),
-    );
+async function handleTaskOrAssignmentCommand(input: ClaimedCommandExecution): Promise<void> {
+  const { ws, command, context, route } = input;
+  const commandForBridge = normalizeTaskCommandForExecution(input);
+  if (!commandForBridge) return;
+  const sparkCommand = sparkCommandFromServerCommandEnvelope(commandForBridge);
+  if (isDaemonDraining(context)) {
+    sendDaemonDrainingReject(ws, route);
     return;
   }
+  const workspace = command.workspaceBindingId
+    ? getWorkspaceById(context.db, command.workspaceBindingId)
+    : null;
+  if (!workspace) {
+    sendUnknownWorkspaceReject(ws, route);
+    return;
+  }
+  const selectedModel = await prepareTaskModel(input, sparkCommand);
+  if (selectedModel === null) return;
+  // Model preparation is asynchronous, so restart draining may have begun after admission.
+  if (isDaemonDraining(context)) {
+    sendDaemonDrainingReject(ws, route);
+    return;
+  }
+  await runTaskCommand({
+    ws,
+    context,
+    commandForBridge,
+    sparkCommand,
+    workspace,
+    route,
+    selectedModel,
+  });
+}
 
-  if (
-    sparkCommand.kind !== "task.start.request" &&
-    sparkCommand.kind !== "assignment.create.request"
-  ) {
+function normalizeTaskCommandForExecution(
+  input: ClaimedCommandExecution,
+): ClaimedCommand | undefined {
+  const { ws, command, route, sparkCommand } = input;
+  if (sparkCommand.kind === "task.start.request") return command;
+  if (sparkCommand.kind !== "assignment.create.request") {
     sendJson(
       ws,
       commandReject(
@@ -415,101 +502,95 @@ export async function executeClaimedCommand(
         route,
       ),
     );
-    return;
+    return undefined;
   }
+  const normalized = normalizeServerCommandForExecution(command);
+  if (normalized.ok) return normalized.envelope;
+  sendJson(
+    ws,
+    commandReject(
+      {
+        reasonCode: normalized.reasonCode,
+        message: normalized.message,
+        retryable: normalized.retryable,
+      },
+      route,
+    ),
+  );
+  return undefined;
+}
 
-  if (context.invocationRegistry?.draining) {
+function isDaemonDraining(context: MessageContext): boolean {
+  return context.invocationRegistry?.draining === true;
+}
+
+function sendDaemonDrainingReject(ws: ServerSocket, route: ReturnType<typeof commandRoute>): void {
+  sendJson(
+    ws,
+    commandReject(
+      {
+        reasonCode: "DAEMON_DRAINING",
+        message: "Spark daemon is draining for restart; retry after the new daemon is ready.",
+        retryable: true,
+      },
+      route,
+    ),
+  );
+}
+
+function sendUnknownWorkspaceReject(
+  ws: ServerSocket,
+  route: ReturnType<typeof commandRoute>,
+): void {
+  sendJson(
+    ws,
+    commandReject(
+      {
+        reasonCode: "UNKNOWN_WORKSPACE_BINDING",
+        message: "Spark daemon has no local workspace for this command.",
+        retryable: false,
+      },
+      route,
+    ),
+  );
+}
+
+async function prepareTaskModel(
+  input: ClaimedCommandExecution,
+  sparkCommand: SparkCommand,
+): Promise<Awaited<ReturnType<SparkDaemonModelControl["effectiveModel"]>> | null | undefined> {
+  const { ws, context, route } = input;
+  if (!context.modelControl) return undefined;
+  try {
+    const model = await context.modelControl.effectiveModel(sessionIdForModel(sparkCommand));
+    await context.modelControl.prepareModel(model);
+    return model;
+  } catch (error) {
     sendJson(
       ws,
       commandReject(
         {
-          reasonCode: "DAEMON_DRAINING",
-          message: "Spark daemon is draining for restart; retry after the new daemon is ready.",
-          retryable: true,
-        },
-        route,
-      ),
-    );
-    return;
-  }
-
-  if (sparkCommand.kind === "assignment.create.request") {
-    const normalized = normalizeServerCommandForExecution(command);
-    if (!normalized.ok) {
-      sendJson(
-        ws,
-        commandReject(
-          {
-            reasonCode: normalized.reasonCode,
-            message: normalized.message,
-            retryable: normalized.retryable,
-          },
-          route,
-        ),
-      );
-      return;
-    }
-
-    commandForBridge = normalized.envelope;
-    sparkCommand = sparkCommandFromServerCommandEnvelope(commandForBridge);
-  }
-
-  const workspace = command.workspaceBindingId
-    ? getWorkspaceById(context.db, command.workspaceBindingId)
-    : null;
-  if (!workspace) {
-    sendJson(
-      ws,
-      commandReject(
-        {
-          reasonCode: "UNKNOWN_WORKSPACE_BINDING",
-          message: "Spark daemon has no local workspace for this command.",
+          reasonCode: "MODEL_UNAVAILABLE",
+          message: error instanceof Error ? error.message : String(error),
           retryable: false,
         },
         route,
       ),
     );
-    return;
+    return null;
   }
+}
 
-  let selectedModel: Awaited<ReturnType<SparkDaemonModelControl["effectiveModel"]>> | undefined;
-  if (context.modelControl) {
-    try {
-      selectedModel = await context.modelControl.effectiveModel(sessionIdForModel(sparkCommand));
-      await context.modelControl.prepareModel(selectedModel);
-    } catch (error) {
-      sendJson(
-        ws,
-        commandReject(
-          {
-            reasonCode: "MODEL_UNAVAILABLE",
-            message: error instanceof Error ? error.message : String(error),
-            retryable: false,
-          },
-          route,
-        ),
-      );
-      return;
-    }
-  }
-
-  // Model preparation is asynchronous, so restart draining may have begun
-  // after the first admission check above.
-  if (context.invocationRegistry?.draining) {
-    sendJson(
-      ws,
-      commandReject(
-        {
-          reasonCode: "DAEMON_DRAINING",
-          message: "Spark daemon is draining for restart; retry after the new daemon is ready.",
-          retryable: true,
-        },
-        route,
-      ),
-    );
-    return;
-  }
-
+async function runTaskCommand(input: {
+  ws: ServerSocket;
+  context: MessageContext;
+  commandForBridge: ClaimedCommand;
+  sparkCommand: SparkCommand;
+  workspace: NonNullable<ReturnType<typeof getWorkspaceById>>;
+  route: ReturnType<typeof commandRoute>;
+  selectedModel: Awaited<ReturnType<SparkDaemonModelControl["effectiveModel"]>> | undefined;
+}): Promise<void> {
+  const { ws, context, commandForBridge, sparkCommand, workspace, route, selectedModel } = input;
   const invocation = context.invocationRegistry?.start({
     invocationId: createId("inv"),
     kind: sparkCommand.kind,
@@ -582,27 +663,9 @@ function isRuntimeSideThreadControlKind(
   );
 }
 
-function isWorkspaceClientOccupancyKind(
-  kind: SparkCommand["kind"],
-): kind is
-  | "workspace.client.attach.request"
-  | "workspace.client.heartbeat.request"
-  | "workspace.client.release.request" {
-  return (
-    kind === "workspace.client.attach.request" ||
-    kind === "workspace.client.heartbeat.request" ||
-    kind === "workspace.client.release.request"
-  );
-}
-
-async function handleWorkspaceClientOccupancyCommand(input: {
-  ws: ServerSocket;
-  context: MessageContext;
-  command: ReturnType<typeof serverCommandEnvelopeSchema.parse>;
-  sparkCommand: SparkCommand;
-  route: ReturnType<typeof commandRoute>;
-  commandWorkspace: ReturnType<typeof getWorkspaceById>;
-}): Promise<void> {
+async function handleWorkspaceClientOccupancyCommand(
+  input: ClaimedCommandExecution,
+): Promise<void> {
   const { ws, context, command, sparkCommand, route, commandWorkspace } = input;
   if (!commandWorkspace) {
     sendJson(
@@ -620,21 +683,7 @@ async function handleWorkspaceClientOccupancyCommand(input: {
   }
 
   try {
-    const client =
-      sparkCommand.kind === "workspace.client.attach.request"
-        ? attachWorkspaceClient(
-            context.db,
-            parseWorkspaceClientAttachPayload(sparkCommand.payload, commandWorkspace.id),
-          )
-        : sparkCommand.kind === "workspace.client.heartbeat.request"
-          ? heartbeatWorkspaceClient(
-              context.db,
-              parseWorkspaceClientHeartbeatPayload(sparkCommand.payload),
-            )
-          : releaseWorkspaceClient(
-              context.db,
-              parseWorkspaceClientReleasePayload(sparkCommand.payload),
-            );
+    const client = applyWorkspaceClientOccupancyCommand(context, commandWorkspace.id, sparkCommand);
 
     const refreshed = getWorkspaceById(context.db, commandWorkspace.id);
     sendJson(ws, commandAck({ accepted: true }, route));
@@ -682,6 +731,32 @@ async function handleWorkspaceClientOccupancyCommand(input: {
   }
 }
 
+function applyWorkspaceClientOccupancyCommand(
+  context: MessageContext,
+  workspaceId: string,
+  sparkCommand: SparkCommand,
+) {
+  switch (sparkCommand.kind) {
+    case "workspace.client.attach.request":
+      return attachWorkspaceClient(
+        context.db,
+        parseWorkspaceClientAttachPayload(sparkCommand.payload, workspaceId),
+      );
+    case "workspace.client.heartbeat.request":
+      return heartbeatWorkspaceClient(
+        context.db,
+        parseWorkspaceClientHeartbeatPayload(sparkCommand.payload),
+      );
+    case "workspace.client.release.request":
+      return releaseWorkspaceClient(
+        context.db,
+        parseWorkspaceClientReleasePayload(sparkCommand.payload),
+      );
+    default:
+      throw new Error(`Unsupported workspace client occupancy command: ${sparkCommand.kind}`);
+  }
+}
+
 function parseWorkspaceClientAttachPayload(
   payload: Record<string, unknown>,
   workspaceId: string,
@@ -702,12 +777,7 @@ function parseWorkspaceClientAttachPayload(
     !Array.isArray(payload.metadata)
       ? { ...(payload.metadata as Record<string, unknown>) }
       : {};
-  const sessionId =
-    typeof payload.sessionId === "string" && payload.sessionId.trim()
-      ? payload.sessionId.trim()
-      : typeof baseMetadata.sessionId === "string" && baseMetadata.sessionId.trim()
-        ? baseMetadata.sessionId.trim()
-        : (clientId ?? `wcl_${createId("msg").slice(4)}`);
+  const sessionId = workspaceClientSessionId(payload, baseMetadata, clientId);
   // Runtime WSS occupancy is always a Cockpit browser session unit.
   const metadata = {
     ...baseMetadata,
@@ -722,6 +792,22 @@ function parseWorkspaceClientAttachPayload(
     ...(leaseTtlMs !== undefined ? { leaseTtlMs } : {}),
     metadata,
   };
+}
+
+function workspaceClientSessionId(
+  payload: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+  clientId: string | undefined,
+): string {
+  const explicitSessionId = trimmedString(payload.sessionId);
+  if (explicitSessionId) return explicitSessionId;
+  const metadataSessionId = trimmedString(metadata.sessionId);
+  if (metadataSessionId) return metadataSessionId;
+  return clientId ?? `wcl_${createId("msg").slice(4)}`;
+}
+
+function trimmedString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function parseWorkspaceClientHeartbeatPayload(

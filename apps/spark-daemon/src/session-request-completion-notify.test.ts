@@ -166,6 +166,48 @@ describe("session request completion notify", () => {
     }
   });
 
+  it("rechecks admission after model preparation before durably submitting the wake", async () => {
+    const harness = createHarness();
+    const sender = localSession("sess_sender", harness.cwd);
+    const target = localSession("sess_target", harness.cwd);
+    const recordTurnQueued = vi.fn(async () => sender);
+    const source = harness.store.submit({
+      sessionId: target.sessionId,
+      prompt: "delegated work",
+      task: requestMailTask(sender.sessionId, target.sessionId, true),
+    });
+    const canAdmit = vi.fn(() => canAdmit.mock.calls.length === 1);
+
+    try {
+      await expect(
+        notifySessionRequestCompletion(
+          {
+            invocationStore: harness.store,
+            sessionRegistry: {
+              get: async (sessionId) => (sessionId === sender.sessionId ? sender : target),
+              recordTurnQueued,
+            },
+            modelControl: {
+              effectiveModel: async () => ({ providerName: "provider", modelId: "model" }),
+              effectiveThinkingLevel: async () => "low" as const,
+              prepareModel: async () => undefined,
+            },
+            canAdmit,
+          },
+          {
+            invocation: source,
+            task: source.task as never,
+            completion: { status: "succeeded", result: { assistantText: "done" } },
+          },
+        ),
+      ).resolves.toEqual({ submitted: false, skippedReason: "admission_closed" });
+      expect(harness.store.listPendingForSession(sender.sessionId)).toHaveLength(0);
+      expect(recordTurnQueued).not.toHaveBeenCalled();
+    } finally {
+      harness.close();
+    }
+  });
+
   it("renders a synthesis prompt with failure details", () => {
     const prompt = renderSessionRequestCompletionPrompt({
       mail: {
@@ -214,5 +256,22 @@ function localSession(sessionId: string, cwd: string): SparkSessionRegistryRecor
     bindings: [],
     createdAt: "2026-07-20T00:00:00.000Z",
     updatedAt: "2026-07-20T00:00:00.000Z",
+  };
+}
+
+function requestMailTask(fromSessionId: string, toSessionId: string, notifyOnCompletion: boolean) {
+  return {
+    type: "session.run" as const,
+    sessionId: toSessionId,
+    prompt: "delegated work",
+    messageMetadata: {
+      sessionMail: {
+        messageId: "mail:admission",
+        kind: "request",
+        fromSessionId,
+        toSessionId,
+        notifyOnCompletion,
+      },
+    },
   };
 }

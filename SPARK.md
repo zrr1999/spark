@@ -73,17 +73,15 @@ inspired_by:
 
 - 完成证据门禁应严格到什么程度：对人工任务、审查/设计任务和角色执行/工作流任务是否采用不同要求。
 - 历史任务中被完成摘要覆盖的原始意图是否需要进一步从聊天记录、每日记忆或 Git 历史中恢复。
-- `pi-btw` 的 Pi 产品兼容安装面应保留到哪个版本；移除根 manifest 暴露前至少要通过真实 TUI/Zellij 的提交、繁忙并行、重启恢复、配置与两种 handoff 验收，并明确 modal overlay 是否属于退场门禁。
-- Cockpit 应保持私有/源码分发、发布完整私有依赖闭包，还是产出自包含 bundle；当前 public app + private `workspace:*` 依赖不是可验证的 registry 安装闭包。
 
 ## 近期收尾任务
 
 - 继续对齐跨表面 ask / gate / submit 语义；Cockpit 已改用协议 option `value` 与 `parseSparkAskChoice`。
 - 文档与 AGENTS 边界语言改为“Pi SDK 内核 + Pi 产品冻结”。
 - 后续可单独收缩 `pi-extension` 表面与 `"pi.extensions"` 元数据；该收缩不阻塞协议对齐。
-- Spark 原生 side-thread 的 daemon store/runner/controller、TUI 单一 `/btw` 命令和 Cockpit 嵌套只读投影已实现；下一步用真实 TUI/Zellij 验证并决定是否另做 modal overlay。`pi-btw` 在退场门禁满足前继续作为冻结兼容实现。
+- Spark 原生 Side Thread 已通过隔离的真实 TUI/Zellij 验收：提交与繁忙并行拒绝、daemon 重启恢复、model/thinking 配置、全文和摘要 handoff 均由真实 daemon invocation 验证。`pi-btw` 继续作为冻结的 Pi 产品兼容层，直到 Pi 产品宿主整体退场；modal overlay 是可选呈现改进，不是原生能力或 `pi-btw` 退场门禁。
 - 以 `check:architecture` 守住工作区数量、生产文件体量和冻结 Pi manifest；先分类 Knip/jscpd/complexity 的动态入口误报，再把稳定基线升级为非增长门禁。
-- 明确 Cockpit 发布模型并增加 clean-pack/install/start 验证，避免仅凭 monorepo build 判断可发布。
+- Spark v0.1 已明确为全仓私有源码分发；`check:distribution` 防止 workspace 意外公开，source-distribution smoke 验证 build、daemon migrations/start、dispatcher、TUI 与 Cockpit health。
 - 将现有 PR/CI 读取能力收敛成 change delivery feedback 事件，先完成“失败反馈回原 session”，再考虑 GitHub Checks 回写。
 - 会话队列双层收敛：TUI 乐观层 ↔ daemon `pendingTurns` 真相；Cockpit 继续只投影 daemon。
 - `memory` owns durable scoped memory, recall candidates (`recall` tool), the `LearningStore` / `learning` tool, and reflection pipelines (`.spark/memory/reflections/`).
@@ -102,3 +100,5 @@ inspired_by:
 - 2026-07-21：清除 `ExtensionAPI` / 目标 `registerPi*` 技术债；宿主契约公开名为 `SparkHostAPI`，ask/tasks/context 注册入口为 `registerSpark*`。
 - 2026-07-22：吸收本地 agent control-plane 竞品的交付闭环，决定将 `pi-btw` 拆为共享 side-thread 契约、Spark 原生 adapter 与冻结 Pi 兼容层；外部 durable engine 不替换 daemon 真相。
 - 2026-07-22：完成 Spark 原生 Side Thread 的 daemon 真相源、TUI 命令与 Cockpit 只读投影首个切片，并将架构增长、开源依赖采纳和发布闭包风险写入正式契约。
+- 2026-07-22：实测发现 Node 不支持在 `node_modules` 内 strip TypeScript，且 daemon bundle 曾遗漏 migration assets；因此 v0.1 收敛为全仓私有源码分发，移除 registry publish 面并增加真实 source build/start smoke。
+- 2026-07-22：真实 TUI/Zellij 验收覆盖 Side Thread 提交、繁忙并行、重启恢复、配置及 full/summary handoff，并修复旧 generation-less 转录在 daemon 升级重启后的兼容读取；决定 `pi-btw` 仅随 Pi 产品宿主整体退场，modal overlay 不作为门禁。

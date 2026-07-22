@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/pi-btw",
   "version": "0.1.0",
+  "private": true,
   "description": "A pi extension for parallel side conversations with /btw",
   "keywords": [
     "agent",
@@ -30,9 +31,6 @@
     "LICENSE"
   ],
   "type": "module",
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
     "check": "vp check --no-fmt --no-lint ."
   },
