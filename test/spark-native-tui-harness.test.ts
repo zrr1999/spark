@@ -1829,7 +1829,11 @@ test("Spark cockpit renders shared workflow, run, task, artifact, review, and Gr
   assert.equal(await harness.submit("/artifacts"), "command");
   assert.match(
     stripAnsi(harness.render()),
-    /No artifact view-model updates have been published yet/,
+    /artifact:review-ok \[record\/json\] producer=review status=approved Reviewer verdict/,
+  );
+  assert.match(
+    stripAnsi(harness.render()),
+    /artifact:graft-patch \[record\/json\] producer=task status=admitted Graft patch provenance/,
   );
 
   assert.equal(await harness.submit("/reviews"), "command");
